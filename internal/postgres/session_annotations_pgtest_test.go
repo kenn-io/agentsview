@@ -224,8 +224,13 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 	require.NoError(t, err, "unchanged Push")
 	assert.Equal(t, 0, unchanged.SessionsPushed)
 
+	before, err := local.GetSessionFull(ctx, sess.ID)
+	require.NoError(t, err)
 	_, err = local.UpdateSessionLabels(ctx, sess.ID, []string{"role=lead"}, nil)
 	require.NoError(t, err, "UpdateSessionLabels")
+	after, err := local.GetSessionFull(ctx, sess.ID)
+	require.NoError(t, err)
+	assert.Equal(t, before.LocalModifiedAt, after.LocalModifiedAt)
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err, "label-only Push")
 	assert.Equal(t, 1, result.SessionsPushed)

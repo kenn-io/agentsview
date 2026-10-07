@@ -3428,10 +3428,9 @@ func (db *DB) RequeueAllArtifactExports(ctx context.Context) error {
 }
 
 // syncMarkerSchemaSQL creates the sync_marker index and the triggers that
-// keep it equal to the max of created_at, local_modified_at, ended_at,
-// started_at, and file_mtime, normalized to ms-precision UTC text. This is
-// the SQL twin of the max-of-signals sync marker computation; the
-// PostgreSQL push computes the same value in Go (see internal/postgres).
+// recompute it from the max of created_at, local_modified_at, ended_at,
+// started_at, and file_mtime, normalized to ms-precision UTC text.
+// Mirror pushes select sessions by this marker.
 // MAX(a,b,...) returns NULL if any argument is NULL, hence the COALESCEs.
 // Every signal, including created_at, falls back to the empty string when
 // missing or unparseable — there is deliberately NO raw-string fallback for
@@ -3446,6 +3445,7 @@ func (db *DB) RequeueAllArtifactExports(ctx context.Context) error {
 // semantics; a full rebuild still covers it.
 // AFTER UPDATE OF only fires on the five source columns, and the trigger
 // body writes only sync_marker, so it cannot recurse.
+// Annotation writes advance sync_marker directly and leave these signals alone.
 //
 // This lives here rather than in schema.sql because schema.sql runs
 // unconditionally on every Open() (via db.init) before

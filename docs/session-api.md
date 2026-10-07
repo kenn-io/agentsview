@@ -290,7 +290,9 @@ Compare `cwd`, `is_truncated`, `message_count`, `file_size`,
 `local_modified_at`, and the session timestamps when choosing a copy. Source
 metadata and timestamps help compare copies; they do not guarantee a complete
 transcript. `local_modified_at` records changes to the archived session row,
-including later metadata edits. It is not the source file's modification time.
+including later metadata edits. Labels, launcher parent links, and custom names
+advance only the mirror sync marker. It is not the source file's modification
+time.
 
 Date filters match a session when its activity window overlaps the selected date
 or range. Sessions that start before midnight and remain active after it

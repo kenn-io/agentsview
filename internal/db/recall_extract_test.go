@@ -683,11 +683,78 @@ func TestCommitExtractedUnitBindsEvidenceAndAdvances(t *testing.T) {
 
 	commit.Cursor = 1
 	commit.Entries = []RecallEntry{commitUnitEntry("e-2", "sess-1", 2, 2)}
+	_, err = d.SetSessionLabels(ctx, "sess-1", []string{"role=reviewer"})
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(ctx, "sess-1", "manager")
+	require.NoError(t, err)
+	_, err = d.ClearSessionExternalParent(ctx, "sess-1")
+	require.NoError(t, err)
 	_, err = d.CommitExtractedUnit(ctx, commit)
 	require.NoError(t, err)
 	progress, _, err = d.ExtractProgress(ctx, "sess-1", "fp-a")
 	require.NoError(t, err)
 	assert.Equal(t, ExtractProgressDone, progress.State)
+}
+
+func TestExtractedSessionAnnotationsPreserveCoverage(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedCommitUnitSession(t, d, "sess-1")
+	_, err := d.getWriter().ExecContext(ctx,
+		"UPDATE sessions SET local_modified_at = '2000-01-01T00:00:00.000Z' WHERE id = 'sess-1'")
+	require.NoError(t, err)
+	session, err := d.GetSessionFull(ctx, "sess-1")
+	require.NoError(t, err)
+	_, err = d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-1", Fingerprint: "fp-a",
+		ContentDigest: "dg", UnitsTotal: 1, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	entry := commitUnitEntry("e-1", "sess-1", 0, 2)
+	entry.Status = "archived"
+	_, err = d.CommitExtractedUnit(ctx, ExtractUnitCommit{
+		SessionID: "sess-1", Fingerprint: "fp-a", Digest: "dg", Cursor: 0,
+		ScanVersions: []string{"rules-v1"}, MessageCount: session.MessageCount,
+		TranscriptRevision: session.TranscriptRevision, LocalModifiedAt: session.LocalModifiedAt,
+		EndedAt: session.EndedAt, Entries: []RecallEntry{entry},
+	})
+	require.NoError(t, err)
+	for _, annotation := range []string{"label", "parent set", "parent clear", "rename"} {
+		t.Run(annotation, func(t *testing.T) {
+			const oldMarker = "2000-01-01T00:00:00.000Z"
+			_, err := d.getWriter().ExecContext(ctx,
+				"UPDATE sessions SET sync_marker = ? WHERE id = 'sess-1'", oldMarker)
+			require.NoError(t, err)
+			switch annotation {
+			case "label":
+				_, err = d.SetSessionLabels(ctx, "sess-1", []string{"role=reviewer"})
+			case "parent set":
+				_, err = d.SetSessionExternalParent(ctx, "sess-1", "manager")
+			case "parent clear":
+				_, err = d.ClearSessionExternalParent(ctx, "sess-1")
+			case "rename":
+				err = d.RenameSession(ctx, "sess-1", new("Review"))
+			}
+			require.NoError(t, err)
+			var modifiedAt, marker string
+			require.NoError(t, d.getReader().QueryRowContext(ctx,
+				"SELECT local_modified_at, sync_marker FROM sessions WHERE id = 'sess-1'",
+			).Scan(&modifiedAt, &marker))
+			assert.Equal(t, "2000-01-01T00:00:00.000Z", modifiedAt)
+			assert.Greater(t, marker, oldMarker)
+			ids, err := d.ExtractCandidates(ctx, ExtractCandidateQuery{
+				Fingerprint: "fp-a", QuietCutoff: time.Now(),
+				ScanVersions: []string{"rules-v1"}, IncludeDone: true,
+			})
+			require.NoError(t, err)
+			assert.NotContains(t, ids, "sess-1")
+			require.NoError(t, d.ActivateExtractGeneration(ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+		})
+	}
 }
 
 func TestCommitExtractedUnitRefusesDriftAndIneligibility(t *testing.T) {
