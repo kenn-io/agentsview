@@ -232,7 +232,6 @@ func TestDiscoverRepos_LinkedWorktreeResolves(t *testing.T) {
 		canonAll([]string{worktreeRoot}),
 		canonAll(slices.Concat(got...)),
 		"DiscoverRepos (worktree path)")
-
 }
 
 // TestDiscoverRepos_MissingCwdSkipped confirms that a cwd whose path is
