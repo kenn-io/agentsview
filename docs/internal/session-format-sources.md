@@ -2869,9 +2869,20 @@ schemas keep their existing ordering behavior.
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it
   is meaningfully identified; otherwise it falls back to catalog pricing.
+- **Cron identity check (2026-10-07):**
+  [hermes_state_ids.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_ids.py)
+  recognizes `cron_<job ID>_<YYYYMMDD>_<HHMMSS>` with job IDs matching
+  `[A-Za-z0-9][A-Za-z0-9._-]*`.
+  [cron/scheduler.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/cron/scheduler.py)
+  records `source = "cron"`; titles remain session names.
+  [export_session](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_portability.py)
+  retains `source` and `parent_session_id`. Live transcripts supply ancestry
+  only when they record cron source and parent metadata.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
-  recognized.
+  recognized. Exported `source` identifies cron only. Producer ancestry wins;
+  sibling transcripts, archived parents and saved automatic jobs on visited
+  ancestors complete missing evidence. Unresolved runs retain `hermes-cron`.
 
 ## Forge (`forge`)
 

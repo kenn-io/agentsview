@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +19,8 @@ import (
 func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	jsonlPath := filepath.Join(root, "child.jsonl")
-	jsonPath := filepath.Join(root, "session_jsononly.json")
+	const dottedID = "cron_job.1_20261007_120000"
+	jsonPath := filepath.Join(root, "session_"+dottedID+".json")
 	writeSourceFile(t, jsonlPath, hermesProviderJSONLFixture("jsonl question"))
 	writeSourceFile(t, jsonPath, hermesProviderJSONFixture("json question"))
 	writeSourceFile(t, filepath.Join(root, "scratch.json"), "{}\n")
@@ -52,7 +54,7 @@ func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
 	assert.Equal(t, jsonlPath, found.DisplayPath)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
-		RawSessionID: "jsononly",
+		RawSessionID: dottedID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -64,6 +66,16 @@ func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
 	assert.Positive(t, fingerprint.Size)
 	assert.Positive(t, fingerprint.MTimeNS)
 	assert.NotEmpty(t, fingerprint.Hash)
+	for _, path := range []string{jsonPath, jsonlPath} {
+		for _, body := range []string{"", "!", `{"source":"cron","parent_session_id":"cron_job-a_20261007_120000"`} {
+			writeSourceFile(t, path, body)
+			fingerprint, err := provider.Fingerprint(t.Context(), SourceRef{Opaque: hermesSource{Path: path}})
+			require.NoError(t, err)
+			plainHash, err := hashJSONLSourceFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, plainHash, fingerprint.Hash)
+		}
+	}
 
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
@@ -697,6 +709,254 @@ func TestHermesStateMemberFingerprintIncludesStateMetadataWhenTranscriptWins(t *
 		"state metadata used by parsing must participate even when transcript messages win")
 }
 
+func TestHermesCronParentLookupUsesIDIndex(t *testing.T) {
+	var allocations []float64
+	for _, count := range []int{74, 7400} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			root := t.TempDir()
+			createHermesStateDB(t, root)
+			conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			_, err = conn.ExecContext(t.Context(), `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < ?)
+				INSERT INTO sessions(id, source, started_at) SELECT printf('unrelated-%06d', i), 'cron', 1 FROM n`, count)
+			require.NoError(t, err)
+			for _, analyzed := range []bool{false, true} {
+				if analyzed {
+					_, err = conn.ExecContext(t.Context(), "ANALYZE")
+					require.NoError(t, err)
+				}
+				var id, parent, unused int
+				var detail string
+				require.NoError(t, conn.QueryRowContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesCronParentQuery, "child").Scan(&id, &parent, &unused, &detail))
+				assert.Contains(t, detail, "id=?", "count=%d analyzed=%t", count, analyzed)
+			}
+			dir := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			for i := range count {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("session_unrelated-%d.json", i)), []byte(`{}`), 0o600))
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "session_middle.json"), []byte(`{"parent_session_id":"cron_job-a_20261007_120000"}`), 0o600))
+			allocations = append(allocations, testing.AllocsPerRun(20, func() {
+				ss := hermesStateSession{id: "tip", source: "cron", parentSessionID: "middle"}
+				require.NoError(t, resolveHermesCronJob(dir, &ss, nil))
+				require.Equal(t, "job-a", ss.cronJob)
+			}))
+			header := "{\"role\":\"session_meta\",\"platform\":\"cron\",\"parent_session_id\":\"middle\"}\n"
+			lr := newLineReader(strings.NewReader(header+strings.Repeat("x", count*1024)), maxLineSize)
+			metadata, err := readHermesJSONLMetadata(lr)
+			require.NoError(t, err)
+			assert.Equal(t, "middle", metadata.parentSessionID)
+			assert.LessOrEqual(t, lr.cr.n, int64(initialScanBufSize), "ancestor metadata reads only the header buffer")
+			releaseLineReader(lr)
+			if count == 74 {
+				_, err = conn.ExecContext(t.Context(), "DROP TABLE sessions")
+				require.NoError(t, err)
+				for _, parent := range []string{"", "cron_job-a_20261007_120000"} {
+					ss := hermesStateSession{id: "tip", source: "cron", parentSessionID: parent}
+					require.NoError(t, resolveHermesCronMember(t.Context(), conn, filepath.Join(root, "state.db"), &ss))
+					assert.Equal(t, HermesCronJobID(parent, nil), ss.cronJob)
+				}
+				ss := hermesStateSession{id: "tip", source: "cron", parentSessionID: "middle"}
+				assert.Error(t, resolveHermesCronMember(t.Context(), conn, filepath.Join(root, "state.db"), &ss))
+			}
+		})
+	}
+	require.Len(t, allocations, 2)
+	assert.LessOrEqual(t, allocations[1], allocations[0]+5, "transcript ancestry lookup must stay bounded by the selected lineage")
+}
+
+func TestHermesCronRunGroupingAndFreshness(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	stateDB := filepath.Join(root, "state.db")
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	const runID = "cron_job.1_20261007_120000"
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions(id, source, model, parent_session_id, started_at) VALUES
+		('cron_job.1_20261007_120000', 'cron', 'gpt-5.4', NULL, 1),
+		('middle', 'cron', 'gpt-5.4', 'cron_job.1_20261007_120000', 2),
+		('tip', 'cron', 'gpt-5.4', 'middle', 3);
+		INSERT INTO messages(session_id, role, content, timestamp)
+		SELECT id, 'user', 'run message', started_at FROM sessions WHERE source = 'cron';`)
+	require.NoError(t, err)
+	provider := newHermesTestProvider(t, root)
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: runID})
+	require.NoError(t, err)
+	require.True(t, found)
+	unrelated, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "child"})
+	require.NoError(t, err)
+	require.True(t, found)
+	fingerprint := func(source SourceRef) SourceFingerprint {
+		fp, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+		ctx, cleanup, err := WithReconciliationCache(t.Context())
+		require.NoError(t, err)
+		cached, err := provider.Fingerprint(ctx, source)
+		require.NoError(t, err)
+		require.NoError(t, cleanup())
+		assert.Equal(t, fp.Hash, cached.Hash)
+		return fp
+	}
+	before, unrelatedBefore := fingerprint(source), fingerprint(unrelated)
+	_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET title = 'Daily digest · Oct 07 12:00' WHERE id = 'tip'")
+	require.NoError(t, err)
+	want := "hermes-cron/job.1"
+	archive, err := provider.parseArchive(t.Context(), stateDB, "", "local")
+	require.NoError(t, err)
+	for _, res := range archive {
+		if res.Session.SourceSessionID == "child" {
+			continue
+		}
+		assert.Equal(t, want, res.Session.Project)
+		member, err := provider.parseStateMember(t.Context(), hermesSource{StateDB: stateDB, SessionID: res.Session.SourceSessionID}, "", "local", SourceFingerprint{})
+		require.NoError(t, err)
+		require.Len(t, member.Results, 1)
+		assert.Equal(t, want, member.Results[0].Result.Session.Project)
+		assert.Equal(t, res.Session.SessionName, member.Results[0].Result.Session.SessionName)
+	}
+	after := fingerprint(source)
+	assert.Equal(t, before.Hash, after.Hash)
+	assert.Equal(t, unrelatedBefore.Hash, fingerprint(unrelated).Hash)
+	tip, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "tip"})
+	require.NoError(t, err)
+	require.True(t, found)
+	_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET parent_session_id = 'tip' WHERE id = 'middle'")
+	require.NoError(t, err)
+	missingParent := fingerprint(tip)
+	_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET parent_session_id = ? WHERE id = 'middle'", runID)
+	require.NoError(t, err)
+	assert.NotEqual(t, missingParent.Hash, fingerprint(tip).Hash)
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	path := filepath.Join(sessionsDir, "session_transcript-only.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"source":"cron","parent_session_id":"middle","messages":[{"role":"user","content":"retained run"}]}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, "session_middle.json"), []byte(`{"source":"cron","parent_session_id":"cron_job-2_20261007_120000"}`), 0o600))
+	_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET parent_session_id = 'cron_job-2_20261007_120000' WHERE id = 'middle'")
+	require.NoError(t, err)
+	archive, err = provider.parseArchive(t.Context(), stateDB, "", "local")
+	require.NoError(t, err)
+	for _, result := range archive {
+		if result.Session.ID == "hermes:transcript-only" {
+			assert.Equal(t, "hermes-cron/job-2", result.Session.Project)
+		}
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, "session_cli-only.json"), []byte(`{"platform":"cli","source":"cron","parent_session_id":"middle","messages":[{"role":"user","content":"ordinary run"}]}`), 0o600))
+	hinted, err := provider.parseArchive(t.Context(), stateDB, "hermes-cron", "local")
+	require.NoError(t, err)
+	for _, result := range hinted {
+		if result.Session.ID == "hermes:transcript-only" {
+			assert.Equal(t, "hermes-cron/job-2", result.Session.Project)
+			assert.True(t, result.Session.projectSynthesizedByHermes)
+		} else if result.Session.ID == "hermes:cli-only" {
+			assert.Equal(t, "hermes-cli", result.Session.Project)
+			assert.Empty(t, result.Session.ParentSessionID)
+			assert.Empty(t, result.Session.RelationshipType)
+		} else {
+			assert.Equal(t, "hermes-cron", result.Session.Project)
+			assert.False(t, result.Session.projectSynthesizedByHermes)
+		}
+	}
+	t.Run("transcript ancestry", func(t *testing.T) {
+		for _, format := range []string{"json", "jsonl"} {
+			t.Run(format, func(t *testing.T) {
+				dir := t.TempDir()
+				name, body := "session_tip.json", `{"source":"cron","parent_session_id":"middle","messages":[{"role":"user","content":"run"}]}`
+				if format == "jsonl" {
+					name, body = "tip.jsonl", "{\"role\":\"session_meta\",\"platform\":\"cron\",\"parent_session_id\":\"middle\"}\n{\"role\":\"user\",\"content\":\"run\"}\n"
+				}
+				path := filepath.Join(dir, name)
+				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+				provider := newHermesTestProvider(t, dir)
+				source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "tip"})
+				require.NoError(t, err)
+				require.True(t, found)
+				before, err := provider.Fingerprint(t.Context(), source)
+				require.NoError(t, err)
+				middle := filepath.Join(dir, "session_middle.json")
+				for _, parent := range []string{runID, "cron_job-2_20261007_120000", "tip", "missing"} {
+					require.NoError(t, os.WriteFile(middle, []byte(fmt.Sprintf(`{"source":"cron","parent_session_id":%q}`, parent)), 0o600))
+					after, err := provider.Fingerprint(t.Context(), source)
+					require.NoError(t, err)
+					assert.Equal(t, before.MTimeNS, after.MTimeNS)
+					assert.Equal(t, before.Size, after.Size)
+					if parent == runID || parent == "cron_job-2_20261007_120000" {
+						assert.NotEqual(t, before.Hash, after.Hash)
+					} else {
+						assert.Equal(t, before.Hash, after.Hash)
+					}
+				}
+				require.NoError(t, os.Remove(middle))
+				after, err := provider.Fingerprint(t.Context(), source)
+				require.NoError(t, err)
+				assert.Equal(t, before, after)
+			})
+		}
+	})
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, model, started_at, input_tokens)
+		VALUES ('unusable', 'cron', 'gpt-5.4', 1, 1)`)
+	require.NoError(t, err)
+	for _, tc := range []struct{ body, parent, format, want string }{
+		{"", "unusable", "", "hermes-cron"},
+		{"!", "unusable", "", "hermes-cron"},
+		{`{"source":"cron","parent_session_id":"cron_job-b_20261007_120000"`, "unusable", "", "hermes-cron"},
+		{"", runID, "json", "hermes-cron/job.1"},
+		{"!", runID, "jsonl", "hermes-cron/job.1"},
+	} {
+		_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET parent_session_id = ?, input_tokens = 10,
+			actual_cost_usd = 3, cost_status = 'actual', cost_source = 'hermes' WHERE id = 'tip'`, tc.parent)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, "session_unusable.json"), []byte(tc.body), 0o600))
+		selectedPath := filepath.Join(sessionsDir, "session_tip.json")
+		if tc.format != "" {
+			body := `{"source":"cron","parent_session_id":"unusable","messages":[{"role":"user","content":"run message"},{"role":"assistant","content":"richer reply"}]}`
+			if tc.format == "jsonl" {
+				selectedPath = filepath.Join(sessionsDir, "tip.jsonl")
+				body = "{\"role\":\"session_meta\",\"platform\":\"cron\",\"parent_session_id\":\"unusable\"}\n{\"role\":\"user\",\"content\":\"run message\"}\n{\"role\":\"assistant\",\"content\":\"richer reply\"}\n"
+			}
+			require.NoError(t, os.WriteFile(selectedPath, []byte(body), 0o600))
+		}
+		fingerprint(tip)
+		for _, hint := range []string{"", "hermes-cron"} {
+			member, err := provider.parseStateMember(t.Context(), hermesSource{StateDB: stateDB, SessionID: "tip"}, hint, "local", SourceFingerprint{})
+			require.NoError(t, err)
+			require.Len(t, member.Results, 1)
+			results := []ParseResult{member.Results[0].Result}
+			bulk, err := provider.parseArchive(t.Context(), stateDB, hint, "local")
+			require.NoError(t, err)
+			for _, res := range bulk {
+				if res.Session.ID == "hermes:tip" {
+					results = append(results, res)
+				}
+			}
+			require.Len(t, results, 2)
+			for _, res := range results {
+				assert.Equal(t, firstNonEmptyJSONLString(hint, tc.want), res.Session.Project)
+				assert.Equal(t, hint == "", res.Session.projectSynthesizedByHermes)
+				require.Len(t, res.UsageEvents, 1)
+				require.NotNil(t, res.UsageEvents[0].Cost)
+				assert.EqualValues(t, 3_000_000, res.UsageEvents[0].Cost.Microdollars)
+				if tc.format == "" {
+					require.Len(t, res.Messages, 1)
+				} else {
+					require.Len(t, res.Messages, 2)
+					assert.Equal(t, "richer reply", res.Messages[1].Content)
+				}
+			}
+		}
+		if tc.format != "" {
+			require.NoError(t, os.Remove(selectedPath))
+		}
+	}
+	_, err = conn.ExecContext(t.Context(), "ALTER TABLE sessions RENAME TO unavailable_sessions")
+	require.NoError(t, err)
+	_, err = provider.parseStateMember(t.Context(), hermesSource{StateDB: stateDB, SessionID: "tip"}, "", "local", SourceFingerprint{})
+	assert.Error(t, err)
+	_, err = provider.Fingerprint(t.Context(), tip)
+	assert.Error(t, err)
+}
+
 func TestHermesProviderArchiveWatchRoots(t *testing.T) {
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")
@@ -839,7 +1099,7 @@ func TestHermesProfileChangedPathAllocationsStayBounded(t *testing.T) {
 }
 
 func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
-	measure := func(t *testing.T, sessionCount int) int64 {
+	measure := func(t *testing.T, sessionCount int, source string) int64 {
 		t.Helper()
 
 		root := t.TempDir()
@@ -853,10 +1113,10 @@ func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
 		_, err = tx.ExecContext(t.Context(), "DELETE FROM messages; DELETE FROM sessions")
 		require.NoError(t, err)
 		for i := range sessionCount {
-			id := fmt.Sprintf("member-%06d", i)
+			id := fmt.Sprintf("cron_job.%06d_20261007_120000", i)
 			_, err = tx.ExecContext(t.Context(), `INSERT INTO sessions
 				(id, source, started_at, estimated_cost_usd, actual_cost_usd)
-				VALUES (?, 'cli', ?, 0, 0)`, id, i)
+				VALUES (?, ?, ?, 0, 0)`, id, source, i)
 			require.NoError(t, err)
 			_, err = tx.ExecContext(t.Context(), `INSERT INTO messages
 				(session_id, role, content, timestamp)
@@ -880,11 +1140,15 @@ func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
 		return peak
 	}
 
-	small := measure(t, 3)
-	large := measure(t, 300)
-	assert.Positive(t, small, "the retained-ID allocation boundary must be observed")
-	assert.LessOrEqual(t, large, small*2,
-		"peak retained ID bytes must not scale with Hermes archive cardinality")
+	for _, source := range []string{"cli", "cron"} {
+		t.Run(source, func(t *testing.T) {
+			small := measure(t, 3, source)
+			large := measure(t, 300, source)
+			assert.Positive(t, small, "the retained-ID allocation boundary must be observed")
+			assert.LessOrEqual(t, large, small*2,
+				"peak retained ID bytes must not scale with Hermes archive cardinality")
+		})
+	}
 }
 
 func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {

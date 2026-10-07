@@ -3755,6 +3755,17 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
+	if err := newDB.RepairHermesCronProjects(ctx); err != nil {
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings, "preserved cron project repair failed: "+err.Error())
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
 	mappingMachines, err := ops.listActiveWorktreeMappingMachines(ctx, newDB)
 	if err != nil {
 		warning := "worktree mapping machine discovery failed, aborting swap: " +
@@ -17681,6 +17692,16 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	indexes := make(map[string][]int)
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
+		if batch[i].sess.HasPooledHermesCronProject() {
+			sess := &batch[i].sess
+			job, err := e.db.ResolveHermesCronJob(ctx, applyIDPrefixToID(e.idPrefix, sess.ID), applyIDPrefixToID(e.idPrefix, sess.ParentSessionID), string(sess.Agent))
+			if err != nil {
+				return batch, err
+			}
+			if job != "" {
+				sess.Project += "/" + job
+			}
+		}
 		if batch[i].sourceProjectResolved {
 			continue
 		}

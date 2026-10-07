@@ -11,6 +11,9 @@ The latest published release is
 
 **New features**
 
+- Hermes cron runs group by stable job ID across renames and compressed
+  sessions, including archived runs with recorded ancestry. Compressed cron
+  transcripts link to their recorded parent.
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.

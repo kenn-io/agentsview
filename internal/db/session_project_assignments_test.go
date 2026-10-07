@@ -11,6 +11,26 @@ import (
 )
 
 func TestAssignSessionProjectOverridesSyncAndFolderRules(t *testing.T) {
+	t.Run("cron automatic project refresh", func(t *testing.T) {
+		for _, agent := range []string{"hermes", "augure-desktop"} {
+			database := testDB(t)
+			id := agent + ":tip"
+			insertSession(t, database, id, agent+"-cron", func(s *Session) { s.Agent = agent })
+			assignment, err := database.AssignSessionProject(t.Context(), id, "manual")
+			require.NoError(t, err)
+			insertSession(t, database, id, agent+"-cron/job-a", func(s *Session) { s.Agent = agent })
+			require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(t.Context(), export.ProjectIdentityObservation{
+				SessionID: id, Project: assignment.Project, Machine: defaultMachine,
+			}, agent+"-cron/job-a"))
+			insertSession(t, database, id, agent+"-cron/job-b", func(s *Session) { s.Agent = agent })
+			stored, err := database.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, assignment.Project, stored.Project)
+			cleared, err := database.ClearSessionProjectAssignment(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, agent+"-cron/job-b", cleared.Project)
+		}
+	})
 	database := testDB(t)
 	ctx := t.Context()
 
@@ -166,8 +186,25 @@ func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) 
 			ObservedAt: time.Date(2026, 8, 25, 12, 5, 0, 0, time.UTC),
 		},
 	))
+	for _, agent := range []string{"hermes", "augure-desktop"} {
+		id := agent + ":tip"
+		insertSession(t, source, id, agent+"-cron/job-a", func(s *Session) { s.Agent = agent })
+		_, err := source.AssignSessionProject(ctx, id, "manual")
+		require.NoError(t, err)
+		insertSession(t, destination, id, agent+"-cron/job-b", func(s *Session) { s.Agent = agent })
+	}
 
 	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	snapshots, err := destination.ListSessionProjectIdentitySnapshotsByID(ctx, []string{"hermes:tip", "augure-desktop:tip"})
+	require.NoError(t, err)
+	for _, agent := range []string{"hermes", "augure-desktop"} {
+		id := agent + ":tip"
+		assertSessionProject(t, destination, id, "manual")
+		cleared, err := destination.ClearSessionProjectAssignment(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, agent+"-cron/job-b", cleared.Project)
+		assert.Equal(t, agent+"-cron/job-b", snapshots[id].Project)
+	}
 	assertSessionProject(t, destination, "session-a", "target_project")
 	observations, err := destination.ListProjectIdentityObservations(
 		ctx, []string{"reparsed", "target_project"},

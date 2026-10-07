@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +25,14 @@ import (
 )
 
 const hermesIDPrefix = string(AgentHermes) + ":"
+
+var hermesCronSessionID = regexp.MustCompile(`^cron_([A-Za-z0-9][A-Za-z0-9._-]*)_\d{8}_\d{6}$`)
+
+func isValidHermesSessionID(id string) bool {
+	return IsValidSessionID(id) || hermesCronSessionID.MatchString(id)
+}
+
+const hermesCronParentQuery = `SELECT COALESCE(parent_session_id, '') FROM sessions WHERE id = ?`
 
 type hermesStateSession struct {
 	id               string
@@ -43,6 +52,7 @@ type hermesStateSession struct {
 	costStatus       string
 	costSource       string
 	title            string
+	cronJob          string
 	apiCallCount     int
 }
 
@@ -138,7 +148,7 @@ func (p *hermesProvider) parseTranscriptArchive(
 			fileProject = project
 		}
 		sess, msgs, err := p.parseSession(
-			file.Path, fileProject, machine,
+			file.Path, fileProject, machine, nil,
 		)
 		if err != nil {
 			return nil, err
@@ -165,15 +175,15 @@ func (p *hermesProvider) parseTranscriptArchive(
 //   - Assistant messages: {"role":"assistant", "content":"...", "reasoning":"...",
 //     "finish_reason":"tool_calls|stop", "tool_calls":[...], "timestamp":"..."}
 //   - Tool results: {"role":"tool", "content":"...", "tool_call_id":"...", "timestamp":"..."}
-func (p *hermesProvider) parseSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+func (p *hermesProvider) parseSession(path, project, machine string, parent func(string) (string, error)) (*ParsedSession, []ParsedMessage, error) {
 	if strings.HasSuffix(path, ".json") {
-		return parseHermesJSONSession(path, project, machine)
+		return parseHermesJSONSession(path, project, machine, parent)
 	}
-	return parseHermesJSONLSession(path, project, machine)
+	return parseHermesJSONLSession(path, project, machine, parent)
 }
 
 // parseHermesJSONLSession parses a Hermes Agent JSONL session file.
-func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+func parseHermesJSONLSession(path, project, machine string, parent func(string) (string, error)) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -196,6 +206,8 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		realUserCount   int
 		firstMsg        string
 		sessionPlatform string
+		parentSessionID string
+		metadataRead    bool
 	)
 
 	// Extract session ID from filename: 20260403_153620_5a3e2ff1.jsonl -> 20260403_153620_5a3e2ff1
@@ -225,7 +237,12 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		switch role {
 		case "session_meta":
 			// Extract model and platform from session header.
-			sessionPlatform = gjson.Get(line, "platform").Str
+			if metadataRead {
+				continue
+			}
+			metadata := hermesTranscriptMetadata(gjson.Parse(line))
+			sessionPlatform, parentSessionID = metadata.source, metadata.parentSessionID
+			metadataRead = true
 			continue
 
 		case "user":
@@ -350,11 +367,11 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	// Derive project from the session platform or default.
 	projectSynthesized := false
 	if project == "" {
-		if sessionPlatform != "" {
-			project = "hermes-" + sessionPlatform
-		} else {
-			project = "hermes"
+		metadata := hermesStateSession{id: sessionID, source: sessionPlatform, parentSessionID: parentSessionID}
+		if err := resolveHermesCronJob(filepath.Dir(path), &metadata, parent); err != nil {
+			return nil, nil, err
 		}
+		project = hermesProject(metadata)
 		projectSynthesized = true
 	}
 
@@ -375,29 +392,29 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 			Mtime: info.ModTime().UnixNano(),
 		},
 	}
+	if sessionPlatform == "cron" && parentSessionID != "" {
+		sess.ParentSessionID = "hermes:" + parentSessionID
+		sess.RelationshipType = RelContinuation
+	}
 
 	return sess, messages, nil
 }
 
 // parseHermesJSONSession parses a Hermes CLI-format JSON session file.
-func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+func parseHermesJSONSession(path, project, machine string, parent func(string) (string, error)) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
 	}
 
-	data, err := os.ReadFile(path)
+	root, _, err := readHermesJSONRoot(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", path, err)
-	}
-
-	root := gjson.ParseBytes(data)
-	if !root.IsObject() {
-		return nil, nil, fmt.Errorf("invalid JSON in %s", path)
+		return nil, nil, err
 	}
 
 	sessionID := HermesSessionID(filepath.Base(path))
-	sessionPlatform := root.Get("platform").Str
+	metadata := hermesTranscriptMetadata(root)
+	parentSessionID := metadata.parentSessionID
 	startedAt := parseHermesTimestamp(root.Get("session_start").Str)
 	endedAt := parseHermesTimestamp(root.Get("last_updated").Str)
 
@@ -540,11 +557,11 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 
 	projectSynthesized := false
 	if project == "" {
-		if sessionPlatform != "" {
-			project = "hermes-" + sessionPlatform
-		} else {
-			project = "hermes"
+		metadata.id = sessionID
+		if err := resolveHermesCronJob(filepath.Dir(path), &metadata, parent); err != nil {
+			return nil, nil, err
 		}
+		project = hermesProject(metadata)
 		projectSynthesized = true
 	}
 
@@ -566,6 +583,10 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 		},
 	}
 
+	if metadata.source == "cron" && parentSessionID != "" {
+		sess.ParentSessionID = "hermes:" + parentSessionID
+		sess.RelationshipType = RelContinuation
+	}
 	return sess, messages, nil
 }
 
@@ -605,6 +626,7 @@ func (p *hermesProvider) parseStateDB(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	resolveHermesCronJobs(sessions, sessionsDir)
 	messages, err := readHermesStateMessages(ctx, conn)
 	if err != nil {
 		return nil, err
@@ -627,7 +649,7 @@ func (p *hermesProvider) parseStateDB(ctx context.Context,
 			continue
 		}
 		sess, msgs, err := p.parseSession(
-			file.Path, file.Project, machine,
+			file.Path, file.Project, machine, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) },
 		)
 		if err != nil {
 			return nil, err
@@ -987,17 +1009,20 @@ func chooseHermesStateSessionSource(
 	sessionsDir, stateDB, project, machine string,
 ) (selectedPath string, sess *ParsedSession, msgs []ParsedMessage, err error) {
 	selectedPath = stateDB
+	if project == "" && ss.source != "" {
+		project = hermesProject(ss)
+	}
 	jsonPath := filepath.Join(sessionsDir, "session_"+ss.id+".json")
 	jsonlPath := filepath.Join(sessionsDir, ss.id+".jsonl")
 	if IsRegularFile(jsonPath) {
-		sess, msgs, err = parseHermesJSONSession(jsonPath, project, machine)
+		sess, msgs, err = parseHermesJSONSession(jsonPath, project, machine, nil)
 		if err == nil && sess != nil &&
 			hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) {
 			return jsonPath, sess, msgs, nil
 		}
 	}
 	if IsRegularFile(jsonlPath) {
-		sess, msgs, err = parseHermesJSONLSession(jsonlPath, project, machine)
+		sess, msgs, err = parseHermesJSONLSession(jsonlPath, project, machine, nil)
 		if err == nil && sess != nil &&
 			(hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) || len(stateMessages) == 0) {
 			return jsonlPath, sess, msgs, nil
@@ -1014,7 +1039,7 @@ func applyHermesStateMetadata(
 	if project != "" {
 		sess.Project = project
 	} else if ss.source != "" {
-		sess.Project = "hermes-" + ss.source
+		sess.Project = hermesProject(ss)
 		sess.projectSynthesizedByHermes = true
 	} else if sess.Project == "" {
 		sess.Project = "hermes"
@@ -1063,6 +1088,154 @@ func applyHermesStateMetadata(
 			}
 		}
 	}
+}
+
+func hermesTranscriptMetadata(root gjson.Result) hermesStateSession {
+	source := root.Get("platform").Str
+	if source == "" && root.Get("source").Str == "cron" {
+		source = "cron"
+	}
+	return hermesStateSession{
+		source:          source,
+		parentSessionID: root.Get("parent_session_id").Str,
+	}
+}
+
+func readHermesJSONRoot(path string) (gjson.Result, []byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return gjson.Result{}, nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	root := gjson.ParseBytes(data)
+	if !gjson.ValidBytes(data) || !root.IsObject() {
+		return root, nil, fmt.Errorf("invalid JSON in %s", path)
+	}
+	return root, data, nil
+}
+
+func readHermesTranscriptMetadata(path string) (hermesStateSession, error) {
+	if strings.HasSuffix(path, ".json") {
+		root, _, err := readHermesJSONRoot(path)
+		return hermesTranscriptMetadata(root), err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return hermesStateSession{}, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
+	metadata, err := readHermesJSONLMetadata(lr)
+	if err != nil {
+		return metadata, fmt.Errorf("reading %s: %w", path, err)
+	}
+	return metadata, nil
+}
+
+func readHermesJSONLMetadata(lr *lineReader) (hermesStateSession, error) {
+	for {
+		line, ok := lr.next()
+		if !ok {
+			break
+		}
+		if gjson.Valid(line) && gjson.Get(line, "role").Str == "session_meta" {
+			return hermesTranscriptMetadata(gjson.Parse(line)), nil
+		}
+	}
+	return hermesStateSession{}, lr.Err()
+}
+
+func resolveHermesCronJob(sessionsDir string, ss *hermesStateSession, parentLookup func(string) (string, error)) error {
+	if ss.source != "cron" {
+		return nil
+	}
+	var lookupErr error
+	ss.cronJob = HermesCronJobID(ss.id, func(id string) string {
+		if parentLookup != nil {
+			parent, err := parentLookup(id)
+			if err != nil {
+				lookupErr = err
+				return ""
+			}
+			if parent != "" {
+				return parent
+			}
+		}
+		if id == ss.id && ss.parentSessionID != "" {
+			return ss.parentSessionID
+		}
+		ancestor := findHermesSourceFile(sessionsDir, id)
+		if ancestor == "" {
+			return ""
+		}
+		metadata, err := readHermesTranscriptMetadata(ancestor)
+		if err != nil {
+			return ""
+		}
+		if metadata.source != "" && metadata.source != ss.source {
+			return ""
+		}
+		return metadata.parentSessionID
+	})
+	return lookupErr
+}
+
+// HermesCronJobID follows recorded parents until a cron run identifies its job.
+func HermesCronJobID(id string, parent func(string) string) string {
+	seen := make(map[string]bool)
+	for id != "" && !seen[id] {
+		seen[id] = true
+		raw := id[strings.LastIndexByte(id, ':')+1:]
+		if match := hermesCronSessionID.FindStringSubmatch(raw); match != nil {
+			return match[1]
+		}
+		if parent == nil {
+			break
+		}
+		id = parent(id)
+	}
+	return ""
+}
+
+func hermesProject(ss hermesStateSession) string {
+	if ss.source == "" {
+		return "hermes"
+	}
+	project := "hermes-" + ss.source
+	if ss.source == "cron" && ss.cronJob != "" {
+		project += "/" + ss.cronJob
+	}
+	return project
+}
+
+func resolveHermesCronJobs(sessions []hermesStateSession, sessionsDir string) {
+	byID := make(map[string]string, len(sessions))
+	for _, ss := range sessions {
+		byID[ss.id] = ss.parentSessionID
+	}
+	for i := range sessions {
+		_ = resolveHermesCronJob(sessionsDir, &sessions[i], func(id string) (string, error) {
+			return byID[id], nil
+		})
+	}
+}
+
+func resolveHermesCronMember(ctx context.Context, conn *sql.DB, stateDB string, ss *hermesStateSession) error {
+	return resolveHermesCronJob(filepath.Join(filepath.Dir(stateDB), "sessions"), ss, func(id string) (string, error) {
+		if id == ss.id {
+			return ss.parentSessionID, nil
+		}
+		return hermesCronParent(ctx, conn, id)
+	})
+}
+
+func hermesCronParent(ctx context.Context, conn *sql.DB, id string) (string, error) {
+	var parent string
+	err := conn.QueryRowContext(ctx, hermesCronParentQuery, id).Scan(&parent)
+	if err == sql.ErrNoRows {
+		err = nil
+	}
+	return parent, err
 }
 
 // hermesHasCostSource reports whether a Hermes cost_source represents a
@@ -1386,7 +1559,7 @@ func discoverHermesTranscriptFiles(sessionsDir string) []DiscoveredFile {
 // sessionsDir. It is the provider-owned find-source body folded off the
 // package-level entrypoint.
 func findHermesSourceFile(sessionsDir, sessionID string) string {
-	if !IsValidSessionID(sessionID) {
+	if !isValidHermesSessionID(sessionID) {
 		return ""
 	}
 	candidate := filepath.Join(sessionsDir, sessionID+".jsonl")

@@ -26,7 +26,7 @@ func relabelHermesResultAsAugureDesktop(result *ParseResult) {
 	)
 	result.Session.Agent = AgentAugureDesktop
 	// applyHermesStateMetadata synthesizes the project from the producer
-	// name ("hermes" / "hermes-<source>"); the fork must not advertise
+	// name ("hermes" / "hermes-<source>[/<job ID>]"); the fork must not advertise
 	// itself as a Hermes project. Explicit project hints pass through
 	// untouched.
 	if result.Session.projectSynthesizedByHermes {
@@ -64,7 +64,7 @@ func augureDesktopSessionID(id string) string {
 }
 
 // augureDesktopProject rebrands a synthesized Hermes project name
-// ("hermes" or "hermes-<source>") to the fork's producer name.
+// ("hermes" or "hermes-<source>[/<job ID>]") to the fork's producer name.
 func augureDesktopProject(project string) string {
 	if project == "hermes" {
 		return "augure-desktop"

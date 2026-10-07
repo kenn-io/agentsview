@@ -1493,10 +1493,15 @@ type ParsedSession struct {
 	aggregateTokenPresenceKnown bool
 
 	// projectSynthesizedByHermes marks Session.Project as synthesized by
-	// the Hermes state-DB metadata ("hermes" / "hermes-<source>") rather
+	// the Hermes state-DB metadata ("hermes" / "hermes-<source>[/<job ID>]") rather
 	// than a caller-supplied project hint, so fork relabels can rebrand
 	// the producer name without touching explicit hints.
 	projectSynthesizedByHermes bool
+}
+
+// HasPooledHermesCronProject distinguishes automatic cron projects from explicit hints.
+func (s ParsedSession) HasPooledHermesCronProject() bool {
+	return s.projectSynthesizedByHermes && (s.Agent == AgentHermes || s.Agent == AgentAugureDesktop) && s.Project == string(s.Agent)+"-cron"
 }
 
 // ParsedToolCall holds a single tool invocation extracted from

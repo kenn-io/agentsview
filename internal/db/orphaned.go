@@ -8,10 +8,144 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type sqlContextExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// ResolveHermesCronJob completes source ancestry with recorded automatic identity.
+func (d *DB) ResolveHermesCronJob(ctx context.Context, id, parent, agent string) (string, error) {
+	return resolveArchivedHermesCronJob(ctx, id, parent, agent, func(ctx context.Context, query string, args ...any) rowScanner {
+		return d.getReader().QueryRowContext(ctx, query, args...)
+	})
+}
+
+func resolveArchivedHermesCronJob(ctx context.Context, id, parent, agent string, queryRow contextQueryRow) (string, error) {
+	namespace := id[:strings.LastIndexByte(id, ':')+1]
+	var lookupErr error
+	var visited []string
+	job := parser.HermesCronJobID(id, func(current string) string {
+		visited = append(visited, current)
+		next := parent
+		if current != id || next == "" {
+			err := queryRow(ctx, `SELECT COALESCE(NULLIF(parser_parent_session_id, ''), parent_session_id, '')
+				FROM sessions WHERE id = ? AND agent = ?`, current, agent).Scan(&next)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ""
+			}
+			if err != nil {
+				lookupErr = err
+				return ""
+			}
+		}
+		if !strings.HasPrefix(next, namespace) {
+			return ""
+		}
+		return next
+	})
+	if job != "" || lookupErr != nil {
+		return job, lookupErr
+	}
+	for _, current := range visited {
+		var project string
+		err := queryRow(ctx, `SELECT snapshot.project FROM session_project_identity_snapshots snapshot
+			JOIN sessions s ON s.id = snapshot.session_id WHERE s.id = ? AND s.agent = ?`, current, agent).Scan(&project)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if saved, ok := strings.CutPrefix(project, agent+"-cron/"); ok && saved != "" &&
+			parser.HermesCronJobID("cron_"+saved+"_00000000_000000", nil) == saved {
+			return saved, nil
+		}
+	}
+	return "", nil
+}
+
+// RepairHermesCronProjects regroups automatic projects after all resync copies.
+func (d *DB) RepairHermesCronProjects(ctx context.Context) error {
+	if err := d.requireWritable(); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tx, err := d.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `SELECT s.id, s.machine, s.cwd, s.project, s.agent, s.deleted_at,
+		COALESCE(NULLIF(s.parser_parent_session_id, ''), s.parent_session_id, ''), a.original_project FROM sessions s
+		LEFT JOIN session_project_assignments a ON a.session_id = s.id
+		WHERE s.agent IN ('hermes', 'augure-desktop') AND
+		((a.session_id IS NULL AND s.project = s.agent || '-cron') OR a.original_project = s.agent || '-cron')`)
+	if err != nil {
+		return err
+	}
+	type candidate struct {
+		id, machine, cwd, project, agent, parent string
+		deleted, original                        sql.NullString
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var row candidate
+		if err := rows.Scan(&row.id, &row.machine, &row.cwd, &row.project, &row.agent, &row.deleted, &row.parent, &row.original); err != nil {
+			rows.Close()
+			return err
+		}
+		candidates = append(candidates, row)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, row := range candidates {
+		id, machine, cwd, project, agent, parent := row.id, row.machine, row.cwd, row.project, row.agent, row.parent
+		deleted, original := row.deleted, row.original
+		prefix := agent + "-cron"
+		job, err := resolveArchivedHermesCronJob(ctx, id, parent, agent, func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		})
+		if err != nil {
+			return err
+		}
+		if job == "" {
+			continue
+		}
+		next := prefix + "/" + job
+		if original.Valid {
+			_, err = tx.ExecContext(ctx, `UPDATE session_project_assignments SET original_project = ?,
+				updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE session_id = ?`, next, id)
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE sessions SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`, id)
+		} else if deleted.Valid {
+			_, err = tx.ExecContext(ctx, `UPDATE sessions SET project = ?,
+				local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`, next, id)
+		} else {
+			_, err = updateSessionProjectTx(ctx, tx, worktreeMappingSessionUpdate{
+				id: id, machine: machine, cwd: cwd, currentProject: project, nextProject: next,
+			}, true)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE session_project_identity_snapshots SET project = ?
+			WHERE session_id = ? AND project = ?`, next, id, prefix); err != nil {
+			return err
+		}
+		if err := reconcileSessionProjectIdentityAggregatesTx(ctx, tx, id, []string{prefix, next}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // execWithoutCancel runs cleanup SQL even if the operation context was canceled.
@@ -1608,6 +1742,7 @@ func (d *DB) CopySessionMetadataFrom(
 	// selected by the user instead of the parser-derived label.
 	type copiedProjectChange struct {
 		sessionID       string
+		agent           string
 		previousProject string
 		freshProject    string
 		assignedProject sql.NullString
@@ -1638,7 +1773,7 @@ func (d *DB) CopySessionMetadataFrom(
 			return fmt.Errorf("copying session project assignments: %w", err)
 		}
 		rows, err := tx.QueryContext(ctx, `
-			SELECT current.id, previous.project, current.project,
+			SELECT current.id, current.agent, previous.project, current.project,
 				assignment.project
 			FROM main.sessions current
 			JOIN old_db.sessions previous ON previous.id = current.id
@@ -1655,6 +1790,7 @@ func (d *DB) CopySessionMetadataFrom(
 			var change copiedProjectChange
 			if err := rows.Scan(
 				&change.sessionID,
+				&change.agent,
 				&change.previousProject,
 				&change.freshProject,
 				&change.assignedProject,
@@ -1682,7 +1818,7 @@ func (d *DB) CopySessionMetadataFrom(
 
 	if oldDBHasTable(ctx, tx, "sessions") && len(projectChanges) == 0 {
 		rows, err := tx.QueryContext(ctx, `
-			SELECT current.id, previous.project, current.project
+			SELECT current.id, current.agent, previous.project, current.project
 			FROM main.sessions current
 			JOIN old_db.sessions previous ON previous.id = current.id
 			WHERE previous.project != current.project
@@ -1695,6 +1831,7 @@ func (d *DB) CopySessionMetadataFrom(
 			var change copiedProjectChange
 			if err := rows.Scan(
 				&change.sessionID,
+				&change.agent,
 				&change.previousProject,
 				&change.freshProject,
 			); err != nil {
@@ -1712,6 +1849,9 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 	for _, change := range projectChanges {
+		if err := refreshHermesCronAssignment(ctx, tx.ExecContext, Session{ID: change.sessionID, Agent: change.agent, Project: change.freshProject}); err != nil {
+			return fmt.Errorf("refreshing copied cron assignment: %w", err)
+		}
 		projects := []string{change.previousProject, change.freshProject}
 		if change.assignedProject.Valid {
 			projects = append(projects, change.assignedProject.String)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func TestCopySyncStateQueuesBothRecordedLocalArtifactIdentities(t *testing.T) {
@@ -479,6 +480,83 @@ func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 			id TEXT PRIMARY KEY
 		)`)
 	require.NoError(t, err, "recreate temp table after cleanup")
+}
+
+func TestRepairHermesCronProjectsPreservesOverridesAndTrash(t *testing.T) {
+	ctx := t.Context()
+	database := testDB(t)
+	const root = "hermes:cron_job-a_20261007_120000"
+	const missing = "hermes:cron_job-b_20261007_120000"
+	for _, row := range []struct{ id, parent, agent, project string }{
+		{root, "", "hermes", "hermes-cron"},
+		{"hermes:middle", root, "hermes", "hermes-cron"},
+		{"hermes:missing-parent", missing, "hermes", "hermes-cron"},
+		{"hermes:assigned", "", "hermes", "hermes-cron"},
+		{"hermes:new-child", "hermes:assigned", "hermes", "hermes-cron"},
+		{"hermes:fresh-child", "hermes:fresh-ancestor", "hermes", "hermes-cron"},
+		{"hermes:fresh-ancestor", missing, "hermes", "hermes-cron"},
+		{"hermes:cycle-a", "hermes:cycle-b", "hermes", "hermes-cron"},
+		{"hermes:cycle-b", "hermes:cycle-a", "hermes", "hermes-cron"},
+		{"mirror:hermes:foreign-child", "hermes:assigned", "hermes", "hermes-cron"},
+		{"hermes:trashed", missing, "hermes", "hermes-cron"},
+		{"augure-desktop:cron_job-c_20261007_120000", "", "augure-desktop", "augure-desktop-cron"},
+	} {
+		insertSession(t, database, row.id, row.project, func(s *Session) { s.Agent = row.agent; s.ParentSessionID = &row.parent })
+		insertMessages(t, database, Message{SessionID: row.id, Ordinal: 0, Role: "user", Content: "saved message"})
+	}
+	assignment, err := database.AssignSessionProject(ctx, "hermes:assigned", "manual")
+	require.NoError(t, err)
+	for _, id := range []string{root, "hermes:assigned", "hermes:cycle-b", "hermes:fresh-ancestor"} {
+		project := "hermes-cron"
+		if id == "hermes:assigned" {
+			project = "hermes-cron/job-b"
+		} else if id == "hermes:cycle-b" {
+			project = "hermes-cron/job-c"
+		} else if id == "hermes:fresh-ancestor" {
+			project = "hermes-cron/job-a"
+		}
+		require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(ctx, export.ProjectIdentityObservation{
+			SessionID: id, Project: project, Machine: defaultMachine, RootPath: "/tmp/project-a",
+		}, project))
+	}
+	freshJob, err := database.ResolveHermesCronJob(ctx, "hermes:new-child", root, "hermes")
+	require.NoError(t, err)
+	assert.Equal(t, "job-a", freshJob)
+	require.NoError(t, database.SoftDeleteSession(ctx, "hermes:trashed"))
+	_, err = database.getWriter().ExecContext(ctx, "UPDATE sessions SET local_modified_at = '2000-01-01T00:00:00Z'")
+	require.NoError(t, err)
+	require.NoError(t, database.RepairHermesCronProjects(ctx))
+	_, err = database.RestoreSession(ctx, "hermes:trashed")
+	require.NoError(t, err)
+	for _, tc := range []struct{ id, project string }{
+		{root, "hermes-cron/job-a"}, {"hermes:middle", "hermes-cron/job-a"},
+		{"hermes:missing-parent", "hermes-cron/job-b"}, {"hermes:trashed", "hermes-cron/job-b"},
+		{"hermes:assigned", assignment.Project}, {"augure-desktop:cron_job-c_20261007_120000", "augure-desktop-cron/job-c"},
+		{"hermes:new-child", "hermes-cron/job-b"}, {"hermes:cycle-a", "hermes-cron/job-c"},
+		{"hermes:fresh-child", "hermes-cron/job-b"}, {"hermes:fresh-ancestor", "hermes-cron/job-b"},
+		{"hermes:cycle-b", "hermes-cron/job-c"}, {"mirror:hermes:foreign-child", "hermes-cron"},
+	} {
+		session, err := database.GetSession(ctx, tc.id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, tc.project, session.Project)
+		if tc.id != "hermes:assigned" && tc.id != "mirror:hermes:foreign-child" {
+			var modified string
+			require.NoError(t, database.getWriter().QueryRowContext(ctx, "SELECT local_modified_at FROM sessions WHERE id = ?", tc.id).Scan(&modified))
+			assert.NotEqual(t, "2000-01-01T00:00:00Z", modified)
+		}
+		messages, err := database.GetAllMessages(ctx, tc.id)
+		require.NoError(t, err)
+		require.Len(t, messages, 1)
+		assert.Equal(t, "saved message", messages[0].Content)
+	}
+	cleared, err := database.ClearSessionProjectAssignment(ctx, "hermes:assigned")
+	require.NoError(t, err)
+	assert.Equal(t, "hermes-cron/job-b", cleared.Project)
+	snapshots, err := database.ListSessionProjectIdentitySnapshotsByID(ctx, []string{root, "hermes:assigned"})
+	require.NoError(t, err)
+	assert.Equal(t, "hermes-cron/job-a", snapshots[root].Project)
+	assert.Equal(t, "hermes-cron/job-b", snapshots["hermes:assigned"].Project)
 }
 
 func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {

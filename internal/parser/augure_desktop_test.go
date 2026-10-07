@@ -175,6 +175,31 @@ func TestAugureDesktopProviderParsesStateDB(t *testing.T) {
 	require.NotEmpty(t, result.Messages)
 	assert.Equal(t, RoleUser, result.Messages[0].Role)
 	assert.Equal(t, "List the parser files.", result.Messages[0].Content)
+	const dottedID = "cron_job.1_20261007_120000"
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET id = ?, source = 'cron';
+		UPDATE messages SET session_id = ?; UPDATE session_model_usage SET session_id = ?`, dottedID, dottedID, dottedID)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	var members []SourceRef
+	require.NoError(t, provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(source SourceRef) error {
+		members = append(members, source)
+		return nil
+	}))
+	require.Len(t, members, 1)
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{FullSessionID: "augure-desktop:" + dottedID})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, members[0].DisplayPath, found.DisplayPath)
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: found.DisplayPath})
+	require.NoError(t, err)
+	require.True(t, ok)
+	outcome, err = provider.Parse(t.Context(), ParseRequest{Source: found, Machine: "devbox"})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "augure-desktop-cron/job.1", outcome.Results[0].Result.Session.Project)
+	assert.Len(t, provider.(*hermesProvider).ReconciliationAggregateMemberPaths(stateDB, "augure-desktop:"+dottedID), 3)
 }
 
 // TestAugureDesktopAcceptsConfiguredCustomRoot pins the reviewer-trust
@@ -227,8 +252,10 @@ func TestAugureDesktopProjectRelabel(t *testing.T) {
 	assert.Equal(t, "augure-desktop", relabel("hermes", true))
 	assert.Equal(t, "augure-desktop-desktop", relabel("hermes-desktop", true))
 	assert.Equal(t, "augure-desktop-work", relabel("hermes-work", true))
+	assert.Equal(t, "augure-desktop-cron/job-a", relabel("hermes-cron/job-a", true))
 	// Explicit hints survive verbatim, including hermes-prefixed names.
 	assert.Equal(t, "hermes-tools", relabel("hermes-tools", false))
+	assert.Equal(t, "hermes-cron/job-a", relabel("hermes-cron/job-a", false))
 	assert.Equal(t, "my-project", relabel("my-project", false))
 	assert.Empty(t, relabel("", false))
 }
@@ -263,7 +290,7 @@ func TestAugureDesktopTranscriptProjectRelabel(t *testing.T) {
 		require.True(t, ok)
 		hp, ok := provider.(*hermesProvider)
 		require.True(t, ok)
-		sess, msgs, err := hp.parseSession(path, hint, "devbox")
+		sess, msgs, err := hp.parseSession(path, hint, "devbox", nil)
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		result := &ParseResult{Session: *sess, Messages: msgs}

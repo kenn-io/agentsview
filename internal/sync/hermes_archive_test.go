@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -379,6 +380,173 @@ func TestSyncPathsHermesArchiveWALCommitRefreshesMetadata(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, stateAfter.Size()+walInfo.Size(), storedSize)
 	assert.Equal(t, walTime.UnixNano(), storedMtime)
+}
+
+func TestHermesCronStableCostsSurviveRenameAndSourcePruning(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	writer, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	stamp := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC).Unix()
+	_, err = writer.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions;
+		INSERT INTO sessions(id, source, model, parent_session_id, started_at, input_tokens, actual_cost_usd, cost_status, cost_source, title) VALUES
+		('cron_job.a_20261007_120000', 'cron', 'gpt-5.4', NULL, ?, 10, 5, 'actual', 'hermes', 'Daily digest · Oct 07 12:00'),
+		('middle', 'cron', 'gpt-5.4', 'cron_job.a_20261007_120000', ?, 10, 0, 'actual', 'hermes', 'Daily digest · Oct 07 12:00'),
+		('tip', 'cron', 'gpt-5.4', 'middle', ?, 10, 3, 'actual', 'hermes', 'Daily digest · Oct 07 12:00'),
+		('cron_job.a_20261007_130000', 'cron', 'gpt-5.4', NULL, ?, 10, 3, 'actual', 'hermes', 'Research digest · Oct 07 13:00'),
+		('cron_job-b_20261007_120000', 'cron', 'gpt-5.4', NULL, ?, 10, 2, 'actual', 'hermes', 'Daily digest · Oct 07 12:00');
+		INSERT INTO messages(session_id, role, content, timestamp) SELECT id, 'user', 'run message', started_at FROM sessions;`, stamp, stamp, stamp, stamp, stamp)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	const transcriptID = "cron_job.a_20261007_140000"
+	require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, "session_"+transcriptID+".json"), []byte(`{"platform":"cron","session_start":"2026-10-07T14:00:00Z","messages":[{"role":"user","content":"transcript only"}]}`), 0o600))
+	for _, row := range []struct{ id, parent string }{{"transcript-middle", transcriptID}, {"transcript-tip", "transcript-middle"}} {
+		body := fmt.Sprintf(`{"source":"cron","parent_session_id":%q,"session_start":"2026-10-07T14:00:00Z","messages":[{"role":"user","content":"compressed transcript"}]}`, row.parent)
+		require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, "session_"+row.id+".json"), []byte(body), 0o600))
+	}
+	database := dbtest.OpenTestDB(t)
+	cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local"}
+	engine := NewEngine(t.Context(), database, cfg)
+	t.Cleanup(engine.Close)
+	initial := engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 8, initial.Synced)
+	jobACost := "11"
+	check := func(database *db.DB) map[string]string {
+		keys := make(map[string]string)
+		for _, window := range []struct{ from, to string }{{"2026-10-07", "2026-10-07"}, {"2026-10-01", "2026-10-31"}} {
+			for _, job := range []struct{ id, cost string }{{"job.a", jobACost}, {"job-b", "2"}} {
+				result, err := database.GetDailyUsage(t.Context(), db.UsageFilter{From: window.from, To: window.to, Agent: "hermes", ProjectLabels: []string{"hermes-cron/" + job.id}, Breakdowns: true})
+				require.NoError(t, err)
+				assert.Equal(t, money.MustParseDollars(job.cost), result.Totals.TotalCost)
+				require.Len(t, result.Daily, 1)
+				require.Len(t, result.Daily[0].ProjectBreakdowns, 1)
+				key := result.Daily[0].ProjectBreakdowns[0].ProjectKey
+				assert.NotEmpty(t, key)
+				if previous := keys[job.id]; previous != "" {
+					assert.Equal(t, previous, key)
+				}
+				keys[job.id] = key
+			}
+		}
+		assert.NotEqual(t, keys["job.a"], keys["job-b"])
+		ids := []string{"cron_job.a_20261007_120000", "middle", "tip", "cron_job.a_20261007_130000", transcriptID, "transcript-middle", "transcript-tip"}
+		if jobACost == "14" {
+			ids = append(ids, "aaa-child")
+		}
+		for _, id := range ids {
+			session, err := database.GetSession(t.Context(), "hermes:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, "hermes-cron/job.a", session.Project)
+		}
+		return keys
+	}
+	keys := check(database)
+	directDatabase := dbtest.OpenTestDB(t)
+	directEngine := NewEngine(t.Context(), directDatabase, cfg)
+	t.Cleanup(directEngine.Close)
+	require.Equal(t, 8, directEngine.SyncAll(t.Context(), nil).Synced)
+	directKeys := check(directDatabase)
+	writer, err = sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	for _, id := range []string{"middle", "cron_job.a_20261007_120000"} {
+		_, err = writer.ExecContext(t.Context(), `UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = ?;
+		DELETE FROM messages WHERE session_id = ?; DELETE FROM sessions WHERE id = ?`, id, id, id)
+		require.NoError(t, err)
+	}
+	require.NoError(t, writer.Close())
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+	assert.Equal(t, keys, check(database))
+	rebuilt := directEngine.ResyncAll(t.Context(), nil)
+	require.False(t, rebuilt.Aborted, "%v", rebuilt.Warnings)
+	assert.Equal(t, directKeys, check(directDatabase))
+	writer, err = sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO sessions(id, source, model, parent_session_id, started_at, input_tokens, actual_cost_usd, cost_status, cost_source)
+		VALUES ('aaa-child', 'cron', 'gpt-5.4', 'tip', ?, 10, 3, 'actual', 'hermes');
+		INSERT INTO messages(session_id, role, content, timestamp) VALUES ('aaa-child', 'user', 'new continuation', ?)`, stamp-1, stamp-1)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	jobACost = "14"
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+	assert.Equal(t, keys, check(database))
+	rebuilt = directEngine.ResyncAll(t.Context(), nil)
+	require.False(t, rebuilt.Aborted, "%v", rebuilt.Warnings)
+	assert.Equal(t, directKeys, check(directDatabase))
+	partial := engine.ResyncAll(t.Context(), nil)
+	require.False(t, partial.Aborted, "%v", partial.Warnings)
+	assert.Equal(t, 2, partial.OrphanedCopied)
+	assert.Equal(t, keys, check(database))
+	for _, row := range []struct{ id, parent string }{{"middle", "cron_job.a_20261007_120000"}, {"tip", "middle"}} {
+		body := fmt.Sprintf(`{"source":"cron","parent_session_id":%q,"messages":[{"role":"user","content":"run message"},{"role":"assistant","content":"richer reply"}]}`, row.parent)
+		require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, "session_"+row.id+".json"), []byte(body), 0o600))
+	}
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+	assert.Equal(t, keys, check(database))
+	messages, err := database.GetAllMessages(t.Context(), "hermes:tip")
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "richer reply", messages[1].Content)
+	archive, err := sql.Open("sqlite3", database.Path())
+	require.NoError(t, err)
+	_, err = archive.ExecContext(t.Context(), `UPDATE sessions SET project = 'hermes-cron' WHERE id != ?`, "hermes:"+transcriptID)
+	require.NoError(t, err)
+	require.NoError(t, archive.Close())
+	for _, id := range []string{"middle", "tip"} {
+		require.NoError(t, os.Remove(filepath.Join(sessionsDir, "session_"+id+".json")))
+	}
+	require.NoError(t, os.Remove(stateDB))
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "%v", stats.Warnings)
+	assert.Equal(t, 6, stats.OrphanedCopied)
+	assert.Equal(t, keys, check(database))
+}
+
+func TestReconcileHermesTranscriptCronAncestorArrival(t *testing.T) {
+	root := t.TempDir()
+	tipPath := filepath.Join(root, "session_tip.json")
+	require.NoError(t, os.WriteFile(tipPath, []byte(`{"source":"cron","parent_session_id":"middle","messages":[{"role":"user","content":"retained run"}]}`), 0o600))
+	info, err := os.Stat(tipPath)
+	require.NoError(t, err)
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	check := func(want string) {
+		require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+		session, err := database.GetSession(t.Context(), "hermes:tip")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, want, session.Project)
+		current, err := os.Stat(tipPath)
+		require.NoError(t, err)
+		assert.Equal(t, info.ModTime(), current.ModTime())
+	}
+	check("hermes-cron")
+	middle := filepath.Join(root, "session_middle.json")
+	for _, job := range []string{"job-a", "job-b"} {
+		body := fmt.Sprintf(`{"source":"cron","parent_session_id":"cron_%s_20261007_120000","messages":[{"role":"user","content":"earlier segment"}]}`, job)
+		require.NoError(t, os.WriteFile(middle, []byte(body), 0o600))
+		check("hermes-cron/" + job)
+		rebuilt := engine.ResyncAll(t.Context(), nil)
+		require.False(t, rebuilt.Aborted, "%v", rebuilt.Warnings)
+		check("hermes-cron/" + job)
+	}
+	require.NoError(t, os.Remove(middle))
+	check("hermes-cron/job-b")
+	provider, ok := parser.NewProvider(parser.AgentHermes, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{RawSessionID: "tip"})
+	require.NoError(t, err)
+	require.True(t, found)
+	source.ProjectHint = "hermes-cron"
+	parsed, err := provider.Parse(t.Context(), parser.ParseRequest{Source: source, Machine: "local"})
+	require.NoError(t, err)
+	require.Len(t, parsed.Results, 1)
+	preserved, err := engine.preserveUnavailableSourceProjects(t.Context(), []pendingWrite{{sess: parsed.Results[0].Result.Session}})
+	require.NoError(t, err)
+	assert.Equal(t, "hermes-cron", preserved[0].sess.Project)
 }
 
 func openHermesArchiveWALWriter(t *testing.T, stateDB string) *sql.DB {

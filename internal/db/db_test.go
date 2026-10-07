@@ -1121,6 +1121,11 @@ func TestCurrentDataVersionClaudePeerMessages(t *testing.T) {
 		"version 126 is the data-version boundary for Claude peer-message classification")
 }
 
+func TestCurrentDataVersionHermesCronProjects(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 127,
+		"version 127 is the data-version boundary for stable Hermes cron job projects")
+}
+
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")
