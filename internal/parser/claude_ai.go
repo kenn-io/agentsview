@@ -22,7 +22,6 @@ type claudeAIConversation struct {
 type claudeAIMessage struct {
 	UUID        string               `json:"uuid"`
 	Parent      jsontext.Value       `json:"parent_message_uuid"`
-	Index       *int                 `json:"index"`
 	Text        string               `json:"text"`
 	Content     []claudeAIBlock      `json:"content"`
 	Sender      string               `json:"sender"`
@@ -112,24 +111,17 @@ func ParseClaudeAIDetail(data []byte) (ParseResult, error) {
 	if conv == nil || conv.UUID == "" || len(conv.Messages) == 0 {
 		return ParseResult{}, fmt.Errorf("expected conversation with chat_messages")
 	}
-	if slices.ContainsFunc(conv.Messages, func(m claudeAIMessage) bool { return len(m.Parent) > 0 && string(m.Parent) != "null" }) {
-		messages, err := selectedClaudeAIPath(*conv)
-		if err != nil {
-			return ParseResult{}, err
-		}
-		conv.Messages = messages
+	messages, err := selectedClaudeAIPath(*conv)
+	if err != nil {
+		return ParseResult{}, err
 	}
+	conv.Messages = messages
 	result, err := convertClaudeAIConversation(*conv)
 	if err != nil {
 		return ParseResult{}, err
 	}
-	if len(conv.CurrentLeaf) > 0 && string(conv.CurrentLeaf) != "null" {
-		var leaf string
-		if err := json.Unmarshal(conv.CurrentLeaf, &leaf); err != nil {
-			return ParseResult{}, err
-		}
-		result.Session.LastEntryUUID = &leaf
-	}
+	leaf := messages[len(messages)-1].UUID
+	result.Session.LastEntryUUID = &leaf
 	return result, nil
 }
 
@@ -203,122 +195,44 @@ func buildClaudeAttachmentText(
 	return parts
 }
 
-// selectedClaudeAIPath follows Claude's visible branch and restores its unanswered prompt.
+// selectedClaudeAIPath walks the server leaf's ancestors back to the root.
 func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) {
 	const root = "00000000-0000-4000-8000-000000000000"
-	byID := make(map[string]claudeAIMessage)
-	parents := make(map[string]string)
-	kept := make(map[string]bool)
+	var leaf string
+	if conv.CurrentLeaf.Kind() != jsontext.KindString || json.Unmarshal(conv.CurrentLeaf, &leaf) != nil || leaf == "" || leaf == root {
+		return nil, fmt.Errorf("expected current_leaf_message_uuid string naming a message")
+	}
+	byID := make(map[string]claudeAIMessage, len(conv.Messages))
+	parents := make(map[string]string, len(conv.Messages))
 	for _, m := range conv.Messages {
 		if _, exists := byID[m.UUID]; exists {
 			return nil, fmt.Errorf("duplicate message uuid %s", m.UUID)
 		}
-		byID[m.UUID] = m
-		if len(m.Parent) > 0 && string(m.Parent) != "null" {
-			var parentsValue string
-			if err := json.Unmarshal(m.Parent, &parentsValue); err != nil {
-				return nil, err
-			}
-			parents[m.UUID] = parentsValue
+		var parent string
+		if m.Parent.Kind() != jsontext.KindString || json.Unmarshal(m.Parent, &parent) != nil {
+			return nil, fmt.Errorf("message %s's parent must be a string", m.UUID)
 		}
-		if m.Sender == "assistant" && parents[m.UUID] != "" {
-			kept[parents[m.UUID]] = true
-		}
-		if m.Sender == "assistant" || len(m.Parent) == 0 {
-			kept[m.UUID] = true
-		}
+		byID[m.UUID], parents[m.UUID] = m, parent
 	}
-	for id := range kept {
-		for parent := parents[id]; parent != "" && !kept[parent]; parent = parents[parent] {
-			kept[parent] = true
+	for id, parent := range parents {
+		if _, exists := byID[parent]; parent != root && !exists {
+			return nil, fmt.Errorf("message %s's parent %s is missing", id, parent)
 		}
-	}
-	var messages, dangling []claudeAIMessage
-	byIndex := make(map[int]string)
-	for _, m := range conv.Messages {
-		if kept[m.UUID] {
-			messages = append(messages, m)
-			if m.Index != nil {
-				byIndex[*m.Index] = m.UUID
-			}
-		} else if m.Sender == "human" {
-			dangling = append(dangling, m)
-		}
-	}
-	selected := make(map[string]string)
-	for _, m := range messages {
-		parent := parents[m.UUID]
-		if parent == "" && m.Index != nil {
-			for i := *m.Index - 1; parent == "" && i >= 0; i-- {
-				parent = byIndex[i]
-			}
-		}
-		if parent == "" {
-			parent = root
-		}
-		if _, exists := byID[parent]; parent != root && (!exists || !kept[parent]) {
-			return nil, fmt.Errorf("message %s's parent %s is missing", m.UUID, parent)
-		}
-		parents[m.UUID] = parent
-		if selected[parent] == "" {
-			selected[parent] = m.UUID
-		}
-	}
-	if len(messages) > 0 && selected[root] == "" {
-		return nil, fmt.Errorf("no root message found")
-	}
-	var leaf string
-	if len(conv.CurrentLeaf) > 0 && string(conv.CurrentLeaf) != "null" {
-		if err := json.Unmarshal(conv.CurrentLeaf, &leaf); err != nil {
-			return nil, err
-		}
-	}
-	serverLeaf := leaf
-	if leaf != "" && !slices.ContainsFunc(messages, func(m claudeAIMessage) bool { return m.UUID == leaf }) {
-		leaf = ""
-		if len(messages) > 0 {
-			leaf = messages[len(messages)-1].UUID
-		}
-	}
-	seen := make(map[string]bool)
-	for id := leaf; id != "" && id != root; id = parents[id] {
-		if seen[id] {
-			return nil, fmt.Errorf("cycle at message %s", id)
-		}
-		seen[id] = true
-		selected[parents[id]] = id
 	}
 	var path []claudeAIMessage
-	clear(seen)
-	for id := selected[root]; id != ""; id = selected[id] {
+	seen := make(map[string]bool)
+	for id := leaf; id != root; id = parents[id] {
+		m, exists := byID[id]
+		if !exists {
+			return nil, fmt.Errorf("message %s is missing", id)
+		}
 		if seen[id] {
 			return nil, fmt.Errorf("cycle at message %s", id)
 		}
 		seen[id] = true
-		path = append(path, byID[id])
+		path = append(path, m)
 	}
-	last := root
-	if len(path) > 0 {
-		last = path[len(path)-1].UUID
-	}
-	var prompt *claudeAIMessage
-	for i := range dangling {
-		m := &dangling[i]
-		if serverLeaf != "" && m.UUID == serverLeaf {
-			prompt = m
-			break
-		}
-		parent := parents[m.UUID]
-		if len(m.Parent) == 0 || string(m.Parent) == "null" {
-			parent = root
-		}
-		if parent == last {
-			prompt = m
-		}
-	}
-	if prompt != nil {
-		path = append(path, *prompt)
-	}
+	slices.Reverse(path)
 	return path, nil
 }
 

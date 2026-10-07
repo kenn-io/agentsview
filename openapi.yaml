@@ -13079,6 +13079,7 @@ paths:
                 $ref: "#/components/schemas/ImporterImportStats"
             text/event-stream:
               schema:
+                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync."
                 type: string
           description: OK
         "400":
