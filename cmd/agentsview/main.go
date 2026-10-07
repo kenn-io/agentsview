@@ -1370,18 +1370,9 @@ func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter, cfg 
 func runDailyTelemetryPings(ctx context.Context, interval time.Duration, cfg config.Config, send func() error) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	var settledDay string
 	for {
-		now := time.Now()
-		if day := now.UTC().Format(time.DateOnly); day != settledDay {
-			_, err := cfg.ClaimDaemonActive(now, send)
-			if err != nil && ctx.Err() == nil {
-				log.Printf("capture telemetry event: %v", err)
-			}
-			// A failed send or record write leaves the day open for the next check.
-			if err == nil {
-				settledDay = day
-			}
+		if err := cfg.ClaimDaemonActive(time.Now(), send); err != nil && ctx.Err() == nil {
+			log.Printf("capture telemetry event: %v", err)
 		}
 		select {
 		case <-ctx.Done():

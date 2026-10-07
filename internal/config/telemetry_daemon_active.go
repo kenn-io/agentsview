@@ -19,9 +19,9 @@ const telemetryDaemonActiveFilename = "telemetry-daemon-active"
 // send fails, it undoes the reservation by putting back the previous record,
 // which leaves the day open for a retry. If undoing also fails, the
 // installation reports nothing for that day.
-func (c *Config) ClaimDaemonActive(now time.Time, send func() error) (claimed bool, err error) {
+func (c *Config) ClaimDaemonActive(now time.Time, send func() error) error {
 	day := now.UTC().Format(time.DateOnly)
-	err = c.withConfigLock(func() error {
+	return c.withConfigLock(func() error {
 		path := filepath.Join(c.DataDir, telemetryDaemonActiveFilename)
 		previous, err := os.ReadFile(path)
 		existed := err == nil
@@ -44,8 +44,6 @@ func (c *Config) ClaimDaemonActive(now time.Time, send func() error) (claimed bo
 			}
 			return errors.Join(err, undoErr)
 		}
-		claimed = true
 		return nil
 	})
-	return claimed, err
 }
