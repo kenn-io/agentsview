@@ -23,22 +23,15 @@ type rawEmbeddingChange struct{ session, revision, action string }
 
 // publishRawRevision issues the corpus revision for rows the caller has already
 // written and queues their embedding work under it. It locks the corpus row,
-// which manifest acceptance and every other publication also update, so it
-// must be the last work of a transaction.
+// which manifest acceptance and every other publication also update, so
+// nothing after it in the transaction may wait on another transaction's lock.
+// The outbox rows record the selection revision read under that lock, which is
+// the one the transaction commits with.
 func publishRawRevision(ctx context.Context, tx *sql.Tx, identityChanged bool, changes []rawEmbeddingChange) error {
-	var revision int64
-	err := tx.QueryRowContext(ctx, `INSERT INTO raw_corpus_state(singleton,corpus_revision,identity_revision) VALUES(1,1,CASE WHEN $1 THEN 1 ELSE 0 END) ON CONFLICT(singleton) DO UPDATE SET corpus_revision=raw_corpus_state.corpus_revision+1,identity_revision=raw_corpus_state.identity_revision+EXCLUDED.identity_revision RETURNING corpus_revision`, identityChanged).Scan(&revision)
-	if err != nil {
+	var corpus int64
+	err := tx.QueryRowContext(ctx, `INSERT INTO raw_corpus_state(singleton,corpus_revision,identity_revision) VALUES(1,1,CASE WHEN $1 THEN 1 ELSE 0 END) ON CONFLICT(singleton) DO UPDATE SET corpus_revision=raw_corpus_state.corpus_revision+1,identity_revision=raw_corpus_state.identity_revision+EXCLUDED.identity_revision RETURNING corpus_revision`, identityChanged).Scan(&corpus)
+	if err != nil || len(changes) == 0 {
 		return err
-	}
-	return queueRawEmbeddingChanges(ctx, tx, changes, revision)
-}
-
-// queueRawEmbeddingChanges requires the caller to hold the corpus row lock that
-// issued corpus, so the recorded selection revision is the one it commits with.
-func queueRawEmbeddingChanges(ctx context.Context, tx *sql.Tx, changes []rawEmbeddingChange, corpus int64) error {
-	if len(changes) == 0 {
-		return nil
 	}
 	sessions := make([]string, len(changes))
 	revisions := make([]string, len(changes))
@@ -46,7 +39,7 @@ func queueRawEmbeddingChanges(ctx context.Context, tx *sql.Tx, changes []rawEmbe
 	for i, c := range changes {
 		sessions[i], revisions[i], actions[i] = c.session, c.revision, c.action
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO raw_embedding_outbox(session_id,corpus_revision,content_revision,action,selection_revision) SELECT c.session_id,$2,c.content_revision,c.action,s.selection_revision FROM unnest($1::text[],$3::text[],$4::text[]) AS c(session_id,content_revision,action) CROSS JOIN raw_corpus_state s WHERE s.singleton=1 ON CONFLICT DO NOTHING`, sessions, corpus, revisions, actions)
+	_, err = tx.ExecContext(ctx, `INSERT INTO raw_embedding_outbox(session_id,corpus_revision,content_revision,action,selection_revision) SELECT c.session_id,$2,c.content_revision,c.action,s.selection_revision FROM unnest($1::text[],$3::text[],$4::text[]) AS c(session_id,content_revision,action) CROSS JOIN raw_corpus_state s WHERE s.singleton=1 ON CONFLICT DO NOTHING`, sessions, corpus, revisions, actions)
 	return err
 }
 

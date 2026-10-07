@@ -259,7 +259,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 	// Materialization is serialized per group by the group locks taken above.
 	// The corpus row is shared with manifest acceptance and every other
-	// projection, so it is locked last, immediately before commit.
+	// projection, so it is locked only after every row write.
 	var embeddings []rawEmbeddingChange
 	if changed {
 		for _, group := range ordered {
@@ -287,14 +287,16 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if err != nil {
 		return err
 	}
-	outcome, err := completeProjectionJob(ctx, tx, lease, complete, s.options.RetryPolicy)
-	if err != nil {
-		return err
-	}
 	if changed || derivedChanged {
 		if err = publishRawRevision(ctx, tx, changed, embeddings); err != nil {
 			return err
 		}
+	}
+	// The job row is already locked, so completing it cannot wait. Checking the
+	// lease after the corpus row wait keeps an expired lease from committing.
+	outcome, err := completeProjectionJob(ctx, tx, lease, complete, s.options.RetryPolicy)
+	if err != nil {
+		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err

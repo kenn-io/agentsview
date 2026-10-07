@@ -357,3 +357,35 @@ func TestRawProjectionRollsBackWhenLeaseExpiresDuringWrites(t *testing.T) {
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM raw_source_contributions`).Scan(&count))
 	assert.Zero(t, count)
 }
+
+func TestRawProjectionRollsBackWhenLeaseExpiresWaitingForCorpusRevision(t *testing.T) {
+	f := newProjectionFixture(t)
+	m, _ := f.accept(t, "device-a", "expires-waiting", "")
+	_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-1")
+	require.NoError(t, err)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "expiry-worker", 1, time.Second)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	gate, err := f.admin.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	_, err = gate.ExecContext(ctx, `UPDATE raw_corpus_state SET corpus_revision=corpus_revision WHERE singleton=1`)
+	require.NoError(t, err)
+
+	projected := make(chan error, 1)
+	go func() { projected <- f.sink.Project(ctx, leases[0], m, projectionOutcome("expires waiting")) }()
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := f.admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='transactionid'`, f.role).Scan(&waiting)
+		return err == nil && waiting == 1
+	}, 3*time.Second, 10*time.Millisecond)
+	time.Sleep(time.Until(leases[0].ExpiresAt) + 100*time.Millisecond)
+	require.NoError(t, gate.Commit())
+
+	require.ErrorIs(t, <-projected, rawderive.ErrLeaseLost)
+	var count int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM sessions`).Scan(&count))
+	assert.Zero(t, count)
+}
