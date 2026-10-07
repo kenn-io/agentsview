@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -488,8 +489,9 @@ func TestDirectBackend_UsageSummary_ExcludesOpaqueProjectKey(t *testing.T) {
 	t.Parallel()
 
 	for _, cron := range []bool{false, true} {
-		name := fmt.Sprint(cron)
+		name := strconv.FormatBool(cron)
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			d := dbtest.OpenTestDB(t)
 			seedPairwiseUsageFixture(t, d)
 			alpha, beta := "alpha", "beta"

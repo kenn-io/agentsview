@@ -477,7 +477,8 @@ func TestHermesCronProjectTitleLabels(t *testing.T) {
 		{"Daily · digest · Oct 07 12:00", "Daily · digest"},
 		{"  Daily digest  · Oct 07 12:00", "Daily digest"},
 		{"job-a · Oct 07 12:00", ""},
-		{"Daily digest · ", ""}, {"cron job-a · Oct 07 12:00", ""},
+		{"Daily digest · ", ""},
+		{"cron job-a · Oct 07 12:00", ""},
 	} {
 		t.Run(tc.title, func(t *testing.T) {
 			assert.Equal(t, tc.want, HermesCronRecordedName("hermes-cron/job-a", tc.title))
