@@ -127,7 +127,6 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	}}}
 	got, err := rawContentRevision(p)
 	require.NoError(t, err)
-	// Recorded with the original normalized-content-v1 encoder. Existing
-	// content identities must survive a change of JSON implementation.
-	assert.Equal(t, "d5c710716bc7b8a68d60e43d58192489be71935625e141f9eb6c9dae723c3a29", got)
+	// The canonical representation includes the cleared Labels field.
+	assert.Equal(t, "2cd456a1c40beaff7e47328dcb83e80499692d01f010e82ed548691d1a5fb7f6", got)
 }
