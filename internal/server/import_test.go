@@ -71,8 +71,8 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				case "/api/organizations":
 					postResult(request.ID, `[{"uuid":"org","capabilities":["chat"]}]`, http.StatusNoContent)
 				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-					postResult(request.ID, `{"conversations":[{"uuid":"relay","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
-				case "/api/organizations/org/chat_conversations/relay?tree=True":
+					postResult(request.ID, `{"data":[{"uuid":"relay","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
+				case "/api/organizations/org/chat_conversations/relay?tree=True&rendering_mode=messages&consistency=strong":
 					postResult(request.ID, `{"uuid":"relay","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
 				default:
 					t.Fatalf("unexpected path %s", request.Path)

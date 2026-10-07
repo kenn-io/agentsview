@@ -82,28 +82,26 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		}
 		ctx, cancel := context.WithCancel(hctx.Context())
 		defer cancel()
-		fetch := func(ctx context.Context, path string) (int, []byte, error) {
+		fetch := func(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
 			id := rand.Text()
 			answer := make(chan claudeAISyncResult, 1)
 			results.Store(id, answer)
 			defer results.Delete(id)
 			if !stream.SendJSON("fetch", map[string]string{"id": id, "path": path}) {
 				cancel()
-				return 0, nil, ctx.Err()
+				return importer.ClaudeAIResponse{}, ctx.Err()
 			}
 			select {
 			case <-ctx.Done():
-				return 0, nil, ctx.Err()
+				return importer.ClaudeAIResponse{}, ctx.Err()
 			case <-time.After(2 * time.Minute):
-				return 0, nil, errors.New("Claude browser fetch timed out")
+				return importer.ClaudeAIResponse{}, errors.New("Claude browser fetch timed out")
 			case response := <-answer:
 				var err error
 				if response.status == 0 {
 					err = errors.New(string(response.body))
-				} else if response.retryAfter != "" {
-					err = importer.ClaudeAIRetryAfter(response.retryAfter)
 				}
-				return response.status, response.body, err
+				return importer.ClaudeAIResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, err
 			}
 		}
 		stats, err := importer.SyncClaudeAI(ctx, store, fetch, &importer.ImportCallbacks{

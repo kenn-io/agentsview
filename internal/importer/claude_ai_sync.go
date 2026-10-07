@@ -14,21 +14,24 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 var errClaudeAINotFound = errors.New("Claude returned HTTP 404")
 
-// ClaudeAIRetryAfter carries the browser's response header without credentials.
-type ClaudeAIRetryAfter string
-
-func (e ClaudeAIRetryAfter) Error() string { return string(e) }
+// ClaudeAIResponse carries the browser response without credentials.
+type ClaudeAIResponse struct {
+	Status     int
+	Body       []byte
+	RetryAfter string
+}
 
 // SyncClaudeAI imports changed conversations through the existing export importer.
 func SyncClaudeAI(ctx context.Context, store interface {
 	db.Store
 	IsSessionTrashed(context.Context, string) bool
 	IsSessionExcluded(context.Context, string) bool
-}, fetch func(context.Context, string) (int, []byte, error), cb *ImportCallbacks) (stats ImportStats, retErr error) {
+}, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks) (stats ImportStats, retErr error) {
 	raw, err := fetchClaudeAI(ctx, fetch, "/api/organizations")
 	if err != nil {
 		return stats, err
@@ -63,17 +66,20 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				return stats, err
 			}
 			var page struct {
-				Conversations []json.RawMessage `json:"conversations"`
-				HasMore       *bool             `json:"has_more"`
+				Data    []json.RawMessage `json:"data"`
+				HasMore *bool             `json:"has_more"`
 			}
 			if err := json.Unmarshal(raw, &page); err != nil {
 				return stats, err
 			}
-			items := page.Conversations
+			items := page.Data
 			if items == nil {
-				return stats, errors.New("Claude list had no conversations")
+				return stats, errors.New("Claude list had no data")
 			}
 			if len(items) == 0 {
+				if page.HasMore != nil && *page.HasMore {
+					return stats, errors.New("Claude list returned an empty page with has_more: true")
+				}
 				break
 			}
 			for _, summary := range items {
@@ -110,7 +116,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					cb.progress(stats)
 					continue
 				}
-				detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True")
+				detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True&rendering_mode=messages&consistency=strong")
 				if errors.Is(err, errClaudeAINotFound) {
 					stats.Skipped++
 					cb.progress(stats)
@@ -122,7 +128,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				var imported ImportStats
 				write := func() error {
 					var err error
-					imported, err = ImportClaudeAIWithOptions(ctx, store, bytes.NewReader(append(append([]byte{'['}, detail...), ']')), nil, ImportOptions{IncrementalFTS: true})
+					imported, err = ImportClaudeAIWithOptions(ctx, store, bytes.NewReader(append(append([]byte{'['}, detail...), ']')), nil, ImportOptions{IncrementalFTS: true, Replace: []string{id}, claudeAISync: true})
 					if err != nil {
 						imported.record(id, importSkipped, err)
 					}
@@ -161,13 +167,25 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	return stats, nil
 }
 
-func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (int, []byte, error), path string) ([]byte, error) {
+func upsertClaudeAISyncConversation(ctx context.Context, store db.Store, result parser.ParseResult, fts *lazyFTS) (importStatus, error) {
+	archived, err := store.GetAllMessages(ctx, result.Session.ID)
+	if err != nil {
+		return importNew, err
+	}
+	incoming := storedFormMessages(store, claudeAIMessages(result.Session.ID, result.Messages))
+	if len(incoming) >= len(archived) && !sameMessages(archived, incoming[:len(archived)]) {
+		return importNew, refuse(RefusalDiverged, errors.New("selected path rewrites archived messages"))
+	}
+	return upsertConversation(ctx, store, result, fts)
+}
+
+func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), path string) ([]byte, error) {
 	for attempt := 0; ; attempt++ {
-		status, body, err := fetch(ctx, path)
-		var retryAfter ClaudeAIRetryAfter
-		if err != nil && !errors.As(err, &retryAfter) {
+		response, err := fetch(ctx, path)
+		if err != nil {
 			return nil, err
 		}
+		status := response.Status
 		if status == http.StatusNotFound {
 			return nil, errClaudeAINotFound
 		}
@@ -178,12 +196,12 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (int
 			if status < 200 || status >= 300 {
 				return nil, fmt.Errorf("Claude returned HTTP %d", status)
 			}
-			return body, nil
+			return response.Body, nil
 		}
 		delay := time.Duration(1<<attempt) * time.Second
-		if seconds, e := strconv.Atoi(string(retryAfter)); e == nil && seconds >= 0 {
+		if seconds, e := strconv.Atoi(response.RetryAfter); e == nil && seconds >= 0 {
 			delay = time.Duration(min(seconds, 60)) * time.Second
-		} else if date, e := http.ParseTime(string(retryAfter)); e == nil {
+		} else if date, e := http.ParseTime(response.RetryAfter); e == nil {
 			delay = max(time.Duration(0), min(time.Until(date), 60*time.Second))
 		}
 		select {
