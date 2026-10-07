@@ -72,6 +72,33 @@ describe("syncClaudeAI browser relay", () => {
     expect(progress).toHaveBeenCalledWith({ imported: 1, updated: 0, skipped: 0, errors: 0 });
   });
 
+  it.each(["returned", "thrown"])("relays %s browser errors to the user", async (kind) => {
+    let stream: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const message = "TypeError: Failed to fetch";
+    const host = {
+      fetch: kind === "returned"
+        ? vi.fn().mockResolvedValue({ status: 0, body: "", error: message })
+        : vi.fn().mockRejectedValue(new Error(message)),
+    } as unknown as BrowserHost;
+    const expected = kind === "returned" ? message : "Error: " + message;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, options: RequestInit) => {
+      if (url === "/api/v1/import/claude-ai/sync") {
+        return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+          stream = controller;
+          stream.enqueue(encoder.encode('event: fetch\ndata: {"id":"failed","path":"/api/organizations/org/chat_conversations_v2"}\n\n'));
+        } }), { headers: { "Content-Type": "text/event-stream" } });
+      }
+      expect(url).toBe("/api/v1/import/claude-ai/sync/results/failed?status=0");
+      expect(await (options.body as Blob).text()).toBe(expected);
+      stream.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: expected })}\n\n`));
+      stream.close();
+      return new Response(null, { status: 204 });
+    }));
+    await expect(syncClaudeAI("org", host)).rejects.toThrow(expected);
+    expect(host.fetch).toHaveBeenCalledWith("/api/organizations/org/chat_conversations_v2");
+  });
+
   it("ends the stream when posting a result fails", async () => {
     const cancelled = vi.fn();
     const host = {
