@@ -4,6 +4,8 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -186,8 +188,8 @@ type repoRootEntry struct {
 }
 
 type repoRootFile struct {
-	contents string
-	exists   bool
+	sum    [sha256.Size]byte
+	exists bool
 }
 
 type repoRootConfig struct {
@@ -195,16 +197,27 @@ type repoRootConfig struct {
 	config, worktree repoRootFile
 }
 
-func readRepoRootFile(path string) (repoRootFile, error) {
+func readRepoRootFile(path string, out io.Writer) (bool, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
-		return repoRootFile{}, nil
+		return false, nil
 	}
 	if err != nil || !info.Mode().IsRegular() {
-		return repoRootFile{}, os.ErrInvalid
+		return false, os.ErrInvalid
 	}
-	data, err := os.ReadFile(path)
-	return repoRootFile{contents: string(data), exists: true}, err
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	_, err = io.Copy(out, file)
+	return true, err
+}
+
+func fingerprintRepoRootFile(path string) (repoRootFile, error) {
+	hash := sha256.New()
+	exists, err := readRepoRootFile(path, hash)
+	return repoRootFile{sum: [sha256.Size]byte(hash.Sum(nil)), exists: exists}, err
 }
 
 // Git root setup reads these two config files directly, without expanding includes.
@@ -214,8 +227,9 @@ func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
 	}
 	gitdir := marker.path
 	if marker.info.Mode().IsRegular() {
-		file, err := readRepoRootFile(marker.path)
-		pointer, ok := strings.CutPrefix(file.contents, "gitdir: ")
+		var file strings.Builder
+		_, err := readRepoRootFile(marker.path, &file)
+		pointer, ok := strings.CutPrefix(file.String(), "gitdir: ")
 		gitdir = strings.TrimRight(pointer, "\r\n")
 		if err != nil || !ok || gitdir == "" {
 			return repoRootConfig{}, false
@@ -228,13 +242,14 @@ func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
 	if err != nil {
 		return repoRootConfig{}, false
 	}
-	file, err := readRepoRootFile(filepath.Join(gitdir, "commondir"))
+	var file strings.Builder
+	exists, err := readRepoRootFile(filepath.Join(gitdir, "commondir"), &file)
 	if err != nil {
 		return repoRootConfig{}, false
 	}
 	common := gitdir
-	if file.exists {
-		common = strings.TrimRight(file.contents, "\r\n")
+	if exists {
+		common = strings.TrimRight(file.String(), "\r\n")
 		if common == "" {
 			return repoRootConfig{}, false
 		}
@@ -246,11 +261,11 @@ func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
 			return repoRootConfig{}, false
 		}
 	}
-	config, err := readRepoRootFile(filepath.Join(common, "config"))
+	config, err := fingerprintRepoRootFile(filepath.Join(common, "config"))
 	if err != nil {
 		return repoRootConfig{}, false
 	}
-	worktree, err := readRepoRootFile(filepath.Join(gitdir, "config.worktree"))
+	worktree, err := fingerprintRepoRootFile(filepath.Join(gitdir, "config.worktree"))
 	return repoRootConfig{gitdir: gitdir, common: common, config: config, worktree: worktree}, err == nil
 }
 
