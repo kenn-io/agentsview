@@ -2739,10 +2739,11 @@ schemas keep their existing ordering behavior.
   `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}?tree=True`.
   The list reads `conversations`, with `items`, `data`, or `results` as observed
   alternatives, and `has_more`. Summary checkpoints use `uuid` and `updated_at`.
-  Details read `name`, `created_at`, `updated_at`, `chat_messages`, and
-  `current_leaf_message_uuid`; ancestry uses message `uuid` and
-  `parent_message_uuid`. The export parser consumes message `sender`, `text`,
-  `content`, timestamps, attachments, and files. No live account was checked for
+  Details read `name`, `created_at`, `updated_at`, and every `chat_messages`
+  entry, matching export imports. Reverified 2026-10-07 against synthetic
+  regenerated-reply and older-export regression fixtures. The export parser
+  consumes message `sender`, `text`, `content`, timestamps, attachments, and
+  files. No live account was checked for
   this rework; the response shapes still need live verification.
 
 ## ChatGPT Export (`chatgpt`)
