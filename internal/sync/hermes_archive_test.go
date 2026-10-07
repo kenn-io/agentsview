@@ -449,6 +449,14 @@ func TestHermesCronStableCostsSurviveRenameAndSourcePruning(t *testing.T) {
 	t.Cleanup(directEngine.Close)
 	require.Equal(t, 8, directEngine.SyncAll(t.Context(), nil).Synced)
 	directKeys := check(directDatabase)
+	require.NoError(t, directDatabase.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET project = 'hermes-cron';
+			UPDATE session_project_identity_snapshots SET project = 'hermes-cron'`)
+		return err
+	}))
+	upgraded := directEngine.ResyncAll(t.Context(), nil)
+	require.False(t, upgraded.Aborted, "%v", upgraded.Warnings)
+	assert.Equal(t, directKeys, check(directDatabase))
 	writer, err = sql.Open("sqlite3", stateDB)
 	require.NoError(t, err)
 	for _, id := range []string{"middle", "cron_job.a_20261007_120000"} {

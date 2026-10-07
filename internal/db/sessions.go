@@ -1659,7 +1659,7 @@ func upsertSessionExec(
 		return sessionUpsertResult{}, ErrSessionTrashed
 	}
 	result.sourceMissing = sourceMissingAt.Valid
-	if err := refreshHermesCronAssignment(ctx, exec, s); err != nil {
+	if err := refreshHermesCronSourceProject(ctx, exec, s); err != nil {
 		return sessionUpsertResult{}, err
 	}
 
@@ -1685,21 +1685,17 @@ func upsertSessionExec(
 	return result, nil
 }
 
-func refreshHermesCronAssignment(ctx context.Context, exec func(context.Context, string, ...any) (sql.Result, error), s Session) error {
+func refreshHermesCronSourceProject(ctx context.Context, exec func(context.Context, string, ...any) (sql.Result, error), s Session) error {
 	if job, ok := strings.CutPrefix(s.Project, s.Agent+"-cron/"); !ok || job == "" ||
 		(s.Agent != "hermes" && s.Agent != "augure-desktop") {
 		return nil
 	}
-	result, err := exec(ctx, `UPDATE session_project_assignments SET original_project = ?,
+	_, err := exec(ctx, `UPDATE session_project_assignments SET original_project = ?,
 		updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE session_id = ? AND
 		(original_project = ? OR (original_project LIKE ? AND original_project = COALESCE(
 			(SELECT project FROM session_project_identity_snapshots WHERE session_id = ?), original_project)))`,
 		s.Project, s.ID, s.Agent+"-cron", s.Agent+"-cron/%", s.ID)
 	if err != nil {
-		return err
-	}
-	updated, err := result.RowsAffected()
-	if err != nil || updated == 0 {
 		return err
 	}
 	_, err = exec(ctx, `UPDATE session_project_identity_snapshots SET project = ? WHERE session_id = ?

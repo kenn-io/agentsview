@@ -192,10 +192,17 @@ func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) 
 		_, err := source.AssignSessionProject(ctx, id, "manual")
 		require.NoError(t, err)
 		insertSession(t, destination, id, agent+"-cron/job-b", func(s *Session) { s.Agent = agent })
+		insertSession(t, source, agent+":unassigned", agent+"-cron", func(s *Session) { s.Agent = agent })
+		insertSession(t, destination, agent+":unassigned", agent+"-cron/job-b", func(s *Session) { s.Agent = agent })
+		insertSession(t, source, agent+":unchanged", agent+"-cron/job-b", func(s *Session) { s.Agent = agent })
+		require.NoError(t, source.UpsertProjectIdentityObservationWithSnapshotProject(ctx, export.ProjectIdentityObservation{
+			SessionID: agent + ":unchanged", Project: agent + "-cron/job-b", Machine: defaultMachine,
+		}, agent+"-cron"))
+		insertSession(t, destination, agent+":unchanged", agent+"-cron/job-b", func(s *Session) { s.Agent = agent })
 	}
 
 	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
-	snapshots, err := destination.ListSessionProjectIdentitySnapshotsByID(ctx, []string{"hermes:tip", "augure-desktop:tip"})
+	snapshots, err := destination.ListSessionProjectIdentitySnapshotsByID(ctx, []string{"hermes:tip", "augure-desktop:tip", "hermes:unassigned", "augure-desktop:unassigned", "hermes:unchanged", "augure-desktop:unchanged"})
 	require.NoError(t, err)
 	for _, agent := range []string{"hermes", "augure-desktop"} {
 		id := agent + ":tip"
@@ -204,6 +211,10 @@ func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) 
 		require.NoError(t, err)
 		assert.Equal(t, agent+"-cron/job-b", cleared.Project)
 		assert.Equal(t, agent+"-cron/job-b", snapshots[id].Project)
+		assertSessionProject(t, destination, agent+":unassigned", agent+"-cron/job-b")
+		assert.Equal(t, agent+"-cron/job-b", snapshots[agent+":unassigned"].Project)
+		assertSessionProject(t, destination, agent+":unchanged", agent+"-cron/job-b")
+		assert.Equal(t, agent+"-cron/job-b", snapshots[agent+":unchanged"].Project)
 	}
 	assertSessionProject(t, destination, "session-a", "target_project")
 	observations, err := destination.ListProjectIdentityObservations(

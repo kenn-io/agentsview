@@ -1279,10 +1279,14 @@ func (s hermesSourceSet) Fingerprint(
 		h := sha256.New()
 		lr := newLineReader(io.TeeReader(reader, h), maxLineSize)
 		defer releaseLineReader(lr)
-		metadata, err = readHermesJSONLMetadata(lr)
-		if err == nil {
-			// TeeReader already hashed the buffered prefix.
-			_, err = io.Copy(h, reader)
+		parsed, metadataErr := readHermesJSONLMetadata(lr)
+		if metadataErr != nil {
+			return SourceFingerprint{}, metadataErr
+		}
+		metadata = parsed
+		// TeeReader already hashed the buffered prefix.
+		if _, copyErr := io.Copy(h, reader); copyErr != nil {
+			return SourceFingerprint{}, copyErr
 		}
 		hash = hex.EncodeToString(h.Sum(nil))
 	}

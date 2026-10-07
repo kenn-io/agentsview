@@ -87,6 +87,7 @@ func (d *DB) RepairHermesCronProjects(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 	type candidate struct {
 		id, machine, cwd, project, agent, parent string
 		deleted, original                        sql.NullString
@@ -1781,6 +1782,10 @@ func (d *DB) CopySessionMetadataFrom(
 				ON assignment.session_id = current.id
 			WHERE previous.project != current.project
 				OR assignment.project IS NOT NULL
+				OR (current.agent IN ('hermes', 'augure-desktop') AND current.project LIKE current.agent || '-cron/%'
+					AND EXISTS (SELECT 1 FROM main.session_project_identity_snapshots snapshot
+						WHERE snapshot.session_id = current.id AND snapshot.project != current.project
+							AND (snapshot.project = current.agent || '-cron' OR snapshot.project LIKE current.agent || '-cron/%')))
 			ORDER BY current.id`)
 		if err != nil {
 			return fmt.Errorf("listing reparsed session project changes: %w", err)
@@ -1822,6 +1827,10 @@ func (d *DB) CopySessionMetadataFrom(
 			FROM main.sessions current
 			JOIN old_db.sessions previous ON previous.id = current.id
 			WHERE previous.project != current.project
+				OR (current.agent IN ('hermes', 'augure-desktop') AND current.project LIKE current.agent || '-cron/%'
+					AND EXISTS (SELECT 1 FROM main.session_project_identity_snapshots snapshot
+						WHERE snapshot.session_id = current.id AND snapshot.project != current.project
+							AND (snapshot.project = current.agent || '-cron' OR snapshot.project LIKE current.agent || '-cron/%')))
 			ORDER BY current.id`)
 		if err != nil {
 			return fmt.Errorf("listing reparsed session project changes: %w", err)
@@ -1849,8 +1858,8 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 	for _, change := range projectChanges {
-		if err := refreshHermesCronAssignment(ctx, tx.ExecContext, Session{ID: change.sessionID, Agent: change.agent, Project: change.freshProject}); err != nil {
-			return fmt.Errorf("refreshing copied cron assignment: %w", err)
+		if err := refreshHermesCronSourceProject(ctx, tx.ExecContext, Session{ID: change.sessionID, Agent: change.agent, Project: change.freshProject}); err != nil {
+			return fmt.Errorf("refreshing copied cron source project: %w", err)
 		}
 		projects := []string{change.previousProject, change.freshProject}
 		if change.assignedProject.Valid {

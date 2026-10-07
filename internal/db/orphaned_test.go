@@ -508,11 +508,12 @@ func TestRepairHermesCronProjectsPreservesOverridesAndTrash(t *testing.T) {
 	require.NoError(t, err)
 	for _, id := range []string{root, "hermes:assigned", "hermes:cycle-b", "hermes:fresh-ancestor"} {
 		project := "hermes-cron"
-		if id == "hermes:assigned" {
+		switch id {
+		case "hermes:assigned":
 			project = "hermes-cron/job-b"
-		} else if id == "hermes:cycle-b" {
+		case "hermes:cycle-b":
 			project = "hermes-cron/job-c"
-		} else if id == "hermes:fresh-ancestor" {
+		case "hermes:fresh-ancestor":
 			project = "hermes-cron/job-a"
 		}
 		require.NoError(t, database.UpsertProjectIdentityObservationWithSnapshotProject(ctx, export.ProjectIdentityObservation{
@@ -529,12 +530,18 @@ func TestRepairHermesCronProjectsPreservesOverridesAndTrash(t *testing.T) {
 	_, err = database.RestoreSession(ctx, "hermes:trashed")
 	require.NoError(t, err)
 	for _, tc := range []struct{ id, project string }{
-		{root, "hermes-cron/job-a"}, {"hermes:middle", "hermes-cron/job-a"},
-		{"hermes:missing-parent", "hermes-cron/job-b"}, {"hermes:trashed", "hermes-cron/job-b"},
-		{"hermes:assigned", assignment.Project}, {"augure-desktop:cron_job-c_20261007_120000", "augure-desktop-cron/job-c"},
-		{"hermes:new-child", "hermes-cron/job-b"}, {"hermes:cycle-a", "hermes-cron/job-c"},
-		{"hermes:fresh-child", "hermes-cron/job-b"}, {"hermes:fresh-ancestor", "hermes-cron/job-b"},
-		{"hermes:cycle-b", "hermes-cron/job-c"}, {"mirror:hermes:foreign-child", "hermes-cron"},
+		{root, "hermes-cron/job-a"},
+		{"hermes:middle", "hermes-cron/job-a"},
+		{"hermes:missing-parent", "hermes-cron/job-b"},
+		{"hermes:trashed", "hermes-cron/job-b"},
+		{"hermes:assigned", assignment.Project},
+		{"augure-desktop:cron_job-c_20261007_120000", "augure-desktop-cron/job-c"},
+		{"hermes:new-child", "hermes-cron/job-b"},
+		{"hermes:cycle-a", "hermes-cron/job-c"},
+		{"hermes:fresh-child", "hermes-cron/job-b"},
+		{"hermes:fresh-ancestor", "hermes-cron/job-b"},
+		{"hermes:cycle-b", "hermes-cron/job-c"},
+		{"mirror:hermes:foreign-child", "hermes-cron"},
 	} {
 		session, err := database.GetSession(ctx, tc.id)
 		require.NoError(t, err)

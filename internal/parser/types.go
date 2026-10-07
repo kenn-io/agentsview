@@ -1500,7 +1500,7 @@ type ParsedSession struct {
 }
 
 // HasPooledHermesCronProject distinguishes automatic cron projects from explicit hints.
-func (s ParsedSession) HasPooledHermesCronProject() bool {
+func (s *ParsedSession) HasPooledHermesCronProject() bool {
 	return s.projectSynthesizedByHermes && (s.Agent == AgentHermes || s.Agent == AgentAugureDesktop) && s.Project == string(s.Agent)+"-cron"
 }
 

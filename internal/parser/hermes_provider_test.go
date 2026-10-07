@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -712,7 +713,7 @@ func TestHermesStateMemberFingerprintIncludesStateMetadataWhenTranscriptWins(t *
 func TestHermesCronParentLookupUsesIDIndex(t *testing.T) {
 	var allocations []float64
 	for _, count := range []int{74, 7400} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			root := t.TempDir()
 			createHermesStateDB(t, root)
 			conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
@@ -758,7 +759,7 @@ func TestHermesCronParentLookupUsesIDIndex(t *testing.T) {
 					assert.Equal(t, HermesCronJobID(parent, nil), ss.cronJob)
 				}
 				ss := hermesStateSession{id: "tip", source: "cron", parentSessionID: "middle"}
-				assert.Error(t, resolveHermesCronMember(t.Context(), conn, filepath.Join(root, "state.db"), &ss))
+				require.Error(t, resolveHermesCronMember(t.Context(), conn, filepath.Join(root, "state.db"), &ss))
 			}
 		})
 	}
@@ -846,14 +847,15 @@ func TestHermesCronRunGroupingAndFreshness(t *testing.T) {
 	hinted, err := provider.parseArchive(t.Context(), stateDB, "hermes-cron", "local")
 	require.NoError(t, err)
 	for _, result := range hinted {
-		if result.Session.ID == "hermes:transcript-only" {
+		switch result.Session.ID {
+		case "hermes:transcript-only":
 			assert.Equal(t, "hermes-cron/job-2", result.Session.Project)
 			assert.True(t, result.Session.projectSynthesizedByHermes)
-		} else if result.Session.ID == "hermes:cli-only" {
+		case "hermes:cli-only":
 			assert.Equal(t, "hermes-cli", result.Session.Project)
 			assert.Empty(t, result.Session.ParentSessionID)
 			assert.Empty(t, result.Session.RelationshipType)
-		} else {
+		default:
 			assert.Equal(t, "hermes-cron", result.Session.Project)
 			assert.False(t, result.Session.projectSynthesizedByHermes)
 		}
@@ -952,9 +954,9 @@ func TestHermesCronRunGroupingAndFreshness(t *testing.T) {
 	_, err = conn.ExecContext(t.Context(), "ALTER TABLE sessions RENAME TO unavailable_sessions")
 	require.NoError(t, err)
 	_, err = provider.parseStateMember(t.Context(), hermesSource{StateDB: stateDB, SessionID: "tip"}, "", "local", SourceFingerprint{})
-	assert.Error(t, err)
+	require.Error(t, err)
 	_, err = provider.Fingerprint(t.Context(), tip)
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 func TestHermesProviderArchiveWatchRoots(t *testing.T) {
