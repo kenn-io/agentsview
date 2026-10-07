@@ -2787,8 +2787,8 @@ schemas keep their existing ordering behavior.
   not authoritative token, cache, reasoning, credit, or USD accounting.
 - **Agentsview:** `internal/parser/claude_ai.go` parses exports;
   `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
-- **Desktop sync evidence:** `source`, reverified 2026-10-07 against
-  Anthropic's published client bundles:
+- **Desktop sync evidence:** `source` and live responses, reverified 2026-10-07
+  against Anthropic's published client bundles:
   [list client](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-m-1-b3JkS0de.js),
   [detail URL builder](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-l-p-m-3-BCYG6Qrh.js),
   and [message normalizer](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-l-m-0-BUHSvGzE.js).
@@ -2796,7 +2796,11 @@ schemas keep their existing ordering behavior.
   `https://claude.ai/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}`.
   Sync requests `archived=false` and `archived=true` separately. It omits the
   `starred` filter so starred chats remain eligible. Repeated summaries skip
-  detail fetches when summary `updated_at` matches archived `ended_at`.
+  detail fetches when summary `updated_at` matches archived `ended_at` and
+  `current_leaf_message_uuid` matches the last archived row's `SourceUUID`.
+  Usage-only archives use the timestamp comparison alone. Branch switches
+  change the leaf without changing `updated_at`. Sync stores message UUIDs;
+  unchanged rows archived without UUIDs keep their existing identities.
   The producer's `ET` detail builder defaults to `tree=True`,
   `rendering_mode=messages`, `render_all_tools=true`, and
   `include_inline_comparison=true`; the client enables `consistency=strong`.
@@ -2811,25 +2815,28 @@ schemas keep their existing ordering behavior.
   a leaf outside the kept messages falls back to the last kept message.
   `vo` walks down from the sentinel. `po` restores an unanswered human prompt
   matching the server leaf, or the last one attached to the visible path's end.
-  The shared parser applies these rules only when a message has a non-null
-  `parent_message_uuid`; flat exports retain their original order, including
-  exports with a null leaf. Duplicate message UUIDs within trees, missing
+  Only `ParseClaudeAIDetail` applies these rules; exports retain their original
+  order even when tree fields are present. Duplicate message UUIDs, missing
   resolved parents, cycles, and trees without a root fail before writing.
   Sync also rejects a detail UUID that differs from the requested chat.
-  Empty details store zero-message sessions; exports still skip empty chats.
+  List items with a null leaf skip detail fetches; exports skip empty chats.
   Inside the serialized write, Sync skips details older than archived
   `ended_at`. Usage-only archives refresh session metadata under their content
-  policy. Detail HTTP failures and responses over 32 MiB fail that chat;
-  authentication, transport, and cancellation errors stop Sync.
+  policy. Detail HTTP 404 counts as skipped. Other detail HTTP failures and
+  responses over 32 MiB fail that chat. Authentication, transport, and
+  cancellation errors stop Sync.
   New turns append rows and preserve existing message IDs. Changed or shorter
   visible history replaces the chat and keeps the previous version in Trash.
   An empty list page with `has_more: true` fails.
   The export parser reads message `sender`, `text`, `content`, timestamps,
-  and attachments. Organization `capabilities` containing `chat` remain
-  based on the original implementation's observations.
-  **Unverified live:** whether the list hides archived chats without the flag,
-  whether `render_all_tools` changes stored tool output, whether exports carry
-  tree fields, and empty-chat listings.
+  and attachments. Live checks confirmed the list and detail shapes in one Team
+  organization: parent links are strings with the root sentinel, message text
+  is in `content[].text`, and list items carry `current_leaf_message_uuid`.
+  The archived flag selects active or archived chats. `render_all_tools=true`
+  preserves artifact tool blocks instead of unsupported-device placeholders.
+  Organization `capabilities` included `chat`.
+  **Unverified live:** multiple chat organizations, web-search blocks,
+  unanswered final prompts, and tree fields in official exports.
 
 ## ChatGPT Export (`chatgpt`)
 
