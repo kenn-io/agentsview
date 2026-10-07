@@ -1149,13 +1149,13 @@ type IncrementalRequest struct {
 	// still-empty stored name, and on an appended custom-title only when it
 	// differs from the stored name. nil keeps the append incremental.
 	StoredSessionName *string
-	// StoredPRLinks maps the normalized pull request URLs already persisted
-	// for this session to their stored first-seen time, or is nil when the
+	// StoredPRLinks contains the normalized pull request URLs already persisted
+	// for this session, or is nil when the
 	// call site cannot supply them. Claude repeats its pr-link record after
 	// later turns, so the incremental parser escalates only when an appended
 	// record would change the stored links. nil keeps the append
 	// incremental.
-	StoredPRLinks map[string]time.Time
+	StoredPRLinks map[string]struct{}
 	// StoredPendingUsageOrdinal is the last assistant message without token
 	// usage in the current turn, as resolved from the committed transcript.
 	// Codex uses it to attach a token_count that follows a late tool result

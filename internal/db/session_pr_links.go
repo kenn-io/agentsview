@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -17,11 +16,10 @@ import (
 // populate it from structured source records, so a full reparse replaces
 // the stored list.
 type PRLink struct {
-	URL         string `json:"url"`
-	Host        string `json:"host"`
-	Repository  string `json:"repository"`
-	Number      int    `json:"number"`
-	FirstSeenAt string `json:"first_seen_at,omitempty"`
+	URL        string `json:"url"`
+	Host       string `json:"host"`
+	Repository string `json:"repository"`
+	Number     int    `json:"number"`
 }
 
 // PRLinksFromParsed converts parser links into storage rows.
@@ -34,9 +32,6 @@ func PRLinksFromParsed(links []parser.PRLink) []PRLink {
 		link := PRLink{
 			URL: l.URL, Host: l.Host, Repository: l.Repository,
 			Number: l.Number,
-		}
-		if !l.FirstSeenAt.IsZero() {
-			link.FirstSeenAt = l.FirstSeenAt.UTC().Format(time.RFC3339Nano)
 		}
 		out = append(out, link)
 	}
@@ -95,10 +90,8 @@ func (c prLinksColumn) Scan(src any) error {
 }
 
 // PRFilter selects sessions linked to a repository, optionally narrowed
-// to one pull request number. Repository matching ignores case. Host is
-// set only for URL filters; shorthand filters match any forge.
+// to one pull request number. Repository matching ignores case.
 type PRFilter struct {
-	Host       string
 	Repository string
 	Number     int
 }
@@ -109,30 +102,17 @@ func (f PRFilter) IsZero() bool { return f.Repository == "" }
 // ErrInvalidPRFilter identifies a pull request filter ParsePRFilter rejects.
 var ErrInvalidPRFilter = errors.New("invalid pr filter")
 
-// ParsePRFilter accepts "owner/repo", "owner/repo#123", or a pull or
-// merge request URL. An empty value returns the zero filter.
+// ParsePRFilter accepts "owner/repo" or "owner/repo#123". An empty value returns the zero filter.
 func ParsePRFilter(value string) (PRFilter, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return PRFilter{}, nil
 	}
-	if strings.Contains(value, "://") {
-		link, ok := parser.NewPRLink(value, "", 0, time.Time{})
-		if !ok {
-			return PRFilter{}, fmt.Errorf(
-				"%w %q: not a pull or merge request URL", ErrInvalidPRFilter, value,
-			)
-		}
-		return PRFilter{
-			Host:       link.Host,
-			Repository: strings.ToLower(link.Repository), Number: link.Number,
-		}, nil
-	}
 	repo, num, hasNum := strings.Cut(value, "#")
 	repo = strings.Trim(strings.TrimSpace(repo), "/")
-	if repo == "" || !strings.Contains(repo, "/") {
+	if repo == "" || !strings.Contains(repo, "/") || strings.Contains(repo, "://") {
 		return PRFilter{}, fmt.Errorf(
-			"%w %q: want owner/repo, owner/repo#123, or a URL", ErrInvalidPRFilter, value,
+			"%w %q: want owner/repo, owner/repo#123", ErrInvalidPRFilter, value,
 		)
 	}
 	f := PRFilter{Repository: strings.ToLower(repo)}
@@ -189,12 +169,11 @@ func (c labelsColumn) Scan(src any) error {
 	return nil
 }
 
-// GetSessionPRLinkFirstSeen maps each pull request URL stored for a
-// session to its stored first-seen time (zero when the source gave none).
+// GetSessionPRLinkURLs returns the pull request URLs stored for a session.
 // A missing session yields an empty map.
-func (db *DB) GetSessionPRLinkFirstSeen(
+func (db *DB) GetSessionPRLinkURLs(
 	ctx context.Context, sessionID string,
-) (map[string]time.Time, error) {
+) (map[string]struct{}, error) {
 	var text string
 	err := db.getReader().QueryRowContext(ctx,
 		"SELECT pr_links FROM sessions WHERE id = ?", sessionID,
@@ -202,13 +181,9 @@ func (db *DB) GetSessionPRLinkFirstSeen(
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("reading pr links for %s: %w", sessionID, err)
 	}
-	seen := make(map[string]time.Time)
+	seen := make(map[string]struct{})
 	for _, link := range DecodePRLinks(text) {
-		var at time.Time
-		if link.FirstSeenAt != "" {
-			at, _ = time.Parse(time.RFC3339Nano, link.FirstSeenAt)
-		}
-		seen[link.URL] = at
+		seen[link.URL] = struct{}{}
 	}
 	return seen, nil
 }

@@ -102,7 +102,7 @@ export interface Filters {
   includeAutomated: boolean;
   /** Exact labels a session must carry; every label must match. */
   labels: string[];
-  /** Pull request reference: owner/repo, owner/repo#123, or a URL. */
+  /** Pull request reference: owner/repo or owner/repo#123. */
   pr: string;
 }
 

@@ -206,7 +206,7 @@ func newSessionListCommand() *cobra.Command {
 	flags.StringArrayVar(&labels, "label", nil,
 		"Only sessions carrying this exact label (repeat to require several)")
 	flags.StringVar(&pr, "pr", "",
-		"Only sessions linked to a pull request: owner/repo, owner/repo#123, or a URL")
+		"Only sessions linked to a pull request: owner/repo or owner/repo#123")
 	flags.StringVar(&cursor, "cursor", "",
 		"Pagination cursor from a previous response")
 	flags.IntVar(&limit, "limit", 0,

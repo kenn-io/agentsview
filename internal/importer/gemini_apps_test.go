@@ -59,7 +59,7 @@ func TestImportGeminiAppsUnchangedKeepsLauncherParent(t *testing.T) {
 	require.NoError(t, err)
 	stats, err := ImportGeminiApps(ctx, d, root, nil)
 	require.NoError(t, err)
-	assert.Greater(t, stats.Skipped, 0)
+	assert.Positive(t, stats.Skipped)
 	s, err := d.GetSession(ctx, id)
 	require.NoError(t, err)
 	require.NotNil(t, s.ParentSessionID)

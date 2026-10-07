@@ -3,7 +3,6 @@
  */
 
 export interface DbPRLink {
-  first_seen_at?: string;
   host: string;
   number: number;
   repository: string;

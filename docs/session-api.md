@@ -322,7 +322,7 @@ therefore appear on both dates.
 | `--min-tool-failures` | `min_tool_failures` | int; `0` is a meaningful filter                                                                                                                                                   |
 | `--has-secret`        | `has_secret`        | bool — only sessions with at least one definite [secret finding](#secret-scanning)                                                                                                |
 | `--label`             | `label`             | repeatable; exact label match, every listed label required                                                                                                                        |
-| `--pr`                | `pr`                | `owner/repo`, `owner/repo#123`, or a pull request URL; see [Pull request links](#pull-request-links)                                                                              |
+| `--pr`                | `pr`                | `owner/repo` or `owner/repo#123`; see [Pull request links](#pull-request-links)                                                                              |
 | `--sort`              | `order_by`          | comma-separated keys; optional `:asc` / `:desc` suffix per key                                                                                                                    |
 | `--reverse`, `-r`     | `descending`        | flips the default direction for unsuffixed sort keys                                                                                                                              |
 | `--cursor`            | `cursor`            | opaque string from prior response                                                                                                                                                 |
@@ -609,15 +609,13 @@ Sessions list the pull requests their agent recorded in the transcript, in
     "url": "https://github.com/owner/repo/pull/123",
     "host": "github.com",
     "repository": "owner/repo",
-    "number": 123,
-    "first_seen_at": "2026-10-05T03:21:20.583Z"
+    "number": 123
   }
 ]
 ```
 
 Claude Code is the only agent that records these today, as `pr-link` entries
-in its transcripts. AgentsView keeps one link per URL with the earliest time it
-appeared. The link says the session was associated with the pull request. It
+in its transcripts. AgentsView keeps one link per URL. The link says the session was associated with the pull request. It
 does not say whether the session opened it.
 Claude Code records these links for the whole transcript, so every session
 split from one transcript, such as a rewind's fork, carries them, like its name
@@ -625,9 +623,8 @@ and git branch.
 
 Filter by pull request with `session list --pr` or the `pr` query parameter.
 The value is `owner/repo` for any pull request in that repository,
-`owner/repo#123` for one pull request, or a pull request URL. Repository
-matching ignores case. A URL also matches its host, so it cannot select a
-same-named repository on another forge; the shorthand forms match any host.
+`owner/repo#123` for one pull request. Repository matching ignores case and
+matches any host.
 
 #### Filtering by label or pull request
 

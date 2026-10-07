@@ -264,7 +264,7 @@ type listSessionsIn struct {
 	ActiveSince      string   `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
 	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns."`
 	Labels           []string `json:"labels,omitempty" jsonschema:"Only sessions carrying every one of these exact labels, such as ticket=ABC-123."`
-	PR               string   `json:"pr,omitempty" jsonschema:"Only sessions linked to a pull request: owner/repo, owner/repo#123, or a pull request URL."`
+	PR               string   `json:"pr,omitempty" jsonschema:"Only sessions linked to a pull request: owner/repo or owner/repo#123."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
 	Cursor           string   `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 }
