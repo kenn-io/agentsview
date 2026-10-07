@@ -44,7 +44,11 @@ it("closing during sync leaves no error after reopening", async () => {
 it("offers sign in, sync and disconnect without a sign-in probe", async () => {
   host.connect.mockResolvedValue(undefined);
   host.disconnect.mockResolvedValue(undefined);
-  syncClaudeAI.mockResolvedValue({ imported: 1, updated: 0, skipped: 0, errors: 0 });
+  syncClaudeAI.mockImplementation(async (_host, callbacks) => {
+    const stats = { imported: 1, updated: 0, skipped: 0, errors: 0 };
+    callbacks.onProgress(stats);
+    return stats;
+  });
   const onimported = vi.fn();
   render(ImportModal, { open: true, onclose: vi.fn(), onimported });
   expect(screen.getByText(m.import_claude_help())).toBeTruthy();
@@ -60,6 +64,25 @@ it("offers sign in, sync and disconnect without a sign-in probe", async () => {
   );
   expect(onimported).toHaveBeenCalledOnce();
   expect(screen.getByText(m.import_processed({ count: 1 }))).toBeTruthy();
+});
+
+it.each(["cancel", "disconnect", "error"])("refreshes completed chats after sync %s", async (exit) => {
+  let rejectSync!: (error: Error) => void;
+  let signal!: AbortSignal;
+  syncClaudeAI.mockImplementation((_host, callbacks, runSignal) => {
+    signal = runSignal;
+    callbacks.onProgress({ imported: 0, updated: 1, skipped: 0, errors: 0 });
+    return new Promise((_, reject) => { rejectSync = reject; });
+  });
+  const onimported = vi.fn();
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported });
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
+  if (exit !== "error") {
+    await fireEvent.click(screen.getByRole("button", { name: exit === "cancel" ? m.import_cancel() : m.import_claude_disconnect() }));
+    expect(signal.aborted).toBe(true);
+  }
+  rejectSync(new Error("Interrupted sync"));
+  await waitFor(() => expect(onimported).toHaveBeenCalledOnce());
 });
 
 it("hides browser sync controls for a read-only archive", () => {

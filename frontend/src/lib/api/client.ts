@@ -27,15 +27,9 @@ export async function consumeEvents<T>(
   response: Response,
   dispatch: (event: EventSourceMessage) => T | undefined,
   missingResult: string,
-  signal?: AbortSignal,
 ): Promise<T> {
   if (!response.body) throw new Error(missingResult);
   const reader = response.body.getReader();
-  const cancel = () => {
-    void reader.cancel().catch(() => {});
-  };
-  signal?.addEventListener("abort", cancel, { once: true });
-  if (signal?.aborted) cancel();
   const decoder = new TextDecoder();
   let result: T | undefined;
   const parser = createParser({
@@ -56,7 +50,6 @@ export async function consumeEvents<T>(
     if (result === undefined) throw new Error(missingResult);
     return result;
   } finally {
-    signal?.removeEventListener("abort", cancel);
     await reader.cancel();
     reader.releaseLock();
   }
@@ -366,7 +359,6 @@ async function readImportResponse(
   response: Response,
   cb?: ImportCallbacks,
   onFetch?: (id: string, path: string) => void,
-  signal?: AbortSignal,
 ): Promise<ImportStats> {
   if (!response.headers.get("content-type")?.includes("text/event-stream")) return response.json();
   return consumeEvents<ImportStats>(
@@ -382,7 +374,6 @@ async function readImportResponse(
       if (event === "error") throw new Error(JSON.parse(data).error ?? "Import failed");
     },
     "Import stream ended without result",
-    signal,
   );
 }
 
@@ -429,7 +420,6 @@ export async function syncClaudeAI(
           abort();
         });
       },
-      controller.signal,
     );
     return await Promise.race([result, failed]);
   } finally {

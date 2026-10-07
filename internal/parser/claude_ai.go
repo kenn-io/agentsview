@@ -203,7 +203,7 @@ func buildClaudeAttachmentText(
 	return parts
 }
 
-// selectedClaudeAIPath follows Claude's fo/uo/co/vo and restores the prompt chosen by po.
+// selectedClaudeAIPath follows Claude's visible branch and restores its unanswered prompt.
 func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) {
 	const root = "00000000-0000-4000-8000-000000000000"
 	byID := make(map[string]claudeAIMessage)
