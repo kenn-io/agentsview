@@ -15,6 +15,8 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+var errClaudeAINotFound = errors.New("Claude returned HTTP 404")
+
 // ClaudeAIRetryAfter carries the browser's response header without credentials.
 type ClaudeAIRetryAfter string
 
@@ -104,12 +106,18 @@ func SyncClaudeAI(ctx context.Context, store interface {
 			if err != nil {
 				return stats, err
 			}
-			if existing != nil && checkpoint == marker.UpdatedAt {
+			updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
+			if existing != nil && checkpoint == marker.UpdatedAt && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) {
 				stats.Skipped++
 				cb.progress(stats)
 				continue
 			}
 			detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True")
+			if errors.Is(err, errClaudeAINotFound) {
+				stats.Skipped++
+				cb.progress(stats)
+				continue
+			}
 			if err != nil {
 				return stats, err
 			}
@@ -168,6 +176,9 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (int
 		if err != nil && !errors.As(err, &retryAfter) {
 			return nil, err
 		}
+		if status == http.StatusNotFound {
+			return nil, errClaudeAINotFound
+		}
 		if status == 401 || status == 403 {
 			return nil, errors.New("Claude sign-in expired. Reconnect Claude.ai and try again")
 		}
@@ -212,15 +223,13 @@ func mergeSummary(detail, summary json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(conversation)
 }
 
-// Keep the active leaf so regenerated replies don't appear twice in the archive.
 func normalizeConversation(raw json.RawMessage) (json.RawMessage, error) {
 	var conversation struct {
-		UUID        string            `json:"uuid"`
-		Name        string            `json:"name"`
-		CreatedAt   string            `json:"created_at"`
-		UpdatedAt   string            `json:"updated_at"`
-		CurrentLeaf string            `json:"current_leaf_message_uuid"`
-		Messages    []json.RawMessage `json:"chat_messages"`
+		UUID      string            `json:"uuid"`
+		Name      string            `json:"name"`
+		CreatedAt string            `json:"created_at"`
+		UpdatedAt string            `json:"updated_at"`
+		Messages  []json.RawMessage `json:"chat_messages"`
 	}
 	if err := json.Unmarshal(raw, &conversation); err != nil {
 		return nil, err
@@ -231,55 +240,5 @@ func normalizeConversation(raw json.RawMessage) (json.RawMessage, error) {
 	if conversation.CreatedAt == "" || conversation.UpdatedAt == "" {
 		return nil, fmt.Errorf("missing conversation timestamps")
 	}
-	messages, err := activeMessages(conversation.Messages, conversation.CurrentLeaf)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(struct {
-		UUID      string            `json:"uuid"`
-		Name      string            `json:"name"`
-		CreatedAt string            `json:"created_at"`
-		UpdatedAt string            `json:"updated_at"`
-		Messages  []json.RawMessage `json:"chat_messages"`
-	}{conversation.UUID, conversation.Name, conversation.CreatedAt, conversation.UpdatedAt, messages})
-}
-
-func activeMessages(messages []json.RawMessage, leaf string) ([]json.RawMessage, error) {
-	if leaf == "" {
-		return messages, nil
-	}
-	type node struct {
-		UUID   string `json:"uuid"`
-		Parent string `json:"parent_message_uuid"`
-		Raw    json.RawMessage
-	}
-	byID := make(map[string]node, len(messages))
-	for _, raw := range messages {
-		var item node
-		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, err
-		}
-		item.Raw = raw
-		if item.UUID != "" {
-			byID[item.UUID] = item
-		}
-	}
-	chain := make([]json.RawMessage, 0, len(messages))
-	seen := make(map[string]struct{})
-	for cursor := leaf; cursor != ""; {
-		item, ok := byID[cursor]
-		if !ok {
-			return messages, nil
-		}
-		if _, exists := seen[cursor]; exists {
-			return nil, fmt.Errorf("conversation message tree contains a cycle")
-		}
-		seen[cursor] = struct{}{}
-		chain = append(chain, item.Raw)
-		cursor = item.Parent
-	}
-	for left, right := 0, len(chain)-1; left < right; left, right = left+1, right-1 {
-		chain[left], chain[right] = chain[right], chain[left]
-	}
-	return chain, nil
+	return json.Marshal(conversation)
 }
