@@ -834,8 +834,9 @@ model. `pg serve` and `--pg` reads then use the single published recipe whose
 parameters rebuild its fingerprint. A `[vector]` section in `config.toml` can't
 be combined with the `AGENTSVIEW_EMBEDDINGS_*` variables; startup stops. If
 PostgreSQL holds several published recipes, adoption refuses to guess and
-semantic search reports the count; remove obsolete generations with
-`agentsview pg vectors drop <id>` and restart. Generations pushed before recipe
+semantic search reports the count; stop the hub's `pg push --watch --embed`,
+remove obsolete generations with `agentsview pg vectors drop <id>`, then start
+the watcher and restart `pg serve`. Generations pushed before recipe
 publication have no recipe until a configured machine pushes them again.
 
 If no generation matches, `pg serve` starts normally but semantic and hybrid

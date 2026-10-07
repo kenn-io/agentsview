@@ -1280,13 +1280,13 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		return nil
 	}
 	initialErr := startupErr
-	if initialErr == nil {
-		initialErr = pusher.push(ctx, reasonStartup, didResync)
-	}
 	if embedder != nil {
 		if err := embedder.startScheduler(ctx); err != nil {
 			log.Printf("pg watch: starting embeddings: %v", err)
 		}
+	}
+	if initialErr == nil {
+		initialErr = pusher.push(ctx, reasonStartup, didResync)
 	}
 	if initialErr != nil {
 		if errors.Is(initialErr, context.Canceled) && ctx.Err() != nil {

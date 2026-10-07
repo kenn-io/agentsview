@@ -311,8 +311,12 @@ imports. Built vectors reach PostgreSQL on the next interval push. A one-shot
 `pg push --embed` pushes sessions, builds embeddings, then pushes vectors in
 the same push. `--full --embed` repairs vector rows too. A recipe or build error
 returns after the sessions land, with their counts shown.
-After changing the recipe and dropping the old generation, restart the hub to
-adopt the new recipe. `--embed` cannot be combined with `--no-vectors`, `--all`,
+A watcher started before the first recipe is published adopts it on a later push.
+After changing the recipe, stop the hub's `pg push --watch --embed`, run
+`agentsview pg vectors drop <old>`, then start the watcher and restart `pg serve`
+to adopt the new recipe. A running watcher keeps pushing the generation it
+adopted and recreates the dropped row.
+`--embed` cannot be combined with `--no-vectors`, `--all`,
 `push_vectors = false`, or a usage-only archive.
 
 To keep the database password out of the URL, mount a passfile and set

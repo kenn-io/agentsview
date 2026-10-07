@@ -14,7 +14,7 @@ import (
 // The token file selected by AGENTSVIEW_AUTH_TOKEN_FILE replaces the
 // config.toml token for the HTTP API, not just in the loaded config.
 func TestDeploymentTokenFileGatesAPI(t *testing.T) {
-	for _, name := range []string{"AGENTSVIEW_AUTH_TOKEN", "AGENTSVIEW_HOST"} {
+	for _, name := range []string{"AGENTSVIEW_AUTH_TOKEN", "AGENTSVIEW_HOST", "AGENTSVIEW_EMBEDDINGS_ENDPOINT", "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"} {
 		t.Setenv(name, "")
 		require.NoError(t, os.Unsetenv(name))
 	}

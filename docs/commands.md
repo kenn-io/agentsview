@@ -1943,6 +1943,7 @@ agentsview help
 | `AGENTSVIEW_PG_ALLOW_INSECURE`        |                                                      | Allow a plaintext default PostgreSQL target under `AGENTSVIEW_MODE`                                 |
 | `AGENTSVIEW_EMBEDDINGS_ENDPOINT`      |                                                      | Embeddings endpoint for adopting a recipe published to PostgreSQL, under `AGENTSVIEW_MODE`          |
 | `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE`  |                                                      | API key file for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                   |
+| `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`    | `32`                                                 | Positive number of inputs per embeddings request when adopting a published PostgreSQL recipe       |
 | `AGENTSVIEW_DUCKDB_PATH`              | `~/.agentsview/sessions.duckdb`                      | DuckDB mirror file path                                                                             |
 | `AGENTSVIEW_DUCKDB_URL`               |                                                      | Remote Quack endpoint URL for `duckdb status` and `duckdb serve` (read side only)                   |
 | `AGENTSVIEW_DUCKDB_TOKEN`             |                                                      | Quack authentication token                                                                          |
