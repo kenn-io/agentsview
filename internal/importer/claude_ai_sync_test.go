@@ -37,12 +37,14 @@ func TestSyncClaudeAI(t *testing.T) {
 			details := 0
 			fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 				switch path {
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
 				case "/api/organizations":
 					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
-				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
 					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + summary + `],"has_more":false}`)}, nil
 				default:
-					require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong", path)
+					require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
 					details++
 					return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
 				}
@@ -82,12 +84,14 @@ func TestSyncClaudeAI(t *testing.T) {
 		require.NoError(t, err)
 		stats, err := SyncClaudeAI(t.Context(), trashDuringImportStore{d}, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 			switch path {
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
 			case "/api/organizations":
 				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
 				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
 			default:
-				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong", path)
+				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
 				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
 			}
 		}, nil)
@@ -102,7 +106,7 @@ func TestSyncClaudeAI(t *testing.T) {
 			if path == "/api/organizations" {
 				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 			}
-			require.Equal(t, "/api/organizations/org/chat_conversations_v2?limit=50&offset=0", path)
+			require.Equal(t, "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false", path)
 			return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":true}`)}, nil
 		}, nil)
 		require.EqualError(t, err, "Claude list returned an empty page with has_more: true")
@@ -112,12 +116,14 @@ func TestSyncClaudeAI(t *testing.T) {
 		details, notifications := 0, 0
 		fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 			switch path {
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
 			case "/api/organizations":
 				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
 				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
 			default:
-				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong", path)
+				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
 				details++
 				return ClaudeAIResponse{Status: 200, Body: []byte(strings.Replace(syncDetail, `"chat_messages":[`, `"current_leaf_message_uuid":"reply","chat_messages":[
 					{"uuid":"abandoned","parent_message_uuid":"root","sender":"assistant","text":"Abandoned reply"},`, 1))}, nil
@@ -171,14 +177,16 @@ func TestSyncClaudeAI(t *testing.T) {
 				d := testDB(t)
 				stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 					switch path {
+					case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+						return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
 					case "/api/organizations":
 						return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
-					case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+					case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
 						return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `,` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":false}`)}, nil
-					case "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong":
+					case "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 						return ClaudeAIResponse{Status: 200, Body: []byte(tt.detail)}, nil
 					default:
-						require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True&rendering_mode=messages&consistency=strong", path)
+						require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
 						return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "one", "two"))}, nil
 					}
 				}, nil)
@@ -207,14 +215,16 @@ func TestSyncClaudeAI(t *testing.T) {
 			}
 			stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 				switch path {
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
 				case "/api/organizations":
 					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
-				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
 					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
-				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=1":
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=1&archived=false":
 					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":false}`)}, nil
 				default:
-					require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True&rendering_mode=messages&consistency=strong", path)
+					require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
 					return ClaudeAIResponse{Status: 404, Body: nil}, nil
 				}
 			}, nil)
@@ -233,12 +243,14 @@ func TestSyncClaudeAI(t *testing.T) {
 		details := 0
 		fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 			switch path {
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
 			case "/api/organizations":
 				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
 				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
 			default:
-				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong", path)
+				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
 				details++
 				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
 			}
@@ -258,19 +270,21 @@ func TestSyncClaudeAI(t *testing.T) {
 		details := 0
 		stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 			switch path {
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
 			case "/api/organizations":
 				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
 				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=1":
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=1&archived=false":
 				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `,` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":true}`)}, nil
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=3":
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=3&archived=false":
 				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
-			case "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong":
+			case "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 				details++
 				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
 			default:
-				require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True&rendering_mode=messages&consistency=strong", path)
+				require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
 				details++
 				return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "one", "two"))}, nil
 			}
@@ -291,7 +305,7 @@ func TestSyncClaudeAI(t *testing.T) {
 				if path == "/api/organizations" {
 					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 				}
-				require.Equal(t, "/api/organizations/org/chat_conversations_v2?limit=50&offset=0", path)
+				require.Equal(t, "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false", path)
 				return ClaudeAIResponse{Status: 200, Body: []byte(page)}, nil
 			}, nil)
 			require.EqualError(t, err, "Claude list had no data")
@@ -322,6 +336,15 @@ func TestSyncClaudeAI(t *testing.T) {
 	})
 }
 
+type trashDuringImportStore struct{ *db.DB }
+
+func (s trashDuringImportStore) WriteSessionBatchAtomic(ctx context.Context, writes []db.SessionBatchWrite, beforeCommit ...func() error) (db.SessionBatchResult, error) {
+	if err := s.DB.SoftDeleteSession(ctx, writes[0].Session.ID); err != nil {
+		return db.SessionBatchResult{}, err
+	}
+	return s.DB.WriteSessionBatchAtomic(ctx, writes, beforeCommit...)
+}
+
 type cancelSyncStore struct {
 	*db.DB
 	cancel context.CancelFunc
@@ -329,4 +352,118 @@ type cancelSyncStore struct {
 
 func (s *cancelSyncStore) WriteSessionBatchAtomic(ctx context.Context, writes []db.SessionBatchWrite, beforeCommit ...func() error) (db.SessionBatchResult, error) {
 	return s.DB.WriteSessionBatchAtomic(ctx, writes, func() error { s.cancel(); return ctx.Err() })
+}
+
+func TestSyncClaudeAIHistory(t *testing.T) {
+	for _, tt := range []struct {
+		name, detail string
+		failed       bool
+		want         []string
+	}{
+		{name: "missing parent preserves archive", detail: strings.Replace(syncDetail, `"parent_message_uuid":"00000000-0000-4000-8000-000000000000"`, `"parent_message_uuid":"missing"`, 1), failed: true},
+		{name: "requested uuid mismatch", detail: strings.Replace(syncDetail, `"uuid":"one"`, `"uuid":"other"`, 1), failed: true},
+		{name: "duplicate message uuid", detail: strings.Replace(syncDetail, `"uuid":"reply"`, `"uuid":"root"`, 1), failed: true},
+		{name: "grown history preserves ids", detail: strings.TrimSuffix(syncDetail, "]}") + `,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"},{"uuid":"a2","parent_message_uuid":"q2","sender":"assistant","text":"Answer"}]}`, want: []string{"Hello", "Chosen reply", "More", "Answer"}},
+		{name: "rename refreshes ended at", detail: strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Renamed"`, 1), want: []string{"Hello", "Chosen reply"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+syncDetail+"]"), nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, stats.Imported)
+			before, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+			require.NoError(t, err)
+			details := 0
+			fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+				switch path {
+				case "/api/organizations":
+					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + strings.ReplaceAll(syncSummary, "10:05:00Z", "10:06:00Z") + `],"has_more":false}`)}, nil
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
+				default:
+					require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
+					details++
+					return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(tt.detail, "10:05:00Z", "10:06:00Z"))}, nil
+				}
+			}
+			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			after, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+			require.NoError(t, err)
+			assert.Empty(t, replacedCopies(t, d, "claude-ai:one"))
+			if tt.failed {
+				assert.Equal(t, 1, stats.Errors)
+				assert.Equal(t, before, after)
+				session, err := d.GetSession(t.Context(), "claude-ai:one")
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				require.NotNil(t, session.EndedAt)
+				assert.Equal(t, "2026-03-01T10:05:00Z", *session.EndedAt)
+				return
+			}
+			assert.Equal(t, 1, stats.Updated)
+			assert.Zero(t, stats.Errors)
+			assert.Equal(t, tt.want, messageContents(after))
+			for i, m := range before {
+				assert.Equal(t, m.ID, after[i].ID)
+			}
+			session, err := d.GetSession(t.Context(), "claude-ai:one")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			require.NotNil(t, session.EndedAt)
+			assert.Equal(t, "2026-03-01T10:06:00Z", *session.EndedAt)
+			if tt.name == "rename refreshes ended at" {
+				require.NotNil(t, session.DisplayName)
+				assert.Equal(t, "Renamed", *session.DisplayName)
+			}
+			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Skipped)
+			assert.Equal(t, 1, details)
+		})
+	}
+}
+
+func TestSyncClaudeAIArchivedList(t *testing.T) {
+	for _, mode := range []string{"archived only", "flag ignored", "flag rejected"} {
+		t.Run(mode, func(t *testing.T) {
+			d := testDB(t)
+			details := 0
+			stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+				switch path {
+				case "/api/organizations":
+					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
+					if mode != "flag ignored" {
+						return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
+					}
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+					if mode == "flag rejected" {
+						return ClaudeAIResponse{Status: 400}, nil
+					}
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
+				default:
+					require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
+					details++
+					return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+				}
+			}, nil)
+			if mode == "flag rejected" {
+				require.EqualError(t, err, "Claude returned HTTP 400")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Imported)
+			assert.Equal(t, 1, details)
+			messages, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+			require.NoError(t, err)
+			assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+			if mode == "flag ignored" {
+				assert.Equal(t, 1, stats.Skipped)
+			}
+		})
+	}
 }

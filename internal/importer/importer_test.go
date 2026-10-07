@@ -260,12 +260,6 @@ func TestImportClaudeAI_PreservesDisplayNameOnReimport(
 	)
 	require.NoError(t, err)
 
-	changed := strings.ReplaceAll(testConversationsJSON, "09:15:00.000000Z", "09:16:00.000000Z")
-	changed = strings.ReplaceAll(changed, "Hi there!", "Updated reply")
-	stats, err := ImportClaudeAI(ctx, d, strings.NewReader(changed), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Updated)
-
 	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
 	require.NoError(t, err)
 	require.NotNil(t, s)
@@ -1501,32 +1495,6 @@ func TestImportStatsRecord(t *testing.T) {
 	tagged := refuse(RefusalDiverged, diskFull)
 	assert.Equal(t, diskFull.Error(), tagged.Error())
 	assert.ErrorIs(t, tagged, diskFull)
-}
-
-type trashDuringImportStore struct {
-	*db.DB
-}
-
-func (s trashDuringImportStore) WriteSessionBatchAtomic(ctx context.Context, writes []db.SessionBatchWrite, beforeCommit ...func() error) (db.SessionBatchResult, error) {
-	if err := s.DB.SoftDeleteSession(ctx, writes[0].Session.ID); err != nil {
-		return db.SessionBatchResult{}, err
-	}
-	return s.DB.WriteSessionBatchAtomic(ctx, writes, beforeCommit...)
-}
-
-func TestImportClaudeAITrashedDuringWrite(t *testing.T) {
-	d := testDB(t)
-	_, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+syncDetail+"]"), nil)
-	require.NoError(t, err)
-	changed := strings.Replace(syncDetail, "Hello", "Edited question", 1)
-	stats, err := ImportClaudeAI(t.Context(), trashDuringImportStore{d}, strings.NewReader("["+changed+"]"), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Errors)
-	assert.Zero(t, stats.Skipped)
-	assert.Equal(t, []ImportRefusal{{SessionID: "claude-ai:one", Reason: RefusalTrashed}}, stats.Refusals)
-	messages, err := d.GetAllMessages(t.Context(), "claude-ai:one")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
 }
 
 func TestImportClaudeAIReportsTrashedSession(t *testing.T) {

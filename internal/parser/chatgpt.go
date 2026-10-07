@@ -224,37 +224,22 @@ func linearizeDAG(
 	mapping map[string]chatGPTNode,
 	currentNode string,
 ) []chatGPTNode {
-	chain, _ := linearizeParentPath(mapping, currentNode, func(node chatGPTNode) string {
-		if node.Parent == nil {
-			return ""
-		}
-		return *node.Parent
-	})
-	return chain
-}
-
-func linearizeParentPath[T any](mapping map[string]T, currentNode string, parent func(T) string) ([]T, error) {
 	if currentNode == "" {
-		return nil, nil
+		return nil
 	}
 
-	chain := make([]T, 0)
-	seen := make(map[string]bool)
+	chain := make([]chatGPTNode, 0)
 	nodeID := currentNode
 	for {
 		node, ok := mapping[nodeID]
 		if !ok {
 			break
 		}
-		if seen[nodeID] {
-			return nil, fmt.Errorf("message %s repeats in selected path", nodeID)
-		}
-		seen[nodeID] = true
 		chain = append(chain, node)
-		nodeID = parent(node)
-		if nodeID == "" {
+		if node.Parent == nil || *node.Parent == "" {
 			break
 		}
+		nodeID = *node.Parent
 	}
 
 	// Reverse to chronological order.
@@ -262,7 +247,7 @@ func linearizeParentPath[T any](mapping map[string]T, currentNode string, parent
 		chain[i], chain[j] = chain[j], chain[i]
 	}
 
-	return chain, nil
+	return chain
 }
 
 // buildChatGPTMessages walks linearized nodes and produces
