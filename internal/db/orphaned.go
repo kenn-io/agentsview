@@ -1935,6 +1935,15 @@ func copySessionDataForIDs(
 		return fmt.Errorf("copying sessions: %w", err)
 	}
 
+	if oldDBHasColumn(ctx, tx, "sessions", "last_entry_uuid") {
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE sessions SET last_entry_uuid = (SELECT last_entry_uuid FROM old_db.sessions WHERE id = sessions.id) "+
+				"WHERE COALESCE(file_path, '') = '' AND id IN (SELECT id FROM "+tempIDsTable+")",
+		); err != nil {
+			return fmt.Errorf("copying import freshness markers: %w", err)
+		}
+	}
+
 	if oldDBHasTable(ctx, tx, "claude_subagent_sources") {
 		if _, err := tx.ExecContext(ctx,
 			"INSERT OR IGNORE INTO claude_subagent_sources (session_id, file_path) "+

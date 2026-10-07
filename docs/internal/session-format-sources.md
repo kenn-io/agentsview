@@ -2733,41 +2733,40 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/claude_ai.go` parses exports;
   `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
 - **Desktop sync evidence:** `source` and live responses, reverified 2026-10-07
-  against Anthropic's published client bundles:
-  [list client](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-m-1-b3JkS0de.js),
-  [detail URL builder](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-l-p-m-3-BCYG6Qrh.js),
-  and [message normalizer](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-l-m-0-BUHSvGzE.js).
+  against Anthropic's published client and responses from Team and personal
+  accounts.
   The list client reads `data` and `has_more` from
   `https://claude.ai/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}`.
-  Sync requests `archived=false` and `archived=true` separately. It omits the
-  `starred` filter so starred chats remain eligible. Repeated summaries skip
-  detail fetches when summary `updated_at` matches archived `ended_at` and
+  Sync omits the `archived` filter to include active and archived chats in one
+  pass. It omits `starred` so starred chats remain eligible. Repeated summaries
+  skip detail fetches when summary `updated_at` matches archived `ended_at` and
   `current_leaf_message_uuid` matches `sessions.last_entry_uuid` under every
   archive policy. Sync stores the raw detail leaf in that column, including
   when the stored messages are unchanged. Branch switches change the leaf
   without changing `updated_at`. Zip imports clear the marker, so their next
   Sync fetches the visible branch once. Unchanged rows keep their identities.
-  The producer's `ET` detail builder defaults to `tree=True`,
+  The client's detail builder defaults to `tree=True`,
   `rendering_mode=messages`, `render_all_tools=true`, and
   `include_inline_comparison=true`; the client enables `consistency=strong`.
   Sync uses these parameters on
   `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}`.
-  The producer's `fo` keeps assistants, humans with an assistant child,
+  Claude's message normalizer keeps assistants, humans with an assistant child,
   messages without a parent field, and every ancestor of a kept message.
-  `uo` resolves an absent, null, or empty parent through the nearest lower
+  It resolves an absent, null, or empty parent through the nearest lower
   `index`, retaining the distinction between absent and null fields. The root
   sentinel is `00000000-0000-4000-8000-000000000000`. Children retain array
-  order, with the first selected by default. `co` selects the leaf's ancestors;
-  a leaf outside the kept messages falls back to the last kept message.
-  `vo` walks down from the sentinel. `po` restores an unanswered human prompt
+  order, with the first selected by default. The normalizer selects the leaf's
+  ancestors; a leaf outside the kept messages falls back to the last kept message.
+  It walks down from the sentinel and restores an unanswered human prompt
   matching the server leaf, or the last one attached to the visible path's end.
   Only `ParseClaudeAIDetail` applies these rules; exports retain their original
   order even when tree fields are present. Duplicate message UUIDs, missing
   resolved parents, cycles, and trees without a root fail before writing.
   Sync also rejects a detail UUID that differs from the requested chat.
   List items with a null leaf skip detail fetches; exports skip empty chats.
-  Inside the serialized write, Sync skips details older than archived
-  `ended_at`. Usage-only archives refresh session metadata under their content
+  Sync commits the freshness marker after the transcript, so interrupted writes
+  refetch on the next run. Full resync preserves markers for import-only
+  sessions. Usage-only archives refresh session metadata under their content
   policy. Detail HTTP 404 counts as skipped. Other detail HTTP failures and
   responses over 32 MiB fail that chat. Authentication, transport, and
   cancellation errors stop Sync.
@@ -2777,11 +2776,12 @@ schemas keep their existing ordering behavior.
   assistant activity rows to the selected path.
   An empty list page with `has_more: true` fails.
   The export parser reads message `sender`, `text`, `content`, timestamps,
-  and attachments. Live checks confirmed the list and detail shapes in one Team
-  organization: parent links are strings with the root sentinel, message text
-  is in `content[].text`, and list items carry `current_leaf_message_uuid`.
-  The archived flag selects active or archived chats. `render_all_tools=true`
-  preserves artifact tool blocks instead of unsupported-device placeholders.
+  and attachments. Live checks confirmed the list and detail shapes in Team
+  and personal accounts: parent links are strings with the root sentinel,
+  message text is in `content[].text`, and list items carry
+  `current_leaf_message_uuid`. Omitting the archived flag returns active and
+  archived chats. `render_all_tools=true` preserves artifact tool blocks instead
+  of unsupported-device placeholders.
   Organization `capabilities` included `chat`.
   **Unverified live:** multiple chat organizations, web-search blocks,
   unanswered final prompts, and tree fields in official exports.

@@ -419,6 +419,36 @@ func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 	require.NoError(t, err, "recreate temp table after cleanup")
 }
 
+func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
+	source := testDB(t)
+	leaf := "reply"
+	for _, id := range []string{"imported", "file-backed"} {
+		session := Session{ID: id, Agent: "claude-ai", Project: "test", Machine: "test", LastEntryUUID: &leaf}
+		if id == "file-backed" {
+			session.Agent = "claude"
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			session.FilePath = &path
+		}
+		require.NoError(t, source.UpsertSession(t.Context(), session))
+	}
+	require.NoError(t, source.Close())
+	destination := testDB(t)
+	count, err := destination.CopyOrphanedDataFrom(source.Path())
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+	for _, id := range []string{"imported", "file-backed"} {
+		session, err := destination.GetSessionFull(t.Context(), id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		if id == "imported" {
+			require.NotNil(t, session.LastEntryUUID)
+			assert.Equal(t, "reply", *session.LastEntryUUID)
+		} else {
+			assert.Nil(t, session.LastEntryUUID)
+		}
+	}
+}
+
 func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()
