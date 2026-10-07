@@ -33,8 +33,6 @@ type replicaPusher struct {
 	ensurePricing func(context.Context) error
 	connect       func(context.Context) (storage.Pusher, error)
 	target        storage.Pusher
-	// Keep full repair pending until an unskipped vector phase completes cleanly.
-	fullVectorRepairPending bool
 	// vectorReconcileNeeded is true until a generation-wide vector
 	// reconciliation succeeds in this watch process, and again after
 	// any push error or a vector phase that skipped or deferred work.
@@ -66,7 +64,6 @@ func (p *replicaPusher) pushBatch(
 	batch *syncpkg.WatchBatch,
 	recovery *syncpkg.WatchRecoveryScope,
 ) error {
-	p.fullVectorRepairPending = p.fullVectorRepairPending || full
 	push := func() error { return p.pushAfterSync(ctx, reason, full) }
 	if batch != nil {
 		if p.scopedSync == nil {
@@ -105,7 +102,6 @@ func (p *replicaPusher) pushAfterSync(
 		p.reset()
 		return fmt.Errorf("ensure schema: %w", err)
 	}
-	full = full || p.fullVectorRepairPending
 	scoped := scopedVectorPush(reason, full, p.vectorReconcileNeeded)
 	res, err := p.target.PushWithOptions(ctx, storage.PushOptions{
 		Full:                           full,
@@ -128,9 +124,6 @@ func (p *replicaPusher) pushAfterSync(
 			p.label, res.Errors,
 		)
 		return fmt.Errorf("%d session(s) failed to push", res.Errors)
-	}
-	if !res.Vectors.Skipped && res.Vectors.SessionsDeferred == 0 {
-		p.fullVectorRepairPending = false
 	}
 	logReplicaWatchPushResult(p.label, p.displayName, res, reason)
 	return nil

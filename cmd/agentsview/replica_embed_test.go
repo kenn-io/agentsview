@@ -323,15 +323,20 @@ func TestReplicaWatchEmbedAdoptsPublishedRecipe(t *testing.T) {
 	assert.Equal(t, 2, replica.opens, "failed resolution retries, then stays pinned")
 }
 
-func TestReplicaWatchEmbedKeepsFullRepairAfterSkippedExport(t *testing.T) {
+func TestReplicaWatchEmbedBuildsFullRepairDuringStartupPush(t *testing.T) {
+	replica := &embedPushReplica{gens: []storage.VectorGenerationInfo{publishedRecipe()}}
 	endpoint := newEmbeddingsStubServer(t, 4)
+	handler := endpoint.Config.Handler
+	endpoint.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Len(t, replica.sessions, 3, "sessions land before embedding requests")
+		handler.ServeHTTP(w, r)
+	})
 	t.Cleanup(endpoint.Close)
 	cfg := testConfigWithClaudeFixture(t)
 	cfg.Vector.Embed.BackstopInterval = "24h"
 	cfg.DeploymentEmbeddings = deploymentRecipeConfig().DeploymentEmbeddings
 	cfg.DeploymentEmbeddings.Endpoint = endpoint.URL + "/v1"
 	archive := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	replica := &embedPushReplica{}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var push func(context.Context, pushReason, *syncpkg.WatchBatch) error
@@ -351,18 +356,15 @@ func TestReplicaWatchEmbedKeepsFullRepairAfterSkippedExport(t *testing.T) {
 			startWatcher: func(config.Config, *syncpkg.Engine, syncpkg.WatchCallback, syncpkg.WatcherOptions) (func(), func(), []string) {
 				return func() {}, func() {
 					defer cancel()
-					require.Equal(t, []bool{true}, replica.skipped, "startup has no recipe to export")
-					replica.setGenerations([]storage.VectorGenerationInfo{publishedRecipe()})
-					embedder := replica.source.(*replicaEmbedder)
-					require.NoError(t, embedder.resolve(ctx))
-					require.NoError(t, embedder.build(ctx))
+					require.Equal(t, []bool{false}, replica.skipped, "startup builds and exports the published recipe")
+					require.Len(t, replica.pushed, 1)
+					assert.Equal(t, publishedRecipe().Fingerprint, replica.pushed[0].Fingerprint)
+					require.Len(t, replica.options, 1)
+					assert.True(t, replica.options[0].Full, "startup repairs unchanged chunks")
 					require.NoError(t, push(ctx, reasonInterval, nil))
-					require.Equal(t, []bool{true, false}, replica.skipped)
+					require.Equal(t, []bool{false, false}, replica.skipped)
 					require.Len(t, replica.options, 2)
-					assert.True(t, replica.options[1].Full, "the first completed vector phase must repair unchanged chunks")
-					require.NoError(t, push(ctx, reasonInterval, nil))
-					require.Len(t, replica.options, 3)
-					assert.False(t, replica.options[2].Full, "a completed repair returns later pushes to incremental mode")
+					assert.False(t, replica.options[1].Full, "later pushes are incremental")
 				}, nil
 			},
 		},
