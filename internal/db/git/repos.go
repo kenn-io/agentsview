@@ -4,13 +4,16 @@ package git
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	gitcmd "go.kenn.io/kit/git/cmd"
 	gitrepo "go.kenn.io/kit/git/repo"
 )
 
@@ -34,6 +37,9 @@ func DiscoverRepos(ctx context.Context, cwds []string) [][]string {
 	position := map[string]int{}
 	out := [][]string{}
 	for _, cwd := range cwds {
+		if ctx.Err() != nil {
+			break
+		}
 		root := findRepoRoot(ctx, cwd)
 		if root == "" {
 			continue
@@ -164,15 +170,72 @@ func normalizeRemoteURL(raw, root string) string {
 	return strings.ToLower(host) + "/" + path
 }
 
-// findRepoRoot returns the absolute repo toplevel for start, or "" when no
-// enclosing repo can be resolved.
+// Completed directory lookups last until process exit; failed fills remain retryable.
+var repoRoots = struct {
+	sync.Mutex
+	entries map[string]*repoRootEntry
+}{entries: make(map[string]*repoRootEntry)}
+
+type repoRootEntry struct {
+	ready chan struct{}
+	root  string
+}
+
+// findRepoRoot returns the absolute repo toplevel for start, or "" when no enclosing repo resolves.
 func findRepoRoot(ctx context.Context, start string) string {
 	if start == "" {
 		return ""
 	}
+	start, err := filepath.Abs(start)
+	if err != nil {
+		return ""
+	}
+	for ctx.Err() == nil {
+		repoRoots.Lock()
+		if entry := repoRoots.entries[start]; entry != nil {
+			select {
+			case <-entry.ready:
+				if entry.root != "" {
+					info, err := os.Stat(entry.root)
+					if err != nil || !info.IsDir() {
+						delete(repoRoots.entries, start)
+						repoRoots.Unlock()
+						continue
+					}
+				}
+				root := entry.root
+				repoRoots.Unlock()
+				return root
+			default:
+				repoRoots.Unlock()
+				select {
+				case <-entry.ready:
+					continue
+				case <-ctx.Done():
+					return ""
+				}
+			}
+		}
+		entry := &repoRootEntry{ready: make(chan struct{})}
+		repoRoots.entries[start] = entry
+		repoRoots.Unlock()
+		root, cacheable := resolveRepoRoot(ctx, start)
+		repoRoots.Lock()
+		entry.root = root
+		if !cacheable {
+			delete(repoRoots.entries, start)
+		}
+		close(entry.ready)
+		repoRoots.Unlock()
+		return root
+	}
+	return ""
+}
+
+func resolveRepoRoot(ctx context.Context, start string) (string, bool) {
 	dir := existingAncestor(start)
 	if dir == "" {
-		return ""
+		return "", false
 	}
 	return gitToplevel(ctx, dir)
 }
@@ -201,14 +264,15 @@ func existingAncestor(path string) string {
 }
 
 // gitToplevel runs `git rev-parse --show-toplevel` from dir and returns the
-// trimmed result, or "" if git fails or prints nothing. A 5s timeout guards
+// trimmed result and whether it can be cached. A 5s timeout guards
 // against hung git invocations on broken repos.
-func gitToplevel(ctx context.Context, dir string) string {
+func gitToplevel(ctx context.Context, dir string) (string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	root, err := gitrepo.Root(ctx, dir)
 	if err != nil {
-		return ""
+		var gitErr *gitcmd.GitError
+		return "", ctx.Err() == nil && errors.As(err, &gitErr) && strings.HasPrefix(gitErr.Stderr, "fatal: not a git repository ")
 	}
-	return root
+	return root, root != ""
 }

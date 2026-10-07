@@ -1,12 +1,14 @@
 package git
 
 import (
+	"context"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,6 +60,86 @@ func TestDiscoverRepos_FindsRootAndFiltersMissing(t *testing.T) {
 	got := DiscoverRepos(t.Context(), []string{sub, outside})
 	want := []string{repoA}
 	assert.Equal(t, canonAll(want), canonAll(slices.Concat(got...)), "DiscoverRepos")
+}
+
+func TestDiscoverRepos_ReusesDirectoryRoots(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	a, b := mkdirIn(t, repo, "a"), mkdirIn(t, repo, "b")
+	outside := t.TempDir()
+	want := canonAll([]string{repo})
+	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{a, outside})...)))
+	path := os.Getenv("PATH")
+	t.Setenv("PATH", t.TempDir())
+	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{a, outside})...)))
+	t.Setenv("PATH", path)
+	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{a, b, outside})...)))
+	gitRun(t, outside, nil, "init", "-q")
+	assert.Empty(t, DiscoverRepos(t.Context(), []string{outside}), "completed negative lookups remain cached")
+	t.Setenv("PATH", t.TempDir())
+	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{b, a})...)))
+}
+
+func TestDiscoverRepos_RetryFailedLookup(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	assert.Empty(t, DiscoverRepos(ctx, []string{repo}))
+	path := os.Getenv("PATH")
+	t.Setenv("PATH", t.TempDir())
+	assert.Empty(t, DiscoverRepos(t.Context(), []string{repo}))
+	t.Setenv("PATH", path)
+	assert.Equal(t, canonAll([]string{repo}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{repo})...)))
+}
+
+func TestDiscoverRepos_OriginsStayFresh(t *testing.T) {
+	skipIfNoGit(t)
+	a, b := initBareRepo(t), initBareRepo(t)
+	require.Len(t, DiscoverRepos(t.Context(), []string{a, b}), 2)
+	setOrigin(t, a, "https://example.com/team/repo.git")
+	setOrigin(t, b, "https://example.com/team/repo.git")
+	assert.Len(t, DiscoverRepos(t.Context(), []string{a, b}), 1)
+}
+
+func TestDiscoverRepos_DeletedRoot(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	sub := mkdirIn(t, repo, "sub")
+	require.NotEmpty(t, DiscoverRepos(t.Context(), []string{sub}))
+	require.NoError(t, os.RemoveAll(repo))
+	assert.Empty(t, DiscoverRepos(t.Context(), []string{sub}))
+}
+
+func TestFindRepoRoot_ConcurrentMisses(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
+		})
+	}
+	wg.Wait()
+}
+
+func TestFindRepoRoot_CancelledWait(t *testing.T) {
+	repo := t.TempDir()
+	entry := &repoRootEntry{ready: make(chan struct{})}
+	repoRoots.Lock()
+	repoRoots.entries[repo] = entry
+	repoRoots.Unlock()
+	t.Cleanup(func() {
+		repoRoots.Lock()
+		delete(repoRoots.entries, repo)
+		close(entry.ready)
+		repoRoots.Unlock()
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan string)
+	go func() { done <- findRepoRoot(ctx, repo) }()
+	cancel()
+	assert.Empty(t, <-done)
 }
 
 func TestDiscoverRepos_Dedup(t *testing.T) {
