@@ -744,8 +744,6 @@ CREATE TABLE IF NOT EXISTS session_labels (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     PRIMARY KEY (session_id, label)
 );
-CREATE INDEX IF NOT EXISTS idx_session_labels_label
-    ON session_labels(label);
 
 -- Launcher-supplied parent links. Linking passes recompute them from current
 -- evidence: a link is the session's parent only while the transcript gives

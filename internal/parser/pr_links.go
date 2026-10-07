@@ -64,8 +64,8 @@ func NewPRLink(
 }
 
 // prLinkPathParts extracts the repository and number from a GitHub
-// (/owner/repo/pull/N), Bitbucket (/workspace/repo/pull-requests/N), or
-// GitLab (/group/repo/-/merge_requests/N) path.
+// (/owner/repo/pull/N), Bitbucket (/workspace/repo/pull-requests/N),
+// GitLab (/group/repo/-/merge_requests/N), or Gerrit (/c/repo/+/N) path.
 func prLinkPathParts(path string) (string, int) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 4 {
@@ -81,6 +81,8 @@ func prLinkPathParts(path string) (string, int) {
 	case kind == "merge_requests" && len(parts) >= 5 &&
 		parts[len(parts)-3] == "-":
 		return strings.Join(parts[:len(parts)-3], "/"), n
+	case kind == "+" && parts[0] == "c":
+		return strings.Join(parts[1:len(parts)-2], "/"), n
 	}
 	return "", 0
 }

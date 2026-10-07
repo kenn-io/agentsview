@@ -52,11 +52,7 @@ func listIDs(t *testing.T, store *Store, f db.SessionFilter) []string {
 	t.Helper()
 	page, err := store.ListSessions(t.Context(), f)
 	require.NoError(t, err)
-	ids := make([]string, 0, len(page.Sessions))
-	for _, s := range page.Sessions {
-		ids = append(ids, s.ID)
-	}
-	return ids
+	return sessionIDs(page.Sessions)
 }
 
 func TestPushServesSessionLabelsAndPRLinks(t *testing.T) {

@@ -182,8 +182,9 @@ fixtures retain this field; missing identities remain source-local.
 - **Pull request links (2026-10-06):** Checked against local Claude Code 2.1.x
   transcripts. The CLI appends top-level records shaped
   `{"type":"pr-link","prNumber":123,"prUrl":"https://github.com/owner/repo/pull/123","prRepository":"owner/repo","sessionId":"...","timestamp":"..."}`.
-  The records carry no `uuid`, so background-fork replay trimming never
-  drops them. One transcript can repeat the same link hundreds of times, so
+  Claude Code PR-link records carry no message `uuid` and are re-appended, so
+  PR links apply to every split of a forked transcript.
+  One transcript can repeat the same link hundreds of times, so
   Agentsview keeps one link per normalized URL with the earliest timestamp and
   keeps every distinct URL. Parser fixtures reverified on 2026-10-06 cover
   more than 100 links and incremental reparsing for new URLs or earlier
