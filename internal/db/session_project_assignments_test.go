@@ -12,10 +12,15 @@ import (
 
 func TestAssignSessionProjectOverridesSyncAndFolderRules(t *testing.T) {
 	t.Run("cron automatic project refresh", func(t *testing.T) {
-		for _, agent := range []string{"hermes", "augure-desktop"} {
+		for _, tc := range []struct{ agent, original, restored string }{
+			{"hermes", "hermes-cron", "hermes-cron/job-b"},
+			{"augure-desktop", "augure-desktop-cron", "augure-desktop-cron/job-b"},
+			{"codex", "codex-cron/job-a", "codex-cron/job-a"},
+		} {
+			agent := tc.agent
 			database := testDB(t)
 			id := agent + ":tip"
-			insertSession(t, database, id, agent+"-cron", func(s *Session) { s.Agent = agent })
+			insertSession(t, database, id, tc.original, func(s *Session) { s.Agent = agent })
 			assignment, err := database.AssignSessionProject(t.Context(), id, "manual")
 			require.NoError(t, err)
 			insertSession(t, database, id, agent+"-cron/job-a", func(s *Session) { s.Agent = agent })
@@ -28,7 +33,7 @@ func TestAssignSessionProjectOverridesSyncAndFolderRules(t *testing.T) {
 			assert.Equal(t, assignment.Project, stored.Project)
 			cleared, err := database.ClearSessionProjectAssignment(t.Context(), id)
 			require.NoError(t, err)
-			assert.Equal(t, agent+"-cron/job-b", cleared.Project)
+			assert.Equal(t, tc.restored, cleared.Project)
 		}
 	})
 	database := testDB(t)

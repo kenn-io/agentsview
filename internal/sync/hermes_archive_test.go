@@ -414,6 +414,7 @@ func TestHermesCronStableCostsSurviveRenameAndSourcePruning(t *testing.T) {
 	require.Equal(t, 8, initial.Synced)
 	jobACost := "11"
 	check := func(database *db.DB) map[string]string {
+		t.Helper()
 		keys := make(map[string]string)
 		for _, window := range []struct{ from, to string }{{"2026-10-07", "2026-10-07"}, {"2026-10-01", "2026-10-31"}} {
 			for _, job := range []struct{ id, cost string }{{"job.a", jobACost}, {"job-b", "2"}} {
