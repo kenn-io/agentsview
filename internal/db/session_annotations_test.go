@@ -174,37 +174,31 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	assert.False(t, link.Applied)
 	assert.Equal(t, ExternalRelationshipType, link.RelationshipType)
 
-	// The write applies the link itself, as an HTTP upload with no linking
-	// pass would.
+	// Uploads link sessions inside the batch transaction.
 	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
 		Session: Session{ID: "worker", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
 	}})
-	require.NoError(t, err)
-	// A fixed timestamp makes a rewrite detectable even within one clock tick.
-	_, err = d.getWriter().ExecContext(ctx,
-		"UPDATE sessions SET local_modified_at = ? WHERE id = ?", "2000-01-01T00:00:00.000Z", "worker")
 	require.NoError(t, err)
 	worker, err := d.GetSessionFull(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
 	assert.Equal(t, "manager", *worker.ParentSessionID)
 	assert.Equal(t, "subagent", worker.RelationshipType)
-	require.NotNil(t, worker.LocalModifiedAt)
-	modifiedAt := worker.LocalModifiedAt
 
 	children, err := d.GetChildSessions(ctx, "manager")
 	require.NoError(t, err)
 	require.Len(t, children, 1)
 	assert.Equal(t, "worker", children[0].ID)
 
-	// A parentless parser rewrite keeps the applied launcher link unchanged.
+	// Sync linking restores the launcher parent after a parser rewrite.
 	insertSession(t, d, "worker", "proj")
+	_, err = d.LinkSubagentSessionsForSessions(ctx, []string{"worker"})
+	require.NoError(t, err)
 	worker, err = d.GetSessionFull(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
 	assert.Equal(t, "manager", *worker.ParentSessionID)
 	assert.Equal(t, "subagent", worker.RelationshipType)
-	assert.Equal(t, modifiedAt, worker.LocalModifiedAt)
 
 	// Batch writes also replace usage events, which stamp local_modified_at.
 	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
@@ -282,8 +276,8 @@ func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
 		assert.False(t, link.Applied)
 		assert.Contains(t, listSessionIDs(t, d, SessionFilter{}), "a")
 	}
-	assertParents(t)
 	require.NoError(t, d.LinkSubagentSessions())
+	assertParents(t)
 
 	// A reparse of a must not re-apply the link.
 	insertSession(t, d, "a", "proj")
@@ -311,12 +305,11 @@ func TestSessionExternalParentReturnsWhenNativeCycleGoesAway(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, worker.ParentSessionID)
 
-	// A reparse of the manager without that parent puts the worker back as
-	// part of the write, leaving the scoped linking pass nothing to move.
+	// Sync linking restores the launcher parent once the native cycle disappears.
 	insertSession(t, d, "manager", "proj")
 	linked, err := d.LinkSubagentSessionsForSessions(ctx, []string{"manager"})
 	require.NoError(t, err)
-	assert.Zero(t, linked)
+	assert.Equal(t, 1, linked)
 	worker, err = d.GetSession(ctx, "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker.ParentSessionID)
@@ -453,6 +446,33 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 
 	// Without an annotation filter the defaults still hide the worker.
 	assert.ElementsMatch(t, []string{"manager", "idle"}, listSessionIDs(t, d, defaults))
+}
+
+func TestSessionBatchSpawnEdgeOverridesExternalParent(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "launcher", "proj")
+	insertSession(t, d, "worker", "proj")
+	link, err := d.SetSessionExternalParent(ctx, "worker", "launcher")
+	require.NoError(t, err)
+	require.True(t, link.Applied)
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session:         Session{ID: "spawner", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
+		ReplaceMessages: true,
+		Messages: []Message{{
+			SessionID: "spawner", Ordinal: 0, Role: "assistant",
+			Content: "spawn worker", HasToolUse: true,
+			ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}},
+		}},
+	}})
+	require.NoError(t, err)
+	worker, err := d.GetSession(ctx, "worker")
+	require.NoError(t, err)
+	require.NotNil(t, worker.ParentSessionID)
+	assert.Equal(t, "spawner", *worker.ParentSessionID)
+	link, err = d.GetSessionExternalParent(ctx, "worker")
+	require.NoError(t, err)
+	assert.False(t, link.Applied)
 }
 
 func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {

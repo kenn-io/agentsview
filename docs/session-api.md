@@ -712,8 +712,9 @@ reports `session_found` and `applied`.
 - The link applies only while the transcript names no parent of its own.
   Subagent, fork, and continuation links that AgentsView derives from the
   transcript win, and `applied` is `false` in that case.
-- AgentsView recomputes the link on every sync. When the transcript parent or
-  loop that blocked it goes away, the session goes back under the linked parent.
+- AgentsView recomputes the link during sync linking, uploads, and set/clear.
+  When the transcript parent or loop that blocked it goes away, the session
+  goes back under the linked parent.
 - The session does not have to exist yet; the link applies when sync imports it.
 - The link is stored apart from the transcript and survives reparses and full
   resyncs. Mirrors receive the resulting parent on push.

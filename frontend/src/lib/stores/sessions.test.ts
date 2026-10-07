@@ -3698,6 +3698,34 @@ describe("SessionsStore live refresh", () => {
     vi.useRealTimers();
   });
 
+  it("sessions events refresh active session labels", async () => {
+    const { events } = await import("./events.svelte.js");
+    let registered: ((e: { scope: string }) => void) | null = null;
+    const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
+      registered = fn as (e: { scope: string }) => void;
+      return () => {};
+    });
+
+    const sessions = createSessionsStore();
+    const detach = sessions.attachSidebar();
+    sessions.activeSessionId = "worker";
+    sessions.sessions = [makeSession({ id: "worker", labels: ["role=reviewer"] })];
+    vi.mocked(api.getSession).mockResolvedValue(makeSession({ id: "worker", labels: [] }));
+    expect(sessions.activeSession?.labels).toEqual(["role=reviewer"]);
+
+    registered!({ scope: "sessions" });
+    await vi.waitFor(() => {
+      expect(sessions.activeSession?.labels).toEqual([]);
+    });
+    expect(SessionsService.getApiV1SessionsById).toHaveBeenCalledWith(
+      { id: "worker" },
+      expect.any(Object),
+    );
+
+    detach();
+    spy.mockRestore();
+  });
+
   it("sessions events replace cached project filter options", async () => {
     const { events } = await import("./events.svelte.js");
     let registered: ((e: { scope: string }) => void) | null = null;

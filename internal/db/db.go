@@ -3068,9 +3068,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerDropsSQL); err != nil {
 		return fmt.Errorf("dropping artifact session queue triggers: %w", err)
 	}
-	if _, err := w.ExecContext(ctx, sessionExternalParentTriggerDropsSQL); err != nil {
-		return fmt.Errorf("dropping session parent triggers: %w", err)
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -3079,9 +3076,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
 		return fmt.Errorf("installing artifact session queue triggers: %w", err)
-	}
-	if _, err := w.ExecContext(ctx, sessionExternalParentTriggerCreatesSQL); err != nil {
-		return fmt.Errorf("installing session parent triggers: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

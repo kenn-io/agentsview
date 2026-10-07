@@ -18,9 +18,6 @@ var ErrSessionExternalParentInvalid = errors.New("invalid session parent link")
 // spells it as a literal.
 const ExternalRelationshipType = "subagent"
 
-// Keep the applied launcher parent when recomputing it would produce the same value.
-const keepLauncherParentSQL = `COALESCE(excluded.parser_parent_session_id,'') = '' AND EXISTS (SELECT 1 FROM session_external_parents ep WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)`
-
 // SessionExternalParent is a parent link supplied by whatever launched a
 // session. It is stored apart from parsed transcript data and applies only
 // while the parser found no parent of its own.
@@ -244,9 +241,7 @@ func externalParentChainSQL(start, target string) string {
 // current evidence. A link is the effective parent
 // when the session has no transcript parent, no spawn edge, and the link's
 // chain does not lead back to the session; otherwise a session it once
-// applied to returns to no parent. The session triggers run it, so it has
-// no statement-level WITH, which trigger bodies cannot carry, and no alias on
-// the updated table, which ALTER TABLE's trigger check rejects.
+// applied to returns to no parent.
 func applySessionExternalParentsSQL(linksSQL string) string {
 	// LIMIT -1 keeps the planner from flattening l into the update, which
 	// would walk each chain once per reference to cyclic, and the unary plus
@@ -313,35 +308,6 @@ func scopedSessionExternalParentsSQL(start string) string {
 // applyScopedSessionExternalParentsSQL binds the JSON id list twice.
 var applyScopedSessionExternalParentsSQL = scopedSessionExternalParentsSQL(
 	"SELECT value FROM json_each(?)")
-
-// sessionExternalParentTriggerDropsSQL and
-// sessionExternalParentTriggerCreatesSQL apply launcher links on every
-// session write that inserts a row or changes its parent columns, so an
-// upsert that rewrites the same parents skips the walk. The triggers run the
-// scoped recompute from the written row inside the writer's statement, so
-// no writer can skip it and a rolled-back write takes its recompute with it.
-// Like the artifact queue triggers they reference migrated columns, so they
-// are dropped before column migrations and created after.
-const sessionExternalParentTriggerDropsSQL = `
-DROP TRIGGER IF EXISTS trg_sessions_external_parent_insert;
-DROP TRIGGER IF EXISTS trg_sessions_external_parent_update;
-`
-
-var sessionExternalParentTriggerCreatesSQL = `
-CREATE TRIGGER IF NOT EXISTS trg_sessions_external_parent_insert
-AFTER INSERT ON sessions
-WHEN EXISTS (SELECT 1 FROM session_external_parents)
-BEGIN` + scopedSessionExternalParentsSQL("SELECT NEW.id") + `;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_sessions_external_parent_update
-AFTER UPDATE OF parent_session_id, parser_parent_session_id ON sessions
-WHEN (OLD.parent_session_id IS NOT NEW.parent_session_id
-	OR OLD.parser_parent_session_id IS NOT NEW.parser_parent_session_id)
-AND EXISTS (SELECT 1 FROM session_external_parents)
-BEGIN` + scopedSessionExternalParentsSQL("SELECT NEW.id") + `;
-END;
-`
 
 // applySessionExternalParents recomputes every launcher link and returns the
 // number of sessions whose effective parent changed. Full linking passes use
