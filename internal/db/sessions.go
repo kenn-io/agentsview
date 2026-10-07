@@ -6163,7 +6163,7 @@ func (db *DB) RenameSession(ctx context.Context, id string, displayName *string)
 	_, err = tx.ExecContext(ctx,
 		`UPDATE sessions
 		 SET display_name = ?,
-		     sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ? AND deleted_at IS NULL`,
 		displayName, id,
 	)

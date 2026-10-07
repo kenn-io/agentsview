@@ -196,8 +196,7 @@ Schema v6 adds two fields to each session row, in JSON and NDJSON:
   Transcript and standalone usage-event writes can update it while
   `last_activity_at` stays unchanged. It is a wall-clock signal: equal values,
   clock changes, and rebuilds prevent treating it as a monotonic revision.
-  Labels, launcher parent links, and custom names update only the mirror sync
-  marker.
+  Labels and launcher parent links update only the mirror sync marker.
 
 For a materialized session receipt, retain a tuple of independent version
 evidence: **transcript revision, project identity (or a digest of the complete
