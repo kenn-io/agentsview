@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,7 @@ func TestClaimDaemonActive(t *testing.T) {
 		wantClaimed bool
 		wantRecord  string
 	}{
+		{"failed first send leaves no record", "install-one", morning, errors.New("queue full"), true, false, ""},
 		{"first start of the day sends", "install-one", morning, nil, true, true, "install-one 2026-03-09\n"},
 		{"restart on the same day skips", "install-one", morning.Add(23 * time.Hour), nil, false, false, "install-one 2026-03-09\n"},
 		{"failed send keeps the day open", "install-one", nextDayInNewYork, errors.New("queue full"), true, false, "install-one 2026-03-09\n"},
@@ -47,6 +49,10 @@ func TestClaimDaemonActive(t *testing.T) {
 		}
 		assert.Equal(t, tc.wantSent, sent, tc.name)
 		assert.Equal(t, tc.wantClaimed, claimed, tc.name)
+		if tc.wantRecord == "" {
+			assert.NoFileExists(t, path, tc.name)
+			continue
+		}
 		data, err := os.ReadFile(path)
 		require.NoError(t, err, tc.name)
 		assert.Equal(t, tc.wantRecord, string(data), tc.name)
@@ -64,6 +70,30 @@ func TestClaimDaemonActiveDoesNotSendWhenRecordIsUnreadable(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, claimed)
 	assert.False(t, sent)
+}
+
+func TestClaimDaemonActiveDoesNotSendWhenRecordIsUnwritable(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("a read-only directory blocks file creation only for unprivileged Unix users")
+	}
+	c := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
+	day := time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC)
+	_, err := c.ClaimDaemonActive(day, func() error { return nil })
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(c.DataDir, 0o500))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(c.DataDir, 0o700)) })
+
+	// Restarts on the next day can read the record but cannot reserve the day.
+	sends := 0
+	for range 3 {
+		claimed, err := c.ClaimDaemonActive(day.Add(24*time.Hour), func() error {
+			sends++
+			return nil
+		})
+		require.Error(t, err)
+		assert.False(t, claimed)
+	}
+	assert.Zero(t, sends)
 }
 
 func TestClaimDaemonActiveConcurrent(t *testing.T) {

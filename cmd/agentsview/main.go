@@ -1358,9 +1358,7 @@ func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter, cfg 
 	if reporter == nil || !reporter.Enabled() {
 		return
 	}
-	// The claim reads only these fields; a copy keeps the goroutine off cfg.
-	claimCfg := config.Config{DataDir: cfg.DataDir, InstallationID: cfg.InstallationID}
-	go runDailyTelemetryPings(ctx, telemetryDailyCheckInterval, claimCfg, func() error {
+	go runDailyTelemetryPings(ctx, telemetryDailyCheckInterval, cfg, func() error {
 		return reporter.CaptureDaemonActive(ctx)
 	})
 }
@@ -1376,13 +1374,12 @@ func runDailyTelemetryPings(ctx context.Context, interval time.Duration, cfg con
 	for {
 		now := time.Now()
 		if day := now.UTC().Format(time.DateOnly); day != settledDay {
-			claimed, err := cfg.ClaimDaemonActive(now, send)
+			_, err := cfg.ClaimDaemonActive(now, send)
 			if err != nil && ctx.Err() == nil {
 				log.Printf("capture telemetry event: %v", err)
 			}
-			// A failed send leaves the day open for the next check; a failed
-			// record after an accepted send must not resend from this process.
-			if claimed || err == nil {
+			// A failed send or record write leaves the day open for the next check.
+			if err == nil {
 				settledDay = day
 			}
 		}
