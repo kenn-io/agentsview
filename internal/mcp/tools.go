@@ -263,7 +263,7 @@ type listSessionsIn struct {
 	DateTo           string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	ActiveSince      string `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
 	IncludeOneShot   bool   `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions (a single user message). Default false."`
-	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns."`
+	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns. Default false."`
 	Limit            int    `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
 	Cursor           string `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 }

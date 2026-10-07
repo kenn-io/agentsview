@@ -18,6 +18,8 @@ The latest published release is
   Visits that span a server change are discarded.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off.
 
+- Include single-prompt sessions in MCP `list_sessions` results with
+  `include_one_shot`, matching `search_content`.
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.
