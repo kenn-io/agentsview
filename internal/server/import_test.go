@@ -594,3 +594,66 @@ func TestHandleImportReplaceQuery(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	httpServer := httptest.NewServer(srv.mux)
+	defer httpServer.Close()
+	response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	scanner := bufio.NewScanner(response.Body)
+	event := ""
+	var stats importer.ImportStats
+	done := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "event: ") {
+			event = strings.TrimPrefix(line, "event: ")
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		switch event {
+		case "fetch":
+			var request struct {
+				ID   string `json:"id"`
+				Path string `json:"path"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(data), &request))
+			var body string
+			switch request.Path {
+			case "/api/organizations":
+				body = `[{"uuid":"org","capabilities":["chat"]}]`
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
+				body = `{"data":[{"uuid":"large","updated_at":"2026-03-01T10:05:00Z"},{"uuid":"later","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
+				body = `{"data":[],"has_more":false}`
+			case "/api/organizations/org/chat_conversations/large?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+				body = strings.Repeat("x", (32<<20)+2)
+			case "/api/organizations/org/chat_conversations/later?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+				body = `{"uuid":"later","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","chat_messages":[]}`
+			default:
+				t.Fatalf("unexpected path %s", request.Path)
+			}
+			result, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status=200", "application/octet-stream", strings.NewReader(body))
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusNoContent, result.StatusCode)
+			require.NoError(t, result.Body.Close())
+		case "error":
+			t.Fatalf("sync failed: %s", data)
+		case "done":
+			require.NoError(t, json.Unmarshal([]byte(data), &stats))
+			done = true
+		}
+	}
+	require.NoError(t, scanner.Err())
+	require.True(t, done)
+	assert.Equal(t, 1, stats.Errors)
+	assert.Equal(t, 1, stats.Imported)
+	session, err := srv.db.GetSession(t.Context(), "claude-ai:later")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Zero(t, session.MessageCount)
+}

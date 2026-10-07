@@ -6440,6 +6440,7 @@ async fn claude_auth_fetch(
     handle: AppHandle,
     path: String,
 ) -> Result<ClaudeBrowserResponse, String> {
+    validate_claude_fetch_path(&path)?;
     let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
         Some(window) => window,
         None => {
@@ -6491,8 +6492,25 @@ async fn claude_auth_fetch(
     response
 }
 
+fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
+    if !path.starts_with("/api/") {
+        return Err("Claude fetch path must start with /api/".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod claude_sync_tests {
+
+    #[test]
+    fn claude_fetch_requires_api_path() {
+        for path in ["/api/organizations", "/api/organizations/org/chat_conversations/one?tree=True"] {
+            assert!(super::validate_claude_fetch_path(path).is_ok());
+        }
+        for path in ["", "/api", "/settings", "//example.com/api/", "https://example.com/api/", "@example.com/api/"] {
+            assert!(super::validate_claude_fetch_path(path).is_err());
+        }
+    }
 
     #[test]
     fn claude_fetch_unsolicited_result_leaves_request_pending() {

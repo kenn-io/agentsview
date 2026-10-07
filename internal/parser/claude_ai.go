@@ -84,7 +84,7 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 		}
 
 		if conv == nil {
-			return fmt.Errorf("expected conversation object")
+			continue
 		}
 
 		if len(conv.Messages) == 0 {
@@ -105,6 +105,18 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 	}
 	_, err = dec.ReadToken()
 	return err
+}
+
+// ParseClaudeAIDetail also emits empty chats so Sync can store their freshness.
+func ParseClaudeAIDetail(data []byte) (ParseResult, error) {
+	var conv *claudeAIConversation
+	if err := json.Unmarshal(data, &conv); err != nil {
+		return ParseResult{}, err
+	}
+	if conv == nil || conv.UUID == "" || conv.Messages == nil {
+		return ParseResult{}, fmt.Errorf("expected conversation with chat_messages")
+	}
+	return convertClaudeAIConversation(*conv)
 }
 
 // assembleClaudeAIContent builds message content from content
@@ -184,6 +196,9 @@ func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) 
 	parents := make(map[string]string)
 	kept := make(map[string]bool)
 	for _, m := range conv.Messages {
+		if _, exists := byID[m.UUID]; exists {
+			return nil, fmt.Errorf("duplicate message uuid %s", m.UUID)
+		}
 		byID[m.UUID] = m
 		if len(m.Parent) > 0 && string(m.Parent) != "null" {
 			var parentsValue string
@@ -296,14 +311,7 @@ func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) 
 func convertClaudeAIConversation(
 	conv claudeAIConversation,
 ) (ParseResult, error) {
-	seen := make(map[string]bool, len(conv.Messages))
-	for _, m := range conv.Messages {
-		if seen[m.UUID] {
-			return ParseResult{}, fmt.Errorf("duplicate message uuid %s", m.UUID)
-		}
-		seen[m.UUID] = true
-	}
-	if len(conv.CurrentLeaf) > 0 || slices.ContainsFunc(conv.Messages, func(m claudeAIMessage) bool { return len(m.Parent) > 0 }) {
+	if slices.ContainsFunc(conv.Messages, func(m claudeAIMessage) bool { return len(m.Parent) > 0 && string(m.Parent) != "null" }) {
 		messages, err := selectedClaudeAIPath(conv)
 		if err != nil {
 			return ParseResult{}, err

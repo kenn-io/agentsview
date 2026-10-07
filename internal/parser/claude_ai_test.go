@@ -393,7 +393,7 @@ func TestParseClaudeAIExport_NullConversation(t *testing.T) {
 		calls++
 		return nil
 	})
-	require.ErrorContains(t, err, "expected conversation object")
+	require.NoError(t, err)
 	assert.Zero(t, calls)
 }
 
@@ -420,7 +420,7 @@ func TestParseClaudeAIExport_SelectedPath(t *testing.T) {
 		{name: "root sibling leaf", leaf: "b", messages: `{"uuid":"a","parent_message_uuid":"` + root + `","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"` + root + `","sender":"assistant","text":"Second"}`, want: []string{"Second"}},
 		{name: "missing leaf falls back", leaf: "missing", messages: question + "," + first + "," + second, want: []string{"Question", "Second"}},
 		{name: "nearest lower index", leaf: "b", messages: `{"uuid":"q","index":0,"sender":"human","text":"Question"},{"uuid":"b","index":5,"parent_message_uuid":null,"sender":"assistant","text":"Second"},{"uuid":"a","index":2,"parent_message_uuid":"","sender":"assistant","text":"First"}`, want: []string{"Question", "First", "Second"}},
-		{name: "absent index starts another root", leaf: "b", messages: `{"uuid":"q","index":0,"sender":"human","text":"Question"},{"uuid":"b","sender":"assistant","text":"Second"}`, want: []string{"Second"}},
+		{name: "flat messages keep their order with a leaf", leaf: "b", messages: `{"uuid":"q","index":0,"sender":"human","text":"Question"},{"uuid":"b","sender":"assistant","text":"Second"}`, want: []string{"Question", "Second"}},
 		{name: "unanswered branch drops", messages: question + "," + first + `,{"uuid":"unused","parent_message_uuid":"q","sender":"human","text":"Unused"}`, want: []string{"Question", "First"}},
 		{name: "last unanswered prompt", messages: question + "," + first + `,{"uuid":"old","parent_message_uuid":"a","sender":"human","text":"Old"},{"uuid":"pending","parent_message_uuid":"a","sender":"human","text":"Pending"}`, want: []string{"Question", "First", "Pending"}},
 		{name: "leaf unanswered prompt", leaf: "old", messages: question + "," + first + `,{"uuid":"old","parent_message_uuid":"a","sender":"human","text":"Old"},{"uuid":"pending","parent_message_uuid":"a","sender":"human","text":"Pending"}`, want: []string{"Question", "First", "Old"}},
@@ -455,5 +455,21 @@ func TestParseClaudeAIExport_SelectedPath(t *testing.T) {
 			assert.Equal(t, tt.want, contents)
 			assert.Equal(t, len(tt.want), results[0].Session.MessageCount)
 		})
+	}
+}
+
+func TestParseClaudeAIExport_FlatNullLeaf(t *testing.T) {
+	for _, messages := range []string{
+		`{"uuid":"q","sender":"human","text":"Question"},{"uuid":"a","sender":"assistant","text":"Answer"}`,
+		`{"uuid":"same","sender":"human","text":"Question"},{"uuid":"same","sender":"assistant","text":"Answer"}`,
+		`{"sender":"human","text":"Question","parent_message_uuid":null},{"sender":"assistant","text":"Answer","parent_message_uuid":null}`,
+	} {
+		input := `[null,{"uuid":"flat","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":null,"chat_messages":[` + messages + `]}]`
+		var results []ParseResult
+		require.NoError(t, parseClaudeAIExport(strings.NewReader(input), func(r ParseResult) error { results = append(results, r); return nil }))
+		require.Len(t, results, 1)
+		require.Len(t, results[0].Messages, 2)
+		assert.Equal(t, "Question", results[0].Messages[0].Content)
+		assert.Equal(t, "Answer", results[0].Messages[1].Content)
 	}
 }
