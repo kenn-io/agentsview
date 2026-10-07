@@ -31,7 +31,9 @@ export async function consumeEvents<T>(
 ): Promise<T> {
   if (!response.body) throw new Error(missingResult);
   const reader = response.body.getReader();
-  const cancel = () => { void reader.cancel().catch(() => {}); };
+  const cancel = () => {
+    void reader.cancel().catch(() => {});
+  };
   signal?.addEventListener("abort", cancel, { once: true });
   if (signal?.aborted) cancel();
   const decoder = new TextDecoder();
@@ -360,7 +362,12 @@ export interface ImportCallbacks {
   onIndexing?: () => void;
 }
 
-async function readImportResponse(response: Response, cb?: ImportCallbacks, onFetch?: (id: string, path: string) => void, signal?: AbortSignal): Promise<ImportStats> {
+async function readImportResponse(
+  response: Response,
+  cb?: ImportCallbacks,
+  onFetch?: (id: string, path: string) => void,
+  signal?: AbortSignal,
+): Promise<ImportStats> {
   if (!response.headers.get("content-type")?.includes("text/event-stream")) return response.json();
   return consumeEvents<ImportStats>(
     response,
@@ -379,26 +386,51 @@ async function readImportResponse(response: Response, cb?: ImportCallbacks, onFe
   );
 }
 
-export async function syncClaudeAI(organization: string, host: BrowserHost, cb?: ImportCallbacks, signal?: AbortSignal): Promise<ImportStats> {
+export async function syncClaudeAI(
+  host: BrowserHost,
+  cb?: ImportCallbacks,
+  signal?: AbortSignal,
+): Promise<ImportStats> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   try {
-    const response = await ImportService.postApiV1ImportClaudeAiSync({ organization }, { signal: controller.signal });
+    const response = await ImportService.postApiV1ImportClaudeAiSync({ signal: controller.signal });
     let fail: (error: unknown) => void = () => {};
-    const failed = new Promise<never>((_, reject) => { fail = reject; });
-    const result = readImportResponse(response, cb, (id, path) => {
-      void (async () => {
-        let fetched;
-        try { fetched = await host.fetch(path); }
-        catch (error) { fetched = { status: 0, body: String(error) }; }
-        await ImportService.postApiV1ImportClaudeAiSyncResultsById({ id }, new Blob([fetched.error ?? fetched.body]), { status: fetched.error ? 0 : fetched.status }, {
-          signal: controller.signal,
-          headers: { "Content-Type": "application/octet-stream", ...(fetched.retryAfter ? { "Retry-After": fetched.retryAfter } : {}) },
+    const failed = new Promise<never>((_, reject) => {
+      fail = reject;
+    });
+    const result = readImportResponse(
+      response,
+      cb,
+      (id, path) => {
+        void (async () => {
+          let fetched;
+          try {
+            fetched = await host.fetch(path);
+          } catch (error) {
+            fetched = { status: 0, body: String(error) };
+          }
+          await ImportService.postApiV1ImportClaudeAiSyncResultsById(
+            { id },
+            new Blob([fetched.error ?? fetched.body]),
+            { status: fetched.error ? 0 : fetched.status },
+            {
+              signal: controller.signal,
+              headers: {
+                "Content-Type": "application/octet-stream",
+                ...(fetched.retryAfter ? { "Retry-After": fetched.retryAfter } : {}),
+              },
+            },
+          );
+        })().catch((error) => {
+          fail(error);
+          abort();
         });
-      })().catch((error) => { fail(error); abort(); });
-    }, controller.signal);
+      },
+      controller.signal,
+    );
     return await Promise.race([result, failed]);
   } finally {
     signal?.removeEventListener("abort", abort);
@@ -408,26 +440,18 @@ export async function syncClaudeAI(organization: string, host: BrowserHost, cb?:
 
 export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
   return readImportResponse(
-    await ImportService.postApiV1ImportClaudeAi(
-      { file },
-      undefined,
-      {
-        headers: { Accept: "text/event-stream" },
-      },
-    ),
+    await ImportService.postApiV1ImportClaudeAi({ file }, undefined, {
+      headers: { Accept: "text/event-stream" },
+    }),
     cb,
   );
 }
 
 export async function importChatGPT(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
   return readImportResponse(
-    await ImportService.postApiV1ImportChatgpt(
-      { file },
-      undefined,
-      {
-        headers: { Accept: "text/event-stream" },
-      },
-    ),
+    await ImportService.postApiV1ImportChatgpt({ file }, undefined, {
+      headers: { Accept: "text/event-stream" },
+    }),
     cb,
   );
 }

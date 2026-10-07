@@ -1,6 +1,5 @@
 export interface BrowserHost {
   connect(): Promise<void>;
-  status(): Promise<{ connected: boolean; pending: boolean; organization: string | null }>;
   fetch(
     path: string,
   ): Promise<{ status: number; body: string; retryAfter?: string; error?: string }>;
@@ -18,7 +17,6 @@ export function getBrowserHost(): BrowserHost | undefined {
   if (!tauri) return;
   return {
     connect: () => tauri.core.invoke("claude_auth_connect"),
-    status: () => tauri.core.invoke("claude_auth_status"),
     fetch: (path) => tauri.core.invoke("claude_auth_fetch", { path }),
     disconnect: () => tauri.core.invoke("claude_auth_disconnect"),
   };

@@ -387,6 +387,16 @@ func TestParseClaudeAIExport_EmptyArray(t *testing.T) {
 	assert.Empty(t, results)
 }
 
+func TestParseClaudeAIExport_NullConversation(t *testing.T) {
+	calls := 0
+	err := parseClaudeAIExport(strings.NewReader("[null]"), func(ParseResult) error {
+		calls++
+		return nil
+	})
+	require.ErrorContains(t, err, "expected conversation object")
+	assert.Zero(t, calls)
+}
+
 func TestParseClaudeAIExport_InvalidJSON(t *testing.T) {
 	err := parseClaudeAIExport(
 		strings.NewReader("{not json"),
