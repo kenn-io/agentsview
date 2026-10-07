@@ -103,6 +103,59 @@ func TestReplaceSessionKeepingTrashedCopy(t *testing.T) {
 	assert.Equal(t, int64(1), restored)
 }
 
+func TestReplaceSessionKeepingTrashedCopyPreservesLauncherParent(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedReplaceSession(t, d)
+	insertSession(t, d, "manager", "proj")
+	link, err := d.SetSessionExternalParent(ctx, "replace", "manager")
+	require.NoError(t, err)
+	require.True(t, link.Applied)
+
+	copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, replaceWrite("new transcript"))
+	require.NoError(t, err)
+	for _, id := range []string{"replace", copyID} {
+		session, err := d.GetSessionFull(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, Ptr("manager"), session.ParentSessionID, id)
+		assert.Equal(t, "subagent", session.RelationshipType, id)
+	}
+}
+
+func TestReplaceSessionKeepingTrashedCopyBreaksLauncherCycle(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedReplaceSession(t, d)
+	insertSession(t, d, "a", "proj")
+	link, err := d.SetSessionExternalParent(ctx, "a", "replace")
+	require.NoError(t, err)
+	require.True(t, link.Applied)
+
+	write := replaceWrite("new transcript")
+	write.Session.ParentSessionID = Ptr("a")
+	write.Session.RelationshipType = "continuation"
+	_, err = d.ReplaceSessionKeepingTrashedCopy(ctx, write)
+	require.NoError(t, err)
+	a, err := d.GetSession(ctx, "a")
+	require.NoError(t, err)
+	require.NotNil(t, a)
+	assert.Nil(t, a.ParentSessionID)
+	replaced, err := d.GetSession(ctx, "replace")
+	require.NoError(t, err)
+	require.NotNil(t, replaced)
+	assert.Equal(t, Ptr("a"), replaced.ParentSessionID)
+	assert.Equal(t, "continuation", replaced.RelationshipType)
+	link, err = d.GetSessionExternalParent(ctx, "a")
+	require.NoError(t, err)
+	assert.False(t, link.Applied)
+	assert.Contains(t, listSessionIDs(t, d, SessionFilter{}), "a")
+	sidebar, err := d.GetSidebarSessionIndex(ctx, SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, sidebar.Total)
+	assert.NotEmpty(t, sidebar.Sessions)
+}
+
 func TestReplaceSessionKeepingTrashedCopyRollsBack(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
