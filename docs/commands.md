@@ -1006,8 +1006,9 @@ See [PostgreSQL Sync — Project Filtering](/docs/pg-sync/#project-filtering) fo
 details on how filtering interacts with the push watermark.
 
 `--embed` pushes sessions first, then builds and pushes embeddings in the same
-process, using `[vector]` or a recipe published to PostgreSQL. Watch mode builds
-in the background after each sync that commits changes and pushes built vectors
+push, using `[vector]` or a recipe published to PostgreSQL. `--full --embed`
+repairs vector rows too. Watch mode builds in the background after each sync
+that commits changes and pushes built vectors
 on the next interval. It never starts a daemon and refuses to run while one owns
 the archive. It cannot be combined with
 `--no-vectors`, `--all`, or a target with `push_vectors = false`. See

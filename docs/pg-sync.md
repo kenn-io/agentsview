@@ -306,9 +306,9 @@ daemon owns the archive; run `agentsview daemon stop` to build here. Watch mode
 builds in the background after each sync that commits changes with a 30-second
 debounce and honors `[vector.embed] backstop_interval` to reconcile older
 imports. Built vectors reach PostgreSQL on the next interval push. A one-shot
-`pg push --embed` pushes sessions and existing vectors first, then builds and
-pushes new vectors. It returns a recipe or build error after the session push
-completes.
+`pg push --embed` pushes sessions, builds embeddings, then pushes vectors in
+the same push. `--full --embed` repairs vector rows too. A recipe or build error
+returns after the sessions land, with their counts shown.
 After changing the recipe and dropping the old generation, restart the hub to
 adopt the new recipe. `--embed` cannot be combined with `--no-vectors`, `--all`,
 `push_vectors = false`, or a usage-only archive.

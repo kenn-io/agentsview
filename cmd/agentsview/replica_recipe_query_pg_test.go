@@ -3,7 +3,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -100,6 +102,36 @@ func TestReplicaRecipeQueryWithoutConfig(t *testing.T) {
 		t.Skip(res.Vectors.SkippedReason)
 	}
 	require.Positive(t, res.Vectors.ChunksPushed)
+
+	// A full embedded push repairs missing chunks even when document hashes match.
+	chunkTable := fmt.Sprintf("%s.vector_chunks_g%d", schema, res.Vectors.GenerationID)
+	var chunksBefore int
+	require.NoError(t, admin.QueryRow("SELECT COUNT(*) FROM "+chunkTable).Scan(&chunksBefore))
+	require.Positive(t, chunksBefore)
+	_, err = admin.Exec("DELETE FROM " + chunkTable + " WHERE (doc_key, chunk_index) IN (SELECT doc_key, chunk_index FROM " + chunkTable + " LIMIT 1)")
+	require.NoError(t, err)
+	var chunksAfter int
+	require.NoError(t, admin.QueryRow("SELECT COUNT(*) FROM "+chunkTable).Scan(&chunksAfter))
+	require.Equal(t, chunksBefore-1, chunksAfter)
+	backend := &localArchiveWriteBackend{
+		appCfg: workstation, database: local,
+		ensurePricing: func(context.Context, *db.DB) error { return nil },
+	}
+	target := storage.ConfiguredReplica{Target: storage.ReplicaTarget{
+		URL: pgURL, Schema: schema, MachineName: "workstation", AllowInsecure: true, PushVectors: true,
+	}}
+	var repaired storage.PushResult
+	captureStdout(t, func() {
+		repaired, err = backend.ReplicaPush(t.Context(), pgReplica{}, target, ReplicaPushConfig{Full: true, Embed: true}, nil, nil)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, repaired.SessionsPushed)
+	assert.Equal(t, 2, repaired.Vectors.SessionsPushed)
+	assert.Equal(t, 2, repaired.Vectors.DocsPushed)
+	assert.Equal(t, chunksBefore, repaired.Vectors.ChunksPushed)
+	assert.Zero(t, repaired.Vectors.SessionsUnchanged)
+	require.NoError(t, admin.QueryRow("SELECT COUNT(*) FROM "+chunkTable).Scan(&chunksAfter))
+	assert.Equal(t, chunksBefore, chunksAfter)
 
 	// Container: no config.toml, only deployment variables.
 	isolateDeploymentEnv(t)

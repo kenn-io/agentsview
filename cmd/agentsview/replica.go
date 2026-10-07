@@ -188,10 +188,12 @@ func runReplicaPushTarget(
 	result, err := writer.ReplicaPush(
 		ctx, backend, target, cfg, projects, excludeProjects,
 	)
+	if err == nil || result.SessionsPushed > 0 || result.MessagesPushed > 0 {
+		writeReplicaPushSummary(os.Stdout, backend.DisplayName(), result)
+	}
 	if err != nil {
 		return err
 	}
-	writeReplicaPushSummary(os.Stdout, backend.DisplayName(), result)
 	if result.Errors > 0 {
 		return fmt.Errorf("%d session(s) failed", result.Errors)
 	}

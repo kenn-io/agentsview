@@ -825,6 +825,7 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 		if embedder, err = newReplicaEmbedder(b.appCfg, backend, target, b.database); err != nil {
 			return storage.PushResult{}, err
 		}
+		embedder.buildOnExport = true
 		defer closeVectorPushSource(embedder)
 	}
 	didResync, err := runLocalSyncAuthoritative(
@@ -889,27 +890,7 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 			LastReconciledVectorGeneration,
 	}, newReplicaPushProgressPrinter())
 	fmt.Print("\r\033[K")
-	if err != nil {
-		return storage.PushResult{}, err
-	}
-	if embedder != nil {
-		if err := embedder.resolve(ctx); err != nil {
-			return result, err
-		}
-		fmt.Println("Building embeddings...")
-		if err := embedder.build(ctx); err != nil {
-			return result, err
-		}
-		vectorResult, err := ps.PushWithOptions(ctx, storage.PushOptions{}, newReplicaPushProgressPrinter())
-		fmt.Print("\r\033[K")
-		result.SessionsPushed += vectorResult.SessionsPushed
-		result.MessagesPushed += vectorResult.MessagesPushed
-		result.Errors += vectorResult.Errors
-		result.Duration += vectorResult.Duration
-		result.Vectors = vectorResult.Vectors
-		return result, err
-	}
-	return result, nil
+	return result, err
 }
 
 func (b *localArchiveWriteBackend) DuckDBPush(

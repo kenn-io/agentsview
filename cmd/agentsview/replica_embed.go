@@ -21,15 +21,18 @@ var errEmbedNeedsLocalArchive = errors.New(
 
 // replicaEmbedder keeps the first resolved recipe for this process.
 type replicaEmbedder struct {
-	appCfg    config.Config
-	backend   storage.Replica
-	target    storage.ReplicaTarget
-	source    *vectorPushSource
-	emitterMu sync.RWMutex
-	emitter   teeEmitter
-	database  *db.DB
-	serving   vectorServing
-	cancel    context.CancelFunc
+	appCfg        config.Config
+	backend       storage.Replica
+	target        storage.ReplicaTarget
+	source        *vectorPushSource
+	emitterMu     sync.RWMutex
+	scheduler     *embedScheduler
+	buildOnExport bool
+	buildOnce     sync.Once
+	buildErr      error
+	database      *db.DB
+	serving       vectorServing
+	cancel        context.CancelFunc
 }
 
 // newReplicaEmbedder validates a pg push --embed request before any local
@@ -71,12 +74,12 @@ func (e *replicaEmbedder) resolve(ctx context.Context) error {
 	return nil
 }
 
-func (e *replicaEmbedder) Emit(scope string) {
+func (e *replicaEmbedder) Emit(_ string) {
 	e.emitterMu.RLock()
-	emitter := e.emitter
+	scheduler := e.scheduler
 	e.emitterMu.RUnlock()
-	if emitter.scheduler != nil {
-		emitter.Emit(scope)
+	if scheduler != nil && e.source.cfg.Vector.Embed.RunAfterSyncEnabled() {
+		scheduler.Notify()
 	}
 }
 
@@ -99,7 +102,7 @@ func (e *replicaEmbedder) startScheduler(ctx context.Context) error {
 		buildCtx, cancel := context.WithCancel(ctx)
 		e.cancel = cancel
 		e.emitterMu.Lock()
-		e.emitter = teeEmitter{scheduler: serving.Scheduler, runAfterSync: e.source.cfg.Vector.Embed.RunAfterSyncEnabled()}
+		e.scheduler = serving.Scheduler
 		e.emitterMu.Unlock()
 		go serving.Scheduler.Run(buildCtx)
 		serving.Scheduler.Notify()
@@ -129,10 +132,20 @@ func (e *replicaEmbedder) resolveRecipe(ctx context.Context) (config.Config, err
 	return adoptReplicaVectorConfig(ctx, e.appCfg, e.backend, store)
 }
 
-// BeginExport skips vectors until an adopted recipe resolves.
+// BeginExport builds once for a one-shot push and exports ready vectors for watch.
 func (e *replicaEmbedder) BeginExport(
 	ctx context.Context, sessionIDs []string,
 ) (storage.VectorExport, bool, error) {
+	if e.buildOnExport {
+		e.buildOnce.Do(func() {
+			if e.buildErr = e.resolve(ctx); e.buildErr == nil {
+				e.buildErr = e.build(ctx)
+			}
+		})
+		if e.buildErr != nil {
+			return nil, false, e.buildErr
+		}
+	}
 	if e.source == nil {
 		return nil, false, nil
 	}

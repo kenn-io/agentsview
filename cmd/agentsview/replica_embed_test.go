@@ -30,13 +30,16 @@ import (
 // vector source the push hands it, the way the real vector phase does.
 type embedPushReplica struct {
 	recipeProvider
-	mu       stdsync.Mutex
-	events   []string
-	opens    int
-	pushed   []storage.VectorGenerationInfo
-	skipped  []bool
-	source   storage.VectorPushSource
-	sessions []db.Session
+	mu           stdsync.Mutex
+	events       []string
+	opens        int
+	pushed       []storage.VectorGenerationInfo
+	skipped      []bool
+	source       storage.VectorPushSource
+	sessions     []db.Session
+	options      []storage.PushOptions
+	reopen       bool
+	beforeReopen func()
 }
 
 func (r *embedPushReplica) record(event string) {
@@ -71,84 +74,52 @@ func (r *embedPushReplica) NewPusher(
 ) (storage.Pusher, error) {
 	r.record("connect")
 	r.source = opts.VectorSource
-	return &embedSourcePusher{replica: r, archive: archive, source: opts.VectorSource, hashes: make(map[string]string)}, nil
+	return &embedExportSpy{replica: r, archive: archive}, nil
 }
 
 type embedRecipeStore struct{ storage.ReplicaStore }
 
 func (embedRecipeStore) Close() error { return nil }
 
-type embedSourcePusher struct {
+// embedExportSpy observes the source boundary after the session phase.
+type embedExportSpy struct {
 	replica *embedPushReplica
-	source  storage.VectorPushSource
-	hashes  map[string]string
 	archive *db.DB
 }
 
-func (p *embedSourcePusher) EnsureSchema(context.Context) error { return nil }
+func (p *embedExportSpy) EnsureSchema(context.Context) error { return nil }
 
-// PushWithOptions mirrors the vector phase's contract: no exported
-// generation skips the phase while sessions still push.
-func (p *embedSourcePusher) PushWithOptions(
-	ctx context.Context, opts storage.PushOptions, _ func(storage.PushProgress),
-) (storage.PushResult, error) {
+func (p *embedExportSpy) PushWithOptions(ctx context.Context, opts storage.PushOptions, _ func(storage.PushProgress)) (storage.PushResult, error) {
 	p.replica.record("push")
+	p.replica.options = append(p.replica.options, opts)
 	page, err := p.archive.ListSessions(ctx, db.SessionFilter{})
 	if err != nil {
 		return storage.PushResult{}, err
 	}
 	p.replica.sessions = page.Sessions
 	res := storage.PushResult{SessionsPushed: len(page.Sessions)}
-	if p.source == nil {
-		res.Vectors.Skipped = true
-		return res, nil
-	}
-	export, ok, err := p.source.BeginExport(ctx, nil)
-	if err != nil {
-		return res, err
-	}
-	if !ok {
-		res.Vectors.Skipped, res.Vectors.SkippedReason = true, "no active local generation"
-	} else {
-		gen := export.Generation()
-		hashes, err := export.SessionDocHashes(ctx, nil)
+	for attempt := 0; ; attempt++ {
+		export, ok, err := p.replica.source.BeginExport(ctx, nil)
 		if err != nil {
-			_ = export.Close()
 			return res, err
 		}
-		for id, hash := range hashes {
-			if !opts.Full && p.hashes[id] == hash {
-				res.Vectors.SessionsUnchanged++
-				continue
-			}
-			docs, _, err := export.SessionDocs(ctx, id)
-			if err != nil {
-				_ = export.Close()
+		res.Vectors.Skipped = !ok
+		if ok {
+			p.replica.pushed = append(p.replica.pushed, export.Generation())
+			if err := export.Close(); err != nil {
 				return res, err
 			}
-			res.Vectors.SessionsPushed++
-			res.Vectors.DocsPushed += len(docs)
-			for _, doc := range docs {
-				res.Vectors.ChunksPushed += len(doc.Chunks)
-			}
-			p.hashes[id] = hash
 		}
-		if err := export.Close(); err != nil {
-			return res, err
+		if !p.replica.reopen || attempt == 1 {
+			break
 		}
-		res.Vectors.GenerationID = 1
-		res.Vectors.Conflicts = 1
-		p.replica.mu.Lock()
-		p.replica.pushed = append(p.replica.pushed, gen)
-		p.replica.mu.Unlock()
+		p.replica.beforeReopen()
 	}
-	p.replica.mu.Lock()
 	p.replica.skipped = append(p.replica.skipped, res.Vectors.Skipped)
-	p.replica.mu.Unlock()
 	return res, nil
 }
 
-func (p *embedSourcePusher) Close() error { return nil }
+func (p *embedExportSpy) Close() error { return nil }
 
 func embedTarget() storage.ConfiguredReplica {
 	return storage.ConfiguredReplica{Target: storage.ReplicaTarget{
@@ -159,7 +130,13 @@ func embedTarget() storage.ConfiguredReplica {
 func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 	for _, adopted := range []bool{false, true} {
 		t.Run(fmt.Sprintf("adopted=%v", adopted), func(t *testing.T) {
+			replica := &embedPushReplica{}
 			endpoint := newEmbeddingsStubServer(t, 4)
+			handler := endpoint.Config.Handler
+			endpoint.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Len(t, replica.sessions, 3, "sessions land before embedding requests")
+				handler.ServeHTTP(w, r)
+			})
 			t.Cleanup(endpoint.Close)
 			cfg := testConfigWithClaudeFixture(t)
 			server := config.VectorEmbeddingsServerConfig{
@@ -167,7 +144,6 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 				Timeout: "10s", MaxRetries: 1,
 			}
 			published := publishedRecipe()
-			replica := &embedPushReplica{}
 			if adopted {
 				cfg.Vector.Embed.BackstopInterval = "24h"
 				cfg.DeploymentEmbeddings = &server
@@ -187,10 +163,10 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 				result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil)
 			})
 			require.NoError(t, err)
-			assert.Equal(t, 6, result.SessionsPushed)
+			assert.Equal(t, 3, result.SessionsPushed)
 			assert.False(t, result.Vectors.Skipped)
-			assert.Equal(t, []string{"connect", "push", "push"}, replica.events)
-			assert.Equal(t, []bool{true, false}, replica.skipped)
+			assert.Equal(t, []string{"connect", "push"}, replica.events)
+			assert.Equal(t, []bool{false}, replica.skipped)
 			require.Len(t, replica.pushed, 1)
 			assert.Equal(t, published.Fingerprint, replica.pushed[0].Fingerprint)
 			if adopted {
@@ -199,25 +175,22 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 				assert.Equal(t, published.Params, replica.pushed[0].Params)
 			}
 			assert.NoFileExists(t, filepath.Join(cfg.DataDir, "config.toml"))
-			if !adopted {
-				replica.skipped = nil
-				captureStdout(t, func() {
-					result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Full: true, Embed: true}, nil, nil)
-				})
+			replica.options = nil
+			replica.reopen = true
+			replica.beforeReopen = func() {
+				// A second build would need the write lock already held here.
+				held, err := tryAcquireNamedLock(cfg.DataDir, vectorsWriteLockFile)
 				require.NoError(t, err)
-				assert.Equal(t, []bool{false, false}, replica.skipped)
-				assert.Zero(t, result.Vectors.SessionsPushed)
-				assert.Zero(t, result.Vectors.DocsPushed)
-				assert.Zero(t, result.Vectors.ChunksPushed)
-				assert.Equal(t, 3, result.Vectors.SessionsUnchanged)
-				assert.Equal(t, 1, result.Vectors.Conflicts)
-				captureStdout(t, func() {
-					result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil)
-				})
-				require.NoError(t, err)
-				assert.Equal(t, 3, result.Vectors.SessionsUnchanged)
-				assert.Equal(t, 1, result.Vectors.Conflicts)
+				t.Cleanup(func() { assert.NoError(t, held.Close()) })
 			}
+			captureStdout(t, func() {
+				result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Full: true, Embed: true}, nil, nil)
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 3, result.SessionsPushed)
+			require.Len(t, replica.options, 1)
+			assert.True(t, replica.options[0].Full)
+			assert.Len(t, replica.pushed, 3)
 		})
 	}
 	t.Run("build failure follows session push", func(t *testing.T) {
@@ -236,6 +209,13 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 		require.ErrorContains(t, err, "building embeddings")
 		assert.Equal(t, []string{"connect", "push"}, replica.events)
 		assert.Equal(t, 3, result.SessionsPushed)
+		cfg.PG = config.PGConfig{URL: embedTarget().Target.URL, MachineName: "test-machine"}
+		replica.Replica = pgReplica{}
+		output := captureStdout(t, func() {
+			err = runReplicaPushTarget(t.Context(), replica, backend, cfg, ReplicaPushConfig{Embed: true}, storage.ReplicaTargetRef{})
+		})
+		require.ErrorContains(t, err, "building embeddings")
+		assert.Contains(t, output, "Pushed 3 sessions, 0 messages")
 	})
 	for _, recipes := range []int{0, 2} {
 		t.Run(fmt.Sprintf("published recipes=%d", recipes), func(t *testing.T) {

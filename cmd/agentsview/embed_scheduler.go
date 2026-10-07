@@ -362,9 +362,7 @@ func wrapEmbeddingSyncEmitter(
 }
 
 func (t teeEmitter) Emit(scope string) {
-	if t.primary != nil {
-		t.primary.Emit(scope)
-	}
+	t.primary.Emit(scope)
 	if t.runAfterSync {
 		t.scheduler.Notify()
 	}
