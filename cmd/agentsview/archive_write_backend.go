@@ -1231,6 +1231,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		_, err := engine.SyncWatchBatchThenRun(c, batch, recovery, work)
 		return err
 	}
+	pusher.fullVectorsPending = cfg.Full
 	defer pusher.reset()
 
 	fmt.Printf(

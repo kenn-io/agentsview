@@ -374,6 +374,70 @@ func TestReplicaWatchEmbedBuildsFullRepairDuringStartupPush(t *testing.T) {
 	})
 }
 
+func TestReplicaWatchEmbedKeepsFullVectorRepairAfterStartupFailure(t *testing.T) {
+	replica := &embedPushReplica{}
+	endpoint := newEmbeddingsStubServer(t, 4)
+	t.Cleanup(endpoint.Close)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Vector.Embed.BackstopInterval = "24h"
+	cfg.DeploymentEmbeddings = deploymentRecipeConfig().DeploymentEmbeddings
+	cfg.DeploymentEmbeddings.Endpoint = endpoint.URL + "/v1"
+	archive := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var retry func()
+	var loopPush func(context.Context, pushReason, *syncpkg.WatchBatch) error
+	backend := &localArchiveWriteBackend{
+		appCfg: cfg, database: archive,
+		ensurePricing: func(context.Context, *db.DB) error { return nil },
+		watchHooks: &archivePushWatchHooks{
+			newLoop: func(label string, debounce, interval time.Duration, work func(context.Context, pushReason, *syncpkg.WatchBatch) error) (*pushLoop, func()) {
+				loopPush = work
+				loop, ticker := newPushLoopWithLabel(label, debounce, interval, work)
+				loop.after = func(time.Duration) <-chan time.Time {
+					retry()
+					return nil
+				}
+				return loop, ticker.Stop
+			},
+			replicaStartupSync: func(_ context.Context, _ *syncpkg.Engine, full bool) (bool, error) {
+				require.True(t, full)
+				return true, nil
+			},
+			startWatcher: func(config.Config, *syncpkg.Engine, syncpkg.WatchCallback, syncpkg.WatcherOptions) (func(), func(), []string) {
+				retry = func() {
+					defer cancel()
+					require.Len(t, replica.options, 1)
+					assert.True(t, replica.options[0].Full)
+					assert.True(t, replica.options[0].FullVectors)
+					assert.Empty(t, replica.pushed, "startup cannot adopt an unpublished recipe")
+					assert.Len(t, replica.sessions, 3, "sessions land despite the vector failure")
+
+					replica.setGenerations([]storage.VectorGenerationInfo{publishedRecipe()})
+					embedder := replica.source.(*replicaEmbedder)
+					require.NoError(t, embedder.resolve(ctx))
+					require.NoError(t, embedder.build(ctx))
+					require.NoError(t, loopPush(ctx, reasonChange, nil))
+					require.Len(t, replica.options, 2)
+					assert.False(t, replica.options[1].Full)
+					assert.True(t, replica.options[1].FullVectors, "recovery still repairs unchanged chunks")
+					assert.False(t, replica.options[1].ScopeVectorsToChangedSessions)
+					require.Len(t, replica.pushed, 1)
+
+					require.NoError(t, loopPush(ctx, reasonChange, nil))
+					require.Len(t, replica.options, 3)
+					assert.False(t, replica.options[2].Full)
+					assert.False(t, replica.options[2].FullVectors, "a completed vector phase clears repair")
+				}
+				return func() {}, func() {}, nil
+			},
+		},
+	}
+	captureStdout(t, func() {
+		require.NoError(t, backend.ReplicaPushWatch(ctx, replica, embedTarget(), ReplicaPushConfig{Full: true, Embed: true}, nil, nil, time.Hour, time.Hour))
+	})
+}
+
 func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
 	started := make(chan struct{})
 	var once stdsync.Once

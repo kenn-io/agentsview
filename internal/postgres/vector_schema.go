@@ -206,9 +206,6 @@ func ensureVectorRecipeColumn(ctx context.Context, pg *sql.DB) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("checking vector recipe column: %w", err)
 	}
-	if existing["vector_generations"]["params"] {
-		return true, nil
-	}
 	if _, err := ensureColumns(ctx, pg, existing, []columnMigration{{
 		table: "vector_generations", column: "params", def: "params JSONB",
 	}}); err != nil {

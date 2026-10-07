@@ -40,6 +40,8 @@ type replicaPusher struct {
 	// on the interval floor unnecessarily; while false, change pushes
 	// scope their vector reads to the changed relational sessions.
 	vectorReconcileNeeded bool
+	// fullVectorsPending keeps a full watch's repair request until vectors complete.
+	fullVectorsPending bool
 	// lastReconciledVectorGeneration is the replica generation id of the
 	// last clean generation-wide reconciliation in this process. A scoped
 	// push carrying it lets the vector phase promote itself to
@@ -102,9 +104,10 @@ func (p *replicaPusher) pushAfterSync(
 		p.reset()
 		return fmt.Errorf("ensure schema: %w", err)
 	}
-	scoped := scopedVectorPush(reason, full, p.vectorReconcileNeeded)
+	scoped := scopedVectorPush(reason, full, p.vectorReconcileNeeded || p.fullVectorsPending)
 	res, err := p.target.PushWithOptions(ctx, storage.PushOptions{
 		Full:                           full,
+		FullVectors:                    p.fullVectorsPending,
 		ScopeVectorsToChangedSessions:  scoped,
 		LastReconciledVectorGeneration: p.lastReconciledVectorGeneration,
 	}, nil)
@@ -112,6 +115,9 @@ func (p *replicaPusher) pushAfterSync(
 		p.vectorReconcileNeeded = true
 		p.reset()
 		return fmt.Errorf("push: %w", err)
+	}
+	if res.Errors == 0 && !res.Vectors.Skipped && res.Vectors.SessionsDeferred == 0 {
+		p.fullVectorsPending = false
 	}
 	p.vectorReconcileNeeded, p.lastReconciledVectorGeneration = nextVectorReconcile(
 		p.vectorReconcileNeeded,

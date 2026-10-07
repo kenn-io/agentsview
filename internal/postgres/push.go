@@ -475,7 +475,7 @@ func (s *Sync) PushWithOptions(
 	// phase reads state only for them. full is the effective value —
 	// a promoted full push keeps generation-wide reconciliation.
 	var vectorScope []string
-	if opts.ScopeVectorsToChangedSessions && !full {
+	if opts.ScopeVectorsToChangedSessions && !full && !opts.FullVectors {
 		vectorScope = mapKeys(sessionByID)
 	}
 
@@ -544,7 +544,7 @@ func (s *Sync) PushWithOptions(
 			return result, err
 		}
 		result.Vectors, err = s.runVectorPushPhase(
-			ctx, full, vectorScope,
+			ctx, full || opts.FullVectors, vectorScope,
 			opts.LastReconciledVectorGeneration, nil, onProgress,
 		)
 		if err != nil {
@@ -686,7 +686,7 @@ func (s *Sync) PushWithOptions(
 		)
 	}
 	result.Vectors, err = s.runVectorPushPhase(
-		ctx, full, vectorScope,
+		ctx, full || opts.FullVectors, vectorScope,
 		opts.LastReconciledVectorGeneration, failedSessions, onProgress,
 	)
 	if err != nil {
