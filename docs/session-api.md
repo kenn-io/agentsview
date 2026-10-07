@@ -610,7 +610,6 @@ Sessions list the pull requests their agent recorded in the transcript, in
     "host": "github.com",
     "repository": "owner/repo",
     "number": 123,
-    "source": "transcript",
     "first_seen_at": "2026-10-05T03:21:20.583Z"
   }
 ]
@@ -646,6 +645,8 @@ Label and pull request filters name the sessions you want, the way `ids` does.
 ______________________________________________________________________
 
 ### `agentsview session label`
+
+Annotation commands use the ID exactly as given, with no prefix lookup, so pass the archive session ID, e.g. `codex:<uuid>` for Codex.
 
 Show, add, or remove free-form labels on a session. Use labels to find every
 session for one ticket, role, or kind of run. A `key=value` form such as

@@ -70,11 +70,6 @@ func NormalizeSessionLabels(labels []string) ([]string, error) {
 	}
 	slices.Sort(out)
 	out = slices.Compact(out)
-	if len(out) > MaxSessionLabels {
-		return nil, fmt.Errorf(
-			"%w: more than %d labels", ErrSessionLabelsInvalid, MaxSessionLabels,
-		)
-	}
 	return out, nil
 }
 

@@ -83,13 +83,12 @@ func TestNewPRLink(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			got, ok := NewPRLink(
-				tt.url, tt.repository, tt.number, PRLinkSourceTranscript, seen,
+				tt.url, tt.repository, tt.number, seen,
 			)
 			require.Equal(t, tt.wantOK, ok)
 			if !tt.wantOK {
 				return
 			}
-			tt.want.Source = PRLinkSourceTranscript
 			tt.want.FirstSeenAt = seen
 			assert.Equal(t, tt.want, got)
 		})
@@ -126,6 +125,24 @@ func TestClaudePRLinksDeduplicatedWithEarliestTimestamp(t *testing.T) {
 	assert.Len(t, results[0].Messages, 2)
 }
 
+func TestClaudePRLinksKeepEveryDistinctURL(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "many-links.jsonl")
+	var content strings.Builder
+	content.WriteString(claudeProviderFixture("Open pull requests"))
+	for i := 1; i <= 101; i++ {
+		fmt.Fprintf(&content, "\n{\"type\":\"pr-link\",\"prUrl\":\"https://github.com/owner/repo/pull/%d\"}", i)
+	}
+	content.WriteString("\n{\"type\":\"pr-link\",\"prUrl\":\"https://github.com/owner/repo/pull/101\"}\n")
+	require.NoError(t, os.WriteFile(path, []byte(content.String()), 0o600))
+	results, _, err := claudeParseWithExclusions(path, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	links := results[0].Session.PRLinks
+	require.Len(t, links, 101)
+	assert.Equal(t, "https://github.com/owner/repo/pull/101", links[100].URL)
+}
+
 func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 	storedAt := time.Date(2026, 10, 5, 3, 21, 0, 0, time.UTC)
 	stored := map[string]time.Time{
@@ -134,8 +151,8 @@ func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 	untimed := map[string]time.Time{
 		"https://github.com/owner/repo/pull/123": {},
 	}
-	full := make(map[string]time.Time, maxPRLinksPerSession)
-	for i := range maxPRLinksPerSession {
+	full := make(map[string]time.Time, 100)
+	for i := range 100 {
 		full[fmt.Sprintf("https://github.com/owner/repo/pull/%d", 1000+i)] = storedAt
 	}
 	record := func(n int, ts string) string {
@@ -172,8 +189,8 @@ func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 			appended: record(123, ""), wantStatus: IncrementalApplied,
 		},
 		{
-			name: "link past the cap stays incremental", stored: full,
-			appended: record(124, "2026-10-05T03:41:00Z"), wantStatus: IncrementalApplied,
+			name: "101st link needs full parse", stored: full,
+			appended: record(124, "2026-10-05T03:41:00Z"), wantStatus: IncrementalNeedsFullParse,
 		},
 	}
 	for _, tt := range tests {

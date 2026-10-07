@@ -1709,8 +1709,6 @@ components:
           type: integer
         repository:
           type: string
-        source:
-          type: string
         url:
           type: string
       required:

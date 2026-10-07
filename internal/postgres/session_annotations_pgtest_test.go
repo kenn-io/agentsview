@@ -20,7 +20,6 @@ func annotatedTestPRLink(repo string, number int) db.PRLink {
 		Host:       "github.com",
 		Repository: repo,
 		Number:     number,
-		Source:     "transcript",
 	}
 }
 

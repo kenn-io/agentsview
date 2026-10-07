@@ -43,7 +43,7 @@ func newSessionLabelCommand() *cobra.Command {
 				return errors.New("--replace cannot be combined with --remove")
 			}
 			write := clearAll || replace || len(labels) > 0 || len(remove) > 0
-			annotator, cleanup, err := resolveSessionAnnotator(cmd, write, &id)
+			annotator, cleanup, err := resolveSessionAnnotator(cmd, write)
 			if err != nil {
 				return err
 			}
@@ -104,7 +104,7 @@ func newSessionParentCommand() *cobra.Command {
 			if clearAll && parentID != "" {
 				return errors.New("--clear cannot be combined with a parent session id")
 			}
-			annotator, cleanup, err := resolveSessionAnnotator(cmd, clearAll || parentID != "", &id, &parentID)
+			annotator, cleanup, err := resolveSessionAnnotator(cmd, clearAll || parentID != "")
 			if err != nil {
 				return err
 			}
@@ -135,7 +135,7 @@ func newSessionParentCommand() *cobra.Command {
 }
 
 func resolveSessionAnnotator(
-	cmd *cobra.Command, write bool, ids ...*string,
+	cmd *cobra.Command, write bool,
 ) (service.SessionAnnotator, func(), error) {
 	resolve := resolveService
 	if write {
@@ -150,19 +150,6 @@ func resolveSessionAnnotator(
 		cleanup()
 		return nil, nil, errors.New(
 			"this session backend does not store labels or parent links")
-	}
-	for _, id := range ids {
-		if *id == "" {
-			continue
-		}
-		resolved, err := resolveServiceSessionID(cmd.Context(), svc, *id)
-		if err != nil && !errors.Is(err, errSessionNotFound) {
-			cleanup()
-			return nil, nil, err
-		}
-		if err == nil {
-			*id = resolved
-		}
 	}
 	return annotator, cleanup, nil
 }

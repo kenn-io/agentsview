@@ -17,13 +17,10 @@ import (
 // populate it from structured source records, so a full reparse replaces
 // the stored list.
 type PRLink struct {
-	URL        string `json:"url"`
-	Host       string `json:"host"`
-	Repository string `json:"repository"`
-	Number     int    `json:"number"`
-	// Source records how the link was obtained, for example "transcript"
-	// for a structured agent event.
-	Source      string `json:"source,omitempty"`
+	URL         string `json:"url"`
+	Host        string `json:"host"`
+	Repository  string `json:"repository"`
+	Number      int    `json:"number"`
 	FirstSeenAt string `json:"first_seen_at,omitempty"`
 }
 
@@ -36,7 +33,7 @@ func PRLinksFromParsed(links []parser.PRLink) []PRLink {
 	for _, l := range links {
 		link := PRLink{
 			URL: l.URL, Host: l.Host, Repository: l.Repository,
-			Number: l.Number, Source: string(l.Source),
+			Number: l.Number,
 		}
 		if !l.FirstSeenAt.IsZero() {
 			link.FirstSeenAt = l.FirstSeenAt.UTC().Format(time.RFC3339Nano)
@@ -120,7 +117,7 @@ func ParsePRFilter(value string) (PRFilter, error) {
 		return PRFilter{}, nil
 	}
 	if strings.Contains(value, "://") {
-		link, ok := parser.NewPRLink(value, "", 0, "", time.Time{})
+		link, ok := parser.NewPRLink(value, "", 0, time.Time{})
 		if !ok {
 			return PRFilter{}, fmt.Errorf(
 				"%w %q: not a pull or merge request URL", ErrInvalidPRFilter, value,

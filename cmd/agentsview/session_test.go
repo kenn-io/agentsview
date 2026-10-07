@@ -696,12 +696,11 @@ func TestSessionAnnotations_ServerFlagRefusesOlderServer(t *testing.T) {
 		_, err := executeCommand(newRootCommand(), args...)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "restart or upgrade the server")
-		require.NotEmpty(t, paths)
-		assert.Equal(t, "/api/v1/version", paths[len(paths)-1])
+		assert.Equal(t, []string{"/api/v1/version"}, paths)
 	}
 }
 
-func TestSessionAnnotationsResolveBareIDs(t *testing.T) {
+func TestSessionAnnotationsKeepExactIDs(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	const worker = "11111111-1111-4111-8111-111111111111"
 	const manager = "22222222-2222-4222-8222-222222222222"
@@ -712,35 +711,34 @@ func TestSessionAnnotationsResolveBareIDs(t *testing.T) {
 	out, err := executeCommand(newRootCommand(), "session", "label", worker, "role=reviewer", "--json")
 	require.NoError(t, err)
 	labels := decodeCLIJSON[db.SessionLabels](t, out)
-	assert.Equal(t, "codex:"+worker, labels.SessionID)
-	assert.True(t, labels.SessionFound)
+	assert.Equal(t, worker, labels.SessionID)
+	assert.False(t, labels.SessionFound)
 	assert.Equal(t, []string{"role=reviewer"}, labels.Labels)
-
 	out, err = executeCommand(newRootCommand(), "session", "parent", worker, manager, "--json")
 	require.NoError(t, err)
 	link := decodeCLIJSON[db.SessionExternalParent](t, out)
-	assert.Equal(t, "codex:"+worker, link.SessionID)
-	assert.Equal(t, "codex:"+manager, link.ParentSessionID)
-	assert.True(t, link.Applied)
-
-	out, err = executeCommand(newRootCommand(), "session", "get", worker, "--json")
-	require.NoError(t, err)
-	detail := decodeCLIJSON[service.SessionDetail](t, out)
-	require.NotNil(t, detail.ParentSessionID)
-	assert.Equal(t, "codex:"+manager, *detail.ParentSessionID)
-	assert.Equal(t, []string{"role=reviewer"}, detail.Labels)
-
-	out, err = executeCommand(newRootCommand(), "session", "label", "unsynced-worker", "pending", "--json")
+	assert.Equal(t, worker, link.SessionID)
+	assert.Equal(t, manager, link.ParentSessionID)
+	assert.False(t, link.Applied)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: worker, project: "proj"},
+		sessionSeed{id: manager, project: "proj"},
+	)
+	out, err = executeCommand(newRootCommand(), "session", "label", worker, "--json")
 	require.NoError(t, err)
 	labels = decodeCLIJSON[db.SessionLabels](t, out)
-	assert.Equal(t, "unsynced-worker", labels.SessionID)
-	assert.False(t, labels.SessionFound)
-
-	out, err = executeCommand(newRootCommand(), "session", "parent", "unsynced-worker", "unsynced-manager", "--json")
+	assert.Equal(t, worker, labels.SessionID)
+	assert.True(t, labels.SessionFound)
+	assert.Equal(t, []string{"role=reviewer"}, labels.Labels)
+	out, err = executeCommand(newRootCommand(), "session", "parent", worker, "--json")
 	require.NoError(t, err)
 	link = decodeCLIJSON[db.SessionExternalParent](t, out)
-	assert.Equal(t, "unsynced-worker", link.SessionID)
-	assert.Equal(t, "unsynced-manager", link.ParentSessionID)
+	assert.Equal(t, manager, link.ParentSessionID)
+	out, err = executeCommand(newRootCommand(), "session", "get", "codex:"+worker, "--json")
+	require.NoError(t, err)
+	detail := decodeCLIJSON[service.SessionDetail](t, out)
+	assert.Nil(t, detail.ParentSessionID)
+	assert.Empty(t, detail.Labels)
 }
 
 func TestPrintSessionParentHumanUnapplied(t *testing.T) {
