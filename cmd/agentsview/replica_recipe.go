@@ -12,15 +12,14 @@ import (
 
 // adoptReplicaVectorConfig returns cfg with the single embedding recipe
 // published to a PostgreSQL replica, served through the deployment
-// embeddings server. cfg is returned unchanged when [vector] is enabled,
-// without a deployment server, or on other backends.
-// Nothing is written to config.toml; callers keep the adopted value for
-// their lifetime.
+// embeddings server. Callers require [vector] disabled and a deployment
+// server configured. Other backends return cfg unchanged. Callers keep the
+// adopted value for their lifetime without writing it to config.toml.
 func adoptReplicaVectorConfig(
 	ctx context.Context, cfg config.Config,
 	backend storage.Replica, store storage.ReplicaStore,
 ) (config.Config, error) {
-	if cfg.Vector.Enabled || cfg.DeploymentEmbeddings == nil || backend.Name() != "pg" {
+	if backend.Name() != "pg" {
 		return cfg, nil
 	}
 	provider, ok := backend.(storage.VectorSearchProvider)
@@ -38,10 +37,13 @@ func adoptReplicaVectorConfig(
 		}
 	}
 	if len(recipes) != 1 {
+		hint := "push the first generation from a configured workstation, then restart 'pg serve'"
+		if len(recipes) > 1 {
+			hint = "remove obsolete generations with 'agentsview pg vectors drop <id>'"
+		}
 		return cfg, fmt.Errorf(
 			"semantic recipe adoption requires exactly one supported published "+
-				"generation (found %d); push from a configured workstation first, "+
-				"remove obsolete generations with 'agentsview pg vectors drop <id>'", len(recipes))
+				"generation (found %d); %s", len(recipes), hint)
 	}
 	recipe := recipes[0]
 	recipe.DefaultServer = "deployment"

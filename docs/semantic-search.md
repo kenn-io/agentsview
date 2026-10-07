@@ -838,6 +838,7 @@ semantic search reports the count; stop the hub's `pg push --watch --embed`,
 remove obsolete generations with `agentsview pg vectors drop <id>`, then start
 the watcher and restart `pg serve`. Generations pushed before recipe
 publication have no recipe until a configured machine pushes them again.
+If `pg serve` starts before a workstation pushes its first generation, restart `pg serve` after that push to enable semantic search.
 
 If no generation matches, `pg serve` starts normally but semantic and hybrid
 search return the 501 "not available" error carrying the mismatch reason, which

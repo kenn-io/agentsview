@@ -312,6 +312,7 @@ imports. Built vectors reach PostgreSQL on the next interval push. A one-shot
 the same push. `--full --embed` repairs vector rows too. A recipe or build error
 returns after the sessions land, with their counts shown.
 A watcher started before the first recipe is published adopts it on a later push.
+If `pg serve` starts before a workstation pushes its first generation, restart `pg serve` after that push to enable semantic search.
 After changing the recipe, stop the hub's `pg push --watch --embed`, run
 `agentsview pg vectors drop <old>`, then start the watcher and restart `pg serve`
 to adopt the new recipe. A running watcher keeps pushing the generation it

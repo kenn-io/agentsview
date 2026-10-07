@@ -95,8 +95,8 @@ func TestAdoptReplicaRecipeFailsClosed(t *testing.T) {
 		listErr error
 		want    string
 	}{
-		{name: "zero", mutate: func([]storage.VectorGenerationInfo) []storage.VectorGenerationInfo { return nil }, want: "found 0"},
-		{name: "two", mutate: func(g []storage.VectorGenerationInfo) []storage.VectorGenerationInfo { return append(g, other()) }, want: "found 2"},
+		{name: "zero", mutate: func([]storage.VectorGenerationInfo) []storage.VectorGenerationInfo { return nil }, want: "generation (found 0); push the first generation from a configured workstation, then restart 'pg serve'"},
+		{name: "two", mutate: func(g []storage.VectorGenerationInfo) []storage.VectorGenerationInfo { return append(g, other()) }, want: "generation (found 2); remove obsolete generations with 'agentsview pg vectors drop <id>'"},
 		{name: "legacy null params", mutate: func(g []storage.VectorGenerationInfo) []storage.VectorGenerationInfo {
 			g[0].Params = nil
 			return g
@@ -136,15 +136,16 @@ func TestExplicitVectorConfigWins(t *testing.T) {
 	explicit := vectorTestConfig(t.TempDir())
 	explicit.DeploymentEmbeddings = deploymentRecipeConfig().DeploymentEmbeddings
 	provider := recipeProvider{gens: []storage.VectorGenerationInfo{publishedRecipe()}}
-	got, err := adoptReplicaVectorConfig(t.Context(), explicit, provider, nil)
+	target := storage.ConfiguredReplica{Target: storage.ReplicaTarget{PushVectors: true}}
+	embedder, err := newReplicaEmbedder(explicit, provider, target, nil)
 	require.NoError(t, err)
-	assert.Equal(t, explicit, got, "local [vector] wins over a published recipe")
+	require.NoError(t, embedder.resolve(t.Context()))
+	assert.Equal(t, explicit, embedder.source.cfg, "local [vector] wins over a published recipe")
 
 	noServer := deploymentRecipeConfig()
 	noServer.DeploymentEmbeddings = nil
-	got, err = adoptReplicaVectorConfig(t.Context(), noServer, provider, nil)
-	require.NoError(t, err)
-	assert.False(t, got.Vector.Enabled, "adoption needs a deployment embeddings server")
+	_, err = newReplicaEmbedder(noServer, provider, target, nil)
+	require.ErrorContains(t, err, "AGENTSVIEW_EMBEDDINGS_ENDPOINT")
 }
 
 func TestDecodeReplicaRecipeRoundTrip(t *testing.T) {

@@ -267,13 +267,16 @@ func TestDeploymentAuthTokenFile(t *testing.T) {
 	})
 
 	for _, tc := range []struct{ name, content, want string }{
+		{name: "empty path", want: "AGENTSVIEW_AUTH_TOKEN_FILE must name a file"},
 		{name: "missing", want: "AGENTSVIEW_AUTH_TOKEN_FILE"},
 		{name: "blank", content: " \n\t", want: "AGENTSVIEW_AUTH_TOKEN_FILE"},
 	} {
 		t.Run(tc.name+" fails closed", func(t *testing.T) {
 			dir, before := setup(t)
 			path := filepath.Join(t.TempDir(), "token")
-			if tc.name != "missing" {
+			if tc.name == "empty path" {
+				path = ""
+			} else if tc.name != "missing" {
 				path = writeSecret(t, filepath.Dir(path), "token", tc.content)
 			}
 			t.Setenv("AGENTSVIEW_AUTH_TOKEN_FILE", path)

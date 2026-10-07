@@ -83,7 +83,7 @@ func (c *Config) applyDeploymentEnv() error {
 	} else if set {
 		c.pgEnvOverrides.AllowInsecure = &v
 	}
-	if path := os.Getenv("AGENTSVIEW_AUTH_TOKEN_FILE"); path != "" {
+	if path, set := os.LookupEnv("AGENTSVIEW_AUTH_TOKEN_FILE"); set {
 		if os.Getenv("AGENTSVIEW_AUTH_TOKEN") != "" {
 			return errors.New(
 				"set only one of AGENTSVIEW_AUTH_TOKEN and AGENTSVIEW_AUTH_TOKEN_FILE")
