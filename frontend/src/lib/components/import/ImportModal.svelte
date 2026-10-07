@@ -6,7 +6,10 @@
   import {
     importClaudeAI,
     importChatGPT,
+    syncClaudeAI,
   } from "../../api/client.js";
+  import { getBrowserHost } from "../../api/browserHost.js";
+  import { isRemoteConnection } from "../../api/runtime.js";
   import {
     FileCheckIcon,
     FileIcon,
@@ -47,6 +50,69 @@
     "importing",
   );
   let progressStats = $state<ImportStats | null>(null);
+  const host = getBrowserHost();
+  let organization = $state<string | null>(null);
+  let connecting = $state(false);
+  let syncing = $state(false);
+  let syncController: AbortController | undefined;
+  const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection());
+
+  $effect(() => {
+    if (!canSync || !host) return;
+    let disposed = false;
+    void host.status().then((status) => {
+      if (!disposed) organization = status.connected ? status.organization : null;
+    }).catch((e) => { if (!disposed) error = String(e); });
+    return () => { disposed = true; syncController?.abort(); };
+  });
+
+  $effect(() => {
+    if (!open) { syncController?.abort(); connecting = false; }
+    if (!canSync || !connecting || !host) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const status = await host.status();
+        if (disposed) return;
+        if (status.connected) { organization = status.organization; connecting = false; }
+        else timer = setTimeout(poll, 1000);
+      } catch (e) {
+        if (!disposed) { error = String(e); connecting = false; }
+      }
+    };
+    timer = setTimeout(poll, 1000);
+    return () => { disposed = true; clearTimeout(timer); };
+  });
+
+  async function connect() {
+    error = null;
+    connecting = true;
+    try { await host?.connect(); }
+    catch (e) { connecting = false; error = String(e); }
+  }
+
+  async function disconnect() {
+    connecting = false;
+    try { await host?.disconnect(); organization = null; }
+    catch (e) { error = String(e); }
+  }
+
+  async function sync() {
+    if (!host || !organization || importing) return;
+    importing = true;
+    syncing = true;
+    error = null;
+    result = null;
+    phase = "importing";
+    progressStats = null;
+    syncController = new AbortController();
+    try {
+      result = await syncClaudeAI(organization, host, { onProgress: (stats) => { progressStats = stats; } }, syncController.signal);
+      onimported();
+    } catch (e) { error = e instanceof Error ? e.message : m.import_failed(); }
+    finally { importing = false; syncing = false; syncController = undefined; }
+  }
 
   const fileSize = $derived(
     selectedFile
@@ -180,7 +246,8 @@
   }
 
   function handleClose() {
-    if (importing) return;
+    if (importing && !syncing) return;
+    syncController?.abort();
     selectedFile = null;
     result = null;
     error = null;
@@ -217,7 +284,7 @@
       label={m.import_cancel()}
       tone="neutral"
       surface="outline"
-      disabled={importing}
+      disabled={importing && !syncing}
       onclick={handleClose}
     />
     <Button
@@ -313,6 +380,16 @@
           {m.import_hint_chatgpt({ zip: ".zip" })}
         {/if}
       </p>
+
+      {#if canSync}
+        {#if organization}
+          <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing} onclick={sync} />
+          <Button label={m.import_claude_disconnect()} tone="neutral" surface="outline" onclick={disconnect} />
+        {:else}
+          <Button label={connecting ? m.import_claude_connecting() : m.import_claude_connect()} tone="info" surface="outline" disabled={connecting || importing} onclick={connect} />
+          {#if connecting}<Button label={m.import_claude_disconnect()} tone="neutral" surface="outline" onclick={disconnect} />{/if}
+        {/if}
+      {/if}
 
       <!-- ── Drop zone ── -->
       {#if importing}

@@ -5,14 +5,103 @@ import {
   watchEvents,
   WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS,
   watchSession,
+  syncClaudeAI,
   WATCH_SESSION_MAX_CONSECUTIVE_ERRORS,
 } from "./client.js";
 import type { SyncHandle } from "./client.js";
 import { ApiError } from "./runtime.js";
 import type { SyncProgress } from "./generated/index.js";
 import * as telemetry from "../utils/telemetry.js";
+import type { BrowserHost } from "./browserHost.js";
 
 vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
+
+describe("syncClaudeAI browser relay", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("answers fetch events with the browser body and retry header", async () => {
+    let stream: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          stream = controller;
+        },
+      }),
+      { headers: { "Content-Type": "text/event-stream" } },
+    );
+    const host: BrowserHost = {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      status: vi.fn(),
+      fetch: vi.fn().mockResolvedValue({ status: 429, body: "browser response", retryAfter: "12" }),
+    };
+    const fetch = vi.fn(async (url: string, options: RequestInit) => {
+      if (url === "/api/v1/import/claude-ai/sync") {
+        expect(JSON.parse(options.body as string)).toEqual({ organization: "org" });
+        stream.enqueue(
+          encoder.encode(
+            'event: fetch\ndata: {"id":"request-1","path":"/api/organizations/org/chat_conversations_v2?limit=50&offset=0"}\n\n',
+          ),
+        );
+        return response;
+      }
+      expect(url).toBe("/api/v1/import/claude-ai/sync/results/request-1?status=429");
+      expect(await (options.body as Blob).text()).toBe("browser response");
+      expect(new Headers(options.headers).get("Retry-After")).toBe("12");
+      stream.enqueue(
+        encoder.encode(
+          'event: progress\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\nevent: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
+        ),
+      );
+      stream.close();
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const progress = vi.fn();
+    expect(await syncClaudeAI("org", host, { onProgress: progress })).toEqual({
+      imported: 1,
+      updated: 0,
+      skipped: 0,
+      errors: 0,
+    });
+    expect(host.fetch).toHaveBeenCalledWith(
+      "/api/organizations/org/chat_conversations_v2?limit=50&offset=0",
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(progress).toHaveBeenCalledWith({ imported: 1, updated: 0, skipped: 0, errors: 0 });
+  });
+
+  it("ends the stream when posting a result fails", async () => {
+    const cancelled = vi.fn();
+    const host = {
+      fetch: vi.fn().mockResolvedValue({ status: 200, body: "{}" }),
+    } as unknown as BrowserHost;
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    'event: fetch\ndata: {"id":"expired","path":"/api/organizations/org/chat_conversations_v2"}\n\n',
+                  ),
+                );
+              },
+              cancel: cancelled,
+            }),
+            { headers: { "Content-Type": "text/event-stream" } },
+          ),
+        )
+        .mockResolvedValueOnce(new Response("expired", { status: 404 })),
+    );
+    await expect(syncClaudeAI("org", host)).rejects.toThrow("expired");
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
+});
 
 /**
  * Create a ReadableStream that yields the given chunks as

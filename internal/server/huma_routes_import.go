@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/db"
@@ -21,6 +24,20 @@ func (s *Server) registerImportRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/import")
 	configureRouteGroup(group, "Import")
 	s.api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[importer.ImportStats](), true, "")
+	var results sync.Map
+	s.stream(group, http.MethodPost, "/claude-ai/sync", "Sync Claude.ai conversations",
+		func(ctx context.Context, in *claudeAISyncInput) (*huma.StreamResponse, error) {
+			return s.humaSyncClaudeAI(ctx, in, &results)
+		}, streamJSONResponseSchema("ImporterImportStats"))
+	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
+		func(ctx context.Context, in *claudeAISyncResultInput) (*struct{}, error) {
+			value, ok := results.LoadAndDelete(in.ID)
+			if !ok {
+				return nil, apiError(http.StatusNotFound, "fetch request expired or already answered")
+			}
+			value.(chan claudeAISyncResult) <- claudeAISyncResult{status: in.Status, body: in.RawBody, retryAfter: in.RetryAfter}
+			return &struct{}{}, nil
+		}, maxBodyBytes((32<<20)+1))
 
 	s.stream(group, http.MethodPost, "/claude-ai",
 		"Import Claude.ai archive", s.humaImportClaudeAI,
@@ -30,6 +47,97 @@ func (s *Server) registerImportRoutes() {
 		"Import ChatGPT archive", s.humaImportChatGPT,
 		streamJSONResponseSchema("ImporterImportStats"),
 	)
+}
+
+type claudeAISyncInput struct {
+	Body struct {
+		Organization string `json:"organization" minLength:"1"`
+	}
+}
+
+type claudeAISyncResultInput struct {
+	ID         string `path:"id"`
+	Status     int    `query:"status" minimum:"0" maximum:"599" required:"true"`
+	RetryAfter string `header:"Retry-After"`
+	RawBody    []byte `contentType:"application/octet-stream"`
+}
+
+type claudeAISyncResult struct {
+	status     int
+	body       []byte
+	retryAfter string
+}
+
+func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
+	if s.db.ReadOnly() {
+		return nil, apiError(http.StatusNotImplemented, "import not available in read-only mode")
+	}
+	if err := s.rejectWriterClosedWrite(); err != nil {
+		return nil, err
+	}
+	store, ok := s.db.(*db.DB)
+	if !ok {
+		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
+	}
+	if strings.ContainsAny(in.Body.Organization, `/\\?#%`) || in.Body.Organization == "." || in.Body.Organization == ".." {
+		return nil, apiError(http.StatusBadRequest, "invalid Claude organization")
+	}
+	return &huma.StreamResponse{Body: func(hctx huma.Context) {
+		stream, ok := newHumaSSEStream(hctx)
+		if !ok {
+			return
+		}
+		ctx, cancel := context.WithCancel(hctx.Context())
+		defer cancel()
+		pending := map[string]chan claudeAISyncResult{}
+		defer func() {
+			for id := range pending {
+				results.Delete(id)
+			}
+		}()
+		fetch := func(ctx context.Context, path string) (int, []byte, error) {
+			id := rand.Text()
+			answer := make(chan claudeAISyncResult, 1)
+			pending[id] = answer
+			results.Store(id, answer)
+			defer func() { delete(pending, id); results.Delete(id) }()
+			if !stream.SendJSON("fetch", map[string]string{"id": id, "path": path}) {
+				cancel()
+				return 0, nil, ctx.Err()
+			}
+			select {
+			case <-ctx.Done():
+				return 0, nil, ctx.Err()
+			case <-time.After(2 * time.Minute):
+				return 0, nil, errors.New("Claude browser fetch timed out")
+			case response := <-answer:
+				var err error
+				if response.retryAfter != "" {
+					err = importer.ClaudeAIRetryAfter(response.retryAfter)
+				}
+				return response.status, response.body, err
+			}
+		}
+		stats, err := importer.SyncClaudeAI(ctx, store, in.Body.Organization, fetch, &importer.ImportCallbacks{
+			SerializeWrite: func(write func() error) error { return s.serializeArchiveWrite(ctx, write) },
+			OnProgress: func(stats importer.ImportStats) {
+				if !stream.SendJSON("progress", stats) {
+					cancel()
+				}
+			},
+			OnPage: func() {
+				s.notifySessionMutation()
+				if s.broadcaster != nil {
+					s.broadcaster.Emit("sessions")
+				}
+			},
+		})
+		if err != nil {
+			stream.SendJSON("error", map[string]string{"error": err.Error()})
+			return
+		}
+		stream.SendJSON("done", stats)
+	}}, nil
 }
 
 type importArchiveInput struct {

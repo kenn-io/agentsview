@@ -2377,5 +2377,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。","countPlural=other":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。"}}],
   "tool_sequences_full_input_in_message": "完整輸入在訊息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整結果在訊息 {ordinal} 中。",
-  "tool_sequences_retry": "重試"
+  "tool_sequences_retry": "重試",
+  "import_claude_connect": "連線",
+  "import_claude_sync": "同步",
+  "import_claude_disconnect": "中斷連線",
+  "import_claude_connecting": "等待登入"
 }

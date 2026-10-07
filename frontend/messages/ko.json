@@ -2377,5 +2377,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다.","countPlural=other":"미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다."}}],
   "tool_sequences_full_input_in_message": "전체 입력은 메시지 {ordinal}에 있습니다.",
   "tool_sequences_full_result_in_message": "전체 결과는 메시지 {ordinal}에 있습니다.",
-  "tool_sequences_retry": "다시 시도"
+  "tool_sequences_retry": "다시 시도",
+  "import_claude_connect": "연결",
+  "import_claude_sync": "동기화",
+  "import_claude_disconnect": "연결 해제",
+  "import_claude_connecting": "로그인 대기 중"
 }
