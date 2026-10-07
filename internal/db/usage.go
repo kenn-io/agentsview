@@ -1921,7 +1921,7 @@ func SanitizeDailyUsageProjectLabelsWithCatalog(
 		for j := range result.Daily[i].ProjectBreakdowns {
 			raw := result.Daily[i].ProjectBreakdowns[j].Project
 			result.Daily[i].ProjectBreakdowns[j].ProjectKey = export.ProjectKeyForEntry(projects[raw])
-			result.Daily[i].ProjectBreakdowns[j].Project = export.SafeProjectDisplayLabel(raw)
+			result.Daily[i].ProjectBreakdowns[j].Project = export.ProjectDisplayLabel(raw, projects[raw])
 		}
 	}
 	if result.SessionCounts.ByProject != nil {
@@ -2512,6 +2512,9 @@ func (db *DB) getDailyUsageLegacy(
 			return DailyUsageResult{}, err
 		}
 		projectRows := DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+		if err := ApplyHermesCronUsageLabels(ctx, db.getReader().QueryContext, SQLiteQueryDialect(), projects); err != nil {
+			return DailyUsageResult{}, err
+		}
 		SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
 		daily = projectRows.Daily
 		sessionCounts = projectRows.SessionCounts
@@ -2759,6 +2762,9 @@ func (db *DB) getDailyUsageLegacy(
 		return DailyUsageResult{}, err
 	}
 	projectRows := DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+	if err := ApplyHermesCronUsageLabels(ctx, db.getReader().QueryContext, SQLiteQueryDialect(), projects); err != nil {
+		return DailyUsageResult{}, err
+	}
 	SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
 	daily = projectRows.Daily
 	sessionCounts = projectRows.SessionCounts

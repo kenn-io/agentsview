@@ -487,28 +487,45 @@ func TestDirectBackend_UsagePairwiseComparison_PreservesCommaProjectLabel(
 func TestDirectBackend_UsageSummary_ExcludesOpaqueProjectKey(t *testing.T) {
 	t.Parallel()
 
-	d := dbtest.OpenTestDB(t)
-	seedPairwiseUsageFixture(t, d)
-	be := service.NewDirectBackend(d, nil)
-	base := service.UsageRequest{
-		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
-		IncludeOneShot: true,
-	}
-	summary, err := be.UsageSummary(t.Context(), base)
-	require.NoError(t, err)
-	var betaKey string
-	for _, project := range summary.ProjectTotals {
-		if project.Project == "beta" {
-			betaKey = project.ProjectKey
-		}
-	}
-	require.NotEmpty(t, betaKey)
+	for _, cron := range []bool{false, true} {
+		name := fmt.Sprint(cron)
+		t.Run(name, func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			seedPairwiseUsageFixture(t, d)
+			alpha, beta := "alpha", "beta"
+			if cron {
+				alpha, beta = "Daily digest · hermes-cron/alpha", "Daily digest · hermes-cron/beta"
+				for _, id := range []string{"usage-alpha-sonnet", "usage-beta-gpt", "usage-beta-sonnet"} {
+					session, err := d.GetSession(t.Context(), id)
+					require.NoError(t, err)
+					require.NotNil(t, session)
+					session.Project = "hermes-cron/" + session.Project
+					session.Agent, session.SessionName = "hermes", new("Daily digest · Jun 01 12:00")
+					require.NoError(t, d.UpsertSession(t.Context(), *session))
+				}
+			}
+			be := service.NewDirectBackend(d, nil)
+			base := service.UsageRequest{
+				From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+				IncludeOneShot: true,
+			}
+			summary, err := be.UsageSummary(t.Context(), base)
+			require.NoError(t, err)
+			var betaKey string
+			for _, project := range summary.ProjectTotals {
+				if project.Project == beta {
+					betaKey = project.ProjectKey
+				}
+			}
+			require.NotEmpty(t, betaKey)
 
-	base.ExcludeProjectKey = betaKey
-	filtered, err := be.UsageSummary(t.Context(), base)
-	require.NoError(t, err)
-	require.Len(t, filtered.ProjectTotals, 1)
-	assert.Equal(t, "alpha", filtered.ProjectTotals[0].Project)
+			base.ExcludeProjectKey = betaKey
+			filtered, err := be.UsageSummary(t.Context(), base)
+			require.NoError(t, err)
+			require.Len(t, filtered.ProjectTotals, 1)
+			assert.Equal(t, alpha, filtered.ProjectTotals[0].Project)
+		})
+	}
 }
 
 func TestDirectBackend_UsageSummary_ExcludesSubagentOnlyProjectKey(t *testing.T) {

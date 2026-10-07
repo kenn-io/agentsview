@@ -479,6 +479,26 @@ func SafeProjectDisplayLabel(value string) string {
 	return safeProjectMetadata(value)
 }
 
+func ProjectDisplayLabel(raw string, entry ProjectMapEntry) string {
+	if label := SafeProjectDisplayLabel(entry.DisplayLabel); label != "" {
+		return label
+	}
+	return SafeProjectDisplayLabel(raw)
+}
+
+func HermesCronRecordedName(project, title string) string {
+	i := strings.LastIndex(title, " · ")
+	if strings.TrimSpace(title[i+len(" · "):]) == "" {
+		return ""
+	}
+	name := strings.TrimSpace(title[:i])
+	jobID := strings.TrimPrefix(project, "hermes-cron/")
+	if name == "" || name == jobID || name == "cron "+jobID {
+		return ""
+	}
+	return name
+}
+
 func ProjectMapForWire(
 	projects map[string]ProjectMapEntry,
 ) map[string]ProjectMapEntry {
@@ -490,7 +510,7 @@ func ProjectMapForWire(
 	sort.Strings(labels)
 	for _, rawLabel := range labels {
 		entry := projects[rawLabel]
-		entry.DisplayLabel = safeProjectMetadata(rawLabel)
+		entry.DisplayLabel = ProjectDisplayLabel(rawLabel, entry)
 		key := entry.ProjectKey
 		if key == "" {
 			continue

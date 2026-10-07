@@ -60,3 +60,33 @@ func TestProjectIdentityMapKeptPerLabelSet(t *testing.T) {
 	require.Equal(t, first, second)
 	require.Len(t, store.projectIdentityMaps.order, 1)
 }
+
+func TestHermesCronProjectLabelsRefreshAfterTitlePush(t *testing.T) {
+	store, syncer, local := newPushedStore(t)
+	ctx := t.Context()
+	for _, id := range []string{"job-a", "job-b"} {
+		session := fixtureSession("hermes:"+id, "hermes-cron/"+id, "cron run", "2026-10-07T12:00:00Z", 1)
+		session.Agent, session.SessionName = "hermes", new("Daily digest · Oct 07 12:00")
+		require.NoError(t, local.UpsertSession(ctx, session))
+		require.NoError(t, local.ReplaceSessionUsageEvents(ctx, session.ID, []db.UsageEvent{{SessionID: session.ID, Source: "session", Model: "gpt-5.4", InputTokens: 10, OccurredAt: "2026-10-07T12:00:00Z", DedupKey: session.ID}}))
+	}
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	labels := []string{"hermes-cron/job-a", "hermes-cron/job-b"}
+	identity, err := store.BuildProjectIdentityMap(ctx, labels)
+	require.NoError(t, err)
+	keyA, keyB := identity[labels[0]].ProjectKey, identity[labels[1]].ProjectKey
+	filter := db.UsageFilter{From: "2026-10-07", To: "2026-10-07", Agent: "hermes", Breakdowns: true}
+	before, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, "Daily digest · hermes-cron/job-a", before.Projects[keyA].DisplayLabel)
+	assert.Equal(t, "Daily digest · hermes-cron/job-b", before.Projects[keyB].DisplayLabel)
+	require.NoError(t, local.RefreshSessionName(ctx, "hermes:job-a", new("Research digest · Oct 07 12:00")))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	after, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, "Research digest · hermes-cron/job-a", after.Projects[keyA].DisplayLabel)
+	assert.Equal(t, before.Projects[keyA].ProjectKey, after.Projects[keyA].ProjectKey)
+	assert.Equal(t, before.Projects[keyB], after.Projects[keyB])
+}

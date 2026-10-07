@@ -6111,3 +6111,55 @@ func TestDailyUsageAmountsPrefersExactCustomKimiAlias(t *testing.T) {
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
 }
+
+func TestHermesCronUsageUsesLatestRecordedLabels(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, row := range []struct{ id, project, title, day, cost string }{
+		{"root-a", "hermes-cron/job-a", "Daily digest · Oct 07 12:00", "2026-10-07", "8"},
+		{"tip-a", "hermes-cron/job-a", "Research digest · Oct 08 12:00", "2026-10-08", "3"},
+		{"a-tip", "hermes-cron/job-a", "Earlier tie · Oct 08 12:00", "2026-10-08", "0"},
+		{"root-b", "hermes-cron/job-b", "Research digest · Oct 08 12:00", "2026-10-08", "2"},
+		{"untitled", "hermes-cron/job-a", "", "2026-10-09", "0"},
+		{"deleted", "hermes-cron/job-a", "Deleted name · Oct 10 12:00", "2026-10-10", "0"},
+	} {
+		stamp := row.day + "T12:00:00Z"
+		insertSession(t, d, row.id, row.project, func(s *Session) {
+			s.Agent = "hermes"
+			s.SessionName, s.StartedAt = &row.title, &stamp
+			if row.id == "tip-a" {
+				s.ParentSessionID = new("root-a")
+			}
+		})
+		cost := money.MustParseDollars(row.cost)
+		require.NoError(t, d.ReplaceSessionUsageEvents(ctx, row.id, []UsageEvent{{SessionID: row.id, Source: "session", Model: "gpt-5.4", InputTokens: 10, Cost: &cost, CostStatus: "actual", CostSource: "hermes", OccurredAt: stamp, DedupKey: "session:" + row.id}}))
+	}
+	require.NoError(t, d.SoftDeleteSession(ctx, "deleted"))
+	projects, err := d.BuildProjectIdentityMap(ctx, []string{"hermes-cron/job-a", "hermes-cron/job-b"})
+	require.NoError(t, err)
+	keyA, keyB := projects["hermes-cron/job-a"].ProjectKey, projects["hermes-cron/job-b"].ProjectKey
+	assert.NotEqual(t, keyA, keyB)
+	for _, tc := range []struct{ to, cost string }{{"2026-10-07", "8"}, {"2026-10-31", "11"}} {
+		result, err := d.GetDailyUsage(ctx, UsageFilter{From: "2026-10-07", To: tc.to, Agent: "hermes", ProjectLabels: []string{"hermes-cron/job-a"}, Breakdowns: true})
+		require.NoError(t, err)
+		assert.Equal(t, money.MustParseDollars(tc.cost), result.Totals.TotalCost)
+		assert.Equal(t, "Research digest · hermes-cron/job-a", result.Projects[keyA].DisplayLabel)
+		for _, day := range result.Daily {
+			require.Len(t, day.ProjectBreakdowns, 1)
+			assert.Equal(t, keyA, day.ProjectBreakdowns[0].ProjectKey)
+			assert.Equal(t, result.Projects[keyA].DisplayLabel, day.ProjectBreakdowns[0].Project)
+		}
+	}
+	result, err := d.GetDailyUsage(ctx, UsageFilter{From: "2026-10-07", To: "2026-10-31", ProjectLabels: []string{"hermes-cron/job-b"}, Breakdowns: true})
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("2"), result.Totals.TotalCost)
+	assert.Equal(t, "Research digest · hermes-cron/job-b", result.Projects[keyB].DisplayLabel)
+	for _, tc := range []struct{ title, want string }{
+		{"malformed title", "Research digest · hermes-cron/job-a"}, {"cron job-a · Oct 09 12:00", "hermes-cron/job-a"},
+	} {
+		require.NoError(t, d.RefreshSessionName(ctx, "untitled", &tc.title))
+		result, err := d.GetDailyUsage(ctx, UsageFilter{From: "2026-10-07", To: "2026-10-07", ProjectLabels: []string{"hermes-cron/job-a"}, Breakdowns: true})
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, result.Projects[keyA].DisplayLabel)
+	}
+}

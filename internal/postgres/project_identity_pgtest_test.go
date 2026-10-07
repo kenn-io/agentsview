@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -371,4 +374,15 @@ func TestPGSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
 		ctx, pg, "archive-a", "salt-a"))
 	err = upsertSourceArchiveScope(ctx, pg, "archive-a", "salt-b")
 	require.ErrorContains(t, err, "archive salt mismatch")
+}
+
+func TestHermesCronUsageRecordedLabels(t *testing.T) {
+	ctx := t.Context()
+	pg, err := Open(testPGURL(t), "agentsview_cron_labels_test", true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS agentsview_cron_labels_test CASCADE`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, pg, "agentsview_cron_labels_test"))
+	dbtest.AssertHermesCronUsageLabels(t, pg, &Store{pg: pg}, db.PostgresQueryDialect())
 }

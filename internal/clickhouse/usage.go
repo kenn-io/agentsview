@@ -2172,6 +2172,9 @@ func (s *Store) dailyUsageForCatalog(
 		}
 		projects = map[string]export.ProjectMapEntry{}
 	}
+	if err := db.ApplyHermesCronUsageLabels(ctx, s.queryContext, db.ClickHouseQueryDialect(), projects); err != nil {
+		return db.DailyUsageResult{}, err
+	}
 	result.Projects = export.ProjectMapForWire(projects)
 	if seenSessions != nil {
 		result.SessionCounts = db.NewUsageSessionCounts(seenSessions)

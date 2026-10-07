@@ -142,6 +142,12 @@ the URL — copying the address bar gives you a shareable link to the exact view
 you're looking at. A **Clear filters** link appears next to the refresh button
 when anything is active.
 
+Hermes cron projects show the name from their newest title containing ` · `
+alongside the stable job ID. Hermes records up to 60 characters of the name.
+Renames keep costs together, and matching names remain distinct. The name stays
+the same across date ranges; an unusable name falls back to the ID. Usage-only
+archives discard session names and show IDs.
+
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,
 comparisons, and top-session ranking to any combination of **Input**, **Cache

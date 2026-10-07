@@ -159,6 +159,9 @@ func (db *DB) assembleDailyUsageFacts(
 		return DailyUsageResult{}, err
 	}
 	projectRows := DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+	if err := ApplyHermesCronUsageLabels(ctx, db.getReader().QueryContext, SQLiteQueryDialect(), projects); err != nil {
+		return DailyUsageResult{}, err
+	}
 	SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
 	pricingBlock, err := resolver.BuildBlock()
 	if err != nil {

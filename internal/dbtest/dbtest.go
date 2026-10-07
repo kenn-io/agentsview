@@ -4,6 +4,7 @@ package dbtest
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -266,4 +267,39 @@ func SeedSessionWithMessages(
 	t.Helper()
 	SeedSession(t, d, id, project, opts...)
 	SeedMessages(t, d, msgs...)
+}
+
+// AssertHermesCronUsageLabels shares the native mirror display contract.
+func AssertHermesCronUsageLabels(t *testing.T, conn *sql.DB, store db.Store, dialect db.QueryDialect) {
+	t.Helper()
+	ctx := t.Context()
+	_, err := conn.ExecContext(ctx, `INSERT INTO sessions(id, project, machine, agent, session_name, started_at, deleted_at, message_count, user_message_count) VALUES
+		('a', 'hermes-cron/job-a', 'host', 'hermes', 'Old digest · Oct 07 12:00', '2026-10-07T12:00:00Z', NULL, 1, 1),
+		('tip', 'hermes-cron/job-a', 'host', 'hermes', 'Research digest · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1),
+		('untitled', 'hermes-cron/job-a', 'host', 'hermes', '', '2026-10-09T12:00:00Z', NULL, 1, 1),
+		('deleted', 'hermes-cron/job-a', 'host', 'hermes', 'Deleted digest · Oct 11 12:00', '2026-10-11T12:00:00Z', '2026-10-11T13:00:00Z', 1, 1),
+		('missing-date', 'hermes-cron/job-a', 'host', 'hermes', 'No date · Oct 12 12:00', NULL, NULL, 1, 1),
+		('b', 'hermes-cron/job-b', 'host', 'hermes', 'Research digest · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1);
+		INSERT INTO messages(session_id, ordinal, role, content, timestamp, model, token_usage)
+		SELECT id, 0, 'assistant', 'run message', started_at, 'gpt-5.4', '{"input_tokens":10}' FROM sessions WHERE agent = 'hermes';`)
+	require.NoError(t, err)
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-10-07", To: "2026-10-08", Agent: "hermes", Breakdowns: true})
+	require.NoError(t, err)
+	labels := make(map[string]string)
+	for _, day := range result.Daily {
+		for _, project := range day.ProjectBreakdowns {
+			labels[project.Project] = project.ProjectKey
+		}
+	}
+	assert.NotEmpty(t, labels["Research digest · hermes-cron/job-a"])
+	assert.NotEmpty(t, labels["Research digest · hermes-cron/job-b"])
+	assert.NotEqual(t, labels["Research digest · hermes-cron/job-a"], labels["Research digest · hermes-cron/job-b"])
+	b := db.NewQueryBuilder(dialect, 0)
+	_, err = conn.ExecContext(ctx, `UPDATE sessions SET session_name = `+b.Add("cron job-a")+` WHERE id = 'untitled'`, b.Args()...)
+	require.NoError(t, err)
+	result, err = store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-10-07", To: "2026-10-07", Agent: "hermes", Breakdowns: true})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	require.Len(t, result.Daily[0].ProjectBreakdowns, 1)
+	assert.Equal(t, "Research digest · hermes-cron/job-a", result.Daily[0].ProjectBreakdowns[0].Project)
 }

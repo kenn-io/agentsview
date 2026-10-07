@@ -2054,6 +2054,9 @@ func (s *Store) GetDailyUsage(
 			return db.DailyUsageResult{}, err
 		}
 		projectRows := db.DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+		if err := db.ApplyHermesCronUsageLabels(ctx, s.pg.QueryContext, db.PostgresQueryDialect(), projects); err != nil {
+			return db.DailyUsageResult{}, err
+		}
 		db.SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
 		daily = projectRows.Daily
 		sessionCounts = projectRows.SessionCounts
@@ -2287,6 +2290,9 @@ func (s *Store) GetDailyUsage(
 		return db.DailyUsageResult{}, err
 	}
 	projectRows := db.DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+	if err := db.ApplyHermesCronUsageLabels(ctx, s.pg.QueryContext, db.PostgresQueryDialect(), projects); err != nil {
+		return db.DailyUsageResult{}, err
+	}
 	db.SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
 	daily = projectRows.Daily
 	sessionCounts = projectRows.SessionCounts

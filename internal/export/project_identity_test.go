@@ -465,6 +465,24 @@ func TestProjectMapForWireUsesOpaqueKeysAndSafeLabels(t *testing.T) {
 		assert.NotContains(t, key, "/Users/alice")
 		assert.Empty(t, entry.DisplayLabel)
 	}
+	projects["hermes-cron/job-a"] = ProjectMapEntry{ProjectKey: "key-a", DisplayLabel: "Digest · hermes-cron/job-a"}
+	projects["safe-fallback"] = ProjectMapEntry{ProjectKey: "key-b", DisplayLabel: "https://example.com/private"}
+	got = ProjectMapForWire(projects)
+	assert.Equal(t, "Digest · hermes-cron/job-a", got["key-a"].DisplayLabel)
+	assert.Equal(t, "safe-fallback", got["key-b"].DisplayLabel)
+}
+
+func TestHermesCronProjectTitleLabels(t *testing.T) {
+	for _, tc := range []struct{ title, want string }{
+		{"Daily · digest · Oct 07 12:00", "Daily · digest"},
+		{"  Daily digest  · Oct 07 12:00", "Daily digest"},
+		{"job-a · Oct 07 12:00", ""},
+		{"Daily digest · ", ""}, {"cron job-a · Oct 07 12:00", ""},
+	} {
+		t.Run(tc.title, func(t *testing.T) {
+			assert.Equal(t, tc.want, HermesCronRecordedName("hermes-cron/job-a", tc.title))
+		})
+	}
 }
 
 func TestProjectLabelKeyIsStableOnlyWithinArchive(t *testing.T) {

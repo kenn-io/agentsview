@@ -4493,6 +4493,9 @@ func (s *Store) GetDailyUsage(
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
+	if err := db.ApplyHermesCronUsageLabels(ctx, s.queryContext, db.DuckDBQueryDialect(), projects); err != nil {
+		return db.DailyUsageResult{}, err
+	}
 	result.Projects = export.ProjectMapForWire(projects)
 	if seenSessions != nil {
 		result.SessionCounts = db.NewUsageSessionCounts(seenSessions)
