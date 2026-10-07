@@ -5,20 +5,23 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 )
 
 type claudeAIConversation struct {
-	UUID      string            `json:"uuid"`
-	Name      string            `json:"name"`
-	CreatedAt string            `json:"created_at"`
-	UpdatedAt string            `json:"updated_at"`
-	Messages  []claudeAIMessage `json:"chat_messages"`
+	UUID        string            `json:"uuid"`
+	Name        string            `json:"name"`
+	CreatedAt   string            `json:"created_at"`
+	UpdatedAt   string            `json:"updated_at"`
+	Messages    []claudeAIMessage `json:"chat_messages"`
+	CurrentLeaf string            `json:"current_leaf_message_uuid"`
 }
 
 type claudeAIMessage struct {
 	UUID        string               `json:"uuid"`
+	Parent      string               `json:"parent_message_uuid"`
 	Text        string               `json:"text"`
 	Content     []claudeAIBlock      `json:"content"`
 	Sender      string               `json:"sender"`
@@ -176,6 +179,31 @@ func buildClaudeAttachmentText(
 func convertClaudeAIConversation(
 	conv claudeAIConversation,
 ) (ParseResult, error) {
+	if conv.CurrentLeaf != "" {
+		byID := make(map[string]claudeAIMessage, len(conv.Messages))
+		for _, message := range conv.Messages {
+			byID[message.UUID] = message
+		}
+		if _, ok := byID[conv.CurrentLeaf]; !ok {
+			return ParseResult{}, fmt.Errorf("current leaf %s not found", conv.CurrentLeaf)
+		}
+		var chain []claudeAIMessage
+		seen := make(map[string]bool)
+		for id := conv.CurrentLeaf; ; {
+			message, ok := byID[id]
+			if !ok {
+				break
+			}
+			if seen[id] {
+				return ParseResult{}, fmt.Errorf("message %s repeats in selected path", id)
+			}
+			seen[id] = true
+			chain = append(chain, message)
+			id = message.Parent
+		}
+		slices.Reverse(chain)
+		conv.Messages = chain
+	}
 	startedAt, err := time.Parse(time.RFC3339Nano, conv.CreatedAt)
 	if err != nil {
 		return ParseResult{},

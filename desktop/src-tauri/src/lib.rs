@@ -25,6 +25,7 @@ use tauri::menu::{
 use tauri::plugin::Builder as PluginBuilder;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::tray::TrayIconBuilder;
+use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::{
     App, AppHandle, Emitter, Manager, RunEvent, State, Url, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
@@ -6643,6 +6644,7 @@ fn create_claude_auth_window(
             .inner_size(1100.0, 800.0)
             .min_inner_size(800.0, 600.0)
             .visible(visible)
+            .background_throttling(BackgroundThrottlingPolicy::Disabled)
             .on_page_load(move |_, payload| {
                 if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
                     if let Ok(mut sender) = sender.lock() {
@@ -6663,9 +6665,6 @@ async fn claude_auth_fetch_result(
     state: State<'_, ClaudeAuthState>,
     payload: ClaudeBrowserFetchResult,
 ) -> Result<(), String> {
-    if window.label() != CLAUDE_AUTH_WINDOW_LABEL {
-        return Err("Claude browser response came from an unexpected window".into());
-    }
     let origin = window.url().map_err(|err| err.to_string())?;
     if origin.port().is_some()
         || origin.scheme() != "https"

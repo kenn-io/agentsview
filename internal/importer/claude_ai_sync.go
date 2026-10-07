@@ -57,22 +57,13 @@ func SyncClaudeAI(ctx context.Context, store interface {
 			return stats, errors.New("invalid Claude organization")
 		}
 		base := "/api/organizations/" + url.PathEscape(org.UUID)
-		seen := make(map[string]bool)
-		var previousPage []byte
 		for offset := 0; ; {
 			raw, err := fetchClaudeAI(ctx, fetch, fmt.Sprintf("%s/chat_conversations_v2?limit=50&offset=%d", base, offset))
 			if err != nil {
 				return stats, err
 			}
-			if bytes.Equal(raw, previousPage) {
-				return stats, errors.New("Claude list page repeated")
-			}
-			previousPage = raw
 			var page struct {
 				Conversations []json.RawMessage `json:"conversations"`
-				Items         []json.RawMessage `json:"items"`
-				Data          []json.RawMessage `json:"data"`
-				Results       []json.RawMessage `json:"results"`
 				HasMore       *bool             `json:"has_more"`
 			}
 			if err := json.Unmarshal(raw, &page); err != nil {
@@ -80,21 +71,9 @@ func SyncClaudeAI(ctx context.Context, store interface {
 			}
 			items := page.Conversations
 			if items == nil {
-				items = page.Items
-			}
-			if items == nil {
-				items = page.Data
-			}
-			if items == nil {
-				items = page.Results
-			}
-			if items == nil {
 				return stats, errors.New("Claude list had no conversations")
 			}
 			if len(items) == 0 {
-				if page.HasMore != nil && *page.HasMore {
-					return stats, errors.New("Claude list page did not advance")
-				}
 				break
 			}
 			for _, summary := range items {
@@ -110,10 +89,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					cb.progress(stats)
 					continue
 				}
-				if seen[marker.UUID] {
-					return stats, errors.New("Claude list page repeated a conversation")
-				}
-				seen[marker.UUID] = true
 				id := "claude-ai:" + marker.UUID
 				if store.IsSessionTrashed(ctx, id) {
 					stats.Skipped++

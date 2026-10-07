@@ -1,12 +1,54 @@
 package parser
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestParseClaudeAIExport_SelectedPath(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		leaf   string
+		parent string
+		want   []string
+		err    string
+	}{
+		{name: "selected reply", leaf: `"current_leaf_message_uuid":"kept",`, parent: "00000000-0000-4000-8000-000000000000", want: []string{"Question", "Kept reply"}},
+		{name: "missing leaf", leaf: `"current_leaf_message_uuid":"missing",`, parent: "", err: "current leaf missing not found"},
+		{name: "no leaf", parent: "", want: []string{"Question", "Abandoned reply", "Kept reply"}},
+		{name: "cycle", leaf: `"current_leaf_message_uuid":"kept",`, parent: "kept", err: "repeats in selected path"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := fmt.Sprintf(`[{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z",%s"chat_messages":[
+				{"uuid":"root","parent_message_uuid":%q,"sender":"human","text":"Question"},
+				{"uuid":"abandoned","parent_message_uuid":"root","sender":"assistant","text":"Abandoned reply"},
+				{"uuid":"kept","parent_message_uuid":"root","sender":"assistant","text":"Kept reply"}]}]`, tt.leaf, tt.parent)
+			var results []ParseResult
+			err := parseClaudeAIExport(strings.NewReader(input), func(result ParseResult) error {
+				results = append(results, result)
+				return nil
+			})
+			if tt.err != "" {
+				require.ErrorContains(t, err, tt.err)
+				assert.Empty(t, results)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Len(t, results[0].Messages, len(tt.want))
+			assert.Equal(t, len(tt.want), results[0].Session.MessageCount)
+			assert.Equal(t, 1, results[0].Session.UserMessageCount)
+			for i, message := range results[0].Messages {
+				assert.Equal(t, tt.want[i], message.Content)
+				assert.Equal(t, i, message.Ordinal)
+			}
+		})
+	}
+}
 
 const testExportJSON = `[
   {
