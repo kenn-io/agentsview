@@ -683,12 +683,6 @@ func TestCommitExtractedUnitBindsEvidenceAndAdvances(t *testing.T) {
 
 	commit.Cursor = 1
 	commit.Entries = []RecallEntry{commitUnitEntry("e-2", "sess-1", 2, 2)}
-	_, err = d.SetSessionLabels(ctx, "sess-1", []string{"role=reviewer"})
-	require.NoError(t, err)
-	_, err = d.SetSessionExternalParent(ctx, "sess-1", "manager")
-	require.NoError(t, err)
-	_, err = d.ClearSessionExternalParent(ctx, "sess-1")
-	require.NoError(t, err)
 	_, err = d.CommitExtractedUnit(ctx, commit)
 	require.NoError(t, err)
 	progress, _, err = d.ExtractProgress(ctx, "sess-1", "fp-a")

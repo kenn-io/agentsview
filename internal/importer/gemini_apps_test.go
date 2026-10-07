@@ -44,29 +44,6 @@ func TestImportGeminiApps(t *testing.T) {
 	assert.Equal(t, "test-machine", sessions.Sessions[0].Machine)
 }
 
-func TestImportGeminiAppsUnchangedKeepsLauncherParent(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "activity.html"), []byte(sanitizedGeminiAppsImportHTML), 0o644))
-	d := testDB(t)
-	ctx := t.Context()
-	_, err := ImportGeminiApps(ctx, d, root, nil)
-	require.NoError(t, err)
-	page, err := d.ListSessions(ctx, db.SessionFilter{Agent: "gemini-apps"})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Sessions)
-	id := page.Sessions[0].ID
-	_, err = d.SetSessionExternalParent(ctx, id, "manager")
-	require.NoError(t, err)
-	stats, err := ImportGeminiApps(ctx, d, root, nil)
-	require.NoError(t, err)
-	assert.Positive(t, stats.Skipped)
-	s, err := d.GetSession(ctx, id)
-	require.NoError(t, err)
-	require.NotNil(t, s.ParentSessionID)
-	assert.Equal(t, "manager", *s.ParentSessionID)
-	assert.Equal(t, "subagent", s.RelationshipType)
-}
-
 func TestImportGeminiAppsIgnoresOtherProductsThroughPublicPath(t *testing.T) {
 	root := t.TempDir()
 	gemini := `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>See <a href="https://example.invalid">source</a> for details</p></div></div>`

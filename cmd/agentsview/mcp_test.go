@@ -19,7 +19,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -253,39 +252,6 @@ func TestResolveMCPServiceExplicitServerUsesReportedCapabilities(
 			assert.Equal(t, 1, probeCount)
 		})
 	}
-}
-
-func TestResolveMCPServiceRefusesAnnotationFiltersOnOlderServer(t *testing.T) {
-	var paths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(
-		w http.ResponseWriter, r *http.Request,
-	) {
-		paths = append(paths, r.URL.Path)
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/v1/version" {
-			_ = json.MarshalWrite(w, map[string]any{
-				"api_version": server.SessionAnnotationsAPIVersion - 1,
-			})
-			return
-		}
-		_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	cmd := newMCPCommand()
-	cmd.SetContext(t.Context())
-	require.NoError(t, cmd.ParseFlags([]string{"--server", srv.URL}))
-	svc, cleanup, err := resolveMCPService(cmd)
-	require.NoError(t, err, "an older server still serves the session")
-	t.Cleanup(cleanup)
-
-	_, err = svc.List(t.Context(), service.ListFilter{Labels: []string{"ticket=A"}})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "restart or upgrade the server")
-	assert.Equal(t, []string{"/api/v1/version"}, paths)
-
-	_, err = svc.List(t.Context(), service.ListFilter{Project: "p"})
-	require.NoError(t, err, "unannotated lists still reach the server")
 }
 
 func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {

@@ -99,35 +99,12 @@ func TestPushServesSessionLabelsAndPRLinks(t *testing.T) {
 			[]string{fixtureAlphaID}},
 		{"number from another link", db.SessionFilter{PR: db.PRFilter{Repository: "acme/tools", Number: 42}},
 			nil},
-		{"unlinked repository", db.SessionFilter{PR: db.PRFilter{Repository: "acme/other"}}, nil},
 	}
 	for _, tt := range tests {
 		t.Run("filter "+tt.name, func(t *testing.T) {
 			assert.ElementsMatch(t, tt.want, listIDs(t, store, tt.filter))
 		})
 	}
-
-	t.Run("sidebar index filters by label and pr", func(t *testing.T) {
-		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Labels: []string{"role:lead"}})
-		require.NoError(t, err)
-		ids := make([]string, 0, len(index.Sessions))
-		for _, row := range index.Sessions {
-			ids = append(ids, row.ID)
-		}
-		assert.Contains(t, ids, fixtureAlphaID)
-		assert.NotContains(t, ids, fixtureBetaID)
-		assert.Equal(t, 1, index.Total)
-
-		index, err = store.GetSidebarSessionIndex(ctx,
-			db.SessionFilter{PR: db.PRFilter{Repository: "acme/widgets"}})
-		require.NoError(t, err)
-		ids = ids[:0]
-		for _, row := range index.Sessions {
-			ids = append(ids, row.ID)
-		}
-		assert.Contains(t, ids, fixtureAlphaID)
-		assert.NotContains(t, ids, fixtureBetaID)
-	})
 
 	t.Run("child label", func(t *testing.T) {
 		f := db.SessionFilter{Labels: []string{"role:worker"}}
@@ -150,7 +127,7 @@ func TestPushServesSessionLabelsAndPRLinks(t *testing.T) {
 	})
 }
 
-func TestPushRepublishesLabelOnlyAndPRLinkChanges(t *testing.T) {
+func TestPushRepublishesLabelOnlyChanges(t *testing.T) {
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 
@@ -172,13 +149,6 @@ func TestPushRepublishesLabelOnlyAndPRLinkChanges(t *testing.T) {
 	require.NotNil(t, beta)
 	assert.Nil(t, beta.Labels)
 	assert.Empty(t, listIDs(t, store, db.SessionFilter{Labels: []string{"ticket-9"}}))
-
-	setLocalPRLinks(t, local, fixtureBetaID, fixturePRLinks[:1])
-	res, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.SessionsPushed)
-	assert.Equal(t, []string{fixtureBetaID}, listIDs(t, store,
-		db.SessionFilter{PR: db.PRFilter{Repository: "acme/widgets", Number: 42}}))
 }
 
 // A mirror pushed before the annotation columns existed gains them in

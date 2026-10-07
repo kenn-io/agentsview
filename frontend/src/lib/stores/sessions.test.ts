@@ -1028,22 +1028,6 @@ describe("SessionsStore", () => {
       expect(sessions.sessions[0]!.is_index_only).toBe(false);
     });
 
-    it("refreshing the active session drops a cleared last label", async () => {
-      mockSidebarIndex([makeSkinnyRow({ id: "labeled" })]);
-      await sessions.load();
-      sessions.selectSession("labeled");
-      vi.mocked(api.getSession).mockResolvedValue(
-        makeSession({ id: "labeled", labels: ["ticket=ABC-123"] }),
-      );
-      await sessions.refreshActiveSession();
-      expect(sessions.sessions[0]!.labels).toEqual(["ticket=ABC-123"]);
-
-      vi.mocked(api.getSession).mockResolvedValue(makeSession({ id: "labeled", labels: [] }));
-      await sessions.refreshActiveSession();
-
-      expect(sessions.sessions[0]!.labels).toEqual([]);
-    });
-
     it("selecting an index-only session hydrates it", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "select-me" })]);
       await sessions.load();

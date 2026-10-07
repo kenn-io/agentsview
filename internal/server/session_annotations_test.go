@@ -33,6 +33,10 @@ func TestSessionLabelsAPI(t *testing.T) {
 	te := setup(t)
 	seedAnnotatedSession(t, te, "worker", nil)
 	seedAnnotatedSession(t, te, "other", nil)
+	seedAnnotatedSession(t, te, "linked", []db.PRLink{{
+		URL: "https://github.com/owner/repo/pull/7", Host: "github.com",
+		Repository: "owner/repo", Number: 7,
+	}})
 
 	w := te.put(t, "/api/v1/sessions/worker/labels",
 		`{"labels":["ticket=ABC-123","role=reviewer"]}`)
@@ -87,25 +91,16 @@ func TestSessionLabelsAPI(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	assert.Contains(t, w.Body.String(), `"labels":[]`)
 	assert.Contains(t, w.Body.String(), `"pr_links":[]`)
-}
-
-func TestSessionPRFilterAPI(t *testing.T) {
-	te := setup(t)
-	seedAnnotatedSession(t, te, "linked", []db.PRLink{{
-		URL: "https://github.com/owner/repo/pull/7", Host: "github.com",
-		Repository: "owner/repo", Number: 7,
-	}})
-	seedAnnotatedSession(t, te, "unlinked", nil)
 
 	assert.Equal(t, []string{"linked"},
 		listedSessionIDs(t, te, url.Values{"pr": {"owner/repo#7"}}))
 
-	w := te.get(t, "/api/v1/sessions?pr=not-a-repo")
+	w = te.get(t, "/api/v1/sessions?pr=not-a-repo")
 	assertStatus(t, w, http.StatusBadRequest)
 
 	w = te.get(t, "/api/v1/sessions/linked")
 	assertStatus(t, w, http.StatusOK)
-	detail := decode[service.SessionDetail](t, w)
+	detail = decode[service.SessionDetail](t, w)
 	require.Len(t, detail.PRLinks, 1)
 	assert.Equal(t, "https://github.com/owner/repo/pull/7", detail.PRLinks[0].URL)
 }
