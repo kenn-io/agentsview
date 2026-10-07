@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-05
+last_edited: 2026-10-07
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -206,6 +206,12 @@ The latest published release is
   used about 99% less memory in AgentsView. Local dates and hours now come
   from the PostgreSQL server's time zone data, which matches AgentsView's for
   current time zones.
+- Hosted raw sync stays fast on a device that has already uploaded many
+  sources. Each acknowledged upload used to reread every object the device had
+  ever uploaded. On a synthetic checkpoint with about 107,000 uploaded objects,
+  acknowledging 36 queued uploads went from about 19 minutes to 1.5 seconds.
+  The first start after upgrading adds an index to the raw sync checkpoint, and
+  earlier AgentsView versions can't open that checkpoint afterward.
 
 **Bug fixes**
 
