@@ -2756,10 +2756,16 @@ schemas keep their existing ordering behavior.
   a leaf outside the kept messages falls back to the last kept message.
   `vo` walks down from the sentinel. `po` restores an unanswered human prompt
   matching the server leaf, or the last one attached to the visible path's end.
-  The shared parser applies these rules only when tree fields are present;
-  flat exports retain their original order. Duplicate message UUIDs, missing
+  The shared parser applies these rules only when a message has a non-null
+  `parent_message_uuid`; flat exports retain their original order, including
+  exports with a null leaf. Duplicate message UUIDs within trees, missing
   resolved parents, cycles, and trees without a root fail before writing.
   Sync also rejects a detail UUID that differs from the requested chat.
+  Empty details store zero-message sessions; exports still skip empty chats.
+  Inside the serialized write, Sync skips details older than archived
+  `ended_at`. Usage-only archives refresh session metadata under their content
+  policy. Detail HTTP failures and responses over 32 MiB fail that chat;
+  authentication, transport, and cancellation errors stop Sync.
   New turns append rows and preserve existing message IDs. Changed or shorter
   visible history replaces the chat and keeps the previous version in Trash.
   An empty list page with `has_more: true` fails.

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json/jsontext"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
 )
@@ -37,7 +39,26 @@ func (s *Server) registerImportRoutes() {
 			}
 			value.(chan claudeAISyncResult) <- claudeAISyncResult{status: in.Status, body: in.RawBody, retryAfter: in.RetryAfter}
 			return &struct{}{}, nil
-		}, maxBodyBytes((32<<20)+1))
+		}, maxBodyBytes((32<<20)+1), func(op *huma.Operation) {
+			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
+				body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), (32<<20)+1))
+				if len(body) > 32<<20 {
+					err = importer.ErrClaudeAIResponseTooLarge
+				}
+				if err != nil {
+					if value, ok := results.LoadAndDelete(ctx.Param("id")); ok {
+						value.(chan claudeAISyncResult) <- claudeAISyncResult{err: err}
+						ctx.SetStatus(http.StatusNoContent)
+					} else {
+						ctx.SetStatus(http.StatusNotFound)
+					}
+					return
+				}
+				req, _ := humago.Unwrap(ctx)
+				req.Body = io.NopCloser(bytes.NewReader(body))
+				next(ctx)
+			})
+		})
 
 	s.stream(group, http.MethodPost, "/claude-ai",
 		"Import Claude.ai archive", s.humaImportClaudeAI,
@@ -59,6 +80,7 @@ type claudeAISyncResultInput struct {
 }
 
 type claudeAISyncResult struct {
+	err        error
 	status     int
 	body       []byte
 	retryAfter string
@@ -97,8 +119,8 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			case <-time.After(2 * time.Minute):
 				return importer.ClaudeAIResponse{}, errors.New("Claude browser fetch timed out")
 			case response := <-answer:
-				var err error
-				if response.status == 0 {
+				err := response.err
+				if err == nil && response.status == 0 {
 					err = errors.New(string(response.body))
 				}
 				return importer.ClaudeAIResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, err

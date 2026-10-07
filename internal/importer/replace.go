@@ -64,8 +64,9 @@ type conversationImport struct {
 }
 
 var (
-	claudeAIImport = conversationImport{parser.AgentClaudeAI, upsertConversation, claudeAIMessages}
-	chatGPTImport  = conversationImport{parser.AgentChatGPT, upsertChatGPTConversation, chatGPTMessages}
+	claudeAIImport     = conversationImport{parser.AgentClaudeAI, upsertConversation, claudeAIMessages}
+	chatGPTImport      = conversationImport{agent: parser.AgentChatGPT, messages: chatGPTMessages}
+	claudeAISyncImport = conversationImport{agent: parser.AgentClaudeAI, messages: claudeAIMessages}
 )
 
 // importConversation runs the default upsert and, when it refuses a session opts lists, replaces the session's messages with the export's and keeps the previous version as a trashed copy.
@@ -76,7 +77,11 @@ func (ci conversationImport) importConversation(
 	fts *lazyFTS,
 	opts ImportOptions,
 ) (importStatus, error) {
-	status, refused := ci.upsert(ctx, store, result, fts)
+	upsert := ci.upsert
+	if upsert == nil {
+		upsert = ci.upsertChatGPTConversation
+	}
+	status, refused := upsert(ctx, store, result, fts)
 	if refused == nil || !replaceable(refused) || !opts.replaces(result.Session.ID) {
 		return status, refused
 	}

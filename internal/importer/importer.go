@@ -402,14 +402,14 @@ func ImportChatGPTWithOptions(
 // archived text the export extends (a truncated copy) counts as a match;
 // shorter exports and exports that rewrite archived history are refused
 // so a re-import can never lose or silently change stored messages.
-func upsertChatGPTConversation(
+func (ci conversationImport) upsertChatGPTConversation(
 	ctx context.Context,
 	store db.Store,
 	result parser.ParseResult,
 	fts *lazyFTS,
 ) (importStatus, error) {
 	s := result.Session
-	msgs := chatGPTMessages(s.ID, result.Messages)
+	msgs := ci.messages(s.ID, result.Messages)
 
 	existing, err := store.GetSession(ctx, s.ID)
 	if err != nil {
@@ -427,17 +427,24 @@ func upsertChatGPTConversation(
 		return importNew, nil
 	}
 
-	if existing.Agent != string(parser.AgentChatGPT) {
+	if existing.Agent != string(ci.agent) {
 		return importNew, refuse(RefusalDiverged, fmt.Errorf(
 			"existing session belongs to agent %q", existing.Agent,
 		))
 	}
 	policy := storeArchiveContent(store)
-	if policy.UsageOnly() {
+	if policy.UsageOnly() && ci.agent == parser.AgentChatGPT {
 		// A usage archive keeps no transcript text and drops rows without
 		// token usage, so the archived history cannot be verified as a
 		// prefix of the export. Leave the stored session untouched.
 		return importSkipped, nil
+	}
+	if policy.UsageOnly() {
+		err := appendChatGPTMessages(ctx, store, chatGPTSession(s), msgs)
+		if errors.Is(err, db.ErrSessionExcluded) {
+			return importSkipped, nil
+		}
+		return importUpdated, err
 	}
 	archived, err := store.GetAllMessages(ctx, s.ID)
 	if err != nil {
@@ -459,13 +466,16 @@ func upsertChatGPTConversation(
 		))
 	}
 	filled, ok := compareChatGPTPrefix(archived, canonical[:len(archived)])
+	if ci.agent == parser.AgentClaudeAI {
+		filled, ok = nil, sameMessages(archived, canonical[:len(archived)])
+	}
 	if !ok {
 		return importNew, refuse(RefusalDiverged, errors.New(
 			"export history diverges from the archived messages",
 		))
 	}
 
-	if len(msgs) == len(archived) && len(filled) == 0 {
+	if ci.agent == parser.AgentChatGPT && len(msgs) == len(archived) && len(filled) == 0 {
 		// Refresh session_name without touching any other fields —
 		// a partial UpsertSession would overwrite first_message,
 		// timestamps, and counts with zero values.
