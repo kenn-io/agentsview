@@ -64,85 +64,115 @@ func TestDiscoverRepos_FindsRootAndFiltersMissing(t *testing.T) {
 	assert.Equal(t, canonAll(want), canonAll(slices.Concat(got...)), "DiscoverRepos")
 }
 
-func TestDiscoverRepos_ReusesDirectoryRoots(t *testing.T) {
+func TestFindRepoRoot_ReusesDirectoryRoots(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initBareRepo(t)
 	a, b := mkdirIn(t, repo, "a"), mkdirIn(t, repo, "b")
-	outside := t.TempDir()
-	want := canonAll([]string{repo})
-	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{a, outside})...)))
+	want := canonAll([]string{repo})[0]
+	findRepoRoot(t.Context(), a)
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", t.TempDir())
-	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{a, outside})...)))
+	assert.Equal(t, want, findRepoRoot(t.Context(), a))
 	t.Setenv("PATH", path)
-	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{a, b, outside})...)))
-	gitRun(t, outside, nil, "init", "-q")
-	assert.Equal(t, canonAll([]string{outside}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{outside})...)))
+	assert.Equal(t, want, findRepoRoot(t.Context(), b))
 	gitRun(t, repo, nil, "commit", "--allow-empty", "-q", "-m", "seed")
 	gitRun(t, repo, nil, "status", "--porcelain")
 	t.Setenv("PATH", t.TempDir())
-	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{b, a})...)))
+	for _, cwd := range []string{a, b} {
+		assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
+	}
 }
 
-func TestDiscoverRepos_RetryFailedLookup(t *testing.T) {
+func TestFindRepoRoot_RetryFailedLookup(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initBareRepo(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	assert.Empty(t, DiscoverRepos(ctx, []string{repo}))
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", t.TempDir())
-	assert.Empty(t, DiscoverRepos(t.Context(), []string{repo}))
+	assert.Empty(t, findRepoRoot(t.Context(), repo))
 	t.Setenv("PATH", path)
-	assert.Equal(t, canonAll([]string{repo}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{repo})...)))
+	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
+	outside := t.TempDir()
+	assert.Empty(t, findRepoRoot(t.Context(), outside))
+	gitRun(t, outside, nil, "init", "-q")
+	assert.Equal(t, canonAll([]string{outside})[0], findRepoRoot(t.Context(), outside))
 }
 
-func TestDiscoverRepos_OriginsStayFresh(t *testing.T) {
-	skipIfNoGit(t)
-	a, b := initBareRepo(t), initBareRepo(t)
-	require.Len(t, DiscoverRepos(t.Context(), []string{a, b}), 2)
-	setOrigin(t, a, "https://example.com/team/repo.git")
-	setOrigin(t, b, "https://example.com/team/repo.git")
-	assert.Len(t, DiscoverRepos(t.Context(), []string{a, b}), 1)
-}
-
-func TestDiscoverRepos_RepositoryChanges(t *testing.T) {
+func TestFindRepoRoot_RepositoryChanges(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initBareRepo(t)
 	sub := mkdirIn(t, repo, "sub")
-	require.NotEmpty(t, DiscoverRepos(t.Context(), []string{sub}))
+	require.NotEmpty(t, findRepoRoot(t.Context(), sub))
 	gitRun(t, sub, nil, "init", "-q")
-	assert.Equal(t, canonAll([]string{sub}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{sub})...)))
+	assert.Equal(t, canonAll([]string{sub})[0], findRepoRoot(t.Context(), sub))
 	require.NoError(t, os.RemoveAll(filepath.Join(sub, ".git")))
-	assert.Equal(t, canonAll([]string{repo}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{sub})...)))
+	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), sub))
 	require.NoError(t, os.Rename(filepath.Join(repo, ".git"), filepath.Join(t.TempDir(), "old-git")))
 	gitRun(t, repo, nil, "init", "-q")
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", t.TempDir())
-	assert.Empty(t, DiscoverRepos(t.Context(), []string{sub}), "replaced marker must resolve again")
+	assert.Empty(t, findRepoRoot(t.Context(), sub), "replaced marker must resolve again")
 	t.Setenv("PATH", path)
+	configureTestRepoIdentity(t, repo)
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-q", "-m", "seed")
+	worktree := filepath.Join(t.TempDir(), "wt")
+	gitRun(t, repo, nil, "worktree", "add", "-b", "feature", worktree)
+	require.NotEmpty(t, findRepoRoot(t.Context(), worktree))
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: missing\n"), 0o600))
+	assert.Empty(t, findRepoRoot(t.Context(), worktree))
 	require.NoError(t, os.RemoveAll(repo))
-	assert.Empty(t, DiscoverRepos(t.Context(), []string{sub}))
+	assert.Empty(t, findRepoRoot(t.Context(), sub))
 }
 
-func TestFindRepoRoot_ConcurrentMisses(t *testing.T) {
-	skipIfNoGit(t)
-	repo := initBareRepo(t)
-	synctest.Test(t, func(t *testing.T) {
-		ctx := &pausedRepoFill{Context: t.Context(), started: make(chan struct{}), resume: make(chan struct{})}
-		results := make(chan string, 9)
-		go func() { results <- findRepoRoot(ctx, repo) }()
-		<-ctx.started
-		for range 8 {
-			go func() { results <- findRepoRoot(t.Context(), repo) }()
-		}
-		synctest.Wait()
-		assert.Empty(t, results, "waiters must share the pending lookup")
-		close(ctx.resume)
-		for range 9 {
-			assert.Equal(t, canonAll([]string{repo})[0], <-results)
-		}
-	})
+func TestFindRepoRoot_PendingFill(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		waiters                     int
+		cancelCreator, cancelWaiter bool
+	}{
+		{"shared success", 8, false, false},
+		{"failed creator", 1, true, false},
+		{"cancelled waiter", 1, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skipIfNoGit(t)
+			repo := initBareRepo(t)
+			synctest.Test(t, func(t *testing.T) {
+				base, cancelCreator := context.WithCancel(t.Context())
+				waiterCtx, cancelWaiter := context.WithCancel(t.Context())
+				defer cancelCreator()
+				defer cancelWaiter()
+				ctx := &pausedRepoFill{Context: base, started: make(chan struct{}), resume: make(chan struct{})}
+				creator, waiter := make(chan string, 1), make(chan string, tc.waiters)
+				go func() { creator <- findRepoRoot(ctx, repo) }()
+				<-ctx.started
+				for range tc.waiters {
+					go func() { waiter <- findRepoRoot(waiterCtx, repo) }()
+				}
+				synctest.Wait()
+				if tc.waiters > 1 {
+					assert.Empty(t, waiter, "waiters must share the pending lookup")
+				}
+				if tc.cancelWaiter {
+					cancelWaiter()
+					assert.Empty(t, <-waiter)
+				}
+				if tc.cancelCreator {
+					cancelCreator()
+				}
+				close(ctx.resume)
+				if tc.cancelCreator {
+					assert.Empty(t, <-creator)
+				} else {
+					assert.Equal(t, canonAll([]string{repo})[0], <-creator)
+				}
+				if !tc.cancelWaiter {
+					for range tc.waiters {
+						assert.Equal(t, canonAll([]string{repo})[0], <-waiter)
+					}
+				}
+			})
+		})
+	}
 }
 
 // Pause at the fill's timeout creation, after it owns the cache entry.
@@ -156,43 +186,6 @@ func (ctx *pausedRepoFill) Deadline() (time.Time, bool) {
 	ctx.startedOnce.Do(func() { close(ctx.started) })
 	<-ctx.resume
 	return ctx.Context.Deadline()
-}
-
-func TestFindRepoRoot_CancelledWait(t *testing.T) {
-	repo := t.TempDir()
-	entry := &repoRootEntry{ready: make(chan struct{})}
-	repoRoots.Lock()
-	repoRoots.entries[repo] = entry
-	repoRoots.Unlock()
-	t.Cleanup(func() {
-		repoRoots.Lock()
-		delete(repoRoots.entries, repo)
-		close(entry.ready)
-		repoRoots.Unlock()
-	})
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan string)
-	go func() { done <- findRepoRoot(ctx, repo) }()
-	cancel()
-	assert.Empty(t, <-done)
-}
-
-func TestFindRepoRoot_FailedCreatorRetriesForLiveWaiter(t *testing.T) {
-	skipIfNoGit(t)
-	repo := initBareRepo(t)
-	synctest.Test(t, func(t *testing.T) {
-		base, cancel := context.WithCancel(t.Context())
-		ctx := &pausedRepoFill{Context: base, started: make(chan struct{}), resume: make(chan struct{})}
-		creator, waiter := make(chan string, 1), make(chan string, 1)
-		go func() { creator <- findRepoRoot(ctx, repo) }()
-		<-ctx.started
-		go func() { waiter <- findRepoRoot(t.Context(), repo) }()
-		synctest.Wait()
-		cancel()
-		close(ctx.resume)
-		assert.Empty(t, <-creator)
-		assert.Equal(t, canonAll([]string{repo})[0], <-waiter)
-	})
 }
 
 func TestDiscoverRepos_Dedup(t *testing.T) {
@@ -239,13 +232,7 @@ func TestDiscoverRepos_LinkedWorktreeResolves(t *testing.T) {
 		canonAll([]string{worktreeRoot}),
 		canonAll(slices.Concat(got...)),
 		"DiscoverRepos (worktree path)")
-	gitfile := filepath.Join(worktreeRoot, ".git")
-	contents, err := os.ReadFile(gitfile)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(gitfile, []byte("gitdir: missing\n"), 0o600))
-	assert.Empty(t, DiscoverRepos(t.Context(), []string{worktreeRoot}))
-	require.NoError(t, os.WriteFile(gitfile, contents, 0o600))
-	assert.Equal(t, canonAll([]string{worktreeRoot}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{worktreeRoot})...)))
+
 }
 
 // TestDiscoverRepos_MissingCwdSkipped confirms that a cwd whose path is
@@ -386,6 +373,9 @@ func TestDiscoverRepos_NoRemoteFallsBackToPath(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, canonAll([]string{first, second}), canonAll(slices.Concat(got...)),
 		"remote-less repositories must not collapse into each other")
+	setOrigin(t, first, "https://example.com/team/repo.git")
+	setOrigin(t, second, "https://example.com/team/repo.git")
+	assert.Len(t, DiscoverRepos(t.Context(), []string{first, second}), 1)
 }
 
 // TestDiscoverRepos_LinkedWorktreeSharesItsRepositoryOrigin pins the
