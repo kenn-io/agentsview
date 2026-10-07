@@ -165,6 +165,53 @@ func TestSessionLabelsRejectInvalidInput(t *testing.T) {
 	}
 }
 
+func TestUpsertSessionAppliesLauncherParent(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "manager", "proj")
+	_, err := d.SetSessionExternalParent(ctx, "worker", "manager")
+	require.NoError(t, err)
+	for range 2 {
+		insertSession(t, d, "worker", "proj")
+		worker, err := d.GetSession(ctx, "worker")
+		require.NoError(t, err)
+		require.NotNil(t, worker.ParentSessionID)
+		assert.Equal(t, "manager", *worker.ParentSessionID)
+		assert.Equal(t, "subagent", worker.RelationshipType)
+	}
+}
+
+func TestScopedSpawnLinkRecomputesMovedChildLauncherCycle(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"q", "p", "b", "a"} {
+		insertSession(t, d, id, "proj")
+	}
+	spawn := func(id string) {
+		t.Helper()
+		require.NoError(t, d.InsertMessages(ctx, []Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
+			ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "p"}},
+		}}))
+	}
+	spawn("q")
+	_, err := d.LinkSubagentSessionsForSessions(ctx, []string{"q"})
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(ctx, "b", "p")
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(ctx, "a", "b")
+	require.NoError(t, err)
+	spawn("a")
+	_, err = d.LinkSubagentSessionsForSessions(ctx, []string{"q"})
+	require.NoError(t, err)
+	for _, id := range []string{"a", "b"} {
+		s, err := d.GetSession(ctx, id)
+		require.NoError(t, err)
+		assert.Nil(t, s.ParentSessionID, id)
+	}
+	assert.ElementsMatch(t, []string{"q", "a", "b"}, listSortedIDs(t, d, SessionFilter{}))
+}
+
 func TestSessionExternalParentApplication(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -291,7 +338,7 @@ func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
 	insertSession(t, d, "b", "proj")
 	linked, err := d.LinkSubagentSessionsForSessions(ctx, []string{"b"})
 	require.NoError(t, err)
-	assert.Equal(t, 1, linked)
+	assert.Equal(t, 0, linked)
 	a, err := d.GetSession(ctx, "a")
 	require.NoError(t, err)
 	require.NotNil(t, a.ParentSessionID)
