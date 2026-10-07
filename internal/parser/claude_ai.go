@@ -74,16 +74,20 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 	}
 
 	for dec.PeekKind() != jsontext.KindEndArray {
-		var conv claudeAIConversation
+		var conv *claudeAIConversation
 		if err := json.UnmarshalDecode(dec, &conv); err != nil {
 			return fmt.Errorf("decoding conversation: %w", err)
+		}
+
+		if conv == nil {
+			return fmt.Errorf("expected conversation object")
 		}
 
 		if len(conv.Messages) == 0 {
 			continue
 		}
 
-		result, err := convertClaudeAIConversation(conv)
+		result, err := convertClaudeAIConversation(*conv)
 		if err != nil {
 			return fmt.Errorf(
 				"converting conversation %s: %w",

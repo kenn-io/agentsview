@@ -238,6 +238,12 @@ func upsertConversation(
 ) (importStatus, error) {
 	s := result.Session
 
+	if trash, ok := store.(interface {
+		IsSessionTrashed(context.Context, string) bool
+	}); ok && trash.IsSessionTrashed(ctx, s.ID) {
+		return importNew, db.ErrSessionTrashed
+	}
+
 	msgs := claudeAIMessages(s.ID, result.Messages)
 
 	existing, err := store.GetSession(ctx, s.ID)
@@ -268,22 +274,6 @@ func upsertConversation(
 	}
 	db.ApplyParsedSessionIdentity(&sess, s)
 
-	if err := store.UpsertSession(ctx, sess); err != nil {
-		if errors.Is(err, db.ErrSessionExcluded) {
-			return importSkipped, nil
-		}
-		return importNew, fmt.Errorf("upserting session: %w", err)
-	}
-
-	// Bump local_modified_at so incremental PG push picks up session_name
-	// changes even when the skip path below returns importSkipped (message
-	// count unchanged) and ReplaceSessionMessages is never called.
-	if localDB, ok := store.(*db.DB); ok {
-		if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
-			log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
-		}
-	}
-
 	// Skip expensive message replacement when the conversation
 	// has not changed since the last import. Compare both
 	// message count and ended_at (source updated_at) to detect
@@ -300,6 +290,20 @@ func upsertConversation(
 			// projects rows, so raw parser output can differ from an
 			// unchanged archived copy.
 			if sameMessages(existingMsgs, storedFormMessages(store, msgs)) {
+				if err := store.UpsertSession(ctx, sess); err != nil {
+					if errors.Is(err, db.ErrSessionExcluded) {
+						return importSkipped, nil
+					}
+					return importNew, fmt.Errorf("upserting session: %w", err)
+				}
+
+				// Publish title changes to incremental mirrors even when messages match.
+				if localDB, ok := store.(*db.DB); ok {
+					if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
+						log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
+					}
+				}
+
 				return importSkipped, nil
 			}
 		}
@@ -309,8 +313,16 @@ func upsertConversation(
 	// avoid per-row trigger overhead during bulk work.
 	fts.suspend(ctx)
 
-	if err := store.ReplaceSessionMessages(ctx, s.ID, msgs); err != nil {
-		return importNew, fmt.Errorf("replacing messages: %w", err)
+	if err := writeSessionBatch(ctx, store, db.SessionBatchWrite{
+		Session:                    sess,
+		Messages:                   msgs,
+		SkipSignalUpdates:          true,
+		ReplaceMessages:            true,
+		RejectMessageCountDecrease: true,
+	}); errors.Is(err, db.ErrSessionExcluded) {
+		return importSkipped, nil
+	} else if err != nil {
+		return importNew, fmt.Errorf("writing session: %w", err)
 	}
 
 	if isNew {
@@ -583,7 +595,7 @@ func canonicalChatGPTMessages(
 func writeChatGPTSession(
 	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
 ) error {
-	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
+	return writeSessionBatch(ctx, store, db.SessionBatchWrite{
 		Session:                    sess,
 		Messages:                   msgs,
 		SkipSignalUpdates:          true,
@@ -599,7 +611,7 @@ func writeChatGPTSession(
 func appendChatGPTMessages(
 	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
 ) error {
-	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
+	return writeSessionBatch(ctx, store, db.SessionBatchWrite{
 		Session:            sess,
 		Messages:           msgs,
 		CompleteStoredRows: true,
@@ -628,7 +640,7 @@ func chatGPTFillRows(
 	return rows
 }
 
-func writeChatGPTBatch(
+func writeSessionBatch(
 	ctx context.Context, store db.Store, write db.SessionBatchWrite,
 ) error {
 	result, err := store.WriteSessionBatchAtomic(

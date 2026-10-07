@@ -2378,8 +2378,8 @@
   "tool_sequences_full_input_in_message": "完整输入在消息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整结果在消息 {ordinal} 中。",
   "tool_sequences_retry": "重试",
-  "import_claude_connect": "连接",
+  "import_claude_connect": "登录",
   "import_claude_sync": "同步",
   "import_claude_disconnect": "断开连接",
-  "import_claude_connecting": "等待登录"
+  "import_claude_help": "登录后关闭窗口，然后点击同步。"
 }

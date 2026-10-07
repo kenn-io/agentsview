@@ -10,7 +10,6 @@
   "windows": ["main"],
   "permissions": [
     "allow-claude-auth-connect",
-    "allow-claude-auth-status",
     "allow-claude-auth-fetch",
     "allow-claude-auth-disconnect",
     "core:default",

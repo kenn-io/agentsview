@@ -42,7 +42,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			require.Equal(t, want, response.StatusCode, "%s", data)
 		}
 		postResult("unknown", `{}`, http.StatusNotFound)
-		response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", strings.NewReader(`{"organization":"org"}`))
+		response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
 		require.NoError(t, err)
 		defer response.Body.Close()
 		require.Equal(t, http.StatusOK, response.StatusCode)
@@ -68,10 +68,12 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(data), &request))
 				answered = request.ID
 				switch request.Path {
+				case "/api/organizations":
+					postResult(request.ID, `[{"uuid":"org","capabilities":["chat"]}]`, http.StatusNoContent)
 				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
 					postResult(request.ID, `{"conversations":[{"uuid":"relay","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
 				case "/api/organizations/org/chat_conversations/relay?tree=True":
-					postResult(request.ID, `{"padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
+					postResult(request.ID, `{"uuid":"relay","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
 				default:
 					t.Fatalf("unexpected path %s", request.Path)
 				}
@@ -101,7 +103,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		srv := testServer(t, 5*time.Second)
 		httpServer := httptest.NewServer(srv.mux)
 		defer httpServer.Close()
-		response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", strings.NewReader(`{"organization":"org"}`))
+		response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
 		require.NoError(t, err)
 		defer response.Body.Close()
 		scanner := bufio.NewScanner(response.Body)
@@ -145,7 +147,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			recorder := httptest.NewRecorder()
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync", strings.NewReader(`{"organization":"org"}`))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync", nil)
 			req.Header.Set("Content-Type", "application/json")
 			start := time.Now()
 			srv.mux.ServeHTTP(recorder, req)

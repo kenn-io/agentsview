@@ -2449,8 +2449,8 @@
   "tool_sequences_full_input_in_message": "完全な入力はメッセージ {ordinal} にあります。",
   "tool_sequences_full_result_in_message": "完全な結果はメッセージ {ordinal} にあります。",
   "tool_sequences_retry": "再試行",
-  "import_claude_connect": "接続",
+  "import_claude_connect": "サインイン",
   "import_claude_sync": "同期",
   "import_claude_disconnect": "切断",
-  "import_claude_connecting": "ログイン待機中"
+  "import_claude_help": "サインインしてウィンドウを閉じ、同期をクリックしてください。"
 }

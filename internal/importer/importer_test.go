@@ -260,6 +260,12 @@ func TestImportClaudeAI_PreservesDisplayNameOnReimport(
 	)
 	require.NoError(t, err)
 
+	changed := strings.ReplaceAll(testConversationsJSON, "09:15:00.000000Z", "09:16:00.000000Z")
+	changed = strings.ReplaceAll(changed, "Hi there!", "Updated reply")
+	stats, err := ImportClaudeAI(ctx, d, strings.NewReader(changed), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+
 	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
 	require.NoError(t, err)
 	require.NotNil(t, s)

@@ -582,15 +582,6 @@ components:
         timezone:
           type: string
       type: object
-    ClaudeAISyncInputBody:
-      additionalProperties: false
-      properties:
-        organization:
-          minLength: 1
-          type: string
-      required:
-        - organization
-      type: object
     Comparison:
       additionalProperties: false
       properties:
@@ -13080,12 +13071,6 @@ paths:
   /api/v1/import/claude-ai/sync:
     post:
       operationId: post-api-v1-import-claude-ai-sync
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ClaudeAISyncInputBody"
-        required: true
       responses:
         "200":
           content:
@@ -13126,12 +13111,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Conflict
-        "422":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Unprocessable Entity
         "500":
           content:
             application/json:

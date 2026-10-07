@@ -67,12 +67,6 @@ struct ClaudeBrowserFetchResult {
     retry_after: Option<String>,
 }
 
-#[derive(serde::Serialize)]
-struct ClaudeAuthStatus {
-    connected: bool,
-    pending: bool,
-    organization: Option<String>,
-}
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const DAEMON_STARTUP_LONG_NOTICE_AFTER: Duration = Duration::from_secs(300);
 const DAEMON_UNHEALTHY_GRACE: Duration = Duration::from_secs(15);
@@ -327,7 +321,6 @@ pub fn run() {
         .manage(ClaudeAuthState::default())
         .invoke_handler(tauri::generate_handler![
             claude_auth_connect,
-            claude_auth_status,
             claude_auth_fetch,
             claude_auth_disconnect,
             claude_auth_fetch_result
@@ -6437,6 +6430,9 @@ fn valid_claude_identifier(value: &str) -> bool {
 }
 
 fn valid_claude_fetch_path(path: &str) -> bool {
+    if path == "/api/organizations" {
+        return true;
+    }
     if path.contains(['\\', '#', '%', '\r', '\n']) {
         return false;
     }
@@ -6461,50 +6457,17 @@ fn valid_claude_fetch_path(path: &str) -> bool {
 async fn claude_auth_connect(handle: AppHandle) -> Result<(), String> {
     let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
         Some(window) => window,
-        None => create_claude_auth_window(&handle, true)?,
+        None => create_claude_auth_window(&handle, true)?.0,
     };
     window.show().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn claude_auth_status(handle: AppHandle) -> Result<ClaudeAuthStatus, String> {
-    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
-        Some(window) => window,
-        None => {
-            return Ok(ClaudeAuthStatus {
-                connected: false,
-                pending: false,
-                organization: None,
-            })
-        }
-    };
-    let cookies = window
-        .cookies_for_url(Url::parse("https://claude.ai/").unwrap())
-        .map_err(|e| e.to_string())?;
-    let signed_in = cookies
-        .iter()
-        .any(|cookie| cookie.name() == "sessionKey" && !cookie.value().is_empty());
-    let organization = cookies
-        .iter()
-        .find(|cookie| cookie.name() == "lastActiveOrg")
-        .map(|cookie| cookie.value().to_string())
-        .filter(|value| signed_in && valid_claude_identifier(value));
-    if organization.is_some() {
-        window.hide().map_err(|e| e.to_string())?;
-    }
-    Ok(ClaudeAuthStatus {
-        connected: organization.is_some(),
-        pending: organization.is_none(),
-        organization,
-    })
-}
-
-#[tauri::command]
 async fn claude_auth_disconnect(handle: AppHandle) -> Result<(), String> {
     let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
         Some(window) => window,
-        None => create_claude_auth_window(&handle, false)?,
+        None => create_claude_auth_window(&handle, false)?.0,
     };
     for cookie in window
         .cookies_for_url(Url::parse("https://claude.ai/").unwrap())
@@ -6529,9 +6492,17 @@ async fn claude_auth_fetch(
     if !valid_claude_fetch_path(&path) {
         return Err("unsupported Claude API path".into());
     }
-    let window = handle
-        .get_webview_window(CLAUDE_AUTH_WINDOW_LABEL)
-        .ok_or("Reconnect Claude.ai and try again")?;
+    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        Some(window) => window,
+        None => {
+            let (window, loaded) = create_claude_auth_window(&handle, false)?;
+            tokio::time::timeout(Duration::from_secs(30), loaded)
+                .await
+                .map_err(|_| "Claude page load timed out")?
+                .map_err(|_| "Claude page load failed")?;
+            window
+        }
+    };
     let origin = window.url().map_err(|e| e.to_string())?;
     if origin.origin().ascii_serialization() != "https://claude.ai" {
         return Err("Claude sign-in is still pending".into());
@@ -6633,6 +6604,7 @@ mod claude_sync_tests {
     #[test]
     fn claude_fetch_path_validation() {
         for path in [
+            "/api/organizations",
             "/api/organizations/org-1/chat_conversations_v2?limit=50&offset=0",
             "/api/organizations/org-1/chat_conversations/chat-1?tree=True",
         ] {
@@ -6653,32 +6625,36 @@ mod claude_sync_tests {
     }
 }
 
-fn claude_auth_profile_dir(handle: &AppHandle) -> Result<PathBuf, String> {
-    let directory = handle
-        .path()
-        .app_data_dir()
-        .map_err(|err| format!("could not resolve the Claude login profile directory: {err}"))?
-        .join("cloud-auth")
-        .join("claude-ai");
-    fs::create_dir_all(&directory)
-        .map_err(|err| format!("could not create the Claude login profile directory: {err}"))?;
-    #[cfg(unix)]
-    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-        .map_err(|err| format!("could not secure the Claude login profile directory: {err}"))?;
-    Ok(directory)
-}
-
-fn create_claude_auth_window(handle: &AppHandle, visible: bool) -> Result<WebviewWindow, String> {
-    let profile_dir = claude_auth_profile_dir(handle)?;
-    let url = Url::parse(CLAUDE_AUTH_URL).map_err(|err| err.to_string())?;
-    WebviewWindowBuilder::new(handle, CLAUDE_AUTH_WINDOW_LABEL, WebviewUrl::External(url))
-        .title("Connect Claude.ai to AgentsView")
-        .inner_size(1100.0, 800.0)
-        .min_inner_size(800.0, 600.0)
-        .visible(visible)
-        .data_directory(profile_dir)
-        .build()
-        .map_err(|err| format!("could not open the Claude sign-in window: {err}"))
+fn create_claude_auth_window(
+    handle: &AppHandle,
+    visible: bool,
+) -> Result<(WebviewWindow, tokio::sync::oneshot::Receiver<()>), String> {
+    let url = Url::parse(if visible {
+        CLAUDE_AUTH_URL
+    } else {
+        "https://claude.ai/"
+    })
+    .map_err(|err| err.to_string())?;
+    let (sender, loaded) = tokio::sync::oneshot::channel();
+    let sender = Mutex::new(Some(sender));
+    let window =
+        WebviewWindowBuilder::new(handle, CLAUDE_AUTH_WINDOW_LABEL, WebviewUrl::External(url))
+            .title("Sign in to Claude.ai")
+            .inner_size(1100.0, 800.0)
+            .min_inner_size(800.0, 600.0)
+            .visible(visible)
+            .on_page_load(move |_, payload| {
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    if let Ok(mut sender) = sender.lock() {
+                        if let Some(sender) = sender.take() {
+                            let _ = sender.send(());
+                        }
+                    }
+                }
+            })
+            .build()
+            .map_err(|err| format!("could not open the Claude sign-in window: {err}"))?;
+    Ok((window, loaded))
 }
 
 #[tauri::command]

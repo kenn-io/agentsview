@@ -2734,17 +2734,20 @@ schemas keep their existing ordering behavior.
   `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
 - **Desktop sync evidence:** `no-public-source`. The original implementation's
   observations and synthetic fixtures describe these private GET endpoints:
+  `https://claude.ai/api/organizations` selects organizations whose `capabilities`
+  include `chat`, then
   `https://claude.ai/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}`
   and
   `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}?tree=True`.
   The list reads `conversations`, with `items`, `data`, or `results` as observed
-  alternatives, and `has_more`. Summary checkpoints use `uuid` and `updated_at`.
+  alternatives, and `has_more`. Freshness compares summary `updated_at` with
+  archived `ended_at`.
   Details read `name`, `created_at`, `updated_at`, and every `chat_messages`
   entry, matching export imports. Reverified 2026-10-07 against synthetic
-  regenerated-reply and older-export regression fixtures. The export parser
-  consumes message `sender`, `text`, `content`, timestamps, attachments, and
-  files. No live account was checked for
-  this rework; the response shapes still need live verification.
+  null-detail, cancellation, and older-export regression fixtures. The export parser
+  consumes message `sender`, `text`, `content`, timestamps, and attachments.
+  No live account was checked for this rework. Organization capabilities, the
+  list key, `has_more`, and whether empty chats appear still need live verification.
 
 ## ChatGPT Export (`chatgpt`)
 
