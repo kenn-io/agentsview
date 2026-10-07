@@ -49,11 +49,7 @@ func (s *Server) registerImportRoutes() {
 	)
 }
 
-type claudeAISyncInput struct {
-	Body struct {
-		Organization string `json:"organization" minLength:"1"`
-	}
-}
+type claudeAISyncInput struct{}
 
 type claudeAISyncResultInput struct {
 	ID         string `path:"id"`
@@ -110,7 +106,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				return response.status, response.body, err
 			}
 		}
-		stats, err := importer.SyncClaudeAI(ctx, store, in.Body.Organization, fetch, &importer.ImportCallbacks{
+		stats, err := importer.SyncClaudeAI(ctx, store, fetch, &importer.ImportCallbacks{
 			SerializeWrite: func(write func() error) error { return s.serializeArchiveWrite(ctx, write) },
 			OnProgress: func(stats importer.ImportStats) {
 				if !stream.SendJSON("progress", stats) {

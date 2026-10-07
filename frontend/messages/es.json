@@ -2463,8 +2463,8 @@
   "tool_sequences_full_input_in_message": "La entrada completa está en el mensaje {ordinal}.",
   "tool_sequences_full_result_in_message": "El resultado completo está en el mensaje {ordinal}.",
   "tool_sequences_retry": "Reintentar",
-  "import_claude_connect": "Conectar",
+  "import_claude_connect": "Iniciar sesión",
   "import_claude_sync": "Sincronizar",
   "import_claude_disconnect": "Desconectar",
-  "import_claude_connecting": "Esperando inicio de sesión"
+  "import_claude_help": "Inicia sesión, cierra la ventana y pulsa Sincronizar."
 }
