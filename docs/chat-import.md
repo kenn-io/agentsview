@@ -73,7 +73,8 @@ list refreshes automatically.
 With the desktop app connected to its local archive, open **Import
 conversations**, select **Claude.ai**, and click **Sign in**. Sign in to
 Claude.ai, close the window, then click **Sync** to download your chats.
-The dialog shows progress and the same result counts as a file import.
+The dialog shows progress and counts new, updated, skipped, and failed chats.
+Sync skips trashed chats; file imports report them as refusals.
 
 Each sync checks all conversation summaries and downloads only new or changed
 chats. Search stays available during the import. Trashed or permanently deleted

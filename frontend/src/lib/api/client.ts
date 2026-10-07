@@ -440,18 +440,26 @@ export async function syncClaudeAI(
 
 export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
   return readImportResponse(
-    await ImportService.postApiV1ImportClaudeAi({ file }, undefined, {
-      headers: { Accept: "text/event-stream" },
-    }),
+    await ImportService.postApiV1ImportClaudeAi(
+      { file },
+      undefined,
+      {
+        headers: { Accept: "text/event-stream" },
+      },
+    ),
     cb,
   );
 }
 
 export async function importChatGPT(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
   return readImportResponse(
-    await ImportService.postApiV1ImportChatgpt({ file }, undefined, {
-      headers: { Accept: "text/event-stream" },
-    }),
+    await ImportService.postApiV1ImportChatgpt(
+      { file },
+      undefined,
+      {
+        headers: { Accept: "text/event-stream" },
+      },
+    ),
     cb,
   );
 }

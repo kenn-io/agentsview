@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import ImportModal from "./ImportModal.svelte";
 import { m } from "../../i18n/index.js";
 
@@ -17,6 +17,27 @@ vi.mock("../../api/client.js", () => ({
   importChatGPT: vi.fn(),
 }));
 afterEach(() => vi.resetAllMocks());
+
+it("closing during sync leaves no error after reopening", async () => {
+  let rejectSync!: (error: Error) => void;
+  let signal!: AbortSignal;
+  syncClaudeAI.mockImplementation((_host, _callbacks, runSignal) => {
+    signal = runSignal;
+    return new Promise((_, reject) => { rejectSync = reject; });
+  });
+  const onclose = vi.fn();
+  const onimported = vi.fn();
+  const { rerender } = render(ImportModal, { open: true, onclose, onimported });
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
+  await fireEvent.click(screen.getByRole("button", { name: m.import_cancel() }));
+  expect(signal.aborted).toBe(true);
+  expect(onclose).toHaveBeenCalledOnce();
+  rejectSync(new Error("Import stream ended without result"));
+  await rerender({ open: true, onclose, onimported });
+  await waitFor(() => expect((screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement).disabled).toBe(false));
+  expect(screen.queryByText("Import stream ended without result")).toBeNull();
+  expect(onimported).not.toHaveBeenCalled();
+});
 
 it("offers sign in, sync and disconnect without a sign-in probe", async () => {
   host.connect.mockResolvedValue(undefined);

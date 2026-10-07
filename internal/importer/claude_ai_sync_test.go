@@ -17,8 +17,8 @@ import (
 
 const syncSummary = `{"uuid":"one","name":"Chat","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}`
 const syncDetail = `{"uuid":"one","name":"Chat","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","chat_messages":[
-    {"uuid":"root","sender":"human","text":"Hello","created_at":"2026-03-01T10:00:00Z"},
-    {"uuid":"reply","sender":"assistant","text":"Chosen reply","created_at":"2026-03-01T10:02:00Z"}]}`
+    {"uuid":"root","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Hello","created_at":"2026-03-01T10:00:00Z"},
+    {"uuid":"reply","parent_message_uuid":"root","sender":"assistant","text":"Chosen reply","created_at":"2026-03-01T10:02:00Z"}]}`
 const syncOrgs = `[{"uuid":"ignored","capabilities":["api"]},{"uuid":"org","capabilities":["chat"]}]`
 
 func TestSyncClaudeAI(t *testing.T) {
@@ -34,7 +34,8 @@ func TestSyncClaudeAI(t *testing.T) {
 			default:
 				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True", path)
 				details++
-				return 200, []byte(syncDetail), nil
+				return 200, []byte(strings.Replace(syncDetail, `"chat_messages":[`, `"current_leaf_message_uuid":"reply","chat_messages":[
+					{"uuid":"abandoned","parent_message_uuid":"root","sender":"assistant","text":"Abandoned reply"},`, 1)), nil
 			}
 		}
 		stats, err := SyncClaudeAI(t.Context(), d, fetch, &ImportCallbacks{OnPage: func() { notifications++ }})
@@ -200,23 +201,48 @@ func TestSyncClaudeAI(t *testing.T) {
 		require.Len(t, messages, 3)
 		assert.Equal(t, "Keep this turn", messages[2].Content)
 	})
-	t.Run("pagination must advance", func(t *testing.T) {
-		for _, page := range []string{`{"conversations":[],"has_more":true}`, `{"conversations":[` + syncSummary + `],"has_more":true}`} {
+	t.Run("overlapping pages import later chats", func(t *testing.T) {
+		d := testDB(t)
+		details := 0
+		stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (int, []byte, error) {
+			switch path {
+			case "/api/organizations":
+				return 200, []byte(syncOrgs), nil
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+				return 200, []byte(`{"conversations":[` + syncSummary + `],"has_more":true}`), nil
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=1":
+				return 200, []byte(`{"conversations":[` + syncSummary + `,` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":true}`), nil
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=3":
+				return 200, []byte(`{"conversations":[],"has_more":true}`), nil
+			case "/api/organizations/org/chat_conversations/one?tree=True":
+				details++
+				return 200, []byte(syncDetail), nil
+			default:
+				require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True", path)
+				details++
+				return 200, []byte(strings.ReplaceAll(syncDetail, "one", "two")), nil
+			}
+		}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 2, stats.Imported)
+		assert.Equal(t, 1, stats.Skipped)
+		assert.Equal(t, 2, details)
+		messages, err := d.GetAllMessages(t.Context(), "claude-ai:two")
+		require.NoError(t, err)
+		require.Len(t, messages, 2)
+		assert.Equal(t, "Chosen reply", messages[1].Content)
+	})
+	t.Run("missing conversations fails", func(t *testing.T) {
+		for _, page := range []string{`{}`, `{"items":[]}`, `{"data":[]}`, `{"results":[]}`} {
 			d := testDB(t)
-			calls := 0
 			_, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (int, []byte, error) {
-				calls++
-				require.LessOrEqual(t, calls, 4)
 				if path == "/api/organizations" {
 					return 200, []byte(syncOrgs), nil
 				}
-				if strings.Contains(path, "chat_conversations_v2") {
-					return 200, []byte(page), nil
-				}
-				return 200, []byte(syncDetail), nil
+				require.Equal(t, "/api/organizations/org/chat_conversations_v2?limit=50&offset=0", path)
+				return 200, []byte(page), nil
 			}, nil)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "Claude list page")
+			require.EqualError(t, err, "Claude list had no conversations")
 		}
 	})
 	t.Run("retry limit and sign in", func(t *testing.T) {
