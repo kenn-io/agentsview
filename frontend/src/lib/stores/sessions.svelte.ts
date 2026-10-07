@@ -701,6 +701,9 @@ class SessionsStore {
     this.sessions[idx] = {
       ...current,
       ...hydrated,
+      parent_session_id: hydrated.parent_session_id,
+      parent_session_ids: hydrated.parent_session_ids,
+      relationship_type: hydrated.relationship_type,
       display_name: hydrated.display_name ?? current.display_name,
       is_teammate: hydrated.is_teammate ?? current.is_teammate,
       is_index_only: false,
