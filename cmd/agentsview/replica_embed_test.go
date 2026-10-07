@@ -337,7 +337,7 @@ func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
 	cfg.DeploymentEmbeddings.Endpoint = endpoint.URL + "/v1"
 	cfg.Vector.Embed.BackstopInterval = "1s"
 	archive := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	replica := &embedPushReplica{recipeProvider: recipeProvider{gens: []storage.VectorGenerationInfo{publishedRecipe()}}}
+	replica := &embedPushReplica{gens: []storage.VectorGenerationInfo{publishedRecipe()}}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var push func(context.Context, pushReason, *syncpkg.WatchBatch) error
