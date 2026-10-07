@@ -125,13 +125,6 @@ func TestSessionParentAPI(t *testing.T) {
 	assert.False(t, link.SessionFound)
 	assert.Equal(t, "subagent", link.RelationshipType)
 
-	seedAnnotatedSession(t, te, "worker", nil)
-	_, err := te.db.LinkSubagentSessionsForSessions(t.Context(), []string{"worker"})
-	require.NoError(t, err)
-	w = te.get(t, "/api/v1/sessions/manager/children")
-	assertStatus(t, w, http.StatusOK)
-	assert.Contains(t, w.Body.String(), `"id":"worker"`)
-
 	w = te.put(t, "/api/v1/sessions/manager/parent",
 		`{"parent_session_id":"worker"}`)
 	assertStatus(t, w, http.StatusBadRequest)

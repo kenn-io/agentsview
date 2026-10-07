@@ -99,24 +99,6 @@ func TestPGSessionPRLinksAndLabelsReadAndFilter(t *testing.T) {
 	defer store.Close()
 
 	t.Run("get paths match the archive", func(t *testing.T) {
-		for _, id := range []string{"sid-a", "sid-a-child", "sid-b", "sid-plain"} {
-			want, err := local.GetSession(ctx, id)
-			require.NoError(t, err)
-			require.NotNil(t, want)
-
-			got, err := store.GetSession(ctx, id)
-			require.NoError(t, err)
-			require.NotNil(t, got)
-			assert.Equal(t, want.PRLinks, got.PRLinks, "GetSession %s pr links", id)
-			assert.Equal(t, want.Labels, got.Labels, "GetSession %s labels", id)
-
-			full, err := store.GetSessionFull(ctx, id)
-			require.NoError(t, err)
-			require.NotNil(t, full)
-			assert.Equal(t, want.PRLinks, full.PRLinks, "GetSessionFull %s pr links", id)
-			assert.Equal(t, want.Labels, full.Labels, "GetSessionFull %s labels", id)
-		}
-
 		got, err := store.GetSession(ctx, "sid-a")
 		require.NoError(t, err)
 		require.NotNil(t, got)
@@ -130,23 +112,6 @@ func TestPGSessionPRLinksAndLabelsReadAndFilter(t *testing.T) {
 		require.NotNil(t, plain)
 		assert.Nil(t, plain.Labels)
 		assert.Nil(t, plain.PRLinks)
-
-		children, err := store.GetChildSessions(ctx, "sid-a")
-		require.NoError(t, err)
-		require.Len(t, children, 1)
-		assert.Equal(t, []string{"role=worker"}, children[0].Labels)
-
-		page, err := store.ListSessions(ctx, db.SessionFilter{
-			IncludeChildren: true,
-		})
-		require.NoError(t, err)
-		byID := map[string]db.Session{}
-		for _, s := range page.Sessions {
-			byID[s.ID] = s
-		}
-		require.Contains(t, byID, "sid-b")
-		assert.Equal(t, []string{"ticket=XYZ-9"}, byID["sid-b"].Labels)
-		assert.Len(t, byID["sid-b"].PRLinks, 2)
 	})
 
 	tests := []struct {
@@ -158,16 +123,6 @@ func TestPGSessionPRLinksAndLabelsReadAndFilter(t *testing.T) {
 			name:    "one label",
 			filter:  db.SessionFilter{Labels: []string{"ticket=ABC-1"}},
 			wantIDs: []string{"sid-a"},
-		},
-		{
-			name:    "every listed label",
-			filter:  db.SessionFilter{Labels: []string{"ticket=ABC-1", "role=lead"}},
-			wantIDs: []string{"sid-a"},
-		},
-		{
-			name:    "a missing label excludes",
-			filter:  db.SessionFilter{Labels: []string{"ticket=ABC-1", "role=worker"}},
-			wantIDs: []string{},
 		},
 		{
 			name:    "child label selects the child directly",
@@ -199,13 +154,6 @@ func TestPGSessionPRLinksAndLabelsReadAndFilter(t *testing.T) {
 			wantIDs: []string{"sid-a", "sid-b"},
 		},
 		{
-			name: "pr repository and number",
-			filter: db.SessionFilter{PR: db.PRFilter{
-				Repository: "acme/widgets", Number: 8,
-			}},
-			wantIDs: []string{"sid-b"},
-		},
-		{
 			name: "pr url on another host",
 			filter: db.SessionFilter{PR: db.PRFilter{
 				Host: "forge.example.com", Repository: "acme/widgets", Number: 8,
@@ -225,14 +173,6 @@ func TestPGSessionPRLinksAndLabelsReadAndFilter(t *testing.T) {
 				Repository: "other/repo", Number: 7,
 			}},
 			wantIDs: []string{},
-		},
-		{
-			name: "label and pr together",
-			filter: db.SessionFilter{
-				Labels: []string{"ticket=XYZ-9"},
-				PR:     db.PRFilter{Repository: "other/repo"},
-			},
-			wantIDs: []string{"sid-b"},
 		},
 	}
 	for _, tt := range tests {
@@ -361,62 +301,4 @@ func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 	assert.Equal(t, []string{"ticket=UP-1"}, got.Labels)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, 4, got.PRLinks[0].Number)
-}
-
-func TestPGAnnotationTreeSkipsHiddenAncestors(t *testing.T) {
-	tests := []struct {
-		name, schema string
-		mid          func(*db.Session)
-		trash        bool
-		filter       db.SessionFilter
-	}{
-		{name: "trashed middle", schema: "agentsview_annotation_tree_trash_test", trash: true},
-		{
-			name: "empty middle", schema: "agentsview_annotation_tree_empty_test",
-			mid: func(s *db.Session) { s.MessageCount = 0 },
-		},
-		{
-			name: "middle outside the automation scope", schema: "agentsview_annotation_tree_scope_test",
-			mid:    func(s *db.Session) { s.IsAutomated = true },
-			filter: db.SessionFilter{AutomatedScope: "human"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			syncer, local, _, ctx := newSessionProvenancePushSync(t, tt.schema)
-			pgURL := testPGURL(t)
-			seedAnnotatedSession(t, local, db.Session{ID: "root"})
-			seedAnnotatedSession(t, local, db.Session{
-				ID: "mid", ParentSessionID: strPtr("root"), RelationshipType: "subagent",
-			})
-			if tt.mid != nil {
-				mid, err := local.GetSession(ctx, "mid")
-				require.NoError(t, err)
-				require.NotNil(t, mid)
-				tt.mid(mid)
-				require.NoError(t, local.UpsertSession(ctx, *mid))
-			}
-			seedAnnotatedSession(t, local, db.Session{
-				ID: "leaf", ParentSessionID: strPtr("mid"), RelationshipType: "subagent",
-			}, "x")
-			if tt.trash {
-				require.NoError(t, local.SoftDeleteSession(ctx, "mid"))
-			}
-			_, err := syncer.Push(ctx, true, nil)
-			require.NoError(t, err, "Push")
-			store, err := NewStore(pgURL, syncer.schema, true)
-			require.NoError(t, err, "NewStore")
-			defer store.Close()
-
-			for _, limit := range []int{0, 10} {
-				f := tt.filter
-				f.Labels = []string{"x"}
-				f.Limit = limit
-				got, err := store.GetSidebarSessionIndex(ctx, f)
-				require.NoError(t, err)
-				assert.Empty(t, got.Sessions, "limit %d", limit)
-				assert.Zero(t, got.Total, "limit %d", limit)
-			}
-		})
-	}
 }

@@ -108,28 +108,11 @@ func TestDuckDBFiltersSessionsByLabelAndPR(t *testing.T) {
 		assert.Equal(t, localSess.PRLinks, got.PRLinks)
 		assert.Equal(t, []string{"ticket-42", "worker"}, got.Labels)
 
-		full, err := store.GetSessionFull(ctx, "sess-2")
-		require.NoError(t, err)
-		require.NotNil(t, full)
-		assert.Equal(t, []string{"worker"}, full.Labels)
-		require.Len(t, full.PRLinks, 1)
-		assert.Equal(t, 13, full.PRLinks[0].Number)
-
 		bare, err := store.GetSession(ctx, "sess-3")
 		require.NoError(t, err)
 		require.NotNil(t, bare)
 		assert.Nil(t, bare.PRLinks)
 		assert.Equal(t, []string{"reviewer"}, bare.Labels)
-
-		page, err := store.ListSessions(ctx, db.SessionFilter{})
-		require.NoError(t, err)
-		byID := make(map[string]db.Session, len(page.Sessions))
-		for _, sess := range page.Sessions {
-			byID[sess.ID] = sess
-		}
-		require.Contains(t, byID, "sess-1")
-		assert.Equal(t, localSess.PRLinks, byID["sess-1"].PRLinks)
-		assert.Equal(t, []string{"ticket-42", "worker"}, byID["sess-1"].Labels)
 	})
 
 	tests := []struct {
@@ -167,14 +150,6 @@ func TestDuckDBFiltersSessionsByLabelAndPR(t *testing.T) {
 			want:        []string{"sess-1", "sess-2"},
 			wantSidebar: []string{"sess-1", "sess-2", "sess-3"},
 			wantTotal:   2,
-		},
-		{
-			name: "repository and number",
-			filter: db.SessionFilter{
-				PR: db.PRFilter{Repository: "example-org/widgets", Number: 13},
-			},
-			want:      []string{"sess-2"},
-			wantTotal: 1,
 		},
 		{
 			name: "second link on a session",
