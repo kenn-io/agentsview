@@ -13,19 +13,17 @@ The latest published release is
 
 - The container image now requires a bearer token. Read `auth_token` from
   `/data/config.toml` or set `AGENTSVIEW_AUTH_TOKEN_FILE` to a mounted token file.
-
-**New features**
-
-- The container image now requires a bearer token and keeps its defaults when
-  you pass flags: `docker run ghcr.io/kenn-io/agentsview --port 9000` still
-  listens on every interface without opening a browser. Read the generated
-  token from `/data/config.toml`, or mount one and point
-  `AGENTSVIEW_AUTH_TOKEN_FILE` at it. The image runs the binary directly;
+  The image keeps its defaults when you pass flags:
+  `docker run ghcr.io/kenn-io/agentsview --port 9000` still listens on every
+  interface without opening a browser. The image runs the binary directly;
   `AGENTSVIEW_MODE=pg-serve` (or the older `PG_SERVE=1`) selects `pg serve`.
   A PostgreSQL hub can adopt the embedding recipe a workstation pushed, given
   `AGENTSVIEW_EMBEDDINGS_ENDPOINT`, and `pg push --embed` builds and pushes
   embeddings in one process. See
   [container deployment](/docs/configuration/#container-deployment).
+
+**New features**
+
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.

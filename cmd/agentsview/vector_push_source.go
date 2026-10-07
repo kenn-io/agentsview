@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"os"
 	"sync"
 
@@ -123,7 +122,7 @@ func (s *vectorPushSource) BeginExport(
 	// produces: params must rebuild the fingerprint they are stored with.
 	out := &vectorPushExport{export: exp}
 	if gen := vectorGeneration(s.cfg.Vector.Embeddings); !s.adopted && exp.Generation().Fingerprint == gen.Fingerprint() {
-		out.params = maps.Clone(gen.Params)
+		out.params = gen.Params
 	}
 	return out, true, nil
 }

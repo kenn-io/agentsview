@@ -61,7 +61,7 @@ max_retries = 1
 // OpenAI-compatible /embeddings endpoint with dimension-length vectors for
 // every input, mirroring the shape internal/vector/encoder_test.go's stub
 // uses.
-func newEmbeddingsStubServer(t *testing.T, dimension int, record ...func(*http.Request, string)) *httptest.Server {
+func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -69,9 +69,6 @@ func newEmbeddingsStubServer(t *testing.T, dimension int, record ...func(*http.R
 			Input []string `json:"input"`
 		}
 		assert.NoError(t, json.UnmarshalRead(r.Body, &req))
-		for _, observe := range record {
-			observe(r, req.Model)
-		}
 
 		data := make([]map[string]any, len(req.Input))
 		for i := range req.Input {
