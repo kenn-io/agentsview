@@ -113,9 +113,7 @@ func TestSessionLabelsLifecycle(t *testing.T) {
 	assert.Equal(t, []string{"nightly", "ticket=ABC-123"}, updated.Labels)
 	after, err := d.GetSessionFull(ctx, "worker")
 	require.NoError(t, err)
-	require.NotNil(t, after.LocalModifiedAt,
-		"label changes must mark the session modified for mirror pushes")
-	assert.NotEqual(t, before.LocalModifiedAt, after.LocalModifiedAt)
+	assert.Equal(t, before.LocalModifiedAt, after.LocalModifiedAt)
 
 	// Parser writes never touch labels.
 	insertSession(t, d, "worker", "proj")
@@ -167,11 +165,12 @@ func TestUpsertSessionAppliesLauncherParent(t *testing.T) {
 	require.NoError(t, err)
 	for range 2 {
 		insertSession(t, d, "worker", "proj")
-		worker, err := d.GetSession(ctx, "worker")
+		worker, err := d.GetSessionFull(ctx, "worker")
 		require.NoError(t, err)
 		require.NotNil(t, worker.ParentSessionID)
 		assert.Equal(t, "manager", *worker.ParentSessionID)
 		assert.Equal(t, "subagent", worker.RelationshipType)
+		assert.Nil(t, worker.LocalModifiedAt, "applying a launcher parent must preserve the content stamp")
 	}
 }
 

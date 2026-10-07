@@ -237,11 +237,10 @@ func (db *DB) writeSessionLabels(
 			return SessionLabels{}, fmt.Errorf("saving session label: %w", err)
 		}
 	}
-	// Mirrors select changed sessions by local_modified_at, so a label-only
-	// change must bump it to be pushed.
+	// Advance the mirror cursor without invalidating Recall's content stamp.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
-		SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		SET sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		WHERE id = ?`, sessionID,
 	); err != nil {
 		return SessionLabels{}, fmt.Errorf("marking labeled session modified: %w", err)

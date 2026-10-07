@@ -141,7 +141,7 @@ func (db *DB) ClearSessionExternalParent(
 			UPDATE sessions
 			SET parent_session_id = NULL,
 				relationship_type = '',
-				local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+				sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 			WHERE id = ?`, sessionID,
 		); err != nil {
 			return SessionExternalParent{}, fmt.Errorf("removing session parent: %w", err)
@@ -248,6 +248,7 @@ func externalParentChainSQL(start, target string) string {
 // when the session has no transcript parent, no spawn edge, and the link's
 // chain does not lead back to the session; otherwise a session it once
 // applied to returns to no parent.
+// Launcher annotations advance mirror selection without changing Recall coverage.
 func applySessionExternalParentsSQL(linksSQL string) string {
 	// LIMIT -1 keeps the planner from flattening l into the update, which
 	// would walk each chain once per reference to cyclic, and the unary plus
@@ -256,7 +257,7 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	UPDATE sessions
 	SET parent_session_id = IIF(l.cyclic, NULL, l.parent_session_id),
 		relationship_type = IIF(l.cyclic, '', 'subagent'),
-		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 	FROM (
 		SELECT ep.session_id, ep.parent_session_id,
 			` + externalParentChainSQL("ep.parent_session_id", "ep.session_id") + ` AS cyclic
