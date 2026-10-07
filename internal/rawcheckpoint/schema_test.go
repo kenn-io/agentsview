@@ -27,6 +27,16 @@ func downgradeToVersionNine(t *testing.T, store *Store) {
 	}
 }
 
+// openCheckpointForTest closes the store when the test ends. A test that
+// closes it earlier to reopen the same path leaves a harmless second Close.
+func openCheckpointForTest(t *testing.T, path string) *Store {
+	t.Helper()
+	store, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
 func queryPlanDetails(t *testing.T, db *sql.DB, query string, args ...any) []string {
 	t.Helper()
 	rows, err := db.QueryContext(t.Context(), `EXPLAIN QUERY PLAN `+query, args...)
@@ -143,9 +153,7 @@ func TestBaseObjectReferenceLookupsSeekByObject(t *testing.T) {
 				t.Helper()
 				downgradeToVersionNine(t, store)
 				require.NoError(t, store.Close())
-				reopened, err := Open(t.Context(), path)
-				require.NoError(t, err)
-				return reopened
+				return openCheckpointForTest(t, path)
 			},
 		},
 		{
@@ -157,9 +165,7 @@ func TestBaseObjectReferenceLookupsSeekByObject(t *testing.T) {
 					ON raw_source_base_objects(sha256, length)`)
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
-				reopened, err := Open(t.Context(), path)
-				require.NoError(t, err)
-				return reopened
+				return openCheckpointForTest(t, path)
 			},
 		},
 		{
@@ -205,10 +211,8 @@ func TestBaseObjectReferenceLookupsSeekByObject(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "checkpoint.db")
-			store, err := Open(t.Context(), path)
-			require.NoError(t, err)
+			store := openCheckpointForTest(t, path)
 			store = tt.prepare(t, store, path)
-			t.Cleanup(func() { require.NoError(t, store.Close()) })
 
 			var version int
 			require.NoError(t, store.db.QueryRowContext(
@@ -243,8 +247,7 @@ func TestBaseObjectReferenceLookupsSeekByObject(t *testing.T) {
 
 func TestVersionNineUpgradePreservesTransportState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "checkpoint.db")
-	store, err := Open(t.Context(), path)
-	require.NoError(t, err)
+	store := openCheckpointForTest(t, path)
 	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 	root, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, t.TempDir())
 	require.NoError(t, err)
@@ -274,9 +277,7 @@ func TestVersionNineUpgradePreservesTransportState(t *testing.T) {
 
 	downgradeToVersionNine(t, store)
 	require.NoError(t, store.Close())
-	store, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	store = openCheckpointForTest(t, path)
 
 	assert.Equal(t, before, checkpointRows(t, store.db))
 	device, found, err := store.Device(t.Context())
