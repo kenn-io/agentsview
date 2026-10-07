@@ -199,6 +199,82 @@ input. The suffix is part of the generation fingerprint, so changing it
 (including setting it for the first time) re-embeds the whole archive on the
 next build.
 
+#### EmbeddingGemma 2 text endpoint
+
+EmbeddingGemma 2 can use the existing text embeddings transport when you supply
+a conforming OpenAI-compatible endpoint. This is an optional recipe for
+`google/embeddinggemma-2` at checkpoint revision
+`914f7f89142e33e77833254d9c9b90c3cef7303b`, using its native 768-dimensional
+output. It does not add image, audio, or video inputs to AgentsView.
+
+```toml
+[vector]
+enabled = true
+
+[vector.embeddings]
+model = "embeddinggemma-2-914f7f89-text-768" # illustrative serving alias
+dimension = 768
+request_dimensions = false
+query_prefix = "task: search result | query: "
+document_prefix = "title: none | text: "
+input_suffix = ""
+model_context_tokens = 8192
+
+[vector.embeddings.servers.local]
+endpoint = "http://127.0.0.1:8000/v1"       # your conforming endpoint
+batch_size = 4
+concurrency = 1
+timeout = "120s"
+```
+
+The alias and URL illustrate configuration; they do not install or identify a
+tested server. Batch size 4, concurrency 1, and a 120-second timeout are
+starting settings for CPU serving, not measured performance guarantees. Defaults
+stay unchanged.
+
+The operator must bind the serving alias to the checkpoint, tokenizer, mean
+pooling **including prompt tokens**, L2 normalization, and inference precision.
+Use `bfloat16` or `float32` activations, not `float16`. A conforming endpoint
+returns L2-normalized native vectors. AgentsView checks that vectors are finite,
+nonzero, and exactly the configured width, then preserves their values. It does
+not verify unit length or normalize them.
+
+Keep the trailing spaces in both prefixes. AgentsView adds the appropriate
+prefix once to raw queries or each document chunk. Do not manually add it to
+queries or documents, or configure the endpoint to add it again. Keep
+`input_suffix` empty; clear any suffix retained from another model.
+
+The serving implementation must enforce the shared 8192-token limit on the fully
+formatted input, including prompts and tokenizer special tokens.
+`max_input_chars` caps original document chunks in runes before affixes are
+added. `model_context_tokens` and `max_batch_tokens` shape build batches; they
+do not tokenize inputs or enforce per-input admission. Leave chunk headroom for
+the serving tokenizer and follow its documented overflow policy. An 8192-rune
+cap does not establish an 8192-token bound.
+
+Use the same vector-producing recipe on every named server. The alias is an
+operator convention; AgentsView cannot verify checkpoint, pooling, tokenizer,
+dtype, or quantization through the HTTP response. Change `model` to a new alias
+when the serving recipe changes, and build the new generation. Changing either
+prefix, the suffix, width, or `request_dimensions` also changes generation
+identity and prevents search against the old generation until it is rebuilt.
+
+Native 768 omits the HTTP `dimensions` field. Optional 512-, 256-, or
+128-dimensional output requires an endpoint that truncates and L2-renormalizes
+server-side. Set `request_dimensions = true` only if that endpoint explicitly
+supports the HTTP dimension-selection contract, with the same width for queries
+and documents. AgentsView never slices returned vectors to make them fit.
+
+The recipe and native width are source-verified against Google's
+[EmbeddingGemma 2 model card](https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2)
+and the
+[pinned checkpoint metadata](https://huggingface.co/google/embeddinggemma-2/tree/914f7f89142e33e77833254d9c9b90c3cef7303b)
+(`config_sentence_transformers.json`, `1_Pooling/config.json`, and
+`modules.json`). Synthetic HTTP tests exercise configuration, role formatting,
+build/search wiring, vector validation, and stale-generation rejection. Actual
+serving, server prompt handling, tokenizer admission, inference, and retrieval
+quality remain untested.
+
 ### Reduced output dimensions (Matryoshka)
 
 Matryoshka-trained embedding models — Qwen3-Embedding, OpenAI's
