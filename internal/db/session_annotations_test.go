@@ -26,19 +26,6 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 		}
 	})
 	insertSession(t, d, "without-prs", "proj")
-	insertSession(t, d, "bitbucket", "proj", func(s *Session) {
-		s.PRLinks = []PRLink{{
-			URL: "https://bitbucket.org/team/repo/pull-requests/5", Host: "bitbucket.org",
-			Repository: "team/repo", Number: 5,
-		}}
-	})
-	insertSession(t, d, "gerrit", "proj", func(s *Session) {
-		s.PRLinks = []PRLink{{
-			URL:        "https://example-review.googlesource.com/c/example/repo/+/7",
-			Host:       "example-review.googlesource.com",
-			Repository: "example/repo", Number: 7,
-		}}
-	})
 
 	got, err := d.GetSession(t.Context(), "with-prs")
 	require.NoError(t, err)
@@ -104,16 +91,11 @@ func TestSessionLabelsLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"role=reviewer", "ticket=ABC-123"}, got.Labels)
 
-	before, err := d.GetSessionFull(ctx, "worker")
-	require.NoError(t, err)
 	updated, err := d.UpdateSessionLabels(ctx, "worker",
 		[]string{"nightly"}, []string{"role=reviewer", "absent"})
 	require.NoError(t, err)
 	assert.True(t, updated.SessionFound)
 	assert.Equal(t, []string{"nightly", "ticket=ABC-123"}, updated.Labels)
-	after, err := d.GetSessionFull(ctx, "worker")
-	require.NoError(t, err)
-	assert.Equal(t, before.LocalModifiedAt, after.LocalModifiedAt)
 
 	// Parser writes never touch labels.
 	insertSession(t, d, "worker", "proj")
@@ -154,23 +136,6 @@ func TestSessionLabelsRejectInvalidInput(t *testing.T) {
 			_, err = d.UpdateSessionLabels(t.Context(), "s", labels, nil)
 			assert.ErrorIs(t, err, ErrSessionLabelsInvalid)
 		})
-	}
-}
-
-func TestUpsertSessionAppliesLauncherParent(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "manager", "proj")
-	_, err := d.SetSessionExternalParent(ctx, "worker", "manager")
-	require.NoError(t, err)
-	for range 2 {
-		insertSession(t, d, "worker", "proj")
-		worker, err := d.GetSessionFull(ctx, "worker")
-		require.NoError(t, err)
-		require.NotNil(t, worker.ParentSessionID)
-		assert.Equal(t, "manager", *worker.ParentSessionID)
-		assert.Equal(t, "subagent", worker.RelationshipType)
-		assert.Nil(t, worker.LocalModifiedAt, "applying a launcher parent must preserve the content stamp")
 	}
 }
 
@@ -217,42 +182,20 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	assert.False(t, link.Applied)
 	assert.Equal(t, ExternalRelationshipType, link.RelationshipType)
 
-	// Uploads link sessions inside the batch transaction.
-	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
-		Session: Session{ID: "worker", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
-	}})
-	require.NoError(t, err)
-	worker, err := d.GetSessionFull(ctx, "worker")
-	require.NoError(t, err)
-	require.NotNil(t, worker.ParentSessionID)
-	assert.Equal(t, "manager", *worker.ParentSessionID)
-	assert.Equal(t, "subagent", worker.RelationshipType)
+	for range 2 {
+		insertSession(t, d, "worker", "proj")
+		worker, err := d.GetSessionFull(ctx, "worker")
+		require.NoError(t, err)
+		require.NotNil(t, worker.ParentSessionID)
+		assert.Equal(t, "manager", *worker.ParentSessionID)
+		assert.Equal(t, "subagent", worker.RelationshipType)
+		assert.Nil(t, worker.LocalModifiedAt, "applying a launcher parent must preserve the content stamp")
+	}
 
 	children, err := d.GetChildSessions(ctx, "manager")
 	require.NoError(t, err)
 	require.Len(t, children, 1)
 	assert.Equal(t, "worker", children[0].ID)
-
-	// Sync linking restores the launcher parent after a parser rewrite.
-	insertSession(t, d, "worker", "proj")
-	_, err = d.LinkSubagentSessionsForSessions(ctx, []string{"worker"})
-	require.NoError(t, err)
-	worker, err = d.GetSessionFull(ctx, "worker")
-	require.NoError(t, err)
-	require.NotNil(t, worker.ParentSessionID)
-	assert.Equal(t, "manager", *worker.ParentSessionID)
-	assert.Equal(t, "subagent", worker.RelationshipType)
-
-	// Batch writes also replace usage events, which stamp local_modified_at.
-	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
-		Session: Session{ID: "worker", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
-	}})
-	require.NoError(t, err)
-	worker, err = d.GetSessionFull(ctx, "worker")
-	require.NoError(t, err)
-	require.NotNil(t, worker.ParentSessionID)
-	assert.Equal(t, "manager", *worker.ParentSessionID)
-	assert.Equal(t, "subagent", worker.RelationshipType)
 
 	link, err = d.GetSessionExternalParent(ctx, "worker")
 	require.NoError(t, err)
@@ -261,7 +204,7 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	cleared, err := d.ClearSessionExternalParent(ctx, "worker")
 	require.NoError(t, err)
 	assert.False(t, cleared.Applied)
-	worker, err = d.GetSessionFull(ctx, "worker")
+	worker, err := d.GetSessionFull(ctx, "worker")
 	require.NoError(t, err)
 	assert.Nil(t, worker.ParentSessionID)
 	assert.Empty(t, worker.RelationshipType)

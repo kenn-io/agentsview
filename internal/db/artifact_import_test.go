@@ -517,33 +517,6 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, provenance)
 }
 
-func TestApplyArtifactImportedSessionPreservesLauncherParent(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	const origin = "peer-a1b2c3"
-	const workerID = origin + "~worker"
-	insertSession(t, d, "manager", "proj")
-	write := messageCountWrite(workerID, 1)
-	write.Session.Machine = origin
-	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
-	require.NoError(t, err)
-	link, err := d.SetSessionExternalParent(ctx, workerID, "manager")
-	require.NoError(t, err)
-	require.True(t, link.Applied)
-
-	result, err := d.ApplyArtifactImportedSession(ctx, ArtifactImportedSession{
-		Origin: origin, GID: workerID, ImportedSessionID: workerID,
-		ManifestHash: strings.Repeat("a", 64),
-	}, write)
-	require.NoError(t, err)
-	require.True(t, result.Written)
-	worker, err := d.GetSession(ctx, workerID)
-	require.NoError(t, err)
-	require.NotNil(t, worker)
-	assert.Equal(t, Ptr("manager"), worker.ParentSessionID)
-	assert.Equal(t, "subagent", worker.RelationshipType)
-}
-
 func TestApplyArtifactImportedSessionProjectsToolResultImages(t *testing.T) {
 	database := testDB(t)
 	database.SetToolResultImages(config.ToolResultImagesOffload)

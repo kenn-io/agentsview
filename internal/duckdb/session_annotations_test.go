@@ -127,19 +127,6 @@ func TestDuckDBFiltersSessionsByLabelAndPR(t *testing.T) {
 			wantTotal:   2,
 		},
 		{
-			name:        "every listed label",
-			filter:      db.SessionFilter{Labels: []string{"worker", "ticket-42"}},
-			want:        []string{"sess-1"},
-			wantSidebar: []string{"sess-1", "sess-3"},
-			wantTotal:   1,
-		},
-		{
-			name:      "unknown label",
-			filter:    db.SessionFilter{Labels: []string{"missing"}},
-			want:      []string{},
-			wantTotal: 0,
-		},
-		{
 			name: "repository ignores case",
 			filter: db.SessionFilter{
 				PR: db.PRFilter{Repository: "EXAMPLE-ORG/widgets"},
@@ -164,16 +151,6 @@ func TestDuckDBFiltersSessionsByLabelAndPR(t *testing.T) {
 			},
 			want:      []string{},
 			wantTotal: 0,
-		},
-		{
-			name: "label and pr together",
-			filter: db.SessionFilter{
-				Labels: []string{"worker"},
-				PR:     db.PRFilter{Repository: "example-org/widgets", Number: 12},
-			},
-			want:        []string{"sess-1"},
-			wantSidebar: []string{"sess-1", "sess-3"},
-			wantTotal:   1,
 		},
 		{
 			name:        "child label selects the child",

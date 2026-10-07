@@ -1220,6 +1220,7 @@ func TestCompareStoredSessionRoundTrip(t *testing.T) {
 		usageEvents: []parser.ParsedUsageEvent{
 			{
 				MessageOrdinal: new(1),
+				Source:         "transcript",
 				Model:          "claude-sonnet",
 				InputTokens:    7,
 				OutputTokens:   3,

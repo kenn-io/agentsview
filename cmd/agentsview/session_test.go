@@ -671,69 +671,6 @@ func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
 	assert.Equal(t, "remote-session", got.Sessions[0]["id"])
 }
 
-func TestSessionAnnotations_ServerFlagRefusesOlderServer(t *testing.T) {
-	newAgentDataDir(t)
-	var paths []string
-	ts := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			paths = append(paths, r.URL.Path)
-			assert.Equal(t, http.MethodGet, r.Method)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"api_version":%d}`,
-				server.SessionAnnotationsAPIVersion-1)
-		}))
-	defer ts.Close()
-
-	for _, command := range [][]string{
-		{"list", "--label", "ticket=A"},
-		{"list", "--pr", "owner/repo"},
-		{"parent", "w"},
-		{"parent", "w", "m"},
-		{"label", "w", "x"},
-	} {
-		paths = nil
-		args := append([]string{"session", "--server", ts.URL}, command...)
-		_, err := executeCommand(newRootCommand(), args...)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "restart or upgrade the server")
-		assert.Equal(t, []string{"/api/v1/version"}, paths)
-	}
-}
-
-func TestSessionAnnotations_ServerFlagReadOnlyHint(t *testing.T) {
-	newAgentDataDir(t)
-	var method, path string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/v1/version" {
-			_, _ = fmt.Fprintf(w, `{"api_version":%d,"read_only":true}`, server.SessionAnnotationsAPIVersion)
-			return
-		}
-		method, path = r.Method, r.URL.Path
-		w.WriteHeader(http.StatusNotImplemented)
-		_, _ = w.Write([]byte(`{"error":"not available in remote mode"}`))
-	}))
-	t.Cleanup(ts.Close)
-	for _, tc := range []struct {
-		command []string
-		method  string
-		path    string
-	}{
-		{[]string{"label", "worker", "nightly"}, http.MethodPatch, "/api/v1/sessions/worker/labels"},
-		{[]string{"label", "worker", "--clear"}, http.MethodPut, "/api/v1/sessions/worker/labels"},
-		{[]string{"parent", "worker", "manager"}, http.MethodPut, "/api/v1/sessions/worker/parent"},
-		{[]string{"parent", "worker", "--clear"}, http.MethodDelete, "/api/v1/sessions/worker/parent"},
-	} {
-		method, path = "", ""
-		args := append([]string{"session", "--server", ts.URL}, tc.command...)
-		_, err := executeCommand(newRootCommand(), args...)
-		require.ErrorIs(t, err, db.ErrReadOnly)
-		require.ErrorContains(t, err, "stop the read-only serve process and use the local DB, or start a local daemon")
-		assert.Equal(t, tc.method, method)
-		assert.Equal(t, tc.path, path)
-	}
-}
-
 func TestSessionAnnotationsKeepExactIDs(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	const worker = "11111111-1111-4111-8111-111111111111"

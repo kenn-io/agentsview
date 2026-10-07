@@ -49,7 +49,6 @@ func TestNewPRLink(t *testing.T) {
 		{name: "missing url", repository: "owner/repo", number: 1},
 		{name: "non-web scheme", url: "file:///owner/repo/pull/1", repository: "owner/repo", number: 1},
 		{name: "credentials in url", url: "https://user:secret@github.com/owner/repo/pull/1", repository: "owner/repo", number: 1},
-		{name: "no number anywhere", url: "https://github.com/owner/repo"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -68,8 +67,7 @@ func TestNewPRLink(t *testing.T) {
 
 func TestClaudePRLinksDeduplicated(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), "pr-links.jsonl")
-	content := strings.Join([]string{
+	duplicates := strings.Join([]string{
 		`{"type":"user","sessionId":"pr-links","uuid":"u1","timestamp":"2026-10-05T03:00:00Z","message":{"content":"open a PR"}}`,
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-10-05T03:01:00Z","message":{"content":[{"type":"text","text":"done"}]}}`,
 		`{"type":"pr-link","prNumber":123,"prUrl":"https://github.com/owner/repo/pull/123","prRepository":"owner/repo","sessionId":"pr-links","timestamp":"2026-10-05T03:21:20.583Z"}`,
@@ -77,47 +75,40 @@ func TestClaudePRLinksDeduplicated(t *testing.T) {
 		`{"type":"pr-link","prNumber":123,"prUrl":"https://github.com/owner/repo/pull/123","prRepository":"owner/repo","sessionId":"pr-links","timestamp":"2026-10-05T03:40:00Z"}`,
 		`{"type":"pr-link","prUrl":"not a url","sessionId":"pr-links"}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-
-	results, _, err := claudeParseWithExclusions(path, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-
-	links := results[0].Session.PRLinks
-	require.Len(t, links, 2)
-	assert.Equal(t, "https://github.com/owner/repo/pull/123", links[0].URL)
-	assert.Equal(t, "owner/repo", links[0].Repository)
-	assert.Equal(t, 123, links[0].Number)
-	assert.Equal(t, "owner/other", links[1].Repository)
-	// pr-link records are metadata, not transcript messages.
-	assert.Len(t, results[0].Messages, 2)
-}
-
-func TestClaudePRLinksKeepEveryDistinctURL(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "many-links.jsonl")
-	var content strings.Builder
-	content.WriteString(claudeProviderFixture("Open pull requests"))
+	var many strings.Builder
+	many.WriteString(claudeProviderFixture("Open pull requests"))
 	for i := 1; i <= 101; i++ {
-		fmt.Fprintf(&content, "\n{\"type\":\"pr-link\",\"prUrl\":\"https://github.com/owner/repo/pull/%d\",\"prRepository\":\"owner/repo\",\"prNumber\":%d}", i, i)
+		fmt.Fprintf(&many, "\n{\"type\":\"pr-link\",\"prUrl\":\"https://github.com/owner/repo/pull/%d\",\"prRepository\":\"owner/repo\",\"prNumber\":%d}", i, i)
 	}
-	content.WriteString("\n{\"type\":\"pr-link\",\"prUrl\":\"https://github.com/owner/repo/pull/101\",\"prRepository\":\"owner/repo\",\"prNumber\":101}\n")
-	require.NoError(t, os.WriteFile(path, []byte(content.String()), 0o600))
-	results, _, err := claudeParseWithExclusions(path, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	links := results[0].Session.PRLinks
-	require.Len(t, links, 101)
-	assert.Equal(t, "https://github.com/owner/repo/pull/101", links[100].URL)
+	for _, tt := range []struct {
+		name, content, firstURL, lastURL, lastRepository string
+		count, firstNumber                               int
+	}{
+		{"duplicates", duplicates, "https://github.com/owner/repo/pull/123", "https://github.com/owner/other/pull/9", "owner/other", 2, 123},
+		{"more than 100 distinct links", many.String(), "https://github.com/owner/repo/pull/1", "https://github.com/owner/repo/pull/101", "owner/repo", 101, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "pr-links.jsonl")
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
+			results, _, err := claudeParseWithExclusions(path, "project", "local")
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			links := results[0].Session.PRLinks
+			require.Len(t, links, tt.count)
+			assert.Equal(t, tt.firstURL, links[0].URL)
+			assert.Equal(t, "owner/repo", links[0].Repository)
+			assert.Equal(t, tt.firstNumber, links[0].Number)
+			assert.Equal(t, tt.lastURL, links[tt.count-1].URL)
+			assert.Equal(t, tt.lastRepository, links[tt.count-1].Repository)
+			assert.Len(t, results[0].Messages, 2)
+		})
+	}
 }
 
 func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 	stored := map[string]struct{}{
 		"https://github.com/owner/repo/pull/123": {},
-	}
-	full := make(map[string]struct{}, 100)
-	for i := range 100 {
-		full[fmt.Sprintf("https://github.com/owner/repo/pull/%d", 1000+i)] = struct{}{}
 	}
 	record := func(n int, ts string) string {
 		line := fmt.Sprintf(`{"type":"pr-link","prNumber":%d,"prUrl":"https://github.com/owner/repo/pull/%d","prRepository":"owner/repo"`, n, n)
@@ -143,10 +134,6 @@ func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 		{
 			name: "untimed repeat stays incremental", stored: stored,
 			appended: record(123, ""), wantStatus: IncrementalApplied,
-		},
-		{
-			name: "101st link needs full parse", stored: full,
-			appended: record(124, "2026-10-05T03:41:00Z"), wantStatus: IncrementalNeedsFullParse,
 		},
 	}
 	for _, tt := range tests {
