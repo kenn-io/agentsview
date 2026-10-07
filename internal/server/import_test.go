@@ -97,6 +97,50 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		postResult(answered, `{}`, http.StatusNotFound)
 	})
 
+	t.Run("browser failure reaches stream error", func(t *testing.T) {
+		srv := testServer(t, 5*time.Second)
+		httpServer := httptest.NewServer(srv.mux)
+		defer httpServer.Close()
+		response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", strings.NewReader(`{"organization":"org"}`))
+		require.NoError(t, err)
+		defer response.Body.Close()
+		scanner := bufio.NewScanner(response.Body)
+		event := ""
+		answered := ""
+		gotError := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "event: ") {
+				event = strings.TrimPrefix(line, "event: ")
+			}
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			switch event {
+			case "fetch":
+				var request struct {
+					ID string `json:"id"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(data), &request))
+				answered = request.ID
+				result, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status=0", "application/octet-stream", strings.NewReader("TypeError: Failed to fetch"))
+				require.NoError(t, err)
+				require.Equal(t, http.StatusNoContent, result.StatusCode)
+				require.NoError(t, result.Body.Close())
+			case "error":
+				assert.JSONEq(t, `{"error":"TypeError: Failed to fetch"}`, data)
+				gotError = true
+			}
+		}
+		require.NoError(t, scanner.Err())
+		assert.True(t, gotError)
+		result, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+answered+"?status=200", "application/octet-stream", strings.NewReader("{}"))
+		require.NoError(t, err)
+		defer result.Body.Close()
+		assert.Equal(t, http.StatusNotFound, result.StatusCode)
+	})
+
 	t.Run("unanswered fetch expires", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -108,6 +152,21 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			assert.Equal(t, 2*time.Minute, time.Since(start))
 			assert.Contains(t, recorder.Body.String(), "Claude browser fetch timed out")
 			assert.Contains(t, recorder.Body.String(), "event: error")
+			var request struct {
+				ID string `json:"id"`
+			}
+			for _, line := range strings.Split(recorder.Body.String(), "\n") {
+				if strings.HasPrefix(line, "data: ") {
+					require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &request))
+					break
+				}
+			}
+			require.NotEmpty(t, request.ID)
+			late := httptest.NewRecorder()
+			answer := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync/results/"+request.ID+"?status=200", strings.NewReader("{}"))
+			answer.Header.Set("Content-Type", "application/octet-stream")
+			srv.mux.ServeHTTP(late, answer)
+			assert.Equal(t, http.StatusNotFound, late.Code)
 		})
 	})
 }

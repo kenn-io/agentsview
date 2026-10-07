@@ -76,7 +76,8 @@
         const status = await host.status();
         if (disposed) return;
         if (status.connected) { organization = status.organization; connecting = false; }
-        else timer = setTimeout(poll, 1000);
+        else if (status.pending) timer = setTimeout(poll, 1000);
+        else connecting = false;
       } catch (e) {
         if (!disposed) { error = String(e); connecting = false; }
       }

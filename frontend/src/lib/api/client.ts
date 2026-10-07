@@ -393,7 +393,7 @@ export async function syncClaudeAI(organization: string, host: BrowserHost, cb?:
         let fetched;
         try { fetched = await host.fetch(path); }
         catch (error) { fetched = { status: 0, body: String(error) }; }
-        await ImportService.postApiV1ImportClaudeAiSyncResultsById({ id }, new Blob([fetched.body]), { status: fetched.status }, {
+        await ImportService.postApiV1ImportClaudeAiSyncResultsById({ id }, new Blob([fetched.error ?? fetched.body]), { status: fetched.error ? 0 : fetched.status }, {
           signal: controller.signal,
           headers: { "Content-Type": "application/octet-stream", ...(fetched.retryAfter ? { "Retry-After": fetched.retryAfter } : {}) },
         });
