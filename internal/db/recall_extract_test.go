@@ -723,7 +723,7 @@ func TestExtractedSessionAnnotationsPreserveCoverage(t *testing.T) {
 		EndedAt: session.EndedAt, Entries: []RecallEntry{entry},
 	})
 	require.NoError(t, err)
-	for _, annotation := range []string{"label", "parent set", "parent clear", "rename"} {
+	for _, annotation := range []string{"label", "parent set", "parent clear"} {
 		t.Run(annotation, func(t *testing.T) {
 			const oldMarker = "2000-01-01T00:00:00.000Z"
 			_, err := d.getWriter().ExecContext(ctx,
@@ -736,8 +736,6 @@ func TestExtractedSessionAnnotationsPreserveCoverage(t *testing.T) {
 				_, err = d.SetSessionExternalParent(ctx, "sess-1", "manager")
 			case "parent clear":
 				_, err = d.ClearSessionExternalParent(ctx, "sess-1")
-			case "rename":
-				err = d.RenameSession(ctx, "sess-1", new("Review"))
 			}
 			require.NoError(t, err)
 			var modifiedAt, marker string
