@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -37,6 +38,16 @@ func mkdirIn(t *testing.T, root, rel string) string {
 	p := filepath.Join(root, rel)
 	require.NoError(t, os.MkdirAll(p, 0o755), "mkdir %s", p)
 	return p
+}
+
+func linkRepoDirectory(t *testing.T, link, target string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		out, err := exec.CommandContext(t.Context(), "cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+		require.NoError(t, err, "%s", out)
+	} else {
+		require.NoError(t, os.Symlink(target, link))
+	}
 }
 
 // canonAll resolves each path through filepath.EvalSymlinks (falling back
@@ -80,16 +91,8 @@ func TestFindRepoRoot_DirectoryAlias(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initBareRepo(t)
 	sub := mkdirIn(t, repo, "sub/nested")
-	require.NoError(t, os.WriteFile(filepath.Join(sub, "HEAD"), nil, 0o600))
 	alias := filepath.Join(t.TempDir(), "alias")
-	if runtime.GOOS == "windows" {
-		out, err := exec.CommandContext(t.Context(), "cmd", "/c", "mklink", "/J", alias, filepath.Dir(sub)).CombinedOutput()
-		if err != nil {
-			t.Skipf("cannot create directory junction: %v: %s", err, out)
-		}
-	} else {
-		require.NoError(t, os.Symlink(filepath.Dir(sub), alias))
-	}
+	linkRepoDirectory(t, alias, filepath.Dir(sub))
 	want := canonAll([]string{repo})[0]
 	for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
 		assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
@@ -122,6 +125,7 @@ func TestFindRepoRoot_RepositoryChanges(t *testing.T) {
 	gitRun(t, repo, nil, "status", "--porcelain")
 	t.Setenv("PATH", t.TempDir())
 	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), sub))
+	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), mkdirIn(t, repo, "unseen")))
 	t.Setenv("PATH", path)
 	t.Run("configured root groups one history", func(t *testing.T) {
 		configured := mkdirIn(t, repo, "configured")
@@ -198,6 +202,7 @@ func TestFindRepoRoot_PendingFill(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			skipIfNoGit(t)
 			repo := initBareRepo(t)
+			sub := mkdirIn(t, repo, "sibling")
 			synctest.Test(t, func(t *testing.T) {
 				base, cancelCreator := context.WithCancel(t.Context())
 				waiterCtx, cancelWaiter := context.WithCancel(t.Context())
@@ -208,7 +213,7 @@ func TestFindRepoRoot_PendingFill(t *testing.T) {
 				go func() { creator <- findRepoRoot(ctx, repo) }()
 				<-ctx.started
 				for range tc.waiters {
-					go func() { waiter <- findRepoRoot(waiterCtx, repo) }()
+					go func() { waiter <- findRepoRoot(waiterCtx, sub) }()
 				}
 				synctest.Wait()
 				if tc.waiters > 1 {
@@ -237,6 +242,141 @@ func TestFindRepoRoot_PendingFill(t *testing.T) {
 	}
 }
 
+func TestFindRepoRoot_ConfiguredLinkRetarget(t *testing.T) {
+	for _, owner := range []string{"common", "worktree"} {
+		for _, same := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/equal%v", owner, same), func(t *testing.T) {
+				skipIfNoGit(t)
+				repo := initBareRepo(t)
+				config := filepath.Join(repo, ".git", "config")
+				if owner == "worktree" {
+					gitRun(t, repo, nil, "config", "extensions.worktreeConfig", "true")
+					config = filepath.Join(repo, ".git", "config.worktree")
+				}
+				initial := repo
+				if !same {
+					initial = t.TempDir()
+				}
+				alias := filepath.Join(t.TempDir(), "worktree")
+				linkRepoDirectory(t, alias, initial)
+				gitRun(t, repo, nil, "config", "--file", config, "core.worktree", alias)
+				if owner == "worktree" {
+					text, err := os.ReadFile(config)
+					require.NoError(t, err)
+					text = []byte(strings.Replace(string(text), "[core]\n\tworktree", "[CoRe] WoRkTrEe", 1))
+					require.NoError(t, os.WriteFile(config, text, 0o600))
+				}
+				require.Equal(t, canonAll([]string{initial})[0], findRepoRoot(t.Context(), repo))
+				require.NoError(t, os.Remove(alias))
+				replacement := t.TempDir()
+				linkRepoDirectory(t, alias, replacement)
+				assert.Equal(t, canonAll([]string{replacement})[0], findRepoRoot(t.Context(), repo))
+			})
+		}
+	}
+}
+
+func TestFindRepoRoot_IncompleteConfigScan(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	config := filepath.Join(repo, ".git", "config")
+	file, err := os.OpenFile(config, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = file.WriteString("\n#" + strings.Repeat("x", 1<<16) + "\n")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
+	t.Setenv("PATH", t.TempDir())
+	assert.Empty(t, findRepoRoot(t.Context(), repo), "an incomplete scan must stay uncached")
+}
+
+func TestFindRepoRoot_AmbiguousMetadata(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	sub := mkdirIn(t, repo, "nested")
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "HEAD"), nil, 0o600))
+	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), sub))
+	gitRun(t, sub, nil, "init", "--bare", "-q")
+	worktree := t.TempDir()
+	gitRun(t, sub, nil, "config", "core.bare", "false")
+	gitRun(t, sub, nil, "config", "core.worktree", worktree)
+	assert.Equal(t, canonAll([]string{worktree})[0], findRepoRoot(t.Context(), sub))
+	ordinary := initBareRepo(t)
+	require.Equal(t, canonAll([]string{ordinary})[0], findRepoRoot(t.Context(), ordinary))
+	assert.Empty(t, findRepoRoot(t.Context(), filepath.Join(ordinary, ".git")))
+}
+
+func TestFindRepoRoot_PointerParentAfterLink(t *testing.T) {
+	for _, name := range []string{"gitfile", "commondir"} {
+		t.Run(name, func(t *testing.T) {
+			skipIfNoGit(t)
+			repo := initBareRepo(t)
+			holder, target := t.TempDir(), t.TempDir()
+			child := mkdirIn(t, target, "child")
+			link := filepath.Join(holder, "link")
+			linkRepoDirectory(t, link, child)
+			actual := filepath.Join(target, "actual")
+			decoy := mkdirIn(t, holder, "actual")
+			gitRun(t, decoy, nil, "init", "--bare", "-q")
+			gitdir := filepath.Join(repo, ".git")
+			base := repo
+			if name == "commondir" {
+				base = gitdir
+			}
+			pointer, err := filepath.Rel(base, link)
+			require.NoError(t, err)
+			pointer += string(filepath.Separator) + ".." + string(filepath.Separator) + "actual"
+			if name == "gitfile" {
+				require.NoError(t, os.Rename(gitdir, actual))
+				require.NoError(t, os.WriteFile(gitdir, []byte("gitdir: "+pointer+"\n"), 0o600))
+			} else {
+				require.NoError(t, os.MkdirAll(actual, 0o755))
+				gitRun(t, actual, nil, "init", "--bare", "-q")
+				require.NoError(t, os.WriteFile(filepath.Join(gitdir, "commondir"), []byte(pointer+"\n"), 0o600))
+			}
+			config := filepath.Join(actual, "config")
+			gitRun(t, repo, nil, "config", "--file", config, "core.bare", "false")
+			gitRun(t, repo, nil, "config", "--file", config, "core.worktree", repo)
+			gitRun(t, repo, nil, "config", "--file", config, "extensions.worktreeConfig", "true")
+			if runtime.GOOS == "windows" {
+				gitRun(t, repo, nil, "config", "--file", filepath.Join(decoy, "config"), "core.bare", "false")
+				gitRun(t, repo, nil, "config", "--file", filepath.Join(decoy, "config"), "core.worktree", repo)
+				gitRun(t, repo, nil, "config", "--file", filepath.Join(decoy, "config"), "extensions.worktreeConfig", "true")
+			}
+			require.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
+			t.Run("ambiguous pointer stays uncached", func(t *testing.T) {
+				t.Setenv("PATH", t.TempDir())
+				assert.Empty(t, findRepoRoot(t.Context(), repo))
+			})
+			worktree := t.TempDir()
+			gitRun(t, repo, nil, "config", "--file", config, "core.worktree", worktree)
+			if runtime.GOOS == "windows" {
+				gitRun(t, repo, nil, "config", "--file", filepath.Join(decoy, "config"), "core.worktree", worktree)
+			}
+			assert.Equal(t, canonAll([]string{worktree})[0], findRepoRoot(t.Context(), repo))
+		})
+	}
+}
+
+func TestNearestGitMarker_DeviceBoundary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Git for Windows has no device boundary")
+	}
+	device, err := repoRootDevice("/dev/shm")
+	if err != nil {
+		t.Skip("shared memory filesystem unavailable")
+	}
+	parent, err := repoRootDevice("/dev")
+	require.NoError(t, err)
+	if parent == device {
+		t.Skip("shared memory has the same device")
+	}
+	t.Setenv("TMPDIR", "/dev/shm")
+	marker, absent := nearestGitMarker(t.TempDir())
+	assert.Empty(t, marker.path)
+	assert.False(t, absent, "a device boundary requires Git's own discovery")
+}
+
 // Pause at the fill's timeout creation, after it owns the cache entry.
 type pausedRepoFill struct {
 	context.Context
@@ -262,7 +402,7 @@ func TestDiscoverRepos_Dedup(t *testing.T) {
 	require.Len(t, got, 1, "want exactly one entry (dedup)")
 	assert.Equal(t, canonAll([]string{repoA}), canonAll(slices.Concat(got...)),
 		"DiscoverRepos")
-	unresolved := mkdirIn(t, repoA, "unresolved")
+	unresolved := initBareRepo(t)
 	t.Setenv("PATH", t.TempDir())
 	ctx := &pausedRepoFill{Context: t.Context(), started: make(chan struct{}), resume: make(chan struct{})}
 	close(ctx.resume)

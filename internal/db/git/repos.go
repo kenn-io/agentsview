@@ -3,6 +3,7 @@
 package git
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +24,7 @@ import (
 // returns one group of checkout paths per repository. Cwds with no enclosing
 // repo (or whose resolution fails) are silently dropped. Order follows
 // first-seen order in the input.
-// Successful roots are reused; fresh filesystem checks skip directories with no repository metadata.
+// Ordinary roots are reused; fresh filesystem checks skip directories with no repository metadata.
 //
 // Resolution prefers `git rev-parse --show-toplevel`, which handles standard
 // `.git` directories, linked worktrees (`.git` is a file pointing at the
@@ -174,7 +176,7 @@ func normalizeRemoteURL(raw, root string) string {
 	return strings.ToLower(host) + "/" + path
 }
 
-// Successful lookups survive while the nearest Git marker remains unchanged.
+// Ordinary roots are shared while their Git marker and root configuration remain unchanged.
 var repoRoots = struct {
 	sync.Mutex
 	entries map[string]*repoRootEntry
@@ -197,7 +199,7 @@ type repoRootConfig struct {
 	config, worktree repoRootFile
 }
 
-func readRepoRootFile(path string, out io.Writer) (bool, error) {
+func readRepoRootFile(path string, read func(io.Reader) error) (bool, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -210,14 +212,32 @@ func readRepoRootFile(path string, out io.Writer) (bool, error) {
 		return false, err
 	}
 	defer file.Close()
-	_, err = io.Copy(out, file)
-	return true, err
+	return true, read(file)
 }
+
+var repoRootWorktreeKey = regexp.MustCompile(`(?i)(^|])[[:space:]]*worktree([[:space:]=#;]|$)`)
 
 func fingerprintRepoRootFile(path string) (repoRootFile, error) {
 	hash := sha256.New()
-	exists, err := readRepoRootFile(path, hash)
+	exists, err := readRepoRootFile(path, func(file io.Reader) error {
+		scanner := bufio.NewScanner(io.TeeReader(file, hash))
+		for scanner.Scan() {
+			if repoRootWorktreeKey.Match(scanner.Bytes()) {
+				return os.ErrInvalid
+			}
+		}
+		return scanner.Err()
+	})
 	return repoRootFile{sum: [sha256.Size]byte(hash.Sum(nil)), exists: exists}, err
+}
+
+func readRepoRootPointer(path string) (string, bool, error) {
+	var text strings.Builder
+	exists, err := readRepoRootFile(path, func(file io.Reader) error {
+		_, err := io.Copy(&text, file)
+		return err
+	})
+	return text.String(), exists, err
 }
 
 // Git root setup reads these two config files directly, without expanding includes.
@@ -227,11 +247,16 @@ func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
 	}
 	gitdir := marker.path
 	if marker.info.Mode().IsRegular() {
-		var file strings.Builder
-		_, err := readRepoRootFile(marker.path, &file)
-		pointer, ok := strings.CutPrefix(file.String(), "gitdir: ")
+		if marker.info.Size() > 1<<20 {
+			return repoRootConfig{}, false
+		}
+		text, _, err := readRepoRootPointer(marker.path)
+		pointer, ok := strings.CutPrefix(text, "gitdir: ")
 		gitdir = strings.TrimRight(pointer, "\r\n")
 		if err != nil || !ok || gitdir == "" {
+			return repoRootConfig{}, false
+		}
+		if !repoRootPointerEligible(gitdir) {
 			return repoRootConfig{}, false
 		}
 		if !filepath.IsAbs(gitdir) {
@@ -242,15 +267,14 @@ func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
 	if err != nil {
 		return repoRootConfig{}, false
 	}
-	var file strings.Builder
-	exists, err := readRepoRootFile(filepath.Join(gitdir, "commondir"), &file)
+	text, exists, err := readRepoRootPointer(filepath.Join(gitdir, "commondir"))
 	if err != nil {
 		return repoRootConfig{}, false
 	}
 	common := gitdir
 	if exists {
-		common = strings.TrimRight(file.String(), "\r\n")
-		if common == "" {
+		common = strings.TrimRight(text, "\r\n")
+		if common == "" || !repoRootPointerEligible(common) {
 			return repoRootConfig{}, false
 		}
 		if !filepath.IsAbs(common) {
@@ -267,6 +291,20 @@ func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
 	}
 	worktree, err := fingerprintRepoRootFile(filepath.Join(gitdir, "config.worktree"))
 	return repoRootConfig{gitdir: gitdir, common: common, config: config, worktree: worktree}, err == nil
+}
+
+// Cleaning a parent component after a name can change which linked directory Git reads.
+func repoRootPointerEligible(path string) bool {
+	leading := !filepath.IsAbs(path)
+	for part := range strings.SplitSeq(filepath.ToSlash(path), "/") {
+		if part == ".." && !leading {
+			return false
+		}
+		if part != "" && part != "." && part != ".." {
+			leading = false
+		}
+	}
+	return true
 }
 
 type gitMarker struct {
@@ -286,8 +324,15 @@ func nearestGitMarker(dir string) (gitMarker, bool) {
 	if err != nil {
 		return gitMarker{}, false
 	}
-	sawHead := false
+	device, err := repoRootDevice(dir)
+	if err != nil {
+		return gitMarker{}, false
+	}
 	for {
+		current, err := repoRootDevice(dir)
+		if err != nil || current != device {
+			return gitMarker{}, false
+		}
 		path := filepath.Join(dir, ".git")
 		info, err := os.Lstat(path)
 		if err == nil {
@@ -301,13 +346,13 @@ func nearestGitMarker(dir string) (gitMarker, bool) {
 			return gitMarker{}, false
 		}
 		if _, err := os.Lstat(filepath.Join(dir, "HEAD")); err == nil {
-			sawHead = true
+			return gitMarker{}, false
 		} else if !os.IsNotExist(err) {
 			return gitMarker{}, false
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return gitMarker{}, !sawHead
+			return gitMarker{}, true
 		}
 		dir = parent
 	}
@@ -323,8 +368,21 @@ func findRepoRoot(ctx context.Context, start string) string {
 		return ""
 	}
 	for ctx.Err() == nil {
+		dir := existingAncestor(start)
+		marker, absent := nearestGitMarker(dir)
+		if absent {
+			return ""
+		}
+		config, known := snapshotRepoRootConfig(marker)
+		if !known {
+			if dir == "" {
+				return ""
+			}
+			return gitToplevel(ctx, dir)
+		}
+		key := marker.path
 		repoRoots.Lock()
-		if entry := repoRoots.entries[start]; entry != nil {
+		if entry := repoRoots.entries[key]; entry != nil {
 			repoRoots.Unlock()
 			select {
 			case <-entry.ready:
@@ -333,10 +391,10 @@ func findRepoRoot(ctx context.Context, start string) string {
 			}
 			marker, _ := nearestGitMarker(existingAncestor(start))
 			config, known := snapshotRepoRootConfig(marker)
-			if !entry.marker.matches(marker) || !known || entry.config != config {
+			if entry.root == "" || !entry.marker.matches(marker) || !known || entry.config != config {
 				repoRoots.Lock()
-				if repoRoots.entries[start] == entry {
-					delete(repoRoots.entries, start)
+				if repoRoots.entries[key] == entry {
+					delete(repoRoots.entries, key)
 				}
 				repoRoots.Unlock()
 				continue
@@ -344,23 +402,16 @@ func findRepoRoot(ctx context.Context, start string) string {
 			return entry.root
 		}
 		entry := &repoRootEntry{ready: make(chan struct{})}
-		repoRoots.entries[start] = entry
+		repoRoots.entries[key] = entry
 		repoRoots.Unlock()
-		dir := existingAncestor(start)
-		marker, absent := nearestGitMarker(dir)
-		config, known := snapshotRepoRootConfig(marker)
-		root := ""
-		if dir != "" && !absent {
-			root = gitToplevel(ctx, dir)
-		}
-		cacheable := root != "" && known && filepath.Clean(root) == filepath.Dir(marker.path)
+		root := gitToplevel(ctx, dir)
 		repoRoots.Lock()
 		entry.root = root
-		if cacheable {
+		if root != "" && filepath.Clean(root) == filepath.Dir(marker.path) {
 			entry.marker = marker
 			entry.config = config
 		} else {
-			delete(repoRoots.entries, start)
+			delete(repoRoots.entries, key)
 		}
 		close(entry.ready)
 		repoRoots.Unlock()

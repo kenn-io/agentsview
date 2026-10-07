@@ -120,7 +120,9 @@ The latest published release is
 
 **Improvements**
 
-- Dashboard repository discovery reuses unchanged Git trust settings, reducing repeated Git launches.
+- Dashboard Git totals resolve each ordinary checkout once on the first load
+  and reuse those lookups when you reload or change the date range. Directories
+  with no repository metadata no longer launch Git.
 - The daemon sends its anonymous `daemon_active` ping at most once per UTC day,
   even when it restarts often or several servers share a data directory. A
   server that stays up sends one ping for each UTC day it runs.
