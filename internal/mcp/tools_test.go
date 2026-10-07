@@ -431,6 +431,30 @@ func TestListSessions_ReturnsRows(t *testing.T) {
 	assert.Equal(t, "proj-a", out.Sessions[0].Project)
 }
 
+func TestListSessions_IncludeOneShot(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "multi", "proj", func(s *db.Session) {
+		s.MessageCount = 4
+		s.UserMessageCount = 2
+	})
+	dbtest.SeedSession(t, d, "single", "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+
+	_, out, err := ts.listSessions(t.Context(), nil, listSessionsIn{})
+	require.NoError(t, err)
+	require.Len(t, out.Sessions, 1, "one-shot sessions are hidden by default")
+	assert.Equal(t, "multi", out.Sessions[0].SessionID)
+
+	_, out, err = ts.listSessions(t.Context(), nil, listSessionsIn{
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Len(t, out.Sessions, 2)
+	assert.Equal(t, 2, out.Total)
+}
+
 func TestQueryRecall_ThreadsVectorModeAndReturnsDistilledEntries(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "agentsview")
