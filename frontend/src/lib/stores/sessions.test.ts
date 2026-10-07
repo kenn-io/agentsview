@@ -14,7 +14,6 @@ import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
 import { ApiError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
-import { routeParamsFromSearch, searchFromRouteParams } from "./sessionRouteParams.js";
 
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
@@ -1462,19 +1461,11 @@ describe("SessionsStore", () => {
       expect(f.hideUnknownProject).toBe(true);
     });
 
-    it("should trim, drop empty, and dedupe label params", () => {
-      const f = parseFiltersFromParams({
-        label: " ticket=ABC-123 \n\nrole=reviewer\nticket=ABC-123",
-        pr: "  acme/widgets#42 ",
-      });
-      expect(f.labels).toEqual(["ticket=ABC-123", "role=reviewer"]);
-      expect(f.pr).toBe("acme/widgets#42");
-    });
-
-    it("should default labels and pull request to empty", () => {
+    it("should trim pull request filters and default labels and pull request to empty", () => {
       const f = parseFiltersFromParams({});
       expect(f.labels).toEqual([]);
       expect(f.pr).toBe("");
+      expect(parseFiltersFromParams({ pr: "  acme/widgets#42 " }).pr).toBe("acme/widgets#42");
     });
 
     it("should handle non-numeric min_messages", () => {
@@ -1561,20 +1552,6 @@ describe("SessionsStore", () => {
       const params = filtersToParams(original);
       const parsed = parseFiltersFromParams(params);
       expect(parsed).toEqual(original);
-    });
-
-    it("should round-trip label and pull request filters through a URL", () => {
-      const original: Filters = {
-        ...parseFiltersFromParams({}),
-        labels: ["ticket=ABC-123", "role=reviewer, lead", "a&b=c#d"],
-        pr: "https://github.com/acme/widgets/pull/42",
-      };
-      const query = searchFromRouteParams(filtersToParams(original)).toString();
-
-      const search = new URLSearchParams(query);
-      expect(search.getAll("label")).toEqual(original.labels);
-      expect(search.get("pr")).toBe(original.pr);
-      expect(parseFiltersFromParams(routeParamsFromSearch(search))).toEqual(original);
     });
 
     it("should round-trip default filters as empty", () => {

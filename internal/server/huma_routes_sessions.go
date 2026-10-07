@@ -220,7 +220,7 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 		Termination:      in.Termination,
 		HasSecret:        in.HasSecret,
 		Starred:          in.Starred,
-		Labels:           db.LabelFilterValues(in.Label),
+		Labels:           in.Label,
 		PR:               in.PR,
 		OrderBy:          in.OrderBy,
 		Descending:       optionalBoolValue(in.Descending),
@@ -253,6 +253,10 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 	if err != nil {
 		return db.SessionFilter{}, apiError(http.StatusBadRequest, err.Error())
 	}
+	labels, err := db.LabelFilterValues(in.Label)
+	if err != nil {
+		return db.SessionFilter{}, apiError(http.StatusBadRequest, err.Error())
+	}
 	return db.SessionFilter{
 		Project:          in.Project,
 		ExcludeProject:   in.ExcludeProject,
@@ -274,7 +278,7 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 		Limit:            limit,
 		Termination:      in.Termination,
 		Starred:          in.Starred,
-		Labels:           db.LabelFilterValues(in.Label),
+		Labels:           labels,
 		PR:               pr,
 	}, nil
 }
@@ -298,8 +302,7 @@ func (s *Server) humaListSessions(
 		if errors.Is(err, db.ErrInvalidCursor) {
 			return nil, apiError(http.StatusBadRequest, "invalid cursor")
 		}
-		// listFilter leaves the PR filter to the service, which parses it once.
-		if errors.Is(err, db.ErrInvalidPRFilter) {
+		if errors.Is(err, db.ErrInvalidPRFilter) || errors.Is(err, db.ErrSessionLabelsInvalid) {
 			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		return nil, serverError(err)

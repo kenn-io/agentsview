@@ -175,10 +175,6 @@ func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 			name: "link past the cap stays incremental", stored: full,
 			appended: record(124, "2026-10-05T03:41:00Z"), wantStatus: IncrementalApplied,
 		},
-		{
-			name:     "unknown stored links stay incremental",
-			appended: record(124, "2026-10-05T03:41:00Z"), wantStatus: IncrementalApplied,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

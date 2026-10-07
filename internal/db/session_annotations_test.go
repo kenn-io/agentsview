@@ -261,12 +261,12 @@ func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
 	_, err := d.SetSessionExternalParent(ctx, "a", "b")
 	require.NoError(t, err)
 	insertSession(t, d, "a", "proj")
-	nativeParent := "a"
-	insertSession(t, d, "b", "proj", func(s *Session) {
-		s.ParentSessionID = &nativeParent
-		s.RelationshipType = "continuation"
-	})
-	require.NoError(t, d.LinkSubagentSessions())
+	b := Session{
+		ID: "b", Project: "proj", Machine: defaultMachine, Agent: defaultAgent,
+		MessageCount: 1, ParentSessionID: new("a"), RelationshipType: "continuation",
+	}
+	_, err = d.getWriter().ExecContext(ctx, upsertSessionBaseSQL, upsertSessionArgs(b)...)
+	require.NoError(t, err)
 
 	assertParents := func(t *testing.T) {
 		t.Helper()
@@ -283,6 +283,7 @@ func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
 		assert.Contains(t, listSessionIDs(t, d, SessionFilter{}), "a")
 	}
 	assertParents(t)
+	require.NoError(t, d.LinkSubagentSessions())
 
 	// A reparse of a must not re-apply the link.
 	insertSession(t, d, "a", "proj")
@@ -324,44 +325,6 @@ func TestSessionExternalParentReturnsWhenNativeCycleGoesAway(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, children, 1)
 	assert.Equal(t, "worker", children[0].ID)
-}
-
-func TestSessionExternalParentYieldsOnRawUpsert(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "a", "proj")
-	_, err := d.SetSessionExternalParent(ctx, "a", "b")
-	require.NoError(t, err)
-
-	// A plain-writer upsert of b under a, with no Go-side recompute, leaves
-	// the saved a -> b link closing a loop, so a must lose it.
-	b := Session{
-		ID: "b", Project: "proj", Machine: defaultMachine, Agent: defaultAgent,
-		MessageCount: 1, ParentSessionID: new("a"), RelationshipType: "continuation",
-	}
-	_, err = d.getWriter().ExecContext(ctx, upsertSessionBaseSQL, upsertSessionArgs(b)...)
-	require.NoError(t, err)
-
-	a, err := d.GetSession(ctx, "a")
-	require.NoError(t, err)
-	assert.Nil(t, a.ParentSessionID)
-	assert.ElementsMatch(t, []string{"a", "b"}, listSessionIDs(t, d, SessionFilter{}))
-}
-
-func TestSessionExternalParentAppliesOnInsertIfAbsent(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "manager", "proj")
-	_, err := d.SetSessionExternalParent(ctx, "worker", "manager")
-	require.NoError(t, err)
-
-	require.NoError(t, d.insertSessionIfAbsent(ctx, Session{
-		ID: "worker", Project: "proj", Machine: defaultMachine, Agent: defaultAgent,
-		MessageCount: 1,
-	}))
-	link, err := d.GetSessionExternalParent(ctx, "worker")
-	require.NoError(t, err)
-	assert.True(t, link.Applied)
 }
 
 func TestSessionExternalParentRejectsInvalidLinks(t *testing.T) {

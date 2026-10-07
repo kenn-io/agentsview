@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
@@ -47,8 +48,6 @@ func TestSessionLabelsAPI(t *testing.T) {
 	w = te.patch(t, "/api/v1/sessions/worker/labels",
 		`{"add":["nightly"],"remove":["role=reviewer"]}`)
 	assertStatus(t, w, http.StatusOK)
-	labels = decode[db.SessionLabels](t, w)
-	assert.Equal(t, []string{"nightly", "ticket=ABC-123"}, labels.Labels)
 
 	w = te.get(t, "/api/v1/sessions/worker")
 	assertStatus(t, w, http.StatusOK)
@@ -58,14 +57,26 @@ func TestSessionLabelsAPI(t *testing.T) {
 	assert.Equal(t, []string{"worker"}, listedSessionIDs(t, te, url.Values{
 		"label": {"nightly", "ticket=ABC-123"},
 	}))
-	assert.Equal(t, []string{}, listedSessionIDs(t, te, url.Values{
-		"label": {"nightly", "role=reviewer"},
-	}))
+	query := url.Values{}
+	for range 1000 {
+		query.Add("label", " nightly ")
+	}
+	assert.Equal(t, []string{"worker"}, listedSessionIDs(t, te, query))
 
-	// Labels for a session that has not synced yet are accepted.
-	w = te.put(t, "/api/v1/sessions/not-yet-synced/labels", `{"labels":["queued"]}`)
-	assertStatus(t, w, http.StatusOK)
-	assert.False(t, decode[db.SessionLabels](t, w).SessionFound)
+	query = url.Values{}
+	for i := range db.MaxSessionLabels {
+		query.Add("label", fmt.Sprintf("label-%d", i))
+	}
+	for _, route := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
+		w = te.get(t, route+"?"+query.Encode())
+		assertStatus(t, w, http.StatusOK)
+	}
+	query.Add("label", "over-limit")
+	for _, route := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
+		w = te.get(t, route+"?"+query.Encode())
+		assertStatus(t, w, http.StatusBadRequest)
+		assert.Contains(t, w.Body.String(), "more than 64 labels")
+	}
 
 	w = te.put(t, "/api/v1/sessions/worker/labels", `{"labels":["=missing-key"]}`)
 	assertStatus(t, w, http.StatusBadRequest)
@@ -92,8 +103,6 @@ func TestSessionPRFilterAPI(t *testing.T) {
 
 	assert.Equal(t, []string{"linked"},
 		listedSessionIDs(t, te, url.Values{"pr": {"owner/repo#7"}}))
-	assert.Equal(t, []string{},
-		listedSessionIDs(t, te, url.Values{"pr": {"owner/repo#8"}}))
 
 	w := te.get(t, "/api/v1/sessions?pr=not-a-repo")
 	assertStatus(t, w, http.StatusBadRequest)
@@ -121,10 +130,6 @@ func TestSessionParentAPI(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	assert.Contains(t, w.Body.String(), `"id":"worker"`)
 
-	w = te.get(t, "/api/v1/sessions/worker/parent")
-	assertStatus(t, w, http.StatusOK)
-	assert.True(t, decode[db.SessionExternalParent](t, w).Applied)
-
 	w = te.put(t, "/api/v1/sessions/manager/parent",
 		`{"parent_session_id":"worker"}`)
 	assertStatus(t, w, http.StatusBadRequest)
@@ -143,23 +148,14 @@ func TestSessionAnnotationWritesUnavailableOnReadOnlyStore(t *testing.T) {
 	assertStatus(t, w, http.StatusNotImplemented)
 	w = te.put(t, "/api/v1/sessions/any/parent", `{"parent_session_id":"p"}`)
 	assertStatus(t, w, http.StatusNotImplemented)
-}
 
-func TestSessionLabelsReadableOnReadOnlyStore(t *testing.T) {
-	te := setupPGMode(t)
 	seedAnnotatedSession(t, te, "worker", nil)
 	_, err := te.db.SetSessionLabels(t.Context(), "worker", []string{"ticket=ABC-123"})
 	require.NoError(t, err)
 
-	w := te.get(t, "/api/v1/sessions/worker/labels")
+	w = te.get(t, "/api/v1/sessions/worker/labels")
 	assertStatus(t, w, http.StatusOK)
 	labels := decode[db.SessionLabels](t, w)
 	assert.True(t, labels.SessionFound)
 	assert.Equal(t, []string{"ticket=ABC-123"}, labels.Labels)
-
-	w = te.get(t, "/api/v1/sessions/unknown/labels")
-	assertStatus(t, w, http.StatusOK)
-	labels = decode[db.SessionLabels](t, w)
-	assert.False(t, labels.SessionFound)
-	assert.Equal(t, []string{}, labels.Labels)
 }

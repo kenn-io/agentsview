@@ -255,6 +255,10 @@ func (b *directBackend) List(
 	if err != nil {
 		return nil, fmt.Errorf("list: %w", err)
 	}
+	f.Labels, err = db.LabelFilterValues(f.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("list: %w", err)
+	}
 	// Match the HTTP handler's clampLimit semantics: values over
 	// MaxSessionLimit clamp to the max, not reset to the default.
 	if f.Limit > db.MaxSessionLimit {
@@ -306,7 +310,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		MinToolFailures:      f.MinToolFailures,
 		HasSecret:            f.HasSecret,
 		Starred:              f.Starred,
-		Labels:               db.LabelFilterValues(f.Labels),
+		Labels:               f.Labels,
 		SecretsRulesVersions: secrets.ActiveRulesVersions(),
 	}
 	// Parse the public sort spec into the structured, per-key form. The spec is
