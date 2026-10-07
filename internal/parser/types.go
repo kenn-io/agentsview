@@ -1438,8 +1438,9 @@ type ParsedSession struct {
 	GitBranch          string
 	SourceSessionID    string
 	SourceVersion      string
-	GroupKey           string `json:"group_key,omitempty"`
-	KeepStoredGroupKey bool   `json:"keep_stored_group_key,omitempty"`
+	LastEntryUUID      *string // Last source entry verified by the provider; nil for exports.
+	GroupKey           string  `json:"group_key,omitempty"`
+	KeepStoredGroupKey bool    `json:"keep_stored_group_key,omitempty"`
 	// TranscriptFidelity classifies how complete a stored transcript is
 	// relative to the agent's full session data: "full" when the
 	// high-resolution source was used, "summary" for a degraded/fallback

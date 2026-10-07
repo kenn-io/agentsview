@@ -123,8 +123,12 @@ func ParseClaudeAIDetail(data []byte) (ParseResult, error) {
 	if err != nil {
 		return ParseResult{}, err
 	}
-	for i, m := range conv.Messages {
-		result.Messages[i].SourceUUID = m.UUID
+	if len(conv.CurrentLeaf) > 0 && string(conv.CurrentLeaf) != "null" {
+		var leaf string
+		if err := json.Unmarshal(conv.CurrentLeaf, &leaf); err != nil {
+			return ParseResult{}, err
+		}
+		result.Session.LastEntryUUID = &leaf
 	}
 	return result, nil
 }

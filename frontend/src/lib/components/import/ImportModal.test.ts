@@ -10,13 +10,15 @@ vi.mock("../../api/runtime.js", async (original) => ({
   ...(await original<typeof import("../../api/runtime.js")>()),
   isRemoteConnection: () => false,
 }));
+const syncState = vi.hoisted(() => ({ readOnly: false }));
+vi.mock("../../stores/sync.svelte.js", () => ({ sync: syncState }));
 const syncClaudeAI = vi.hoisted(() => vi.fn());
 vi.mock("../../api/client.js", () => ({
   syncClaudeAI,
   importClaudeAI: vi.fn(),
   importChatGPT: vi.fn(),
 }));
-afterEach(() => vi.resetAllMocks());
+afterEach(() => { vi.resetAllMocks(); syncState.readOnly = false; });
 
 it("closing during sync leaves no error after reopening", async () => {
   let rejectSync!: (error: Error) => void;
@@ -58,4 +60,12 @@ it("offers sign in, sync and disconnect without a sign-in probe", async () => {
   );
   expect(onimported).toHaveBeenCalledOnce();
   expect(screen.getByText(m.import_processed({ count: 1 }))).toBeTruthy();
+});
+
+it("hides browser sync controls for a read-only archive", () => {
+  syncState.readOnly = true;
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  expect(screen.queryByRole("button", { name: m.import_claude_sync() })).toBeNull();
+  expect(screen.queryByRole("button", { name: m.import_claude_connect() })).toBeNull();
+  expect(screen.queryByRole("button", { name: m.import_claude_disconnect() })).toBeNull();
 });

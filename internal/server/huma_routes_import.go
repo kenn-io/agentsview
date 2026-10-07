@@ -133,12 +133,6 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 					cancel()
 				}
 			},
-			OnPage: func() {
-				s.notifySessionMutation()
-				if s.broadcaster != nil {
-					s.broadcaster.Emit("sessions")
-				}
-			},
 		})
 		if err != nil {
 			stream.SendJSON("error", map[string]string{"error": err.Error()})
