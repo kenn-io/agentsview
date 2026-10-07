@@ -60,107 +60,123 @@ func SyncClaudeAI(ctx context.Context, store interface {
 			return stats, errors.New("invalid Claude organization")
 		}
 		base := "/api/organizations/" + url.PathEscape(org.UUID)
-		for offset := 0; ; {
-			raw, err := fetchClaudeAI(ctx, fetch, fmt.Sprintf("%s/chat_conversations_v2?limit=50&offset=%d", base, offset))
-			if err != nil {
-				return stats, err
-			}
-			var page struct {
-				Data    []json.RawMessage `json:"data"`
-				HasMore *bool             `json:"has_more"`
-			}
-			if err := json.Unmarshal(raw, &page); err != nil {
-				return stats, err
-			}
-			items := page.Data
-			if items == nil {
-				return stats, errors.New("Claude list had no data")
-			}
-			if len(items) == 0 {
-				if page.HasMore != nil && *page.HasMore {
-					return stats, errors.New("Claude list returned an empty page with has_more: true")
-				}
-				break
-			}
-			for _, summary := range items {
-				if err := ctx.Err(); err != nil {
-					return stats, err
-				}
-				var marker struct {
-					UUID      string `json:"uuid"`
-					UpdatedAt string `json:"updated_at"`
-				}
-				if err := json.Unmarshal(summary, &marker); err != nil || !safeConversationID(marker.UUID) || marker.UpdatedAt == "" {
-					stats.Errors++
-					cb.progress(stats)
-					continue
-				}
-				id := "claude-ai:" + marker.UUID
-				if store.IsSessionTrashed(ctx, id) {
-					stats.Skipped++
-					cb.progress(stats)
-					continue
-				}
-				if store.IsSessionExcluded(ctx, id) {
-					stats.Skipped++
-					cb.progress(stats)
-					continue
-				}
-				existing, err := store.GetSession(ctx, id)
+		for _, archived := range []bool{false, true} {
+			for offset := 0; ; {
+				raw, err := fetchClaudeAI(ctx, fetch, fmt.Sprintf("%s/chat_conversations_v2?limit=50&offset=%d&archived=%t", base, offset, archived))
 				if err != nil {
 					return stats, err
 				}
-				updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
-				if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) {
-					stats.Skipped++
-					cb.progress(stats)
-					continue
+				var page struct {
+					Data    []json.RawMessage `json:"data"`
+					HasMore *bool             `json:"has_more"`
 				}
-				detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True&rendering_mode=messages&consistency=strong")
-				if errors.Is(err, errClaudeAINotFound) {
-					stats.Skipped++
-					cb.progress(stats)
-					continue
-				}
-				if err != nil {
+				if err := json.Unmarshal(raw, &page); err != nil {
 					return stats, err
 				}
-				var imported ImportStats
-				write := func() error {
-					var err error
-					imported, err = ImportClaudeAIWithOptions(ctx, store, bytes.NewReader(append(append([]byte{'['}, detail...), ']')), nil, ImportOptions{IncrementalFTS: true, Replace: []string{id}, claudeAISync: true})
+				items := page.Data
+				if items == nil {
+					return stats, errors.New("Claude list had no data")
+				}
+				if len(items) == 0 {
+					if page.HasMore != nil && *page.HasMore {
+						return stats, errors.New("Claude list returned an empty page with has_more: true")
+					}
+					break
+				}
+				for _, summary := range items {
+					if err := ctx.Err(); err != nil {
+						return stats, err
+					}
+					var marker struct {
+						UUID      string `json:"uuid"`
+						UpdatedAt string `json:"updated_at"`
+					}
+					if err := json.Unmarshal(summary, &marker); err != nil || !safeConversationID(marker.UUID) || marker.UpdatedAt == "" {
+						stats.Errors++
+						cb.progress(stats)
+						continue
+					}
+					id := "claude-ai:" + marker.UUID
+					if store.IsSessionTrashed(ctx, id) {
+						stats.Skipped++
+						cb.progress(stats)
+						continue
+					}
+					if store.IsSessionExcluded(ctx, id) {
+						stats.Skipped++
+						cb.progress(stats)
+						continue
+					}
+					existing, err := store.GetSession(ctx, id)
 					if err != nil {
-						imported.record(id, importSkipped, err)
+						return stats, err
 					}
-					if imported.Imported+imported.Updated+imported.Skipped+imported.Errors == 0 {
-						imported.Skipped++
+					updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
+					if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) {
+						stats.Skipped++
+						cb.progress(stats)
+						continue
 					}
-
-					return nil
+					detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true")
+					if errors.Is(err, errClaudeAINotFound) {
+						stats.Skipped++
+						cb.progress(stats)
+						continue
+					}
+					if err != nil {
+						return stats, err
+					}
+					var imported ImportStats
+					write := func() error {
+						var identity struct {
+							UUID string `json:"uuid"`
+						}
+						if err := json.Unmarshal(detail, &identity); err != nil || identity.UUID != marker.UUID {
+							imported.record(id, importSkipped, fmt.Errorf("conversation uuid differs from requested %s or detail is invalid", marker.UUID))
+							return nil
+						}
+						provider, _ := parser.NewProvider(parser.AgentClaudeAI, parser.ProviderConfig{})
+						err := provider.(parser.ClaudeAIExportParser).ParseClaudeAIExport(bytes.NewReader(append(append([]byte{'['}, detail...), ']')), func(result parser.ParseResult) error {
+							ci := conversationImport{parser.AgentClaudeAI, upsertClaudeAISyncConversation, claudeAIMessages}
+							status, err := ci.importConversation(ctx, store, result, nil, ImportOptions{Replace: []string{id}})
+							if errors.Is(err, db.ErrSessionTrashed) {
+								status, err = importSkipped, nil
+							}
+							imported.record(id, status, err)
+							return nil
+						})
+						if err != nil {
+							imported.record(id, importSkipped, err)
+						}
+						if imported.Imported+imported.Updated+imported.Skipped+imported.Errors == 0 {
+							imported.Skipped++
+						}
+						return nil
+					}
+					if cb != nil && cb.SerializeWrite != nil {
+						err = cb.SerializeWrite(write)
+					} else {
+						err = write()
+					}
+					stats.Imported += imported.Imported
+					stats.Updated += imported.Updated
+					stats.Skipped += imported.Skipped
+					stats.Errors += imported.Errors
+					stats.Refusals = append(stats.Refusals, imported.Refusals...)
+					wrote = wrote || imported.Imported+imported.Updated > 0
+					cb.progress(stats)
+					if ctx.Err() != nil {
+						return stats, ctx.Err()
+					}
+					if err != nil {
+						return stats, err
+					}
 				}
-				if cb != nil && cb.SerializeWrite != nil {
-					err = cb.SerializeWrite(write)
-				} else {
-					err = write()
+				notify()
+				offset += len(items)
+				if page.HasMore != nil && !*page.HasMore {
+					break
 				}
-				stats.Imported += imported.Imported
-				stats.Updated += imported.Updated
-				stats.Skipped += imported.Skipped
-				stats.Errors += imported.Errors
-				stats.Refusals = append(stats.Refusals, imported.Refusals...)
-				wrote = wrote || imported.Imported+imported.Updated > 0
-				cb.progress(stats)
-				if ctx.Err() != nil {
-					return stats, ctx.Err()
-				}
-				if err != nil {
-					return stats, err
-				}
-			}
-			notify()
-			offset += len(items)
-			if page.HasMore != nil && !*page.HasMore {
-				break
 			}
 		}
 	}
@@ -168,15 +184,42 @@ func SyncClaudeAI(ctx context.Context, store interface {
 }
 
 func upsertClaudeAISyncConversation(ctx context.Context, store db.Store, result parser.ParseResult, fts *lazyFTS) (importStatus, error) {
-	archived, err := store.GetAllMessages(ctx, result.Session.ID)
+	s := result.Session
+	msgs := claudeAIMessages(s.ID, result.Messages)
+	sess := chatGPTSession(s)
+	existing, err := store.GetSession(ctx, s.ID)
 	if err != nil {
 		return importNew, err
 	}
-	incoming := storedFormMessages(store, claudeAIMessages(result.Session.ID, result.Messages))
-	if len(incoming) >= len(archived) && !sameMessages(archived, incoming[:len(archived)]) {
+	if existing == nil {
+		err := writeChatGPTSession(ctx, store, sess, msgs)
+		if errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
+			return importSkipped, nil
+		}
+		return importNew, err
+	}
+	if existing.Agent != string(parser.AgentClaudeAI) {
+		return importNew, refuse(RefusalDiverged, errors.New("existing session belongs to another agent"))
+	}
+	if storeArchiveContent(store).UsageOnly() {
+		return importSkipped, nil
+	}
+	archived, err := store.GetAllMessages(ctx, s.ID)
+	if err != nil {
+		return importNew, err
+	}
+	incoming := storedFormMessages(store, msgs)
+	if len(incoming) < len(archived) {
+		return importNew, refuse(RefusalShorterExport, errors.New("selected path is shorter than archived history"))
+	}
+	if !sameMessages(archived, incoming[:len(archived)]) {
 		return importNew, refuse(RefusalDiverged, errors.New("selected path rewrites archived messages"))
 	}
-	return upsertConversation(ctx, store, result, fts)
+	err = appendChatGPTMessages(ctx, store, sess, msgs[len(archived):])
+	if errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
+		return importSkipped, nil
+	}
+	return importUpdated, err
 }
 
 func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), path string) ([]byte, error) {
