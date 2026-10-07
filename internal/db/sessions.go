@@ -1560,15 +1560,6 @@ func (db *DB) upsertSession(ctx context.Context,
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	writer := db.getWriter()
-	if !db.usageOnlyStorage() {
-		return upsertSessionExec(
-			ctx,
-			writer.Exec,
-			writer.QueryRow,
-			s,
-			reviveSourceMissing,
-		)
-	}
 	// The upsert leaves stored titles, signals, and findings alone on
 	// purpose in full mode; a usage archive must not keep any that predate
 	// the policy, so the row is settled in the same transaction.
@@ -1589,8 +1580,10 @@ func (db *DB) upsertSession(ctx context.Context,
 	if err != nil {
 		return result, err
 	}
-	if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
-		return result, err
+	if db.usageOnlyStorage() {
+		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
+			return result, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing session upsert: %w", err)
@@ -1630,12 +1623,15 @@ func upsertSessionExec(
 	var previousProject string
 	var previousSessionName sql.NullString
 	var previousAutomated bool
+	var previousParent sql.NullString
+	var previousRelationship string
 	var deletedAt, sourceMissingAt sql.NullString
 	err = queryRow(ctx,
-		"SELECT project, session_name, deleted_at, source_missing_at, is_automated "+
+		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type "+
 			"FROM sessions WHERE id = ?", s.ID,
 	).Scan(
 		&previousProject, &previousSessionName, &deletedAt, &sourceMissingAt, &previousAutomated,
+		&previousParent, &previousRelationship,
 	)
 	result := sessionUpsertResult{
 		inserted:        errors.Is(err, sql.ErrNoRows),
@@ -1680,6 +1676,12 @@ func upsertSessionExec(
 	if err != nil {
 		return sessionUpsertResult{},
 			fmt.Errorf("upserting session %s: %w", s.ID, err)
+	}
+	parentChanged := !nullableStringEqual(previousParent, s.ParentSessionID)
+	if result.inserted || parentChanged || previousRelationship != s.RelationshipType {
+		if _, err := applySessionExternalParentsFor(ctx, exec, queryRow, []string{s.ID}); err != nil {
+			return sessionUpsertResult{}, err
+		}
 	}
 	return result, nil
 }
@@ -2104,14 +2106,15 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 
 func linkSubagentSessionsForSessionsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, error) {
 	updated := 0
+	seeds := append([]string{}, ids...)
 
 	// Each id binds twice (once per UNION branch), so halve the chunk to
 	// stay within SQLite's bind-variable limit.
 	err := queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
 		ph, args := inPlaceholders(chunk)
 		allArgs := append(append([]any{}, args...), args...)
-		res, err := tx.ExecContext(ctx,
-			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
+		rows, err := tx.QueryContext(ctx,
+			linkSubagentSessionsForSessionsQuery(ph)+" RETURNING id", allArgs...,
 		)
 		if err != nil {
 			return fmt.Errorf(
@@ -2119,19 +2122,24 @@ func linkSubagentSessionsForSessionsTx(ctx context.Context, tx *sql.Tx, ids []st
 				len(chunk), err,
 			)
 		}
-		count, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("counting scoped subagent links: %w", err)
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("reading scoped subagent link: %w", err)
+			}
+			seeds = append(seeds, id)
+			updated++
 		}
-		updated += int(count)
-		return nil
+		return rows.Err()
 	})
 	if err != nil {
 		return 0, err
 	}
-	// Spawn edges may have re-parented children of the batch; those sit in
-	// its subtree, so the scoped recompute still reaches them.
-	launched, err := applySessionExternalParentsFor(ctx, tx, ids)
+	launched, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		}, seeds)
 	if err != nil {
 		return 0, err
 	}

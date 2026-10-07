@@ -90,7 +90,10 @@ func (db *DB) SetSessionExternalParent(
 	); err != nil {
 		return SessionExternalParent{}, fmt.Errorf("saving session parent: %w", err)
 	}
-	moved, err := applySessionExternalParentsFor(ctx, tx, []string{sessionID})
+	moved, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		}, []string{sessionID})
 	if err != nil {
 		return SessionExternalParent{}, err
 	}
@@ -145,7 +148,10 @@ func (db *DB) ClearSessionExternalParent(
 		}
 	}
 	// Dropping the link can release another link whose chain ran through it.
-	moved, err := applySessionExternalParentsFor(ctx, tx, []string{sessionID})
+	moved, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		}, []string{sessionID})
 	if err != nil {
 		return SessionExternalParent{}, err
 	}
@@ -320,13 +326,16 @@ func applySessionExternalParents(ctx context.Context, tx *sql.Tx) (int, error) {
 // to the given sessions can move, so its cost tracks the batch rather than
 // the number of links.
 func applySessionExternalParentsFor(
-	ctx context.Context, tx *sql.Tx, ids []string,
+	ctx context.Context,
+	exec func(context.Context, string, ...any) (sql.Result, error),
+	queryRow func(context.Context, string, ...any) rowScanner,
+	ids []string,
 ) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 	var linked bool
-	if err := tx.QueryRowContext(ctx,
+	if err := queryRow(ctx,
 		"SELECT EXISTS (SELECT 1 FROM session_external_parents)",
 	).Scan(&linked); err != nil {
 		return 0, fmt.Errorf("checking session parents: %w", err)
@@ -338,7 +347,7 @@ func applySessionExternalParentsFor(
 	if err != nil {
 		return 0, fmt.Errorf("encoding session ids: %w", err)
 	}
-	return execSessionExternalParents(ctx, tx.ExecContext,
+	return execSessionExternalParents(ctx, exec,
 		applyScopedSessionExternalParentsSQL, string(encoded), string(encoded))
 }
 

@@ -421,6 +421,23 @@ func TestImportAdvancesLocalModifiedAt(t *testing.T) {
 		"local_modified_at must be set after import so PG push picks up session_name changes")
 }
 
+func TestImportUnchangedKeepsLauncherParent(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(ctx, "claude-ai:import-test-001", "manager")
+	require.NoError(t, err)
+	stats, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
+	require.NoError(t, err)
+	assert.Greater(t, stats.Skipped, 0)
+	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.NotNil(t, s.ParentSessionID)
+	assert.Equal(t, "manager", *s.ParentSessionID)
+	assert.Equal(t, "subagent", s.RelationshipType)
+}
+
 func TestImportSkipPathBumpsLocalModifiedAt(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
