@@ -182,6 +182,76 @@ type repoRootEntry struct {
 	ready  chan struct{}
 	root   string
 	marker gitMarker
+	config repoRootConfig
+}
+
+type repoRootFile struct {
+	contents string
+	exists   bool
+}
+
+type repoRootConfig struct {
+	gitdir, common   string
+	config, worktree repoRootFile
+}
+
+func readRepoRootFile(path string) (repoRootFile, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return repoRootFile{}, nil
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return repoRootFile{}, os.ErrInvalid
+	}
+	data, err := os.ReadFile(path)
+	return repoRootFile{contents: string(data), exists: true}, err
+}
+
+// Git root setup reads these two config files directly, without expanding includes.
+func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
+	if marker.info == nil {
+		return repoRootConfig{}, false
+	}
+	gitdir := marker.path
+	if marker.info.Mode().IsRegular() {
+		file, err := readRepoRootFile(marker.path)
+		pointer, ok := strings.CutPrefix(file.contents, "gitdir: ")
+		gitdir = strings.TrimRight(pointer, "\r\n")
+		if err != nil || !ok || gitdir == "" {
+			return repoRootConfig{}, false
+		}
+		if !filepath.IsAbs(gitdir) {
+			gitdir = filepath.Join(filepath.Dir(marker.path), gitdir)
+		}
+	}
+	gitdir, err := pathresolve.EvalSymlinks(gitdir)
+	if err != nil {
+		return repoRootConfig{}, false
+	}
+	file, err := readRepoRootFile(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		return repoRootConfig{}, false
+	}
+	common := gitdir
+	if file.exists {
+		common = strings.TrimRight(file.contents, "\r\n")
+		if common == "" {
+			return repoRootConfig{}, false
+		}
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(gitdir, common)
+		}
+		common, err = pathresolve.EvalSymlinks(common)
+		if err != nil {
+			return repoRootConfig{}, false
+		}
+	}
+	config, err := readRepoRootFile(filepath.Join(common, "config"))
+	if err != nil {
+		return repoRootConfig{}, false
+	}
+	worktree, err := readRepoRootFile(filepath.Join(gitdir, "config.worktree"))
+	return repoRootConfig{gitdir: gitdir, common: common, config: config, worktree: worktree}, err == nil
 }
 
 type gitMarker struct {
@@ -247,7 +317,8 @@ func findRepoRoot(ctx context.Context, start string) string {
 				return ""
 			}
 			marker, _ := nearestGitMarker(existingAncestor(start))
-			if !entry.marker.matches(marker) {
+			config, known := snapshotRepoRootConfig(marker)
+			if !entry.marker.matches(marker) || !known || entry.config != config {
 				repoRoots.Lock()
 				if repoRoots.entries[start] == entry {
 					delete(repoRoots.entries, start)
@@ -262,15 +333,17 @@ func findRepoRoot(ctx context.Context, start string) string {
 		repoRoots.Unlock()
 		dir := existingAncestor(start)
 		marker, absent := nearestGitMarker(dir)
+		config, known := snapshotRepoRootConfig(marker)
 		root := ""
 		if dir != "" && !absent {
 			root = gitToplevel(ctx, dir)
 		}
-		cacheable := root != "" && marker.info != nil && filepath.Clean(root) == filepath.Dir(marker.path)
+		cacheable := root != "" && known && filepath.Clean(root) == filepath.Dir(marker.path)
 		repoRoots.Lock()
 		entry.root = root
 		if cacheable {
 			entry.marker = marker
+			entry.config = config
 		} else {
 			delete(repoRoots.entries, start)
 		}
