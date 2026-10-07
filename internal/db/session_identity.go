@@ -9,5 +9,5 @@ func ApplyParsedSessionIdentity(dst *Session, src parser.ParsedSession) {
 	dst.AgentLabel = src.AgentLabel
 	dst.Entrypoint = src.Entrypoint
 	dst.SessionKind = src.SessionKind
-	dst.PRLinks = PRLinksFromParsed(src.PRLinks)
+	dst.PRLinks = src.PRLinks
 }

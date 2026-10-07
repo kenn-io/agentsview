@@ -22,4 +22,5 @@ func TestSetSessionLabelsMapsRemoteReadOnly(t *testing.T) {
 	backend.apiVersion = service.SessionAnnotationsAPIVersion
 	_, err := backend.SetSessionLabels(t.Context(), "worker", []string{"nightly"})
 	require.ErrorIs(t, err, db.ErrReadOnly)
+	assert.ErrorContains(t, err, "stop the read-only serve process and use the local DB, or start a local daemon")
 }

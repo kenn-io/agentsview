@@ -173,7 +173,7 @@ func annotationResult[T any](
 	response *http.Response, body []byte, err error, out *T,
 ) (*T, error) {
 	if response != nil && response.StatusCode == http.StatusNotImplemented && response.Request.Method != http.MethodGet {
-		return nil, fmt.Errorf("%s: %w", response.Request.URL.Path, db.ErrReadOnly)
+		return nil, fmt.Errorf("%s: %w; stop the read-only serve process and use the local DB, or start a local daemon", response.Request.URL.Path, db.ErrReadOnly)
 	}
 	if err := serviceResponseError(response, body, err); err != nil {
 		return nil, err
