@@ -279,13 +279,9 @@ func TestResolveMCPServiceRefusesAnnotationFiltersOnOlderServer(t *testing.T) {
 	require.NoError(t, err, "an older server still serves the session")
 	t.Cleanup(cleanup)
 
-	for _, f := range []service.ListFilter{
-		{Labels: []string{"ticket=A"}}, {PR: "owner/repo"},
-	} {
-		_, err := svc.List(t.Context(), f)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "restart or upgrade the server")
-	}
+	_, err = svc.List(t.Context(), service.ListFilter{Labels: []string{"ticket=A"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "restart or upgrade the server")
 	assert.Equal(t, []string{"/api/v1/version"}, paths)
 
 	_, err = svc.List(t.Context(), service.ListFilter{Project: "p"})

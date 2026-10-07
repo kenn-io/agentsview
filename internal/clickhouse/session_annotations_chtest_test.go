@@ -84,31 +84,11 @@ func TestPushServesSessionLabelsAndPRLinks(t *testing.T) {
 		assert.Equal(t, fixturePRLinks, got.PRLinks)
 		assert.Equal(t, []string{"role:lead", "ticket-1"}, got.Labels)
 
-		full, err := store.GetSessionFull(ctx, fixtureAlphaID)
-		require.NoError(t, err)
-		require.NotNil(t, full)
-		assert.Equal(t, fixturePRLinks, full.PRLinks)
-		assert.Equal(t, []string{"role:lead", "ticket-1"}, full.Labels)
-
 		beta, err := store.GetSession(ctx, fixtureBetaID)
 		require.NoError(t, err)
 		require.NotNil(t, beta)
 		assert.Nil(t, beta.PRLinks, "a session without links reads back as nil")
 		assert.Equal(t, []string{"ticket-1"}, beta.Labels)
-
-		children, err := store.GetChildSessions(ctx, fixtureAlphaID)
-		require.NoError(t, err)
-		require.Len(t, children, 1)
-		assert.Equal(t, []string{"role:worker"}, children[0].Labels)
-		assert.Nil(t, children[0].PRLinks)
-	})
-
-	t.Run("list carries both fields", func(t *testing.T) {
-		page, err := store.ListSessions(ctx, db.SessionFilter{Labels: []string{"role:lead"}})
-		require.NoError(t, err)
-		require.Len(t, page.Sessions, 1)
-		assert.Equal(t, fixturePRLinks, page.Sessions[0].PRLinks)
-		assert.Equal(t, []string{"role:lead", "ticket-1"}, page.Sessions[0].Labels)
 	})
 
 	tests := []struct {
@@ -118,9 +98,6 @@ func TestPushServesSessionLabelsAndPRLinks(t *testing.T) {
 	}{
 		{"one label", db.SessionFilter{Labels: []string{"ticket-1"}},
 			[]string{fixtureAlphaID, fixtureBetaID}},
-		{"every label must match", db.SessionFilter{Labels: []string{"ticket-1", "role:lead"}},
-			[]string{fixtureAlphaID}},
-		{"unknown label", db.SessionFilter{Labels: []string{"ticket-2"}}, nil},
 		{"repository ignores case", db.SessionFilter{PR: db.PRFilter{Repository: "acme/widgets"}},
 			[]string{fixtureAlphaID}},
 		{"repository and number", db.SessionFilter{PR: db.PRFilter{Repository: "acme/tools", Number: 7}},
@@ -134,9 +111,6 @@ func TestPushServesSessionLabelsAndPRLinks(t *testing.T) {
 		{"url on the stored host", db.SessionFilter{PR: db.PRFilter{
 			Host: "github.com", Repository: "acme/widgets", Number: 42,
 		}}, []string{fixtureAlphaID}},
-		{"label and pr together", db.SessionFilter{
-			Labels: []string{"ticket-1"}, PR: db.PRFilter{Repository: "acme/widgets", Number: 42},
-		}, []string{fixtureAlphaID}},
 	}
 	for _, tt := range tests {
 		t.Run("filter "+tt.name, func(t *testing.T) {

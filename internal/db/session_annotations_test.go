@@ -11,13 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func listSessionIDs(t *testing.T, d *DB, f SessionFilter) []string {
-	t.Helper()
-	page, err := d.ListSessions(t.Context(), f)
-	require.NoError(t, err)
-	return sessionIDs(page.Sessions)
-}
-
 func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "with-prs", "proj", func(s *Session) {
@@ -70,7 +63,7 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 		t.Run(tt.filter, func(t *testing.T) {
 			pr, err := ParsePRFilter(tt.filter)
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, listSessionIDs(t, d, SessionFilter{PR: pr}))
+			assert.Equal(t, tt.want, listSortedIDs(t, d, SessionFilter{PR: pr}))
 		})
 	}
 
@@ -129,9 +122,9 @@ func TestSessionLabelsLifecycle(t *testing.T) {
 	assert.Equal(t, []string{"nightly", "ticket=ABC-123"}, stored.Labels)
 
 	assert.Equal(t, []string{"worker"},
-		listSessionIDs(t, d, SessionFilter{Labels: []string{"nightly", "ticket=ABC-123"}}))
+		listSortedIDs(t, d, SessionFilter{Labels: []string{"nightly", "ticket=ABC-123"}}))
 	assert.Equal(t, []string{},
-		listSessionIDs(t, d, SessionFilter{Labels: []string{"nightly", "role=reviewer"}}))
+		listSortedIDs(t, d, SessionFilter{Labels: []string{"nightly", "role=reviewer"}}))
 
 	cleared, err := d.SetSessionLabels(ctx, "worker", nil)
 	require.NoError(t, err)
@@ -274,7 +267,7 @@ func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
 		link, err := d.GetSessionExternalParent(ctx, "a")
 		require.NoError(t, err)
 		assert.False(t, link.Applied)
-		assert.Contains(t, listSessionIDs(t, d, SessionFilter{}), "a")
+		assert.Contains(t, listSortedIDs(t, d, SessionFilter{}), "a")
 	}
 	require.NoError(t, d.LinkSubagentSessions())
 	assertParents(t)
@@ -283,41 +276,20 @@ func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
 	insertSession(t, d, "a", "proj")
 	require.NoError(t, d.LinkSubagentSessions())
 	assertParents(t)
-}
 
-func TestSessionExternalParentReturnsWhenNativeCycleGoesAway(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "manager", "proj")
-	insertSession(t, d, "worker", "proj")
-	_, err := d.SetSessionExternalParent(ctx, "worker", "manager")
-	require.NoError(t, err)
-
-	// An imported transcript puts the manager under the worker.
-	nativeParent := "worker"
-	insertSession(t, d, "manager", "proj", func(s *Session) {
-		s.ParentSessionID = &nativeParent
-		s.RelationshipType = "continuation"
-	})
-	_, err = d.LinkSubagentSessionsForSessions(ctx, []string{"manager"})
-	require.NoError(t, err)
-	worker, err := d.GetSession(ctx, "worker")
-	require.NoError(t, err)
-	assert.Nil(t, worker.ParentSessionID)
-
-	// Sync linking restores the launcher parent once the native cycle disappears.
-	insertSession(t, d, "manager", "proj")
-	linked, err := d.LinkSubagentSessionsForSessions(ctx, []string{"manager"})
+	// Scoped linking restores the launcher parent after the native cycle disappears.
+	insertSession(t, d, "b", "proj")
+	linked, err := d.LinkSubagentSessionsForSessions(ctx, []string{"b"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, linked)
-	worker, err = d.GetSession(ctx, "worker")
+	a, err := d.GetSession(ctx, "a")
 	require.NoError(t, err)
-	require.NotNil(t, worker.ParentSessionID)
-	assert.Equal(t, "manager", *worker.ParentSessionID)
-	children, err := d.GetChildSessions(ctx, "manager")
+	require.NotNil(t, a.ParentSessionID)
+	assert.Equal(t, "b", *a.ParentSessionID)
+	children, err := d.GetChildSessions(ctx, "b")
 	require.NoError(t, err)
 	require.Len(t, children, 1)
-	assert.Equal(t, "worker", children[0].ID)
+	assert.Equal(t, "a", children[0].ID)
 }
 
 func TestSessionExternalParentRejectsInvalidLinks(t *testing.T) {
@@ -425,7 +397,7 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// The flat list selects the matching worker itself.
 			assert.Equal(t, []string{"worker"},
-				listSessionIDs(t, d, tt.filter(defaults)))
+				listSortedIDs(t, d, tt.filter(defaults)))
 
 			// The sidebar keeps the launcher's tree and drops unrelated roots.
 			for _, limit := range []int{0, 10} {
@@ -445,34 +417,7 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 	}
 
 	// Without an annotation filter the defaults still hide the worker.
-	assert.ElementsMatch(t, []string{"manager", "idle"}, listSessionIDs(t, d, defaults))
-}
-
-func TestSessionBatchSpawnEdgeOverridesExternalParent(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "launcher", "proj")
-	insertSession(t, d, "worker", "proj")
-	link, err := d.SetSessionExternalParent(ctx, "worker", "launcher")
-	require.NoError(t, err)
-	require.True(t, link.Applied)
-	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
-		Session:         Session{ID: "spawner", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
-		ReplaceMessages: true,
-		Messages: []Message{{
-			SessionID: "spawner", Ordinal: 0, Role: "assistant",
-			Content: "spawn worker", HasToolUse: true,
-			ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}},
-		}},
-	}})
-	require.NoError(t, err)
-	worker, err := d.GetSession(ctx, "worker")
-	require.NoError(t, err)
-	require.NotNil(t, worker.ParentSessionID)
-	assert.Equal(t, "spawner", *worker.ParentSessionID)
-	link, err = d.GetSessionExternalParent(ctx, "worker")
-	require.NoError(t, err)
-	assert.False(t, link.Applied)
+	assert.ElementsMatch(t, []string{"manager", "idle"}, listSortedIDs(t, d, defaults))
 }
 
 func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
@@ -496,6 +441,13 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	}
 	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
 	require.NoError(t, err)
+	child, err := d.GetSession(ctx, "child")
+	require.NoError(t, err)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "spawner", *child.ParentSessionID)
+	link, err = d.GetSessionExternalParent(ctx, "child")
+	require.NoError(t, err)
+	assert.False(t, link.Applied)
 	require.NoError(t, d.LinkSubagentSessions())
 
 	// A launcher naming the spawner itself must not take ownership of the
@@ -505,7 +457,7 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	assert.False(t, link.Applied)
 	_, err = d.ClearSessionExternalParent(ctx, "child")
 	require.NoError(t, err)
-	child, err := d.GetSession(ctx, "child")
+	child, err = d.GetSession(ctx, "child")
 	require.NoError(t, err)
 	require.NotNil(t, child.ParentSessionID)
 	assert.Equal(t, "spawner", *child.ParentSessionID,
