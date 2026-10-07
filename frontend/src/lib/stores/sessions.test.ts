@@ -2283,7 +2283,8 @@ describe("SessionsStore", () => {
       await sessions.load();
       expect(sessions.sessions).toHaveLength(1);
 
-      const rejected = 'pr filter "https://github.com/acme/widgets": not a pull or merge request URL';
+      const rejected =
+        'pr filter "https://github.com/acme/widgets": not a pull or merge request URL';
       vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(new ApiError(400, rejected));
       sessions.setPRFilter("https://github.com/acme/widgets");
       await vi.waitFor(() => {
@@ -3709,13 +3710,24 @@ describe("SessionsStore live refresh", () => {
     const sessions = createSessionsStore();
     const detach = sessions.attachSidebar();
     sessions.activeSessionId = "worker";
-    sessions.sessions = [makeSession({ id: "worker", labels: ["role=reviewer"] })];
+    sessions.sessions = [
+      makeSession({
+        id: "worker",
+        labels: ["role=reviewer"],
+        parent_session_id: "manager",
+        parent_session_ids: ["manager"],
+        relationship_type: "subagent",
+      }),
+    ];
     vi.mocked(api.getSession).mockResolvedValue(makeSession({ id: "worker", labels: [] }));
     expect(sessions.activeSession?.labels).toEqual(["role=reviewer"]);
 
     registered!({ scope: "sessions" });
     await vi.waitFor(() => {
       expect(sessions.activeSession?.labels).toEqual([]);
+      expect(sessions.activeSession?.parent_session_id).toBeUndefined();
+      expect(sessions.activeSession?.parent_session_ids).toBeUndefined();
+      expect(sessions.activeSession?.relationship_type).toBeUndefined();
     });
     expect(SessionsService.getApiV1SessionsById).toHaveBeenCalledWith(
       { id: "worker" },

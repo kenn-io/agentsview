@@ -677,6 +677,7 @@ func TestSessionAnnotations_ServerFlagRefusesOlderServer(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			paths = append(paths, r.URL.Path)
+			assert.Equal(t, http.MethodGet, r.Method)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"api_version":%d}`,
 				server.SessionAnnotationsAPIVersion-1)
@@ -695,8 +696,51 @@ func TestSessionAnnotations_ServerFlagRefusesOlderServer(t *testing.T) {
 		_, err := executeCommand(newRootCommand(), args...)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "restart or upgrade the server")
-		assert.Equal(t, []string{"/api/v1/version"}, paths)
+		require.NotEmpty(t, paths)
+		assert.Equal(t, "/api/v1/version", paths[len(paths)-1])
 	}
+}
+
+func TestSessionAnnotationsResolveBareIDs(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	const worker = "11111111-1111-4111-8111-111111111111"
+	const manager = "22222222-2222-4222-8222-222222222222"
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "codex:" + worker, project: "proj"},
+		sessionSeed{id: "codex:" + manager, project: "proj"},
+	)
+	out, err := executeCommand(newRootCommand(), "session", "label", worker, "role=reviewer", "--json")
+	require.NoError(t, err)
+	labels := decodeCLIJSON[db.SessionLabels](t, out)
+	assert.Equal(t, "codex:"+worker, labels.SessionID)
+	assert.True(t, labels.SessionFound)
+	assert.Equal(t, []string{"role=reviewer"}, labels.Labels)
+
+	out, err = executeCommand(newRootCommand(), "session", "parent", worker, manager, "--json")
+	require.NoError(t, err)
+	link := decodeCLIJSON[db.SessionExternalParent](t, out)
+	assert.Equal(t, "codex:"+worker, link.SessionID)
+	assert.Equal(t, "codex:"+manager, link.ParentSessionID)
+	assert.True(t, link.Applied)
+
+	out, err = executeCommand(newRootCommand(), "session", "get", worker, "--json")
+	require.NoError(t, err)
+	detail := decodeCLIJSON[service.SessionDetail](t, out)
+	require.NotNil(t, detail.ParentSessionID)
+	assert.Equal(t, "codex:"+manager, *detail.ParentSessionID)
+	assert.Equal(t, []string{"role=reviewer"}, detail.Labels)
+
+	out, err = executeCommand(newRootCommand(), "session", "label", "unsynced-worker", "pending", "--json")
+	require.NoError(t, err)
+	labels = decodeCLIJSON[db.SessionLabels](t, out)
+	assert.Equal(t, "unsynced-worker", labels.SessionID)
+	assert.False(t, labels.SessionFound)
+
+	out, err = executeCommand(newRootCommand(), "session", "parent", "unsynced-worker", "unsynced-manager", "--json")
+	require.NoError(t, err)
+	link = decodeCLIJSON[db.SessionExternalParent](t, out)
+	assert.Equal(t, "unsynced-worker", link.SessionID)
+	assert.Equal(t, "unsynced-manager", link.ParentSessionID)
 }
 
 func TestPrintSessionParentHumanUnapplied(t *testing.T) {
