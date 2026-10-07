@@ -76,10 +76,12 @@ Claude.ai, close the window, then click **Sync** to download your chats.
 The dialog shows progress and counts new, updated, skipped, and failed chats.
 Sync skips trashed chats; file imports report them as refusals.
 
-Each sync checks all conversation summaries and downloads only new or changed
-chats. Search stays available during the import. Trashed or permanently deleted
-chats stay deleted, and shorter conversations are refused. Closing the dialog
-cancels the sync; completed chats stay archived for the next sync.
+Each sync includes archived chats, checks all conversation summaries, and
+downloads only new or changed chats. Search stays available during the import.
+Trashed or permanently deleted chats stay deleted. A chat whose visible history
+changed after an edit or a branch switch replaces the archived copy. The
+previous version stays in Trash. Closing the dialog cancels the sync; completed
+chats stay archived for the next sync.
 
 Sign-in persists in the browser's cookie store across app restarts. **Disconnect**
 deletes the Claude.ai cookies and closes the sign-in window. Credentials stay

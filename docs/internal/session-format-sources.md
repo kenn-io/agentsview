@@ -2739,24 +2739,36 @@ schemas keep their existing ordering behavior.
   and [message normalizer](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-l-m-0-BUHSvGzE.js).
   The list client reads `data` and `has_more` from
   `https://claude.ai/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}`.
-  Its normal list options omit `starred`; the starred-only list sets
-  `starred=true`. Sync omits this filter so starred chats remain eligible.
-  The detail builder sets `tree=True` and `rendering_mode=messages`; the
-  client enables `consistency=strong` by default. Sync uses
-  `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}?tree=True&rendering_mode=messages&consistency=strong`.
-  Freshness compares summary `updated_at` with archived `ended_at`.
-  Details read `name`, `created_at`, `updated_at`, `current_leaf_message_uuid`,
-  and `chat_messages`. For a missing `parent_message_uuid`, the normalizer
-  finds the nearest lower message `index`; the root sentinel is
-  `00000000-0000-4000-8000-000000000000`. The parser follows the selected
-  leaf's parents. A missing leaf or cycle fails; without a leaf, it keeps
-  every message. Sync replaces a changed path that rewrites or shortens the
-  archived history and keeps the previous copy in trash. An empty list page
-  with `has_more: true` fails.
+  Sync requests `archived=false` and `archived=true` separately. It omits the
+  `starred` filter so starred chats remain eligible. Repeated summaries skip
+  detail fetches when summary `updated_at` matches archived `ended_at`.
+  The producer's `ET` detail builder defaults to `tree=True`,
+  `rendering_mode=messages`, `render_all_tools=true`, and
+  `include_inline_comparison=true`; the client enables `consistency=strong`.
+  Sync uses these parameters on
+  `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}`.
+  The producer's `fo` keeps assistants, humans with an assistant child,
+  messages without a parent field, and every ancestor of a kept message.
+  `uo` resolves an absent, null, or empty parent through the nearest lower
+  `index`, retaining the distinction between absent and null fields. The root
+  sentinel is `00000000-0000-4000-8000-000000000000`. Children retain array
+  order, with the first selected by default. `co` selects the leaf's ancestors;
+  a leaf outside the kept messages falls back to the last kept message.
+  `vo` walks down from the sentinel. `po` restores an unanswered human prompt
+  matching the server leaf, or the last one attached to the visible path's end.
+  The shared parser applies these rules only when tree fields are present;
+  flat exports retain their original order. Duplicate message UUIDs, missing
+  resolved parents, cycles, and trees without a root fail before writing.
+  Sync also rejects a detail UUID that differs from the requested chat.
+  New turns append rows and preserve existing message IDs. Changed or shorter
+  visible history replaces the chat and keeps the previous version in Trash.
+  An empty list page with `has_more: true` fails.
   The export parser reads message `sender`, `text`, `content`, timestamps,
   and attachments. Organization `capabilities` containing `chat` remain
-  based on the original implementation's observations. Live account checks
-  remain outstanding for export branch fields and empty-chat listings.
+  based on the original implementation's observations.
+  **Unverified live:** whether the list hides archived chats without the flag,
+  whether `render_all_tools` changes stored tool output, whether exports carry
+  tree fields, and empty-chat listings.
 
 ## ChatGPT Export (`chatgpt`)
 

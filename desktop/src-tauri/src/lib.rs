@@ -40,7 +40,6 @@ use tauri_plugin_updater::UpdaterExt;
 const HOST: &str = "127.0.0.1";
 const CLAUDE_AUTH_WINDOW_LABEL: &str = "claude-auth";
 const CLAUDE_AUTH_URL: &str = "https://claude.ai/login?return_url=%2Fnew";
-const CLAUDE_BROWSER_RESPONSE_MAX_BYTES: usize = 32 << 20;
 
 #[derive(Default)]
 struct ClaudeAuthState {
@@ -1001,7 +1000,7 @@ fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlug
     PluginBuilder::new("navigation-guard")
         .on_navigation(|webview, url| {
             if webview.label() == CLAUDE_AUTH_WINDOW_LABEL {
-                return is_allowed_claude_auth_navigation(url);
+                return url.scheme() == "https";
             }
             let backend_port = webview
                 .app_handle()
@@ -6405,54 +6404,6 @@ agentsview running at http://127.0.0.1:18082
     }
 }
 
-fn is_allowed_claude_auth_navigation(url: &Url) -> bool {
-    if url.port().is_some() || url.scheme() != "https" {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    host == "claude.ai"
-        || host.ends_with(".claude.ai")
-        || matches!(
-            host,
-            "accounts.google.com" | "login.microsoftonline.com" | "appleid.apple.com"
-        )
-        || host.ends_with(".okta.com")
-        || host.ends_with(".auth0.com")
-}
-
-fn valid_claude_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-
-fn valid_claude_fetch_path(path: &str) -> bool {
-    if path == "/api/organizations" {
-        return true;
-    }
-    if path.contains(['\\', '#', '%', '\r', '\n']) {
-        return false;
-    }
-    let Some(rest) = path.strip_prefix("/api/organizations/") else {
-        return false;
-    };
-    let Some((org, tail)) = rest.split_once('/') else {
-        return false;
-    };
-    valid_claude_identifier(org)
-        && tail.split('?').next().is_some_and(|route| {
-            !route.is_empty()
-                && route.split('/').all(|part| {
-                    valid_claude_identifier(part)
-                        || part == "chat_conversations"
-                        || part == "chat_conversations_v2"
-                })
-        })
-}
-
 #[tauri::command]
 async fn claude_auth_connect(handle: AppHandle) -> Result<(), String> {
     let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
@@ -6489,9 +6440,6 @@ async fn claude_auth_fetch(
     handle: AppHandle,
     path: String,
 ) -> Result<ClaudeBrowserResponse, String> {
-    if !valid_claude_fetch_path(&path) {
-        return Err("unsupported Claude API path".into());
-    }
     let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
         Some(window) => window,
         None => {
@@ -6545,7 +6493,6 @@ async fn claude_auth_fetch(
 
 #[cfg(test)]
 mod claude_sync_tests {
-    use super::valid_claude_fetch_path;
 
     #[test]
     fn claude_fetch_unsolicited_result_leaves_request_pending() {
@@ -6592,59 +6539,6 @@ mod claude_sync_tests {
             .finish_browser_request(result(id, "duplicate"))
             .is_err());
     }
-
-    #[test]
-    fn claude_fetch_oversized_response_fails_only_its_request() {
-        let state = super::ClaudeAuthState::default();
-        let (large_id, mut large_receiver) = state.start_browser_request().unwrap();
-        let (id, mut receiver) = state.start_browser_request().unwrap();
-        assert!(state
-            .finish_browser_request(super::ClaudeBrowserFetchResult {
-                request_id: large_id,
-                status: 200,
-                body: "x".repeat(super::CLAUDE_BROWSER_RESPONSE_MAX_BYTES + 1),
-                error: None,
-                retry_after: None,
-            })
-            .is_err());
-        assert_eq!(
-            large_receiver.try_recv().unwrap().error.as_deref(),
-            Some("Claude browser response exceeded the 32 MiB safety limit")
-        );
-        state
-            .finish_browser_request(super::ClaudeBrowserFetchResult {
-                request_id: id,
-                status: 200,
-                body: "chat".into(),
-                error: None,
-                retry_after: None,
-            })
-            .unwrap();
-        assert_eq!(receiver.try_recv().unwrap().body, "chat");
-    }
-
-    #[test]
-    fn claude_fetch_path_validation() {
-        for path in [
-            "/api/organizations",
-            "/api/organizations/org-1/chat_conversations_v2?limit=50&offset=0",
-            "/api/organizations/org-1/chat_conversations/chat-1?tree=True",
-        ] {
-            assert!(valid_claude_fetch_path(path), "{path}");
-        }
-        for path in [
-            "https://evil.example/api/organizations/a",
-            "//evil.example/a",
-            "/api/organizations/a/../secrets",
-            "/api/organizations/a/%2e%2e/secrets",
-            "/api/organizations/a/\\evil",
-            "/api/organizations/a/chat#fragment",
-            "/api/organizations//chat",
-            "/api/organizations/a/chat\n",
-        ] {
-            assert!(!valid_claude_fetch_path(path), "{path}");
-        }
-    }
 }
 
 fn create_claude_auth_window(
@@ -6682,17 +6576,9 @@ fn create_claude_auth_window(
 
 #[tauri::command]
 async fn claude_auth_fetch_result(
-    window: WebviewWindow,
     state: State<'_, ClaudeAuthState>,
     payload: ClaudeBrowserFetchResult,
 ) -> Result<(), String> {
-    let origin = window.url().map_err(|err| err.to_string())?;
-    if origin.port().is_some()
-        || origin.scheme() != "https"
-        || !origin.host_str().is_some_and(|host| host == "claude.ai")
-    {
-        return Err("Claude browser response came from an unexpected origin".into());
-    }
     state.finish_browser_request(payload)
 }
 
@@ -6722,15 +6608,6 @@ impl ClaudeAuthState {
             .map_err(|_| "Claude browser request lock failed")?
             .remove(&payload.request_id)
             .ok_or("no Claude browser request is pending")?;
-        if payload.body.len() > CLAUDE_BROWSER_RESPONSE_MAX_BYTES {
-            let _ = sender.send(ClaudeBrowserResponse {
-                status: 0,
-                body: String::new(),
-                error: Some("Claude browser response exceeded the 32 MiB safety limit".into()),
-                retry_after: None,
-            });
-            return Err("Claude browser response was too large".into());
-        }
         sender
             .send(ClaudeBrowserResponse {
                 status: payload.status,

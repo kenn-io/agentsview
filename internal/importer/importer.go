@@ -134,10 +134,7 @@ func ImportClaudeAIWithOptions(
 	opts ImportOptions,
 	machine ...string,
 ) (stats ImportStats, retErr error) {
-	var fts *lazyFTS
-	if !opts.IncrementalFTS {
-		fts = newLazyFTS(ctx, store, cb.indexing)
-	}
+	fts := newLazyFTS(ctx, store, cb.indexing)
 	defer func() {
 		if err := fts.restore(ctx); err != nil {
 			retErr = errors.Join(retErr, err)
@@ -165,16 +162,9 @@ func ImportClaudeAIWithOptions(
 		result.Session.Machine = resolvedImportMachine(
 			result.Session.Machine, machine,
 		)
-		ci := claudeAIImport
-		if opts.claudeAISync {
-			ci.upsert = upsertClaudeAISyncConversation
-		}
-		status, err := ci.importConversation(
+		status, err := claudeAIImport.importConversation(
 			ctx, store, result, fts, opts,
 		)
-		if opts.claudeAISync && errors.Is(err, db.ErrSessionTrashed) {
-			status, err = importSkipped, nil
-		}
 		stats.record(result.Session.ID, status, err)
 		cb.progress(stats)
 		return nil
@@ -275,6 +265,22 @@ func upsertConversation(
 	}
 	db.ApplyParsedSessionIdentity(&sess, s)
 
+	if err := store.UpsertSession(ctx, sess); err != nil {
+		if errors.Is(err, db.ErrSessionExcluded) {
+			return importSkipped, nil
+		}
+		return importNew, fmt.Errorf("upserting session: %w", err)
+	}
+
+	// Bump local_modified_at so incremental PG push picks up session_name
+	// changes even when the skip path below returns importSkipped (message
+	// count unchanged) and ReplaceSessionMessages is never called.
+	if localDB, ok := store.(*db.DB); ok {
+		if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
+			log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
+		}
+	}
+
 	// Skip expensive message replacement when the conversation
 	// has not changed since the last import. Compare both
 	// message count and ended_at (source updated_at) to detect
@@ -291,20 +297,6 @@ func upsertConversation(
 			// projects rows, so raw parser output can differ from an
 			// unchanged archived copy.
 			if sameMessages(existingMsgs, storedFormMessages(store, msgs)) {
-				if err := store.UpsertSession(ctx, sess); err != nil {
-					if errors.Is(err, db.ErrSessionExcluded) {
-						return importSkipped, nil
-					}
-					return importNew, fmt.Errorf("upserting session: %w", err)
-				}
-
-				// Publish title changes to incremental mirrors even when messages match.
-				if localDB, ok := store.(*db.DB); ok {
-					if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
-						log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
-					}
-				}
-
 				return importSkipped, nil
 			}
 		}
@@ -314,16 +306,8 @@ func upsertConversation(
 	// avoid per-row trigger overhead during bulk work.
 	fts.suspend(ctx)
 
-	if err := writeSessionBatch(ctx, store, db.SessionBatchWrite{
-		Session:                    sess,
-		Messages:                   msgs,
-		SkipSignalUpdates:          true,
-		ReplaceMessages:            true,
-		RejectMessageCountDecrease: true,
-	}); errors.Is(err, db.ErrSessionExcluded) {
-		return importSkipped, nil
-	} else if err != nil {
-		return importNew, fmt.Errorf("writing session: %w", err)
+	if err := store.ReplaceSessionMessages(ctx, s.ID, msgs); err != nil {
+		return importNew, fmt.Errorf("replacing messages: %w", err)
 	}
 
 	if isNew {
@@ -434,7 +418,7 @@ func upsertChatGPTConversation(
 	if existing == nil {
 		fts.suspend(ctx)
 		err := writeChatGPTSession(ctx, store, chatGPTSession(s), msgs)
-		if errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
+		if errors.Is(err, db.ErrSessionExcluded) {
 			return importSkipped, nil
 		}
 		if err != nil {
@@ -513,7 +497,7 @@ func upsertChatGPTConversation(
 	rows = append(rows, msgs[len(archived):]...)
 	if err := appendChatGPTMessages(
 		ctx, store, chatGPTSession(s), rows,
-	); errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
+	); errors.Is(err, db.ErrSessionExcluded) {
 		return importSkipped, nil
 	} else if err != nil {
 		return importNew, fmt.Errorf("appending messages: %w", err)
@@ -596,7 +580,7 @@ func canonicalChatGPTMessages(
 func writeChatGPTSession(
 	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
 ) error {
-	return writeSessionBatch(ctx, store, db.SessionBatchWrite{
+	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
 		Session:                    sess,
 		Messages:                   msgs,
 		SkipSignalUpdates:          true,
@@ -612,7 +596,7 @@ func writeChatGPTSession(
 func appendChatGPTMessages(
 	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
 ) error {
-	return writeSessionBatch(ctx, store, db.SessionBatchWrite{
+	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
 		Session:            sess,
 		Messages:           msgs,
 		CompleteStoredRows: true,
@@ -641,15 +625,13 @@ func chatGPTFillRows(
 	return rows
 }
 
-func writeSessionBatch(
+func writeChatGPTBatch(
 	ctx context.Context, store db.Store, write db.SessionBatchWrite,
 ) error {
 	result, err := store.WriteSessionBatchAtomic(
 		ctx, []db.SessionBatchWrite{write},
 	)
-	if errors.Is(err, db.ErrSessionTrashed) {
-		return err
-	}
+	// Trashed sessions count as excluded, so check before the returned error.
 	if result.ExcludedSessions > 0 {
 		return db.ErrSessionExcluded
 	}
