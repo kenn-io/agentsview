@@ -75,7 +75,7 @@ func TestDiscoverRepos_ReusesDirectoryRoots(t *testing.T) {
 	t.Setenv("PATH", path)
 	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{a, b, outside})...)))
 	gitRun(t, outside, nil, "init", "-q")
-	assert.Empty(t, DiscoverRepos(t.Context(), []string{outside}), "completed negative lookups remain cached")
+	assert.Equal(t, canonAll([]string{outside}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{outside})...)))
 	t.Setenv("PATH", t.TempDir())
 	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{b, a})...)))
 }
@@ -102,11 +102,15 @@ func TestDiscoverRepos_OriginsStayFresh(t *testing.T) {
 	assert.Len(t, DiscoverRepos(t.Context(), []string{a, b}), 1)
 }
 
-func TestDiscoverRepos_DeletedRoot(t *testing.T) {
+func TestDiscoverRepos_RepositoryChanges(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initBareRepo(t)
 	sub := mkdirIn(t, repo, "sub")
 	require.NotEmpty(t, DiscoverRepos(t.Context(), []string{sub}))
+	gitRun(t, sub, nil, "init", "-q")
+	assert.Equal(t, canonAll([]string{sub}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{sub})...)))
+	require.NoError(t, os.RemoveAll(filepath.Join(sub, ".git")))
+	assert.Equal(t, canonAll([]string{repo}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{sub})...)))
 	require.NoError(t, os.RemoveAll(repo))
 	assert.Empty(t, DiscoverRepos(t.Context(), []string{sub}))
 }
@@ -186,6 +190,13 @@ func TestDiscoverRepos_LinkedWorktreeResolves(t *testing.T) {
 		canonAll([]string{worktreeRoot}),
 		canonAll(slices.Concat(got...)),
 		"DiscoverRepos (worktree path)")
+	gitfile := filepath.Join(worktreeRoot, ".git")
+	contents, err := os.ReadFile(gitfile)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(gitfile, []byte("gitdir: missing\n"), 0o600))
+	assert.Empty(t, DiscoverRepos(t.Context(), []string{worktreeRoot}))
+	require.NoError(t, os.WriteFile(gitfile, contents, 0o600))
+	assert.Equal(t, canonAll([]string{worktreeRoot}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{worktreeRoot})...)))
 }
 
 // TestDiscoverRepos_MissingCwdSkipped confirms that a cwd whose path is

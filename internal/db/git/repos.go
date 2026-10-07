@@ -4,7 +4,6 @@ package git
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"os"
 	"os/exec"
@@ -13,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	gitcmd "go.kenn.io/kit/git/cmd"
 	gitrepo "go.kenn.io/kit/git/repo"
 )
 
@@ -37,9 +35,6 @@ func DiscoverRepos(ctx context.Context, cwds []string) [][]string {
 	position := map[string]int{}
 	out := [][]string{}
 	for _, cwd := range cwds {
-		if ctx.Err() != nil {
-			break
-		}
 		root := findRepoRoot(ctx, cwd)
 		if root == "" {
 			continue
@@ -170,15 +165,52 @@ func normalizeRemoteURL(raw, root string) string {
 	return strings.ToLower(host) + "/" + path
 }
 
-// Completed directory lookups last until process exit; failed fills remain retryable.
+// Successful lookups survive while the nearest Git marker remains unchanged.
 var repoRoots = struct {
 	sync.Mutex
 	entries map[string]*repoRootEntry
 }{entries: make(map[string]*repoRootEntry)}
 
 type repoRootEntry struct {
-	ready chan struct{}
-	root  string
+	ready  chan struct{}
+	root   string
+	marker gitMarker
+}
+
+type gitMarker struct {
+	path string
+	info os.FileInfo
+}
+
+func (m gitMarker) matches(other gitMarker) bool {
+	return m.info != nil && other.info != nil && m.path == other.path && os.SameFile(m.info, other.info) &&
+		m.info.Mode() == other.info.Mode() && m.info.Size() == other.info.Size() && m.info.ModTime().Equal(other.info.ModTime())
+}
+
+// nearestGitMarker validates cached roots; Git still resolves unusual layouts.
+func nearestGitMarker(start string) gitMarker {
+	dir, err := filepath.EvalSymlinks(existingAncestor(start))
+	if err != nil {
+		return gitMarker{}
+	}
+	for {
+		path := filepath.Join(dir, ".git")
+		info, err := os.Lstat(path)
+		if err == nil {
+			if info.IsDir() || info.Mode().IsRegular() {
+				return gitMarker{path: path, info: info}
+			}
+			return gitMarker{}
+		}
+		if !os.IsNotExist(err) {
+			return gitMarker{}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return gitMarker{}
+		}
+		dir = parent
+	}
 }
 
 // findRepoRoot returns the absolute repo toplevel for start, or "" when no enclosing repo resolves.
@@ -193,35 +225,34 @@ func findRepoRoot(ctx context.Context, start string) string {
 	for ctx.Err() == nil {
 		repoRoots.Lock()
 		if entry := repoRoots.entries[start]; entry != nil {
+			repoRoots.Unlock()
 			select {
 			case <-entry.ready:
-				if entry.root != "" {
-					info, err := os.Stat(entry.root)
-					if err != nil || !info.IsDir() {
-						delete(repoRoots.entries, start)
-						repoRoots.Unlock()
-						continue
-					}
-				}
-				root := entry.root
-				repoRoots.Unlock()
-				return root
-			default:
-				repoRoots.Unlock()
-				select {
-				case <-entry.ready:
-					continue
-				case <-ctx.Done():
-					return ""
-				}
+			case <-ctx.Done():
+				return ""
 			}
+			if !entry.marker.matches(nearestGitMarker(start)) {
+				repoRoots.Lock()
+				if repoRoots.entries[start] == entry {
+					delete(repoRoots.entries, start)
+				}
+				repoRoots.Unlock()
+				continue
+			}
+			return entry.root
 		}
 		entry := &repoRootEntry{ready: make(chan struct{})}
 		repoRoots.entries[start] = entry
 		repoRoots.Unlock()
-		root, cacheable := resolveRepoRoot(ctx, start)
+		marker := nearestGitMarker(start)
+		root := ""
+		if dir := existingAncestor(start); dir != "" {
+			root = gitToplevel(ctx, dir)
+		}
+		cacheable := root != "" && filepath.Clean(root) == filepath.Dir(marker.path) && marker.matches(nearestGitMarker(start))
 		repoRoots.Lock()
 		entry.root = root
+		entry.marker = marker
 		if !cacheable {
 			delete(repoRoots.entries, start)
 		}
@@ -230,14 +261,6 @@ func findRepoRoot(ctx context.Context, start string) string {
 		return root
 	}
 	return ""
-}
-
-func resolveRepoRoot(ctx context.Context, start string) (string, bool) {
-	dir := existingAncestor(start)
-	if dir == "" {
-		return "", false
-	}
-	return gitToplevel(ctx, dir)
 }
 
 // existingAncestor returns the closest ancestor of path that exists on disk
@@ -264,15 +287,14 @@ func existingAncestor(path string) string {
 }
 
 // gitToplevel runs `git rev-parse --show-toplevel` from dir and returns the
-// trimmed result and whether it can be cached. A 5s timeout guards
+// trimmed result, or "" if git fails or prints nothing. A 5s timeout guards
 // against hung git invocations on broken repos.
-func gitToplevel(ctx context.Context, dir string) (string, bool) {
+func gitToplevel(ctx context.Context, dir string) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	root, err := gitrepo.Root(ctx, dir)
 	if err != nil {
-		var gitErr *gitcmd.GitError
-		return "", ctx.Err() == nil && errors.As(err, &gitErr) && strings.HasPrefix(gitErr.Stderr, "fatal: not a git repository ")
+		return ""
 	}
-	return root, root != ""
+	return root
 }
