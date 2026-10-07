@@ -33,6 +33,13 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 			Repository: "team/repo", Number: 5,
 		}}
 	})
+	insertSession(t, d, "gerrit", "proj", func(s *Session) {
+		s.PRLinks = []PRLink{{
+			URL:        "https://example-review.googlesource.com/c/example/repo/+/7",
+			Host:       "example-review.googlesource.com",
+			Repository: "example/repo", Number: 7,
+		}}
+	})
 
 	got, err := d.GetSession(t.Context(), "with-prs")
 	require.NoError(t, err)
@@ -58,6 +65,7 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 		{filter: "https://forge.example.com/owner/repo/pull/12", want: []string{}},
 		{filter: "owner/missing", want: []string{}},
 		{filter: "https://bitbucket.org/team/repo/pull-requests/5", want: []string{"bitbucket"}},
+		{filter: "https://example-review.googlesource.com/c/example/repo/+/7", want: []string{"gerrit"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.filter, func(t *testing.T) {

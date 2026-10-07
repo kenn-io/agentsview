@@ -64,6 +64,16 @@ func TestNewPRLink(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			name: "gerrit change in a nested repository",
+			url:  "https://example-review.googlesource.com/c/example/repo/+/7",
+			want: PRLink{
+				URL:        "https://example-review.googlesource.com/c/example/repo/+/7",
+				Host:       "example-review.googlesource.com",
+				Repository: "example/repo", Number: 7,
+			},
+			wantOK: true,
+		},
+		{
 			name:       "explicit fields win over an unrecognized path",
 			url:        "https://forge.example.com/r/9",
 			repository: "team/repo",

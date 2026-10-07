@@ -26,11 +26,7 @@ func listedSessionIDs(t *testing.T, te *testEnv, query url.Values) []string {
 	w := te.get(t, "/api/v1/sessions?"+query.Encode())
 	assertStatus(t, w, http.StatusOK)
 	list := decode[service.SessionList](t, w)
-	ids := []string{}
-	for _, s := range list.Sessions {
-		ids = append(ids, s.ID)
-	}
-	return ids
+	return orderedSessionIDs(list.Sessions)
 }
 
 func TestSessionLabelsAPI(t *testing.T) {
