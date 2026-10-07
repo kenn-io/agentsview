@@ -517,6 +517,75 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, provenance)
 }
 
+func TestApplyArtifactImportedSessionPreservesLauncherParent(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const origin = "peer-a1b2c3"
+	const workerID = origin + "~worker"
+	insertSession(t, d, "manager", "proj")
+	write := messageCountWrite(workerID, 1)
+	write.Session.Machine = origin
+	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+	require.NoError(t, err)
+	link, err := d.SetSessionExternalParent(ctx, workerID, "manager")
+	require.NoError(t, err)
+	require.True(t, link.Applied)
+
+	result, err := d.ApplyArtifactImportedSession(ctx, ArtifactImportedSession{
+		Origin: origin, GID: workerID, ImportedSessionID: workerID,
+		ManifestHash: strings.Repeat("a", 64),
+	}, write)
+	require.NoError(t, err)
+	require.True(t, result.Written)
+	worker, err := d.GetSession(ctx, workerID)
+	require.NoError(t, err)
+	require.NotNil(t, worker)
+	assert.Equal(t, Ptr("manager"), worker.ParentSessionID)
+	assert.Equal(t, "subagent", worker.RelationshipType)
+}
+
+func TestApplyArtifactImportedSessionBreaksLauncherCycle(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const origin = "peer-a1b2c3"
+	const aID = origin + "~a"
+	const bID = origin + "~b"
+	aWrite := messageCountWrite(aID, 1)
+	bWrite := messageCountWrite(bID, 1)
+	aWrite.Session.Machine, bWrite.Session.Machine = origin, origin
+	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{aWrite, bWrite})
+	require.NoError(t, err)
+	link, err := d.SetSessionExternalParent(ctx, aID, bID)
+	require.NoError(t, err)
+	require.True(t, link.Applied)
+
+	bWrite.Session.ParentSessionID = Ptr(aID)
+	bWrite.Session.RelationshipType = "continuation"
+	result, err := d.ApplyArtifactImportedSession(ctx, ArtifactImportedSession{
+		Origin: origin, GID: bID, ImportedSessionID: bID,
+		ManifestHash: strings.Repeat("a", 64),
+	}, bWrite)
+	require.NoError(t, err)
+	require.True(t, result.Written)
+	a, err := d.GetSession(ctx, aID)
+	require.NoError(t, err)
+	require.NotNil(t, a)
+	assert.Nil(t, a.ParentSessionID)
+	b, err := d.GetSession(ctx, bID)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	assert.Equal(t, Ptr(aID), b.ParentSessionID)
+	assert.Equal(t, "continuation", b.RelationshipType)
+	link, err = d.GetSessionExternalParent(ctx, aID)
+	require.NoError(t, err)
+	assert.False(t, link.Applied)
+	assert.Contains(t, listSessionIDs(t, d, SessionFilter{}), aID)
+	sidebar, err := d.GetSidebarSessionIndex(ctx, SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, sidebar.Total)
+	assert.NotEmpty(t, sidebar.Sessions)
+}
+
 func TestApplyArtifactImportedSessionProjectsToolResultImages(t *testing.T) {
 	database := testDB(t)
 	database.SetToolResultImages(config.ToolResultImagesOffload)

@@ -142,6 +142,11 @@ func (db *DB) applyArtifactImportedSession(
 	default:
 		return result, err
 	}
+	if result.Written {
+		if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{write.Session.ID}); err != nil {
+			return ArtifactImportedSessionResult{}, err
+		}
+	}
 	if err := recordArtifactImportedSessionTx(ctx, tx, imported); err != nil {
 		return ArtifactImportedSessionResult{}, err
 	}
