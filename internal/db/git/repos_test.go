@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -92,9 +93,12 @@ func TestFindRepoRoot_RetryFailedLookup(t *testing.T) {
 	t.Setenv("PATH", path)
 	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
 	outside := t.TempDir()
-	assert.Empty(t, findRepoRoot(t.Context(), outside))
+	ctx := &pausedRepoFill{Context: t.Context(), started: make(chan struct{}), resume: make(chan struct{})}
+	close(ctx.resume)
+	assert.Empty(t, DiscoverRepos(ctx, []string{outside, outside, outside}))
+	assert.Equal(t, int32(1), ctx.attempts.Load(), "one negative lookup per distinct working directory in a request")
 	gitRun(t, outside, nil, "init", "-q")
-	assert.Equal(t, canonAll([]string{outside})[0], findRepoRoot(t.Context(), outside))
+	assert.Equal(t, canonAll([]string{outside}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{outside})...)))
 }
 
 func TestFindRepoRoot_RepositoryChanges(t *testing.T) {
@@ -180,9 +184,11 @@ type pausedRepoFill struct {
 	context.Context
 	started, resume chan struct{}
 	startedOnce     sync.Once
+	attempts        atomic.Int32
 }
 
 func (ctx *pausedRepoFill) Deadline() (time.Time, bool) {
+	ctx.attempts.Add(1)
 	ctx.startedOnce.Do(func() { close(ctx.started) })
 	<-ctx.resume
 	return ctx.Context.Deadline()

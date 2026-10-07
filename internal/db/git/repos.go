@@ -31,10 +31,15 @@ import (
 // callers can count the union of their commits, including diverged branches.
 // Repositories without an origin stay separate by local path.
 func DiscoverRepos(ctx context.Context, cwds []string) [][]string {
+	seenCwds := map[string]struct{}{}
 	seen := map[string]struct{}{}
 	position := map[string]int{}
 	out := [][]string{}
 	for _, cwd := range cwds {
+		if _, ok := seenCwds[cwd]; ok {
+			continue
+		}
+		seenCwds[cwd] = struct{}{}
 		root := findRepoRoot(ctx, cwd)
 		if root == "" {
 			continue
