@@ -17,12 +17,12 @@ import (
 var fixturePRLinks = []db.PRLink{
 	{
 		URL: "https://github.com/Acme/Widgets/pull/42", Host: "github.com",
-		Repository: "Acme/Widgets", Number: 42, Source: "transcript",
+		Repository: "Acme/Widgets", Number: 42,
 		FirstSeenAt: "2026-01-10T00:01:00Z",
 	},
 	{
 		URL: "https://gitlab.com/acme/tools/-/merge_requests/7", Host: "gitlab.com",
-		Repository: "acme/tools", Number: 7, Source: "transcript",
+		Repository: "acme/tools", Number: 7,
 	},
 }
 

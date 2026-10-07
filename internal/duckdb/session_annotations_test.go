@@ -26,14 +26,12 @@ func newAnnotatedPushFixture(t *testing.T) (*db.DB, string) {
 				Host:       "github.com",
 				Repository: "Example-Org/Widgets",
 				Number:     12,
-				Source:     "transcript",
 			},
 			{
 				URL:        "https://github.com/example-org/gadgets/pull/7",
 				Host:       "github.com",
 				Repository: "example-org/gadgets",
 				Number:     7,
-				Source:     "transcript",
 			},
 		},
 		"sess-2": {{
@@ -41,7 +39,6 @@ func newAnnotatedPushFixture(t *testing.T) (*db.DB, string) {
 			Host:       "github.com",
 			Repository: "example-org/widgets",
 			Number:     13,
-			Source:     "transcript",
 		}},
 	}
 	writes := make([]db.SessionBatchWrite, 0, 3)

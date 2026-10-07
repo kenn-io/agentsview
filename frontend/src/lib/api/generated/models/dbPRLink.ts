@@ -7,6 +7,5 @@ export interface DbPRLink {
   host: string;
   number: number;
   repository: string;
-  source?: string;
   url: string;
 }

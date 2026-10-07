@@ -7,19 +7,6 @@ import (
 	"time"
 )
 
-// PRLinkSource records how a session's pull request link was obtained.
-type PRLinkSource string
-
-// PRLinkSourceTranscript marks a link the agent recorded as a structured
-// transcript event, such as Claude Code's pr-link record.
-const PRLinkSourceTranscript PRLinkSource = "transcript"
-
-// maxPRLinksPerSession bounds the links kept for one session. Claude Code
-// repeats the same pr-link record many times, so real sessions carry a
-// handful of distinct links; the cap only protects storage from a
-// malformed or adversarial transcript.
-const maxPRLinksPerSession = 100
-
 // PRLink is a pull or merge request associated with a session. The shape
 // is provider-neutral so any parser can populate it.
 type PRLink struct {
@@ -33,7 +20,6 @@ type PRLink struct {
 	Repository string
 	// Number is the pull or merge request number.
 	Number int
-	Source PRLinkSource
 	// FirstSeenAt is the earliest timestamp the source attached to the
 	// link; zero when the source carried none.
 	FirstSeenAt time.Time
@@ -45,7 +31,7 @@ type PRLink struct {
 // supplies them. It reports false when the reference is unusable.
 func NewPRLink(
 	rawURL, repository string, number int,
-	source PRLinkSource, seenAt time.Time,
+	seenAt time.Time,
 ) (PRLink, bool) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") ||
@@ -73,7 +59,6 @@ func NewPRLink(
 		Host:        host,
 		Repository:  repository,
 		Number:      number,
-		Source:      source,
 		FirstSeenAt: seenAt,
 	}, true
 }
@@ -116,9 +101,6 @@ func (c *prLinkCollector) add(link PRLink) {
 		}
 		return
 	}
-	if len(c.links) >= maxPRLinksPerSession {
-		return
-	}
 	if c.index == nil {
 		c.index = make(map[string]int)
 	}
@@ -146,12 +128,11 @@ func mergePRLinks(lists ...[]PRLink) []PRLink {
 
 // prLinkChangesStored reports whether a full parse would store something
 // different after seeing link, given the stored URLs and first-seen
-// times: a new URL below the per-session cap, or an earlier (or first)
-// timestamp for a stored URL.
+// times: a new URL, or an earlier timestamp for a stored URL.
 func prLinkChangesStored(stored map[string]time.Time, link PRLink) bool {
 	seen, ok := stored[link.URL]
 	if !ok {
-		return len(stored) < maxPRLinksPerSession
+		return true
 	}
 	if link.FirstSeenAt.IsZero() {
 		return false

@@ -185,8 +185,9 @@ fixtures retain this field; missing identities remain source-local.
   The records carry no `uuid`, so background-fork replay trimming never
   drops them. One transcript can repeat the same link hundreds of times, so
   Agentsview keeps one link per normalized URL with the earliest timestamp and
-  escalates an incremental sync to a full parse only for a URL the session
-  does not store yet. The record does not say whether the session opened the
+  keeps every distinct URL. Parser fixtures reverified on 2026-10-06 cover
+  more than 100 links and incremental reparsing for new URLs or earlier
+  timestamps. The record does not say whether the session opened the
   pull request. Undocumented upstream; evidence is `no-public-source`. See
   `claudePRLink` in `internal/parser/claude.go` and
   `internal/parser/pr_links.go`.

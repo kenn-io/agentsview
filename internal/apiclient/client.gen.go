@@ -21735,7 +21735,6 @@ type DBPRLink struct {
 	Host        string  `json:"host" validate:"required"`
 	Number      int64   `json:"number"`
 	Repository  string  `json:"repository" validate:"required"`
-	Source      *string `json:"source,omitempty"`
 	URL         string  `json:"url" validate:"required"`
 }
 

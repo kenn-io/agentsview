@@ -17,12 +17,12 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 		s.PRLinks = []PRLink{
 			{
 				URL: "https://github.com/Owner/Repo/pull/12", Host: "github.com",
-				Repository: "Owner/Repo", Number: 12, Source: "transcript",
+				Repository: "Owner/Repo", Number: 12,
 				FirstSeenAt: "2026-10-05T03:21:20.583Z",
 			},
 			{
 				URL: "https://github.com/owner/other/pull/3", Host: "github.com",
-				Repository: "owner/other", Number: 3, Source: "transcript",
+				Repository: "owner/other", Number: 3,
 			},
 		}
 	})
@@ -30,7 +30,7 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 	insertSession(t, d, "bitbucket", "proj", func(s *Session) {
 		s.PRLinks = []PRLink{{
 			URL: "https://bitbucket.org/team/repo/pull-requests/5", Host: "bitbucket.org",
-			Repository: "team/repo", Number: 5, Source: "transcript",
+			Repository: "team/repo", Number: 5,
 		}}
 	})
 
@@ -150,6 +150,8 @@ func TestSessionLabelsRejectInvalidInput(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := d.SetSessionLabels(t.Context(), "s", labels)
+			require.ErrorIs(t, err, ErrSessionLabelsInvalid)
+			_, err = d.UpdateSessionLabels(t.Context(), "s", labels, nil)
 			assert.ErrorIs(t, err, ErrSessionLabelsInvalid)
 		})
 	}

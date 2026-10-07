@@ -97,7 +97,7 @@ func TestSessionPRFilterAPI(t *testing.T) {
 	te := setup(t)
 	seedAnnotatedSession(t, te, "linked", []db.PRLink{{
 		URL: "https://github.com/owner/repo/pull/7", Host: "github.com",
-		Repository: "owner/repo", Number: 7, Source: "transcript",
+		Repository: "owner/repo", Number: 7,
 	}})
 	seedAnnotatedSession(t, te, "unlinked", nil)
 
