@@ -24,6 +24,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

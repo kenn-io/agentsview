@@ -165,9 +165,16 @@ func ImportClaudeAIWithOptions(
 		result.Session.Machine = resolvedImportMachine(
 			result.Session.Machine, machine,
 		)
-		status, err := claudeAIImport.importConversation(
+		ci := claudeAIImport
+		if opts.claudeAISync {
+			ci.upsert = upsertClaudeAISyncConversation
+		}
+		status, err := ci.importConversation(
 			ctx, store, result, fts, opts,
 		)
+		if opts.claudeAISync && errors.Is(err, db.ErrSessionTrashed) {
+			status, err = importSkipped, nil
+		}
 		stats.record(result.Session.ID, status, err)
 		cb.progress(stats)
 		return nil
@@ -237,12 +244,6 @@ func upsertConversation(
 	fts *lazyFTS,
 ) (importStatus, error) {
 	s := result.Session
-
-	if trash, ok := store.(interface {
-		IsSessionTrashed(context.Context, string) bool
-	}); ok && trash.IsSessionTrashed(ctx, s.ID) {
-		return importNew, db.ErrSessionTrashed
-	}
 
 	msgs := claudeAIMessages(s.ID, result.Messages)
 
@@ -433,7 +434,7 @@ func upsertChatGPTConversation(
 	if existing == nil {
 		fts.suspend(ctx)
 		err := writeChatGPTSession(ctx, store, chatGPTSession(s), msgs)
-		if errors.Is(err, db.ErrSessionExcluded) {
+		if errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
 			return importSkipped, nil
 		}
 		if err != nil {
@@ -512,7 +513,7 @@ func upsertChatGPTConversation(
 	rows = append(rows, msgs[len(archived):]...)
 	if err := appendChatGPTMessages(
 		ctx, store, chatGPTSession(s), rows,
-	); errors.Is(err, db.ErrSessionExcluded) {
+	); errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
 		return importSkipped, nil
 	} else if err != nil {
 		return importNew, fmt.Errorf("appending messages: %w", err)
@@ -646,7 +647,9 @@ func writeSessionBatch(
 	result, err := store.WriteSessionBatchAtomic(
 		ctx, []db.SessionBatchWrite{write},
 	)
-	// Trashed sessions count as excluded, so check before the returned error.
+	if errors.Is(err, db.ErrSessionTrashed) {
+		return err
+	}
 	if result.ExcludedSessions > 0 {
 		return db.ErrSessionExcluded
 	}

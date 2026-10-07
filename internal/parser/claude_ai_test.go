@@ -9,6 +9,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseClaudeAIExport_LegacyParents(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		parent string
+		want   []string
+	}{
+		{name: "missing parents", parent: "", want: []string{"First question", "First answer", "Second question", "Second answer"}},
+		{name: "root sentinel ends the path", parent: "00000000-0000-4000-8000-000000000000", want: []string{"Second question", "Second answer"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := fmt.Sprintf(`[{"uuid":"legacy","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"a2","chat_messages":[
+				{"uuid":"a2","index":5,"sender":"assistant","text":"Second answer"},
+				{"uuid":"q1","index":0,"sender":"human","text":"First question"},
+				{"uuid":"q2","index":4,"parent_message_uuid":%q,"sender":"human","text":"Second question"},
+				{"uuid":"a1","index":1,"sender":"assistant","text":"First answer"}]}]`, tt.parent)
+			var contents []string
+			err := parseClaudeAIExport(strings.NewReader(input), func(result ParseResult) error {
+				for _, message := range result.Messages {
+					contents = append(contents, message.Content)
+				}
+				return nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, contents)
+		})
+	}
+}
+
 func TestParseClaudeAIExport_SelectedPath(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
