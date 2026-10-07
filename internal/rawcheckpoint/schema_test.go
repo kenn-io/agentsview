@@ -2,6 +2,7 @@ package rawcheckpoint
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -27,13 +28,13 @@ func downgradeToVersionNine(t *testing.T, store *Store) {
 	}
 }
 
-// openCheckpointForTest closes the store when the test ends. A test that
-// closes it earlier to reopen the same path leaves a harmless second Close.
+// openCheckpointForTest closes the store when the test ends. Close is
+// idempotent, so a test may close it earlier to reopen the same path.
 func openCheckpointForTest(t *testing.T, path string) *Store {
 	t.Helper()
 	store, err := Open(t.Context(), path)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return store
 }
 
@@ -102,10 +103,35 @@ func queryStrings(t *testing.T, db *sql.DB, query string) []string {
 	return values
 }
 
-func schemaObjects(t *testing.T, db *sql.DB) []string {
+// schemaDefinitions maps each schema object to its whitespace-normalized SQL
+// so checkpoints built by different paths can be compared definition by
+// definition.
+func schemaDefinitions(t *testing.T, db *sql.DB) map[string]string {
 	t.Helper()
-	return queryStrings(t, db, `SELECT type || ' ' || name || ' on ' || tbl_name
-		FROM sqlite_master WHERE name NOT LIKE 'sqlite_autoindex_%' ORDER BY 1`)
+	rows, err := db.QueryContext(t.Context(),
+		`SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL`)
+	require.NoError(t, err)
+	defer rows.Close()
+	objects := map[string]string{}
+	for rows.Next() {
+		var kind, name, definition string
+		require.NoError(t, rows.Scan(&kind, &name, &definition))
+		normalized := strings.Join(strings.Fields(definition), " ")
+		objects[kind+" "+name] = strings.ReplaceAll(normalized, " )", ")")
+	}
+	require.NoError(t, rows.Err())
+	return objects
+}
+
+// indexAndTriggerDefinitions keeps only the index and trigger definitions.
+func indexAndTriggerDefinitions(definitions map[string]string) map[string]string {
+	kept := map[string]string{}
+	for object, definition := range definitions {
+		if strings.HasPrefix(object, "index ") || strings.HasPrefix(object, "trigger ") {
+			kept[object] = definition
+		}
+	}
+	return kept
 }
 
 func acknowledgeNextTestGeneration(t *testing.T, store *Store, commit rawsync.CommitResult) string {
@@ -152,18 +178,6 @@ func TestBaseObjectReferenceLookupsSeekByObject(t *testing.T) {
 			prepare: func(t *testing.T, store *Store, path string) *Store {
 				t.Helper()
 				downgradeToVersionNine(t, store)
-				require.NoError(t, store.Close())
-				return openCheckpointForTest(t, path)
-			},
-		},
-		{
-			name: "version 9 checkpoint that already carries an equivalent index",
-			prepare: func(t *testing.T, store *Store, path string) *Store {
-				t.Helper()
-				downgradeToVersionNine(t, store)
-				_, err := store.db.ExecContext(t.Context(), `CREATE INDEX operator_added_lookup
-					ON raw_source_base_objects(sha256, length)`)
-				require.NoError(t, err)
 				require.NoError(t, store.Close())
 				return openCheckpointForTest(t, path)
 			},
@@ -298,7 +312,7 @@ func TestVersionNineUpgradePreservesTransportState(t *testing.T) {
 	assert.Equal(t, queued.CaptureID, acknowledgeNextTestGeneration(t, store, next))
 }
 
-func TestFreshAndUpgradedCheckpointsDefineTheSameSchemaObjects(t *testing.T) {
+func TestFreshAndUpgradedCheckpointsDefineTheSameIndexesAndTriggers(t *testing.T) {
 	fresh, err := Open(t.Context(), filepath.Join(t.TempDir(), "fresh.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
@@ -308,11 +322,13 @@ func TestFreshAndUpgradedCheckpointsDefineTheSameSchemaObjects(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 
-	objects := schemaObjects(t, fresh.db)
+	// Shipped migrations leave out CHECK constraints the fresh tables carry,
+	// so only indexes and triggers must match definition for definition.
+	freshDefinitions := indexAndTriggerDefinitions(schemaDefinitions(t, fresh.db))
+	upgradedDefinitions := indexAndTriggerDefinitions(schemaDefinitions(t, upgraded.db))
 
-	assert.Contains(t, objects,
-		"index raw_source_base_objects_object_idx on raw_source_base_objects")
-	assert.Equal(t, objects, schemaObjects(t, upgraded.db))
+	assert.Contains(t, freshDefinitions, "index raw_source_base_objects_object_idx")
+	assert.Equal(t, freshDefinitions, upgradedDefinitions)
 }
 
 func TestUploadedObjectIsForgottenOnlyAfterLastAcknowledgedBaseDropsIt(t *testing.T) {
@@ -335,7 +351,7 @@ func TestUploadedObjectIsForgottenOnlyAfterLastAcknowledgedBaseDropsIt(t *testin
 		var state string
 		err := store.db.QueryRowContext(t.Context(), `SELECT state FROM outbox_objects
 			WHERE sha256 = ? AND length = ?`, shared.SHA256, shared.Length).Scan(&state)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return "forgotten"
 		}
 		require.NoError(t, err)

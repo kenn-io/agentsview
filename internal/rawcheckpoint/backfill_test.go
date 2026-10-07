@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -258,19 +257,6 @@ func TestBackfillDestinationSurvivesReopenAndFencesWatch(t *testing.T) {
 }
 
 func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
-	schema := func(store *Store) map[string]string {
-		rows, err := store.db.QueryContext(t.Context(), `SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL`)
-		require.NoError(t, err)
-		defer rows.Close()
-		objects := map[string]string{}
-		for rows.Next() {
-			var kind, name, sql string
-			require.NoError(t, rows.Scan(&kind, &name, &sql))
-			objects[kind+" "+name] = strings.ReplaceAll(strings.Join(strings.Fields(sql), " "), " )", ")")
-		}
-		require.NoError(t, rows.Err())
-		return objects
-	}
 	fresh, err := Open(t.Context(), filepath.Join(t.TempDir(), "fresh.db"))
 	require.NoError(t, err)
 	defer fresh.Close()
@@ -287,7 +273,7 @@ func TestFreshSchemaMatchesVersionEightMigration(t *testing.T) {
 	require.NoError(t, err)
 	defer migrated.Close()
 
-	require.Equal(t, schema(fresh), schema(migrated))
+	require.Equal(t, schemaDefinitions(t, fresh.db), schemaDefinitions(t, migrated.db))
 }
 
 func TestBackfillSelectionWithInvalidUTF8RootStillDetectsChanges(t *testing.T) {
