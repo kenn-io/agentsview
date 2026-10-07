@@ -1,23 +1,26 @@
 package importer
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/httputil"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-var errClaudeAINotFound = errors.New("Claude returned HTTP 404")
+// ErrClaudeAIResponseTooLarge marks a chat that exceeds the browser relay limit.
+var ErrClaudeAIResponseTooLarge = errors.New("Claude response exceeds 32 MiB")
+
+type claudeAIHTTPError struct{ status int }
+
+func (e *claudeAIHTTPError) Error() string { return fmt.Sprintf("Claude returned HTTP %d", e.status) }
 
 // ClaudeAIResponse carries the browser response without credentials.
 type ClaudeAIResponse struct {
@@ -118,8 +121,9 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						continue
 					}
 					detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true")
-					if errors.Is(err, errClaudeAINotFound) {
-						stats.Skipped++
+					var detailError *claudeAIHTTPError
+					if errors.As(err, &detailError) || errors.Is(err, ErrClaudeAIResponseTooLarge) {
+						stats.Errors++
 						cb.progress(stats)
 						continue
 					}
@@ -128,29 +132,30 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					}
 					var imported ImportStats
 					write := func() error {
-						var identity struct {
-							UUID string `json:"uuid"`
+						result, err := parser.ParseClaudeAIDetail(detail)
+						if err == nil && result.Session.ID != id {
+							err = fmt.Errorf("conversation uuid differs from requested %s", marker.UUID)
 						}
-						if err := json.Unmarshal(detail, &identity); err != nil || identity.UUID != marker.UUID {
-							imported.record(id, importSkipped, fmt.Errorf("conversation uuid differs from requested %s or detail is invalid", marker.UUID))
-							return nil
-						}
-						provider, _ := parser.NewProvider(parser.AgentClaudeAI, parser.ProviderConfig{})
-						err := provider.(parser.ClaudeAIExportParser).ParseClaudeAIExport(bytes.NewReader(append(append([]byte{'['}, detail...), ']')), func(result parser.ParseResult) error {
-							ci := conversationImport{parser.AgentClaudeAI, upsertClaudeAISyncConversation, claudeAIMessages}
-							status, err := ci.importConversation(ctx, store, result, nil, ImportOptions{Replace: []string{id}})
-							if errors.Is(err, db.ErrSessionTrashed) {
-								status, err = importSkipped, nil
-							}
-							imported.record(id, status, err)
-							return nil
-						})
 						if err != nil {
 							imported.record(id, importSkipped, err)
+							return nil
 						}
-						if imported.Imported+imported.Updated+imported.Skipped+imported.Errors == 0 {
-							imported.Skipped++
+						existing, err := store.GetSession(ctx, id)
+						if err != nil {
+							return err
 						}
+						if existing != nil && existing.EndedAt != nil {
+							endedAt, err := time.Parse(time.RFC3339Nano, *existing.EndedAt)
+							if err == nil && endedAt.After(result.Session.EndedAt) {
+								imported.Skipped++
+								return nil
+							}
+						}
+						status, err := claudeAISyncImport.importConversation(ctx, store, result, nil, ImportOptions{Replace: []string{id}})
+						if errors.Is(err, db.ErrSessionTrashed) {
+							status, err = importSkipped, nil
+						}
+						imported.record(id, status, err)
 						return nil
 					}
 					if cb != nil && cb.SerializeWrite != nil {
@@ -183,45 +188,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	return stats, nil
 }
 
-func upsertClaudeAISyncConversation(ctx context.Context, store db.Store, result parser.ParseResult, fts *lazyFTS) (importStatus, error) {
-	s := result.Session
-	msgs := claudeAIMessages(s.ID, result.Messages)
-	sess := chatGPTSession(s)
-	existing, err := store.GetSession(ctx, s.ID)
-	if err != nil {
-		return importNew, err
-	}
-	if existing == nil {
-		err := writeChatGPTSession(ctx, store, sess, msgs)
-		if errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
-			return importSkipped, nil
-		}
-		return importNew, err
-	}
-	if existing.Agent != string(parser.AgentClaudeAI) {
-		return importNew, refuse(RefusalDiverged, errors.New("existing session belongs to another agent"))
-	}
-	if storeArchiveContent(store).UsageOnly() {
-		return importSkipped, nil
-	}
-	archived, err := store.GetAllMessages(ctx, s.ID)
-	if err != nil {
-		return importNew, err
-	}
-	incoming := storedFormMessages(store, msgs)
-	if len(incoming) < len(archived) {
-		return importNew, refuse(RefusalShorterExport, errors.New("selected path is shorter than archived history"))
-	}
-	if !sameMessages(archived, incoming[:len(archived)]) {
-		return importNew, refuse(RefusalDiverged, errors.New("selected path rewrites archived messages"))
-	}
-	err = appendChatGPTMessages(ctx, store, sess, msgs[len(archived):])
-	if errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
-		return importSkipped, nil
-	}
-	return importUpdated, err
-}
-
 func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), path string) ([]byte, error) {
 	for attempt := 0; ; attempt++ {
 		response, err := fetch(ctx, path)
@@ -229,23 +195,18 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 			return nil, err
 		}
 		status := response.Status
-		if status == http.StatusNotFound {
-			return nil, errClaudeAINotFound
-		}
 		if status == 401 || status == 403 {
 			return nil, errors.New("Sign in to Claude.ai, then Sync again")
 		}
 		if status != 429 && status < 500 || attempt == 4 {
 			if status < 200 || status >= 300 {
-				return nil, fmt.Errorf("Claude returned HTTP %d", status)
+				return nil, &claudeAIHTTPError{status: status}
 			}
 			return response.Body, nil
 		}
 		delay := time.Duration(1<<attempt) * time.Second
-		if seconds, e := strconv.Atoi(response.RetryAfter); e == nil && seconds >= 0 {
-			delay = time.Duration(min(seconds, 60)) * time.Second
-		} else if date, e := http.ParseTime(response.RetryAfter); e == nil {
-			delay = max(time.Duration(0), min(time.Until(date), 60*time.Second))
+		if retryAfter := httputil.ParseRetryAfter(response.RetryAfter); retryAfter > 0 {
+			delay = min(retryAfter, 60*time.Second)
 		}
 		select {
 		case <-ctx.Done():

@@ -418,22 +418,6 @@ func TestIsContextOverflowDetail(t *testing.T) {
 	}
 }
 
-func TestParseRetryAfter(t *testing.T) {
-	if got := parseRetryAfter("2"); got != 2*time.Second {
-		require.FailNowf(t, "test failed", "parseRetryAfter(2) = %v", got)
-	}
-	future := time.Now().Add(5 * time.Second).UTC().Format(http.TimeFormat)
-	got := parseRetryAfter(future)
-	if got <= 0 || got > 5*time.Second {
-		require.FailNowf(t, "test failed", "parseRetryAfter(http-date) = %v", got)
-	}
-	for _, value := range []string{"", "garbage", "-3"} {
-		if got := parseRetryAfter(value); got != 0 {
-			require.FailNowf(t, "test failed", "parseRetryAfter(%q) = %v, want 0", value, got)
-		}
-	}
-}
-
 func TestClientChoicelessResponseAccountsUsageAcrossRetry(t *testing.T) {
 	// A choiceless 200 still reports token usage; the retry that recovers
 	// from it must not drop that cost from the accounting.

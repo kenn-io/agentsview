@@ -12,12 +12,12 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/httputil"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
@@ -538,7 +538,7 @@ func (c *Client) distill(
 		if isTransientStatus(response.StatusCode) {
 			return nil, Usage{}, &transientError{
 				err: statusErr,
-				retryAfter: parseRetryAfter(
+				retryAfter: httputil.ParseRetryAfter(
 					response.Header.Get("Retry-After"),
 				),
 			}
@@ -933,26 +933,6 @@ func isTransientStatus(status int) bool {
 	return status == http.StatusRequestTimeout ||
 		status == http.StatusTooManyRequests ||
 		status >= 500
-}
-
-// parseRetryAfter reads a Retry-After header in either the delay-seconds or
-// HTTP-date form, returning zero for absent or unparseable values.
-func parseRetryAfter(value string) time.Duration {
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.Atoi(value); err == nil {
-		if seconds > 0 {
-			return time.Duration(seconds) * time.Second
-		}
-		return 0
-	}
-	if when, err := http.ParseTime(value); err == nil {
-		if delay := time.Until(when); delay > 0 {
-			return delay
-		}
-	}
-	return 0
 }
 
 // isContextOverflowDetail reports whether a 400 body identifies an
