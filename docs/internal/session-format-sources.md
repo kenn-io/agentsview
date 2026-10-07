@@ -2805,23 +2805,18 @@ schemas keep their existing ordering behavior.
   `include_inline_comparison=true`; the client enables `consistency=strong`.
   Sync uses these parameters on
   `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}`.
-  Claude's message normalizer keeps assistants, humans with an assistant child,
-  messages without a parent field, and every ancestor of a kept message.
-  It resolves an absent, null, or empty parent through the nearest lower
-  `index`, retaining the distinction between absent and null fields. The root
-  sentinel is `00000000-0000-4000-8000-000000000000`. Children retain array
-  order, with the first selected by default. The normalizer selects the leaf's
-  ancestors; a leaf outside the kept messages falls back to the last kept message.
-  It walks down from the sentinel and restores an unanswered human prompt
-  matching the server leaf, or the last one attached to the visible path's end.
-  Only `ParseClaudeAIDetail` applies these rules; exports retain their original
-  order even when tree fields are present. Duplicate message UUIDs, missing
-  resolved parents, cycles, and trees without a root fail before writing.
+  Live details identified the visible branch with `current_leaf_message_uuid`
+  and string `parent_message_uuid` links ending at the root sentinel,
+  `00000000-0000-4000-8000-000000000000`. `ParseClaudeAIDetail` walks those
+  ancestors and reverses the path. Missing or null leaves, missing messages or
+  parents, non-string parents, duplicate UUIDs, and cycles fail before writing.
+  Exports retain their original order even when tree fields are present.
   Sync also rejects a detail UUID that differs from the requested chat.
   List items with a null leaf skip detail fetches; exports skip empty chats.
-  Sync commits the freshness marker after the transcript, so interrupted writes
-  refetch on the next run. Full resync preserves markers for import-only
-  sessions. Usage-only archives refresh session metadata under their content
+  Sync commits session metadata, messages, and the freshness marker in one
+  transaction, so interrupted writes leave either the old or new chat version.
+  Full resync preserves markers for import-only sessions. Usage-only archives
+  refresh session metadata under their content
   policy. Detail HTTP 404 counts as skipped. Other detail HTTP failures and
   responses over 32 MiB fail that chat. Authentication, transport, and
   cancellation errors stop Sync.

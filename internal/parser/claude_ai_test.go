@@ -406,51 +406,26 @@ func TestParseClaudeAIExport_InvalidJSON(t *testing.T) {
 }
 
 func TestParseClaudeAIDetail_SelectedPath(t *testing.T) {
-	const root = `00000000-0000-4000-8000-000000000000`
-	const question = `{"uuid":"q","parent_message_uuid":"` + root + `","sender":"human","text":"","content":[{"type":"text","text":"Question"}]}`
-	const first = `{"uuid":"a","parent_message_uuid":"q","sender":"assistant","text":"","content":[{"type":"text","text":"First"}]}`
-	const second = `{"uuid":"b","parent_message_uuid":"q","sender":"assistant","text":"","content":[{"type":"text","text":"Second"}]}`
+	const question = `{"uuid":"q","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","content":[{"type":"text","text":"Question"}]}`
+	const first = `{"uuid":"a","parent_message_uuid":"q","sender":"assistant","content":[{"type":"text","text":"First"}]}`
+	const retry = `{"uuid":"retry","parent_message_uuid":"q","sender":"assistant","content":[{"type":"text","text":"Retry"}]}`
+	const more = `{"uuid":"q2","parent_message_uuid":"a","sender":"human","content":[{"type":"text","text":"More"}]},{"uuid":"a2","parent_message_uuid":"q2","sender":"assistant","content":[{"type":"text","text":"Answer"}]}`
+	const edit = `{"uuid":"edited","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","content":[{"type":"text","text":"Edited"}]},{"uuid":"b","parent_message_uuid":"edited","sender":"assistant","content":[{"type":"text","text":"Second"}]}`
 	for _, tt := range []struct {
-		name, leaf, messages, err string
-		omitLeaf                  bool
-		want                      []string
+		name, leaf string
+		want       []string
 	}{
-		{name: "siblings without leaf select first", omitLeaf: true, messages: question + "," + first + "," + second, want: []string{"Question", "First"}},
-		{name: "second sibling leaf", leaf: "b", messages: question + "," + first + "," + second, want: []string{"Question", "Second"}},
-		{name: "root sibling leaf", leaf: "b", messages: `{"uuid":"a","parent_message_uuid":"` + root + `","sender":"assistant","text":"","content":[{"type":"text","text":"First"}]},{"uuid":"b","parent_message_uuid":"` + root + `","sender":"assistant","text":"","content":[{"type":"text","text":"Second"}]}`, want: []string{"Second"}},
-		{name: "missing leaf falls back", leaf: "missing", messages: question + "," + first + "," + second, want: []string{"Question", "Second"}},
-		{name: "nearest lower index", leaf: "b", messages: `{"uuid":"q","index":0,"sender":"human","text":"","content":[{"type":"text","text":"Question"}]},{"uuid":"b","index":5,"parent_message_uuid":null,"sender":"assistant","text":"","content":[{"type":"text","text":"Second"}]},{"uuid":"a","index":2,"parent_message_uuid":"","sender":"assistant","text":"","content":[{"type":"text","text":"First"}]}`, want: []string{"Question", "First", "Second"}},
-		{name: "flat messages keep their order with a leaf", leaf: "b", messages: `{"uuid":"q","index":0,"sender":"human","text":"","content":[{"type":"text","text":"Question"}]},{"uuid":"b","sender":"assistant","text":"","content":[{"type":"text","text":"Second"}]}`, want: []string{"Question", "Second"}},
-		{name: "unanswered branch drops", messages: question + "," + first + `,{"uuid":"unused","parent_message_uuid":"q","sender":"human","text":"","content":[{"type":"text","text":"Unused"}]}`, want: []string{"Question", "First"}},
-		{name: "last unanswered prompt", messages: question + "," + first + `,{"uuid":"old","parent_message_uuid":"a","sender":"human","text":"","content":[{"type":"text","text":"Old"}]},{"uuid":"pending","parent_message_uuid":"a","sender":"human","text":"","content":[{"type":"text","text":"Pending"}]}`, want: []string{"Question", "First", "Pending"}},
-		{name: "leaf unanswered prompt", leaf: "old", messages: question + "," + first + `,{"uuid":"old","parent_message_uuid":"a","sender":"human","text":"","content":[{"type":"text","text":"Old"}]},{"uuid":"pending","parent_message_uuid":"a","sender":"human","text":"","content":[{"type":"text","text":"Pending"}]}`, want: []string{"Question", "First", "Old"}},
-		{name: "null parent pending root", messages: `{"uuid":"pending","parent_message_uuid":null,"sender":"human","text":"","content":[{"type":"text","text":"Pending"}]}`, want: []string{"Pending"}},
-		{name: "ancestor retained", leaf: "b", messages: question + `,{"uuid":"middle","parent_message_uuid":"q","sender":"human","text":"","content":[{"type":"text","text":"Middle"}]},{"uuid":"b","parent_message_uuid":"middle","sender":"assistant","text":"","content":[{"type":"text","text":"Second"}]}`, want: []string{"Question", "Middle", "Second"}},
-		{name: "unresolved parent", messages: `{"uuid":"q","parent_message_uuid":"missing","sender":"human","text":"","content":[{"type":"text","text":"Question"}]},` + first, err: "message q's parent missing is missing"},
-		{name: "cycle", leaf: "b", messages: question + "," + first + `,{"uuid":"b","parent_message_uuid":"c","sender":"assistant"},{"uuid":"c","parent_message_uuid":"b","sender":"assistant"}`, err: "cycle"},
-		{name: "no root", messages: `{"uuid":"a","parent_message_uuid":"b","sender":"assistant"},{"uuid":"b","parent_message_uuid":"a","sender":"assistant"}`, err: "no root message"},
-		{name: "duplicate uuid", messages: question + "," + first + "," + first, err: "duplicate message uuid a"},
-		{name: "empty leaf still normalizes", leaf: "", messages: question + "," + first + "," + second, want: []string{"Question", "First"}},
+		{"edit", "b", []string{"Edited", "Second"}},
+		{"switch back", "a2", []string{"Question", "First", "More", "Answer"}},
+		{"retry", "retry", []string{"Question", "Retry"}},
+		{"retry switch back", "a", []string{"Question", "First"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			leafField := `"current_leaf_message_uuid":"` + tt.leaf + `",`
-			if tt.omitLeaf {
-				leafField = ""
-			}
-			input := `{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z",` + leafField + `"chat_messages":[` + tt.messages + `]}`
+			input := `{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"` + tt.leaf + `","chat_messages":[` + edit + "," + more + "," + retry + "," + first + "," + question + `]}`
 			result, err := ParseClaudeAIDetail([]byte(input))
-			if tt.err != "" {
-				require.ErrorContains(t, err, tt.err)
-				assert.Empty(t, result.Messages)
-				return
-			}
 			require.NoError(t, err)
-			if tt.omitLeaf {
-				assert.Nil(t, result.Session.LastEntryUUID)
-			} else {
-				require.NotNil(t, result.Session.LastEntryUUID)
-				assert.Equal(t, tt.leaf, *result.Session.LastEntryUUID)
-			}
+			require.NotNil(t, result.Session.LastEntryUUID)
+			assert.Equal(t, tt.leaf, *result.Session.LastEntryUUID)
 			var contents []string
 			for i, m := range result.Messages {
 				contents = append(contents, m.Content)
@@ -458,6 +433,29 @@ func TestParseClaudeAIDetail_SelectedPath(t *testing.T) {
 			}
 			assert.Equal(t, tt.want, contents)
 			assert.Equal(t, len(tt.want), result.Session.MessageCount)
+		})
+	}
+}
+
+func TestParseClaudeAIDetail_InvalidTree(t *testing.T) {
+	const question = `{"uuid":"q","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human"}`
+	const answer = `{"uuid":"a","parent_message_uuid":"q","sender":"assistant"}`
+	for _, tt := range []struct{ name, leaf, messages, err string }{
+		{"null leaf", `"current_leaf_message_uuid":null,`, question + "," + answer, "expected current_leaf"},
+		{"absent leaf", "", question + "," + answer, "expected current_leaf"},
+		{"missing leaf message", `"current_leaf_message_uuid":"missing",`, question + "," + answer, "message missing is missing"},
+		{"null parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":null}`, "parent must be a string"},
+		{"absent parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a"}`, "parent must be a string"},
+		{"numeric parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":42}`, "parent must be a string"},
+		{"orphan parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":"missing"}`, "parent missing is missing"},
+		{"cycle", `"current_leaf_message_uuid":"a",`, `{"uuid":"q","parent_message_uuid":"a"},` + answer, "cycle"},
+		{"duplicate", `"current_leaf_message_uuid":"a",`, question + "," + answer + "," + answer, "duplicate message uuid a"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z",` + tt.leaf + `"chat_messages":[` + tt.messages + `]}`
+			result, err := ParseClaudeAIDetail([]byte(input))
+			require.ErrorContains(t, err, tt.err)
+			assert.Empty(t, result.Messages)
 		})
 	}
 }

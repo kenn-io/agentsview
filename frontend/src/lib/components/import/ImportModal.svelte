@@ -84,7 +84,7 @@
     finally {
       importing = false;
       syncController = undefined;
-      if (progressStats && (progressStats.imported > 0 || progressStats.updated > 0)) onimported();
+      onimported();
     }
   }
 

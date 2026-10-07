@@ -38,7 +38,7 @@ it("closing during sync leaves no error after reopening", async () => {
   await rerender({ open: true, onclose, onimported });
   await waitFor(() => expect((screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement).disabled).toBe(false));
   expect(screen.queryByText("Import stream ended without result")).toBeNull();
-  expect(onimported).not.toHaveBeenCalled();
+  expect(onimported).toHaveBeenCalledOnce();
 });
 
 it("offers sign in, sync and disconnect without a sign-in probe", async () => {
