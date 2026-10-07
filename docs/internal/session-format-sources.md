@@ -2794,15 +2794,20 @@ schemas keep their existing ordering behavior.
   `https://claude.ai/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}`
   and
   `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}?tree=True`.
-  The list reads `conversations`, with `items`, `data`, or `results` as observed
-  alternatives, and `has_more`. Freshness compares summary `updated_at` with
-  archived `ended_at`.
-  Details read `name`, `created_at`, `updated_at`, and every `chat_messages`
-  entry, matching export imports. Reverified 2026-10-07 against synthetic
-  null-detail, cancellation, and older-export regression fixtures. The export parser
+  The list reads only `conversations` and `has_more`. Freshness compares summary
+  `updated_at` with archived `ended_at`.
+  Details read `name`, `created_at`, `updated_at`, `current_leaf_message_uuid`,
+  and `chat_messages` entries with `parent_message_uuid`. The shared parser walks
+  parents from the selected leaf, stops at a parent outside the message set,
+  and reverses the path. A missing leaf or repeated node fails; without a leaf
+  field, it keeps every message. Reverified 2026-10-07 against synthetic
+  branch, overlapping-page, cancellation, and older-export regression fixtures.
+  The export parser
   consumes message `sender`, `text`, `content`, timestamps, and attachments.
   No live account was checked for this rework. Organization capabilities, the
-  list key, `has_more`, and whether empty chats appear still need live verification.
+  list key, `has_more`, `tree=True` leaf presence, whether exports carry branches,
+  and whether starred and empty chats appear in the list still need live
+  verification.
 
 ## ChatGPT Export (`chatgpt`)
 

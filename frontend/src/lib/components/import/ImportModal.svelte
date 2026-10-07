@@ -72,11 +72,15 @@
     result = null;
     phase = "importing";
     progressStats = null;
-    syncController = new AbortController();
+    const controller = new AbortController();
+    syncController = controller;
     try {
-      result = await syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, syncController.signal);
+      result = await syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
       onimported();
-    } catch (e) { error = e instanceof Error ? e.message : m.import_failed(); }
+    } catch (e) {
+      if (controller.signal.aborted) return;
+      error = e instanceof Error ? e.message : m.import_failed();
+    }
     finally { importing = false; syncController = undefined; }
   }
 
