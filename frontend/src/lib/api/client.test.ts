@@ -114,7 +114,7 @@ describe("syncClaudeAI browser relay", () => {
   });
 
   it("ends the stream when posting a result fails", async () => {
-    const cancelled = vi.fn();
+    let signal!: AbortSignal;
     const host = {
       fetch: vi.fn().mockResolvedValue({ status: 200, body: "{}" }),
     } as unknown as BrowserHost;
@@ -122,25 +122,26 @@ describe("syncClaudeAI browser relay", () => {
       "fetch",
       vi
         .fn()
-        .mockResolvedValueOnce(
-          new Response(
+        .mockImplementationOnce(async (_url, options) => {
+          signal = options.signal;
+          return new Response(
             new ReadableStream({
               start(controller) {
+                signal.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
                 controller.enqueue(
                   new TextEncoder().encode(
                     'event: fetch\ndata: {"id":"expired","path":"/api/organizations/org/chat_conversations_v2"}\n\n',
                   ),
                 );
               },
-              cancel: cancelled,
             }),
             { headers: { "Content-Type": "text/event-stream" } },
-          ),
-        )
+          );
+        })
         .mockResolvedValueOnce(new Response("expired", { status: 404 })),
     );
     await expect(syncClaudeAI(host)).rejects.toThrow("expired");
-    expect(cancelled).toHaveBeenCalledOnce();
+    expect(signal.aborted).toBe(true);
   });
 });
 

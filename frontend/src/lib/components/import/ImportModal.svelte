@@ -77,12 +77,15 @@
     syncController = controller;
     try {
       result = await syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
-      onimported();
     } catch (e) {
       if (controller.signal.aborted) return;
       error = e instanceof Error ? e.message : m.import_failed();
     }
-    finally { importing = false; syncController = undefined; }
+    finally {
+      importing = false;
+      syncController = undefined;
+      if (progressStats && (progressStats.imported > 0 || progressStats.updated > 0)) onimported();
+    }
   }
 
   const fileSize = $derived(

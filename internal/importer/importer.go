@@ -261,7 +261,6 @@ func upsertConversation(
 		EndedAt:          timeStr(s.EndedAt),
 		MessageCount:     s.MessageCount,
 		UserMessageCount: s.UserMessageCount,
-		LastEntryUUID:    s.LastEntryUUID,
 	}
 	db.ApplyParsedSessionIdentity(&sess, s)
 
@@ -297,6 +296,12 @@ func upsertConversation(
 			// projects rows, so raw parser output can differ from an
 			// unchanged archived copy.
 			if sameMessages(existingMsgs, storedFormMessages(store, msgs)) {
+				if s.LastEntryUUID != nil {
+					sess.LastEntryUUID = s.LastEntryUUID
+					if err := store.UpsertSession(ctx, sess); err != nil {
+						return importNew, fmt.Errorf("saving freshness marker: %w", err)
+					}
+				}
 				return importSkipped, nil
 			}
 		}
@@ -308,6 +313,13 @@ func upsertConversation(
 
 	if err := store.ReplaceSessionMessages(ctx, s.ID, msgs); err != nil {
 		return importNew, fmt.Errorf("replacing messages: %w", err)
+	}
+	// Commit freshness only after the transcript it describes.
+	if s.LastEntryUUID != nil {
+		sess.LastEntryUUID = s.LastEntryUUID
+		if err := store.UpsertSession(ctx, sess); err != nil {
+			return importNew, fmt.Errorf("saving freshness marker: %w", err)
+		}
 	}
 
 	if isNew {

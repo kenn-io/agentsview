@@ -84,8 +84,8 @@ history, the previous version stays in Trash. A chat first imported from a zip
 needs one detail fetch to verify its visible branch. Re-importing a zip clears
 that verification, so the next Sync fetches it once again. Each chat has a
 32 MiB response limit; larger chats count as failed while Sync continues.
-Closing the dialog cancels the sync; completed chats stay archived for the next
-sync.
+Closing the dialog cancels the sync. Completed chats appear in the sidebar,
+and the next Sync picks up any unfinished chats.
 
 Sign-in persists in the browser's cookie store across app restarts. **Disconnect**
 deletes the Claude.ai cookies and closes the sign-in window. Credentials stay

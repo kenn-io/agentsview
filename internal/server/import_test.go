@@ -23,6 +23,25 @@ import (
 	"go.kenn.io/agentsview/internal/importer"
 )
 
+func readImportEvents(t *testing.T, body io.Reader, handle func(string, string)) {
+	t.Helper()
+	scanner := bufio.NewScanner(body)
+	event := ""
+	terminal := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "event: ") {
+			event = strings.TrimPrefix(line, "event: ")
+		}
+		if strings.HasPrefix(line, "data: ") {
+			handle(event, strings.TrimPrefix(line, "data: "))
+			terminal = terminal || event == "done" || event == "error"
+		}
+	}
+	require.NoError(t, scanner.Err())
+	require.True(t, terminal, "import stream must finish with done or error")
+}
+
 func TestClaudeAISyncRelay(t *testing.T) {
 	t.Run("large result stores session", func(t *testing.T) {
 		srv := testServer(t, 5*time.Second)
@@ -41,19 +60,9 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		require.NoError(t, err)
 		defer response.Body.Close()
 		require.Equal(t, http.StatusOK, response.StatusCode)
-		scanner := bufio.NewScanner(response.Body)
-		event := ""
 		answered := ""
 		var stats importer.ImportStats
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "event: ") {
-				event = strings.TrimPrefix(line, "event: ")
-			}
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			data := strings.TrimPrefix(line, "data: ")
+		readImportEvents(t, response.Body, func(event, data string) {
 			switch event {
 			case "fetch":
 				var request struct {
@@ -65,9 +74,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				switch request.Path {
 				case "/api/organizations":
 					postResult(request.ID, `[{"uuid":"org","capabilities":["chat"]}]`, http.StatusNoContent)
-				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
-					postResult(request.ID, `{"data":[],"has_more":false}`, http.StatusNoContent)
-				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
 					postResult(request.ID, `{"data":[{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
 				case "/api/organizations/org/chat_conversations/relay?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 					postResult(request.ID, `{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
@@ -79,8 +86,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			case "done":
 				require.NoError(t, json.Unmarshal([]byte(data), &stats))
 			}
-		}
-		require.NoError(t, scanner.Err())
+		})
 		assert.Equal(t, 1, stats.Imported)
 		messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:relay")
 		require.NoError(t, err)
@@ -96,19 +102,9 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
 		require.NoError(t, err)
 		defer response.Body.Close()
-		scanner := bufio.NewScanner(response.Body)
-		event := ""
 		answered := ""
 		gotError := false
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "event: ") {
-				event = strings.TrimPrefix(line, "event: ")
-			}
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			data := strings.TrimPrefix(line, "data: ")
+		readImportEvents(t, response.Body, func(event, data string) {
 			switch event {
 			case "fetch":
 				var request struct {
@@ -124,8 +120,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				assert.JSONEq(t, `{"error":"TypeError: Failed to fetch"}`, data)
 				gotError = true
 			}
-		}
-		require.NoError(t, scanner.Err())
+		})
 		assert.True(t, gotError)
 		result, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+answered+"?status=200", "application/octet-stream", strings.NewReader("{}"))
 		require.NoError(t, err)
@@ -590,19 +585,9 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 	response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
 	require.NoError(t, err)
 	defer response.Body.Close()
-	scanner := bufio.NewScanner(response.Body)
-	event := ""
 	var stats importer.ImportStats
 	done := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "event: ") {
-			event = strings.TrimPrefix(line, "event: ")
-		}
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
+	readImportEvents(t, response.Body, func(event, data string) {
 		switch event {
 		case "fetch":
 			var request struct {
@@ -614,10 +599,8 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 			switch request.Path {
 			case "/api/organizations":
 				body = `[{"uuid":"org","capabilities":["chat"]}]`
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=false":
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
 				body = `{"data":[{"uuid":"large","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"},{"uuid":"later","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0&archived=true":
-				body = `{"data":[],"has_more":false}`
 			case "/api/organizations/org/chat_conversations/large?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 				body = strings.Repeat("x", (32<<20)+2)
 			case "/api/organizations/org/chat_conversations/later?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
@@ -635,8 +618,7 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(data), &stats))
 			done = true
 		}
-	}
-	require.NoError(t, scanner.Err())
+	})
 	require.True(t, done)
 	assert.Equal(t, 1, stats.Errors)
 	assert.Equal(t, 1, stats.Imported)
