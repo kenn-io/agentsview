@@ -1884,11 +1884,16 @@ func (db *DB) GetAnalyticsHeatmap(
 	case "output_tokens":
 		source = dayOutputTokens
 	}
-	return BuildHeatmapResponse(f.From, f.To, metric, source, false), nil
+	return BuildHeatmapResponse(f.From, f.To, metric, source), nil
 }
 
-// BuildHeatmapResponse returns an empty slice for valid reversed ranges when emptyEntries is true.
-func BuildHeatmapResponse(from, to, metric string, source map[string]int, emptyEntries bool) HeatmapResponse {
+// BuildHeatmapResponse builds one entry per day in [from, to], clamped to
+// MaxHeatmapDays, with quartile levels from the displayed days' values. An
+// output_tokens source with no days means no session reported token coverage,
+// so the response has no entries and the UI shows "no data".
+func BuildHeatmapResponse(
+	from, to, metric string, source map[string]int,
+) HeatmapResponse {
 	entriesFrom := clampFrom(from, to)
 	out := HeatmapResponse{Metric: metric, EntriesFrom: entriesFrom}
 	if metric == "output_tokens" && len(source) == 0 {
@@ -1902,7 +1907,7 @@ func BuildHeatmapResponse(from, to, metric string, source map[string]int, emptyE
 	}
 	sort.Ints(values)
 	out.Levels = computeQuartileLevels(values)
-	out.Entries = buildDateEntries(entriesFrom, to, source, out.Levels, emptyEntries)
+	out.Entries = buildDateEntries(entriesFrom, to, source, out.Levels)
 	return out
 }
 
@@ -1968,7 +1973,6 @@ func buildDateEntries(
 	from, to string,
 	values map[string]int,
 	levels HeatmapLevels,
-	emptyEntries bool,
 ) []HeatmapEntry {
 	start, err := time.Parse("2006-01-02", from)
 	if err != nil {
@@ -1980,9 +1984,6 @@ func buildDateEntries(
 	}
 
 	var entries []HeatmapEntry
-	if emptyEntries {
-		entries = []HeatmapEntry{}
-	}
 	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 		date := d.Format("2006-01-02")
 		v := values[date]

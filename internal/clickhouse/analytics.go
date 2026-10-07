@@ -1253,7 +1253,7 @@ func (s *Store) GetAnalyticsHeatmap(
 				counts[date] += session.messageCount
 			}
 		}
-		return db.BuildHeatmapResponse(f.From, f.To, metric, counts, true), nil
+		return db.BuildHeatmapResponse(f.From, f.To, metric, counts), nil
 	}
 	where, args := chBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
@@ -1293,7 +1293,7 @@ func (s *Store) GetAnalyticsHeatmap(
 	if err := rows.Err(); err != nil {
 		return db.HeatmapResponse{}, fmt.Errorf("iterating clickhouse analytics heatmap: %w", err)
 	}
-	return db.BuildHeatmapResponse(f.From, f.To, metric, counts, true), nil
+	return db.BuildHeatmapResponse(f.From, f.To, metric, counts), nil
 }
 
 func (s *Store) GetAnalyticsProjects(
@@ -2763,8 +2763,7 @@ func (s *Store) GetTrendsTerms(
 		if !allowedSessions[sessionID] {
 			return
 		}
-		date := local.Format("2006-01-02")
-		acc.Add(content, date, bucketAnalyticsDate(date, granularity))
+		acc.Add(content, local)
 	}
 	emit := func(m db.ScopedMessage) {
 		if !m.HasLocalTime {

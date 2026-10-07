@@ -98,7 +98,7 @@ func (db *DB) GetTrendsTerms(
 		if !ok {
 			return
 		}
-		acc.Add(row.content, msgTime.Format("2006-01-02"), TrendBucketDate(msgTime, loc, granularity))
+		acc.Add(row.content, msgTime)
 	}
 	rowStartedAt := make(map[string]string)
 	rowCreatedAt := make(map[string]string)
@@ -156,7 +156,8 @@ func (db *DB) GetTrendsTerms(
 	return acc.Response(), nil
 }
 
-// TrendAccumulator counts terms using the backend's local dates and bucket keys.
+// TrendAccumulator counts term occurrences per trend bucket. Backends feed it
+// messages with their local timestamps; it owns date filtering and bucketing.
 type TrendAccumulator struct {
 	from, to, granularity string
 	terms                 []TrendTermInput
@@ -166,20 +167,35 @@ type TrendAccumulator struct {
 	messageCounts         []int
 }
 
-func NewTrendAccumulator(from, to, granularity string, terms []TrendTermInput) *TrendAccumulator {
+// NewTrendAccumulator returns an accumulator for the buckets spanning
+// [from, to] at the given granularity.
+func NewTrendAccumulator(
+	from, to, granularity string, terms []TrendTermInput,
+) *TrendAccumulator {
 	buckets := TrendBucketRange(from, to, granularity)
 	counts := make([][]int, len(terms))
 	for i := range counts {
 		counts[i] = make([]int, len(buckets))
 	}
-	return &TrendAccumulator{from: from, to: to, granularity: granularity, terms: terms, buckets: buckets, index: trendBucketIndex(buckets), counts: counts, messageCounts: make([]int, len(buckets))}
+	return &TrendAccumulator{
+		from:          from,
+		to:            to,
+		granularity:   granularity,
+		terms:         terms,
+		buckets:       buckets,
+		index:         trendBucketIndex(buckets),
+		counts:        counts,
+		messageCounts: make([]int, len(buckets)),
+	}
 }
 
-func (a *TrendAccumulator) Add(content, date, bucketDate string) {
-	if !inDateRange(date, a.from, a.to) {
+// Add counts content in the bucket holding local's calendar date. Messages
+// whose local date falls outside [from, to] are ignored.
+func (a *TrendAccumulator) Add(content string, local time.Time) {
+	if !inDateRange(local.Format("2006-01-02"), a.from, a.to) {
 		return
 	}
-	bucket, ok := a.index[bucketDate]
+	bucket, ok := a.index[TrendBucketDate(local, local.Location(), a.granularity)]
 	if !ok {
 		return
 	}
@@ -189,8 +205,11 @@ func (a *TrendAccumulator) Add(content, date, bucketDate string) {
 	}
 }
 
+// Response builds the trends response from the accumulated counts.
 func (a *TrendAccumulator) Response() TrendsTermsResponse {
-	return BuildTrendsTermsResponse(a.from, a.to, a.granularity, a.buckets, a.terms, a.counts, a.messageCounts)
+	return BuildTrendsTermsResponse(
+		a.from, a.to, a.granularity, a.buckets, a.terms, a.counts, a.messageCounts,
+	)
 }
 
 func ParseTrendTerms(values []string) ([]TrendTermInput, error) {
@@ -399,25 +418,20 @@ func trendMessageLocalTime(
 
 func TrendBucketDate(t time.Time, loc *time.Location, granularity string) string {
 	local := t.In(loc)
+	// Calendar math runs in UTC because local midnight does not exist on some
+	// DST transition days, and time.Date would move it to the previous day.
+	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
 	switch granularity {
 	case "week":
-		weekday := int(local.Weekday())
+		weekday := int(day.Weekday())
 		if weekday == 0 {
 			weekday = 7
 		}
-		start := local.AddDate(0, 0, -(weekday - 1))
-		return time.Date(
-			start.Year(), start.Month(), start.Day(),
-			0, 0, 0, 0, loc,
-		).Format("2006-01-02")
+		day = day.AddDate(0, 0, -(weekday - 1))
 	case "month":
-		return time.Date(
-			local.Year(), local.Month(), 1,
-			0, 0, 0, 0, loc,
-		).Format("2006-01-02")
-	default:
-		return local.Format("2006-01-02")
+		day = day.AddDate(0, 0, 1-day.Day())
 	}
+	return day.Format("2006-01-02")
 }
 
 func TrendBucketRange(from, to, granularity string) []TrendBucket {

@@ -495,7 +495,13 @@ func NormalizeSessionLimit(limit int) int {
 }
 
 // BuildSessionPage trims the extra row and encodes the next page's cursor.
-func BuildSessionPage(sessions []Session, total int, f SessionFilter, rs []ResolvedSort, encode func(SessionCursor) string) SessionPage {
+func BuildSessionPage(
+	sessions []Session,
+	total int,
+	f SessionFilter,
+	rs []ResolvedSort,
+	encode func(SessionCursor) string,
+) SessionPage {
 	page := SessionPage{Sessions: sessions, Total: total}
 	if len(sessions) > f.Limit {
 		page.Sessions = sessions[:f.Limit]

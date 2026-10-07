@@ -1370,7 +1370,7 @@ func (s *Store) GetAnalyticsHeatmap(
 		source = dayOutputTokens
 	}
 
-	return db.BuildHeatmapResponse(f.From, f.To, metric, source, true), nil
+	return db.BuildHeatmapResponse(f.From, f.To, metric, source), nil
 }
 
 // --- Projects ---

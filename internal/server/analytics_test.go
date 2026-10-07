@@ -812,6 +812,23 @@ func TestAnalyticsHeatmap_OutputTokens(t *testing.T) {
 	assert.Equal(t, stats.TotalOutputTokens, total)
 }
 
+func TestAnalyticsHeatmap_OutputTokensNoReporting(
+	t *testing.T,
+) {
+	te, _ := setupAnalyticsEnv(t)
+
+	w := te.get(t, buildURLWithRange("heatmap", map[string]string{
+		"timezone": "UTC",
+		"metric":   "output_tokens",
+	}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[db.HeatmapResponse](t, w)
+	require.Equal(t, "output_tokens", resp.Metric)
+	assert.Empty(t, resp.Entries,
+		"no sessions report token coverage")
+}
+
 func TestAnalyticsProjects(t *testing.T) {
 	te, stats := setupAnalyticsEnv(t)
 

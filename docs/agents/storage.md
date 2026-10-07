@@ -205,10 +205,10 @@ backend at compile time, so a missing method fails `go build`.
 
 `internal/db` owns shared result processing: `NormalizeSessionLimit` and
 `BuildSessionPage` for pagination, `BuildHeatmapResponse` for daily levels,
-`TrendAccumulator` for term counts, and `MessageScope` with
-`AnalyticsFilter.MessageScopeFilter` for model-scoped projections. Backends
-retain their queries, cursor codecs, timestamp scanning, and trend bucket
-derivation.
+`TrendAccumulator` for term date filtering, buckets, and counts, and
+`MessageScope` with `AnalyticsFilter.MessageScopeFilter` for model-scoped
+projections. Backends retain their queries, cursor codecs, and timestamp
+scanning.
 
 A replica is a remote database the archive pushes into and that serves the web
 UI read-only. A replica may keep its push cursor in the archive sync state
@@ -334,11 +334,12 @@ The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
 change. Catalog and user-pricing changes are covered per session instead: each
-rollup install records the distinct `(provider, reported model, canonical
-model)` lookups its daily rows used, and a read re-resolves only those against
-the current catalog. A price change therefore rebuilds just the sessions whose
-lookups resolve differently, while `updated_at`-only refreshes rebuild nothing.
-Do not add a write-only extractor-version metadata key.
+rollup install records the distinct
+`(provider, reported model, canonical model)` lookups its daily rows used, and a
+read re-resolves only those against the current catalog. A price change
+therefore rebuilds just the sessions whose lookups resolve differently, while
+`updated_at`-only refreshes rebuild nothing. Do not add a write-only
+extractor-version metadata key.
 
 Deduplication groups are classified per group at rollup build time. A group is
 finalized into daily rows only when its resolution provably cannot vary with the
@@ -465,12 +466,12 @@ Empty events, such as timing-only `tool_execution` marks, don't count. That
 pair, an empty column with a non-zero length, tells a reader to take the text
 from the one event with content. Summaries over several content-bearing events,
 summaries that differ from their event, calls with no content-bearing event, and
-blocked categories store exactly what the parser produced. Load tool calls through the message loaders, which
-refill the summary once events are attached; a query that selects the column
-directly must apply the same fallback, and PostgreSQL and DuckDB apply the same
-write rule so their tool-call fingerprints match SQLite. Anyone reading the
-archive or a mirror by hand sees the empty column and must join the events table
-to recover the text.
+blocked categories store exactly what the parser produced. Load tool calls
+through the message loaders, which refill the summary once events are attached;
+a query that selects the column directly must apply the same fallback, and
+PostgreSQL and DuckDB apply the same write rule so their tool-call fingerprints
+match SQLite. Anyone reading the archive or a mirror by hand sees the empty
+column and must join the events table to recover the text.
 
 ## DuckDB Mirror
 
