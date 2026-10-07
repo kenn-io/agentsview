@@ -8,8 +8,9 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,6 +77,8 @@ func TestDiscoverRepos_ReusesDirectoryRoots(t *testing.T) {
 	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{a, b, outside})...)))
 	gitRun(t, outside, nil, "init", "-q")
 	assert.Equal(t, canonAll([]string{outside}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{outside})...)))
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-q", "-m", "seed")
+	gitRun(t, repo, nil, "status", "--porcelain")
 	t.Setenv("PATH", t.TempDir())
 	assert.Equal(t, want, canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{b, a})...)))
 }
@@ -111,6 +114,12 @@ func TestDiscoverRepos_RepositoryChanges(t *testing.T) {
 	assert.Equal(t, canonAll([]string{sub}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{sub})...)))
 	require.NoError(t, os.RemoveAll(filepath.Join(sub, ".git")))
 	assert.Equal(t, canonAll([]string{repo}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{sub})...)))
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git"), filepath.Join(t.TempDir(), "old-git")))
+	gitRun(t, repo, nil, "init", "-q")
+	path := os.Getenv("PATH")
+	t.Setenv("PATH", t.TempDir())
+	assert.Empty(t, DiscoverRepos(t.Context(), []string{sub}), "replaced marker must resolve again")
+	t.Setenv("PATH", path)
 	require.NoError(t, os.RemoveAll(repo))
 	assert.Empty(t, DiscoverRepos(t.Context(), []string{sub}))
 }
@@ -118,13 +127,33 @@ func TestDiscoverRepos_RepositoryChanges(t *testing.T) {
 func TestFindRepoRoot_ConcurrentMisses(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initBareRepo(t)
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Go(func() {
-			assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
-		})
-	}
-	wg.Wait()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := &pausedRepoFill{Context: t.Context(), started: make(chan struct{}), resume: make(chan struct{})}
+		results := make(chan string, 9)
+		go func() { results <- findRepoRoot(ctx, repo) }()
+		<-ctx.started
+		for range 8 {
+			go func() { results <- findRepoRoot(t.Context(), repo) }()
+		}
+		synctest.Wait()
+		assert.Empty(t, results, "waiters must share the pending lookup")
+		close(ctx.resume)
+		for range 9 {
+			assert.Equal(t, canonAll([]string{repo})[0], <-results)
+		}
+	})
+}
+
+// Pause at the fill's timeout creation, after it owns the cache entry.
+type pausedRepoFill struct {
+	context.Context
+	started, resume chan struct{}
+}
+
+func (ctx *pausedRepoFill) Deadline() (time.Time, bool) {
+	close(ctx.started)
+	<-ctx.resume
+	return ctx.Context.Deadline()
 }
 
 func TestFindRepoRoot_CancelledWait(t *testing.T) {
@@ -144,6 +173,24 @@ func TestFindRepoRoot_CancelledWait(t *testing.T) {
 	go func() { done <- findRepoRoot(ctx, repo) }()
 	cancel()
 	assert.Empty(t, <-done)
+}
+
+func TestFindRepoRoot_FailedCreatorRetriesForLiveWaiter(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	synctest.Test(t, func(t *testing.T) {
+		base, cancel := context.WithCancel(t.Context())
+		ctx := &pausedRepoFill{Context: base, started: make(chan struct{}), resume: make(chan struct{})}
+		creator, waiter := make(chan string, 1), make(chan string, 1)
+		go func() { creator <- findRepoRoot(ctx, repo) }()
+		<-ctx.started
+		go func() { waiter <- findRepoRoot(t.Context(), repo) }()
+		synctest.Wait()
+		cancel()
+		close(ctx.resume)
+		assert.Empty(t, <-creator)
+		assert.Equal(t, canonAll([]string{repo})[0], <-waiter)
+	})
 }
 
 func TestDiscoverRepos_Dedup(t *testing.T) {

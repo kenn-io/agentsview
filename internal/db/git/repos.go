@@ -184,7 +184,8 @@ type gitMarker struct {
 
 func (m gitMarker) matches(other gitMarker) bool {
 	return m.info != nil && other.info != nil && m.path == other.path && os.SameFile(m.info, other.info) &&
-		m.info.Mode() == other.info.Mode() && m.info.Size() == other.info.Size() && m.info.ModTime().Equal(other.info.ModTime())
+		m.info.Mode().Type() == other.info.Mode().Type() &&
+		(m.info.IsDir() || m.info.Size() == other.info.Size() && m.info.ModTime().Equal(other.info.ModTime()))
 }
 
 // nearestGitMarker validates cached roots; Git still resolves unusual layouts.
@@ -252,8 +253,9 @@ func findRepoRoot(ctx context.Context, start string) string {
 		cacheable := root != "" && filepath.Clean(root) == filepath.Dir(marker.path) && marker.matches(nearestGitMarker(start))
 		repoRoots.Lock()
 		entry.root = root
-		entry.marker = marker
-		if !cacheable {
+		if cacheable {
+			entry.marker = marker
+		} else {
 			delete(repoRoots.entries, start)
 		}
 		close(entry.ready)
