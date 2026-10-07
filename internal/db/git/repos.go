@@ -189,8 +189,8 @@ func (m gitMarker) matches(other gitMarker) bool {
 }
 
 // nearestGitMarker validates cached roots; Git still resolves unusual layouts.
-func nearestGitMarker(start string) gitMarker {
-	dir, err := filepath.EvalSymlinks(existingAncestor(start))
+func nearestGitMarker(dir string) gitMarker {
+	dir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return gitMarker{}
 	}
@@ -198,7 +198,8 @@ func nearestGitMarker(start string) gitMarker {
 		path := filepath.Join(dir, ".git")
 		info, err := os.Lstat(path)
 		if err == nil {
-			if info.IsDir() || info.Mode().IsRegular() {
+			// Windows FileInfo loads its identity lazily; capture it before the path can be replaced.
+			if (info.IsDir() || info.Mode().IsRegular()) && os.SameFile(info, info) {
 				return gitMarker{path: path, info: info}
 			}
 			return gitMarker{}
@@ -232,7 +233,7 @@ func findRepoRoot(ctx context.Context, start string) string {
 			case <-ctx.Done():
 				return ""
 			}
-			if !entry.marker.matches(nearestGitMarker(start)) {
+			if !entry.marker.matches(nearestGitMarker(existingAncestor(start))) {
 				repoRoots.Lock()
 				if repoRoots.entries[start] == entry {
 					delete(repoRoots.entries, start)
@@ -245,12 +246,13 @@ func findRepoRoot(ctx context.Context, start string) string {
 		entry := &repoRootEntry{ready: make(chan struct{})}
 		repoRoots.entries[start] = entry
 		repoRoots.Unlock()
-		marker := nearestGitMarker(start)
+		dir := existingAncestor(start)
+		marker := nearestGitMarker(dir)
 		root := ""
-		if dir := existingAncestor(start); dir != "" {
+		if dir != "" {
 			root = gitToplevel(ctx, dir)
 		}
-		cacheable := root != "" && filepath.Clean(root) == filepath.Dir(marker.path) && marker.matches(nearestGitMarker(start))
+		cacheable := root != "" && marker.info != nil && filepath.Clean(root) == filepath.Dir(marker.path)
 		repoRoots.Lock()
 		entry.root = root
 		if cacheable {

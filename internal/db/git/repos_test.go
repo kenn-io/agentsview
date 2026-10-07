@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -148,10 +149,11 @@ func TestFindRepoRoot_ConcurrentMisses(t *testing.T) {
 type pausedRepoFill struct {
 	context.Context
 	started, resume chan struct{}
+	startedOnce     sync.Once
 }
 
 func (ctx *pausedRepoFill) Deadline() (time.Time, bool) {
-	close(ctx.started)
+	ctx.startedOnce.Do(func() { close(ctx.started) })
 	<-ctx.resume
 	return ctx.Context.Deadline()
 }
