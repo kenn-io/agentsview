@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -89,16 +91,52 @@ func TestFindRepoRoot_RetryFailedLookup(t *testing.T) {
 	repo := initBareRepo(t)
 	path := os.Getenv("PATH")
 	t.Setenv("PATH", t.TempDir())
-	assert.Empty(t, findRepoRoot(t.Context(), repo))
+	ctx := &pausedRepoFill{Context: t.Context(), started: make(chan struct{}), resume: make(chan struct{})}
+	close(ctx.resume)
+	assert.Empty(t, DiscoverRepos(ctx, []string{repo, repo, repo}))
+	assert.Equal(t, int32(1), ctx.attempts.Load(), "one failed lookup per distinct working directory in a request")
 	t.Setenv("PATH", path)
 	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
 	outside := t.TempDir()
-	ctx := &pausedRepoFill{Context: t.Context(), started: make(chan struct{}), resume: make(chan struct{})}
-	close(ctx.resume)
+	ctx.attempts.Store(0)
 	assert.Empty(t, DiscoverRepos(ctx, []string{outside, outside, outside}))
-	assert.Equal(t, int32(1), ctx.attempts.Load(), "one negative lookup per distinct working directory in a request")
+	assert.Empty(t, DiscoverRepos(ctx, []string{outside}))
+	assert.Zero(t, ctx.attempts.Load(), "ordinary non-repositories need no Git lookup")
 	gitRun(t, outside, nil, "init", "-q")
 	assert.Equal(t, canonAll([]string{outside}), canonAll(slices.Concat(DiscoverRepos(t.Context(), []string{outside})...)))
+}
+
+func TestFindRepoRoot_BareWorktreeFallback(t *testing.T) {
+	skipIfNoGit(t)
+	bare, worktree := t.TempDir(), t.TempDir()
+	gitRun(t, bare, nil, "init", "--bare", "-q")
+	gitRun(t, bare, nil, "config", "core.bare", "false")
+	gitRun(t, bare, nil, "config", "core.worktree", worktree)
+	assert.Equal(t, canonAll([]string{worktree})[0], findRepoRoot(t.Context(), bare))
+}
+
+func TestFindRepoRoot_DirectoryAlias(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	sub := mkdirIn(t, repo, "sub/nested")
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "HEAD"), nil, 0o600))
+	alias := filepath.Join(t.TempDir(), "alias")
+	if runtime.GOOS == "windows" {
+		out, err := exec.CommandContext(t.Context(), "cmd", "/c", "mklink", "/J", alias, filepath.Dir(sub)).CombinedOutput()
+		if err != nil {
+			t.Skipf("cannot create directory junction: %v: %s", err, out)
+		}
+	} else {
+		require.NoError(t, os.Symlink(filepath.Dir(sub), alias))
+	}
+	want := canonAll([]string{repo})[0]
+	for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
+		assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
+	}
+	t.Setenv("PATH", t.TempDir())
+	for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
+		assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
+	}
 }
 
 func TestFindRepoRoot_RepositoryChanges(t *testing.T) {

@@ -13,12 +13,14 @@ import (
 	"time"
 
 	gitrepo "go.kenn.io/kit/git/repo"
+	"go.kenn.io/kit/pathresolve"
 )
 
 // DiscoverRepos resolves each cwd to its enclosing git repository toplevel and
 // returns one group of checkout paths per repository. Cwds with no enclosing
 // repo (or whose resolution fails) are silently dropped. Order follows
 // first-seen order in the input.
+// Successful roots are reused; fresh filesystem checks skip directories with no repository metadata.
 //
 // Resolution prefers `git rev-parse --show-toplevel`, which handles standard
 // `.git` directories, linked worktrees (`.git` is a file pointing at the
@@ -194,27 +196,33 @@ func (m gitMarker) matches(other gitMarker) bool {
 }
 
 // nearestGitMarker validates cached roots; Git still resolves unusual layouts.
-func nearestGitMarker(dir string) gitMarker {
-	dir, err := filepath.EvalSymlinks(dir)
+func nearestGitMarker(dir string) (gitMarker, bool) {
+	dir, err := pathresolve.EvalSymlinks(dir)
 	if err != nil {
-		return gitMarker{}
+		return gitMarker{}, false
 	}
+	sawHead := false
 	for {
 		path := filepath.Join(dir, ".git")
 		info, err := os.Lstat(path)
 		if err == nil {
 			// Windows FileInfo loads its identity lazily; capture it before the path can be replaced.
 			if (info.IsDir() || info.Mode().IsRegular()) && os.SameFile(info, info) {
-				return gitMarker{path: path, info: info}
+				return gitMarker{path: path, info: info}, false
 			}
-			return gitMarker{}
+			return gitMarker{}, false
 		}
 		if !os.IsNotExist(err) {
-			return gitMarker{}
+			return gitMarker{}, false
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "HEAD")); err == nil {
+			sawHead = true
+		} else if !os.IsNotExist(err) {
+			return gitMarker{}, false
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return gitMarker{}
+			return gitMarker{}, !sawHead
 		}
 		dir = parent
 	}
@@ -238,7 +246,8 @@ func findRepoRoot(ctx context.Context, start string) string {
 			case <-ctx.Done():
 				return ""
 			}
-			if !entry.marker.matches(nearestGitMarker(existingAncestor(start))) {
+			marker, _ := nearestGitMarker(existingAncestor(start))
+			if !entry.marker.matches(marker) {
 				repoRoots.Lock()
 				if repoRoots.entries[start] == entry {
 					delete(repoRoots.entries, start)
@@ -252,9 +261,9 @@ func findRepoRoot(ctx context.Context, start string) string {
 		repoRoots.entries[start] = entry
 		repoRoots.Unlock()
 		dir := existingAncestor(start)
-		marker := nearestGitMarker(dir)
+		marker, absent := nearestGitMarker(dir)
 		root := ""
-		if dir != "" {
+		if dir != "" && !absent {
 			root = gitToplevel(ctx, dir)
 		}
 		cacheable := root != "" && marker.info != nil && filepath.Clean(root) == filepath.Dir(marker.path)
