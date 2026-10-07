@@ -693,6 +693,7 @@ func sameMessages(existing, incoming []db.Message) bool {
 	}
 	for i := range existing {
 		if !sameTurn(existing[i], incoming[i]) ||
+			existing[i].SourceUUID != "" && incoming[i].SourceUUID != "" && existing[i].SourceUUID != incoming[i].SourceUUID ||
 			existing[i].Content != incoming[i].Content ||
 			existing[i].ContentLength != incoming[i].ContentLength {
 			return false
