@@ -1,5 +1,5 @@
 import { MetadataService } from "../api/generated/index.js";
-import type { DbStatsOutcomeStats, GetApiV1SessionStatsParams } from "../api/generated/index.js";
+import type { DbStatsOutcomeStats } from "../api/generated/index.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 /** The window the totals are read for. */
@@ -63,19 +63,21 @@ export class OutcomeTotalsStore {
     this.loading = true;
     this.includePullRequests = withPullRequests;
     try {
-      const params: GetApiV1SessionStatsParams = {
-        since: window.since,
-        until: window.until,
-        timezone: window.timezone,
-        agent: window.agent,
-        include_project: window.includeProject,
-        exclude_project: window.excludeProject,
-        include_one_shot: window.includeOneShot,
-        include_automated: window.includeAutomated,
-        include_git_outcomes: true,
-        include_github_outcomes: withPullRequests,
-      };
-      const response = await this.fetchStats(params, { signal });
+      const response = await this.fetchStats(
+        {
+          since: window.since,
+          until: window.until,
+          timezone: window.timezone,
+          agent: window.agent,
+          include_project: window.includeProject,
+          exclude_project: window.excludeProject,
+          include_one_shot: window.includeOneShot,
+          include_automated: window.includeAutomated,
+          include_git_outcomes: true,
+          include_github_outcomes: withPullRequests,
+        },
+        { signal },
+      );
       if (!this.latest.isCurrent(signal)) return;
       // An absent block means the window had no repository to read, which is
       // not the same as a window with zero commits.

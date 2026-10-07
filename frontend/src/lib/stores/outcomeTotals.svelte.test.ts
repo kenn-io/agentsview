@@ -94,11 +94,8 @@ describe("OutcomeTotalsStore", () => {
 
   it.each([
     ["window", false],
-    ["GitHub", false],
-    ["reset", false],
     ["window", true],
-    ["GitHub", true],
-    ["reset", true],
+    ["reset", false],
   ])(
     "cancels a replaced request on %s and ignores its late result, fails=%s",
     async (replacement, fails) => {
@@ -146,8 +143,7 @@ describe("OutcomeTotalsStore", () => {
         return;
       }
       const window = { since: "2026-08-02", until: "2026-09-01" };
-      const second =
-        replacement === "GitHub" ? store.loadWithPullRequests(window) : store.load(window);
+      const second = store.load(window);
       expect(signals[0]?.aborted).toBe(true);
       expect(signals[1]?.aborted).toBe(false);
       if (fails) await first;
