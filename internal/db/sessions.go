@@ -1441,9 +1441,9 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			ended_at = excluded.ended_at,
 			message_count = excluded.message_count,
 			user_message_count = excluded.user_message_count,
-			parent_session_id = IIF(` + keepLauncherParentSQL + `, sessions.parent_session_id, excluded.parent_session_id),
+			parent_session_id = excluded.parent_session_id,
 			parser_parent_session_id = excluded.parser_parent_session_id,
-			relationship_type = IIF(` + keepLauncherParentSQL + `, sessions.relationship_type, excluded.relationship_type),
+			relationship_type = excluded.relationship_type,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
 			has_total_output_tokens = excluded.has_total_output_tokens,
@@ -2092,11 +2092,22 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 		return 0, fmt.Errorf("beginning scoped subagent linking: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	updated, err := linkSubagentSessionsForSessionsTx(ctx, tx, ids)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing scoped subagent linking: %w", err)
+	}
+	return updated, nil
+}
+
+func linkSubagentSessionsForSessionsTx(ctx context.Context, tx *sql.Tx, ids []string) (int, error) {
 	updated := 0
 
 	// Each id binds twice (once per UNION branch), so halve the chunk to
 	// stay within SQLite's bind-variable limit.
-	err = queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
+	err := queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
 		ph, args := inPlaceholders(chunk)
 		allArgs := append(append([]any{}, args...), args...)
 		res, err := tx.ExecContext(ctx,
@@ -2125,9 +2136,6 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 		return 0, err
 	}
 	updated += launched
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("committing scoped subagent linking: %w", err)
-	}
 	return updated, nil
 }
 

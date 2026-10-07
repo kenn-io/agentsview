@@ -1992,7 +1992,7 @@ func sessionPushFingerprint(
 		sess.Entrypoint,
 		sess.SessionKind,
 		db.EncodePRLinks(sess.PRLinks),
-		sessionLabelsFingerprint(sess.Labels),
+		strconv.Itoa(len(sess.Labels)),
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
 		stringValue(sess.SessionName),
@@ -2051,19 +2051,10 @@ func sessionPushFingerprint(
 		sess.SecretsRulesVersion,
 		usageEventFingerprint,
 	}
+	fields = append(fields, sess.Labels...)
 	var b strings.Builder
 	for _, f := range fields {
 		fmt.Fprintf(&b, "%d:%s", len(f), f)
-	}
-	return b.String()
-}
-
-// sessionLabelsFingerprint length-prefixes each label so that label sets
-// with different boundaries cannot collide.
-func sessionLabelsFingerprint(labels []string) string {
-	var b strings.Builder
-	for _, label := range labels {
-		fmt.Fprintf(&b, "%d:%s", len(label), label)
 	}
 	return b.String()
 }

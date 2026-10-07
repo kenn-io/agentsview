@@ -1575,6 +1575,7 @@ class SessionsStore {
       return;
     }
     if (event.scope === "sessions" || event.scope === "sync") {
+      if (event.scope === "sessions") void this.refreshActiveSession();
       this.invalidateProjectCache();
       this.scheduleIndexRefresh();
       this.bumpActiveSessionUsageVersion();

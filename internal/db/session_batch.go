@@ -293,7 +293,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		writtenUsageIDs = append(writtenUsageIDs, write.Session.ID)
 	}
 
-	if _, err := applySessionExternalParentsFor(ctx, tx, writtenUsageIDs); err != nil {
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, writtenUsageIDs); err != nil {
 		return result, err
 	}
 
