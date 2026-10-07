@@ -18,7 +18,6 @@ var fixturePRLinks = []db.PRLink{
 	{
 		URL: "https://github.com/Acme/Widgets/pull/42", Host: "github.com",
 		Repository: "Acme/Widgets", Number: 42,
-		FirstSeenAt: "2026-01-10T00:01:00Z",
 	},
 	{
 		URL: "https://gitlab.com/acme/tools/-/merge_requests/7", Host: "gitlab.com",
@@ -101,12 +100,6 @@ func TestPushServesSessionLabelsAndPRLinks(t *testing.T) {
 		{"number from another link", db.SessionFilter{PR: db.PRFilter{Repository: "acme/tools", Number: 42}},
 			nil},
 		{"unlinked repository", db.SessionFilter{PR: db.PRFilter{Repository: "acme/other"}}, nil},
-		{"url on another host", db.SessionFilter{PR: db.PRFilter{
-			Host: "forge.example.com", Repository: "acme/widgets", Number: 42,
-		}}, nil},
-		{"url on the stored host", db.SessionFilter{PR: db.PRFilter{
-			Host: "github.com", Repository: "acme/widgets", Number: 42,
-		}}, []string{fixtureAlphaID}},
 	}
 	for _, tt := range tests {
 		t.Run("filter "+tt.name, func(t *testing.T) {

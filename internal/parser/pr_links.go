@@ -2,9 +2,7 @@ package parser
 
 import (
 	"net/url"
-	"strconv"
 	"strings"
-	"time"
 )
 
 // PRLink is a pull or merge request associated with a session. The shape
@@ -20,18 +18,11 @@ type PRLink struct {
 	Repository string
 	// Number is the pull or merge request number.
 	Number int
-	// FirstSeenAt is the earliest timestamp the source attached to the
-	// link; zero when the source carried none.
-	FirstSeenAt time.Time
 }
 
-// NewPRLink validates and normalizes a pull request reference. The URL is
-// required. Repository and number fall back to values parsed from the URL
-// path when the source omits them, and are trusted over the path when it
-// supplies them. It reports false when the reference is unusable.
+// NewPRLink validates a web URL and the repository and number supplied by the source.
 func NewPRLink(
 	rawURL, repository string, number int,
-	seenAt time.Time,
 ) (PRLink, bool) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") ||
@@ -39,15 +30,7 @@ func NewPRLink(
 		return PRLink{}, false
 	}
 	host := strings.ToLower(u.Host)
-	path := strings.TrimRight(u.EscapedPath(), "/")
-	pathRepo, pathNumber := prLinkPathParts(path)
 	repository = strings.Trim(strings.TrimSpace(repository), "/")
-	if repository == "" {
-		repository = pathRepo
-	}
-	if number <= 0 {
-		number = pathNumber
-	}
 	if repository == "" || number <= 0 {
 		return PRLink{}, false
 	}
@@ -55,52 +38,22 @@ func NewPRLink(
 	normalized.RawPath = ""
 	normalizedURL := strings.TrimRight(normalized.String(), "/")
 	return PRLink{
-		URL:         normalizedURL,
-		Host:        host,
-		Repository:  repository,
-		Number:      number,
-		FirstSeenAt: seenAt,
+		URL:        normalizedURL,
+		Host:       host,
+		Repository: repository,
+		Number:     number,
 	}, true
 }
 
-// prLinkPathParts extracts the repository and number from a GitHub
-// (/owner/repo/pull/N), Bitbucket (/workspace/repo/pull-requests/N),
-// GitLab (/group/repo/-/merge_requests/N), or Gerrit (/c/repo/+/N) path.
-func prLinkPathParts(path string) (string, int) {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 4 {
-		return "", 0
-	}
-	n, err := strconv.Atoi(parts[len(parts)-1])
-	if err != nil || n <= 0 {
-		return "", 0
-	}
-	switch kind := parts[len(parts)-2]; {
-	case kind == "pull" || kind == "pulls" || kind == "pull-requests":
-		return strings.Join(parts[:len(parts)-2], "/"), n
-	case kind == "merge_requests" && len(parts) >= 5 &&
-		parts[len(parts)-3] == "-":
-		return strings.Join(parts[:len(parts)-3], "/"), n
-	case kind == "+" && parts[0] == "c":
-		return strings.Join(parts[1:len(parts)-2], "/"), n
-	}
-	return "", 0
-}
-
 // prLinkCollector deduplicates links by URL, keeping first-appearance
-// order and the earliest timestamp.
+// order.
 type prLinkCollector struct {
 	links []PRLink
 	index map[string]int
 }
 
 func (c *prLinkCollector) add(link PRLink) {
-	if i, ok := c.index[link.URL]; ok {
-		seen := c.links[i].FirstSeenAt
-		if !link.FirstSeenAt.IsZero() &&
-			(seen.IsZero() || link.FirstSeenAt.Before(seen)) {
-			c.links[i].FirstSeenAt = link.FirstSeenAt
-		}
+	if _, ok := c.index[link.URL]; ok {
 		return
 	}
 	if c.index == nil {
@@ -126,18 +79,4 @@ func mergePRLinks(lists ...[]PRLink) []PRLink {
 		}
 	}
 	return c.result()
-}
-
-// prLinkChangesStored reports whether a full parse would store something
-// different after seeing link, given the stored URLs and first-seen
-// times: a new URL, or an earlier timestamp for a stored URL.
-func prLinkChangesStored(stored map[string]time.Time, link PRLink) bool {
-	seen, ok := stored[link.URL]
-	if !ok {
-		return true
-	}
-	if link.FirstSeenAt.IsZero() {
-		return false
-	}
-	return seen.IsZero() || link.FirstSeenAt.Before(seen)
 }

@@ -2284,9 +2284,9 @@ describe("SessionsStore", () => {
       expect(sessions.sessions).toHaveLength(1);
 
       const rejected =
-        'pr filter "https://github.com/acme/widgets": not a pull or merge request URL';
+        'pr filter "acme/widgets#zero": invalid pull request number';
       vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(new ApiError(400, rejected));
-      sessions.setPRFilter("https://github.com/acme/widgets");
+      sessions.setPRFilter("acme/widgets#zero");
       await vi.waitFor(() => {
         expect(sessions.sidebarLoadError).toBe(rejected);
       });

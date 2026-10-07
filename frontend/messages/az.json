@@ -450,7 +450,7 @@
   "sidebar_filters_label_placeholder": "Etiket əlavə et, məs. ticket=ABC-123",
   "sidebar_filters_pull_request": "Pull request",
   "sidebar_filters_pull_request_input": "Pull request-ə görə süz",
-  "sidebar_filters_pull_request_placeholder": "owner/repo#123 və ya URL",
+  "sidebar_filters_pull_request_placeholder": "owner/repo#123",
   "sidebar_row_expand": "Genişləndir",
   "sidebar_row_collapse": "Yığ",
   "sidebar_row_select_session": "Sessiyanı seç",

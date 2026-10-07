@@ -414,7 +414,7 @@ type ListFilter struct {
 	// Labels keeps sessions carrying every listed label.
 	Labels []string `json:"label,omitempty"`
 	// PR keeps sessions linked to a pull request: owner/repo,
-	// owner/repo#123, or a pull request URL.
+	// owner/repo#123.
 	PR     string `json:"pr,omitempty"`
 	Cursor string `json:"cursor,omitempty"`
 	Limit  int    `json:"limit,omitempty"`

@@ -448,7 +448,7 @@
   "sidebar_filters_label_placeholder": "Add label, e.g. ticket=ABC-123",
   "sidebar_filters_pull_request": "Pull request",
   "sidebar_filters_pull_request_input": "Filter by pull request",
-  "sidebar_filters_pull_request_placeholder": "owner/repo#123 or URL",
+  "sidebar_filters_pull_request_placeholder": "owner/repo#123",
   "sidebar_row_expand": "Expand",
   "sidebar_row_collapse": "Collapse",
   "sidebar_row_select_session": "Select session",

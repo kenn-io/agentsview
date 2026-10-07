@@ -430,7 +430,7 @@ func TestImportUnchangedKeepsLauncherParent(t *testing.T) {
 	require.NoError(t, err)
 	stats, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
 	require.NoError(t, err)
-	assert.Greater(t, stats.Skipped, 0)
+	assert.Positive(t, stats.Skipped)
 	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
 	require.NoError(t, err)
 	require.NotNil(t, s.ParentSessionID)

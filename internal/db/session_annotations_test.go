@@ -18,7 +18,6 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 			{
 				URL: "https://github.com/Owner/Repo/pull/12", Host: "github.com",
 				Repository: "Owner/Repo", Number: 12,
-				FirstSeenAt: "2026-10-05T03:21:20.583Z",
 			},
 			{
 				URL: "https://github.com/owner/other/pull/3", Host: "github.com",
@@ -46,7 +45,6 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 	require.NotNil(t, got)
 	require.Len(t, got.PRLinks, 2)
 	assert.Equal(t, "Owner/Repo", got.PRLinks[0].Repository)
-	assert.Equal(t, "2026-10-05T03:21:20.583Z", got.PRLinks[0].FirstSeenAt)
 
 	full, err := d.GetSessionFull(t.Context(), "with-prs")
 	require.NoError(t, err)
@@ -59,13 +57,9 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 	}{
 		{filter: "owner/repo", want: []string{"with-prs"}},
 		{filter: "owner/repo#12", want: []string{"with-prs"}},
-		{filter: "https://github.com/OWNER/repo/pull/12", want: []string{"with-prs"}},
 		{filter: "owner/repo#13", want: []string{}},
-		// A URL also pins the forge host; shorthand matches any host.
-		{filter: "https://forge.example.com/owner/repo/pull/12", want: []string{}},
+
 		{filter: "owner/missing", want: []string{}},
-		{filter: "https://bitbucket.org/team/repo/pull-requests/5", want: []string{"bitbucket"}},
-		{filter: "https://example-review.googlesource.com/c/example/repo/+/7", want: []string{"gerrit"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.filter, func(t *testing.T) {

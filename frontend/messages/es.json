@@ -450,7 +450,7 @@
   "sidebar_filters_label_placeholder": "Añadir etiqueta, p. ej. ticket=ABC-123",
   "sidebar_filters_pull_request": "Pull request",
   "sidebar_filters_pull_request_input": "Filtrar por pull request",
-  "sidebar_filters_pull_request_placeholder": "owner/repo#123 o URL",
+  "sidebar_filters_pull_request_placeholder": "owner/repo#123",
   "sidebar_row_expand": "Expandir",
   "sidebar_row_collapse": "Contraer",
   "sidebar_row_select_session": "Seleccionar sesión",

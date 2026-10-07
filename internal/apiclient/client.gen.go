@@ -18159,7 +18159,7 @@ type GetAPIV1SessionsQuery struct {
 	// Label Keep sessions carrying this exact label; repeat to require several
 	Label []string `json:"label,omitempty"`
 
-	// Pr Keep sessions linked to a pull request: owner/repo, owner/repo#123, or a pull request URL
+	// Pr Keep sessions linked to a pull request: owner/repo or owner/repo#123
 	Pr *string `json:"pr,omitempty"`
 
 	// OrderBy Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id.
@@ -21731,11 +21731,10 @@ func (d DBModelBreakdown) Validate() error {
 }
 
 type DBPRLink struct {
-	FirstSeenAt *string `json:"first_seen_at,omitempty"`
-	Host        string  `json:"host" validate:"required"`
-	Number      int64   `json:"number"`
-	Repository  string  `json:"repository" validate:"required"`
-	URL         string  `json:"url" validate:"required"`
+	Host       string `json:"host" validate:"required"`
+	Number     int64  `json:"number"`
+	Repository string `json:"repository" validate:"required"`
+	URL        string `json:"url" validate:"required"`
 }
 
 func (d DBPRLink) Validate() error {

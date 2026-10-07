@@ -435,7 +435,7 @@
   "sidebar_filters_label_placeholder": "新增標籤，例如 ticket=ABC-123",
   "sidebar_filters_pull_request": "拉取請求",
   "sidebar_filters_pull_request_input": "依拉取請求篩選",
-  "sidebar_filters_pull_request_placeholder": "owner/repo#123 或 URL",
+  "sidebar_filters_pull_request_placeholder": "owner/repo#123",
   "sidebar_row_expand": "展開",
   "sidebar_row_collapse": "摺疊",
   "sidebar_row_select_session": "選擇對話",

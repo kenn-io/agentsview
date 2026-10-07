@@ -179,16 +179,15 @@ fixtures retain this field; missing identities remain source-local.
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 
-- **Pull request links (2026-10-06):** Checked against local Claude Code 2.1.x
+- **Pull request links (2026-10-07):** Checked against local Claude Code 2.1.x
   transcripts. The CLI appends top-level records shaped
   `{"type":"pr-link","prNumber":123,"prUrl":"https://github.com/owner/repo/pull/123","prRepository":"owner/repo","sessionId":"...","timestamp":"..."}`.
   Claude Code PR-link records carry no message `uuid` and are re-appended, so
   PR links apply to every split of a forked transcript.
   One transcript can repeat the same link hundreds of times, so
-  Agentsview keeps one link per normalized URL with the earliest timestamp and
-  keeps every distinct URL. Parser fixtures reverified on 2026-10-06 cover
-  more than 100 links and incremental reparsing for new URLs or earlier
-  timestamps. The record does not say whether the session opened the
+  Agentsview requires the recorded repository and number and keeps every
+  distinct normalized URL. Parser fixtures reverified on 2026-10-07 cover
+  more than 100 links and incremental reparsing only for new URLs. The record does not say whether the session opened the
   pull request. Undocumented upstream; evidence is `no-public-source`. See
   `claudePRLink` in `internal/parser/claude.go` and
   `internal/parser/pr_links.go`.

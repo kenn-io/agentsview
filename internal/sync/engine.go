@@ -15906,11 +15906,11 @@ func (e *Engine) tryProviderIncrementalAppend(
 		// command followed by a fresh response would force a full parse.
 		var storedLastClaudeMessageID *string
 		var storedSessionName *string
-		var storedPRLinks map[string]time.Time
+		var storedPRLinks map[string]struct{}
 		if provider.Definition().Type == parser.AgentClaude {
 			id := e.db.LastClaudeMessageID(ctx, inc.ID)
 			storedLastClaudeMessageID = &id
-			links, lerr := e.db.GetSessionPRLinkFirstSeen(ctx, inc.ID)
+			links, lerr := e.db.GetSessionPRLinkURLs(ctx, inc.ID)
 			if lerr != nil {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
 					fmt.Errorf("read stored Claude pr links: %w", lerr)

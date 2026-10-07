@@ -435,7 +435,7 @@
   "sidebar_filters_label_placeholder": "레이블 추가, 예: ticket=ABC-123",
   "sidebar_filters_pull_request": "풀 리퀘스트",
   "sidebar_filters_pull_request_input": "풀 리퀘스트로 필터링",
-  "sidebar_filters_pull_request_placeholder": "owner/repo#123 또는 URL",
+  "sidebar_filters_pull_request_placeholder": "owner/repo#123",
   "sidebar_row_expand": "펼치기",
   "sidebar_row_collapse": "접기",
   "sidebar_row_select_session": "세션 선택",

@@ -72,10 +72,10 @@ type QueryDialect struct {
 	// column on the session row.
 	labelPredicate func(q func(string) string, ph string) string
 	// prLinkPredicate renders "a stored pull request link matches this
-	// repository, and number and host when numPh and hostPh are
+	// repository, and number when numPh is
 	// non-empty" over the JSON text column col. Nil renders the SQLite
 	// json_each form.
-	prLinkPredicate func(col, repoPh, numPh, hostPh string) string
+	prLinkPredicate func(col, repoPh, numPh string) string
 	// orphanPredicate renders the "parent row is missing" test used by
 	// BuildCanonicalRootWhere. Nil uses the configured parent relation.
 	orphanPredicate func(sessionAlias, parentAlias string) string
@@ -106,17 +106,14 @@ func (d QueryDialect) labelPredicateSQL(
 		q("id") + " AND sl.label = " + ph + ")"
 }
 
-func (d QueryDialect) prLinkPredicateSQL(col, repoPh, numPh, hostPh string) string {
+func (d QueryDialect) prLinkPredicateSQL(col, repoPh, numPh string) string {
 	if d.prLinkPredicate != nil {
-		return d.prLinkPredicate(col, repoPh, numPh, hostPh)
+		return d.prLinkPredicate(col, repoPh, numPh)
 	}
 	pred := "EXISTS (SELECT 1 FROM json_each(NULLIF(" + col + ", '')) pl" +
 		" WHERE lower(json_extract(pl.value, '$.repository')) = " + repoPh
 	if numPh != "" {
 		pred += " AND json_extract(pl.value, '$.number') = " + numPh
-	}
-	if hostPh != "" {
-		pred += " AND json_extract(pl.value, '$.host') = " + hostPh
 	}
 	return pred + ")"
 }
@@ -219,15 +216,12 @@ func PostgresQueryDialect() QueryDialect {
 			// Containment can use the GIN index on labels.
 			return q("labels") + " @> ARRAY[" + ph + "::text]"
 		},
-		prLinkPredicate: func(col, repoPh, numPh, hostPh string) string {
+		prLinkPredicate: func(col, repoPh, numPh string) string {
 			pred := "EXISTS (SELECT 1 FROM jsonb_array_elements(NULLIF(" +
 				col + ", '')::jsonb) pl WHERE lower(pl->>'repository') = " +
 				repoPh
 			if numPh != "" {
 				pred += " AND (pl->>'number')::bigint = " + numPh
-			}
-			if hostPh != "" {
-				pred += " AND pl->>'host' = " + hostPh
 			}
 			return pred + ")"
 		},
@@ -281,13 +275,10 @@ func ClickHouseQueryDialect() QueryDialect {
 		labelPredicate: func(q func(string) string, ph string) string {
 			return "has(" + q("labels") + ", " + ph + ")"
 		},
-		prLinkPredicate: func(col, repoPh, numPh, hostPh string) string {
+		prLinkPredicate: func(col, repoPh, numPh string) string {
 			cond := "lower(JSONExtractString(pl, 'repository')) = " + repoPh
 			if numPh != "" {
 				cond += " AND JSONExtractInt(pl, 'number') = " + numPh
-			}
-			if hostPh != "" {
-				cond += " AND JSONExtractString(pl, 'host') = " + hostPh
 			}
 			return "arrayExists(pl -> " + cond +
 				", JSONExtractArrayRaw(" + col + "))"
@@ -360,13 +351,10 @@ func DuckDBQueryDialect() QueryDialect {
 		labelPredicate: func(q func(string) string, ph string) string {
 			return "list_contains(" + q("labels") + ", " + ph + ")"
 		},
-		prLinkPredicate: func(col, repoPh, numPh, hostPh string) string {
+		prLinkPredicate: func(col, repoPh, numPh string) string {
 			cond := "lower(pl->>'repository') = " + repoPh
 			if numPh != "" {
 				cond += " AND CAST(pl->>'number' AS BIGINT) = " + numPh
-			}
-			if hostPh != "" {
-				cond += " AND (pl->>'host') = " + hostPh
 			}
 			return "len(list_filter(CAST(json_extract(NULLIF(" + col +
 				", ''), '$[*]') AS JSON[]), pl -> " + cond + ")) > 0"
@@ -939,15 +927,12 @@ func annotationPredicates(
 	}
 	if !f.PR.IsZero() {
 		repoPh := b.Add(strings.ToLower(f.PR.Repository))
-		numPh, hostPh := "", ""
+		numPh := ""
 		if f.PR.Number > 0 {
 			numPh = b.Add(f.PR.Number)
 		}
-		if f.PR.Host != "" {
-			hostPh = b.Add(f.PR.Host)
-		}
 		preds = append(preds,
-			b.dialect.prLinkPredicateSQL(q("pr_links"), repoPh, numPh, hostPh))
+			b.dialect.prLinkPredicateSQL(q("pr_links"), repoPh, numPh))
 	}
 	return preds
 }
