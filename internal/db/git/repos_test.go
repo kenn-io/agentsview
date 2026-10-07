@@ -116,15 +116,12 @@ func TestFindRepoRoot_RepositoryChanges(t *testing.T) {
 	assert.Zero(t, ctx.attempts.Load(), "ordinary non-repositories need no Git lookup")
 	gitRun(t, outside, nil, "init", "-q")
 	assert.Equal(t, canonAll([]string{outside})[0], findRepoRoot(t.Context(), outside))
-	sub, sibling := mkdirIn(t, repo, "sub"), mkdirIn(t, repo, "sibling")
-	require.NotEmpty(t, findRepoRoot(t.Context(), sub))
-	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), sibling))
+	sub := mkdirIn(t, repo, "sub")
+	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), sub))
 	gitRun(t, repo, nil, "commit", "--allow-empty", "-q", "-m", "seed")
 	gitRun(t, repo, nil, "status", "--porcelain")
 	t.Setenv("PATH", t.TempDir())
-	for _, cwd := range []string{sub, sibling} {
-		assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), cwd))
-	}
+	assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), sub))
 	t.Setenv("PATH", path)
 	gitRun(t, sub, nil, "init", "-q")
 	assert.Equal(t, canonAll([]string{sub})[0], findRepoRoot(t.Context(), sub))
@@ -139,7 +136,7 @@ func TestFindRepoRoot_RepositoryChanges(t *testing.T) {
 	gitRun(t, repo, nil, "commit", "--allow-empty", "-q", "-m", "seed")
 	worktree := filepath.Join(t.TempDir(), "wt")
 	gitRun(t, repo, nil, "worktree", "add", "-b", "feature", worktree)
-	require.NotEmpty(t, findRepoRoot(t.Context(), worktree))
+	assert.Equal(t, canonAll([]string{worktree})[0], findRepoRoot(t.Context(), worktree))
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: missing\n"), 0o600))
 	assert.Empty(t, findRepoRoot(t.Context(), worktree))
 }
@@ -236,31 +233,6 @@ func TestDiscoverRepos_EmptyInputReturnsEmptySlice(t *testing.T) {
 	got = DiscoverRepos(t.Context(), []string{})
 	require.NotNil(t, got, "DiscoverRepos([])")
 	assert.Empty(t, got, "DiscoverRepos([]) should be empty slice")
-}
-
-// TestDiscoverRepos_LinkedWorktreeResolves covers the regression flagged
-// by code review: linked worktrees use a `.git` FILE (not directory)
-// that points at the parent gitdir. `git rev-parse --show-toplevel`
-// resolves these, so worktree cwds must contribute a repo root rather
-// than being silently dropped.
-func TestDiscoverRepos_LinkedWorktreeResolves(t *testing.T) {
-	skipIfNoGit(t)
-	repo := initBareRepo(t)
-	// `git worktree add` requires at least one commit in the source
-	// repo, so seed one before linking.
-	gitRun(t, repo, nil, "commit", "--allow-empty", "-q", "-m", "seed")
-
-	worktreeRoot := filepath.Join(t.TempDir(), "wt")
-	gitRun(t, repo, nil,
-		"worktree", "add", "-b", "feature", worktreeRoot,
-	)
-
-	got := DiscoverRepos(t.Context(), []string{worktreeRoot})
-	require.Len(t, got, 1, "want one worktree root")
-	assert.Equal(t,
-		canonAll([]string{worktreeRoot}),
-		canonAll(slices.Concat(got...)),
-		"DiscoverRepos (worktree path)")
 }
 
 // TestDiscoverRepos_MissingCwdSkipped confirms that a cwd whose path is
