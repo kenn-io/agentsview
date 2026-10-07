@@ -4,11 +4,11 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/rawderive"
+	"go.kenn.io/agentsview/internal/rawsync"
 	"testing"
 	"time"
 )
@@ -58,15 +58,22 @@ func TestRawProjectionCurationResolvesMembershipAfterConcurrentSplit(t *testing.
 	assert.Equal(t, []string{ra.SessionID}, stars)
 }
 
-// Manifest acceptance and every other projection update the corpus revision
-// row, so a projection must not hold it while it writes one group's rows.
-func TestRawProjectionRowWritesDoNotHoldCorpusRevisionAgainstOtherSources(t *testing.T) {
-	f := newProjectionFixture(t)
-	slow, _ := f.accept(t, "device-a", "slow-a", "")
-	lease := f.lease(t, slow)
-	other, _ := f.accept(t, "device-b", "other-b", "")
-	_, err := f.admin.ExecContext(t.Context(), `CREATE FUNCTION hold_projection_message() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(hashtext(TG_TABLE_SCHEMA)); RETURN NEW; END $$; CREATE TRIGGER hold_projection_message BEFORE INSERT ON messages FOR EACH ROW EXECUTE FUNCTION hold_projection_message()`)
+// parkOn makes every matching row write wait on the fixture's advisory gate.
+// condition is a PL/pgSQL boolean over NEW or OLD.
+func (f projectionFixture) parkOn(t *testing.T, timing, table, condition string) {
+	t.Helper()
+	row := "NEW"
+	if timing == "DELETE" {
+		row = "OLD"
+	}
+	_, err := f.admin.ExecContext(t.Context(), fmt.Sprintf(`CREATE FUNCTION park_%[2]s() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF %[3]s THEN PERFORM pg_advisory_xact_lock(hashtext(TG_TABLE_SCHEMA)); END IF; RETURN %[4]s; END $$; CREATE TRIGGER park_%[2]s BEFORE %[1]s ON %[2]s FOR EACH ROW EXECUTE FUNCTION park_%[2]s()`, timing, table, condition, row))
 	require.NoError(t, err)
+}
+
+// whileParked runs write until a parkOn trigger holds it mid-materialization,
+// runs during, and then releases write and requires both to succeed.
+func (f projectionFixture) whileParked(t *testing.T, write, during func(context.Context) error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	gate, err := f.admin.BeginTx(ctx, nil)
@@ -74,93 +81,239 @@ func TestRawProjectionRowWritesDoNotHoldCorpusRevisionAgainstOtherSources(t *tes
 	defer gate.Rollback()
 	_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
 	require.NoError(t, err)
-	projected := make(chan error, 1)
-	go func() { projected <- f.sink.Project(ctx, lease, slow, projectionOutcome("slow")) }()
+	written := make(chan error, 1)
+	go func() { written <- write(ctx) }()
 	require.Eventually(t, func() bool {
-		var writing int
-		err := f.admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory'`, f.role).Scan(&writing)
-		return err == nil && writing == 1
+		var parked int
+		err := f.admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory'`, f.role).Scan(&parked)
+		return err == nil && parked == 1
 	}, 3*time.Second, 10*time.Millisecond)
 
-	selectCtx, cancelSelect := context.WithTimeout(ctx, 3*time.Second)
-	defer cancelSelect()
-	_, err = f.sink.SelectSourceGeneration(selectCtx, other, "parser-1")
+	duringCtx, cancelDuring := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelDuring()
+	require.NoError(t, during(duringCtx), "another source waited for a writer that was still materializing rows")
 
-	require.NoError(t, err, "selecting another source waited for a projection that was still writing rows")
 	require.NoError(t, gate.Commit())
-	require.NoError(t, <-projected)
-	var selection, corpus int64
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT selection_revision,corpus_revision FROM raw_corpus_state WHERE singleton=1`).Scan(&selection, &corpus))
-	assert.Equal(t, int64(2), selection)
-	assert.Equal(t, int64(1), corpus)
-	var queuedSelection, queuedCorpus int64
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT selection_revision,corpus_revision FROM raw_embedding_outbox`).Scan(&queuedSelection, &queuedCorpus))
-	assert.Equal(t, selection, queuedSelection, "embedding work must carry the selection revision its projection committed with")
-	assert.Equal(t, corpus, queuedCorpus)
+	require.NoError(t, <-written)
 }
 
-// Excluding a trashed session removes its physical rows; other sources must
-// stay selectable while those rows are being removed.
+// requireSelectableWhileParked requires that another source can be selected
+// while write is parked. Manifest acceptance and every publication update the
+// corpus revision row, so no writer may hold it across row writes.
+func (f projectionFixture) requireSelectableWhileParked(t *testing.T, other rawsync.CanonicalManifest, write func(context.Context) error) {
+	t.Helper()
+	f.whileParked(t, write, func(ctx context.Context) error {
+		_, err := f.sink.SelectSourceGeneration(ctx, other, "parser-1")
+		return err
+	})
+}
+
+type corpusRevisions struct{ identity, selection, corpus int64 }
+
+func (f projectionFixture) revisions(t *testing.T) corpusRevisions {
+	t.Helper()
+	var r corpusRevisions
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT identity_revision,selection_revision,corpus_revision FROM raw_corpus_state WHERE singleton=1`).Scan(&r.identity, &r.selection, &r.corpus))
+	return r
+}
+
+type embeddingEvent struct {
+	session, content, action string
+	selection, corpus        int64
+}
+
+func (f projectionFixture) embeddingEvents(t *testing.T, action string) []embeddingEvent {
+	t.Helper()
+	rows, err := f.runtime.QueryContext(t.Context(), `SELECT session_id,content_revision,action,selection_revision,corpus_revision FROM raw_embedding_outbox WHERE action=$1 ORDER BY corpus_revision`, action)
+	require.NoError(t, err)
+	defer rows.Close()
+	var events []embeddingEvent
+	for rows.Next() {
+		var e embeddingEvent
+		require.NoError(t, rows.Scan(&e.session, &e.content, &e.action, &e.selection, &e.corpus))
+		events = append(events, e)
+	}
+	require.NoError(t, rows.Err())
+	return events
+}
+
+// projectSession publishes one single-session source under its own group.
+func (f projectionFixture) projectSession(t *testing.T, device, session string) RawIdentity {
+	t.Helper()
+	m, _ := f.accept(t, device, "capture-"+session, "")
+	outcome := projectionOutcome("content " + session)
+	outcome.Outcome.Results[0].Result.Session.ID = "codex:" + session
+	outcome.Outcome.Results[0].Result.Session.SourceSessionID = session
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:"+session)
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityUnique, resolved.State)
+	return resolved
+}
+
+func TestRawProjectionRowWritesDoNotHoldCorpusRevisionAgainstOtherSources(t *testing.T) {
+	f := newProjectionFixture(t)
+	slow, _ := f.accept(t, "device-a", "slow-a", "")
+	lease := f.lease(t, slow)
+	other, _ := f.accept(t, "device-b", "other-b", "")
+	f.parkOn(t, "INSERT", "messages", "true")
+
+	f.requireSelectableWhileParked(t, other, func(ctx context.Context) error {
+		return f.sink.Project(ctx, lease, slow, projectionOutcome("slow"))
+	})
+
+	now := f.revisions(t)
+	assert.Equal(t, int64(2), now.selection)
+	assert.Equal(t, int64(1), now.corpus)
+	events := f.embeddingEvents(t, "reconcile")
+	require.Len(t, events, 1)
+	assert.Equal(t, now.selection, events[0].selection, "embedding work must carry the selection revision its projection committed with")
+	assert.Equal(t, now.corpus, events[0].corpus)
+}
+
+// Projections of different groups share no rows, so one can publish while
+// another is still writing.
+func TestRawProjectionsOfDifferentGroupsPublishIndependently(t *testing.T) {
+	f := newProjectionFixture(t)
+	slow, _ := f.accept(t, "device-a", "slow-a", "")
+	slowLease := f.lease(t, slow)
+	slowOutcome := projectionOutcome("parked")
+	fast, _ := f.accept(t, "device-b", "fast-b", "")
+	fastOutcome := projectionOutcome("fast")
+	fastOutcome.Outcome.Results[0].Result.Session.ID = "codex:fast"
+	fastOutcome.Outcome.Results[0].Result.Session.SourceSessionID = "fast"
+	f.parkOn(t, "INSERT", "messages", "NEW.content = 'parked'")
+
+	f.whileParked(t, func(ctx context.Context) error {
+		return f.sink.Project(ctx, slowLease, slow, slowOutcome)
+	}, func(ctx context.Context) error {
+		_, err := f.sink.SelectSourceGeneration(ctx, fast, "parser-1")
+		if err != nil {
+			return err
+		}
+		leases, err := f.jobs.ClaimRawParseJobs(ctx, "second-worker", 1, time.Minute)
+		if err != nil {
+			return err
+		}
+		if len(leases) != 1 {
+			return fmt.Errorf("claimed %d jobs, want 1", len(leases))
+		}
+		return f.sink.Project(ctx, leases[0], fast, fastOutcome)
+	})
+
+	slowIdentity, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	fastIdentity, err := f.sink.Resolve(t.Context(), "codex:fast")
+	require.NoError(t, err)
+	require.Equal(t, RawIdentityUnique, slowIdentity.State)
+	require.Equal(t, RawIdentityUnique, fastIdentity.State)
+	now := f.revisions(t)
+	assert.Equal(t, int64(2), now.corpus)
+	assert.Equal(t, []embeddingEvent{
+		{session: fastIdentity.SessionID, content: fastIdentity.ContentRevision, action: "reconcile", selection: 2, corpus: 1},
+		{session: slowIdentity.SessionID, content: slowIdentity.ContentRevision, action: "reconcile", selection: 2, corpus: 2},
+	}, f.embeddingEvents(t, "reconcile"))
+	var messages int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM messages`).Scan(&messages))
+	assert.Equal(t, 4, messages)
+}
+
+func TestRawCurationRowWritesDoNotHoldCorpusRevisionAgainstOtherSources(t *testing.T) {
+	f := newProjectionFixture(t)
+	f.projectSession(t, "device-a", "starred")
+	other, _ := f.accept(t, "device-b", "other-b", "")
+	before := f.revisions(t)
+	f.parkOn(t, "INSERT", "starred_sessions", "true")
+
+	f.requireSelectableWhileParked(t, other, func(ctx context.Context) error {
+		return f.sink.SetCuration(ctx, "codex:starred", "starred", true)
+	})
+
+	now := f.revisions(t)
+	assert.Equal(t, before.corpus+1, now.corpus)
+	assert.Equal(t, before.identity, now.identity)
+	stars, err := (&Store{pg: f.runtime}).ListStarredSessionIDs(t.Context())
+	require.NoError(t, err)
+	assert.Len(t, stars, 1)
+}
+
+// Excluding trashed sessions removes their physical rows. Emptying the trash
+// removes every selected group's rows before it publishes any of them.
 func TestRawExclusionRowRemovalDoesNotHoldCorpusRevisionAgainstOtherSources(t *testing.T) {
 	tests := []struct {
 		name    string
-		exclude func(context.Context, *RawProjectionStore) error
+		exclude func(context.Context, *RawProjectionStore) (int, error)
+		// removed picks, in publication order, the sessions the operation
+		// removes from the two trashed sessions ordered by group.
+		removed func(first, second RawIdentity) []RawIdentity
 	}{
-		{name: "one trashed session", exclude: func(ctx context.Context, s *RawProjectionStore) error {
-			removed, err := s.ExcludeTrashedSession(ctx, "codex:portable")
-			if err == nil && !removed {
-				return errors.New("trashed session was not excluded")
-			}
-			return err
-		}},
-		{name: "empty trash", exclude: func(ctx context.Context, s *RawProjectionStore) error {
-			removed, err := s.EmptyTrash(ctx)
-			if err == nil && removed != 1 {
-				return fmt.Errorf("emptied %d sessions, want 1", removed)
-			}
-			return err
-		}},
+		{
+			name: "one trashed session",
+			exclude: func(ctx context.Context, s *RawProjectionStore) (int, error) {
+				removed, err := s.ExcludeTrashedSession(ctx, "codex:trashed-a")
+				if removed {
+					return 1, err
+				}
+				return 0, err
+			},
+			removed: func(first, second RawIdentity) []RawIdentity {
+				if first.PublicID == "codex:trashed-a" {
+					return []RawIdentity{first}
+				}
+				return []RawIdentity{second}
+			},
+		},
+		{
+			name: "empty trash across two groups",
+			exclude: func(ctx context.Context, s *RawProjectionStore) (int, error) {
+				return s.EmptyTrash(ctx)
+			},
+			removed: func(first, second RawIdentity) []RawIdentity {
+				return []RawIdentity{first, second}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newProjectionFixture(t)
-			trashed, _ := f.accept(t, "device-a", "trashed-a", "")
-			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, trashed), trashed, projectionOutcome("trashed")))
-			require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "trashed", true))
-			other, _ := f.accept(t, "device-b", "other-b", "")
-			_, err := f.admin.ExecContext(t.Context(), `CREATE FUNCTION hold_session_removal() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(hashtext(TG_TABLE_SCHEMA)); RETURN OLD; END $$; CREATE TRIGGER hold_session_removal BEFORE DELETE ON sessions FOR EACH ROW EXECUTE FUNCTION hold_session_removal()`)
-			require.NoError(t, err)
-			var before struct{ identity, corpus int64 }
-			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT identity_revision,corpus_revision FROM raw_corpus_state WHERE singleton=1`).Scan(&before.identity, &before.corpus))
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			gate, err := f.admin.BeginTx(ctx, nil)
-			require.NoError(t, err)
-			defer gate.Rollback()
-			_, err = gate.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, f.schema)
-			require.NoError(t, err)
-			excluded := make(chan error, 1)
-			go func() { excluded <- tt.exclude(ctx, f.sink) }()
-			require.Eventually(t, func() bool {
-				var removing int
-				err := f.admin.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory'`, f.role).Scan(&removing)
-				return err == nil && removing == 1
-			}, 3*time.Second, 10*time.Millisecond)
+			first := f.projectSession(t, "device-a", "trashed-a")
+			second := f.projectSession(t, "device-b", "trashed-b")
+			first.PublicID, second.PublicID = "codex:trashed-a", "codex:trashed-b"
+			require.NotEqual(t, first.GroupID, second.GroupID)
+			if second.GroupID < first.GroupID {
+				first, second = second, first
+			}
+			for _, alias := range []string{"codex:trashed-a", "codex:trashed-b"} {
+				require.NoError(t, f.sink.SetCuration(t.Context(), alias, "trashed", true))
+			}
+			other, _ := f.accept(t, "device-c", "other-c", "")
+			want := tt.removed(first, second)
+			before := f.revisions(t)
+			// Park the last removal, after every earlier group is materialized.
+			f.parkOn(t, "DELETE", "sessions", "OLD.id = '"+want[len(want)-1].SessionID+"'")
 
-			selectCtx, cancelSelect := context.WithTimeout(ctx, 3*time.Second)
-			defer cancelSelect()
-			_, err = f.sink.SelectSourceGeneration(selectCtx, other, "parser-1")
+			var removed int
+			f.requireSelectableWhileParked(t, other, func(ctx context.Context) error {
+				var err error
+				removed, err = tt.exclude(ctx, f.sink)
+				return err
+			})
 
-			require.NoError(t, err, "selecting another source waited for an exclusion that was still removing rows")
-			require.NoError(t, gate.Commit())
-			require.NoError(t, <-excluded)
-			var identity, corpus int64
-			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT identity_revision,corpus_revision FROM raw_corpus_state WHERE singleton=1`).Scan(&identity, &corpus))
-			assert.Equal(t, before.identity+1, identity)
-			assert.Equal(t, before.corpus+1, corpus)
+			assert.Equal(t, len(want), removed)
+			now := f.revisions(t)
+			assert.Equal(t, before.identity+int64(len(want)), now.identity)
+			assert.Equal(t, before.corpus+int64(len(want)), now.corpus)
+			var wantEvents []embeddingEvent
+			for i, identity := range want {
+				wantEvents = append(wantEvents, embeddingEvent{
+					session: identity.SessionID, content: identity.ContentRevision, action: "remove",
+					selection: now.selection, corpus: before.corpus + int64(i) + 1,
+				})
+			}
+			assert.Equal(t, wantEvents, f.embeddingEvents(t, "remove"))
 			var sessions int
 			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM sessions`).Scan(&sessions))
-			assert.Zero(t, sessions)
+			assert.Equal(t, 2-len(want), sessions)
 		})
 	}
 }

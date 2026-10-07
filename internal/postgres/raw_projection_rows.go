@@ -21,20 +21,37 @@ const (
 // materialization once that materialization has a corpus revision.
 type rawEmbeddingChange struct{ session, revision, action string }
 
+// publishRawRevision issues the corpus revision for rows the caller has already
+// written and queues their embedding work under it. It locks the corpus row,
+// which manifest acceptance and every other publication also update, so it
+// must be the last work of a transaction.
+func publishRawRevision(ctx context.Context, tx *sql.Tx, identityChanged bool, changes []rawEmbeddingChange) error {
+	var revision int64
+	err := tx.QueryRowContext(ctx, `INSERT INTO raw_corpus_state(singleton,corpus_revision,identity_revision) VALUES(1,1,CASE WHEN $1 THEN 1 ELSE 0 END) ON CONFLICT(singleton) DO UPDATE SET corpus_revision=raw_corpus_state.corpus_revision+1,identity_revision=raw_corpus_state.identity_revision+EXCLUDED.identity_revision RETURNING corpus_revision`, identityChanged).Scan(&revision)
+	if err != nil {
+		return err
+	}
+	return queueRawEmbeddingChanges(ctx, tx, changes, revision)
+}
+
 // queueRawEmbeddingChanges requires the caller to hold the corpus row lock that
 // issued corpus, so the recorded selection revision is the one it commits with.
 func queueRawEmbeddingChanges(ctx context.Context, tx *sql.Tx, changes []rawEmbeddingChange, corpus int64) error {
-	for _, c := range changes {
-		_, err := tx.ExecContext(ctx, `INSERT INTO raw_embedding_outbox(session_id,corpus_revision,content_revision,action,selection_revision) SELECT $1,$2,$3,$4,selection_revision FROM raw_corpus_state WHERE singleton=1 ON CONFLICT DO NOTHING`, c.session, corpus, c.revision, c.action)
-		if err != nil {
-			return err
-		}
+	if len(changes) == 0 {
+		return nil
 	}
-	return nil
+	sessions := make([]string, len(changes))
+	revisions := make([]string, len(changes))
+	actions := make([]string, len(changes))
+	for i, c := range changes {
+		sessions[i], revisions[i], actions[i] = c.session, c.revision, c.action
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO raw_embedding_outbox(session_id,corpus_revision,content_revision,action,selection_revision) SELECT c.session_id,$2,c.content_revision,c.action,s.selection_revision FROM unnest($1::text[],$3::text[],$4::text[]) AS c(session_id,content_revision,action) CROSS JOIN raw_corpus_state s WHERE s.singleton=1 ON CONFLICT DO NOTHING`, sessions, corpus, revisions, actions)
+	return err
 }
 
 // materializeGroup requires the caller to hold the group's row lock. It
-// returns the embedding changes for the caller to queue under a corpus revision.
+// returns the embedding changes for the caller to pass to publishRawRevision.
 func (s *RawProjectionStore) materializeGroup(ctx context.Context, tx *sql.Tx, group string) ([]rawEmbeddingChange, error) {
 	if err := reconcileRawPrefixes(ctx, tx, group); err != nil {
 		return nil, err

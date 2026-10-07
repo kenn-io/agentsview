@@ -259,7 +259,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 	// Materialization is serialized per group by the group locks taken above.
 	// The corpus row is shared with manifest acceptance and every other
-	// projection, so it is locked only after the rows are written.
+	// projection, so it is locked last, immediately before commit.
 	var embeddings []rawEmbeddingChange
 	if changed {
 		for _, group := range ordered {
@@ -268,16 +268,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				return err
 			}
 			embeddings = append(embeddings, changes...)
-		}
-	}
-	if changed || derivedChanged {
-		var revision int64
-		err = tx.QueryRowContext(ctx, `INSERT INTO raw_corpus_state(singleton,corpus_revision,identity_revision) VALUES(1,1,CASE WHEN $1 THEN 1 ELSE 0 END) ON CONFLICT(singleton) DO UPDATE SET corpus_revision=raw_corpus_state.corpus_revision+1,identity_revision=raw_corpus_state.identity_revision+EXCLUDED.identity_revision RETURNING corpus_revision`, changed).Scan(&revision)
-		if err != nil {
-			return err
-		}
-		if err = queueRawEmbeddingChanges(ctx, tx, embeddings, revision); err != nil {
-			return err
 		}
 	}
 	_, err = tx.ExecContext(ctx, rawSourceProofDeleteSQL, source)
@@ -300,6 +290,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	outcome, err := completeProjectionJob(ctx, tx, lease, complete, s.options.RetryPolicy)
 	if err != nil {
 		return err
+	}
+	if changed || derivedChanged {
+		if err = publishRawRevision(ctx, tx, changed, embeddings); err != nil {
+			return err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return err

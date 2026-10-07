@@ -45,7 +45,7 @@ func (s *RawProjectionStore) ExcludeTrashedSession(ctx context.Context, alias st
 	if err != nil {
 		return false, err
 	}
-	if err = publishRawExclusion(ctx, tx, changes); err != nil {
+	if err = publishRawRevision(ctx, tx, true, changes); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
@@ -115,7 +115,7 @@ func (s *RawProjectionStore) EmptyTrash(ctx context.Context) (int, error) {
 		}
 	}
 	for _, changes := range excluded {
-		if err = publishRawExclusion(ctx, tx, changes); err != nil {
+		if err = publishRawRevision(ctx, tx, true, changes); err != nil {
 			return 0, err
 		}
 	}
@@ -125,15 +125,4 @@ func (s *RawProjectionStore) EmptyTrash(ctx context.Context) (int, error) {
 func excludeRawCohort(ctx context.Context, tx *sql.Tx, group, id string) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO raw_curation(group_id,branch_id,field,value) SELECT group_id,branch_id,'excluded','true'::jsonb FROM raw_session_branches WHERE group_id=$1 AND session_id=$2 AND active ON CONFLICT(group_id,branch_id,field) DO UPDATE SET value='true'`, group, id)
 	return err
-}
-
-// publishRawExclusion issues one identity and corpus revision for a group the
-// caller has already materialized, so the corpus row is locked only to publish.
-func publishRawExclusion(ctx context.Context, tx *sql.Tx, changes []rawEmbeddingChange) error {
-	var revision int64
-	err := tx.QueryRowContext(ctx, `UPDATE raw_corpus_state SET identity_revision=identity_revision+1,corpus_revision=corpus_revision+1 WHERE singleton=1 RETURNING corpus_revision`).Scan(&revision)
-	if err != nil {
-		return err
-	}
-	return queueRawEmbeddingChanges(ctx, tx, changes, revision)
 }
