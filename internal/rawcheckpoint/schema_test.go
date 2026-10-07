@@ -47,53 +47,55 @@ func queryPlanDetails(t *testing.T, db *sql.DB, query string, args ...any) []str
 // shown to leave transport state untouched.
 func checkpointRows(t *testing.T, db *sql.DB) map[string][]string {
 	t.Helper()
-	tableRows, err := db.QueryContext(t.Context(),
+	tables := queryStrings(t, db,
 		`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
-	require.NoError(t, err)
-	var tables []string
-	for tableRows.Next() {
-		var name string
-		require.NoError(t, tableRows.Scan(&name))
-		tables = append(tables, name)
-	}
-	require.NoError(t, tableRows.Err())
-	require.NoError(t, tableRows.Close())
 	dump := make(map[string][]string, len(tables))
 	for _, table := range tables {
-		rows, err := db.QueryContext(t.Context(), `SELECT * FROM `+table+` ORDER BY rowid`)
-		require.NoError(t, err)
-		columns, err := rows.Columns()
-		require.NoError(t, err)
-		dump[table] = []string{}
-		for rows.Next() {
-			values := make([]any, len(columns))
-			targets := make([]any, len(columns))
-			for i := range values {
-				targets[i] = &values[i]
-			}
-			require.NoError(t, rows.Scan(targets...))
-			dump[table] = append(dump[table], fmt.Sprint(values...))
-		}
-		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
+		dump[table] = tableRows(t, db, table)
 	}
 	return dump
 }
 
-func schemaObjects(t *testing.T, db *sql.DB) []string {
+func tableRows(t *testing.T, db *sql.DB, table string) []string {
 	t.Helper()
-	rows, err := db.QueryContext(t.Context(), `SELECT type || ' ' || name || ' on ' || tbl_name
-		FROM sqlite_master WHERE name NOT LIKE 'sqlite_autoindex_%' ORDER BY 1`)
+	rows, err := db.QueryContext(t.Context(), `SELECT * FROM `+table+` ORDER BY rowid`)
 	require.NoError(t, err)
 	defer rows.Close()
-	var objects []string
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	rendered := []string{}
 	for rows.Next() {
-		var object string
-		require.NoError(t, rows.Scan(&object))
-		objects = append(objects, object)
+		values := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range values {
+			targets[i] = &values[i]
+		}
+		require.NoError(t, rows.Scan(targets...))
+		rendered = append(rendered, fmt.Sprint(values...))
 	}
 	require.NoError(t, rows.Err())
-	return objects
+	return rendered
+}
+
+func queryStrings(t *testing.T, db *sql.DB, query string) []string {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+	var values []string
+	for rows.Next() {
+		var value string
+		require.NoError(t, rows.Scan(&value))
+		values = append(values, value)
+	}
+	require.NoError(t, rows.Err())
+	return values
+}
+
+func schemaObjects(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	return queryStrings(t, db, `SELECT type || ' ' || name || ' on ' || tbl_name
+		FROM sqlite_master WHERE name NOT LIKE 'sqlite_autoindex_%' ORDER BY 1`)
 }
 
 func acknowledgeNextTestGeneration(t *testing.T, store *Store, commit rawsync.CommitResult) string {
@@ -138,6 +140,7 @@ func TestBaseObjectReferenceLookupsSeekByObject(t *testing.T) {
 		{
 			name: "checkpoint upgraded from version 9",
 			prepare: func(t *testing.T, store *Store, path string) *Store {
+				t.Helper()
 				downgradeToVersionNine(t, store)
 				require.NoError(t, store.Close())
 				reopened, err := Open(t.Context(), path)
@@ -148,6 +151,7 @@ func TestBaseObjectReferenceLookupsSeekByObject(t *testing.T) {
 		{
 			name: "version 9 checkpoint that already carries an equivalent index",
 			prepare: func(t *testing.T, store *Store, path string) *Store {
+				t.Helper()
 				downgradeToVersionNine(t, store)
 				_, err := store.db.ExecContext(t.Context(), `CREATE INDEX operator_added_lookup
 					ON raw_source_base_objects(sha256, length)`)
@@ -161,6 +165,7 @@ func TestBaseObjectReferenceLookupsSeekByObject(t *testing.T) {
 		{
 			name: "many sources with planner statistics",
 			prepare: func(t *testing.T, store *Store, _ string) *Store {
+				t.Helper()
 				root, err := store.ResolveConfiguredRoot(
 					t.Context(), parser.AgentClaude, t.TempDir(),
 				)
