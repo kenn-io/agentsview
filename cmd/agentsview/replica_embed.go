@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -16,20 +17,19 @@ import (
 // archive: the build runs in this process, and a daemon route is not built.
 var errEmbedNeedsLocalArchive = errors.New(
 	"pg push --embed builds embeddings in this process and cannot run while " +
-		"a daemon owns the archive; run pg push without --embed so the daemon " +
-		"builds and pushes embeddings itself, or stop the daemon " +
-		"(agentsview daemon stop) to build here")
+		"a daemon owns the archive; run 'agentsview daemon stop' to build here")
 
 // replicaEmbedder keeps the first resolved recipe for this process.
 type replicaEmbedder struct {
-	appCfg        config.Config
-	backend       storage.Replica
-	target        storage.ReplicaTarget
-	source        *vectorPushSource
-	initialSource *vectorPushSource
-	database      *db.DB
-	serving       vectorServing
-	cancel        context.CancelFunc
+	appCfg    config.Config
+	backend   storage.Replica
+	target    storage.ReplicaTarget
+	source    *vectorPushSource
+	emitterMu sync.RWMutex
+	emitter   teeEmitter
+	database  *db.DB
+	serving   vectorServing
+	cancel    context.CancelFunc
 }
 
 // newReplicaEmbedder validates a pg push --embed request before any local
@@ -55,7 +55,7 @@ func newReplicaEmbedder(
 		appCfg: appCfg, backend: backend, target: target.Target, database: database,
 	}
 	if appCfg.Vector.Enabled {
-		e.initialSource = &vectorPushSource{cfg: appCfg}
+		e.source = &vectorPushSource{cfg: appCfg}
 	}
 	return e, nil
 }
@@ -71,7 +71,16 @@ func (e *replicaEmbedder) resolve(ctx context.Context) error {
 	return nil
 }
 
-func (e *replicaEmbedder) startScheduler(ctx context.Context, notify bool) error {
+func (e *replicaEmbedder) Emit(scope string) {
+	e.emitterMu.RLock()
+	emitter := e.emitter
+	e.emitterMu.RUnlock()
+	if emitter.scheduler != nil {
+		emitter.Emit(scope)
+	}
+}
+
+func (e *replicaEmbedder) startScheduler(ctx context.Context) error {
 	if err := e.resolve(ctx); err != nil {
 		return err
 	}
@@ -89,10 +98,11 @@ func (e *replicaEmbedder) startScheduler(ctx context.Context, notify bool) error
 		e.serving = serving
 		buildCtx, cancel := context.WithCancel(ctx)
 		e.cancel = cancel
+		e.emitterMu.Lock()
+		e.emitter = teeEmitter{scheduler: serving.Scheduler, runAfterSync: e.source.cfg.Vector.Embed.RunAfterSyncEnabled()}
+		e.emitterMu.Unlock()
 		go serving.Scheduler.Run(buildCtx)
-	}
-	if notify {
-		e.serving.Scheduler.Notify()
+		serving.Scheduler.Notify()
 	}
 	return nil
 }
@@ -119,14 +129,11 @@ func (e *replicaEmbedder) resolveRecipe(ctx context.Context) (config.Config, err
 	return adoptReplicaVectorConfig(ctx, e.appCfg, e.backend, store)
 }
 
-// BeginExport uses the plain local source until a recipe resolves.
+// BeginExport skips vectors until an adopted recipe resolves.
 func (e *replicaEmbedder) BeginExport(
 	ctx context.Context, sessionIDs []string,
 ) (storage.VectorExport, bool, error) {
 	if e.source == nil {
-		if e.initialSource != nil {
-			return e.initialSource.BeginExport(ctx, sessionIDs)
-		}
 		return nil, false, nil
 	}
 	return e.source.BeginExport(ctx, sessionIDs)
@@ -142,9 +149,6 @@ func (e *replicaEmbedder) Close() error {
 	var err error
 	if e.serving.Close != nil {
 		err = e.serving.Close()
-	}
-	if e.initialSource != nil {
-		err = errors.Join(err, e.initialSource.Close())
 	}
 	if e.source == nil {
 		return err

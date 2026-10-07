@@ -41,8 +41,7 @@ func adoptReplicaVectorConfig(
 		return cfg, fmt.Errorf(
 			"semantic recipe adoption requires exactly one supported published "+
 				"generation (found %d); push from a configured workstation first, "+
-				"remove obsolete generations with 'agentsview pg vectors drop <id>', "+
-				"or configure [vector.embeddings] and restart", len(recipes))
+				"remove obsolete generations with 'agentsview pg vectors drop <id>'", len(recipes))
 	}
 	recipe := recipes[0]
 	recipe.DefaultServer = "deployment"

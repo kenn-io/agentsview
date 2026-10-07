@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	stdsync "sync"
@@ -19,8 +20,10 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // embedPushReplica is a PostgreSQL-named replica whose pusher exports the
@@ -134,6 +137,7 @@ func (p *embedSourcePusher) PushWithOptions(
 			return res, err
 		}
 		res.Vectors.GenerationID = 1
+		res.Vectors.Conflicts = 1
 		p.replica.mu.Lock()
 		p.replica.pushed = append(p.replica.pushed, gen)
 		p.replica.mu.Unlock()
@@ -196,18 +200,23 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 			}
 			assert.NoFileExists(t, filepath.Join(cfg.DataDir, "config.toml"))
 			if !adopted {
-				firstVectors := result.Vectors
 				replica.skipped = nil
 				captureStdout(t, func() {
 					result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Full: true, Embed: true}, nil, nil)
 				})
 				require.NoError(t, err)
 				assert.Equal(t, []bool{false, false}, replica.skipped)
-				require.Positive(t, result.Vectors.ChunksPushed)
-				assert.Equal(t, firstVectors.SessionsPushed, result.Vectors.SessionsPushed)
-				assert.Equal(t, firstVectors.DocsPushed, result.Vectors.DocsPushed)
-				assert.Equal(t, firstVectors.ChunksPushed, result.Vectors.ChunksPushed)
-				require.Positive(t, result.Vectors.SessionsUnchanged)
+				assert.Zero(t, result.Vectors.SessionsPushed)
+				assert.Zero(t, result.Vectors.DocsPushed)
+				assert.Zero(t, result.Vectors.ChunksPushed)
+				assert.Equal(t, 3, result.Vectors.SessionsUnchanged)
+				assert.Equal(t, 1, result.Vectors.Conflicts)
+				captureStdout(t, func() {
+					result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil)
+				})
+				require.NoError(t, err)
+				assert.Equal(t, 3, result.Vectors.SessionsUnchanged)
+				assert.Equal(t, 1, result.Vectors.Conflicts)
 			}
 		})
 	}
@@ -276,9 +285,9 @@ func TestReplicaWatchEmbedRetriesAfterWriteLockClears(t *testing.T) {
 	embedder, err := newReplicaEmbedder(cfg, &embedPushReplica{}, embedTarget(), archive)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, embedder.Close()) })
-	require.NoError(t, embedder.startScheduler(t.Context(), true))
+	require.NoError(t, embedder.startScheduler(t.Context()))
 	require.NoError(t, held.Close())
-	require.NoError(t, embedder.startScheduler(t.Context(), true))
+	require.NoError(t, embedder.startScheduler(t.Context()))
 	require.Eventually(t, func() bool {
 		export, ok, err := embedder.BeginExport(t.Context(), nil)
 		if err != nil || !ok {
@@ -314,13 +323,13 @@ func TestReplicaWatchEmbedAdoptsPublishedRecipe(t *testing.T) {
 	}
 	t.Cleanup(pusher.reset)
 	require.NoError(t, pusher.push(t.Context(), reasonStartup, false))
-	require.Error(t, embedder.startScheduler(t.Context(), true))
+	require.Error(t, embedder.startScheduler(t.Context()))
 	assert.Equal(t, []bool{true}, replica.skipped)
 
 	published := publishedRecipe()
 	replica.setGenerations([]storage.VectorGenerationInfo{published})
 	require.NoError(t, pusher.push(t.Context(), reasonChange, false))
-	require.NoError(t, embedder.startScheduler(t.Context(), true))
+	require.NoError(t, embedder.startScheduler(t.Context()))
 	require.NotNil(t, embedder.serving.Scheduler)
 	assert.Equal(t, time.Second, embedder.serving.Scheduler.backstop)
 	require.Eventually(t, func() bool {
@@ -349,15 +358,11 @@ func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
 		http.Error(w, "rate limited", http.StatusTooManyRequests)
 	}))
 	t.Cleanup(endpoint.Close)
-	cfg := deploymentRecipeConfig()
-	cfg.DataDir = t.TempDir()
-	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.DeploymentEmbeddings = deploymentRecipeConfig().DeploymentEmbeddings
 	cfg.DeploymentEmbeddings.Endpoint = endpoint.URL + "/v1"
 	cfg.Vector.Embed.BackstopInterval = "1s"
 	archive := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	dbtest.SeedSessionWithMessages(t, archive, "s1", "project",
-		[]db.Message{dbtest.UserMsg("s1", 0, "watched content")},
-		func(s *db.Session) { s.EndedAt = new("2026-01-01T00:00:00Z") })
 	replica := &embedPushReplica{recipeProvider: recipeProvider{gens: []storage.VectorGenerationInfo{publishedRecipe()}}}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -380,7 +385,14 @@ func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
 					case <-time.After(10 * time.Second):
 						require.FailNow(t, "build never reached endpoint")
 					}
-					require.NoError(t, push(ctx, reasonChange, nil))
+					content := testjsonl.NewSessionBuilder().
+						AddClaudeUser("2026-01-01T00:00:00Z", "missed watcher event").
+						String()
+					require.NoError(t, os.WriteFile(filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "-home-proj0", "interval-session.jsonl"), []byte(content), 0o600))
+					require.NoError(t, push(ctx, reasonInterval, nil))
+					session, err := archive.GetSession(ctx, "interval-session")
+					require.NoError(t, err)
+					require.NotNil(t, session)
 					embedder := replica.source.(*replicaEmbedder)
 					require.Len(t, embedder.serving.Scheduler.dirty, 1)
 					release := <-embedder.serving.Scheduler.dirty

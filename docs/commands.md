@@ -993,7 +993,7 @@ agentsview pg push [target] [flags]
 | -------------------- | ------- | -------------------------------------------------------------- |
 | `--full`             | `false` | Force full local resync and re-push                            |
 | `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run             |
-| `--embed`            | `false` | Build pending embeddings before each push                      |
+| `--embed`            | `false` | Push sessions first, then build and push vectors; watch builds after syncs and pushes vectors on the next interval |
 | `--projects`         |         | Comma-separated projects to push (inclusive)                   |
 | `--exclude-projects` |         | Comma-separated projects to exclude from push                  |
 | `--all-projects`     | `false` | Ignore configured project filters for this run                 |
@@ -1005,9 +1005,11 @@ agentsview pg push [target] [flags]
 See [PostgreSQL Sync — Project Filtering](/docs/pg-sync/#project-filtering) for
 details on how filtering interacts with the push watermark.
 
-`--embed` builds embeddings in the same process before each push, using
-`[vector]` or a recipe published to PostgreSQL. It never starts a daemon and
-refuses to run while one owns the archive. It cannot be combined with
+`--embed` pushes sessions first, then builds and pushes embeddings in the same
+process, using `[vector]` or a recipe published to PostgreSQL. Watch mode builds
+in the background after each sync that commits changes and pushes built vectors
+on the next interval. It never starts a daemon and refuses to run while one owns
+the archive. It cannot be combined with
 `--no-vectors`, `--all`, or a target with `push_vectors = false`. See
 [Build and push embeddings in a container](/docs/pg-sync/#build-and-push-embeddings-in-a-container).
 

@@ -904,26 +904,9 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 		fmt.Print("\r\033[K")
 		result.SessionsPushed += vectorResult.SessionsPushed
 		result.MessagesPushed += vectorResult.MessagesPushed
-		result.SkippedConflicts += vectorResult.SkippedConflicts
-		result.SkippedUnchanged += vectorResult.SkippedUnchanged
-		result.DeletedStale += vectorResult.DeletedStale
 		result.Errors += vectorResult.Errors
 		result.Duration += vectorResult.Duration
-		vectors := vectorResult.Vectors
-		vectors.SessionsPushed += result.Vectors.SessionsPushed
-		vectors.SessionsUnchanged += result.Vectors.SessionsUnchanged
-		vectors.SessionsDeferred += result.Vectors.SessionsDeferred
-		vectors.DocsPushed += result.Vectors.DocsPushed
-		vectors.ChunksPushed += result.Vectors.ChunksPushed
-		vectors.DocsDeleted += result.Vectors.DocsDeleted
-		vectors.SessionsEvicted += result.Vectors.SessionsEvicted
-		vectors.Conflicts += result.Vectors.Conflicts
-		if !result.Vectors.Skipped && vectors.Skipped {
-			vectors.Skipped = false
-			vectors.SkippedReason = ""
-			vectors.GenerationID = result.Vectors.GenerationID
-		}
-		result.Vectors = vectors
+		result.Vectors = vectorResult.Vectors
 		return result, err
 	}
 	return result, nil
@@ -1186,7 +1169,18 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	}
 	cleanResyncTemp(b.appCfg.DBPath)
 
+	var embedder *replicaEmbedder
+	var emitter syncpkg.Emitter
+	if cfg.Embed {
+		var err error
+		if embedder, err = newReplicaEmbedder(b.appCfg, backend, target, b.database); err != nil {
+			return err
+		}
+		emitter = embedder
+	}
+
 	engine := syncpkg.NewEngine(ctx, b.database, syncpkg.EngineConfig{
+		Emitter:                 emitter,
 		AgentDirs:               b.appCfg.AgentDirs,
 		SourceMachines:          b.appCfg.SourceMachines,
 		ProviderMetadata:        b.appCfg.ProviderMetadata,
@@ -1200,13 +1194,6 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	defer engine.Close()
 
 	name := backend.Name()
-	var embedder *replicaEmbedder
-	if cfg.Embed {
-		var err error
-		if embedder, err = newReplicaEmbedder(b.appCfg, backend, target, b.database); err != nil {
-			return err
-		}
-	}
 	var pusher *replicaPusher
 	if b.watchHooks != nil && b.watchHooks.newReplicaPusher != nil {
 		pusher = b.watchHooks.newReplicaPusher(engine)
@@ -1278,7 +1265,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 				c, r, false, batch, watchRecoveryForBatch(b.appCfg, batch),
 			)
 			if embedder != nil && r != reasonShutdown {
-				if err := embedder.startScheduler(ctx, r == reasonStartup || r == reasonChange || batch != nil); err != nil {
+				if err := embedder.startScheduler(ctx); err != nil {
 					log.Printf("pg watch: starting embeddings: %v", err)
 				}
 			}
@@ -1316,7 +1303,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		initialErr = pusher.push(ctx, reasonStartup, didResync)
 	}
 	if embedder != nil {
-		if err := embedder.startScheduler(ctx, true); err != nil {
+		if err := embedder.startScheduler(ctx); err != nil {
 			log.Printf("pg watch: starting embeddings: %v", err)
 		}
 	}

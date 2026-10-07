@@ -302,8 +302,8 @@ runs it needs no shell wrapper:
 
 The recipe is resolved on the first cycle that succeeds and kept until the
 process restarts. `--embed` never starts a daemon and refuses to run while a
-daemon owns the archive; stop the daemon, or push without `--embed` and let the
-daemon build. Watch mode builds in the background after sync with a 30-second
+daemon owns the archive; run `agentsview daemon stop` to build here. Watch mode
+builds in the background after each sync that commits changes with a 30-second
 debounce and honors `[vector.embed] backstop_interval` to reconcile older
 imports. Built vectors reach PostgreSQL on the next interval push. A one-shot
 `pg push --embed` pushes sessions and existing vectors first, then builds and
