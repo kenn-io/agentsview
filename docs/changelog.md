@@ -113,6 +113,9 @@ The latest published release is
 
 **Improvements**
 
+- The daemon sends its anonymous `daemon_active` ping at most once per UTC day,
+  even when it restarts often or several servers share a data directory. A
+  server that stays up sends one ping for each UTC day it runs.
 - The Usage page stays fast after a pricing update. A changed price now
   rebuilds only the sessions that used that model, instead of every session in
   the archive, and a refresh that changes no rates rebuilds nothing. The daemon

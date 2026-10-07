@@ -44,7 +44,7 @@ var (
 
 const (
 	periodicSyncInterval           = 15 * time.Minute
-	telemetryPingInterval          = 24 * time.Hour
+	telemetryDailyCheckInterval    = time.Hour
 	unwatchedPollInterval          = 2 * time.Minute
 	watcherBatchDelay              = 500 * time.Millisecond
 	watcherSyncMinInterval         = 5 * time.Second
@@ -619,7 +619,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 	fmt.Printf("Database: %s\n", cfg.DBPath)
 
-	startTelemetryPings(ctx, telemetryReporter)
+	startTelemetryPings(ctx, telemetryReporter, cfg)
 
 	if vectorServe.Scheduler != nil {
 		go vectorServe.Scheduler.Run(ctx)
@@ -1354,28 +1354,43 @@ func telemetryOptions(cfg config.Config) telemetry.Options {
 	return opts
 }
 
-func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter) {
+func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter, cfg config.Config) {
 	if reporter == nil || !reporter.Enabled() {
 		return
 	}
-	captureTelemetryPing(ctx, reporter)
-	go func() {
-		ticker := time.NewTicker(telemetryPingInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				captureTelemetryPing(ctx, reporter)
-			}
-		}
-	}()
+	// The claim reads only these fields; a copy keeps the goroutine off cfg.
+	claimCfg := config.Config{DataDir: cfg.DataDir, InstallationID: cfg.InstallationID}
+	go runDailyTelemetryPings(ctx, telemetryDailyCheckInterval, claimCfg, func() error {
+		return reporter.CaptureDaemonActive(ctx)
+	})
 }
 
-func captureTelemetryPing(ctx context.Context, reporter *telemetry.Reporter) {
-	if err := reporter.CaptureDaemonActive(ctx); err != nil && ctx.Err() == nil {
-		log.Printf("capture telemetry event: %v", err)
+// runDailyTelemetryPings sends daemon_active at most once per installation
+// per UTC day. It checks at start and every interval, so a daemon that runs
+// across midnight UTC reports the new day within one interval, and a daemon
+// that restarts repeatedly finds the day already recorded.
+func runDailyTelemetryPings(ctx context.Context, interval time.Duration, cfg config.Config, send func() error) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var settledDay string
+	for {
+		now := time.Now()
+		if day := now.UTC().Format(time.DateOnly); day != settledDay {
+			claimed, err := cfg.ClaimDaemonActive(now, send)
+			if err != nil && ctx.Err() == nil {
+				log.Printf("capture telemetry event: %v", err)
+			}
+			// A failed send leaves the day open for the next check; a failed
+			// record after an accepted send must not resend from this process.
+			if claimed || err == nil {
+				settledDay = day
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

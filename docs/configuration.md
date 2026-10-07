@@ -1792,7 +1792,8 @@ The automatic outbound requests are update checks and anonymous telemetry:
 ### Anonymous Daemon Telemetry
 
 As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
-startup and every 24 hours while running. The web UI also reports an anonymous
+each UTC day it runs. Restarts and other servers sharing the data directory do
+not send another ping that day. The web UI also reports an anonymous
 `app_opened` event to the server when it loads and on the first focus of a later
 UTC day. The server sends it to PostHog with the same fields and opt-out as the
 ping. The browser never contacts PostHog.
