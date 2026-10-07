@@ -629,6 +629,8 @@ matches any host.
 #### Filtering by label or pull request
 
 Label and pull request filters name the sessions you want, the way `ids` does.
+Hosted raw sync carries no archive labels or launcher parent links. Its label
+filter matches nothing.
 
 - In a flat list (`session list`, `GET /api/v1/sessions`, MCP `list_sessions`)
   they match each session directly. Child sessions, automated sessions, and
@@ -710,7 +712,8 @@ reports `session_found` and `applied`.
 - The link applies only while the transcript names no parent of its own.
   Subagent, fork, and continuation links that AgentsView derives from the
   transcript win, and `applied` is `false` in that case.
-- AgentsView recomputes the link during sync linking, uploads, and set/clear.
+- AgentsView recomputes the link when writing sessions, linking spawn edges,
+  and setting or clearing launcher links.
   When the transcript parent or loop that blocked it goes away, the session
   goes back under the linked parent.
 - The session does not have to exist yet; the link applies when sync imports it.
