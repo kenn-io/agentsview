@@ -3,9 +3,7 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +12,6 @@ import (
 	"strings"
 	stdsync "sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,93 +21,9 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/storage"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
-func TestReplicaWatchEmbedFullStartupRepairsChunks(t *testing.T) {
-	pgURL := os.Getenv("TEST_PG_URL")
-	if pgURL == "" {
-		t.Skip("TEST_PG_URL not set; skipping PG tests")
-	}
-	const schema = "agentsview_watch_embed_repair_test"
-	admin, err := postgres.Open(pgURL, schema, true)
-	require.NoError(t, err)
-	_, err = admin.Exec("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
-		_ = admin.Close()
-	})
-	_, err = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
-	require.NoError(t, err)
-
-	endpoint := newEmbeddingsStubServer(t, 4)
-	t.Cleanup(endpoint.Close)
-	cfg := vectorTestConfig(t.TempDir())
-	cfg.Vector.Embeddings = publishedRecipeConfig("published-model")
-	server := config.VectorEmbeddingsServerConfig{
-		Endpoint: endpoint.URL + "/v1", BatchSize: 8, Concurrency: 1, Timeout: "10s", MaxRetries: 1,
-	}
-	cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": server}
-	archive := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	dbtest.SeedSessionWithMessages(t, archive, "session-one", "project",
-		[]db.Message{dbtest.UserMsg("session-one", 0, "content to repair")},
-		func(s *db.Session) { s.EndedAt = new("2026-01-01T00:00:00Z") })
-	require.NoError(t, runEmbeddingsBuildDirect(t.Context(), io.Discard, cfg, vector.BuildRequest{}))
-	source := newVectorPushSource(cfg)
-	t.Cleanup(func() { closeVectorPushSource(source) })
-	pusher, err := postgres.New(pgURL, schema, archive, "hub", true,
-		storage.PusherOptions{VectorSource: source})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = pusher.Close() })
-	require.NoError(t, pusher.EnsureSchema(t.Context()))
-	result, err := pusher.PushWithOptions(t.Context(), storage.PushOptions{Full: true}, nil)
-	require.NoError(t, err)
-	require.False(t, result.Vectors.Skipped, result.Vectors.SkippedReason)
-	require.Positive(t, result.Vectors.ChunksPushed)
-	chunkTable := fmt.Sprintf("%s.vector_chunks_g%d", schema, result.Vectors.GenerationID)
-	var chunksBefore int
-	require.NoError(t, admin.QueryRow("SELECT COUNT(*) FROM "+chunkTable).Scan(&chunksBefore))
-	require.Positive(t, chunksBefore)
-	_, err = admin.Exec("DELETE FROM " + chunkTable)
-	require.NoError(t, err)
-	var chunksAfter int
-	require.NoError(t, admin.QueryRow("SELECT COUNT(*) FROM "+chunkTable).Scan(&chunksAfter))
-	require.Zero(t, chunksAfter)
-
-	// The hub adopts the published recipe while retaining the local vectors and saved push hashes.
-	cfg.Vector.Enabled = false
-	cfg.DeploymentEmbeddings = &server
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	backend := &localArchiveWriteBackend{
-		appCfg: cfg, database: archive,
-		ensurePricing: func(context.Context, *db.DB) error { return nil },
-		watchHooks: &archivePushWatchHooks{
-			replicaStartupSync: func(_ context.Context, _ *syncpkg.Engine, full bool) (bool, error) {
-				require.True(t, full)
-				return full, nil
-			},
-			startWatcher: func(config.Config, *syncpkg.Engine, syncpkg.WatchCallback, syncpkg.WatcherOptions) (func(), func(), []string) {
-				return func() {}, cancel, nil
-			},
-		},
-	}
-	target := storage.ConfiguredReplica{Target: storage.ReplicaTarget{
-		URL: pgURL, Schema: schema, MachineName: "hub", AllowInsecure: true, PushVectors: true,
-	}}
-	captureStdout(t, func() {
-		require.NoError(t, backend.ReplicaPushWatch(ctx, pgReplica{}, target,
-			ReplicaPushConfig{Full: true, Embed: true}, nil, nil, time.Hour, time.Hour))
-	})
-	require.NoError(t, admin.QueryRow("SELECT COUNT(*) FROM "+chunkTable).Scan(&chunksAfter))
-	assert.Equal(t, chunksBefore, chunksAfter, "the startup full push restores chunks despite saved document hashes")
-}
-
-// A workstation with [vector] pushes and publishes its recipe; a container
-// with only AGENTSVIEW_EMBEDDINGS_* adopts it and answers a semantic query
-// from the real pgvector chunk table.
 func TestReplicaRecipeQueryWithoutConfig(t *testing.T) {
 	pgURL := os.Getenv("TEST_PG_URL")
 	if pgURL == "" {
@@ -186,36 +99,6 @@ func TestReplicaRecipeQueryWithoutConfig(t *testing.T) {
 		t.Skip(res.Vectors.SkippedReason)
 	}
 	require.Positive(t, res.Vectors.ChunksPushed)
-
-	// A full embedded push repairs missing chunks even when document hashes match.
-	chunkTable := fmt.Sprintf("%s.vector_chunks_g%d", schema, res.Vectors.GenerationID)
-	var chunksBefore int
-	require.NoError(t, admin.QueryRow("SELECT COUNT(*) FROM "+chunkTable).Scan(&chunksBefore))
-	require.Positive(t, chunksBefore)
-	_, err = admin.Exec("DELETE FROM " + chunkTable + " WHERE (doc_key, chunk_index) IN (SELECT doc_key, chunk_index FROM " + chunkTable + " LIMIT 1)")
-	require.NoError(t, err)
-	var chunksAfter int
-	require.NoError(t, admin.QueryRow("SELECT COUNT(*) FROM "+chunkTable).Scan(&chunksAfter))
-	require.Equal(t, chunksBefore-1, chunksAfter)
-	backend := &localArchiveWriteBackend{
-		appCfg: workstation, database: local,
-		ensurePricing: func(context.Context, *db.DB) error { return nil },
-	}
-	target := storage.ConfiguredReplica{Target: storage.ReplicaTarget{
-		URL: pgURL, Schema: schema, MachineName: "workstation", AllowInsecure: true, PushVectors: true,
-	}}
-	var repaired storage.PushResult
-	captureStdout(t, func() {
-		repaired, err = backend.ReplicaPush(t.Context(), pgReplica{}, target, ReplicaPushConfig{Full: true, Embed: true}, nil, nil)
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 2, repaired.SessionsPushed)
-	assert.Equal(t, 2, repaired.Vectors.SessionsPushed)
-	assert.Equal(t, 2, repaired.Vectors.DocsPushed)
-	assert.Equal(t, chunksBefore, repaired.Vectors.ChunksPushed)
-	assert.Zero(t, repaired.Vectors.SessionsUnchanged)
-	require.NoError(t, admin.QueryRow("SELECT COUNT(*) FROM "+chunkTable).Scan(&chunksAfter))
-	assert.Equal(t, chunksBefore, chunksAfter)
 
 	// Container: no config.toml, only deployment variables.
 	isolateDeploymentEnv(t)

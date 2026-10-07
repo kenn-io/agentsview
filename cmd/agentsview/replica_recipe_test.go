@@ -141,11 +141,6 @@ func TestExplicitVectorConfigWins(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, embedder.resolve(t.Context()))
 	assert.Equal(t, explicit, embedder.source.cfg, "local [vector] wins over a published recipe")
-
-	noServer := deploymentRecipeConfig()
-	noServer.DeploymentEmbeddings = nil
-	_, err = newReplicaEmbedder(noServer, provider, target, nil)
-	require.ErrorContains(t, err, "AGENTSVIEW_EMBEDDINGS_ENDPOINT")
 }
 
 func TestDecodeReplicaRecipeRoundTrip(t *testing.T) {

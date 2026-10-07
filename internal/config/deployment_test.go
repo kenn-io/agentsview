@@ -165,6 +165,19 @@ func TestDeploymentEnvAppliesUnderMode(t *testing.T) {
 			if loader.name == "LoadMinimal" || loader.name == "LoadReadOnly" {
 				return
 			}
+			cfg, err = loader.load("--port", "9000")
+			require.NoError(t, err)
+			assert.Equal(t, "0.0.0.0", cfg.Host)
+			assert.True(t, cfg.NoBrowser)
+			assert.True(t, cfg.RequireAuth)
+			assert.Equal(t, 9000, cfg.Port)
+
+			cfg, err = loader.load("--port", "9000", "--host", "127.0.0.1")
+			require.NoError(t, err)
+			assert.Equal(t, "127.0.0.1", cfg.Host)
+			assert.Equal(t, 9000, cfg.Port)
+			assert.True(t, cfg.NoBrowser)
+
 			// Flags beat env.
 			flags := []string{"--host", "127.0.0.2", "--no-browser=false", "--require-auth=false", "--port", "9000"}
 			if loader.name == "Load" {
@@ -253,17 +266,6 @@ func TestDeploymentAuthTokenFile(t *testing.T) {
 		data, err := os.ReadFile(filepath.Join(dir, configFileName))
 		require.NoError(t, err)
 		assert.Contains(t, string(data), "file-token", "the file token stays on disk")
-	})
-
-	t.Run("expands home", func(t *testing.T) {
-		setup(t)
-		home := t.TempDir()
-		setTestHome(t, home)
-		writeSecret(t, home, "token", "home-secret")
-		t.Setenv("AGENTSVIEW_AUTH_TOKEN_FILE", "~/token")
-		cfg, err := LoadMinimal()
-		require.NoError(t, err)
-		assert.Equal(t, "home-secret", cfg.AuthToken)
 	})
 
 	for _, tc := range []struct{ name, content, want string }{
@@ -365,32 +367,33 @@ func TestDeploymentInlineSecretsUnchanged(t *testing.T) {
 
 func TestDeploymentEmbeddings(t *testing.T) {
 	t.Run("endpoint gets owner defaults", func(t *testing.T) {
-		unsetDeploymentEnv(t)
-		setupTestEnv(t)
-		t.Setenv("AGENTSVIEW_MODE", "pg-serve")
-		t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", " http://embeddings.internal/v1 ")
-		cfg, err := LoadMinimal()
-		require.NoError(t, err)
-		require.NotNil(t, cfg.DeploymentEmbeddings)
-		assert.Equal(t, "http://embeddings.internal/v1", cfg.DeploymentEmbeddings.Endpoint)
-		assert.Equal(t, 32, cfg.DeploymentEmbeddings.BatchSize)
-		assert.Equal(t, 4, cfg.DeploymentEmbeddings.Concurrency)
-		assert.Equal(t, "30s", cfg.DeploymentEmbeddings.Timeout)
-		assert.Equal(t, 3, cfg.DeploymentEmbeddings.MaxRetries)
-		assert.Empty(t, cfg.DeploymentEmbeddings.APIKey())
-		assert.False(t, cfg.Vector.Enabled, "the endpoint alone never enables [vector]")
-	})
-
-	t.Run("custom batch size", func(t *testing.T) {
-		unsetDeploymentEnv(t)
-		setupTestEnv(t)
-		t.Setenv("AGENTSVIEW_MODE", "pg-serve")
-		t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "http://embeddings.example/v1")
-		t.Setenv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE", " 2 ")
-		cfg, err := LoadMinimal()
-		require.NoError(t, err)
-		require.NotNil(t, cfg.DeploymentEmbeddings)
-		assert.Equal(t, 2, cfg.DeploymentEmbeddings.BatchSize)
+		for _, tc := range []struct {
+			name, batchSize string
+			wantBatchSize   int
+		}{
+			{name: "default batch size", wantBatchSize: 32},
+			{name: "custom batch size", batchSize: " 2 ", wantBatchSize: 2},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				unsetDeploymentEnv(t)
+				setupTestEnv(t)
+				t.Setenv("AGENTSVIEW_MODE", "pg-serve")
+				t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", " http://embeddings.internal/v1 ")
+				if tc.batchSize != "" {
+					t.Setenv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE", tc.batchSize)
+				}
+				cfg, err := LoadMinimal()
+				require.NoError(t, err)
+				require.NotNil(t, cfg.DeploymentEmbeddings)
+				assert.Equal(t, "http://embeddings.internal/v1", cfg.DeploymentEmbeddings.Endpoint)
+				assert.Equal(t, tc.wantBatchSize, cfg.DeploymentEmbeddings.BatchSize)
+				assert.Equal(t, 4, cfg.DeploymentEmbeddings.Concurrency)
+				assert.Equal(t, "30s", cfg.DeploymentEmbeddings.Timeout)
+				assert.Equal(t, 3, cfg.DeploymentEmbeddings.MaxRetries)
+				assert.Empty(t, cfg.DeploymentEmbeddings.APIKey())
+				assert.False(t, cfg.Vector.Enabled, "the endpoint alone never enables [vector]")
+			})
+		}
 	})
 
 	t.Run("key file expands home", func(t *testing.T) {

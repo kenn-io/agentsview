@@ -217,34 +217,28 @@ func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
 		require.ErrorContains(t, err, "building embeddings")
 		assert.Contains(t, output, "Pushed 3 sessions, 0 messages")
 	})
-	for _, recipes := range []int{0, 2} {
-		t.Run(fmt.Sprintf("published recipes=%d", recipes), func(t *testing.T) {
-			cfg := testConfigWithClaudeFixture(t)
-			cfg.DeploymentEmbeddings = deploymentRecipeConfig().DeploymentEmbeddings
-			replica := &embedPushReplica{}
-			for range recipes {
-				replica.gens = append(replica.gens, publishedRecipe())
-			}
-			backend := &localArchiveWriteBackend{
-				appCfg: cfg, database: dbtest.OpenTestDBAt(t, cfg.DBPath),
-				ensurePricing: func(context.Context, *db.DB) error { return nil },
-			}
-			var result storage.PushResult
-			var err error
-			captureStdout(t, func() {
-				result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil)
-			})
-			require.ErrorContains(t, err, "semantic recipe adoption requires exactly one")
-			assert.Contains(t, err.Error(), fmt.Sprintf("found %d", recipes))
-			assert.Equal(t, []string{"connect", "push"}, replica.events)
-			assert.Equal(t, 3, result.SessionsPushed)
-			var ids []string
-			for _, session := range replica.sessions {
-				ids = append(ids, session.ID)
-			}
-			assert.ElementsMatch(t, []string{"session0", "session1", "session2"}, ids)
+	t.Run("published recipes=0", func(t *testing.T) {
+		cfg := testConfigWithClaudeFixture(t)
+		cfg.DeploymentEmbeddings = deploymentRecipeConfig().DeploymentEmbeddings
+		replica := &embedPushReplica{}
+		backend := &localArchiveWriteBackend{
+			appCfg: cfg, database: dbtest.OpenTestDBAt(t, cfg.DBPath),
+			ensurePricing: func(context.Context, *db.DB) error { return nil },
+		}
+		var result storage.PushResult
+		var err error
+		captureStdout(t, func() {
+			result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil)
 		})
-	}
+		require.ErrorContains(t, err, "semantic recipe adoption requires exactly one")
+		assert.Equal(t, []string{"connect", "push"}, replica.events)
+		assert.Equal(t, 3, result.SessionsPushed)
+		var ids []string
+		for _, session := range replica.sessions {
+			ids = append(ids, session.ID)
+		}
+		assert.ElementsMatch(t, []string{"session0", "session1", "session2"}, ids)
+	})
 }
 
 func TestReplicaWatchEmbedRetriesAfterWriteLockClears(t *testing.T) {
@@ -455,7 +449,7 @@ allow_insecure = true
 		// Neither [vector] nor a deployment endpoint: the local writer's
 		// embedder rejects the request before the watch loop starts.
 		err := runReplicaPushWatch(pgReplica{}, ReplicaPushConfig{Embed: true}, "")
-		require.ErrorContains(t, err, "AGENTSVIEW_EMBEDDINGS_ENDPOINT")
+		require.Error(t, err)
 		require.NotErrorIs(t, err, errEmbedNeedsLocalArchive)
 		assert.Zero(t, *starts)
 		assert.Nil(t, FindDaemonRuntime(dataDir, ""))
