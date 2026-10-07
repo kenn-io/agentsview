@@ -25,6 +25,7 @@ var deploymentTestEnv = []string{
 	"AGENTSVIEW_AUTH_TOKEN_FILE",
 	"AGENTSVIEW_EMBEDDINGS_ENDPOINT",
 	"AGENTSVIEW_EMBEDDINGS_API_KEY_FILE",
+	"AGENTSVIEW_EMBEDDINGS_BATCH_SIZE",
 }
 
 // isolateDeploymentEnv unsets every deployment variable and points the data

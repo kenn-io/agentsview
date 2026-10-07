@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,16 +19,10 @@ import (
 func TestDeploymentEmbeddingKeyFileReachesEncoder(t *testing.T) {
 	isolateDeploymentEnv(t)
 	var gotAuth, gotModel string
-	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	endpoint := newEmbeddingsStubServer(t, 4, func(r *http.Request, model string) {
 		gotAuth = r.Header.Get("Authorization")
-		var body struct {
-			Model string `json:"model"`
-		}
-		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-		gotModel = body.Model
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"index":0,"embedding":[1,0,0,0]}]}`))
-	}))
+		gotModel = model
+	})
 	t.Cleanup(endpoint.Close)
 	keyFile := filepath.Join(t.TempDir(), "embed-key")
 	require.NoError(t, os.WriteFile(keyFile, []byte("embedding-secret\n"), 0o600))
@@ -47,7 +39,7 @@ func TestDeploymentEmbeddingKeyFileReachesEncoder(t *testing.T) {
 	require.NoError(t, err)
 	vec, err := kitvec.EncodeOne(t.Context(), enc, "query")
 	require.NoError(t, err)
-	assert.Equal(t, []float32{1, 0, 0, 0}, []float32(vec))
+	assert.Equal(t, []float32{1, 1, 1, 1}, []float32(vec))
 	assert.Equal(t, "Bearer embedding-secret", gotAuth)
 	assert.Equal(t, "published-model", gotModel)
 }

@@ -22,6 +22,7 @@ var deploymentTestEnv = []string{
 	"AGENTSVIEW_AUTH_TOKEN_FILE",
 	"AGENTSVIEW_EMBEDDINGS_ENDPOINT",
 	"AGENTSVIEW_EMBEDDINGS_API_KEY_FILE",
+	"AGENTSVIEW_EMBEDDINGS_BATCH_SIZE",
 }
 
 // unsetDeploymentEnv removes every deployment variable for the test; the
@@ -377,6 +378,18 @@ func TestDeploymentEmbeddings(t *testing.T) {
 		assert.False(t, cfg.Vector.Enabled, "the endpoint alone never enables [vector]")
 	})
 
+	t.Run("custom batch size", func(t *testing.T) {
+		unsetDeploymentEnv(t)
+		setupTestEnv(t)
+		t.Setenv("AGENTSVIEW_MODE", "pg-serve")
+		t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", "http://embeddings.example/v1")
+		t.Setenv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE", " 2 ")
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+		require.NotNil(t, cfg.DeploymentEmbeddings)
+		assert.Equal(t, 2, cfg.DeploymentEmbeddings.BatchSize)
+	})
+
 	t.Run("key file expands home", func(t *testing.T) {
 		unsetDeploymentEnv(t)
 		setupTestEnv(t)
@@ -395,17 +408,24 @@ func TestDeploymentEmbeddings(t *testing.T) {
 
 func TestDeploymentEmbeddingsRejectInvalid(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		vector   bool
-		endpoint *string
-		keyFile  string
-		want     string
+		name      string
+		vector    bool
+		endpoint  *string
+		keyFile   string
+		batchSize *string
+		want      string
 	}{
 		{name: "with vector section", vector: true, endpoint: new("http://e/v1"), want: "AGENTSVIEW_EMBEDDINGS_*"},
 		{name: "key file without endpoint", keyFile: "key-secret", want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
 		{name: "blank endpoint", endpoint: new("  "), want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
 		{name: "blank key file", endpoint: new("http://e/v1"), keyFile: " \n", want: "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE"},
 		{name: "missing key file", endpoint: new("http://e/v1"), keyFile: "missing", want: "AGENTSVIEW_EMBEDDINGS_API_KEY_FILE"},
+		{name: "batch size without endpoint", batchSize: new("2"), want: "AGENTSVIEW_EMBEDDINGS_ENDPOINT"},
+		{name: "batch size with vector section", vector: true, batchSize: new("2"), want: "AGENTSVIEW_EMBEDDINGS_*"},
+		{name: "non-integer batch size", endpoint: new("http://e/v1"), batchSize: new("1.5"), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
+		{name: "blank batch size", endpoint: new("http://e/v1"), batchSize: new(" "), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
+		{name: "zero batch size", endpoint: new("http://e/v1"), batchSize: new("0"), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
+		{name: "negative batch size", endpoint: new("http://e/v1"), batchSize: new("-1"), want: "AGENTSVIEW_EMBEDDINGS_BATCH_SIZE"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			unsetDeploymentEnv(t)
@@ -416,6 +436,9 @@ func TestDeploymentEmbeddingsRejectInvalid(t *testing.T) {
 			t.Setenv("AGENTSVIEW_MODE", "serve")
 			if tc.endpoint != nil {
 				t.Setenv("AGENTSVIEW_EMBEDDINGS_ENDPOINT", *tc.endpoint)
+			}
+			if tc.batchSize != nil {
+				t.Setenv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE", *tc.batchSize)
 			}
 			switch tc.keyFile {
 			case "":

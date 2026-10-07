@@ -103,7 +103,8 @@ func (c *Config) applyDeploymentEnv() error {
 func (c *Config) applyDeploymentEmbeddings() error {
 	endpoint, endpointSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_ENDPOINT")
 	keyPath, keySet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE")
-	if !endpointSet && !keySet {
+	batchSize, batchSet := os.LookupEnv("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE")
+	if !endpointSet && !keySet && !batchSet {
 		return nil
 	}
 	if c.vectorSectionDefined {
@@ -120,6 +121,13 @@ func (c *Config) applyDeploymentEmbeddings() error {
 		deploymentEmbeddingsServer: {Endpoint: endpoint},
 	}, toml.MetaData{})
 	server := servers[deploymentEmbeddingsServer]
+	if batchSet {
+		var err error
+		server.BatchSize, err = strconv.Atoi(strings.TrimSpace(batchSize))
+		if err != nil {
+			return errors.New("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE must be a positive integer")
+		}
+	}
 	if keySet {
 		key, err := readSecretFile("AGENTSVIEW_EMBEDDINGS_API_KEY_FILE", keyPath)
 		if err != nil {
@@ -128,6 +136,9 @@ func (c *Config) applyDeploymentEmbeddings() error {
 		server.apiKey = key
 	}
 	if err := server.validate(deploymentEmbeddingsServer, 0); err != nil {
+		if batchSet {
+			return fmt.Errorf("AGENTSVIEW_EMBEDDINGS_BATCH_SIZE: %w", err)
+		}
 		return err
 	}
 	c.DeploymentEmbeddings = &server

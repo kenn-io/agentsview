@@ -299,6 +299,8 @@ runs it needs no shell wrapper:
   [`AGENTSVIEW_MODE`](/docs/configuration/#container-deployment). Adoption needs
   exactly one published recipe; see
   [semantic search: PostgreSQL](/docs/semantic-search/#postgresql).
+  Set `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE` to a positive integer to change the
+  number of inputs per request from the default `32`.
 
 The recipe is resolved on the first cycle that succeeds and kept until the
 process restarts. `--embed` never starts a daemon and refuses to run while a

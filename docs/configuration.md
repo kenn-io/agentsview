@@ -292,6 +292,7 @@ use them with the native binary.
 | `AGENTSVIEW_PG_ALLOW_INSECURE`       | Sets `allow_insecure` for the default PostgreSQL target, for a database on a private network without TLS                                                                                    |
 | `AGENTSVIEW_EMBEDDINGS_ENDPOINT`     | OpenAI-compatible embeddings endpoint for recipe adoption in `pg push --embed` and `pg serve`; local `serve` ignores it. See [semantic search on PostgreSQL](/docs/semantic-search/) |
 | `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` | File holding that endpoint's API key; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                                                                             |
+| `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE` | Inputs per embeddings request; positive integer, default `32`; requires `AGENTSVIEW_EMBEDDINGS_ENDPOINT`. Lower it for providers with request token limits. |
 
 The image sets `AGENTSVIEW_MODE=serve`, `AGENTSVIEW_HOST=0.0.0.0`,
 `AGENTSVIEW_REQUIRE_AUTH=true`, and `AGENTSVIEW_NO_BROWSER=true`. An explicit
