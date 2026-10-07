@@ -79,9 +79,6 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
 	}
-	if strings.ContainsAny(in.Body.Organization, `/\\?#%`) || in.Body.Organization == "." || in.Body.Organization == ".." {
-		return nil, apiError(http.StatusBadRequest, "invalid Claude organization")
-	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
@@ -89,18 +86,11 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		}
 		ctx, cancel := context.WithCancel(hctx.Context())
 		defer cancel()
-		pending := map[string]chan claudeAISyncResult{}
-		defer func() {
-			for id := range pending {
-				results.Delete(id)
-			}
-		}()
 		fetch := func(ctx context.Context, path string) (int, []byte, error) {
 			id := rand.Text()
 			answer := make(chan claudeAISyncResult, 1)
-			pending[id] = answer
 			results.Store(id, answer)
-			defer func() { delete(pending, id); results.Delete(id) }()
+			defer results.Delete(id)
 			if !stream.SendJSON("fetch", map[string]string{"id": id, "path": path}) {
 				cancel()
 				return 0, nil, ctx.Err()
@@ -112,7 +102,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				return 0, nil, errors.New("Claude browser fetch timed out")
 			case response := <-answer:
 				var err error
-				if response.retryAfter != "" {
+				if response.status == 0 {
+					err = errors.New(string(response.body))
+				} else if response.retryAfter != "" {
 					err = importer.ClaudeAIRetryAfter(response.retryAfter)
 				}
 				return response.status, response.body, err

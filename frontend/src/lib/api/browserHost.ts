@@ -1,6 +1,6 @@
 export interface BrowserHost {
   connect(): Promise<void>;
-  status(): Promise<{ connected: boolean; organization: string | null }>;
+  status(): Promise<{ connected: boolean; pending: boolean; organization: string | null }>;
   fetch(
     path: string,
   ): Promise<{ status: number; body: string; retryAfter?: string; error?: string }>;
