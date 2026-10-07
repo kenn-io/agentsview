@@ -5,7 +5,6 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"time"
 )
@@ -22,6 +21,7 @@ type claudeAIConversation struct {
 type claudeAIMessage struct {
 	UUID        string               `json:"uuid"`
 	Parent      string               `json:"parent_message_uuid"`
+	Index       int                  `json:"index"`
 	Text        string               `json:"text"`
 	Content     []claudeAIBlock      `json:"content"`
 	Sender      string               `json:"sender"`
@@ -181,27 +181,25 @@ func convertClaudeAIConversation(
 ) (ParseResult, error) {
 	if conv.CurrentLeaf != "" {
 		byID := make(map[string]claudeAIMessage, len(conv.Messages))
+		byIndex := make(map[int]string, len(conv.Messages))
 		for _, message := range conv.Messages {
+			byIndex[message.Index] = message.UUID
+		}
+		for _, message := range conv.Messages {
+			if message.Parent == "" {
+				for index := message.Index - 1; message.Parent == "" && index >= 0; index-- {
+					message.Parent = byIndex[index]
+				}
+			}
 			byID[message.UUID] = message
 		}
 		if _, ok := byID[conv.CurrentLeaf]; !ok {
 			return ParseResult{}, fmt.Errorf("current leaf %s not found", conv.CurrentLeaf)
 		}
-		var chain []claudeAIMessage
-		seen := make(map[string]bool)
-		for id := conv.CurrentLeaf; ; {
-			message, ok := byID[id]
-			if !ok {
-				break
-			}
-			if seen[id] {
-				return ParseResult{}, fmt.Errorf("message %s repeats in selected path", id)
-			}
-			seen[id] = true
-			chain = append(chain, message)
-			id = message.Parent
+		chain, err := linearizeParentPath(byID, conv.CurrentLeaf, func(message claudeAIMessage) string { return message.Parent })
+		if err != nil {
+			return ParseResult{}, err
 		}
-		slices.Reverse(chain)
 		conv.Messages = chain
 	}
 	startedAt, err := time.Parse(time.RFC3339Nano, conv.CreatedAt)

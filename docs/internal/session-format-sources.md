@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-02
+last_edited: 2026-10-07
 ---
 
 # Session Format Source Inventory
@@ -2787,27 +2787,31 @@ schemas keep their existing ordering behavior.
   not authoritative token, cache, reasoning, credit, or USD accounting.
 - **Agentsview:** `internal/parser/claude_ai.go` parses exports;
   `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
-- **Desktop sync evidence:** `no-public-source`. The original implementation's
-  observations and synthetic fixtures describe these private GET endpoints:
-  `https://claude.ai/api/organizations` selects organizations whose `capabilities`
-  include `chat`, then
-  `https://claude.ai/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}`
-  and
-  `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}?tree=True`.
-  The list reads only `conversations` and `has_more`. Freshness compares summary
-  `updated_at` with archived `ended_at`.
+- **Desktop sync evidence:** `source`, reverified 2026-10-07 against
+  Anthropic's published client bundles:
+  [list client](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-m-1-b3JkS0de.js),
+  [detail URL builder](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-l-p-m-3-BCYG6Qrh.js),
+  and [message normalizer](https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-l-m-0-BUHSvGzE.js).
+  The list client reads `data` and `has_more` from
+  `https://claude.ai/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}`.
+  Its normal list options omit `starred`; the starred-only list sets
+  `starred=true`. Sync omits this filter so starred chats remain eligible.
+  The detail builder sets `tree=True` and `rendering_mode=messages`; the
+  client enables `consistency=strong` by default. Sync uses
+  `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}?tree=True&rendering_mode=messages&consistency=strong`.
+  Freshness compares summary `updated_at` with archived `ended_at`.
   Details read `name`, `created_at`, `updated_at`, `current_leaf_message_uuid`,
-  and `chat_messages` entries with `parent_message_uuid`. The shared parser walks
-  parents from the selected leaf, stops at a parent outside the message set,
-  and reverses the path. A missing leaf or repeated node fails; without a leaf
-  field, it keeps every message. Reverified 2026-10-07 against synthetic
-  branch, overlapping-page, cancellation, and older-export regression fixtures.
-  The export parser
-  consumes message `sender`, `text`, `content`, timestamps, and attachments.
-  No live account was checked for this rework. Organization capabilities, the
-  list key, `has_more`, `tree=True` leaf presence, whether exports carry branches,
-  and whether starred and empty chats appear in the list still need live
-  verification.
+  and `chat_messages`. For a missing `parent_message_uuid`, the normalizer
+  finds the nearest lower message `index`; the root sentinel is
+  `00000000-0000-4000-8000-000000000000`. The parser follows the selected
+  leaf's parents. A missing leaf or cycle fails; without a leaf, it keeps
+  every message. Sync replaces a changed path that rewrites or shortens the
+  archived history and keeps the previous copy in trash. An empty list page
+  with `has_more: true` fails.
+  The export parser reads message `sender`, `text`, `content`, timestamps,
+  and attachments. Organization `capabilities` containing `chat` remain
+  based on the original implementation's observations. Live account checks
+  remain outstanding for export branch fields and empty-chat listings.
 
 ## ChatGPT Export (`chatgpt`)
 

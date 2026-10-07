@@ -44,9 +44,8 @@ const CLAUDE_BROWSER_RESPONSE_MAX_BYTES: usize = 32 << 20;
 
 #[derive(Default)]
 struct ClaudeAuthState {
-    next_browser_request: AtomicU64,
     pending_browser_requests:
-        Mutex<BTreeMap<u64, tokio::sync::oneshot::Sender<ClaudeBrowserResponse>>>,
+        Mutex<BTreeMap<String, tokio::sync::oneshot::Sender<ClaudeBrowserResponse>>>,
 }
 
 #[derive(serde::Serialize)]
@@ -61,7 +60,7 @@ struct ClaudeBrowserResponse {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaudeBrowserFetchResult {
-    request_id: u64,
+    request_id: String,
     status: u16,
     body: String,
     error: Option<String>,
@@ -6510,6 +6509,7 @@ async fn claude_auth_fetch(
     }
     let state = handle.state::<ClaudeAuthState>();
     let (request_id, receiver) = state.start_browser_request()?;
+    let request_id_json = serde_json::to_string(&request_id).map_err(|e| e.to_string())?;
     let url =
         serde_json::to_string(&format!("https://claude.ai{path}")).map_err(|e| e.to_string())?;
     let script = format!(
@@ -6520,9 +6520,9 @@ async fn claude_auth_fetch(
             const response = await fetch({url}, {{ method: "GET", credentials: "include", redirect: "error", signal: controller.signal }});
             const body = await response.text();
             const retryAfter = response.headers.get("retry-after") ?? undefined;
-            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id}, status: response.status, body, retryAfter }} }});
+            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: response.status, body, retryAfter }} }});
         }} catch (error) {{
-            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id}, status: 0, body: "", error: String(error) }} }});
+            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 0, body: "", error: String(error) }} }});
         }} finally {{
             clearTimeout(timer);
         }}
@@ -6548,6 +6548,27 @@ mod claude_sync_tests {
     use super::valid_claude_fetch_path;
 
     #[test]
+    fn claude_fetch_unsolicited_result_leaves_request_pending() {
+        let state = super::ClaudeAuthState::default();
+        let (id, mut receiver) = state.start_browser_request().unwrap();
+        assert!(state
+            .finish_browser_request(super::ClaudeBrowserFetchResult {
+                request_id: "0".into(),
+                status: 200,
+                body: "unsolicited".into(),
+                error: None,
+                retry_after: None,
+            })
+            .is_err());
+        assert!(receiver.try_recv().is_err());
+        let payload = serde_json::json!({"requestId": id, "status": 200, "body": "chat"});
+        state
+            .finish_browser_request(serde_json::from_value(payload).unwrap())
+            .unwrap();
+        assert_eq!(receiver.try_recv().unwrap().body, "chat");
+    }
+
+    #[test]
     fn claude_fetch_cancelled_request_does_not_block_next() {
         let state = super::ClaudeAuthState::default();
         let (old_id, old_receiver) = state.start_browser_request().unwrap();
@@ -6564,7 +6585,7 @@ mod claude_sync_tests {
             .finish_browser_request(result(old_id, "stale"))
             .is_err());
         state
-            .finish_browser_request(result(id, "new chat"))
+            .finish_browser_request(result(id.clone(), "new chat"))
             .unwrap();
         assert_eq!(receiver.try_recv().unwrap().body, "new chat");
         assert!(state
@@ -6678,13 +6699,19 @@ async fn claude_auth_fetch_result(
 impl ClaudeAuthState {
     fn start_browser_request(
         &self,
-    ) -> Result<(u64, tokio::sync::oneshot::Receiver<ClaudeBrowserResponse>), String> {
-        let id = self.next_browser_request.fetch_add(1, Ordering::SeqCst);
+    ) -> Result<
+        (
+            String,
+            tokio::sync::oneshot::Receiver<ClaudeBrowserResponse>,
+        ),
+        String,
+    > {
+        let id = uuid::Uuid::new_v4().to_string();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         self.pending_browser_requests
             .lock()
             .map_err(|_| "Claude request lock failed")?
-            .insert(id, sender);
+            .insert(id.clone(), sender);
         Ok((id, receiver))
     }
 

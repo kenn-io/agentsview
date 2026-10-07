@@ -15,27 +15,112 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-const syncSummary = `{"uuid":"one","name":"Chat","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}`
+const syncSummary = `{"uuid":"one","name":"Chat","is_starred":true,"created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}`
 const syncDetail = `{"uuid":"one","name":"Chat","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","chat_messages":[
-    {"uuid":"root","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Hello","created_at":"2026-03-01T10:00:00Z"},
-    {"uuid":"reply","parent_message_uuid":"root","sender":"assistant","text":"Chosen reply","created_at":"2026-03-01T10:02:00Z"}]}`
+    {"uuid":"root","index":0,"parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Hello","created_at":"2026-03-01T10:00:00Z"},
+    {"uuid":"reply","index":1,"parent_message_uuid":"root","sender":"assistant","text":"Chosen reply","created_at":"2026-03-01T10:02:00Z"}]}`
 const syncOrgs = `[{"uuid":"ignored","capabilities":["api"]},{"uuid":"org","capabilities":["chat"]}]`
 
 func TestSyncClaudeAI(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		shorter bool
+		want    []string
+	}{
+		{name: "shorter selected path", shorter: true, want: []string{"Edited question", "Chosen reply"}},
+		{name: "rewritten selected path", want: []string{"Edited question", "Chosen reply", "Second question", "Second answer"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			detail := strings.TrimSuffix(syncDetail, "]}") + `,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"Second question"},{"uuid":"a2","parent_message_uuid":"q2","sender":"assistant","text":"Second answer"}],"current_leaf_message_uuid":"a2"}`
+			summary := syncSummary
+			details := 0
+			fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+				switch path {
+				case "/api/organizations":
+					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + summary + `],"has_more":false}`)}, nil
+				default:
+					require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong", path)
+					details++
+					return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+				}
+			}
+			stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, stats.Imported)
+			messages, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+			require.NoError(t, err)
+			require.Len(t, messages, 4)
+			if tt.shorter {
+				detail = strings.Replace(syncDetail, `"chat_messages":`, `"current_leaf_message_uuid":"reply","chat_messages":`, 1)
+			}
+			detail = strings.Replace(strings.Replace(detail, "Hello", "Edited question", 1), "10:05:00Z", "10:06:00Z", 1)
+			summary = strings.Replace(summary, "10:05:00Z", "10:06:00Z", 1)
+			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Updated)
+			assert.Empty(t, stats.Refusals)
+			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Skipped)
+			assert.Equal(t, 2, details)
+			messages, err = d.GetAllMessages(t.Context(), "claude-ai:one")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, messageContents(messages))
+			copies := replacedCopies(t, d, "claude-ai:one")
+			require.Len(t, copies, 1)
+			old, err := d.GetAllMessages(t.Context(), copies[0].ID)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"Hello", "Chosen reply", "Second question", "Second answer"}, messageContents(old))
+		})
+	}
+	t.Run("trashed during sync write is skipped", func(t *testing.T) {
+		d := testDB(t)
+		_, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+strings.Replace(syncDetail, "10:05:00Z", "10:04:00Z", 1)+"]"), nil)
+		require.NoError(t, err)
+		stats, err := SyncClaudeAI(t.Context(), trashDuringImportStore{d}, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+			switch path {
+			case "/api/organizations":
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
+			default:
+				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong", path)
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+			}
+		}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Skipped)
+		assert.Zero(t, stats.Errors)
+		assert.Empty(t, stats.Refusals)
+		assert.True(t, d.IsSessionTrashed(t.Context(), "claude-ai:one"))
+	})
+	t.Run("empty page with more fails", func(t *testing.T) {
+		_, err := SyncClaudeAI(t.Context(), testDB(t), func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+			if path == "/api/organizations" {
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+			}
+			require.Equal(t, "/api/organizations/org/chat_conversations_v2?limit=50&offset=0", path)
+			return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":true}`)}, nil
+		}, nil)
+		require.EqualError(t, err, "Claude list returned an empty page with has_more: true")
+	})
 	t.Run("restart and older zip freshness", func(t *testing.T) {
 		d := testDB(t)
 		details, notifications := 0, 0
-		fetch := func(ctx context.Context, path string) (int, []byte, error) {
+		fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 			switch path {
 			case "/api/organizations":
-				return 200, []byte(syncOrgs), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-				return 200, []byte(`{"conversations":[` + syncSummary + `],"has_more":false}`), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
 			default:
-				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True", path)
+				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong", path)
 				details++
-				return 200, []byte(strings.Replace(syncDetail, `"chat_messages":[`, `"current_leaf_message_uuid":"reply","chat_messages":[
-					{"uuid":"abandoned","parent_message_uuid":"root","sender":"assistant","text":"Abandoned reply"},`, 1)), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(strings.Replace(syncDetail, `"chat_messages":[`, `"current_leaf_message_uuid":"reply","chat_messages":[
+					{"uuid":"abandoned","parent_message_uuid":"root","sender":"assistant","text":"Abandoned reply"},`, 1))}, nil
 			}
 		}
 		stats, err := SyncClaudeAI(t.Context(), d, fetch, &ImportCallbacks{OnPage: func() { notifications++ }})
@@ -84,17 +169,17 @@ func TestSyncClaudeAI(t *testing.T) {
 		} {
 			t.Run(tt.name, func(t *testing.T) {
 				d := testDB(t)
-				stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (int, []byte, error) {
+				stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 					switch path {
 					case "/api/organizations":
-						return 200, []byte(syncOrgs), nil
+						return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 					case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-						return 200, []byte(`{"conversations":[` + syncSummary + `,` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":false}`), nil
-					case "/api/organizations/org/chat_conversations/one?tree=True":
-						return 200, []byte(tt.detail), nil
+						return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `,` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":false}`)}, nil
+					case "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong":
+						return ClaudeAIResponse{Status: 200, Body: []byte(tt.detail)}, nil
 					default:
-						require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True", path)
-						return 200, []byte(strings.ReplaceAll(syncDetail, "one", "two")), nil
+						require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True&rendering_mode=messages&consistency=strong", path)
+						return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "one", "two"))}, nil
 					}
 				}, nil)
 				require.NoError(t, err)
@@ -120,17 +205,17 @@ func TestSyncClaudeAI(t *testing.T) {
 				_, err := d.DeleteSessionIfTrashed(t.Context(), "claude-ai:one")
 				require.NoError(t, err)
 			}
-			stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (int, []byte, error) {
+			stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 				switch path {
 				case "/api/organizations":
-					return 200, []byte(syncOrgs), nil
+					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-					return 200, []byte(`{"conversations":[` + syncSummary + `],"has_more":true}`), nil
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
 				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=1":
-					return 200, []byte(`{"conversations":[` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":false}`), nil
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":false}`)}, nil
 				default:
-					require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True", path)
-					return 404, nil, nil
+					require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True&rendering_mode=messages&consistency=strong", path)
+					return ClaudeAIResponse{Status: 404, Body: nil}, nil
 				}
 			}, nil)
 			require.NoError(t, err)
@@ -146,16 +231,16 @@ func TestSyncClaudeAI(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		store := &cancelSyncStore{DB: d, cancel: cancel}
 		details := 0
-		fetch := func(ctx context.Context, path string) (int, []byte, error) {
+		fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 			switch path {
 			case "/api/organizations":
-				return 200, []byte(syncOrgs), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-				return 200, []byte(`{"conversations":[` + syncSummary + `],"has_more":false}`), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
 			default:
-				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True", path)
+				require.Equal(t, "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong", path)
 				details++
-				return 200, []byte(syncDetail), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
 			}
 		}
 		_, err = SyncClaudeAI(ctx, store, fetch, nil)
@@ -168,59 +253,26 @@ func TestSyncClaudeAI(t *testing.T) {
 		assert.Equal(t, 1, stats.Updated)
 		assert.Equal(t, 2, details)
 	})
-	t.Run("shorter history remains retryable", func(t *testing.T) {
-		d := testDB(t)
-		longer := syncDetail
-		longer = strings.TrimSuffix(longer, "]}") + `,{"uuid":"last","sender":"human","text":"Keep this turn","created_at":"2026-03-01T10:03:00Z"}]}`
-		longer = strings.ReplaceAll(longer, "10:05:00Z", "10:04:00Z")
-		_, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+longer+"]"), nil)
-		require.NoError(t, err)
-		details := 0
-		fetch := func(ctx context.Context, path string) (int, []byte, error) {
-			switch path {
-			case "/api/organizations":
-				return 200, []byte(syncOrgs), nil
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-				return 200, []byte(`{"conversations":[` + syncSummary + `],"has_more":false}`), nil
-			default:
-				details++
-				return 200, []byte(syncDetail), nil
-			}
-		}
-		for range 2 {
-			stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-			require.NoError(t, err)
-			assert.Equal(t, []ImportRefusal{{SessionID: "claude-ai:one", Reason: RefusalShorterExport}}, stats.Refusals)
-		}
-		assert.Equal(t, 2, details)
-		session, err := d.GetSession(t.Context(), "claude-ai:one")
-		require.NoError(t, err)
-		assert.Equal(t, "2026-03-01T10:04:00Z", *session.EndedAt)
-		messages, err := d.GetAllMessages(t.Context(), "claude-ai:one")
-		require.NoError(t, err)
-		require.Len(t, messages, 3)
-		assert.Equal(t, "Keep this turn", messages[2].Content)
-	})
 	t.Run("overlapping pages import later chats", func(t *testing.T) {
 		d := testDB(t)
 		details := 0
-		stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (int, []byte, error) {
+		stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 			switch path {
 			case "/api/organizations":
-				return 200, []byte(syncOrgs), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-				return 200, []byte(`{"conversations":[` + syncSummary + `],"has_more":true}`), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
 			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=1":
-				return 200, []byte(`{"conversations":[` + syncSummary + `,` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":true}`), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `,` + strings.ReplaceAll(syncSummary, "one", "two") + `],"has_more":true}`)}, nil
 			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=3":
-				return 200, []byte(`{"conversations":[],"has_more":true}`), nil
-			case "/api/organizations/org/chat_conversations/one?tree=True":
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
+			case "/api/organizations/org/chat_conversations/one?tree=True&rendering_mode=messages&consistency=strong":
 				details++
-				return 200, []byte(syncDetail), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
 			default:
-				require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True", path)
+				require.Equal(t, "/api/organizations/org/chat_conversations/two?tree=True&rendering_mode=messages&consistency=strong", path)
 				details++
-				return 200, []byte(strings.ReplaceAll(syncDetail, "one", "two")), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "one", "two"))}, nil
 			}
 		}, nil)
 		require.NoError(t, err)
@@ -232,17 +284,17 @@ func TestSyncClaudeAI(t *testing.T) {
 		require.Len(t, messages, 2)
 		assert.Equal(t, "Chosen reply", messages[1].Content)
 	})
-	t.Run("missing conversations fails", func(t *testing.T) {
-		for _, page := range []string{`{}`, `{"items":[]}`, `{"data":[]}`, `{"results":[]}`} {
+	t.Run("missing data fails", func(t *testing.T) {
+		for _, page := range []string{`{}`, `{"items":[]}`, `{"conversations":[]}`, `{"results":[]}`} {
 			d := testDB(t)
-			_, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (int, []byte, error) {
+			_, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 				if path == "/api/organizations" {
-					return 200, []byte(syncOrgs), nil
+					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 				}
 				require.Equal(t, "/api/organizations/org/chat_conversations_v2?limit=50&offset=0", path)
-				return 200, []byte(page), nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(page)}, nil
 			}, nil)
-			require.EqualError(t, err, "Claude list had no conversations")
+			require.EqualError(t, err, "Claude list had no data")
 		}
 	})
 	t.Run("retry limit and sign in", func(t *testing.T) {
@@ -252,9 +304,9 @@ func TestSyncClaudeAI(t *testing.T) {
 					d := testDB(t)
 					calls := 0
 					start := time.Now()
-					_, err := SyncClaudeAI(t.Context(), d, func(context.Context, string) (int, []byte, error) {
+					_, err := SyncClaudeAI(t.Context(), d, func(context.Context, string) (ClaudeAIResponse, error) {
 						calls++
-						return status, nil, ClaudeAIRetryAfter("120")
+						return ClaudeAIResponse{Status: status, RetryAfter: "120"}, nil
 					}, nil)
 					require.Error(t, err)
 					if status == 401 || status == 403 {
