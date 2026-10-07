@@ -30,7 +30,9 @@ func (s *Server) registerImportRoutes() {
 	s.stream(group, http.MethodPost, "/claude-ai/sync", "Sync Claude.ai conversations",
 		func(ctx context.Context, in *claudeAISyncInput) (*huma.StreamResponse, error) {
 			return s.humaSyncClaudeAI(ctx, in, &results)
-		}, streamJSONResponseSchema("ImporterImportStats"))
+		}, streamJSONResponseSchema("ImporterImportStats"), func(op *huma.Operation) {
+			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync."
+		})
 	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
 		func(ctx context.Context, in *claudeAISyncResultInput) (*struct{}, error) {
 			value, ok := results.LoadAndDelete(in.ID)

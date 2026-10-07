@@ -250,76 +250,46 @@ func upsertConversation(
 			len(msgs), existing.MessageCount,
 		))
 	}
-
-	sess := db.Session{
-		ID:               s.ID,
-		Project:          s.Project,
-		Machine:          s.Machine,
-		FirstMessage:     strPtr(s.FirstMessage),
-		SessionName:      db.ParsedSessionName(s),
-		StartedAt:        timeStr(s.StartedAt),
-		EndedAt:          timeStr(s.EndedAt),
-		MessageCount:     s.MessageCount,
-		UserMessageCount: s.UserMessageCount,
+	if localDB, ok := store.(*db.DB); ok && localDB.IsSessionExcluded(ctx, s.ID) {
+		return importSkipped, nil
 	}
-	db.ApplyParsedSessionIdentity(&sess, s)
 
-	if err := store.UpsertSession(ctx, sess); err != nil {
-		if errors.Is(err, db.ErrSessionExcluded) {
+	sess := chatGPTSession(s)
+	replaceMessages := false
+	if existing != nil {
+		archived, err := store.GetAllMessages(ctx, s.ID)
+		if err != nil {
+			return importNew, fmt.Errorf("loading existing messages: %w", err)
+		}
+		canonical := storedFormMessages(store, msgs)
+		if existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) && sameMessages(archived, canonical) {
+			if err := store.UpsertSession(ctx, sess); errors.Is(err, db.ErrSessionExcluded) {
+				return importSkipped, nil
+			} else if err != nil {
+				return importNew, fmt.Errorf("upserting session: %w", err)
+			}
+			if localDB, ok := store.(*db.DB); ok {
+				if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
+					log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
+				}
+			}
 			return importSkipped, nil
 		}
-		return importNew, fmt.Errorf("upserting session: %w", err)
+		replaceMessages = len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)])
 	}
 
-	// Bump local_modified_at so incremental PG push picks up session_name
-	// changes even when the skip path below returns importSkipped (message
-	// count unchanged) and ReplaceSessionMessages is never called.
-	if localDB, ok := store.(*db.DB); ok {
-		if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
-			log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
-		}
-	}
-
-	// Skip expensive message replacement when the conversation
-	// has not changed since the last import. Compare both
-	// message count and ended_at (source updated_at) to detect
-	// content/metadata changes even when count is unchanged.
-	if !isNew && existing != nil && existing.MessageCount == s.MessageCount {
-		newEnd := timeStr(s.EndedAt)
-		if ptrEqual(existing.EndedAt, newEnd) {
-			existingMsgs, err := store.GetAllMessages(ctx, s.ID)
-			if err != nil {
-				return importNew,
-					fmt.Errorf("loading existing messages: %w", err)
-			}
-			// Compare in stored form: the write path sanitizes and
-			// projects rows, so raw parser output can differ from an
-			// unchanged archived copy.
-			if sameMessages(existingMsgs, storedFormMessages(store, msgs)) {
-				if s.LastEntryUUID != nil {
-					sess.LastEntryUUID = s.LastEntryUUID
-					if err := store.UpsertSession(ctx, sess); err != nil {
-						return importNew, fmt.Errorf("saving freshness marker: %w", err)
-					}
-				}
-				return importSkipped, nil
-			}
-		}
-	}
-
-	// Suspend FTS before first message-changing operation to
-	// avoid per-row trigger overhead during bulk work.
 	fts.suspend(ctx)
-
-	if err := store.ReplaceSessionMessages(ctx, s.ID, msgs); err != nil {
-		return importNew, fmt.Errorf("replacing messages: %w", err)
+	_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:                    sess,
+		Messages:                   msgs,
+		RejectMessageCountDecrease: true,
+		ReplaceMessages:            replaceMessages,
+	}})
+	if errors.Is(err, db.ErrSessionExcluded) {
+		return importSkipped, nil
 	}
-	// Commit freshness only after the transcript it describes.
-	if s.LastEntryUUID != nil {
-		sess.LastEntryUUID = s.LastEntryUUID
-		if err := store.UpsertSession(ctx, sess); err != nil {
-			return importNew, fmt.Errorf("saving freshness marker: %w", err)
-		}
+	if err != nil {
+		return importNew, err
 	}
 
 	if isNew {

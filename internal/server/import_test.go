@@ -77,7 +77,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
 					postResult(request.ID, `{"data":[{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
 				case "/api/organizations/org/chat_conversations/relay?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-					postResult(request.ID, `{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
+					postResult(request.ID, `{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
 				default:
 					t.Fatalf("unexpected path %s", request.Path)
 				}
@@ -604,7 +604,7 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 			case "/api/organizations/org/chat_conversations/large?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 				body = strings.Repeat("x", (32<<20)+2)
 			case "/api/organizations/org/chat_conversations/later?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-				body = `{"uuid":"later","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","sender":"assistant","text":"Later reply","created_at":"2026-03-01T10:05:00Z"}]}`
+				body = `{"uuid":"later","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"assistant","text":"Later reply","created_at":"2026-03-01T10:05:00Z"}]}`
 			default:
 				t.Fatalf("unexpected path %s", request.Path)
 			}

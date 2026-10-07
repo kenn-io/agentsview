@@ -121,9 +121,9 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				var detailError *claudeAIHTTPError
 				if errors.As(err, &detailError) || errors.Is(err, ErrClaudeAIResponseTooLarge) {
 					if detailError != nil && detailError.status == 404 {
-						stats.Skipped++
+						stats.record(id, importSkipped, nil)
 					} else {
-						stats.Errors++
+						stats.record(id, importSkipped, err)
 					}
 					cb.progress(stats)
 					continue
@@ -131,21 +131,20 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err != nil {
 					return stats, err
 				}
-				var imported ImportStats
 				write := func() error {
 					result, err := parser.ParseClaudeAIDetail(detail)
 					if err == nil && result.Session.ID != id {
 						err = fmt.Errorf("conversation uuid differs from requested %s", marker.UUID)
 					}
 					if err != nil {
-						imported.record(id, importSkipped, err)
+						stats.record(id, importSkipped, err)
 						return nil
 					}
 					status, err := claudeAIImport.importConversation(ctx, store, result, nil, ImportOptions{Replace: []string{id}})
 					if errors.Is(err, db.ErrSessionTrashed) {
 						status, err = importSkipped, nil
 					}
-					imported.record(id, status, err)
+					stats.record(id, status, err)
 					return nil
 				}
 				if cb != nil && cb.SerializeWrite != nil {
@@ -153,11 +152,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				} else {
 					err = write()
 				}
-				stats.Imported += imported.Imported
-				stats.Updated += imported.Updated
-				stats.Skipped += imported.Skipped
-				stats.Errors += imported.Errors
-				stats.Refusals = append(stats.Refusals, imported.Refusals...)
 				cb.progress(stats)
 				if ctx.Err() != nil {
 					return stats, ctx.Err()
