@@ -148,7 +148,7 @@ func rawContentRevision(p ingest.PreparedSession) (string, error) {
 
 var (
 	rawSessionType         = reflect.TypeFor[db.Session]()
-	rawPostV1SessionFields = map[string]bool{"PRLinks": true}
+	rawPostV1SessionFields = map[string]bool{"PRLinks": true, "Labels": true}
 )
 
 func rawCanonicalValue(v reflect.Value, field string) (any, error) {

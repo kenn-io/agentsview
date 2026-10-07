@@ -15,28 +15,7 @@ import (
 // PRLink is a pull or merge request associated with a session. Parsers
 // populate it from structured source records, so a full reparse replaces
 // the stored list.
-type PRLink struct {
-	URL        string `json:"url"`
-	Host       string `json:"host"`
-	Repository string `json:"repository"`
-	Number     int    `json:"number"`
-}
-
-// PRLinksFromParsed converts parser links into storage rows.
-func PRLinksFromParsed(links []parser.PRLink) []PRLink {
-	if len(links) == 0 {
-		return nil
-	}
-	out := make([]PRLink, 0, len(links))
-	for _, l := range links {
-		link := PRLink{
-			URL: l.URL, Host: l.Host, Repository: l.Repository,
-			Number: l.Number,
-		}
-		out = append(out, link)
-	}
-	return out
-}
+type PRLink = parser.PRLink
 
 // EncodePRLinks returns the stored text form of links: a JSON array, or
 // the empty string when there are none.

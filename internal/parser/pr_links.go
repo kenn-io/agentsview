@@ -10,14 +10,14 @@ import (
 type PRLink struct {
 	// URL is the normalized web URL: lowercase host, no query, fragment,
 	// or trailing slash.
-	URL string
+	URL string `json:"url"`
 	// Host is the lowercase forge host, for example "github.com".
-	Host string
+	Host string `json:"host"`
 	// Repository is the repository path on the host, for example
 	// "owner/repo" or "group/subgroup/repo".
-	Repository string
+	Repository string `json:"repository"`
 	// Number is the pull or merge request number.
-	Number int
+	Number int `json:"number"`
 }
 
 // NewPRLink validates a web URL and the repository and number supplied by the source.
@@ -49,17 +49,17 @@ func NewPRLink(
 // order.
 type prLinkCollector struct {
 	links []PRLink
-	index map[string]int
+	seen  map[string]struct{}
 }
 
 func (c *prLinkCollector) add(link PRLink) {
-	if _, ok := c.index[link.URL]; ok {
+	if _, ok := c.seen[link.URL]; ok {
 		return
 	}
-	if c.index == nil {
-		c.index = make(map[string]int)
+	if c.seen == nil {
+		c.seen = make(map[string]struct{})
 	}
-	c.index[link.URL] = len(c.links)
+	c.seen[link.URL] = struct{}{}
 	c.links = append(c.links, link)
 }
 

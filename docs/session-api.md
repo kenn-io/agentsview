@@ -290,7 +290,7 @@ Compare `cwd`, `is_truncated`, `message_count`, `file_size`,
 `local_modified_at`, and the session timestamps when choosing a copy. Source
 metadata and timestamps help compare copies; they do not guarantee a complete
 transcript. `local_modified_at` records changes to the archived session row,
-including later metadata edits. Labels, launcher parent links, and custom names
+including custom names and later metadata edits. Labels and launcher parent links
 advance only the mirror sync marker. It is not the source file's modification
 time.
 
@@ -704,6 +704,8 @@ agentsview session parent <worker-id> --clear
 | `GET`    | `/api/v1/sessions/{id}/parent` | —                               |
 | `PUT`    | `/api/v1/sessions/{id}/parent` | `{"parent_session_id": "<id>"}` |
 | `DELETE` | `/api/v1/sessions/{id}/parent` | —                               |
+
+The body accepts only `parent_session_id`; `relationship_type` is rejected, and links always record `subagent`.
 
 A launched worker is delegated work, so the link always makes it a subagent of
 the launching session, and the response reports `relationship_type` as

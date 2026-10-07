@@ -21730,17 +21730,6 @@ func (d DBModelBreakdown) Validate() error {
 	return errors
 }
 
-type DBPRLink struct {
-	Host       string `json:"host" validate:"required"`
-	Number     int64  `json:"number"`
-	Repository string `json:"repository" validate:"required"`
-	URL        string `json:"url" validate:"required"`
-}
-
-func (d DBPRLink) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(d))
-}
-
 type DBPeakContextDistribution struct {
 	ClaudeOnly bool                 `json:"claude_only"`
 	NullCount  int64                `json:"null_count"`
@@ -21951,7 +21940,7 @@ type DBSession struct {
 	ParentSessionIds       []string          `json:"parent_session_ids,omitempty"`
 	ParserMalformedLines   *int64            `json:"parser_malformed_lines,omitempty"`
 	PeakContextTokens      int64             `json:"peak_context_tokens"`
-	PrLinks                []DBPRLink        `json:"pr_links,omitempty"`
+	PrLinks                []ParserPRLink    `json:"pr_links,omitempty"`
 	Project                string            `json:"project" validate:"required"`
 	ProjectAssigned        *bool             `json:"project_assigned,omitempty"`
 	QualitySignals         *DBQualitySignals `json:"quality_signals,omitempty"`
@@ -22583,6 +22572,17 @@ func (m MachinesResponse) Validate() error {
 type ModelTotal = service.ModelTotal
 
 type MoneyMoney = money.Money
+
+type ParserPRLink struct {
+	Host       string `json:"host" validate:"required"`
+	Number     int64  `json:"number"`
+	Repository string `json:"repository" validate:"required"`
+	URL        string `json:"url" validate:"required"`
+}
+
+func (p ParserPRLink) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(p))
+}
 
 type ProjectTotal = service.ProjectTotal
 

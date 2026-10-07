@@ -1671,24 +1671,6 @@ components:
         - cacheReadTokens
         - cost
       type: object
-    DbPRLink:
-      additionalProperties: false
-      properties:
-        host:
-          type: string
-        number:
-          format: int64
-          type: integer
-        repository:
-          type: string
-        url:
-          type: string
-      required:
-        - url
-        - host
-        - repository
-        - number
-      type: object
     DbPeakContextDistribution:
       additionalProperties: false
       properties:
@@ -2552,7 +2534,7 @@ components:
           type: integer
         pr_links:
           items:
-            $ref: "#/components/schemas/DbPRLink"
+            $ref: "#/components/schemas/ParserPRLink"
           type: array
         project:
           type: string
@@ -4972,6 +4954,24 @@ components:
       required:
         - ordinals
       type: object
+    ParserPRLink:
+      additionalProperties: false
+      properties:
+        host:
+          type: string
+        number:
+          format: int64
+          type: integer
+        repository:
+          type: string
+        url:
+          type: string
+      required:
+        - url
+        - host
+        - repository
+        - number
+      type: object
     PinMessageResponse:
       additionalProperties: false
       properties:
@@ -6566,7 +6566,7 @@ components:
           type: integer
         pr_links:
           items:
-            $ref: "#/components/schemas/DbPRLink"
+            $ref: "#/components/schemas/ParserPRLink"
           type: array
         project:
           type: string
