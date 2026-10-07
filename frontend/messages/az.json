@@ -2462,5 +2462,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir.","countPlural=other":"Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir."}}],
   "tool_sequences_full_input_in_message": "Tam giriş {ordinal} nömrəli mesajdadır.",
   "tool_sequences_full_result_in_message": "Tam nəticə {ordinal} nömrəli mesajdadır.",
-  "tool_sequences_retry": "Yenidən cəhd et"
+  "tool_sequences_retry": "Yenidən cəhd et",
+  "import_claude_connect": "Qoşul",
+  "import_claude_sync": "Sinxronlaşdır",
+  "import_claude_disconnect": "Bağlantını kəs",
+  "import_claude_connecting": "Giriş gözlənilir"
 }

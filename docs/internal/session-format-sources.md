@@ -2785,8 +2785,20 @@ schemas keep their existing ordering behavior.
   publish its complete JSON schema.
 - **Usage and cost:** The export contains conversation content and timestamps,
   not authoritative token, cache, reasoning, credit, or USD accounting.
-- **Agentsview:** `internal/parser/claude_ai.go`; this is an import format, not
-  a live application session store.
+- **Agentsview:** `internal/parser/claude_ai.go` parses exports;
+  `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
+- **Desktop sync evidence:** `no-public-source`. The original implementation's
+  observations and synthetic fixtures describe these private GET endpoints:
+  `https://claude.ai/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}`
+  and
+  `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}?tree=True`.
+  The list reads `conversations`, with `items`, `data`, or `results` as observed
+  alternatives, and `has_more`. Summary checkpoints use `uuid` and `updated_at`.
+  Details read `name`, `created_at`, `updated_at`, `chat_messages`, and
+  `current_leaf_message_uuid`; ancestry uses message `uuid` and
+  `parent_message_uuid`. The export parser consumes message `sender`, `text`,
+  `content`, timestamps, attachments, and files. No live account was checked for
+  this rework; the response shapes still need live verification.
 
 ## ChatGPT Export (`chatgpt`)
 

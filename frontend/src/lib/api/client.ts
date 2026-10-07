@@ -16,6 +16,7 @@ import {
 } from "./generated/index.js";
 import { ApiError, getAuthToken, getGeneratedBase, isRemoteConnection } from "./runtime.js";
 import { reportTelemetry } from "../utils/telemetry.js";
+import type { BrowserHost } from "./browserHost.js";
 
 export interface SyncHandle {
   abort: () => void;
@@ -26,9 +27,13 @@ export async function consumeEvents<T>(
   response: Response,
   dispatch: (event: EventSourceMessage) => T | undefined,
   missingResult: string,
+  signal?: AbortSignal,
 ): Promise<T> {
   if (!response.body) throw new Error(missingResult);
   const reader = response.body.getReader();
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) cancel();
   const decoder = new TextDecoder();
   let result: T | undefined;
   const parser = createParser({
@@ -49,6 +54,7 @@ export async function consumeEvents<T>(
     if (result === undefined) throw new Error(missingResult);
     return result;
   } finally {
+    signal?.removeEventListener("abort", cancel);
     await reader.cancel();
     reader.releaseLock();
   }
@@ -354,18 +360,50 @@ export interface ImportCallbacks {
   onIndexing?: () => void;
 }
 
-async function readImportResponse(response: Response, cb?: ImportCallbacks): Promise<ImportStats> {
+async function readImportResponse(response: Response, cb?: ImportCallbacks, onFetch?: (id: string, path: string) => void, signal?: AbortSignal): Promise<ImportStats> {
   if (!response.headers.get("content-type")?.includes("text/event-stream")) return response.json();
   return consumeEvents<ImportStats>(
     response,
     ({ event, data }) => {
+      if (event === "fetch") {
+        const request = JSON.parse(data);
+        onFetch?.(request.id, request.path);
+      }
       if (event === "progress") cb?.onProgress?.(JSON.parse(data));
       if (event === "indexing") cb?.onIndexing?.();
       if (event === "done") return JSON.parse(data);
       if (event === "error") throw new Error(JSON.parse(data).error ?? "Import failed");
     },
     "Import stream ended without result",
+    signal,
   );
+}
+
+export async function syncClaudeAI(organization: string, host: BrowserHost, cb?: ImportCallbacks, signal?: AbortSignal): Promise<ImportStats> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    const response = await ImportService.postApiV1ImportClaudeAiSync({ organization }, { signal: controller.signal });
+    let fail: (error: unknown) => void = () => {};
+    const failed = new Promise<never>((_, reject) => { fail = reject; });
+    const result = readImportResponse(response, cb, (id, path) => {
+      void (async () => {
+        let fetched;
+        try { fetched = await host.fetch(path); }
+        catch (error) { fetched = { status: 0, body: String(error) }; }
+        await ImportService.postApiV1ImportClaudeAiSyncResultsById({ id }, new Blob([fetched.body]), { status: fetched.status }, {
+          signal: controller.signal,
+          headers: { "Content-Type": "application/octet-stream", ...(fetched.retryAfter ? { "Retry-After": fetched.retryAfter } : {}) },
+        });
+      })().catch((error) => { fail(error); abort(); });
+    }, controller.signal);
+    return await Promise.race([result, failed]);
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    abort();
+  }
 }
 
 export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<ImportStats> {

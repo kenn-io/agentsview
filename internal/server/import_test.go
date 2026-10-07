@@ -2,15 +2,18 @@ package server
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"encoding/json/v2"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -19,6 +22,95 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
 )
+
+func TestClaudeAISyncRelay(t *testing.T) {
+	t.Run("large result and session notification", func(t *testing.T) {
+		srv := testServer(t, 5*time.Second)
+		notifications := 0
+		srv.sessionMutationNotify = func() { notifications++ }
+		srv.broadcaster = NewBroadcaster(0)
+		events, unsubscribe := srv.broadcaster.Subscribe()
+		defer unsubscribe()
+		httpServer := httptest.NewServer(srv.mux)
+		defer httpServer.Close()
+		postResult := func(id, body string, want int) {
+			response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+id+"?status=200", "application/octet-stream", strings.NewReader(body))
+			require.NoError(t, err)
+			defer response.Body.Close()
+			data, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			require.Equal(t, want, response.StatusCode, "%s", data)
+		}
+		postResult("unknown", `{}`, http.StatusNotFound)
+		response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", strings.NewReader(`{"organization":"org"}`))
+		require.NoError(t, err)
+		defer response.Body.Close()
+		require.Equal(t, http.StatusOK, response.StatusCode)
+		scanner := bufio.NewScanner(response.Body)
+		event := ""
+		answered := ""
+		var stats importer.ImportStats
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "event: ") {
+				event = strings.TrimPrefix(line, "event: ")
+			}
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			switch event {
+			case "fetch":
+				var request struct {
+					ID   string `json:"id"`
+					Path string `json:"path"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(data), &request))
+				answered = request.ID
+				switch request.Path {
+				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+					postResult(request.ID, `{"conversations":[{"uuid":"relay","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
+				case "/api/organizations/org/chat_conversations/relay?tree=True":
+					postResult(request.ID, `{"padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
+				default:
+					t.Fatalf("unexpected path %s", request.Path)
+				}
+			case "error":
+				t.Fatalf("sync failed: %s", data)
+			case "done":
+				require.NoError(t, json.Unmarshal([]byte(data), &stats))
+			}
+		}
+		require.NoError(t, scanner.Err())
+		assert.Equal(t, 1, stats.Imported)
+		assert.Equal(t, 1, notifications)
+		select {
+		case event := <-events:
+			assert.Equal(t, "sessions", event.Scope)
+		default:
+			t.Fatal("missing session event")
+		}
+		messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:relay")
+		require.NoError(t, err)
+		require.Len(t, messages, 1)
+		assert.Equal(t, "Archived relay message", messages[0].Content)
+		postResult(answered, `{}`, http.StatusNotFound)
+	})
+
+	t.Run("unanswered fetch expires", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync", strings.NewReader(`{"organization":"org"}`))
+			req.Header.Set("Content-Type", "application/json")
+			start := time.Now()
+			srv.mux.ServeHTTP(recorder, req)
+			assert.Equal(t, 2*time.Minute, time.Since(start))
+			assert.Contains(t, recorder.Body.String(), "Claude browser fetch timed out")
+			assert.Contains(t, recorder.Body.String(), "event: error")
+		})
+	})
+}
 
 func TestHandleImportClaudeAI(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
