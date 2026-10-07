@@ -78,20 +78,16 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 	}
 
 	for dec.PeekKind() != jsontext.KindEndArray {
-		var conv *claudeAIConversation
+		var conv claudeAIConversation
 		if err := json.UnmarshalDecode(dec, &conv); err != nil {
 			return fmt.Errorf("decoding conversation: %w", err)
-		}
-
-		if conv == nil {
-			continue
 		}
 
 		if len(conv.Messages) == 0 {
 			continue
 		}
 
-		result, err := convertClaudeAIConversation(*conv)
+		result, err := convertClaudeAIConversation(conv)
 		if err != nil {
 			return fmt.Errorf(
 				"converting conversation %s: %w",
@@ -107,16 +103,30 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 	return err
 }
 
-// ParseClaudeAIDetail also emits empty chats so Sync can store their freshness.
+// ParseClaudeAIDetail selects the visible branch of a browser-fetched chat.
 func ParseClaudeAIDetail(data []byte) (ParseResult, error) {
 	var conv *claudeAIConversation
 	if err := json.Unmarshal(data, &conv); err != nil {
 		return ParseResult{}, err
 	}
-	if conv == nil || conv.UUID == "" || conv.Messages == nil {
+	if conv == nil || conv.UUID == "" || len(conv.Messages) == 0 {
 		return ParseResult{}, fmt.Errorf("expected conversation with chat_messages")
 	}
-	return convertClaudeAIConversation(*conv)
+	if slices.ContainsFunc(conv.Messages, func(m claudeAIMessage) bool { return len(m.Parent) > 0 && string(m.Parent) != "null" }) {
+		messages, err := selectedClaudeAIPath(*conv)
+		if err != nil {
+			return ParseResult{}, err
+		}
+		conv.Messages = messages
+	}
+	result, err := convertClaudeAIConversation(*conv)
+	if err != nil {
+		return ParseResult{}, err
+	}
+	for i, m := range conv.Messages {
+		result.Messages[i].SourceUUID = m.UUID
+	}
+	return result, nil
 }
 
 // assembleClaudeAIContent builds message content from content
@@ -311,13 +321,6 @@ func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) 
 func convertClaudeAIConversation(
 	conv claudeAIConversation,
 ) (ParseResult, error) {
-	if slices.ContainsFunc(conv.Messages, func(m claudeAIMessage) bool { return len(m.Parent) > 0 && string(m.Parent) != "null" }) {
-		messages, err := selectedClaudeAIPath(conv)
-		if err != nil {
-			return ParseResult{}, err
-		}
-		conv.Messages = messages
-	}
 	startedAt, err := time.Parse(time.RFC3339Nano, conv.CreatedAt)
 	if err != nil {
 		return ParseResult{},

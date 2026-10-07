@@ -123,6 +123,7 @@ func claudeAIMessages(
 	for i, m := range parsed {
 		msgs[i] = db.Message{
 			SessionID:     sessionID,
+			SourceUUID:    m.SourceUUID,
 			Ordinal:       m.Ordinal,
 			Role:          string(m.Role),
 			Content:       m.Content,

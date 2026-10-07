@@ -91,11 +91,17 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						return stats, err
 					}
 					var marker struct {
-						UUID      string `json:"uuid"`
-						UpdatedAt string `json:"updated_at"`
+						UUID        string `json:"uuid"`
+						UpdatedAt   string `json:"updated_at"`
+						CurrentLeaf string `json:"current_leaf_message_uuid"`
 					}
 					if err := json.Unmarshal(summary, &marker); err != nil || !safeConversationID(marker.UUID) || marker.UpdatedAt == "" {
 						stats.Errors++
+						cb.progress(stats)
+						continue
+					}
+					if marker.CurrentLeaf == "" {
+						stats.Skipped++
 						cb.progress(stats)
 						continue
 					}
@@ -116,14 +122,28 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					}
 					updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
 					if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) {
-						stats.Skipped++
-						cb.progress(stats)
-						continue
+						unchanged := storeArchiveContent(store).UsageOnly()
+						if !unchanged {
+							messages, err := store.GetMessages(ctx, id, existing.MessageCount-1, 1, false)
+							if err != nil {
+								return stats, err
+							}
+							unchanged = len(messages) > 0 && messages[0].SourceUUID == marker.CurrentLeaf
+						}
+						if unchanged {
+							stats.Skipped++
+							cb.progress(stats)
+							continue
+						}
 					}
 					detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true")
 					var detailError *claudeAIHTTPError
 					if errors.As(err, &detailError) || errors.Is(err, ErrClaudeAIResponseTooLarge) {
-						stats.Errors++
+						if detailError != nil && detailError.status == 404 {
+							stats.Skipped++
+						} else {
+							stats.Errors++
+						}
 						cb.progress(stats)
 						continue
 					}
