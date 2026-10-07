@@ -458,20 +458,29 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
-	insertSession(t, d, "spawner", "proj")
+	insertSession(t, d, "manager", "proj")
 	insertSession(t, d, "child", "proj")
-	insertMessages(t, d, Message{
-		SessionID: "spawner", Ordinal: 0, Role: "assistant",
-		Content: "spawn child", HasToolUse: true,
-		ToolCalls: []ToolCall{{
-			ToolName: "Agent", Category: "Task", SubagentSessionID: "child",
+	link, err := d.SetSessionExternalParent(ctx, "child", "manager")
+	require.NoError(t, err)
+	assert.True(t, link.Applied)
+	write := SessionBatchWrite{
+		Session:         Session{ID: "spawner", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
+		ReplaceMessages: true,
+		Messages: []Message{{
+			SessionID: "spawner", Ordinal: 0, Role: "assistant",
+			Content: "spawn child", HasToolUse: true,
+			ToolCalls: []ToolCall{{
+				ToolName: "Agent", Category: "Task", SubagentSessionID: "child",
+			}},
 		}},
-	})
+	}
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+	require.NoError(t, err)
 	require.NoError(t, d.LinkSubagentSessions())
 
 	// A launcher naming the spawner itself must not take ownership of the
 	// spawn-derived parent.
-	link, err := d.SetSessionExternalParent(ctx, "child", "spawner")
+	link, err = d.SetSessionExternalParent(ctx, "child", "spawner")
 	require.NoError(t, err)
 	assert.False(t, link.Applied)
 	_, err = d.ClearSessionExternalParent(ctx, "child")
@@ -482,7 +491,6 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	assert.Equal(t, "spawner", *child.ParentSessionID,
 		"clearing a launcher link must keep the spawn-derived parent")
 
-	insertSession(t, d, "manager", "proj")
 	link, err = d.SetSessionExternalParent(ctx, "child", "manager")
 	require.NoError(t, err)
 	assert.False(t, link.Applied)
@@ -494,6 +502,20 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, child.ParentSessionID)
 	assert.Equal(t, "spawner", *child.ParentSessionID)
+
+	// Removing the spawn edge restores the saved launcher parent during upload.
+	write.Messages[0].HasToolUse = false
+	write.Messages[0].ToolCalls = nil
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+	require.NoError(t, err)
+	child, err = d.GetSession(ctx, "child")
+	require.NoError(t, err)
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "manager", *child.ParentSessionID)
+	assert.Equal(t, "subagent", child.RelationshipType)
+	link, err = d.GetSessionExternalParent(ctx, "child")
+	require.NoError(t, err)
+	assert.True(t, link.Applied)
 }
 
 func TestAnnotationTreeSkipsHiddenAncestors(t *testing.T) {
