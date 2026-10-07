@@ -20,8 +20,12 @@ transaction or a pinned reader can push the WAL past it (249 MiB was observed).
 Before closing the replacement, the build runs a checked truncate checkpoint.
 The swap installs only the main file, so a failed checkpoint or close aborts it.
 
-`RecordArtifactCheckpointLandingFromStage` records completed checkpoint landings;
-the retired `artifact_checkpoint_landing_sessions` table remains for older builds.
+### Artifact checkpoint landings
+
+Land artifact checkpoints only through
+`RecordArtifactCheckpointLandingFromStage`. Do not write to or drop
+`artifact_checkpoint_landing_sessions`. Nothing uses it, but builds up to v0.44
+require it to open an archive read-only.
 
 ### Conversation export
 
@@ -330,11 +334,12 @@ The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
 change. Catalog and user-pricing changes are covered per session instead: each
-rollup install records the distinct `(provider, reported model, canonical
-model)` lookups its daily rows used, and a read re-resolves only those against
-the current catalog. A price change therefore rebuilds just the sessions whose
-lookups resolve differently, while `updated_at`-only refreshes rebuild nothing.
-Do not add a write-only extractor-version metadata key.
+rollup install records the distinct
+`(provider, reported model, canonical model)` lookups its daily rows used, and a
+read re-resolves only those against the current catalog. A price change
+therefore rebuilds just the sessions whose lookups resolve differently, while
+`updated_at`-only refreshes rebuild nothing. Do not add a write-only
+extractor-version metadata key.
 
 Deduplication groups are classified per group at rollup build time. A group is
 finalized into daily rows only when its resolution provably cannot vary with the
@@ -461,12 +466,12 @@ Empty events, such as timing-only `tool_execution` marks, don't count. That
 pair, an empty column with a non-zero length, tells a reader to take the text
 from the one event with content. Summaries over several content-bearing events,
 summaries that differ from their event, calls with no content-bearing event, and
-blocked categories store exactly what the parser produced. Load tool calls through the message loaders, which
-refill the summary once events are attached; a query that selects the column
-directly must apply the same fallback, and PostgreSQL and DuckDB apply the same
-write rule so their tool-call fingerprints match SQLite. Anyone reading the
-archive or a mirror by hand sees the empty column and must join the events table
-to recover the text.
+blocked categories store exactly what the parser produced. Load tool calls
+through the message loaders, which refill the summary once events are attached;
+a query that selects the column directly must apply the same fallback, and
+PostgreSQL and DuckDB apply the same write rule so their tool-call fingerprints
+match SQLite. Anyone reading the archive or a mirror by hand sees the empty
+column and must join the events table to recover the text.
 
 ## DuckDB Mirror
 

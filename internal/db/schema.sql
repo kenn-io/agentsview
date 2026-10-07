@@ -1350,6 +1350,7 @@ CREATE TABLE IF NOT EXISTS artifact_checkpoint_landings (
     checkpoint_size   INTEGER NOT NULL
 );
 
+-- Unused; kept because builds up to v0.44 require it for read-only opens.
 CREATE TABLE IF NOT EXISTS artifact_checkpoint_landing_sessions (
     origin        TEXT NOT NULL,
     gid           TEXT NOT NULL,

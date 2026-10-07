@@ -373,7 +373,10 @@ func stageCheckpointForCopyTest(
 	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
 	if complete {
 		for start := 0; start < len(entries); start += maxArtifactImportSessionPageSize {
-			require.NoError(t, database.StageArtifactCheckpointSessions(ctx, landing, entries[start:min(start+maxArtifactImportSessionPageSize, len(entries))]))
+			end := min(start+maxArtifactImportSessionPageSize, len(entries))
+			require.NoError(t, database.StageArtifactCheckpointSessions(
+				ctx, landing, entries[start:end],
+			))
 		}
 		require.NoError(t, database.CompleteArtifactCheckpointStage(
 			ctx, landing, len(entries),

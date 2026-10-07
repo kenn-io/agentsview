@@ -393,7 +393,14 @@ func TestArtifactCheckpointLandingReadUsesOneSnapshot(t *testing.T) {
 				)
 				require.NoError(t, recordErr)
 				require.True(t, advanced)
-				landCheckpointForTest(t, database, ArtifactCheckpointLanding(secondHead), secondMap)
+				landCheckpointForTest(
+					t, database, ArtifactCheckpointLanding(secondHead), secondMap,
+				)
+				pruned, _, pruneErr := database.PruneArtifactCheckpointStages(
+					context.WithoutCancel(ctx), 10,
+				)
+				require.NoError(t, pruneErr)
+				require.Positive(t, pruned)
 			})
 		},
 	)
@@ -941,7 +948,12 @@ func TestPruneArtifactCheckpointStagesIsBoundedAndKeepsCurrentLanding(
 	assert.Empty(t, sessionMap)
 }
 
-func landCheckpointForTest(t *testing.T, database *DB, landing ArtifactCheckpointLanding, sessionMap map[string]string) {
+func landCheckpointForTest(
+	t *testing.T,
+	database *DB,
+	landing ArtifactCheckpointLanding,
+	sessionMap map[string]string,
+) {
 	t.Helper()
 	ctx := t.Context()
 	entries := make([]ArtifactCheckpointSession, 0, len(sessionMap))
