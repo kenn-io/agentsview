@@ -1,9 +1,5 @@
 import { MetadataService } from "../api/generated/index.js";
-import type {
-  DbSessionStats,
-  DbStatsOutcomeStats,
-  GetApiV1SessionStatsParams,
-} from "../api/generated/index.js";
+import type { DbStatsOutcomeStats, GetApiV1SessionStatsParams } from "../api/generated/index.js";
 
 /** The window the totals are read for. */
 export interface OutcomeWindow {
@@ -17,7 +13,7 @@ export interface OutcomeWindow {
   includeAutomated?: boolean;
 }
 
-type FetchStats = (params: GetApiV1SessionStatsParams) => Promise<DbSessionStats>;
+type FetchStats = typeof MetadataService.getApiV1SessionStats;
 
 /**
  * Reads the git and GitHub outcome totals for a window.
@@ -36,10 +32,8 @@ export class OutcomeTotalsStore {
   error = $state<string | null>(null);
   includePullRequests = $state(false);
 
-  /**
-   * Guards against a slow earlier window overwriting a later one: only the
-   * newest request may apply its result.
-   */
+  /** Cancels replaced reads; only the newest request may apply its result. */
+  private abortController: AbortController | null = null;
   private requestSeq = 0;
 
   constructor(private readonly fetchStats: FetchStats = MetadataService.getApiV1SessionStats) {}
@@ -56,6 +50,8 @@ export class OutcomeTotalsStore {
 
   reset(): void {
     this.requestSeq += 1;
+    this.abortController?.abort();
+    this.abortController = null;
     this.stats = null;
     this.error = null;
     this.loading = false;
@@ -64,12 +60,15 @@ export class OutcomeTotalsStore {
 
   private async read(window: OutcomeWindow, withPullRequests: boolean): Promise<void> {
     const seq = ++this.requestSeq;
+    this.abortController?.abort();
+    const controller = new AbortController();
+    this.abortController = controller;
     this.stats = null;
     this.error = null;
     this.loading = true;
     this.includePullRequests = withPullRequests;
     try {
-      const response = await this.fetchStats({
+      const params: GetApiV1SessionStatsParams = {
         since: window.since,
         until: window.until,
         timezone: window.timezone,
@@ -80,7 +79,8 @@ export class OutcomeTotalsStore {
         include_automated: window.includeAutomated,
         include_git_outcomes: true,
         include_github_outcomes: withPullRequests,
-      });
+      };
+      const response = await this.fetchStats(params, { signal: controller.signal });
       if (seq !== this.requestSeq) return;
       // An absent block means the window had no repository to read, which is
       // not the same as a window with zero commits.

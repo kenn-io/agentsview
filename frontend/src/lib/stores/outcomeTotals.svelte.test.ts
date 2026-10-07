@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { OutcomeTotalsStore } from "./outcomeTotals.svelte.js";
+import { MetadataService } from "../api/generated/index.js";
 import type { DbSessionStats, GetApiV1SessionStatsParams } from "../api/generated/index.js";
 
-type FetchStats = (params: GetApiV1SessionStatsParams) => Promise<DbSessionStats>;
+type FetchStats = typeof MetadataService.getApiV1SessionStats;
 
 // The params of the one call the store made, so a test can assert the flags.
 function calledWith(fetchStats: ReturnType<typeof vi.fn>): GetApiV1SessionStatsParams {
@@ -91,36 +92,71 @@ describe("OutcomeTotalsStore", () => {
     expect(store.loading).toBe(false);
   });
 
-  it("ignores a slow earlier response once a later window was requested", async () => {
-    const responses: Array<() => void> = [];
-    const fetchStats = vi.fn(
-      (params: GetApiV1SessionStatsParams) =>
-        new Promise<DbSessionStats>((resolve) => {
-          responses.push(() =>
-            resolve({
-              generated_at: "2026-09-01T00:00:00Z",
-              outcome_stats: {
-                repos_active: 1,
-                commits: params.since === "2026-08-01" ? 1 : 2,
-                loc_added: 0,
-                loc_removed: 0,
-                files_changed: 0,
-              },
-            } as DbSessionStats),
-          );
-        }),
-    );
-    const store = new OutcomeTotalsStore(fetchStats as unknown as FetchStats);
+  it.each([
+    ["window", false],
+    ["GitHub", false],
+    ["reset", false],
+    ["window", true],
+    ["GitHub", true],
+    ["reset", true],
+  ])(
+    "cancels a replaced request on %s and ignores its late result, fails=%s",
+    async (replacement, fails) => {
+      const responses: Array<() => void> = [];
+      const failures: Array<(cause: Error) => void> = [];
+      const signals: AbortSignal[] = [];
+      const fetchStats = vi.fn(
+        (...[params, options]: Parameters<FetchStats>) =>
+          new Promise<DbSessionStats>((resolve, reject) => {
+            signals.push(options?.signal as AbortSignal);
+            failures.push(reject);
+            responses.push(() =>
+              resolve({
+                generated_at: "2026-09-01T00:00:00Z",
+                outcome_stats: {
+                  repos_active: 1,
+                  commits: params?.since === "2026-08-01" ? 1 : 2,
+                  loc_added: 0,
+                  loc_removed: 0,
+                  files_changed: 0,
+                },
+              } as DbSessionStats),
+            );
+          }),
+      );
+      const store = new OutcomeTotalsStore(fetchStats as unknown as FetchStats);
 
-    const first = store.load({ since: "2026-08-01", until: "2026-09-01" });
-    const second = store.load({ since: "2026-08-02", until: "2026-09-01" });
-    // The second window answers first, then the stale first window answers.
-    (responses[1] as () => void)();
-    (responses[0] as () => void)();
-    await Promise.all([first, second]);
+      const first = store.load({ since: "2026-08-01", until: "2026-09-01" });
+      expect(signals[0]?.aborted).toBe(false);
+      if (replacement === "reset") {
+        store.reset();
+        expect(signals[0]?.aborted).toBe(true);
+        if (fails) (failures[0] as (cause: Error) => void)(new Error("canceled"));
+        else (responses[0] as () => void)();
+        await first;
+        expect(store.stats).toBeNull();
+        expect(store.error).toBeNull();
+        expect(store.loading).toBe(false);
+        expect(store.includePullRequests).toBe(false);
+        return;
+      }
+      const window = { since: "2026-08-02", until: "2026-09-01" };
+      const second =
+        replacement === "GitHub" ? store.loadWithPullRequests(window) : store.load(window);
+      expect(signals[0]?.aborted).toBe(true);
+      expect(signals[1]?.aborted).toBe(false);
+      expect(store.loading).toBe(true);
+      // The second window answers first, then the stale first window answers.
+      (responses[1] as () => void)();
+      if (fails) (failures[0] as (cause: Error) => void)(new Error("canceled"));
+      else (responses[0] as () => void)();
+      await Promise.all([first, second]);
 
-    expect(store.stats?.commits).toBe(2);
-  });
+      expect(store.stats?.commits).toBe(2);
+      expect(store.error).toBeNull();
+      expect(store.loading).toBe(false);
+    },
+  );
 
   it("clears previous totals and errors while a new window loads", async () => {
     let finish!: (response: DbSessionStats) => void;

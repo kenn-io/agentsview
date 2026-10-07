@@ -625,6 +625,7 @@
     cancelInitialLoad();
     analytics.setFetchStartHandler(undefined);
     analytics.cancelInFlightReads();
+    outcomeTotals.reset();
     const state = currentAnalyticsPanelDate();
     if (state) {
       analyticsPageDates.retain(
