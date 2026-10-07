@@ -433,14 +433,8 @@ func TestListSessions_ReturnsRows(t *testing.T) {
 
 func TestListSessions_IncludeOneShot(t *testing.T) {
 	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "multi", "proj", func(s *db.Session) {
-		s.MessageCount = 4
-		s.UserMessageCount = 2
-	})
-	dbtest.SeedSession(t, d, "single", "proj", func(s *db.Session) {
-		s.MessageCount = 2
-		s.UserMessageCount = 1
-	})
+	dbtest.SeedSession(t, d, "multi", "proj", dbtest.WithMessageCounts(4, 2))
+	dbtest.SeedSession(t, d, "single", "proj", dbtest.WithMessageCounts(2, 1))
 
 	_, out, err := ts.listSessions(t.Context(), nil, listSessionsIn{})
 	require.NoError(t, err)
