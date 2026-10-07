@@ -31,13 +31,8 @@ type replicaPusher struct {
 		func() error,
 	) error
 	ensurePricing func(context.Context) error
-	// beforePush, when set, runs after the local sync and before connecting
-	// (pg push --watch --embed builds embeddings here). A failure is logged
-	// and the cycle still pushes sessions; the vector source decides what
-	// the vector phase can export.
-	beforePush func(context.Context) error
-	connect    func(context.Context) (storage.Pusher, error)
-	target     storage.Pusher
+	connect       func(context.Context) (storage.Pusher, error)
+	target        storage.Pusher
 	// vectorReconcileNeeded is true until a generation-wide vector
 	// reconciliation succeeds in this watch process, and again after
 	// any push error or a vector phase that skipped or deferred work.
@@ -95,15 +90,6 @@ func (p *replicaPusher) pushAfterSync(
 	}
 	if err := ctx.Err(); err != nil {
 		return err
-	}
-	// The shutdown flush skips the build so its short budget goes to sessions.
-	if p.beforePush != nil && reason != reasonShutdown {
-		if err := p.beforePush(ctx); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			log.Printf("%s: %v; pushing sessions and retrying next cycle", p.label, err)
-		}
 	}
 	if p.target == nil {
 		t, err := p.connect(ctx)

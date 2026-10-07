@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,70 +16,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
-
-// embedEndpoint is an OpenAI-compatible embeddings stub that records each
-// request's model and inputs.
-type embedEndpoint struct {
-	*httptest.Server
-	mu       stdsync.Mutex
-	models   []string
-	inputs   []string
-	requests int
-	onCall   func()
-}
-
-func newEmbedEndpoint(t *testing.T, dim int) *embedEndpoint {
-	t.Helper()
-	e := &embedEndpoint{}
-	e.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Model string   `json:"model"`
-			Input []string `json:"input"`
-		}
-		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		e.mu.Lock()
-		e.requests++
-		e.models = append(e.models, body.Model)
-		e.inputs = append(e.inputs, body.Input...)
-		onCall := e.onCall
-		e.mu.Unlock()
-		if onCall != nil {
-			onCall()
-		}
-		data := make([]map[string]any, len(body.Input))
-		for i := range data {
-			vec := make([]float32, dim)
-			vec[0] = 1
-			data[i] = map[string]any{"index": i, "embedding": vec}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
-	}))
-	t.Cleanup(e.Close)
-	return e
-}
-
-func (e *embedEndpoint) snapshot() (requests int, models, inputs []string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.requests, append([]string(nil), e.models...), append([]string(nil), e.inputs...)
-}
-
-func (e *embedEndpoint) server() config.VectorEmbeddingsServerConfig {
-	return config.VectorEmbeddingsServerConfig{
-		Endpoint: e.URL + "/v1", BatchSize: 16, Concurrency: 1,
-		Timeout: "10s", MaxRetries: 1,
-	}
-}
 
 // embedPushReplica is a PostgreSQL-named replica whose pusher exports the
 // vector source the push hands it, the way the real vector phase does.
@@ -179,173 +120,173 @@ func embedTarget() storage.ConfiguredReplica {
 	}}
 }
 
-// recipeWithDimension is publishedRecipe sized for the stub endpoint.
-func recipeWithDimension(dim int) (config.VectorEmbeddingsConfig, storage.VectorGenerationInfo) {
-	c := publishedRecipeConfig("published-model")
-	c.Dimension = dim
-	gen := vectorGeneration(c)
-	return c, storage.VectorGenerationInfo{
-		Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: dim, Params: gen.Params,
+func TestReplicaPushEmbedPushesSessionsThenVectors(t *testing.T) {
+	for _, adopted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("adopted=%v", adopted), func(t *testing.T) {
+			endpoint := newEmbeddingsStubServer(t, 4)
+			t.Cleanup(endpoint.Close)
+			cfg := testConfigWithClaudeFixture(t)
+			server := config.VectorEmbeddingsServerConfig{
+				Endpoint: endpoint.URL + "/v1", BatchSize: 16, Concurrency: 1,
+				Timeout: "10s", MaxRetries: 1,
+			}
+			published := publishedRecipe()
+			replica := &embedPushReplica{}
+			if adopted {
+				cfg.Vector.Embed.BackstopInterval = "24h"
+				cfg.DeploymentEmbeddings = &server
+				replica.gens = []storage.VectorGenerationInfo{published}
+			} else {
+				cfg.Vector = vectorTestConfig(cfg.DataDir).Vector
+				cfg.Vector.Embeddings = publishedRecipeConfig("published-model")
+				cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": server}
+			}
+			backend := &localArchiveWriteBackend{
+				appCfg: cfg, database: dbtest.OpenTestDBAt(t, cfg.DBPath),
+				ensurePricing: func(context.Context, *db.DB) error { return nil },
+			}
+			var result storage.PushResult
+			var err error
+			captureStdout(t, func() {
+				result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil)
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 2, result.SessionsPushed)
+			assert.False(t, result.Vectors.Skipped)
+			assert.Equal(t, []string{"connect", "push", "push"}, replica.events)
+			assert.Equal(t, []bool{true, false}, replica.skipped)
+			require.Len(t, replica.pushed, 1)
+			assert.Equal(t, published.Fingerprint, replica.pushed[0].Fingerprint)
+			if adopted {
+				assert.Nil(t, replica.pushed[0].Params)
+			} else {
+				assert.Equal(t, published.Params, replica.pushed[0].Params)
+			}
+			assert.NoFileExists(t, filepath.Join(cfg.DataDir, "config.toml"))
+		})
 	}
-}
-
-func TestReplicaPushEmbedBuildsBeforePush(t *testing.T) {
-	t.Run("local [vector]", func(t *testing.T) {
-		endpoint := newEmbedEndpoint(t, 3)
+	t.Run("build failure follows session push", func(t *testing.T) {
 		cfg := testConfigWithClaudeFixture(t)
-		vec := vectorTestConfig(cfg.DataDir).Vector
-		vec.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"local": endpoint.server()}
-		cfg.Vector = vec
+		cfg.Vector = vectorTestConfig(cfg.DataDir).Vector
 		replica := &embedPushReplica{}
-		endpoint.onCall = func() { replica.record("embed") }
-
 		backend := &localArchiveWriteBackend{
-			appCfg:        cfg,
-			database:      dbtest.OpenTestDBAt(t, cfg.DBPath),
+			appCfg: cfg, database: dbtest.OpenTestDBAt(t, cfg.DBPath),
 			ensurePricing: func(context.Context, *db.DB) error { return nil },
 		}
 		var result storage.PushResult
 		var err error
 		captureStdout(t, func() {
-			result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(),
-				ReplicaPushConfig{Embed: true}, nil, nil)
+			result, err = backend.ReplicaPush(t.Context(), replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil)
 		})
-		require.NoError(t, err)
-		assert.False(t, result.Vectors.Skipped)
-
-		_, models, inputs := endpoint.snapshot()
-		assert.Contains(t, inputs, "hello", "the build embeds sessions this push synced")
-		assert.Equal(t, "test-model", models[0])
-		require.NotEmpty(t, replica.events)
-		assert.Equal(t, "embed", replica.events[0], "the build runs before connecting")
-		assert.Equal(t, []string{"connect", "push"}, replica.events[len(replica.events)-2:])
-		require.Len(t, replica.pushed, 1)
-		want := vectorGeneration(cfg.Vector.Embeddings)
-		assert.Equal(t, want.Fingerprint(), replica.pushed[0].Fingerprint)
-		assert.Equal(t, want.Params, replica.pushed[0].Params)
-	})
-
-	t.Run("adopted recipe", func(t *testing.T) {
-		endpoint := newEmbedEndpoint(t, 4)
-		cfg := testConfigWithClaudeFixture(t)
-		cfg.Vector.Embed.BackstopInterval = "24h"
-		server := endpoint.server()
-		cfg.DeploymentEmbeddings = &server
-		_, published := recipeWithDimension(4)
-		replica := &embedPushReplica{}
-		replica.gens = []storage.VectorGenerationInfo{published}
-
-		backend := &localArchiveWriteBackend{
-			appCfg:        cfg,
-			database:      dbtest.OpenTestDBAt(t, cfg.DBPath),
-			ensurePricing: func(context.Context, *db.DB) error { return nil },
-		}
-		var err error
-		captureStdout(t, func() {
-			_, err = backend.ReplicaPush(t.Context(), replica, embedTarget(),
-				ReplicaPushConfig{Embed: true}, nil, nil)
-		})
-		require.NoError(t, err)
-		_, models, inputs := endpoint.snapshot()
-		require.NotEmpty(t, models)
-		assert.Equal(t, "published-model", models[0])
-		assert.Contains(t, inputs, "passage: hello", "documents use the adopted prefix")
-		require.Len(t, replica.pushed, 1)
-		assert.Equal(t, published.Fingerprint, replica.pushed[0].Fingerprint)
-		assert.Equal(t, published.Params, replica.pushed[0].Params)
-		assert.NoFileExists(t, filepath.Join(cfg.DataDir, "config.toml"),
-			"adoption never writes config.toml")
-	})
-
-	t.Run("one-shot build failure fails the push", func(t *testing.T) {
-		cfg := testConfigWithClaudeFixture(t)
-		cfg.Vector = vectorTestConfig(cfg.DataDir).Vector // endpoint 127.0.0.1:1 refuses
-		replica := &embedPushReplica{}
-		backend := &localArchiveWriteBackend{
-			appCfg:        cfg,
-			database:      dbtest.OpenTestDBAt(t, cfg.DBPath),
-			ensurePricing: func(context.Context, *db.DB) error { return nil },
-		}
-		var err error
-		captureStdout(t, func() {
-			_, err = backend.ReplicaPush(t.Context(), replica, embedTarget(),
-				ReplicaPushConfig{Embed: true}, nil, nil)
-		})
-		require.ErrorContains(t, err, "embedding before push")
-		assert.NotContains(t, replica.events, "push")
+		require.ErrorContains(t, err, "building embeddings")
+		assert.Equal(t, []string{"connect", "push"}, replica.events)
+		assert.Equal(t, 1, result.SessionsPushed)
 	})
 }
 
-func TestReplicaWatchEmbedsBeforeEachPush(t *testing.T) {
-	endpoint := newEmbedEndpoint(t, 4)
-	dataDir := t.TempDir()
-	cfg := config.Config{
-		DataDir: dataDir,
-		DBPath:  filepath.Join(dataDir, "sessions.db"),
-		Vector:  config.VectorConfig{Embed: config.VectorEmbedConfig{BackstopInterval: "24h"}},
-	}
-	server := endpoint.server()
-	cfg.DeploymentEmbeddings = &server
+func TestReplicaWatchEmbedAdoptsPublishedRecipe(t *testing.T) {
+	endpoint := newEmbeddingsStubServer(t, 4)
+	t.Cleanup(endpoint.Close)
+	cfg := deploymentRecipeConfig()
+	cfg.DataDir = t.TempDir()
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	cfg.DeploymentEmbeddings.Endpoint = endpoint.URL + "/v1"
+	cfg.Vector.Embed.BackstopInterval = "1s"
 	archive := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	dbtest.SeedSessionWithMessages(t, archive, "s1", "project",
 		[]db.Message{dbtest.UserMsg("s1", 0, "watched content")},
 		func(s *db.Session) { s.EndedAt = new("2026-01-01T00:00:00Z") })
-
 	replica := &embedPushReplica{}
-	embedder, err := newReplicaEmbedder(cfg, replica, embedTarget(), ReplicaPushConfig{Embed: true})
+	embedder, err := newReplicaEmbedder(cfg, replica, embedTarget(), archive)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, embedder.Close()) })
-	endpoint.onCall = func() { replica.record("embed") }
-
-	logs := captureLogOutput(t)
 	pusher := &replicaPusher{
-		label: "pg watch", displayName: "PostgreSQL",
-		localSync: func(context.Context) error {
-			replica.record("sync")
-			return nil
-		},
-		beforePush: embedder.prepare,
+		localSync: func(context.Context) error { return nil },
 		connect: func(ctx context.Context) (storage.Pusher, error) {
-			return replica.NewPusher(ctx, storage.ReplicaTarget{}, nil,
-				storage.PusherOptions{VectorSource: embedder})
+			return replica.NewPusher(ctx, storage.ReplicaTarget{}, archive, storage.PusherOptions{VectorSource: embedder})
 		},
 	}
-
-	// Cycle 1: nothing published yet, so the recipe cannot be resolved.
-	// Sessions still push; the vector phase is skipped.
+	t.Cleanup(pusher.reset)
 	require.NoError(t, pusher.push(t.Context(), reasonStartup, false))
-	assert.Equal(t, []string{"sync", "connect", "push"}, replica.events)
+	require.Error(t, embedder.startScheduler(t.Context()))
 	assert.Equal(t, []bool{true}, replica.skipped)
-	assert.Contains(t, logs.String(), "embedding before push")
-	assert.True(t, pusher.vectorReconcileNeeded)
 
-	// Cycle 2: a workstation published a recipe; it is adopted, built and
-	// pushed.
-	_, published := recipeWithDimension(4)
+	published := publishedRecipe()
 	replica.setGenerations([]storage.VectorGenerationInfo{published})
-	replica.events = nil
 	require.NoError(t, pusher.push(t.Context(), reasonChange, false))
-	require.NotEmpty(t, replica.events)
-	assert.Equal(t, "sync", replica.events[0])
-	assert.Equal(t, "embed", replica.events[1], "the build runs before the push")
-	assert.Equal(t, "push", replica.events[len(replica.events)-1])
+	require.NoError(t, embedder.startScheduler(t.Context()))
+	require.NotNil(t, embedder.serving.Scheduler)
+	assert.Equal(t, time.Second, embedder.serving.Scheduler.backstop)
+	require.Eventually(t, func() bool {
+		export, ok, err := embedder.BeginExport(t.Context(), nil)
+		if err != nil || !ok {
+			return false
+		}
+		return export.Close() == nil
+	}, 10*time.Second, 10*time.Millisecond)
+
+	replica.setGenerations(nil)
+	require.NoError(t, pusher.push(t.Context(), reasonInterval, false))
 	require.Len(t, replica.pushed, 1)
 	assert.Equal(t, published.Fingerprint, replica.pushed[0].Fingerprint)
-	assert.Equal(t, []bool{true, false}, replica.skipped)
+	assert.Nil(t, replica.pushed[0].Params)
+	assert.Equal(t, []bool{true, true, false}, replica.skipped)
+	assert.Equal(t, 2, replica.opens, "failed resolution retries, then stays pinned")
+}
 
-	// Cycle 3: the recipe stays pinned even when the replica changes.
-	replica.setGenerations(nil)
-	dbtest.SeedSessionWithMessages(t, archive, "s2", "project",
-		[]db.Message{dbtest.UserMsg("s2", 0, "second content")},
-		func(s *db.Session) { s.EndedAt = new("2026-01-02T00:00:00Z") })
-	replica.events = nil
-	require.NoError(t, pusher.push(t.Context(), reasonChange, false))
-	assert.Equal(t, "embed", replica.events[1])
-	require.Len(t, replica.pushed, 2)
-	assert.Equal(t, published.Fingerprint, replica.pushed[1].Fingerprint)
-	assert.Equal(t, 2, replica.opens, "resolution retried once, then pinned")
-	_, _, inputs := endpoint.snapshot()
-	assert.Contains(t, inputs, "passage: second content")
+func TestReplicaWatchEmbedPushesSessionsWhileBuildWaits(t *testing.T) {
+	started := make(chan struct{})
+	var once stdsync.Once
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		once.Do(func() { close(started) })
+		w.Header().Set("Retry-After", "3600")
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	t.Cleanup(endpoint.Close)
+	cfg := deploymentRecipeConfig()
+	cfg.DataDir = t.TempDir()
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	cfg.DeploymentEmbeddings.Endpoint = endpoint.URL + "/v1"
+	cfg.Vector.Embed.BackstopInterval = "1s"
+	archive := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	dbtest.SeedSessionWithMessages(t, archive, "s1", "project",
+		[]db.Message{dbtest.UserMsg("s1", 0, "watched content")},
+		func(s *db.Session) { s.EndedAt = new("2026-01-01T00:00:00Z") })
+	replica := &embedPushReplica{recipeProvider: recipeProvider{gens: []storage.VectorGenerationInfo{publishedRecipe()}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var push func(context.Context, pushReason, *syncpkg.WatchBatch) error
+	var shutdownStart time.Time
+	backend := &localArchiveWriteBackend{
+		appCfg: cfg, database: archive,
+		ensurePricing: func(context.Context, *db.DB) error { return nil },
+		watchHooks: &archivePushWatchHooks{
+			newLoop: func(label string, debounce, interval time.Duration, work func(context.Context, pushReason, *syncpkg.WatchBatch) error) (*pushLoop, func()) {
+				push = work
+				loop, ticker := newPushLoopWithLabel(label, debounce, interval, work)
+				return loop, ticker.Stop
+			},
+			replicaStartupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) { return false, nil },
+			startWatcher: func(config.Config, *syncpkg.Engine, syncpkg.WatchCallback, syncpkg.WatcherOptions) (func(), func(), []string) {
+				return func() {}, func() {
+					select {
+					case <-started:
+					case <-time.After(10 * time.Second):
+						require.FailNow(t, "build never reached endpoint")
+					}
+					require.NoError(t, push(ctx, reasonChange, nil))
+					require.NoError(t, push(ctx, reasonInterval, nil))
+					assert.Equal(t, []string{"connect", "push", "push", "push"}, replica.events)
+					shutdownStart = time.Now()
+					cancel()
+				}, nil
+			},
+		},
+	}
+	captureStdout(t, func() {
+		require.NoError(t, backend.ReplicaPushWatch(ctx, replica, embedTarget(), ReplicaPushConfig{Embed: true}, nil, nil, time.Hour, time.Hour))
+	})
+	assert.Less(t, time.Since(shutdownStart), time.Second, "shutdown cancels the rate-limited build")
 }
 
 func TestReplicaPushEmbedUsesLocalWriterWithoutDaemon(t *testing.T) {
@@ -368,9 +309,10 @@ func TestReplicaPushEmbedUsesLocalWriterWithoutDaemon(t *testing.T) {
 		return dataDir, &starts
 	}
 
-	t.Run("push builds locally", func(t *testing.T) {
+	t.Run("push connects through the local writer", func(t *testing.T) {
 		dataDir, starts := setup(t)
-		endpoint := newEmbedEndpoint(t, 3)
+		endpoint := newEmbeddingsStubServer(t, 3)
+		t.Cleanup(endpoint.Close)
 		writeTestConfig(t, dataDir, fmt.Sprintf(`
 [pg]
 url = "postgres://agentsview@127.0.0.1:1/agentsview?connect_timeout=1"
@@ -394,12 +336,9 @@ endpoint = %q
 		captureStdout(t, func() {
 			err = runReplicaPush(pgReplica{}, ReplicaPushConfig{Embed: true}, "")
 		})
-		require.Error(t, err, "the unreachable hub fails only after the local build")
+		require.Error(t, err, "the unreachable hub fails before building")
 		require.NotErrorIs(t, err, errEmbedNeedsLocalArchive)
 		assert.Zero(t, *starts, "no daemon is started")
-		requests, _, inputs := endpoint.snapshot()
-		assert.Positive(t, requests, "embeddings were built in this process")
-		assert.Contains(t, inputs, "local content")
 		assert.Nil(t, FindDaemonRuntime(dataDir, ""), "no daemon runtime file appears")
 	})
 
@@ -498,30 +437,21 @@ func TestReplicaPushEmbedFlagValidation(t *testing.T) {
 	noTargetVectors := embedTarget()
 	noTargetVectors.Target.PushVectors = false
 	for _, tc := range []struct {
-		name    string
-		cfg     config.Config
-		backend storage.Replica
-		target  storage.ConfiguredReplica
-		push    ReplicaPushConfig
-		want    string
+		name   string
+		cfg    config.Config
+		target storage.ConfiguredReplica
+		want   string
 	}{
 		{name: "disabled vector without endpoint", cfg: disabled, want: "[vector] enabled"},
 		{name: "usage-only archive", cfg: usageOnly, want: "usage-only"},
 		{name: "push_vectors false", cfg: enabled, target: noTargetVectors, want: "push_vectors = false"},
-		{name: "no-vectors", cfg: enabled, push: ReplicaPushConfig{NoVectors: true}, want: "--no-vectors"},
-		{name: "other backend", cfg: enabled, backend: clickhouse.Backend{}, want: "only by pg push"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			backend := tc.backend
-			if backend == nil {
-				backend = pgReplica{}
-			}
 			target := tc.target
 			if target.Target.URL == "" {
 				target = embedTarget()
 			}
-			tc.push.Embed = true
-			_, err := newReplicaEmbedder(tc.cfg, backend, target, tc.push)
+			_, err := newReplicaEmbedder(tc.cfg, pgReplica{}, target, nil)
 			require.ErrorContains(t, err, tc.want)
 			if tc.name == "disabled vector without endpoint" {
 				assert.Contains(t, err.Error(), "AGENTSVIEW_EMBEDDINGS_ENDPOINT")

@@ -820,10 +820,11 @@ search at startup when three conditions hold on the serving host:
    query text is embedded at search time with the same encoder the index was
    built with.
 
-Each push also publishes the recipe (model, dimension, chunking, affixes and
-`request_dimensions`) next to its generation, but only when the configured
-recipe reproduces that generation's fingerprint. Published recipes are never
-changed afterwards.
+Only a machine with `[vector]` configured publishes the recipe (model,
+dimension, chunking, affixes and `request_dimensions`) next to its generation,
+but only when the configured recipe reproduces that generation's fingerprint.
+Published recipes stay unchanged. An adopting host pushes vectors without
+publishing the adopted recipe.
 
 A serving host without `[vector]` can adopt a published recipe instead. Under
 [`AGENTSVIEW_MODE`](/docs/configuration/#container-deployment), set

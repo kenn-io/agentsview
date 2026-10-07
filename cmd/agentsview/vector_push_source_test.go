@@ -357,6 +357,14 @@ func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
 		got.Params["query_prefix"] = "mutated"
 		assert.Equal(t, "query: ", want.Params["query_prefix"],
 			"published params are a copy of the recipe")
+		require.NoError(t, export.Close())
+		src.(*vectorPushSource).adopted = true
+		adoptedExport, ok, err := src.BeginExport(ctx, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		defer adoptedExport.Close()
+		assert.Equal(t, want.Fingerprint(), adoptedExport.Generation().Fingerprint)
+		assert.Nil(t, adoptedExport.Generation().Params)
 	})
 
 	t.Run("other generation publishes nothing", func(t *testing.T) {

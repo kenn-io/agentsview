@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 )
@@ -19,29 +20,26 @@ var errEmbedNeedsLocalArchive = errors.New(
 		"builds and pushes embeddings itself, or stop the daemon " +
 		"(agentsview daemon stop) to build here")
 
-// replicaEmbedder builds embeddings before a push and is the push's vector
-// source. The first recipe it resolves is pinned for the process; a failed
-// resolution is retried on the next cycle. Pushes call it serially.
+// replicaEmbedder keeps the first resolved recipe for this process.
 type replicaEmbedder struct {
-	appCfg  config.Config
-	backend storage.Replica
-	target  storage.ReplicaTarget
-	pinned  *config.Config
-	source  *vectorPushSource
+	appCfg   config.Config
+	backend  storage.Replica
+	target   storage.ReplicaTarget
+	source   *vectorPushSource
+	database *db.DB
+	serving  vectorServing
+	cancel   context.CancelFunc
 }
 
 // newReplicaEmbedder validates a pg push --embed request before any local
 // work runs.
 func newReplicaEmbedder(
 	appCfg config.Config, backend storage.Replica,
-	target storage.ConfiguredReplica, cfg ReplicaPushConfig,
+	target storage.ConfiguredReplica, database *db.DB,
 ) (*replicaEmbedder, error) {
-	if backend.Name() != "pg" {
-		return nil, fmt.Errorf("--embed is supported only by pg push, not %s push", backend.Name())
-	}
-	if cfg.NoVectors || !target.Target.PushVectors {
+	if !target.Target.PushVectors {
 		return nil, errors.New(
-			"--embed pushes vectors; remove --no-vectors or push_vectors = false")
+			"--embed pushes vectors; remove push_vectors = false")
 	}
 	if appCfg.ArchiveContent.UsageOnly() {
 		return nil, errors.New("--embed is unavailable for usage-only archives")
@@ -53,25 +51,49 @@ func newReplicaEmbedder(
 				"a recipe published to PostgreSQL")
 	}
 	return &replicaEmbedder{
-		appCfg: appCfg, backend: backend, target: target.Target,
+		appCfg: appCfg, backend: backend, target: target.Target, database: database,
 	}, nil
 }
 
-// prepare resolves and pins the recipe on first success, then builds
-// pending embeddings into vectors.db.
-func (e *replicaEmbedder) prepare(ctx context.Context) error {
-	if e.pinned == nil {
+func (e *replicaEmbedder) resolve(ctx context.Context) error {
+	if e.source == nil {
 		cfg, err := e.resolveRecipe(ctx)
 		if err != nil {
-			return fmt.Errorf("embedding before push: %w", err)
+			return err
 		}
-		e.pinned = &cfg
-		e.source = &vectorPushSource{cfg: cfg}
+		e.source = &vectorPushSource{cfg: cfg, adopted: !e.appCfg.Vector.Enabled}
 	}
-	if err := runEmbeddingsBuildDirect(ctx, io.Discard, *e.pinned, vector.BuildRequest{
-		IncludeAutomated: e.pinned.Vector.IncludeAutomated,
+	return nil
+}
+
+func (e *replicaEmbedder) startScheduler(ctx context.Context) error {
+	if err := e.resolve(ctx); err != nil {
+		return err
+	}
+	if e.cancel == nil {
+		serving, err := setupVectorServing(ctx, e.source.cfg, e.database, nil)
+		if err != nil {
+			return err
+		}
+		e.serving = serving
+		buildCtx, cancel := context.WithCancel(ctx)
+		e.cancel = cancel
+		if serving.Scheduler == nil {
+			return nil
+		}
+		go serving.Scheduler.Run(buildCtx)
+	}
+	if e.serving.Scheduler != nil {
+		e.serving.Scheduler.Notify()
+	}
+	return nil
+}
+
+func (e *replicaEmbedder) build(ctx context.Context) error {
+	if err := runEmbeddingsBuildDirect(ctx, io.Discard, e.source.cfg, vector.BuildRequest{
+		IncludeAutomated: e.source.cfg.Vector.IncludeAutomated,
 	}); err != nil {
-		return fmt.Errorf("embedding before push: %w", err)
+		return fmt.Errorf("building embeddings: %w", err)
 	}
 	return nil
 }
@@ -100,10 +122,19 @@ func (e *replicaEmbedder) BeginExport(
 	return e.source.BeginExport(ctx, sessionIDs)
 }
 
-// Close releases the pinned source's vectors.db handle.
 func (e *replicaEmbedder) Close() error {
-	if e.source == nil {
-		return nil
+	if e.cancel != nil {
+		e.cancel()
 	}
-	return e.source.Close()
+	if e.serving.Scheduler != nil {
+		e.serving.Scheduler.Stop()
+	}
+	var err error
+	if e.serving.Close != nil {
+		err = e.serving.Close()
+	}
+	if e.source == nil {
+		return err
+	}
+	return errors.Join(err, e.source.Close())
 }

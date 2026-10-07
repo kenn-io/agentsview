@@ -289,8 +289,8 @@ generations.
 #### Build and push embeddings in a container
 
 `pg push --embed` (and `pg push --watch --embed`) syncs the local archive,
-builds pending embeddings, and pushes sessions and vectors in one process. A
-container that runs it needs no shell wrapper:
+pushes sessions, and builds pending embeddings in one process. A container that
+runs it needs no shell wrapper:
 
 - With `[vector]` in its `config.toml`, it builds with that recipe.
 - Without `[vector]`, it adopts the recipe a configured workstation published to
@@ -303,11 +303,14 @@ container that runs it needs no shell wrapper:
 The recipe is resolved on the first cycle that succeeds and kept until the
 process restarts. `--embed` never starts a daemon and refuses to run while a
 daemon owns the archive; stop the daemon, or push without `--embed` and let the
-daemon build. In watch mode a failed build is logged, that cycle still pushes
-sessions and any vectors already built for the active model, and the next cycle
-retries. A one-shot
-`pg push --embed` returns the build error instead. `--embed` cannot be combined
-with `--no-vectors`, `--all`, `push_vectors = false`, or a usage-only archive.
+daemon build. Watch mode builds in the background after sync with a 30-second
+debounce and honors `[vector.embed] backstop_interval` to reconcile older
+imports. Built vectors reach PostgreSQL on the next interval push. A one-shot
+`pg push --embed` pushes sessions and existing vectors first, then builds and
+pushes new vectors. It returns a build error after the session push completes.
+After changing the recipe and dropping the old generation, restart the hub to
+adopt the new recipe. `--embed` cannot be combined with `--no-vectors`, `--all`,
+`push_vectors = false`, or a usage-only archive.
 
 To keep the database password out of the URL, mount a passfile and set
 `PGPASSFILE`; see [container deployment](/docs/configuration/#container-deployment).

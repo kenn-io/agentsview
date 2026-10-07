@@ -28,7 +28,8 @@ import (
 // PGPush, at loop exit in the watch path (which reuses one adapter across
 // reconnects) — since the pusher never closes its source.
 type vectorPushSource struct {
-	cfg config.Config
+	cfg     config.Config
+	adopted bool
 
 	mu sync.Mutex
 	ix *vector.Index
@@ -121,7 +122,7 @@ func (s *vectorPushSource) BeginExport(
 	// Publish the recipe only for the generation the configured recipe
 	// produces: params must rebuild the fingerprint they are stored with.
 	out := &vectorPushExport{export: exp}
-	if gen := vectorGeneration(s.cfg.Vector.Embeddings); exp.Generation().Fingerprint == gen.Fingerprint() {
+	if gen := vectorGeneration(s.cfg.Vector.Embeddings); !s.adopted && exp.Generation().Fingerprint == gen.Fingerprint() {
 		out.params = maps.Clone(gen.Params)
 	}
 	return out, true, nil
