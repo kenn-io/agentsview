@@ -103,13 +103,19 @@ describe("OutcomeTotalsStore", () => {
     "cancels a replaced request on %s and ignores its late result, fails=%s",
     async (replacement, fails) => {
       const responses: Array<() => void> = [];
-      const failures: Array<(cause: Error) => void> = [];
       const signals: AbortSignal[] = [];
       const fetchStats = vi.fn(
         (...[params, options]: Parameters<FetchStats>) =>
           new Promise<DbSessionStats>((resolve, reject) => {
-            signals.push(options?.signal as AbortSignal);
-            failures.push(reject);
+            const signal = options?.signal as AbortSignal;
+            signals.push(signal);
+            if (fails) {
+              signal.addEventListener(
+                "abort",
+                () => reject(new DOMException("aborted", "AbortError")),
+                { once: true },
+              );
+            }
             responses.push(() =>
               resolve({
                 generated_at: "2026-09-01T00:00:00Z",
@@ -131,8 +137,7 @@ describe("OutcomeTotalsStore", () => {
       if (replacement === "reset") {
         store.reset();
         expect(signals[0]?.aborted).toBe(true);
-        if (fails) (failures[0] as (cause: Error) => void)(new Error("canceled"));
-        else (responses[0] as () => void)();
+        if (!fails) (responses[0] as () => void)();
         await first;
         expect(store.stats).toBeNull();
         expect(store.error).toBeNull();
@@ -145,11 +150,12 @@ describe("OutcomeTotalsStore", () => {
         replacement === "GitHub" ? store.loadWithPullRequests(window) : store.load(window);
       expect(signals[0]?.aborted).toBe(true);
       expect(signals[1]?.aborted).toBe(false);
+      if (fails) await first;
       expect(store.loading).toBe(true);
+      expect(store.error).toBeNull();
       // The second window answers first, then the stale first window answers.
       (responses[1] as () => void)();
-      if (fails) (failures[0] as (cause: Error) => void)(new Error("canceled"));
-      else (responses[0] as () => void)();
+      if (!fails) (responses[0] as () => void)();
       await Promise.all([first, second]);
 
       expect(store.stats?.commits).toBe(2);

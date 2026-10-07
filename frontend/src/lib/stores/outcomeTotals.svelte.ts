@@ -1,5 +1,6 @@
 import { MetadataService } from "../api/generated/index.js";
 import type { DbStatsOutcomeStats, GetApiV1SessionStatsParams } from "../api/generated/index.js";
+import { LatestRead } from "../utils/latest-read.js";
 
 /** The window the totals are read for. */
 export interface OutcomeWindow {
@@ -33,8 +34,7 @@ export class OutcomeTotalsStore {
   includePullRequests = $state(false);
 
   /** Cancels replaced reads; only the newest request may apply its result. */
-  private abortController: AbortController | null = null;
-  private requestSeq = 0;
+  private readonly latest = new LatestRead();
 
   constructor(private readonly fetchStats: FetchStats = MetadataService.getApiV1SessionStats) {}
 
@@ -49,9 +49,7 @@ export class OutcomeTotalsStore {
   }
 
   reset(): void {
-    this.requestSeq += 1;
-    this.abortController?.abort();
-    this.abortController = null;
+    this.latest.cancel();
     this.stats = null;
     this.error = null;
     this.loading = false;
@@ -59,10 +57,7 @@ export class OutcomeTotalsStore {
   }
 
   private async read(window: OutcomeWindow, withPullRequests: boolean): Promise<void> {
-    const seq = ++this.requestSeq;
-    this.abortController?.abort();
-    const controller = new AbortController();
-    this.abortController = controller;
+    const signal = this.latest.begin();
     this.stats = null;
     this.error = null;
     this.loading = true;
@@ -80,18 +75,18 @@ export class OutcomeTotalsStore {
         include_git_outcomes: true,
         include_github_outcomes: withPullRequests,
       };
-      const response = await this.fetchStats(params, { signal: controller.signal });
-      if (seq !== this.requestSeq) return;
+      const response = await this.fetchStats(params, { signal });
+      if (!this.latest.isCurrent(signal)) return;
       // An absent block means the window had no repository to read, which is
       // not the same as a window with zero commits.
       this.stats = response.outcome_stats ?? null;
       this.error = null;
     } catch (cause) {
-      if (seq !== this.requestSeq) return;
+      if (!this.latest.isCurrent(signal)) return;
       this.stats = null;
       this.error = cause instanceof Error ? cause.message : String(cause);
     } finally {
-      if (seq === this.requestSeq) this.loading = false;
+      if (this.latest.finish(signal)) this.loading = false;
     }
   }
 }
