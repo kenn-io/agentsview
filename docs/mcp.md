@@ -137,9 +137,9 @@ conversation, pass its full ID as `current_session_id`; `search_content` then
 excludes only that session before applying the result limit and does not hide
 other recent work.
 
-`search_content` also excludes one-shot and automated sessions by default. Set
-`include_one_shot: true` or `include_automated: true` to include those classes.
-An empty result can therefore omit a matching one-shot or automated session.
+`list_sessions` and `search_content` exclude one-shot and automated sessions by
+default. Set `include_one_shot: true` or `include_automated: true` to include
+those classes. An empty result can therefore omit a matching one-shot or automated session.
 
 When a vector search index is configured, prefer `search_content` with
 `mode: "hybrid"` or `mode: "semantic"` for questions about prior work,
