@@ -14,6 +14,8 @@ import (
 
 // ImportOptions selects opt-in import behavior. The zero value is the default import.
 type ImportOptions struct {
+	// IncrementalFTS keeps search triggers enabled for small sync writes.
+	IncrementalFTS bool
 	// Replace lists session IDs whose archived messages the export may replace when the default import refuses them; the previous version moves to the trash as a copy.
 	Replace []string
 }

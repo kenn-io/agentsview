@@ -44,6 +44,8 @@ type ImportRefusal struct {
 
 // ImportCallbacks provides optional progress reporting.
 type ImportCallbacks struct {
+	SerializeWrite func(func() error) error
+	OnPage         func()
 	// OnProgress fires after each conversation with current
 	// cumulative counts; Refusals is always left empty.
 	OnProgress func(ImportStats)
@@ -132,7 +134,10 @@ func ImportClaudeAIWithOptions(
 	opts ImportOptions,
 	machine ...string,
 ) (stats ImportStats, retErr error) {
-	fts := newLazyFTS(ctx, store, cb.indexing)
+	var fts *lazyFTS
+	if !opts.IncrementalFTS {
+		fts = newLazyFTS(ctx, store, cb.indexing)
+	}
 	defer func() {
 		if err := fts.restore(ctx); err != nil {
 			retErr = errors.Join(retErr, err)

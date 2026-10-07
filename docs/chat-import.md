@@ -68,6 +68,26 @@ The dialog shows a summary when finished — for example,
 "5 conversations processed (4 new, 1 updated)". The session
 list refreshes automatically.
 
+## Sync in the desktop app
+
+With the desktop app connected to its local archive, open **Import
+conversations**, select **Claude.ai**, and click **Connect**. Sign in to
+Claude.ai in the window that opens, then click **Sync** to download your chats.
+The dialog shows progress and the same result counts as a file import.
+
+Each sync checks all conversation summaries and downloads only new or changed
+chats. Search stays available during the import. Trashed or permanently deleted
+chats stay deleted, and shorter conversations are refused. Closing the dialog
+cancels the sync; completed chats keep their checkpoints for the next sync.
+
+Sign-in persists in the browser's cookie store across app restarts. **Disconnect**
+deletes the Claude.ai cookies and closes the sign-in window. Credentials stay
+inside that window's browser host. Sync requires the desktop app and a local
+connection; file imports remain available in the web UI.
+
+These private Claude.ai endpoints can change without notice. Reconnect if Sync
+reports that your sign-in expired.
+
 ## Importing via the CLI
 
 Use `agentsview import` to import from the command line:
