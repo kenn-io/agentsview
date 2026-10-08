@@ -526,8 +526,8 @@ describe("AttributionPanel job groups", () => {
       cost: testMoney(cost),
     });
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([
-      group("abcdef-job", 3),
-      group("abcdef-other", 2),
+      group("abcdef-job@12345678", 3),
+      group("abcdef-other@abcdef01", 2),
       { ...group("", 1), sessionId: "hermes:ungrouped", displayName: "Ungrouped run" },
       { ...group("", 2), groupLabel: "", sessionId: "", displayName: "" },
       { ...group("remainder", 0.5), groupLabel: "Other" },
@@ -603,6 +603,22 @@ describe("AttributionPanel job groups", () => {
     expect(
       [...document.querySelectorAll(".list-pct")].map((row) => row.textContent?.trim()),
     ).toEqual(["50.0%", "33.3%", "16.7%"]);
+    await unmount(component);
+  });
+
+  it("shows the job ID for an unnamed group in its label and tooltip", async () => {
+    usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
+    usage.zoomRows = [{
+      ...topSessionForRemainder(),
+      groupKey: "digest@12345678",
+      groupLabel: "",
+      displayName: "digest@12345678",
+    }];
+    const component = mountPanel();
+    await tick();
+    const row = document.querySelector<HTMLElement>(".list-row")!;
+    expect(row.querySelector(".list-label")!.textContent).toBe("digest");
+    expect(row.title).toBe("digest");
     await unmount(component);
   });
 

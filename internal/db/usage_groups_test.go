@@ -46,11 +46,9 @@ func TestHermesCronGroupsKeepProfilesSeparate(t *testing.T) {
 	groups, err := db.GroupTopSessions(entries, 100, db.TopSessionsSortTokens, db.UsageTokenTypesAll)
 	require.NoError(t, err)
 	require.Len(t, groups, 2)
-	assert.ElementsMatch(t, []string{
-		filepath.Join(profiles, "profile-a", "state.db") + "#digest",
-		filepath.Join(profiles, "profile-b", "state.db") + "#digest",
-	}, []string{groups[0].GroupKey, groups[1].GroupKey})
+	assert.NotEqual(t, groups[0].GroupKey, groups[1].GroupKey)
 	for _, group := range groups {
+		assert.Regexp(t, `^digest@[0-9a-f]{8}$`, group.GroupKey)
 		assert.Equal(t, "hermes-cron", group.Project)
 		assert.Equal(t, 20, group.InputTokens)
 	}

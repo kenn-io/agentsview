@@ -2941,8 +2941,9 @@ schemas keep their existing ordering behavior.
   `[A-Za-z0-9][A-Za-z0-9._-]*`.
   [cron/scheduler.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/cron/scheduler.py)
   records `source = "cron"` and titles as the job name followed by ` · `
-  and the run timestamp. Agentsview scopes the job ID to its archive's
-  `state.db` source path in `group_key` and keeps the recorded name in
+  and the run timestamp. Agentsview stores `group_key` as the job ID followed
+  by `@` and the first eight SHA-256 hex digits of the absolute `state.db`
+  path, keeping profiles separate without storing paths. It keeps the name in
   `group_label`.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both

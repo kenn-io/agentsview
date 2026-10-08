@@ -5,6 +5,7 @@ package parser
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -1525,7 +1526,8 @@ func hermesCronGroupKey(path, job string) string {
 	if filepath.Base(root) == "sessions" {
 		root = filepath.Dir(root)
 	}
-	return VirtualSourcePath(absoluteHermesPath(filepath.Join(root, "state.db")), job)
+	digest := sha256.Sum256([]byte(absoluteHermesPath(filepath.Join(root, "state.db"))))
+	return fmt.Sprintf("%s@%x", job, digest[:4])
 }
 
 func hermesCronRunJob(id string) string {

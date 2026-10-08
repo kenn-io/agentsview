@@ -1349,13 +1349,28 @@ func TestHermesCronStateGroups(t *testing.T) {
 			}
 			require.Len(t, sessions, 2)
 			for _, session := range sessions {
-				key := ""
 				if tc.key != "" {
-					key = stateDB + "#" + tc.key
+					assert.Regexp(t, "^"+tc.key+"@[0-9a-f]{8}$", session.GroupKey)
+				} else {
+					assert.Empty(t, session.GroupKey)
 				}
-				assert.Equal(t, key, session.GroupKey)
 				assert.Equal(t, tc.label, session.GroupLabel)
 			}
+			assert.Equal(t, sessions[0].GroupKey, sessions[1].GroupKey)
 		})
+	}
+}
+
+func TestHermesCronGroupKey(t *testing.T) {
+	root, want := "/profiles/profile-a", "job-a@bbda7b41"
+	if runtime.GOOS == "windows" {
+		root, want = `C:\profiles\profile-a`, "job-a@f0c8a58d"
+	}
+	for _, path := range []string{
+		filepath.Join(root, "state.db"),
+		filepath.Join(root, "sessions", "cron_job-a_20261007_120000.jsonl"),
+	} {
+		assert.Equal(t, want, hermesCronGroupKey(path, "job-a"))
+		assert.Empty(t, hermesCronGroupKey(path, ""))
 	}
 }
