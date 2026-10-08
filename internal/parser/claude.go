@@ -500,7 +500,7 @@ func claudeParseFile(
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
 	for i := range results {
-		results[i].Session.RelationshipType = promoteParentlessWorker(
+		results[i].Session.RelationshipType = PromoteParentlessWorker(
 			results[i].Session.ParentSessionID, results[i].Session.RelationshipType,
 			claudeWorkerMessages(results[i].Session.Entrypoint, results[i].Session.SessionKind, results[i].Messages),
 		)

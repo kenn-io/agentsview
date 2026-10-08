@@ -108,6 +108,7 @@ func repairParentlessWorkersPG(ctx context.Context, pg *sql.DB) error {
 	if done {
 		return nil
 	}
+	// Apply parser.PromoteParentlessWorker to stored rows that won't be rewritten.
 	if _, err := pg.ExecContext(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', updated_at = NOW()
 		WHERE session_kind = 'non-interactive'

@@ -12,6 +12,11 @@ func resetClassifierPatterns() {
 	SetUserAutomationExactMatches(nil)
 }
 
+func TestClassifierHashCurrentAlgoVersion(t *testing.T) {
+	assert.Equal(t, 3, classifierAlgorithmVersion,
+		"classifierAlgorithmVersion changed; confirm matching semantics changed and update this test")
+}
+
 func TestClassifierHashStable(t *testing.T) {
 	t.Cleanup(resetClassifierPatterns)
 	SetUserAutomationPrefixes([]string{"foo", "bar"})

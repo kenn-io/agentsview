@@ -2583,14 +2583,14 @@ func sessionAutomationStateTx(
 	tx transactionQueries, sessionID string,
 ) (want, rowAutomated, ok bool, err error) {
 	var (
-		firstMessage       sql.NullString
-		firstUserMessage   sql.NullString
-		userMsgCount       int
-		agent, sessionKind string
+		firstMessage     sql.NullString
+		firstUserMessage sql.NullString
+		userMsgCount     int
+		sessionKind      string
 	)
 	err = tx.QueryRow(`
 		SELECT
-			s.agent, s.session_kind,
+			s.session_kind,
 			s.first_message,
 			s.user_message_count,
 			s.is_automated,
@@ -2609,7 +2609,7 @@ func sessionAutomationStateTx(
 		WHERE s.id = ?`,
 		sessionID,
 	).Scan(
-		&agent, &sessionKind,
+		&sessionKind,
 		&firstMessage, &userMsgCount,
 		&rowAutomated, &firstUserMessage,
 	)
@@ -2623,7 +2623,7 @@ func sessionAutomationStateTx(
 		)
 	}
 
-	want = IsAutomatedSessionMetadata(agent, sessionKind) ||
+	want = IsAutomatedSessionMetadata("", sessionKind) ||
 		isAutomatedFromTextCandidates(userMsgCount, firstUserMessage, firstMessage)
 	return want, rowAutomated, true, nil
 }

@@ -1871,8 +1871,8 @@ type ParseResult struct {
 	CheckpointAnchorDigest string
 }
 
-// promoteParentlessWorker classifies workers without an existing parent or relationship.
-func promoteParentlessWorker(parent string, rel RelationshipType, worker bool) RelationshipType {
+// PromoteParentlessWorker classifies workers without an existing parent or relationship.
+func PromoteParentlessWorker(parent string, rel RelationshipType, worker bool) RelationshipType {
 	if parent == "" && rel == RelNone && worker {
 		return RelSubagent
 	}

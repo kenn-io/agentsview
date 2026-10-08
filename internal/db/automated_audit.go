@@ -17,6 +17,7 @@ func repairParentlessWorkers(ctx context.Context, w *writerHandle) error {
 	if done != 0 {
 		return nil
 	}
+	// Apply parser.PromoteParentlessWorker to stored rows that won't be rewritten.
 	if _, err := w.Exec(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE session_kind = 'non-interactive'

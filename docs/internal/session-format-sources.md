@@ -153,7 +153,8 @@ evidence; they do not establish whether a tool helped the task.
   Human origin wins conflicting markers; missing origin remains ambiguous.
   Explicit provider kinds remain intact.
   Data version 127 reparses readable sources once. Reverified 2026-10-08
-  against parser fixtures and context-first appends in usage-only archives.
+  against parser fixtures, user-line entrypoints in sync fixtures, and
+  context-first appends in usage-only archives.
   The first real prompt reparses an `sdk-cli` session with zero stored user
   messages; assistant appends stay incremental. The original evidence came
   from the installed producer and local transcripts.

@@ -27,7 +27,11 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 		{"script", nil, true},
 		{"child", new("worker"), true},
 	} {
-		sess := fixtureSession(tc.id, "project-a", "Explain this function.", "2026-10-01T10:00:00Z", 2)
+		prompt := "Explain this function."
+		if tc.automated {
+			prompt = "You are a code reviewer. Review this function."
+		}
+		sess := fixtureSession(tc.id, "project-a", prompt, "2026-10-01T10:00:00Z", 2)
 		sess.EndedAt = new("2026-10-01T10:01:00Z")
 		sess.RelationshipType = "subagent"
 		sess.ParentSessionID = tc.parent
@@ -35,12 +39,17 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 			Session: sess,
 			Messages: []db.Message{
-				fixtureMessage(tc.id, 0, "user", "Explain this function.", "2026-10-01T10:00:00Z"),
+				fixtureMessage(tc.id, 0, "user", prompt, "2026-10-01T10:00:00Z"),
 				fixtureMessage(tc.id, 1, "assistant", "The explanation.", "2026-10-01T10:01:00Z"),
 			},
 			DataVersion: db.CurrentDataVersion(), ReplaceMessages: true,
 		}})
 		require.NoError(t, err)
+		stored, err := local.GetSession(t.Context(), tc.id)
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		require.Equal(t, tc.automated, stored.IsAutomated)
+		require.Equal(t, "subagent", stored.RelationshipType)
 	}
 	_, err := syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)

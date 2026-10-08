@@ -27,22 +27,19 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	}{
 		{
 			id: "human", path: filepath.Join(claudeRoot, "project", "human.jsonl"),
-			content: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
-				`{"type":"user","uuid":"u1","turnOrigin":"human","origin":{"kind":"human"},"promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Plan a settings change."}}` + "\n",
+			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"human","origin":{"kind":"human"},"promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Plan a settings change."}}` + "\n",
 			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
 			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"human","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
 		},
 		{
 			id: "worker", path: filepath.Join(claudeRoot, "project", "worker.jsonl"), relationship: parser.RelSubagent,
-			content: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
-				`{"type":"user","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Delegate a settings change."}}` + "\n",
+			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Delegate a settings change."}}` + "\n",
 			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
 			followup: testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:02:00Z", "More detail.", "a2", "a1").String(),
 		},
 		{
 			id: "scripted-worker", path: filepath.Join(claudeRoot, "project", "scripted-worker.jsonl"), relationship: parser.RelSubagent, automated: true,
-			content: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
-				`{"type":"user","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"You are a code reviewer. Review the settings change."}}` + "\n",
+			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"You are a code reviewer. Review the settings change."}}` + "\n",
 			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
 			followup: testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:02:00Z", "More detail.", "a2", "a1").String(),
 		},

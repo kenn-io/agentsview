@@ -438,7 +438,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 		}
 	}
 
-	b.relationshipType = promoteParentlessWorker(b.parentSessionID, b.relationshipType, b.sessionKind == SessionKindNonInteractive)
+	b.relationshipType = PromoteParentlessWorker(b.parentSessionID, b.relationshipType, b.sessionKind == SessionKindNonInteractive)
 
 	b.armForkGate(payload)
 

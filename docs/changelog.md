@@ -234,6 +234,8 @@ The latest published release is
   they have script evidence; `codex exec` runs are no longer automated by launch
   mode alone, changing the rule from
   [agentsview#1855](https://github.com/kenn-io/agentsview/issues/1855).
+  Plain `codex exec` and Grok non-interactive runs are now included by default
+  in usage and embeddings scopes.
 - Hosted raw sync keeps a session listed and searchable after its source file
   disappears from the device that uploaded it, matching the local archive.
   Before, `raw-sync watch` reporting a missing file hid the session, emptied it
