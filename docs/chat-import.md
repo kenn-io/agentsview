@@ -85,12 +85,12 @@ notes, in the same transaction as the update. Each such replacement makes a
 fresh copy. Replacements that keep every pin and note make no copy.
 Switching back on Claude.ai and syncing restores those turns. Dropped pins and
 notes stay in the Trash copy and don't return to the live chat. A chat first
-imported from a zip needs one detail fetch to verify its visible branch.
+imported from a zip needs one detail fetch to verify its visible branch. It
+keeps its stored turns when Sync finds no change; turns Sync adds or replaces
+carry claude.ai's message identities.
 Re-importing a zip clears that verification, so the next Sync fetches it once
 again. Each chat has a 32 MiB response limit; larger chats count as failed while
 Sync continues.
-A chat first imported from a zip keeps its stored turns when Sync finds no
-change; turns Sync adds or replaces carry claude.ai's message identities.
 
 A chat that fails counts as failed while Sync continues. An expired sign-in,
 or two chats failing in a row, ends the Sync.
