@@ -126,61 +126,6 @@ func (s *Store) listProjectIdentityObservationsChunk(
 	return out, nil
 }
 
-func (s *Store) BuildProjectIdentityMap(
-	ctx context.Context,
-	labels []string,
-) (map[string]export.ProjectMapEntry, error) {
-	if labels != nil && len(labels) == 0 {
-		return map[string]export.ProjectMapEntry{}, nil
-	}
-	observations, err := s.ListProjectIdentityObservations(ctx, labels)
-	if err != nil {
-		return nil, err
-	}
-	scope, err := s.sourceArchiveIdentityScope(ctx, observations)
-	if err != nil {
-		return nil, err
-	}
-	return export.BuildProjectsMapWithScope(labels, observations, scope), nil
-}
-
-func (s *Store) sourceArchiveIdentityScope(
-	ctx context.Context,
-	observations []export.ProjectIdentityObservation,
-) (export.IdentityScope, error) {
-	query := `
-		SELECT source_archive_id, source_archive_salt
-		FROM source_archives
-	`
-	query += " ORDER BY source_archive_id"
-	rows, err := s.queryContext(ctx, query)
-	if err != nil {
-		return export.IdentityScope{}, fmt.Errorf(
-			"listing duckdb source archives: %w", err,
-		)
-	}
-	defer rows.Close()
-
-	var scopes []export.IdentityScope
-	for rows.Next() {
-		var scope export.IdentityScope
-		if err := rows.Scan(&scope.ArchiveID, &scope.ArchiveSalt); err != nil {
-			return export.IdentityScope{}, fmt.Errorf(
-				"scanning duckdb source archive: %w", err,
-			)
-		}
-		scopes = append(scopes, scope)
-	}
-	if err := rows.Err(); err != nil {
-		return export.IdentityScope{}, fmt.Errorf(
-			"iterating duckdb source archives: %w", err,
-		)
-	}
-	if len(scopes) == 1 {
-		return scopes[0], nil
-	}
-	if len(scopes) == 0 {
-		return db.ObservationIdentityScope(observations), nil
-	}
-	return export.AggregateIdentityScope(scopes), nil
+func (s *Store) BuildProjectIdentityMap(ctx context.Context, labels []string) (map[string]export.ProjectMapEntry, error) {
+	return s.catalog().BuildProjectIdentityMap(ctx, labels)
 }

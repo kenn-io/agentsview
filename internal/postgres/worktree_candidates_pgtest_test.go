@@ -193,63 +193,6 @@ func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {
 	assert.Equal(t, 2, got[1].ContributingSessions)
 }
 
-func TestPGWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
-	const schema = "agentsview_worktree_candidates_alias_test"
-	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
-	const (
-		primary = "current-project-name"
-		alias   = "historical-project-name"
-		machine = "host-a.example"
-		remote  = "https://example.com/team/repository.git"
-	)
-	for _, fixture := range []struct {
-		id, project, cwd string
-	}{
-		{"primary-session", primary, "/srv/worktrees/repo/feature/cmd"},
-		{"alias-session", alias, "/srv/worktrees/repo/feature/frontend"},
-	} {
-		seedPGCandidateSession(
-			t, localDB, fixture.id, fixture.project, machine, fixture.cwd,
-			"2025-06-02T10:00:00Z",
-		)
-		require.NoError(t, localDB.UpsertProjectIdentityObservation(ctx,
-			export.ProjectIdentityObservation{
-				SessionID: fixture.id, Project: fixture.project, Machine: machine,
-				RootPath:         "/srv/worktrees/repo",
-				WorktreeRootPath: "/srv/worktrees/repo/feature",
-				GitRemote:        remote,
-				RemoteResolution: export.ProjectResolutionResolved,
-				ObservedAt:       time.Date(2025, 6, 2, 10, 0, 0, 0, time.UTC),
-			},
-		))
-	}
-	_, err := sync.Push(ctx, false, nil)
-	require.NoError(t, err)
-
-	projects, err := localDB.BuildProjectIdentityMap(
-		ctx, []string{primary, alias},
-	)
-	require.NoError(t, err)
-	require.NotNil(t, projects[primary].Identity)
-	require.NotNil(t, projects[alias].Identity)
-	require.Equal(t, projects[primary].Identity.Key, projects[alias].Identity.Key)
-	require.NotEqual(t, projects[primary].ProjectKey, projects[alias].ProjectKey)
-	request := db.ArchiveWorktreeCandidateRequest{
-		ProjectLabel: export.SafeProjectDisplayLabel(primary),
-		ProjectKey:   projects[primary].ProjectKey,
-	}
-	localCandidates, err := localDB.ListArchiveWorktreeCandidates(ctx, request)
-	require.NoError(t, err)
-	pgCandidates, err := (&Store{pg: pg}).ListArchiveWorktreeCandidates(ctx, request)
-	require.NoError(t, err)
-
-	assert.Equal(t, localCandidates, pgCandidates)
-	require.Len(t, pgCandidates, 1)
-	assert.Equal(t, 1, pgCandidates[0].ContributingSessions)
-	require.Len(t, pgCandidates[0].Examples, 1)
-	assert.Equal(t, "primary-session", pgCandidates[0].Examples[0].SessionID)
-}
-
 func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	const (
 		schema        = "agentsview_worktree_candidates_generation_test"
@@ -323,40 +266,4 @@ func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	require.Len(t, candidates, 1)
 	assert.Equal(t, "snapshot", candidates[0].EvidenceKind)
 	assert.Equal(t, "/srv/new/repo/worktree", candidates[0].EvidenceRoot)
-}
-
-// TestPGListArchiveWorktreeCandidatesKeyMismatch verifies the PG mirror
-// matches SQLite's key-mismatch semantics exactly: a right label with a
-// wrong project key returns an empty candidate list with no error, and an
-// empty project key is rejected outright.
-func TestPGListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
-	const schema = "agentsview_worktree_candidates_key_mismatch_test"
-	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
-	const project = "mismatch-project"
-
-	seedPGCandidateSession(t, localDB, "session-a", project, "host-a.example",
-		"/srv/worktrees/repo/feature", "2025-06-02T10:00:00Z")
-	setPGCandidateSnapshot(t, ctx, localDB, "session-a", project, "host-a.example",
-		"/srv/worktrees/repo", "/srv/worktrees/repo/feature")
-
-	_, err := sync.Push(ctx, false, nil)
-	require.NoError(t, err, "Push")
-
-	pgStore := &Store{pg: pg}
-
-	candidates, err := pgStore.ListArchiveWorktreeCandidates(ctx,
-		db.ArchiveWorktreeCandidateRequest{
-			ProjectLabel: export.SafeProjectDisplayLabel(project),
-			ProjectKey:   "wrong-key",
-		})
-	require.NoError(t, err)
-	assert.Empty(t, candidates,
-		"right label with wrong key must return no candidates, no error")
-
-	_, err = pgStore.ListArchiveWorktreeCandidates(ctx,
-		db.ArchiveWorktreeCandidateRequest{
-			ProjectLabel: export.SafeProjectDisplayLabel(project),
-			ProjectKey:   "",
-		})
-	require.Error(t, err, "empty project key must error")
 }

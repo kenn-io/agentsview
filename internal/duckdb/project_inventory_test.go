@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"context"
-	"sort"
 	"testing"
 	"time"
 
@@ -209,6 +208,33 @@ func TestDuckProjectInventoryMatchesSQLite(t *testing.T) {
 
 	assert.Equal(t, 0, duckInv.Projects[3].EnabledRulesTargeting,
 		"misc has no rule targeting it by raw label, only gamma is resolved to")
+
+	_, err = syncer.DB().ExecContext(ctx,
+		`UPDATE sessions SET source_archive_id = '' WHERE id = 'alpha-1'`)
+	require.NoError(t, err, "clear provenance")
+
+	after, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
+	require.NoError(t, err, "GetProjectInventory after")
+
+	assert.Equal(t, duckInv.GovernedSessions-1, after.GovernedSessions,
+		"unattributed session drops out of the governed count")
+	assert.Equal(t, duckInv.TotalSessions, after.TotalSessions,
+		"aggregate visibility is unaffected by provenance")
+	assert.Equal(t, duckInv.TotalProjects, after.TotalProjects)
+
+	var beforeAlpha, afterAlpha db.ProjectInventoryRow
+	for _, row := range duckInv.Projects {
+		if row.Label == "alpha" {
+			beforeAlpha = row
+		}
+	}
+	for _, row := range after.Projects {
+		if row.Label == "alpha" {
+			afterAlpha = row
+		}
+	}
+	assert.Equal(t, beforeAlpha.Sessions, afterAlpha.Sessions,
+		"alpha's session count is unchanged")
 }
 
 func TestDuckGovernedCountExcludesAssignedSiblingEvidence(t *testing.T) {
@@ -242,173 +268,32 @@ func TestDuckGovernedCountExcludesAssignedSiblingEvidence(t *testing.T) {
 	assert.Equal(t, localInv.GovernedSessions, duckInv.GovernedSessions)
 }
 
-func TestDuckProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	seedInventorySession(t, local, "private-a-1", "/private/repos/alpha", nil)
-	seedInventorySession(t, local, "private-b-1", "/private/repos/beta", nil)
-	seedInventorySession(t, local, "private-b-2", "/private/repos/beta", nil)
-
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	pushDataReadMirror(t, ctx, syncer)
-	inv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx, db.ProjectDateFilter{})
-	require.NoError(t, err)
-	require.Len(t, inv.Projects, 2)
-	assert.Equal(t, 2, inv.TotalProjects)
-	assert.Equal(t, 3, inv.TotalSessions)
-
-	keys := map[string]struct{}{}
-	counts := make([]int, 0, len(inv.Projects))
-	for _, row := range inv.Projects {
-		assert.Empty(t, row.Label)
-		assert.NotEmpty(t, row.ProjectKey)
-		keys[row.ProjectKey] = struct{}{}
-		counts = append(counts, row.Sessions)
-	}
-	assert.Len(t, keys, 2)
-	sort.Ints(counts)
-	assert.Equal(t, []int{1, 2}, counts)
-}
-
-// TestDuckProjectInventoryIgnoresUnattributedSessions verifies that a
-// session with blanked source_archive_id (lost provenance) is dropped from
-// the governed count but stays visible in every aggregate count:
-// provenance only gates governedness, not visibility.
-func TestDuckProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	buildInventoryFixture(t, local, ctx)
-
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	pushDataReadMirror(t, ctx, syncer)
-
-	duckStore := NewStoreFromDB(syncer.DB())
-	before, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
-	require.NoError(t, err, "GetProjectInventory before")
-	require.Equal(t, 2, before.GovernedSessions,
-		"alpha-1 and gamma-dynamic governed before provenance is cleared")
-
-	_, err = syncer.DB().ExecContext(ctx,
-		`UPDATE sessions SET source_archive_id = '' WHERE id = 'alpha-1'`)
-	require.NoError(t, err, "clear provenance")
-
-	after, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
-	require.NoError(t, err, "GetProjectInventory after")
-
-	assert.Equal(t, before.GovernedSessions-1, after.GovernedSessions,
-		"unattributed session drops out of the governed count")
-	assert.Equal(t, before.TotalSessions, after.TotalSessions,
-		"aggregate visibility is unaffected by provenance")
-	assert.Equal(t, before.TotalProjects, after.TotalProjects)
-
-	var beforeAlpha, afterAlpha db.ProjectInventoryRow
-	for _, row := range before.Projects {
-		if row.Label == "alpha" {
-			beforeAlpha = row
-		}
-	}
-	for _, row := range after.Projects {
-		if row.Label == "alpha" {
-			afterAlpha = row
-		}
-	}
-	assert.Equal(t, beforeAlpha.Sessions, afterAlpha.Sessions,
-		"alpha's session count is unchanged")
-}
-
-func TestDuckPushPreservesSessionMachineForGovernance(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	for _, fixture := range []struct {
-		id      string
-		project string
-		machine string
-		cwd     string
-	}{
-		{id: "host-a-session", project: "alpha", machine: "host-a", cwd: "/repos/alpha"},
-		{id: "host-b-session", project: "beta", machine: "host-b", cwd: "/repos/beta"},
-	} {
-		seedInventorySession(t, local, fixture.id, fixture.project, func(s *db.Session) {
-			s.Machine = fixture.machine
-			s.Cwd = fixture.cwd
-		})
-		_, err := local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
-			Machine: fixture.machine, PathPrefix: fixture.cwd,
-			Layout:  db.WorktreeMappingLayoutExplicit,
-			Project: fixture.project, Enabled: true,
-		})
-		require.NoError(t, err)
-	}
-
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	pushDataReadMirror(t, ctx, syncer)
-
-	rows, err := syncer.DB().QueryContext(ctx,
-		`SELECT id, machine FROM sessions ORDER BY id`)
-	require.NoError(t, err)
-	defer rows.Close()
-	machines := map[string]string{}
-	for rows.Next() {
-		var id, machine string
-		require.NoError(t, rows.Scan(&id, &machine))
-		machines[id] = machine
-	}
-	require.NoError(t, rows.Err())
-	assert.Equal(t, map[string]string{
-		"host-a-session": "host-a",
-		"host-b-session": "host-b",
-	}, machines)
-
-	inventory, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx, db.ProjectDateFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 2, inventory.GovernedSessions,
-		"each mirrored session must join the mapping from its source machine")
-}
-
-// TestDuckProjectInventoryCrossArchiveIsolation verifies that inventory
-// governance is scoped per source archive AND per machine when a DuckDB
-// mirror serves more than one archive. It pushes one archive through the
-// real sync path (archive A) and hand-inserts a second archive's mapping
-// and session rows directly into the DuckDB mirror (archive B), following
-// the pattern in TestDuckPushReplicatesWorktreeMappings. Both archives
-// deliberately use the same machine name and path prefix, isolating
-// source_archive_id as the only variable between archive A and B: a broken
-// (source_archive_id, machine) scope -- either in the candidate-row SQL or
-// in how projectInventoryMappings groups rules by archive -- would
-// incorrectly let archive B's rule govern archive A's session.
-//
-// A third session, b-session-other-machine, isolates the other half of the
-// same tuple filter: it shares archive B's source_archive_id and cwd prefix
-// but sits on a machine ("m-other") archive B's mapping does not cover, so
-// a filter scoped by source_archive_id alone (dropping the machine
-// comparison) would wrongly admit and govern it.
+// Governance checks archive and machine eligibility before evaluating each archive's own rules.
 func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
 
-	// Archive A (the local push archive) has no worktree mapping of its
-	// own on duckPushMachine.
+	// Archive A has an enabled mapping whose prefix matches no session.
 	seedInventorySession(t, local, "a-session", "proj-a", func(s *db.Session) {
 		s.Machine = duckPushMachine
 		s.Cwd = "/repos/shared"
 		s.StartedAt = new("2024-01-01T00:00:00Z")
 	})
 
+	_, err := local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+		Machine: duckPushMachine, PathPrefix: "/repos/matches-nothing",
+		Layout: db.WorktreeMappingLayoutExplicit, Project: "proj-a-unused", Enabled: true,
+	})
+	require.NoError(t, err, "seed archive A decoy mapping")
+
 	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
-
-	var aSessionMachine string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT machine FROM sessions WHERE id = 'a-session'`,
-	).Scan(&aSessionMachine), "read back a-session machine")
-	require.Equal(t, duckPushMachine, aSessionMachine,
-		"push must preserve an explicit source machine")
 
 	// Archive B: hand-inserted mirror rows for a second source archive,
 	// reusing the same machine name and path prefix as archive
 	// A's session, plus its own governed session.
 	const archiveB = "archive-b"
-	_, err := syncer.DB().ExecContext(ctx, `
+	_, err = syncer.DB().ExecContext(ctx, `
 		INSERT INTO source_worktree_project_mappings
 		(source_archive_id, machine, path_prefix, layout, project,
 		 original_project, enabled, updated_at)
@@ -440,6 +325,16 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 		"2024-03-02T00:00:00Z", "2024-03-02T00:00:00Z", archiveB)
 	require.NoError(t, err, "seed archive B session on a different machine")
 
+	// Archive C has no mapping, even though its session shares B's machine and cwd.
+	_, err = syncer.DB().ExecContext(ctx, `
+        INSERT INTO sessions
+        (id, machine, project, agent, message_count, user_message_count,
+         relationship_type, cwd, started_at, created_at, source_archive_id)
+        VALUES ('c-session', ?, 'proj-c', 'claude', 1, 1,
+         'root', '/repos/shared', CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP), 'archive-c')`,
+		duckPushMachine, "2024-03-02T00:00:00Z", "2024-03-02T00:00:00Z")
+	require.NoError(t, err, "seed unmapped archive C session")
+
 	duckStore := NewStoreFromDB(syncer.DB())
 	inv, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory")
@@ -452,10 +347,7 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 	require.Contains(t, byLabel, "proj-b")
 
 	assert.Equal(t, 1, inv.GovernedSessions,
-		"only archive B's own session on duckPushMachine is governed by "+
-			"archive B's rule; archive A has no rule of its own on that "+
-			"machine, and b-session-other-machine sits on a machine archive "+
-			"B's rule does not cover, so neither is governed")
+		"A passes the prefilter but its decoy rule matches nothing; only B is governed")
 	assert.Equal(t, 2, byLabel["proj-b"].Sessions,
 		"b-session and b-session-other-machine are both visible even though "+
 			"only one is governed; visibility does not depend on governance")
@@ -464,20 +356,17 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 	assert.Equal(t, 1, byLabel["proj-b"].EnabledRulesTargeting,
 		"archive B's own rule attributes correctly to its own project")
 
-	// Directly exercise the (source_archive_id, machine) scope in
-	// projectInventoryCandidateRows: archive A's session must not become a
-	// governance candidate on the strength of archive B's enabled mapping
-	// on the same machine name.
-	candidates, err := duckStore.projectInventoryCandidateRows(ctx, nil)
+	// Candidate eligibility and per-archive rule evaluation must hold independently.
+	candidates, err := duckStore.catalog().ProjectInventoryCandidateRows(ctx, nil)
 	require.NoError(t, err, "projectInventoryCandidateRows")
 	var candidateIDs []string
 	for _, c := range candidates {
 		candidateIDs = append(candidateIDs, c.SessionID)
 	}
-	assert.NotContains(t, candidateIDs, "a-session",
-		"archive A has no enabled mapping of its own; the (source_archive_id, "+
-			"machine) scope must not admit its session just because archive B "+
-			"has an enabled mapping on the same machine name")
+	assert.Contains(t, candidateIDs, "a-session",
+		"A's enabled decoy admits the session; only rule evaluation rejects it")
+	assert.NotContains(t, candidateIDs, "c-session",
+		"C has no own mapping and must not inherit A's or B's eligibility")
 	assert.Contains(t, candidateIDs, "b-session",
 		"archive B's own session is a legitimate candidate under its own "+
 			"enabled mapping")

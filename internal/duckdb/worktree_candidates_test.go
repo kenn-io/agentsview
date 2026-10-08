@@ -128,6 +128,22 @@ func TestDuckWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 	assert.False(t, localCandidates[3].Available)
 	assert.Equal(t, 2, localCandidates[3].ContributingSessions,
 		"DuckDB and SQLite include zero-message inventory sessions")
+
+	candidates, err := duckStore.ListArchiveWorktreeCandidates(ctx,
+		db.ArchiveWorktreeCandidateRequest{
+			ProjectLabel: export.SafeProjectDisplayLabel(project),
+			ProjectKey:   "wrong-key",
+		})
+	require.NoError(t, err)
+	assert.Empty(t, candidates,
+		"right label with wrong key must return no candidates, no error")
+
+	_, err = duckStore.ListArchiveWorktreeCandidates(ctx,
+		db.ArchiveWorktreeCandidateRequest{
+			ProjectLabel: export.SafeProjectDisplayLabel(project),
+			ProjectKey:   "",
+		})
+	require.Error(t, err, "empty project key must error")
 }
 
 func TestDuckWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
@@ -186,40 +202,4 @@ func TestDuckWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 	assert.Equal(t, 1, duckCandidates[0].ContributingSessions)
 	require.Len(t, duckCandidates[0].Examples, 1)
 	assert.Equal(t, "primary-session", duckCandidates[0].Examples[0].SessionID)
-}
-
-// TestDuckListArchiveWorktreeCandidatesKeyMismatch verifies the DuckDB
-// mirror matches SQLite's key-mismatch semantics exactly: a right label with
-// a wrong project key returns an empty candidate list with no error, and an
-// empty project key is rejected outright.
-func TestDuckListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	const project = "mismatch-project"
-
-	seedDuckCandidateSession(t, local, "session-a", project,
-		"/srv/worktrees/repo/feature", "2025-06-02T10:00:00Z")
-	setDuckCandidateSnapshot(t, ctx, local, "session-a", project,
-		"/srv/worktrees/repo", "/srv/worktrees/repo/feature")
-
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	pushDataReadMirror(t, ctx, syncer)
-
-	duckStore := NewStoreFromDB(syncer.DB())
-
-	candidates, err := duckStore.ListArchiveWorktreeCandidates(ctx,
-		db.ArchiveWorktreeCandidateRequest{
-			ProjectLabel: export.SafeProjectDisplayLabel(project),
-			ProjectKey:   "wrong-key",
-		})
-	require.NoError(t, err)
-	assert.Empty(t, candidates,
-		"right label with wrong key must return no candidates, no error")
-
-	_, err = duckStore.ListArchiveWorktreeCandidates(ctx,
-		db.ArchiveWorktreeCandidateRequest{
-			ProjectLabel: export.SafeProjectDisplayLabel(project),
-			ProjectKey:   "",
-		})
-	require.Error(t, err, "empty project key must error")
 }

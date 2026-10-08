@@ -103,60 +103,17 @@ func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
 		"alpha-1 governed via the enabled rule; alpha-2's cwd doesn't match")
 	assert.Equal(t, 0, duckByPrefix["/w/b"].GovernedSessions,
 		"disabled rule never governs sessions, even though its cwd matches")
-}
 
-// TestDuckProjectRulesEmptyMachineMatchesSQLite verifies that
-// ListProjectRules with an empty (or whitespace-only) machine argument
-// returns zero rules on both SQLite and DuckDB, not "every machine's
-// rules." SQLite's ListWorktreeProjectMappings filters with a literal
-// `WHERE machine = ?` bound to "" (confirmed directly: no
-// normalizeWorktreeMapping-created mapping row ever has an empty machine
-// column, so that query always returns nothing); the DuckDB mirror's shared
-// projectInventoryMappings/projectInventoryCandidateRows helpers must
-// reject the temptation to treat machine == "" as a magic "unrestricted"
-// sentinel, since that value is a completely ordinary (if never matched)
-// machine value here, and doing so previously leaked every archive's rules
-// for every machine into an empty-machine request. The machine typeahead
-// list is unaffected either way, per ListProjectRules's contract.
-func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-
-	seedInventorySession(t, local, "alpha-1", "alpha", func(s *db.Session) {
-		s.Machine = duckPushMachine
-		s.Cwd = "/w/a"
-	})
-	_, err := local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
-		Machine: duckPushMachine, PathPrefix: "/w/a",
-		Layout: db.WorktreeMappingLayoutExplicit, Project: "alpha", Enabled: true,
-	})
-	require.NoError(t, err, "CreateWorktreeProjectMapping alpha")
-
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	pushDataReadMirror(t, ctx, syncer)
-
-	localRules, err := local.ListProjectRules(ctx, "")
-	require.NoError(t, err, "local ListProjectRules")
-	require.Empty(t, localRules.Rules,
-		"sanity: SQLite's own empty-machine contract returns zero rules")
-	require.NotEmpty(t, localRules.Machines,
-		"sanity: SQLite's machine list stays populated regardless of the filter")
-
-	duckStore := NewStoreFromDB(syncer.DB())
-	duckRules, err := duckStore.ListProjectRules(ctx, "")
-	require.NoError(t, err, "duckdb ListProjectRules")
-
-	assert.Empty(t, duckRules.Rules,
-		"an empty machine argument must match zero rules, not every archive's "+
-			"rules for every machine")
-	assert.ElementsMatch(t, localRules.Machines, duckRules.Machines,
-		"machine typeahead list is unaffected by the empty machine filter")
-
-	whitespaceRules, err := duckStore.ListProjectRules(ctx, "   ")
-	require.NoError(t, err, "duckdb ListProjectRules whitespace")
-	assert.Empty(t, whitespaceRules.Rules,
-		"a whitespace-only machine argument trims to empty and must also "+
-			"match zero rules")
+	for _, machine := range []string{"", "   "} {
+		localEmpty, err := local.ListProjectRules(ctx, machine)
+		require.NoError(t, err)
+		require.Empty(t, localEmpty.Rules)
+		require.NotEmpty(t, localEmpty.Machines)
+		duckEmpty, err := duckStore.ListProjectRules(ctx, machine)
+		require.NoError(t, err)
+		assert.Empty(t, duckEmpty.Rules, "blank machine matches zero rules")
+		assert.ElementsMatch(t, localEmpty.Machines, duckEmpty.Machines)
+	}
 }
 
 // TestDuckProjectRulesCrossArchiveIsolation verifies that rule governance is

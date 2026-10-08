@@ -238,8 +238,10 @@ stay in their backend.
    `internal/postgres/backend.go` and `internal/clickhouse/backend.go` as the
    two worked examples. The push returns `storage.PushResult` and reports
    progress as `storage.PushProgress`; a backend without a vector phase sets
-   `Vectors.Skipped`. Write the backend's own SQL; the contract is Go, not a
-   shared query string.
+   `Vectors.Skipped`. Route catalog reads through `readbase.NewCatalog` with
+   an adapter implementing every `readbase.CatalogBackend` method. Forward
+   common SQL to the shared builders; keep specialized SQL and typed loaders
+   in the backend.
 1. Add the config section and its resolvers in `internal/config` the way
    `[pg]`/`[pg.NAME]` and `[clickhouse]` work: a struct, `Resolve<Name>`,
    `Resolve<Name>Target`, and `<Name>TargetNames`. `Backend.Targets` and
@@ -312,12 +314,16 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
 [reporting exports](../reporting-export.md#project-identity-evidence).
 
 - Keep observable behavior and query shape aligned between SQLite and
-  PostgreSQL/CockroachDB when practical. Match queries, indexes, aggregations,
-  filters, and ordering unless a documented constraint requires a difference.
-- Do not fix correctness or performance in only one primary backend unless the
-  user limits the task to that backend. If implementations must differ,
-  explain why and preserve the same behavior.
-- DuckDB is a derived mirror and is not part of this parity rule.
+  PostgreSQL/CockroachDB, DuckDB and ClickHouse. Match queries, indexes,
+  aggregations, filters and ordering unless a documented SQL, storage layout
+  or disposable mirror constraint requires a difference.
+- Do not fix correctness or performance in only one backend unless the user
+  limits the task to that backend. If implementations must differ, explain why
+  and preserve the same behavior.
+- PostgreSQL, DuckDB and ClickHouse share catalog orchestration in
+  `internal/readbase.Catalog`. Shared query builders own SQL that differs only
+  in syntax. Each backend explicitly supplies every required SQL operation and
+  its typed timestamp, observation and snapshot loaders.
 
 ### Usage cache divergence
 

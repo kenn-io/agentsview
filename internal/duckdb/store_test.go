@@ -1012,54 +1012,60 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 }
 
 func TestProjectIdentityMapLegacyFallbackUsesFilePath(t *testing.T) {
-	ctx := t.Context()
-	conn := openTestDuckDB(t)
-	require.NoError(t, EnsureSchema(ctx, conn))
-	store := NewStoreFromDB(conn)
-
-	_, err := conn.ExecContext(ctx, `
+	for _, fixture := range []struct {
+		name        string
+		withArchive bool
+	}{
+		{name: "file path with archive", withArchive: true},
+		{name: "distinct keys without archive"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			ctx := t.Context()
+			conn := openTestDuckDB(t)
+			require.NoError(t, EnsureSchema(ctx, conn))
+			store := NewStoreFromDB(conn)
+			if fixture.withArchive {
+				_, err := conn.ExecContext(ctx, `
 		INSERT INTO source_archives (source_archive_id, source_archive_salt)
 		VALUES (?, ?)`, "legacy-test-archive", "legacy-test-salt")
-	require.NoError(t, err)
+				require.NoError(t, err)
 
-	_, err = conn.ExecContext(ctx, `
+				_, err = conn.ExecContext(ctx, `
 		INSERT INTO sessions (id, project, machine, agent, cwd, file_path)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		"file-path-identity", "file-project", "laptop", "codex", "",
-		"/fixtures/duck-file-project/session.jsonl",
-	)
-	require.NoError(t, err)
+					"file-path-identity", "file-project", "laptop", "codex", "",
+					"/fixtures/duck-file-project/session.jsonl",
+				)
+				require.NoError(t, err)
 
-	got, err := store.BuildProjectIdentityMap(ctx, []string{"file-project"})
-	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionUnknown,
-		got["file-project"].Resolution)
-	assert.Nil(t, got["file-project"].Identity)
-}
+				got, err := store.BuildProjectIdentityMap(ctx, []string{"file-project"})
+				require.NoError(t, err)
+				require.Equal(t, export.ProjectResolutionUnknown,
+					got["file-project"].Resolution)
+				assert.Nil(t, got["file-project"].Identity)
 
-func TestProjectIdentityMapLegacySessionsUseDistinctFallbackKeys(t *testing.T) {
-	ctx := t.Context()
-	conn := openTestDuckDB(t)
-	require.NoError(t, EnsureSchema(ctx, conn))
-	_, err := conn.ExecContext(ctx, `
+				return
+			}
+			_, err := conn.ExecContext(ctx, `
 		INSERT INTO sessions (id, project, machine, agent)
 		VALUES
 			('legacy-alpha', 'alpha', 'host', 'codex'),
 			('legacy-beta', 'beta', 'host', 'codex')`)
-	require.NoError(t, err)
+			require.NoError(t, err)
 
-	store := NewStoreFromDB(conn)
-	first, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
-	require.NoError(t, err)
-	second, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
-	require.NoError(t, err)
+			first, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
+			require.NoError(t, err)
+			second, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
+			require.NoError(t, err)
 
-	assert.NotEmpty(t, first["alpha"].ProjectKey)
-	assert.NotEmpty(t, first["beta"].ProjectKey)
-	assert.NotEqual(t, first["alpha"].ProjectKey, first["beta"].ProjectKey)
-	assert.Equal(t, first["alpha"].ProjectKey, second["alpha"].ProjectKey)
-	assert.Equal(t, first["beta"].ProjectKey, second["beta"].ProjectKey)
-	assert.Len(t, export.ProjectMapForWire(first), 2)
+			assert.NotEmpty(t, first["alpha"].ProjectKey)
+			assert.NotEmpty(t, first["beta"].ProjectKey)
+			assert.NotEqual(t, first["alpha"].ProjectKey, first["beta"].ProjectKey)
+			assert.Equal(t, first["alpha"].ProjectKey, second["alpha"].ProjectKey)
+			assert.Equal(t, first["beta"].ProjectKey, second["beta"].ProjectKey)
+			assert.Len(t, export.ProjectMapForWire(first), 2)
+		})
+	}
 }
 
 func TestProjectIdentityObservationRoundTripsRepositoryContext(t *testing.T) {
@@ -1125,6 +1131,9 @@ func TestProjectIdentityObservationsAggregateSourceArchives(t *testing.T) {
 	assert.NotEmpty(t, aggregate["missing"].ProjectKey)
 	assert.Contains(t, export.ProjectMapForWire(aggregate), aggregate["app"].ProjectKey)
 	assert.Contains(t, export.ProjectMapForWire(aggregate), aggregate["missing"].ProjectKey)
+
+	assert.Equal(t, export.ProjectResolutionAmbiguous, aggregate["app"].Resolution)
+	assert.Nil(t, aggregate["app"].Identity)
 }
 
 func TestSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {

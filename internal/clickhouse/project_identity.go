@@ -142,54 +142,10 @@ func (s *Store) BuildProjectIdentityMap(
 	if kept, ok := s.projectIdentityMaps.get(key, fingerprint); ok {
 		return maps.Clone(kept[0]), nil
 	}
-	observations, err := s.ListProjectIdentityObservations(ctx, labels)
+	projects, err := s.catalog().BuildProjectIdentityMap(ctx, labels)
 	if err != nil {
 		return nil, err
 	}
-	scope, err := s.sourceArchiveIdentityScope(ctx, observations)
-	if err != nil {
-		return nil, err
-	}
-	projects := export.BuildProjectsMapWithScope(labels, observations, scope)
 	s.projectIdentityMaps.put(key, fingerprint, []map[string]export.ProjectMapEntry{maps.Clone(projects)})
 	return projects, nil
-}
-
-func (s *Store) sourceArchiveIdentityScope(
-	ctx context.Context,
-	observations []export.ProjectIdentityObservation,
-) (export.IdentityScope, error) {
-	rows, err := s.queryContext(ctx, `
-		SELECT source_archive_id, source_archive_salt
-		FROM source_archives
-		ORDER BY source_archive_id`)
-	if err != nil {
-		return export.IdentityScope{}, fmt.Errorf(
-			"listing clickhouse source archives: %w", err,
-		)
-	}
-	defer rows.Close()
-
-	var scopes []export.IdentityScope
-	for rows.Next() {
-		var scope export.IdentityScope
-		if err := rows.Scan(&scope.ArchiveID, &scope.ArchiveSalt); err != nil {
-			return export.IdentityScope{}, fmt.Errorf(
-				"scanning clickhouse source archive: %w", err,
-			)
-		}
-		scopes = append(scopes, scope)
-	}
-	if err := rows.Err(); err != nil {
-		return export.IdentityScope{}, fmt.Errorf(
-			"iterating clickhouse source archives: %w", err,
-		)
-	}
-	if len(scopes) == 1 {
-		return scopes[0], nil
-	}
-	if len(scopes) == 0 {
-		return db.ObservationIdentityScope(observations), nil
-	}
-	return export.AggregateIdentityScope(scopes), nil
 }
