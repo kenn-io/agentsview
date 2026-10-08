@@ -2023,94 +2023,65 @@ describe("UsageStore attribution focus", () => {
   });
 
   it.each([
-    [
-      "project",
-      "pl1:sha256:alpha",
-      "excludedProjectKeys",
-      "exclude_project_key",
-      "pl1:sha256:beta",
-    ],
-    ["model", "gpt-4o", "excludedModels", "exclude_model", "claude-sonnet-4-20250514"],
-    ["agent", "codex", "excludedAgents", "exclude_agent", "claude"],
-  ] as const)(
-    "focuses %s stats and clears focus after the summary narrows",
-    async (groupBy, id, field, param, other) => {
-      const { usage } = await loadStore();
-      const summary = usageSummary();
-      summary.agentTotals = ["codex", "claude"].map((agent) => ({
-        ...summary.modelTotals[0]!,
-        agent,
-      }));
-      usage.summary = summary;
-      usage[field] = "hidden-key";
-      usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
-      usage.focusAttribution(groupBy, id);
-      expect(usage[field]).toBe(`hidden-key,${other}`);
-      expect(usage.isAttributionFocused(groupBy, id)).toBe(true);
-      expect(usage.zoomedProject).toBeNull();
-      await vi.waitFor(() =>
-        expect(
-          usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params),
-        ).toContainEqual(
-          expect.objectContaining({
-            [param]: `hidden-key,${other}`,
-            from: "2024-01-08",
-            to: "2024-01-14",
-          }),
-        ),
-      );
-      const narrowed = usageSummary();
-      narrowed.projectTotals = summary.projectTotals.filter((row) => row.project_key === id);
-      narrowed.modelTotals = summary.modelTotals.filter((row) => row.model === id);
-      narrowed.agentTotals = summary.agentTotals.filter((row) => row.agent === id);
-      usage.summary = narrowed;
-      usage.focusAttribution(groupBy, id);
-      expect(usage[field]).toBe("");
-      expect(usage.isAttributionFocused(groupBy, id)).toBe(false);
-      expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]?.[param]).toBeUndefined();
-      usage.cancelInFlightReads();
-    },
-  );
-
-  it("restores the exclusions and brush when focus cannot load", async () => {
+    ["project", "pl1:sha256:alpha", "project_key"],
+    ["model", "gpt-4o", "model"],
+    ["agent", "codex", "agent"],
+  ] as const)("keeps %s focus as an include when dates widen", async (by, id, param) => {
     const { usage } = await loadStore();
     usage.summary = usageSummary();
-    usage.excludedModels = "hidden-model";
-    usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
-    usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("request failed"));
-    usage.focusAttribution("model", "gpt-4o");
-    await vi.waitFor(() => expect(usage.excludedModels).toBe("hidden-model"));
-    expect(usage.isAttributionFocused("model", "gpt-4o")).toBe(false);
-    expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
+    usage.applyDateRange("2024-01-08", "2024-01-14");
+    usage.toggleFocus(by, id, id);
+    await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params)).toContainEqual(
+      expect.objectContaining({ [param]: id, from: "2024-01-08", to: "2024-01-14" }),
+    );
+    const unfocused = usageServiceMocks.getApiV1UsageSummary.mock.calls[1]![0];
+    expect(unfocused[param]).toBeUndefined();
+    expect(unfocused).toEqual(expect.objectContaining({ from: "2024-01-08", to: "2024-01-14" }));
+    usage.applyDateRange("2024-01-01", "2024-02-29");
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ [param]: id, from: "2024-01-01", to: "2024-02-29" }),
+    );
+    expect(usage.isFocused(by, id)).toBe(true);
+    expect(usage.zoomedProject).toBeNull();
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    usage.toggleFocus(by, id, id);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledOnce();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0][param]).toBeUndefined();
+    expect(usage.attributionSummary).toBeNull();
     usage.cancelInFlightReads();
   });
 
-  it("clears a single-item focus and respects a later picker selection", async () => {
+  it("drops focus from the chart context while the brush narrows totals", async () => {
     const { usage } = await loadStore();
-    const summary = usageSummary();
-    summary.modelTotals = [summary.modelTotals[1]!];
-    usage.summary = summary;
-    usage.focusAttribution("model", "gpt-4o");
-    expect(usage.isAttributionFocused("model", "gpt-4o")).toBe(true);
-    usage.focusAttribution("model", "gpt-4o");
-    expect(usage.isAttributionFocused("model", "gpt-4o")).toBe(false);
-    usage.focusAttribution("model", "gpt-4o");
-    usage.selectAllModels();
-    expect(usage.isAttributionFocused("model", "gpt-4o")).toBe(false);
+    usage.summary = usageSummary();
+    usage.applyDateRange("2024-01-01", "2024-01-31");
+    usage.toggleFocus("model", "gpt-4o", "gpt-4o");
+    await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
+    usage.setTimeRange("2024-01-08", "2024-01-14");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    await usage.fetchAll({ preserveTimeRange: true });
+    const calls = usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params);
+    expect(calls[0]).toEqual(expect.objectContaining({ model: "gpt-4o", from: "2024-01-08", to: "2024-01-14" }));
+    expect(calls[1]).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }));
+    expect(calls[1].model).toBeUndefined();
+    expect(calls[2].model).toBeUndefined();
     usage.cancelInFlightReads();
   });
 
-  it("keeps each grouping's focus when another grouping changes", async () => {
+  it("replaces focus and clears it with Clear filters", async () => {
     const { usage } = await loadStore();
-    usage.summary = usageSummary();
-    usage.focusAttribution("project", "pl1:sha256:alpha");
-    usage.focusAttribution("model", "gpt-4o");
-    expect(usage.isAttributionFocused("project", "pl1:sha256:alpha")).toBe(true);
-    expect(usage.isAttributionFocused("model", "gpt-4o")).toBe(true);
-    usage.selectAllModels();
-    expect(usage.isAttributionFocused("project", "pl1:sha256:alpha")).toBe(true);
-    usage.focusAttribution("project", "pl1:sha256:alpha");
-    expect(usage.excludedProjectKeys).toBe("");
+    usage.toggleFocus("project", "pl1:sha256:alpha", "Alpha");
+    usage.toggleFocus("model", "gpt-4o", "gpt-4o");
+    expect(usage.isFocused("project", "pl1:sha256:alpha")).toBe(false);
+    expect(usage.isFocused("model", "gpt-4o")).toBe(true);
+    usage.clearFilters();
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].model).toBeUndefined();
     usage.cancelInFlightReads();
   });
 });
@@ -2148,6 +2119,7 @@ describe("UsageStore project zoom", () => {
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     expect(usage.excludedProjectKeys).toBe("");
     usage.toggleProjectKey("pl1:sha256:alpha");
+    usage.backToProjects(false);
     expect(usage.zoomedProject).toBeNull();
     expect(usage.zoomRows).toBeNull();
     expect(usage.excludedProjectKeys).toBe("pl1:sha256:alpha");
@@ -2199,7 +2171,7 @@ describe("UsageStore project zoom", () => {
         }),
     );
     usage.selectAttributionProject("pl1:sha256:beta", "Project");
-    usage.backToProjects();
+    usage.backToProjects(false);
     expect(usage.loading.zoom).toBe(false);
     resolveOld([group(1)]);
     await Promise.resolve();

@@ -4,7 +4,6 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
-  import { onMount } from "svelte";
   import { Button } from "@kenn-io/kit-ui";
   import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
@@ -37,7 +36,6 @@
   }
 
   let panel: HTMLElement;
-  let touchClick = false;
   let clickedProject: { id: string; label: string } | undefined;
 
   const zoomedProject = $derived(usage.zoomedProject);
@@ -45,15 +43,6 @@
   function zoomRowId(row: { groupKey?: string; machine?: string; sessionId: string }): string {
     return row.groupKey ? `group:${JSON.stringify([row.groupKey, row.machine ?? ""])}` : row.sessionId ? `session:${row.sessionId}` : "remainder";
   }
-
-  onMount(() => {
-    const onPopState = () => usage.backToProjects(false);
-    window.addEventListener("popstate", onPopState);
-    return () => {
-      window.removeEventListener("popstate", onPopState);
-      usage.backToProjects();
-    };
-  });
 
   function handleBackKey(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
@@ -65,7 +54,7 @@
   }
 
   const rowItems = $derived.by(() => {
-    const s = usage.summary;
+    const s = usage.attributionSummary ?? usage.summary;
     if (!s && !zoomedProject) return [];
 
     let items: Array<{
@@ -143,7 +132,8 @@
       value: r.value,
       color: r.color,
       title: rowTitle(r.id, r.label),
-      selected: usage.isAttributionFocused(groupBy, r.id),
+      selected: usage.isFocused(groupBy, r.id),
+      dimmed: !zoomedProject && usage.focus !== null && !usage.isFocused(groupBy, r.id),
       meta: fmtPct(r.value, rows.reduce(
         (sum, item) => sum + item.value, 0,
       )),
@@ -162,13 +152,14 @@
 
   function handleSelect(id: string) {
     if (zoomedProject) return;
-    if (groupBy === "project") clickedProject = rows.find((row) => row.id === id);
-    usage.focusAttribution(groupBy, id);
+    const row = rows.find((row) => row.id === id);
+    if (groupBy === "project") clickedProject = row;
+    if (row) usage.toggleFocus(groupBy, id, row.label);
   }
 
   function handleOpen(id: string, event?: MouseEvent) {
     if (zoomedProject || groupBy !== "project") return;
-    // Focusing can move a different project under the second click.
+    // Adding or removing a filter chip can move the panel under the second tap.
     const project = event && clickedProject ? clickedProject : rows.find((row) => row.id === id);
     if (!project) return;
     usage.selectAttributionProject(project.id, project.label);
@@ -176,14 +167,13 @@
   }
 
   function handleClick(event: MouseEvent, id: string) {
-    touchClick = "pointerType" in event && event.pointerType === "touch";
-    if (groupBy !== "project" || touchClick || event.detail < 2) handleSelect(id);
+    if (event.detail < 2) handleSelect(id);
   }
 
   function handleKey(event: KeyboardEvent, id: string) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      if (event.key === "Enter") handleOpen(id);
+      if (event.key === "Enter" && groupBy === "project") handleOpen(id);
       else handleSelect(id);
     }
   }
@@ -252,9 +242,6 @@
         </button>
       </div>
     </div>
-    {#if zoomedProject}
-      <Button size="sm" surface="soft" label={m.usage_hide_project()} onclick={() => usage.excludeProjectKey(zoomedProject.key, { preserveTimeRange: true })} />
-    {/if}
   </div>
   {#if zoomedProject && usage.errors.zoom}
     <div class="empty">{usage.errors.zoom}</div>
@@ -279,14 +266,15 @@
           {#each rows as row, i (row.id)}
             <div
               class="rail-row"
-              class:selected={usage.isAttributionFocused(groupBy, row.id)}
+              class:selected={usage.isFocused(groupBy, row.id)}
+              class:dimmed={!zoomedProject && usage.focus !== null && !usage.isFocused(groupBy, row.id)}
               role="button"
               tabindex={zoomedProject ? -1 : 0}
-              aria-pressed={usage.isAttributionFocused(groupBy, row.id)}
+              aria-pressed={usage.isFocused(groupBy, row.id)}
               title={rowTitle(row.id, row.label)}
               aria-disabled={!!zoomedProject}
               onclick={(event) => handleClick(event, row.id)}
-              ondblclick={(event) => { if (!touchClick) handleOpen(row.id, event); }}
+              ondblclick={(event) => handleOpen(row.id, event)}
               onkeydown={(event) => handleKey(event, row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
@@ -309,14 +297,15 @@
         {#each rows as row, i (row.id)}
           <div
             class="list-row"
-            class:selected={usage.isAttributionFocused(groupBy, row.id)}
+            class:selected={usage.isFocused(groupBy, row.id)}
+            class:dimmed={!zoomedProject && usage.focus !== null && !usage.isFocused(groupBy, row.id)}
             role="button"
             tabindex={zoomedProject ? -1 : 0}
-            aria-pressed={usage.isAttributionFocused(groupBy, row.id)}
+            aria-pressed={usage.isFocused(groupBy, row.id)}
             title={rowTitle(row.id, row.label)}
             aria-disabled={!!zoomedProject}
             onclick={(event) => handleClick(event, row.id)}
-            ondblclick={(event) => { if (!touchClick) handleOpen(row.id, event); }}
+            ondblclick={(event) => handleOpen(row.id, event)}
             onkeydown={(event) => handleKey(event, row.id)}
           >
             <span class="list-rank">{i + 1}</span>
@@ -435,6 +424,14 @@
 
   .rail-row:hover:not([aria-disabled="true"]) {
     background: var(--bg-surface-hover);
+  }
+
+  .rail-row, .list-row {
+    touch-action: manipulation;
+  }
+
+  .dimmed {
+    opacity: 0.35;
   }
 
   .rail-row.selected, .list-row.selected {

@@ -58,7 +58,7 @@
 
   const chartColorMaps = $derived(
     usageChartColorMaps(
-      usage.timeSeriesSummary,
+      usage.colorSummary,
       settings.chartPalette,
     ),
   );
@@ -67,10 +67,10 @@
   // available after filtering removes it or the page is remounted.
 
   $effect(() => {
-    const fromSummary = usage.summary?.projectTotals ?? [];
+    const fromSummary = (usage.attributionSummary ?? usage.summary)?.projectTotals ?? [];
     const counts = usage.isTimeRangeSummaryProvisional
       ? {}
-      : usage.summary?.sessionCounts.byProject ?? {};
+      : (usage.attributionSummary ?? usage.summary)?.sessionCounts.byProject ?? {};
     untrack(() => usage.mergeKnownProjects(fromSummary, counts));
   });
 
@@ -139,7 +139,7 @@
 
   // Seed from the filtered summary response.
   $effect(() => {
-    const fromSummary = (usage.summary?.modelTotals ?? [])
+    const fromSummary = ((usage.attributionSummary ?? usage.summary)?.modelTotals ?? [])
       .map((m) => m.model);
     untrack(() => mergeIntoKnownModels(fromSummary));
   });
@@ -384,9 +384,7 @@
     });
   });
 
-  // URL write-back: keep URL params in sync with filter state
-  // so users can share/bookmark the view.
-  $effect(() => {
+  function usageUrlParams(): Record<string, string> {
     const state = {
       from: usage.from,
       to: usage.to,
@@ -397,7 +395,7 @@
       excludedAgents: usage.excludedAgents,
       excludedModels: usage.excludedModels,
     };
-    const nextParams = withSelectedTokenTypes(
+    return withSelectedTokenTypes(
       withUsageMode(
         mergeUsageAndSessionUrlParams(
           buildUsageUrlParams(state),
@@ -408,10 +406,23 @@
       usage.selectedTokenTypes,
       usage.mode,
     );
+  }
+
+  $effect(() => {
+    const nextParams = usageUrlParams();
     const ready = urlInitRan && urlWritebackReady;
     untrack(() => {
       if (!ready || router.route !== "usage") return;
       router.replaceParams(nextParams);
+    });
+  });
+
+  $effect(() => {
+    const agent = sessions.filters.agent;
+    untrack(() => {
+      if (usage.focus?.by === "agent" && usage.focus.id !== agent) {
+        usage.focus = null;
+      }
     });
   });
 
@@ -431,6 +442,12 @@
 
   onMount(() => {
     mounted = true;
+    const onPopState = () => {
+      if (!usage.hasZoomHistory) return;
+      usage.backToProjects(false);
+      if (router.route === "usage") router.replaceParams(usageUrlParams());
+    };
+    window.addEventListener("popstate", onPopState);
     // The Agent dropdown reads sessions.agents, which is otherwise loaded
     // lazily by the sidebar filter control; a direct /usage visit needs it too.
     sessions.loadAgents();
@@ -441,6 +458,10 @@
     tick().then(() => {
       urlWritebackReady = true;
     });
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      usage.backToProjects(false);
+    };
   });
 
   onDestroy(() => {
@@ -530,7 +551,11 @@
   </div>
 
   <SessionActiveFilters
-    onClearProjects={() => usage.selectAllProjects()}
+    projectFilters={usage.focus?.by === "project" ? [usage.focus.label] : []}
+    modelFilters={usage.focus?.by === "model" ? [usage.focus.label] : []}
+    onRemoveProject={() => usage.clearFocus()}
+    onRemoveModel={() => usage.clearFocus()}
+    onClearProjects={() => usage.clearFilters()}
     onClearAgents={() => usage.selectAllAgents()}
     onClearModels={() => usage.selectAllModels()}
   />

@@ -22580,6 +22580,13 @@ paths:
           schema:
             description: Filter by project
             type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
+            type: string
         - description: Filter by machine
           explode: false
           in: query
@@ -22817,6 +22824,13 @@ paths:
           name: project
           schema:
             description: Filter by project
+            type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
             type: string
         - description: Filter by machine
           explode: false
@@ -23078,6 +23092,13 @@ paths:
           schema:
             description: Filter by project
             type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
+            type: string
         - description: Filter by machine
           explode: false
           in: query
@@ -23305,6 +23326,13 @@ paths:
           name: project
           schema:
             description: Filter by project
+            type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
             type: string
         - description: Filter by machine
           explode: false
@@ -23534,6 +23562,13 @@ paths:
           schema:
             description: Filter by project
             type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
+            type: string
         - description: Filter by machine
           explode: false
           in: query
@@ -23645,13 +23680,6 @@ paths:
             default: true
             description: Include distinct session counts
             type: boolean
-        - description: Filter by an opaque project key
-          explode: false
-          in: query
-          name: project_key
-          schema:
-            description: Filter by an opaque project key
-            type: string
         - description: Maximum number of sessions
           explode: false
           in: query

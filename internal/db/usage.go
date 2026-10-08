@@ -654,6 +654,9 @@ type dailyUsageScanRow struct {
 }
 
 type topSessionMetadata struct {
+	machine     string
+	groupKey    string
+	groupLabel  string
 	displayName string
 	agent       string
 	project     string
@@ -1639,7 +1642,10 @@ SELECT
 	COALESCE(NULLIF(COALESCE(display_name, session_name), ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
 	agent,
 	project,
-	COALESCE(started_at, '') AS started_at
+	COALESCE(started_at, '') AS started_at,
+	machine,
+	group_key,
+	group_label
 FROM sessions
 WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
@@ -1657,6 +1663,9 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 			&meta.agent,
 			&meta.project,
 			&meta.startedAt,
+			&meta.machine,
+			&meta.groupKey,
+			&meta.groupLabel,
 		); err != nil {
 			return nil, fmt.Errorf("scanning top session metadata: %w", err)
 		}
@@ -2925,6 +2934,9 @@ func (db *DB) getTopSessionsByCostLegacy(
 			result[i].Agent = meta.agent
 			result[i].Project = meta.project
 			result[i].StartedAt = meta.startedAt
+			result[i].Machine = meta.machine
+			result[i].GroupKey = meta.groupKey
+			result[i].GroupLabel = meta.groupLabel
 		}
 	}
 

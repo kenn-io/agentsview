@@ -149,21 +149,22 @@ exclusions by key and the opened attribution project stay in the current page.
 A **Clear filters** link appears next to the refresh button
 when anything is active.
 
-Click a tile or row in Usage attribution to focus the page's stats on that
-project, model, or agent. Click it again to clear that grouping's exclusions.
-Double-click a project to open its groups and individual sessions for the
-selected date range. Enter opens a project; Space selects it. Touch taps
-select without opening. Hermes cron jobs show their latest
-recorded name in that range and their ID on hover. Matching names get a short
-ID suffix. Matching job IDs on different machines get a machine suffix.
-Colliding session IDs retain their provider. **All projects** returns to the
-project view.
-**Hide project** or the Projects picker excludes a project. Usage outside the
-top 100 tiles appears under **Other**. Archives without `state.db` titles show
-job IDs. Matching job IDs in profiles on the same machine share one row.
-With the panel focused, Escape or Backspace returns to all projects. Browser
-Back also returns to all projects. Page totals and charts keep their current
-scope.
+Click a tile or row in Usage attribution to select a project, model, or agent
+and narrow the page's stats. Every tile and row stays visible at its own color;
+the selection is highlighted and the others dimmed. Click the selection again
+or remove its filter chip to clear it. The selection stays active when dates widen.
+Double click, double tap, or press Enter on a project to open its groups and
+individual sessions for the selected date range. Enter selects a model or agent;
+Space selects any item. Hermes cron jobs show their latest recorded name in
+that range and their ID on hover. Matching names get a short ID suffix. Matching
+job IDs on different machines get a machine suffix. Colliding session IDs retain
+their provider. **All projects**, Escape, Backspace, and browser Back return to
+project tiles with the current dates, filters, and selection.
+The **Projects** picker excludes a project. Usage outside the top 100 tiles
+appears under **Other**. Archives without `state.db` titles show job IDs.
+Matching job IDs in profiles on the same machine share one row.
+Orphaned Hermes sessions synced before the upgrade can't be reparsed and appear
+under **Other**.
 
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,
@@ -229,9 +230,9 @@ controls work in Tokens mode.
 The attribution panel breaks down total spend for the window into a treemap plus
 a ranked side rail. Switch the group-by between **Project**, **Model**, and
 **Agent**, or flip the view from **Treemap** to **List** for a table-style
-readout. Click a project cell or row to open the project. Use **Hide project**
-or the **Projects** filter to hide it from the chart above and see where the
-remaining spend is going.
+readout. Click a tile or row to select it while keeping every item visible.
+Double click, double tap, or press Enter on a project to open its groups and
+sessions. Use the **Projects** filter to hide projects.
 
 ![Cost attribution treemap](/docs/assets/generated/screenshots/usage-attribution.png)
 

@@ -56,7 +56,7 @@ func usageSessionRowBytes(r chUsageSessionRow) int64 {
 }
 
 func topSessionBytes(e db.TopSessionEntry) int64 {
-	return int64(unsafe.Sizeof(e)) + stringBytes(e.SessionID, e.DisplayName, e.Agent, e.Project, e.StartedAt)
+	return int64(unsafe.Sizeof(e)) + stringBytes(e.SessionID, e.DisplayName, e.Agent, e.Project, e.StartedAt, e.Machine, e.GroupKey, e.GroupLabel)
 }
 
 func analyticsSessionBytes(r readbase.AnalyticsSession) int64 {

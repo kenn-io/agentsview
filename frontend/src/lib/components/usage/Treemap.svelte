@@ -13,6 +13,7 @@
     meta?: string;
     title?: string;
     selected?: boolean;
+    dimmed?: boolean;
   }
 
   interface Props {
@@ -44,13 +45,12 @@
   );
 
   let measuredWidth = $state(0);
-  let touchClick = false;
   const chartWidth = $derived(measuredWidth > 0 ? measuredWidth : 600);
 
   function handleKey(e: KeyboardEvent, id: string) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      if (e.key === "Enter") onOpen?.(id);
+      if (e.key === "Enter" && onOpen) onOpen(id);
       else onSelect?.(id);
     }
   }
@@ -73,17 +73,15 @@
             </clipPath>
             <g
               class="tile"
+              class:dimmed={tile.dimmed}
               clip-path={`url(#${clipId})`}
               tabindex={onSelect ? 0 : -1}
               role="button"
               aria-disabled={!onSelect}
               aria-pressed={tile.selected ?? false}
               aria-label={tile.title ?? m.usage_click_to_focus({ label: tile.label })}
-              onclick={(event) => {
-                touchClick = "pointerType" in event && event.pointerType === "touch";
-                if (!onOpen || touchClick || event.detail < 2) onSelect?.(tile.id);
-              }}
-              ondblclick={(event) => { if (!touchClick) onOpen?.(tile.id, event); }}
+              onclick={(event) => { if (event.detail < 2) onSelect?.(tile.id); }}
+              ondblclick={(event) => onOpen?.(tile.id, event)}
               onkeydown={(event) => handleKey(event, tile.id)}
             >
               <title>{tile.title ?? m.usage_click_to_focus({ label: tile.label })}</title>
@@ -124,6 +122,11 @@
 
   .treemap-container :global(.tile) {
     cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .treemap-container :global(.tile.dimmed) {
+    opacity: 0.35;
   }
 
   .treemap-container :global(.tile[aria-disabled="true"]) {

@@ -124,6 +124,9 @@ afterEach(() => {
   router.params = {};
   router.sessionId = null;
   window.history.replaceState(null, "", "/");
+  usage.backToProjects(false);
+  usage.focus = null;
+  usage.attributionSummary = null;
   usage.summary = null;
   usage.topSessions = null;
   usage.errors.summary = null;
@@ -825,5 +828,47 @@ describe("UsagePage refresh behavior", () => {
     expect(source).toContain('class="chart-panel bounded"');
     expect(source).toContain("max-height:");
     expect(source).toContain("overflow: auto;");
+  });
+});
+
+
+describe("Usage attribution history", () => {
+  it.each(["button", "Escape", "Backspace", "browser"])("%s Back keeps the current dates and selection", async (action) => {
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    window.history.replaceState(null, "", "/usage?from=2024-01-01&to=2024-01-31");
+    router.route = "usage";
+    router.params = { from: "2024-01-01", to: "2024-01-31" };
+    usage.summary = usageSummaryWithUnsupported();
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    usage.toggleFocus("project", "pl1:sha256:alpha", "Alpha");
+    usage.selectAttributionProject("pl1:sha256:alpha", "Alpha");
+    await flushEffects();
+    usage.applyDateRange("2024-01-01", "2024-03-31");
+    usage.excludedModels = "model-hidden";
+    await flushEffects();
+    expect(window.history.state?.usageZoom).toBe(true);
+    const pop = () => {
+      window.history.replaceState(null, "", "/usage?from=2024-01-01&to=2024-01-31");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    };
+    const back = vi.spyOn(window.history, "back").mockImplementation(pop);
+    if (action === "browser") pop();
+    else if (action === "button") {
+      [...document.querySelectorAll<HTMLButtonElement>(".attribution-panel button")]
+        .find((button) => button.textContent?.trim() === "← All projects")!.click();
+    } else {
+      const panel = document.querySelector<HTMLElement>(".attribution-panel")!;
+      panel.focus();
+      panel.dispatchEvent(new KeyboardEvent("keydown", { key: action, bubbles: true, cancelable: true }));
+    }
+    await flushEffects();
+    expect(usage.zoomedProject).toBeNull();
+    expect(usage.isFocused("project", "pl1:sha256:alpha")).toBe(true);
+    expect(router.params).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-03-31", exclude_model: "model-hidden" }));
+    expect(usage.to).toBe("2024-03-31");
+    expect(back).toHaveBeenCalledTimes(action === "browser" ? 0 : 1);
   });
 });

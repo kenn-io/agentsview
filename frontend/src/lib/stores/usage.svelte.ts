@@ -20,10 +20,11 @@ type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions" | "zoom"
 // Steps of a full refresh in execution order; the breakdown follows it. The
 // window summary is the second summary request made while a time range is
 // selected on the chart.
-type UsageStep = UsagePanel | "contextSummary";
+type UsageStep = UsagePanel | "contextSummary" | "attributionSummary";
 const USAGE_STEP_ORDER: readonly UsageStep[] = [
   "summary",
   "contextSummary",
+  "attributionSummary",
   "topSessions",
   "zoom",
   "comparison",
@@ -341,9 +342,7 @@ class UsageStore {
   selectedTokenTypes: UsageTokenType[] = $state([...ALL_TOKEN_TYPES]);
   selectedTimeRange: { from: string; to: string } | null = $state(null);
 
-  // Empty exclusion sets show all items. Chart clicks and picker checkboxes
-  // share these comma-separated sets.
-  // Initialized from localStorage to survive tab switches.
+  // Picker exclusions persist across tab switches.
   excludedProjects: string = $state("");
   excludedProjectKeys: string = $state("");
   excludedAgents: string = $state("");
@@ -359,11 +358,17 @@ class UsageStore {
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
+  attributionSummary = $state<UsageSummaryResponse | null>(null);
+  focus = $state<{ by: GroupBy; id: string; label: string } | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
-  zoomedProject = $state<{ key: string; label: string } | null>(null);
+  private zoomed = $state(false);
+
+  get zoomedProject(): { key: string; label: string } | null {
+    return this.zoomed && this.focus?.by === "project" ? { key: this.focus.id, label: this.focus.label } : null;
+  }
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
@@ -421,7 +426,7 @@ class UsageStore {
     this.hasNewData = true;
   }
 
-  private baseParams(): UsageParams {
+  private baseParams(options: { focus?: boolean } = {}): UsageParams {
     const sessionFilters = sessions.filters;
     const range = this.selectedTimeRange ?? {
       from: this.from,
@@ -457,11 +462,22 @@ class UsageStore {
     if (this.excludedModels) {
       p.exclude_model = this.excludedModels;
     }
+    if (options.focus !== false && this.focus) {
+      if (this.focus.by === "project") p.project_key = this.focus.id;
+      else if (this.focus.by === "agent") p.agent = this.focus.id;
+      else p.model = this.focus.id;
+    } else if (options.focus === false && this.focus?.by === "agent") {
+      p.agent = undefined;
+    }
     return p;
   }
 
   get timeSeriesSummary(): UsageSummaryResponse | null {
     return this.timeSeriesContextSummary ?? this.summary;
+  }
+
+  get colorSummary(): UsageSummaryResponse | null {
+    return this.timeSeriesContextSummary ?? this.attributionSummary ?? this.summary;
   }
 
   get pairwiseModelOptions(): string[] {
@@ -593,10 +609,10 @@ class UsageStore {
       return;
     }
     if (this.selectedTimeRange === null) {
-      this.timeSeriesContextSummary = this.summary;
+      this.timeSeriesContextSummary = this.attributionSummary ?? this.summary;
     }
     this.selectedTimeRange = { from, to };
-    if (this.timeSeriesContextSummary) {
+    if (this.timeSeriesContextSummary && !this.focus) {
       this.summary = summaryForDateRange(this.timeSeriesContextSummary, from, to);
       this.isTimeRangeSummaryProvisional = true;
     }
@@ -638,29 +654,23 @@ class UsageStore {
     }
   }
 
-  private attributionFocus = $state<Partial<Record<GroupBy, { id: string; excluded: string }>>>({});
-
-  isAttributionFocused(groupBy: GroupBy, id: string): boolean {
-    const field = groupBy === "project" ? "excludedProjectKeys" : groupBy === "agent" ? "excludedAgents" : "excludedModels";
-    return this.attributionFocus[groupBy]?.id === id && this.attributionFocus[groupBy]?.excluded === this[field];
+  isFocused(by: GroupBy, id: string): boolean {
+    return this.focus?.by === by && this.focus.id === id;
   }
 
-  focusAttribution(groupBy: GroupBy, id: string): void {
-    const field = groupBy === "project" ? "excludedProjectKeys" : groupBy === "agent" ? "excludedAgents" : "excludedModels";
-    const previous = this[field];
-    const previousFocus = this.attributionFocus[groupBy];
-    const clear = this.isAttributionFocused(groupBy, id);
-    const keys = groupBy === "project" ? this.summary?.projectTotals.map((row) => row.project_key) : groupBy === "agent" ? this.summary?.agentTotals.map((row) => row.agent) : this.summary?.modelTotals.map((row) => row.model);
-    const all = new Set([...previous.split(",").filter(Boolean), ...(keys ?? [])]);
-    const excluded = clear ? "" : [...all].filter((key) => key !== id).join(",");
-    this[field] = excluded;
-    this.attributionFocus[groupBy] = clear ? undefined : { id, excluded };
-    void this.fetchAllWithResult({ preserveTimeRange: true }).then((result) => {
-      if (result !== "error" || this[field] !== excluded) return;
-      this[field] = previous;
-      this.attributionFocus[groupBy] = previousFocus;
-      void this.fetchAll({ preserveTimeRange: true });
-    });
+  toggleFocus(by: GroupBy, id: string, label: string): void {
+    const clear = this.isFocused(by, id);
+    if (this.focus?.by === "agent") sessions.filters.agent = "";
+    this.focus = clear ? null : { by, id, label };
+    if (by === "agent") sessions.filters.agent = clear ? "" : id;
+    void this.fetchAll({ preserveTimeRange: true });
+  }
+
+  clearFocus(): void {
+    if (!this.focus) return;
+    if (this.zoomed) this.backToProjects();
+    const { by, id, label } = this.focus;
+    this.toggleFocus(by, id, label);
   }
 
   // Toggle an item's exclusion. Clicking an included item
@@ -671,7 +681,6 @@ class UsageStore {
   }
 
   toggleProjectKey(key: string, options: { preserveTimeRange?: boolean } = {}): void {
-    this.attributionFocus.project = undefined;
     const previous = this.excludedProjectKeys;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedProjectKeys = this.toggleCsv(this.excludedProjectKeys, key);
@@ -685,13 +694,7 @@ class UsageStore {
     });
   }
 
-  excludeProjectKey(key: string, options: { preserveTimeRange?: boolean } = {}): void {
-    if (!this.isProjectKeyExcluded(key)) this.toggleProjectKey(key, options);
-    if (this.zoomedProject?.key === key) this.backToProjects();
-  }
-
   toggleAgent(name: string, options: { preserveTimeRange?: boolean } = {}): void {
-    this.attributionFocus.agent = undefined;
     const previous = this.excludedAgents;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedAgents = this.toggleCsv(this.excludedAgents, name);
@@ -704,7 +707,6 @@ class UsageStore {
   }
 
   hideModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
-    this.attributionFocus.model = undefined;
     const previous = this.excludedModels;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedModels = joinCsvParts(this.excludedModels, name);
@@ -717,7 +719,6 @@ class UsageStore {
   }
 
   toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
-    this.attributionFocus.model = undefined;
     const previous = this.excludedModels;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedModels = this.toggleCsv(this.excludedModels, name);
@@ -763,14 +764,12 @@ class UsageStore {
   }
 
   selectAllProjects(): void {
-    this.attributionFocus.project = undefined;
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
     this.fetchAll();
   }
 
   deselectAllProjectKeys(all: string[]): void {
-    this.attributionFocus.project = undefined;
     const excluded = new Set(
       this.excludedProjectKeys ? this.excludedProjectKeys.split(",").filter(Boolean) : [],
     );
@@ -781,31 +780,29 @@ class UsageStore {
   }
 
   selectAllAgents(): void {
-    this.attributionFocus.agent = undefined;
     this.excludedAgents = "";
     this.fetchAll();
   }
 
   deselectAllAgents(all: string[]): void {
-    this.attributionFocus.agent = undefined;
     this.excludedAgents = all.join(",");
     this.fetchAll();
   }
 
   selectAllModels(): void {
-    this.attributionFocus.model = undefined;
     this.excludedModels = "";
     this.fetchAll();
   }
 
   deselectAllModels(all: string[]): void {
-    this.attributionFocus.model = undefined;
     this.excludedModels = joinCsvParts(this.excludedModels, all.join(","));
     this.fetchAll();
   }
 
   clearFilters(): void {
-    this.attributionFocus = {};
+    if (this.focus?.by === "agent") sessions.filters.agent = "";
+    this.focus = null;
+    this.backToProjects();
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
     this.excludedAgents = "";
@@ -815,6 +812,7 @@ class UsageStore {
 
   get hasActiveFilters(): boolean {
     return (
+      this.focus !== null ||
       this.excludedProjects !== "" ||
       this.excludedProjectKeys !== "" ||
       this.excludedAgents !== "" ||
@@ -923,12 +921,13 @@ class UsageStore {
       options.preserveTimeRange &&
       options.refreshTimeSeriesContext !== false &&
       selectedRangeAtStart !== null
-        ? { ...params, from: this.from, to: this.to }
+        ? { ...this.baseParams({ focus: false }), from: this.from, to: this.to }
         : undefined;
     const summaryPromise = this.fetchSummary({
       loadComparison: false,
       params,
       contextParams,
+      attributionParams: this.focus ? this.baseParams({ focus: false }) : undefined,
     });
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
@@ -1002,6 +1001,7 @@ class UsageStore {
       loadComparison?: boolean;
       params?: UsageParams;
       contextParams?: UsageParams;
+      attributionParams?: UsageParams;
       recoverProjectScope?: boolean;
     } = {},
   ): Promise<LoadedUsageSummary | null> {
@@ -1024,26 +1024,30 @@ class UsageStore {
     const liveContextStep = options.contextParams
       ? this.liveQuery.start("contextSummary", started)
       : 0;
+    const liveAttributionStep = options.attributionParams ? this.liveQuery.start("attributionSummary", started) : 0;
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const params = options.params ?? this.baseParams();
       const contextParams = options.contextParams;
       let data: UsageSummaryResponse;
       let contextData: UsageSummaryResponse | null = null;
-      if (contextParams) {
-        [data, contextData] = await Promise.all([
-          UsageService.getApiV1UsageSummary(params, { signal }),
-          UsageService.getApiV1UsageSummary(contextParams, { signal }),
-        ]);
-      } else {
+      let attributionData: UsageSummaryResponse | null = null;
+      if (!contextParams && !options.attributionParams) {
         data = await UsageService.getApiV1UsageSummary(params, { signal });
+      } else {
+        [data, contextData, attributionData] = await Promise.all([
+          UsageService.getApiV1UsageSummary(params, { signal }),
+          contextParams ? UsageService.getApiV1UsageSummary(contextParams, { signal }) : null,
+          options.attributionParams ? UsageService.getApiV1UsageSummary(options.attributionParams, { signal }) : null,
+        ]);
       }
       if (this.versions.summary === v) {
         this.summary = data;
+        this.attributionSummary = attributionData;
         // Both responses are applied together, so each request's apply
         // phase starts once the later body has arrived; the earlier one
         // shows a gap while it waited for its sibling.
-        const bodies = [data, contextData]
+        const bodies = [data, contextData, attributionData]
           .map((body) => responseTimingOf(body)?.bodyAt)
           .filter((at): at is number => at !== undefined);
         const applyStartedAt = bodies.length > 0 ? Math.max(...bodies) : undefined;
@@ -1051,6 +1055,7 @@ class UsageStore {
         if (contextData !== null) {
           this.noteStep("contextSummary", liveContextStep, started, contextData, applyStartedAt);
         }
+        if (attributionData) this.noteStep("attributionSummary", liveAttributionStep, started, attributionData, applyStartedAt);
         this.isTimeRangeSummaryProvisional = false;
         if (contextData !== null) {
           this.timeSeriesContextSummary = contextData;
@@ -1093,11 +1098,12 @@ class UsageStore {
           params: recoveredParams,
           contextParams: options.contextParams
             ? {
-                ...recoveredParams,
+                ...this.baseParams({ focus: false }),
                 from: options.contextParams.from,
                 to: options.contextParams.to,
               }
             : undefined,
+          attributionParams: options.attributionParams ? this.baseParams({ focus: false }) : undefined,
           recoverProjectScope: false,
         });
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
@@ -1127,6 +1133,7 @@ class UsageStore {
       this.recordStep("summary", started, status);
       this.liveQuery.abandon(liveStep);
       this.liveQuery.abandon(liveContextStep);
+      this.liveQuery.abandon(liveAttributionStep);
       this.clearAbortSignal("summary", signal);
       if (this.versions.summary === v) {
         this.loading.summary = false;
@@ -1242,41 +1249,33 @@ class UsageStore {
   }
 
   private zoomHistoryEntry = false;
-  private zoomHistoryPath = "";
-  private zoomHistoryBack: Promise<void> | null = null;
+
+  get hasZoomHistory(): boolean {
+    return this.zoomHistoryEntry;
+  }
 
   backToProjects(popHistory = true): void {
-    if (!popHistory && this.zoomHistoryBack) return;
-    if (this.zoomHistoryEntry && popHistory && window.location.pathname === this.zoomHistoryPath) {
-      this.zoomHistoryBack = new Promise((resolve) => {
-        window.addEventListener("popstate", () => {
-          this.zoomHistoryBack = null;
-          resolve();
-        }, { once: true });
-      });
+    if (popHistory && this.zoomHistoryEntry && window.history.state?.usageZoom) {
       window.history.back();
+    } else {
+      this.zoomHistoryEntry = false;
     }
-    this.zoomHistoryEntry = false;
     this.invalidatePanel("zoom");
-    this.zoomedProject = null;
+    this.zoomed = false;
     this.zoomRows = null;
     this.errors.zoom = null;
   }
 
   selectAttributionProject(key: string, label: string): void {
-    if (this.zoomHistoryBack) {
-      const version = this.versions.zoom;
-      void this.zoomHistoryBack.then(() => {
-        if (version === this.versions.zoom) this.selectAttributionProject(key, label);
-      });
-      return;
+    if (!this.isFocused("project", key)) {
+      this.zoomed = false;
+      this.toggleFocus("project", key, label);
     }
+    this.zoomed = true;
     if (!this.zoomHistoryEntry) {
-      window.history.pushState(window.history.state, "");
+      window.history.pushState({ ...window.history.state, usageZoom: true }, "");
       this.zoomHistoryEntry = true;
-      this.zoomHistoryPath = window.location.pathname;
     }
-    this.zoomedProject = { key, label };
     void this.fetchZoom();
   }
 
@@ -1295,7 +1294,6 @@ class UsageStore {
       const data = await UsageService.getApiV1UsageTopSessions(
         {
           ...params,
-          project_key: projectKey,
           group_by: "group",
           limit: 100,
           sort: this.mode === "token" ? "tokens" : "cost",

@@ -121,6 +121,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   api.getApiV1UsageSummary.mockImplementation(async (params) => summary(params.exclude_model));
+  usage.focus = null;
+  usage.attributionSummary = null;
   usage.excludedModels = "";
   usage.toggles.attribution.groupBy = "model";
   usage.toggles.attribution.view = "treemap";
@@ -132,6 +134,8 @@ afterEach(async () => {
   await unmount(component);
   usage.cancelInFlightReads();
   usage.summary = null;
+  usage.focus = null;
+  usage.attributionSummary = null;
   usage.excludedModels = "";
   usage.toggles.attribution.groupBy = "project";
   router.route = "sessions";
@@ -166,25 +170,25 @@ describe("Usage model visibility", () => {
         expect(params.model).toBeUndefined();
         expect(
           Array.from(document.querySelectorAll(".tile title"), (tile) => tile.textContent),
-        ).toEqual(["Click to hide model-alpha", "Click to hide model-charlie"]);
+        ).toEqual(["Click to focus model-alpha", "Click to focus model-charlie"]);
       });
       expect(router.params.exclude_model).toBe("model-bravo");
     },
   );
 
-  it("keeps chart hiding, picker restoring, and bulk visibility in sync", async () => {
+  it("keeps selection visible while picker exclusions change the list", async () => {
     component = mount(UsagePage, { target: document.body });
     await tick();
     document.querySelector(".tile")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await vi.waitFor(() => expect(document.querySelectorAll(".tile")).toHaveLength(2));
-    expect(modelPicker().textContent).not.toContain("All");
-
+    await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
+    expect(document.querySelectorAll(".tile")).toHaveLength(3);
+    expect(document.querySelectorAll(".tile.dimmed")).toHaveLength(2);
+    expect(document.querySelector('.tile[aria-pressed="true"]')).not.toBeNull();
+    expect(modelPicker().textContent).toContain("All");
+    document.querySelector(".tile")!.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    await vi.waitFor(() => expect(usage.focus).toBeNull());
     modelPicker().click();
     await tick();
-    expect(modelOption("model-alpha").classList.contains("active")).toBe(false);
-    modelOption("model-alpha").click();
-    await vi.waitFor(() => expect(document.querySelectorAll(".tile")).toHaveLength(3));
-
     modelOption("model-bravo").click();
     await vi.waitFor(() => {
       expect(api.getApiV1UsageSummary.mock.lastCall?.[0].exclude_model).toBe("model-bravo");

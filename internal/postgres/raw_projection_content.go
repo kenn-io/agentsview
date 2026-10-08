@@ -184,8 +184,8 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 		out := map[string]any{}
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			// New non-content metadata must stay out of normalized-content-v1.
-			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "GroupKey" || f.Name == "GroupLabel" {
+			// Empty group fields preserve revisions of previously ungrouped sessions.
+			if !f.IsExported() || f.Name == "UsageAutomationProjected" || ((f.Name == "GroupKey" || f.Name == "GroupLabel") && v.Field(i).IsZero()) {
 				continue
 			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)

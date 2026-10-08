@@ -11,12 +11,16 @@ The latest release is
 
 **New features**
 
-- Click a project in Usage attribution to see its groups and sessions.
+- Select a Usage attribution tile or row to narrow totals and charts while
+  every item stays visible in its own color. Double click, double tap, or press
+  Enter on a project to open its groups and sessions. Back keeps current dates,
+  filters, and selection. The Projects picker hides projects.
   Hermes cron jobs keep renamed runs and continuations together through
   recorded parent links. Each job shows its latest recorded name in the
-  selected range. Use **Hide project** in the zoom header to exclude it.
+  selected range, including on hosted PostgreSQL archives.
   The first sync after upgrading rebuilds the archive once to populate groups.
-  For DuckDB mirrors, run `agentsview duckdb push --full` once.
+  Orphaned Hermes sessions synced before the upgrade can't be reparsed and
+  appear under **Other**. For DuckDB mirrors, run `agentsview duckdb push --full` once.
 
 **Bug fixes**
 

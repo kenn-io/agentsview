@@ -26,6 +26,10 @@ export type GetApiV1UsageTopSessionsParams = {
    */
   project?: string;
   /**
+   * Filter by an opaque project key
+   */
+  project_key?: string;
+  /**
    * Filter by machine
    */
   machine?: string;
@@ -86,10 +90,6 @@ export type GetApiV1UsageTopSessionsParams = {
    * Include distinct session counts
    */
   session_counts?: boolean;
-  /**
-   * Filter by an opaque project key
-   */
-  project_key?: string;
   /**
    * Maximum number of sessions
    * @minimum 0
