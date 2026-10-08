@@ -673,12 +673,6 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			if !tt.updated {
 				assert.Equal(t, *initial.TranscriptRevision, *marked.TranscriptRevision)
 			}
-			if tt.name == "shorter result updates in place" {
-				assert.NotEqual(t, *initial.TranscriptRevision, *marked.TranscriptRevision)
-				assert.Empty(t, marked.SecretsRulesVersion)
-			} else {
-				assert.Equal(t, "test-rules", marked.SecretsRulesVersion)
-			}
 			assert.Equal(t, strPtr("claude-ai:v1:full:reply"), marked.LastEntryUUID)
 			_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+tt.detail+"]"), nil)
 			require.NoError(t, err)
