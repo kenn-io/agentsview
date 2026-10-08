@@ -2808,7 +2808,9 @@ schemas keep their existing ordering behavior.
   Live details identified the visible branch with `current_leaf_message_uuid`
   and string `parent_message_uuid` links ending at the root sentinel,
   `00000000-0000-4000-8000-000000000000`. `ParseClaudeAIDetail` walks those
-  ancestors and reverses the path. Missing or null leaves, missing messages or
+  ancestors and reverses the path. Sync carries each live message's `uuid` into
+  `messages.source_uuid`, so pins follow that message across reconciliation.
+  Missing or null leaves, missing messages or
   parents, non-string parents, duplicate UUIDs, and cycles fail before writing.
   Exports retain their original order even when tree fields are present.
   Sync also rejects a detail UUID that differs from the requested chat.
@@ -2818,11 +2820,15 @@ schemas keep their existing ordering behavior.
   Full resync preserves markers for import-only sessions. Usage-only archives
   refresh session metadata under their content
   policy. Detail HTTP 404 counts as skipped. Other detail HTTP failures and
-  responses over 32 MiB fail that chat. Authentication, transport, and
+  responses over 32 MiB fail that chat. The browser checks `Content-Length`
+  and caps stream reads before IPC, returning HTTP 413 with an empty body.
+  Authentication, transport, and
   cancellation errors stop Sync.
   Sync uses the export importer's message reconciliation. New turns preserve
   existing message IDs, and changed history updates in place. A shorter visible
-  history keeps the previous version in Trash. Usage-only writes reconcile
+  history from an earlier Sync keeps the previous version in Trash. Sync
+  replaces zip imports without a freshness marker in place, without a Trash
+  copy. Usage-only writes reconcile
   assistant activity rows to the selected path.
   An empty list page with `has_more: true` fails.
   The export parser reads message `sender`, `text`, `content`, timestamps,

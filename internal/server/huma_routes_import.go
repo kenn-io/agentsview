@@ -22,6 +22,8 @@ import (
 	"go.kenn.io/agentsview/internal/importer"
 )
 
+const claudeAIResponseLimit = 32 << 20
+
 func (s *Server) registerImportRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/import")
 	configureRouteGroup(group, "Import")
@@ -41,10 +43,10 @@ func (s *Server) registerImportRoutes() {
 			}
 			value.(chan claudeAISyncResult) <- claudeAISyncResult{status: in.Status, body: in.RawBody, retryAfter: in.RetryAfter}
 			return &struct{}{}, nil
-		}, maxBodyBytes((32<<20)+1), func(op *huma.Operation) {
+		}, maxBodyBytes(claudeAIResponseLimit+1), func(op *huma.Operation) {
 			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
-				body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), (32<<20)+1))
-				if len(body) > 32<<20 {
+				body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), claudeAIResponseLimit+1))
+				if len(body) > claudeAIResponseLimit || ctx.Query("status") == "413" {
 					err = importer.ErrClaudeAIResponseTooLarge
 				}
 				if err != nil {
@@ -136,6 +138,13 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				}
 			},
 		})
+		if stats.Imported+stats.Updated > 0 {
+			if s.broadcaster != nil {
+				s.broadcaster.Emit("sessions")
+			}
+			s.notifySessionMutation()
+			s.notifyRecallCorpusMutation()
+		}
 		if err != nil {
 			stream.SendJSON("error", map[string]string{"error": err.Error()})
 			return
