@@ -258,8 +258,26 @@ func boundedRepoRootEligibility(ctx context.Context, check func(context.Context)
 	return repoRootEligibility{}
 }
 
-func readRepoRootFile(path string, read func(io.Reader) error) (bool, error) {
+type repoRootReader struct {
+	io.Reader
+	ctx context.Context
+}
+
+func (r repoRootReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.Reader.Read(p)
+}
+
+func readRepoRootFile(ctx context.Context, path string, read func(io.Reader) error) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	info, err := os.Stat(path)
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
 	if os.IsNotExist(err) {
 		return false, nil
 	}
@@ -271,15 +289,22 @@ func readRepoRootFile(path string, read func(io.Reader) error) (bool, error) {
 		return false, err
 	}
 	defer file.Close()
-	return true, read(file)
+	if ctx.Err() != nil {
+		return true, ctx.Err()
+	}
+	err = read(repoRootReader{Reader: file, ctx: ctx})
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return true, err
 }
 
 var repoRootWorktreeKey = regexp.MustCompile(`(?i)(^|])[[:space:]]*worktree([[:space:]=#;]|$)`)
 
-func fingerprintRepoRootFile(path string) (repoRootFile, bool, error) {
+func fingerprintRepoRootFile(ctx context.Context, path string) (repoRootFile, bool, error) {
 	hash := sha256.New()
 	worktree := false
-	exists, err := readRepoRootFile(path, func(file io.Reader) error {
+	exists, err := readRepoRootFile(ctx, path, func(file io.Reader) error {
 		scanner := bufio.NewScanner(io.TeeReader(file, hash))
 		for scanner.Scan() {
 			if strings.HasSuffix(scanner.Text(), "\\") {
@@ -292,26 +317,30 @@ func fingerprintRepoRootFile(path string) (repoRootFile, bool, error) {
 	return repoRootFile{sum: [sha256.Size]byte(hash.Sum(nil)), exists: exists}, worktree, err
 }
 
-func readRepoRootPointer(path string) (string, bool, error) {
-	var text strings.Builder
-	exists, err := readRepoRootFile(path, func(file io.Reader) error {
-		_, err := io.Copy(&text, file)
+func readRepoRootPointer(ctx context.Context, path string) (string, bool, error) {
+	var text []byte
+	exists, err := readRepoRootFile(ctx, path, func(file io.Reader) error {
+		var err error
+		text, err = io.ReadAll(io.LimitReader(file, 1<<20+1))
+		if len(text) > 1<<20 {
+			return os.ErrInvalid
+		}
 		return err
 	})
-	return text.String(), exists, err
+	if err != nil {
+		return "", exists, err
+	}
+	return string(text), exists, nil
 }
 
 // Git root setup reads these two config files directly, without expanding includes.
 func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConfig, bool) {
-	if marker.info == nil || !repoRootOwned(filepath.Dir(marker.path)) || !repoRootOwned(marker.path) {
+	if marker.info == nil || ctx.Err() != nil || !repoRootOwned(filepath.Dir(marker.path)) || ctx.Err() != nil || !repoRootOwned(marker.path) {
 		return repoRootConfig{}, false
 	}
 	gitdir := marker.path
 	if marker.info.Mode().IsRegular() {
-		if marker.info.Size() > 1<<20 {
-			return repoRootConfig{}, false
-		}
-		text, _, err := readRepoRootPointer(marker.path)
+		text, _, err := readRepoRootPointer(ctx, marker.path)
 		pointer, ok := strings.CutPrefix(text, "gitdir: ")
 		gitdir = strings.TrimRight(pointer, "\r\n")
 		if err != nil || !ok || gitdir == "" {
@@ -324,11 +353,14 @@ func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConf
 			gitdir = filepath.Join(filepath.Dir(marker.path), gitdir)
 		}
 	}
-	gitdir, err := pathresolve.EvalSymlinks(gitdir)
-	if err != nil || (gitdir != marker.path && !repoRootOwned(gitdir)) || !repoRootHeadValid(filepath.Join(gitdir, "HEAD")) {
+	if ctx.Err() != nil {
 		return repoRootConfig{}, false
 	}
-	text, exists, err := readRepoRootPointer(filepath.Join(gitdir, "commondir"))
+	gitdir, err := pathresolve.EvalSymlinks(gitdir)
+	if err != nil || ctx.Err() != nil || (gitdir != marker.path && !repoRootOwned(gitdir)) || !repoRootHeadValid(ctx, filepath.Join(gitdir, "HEAD")) {
+		return repoRootConfig{}, false
+	}
+	text, exists, err := readRepoRootPointer(ctx, filepath.Join(gitdir, "commondir"))
 	if err != nil {
 		return repoRootConfig{}, false
 	}
@@ -341,15 +373,18 @@ func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConf
 		if !filepath.IsAbs(common) {
 			common = filepath.Join(gitdir, common)
 		}
+		if ctx.Err() != nil {
+			return repoRootConfig{}, false
+		}
 		common, err = pathresolve.EvalSymlinks(common)
 		if err != nil {
 			return repoRootConfig{}, false
 		}
 	}
-	if !repoRootAccessible(filepath.Join(common, "objects")) || !repoRootAccessible(filepath.Join(common, "refs")) {
+	if ctx.Err() != nil || !repoRootAccessible(filepath.Join(common, "objects")) || ctx.Err() != nil || !repoRootAccessible(filepath.Join(common, "refs")) {
 		return repoRootConfig{}, false
 	}
-	config, key, err := fingerprintRepoRootFile(filepath.Join(common, "config"))
+	config, key, err := fingerprintRepoRootFile(ctx, filepath.Join(common, "config"))
 	if err != nil || key {
 		return repoRootConfig{}, false
 	}
@@ -368,7 +403,7 @@ func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConf
 	if result.worktreeInactive {
 		return result, true
 	}
-	result.worktree, key, err = fingerprintRepoRootFile(filepath.Join(gitdir, "config.worktree"))
+	result.worktree, key, err = fingerprintRepoRootFile(ctx, filepath.Join(gitdir, "config.worktree"))
 	if err != nil {
 		return repoRootConfig{}, false
 	}
@@ -381,23 +416,26 @@ func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConf
 	return result, true
 }
 
-var repoRootHead = regexp.MustCompile(`^(ref: refs/[A-Za-z0-9_./-]+|[0-9a-f]{40})\n?$`)
+var repoRootHead = regexp.MustCompile(`^(ref:[ \t\n\r]*refs/|[0-9a-fA-F]{40})`)
 
-func repoRootHeadValid(path string) bool {
+func repoRootHeadValid(ctx context.Context, path string) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	info, err := os.Lstat(path)
-	if err != nil {
+	if err != nil || ctx.Err() != nil {
 		return false
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		target, err := os.Readlink(path)
-		return err == nil && strings.HasPrefix(target, "refs/")
+		return err == nil && ctx.Err() == nil && strings.HasPrefix(target, "refs/")
 	}
-	if !info.Mode().IsRegular() || info.Size() > 256 {
+	if !info.Mode().IsRegular() {
 		return false
 	}
 	var data []byte
-	_, err = readRepoRootFile(path, func(file io.Reader) error {
-		data, err = io.ReadAll(io.LimitReader(file, 257))
+	_, err = readRepoRootFile(ctx, path, func(file io.Reader) error {
+		data, err = io.ReadAll(io.LimitReader(file, 255))
 		return err
 	})
 	return err == nil && repoRootHead.Match(data)
@@ -444,22 +482,28 @@ func (m gitMarker) matches(other gitMarker) bool {
 }
 
 // nearestGitMarker validates cached roots; Git still resolves unusual layouts.
-func nearestGitMarker(dir string) (gitMarker, bool) {
+func nearestGitMarker(ctx context.Context, dir string) (gitMarker, bool) {
+	if ctx.Err() != nil {
+		return gitMarker{}, false
+	}
 	dir, err := pathresolve.EvalSymlinks(dir)
-	if err != nil {
+	if err != nil || ctx.Err() != nil {
 		return gitMarker{}, false
 	}
 	device, err := repoRootDevice(dir)
 	if err != nil {
 		return gitMarker{}, false
 	}
-	for {
+	for ctx.Err() == nil {
 		current, err := repoRootDevice(dir)
-		if err != nil || current != device {
+		if err != nil || ctx.Err() != nil || current != device {
 			return gitMarker{}, false
 		}
 		path := filepath.Join(dir, ".git")
 		info, err := os.Lstat(path)
+		if ctx.Err() != nil {
+			return gitMarker{}, false
+		}
 		if err == nil {
 			// Windows FileInfo loads its identity lazily; capture it before the path can be replaced.
 			if (info.IsDir() || info.Mode().IsRegular()) && os.SameFile(info, info) {
@@ -481,6 +525,7 @@ func nearestGitMarker(dir string) (gitMarker, bool) {
 		}
 		dir = parent
 	}
+	return gitMarker{}, false
 }
 
 // findRepoRoot returns the absolute repo toplevel for start, or "" when no enclosing repo resolves.
@@ -495,7 +540,7 @@ func findRepoRoot(ctx context.Context, start string) string {
 	for ctx.Err() == nil {
 		dir := existingAncestor(start)
 		eligibility := boundedRepoRootEligibility(ctx, func(batch context.Context) repoRootEligibility {
-			marker, absent := nearestGitMarker(dir)
+			marker, absent := nearestGitMarker(batch, dir)
 			config, known := snapshotRepoRootConfig(batch, marker)
 			return repoRootEligibility{marker: marker, config: config, absent: absent, known: known}
 		})

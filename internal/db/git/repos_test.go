@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -100,9 +101,14 @@ func TestFindRepoRoot_DirectoryAlias(t *testing.T) {
 		assert.Equal(t, want, findRepoRoot(ctx, cwd))
 	}
 	assert.Equal(t, int32(3), ctx.attempts.Load(), "two eligibility bounds and one shared root lookup")
-	t.Setenv("PATH", t.TempDir())
-	for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
-		assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
+	for _, branch := range []string{"fix/cache+tracing", "feature/@dashboard"} {
+		gitRun(t, repo, nil, "checkout", "-q", "-b", branch)
+		t.Run(branch, func(t *testing.T) {
+			t.Setenv("PATH", t.TempDir())
+			for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
+				assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
+			}
+		})
 	}
 }
 
@@ -352,6 +358,47 @@ func TestFindRepoRoot_InactiveWorktreeConfig(t *testing.T) {
 	assert.Equal(t, canonAll([]string{configured})[0], findRepoRoot(t.Context(), repo))
 }
 
+func TestRepoRootHeadValid_Prefix(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		valid bool
+	}{
+		{"ref:\t\r\n refs/heads/" + strings.Repeat("long", 100), true},
+		{strings.Repeat("AB", 32) + "\n", true},
+		{"ref:\vrefs/heads/main", false},
+		{"ref:\frefs/heads/main", false},
+	} {
+		t.Run(tc.text[:8], func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "HEAD")
+			require.NoError(t, os.WriteFile(path, []byte(tc.text), 0o600))
+			assert.Equal(t, tc.valid, repoRootHeadValid(t.Context(), path))
+		})
+	}
+}
+
+func TestRepoRootPointer_Oversized(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commondir")
+	require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("x", 1<<20+1)), 0o600))
+	text, exists, err := readRepoRootPointer(t.Context(), path)
+	require.ErrorIs(t, err, os.ErrInvalid)
+	assert.True(t, exists)
+	assert.Empty(t, text)
+}
+
+func TestRepoRootReader_Cancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	source := strings.NewReader("xy")
+	reader := repoRootReader{Reader: source, ctx: ctx}
+	buffer := make([]byte, 1)
+	_, err := io.ReadFull(reader, buffer)
+	require.NoError(t, err)
+	cancel()
+	_, err = reader.Read(buffer)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, source.Len(), "cancellation prevents the next underlying read")
+}
+
 func TestFindRepoRoot_ConfiguredLinkRetarget(t *testing.T) {
 	for _, owner := range []string{"common", "worktree"} {
 		for _, same := range []bool{true, false} {
@@ -483,7 +530,7 @@ func TestNearestGitMarker_DeviceBoundary(t *testing.T) {
 	}
 	t.Setenv("TMPDIR", "/dev/shm")
 	t.Setenv("GOTMPDIR", "/dev/shm")
-	marker, absent := nearestGitMarker(t.TempDir())
+	marker, absent := nearestGitMarker(t.Context(), t.TempDir())
 	assert.Empty(t, marker.path)
 	assert.False(t, absent, "a device boundary requires Git's own discovery")
 }
