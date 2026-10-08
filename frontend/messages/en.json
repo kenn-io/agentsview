@@ -2466,5 +2466,6 @@
   "import_claude_disconnect": "Disconnect",
   "import_claude_help": "Sign in, close the window, then Sync.",
   "import_claude_auth_required": "Sign in to Claude.ai, then Sync again",
-  "import_claude_sign_in_pending": "Finish signing in to Claude.ai, close the window, then Sync again."
+  "import_claude_sign_in_pending": "Finish signing in to Claude.ai, close the window, then Sync again.",
+  "import_newer_marker": "The archived session {session} requires a newer version of AgentsView. Update AgentsView, then Sync again."
 }

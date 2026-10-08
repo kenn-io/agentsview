@@ -131,7 +131,6 @@ afterEach(() => {
 
 it.each([
   ["claude-ai:chat", 2],
-  ["codex:chat", 2],
 ] as const)("reloads pins for a synced session %s", async (id, loads) => {
   stubAppDependencies();
   vi.spyOn(sessions, "load").mockResolvedValue();

@@ -29,23 +29,20 @@ describe("syncClaudeAI browser relay", () => {
     expect(host.close).toHaveBeenCalledOnce();
   });
 
-  it("preserves a successful sync when closing the browser fails", async () => {
+  it.each(["done", "error"])("preserves sync %s when closing the browser fails", async (event) => {
     const host = { close: vi.fn().mockRejectedValue(new Error("Close failed")) } as unknown as BrowserHost;
+    const data = event === "done"
+      ? { imported: 1, updated: 0, skipped: 0, errors: 0 }
+      : { error: "Sign in required", code: "claude_ai_auth_required" };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
-      'event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
+      `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
       { headers: { "Content-Type": "text/event-stream" } },
     )));
-    await expect(syncClaudeAI(host)).resolves.toEqual({ imported: 1, updated: 0, skipped: 0, errors: 0 });
-    expect(host.close).toHaveBeenCalledOnce();
-  });
-
-  it("preserves a sync error when closing the browser fails", async () => {
-    const host = { close: vi.fn().mockRejectedValue(new Error("Close failed")) } as unknown as BrowserHost;
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
-      'event: error\ndata: {"error":"Sign in required","code":"claude_ai_auth_required"}\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    )));
-    await expect(syncClaudeAI(host)).rejects.toMatchObject({ message: "Sign in required", code: "claude_ai_auth_required" });
+    if (event === "done") {
+      await expect(syncClaudeAI(host)).resolves.toEqual({ imported: 1, updated: 0, skipped: 0, errors: 0 });
+    } else {
+      await expect(syncClaudeAI(host)).rejects.toMatchObject({ message: "Sign in required", code: "claude_ai_auth_required" });
+    }
     expect(host.close).toHaveBeenCalledOnce();
   });
 

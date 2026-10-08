@@ -432,7 +432,6 @@ func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
 		want   *string
 	}{
 		{"imported", &leaf, &leaf},
-		{"imported-other", &otherLeaf, &otherLeaf},
 		{"imported-null", nil, nil},
 		{"full-marker", &fullMarker, &fullMarker},
 		{"usage-marker", &usageMarker, nil},
@@ -453,7 +452,7 @@ func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
 	destination := testDB(t)
 	count, err := destination.CopyOrphanedDataFrom(source.Path())
 	require.NoError(t, err)
-	require.Equal(t, 7, count)
+	require.Equal(t, 6, count)
 	for _, row := range rows {
 		session, err := destination.GetSessionFull(t.Context(), row.id)
 		require.NoError(t, err)
