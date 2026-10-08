@@ -3131,7 +3131,7 @@ func restorePinnedMessages(
 
 	var claudeAILegacyReplacement bool
 	if len(pins) > 0 {
-		if err := tx.QueryRowContext(ctx, `SELECT agent = 'claude-ai' AND NOT EXISTS(SELECT 1 FROM messages WHERE session_id = $1 AND COALESCE(source_uuid, '') != '') FROM sessions WHERE id = $1`, sessionID).Scan(&claudeAILegacyReplacement); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN agent = 'claude-ai' THEN NOT EXISTS(SELECT 1 FROM messages WHERE session_id = $1 AND COALESCE(source_uuid, '') != '') ELSE false END FROM sessions WHERE id = $1`, sessionID).Scan(&claudeAILegacyReplacement); err != nil {
 			return fmt.Errorf("checking pg pin source identities: %w", err)
 		}
 	}

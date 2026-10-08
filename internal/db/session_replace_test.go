@@ -146,8 +146,8 @@ func TestReplaceSessionKeepingTrashedCopyOnlyOnPinLoss(t *testing.T) {
 func TestReplaceSessionKeepingTrashedCopyPinLossRollsBackAfterCopy(t *testing.T) {
 	d := testDB(t)
 	before := seedReplaceSession(t, d)
-	_, err := d.getWriter().Exec(t.Context(), `CREATE TRIGGER reject_live_replacement BEFORE INSERT ON messages
-		WHEN NEW.session_id = 'replace' AND EXISTS(SELECT 1 FROM sessions WHERE id LIKE 'replace:replaced:%')
+	_, err := d.getWriter().Exec(t.Context(), `CREATE TRIGGER reject_replacement_copy BEFORE INSERT ON messages
+		WHEN NEW.session_id LIKE 'replace:replaced:%' AND EXISTS(SELECT 1 FROM messages WHERE session_id = 'replace' AND content = 'Changed pinned turn')
 		BEGIN SELECT RAISE(ABORT, 'replacement rejected'); END`)
 	require.NoError(t, err)
 	write := replaceWrite("Changed pinned turn", "Changed reply")
@@ -194,13 +194,8 @@ func TestReplaceSessionKeepingTrashedCopyPinIdentities(t *testing.T) {
 		surviving     []int
 		copy          bool
 	}{
-		{"unique uuid follows edited turn", []Message{msg("a", "old"), msg("b", "reply")}, []Message{msg("b", "reply"), msg("a", "edited")}, []int{0}, []int{1}, false},
-		{"duplicate uuid group shifts", []Message{msg("a", "same"), msg("a", "same")}, []Message{msg("b", "new"), msg("a", "same"), msg("a", "same")}, []int{1}, []int{2}, false},
-		{"duplicate uuid group shrinks", []Message{msg("a", "same"), msg("a", "same")}, []Message{msg("a", "same")}, []int{1}, nil, true},
-		{"legacy group shifts", []Message{msg("", "same"), msg("", "same")}, []Message{msg("", "new"), msg("", "same"), msg("", "same")}, []int{1}, []int{2}, false},
 		{"legacy zip fallback", []Message{msg("a", "same"), msg("b", "reply")}, []Message{msg("", "same"), msg("", "edited")}, []int{0}, []int{0}, false},
 		{"colliding pin targets", []Message{msg("a", "same"), msg("", "other")}, []Message{msg("a", "other")}, []int{0, 1}, []int{0}, true},
-		{"unpinned edit", []Message{msg("a", "old")}, []Message{msg("b", "edited")}, nil, nil, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)

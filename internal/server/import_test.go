@@ -820,7 +820,7 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 			}
 			wantTerminal := ending
 			if ending == "detail error" {
-				wantTerminal = "done"
+				wantTerminal = "error"
 			}
 			assert.Equal(t, wantTerminal, terminal)
 			for _, ch := range []<-chan struct{}{mutations, recall} {

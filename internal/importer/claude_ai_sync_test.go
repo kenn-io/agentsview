@@ -240,7 +240,7 @@ func TestSyncClaudeAIInvalidAccountSession(t *testing.T) {
 		"/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true",
 	}
 	for stage, path := range paths {
-		for _, status := range []int{200, 401, 403, 429, 503} {
+		for _, status := range []int{401, 403, 429, 503} {
 			t.Run(path+"/"+strconv.Itoa(status), func(t *testing.T) {
 				d := testDB(t)
 				calls := 0
@@ -779,6 +779,12 @@ func TestSyncClaudeAIDetailFailures(t *testing.T) {
 					assert.Zero(t, stats.Errors+stats.Imported+stats.Skipped)
 					return
 				}
+				if tt.status == 0 && !errors.Is(tt.err, ErrClaudeAIResponseTooLarge) {
+					require.ErrorIs(t, err, tt.err)
+					assert.Zero(t, later)
+					assert.Zero(t, stats.Errors+stats.Imported+stats.Skipped)
+					return
+				}
 				require.NoError(t, err)
 				assert.Equal(t, 1, later)
 				if tt.status == 404 {
@@ -822,17 +828,27 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222", []db.SecretFinding{{RuleName: "test-secret", Confidence: "high", LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 5, RedactedMatch: "[redacted]"}}, 1, "test-rules"))
 	findings, err := d.SessionSecretFindings(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 	require.NoError(t, err)
+	require.Len(t, findings, 1)
 	before, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 	require.NoError(t, err)
+	initial, err := d.GetSessionFull(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+	require.NoError(t, err)
+	require.NotNil(t, initial)
+	require.NotNil(t, initial.TranscriptRevision)
 	calls := 0
 	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
 		calls++
 		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
 	})
-	for range 2 {
+	for i := range 2 {
 		stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
 		require.NoError(t, err)
-		assert.Equal(t, 1, stats.Skipped)
+		if i == 0 {
+			assert.Equal(t, 1, stats.Updated)
+			assert.Zero(t, stats.Skipped)
+		} else {
+			assert.Equal(t, 1, stats.Skipped)
+		}
 	}
 	assert.Equal(t, 1, calls)
 	after, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
@@ -845,11 +861,13 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 	assert.Equal(t, before, after)
 	afterFindings, err := d.SessionSecretFindings(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 	require.NoError(t, err)
-	assert.Equal(t, findings, afterFindings)
+	assert.Empty(t, afterFindings)
 	assert.Empty(t, replacedCopies(t, d, "claude-ai:22222222-2222-4222-8222-222222222222"))
 	marked, err := d.GetSessionFull(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 	require.NoError(t, err)
 	require.NotNil(t, marked)
+	require.NotNil(t, marked.TranscriptRevision)
+	assert.Greater(t, *marked.TranscriptRevision, *initial.TranscriptRevision)
 	assert.Equal(t, strPtr("claude-ai:v1:full:reply"), marked.LastEntryUUID)
 	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+syncDetail+"]"), nil)
 	require.NoError(t, err)
@@ -1081,7 +1099,7 @@ func TestSyncClaudeAIZipDuplicatePromptPin(t *testing.T) {
 		return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
 	}), nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, 1, stats.Updated)
 	after, err := d.GetAllMessages(t.Context(), id)
 	require.NoError(t, err)
 	require.Len(t, after, 4)

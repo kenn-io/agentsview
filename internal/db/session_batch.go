@@ -617,7 +617,7 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	transcriptChanged := len(msgs) > 0 || filled > 0 || extended > 0
+	transcriptChanged := len(msgs) > 0 || filled > 0 || extended > 0 || sourceFilled > 0
 	if replaceMessages && sessionExists {
 		transcriptChanged = replacementTranscriptChanged
 	}
