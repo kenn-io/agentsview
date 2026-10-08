@@ -1613,7 +1613,7 @@ type ParsedMessage struct {
 	// on older transcripts that predate the field and for agents that
 	// do not emit it.
 	PromptSource string
-	// claudeSDKOrigin carries transient evidence through queued prompt merging.
+	// claudeSDKOrigin records this line's SDK origin; merged queued prompts default to false.
 	claudeSDKOrigin   bool
 	SourceUUID        string
 	SourceParentUUID  string
@@ -1869,6 +1869,14 @@ type ParseResult struct {
 	// checkpoint so it never re-reads the source after a full parse.
 	CheckpointHashState    []byte
 	CheckpointAnchorDigest string
+}
+
+// PromoteParentlessWorker classifies workers without an existing parent or relationship.
+func PromoteParentlessWorker(parent string, rel RelationshipType, worker bool) RelationshipType {
+	if parent == "" && rel == RelNone && worker {
+		return RelSubagent
+	}
+	return rel
 }
 
 // InferRelationshipTypes sets RelationshipType on results that have

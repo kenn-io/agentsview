@@ -500,10 +500,10 @@ func claudeParseFile(
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
 	for i := range results {
-		if results[i].Session.ParentSessionID == "" && results[i].Session.RelationshipType == RelNone &&
-			claudeWorkerMessages(results[i].Session.Entrypoint, results[i].Session.SessionKind, results[i].Messages) {
-			results[i].Session.RelationshipType = RelSubagent
-		}
+		results[i].Session.RelationshipType = PromoteParentlessWorker(
+			results[i].Session.ParentSessionID, results[i].Session.RelationshipType,
+			claudeWorkerMessages(results[i].Session.Entrypoint, results[i].Session.SessionKind, results[i].Messages),
+		)
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
@@ -775,10 +775,9 @@ type ClaudeSubagentLink struct {
 // only change the stored session when the corresponding stored value is
 // still empty.
 type claudeStoredIdentity struct {
-	agentLabel       string
-	entrypoint       string
-	sessionKind      string
-	userMessageCount int
+	agentLabel  string
+	entrypoint  string
+	sessionKind string
 }
 
 // claudeIncrementalScan carries the per-session stored state an
@@ -1047,9 +1046,6 @@ func claudeParseSessionFrom(
 				endedAt = qc.timestamp
 			}
 		}
-	}
-	if stored.userMessageCount == 0 && claudeWorkerMessages(stored.entrypoint, stored.sessionKind, msgs) {
-		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 	// Use the latest timestamp from all lines (including
 	// non-message events) if it's later than what

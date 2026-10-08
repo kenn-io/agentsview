@@ -54,19 +54,20 @@ sessions, so **Total Cost** lines up with `agentsview usage daily` for the same
 day and timezone. Usage rows that recur across related sessions are deduplicated
 before totaling, the same rule the Usage page applies.
 
-Subagents are sessions another agent launched, in-process or as separate
+Subagents include sessions another agent launched, in-process or as separate
 `claude -p`, `codex exec`, or Grok headless runs. Claude Code `sdk-cli` workers
 qualify when their first real normalized prompt records `turnOrigin=sdk`.
 Human origin wins conflicting markers. A queued first prompt, missing or unknown
 origin, SDK library entrypoints, or an explicit provider kind blocks this
 inference. Human SDK conversations stay Interactive unless their prompts match
 an automation pattern. Recorded non-interactive Codex and Grok runs count as
-Subagents. Workers appear as sidebar roots until a parent link exists.
+Subagents and keep their automation flag.
 
-Readable Claude sources reparse once to recover origin evidence. Stored
-non-interactive sessions without a parent or relationship become Subagents even
-when their sources are missing. Usage-only archives retain automation flags
-whose prompt evidence was discarded.
+Parentless workers appear as sidebar roots. Flat lists, search, CLI, stats, and
+pickers include them only when children are included, like other parentless
+subagents. Automation filters still apply. Readable sources reparse once to
+recover classification evidence. Sessions whose sources are unreadable keep
+their stored category.
 
 The session count separates subagents from interactive and automated
 conversations. A subagent counts only in the subagent category, even if its

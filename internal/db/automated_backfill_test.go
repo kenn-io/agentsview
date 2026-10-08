@@ -803,35 +803,3 @@ func TestAutomationIgnoresToolResultAsFirstPrompt(t *testing.T) {
 		})
 	}
 }
-
-func TestOpenBackfillsHeadlessRelationships(t *testing.T) {
-	d := testDB(t)
-	sessions := []struct {
-		id, kind, parent, relationship, want string
-	}{
-		{id: "headless", kind: "non-interactive", want: "subagent"},
-		{id: "parented", kind: "non-interactive", parent: "parent"},
-		{id: "fork", kind: "non-interactive", relationship: "fork", want: "fork"},
-		{id: "continuation", kind: "non-interactive", relationship: "continuation", want: "continuation"},
-		{id: "child", kind: "non-interactive", parent: "parent", relationship: "subagent", want: "subagent"},
-		{id: "roborev", kind: "roborev"},
-	}
-	for _, session := range sessions {
-		require.NoError(t, d.UpsertSession(t.Context(), Session{
-			ID: session.id, Project: "project", Agent: "codex", Machine: "local", SessionKind: session.kind,
-			ParentSessionID: new(session.parent), RelationshipType: session.relationship,
-		}))
-	}
-	path := d.Path()
-	require.NoError(t, d.Close())
-	reopened, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { reopened.Close() })
-	for _, session := range sessions {
-		stored, err := reopened.GetSession(t.Context(), session.id)
-		require.NoError(t, err)
-		require.NotNil(t, stored)
-		assert.Equal(t, session.want, stored.RelationshipType, session.id)
-		assert.Equal(t, new(session.parent), stored.ParentSessionID, session.id)
-	}
-}

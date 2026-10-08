@@ -99,7 +99,7 @@ func TestClassifierHashSeparatesUserCategories(t *testing.T) {
 // the test must be updated to match. The check exists to
 // surface accidental version-constant edits during review.
 func TestClassifierHashCurrentAlgoVersion(t *testing.T) {
-	assert.Equal(t, 3, classifierAlgorithmVersion,
+	assert.Equal(t, 2, classifierAlgorithmVersion,
 		"classifierAlgorithmVersion changed; update this test and confirm "+
 			"matching semantics actually changed (not just pattern edits, "+
 			"which the hash already detects)")

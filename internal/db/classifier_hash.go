@@ -19,8 +19,7 @@ import (
 // in ResyncAll prior to the ForceBackfillIsAutomated wiring.
 // Without this bump, those DBs already have the v1 hash stored
 // and would skip the backfill on Open.)
-// (3: non-interactive launch metadata counts as subagent work.)
-const classifierAlgorithmVersion = 3
+const classifierAlgorithmVersion = 2
 
 // ClassifierHash returns a stable hex-encoded SHA-256 over
 // the algorithm version, all built-in pattern slices, and the

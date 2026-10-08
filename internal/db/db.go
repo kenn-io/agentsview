@@ -565,8 +565,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // rows with source_subtype peer_message instead of user prompts. Re-parse
 // unchanged Claude sources so user-message counts and first messages drop
 // them.)
-// (128: headless workers count as subagents; reparse Claude SDK prompt origin.)
-const dataVersion = 128
+// (127: reparse readable sources to classify headless workers as subagents.)
+const dataVersion = 127
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -2968,12 +2968,6 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	progress.report("Backfilling database metadata")
-	if _, err := w.Exec(ctx, `UPDATE sessions
-		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE session_kind = 'non-interactive' AND COALESCE(parent_session_id, '') = ''
-		AND COALESCE(relationship_type, '') = ''`); err != nil {
-		return fmt.Errorf("backfilling headless subagents: %w", err)
-	}
 	if err := db.backfillIsAutomatedLocked(ctx, w); err != nil {
 		return err
 	}

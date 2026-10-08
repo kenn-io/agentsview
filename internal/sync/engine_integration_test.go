@@ -13378,6 +13378,35 @@ func TestIncrementalSync_ClaudeAgentSettingAppendUsesFullParse(t *testing.T) {
 	})
 }
 
+func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, initial       string
+		malformed, messages int
+	}{
+		{name: "first worker", initial: `"isMeta":true,`, malformed: 1, messages: 1},
+		{name: "established session", initial: `"turnOrigin":"sdk",`, messages: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupTestEnv(t)
+			initial := `{"type":"user","uuid":"u1","entrypoint":"sdk-cli",` + tc.initial + `"timestamp":"2026-06-01T00:00:00Z","message":{"content":"first prompt"}}` + "\n"
+			path := env.writeClaudeSession(t, "proj", "worker-append.jsonl", initial)
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+			appended := "not json\n" + `{"type":"user","uuid":"u2","parentUuid":"u1","turnOrigin":"sdk","timestamp":"2026-06-01T00:00:02Z","message":{"content":"Plan a settings change."}}` + "\n"
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+			require.NoError(t, err)
+			_, err = f.WriteString(appended)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			env.engine.SyncPaths([]string{path})
+			assertSessionMessageCount(t, env.db, "worker-append", tc.messages)
+			assertSessionState(t, env.db, "worker-append", func(sess *db.Session) {
+				assert.Equal(t, "subagent", sess.RelationshipType)
+				assert.Equal(t, tc.malformed, sess.ParserMalformedLines)
+			})
+		})
+	}
+}
+
 func TestIncrementalSync_ClaudeStoredEntrypointAppendStaysIncremental(t *testing.T) {
 	env := setupTestEnv(t)
 

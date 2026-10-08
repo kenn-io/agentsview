@@ -1375,15 +1375,18 @@ record is preserved through the bulk-resync rebuild-and-copy path.
 
 Headless workers count as Subagents. This includes Claude Code `sdk-cli`
 sessions whose first real normalized prompt records `turnOrigin=sdk`, plus
-recorded non-interactive Codex and Grok runs. `codex exec` runs are visible by
-default. See [Activity](https://agentsview.io/docs/activity/) for classification
-and parent-link behavior.
+recorded non-interactive Codex and Grok runs. Codex and Grok headless runs keep
+their automation flag. Parentless workers appear as sidebar roots. Flat lists,
+search, CLI, stats, and pickers include them only when children are included;
+automation filters still apply. Readable sources reparse once, and unreadable
+sources keep their stored category. See
+[Activity](https://agentsview.io/docs/activity/) for classification details.
 
 Roborev-tagged runs are automated code reviews. Other sessions are automated
 when they have one or fewer real user messages and their first user message
-matches the automation
-classifier. Automated sessions (roborev reviews, title generation, warmup pings,
-changelog generation, and similar scripted runs) are filtered out of session
+matches the automation classifier. Automated sessions (roborev reviews, title
+generation, warmup pings, changelog generation, and similar scripted runs) are
+filtered out of session
 lists, counts, and analytics by default — the **Include automated** toggle in
 the session filter dropdown opts them back in.
 

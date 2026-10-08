@@ -15870,7 +15870,6 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredAgentLabel:          inc.AgentLabel,
 				StoredEntrypoint:          inc.Entrypoint,
 				StoredSessionKind:         inc.SessionKind,
-				StoredUserMessageCount:    inc.UserMsgCount,
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
 				StoredSessionName:         storedSessionName,
@@ -15970,6 +15969,10 @@ func (e *Engine) tryIncrementalJSONL(
 	if e.db.GetSessionDataVersion(ctx, inc.ID) <
 		db.CurrentDataVersion() {
 		return processResult{}, false
+	}
+
+	if agent == parser.AgentClaude && inc.UserMsgCount == 0 && inc.Entrypoint == "sdk-cli" && inc.SessionKind == "" {
+		return processResult{forceReplace: true}, false
 	}
 
 	currentSize := info.Size()

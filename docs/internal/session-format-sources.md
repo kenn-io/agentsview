@@ -152,11 +152,11 @@ evidence; they do not establish whether a tool helped the task.
   A queued first prompt supplies no SDK evidence and blocks later-turn inference.
   Human origin wins conflicting markers; missing origin remains ambiguous.
   Explicit provider kinds remain intact.
-  Data version 128 reparses readable sources once. Reverified 2026-10-08
-  against parser fixtures and the stored-count incremental path. The original
-  evidence came from the installed producer and local transcripts. Public source
-  is unavailable. Queued fixtures follow the bundled ingress and persistence path;
-  no native queued-origin transcript has been captured.
+  Data version 127 reparses readable sources once. Reverified 2026-10-08
+  against parser fixtures and the engine's zero-user-count escalation. The
+  original evidence came from the installed producer and local transcripts.
+  Public source is unavailable. Queued fixtures follow the bundled ingress and
+  persistence path; no native queued-origin transcript has been captured.
 
 Rechecked 2026-09-11 against the existing provider parser and its metadata
 fixtures: the first nonempty JSONL `sessionId` supplies `SourceSessionID`. A
@@ -572,10 +572,10 @@ fixtures retain this field; missing identities remain source-local.
 - **Launch classification (reverified 2026-10-08):**
   `session_meta.payload.originator=codex_exec` is durable producer evidence
   of a non-interactive `codex exec` invocation. Agentsview persists that as
-  `session_kind = non-interactive` and
-  assigns parentless runs with no existing relationship to Subagents. Launch
-  mode alone no longer marks them automated. Reverified against exec and spawned
-  child parser fixtures. When `thread_source` is `roborev` (from
+  `session_kind = non-interactive` and assigns parentless runs with no existing
+  relationship to Subagents. Launch mode keeps them automated, including runs
+  with multiple user messages. Reverified against exec and spawned child parser
+  fixtures. When `thread_source` is `roborev` (from
   `codex exec --thread-source roborev`), Agentsview stores
   `session_kind = roborev` instead so roborev reviews stay identifiable as
   code review while remaining automated. Native `spawn_agent` children still
@@ -1172,7 +1172,8 @@ fixtures retain this field; missing identities remain source-local.
   supplies it. Agentsview retains an explicit true value in a valid,
   session-associated file as `session_kind=non-interactive` and assigns
   parentless runs with no existing relationship to Subagents. Reverified
-  2026-10-08 against the prompt-context parser fixture.
+  2026-10-08 against the prompt-context parser and sync fixtures; explicit
+  non-interactive metadata keeps these runs automated.
 
 - **Subagent attribution (reverified 2026-09-18):** Grok Build stores each
   `spawn_subagent` child as a sibling session directory in the normal sessions
