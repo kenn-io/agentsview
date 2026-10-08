@@ -99,7 +99,7 @@ func TestFindRepoRoot_DirectoryAlias(t *testing.T) {
 	for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
 		assert.Equal(t, want, findRepoRoot(ctx, cwd))
 	}
-	assert.Equal(t, int32(1), ctx.attempts.Load(), "cold sibling directories share one lookup")
+	assert.Equal(t, int32(3), ctx.attempts.Load(), "two eligibility bounds and one shared root lookup")
 	t.Setenv("PATH", t.TempDir())
 	for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
 		assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
@@ -119,7 +119,7 @@ func TestFindRepoRoot_RepositoryChanges(t *testing.T) {
 	close(ctx.resume)
 	assert.Empty(t, findRepoRoot(ctx, outside))
 	assert.Empty(t, findRepoRoot(ctx, outside))
-	assert.Zero(t, ctx.attempts.Load(), "ordinary non-repositories need no Git lookup")
+	assert.Equal(t, int32(2), ctx.attempts.Load(), "ordinary non-repositories need only their eligibility bounds")
 	gitRun(t, outside, nil, "init", "-q")
 	assert.Equal(t, canonAll([]string{outside})[0], findRepoRoot(t.Context(), outside))
 	sub := mkdirIn(t, repo, "sub")
@@ -240,6 +240,60 @@ func TestFindRepoRoot_PendingFill(t *testing.T) {
 						assert.Equal(t, canonAll([]string{repo})[0], <-waiter)
 					}
 				}
+			})
+		})
+	}
+}
+
+func TestBoundedRepoRootEligibility_StalledBatch(t *testing.T) {
+	for _, cancelOwner := range []bool{true, false} {
+		t.Run(fmt.Sprintf("cancel owner %t", cancelOwner), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				started, release := make(chan struct{}), make(chan struct{})
+				var releaseOnce sync.Once
+				defer releaseOnce.Do(func() { close(release) })
+				var attempts atomic.Int32
+				owner := make(chan repoRootEligibility, 1)
+				go func() {
+					owner <- boundedRepoRootEligibility(ctx, func(context.Context) repoRootEligibility {
+						attempts.Add(1)
+						close(started)
+						<-release
+						return repoRootEligibility{known: true}
+					})
+				}()
+				<-started
+				repoRoots.Lock()
+				pending, entries := repoRoots.pending, len(repoRoots.entries)
+				repoRoots.Unlock()
+				check := func(context.Context) repoRootEligibility {
+					attempts.Add(1)
+					return repoRootEligibility{known: true}
+				}
+				if cancelOwner {
+					cancel()
+				} else {
+					waiter := make(chan repoRootEligibility, 1)
+					go func() { waiter <- boundedRepoRootEligibility(t.Context(), check) }()
+					synctest.Wait()
+					assert.Empty(t, waiter, "healthy ownership keeps later admission waiting")
+					time.Sleep(5 * time.Second)
+					assert.False(t, (<-waiter).known)
+				}
+				assert.False(t, (<-owner).known)
+				before := time.Now()
+				assert.False(t, boundedRepoRootEligibility(t.Context(), check).known)
+				assert.Equal(t, before, time.Now(), "abandoned worker declines admission immediately")
+				assert.Equal(t, int32(1), attempts.Load())
+				releaseOnce.Do(func() { close(release) })
+				<-pending
+				repoRoots.Lock()
+				assert.Len(t, repoRoots.entries, entries, "late completion publishes no root")
+				repoRoots.Unlock()
+				assert.True(t, boundedRepoRootEligibility(t.Context(), check).known)
+				assert.Equal(t, int32(2), attempts.Load())
 			})
 		})
 	}
@@ -428,12 +482,13 @@ func TestNearestGitMarker_DeviceBoundary(t *testing.T) {
 		t.Skip("shared memory has the same device")
 	}
 	t.Setenv("TMPDIR", "/dev/shm")
+	t.Setenv("GOTMPDIR", "/dev/shm")
 	marker, absent := nearestGitMarker(t.TempDir())
 	assert.Empty(t, marker.path)
 	assert.False(t, absent, "a device boundary requires Git's own discovery")
 }
 
-// Pause at the fill's timeout creation, after it owns the cache entry.
+// Pause at the root fill's timeout, after the eligibility timeout and cache admission.
 type pausedRepoFill struct {
 	context.Context
 	started, resume chan struct{}
@@ -442,9 +497,10 @@ type pausedRepoFill struct {
 }
 
 func (ctx *pausedRepoFill) Deadline() (time.Time, bool) {
-	ctx.attempts.Add(1)
-	ctx.startedOnce.Do(func() { close(ctx.started) })
-	<-ctx.resume
+	if ctx.attempts.Add(1) == 2 {
+		ctx.startedOnce.Do(func() { close(ctx.started) })
+		<-ctx.resume
+	}
 	return ctx.Context.Deadline()
 }
 
@@ -463,7 +519,7 @@ func TestDiscoverRepos_Dedup(t *testing.T) {
 	ctx := &pausedRepoFill{Context: t.Context(), started: make(chan struct{}), resume: make(chan struct{})}
 	close(ctx.resume)
 	assert.Empty(t, DiscoverRepos(ctx, []string{unresolved, unresolved, unresolved}))
-	assert.Equal(t, int32(1), ctx.attempts.Load(), "one failed lookup per distinct working directory in a request")
+	assert.Equal(t, int32(2), ctx.attempts.Load(), "one eligibility bound and failed root lookup per distinct directory")
 }
 
 func TestDiscoverRepos_EmptyInputReturnsEmptySlice(t *testing.T) {

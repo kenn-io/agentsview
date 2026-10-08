@@ -181,7 +181,8 @@ func normalizeRemoteURL(raw, root string) string {
 // Ordinary roots are shared while their Git marker and root configuration remain unchanged.
 var repoRoots = struct {
 	sync.Mutex
-	entries map[string]*repoRootEntry
+	entries               map[string]*repoRootEntry
+	pending, pendingEnded <-chan struct{}
 }{entries: make(map[string]*repoRootEntry)}
 
 type repoRootEntry struct {
@@ -200,6 +201,61 @@ type repoRootConfig struct {
 	gitdir, common   string
 	config, worktree repoRootFile
 	worktreeInactive bool
+}
+
+type repoRootEligibility struct {
+	marker        gitMarker
+	config        repoRootConfig
+	absent, known bool
+}
+
+func boundedRepoRootEligibility(ctx context.Context, check func(context.Context) repoRootEligibility) repoRootEligibility {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for ctx.Err() == nil {
+		repoRoots.Lock()
+		if ctx.Err() != nil {
+			repoRoots.Unlock()
+			break
+		}
+		pending, ended := repoRoots.pending, repoRoots.pendingEnded
+		if pending == nil {
+			done := make(chan struct{})
+			repoRoots.pending, repoRoots.pendingEnded = done, ctx.Done()
+			repoRoots.Unlock()
+			var result repoRootEligibility
+			go func() {
+				result = check(ctx)
+				repoRoots.Lock()
+				repoRoots.pending, repoRoots.pendingEnded = nil, nil
+				close(done)
+				repoRoots.Unlock()
+			}()
+			select {
+			case <-done:
+				if ctx.Err() == nil {
+					return result
+				}
+			case <-ctx.Done():
+			}
+			return repoRootEligibility{}
+		}
+		repoRoots.Unlock()
+		select {
+		case <-pending:
+			continue
+		case <-ended:
+			select {
+			case <-pending:
+				continue
+			default:
+				return repoRootEligibility{}
+			}
+		case <-ctx.Done():
+			return repoRootEligibility{}
+		}
+	}
+	return repoRootEligibility{}
 }
 
 func readRepoRootFile(path string, read func(io.Reader) error) (bool, error) {
@@ -438,12 +494,16 @@ func findRepoRoot(ctx context.Context, start string) string {
 	}
 	for ctx.Err() == nil {
 		dir := existingAncestor(start)
-		marker, absent := nearestGitMarker(dir)
-		if absent {
+		eligibility := boundedRepoRootEligibility(ctx, func(batch context.Context) repoRootEligibility {
+			marker, absent := nearestGitMarker(dir)
+			config, known := snapshotRepoRootConfig(batch, marker)
+			return repoRootEligibility{marker: marker, config: config, absent: absent, known: known}
+		})
+		if ctx.Err() != nil || eligibility.absent {
 			return ""
 		}
-		config, known := snapshotRepoRootConfig(ctx, marker)
-		if !known {
+		marker, config := eligibility.marker, eligibility.config
+		if !eligibility.known {
 			if dir == "" {
 				return ""
 			}
@@ -463,6 +523,9 @@ func findRepoRoot(ctx context.Context, start string) string {
 					return ""
 				}
 			}
+			if ctx.Err() != nil {
+				return ""
+			}
 			if entry.root == "" || !entry.marker.matches(marker) || entry.config != config {
 				repoRoots.Lock()
 				if repoRoots.entries[key] == entry {
@@ -473,11 +536,18 @@ func findRepoRoot(ctx context.Context, start string) string {
 			}
 			return entry.root
 		}
+		if ctx.Err() != nil {
+			repoRoots.Unlock()
+			return ""
+		}
 		entry := &repoRootEntry{ready: make(chan struct{})}
 		repoRoots.entries[key] = entry
 		repoRoots.Unlock()
 		root := gitToplevel(ctx, dir)
 		repoRoots.Lock()
+		if ctx.Err() != nil {
+			root = ""
+		}
 		entry.root = root
 		if root != "" && filepath.Clean(root) == filepath.Dir(marker.path) {
 			entry.marker = marker
@@ -522,7 +592,7 @@ func gitToplevel(ctx context.Context, dir string) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	root, err := gitrepo.Root(ctx, dir)
-	if err != nil {
+	if err != nil || ctx.Err() != nil {
 		return ""
 	}
 	return root
