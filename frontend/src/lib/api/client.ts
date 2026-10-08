@@ -387,7 +387,7 @@ export async function syncClaudeAI(
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   try {
-    const response = await ImportService.postApiV1ImportClaudeAiSync(undefined, { signal: controller.signal });
+    const response = await ImportService.postApiV1ImportClaudeAiSync({ signal: controller.signal });
     let fail: (error: unknown) => void = () => {};
     const failed = new Promise<never>((_, reject) => {
       fail = reject;

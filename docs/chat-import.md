@@ -79,9 +79,9 @@ Sync skips trashed chats; file imports report them as refusals.
 Each sync includes archived chats, checks all conversation summaries, and
 downloads only new or changed chats. Search stays available during the import.
 Trashed or permanently deleted chats stay deleted. Changed chats update in
-place, as re-imported exports do. When an edit or branch switch leaves a shorter
-history, Sync refuses it and lists the chat, as file imports do. See
-[Replacing archived history](#replacing-archived-history). A chat first imported
+place to show the branch Claude.ai shows. After an edit or branch switch, turns
+after the fork change in place, and pins on replaced turns go with them.
+Switching back on Claude.ai and syncing restores those turns. A chat first imported
 from a zip needs one detail fetch to verify its visible branch. Re-importing a
 zip clears that verification, so the next Sync fetches it once again. Each chat
 has a 32 MiB response limit; larger chats count as failed while Sync continues.
@@ -226,7 +226,6 @@ repeatable query parameter:
 ```text
 POST /api/v1/import/chatgpt?replace=<session-id>&replace=<session-id>
 POST /api/v1/import/claude-ai?replace=<session-id>
-POST /api/v1/import/claude-ai/sync?replace=<session-id>
 ```
 
 What happens to a listed session:

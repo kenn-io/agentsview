@@ -2761,18 +2761,22 @@ schemas keep their existing ordering behavior.
   Sync also rejects a detail UUID that differs from the requested chat.
   List items with a null leaf skip detail fetches; exports skip empty chats.
   Sync commits session metadata, messages, and the freshness marker in one
-  transaction, so interrupted writes leave either the old or new chat version.
+  transaction, including `local_modified_at` for unchanged text, so interrupted
+  writes leave either the old or new chat version.
   Full resync preserves markers for import-only sessions. Usage-only archives
   refresh session metadata under their content
   policy. Detail HTTP 404 counts as skipped. Other detail HTTP failures and
-  responses over 32 MiB fail that chat. The browser checks `Content-Length`
-  and caps stream reads before IPC, returning HTTP 413 with an empty body.
-  Authentication, transport, and
-  cancellation errors stop Sync.
+  responses over 32 MiB fail that chat. The browser caps stream reads before
+  IPC, returning HTTP 413 with an empty body. The Go relay independently caps
+  request bodies at 32 MiB. Detail authentication and host errors fail that
+  chat and allow later chats to sync. Organization or list failures and
+  cancellation stop Sync. The native fetch command accepts only the organization
+  list, paginated chat list, and chat detail paths built by Go, with UUID-shaped
+  organization and chat IDs.
   Sync uses the export importer's message reconciliation. New turns preserve
-  existing message IDs. Changed histories update in place. Shorter histories are
-  refused as `shorter_export`, as zip imports are. An explicit `replace` list
-  moves the previous version and all its pins to a fresh Trash copy. Matching
+  existing message IDs. Changed live histories update in place at every length,
+  without a Trash copy. Shorter zip exports remain refused as `shorter_export`.
+  Matching
   text keeps stored rows and IDs even when source UUIDs differ. Metadata
   refreshes preserve findings and signals when messages match. Rechecked against the selected-path
   and Sync regression fixtures on 2026-10-07. Usage-only writes reconcile
