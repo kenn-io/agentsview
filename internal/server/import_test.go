@@ -44,57 +44,93 @@ func readImportEvents(t *testing.T, body io.Reader, handle func(string, string))
 }
 
 func TestClaudeAISyncRelay(t *testing.T) {
-	t.Run("large result stores session", func(t *testing.T) {
-		srv := testServer(t, 5*time.Second)
-		httpServer := httptest.NewServer(srv.mux)
-		defer httpServer.Close()
-		postResult := func(id, body string, want int) {
-			response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+id+"?status=200", "application/octet-stream", strings.NewReader(body))
+	for _, tt := range []struct {
+		name, query   string
+		seed, replace bool
+	}{
+		{name: "large result stores session"},
+		{name: "shorter result is refused", seed: true},
+		{name: "replace query keeps previous version", seed: true, replace: true, query: "?replace=claude-ai:relay&replace=claude-ai:other"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			if tt.seed {
+				stats, err := importer.ImportClaudeAI(t.Context(), srv.db, strings.NewReader(`[{"uuid":"relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:04:00Z","chat_messages":[{"sender":"human","text":"Previous prompt"},{"sender":"assistant","text":"Previous answer"}]}]`), nil)
+				require.NoError(t, err)
+				require.Equal(t, 1, stats.Imported)
+			}
+			httpServer := httptest.NewServer(srv.mux)
+			defer httpServer.Close()
+			postResult := func(id, body string, want int) {
+				response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+id+"?status=200", "application/octet-stream", strings.NewReader(body))
+				require.NoError(t, err)
+				defer response.Body.Close()
+				data, err := io.ReadAll(response.Body)
+				require.NoError(t, err)
+				require.Equal(t, want, response.StatusCode, "%s", data)
+			}
+			postResult("unknown", `{}`, http.StatusNotFound)
+			response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync"+tt.query, "application/json", nil)
 			require.NoError(t, err)
 			defer response.Body.Close()
-			data, err := io.ReadAll(response.Body)
-			require.NoError(t, err)
-			require.Equal(t, want, response.StatusCode, "%s", data)
-		}
-		postResult("unknown", `{}`, http.StatusNotFound)
-		response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
-		require.NoError(t, err)
-		defer response.Body.Close()
-		require.Equal(t, http.StatusOK, response.StatusCode)
-		answered := ""
-		var stats importer.ImportStats
-		readImportEvents(t, response.Body, func(event, data string) {
-			switch event {
-			case "fetch":
-				var request struct {
-					ID   string `json:"id"`
-					Path string `json:"path"`
+			require.Equal(t, http.StatusOK, response.StatusCode)
+			answered := ""
+			var stats importer.ImportStats
+			readImportEvents(t, response.Body, func(event, data string) {
+				switch event {
+				case "fetch":
+					var request struct {
+						ID   string `json:"id"`
+						Path string `json:"path"`
+					}
+					require.NoError(t, json.Unmarshal([]byte(data), &request))
+					answered = request.ID
+					switch request.Path {
+					case "/api/organizations":
+						postResult(request.ID, `[{"uuid":"org","capabilities":["chat"]}]`, http.StatusNoContent)
+					case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+						postResult(request.ID, `{"data":[{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
+					case "/api/organizations/org/chat_conversations/relay?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+						postResult(request.ID, `{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
+					default:
+						t.Fatalf("unexpected path %s", request.Path)
+					}
+				case "error":
+					t.Fatalf("sync failed: %s", data)
+				case "done":
+					require.NoError(t, json.Unmarshal([]byte(data), &stats))
 				}
-				require.NoError(t, json.Unmarshal([]byte(data), &request))
-				answered = request.ID
-				switch request.Path {
-				case "/api/organizations":
-					postResult(request.ID, `[{"uuid":"org","capabilities":["chat"]}]`, http.StatusNoContent)
-				case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-					postResult(request.ID, `{"data":[{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
-				case "/api/organizations/org/chat_conversations/relay?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-					postResult(request.ID, `{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
-				default:
-					t.Fatalf("unexpected path %s", request.Path)
-				}
-			case "error":
-				t.Fatalf("sync failed: %s", data)
-			case "done":
-				require.NoError(t, json.Unmarshal([]byte(data), &stats))
+			})
+			if tt.seed && !tt.replace {
+				assert.Equal(t, 1, stats.Errors)
+				assert.Equal(t, []importer.ImportRefusal{{SessionID: "claude-ai:relay", Reason: importer.RefusalShorterExport}}, stats.Refusals)
+				old, err := srv.db.GetAllMessages(t.Context(), "claude-ai:relay")
+				require.NoError(t, err)
+				require.Len(t, old, 2)
+				assert.Equal(t, "Previous answer", old[1].Content)
+				return
 			}
+			if tt.replace {
+				assert.Equal(t, 1, stats.Updated)
+				trashed, err := srv.db.(*db.DB).ListTrashedSessions(t.Context())
+				require.NoError(t, err)
+				require.Len(t, trashed, 1)
+				old, err := srv.db.GetAllMessages(t.Context(), trashed[0].ID)
+				require.NoError(t, err)
+				require.Len(t, old, 2)
+				assert.Equal(t, "Previous answer", old[1].Content)
+			} else {
+				assert.Equal(t, 1, stats.Imported)
+			}
+			assert.Zero(t, stats.Errors)
+			messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:relay")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "Archived relay message", messages[0].Content)
+			postResult(answered, `{}`, http.StatusNotFound)
 		})
-		assert.Equal(t, 1, stats.Imported)
-		messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:relay")
-		require.NoError(t, err)
-		require.Len(t, messages, 1)
-		assert.Equal(t, "Archived relay message", messages[0].Content)
-		postResult(answered, `{}`, http.StatusNotFound)
-	})
+
+	}
 
 	t.Run("browser failure reaches stream error", func(t *testing.T) {
 		srv := testServer(t, 5*time.Second)

@@ -74,7 +74,9 @@ func (s *Server) registerImportRoutes() {
 	)
 }
 
-type claudeAISyncInput struct{}
+type claudeAISyncInput struct {
+	Replace []string `query:"replace,explode" doc:"Session IDs whose archived messages this import may replace when the default import refuses the export; the previous version moves to the trash. Repeatable"`
+}
 
 type claudeAISyncResultInput struct {
 	ID         string `path:"id"`
@@ -137,7 +139,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 					cancel()
 				}
 			},
-		})
+		}, importer.ImportOptions{Replace: in.Replace})
 		if stats.Imported+stats.Updated > 0 {
 			if s.broadcaster != nil {
 				s.broadcaster.Emit("sessions")

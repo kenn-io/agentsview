@@ -6,6 +6,7 @@ import type {
   PostApiV1ImportChatgptParams,
   PostApiV1ImportClaudeAiBody,
   PostApiV1ImportClaudeAiParams,
+  PostApiV1ImportClaudeAiSyncParams,
   PostApiV1ImportClaudeAiSyncResultsByIdParams,
   PostApiV1ImportClaudeAiSyncResultsByIdPathParameters,
 } from "../models";
@@ -95,17 +96,35 @@ export const postApiV1ImportClaudeAi = async (
   });
 };
 
-export const getPostApiV1ImportClaudeAiSyncUrl = () => {
-  return `/api/v1/import/claude-ai/sync`;
+export const getPostApiV1ImportClaudeAiSyncUrl = (params?: PostApiV1ImportClaudeAiSyncParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    const explodeParameters = ["replace"];
+
+    if (Array.isArray(value) && explodeParameters.includes(key)) {
+      value.forEach((v) => {
+        normalizedParams.append(key, v === null ? "null" : String(v));
+      });
+      return;
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/import/claude-ai/sync?${stringifiedParams}`
+    : `/api/v1/import/claude-ai/sync`;
 };
 
 /**
  * @summary Sync Claude.ai conversations
  */
 export const postApiV1ImportClaudeAiSync = async (
+  params?: PostApiV1ImportClaudeAiSyncParams,
   options?: Parameters<typeof orvalRequest>[1],
 ): Promise<Response> => {
-  return orvalRequest<Response>(getPostApiV1ImportClaudeAiSyncUrl(), {
+  return orvalRequest<Response>(getPostApiV1ImportClaudeAiSyncUrl(params), {
     ...options,
     method: "POST",
   });

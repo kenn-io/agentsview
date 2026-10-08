@@ -69,39 +69,33 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		return "", err
 	}
 
-	copyID, err := matchingTrashedCopyTx(ctx, tx, *src, stored)
-	if err != nil {
-		return "", err
+	copyID := replacedSessionCopyID(id, time.Now())
+	copyWrite := db.storageSessionBatchWrite(sessionCopyWrite(*src, copyID, stored))
+	copyWrite.UsageEvents = make([]UsageEvent, len(events))
+	for i, ev := range events {
+		ev.ID, ev.SessionID = 0, copyID
+		copyWrite.UsageEvents[i] = ev
 	}
-	if copyID == "" {
-		copyID = replacedSessionCopyID(id, time.Now())
-		copyWrite := db.storageSessionBatchWrite(sessionCopyWrite(*src, copyID, stored))
-		copyWrite.UsageEvents = make([]UsageEvent, len(events))
-		for i, ev := range events {
-			ev.ID, ev.SessionID = 0, copyID
-			copyWrite.UsageEvents[i] = ev
-		}
-		if _, err := writeOneSessionBatchTx(
-			ctx, tx, ctxTx, copyWrite, &pending, db.usageOnlyStorage(),
-		); err != nil {
-			return "", fmt.Errorf("writing replaced session copy: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `
+	// The batch writer replaces a session's usage events, so keep the stored ones unless the import supplies its own.
+	if len(write.UsageEvents) == 0 {
+		write.UsageEvents = events
+	}
+	if _, err := writeOneSessionBatchTx(
+		ctx, tx, ctxTx, copyWrite, &pending, db.usageOnlyStorage(),
+	); err != nil {
+		return "", fmt.Errorf("writing replaced session copy: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET display_name = (SELECT display_name FROM sessions WHERE id = ?),
 		    deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		    local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE id = ?`, id, copyID,
-		); err != nil {
-			return "", fmt.Errorf("trashing replaced session copy: %w", err)
-		}
+	); err != nil {
+		return "", fmt.Errorf("trashing replaced session copy: %w", err)
 	}
 	if err := copySessionPinsTx(ctx, tx, id, copyID); err != nil {
 		return "", err
-	}
-	// The batch writer replaces a session's usage events, so keep the stored ones unless the import supplies its own.
-	if len(write.UsageEvents) == 0 {
-		write.UsageEvents = events
 	}
 
 	if _, err := writeOneSessionBatchTx(
@@ -115,47 +109,6 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	db.notifyUsageSessions([]string{copyID, id})
 	pending.flush()
 	return copyID, nil
-}
-
-func matchingTrashedCopyTx(ctx context.Context, tx *sql.Tx, src Session, stored []Message) (string, error) {
-	prefix := src.ID + ":replaced:"
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE deleted_at IS NOT NULL AND id >= ? AND id < ?`, prefix, src.ID+":replaced;")
-	if err != nil {
-		return "", err
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return "", err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	_ = rows.Close()
-	if err != nil {
-		return "", err
-	}
-	for _, id := range ids {
-		messages, err := sessionMessagesTx(ctx, tx, id)
-		if err != nil {
-			return "", err
-		}
-		previous := sessionCopyWrite(src, id, stored).Messages
-		// Claude.ai exports omit UUIDs that Sync later adds to the same turns.
-		if src.Agent == "claude-ai" && len(messages) == len(previous) {
-			for i := range messages {
-				if messages[i].SourceUUID == "" || previous[i].SourceUUID == "" {
-					messages[i].SourceUUID, previous[i].SourceUUID = "", ""
-				}
-			}
-		}
-		if transcriptMessagesEqual(messages, previous) {
-			return id, nil
-		}
-	}
-	return "", nil
 }
 
 // replacedSessionCopyID names the trashed copy after its source and the replacement time.
@@ -193,9 +146,7 @@ func copySessionPinsTx(ctx context.Context, tx *sql.Tx, fromID, toID string) err
 		FROM pinned_messages p
 		JOIN messages sm ON sm.id = p.message_id
 		JOIN messages cm ON cm.session_id = ? AND cm.ordinal = sm.ordinal
-		WHERE p.session_id = ? AND NOT EXISTS (
-			SELECT 1 FROM pinned_messages existing WHERE existing.session_id = ? AND existing.message_id = cm.id
-		)`, toID, toID, fromID, toID,
+		WHERE p.session_id = ?`, toID, toID, fromID,
 	); err != nil {
 		return fmt.Errorf("copying pins to %s: %w", toID, err)
 	}

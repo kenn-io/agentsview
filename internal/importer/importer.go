@@ -236,11 +236,7 @@ func upsertConversation(
 
 	msgs := claudeAIMessages(s.ID, result.Messages)
 
-	getSession := store.GetSession
-	if s.LastEntryUUID != nil {
-		getSession = store.GetSessionFull
-	}
-	existing, err := getSession(ctx, s.ID)
+	existing, err := store.GetSession(ctx, s.ID)
 	if err != nil {
 		return importNew, fmt.Errorf("checking session: %w", err)
 	}
@@ -263,15 +259,7 @@ func upsertConversation(
 			return importNew, fmt.Errorf("loading existing messages: %w", err)
 		}
 		canonical := storedFormMessages(store, msgs)
-		if s.LastEntryUUID != nil {
-			for i, m := range archived {
-				if i >= len(canonical) || m.SourceUUID != canonical[i].SourceUUID {
-					replaceMessages = true
-					break
-				}
-			}
-		}
-		if !replaceMessages && sameMessages(archived, canonical) {
+		if sameMessages(archived, canonical) {
 			if err := store.UpsertSession(ctx, sess); errors.Is(err, db.ErrSessionExcluded) {
 				return importSkipped, nil
 			} else if err != nil {
@@ -287,10 +275,7 @@ func upsertConversation(
 			}
 			return importUpdated, nil
 		}
-		replaceMessages = replaceMessages || len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)])
-		if s.LastEntryUUID != nil && replaceMessages {
-			return importNew, refuse(RefusalDiverged, errors.New("visible branch differs from archived messages"))
-		}
+		replaceMessages = len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)])
 	}
 
 	fts.suspend(ctx)

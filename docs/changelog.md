@@ -13,7 +13,8 @@ The latest release is
 
 - Sync Claude.ai chats from the desktop Import dialog without downloading an
   export. Later runs fetch new or changed chats, including branch switches.
-  Shorter histories keep the previous version in Trash.
+  Shorter histories are refused and listed, as file imports are. See
+  [Replacing archived history](chat-import.md#replacing-archived-history).
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on
