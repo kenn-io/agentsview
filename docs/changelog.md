@@ -113,7 +113,7 @@ The latest published release is
 
 **Improvements**
 
-- Dashboard Git lookups reuse unchanged trust settings, reducing repeated Git launches.
+- Dashboard repository discovery reuses unchanged Git trust settings, reducing repeated Git launches.
 - The daemon sends its anonymous `daemon_active` ping at most once per UTC day,
   even when it restarts often or several servers share a data directory. A
   server that stays up sends one ping for each UTC day it runs.

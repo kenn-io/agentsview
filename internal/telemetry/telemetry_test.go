@@ -25,24 +25,6 @@ func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
 	assert.False(t, EnabledFromEnv())
 }
 
-func TestNewReporterDisabledByEnv(t *testing.T) {
-	t.Setenv(EnabledEnv, "0")
-
-	reporter, err := NewReporter(Options{InstallationID: "anonymous-install-id"})
-	require.NoError(t, err)
-
-	assert.False(t, reporter.Enabled())
-}
-
-func TestGenericTelemetryEnvDisablesReporter(t *testing.T) {
-	t.Setenv(GenericEnabledEnv, "0")
-
-	reporter, err := NewReporter(Options{InstallationID: "anonymous-install-id"})
-	require.NoError(t, err)
-
-	assert.False(t, reporter.Enabled())
-}
-
 func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")
@@ -54,17 +36,22 @@ func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
 }
 
 func TestNewReporterOptedOutKeepsAllowlist(t *testing.T) {
-	t.Setenv(GenericEnabledEnv, "0")
+	for _, env := range []string{EnabledEnv, GenericEnabledEnv} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv(EnabledEnv, "1")
+			t.Setenv(GenericEnabledEnv, "1")
+			t.Setenv(env, "0")
 
-	reporter, err := NewReporter(Options{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reporter.Close()) })
+			reporter, err := NewReporter(Options{})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reporter.Close()) })
 
-	assert.False(t, reporter.Enabled())
-	assert.True(t, reporter.EventAllowed(EventAppOpened))
-	assert.True(t, reporter.EventAllowed(EventDaemonActive))
-	assert.False(t, reporter.EventAllowed("unknown_event"))
-	require.NoError(t, reporter.CaptureDaemonActive(t.Context()))
+			assert.False(t, reporter.Enabled())
+			assert.True(t, reporter.EventAllowed(EventAppOpened))
+			assert.True(t, reporter.EventAllowed(EventDaemonActive))
+			assert.False(t, reporter.EventAllowed("unknown_event"))
+		})
+	}
 }
 
 func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
@@ -78,6 +65,11 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 
 	reporter := &Reporter{client: client}
+	assert.True(t, reporter.Enabled())
+	require.NoError(t, reporter.CaptureDaemonActive(t.Context()))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.NoError(t, reporter.CaptureDaemonActive(ctx))
 
 	assert.True(t, reporter.EventAllowed(EventDaemonActive))
 	assert.True(t, reporter.EventAllowed(EventAppOpened))
@@ -109,31 +101,4 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 	assert.NotContains(t, props, "app")
 	assert.NotContains(t, props, "project")
 	assert.NotContains(t, props, "session")
-}
-
-func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
-	t.Setenv(EnabledEnv, "1")
-	t.Setenv(GenericEnabledEnv, "1")
-
-	client, err := newKitReporter(Options{
-		InstallationID: "anonymous-install-id", Version: "v1.2.3", Commit: "abc123",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
-
-	reporter := &Reporter{client: client}
-	assert.True(t, reporter.Enabled())
-
-	err = reporter.CaptureDaemonActive(t.Context())
-	require.NoError(t, err)
-}
-
-func TestReporterCaptureDaemonActiveTestBlockerWinsOverCanceledContext(t *testing.T) {
-	client := kittelemetry.DisabledReporter()
-	reporter := &Reporter{client: client}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	err := reporter.CaptureDaemonActive(ctx)
-	require.NoError(t, err)
 }
