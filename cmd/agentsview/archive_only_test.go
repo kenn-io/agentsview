@@ -37,7 +37,9 @@ func TestArchiveOnlyRefusesReceivingHostOnRestart(t *testing.T) {
 		out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeStaleArchiveHelperProcess",
 			[]string{"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data), "AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0]}, "listening at")
 		require.NoError(t, err, string(out))
-		database, err = db.OpenIsolatedContext(t.Context(), cfg.DBPath)
+		// Read only: a writable open can truncate the WAL while Windows still
+		// maps it for the helper process that just exited.
+		database, err = db.OpenReadOnly(t.Context(), cfg.DBPath)
 		require.NoError(t, err)
 		var count int
 		require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
@@ -122,7 +124,9 @@ func TestArchiveOnlyConfigOnlyBackgroundStart(t *testing.T) {
 	require.NoError(t, response.Body.Close())
 	assert.Equal(t, http.StatusOK, response.StatusCode)
 	require.NoError(t, stopDaemonProcess(result.Runtime.Record, 5*time.Second))
-	database, err = db.OpenIsolatedContext(t.Context(), filepath.Join(cfg.DataDir, "sessions.db"))
+	// Read only: a writable open can truncate the WAL while Windows still maps
+	// it for the daemon process that just exited.
+	database, err = db.OpenReadOnly(t.Context(), filepath.Join(cfg.DataDir, "sessions.db"))
 	require.NoError(t, err)
 	defer database.Close()
 	var count int
