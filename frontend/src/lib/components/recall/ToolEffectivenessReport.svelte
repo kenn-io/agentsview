@@ -7,7 +7,7 @@
     type ServiceSessionDetail,
     type SessionToolSequencesResponse,
   } from "../../api/generated/index";
-  import { isAbortError } from "../../api/runtime.js";
+  import { ApiError, isAbortError } from "../../api/runtime.js";
   import {
     parseToolEffectivenessReport,
     type ToolEffectivenessAssessment,
@@ -65,6 +65,7 @@
   let timing = $state<DbSessionTiming | null>(null);
   let factsLoading = $state(false);
   let factsFailed = $state(false);
+  let factsUnavailable = $state(false);
   let factsAttempt = $state(0);
   // Per conclusion: whether its evidence is open and which citation is highlighted.
   let openConclusions = $state<Record<number, boolean>>({});
@@ -82,6 +83,7 @@
     session = null;
     timing = null;
     factsFailed = false;
+    factsUnavailable = false;
     openConclusions = {};
     activeCitation = {};
     if (!id) {
@@ -121,7 +123,9 @@
       })
       .catch((error) => {
         if (isAbortError(error) || !factsRead.isCurrent(signal)) return;
-        factsFailed = true;
+        // A backend that records no transcript revision can't serve the sequences, so retrying won't help.
+        if (error instanceof ApiError && error.status === 501) factsUnavailable = true;
+        else factsFailed = true;
       })
       .finally(() => {
         if (!factsRead.finish(signal)) return;
@@ -242,13 +246,9 @@
   }
 
   /** What the model saw of a cited call's result when the budget cut it. */
-  function modelSaw(citation: Citation): string | undefined {
-    if (citation.kind !== "call") return undefined;
-    const cut = report?.omissions.find((o) =>
-      o.reason === "budget" && o.field === "result" &&
-      o.ordinal === citation.ordinal && o.call_index === citation.callIndex);
-    if (cut?.kept_bytes === undefined) return undefined;
-    return m.tool_effectiveness_model_saw({ kept: m.tool_sequences_byte_count(countArgs(cut.kept_bytes)) });
+  function modelSaw(detail: ToolEffectivenessCitedCall): string | undefined {
+    if (detail.result_kept_bytes === undefined) return undefined;
+    return m.tool_effectiveness_model_saw(countArgs(detail.result_kept_bytes));
   }
 
   function citationTitle(citation: Citation): string {
@@ -283,34 +283,24 @@
   }
 
   function callFallback(citation: Citation & { kind: "call" }): string {
-    return m.tool_sequences_message_call({ ordinal: citation.ordinal, callIndex: citation.callIndex });
+    return m.tool_sequences_message_call({ ordinal: citation.ordinal, callNumber: citation.callIndex + 1 });
   }
 
   function omissionText(omission: ToolEffectivenessOmission): string {
-    const where = {
-      ordinal: String(omission.ordinal ?? ""),
-      callIndex: String(omission.call_index ?? ""),
-      tool: omission.tool_name ?? "",
-    };
+    const args = countArgs(omission.count);
     switch (omission.reason) {
-      case "budget":
-        return m.tool_effectiveness_omission_budget({
-          ...where,
-          field: omission.field === "input" ? m.tool_sequences_input() : m.tool_sequences_result(),
-          keptLabel: formatCount(omission.kept_bytes ?? 0),
-          ...countArgs(omission.original_bytes ?? 0),
-        });
-      case "unretained":
-        return omission.original_bytes === undefined
-          ? m.tool_effectiveness_omission_unretained(where)
-          : m.tool_effectiveness_omission_unretained_bytes({
-            ...where,
-            ...countArgs(omission.original_bytes),
-          });
-      case "previews": {
-        const count = omission.count ?? 0;
-        return m.tool_effectiveness_omission_previews({ count, countLabel: formatCount(count) });
+      case "budget": {
+        const keptLabel = formatCount(omission.kept_bytes ?? 0);
+        return omission.field === "input"
+          ? m.tool_effectiveness_omission_budget_input({ ...args, keptLabel })
+          : m.tool_effectiveness_omission_budget_result({ ...args, keptLabel });
       }
+      case "unretained":
+        return m.tool_effectiveness_omission_unretained(args);
+      case "no_result":
+        return m.tool_effectiveness_omission_no_result(args);
+      case "previews":
+        return m.tool_effectiveness_omission_previews({ ...args, charsLabel: formatCount(omission.kept_chars ?? 0) });
     }
   }
 
@@ -341,7 +331,7 @@
     <div class="report-head">
       {#if session}
         <div class="report-title">
-          <h3>{sessionTitle}</h3>
+          <p class="report-name">{sessionTitle}</p>
           <p>
             <a href={router.buildSessionHref(sessionId)} onclick={openSession}>{m.tool_effectiveness_open_session()}</a>
             · {session.agent_label || session.agent} · {session.project}
@@ -377,9 +367,9 @@
       </div>
     </div>
 
-    <section class="report-section" aria-labelledby="tool-effectiveness-assessment-title">
+    <section class="report-section" aria-labelledby="{uid}-assessment-title">
       <div class="section-head">
-        <h2 id="tool-effectiveness-assessment-title">{m.tool_effectiveness_model_assessment()}</h2>
+        <h2 id="{uid}-assessment-title">{m.tool_effectiveness_model_assessment()}</h2>
         <span class="hint">{m.tool_effectiveness_select_citation()}</span>
       </div>
       <ol class="conclusions">
@@ -388,7 +378,7 @@
           <li class="conclusion" class:open>
             {@render verdict(conclusion.assessment, assessmentLabel(conclusion.assessment))}
             <div class="conclusion-body">
-              <p>{conclusion.text}</p>
+              <p id="{uid}-conclusion-{index}">{conclusion.text}</p>
               <div class="citations">
                 {#each citations as citation (citation.key)}
                   <button
@@ -413,9 +403,12 @@
                     <span class="citation-arrow" aria-hidden="true">↗</span>
                   </button>
                 {/each}
+                <!-- The conclusion's text joins the count, so each toggle has its own name. -->
                 <button
                   type="button"
                   class="citation-toggle"
+                  id="{uid}-toggle-{index}"
+                  aria-labelledby="{uid}-toggle-{index} {uid}-conclusion-{index}"
                   aria-expanded={open}
                   aria-controls={open ? `${uid}-evidence-${index}` : undefined}
                   onclick={() => toggleConclusion(index)}
@@ -449,7 +442,7 @@
                         callIndex={sharesMessage(citation) ? citation.callIndex : undefined}
                         outcome={citation.detail.outcome}
                         resultBytes={citation.detail.result_bytes}
-                        cut={modelSaw(citation)}
+                        cut={modelSaw(citation.detail)}
                         {highlighted}
                       />
                     {:else}
@@ -459,7 +452,6 @@
                         call={citationTarget(citation)}
                         tool=""
                         input={callFallback(citation)}
-                        cut={modelSaw(citation)}
                         {highlighted}
                       />
                     {/if}
@@ -477,6 +469,7 @@
       {sessionId}
       loading={factsLoading}
       failed={factsFailed}
+      unavailable={factsUnavailable}
       onretry={() => factsAttempt++}
       {timing}
       embedded
@@ -532,7 +525,7 @@
     border-bottom: 1px solid var(--border-muted);
   }
 
-  .report-title h3 {
+  .report-title .report-name {
     margin: 0;
     color: var(--text-primary);
     font-size: var(--font-size-lg);

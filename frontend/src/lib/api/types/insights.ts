@@ -31,15 +31,16 @@ export interface ToolEffectivenessConclusion {
   calls: ToolEffectivenessCallRef[];
 }
 
+/** Counts one kind of evidence the model didn't see in full. */
 export interface ToolEffectivenessOmission {
-  reason: "budget" | "unretained" | "previews";
-  ordinal?: number;
-  call_index?: number;
-  tool_name?: string;
+  reason: "budget" | "unretained" | "no_result" | "previews";
+  /** What a budget cut shortened. */
   field?: "input" | "result";
+  count: number;
+  /** The most a budget cut kept of any one field. */
   kept_bytes?: number;
-  original_bytes?: number;
-  count?: number;
+  /** The length of each message preview. */
+  kept_chars?: number;
 }
 
 /** Details of one cited call, saved with the report. */
@@ -52,6 +53,8 @@ export interface ToolEffectivenessCitedCall {
   input_preview: string;
   outcome: "errored" | "empty" | "content" | "unknown";
   result_bytes?: number;
+  /** How much of the result the model saw when the budget cut it. */
+  result_kept_bytes?: number;
   /** How many calls the cited message holds. */
   message_calls: number;
 }
@@ -67,7 +70,7 @@ export interface ToolEffectivenessReport {
 }
 
 const ASSESSMENTS = new Set(["helped", "did_not_help", "unknown"]);
-const OMISSION_REASONS = new Set(["budget", "unretained", "previews"]);
+const OMISSION_REASONS = new Set(["budget", "unretained", "no_result", "previews"]);
 
 function isInt(value: unknown): value is number {
   return Number.isInteger(value);
@@ -103,13 +106,21 @@ function isCitedCall(value: unknown): value is ToolEffectivenessCitedCall {
     typeof c.input_preview === "string" &&
     OUTCOMES.has(c.outcome) &&
     (c.result_bytes === undefined || isInt(c.result_bytes)) &&
+    (c.result_kept_bytes === undefined || isInt(c.result_kept_bytes)) &&
     isInt(c.message_calls)
   );
 }
 
 function isOmission(value: unknown): value is ToolEffectivenessOmission {
   const o = value as ToolEffectivenessOmission | null;
-  return typeof o === "object" && o !== null && OMISSION_REASONS.has(o.reason);
+  return (
+    typeof o === "object" &&
+    o !== null &&
+    OMISSION_REASONS.has(o.reason) &&
+    isInt(o.count) &&
+    (o.kept_bytes === undefined || isInt(o.kept_bytes)) &&
+    (o.kept_chars === undefined || isInt(o.kept_chars))
+  );
 }
 
 /** Returns the saved tool-effectiveness report, or null when it is missing or unreadable. */

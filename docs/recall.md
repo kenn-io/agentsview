@@ -52,8 +52,13 @@ From a session's actions menu, **Analyze tool effectiveness** generates a report
 on that one session: which tool calls helped and which wasted turns. Each
 conclusion names the calls it cites, and clicking one shows those calls with a
 link to their message. The session's observed tool sequences and a note on
-anything cut from the model's input follow the conclusions. The server rejects
-a report that cites a message the model was never shown.
+anything cut from the model's input follow the conclusions.
+
+The report sends each tool call's input and result to the insight agent, up to
+256 KiB of that text per run, so it costs more tokens than Agent Analysis and
+sends whatever the commands printed, secrets included. When a reply cites a
+message or call the model was never shown, the server asks once more and saves
+nothing if that reply fails too.
 
 ![Recall corpus browser](/docs/assets/generated/screenshots/recall-corpus.png)
 
@@ -195,8 +200,8 @@ endpoint. It is off by default; manually running the build command is treated as
 one-time consent for that invocation.
 
 Vector and hybrid queries keep working while the Recall index trails the corpus
-by a few entries, which is normal while extraction is writing them. Each
-insert, delete, accept, reject, or text edit of an accepted entry is one corpus
+by a few entries, which is normal while extraction is writing them. Each insert,
+delete, accept, reject, or text edit of an accepted entry is one corpus
 revision, and the index may trail by up to `[vector] recall_max_revision_lag`
 revisions (default 256):
 
@@ -206,12 +211,11 @@ recall_max_revision_lag = 256   # 0 requires the index to match the corpus exact
 ```
 
 Entries newer than the index are missing only from the vector ranking. Hybrid
-search still finds them through its lexical ranking, which runs after the
-query is encoded. Results come from the entries as the query reads them, so one
-deleted or rejected since the last build drops out. Past the bound,
-vector and hybrid queries fail closed until the Recall store is rebuilt, by hand
-or by the automatic refresh when it is enabled; lexical mode keeps working
-meanwhile. See
+search still finds them through its lexical ranking, which runs after the query
+is encoded. Results come from the entries as the query reads them, so one
+deleted or rejected since the last build drops out. Past the bound, vector and
+hybrid queries fail closed until the Recall store is rebuilt, by hand or by the
+automatic refresh when it is enabled; lexical mode keeps working meanwhile. See
 [Semantic Search](/docs/semantic-search/#enabling-vector) for the shared
 embedding configuration and endpoint privacy considerations.
 
@@ -260,17 +264,17 @@ Optional keys: `deployment` (labels which serving instance produced the corpus),
 `backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
 `max_window_chars` (default 50000), `max_tokens`, `candidate_findings`
 (`"block"` default, or `"allow"` — see below), per-server `api_key_env`,
-per-server `concurrency` (default 1 — see below), a
-`[recall.extract.prompts]` table (`profile`, `dir`), and a
-`[recall.extract.request]` table (`temperature`, `extra_body`).
+per-server `concurrency` (default 1 — see below), a `[recall.extract.prompts]`
+table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
+`extra_body`).
 
 `concurrency` sets how many sessions a pass distills at once against that
 server; each session's units are still sent one at a time, in order. Raise it
 for hosted endpoints or servers that batch concurrent requests, where a
 one-session pass leaves the endpoint mostly idle between round trips. Keep the
-default of 1 for a single local model: parallel requests divide the same
-compute instead of adding throughput. Each in-flight session holds its
-transcript in memory, and a hosted endpoint's rate limits still apply.
+default of 1 for a single local model: parallel requests divide the same compute
+instead of adding throughput. Each in-flight session holds its transcript in
+memory, and a hosted endpoint's rate limits still apply.
 
 Non-loopback endpoints must use HTTPS: extraction sends transcript content to
 the endpoint, and plaintext HTTP off the machine could be intercepted. A server

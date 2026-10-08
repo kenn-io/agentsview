@@ -131,6 +131,7 @@ func TestBuildToolEffectivenessPrompt_FitsAgentArgumentLimit(t *testing.T) {
 	assert.LessOrEqual(t, len(prompt), req.MaxPromptBytes)
 	require.NotEmpty(t, ev.Omissions)
 	assert.Equal(t, OmissionBudget, ev.Omissions[0].Reason)
+	assert.Contains(t, prompt, "Result (cut to ")
 
 	req.MaxPromptBytes = 100
 	_, _, err = BuildToolEffectivenessPrompt(t.Context(), d, req)
@@ -171,19 +172,17 @@ func TestBuildToolEffectivenessPrompt_BudgetTrimsLargestFirst(t *testing.T) {
 
 	fixed := 2 + 2 + len(input) + len(small)
 	limit := (toolEvidenceBudgetBytes - fixed) / 2
-	require.Len(t, ev.Omissions, 2)
-	assert.Equal(t, ToolEvidenceOmission{
-		Reason: OmissionBudget, Ordinal: new(1), CallIndex: new(0), ToolName: "Bash",
-		Field: "result", KeptBytes: new(limit), OriginalBytes: new(len(big)),
-	}, ev.Omissions[0])
-	assert.Equal(t, ToolEvidenceOmission{
-		Reason: OmissionBudget, Ordinal: new(2), CallIndex: new(0), ToolName: "Bash",
-		Field: "result", KeptBytes: new(limit), OriginalBytes: new(len(medium)),
-	}, ev.Omissions[1])
+	assert.Equal(t, []ToolEvidenceOmission{{
+		Reason: OmissionBudget, Field: "result", Count: 2, KeptBytes: new(limit),
+	}}, ev.Omissions)
 	assert.Contains(t, prompt, input)
 	assert.Contains(t, prompt, small)
 	assert.NotContains(t, prompt, strings.Repeat("a", limit+1))
-	assert.Contains(t, prompt, "msg 1 #0 Bash result: cut to")
+	assert.Contains(t, prompt, fmt.Sprintf("Result (cut to %d of %d bytes):\n", limit, len(big)))
+	assert.Contains(t, prompt, fmt.Sprintf("Result (cut to %d of %d bytes):\n", limit, len(medium)))
+	assert.Contains(t, prompt, fmt.Sprintf("## Omissions\n\n- 2 call results cut to at most %d bytes each\n", limit))
+	assert.Equal(t, new(limit), ev.callDetails[[2]int{1, 0}].ResultKeptBytes)
+	assert.Nil(t, ev.callDetails[[2]int{3, 0}].ResultKeptBytes)
 
 	again, _ := buildToolEffectiveness(t, d, "budget")
 	assert.Equal(t, prompt, again)
@@ -203,7 +202,33 @@ func TestBuildToolEffectivenessPrompt_FencesAndUTF8(t *testing.T) {
 	assert.Contains(t, prompt, "``````\n"+fenced+"\n``````\n")
 	assert.True(t, utf8.ValidString(prompt))
 	require.Len(t, ev.Omissions, 1)
-	assert.Equal(t, 0, *ev.Omissions[0].KeptBytes%3)
+	kept := ev.callDetails[[2]int{2, 0}].ResultKeptBytes
+	require.NotNil(t, kept)
+	assert.Equal(t, 0, *kept%3)
+}
+
+// A long session adds one omission per kind of cut, however many calls it holds.
+func TestBuildToolEffectivenessPrompt_ManyCutsShareOneOmission(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	msgs := []db.Message{{SessionID: "many", Ordinal: 0, Role: "user", Content: "go"}}
+	result := strings.Repeat("x", 4000)
+	for i := 1; i <= 500; i++ {
+		msgs = append(msgs, toolEffectivenessMessage("many", i,
+			toolEffectivenessCall("Bash", fmt.Sprintf("b%d", i), `{"command":"cat file.go"}`, result, "completed")))
+	}
+	seedToolEffectivenessSession(t, d, "many", "clean", msgs...)
+	prompt, ev := buildToolEffectiveness(t, d, "many")
+
+	require.Len(t, ev.Omissions, 1)
+	assert.Equal(t, 500, ev.Omissions[0].Count)
+	_, omissions, found := strings.Cut(prompt, "## Omissions")
+	require.True(t, found)
+	assert.Equal(t, 1, strings.Count(omissions, "\n- "))
+
+	req := GenerateRequest{Type: ToolEffectivenessType, SessionID: "many", MaxPromptBytes: 120 << 10}
+	fitted, _, err := BuildToolEffectivenessPrompt(t.Context(), d, req)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(fitted), req.MaxPromptBytes)
 }
 
 func TestBuildToolEffectivenessPrompt_UnretainedResults(t *testing.T) {
@@ -219,14 +244,15 @@ func TestBuildToolEffectivenessPrompt_UnretainedResults(t *testing.T) {
 	)
 	prompt, ev := buildToolEffectiveness(t, d, "unretained")
 
-	assert.Equal(t, 3, strings.Count(prompt, "(result not retained)"))
-	require.Len(t, ev.Omissions, 3)
-	for _, o := range ev.Omissions {
-		assert.Equal(t, OmissionUnretained, o.Reason)
-	}
-	assert.Equal(t, new(17), ev.Omissions[1].OriginalBytes)
-	assert.Nil(t, ev.Omissions[2].OriginalBytes)
-	assert.Contains(t, prompt, "msg 2 #0 Read result: not retained (17 bytes originally)")
+	assert.Equal(t, 2, strings.Count(prompt, "(result not retained)"))
+	assert.Contains(t, prompt, "### Call msg 3 #0 Bash\n- Outcome: unknown\n- Sequence: none\n\nInput:\n```\n{}\n```\n\nResult:\n(no result recorded)\n")
+	assert.Equal(t, []ToolEvidenceOmission{
+		{Reason: OmissionUnretained, Field: "result", Count: 2},
+		{Reason: OmissionNoResult, Field: "result", Count: 1},
+	}, ev.Omissions)
+	assert.Contains(t, prompt, "## Omissions\n\n- 2 call results not retained\n- 1 calls with no recorded result\n")
+	assert.Equal(t, new(17), ev.callDetails[[2]int{2, 0}].ResultBytes)
+	assert.Nil(t, ev.callDetails[[2]int{3, 0}].ResultBytes)
 	assert.True(t, ev.allResultsUnknown)
 }
 
@@ -272,10 +298,9 @@ func TestBuildToolEffectivenessPrompt_WithheldErrorResult(t *testing.T) {
 	)
 	prompt, ev := buildToolEffectiveness(t, d, "withheld-error")
 
-	assert.Contains(t, prompt, "msg 1 #0 Read result: not retained (17 bytes originally)")
-	require.Len(t, ev.Omissions, 1)
-	assert.Equal(t, OmissionUnretained, ev.Omissions[0].Reason)
-	assert.Equal(t, new(17), ev.Omissions[0].OriginalBytes)
+	assert.Contains(t, prompt, "Result:\n(result not retained)\n")
+	assert.Equal(t, []ToolEvidenceOmission{{Reason: OmissionUnretained, Field: "result", Count: 1}}, ev.Omissions)
+	assert.Equal(t, new(17), ev.callDetails[[2]int{1, 0}].ResultBytes)
 	assert.Equal(t, "errored", ev.callDetails[[2]int{1, 0}].Outcome)
 }
 
@@ -287,7 +312,7 @@ func TestBuildToolEffectivenessPrompt_PreviewOmission(t *testing.T) {
 	)
 	prompt, ev := buildToolEffectiveness(t, d, "preview")
 
-	assert.Equal(t, []ToolEvidenceOmission{{Reason: OmissionPreviews, Count: 1}}, ev.Omissions)
+	assert.Equal(t, []ToolEvidenceOmission{{Reason: OmissionPreviews, Count: 1, KeptChars: new(sessionPreviewRunes)}}, ev.Omissions)
 	assert.Contains(t, prompt, "- 1 messages shown as 800-character previews")
 }
 
@@ -410,27 +435,33 @@ func TestParseToolEffectivenessReport(t *testing.T) {
 
 	_, err = ParseToolEffectivenessReport(`{"conclusions":[{"assessment":"helped","text":"t","ordinals":[2],"calls":[{"ordinal":2}]}]}`)
 	require.ErrorContains(t, err, "call_index")
-	_, err = ParseToolEffectivenessReport(`{"conclusions":[{"assessment":"helped","text":"t","ordinals":[2],"calls":[{"ordinal":2,"call_index":1,"x":1}]}]}`)
-	require.Error(t, err)
 
-	_, err = ParseToolEffectivenessReport(`{"conclusions":[],"extra":1}`)
-	require.Error(t, err)
+	// Members the schema doesn't name are ignored rather than failing a paid run.
+	r, err = ParseToolEffectivenessReport(`{"conclusions":[{"assessment":"helped","text":"t","confidence":0.9,"ordinals":[2],"calls":[{"ordinal":2,"call_index":1,"x":1}]}],"extra":1}`)
+	require.NoError(t, err)
+	require.Len(t, r.Conclusions, 1)
+	assert.Equal(t, []ToolEffectivenessCallRef{{Ordinal: 2, CallIndex: 1}}, r.Conclusions[0].Calls)
 	_, err = ParseToolEffectivenessReport("The calls helped.")
 	assert.Error(t, err)
 }
 
 func TestToolEffectivenessStructuredAndMarkdown(t *testing.T) {
-	ev := ToolEffectivenessEvidence{SessionID: "s", CallCount: 2, Omissions: []ToolEvidenceOmission{{
-		Reason: OmissionUnretained, Ordinal: new(2), CallIndex: new(0), ToolName: "Read", Field: "result",
-	}}}
-	r := ToolEffectivenessReport{Conclusions: []ToolEffectivenessConclusion{{
-		Assessment: AssessmentDidNotHelp, Text: "Repeated the same search", Ordinals: []int{1, 2},
-		Calls: []ToolEffectivenessCallRef{{Ordinal: 2, CallIndex: 0}},
-	}}}
+	ev := ToolEffectivenessEvidence{SessionID: "s", CallCount: 2, Omissions: []ToolEvidenceOmission{
+		{Reason: OmissionBudget, Field: "input", Count: 3, KeptBytes: new(40)},
+		{Reason: OmissionUnretained, Field: "result", Count: 1},
+	}}
+	r := ToolEffectivenessReport{Conclusions: []ToolEffectivenessConclusion{
+		{
+			Assessment: AssessmentDidNotHelp, Text: "Repeated the same search", Ordinals: []int{1, 2},
+			Calls: []ToolEffectivenessCallRef{{Ordinal: 2, CallIndex: 0}},
+		},
+		{Assessment: AssessmentHelped, Text: "Read found it.\n\n- then stopped", Ordinals: []int{3}},
+	}}
 	md := RenderToolEffectivenessMarkdown(r, ev)
 	assert.Contains(t, md, "## Model assessment\n\n- **Did not help**: Repeated the same search (msg 1, msg 2, msg 2 #0)\n")
+	assert.Contains(t, md, "- **Helped**: Read found it. - then stopped (msg 3)\n\n## Observed")
 	assert.Contains(t, md, "## Observed tool sequences\n\nNone.\n")
-	assert.Contains(t, md, "## Omissions\n\n- msg 2 #0 Read result: not retained\n")
+	assert.Contains(t, md, "## Omissions\n\n- 3 call inputs cut to at most 40 bytes each\n- 1 call results not retained\n")
 }
 
 func TestToolEffectivenessStructured_CitedCalls(t *testing.T) {

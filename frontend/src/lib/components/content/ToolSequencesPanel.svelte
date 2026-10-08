@@ -371,8 +371,9 @@
 </section>
 
 <style>
+  /* Named, since each call row is a container too and would otherwise answer the queries for its detail. */
   .tool-sequences-panel {
-    container-type: inline-size;
+    container: tool-sequences / inline-size;
     max-height: clamp(10rem, 34vh, 24rem);
     min-width: 0;
     overflow: auto;
@@ -703,7 +704,7 @@
     }
   }
 
-  @container (max-width: 520px) {
+  @container tool-sequences (max-width: 520px) {
     .legend {
       display: none;
     }

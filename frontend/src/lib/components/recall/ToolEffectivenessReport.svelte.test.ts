@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { flushSync, mount, tick, unmount } from "svelte";
 import type { DbInsight, SessionToolSequencesResponse } from "../../api/generated/index.js";
+import { ApiError } from "../../api/runtime.js";
 import { router } from "../../stores/router.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import ToolEffectivenessReport from "./ToolEffectivenessReport.svelte";
@@ -90,24 +91,10 @@ function makeInsight(overrides: Partial<DbInsight> = {}): DbInsight {
         { assessment: "helped", text: "Read found the config", ordinals: [3], calls: [] },
       ],
       omissions: [
-        {
-          reason: "budget",
-          ordinal: 3,
-          call_index: 0,
-          tool_name: "Read",
-          field: "result",
-          kept_bytes: 100,
-          original_bytes: 4000,
-        },
-        {
-          reason: "unretained",
-          ordinal: 4,
-          call_index: 1,
-          tool_name: "Read",
-          field: "result",
-          original_bytes: 17,
-        },
-        { reason: "previews", count: 2 },
+        { reason: "budget", field: "result", count: 1, kept_bytes: 100 },
+        { reason: "unretained", field: "result", count: 1 },
+        { reason: "no_result", field: "result", count: 2 },
+        { reason: "previews", count: 2, kept_chars: 800 },
       ],
       transcript_revision: "rev-1",
       cited_calls: [
@@ -128,6 +115,7 @@ function makeInsight(overrides: Partial<DbInsight> = {}): DbInsight {
           input_preview: '{"file_path":"config.ts"}',
           outcome: "content",
           result_bytes: 4000,
+          result_kept_bytes: 100,
           message_calls: 1,
         },
       ],
@@ -177,7 +165,9 @@ describe("ToolEffectivenessReport", () => {
     await settle();
 
     expect(getToolSequences).toHaveBeenCalledWith({ id: "s1" }, expect.anything());
-    expect(document.querySelector(".report-title h3")?.textContent).toBe("Fix config loading");
+    expect(document.querySelector(".report-title .report-name")?.textContent).toBe(
+      "Fix config loading",
+    );
     const summary =
       document.querySelector("[data-testid=tool-effectiveness-summary]")?.textContent ?? "";
     expect(summary).toContain("2 conclusions");
@@ -208,9 +198,13 @@ describe("ToolEffectivenessReport", () => {
     expect(text).toContain("Did not help");
     expect(text).toContain("Repeated the empty search");
     expect(text).toContain("model saw 100 bytes");
-    expect(text).toContain("Message 3, call 0 (Read): Result cut to 100 of 4,000 bytes");
-    expect(text).toContain("Message 4, call 1 (Read): result not retained (17 bytes originally)");
-    expect(text).toContain("2 messages shown as 800-character previews");
+    const omissions = [...document.querySelectorAll(".omission")].map((o) => o.textContent);
+    expect(omissions).toEqual([
+      "1 call result cut to at most 100 bytes",
+      "1 call result not retained",
+      "2 calls with no recorded result",
+      "2 messages shown as previews of 800 characters",
+    ]);
     expect(text).not.toContain("saved markdown text");
     unmount(component);
   });
@@ -227,7 +221,7 @@ describe("ToolEffectivenessReport", () => {
 
     expect(citationButtons().map((b) => b.textContent?.replace(/\s+/g, " ").trim())).toEqual([
       "Message 1 ↗",
-      "Message 2, call 0 ↗",
+      "Message 2, call 1 ↗",
       "Message 3 ↗",
     ]);
     unmount(component);
@@ -354,6 +348,44 @@ describe("ToolEffectivenessReport", () => {
     unmount(component);
   });
 
+  it("names each citation toggle by its conclusion", async () => {
+    const component = mount(ToolEffectivenessReport, {
+      target: document.body,
+      props: { insight: makeInsight() },
+    });
+    await settle();
+
+    const names = [...document.querySelectorAll<HTMLButtonElement>(".citation-toggle")].map(
+      (toggle) =>
+        toggle
+          .getAttribute("aria-labelledby")!
+          .split(" ")
+          .map((id) => document.getElementById(id)?.textContent?.replace(/\s+/g, " ").trim())
+          .join(" "),
+    );
+    expect(names).toEqual([
+      "2 citations Repeated the empty search",
+      "1 citation Read found the config",
+    ]);
+    unmount(component);
+  });
+
+  it("says the sequences are unavailable when the archive records no revision", async () => {
+    getToolSequences.mockRejectedValueOnce(
+      new ApiError(501, "this backend records no transcript revision", "revision_unavailable"),
+    );
+    const component = mount(ToolEffectivenessReport, {
+      target: document.body,
+      props: { insight: makeInsight() },
+    });
+    await settle();
+
+    const panel = document.querySelector(".tool-sequences-panel")!;
+    expect(panel.textContent).toContain("doesn't record transcript versions");
+    expect(panel.querySelector("[role=alert]")).toBeNull();
+    unmount(component);
+  });
+
   it("retries the sequence read after it fails", async () => {
     getToolSequences.mockRejectedValueOnce(new Error("offline"));
     const component = mount(ToolEffectivenessReport, {
@@ -394,19 +426,33 @@ describe("ToolEffectivenessReport", () => {
     const raw = JSON.parse(insight.structured_json!);
     raw.call_count = 1;
     raw.omissions = [
-      { reason: "unretained", ordinal: 4, call_index: 1, tool_name: "Read", original_bytes: 1 },
+      { reason: "budget", field: "input", count: 1, kept_bytes: 50 },
+      { reason: "unretained", field: "result", count: 1 },
+      { reason: "no_result", field: "result", count: 1 },
+      { reason: "previews", count: 1, kept_chars: 800 },
     ];
+    raw.cited_calls[1].result_kept_bytes = 1;
     getToolSequences.mockResolvedValue(makeFacts(3));
     const component = mount(ToolEffectivenessReport, {
       target: document.body,
       props: { insight: { ...insight, structured_json: JSON.stringify(raw) } },
     });
     await settle();
+    document
+      .querySelectorAll<HTMLButtonElement>(".citation-toggle")
+      .forEach((toggle) => toggle.click());
+    flushSync();
 
     const text = document.body.textContent ?? "";
     expect(text).toContain("of 1 call cited");
     expect(text).toContain("the model judged 1 call and the session now has 3");
-    expect(text).toContain("(1 byte originally)");
+    expect(text).toContain("model saw 1 byte");
+    expect([...document.querySelectorAll(".omission")].map((o) => o.textContent)).toEqual([
+      "1 call input cut to at most 50 bytes",
+      "1 call result not retained",
+      "1 call with no recorded result",
+      "1 message shown as a preview of 800 characters",
+    ]);
     unmount(component);
   });
 
@@ -439,15 +485,16 @@ describe("ToolEffectivenessReport", () => {
     });
     await settle();
 
+    // Call index 1 is the message's second call.
     const [button] = citationButtons();
-    expect(button!.textContent).toContain("Message 2, call 1");
+    expect(button!.textContent).toContain("Message 2, call 2");
     expect(button!.textContent).toContain("No input recorded.");
-    expect(button!.title).toContain("Message 2, call 1");
+    expect(button!.title).toContain("Message 2, call 2");
     button!.click();
     flushSync();
-    expect(document.querySelector(".conclusion .jump")!.textContent).toContain("Message 2, call 1");
+    expect(document.querySelector(".conclusion .jump")!.textContent).toContain("Message 2, call 2");
     expect(document.querySelector(".conclusion .jump")!.getAttribute("aria-label")).toBe(
-      "Message 2, call 1: open the Grep call in the transcript",
+      "Message 2, call 2: open the Grep call in the transcript",
     );
     unmount(component);
   });

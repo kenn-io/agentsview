@@ -58,13 +58,16 @@
     children = undefined,
   }: Props = $props();
 
+  // Readers count calls from one, though call indexes start at zero.
   const where = $derived(
-    callIndex === undefined ? m.tool_sequences_message({ ordinal }) : m.tool_sequences_message_call({ ordinal, callIndex }),
+    callIndex === undefined
+      ? m.tool_sequences_message({ ordinal })
+      : m.tool_sequences_message_call({ ordinal, callNumber: callIndex + 1 }),
   );
   const jumpLabel = $derived(
     callIndex === undefined
       ? m.tool_sequences_jump_label({ ordinal, tool })
-      : m.tool_sequences_jump_call_label({ ordinal, callIndex, tool }),
+      : m.tool_sequences_jump_call_label({ ordinal, callNumber: callIndex + 1, tool }),
   );
   const size = $derived(
     resultBytes === null || resultBytes === undefined

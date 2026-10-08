@@ -31,13 +31,13 @@ const report = {
       },
     ],
     omissions: [
-      { reason: "previews", count: 1 },
-      { reason: "budget", ordinal: 3, call_index: 0, tool_name: "Read", field: "result", kept_bytes: 12, original_bytes: 16 },
+      { reason: "budget", field: "result", count: 1, kept_bytes: 12 },
+      { reason: "previews", count: 1, kept_chars: 800 },
     ],
     cited_calls: [
       { ordinal: 1, call_index: 0, tool_name: "Grep", input_preview: '{"pattern":"config"}', outcome: "empty", result_bytes: 16, message_calls: 1 },
       { ordinal: 2, call_index: 0, tool_name: "Grep", input_preview: '{"pattern":"config"}', outcome: "empty", result_bytes: 16, message_calls: 1 },
-      { ordinal: 3, call_index: 0, tool_name: "mcp__onemcp__context7_1mcp_resolve_library_id", input_preview: '{"file_path":"app/config.json"}', outcome: "content", result_bytes: 16, message_calls: 1 },
+      { ordinal: 3, call_index: 0, tool_name: "mcp__onemcp__context7_1mcp_resolve_library_id", input_preview: '{"file_path":"app/config.json"}', outcome: "content", result_bytes: 16, result_kept_bytes: 12, message_calls: 1 },
     ],
   }),
   created_at: "2026-04-26T12:00:00Z",
@@ -67,7 +67,7 @@ test("saved tool-effectiveness report keeps conclusions, sequences, and omission
       await expect(detail.getByRole("heading", { name: "Model assessment" })).toBeVisible();
       await expect(detail.getByRole("heading", { name: "Observed tool sequences" })).toBeVisible();
       await expect(detail).toContainText("The second Grep repeated an empty search.");
-      await expect(detail).toContainText("1 message shown as an 800-character preview");
+      await expect(detail).toContainText("1 message shown as a preview of 800 characters");
       await expect(detail).toContainText("3 of 3 calls cited");
       await expect(detail.locator("[data-testid=tool-effectiveness-session-changed]")).toHaveCount(0);
       await expect(detail.locator(".citations .citation")).toHaveText([

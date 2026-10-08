@@ -34,6 +34,7 @@ const (
 const (
 	OmissionBudget     = "budget"
 	OmissionUnretained = "unretained"
+	OmissionNoResult   = "no_result"
 	OmissionPreviews   = "previews"
 )
 
@@ -44,19 +45,21 @@ const toolEffectivenessInstruction = "You are assessing how the tool calls in on
 	"Cite only message ordinals and calls that appear in this prompt. " +
 	"An empty result can be useful evidence; a call with status completed and an empty result finished without output, as a silent command does. " +
 	"A successful tool call does not prove the task succeeded. " +
-	"Answer unknown when the evidence is insufficient, including anything listed under Omissions. " +
+	"Answer unknown when the evidence is insufficient, including inputs or results marked cut, not retained, or not recorded. " +
 	"Do not assign session cost, tokens, or time to a single tool.\n"
 
-// ToolEvidenceOmission names evidence the prompt cut or never had.
+// ToolEvidenceOmission counts one kind of evidence the prompt cut or never
+// had. Each call's own cut is marked beside its evidence, so a long session
+// adds no more than one omission per kind.
 type ToolEvidenceOmission struct {
-	Reason        string `json:"reason"`
-	Ordinal       *int   `json:"ordinal,omitempty"`
-	CallIndex     *int   `json:"call_index,omitempty"`
-	ToolName      string `json:"tool_name,omitempty"`
-	Field         string `json:"field,omitempty"`
-	KeptBytes     *int   `json:"kept_bytes,omitempty"`
-	OriginalBytes *int   `json:"original_bytes,omitempty"`
-	Count         int    `json:"count,omitzero"`
+	Reason string `json:"reason"`
+	// Field names what a budget cut shortened: input or result.
+	Field string `json:"field,omitempty"`
+	Count int    `json:"count"`
+	// KeptBytes is the most a budget cut kept of any one field.
+	KeptBytes *int `json:"kept_bytes,omitempty"`
+	// KeptChars is the length of each message preview.
+	KeptChars *int `json:"kept_chars,omitempty"`
 }
 
 // ToolEffectivenessEvidence records what a prompt sent, for validating the reply.
@@ -88,7 +91,7 @@ func (c *ToolEffectivenessCallRef) UnmarshalJSON(data []byte) error {
 		Ordinal   *int `json:"ordinal"`
 		CallIndex *int `json:"call_index"`
 	}
-	if err := json.Unmarshal(data, &raw, json.RejectUnknownMembers(true)); err != nil {
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	if raw.Ordinal == nil || raw.CallIndex == nil {
@@ -122,6 +125,9 @@ type ToolEffectivenessCitedCall struct {
 	InputPreview string `json:"input_preview"`
 	Outcome      string `json:"outcome"`
 	ResultBytes  *int   `json:"result_bytes,omitempty"`
+	// ResultKeptBytes is how much of the result the model saw when the
+	// budget cut it.
+	ResultKeptBytes *int `json:"result_kept_bytes,omitempty"`
 	// MessageCalls tells the view whether an ordinal-only citation names
 	// this call or a message with several calls.
 	MessageCalls int `json:"message_calls"`
@@ -145,12 +151,6 @@ type ToolEffectivenessStructured struct {
 
 // toolCitationPreviewBytes matches the tool-sequences input preview cap.
 const toolCitationPreviewBytes = 512
-
-type toolEvidenceField struct {
-	ordinal, callIndex int
-	toolName, field    string
-	text               string
-}
 
 // ErrNoCitableMessages means the session has no user or assistant message
 // for a conclusion to cite.
@@ -262,126 +262,30 @@ func buildToolEffectivenessPrompt(
 
 	rows := ingest.ExtractToolCallRows(in.msgs)
 	observed := signals.ExtractToolSequences(rows, parser.TerminationComplete(in.sess.TerminationStatus))
-	ev.CallCount = len(rows)
-	ev.sentCalls = make(map[[2]int]bool, len(rows))
-	ev.callDetails = make(map[[2]int]ToolEffectivenessCitedCall, len(rows))
+	states := recordToolCalls(&ev, rows, observed)
+	kept, omissions := fitToolEvidence(&ev, rows, states, budget)
+	writeToolEvidence(&b, &ev, rows, observed, states, kept)
 
-	sequenceOf := make([]int, len(rows))
-	for i, seq := range observed.Sequences {
-		for j := seq.Start; j < seq.End && j < len(rows); j++ {
-			sequenceOf[j] = i + 1
+	withheld, missing := 0, 0
+	for _, state := range states {
+		switch state {
+		case resultWithheld:
+			withheld++
+		case resultMissing:
+			missing++
+		case resultSent:
 		}
 	}
-
-	unretained := make([]bool, len(rows))
-	var fields []toolEvidenceField
-	ev.allResultsUnknown = len(rows) > 0
-	for i, row := range rows {
-		outcome := observed.Calls[i].Outcome
-		// A withheld result keeps its length and error status but loses its text.
-		// A finished call with no output and no length returned nothing.
-		unretained[i] = row.ResultContentUnknown ||
-			(row.ResultContent == "" && (row.ResultContentLength > 0 ||
-				(outcome == signals.ToolOutcomeUnknown && !signals.IsCompletedToolStatus(row.EventStatus))))
-		// A finished call whose result is retained, even a silent command's empty one, is known evidence though its outcome class is unknown.
-		if outcome != signals.ToolOutcomeUnknown || (signals.IsCompletedToolStatus(row.EventStatus) && !unretained[i]) {
-			ev.allResultsUnknown = false
-		}
-		detail := ToolEffectivenessCitedCall{
-			Ordinal: row.MessageOrdinal, CallIndex: row.CallIndex, ToolUseID: row.ToolUseID, ToolName: row.ToolName,
-			InputPreview: strings.Clone(stringutil.SafeTruncate(row.InputJSON, toolCitationPreviewBytes)),
-			Outcome:      string(outcome),
-		}
-		if !unretained[i] || row.ResultContentLength > 0 {
-			detail.ResultBytes = new(max(row.ResultContentLength, len(row.ResultContent)))
-		}
-		ev.callDetails[[2]int{row.MessageOrdinal, row.CallIndex}] = detail
-		fields = append(fields, toolEvidenceField{row.MessageOrdinal, row.CallIndex, row.ToolName, "input", row.InputJSON})
-		if !unretained[i] {
-			fields = append(fields, toolEvidenceField{row.MessageOrdinal, row.CallIndex, row.ToolName, "result", row.ResultContent})
-		}
+	if withheld > 0 {
+		omissions = append(omissions, ToolEvidenceOmission{Reason: OmissionUnretained, Field: "result", Count: withheld})
 	}
-	limit := toolEvidenceCap(fields, budget)
-	for _, f := range fields {
-		ev.evidenceBytes += len(f.text)
+	if missing > 0 {
+		omissions = append(omissions, ToolEvidenceOmission{Reason: OmissionNoResult, Field: "result", Count: missing})
 	}
-	ev.evidenceBytes = min(ev.evidenceBytes, budget)
-
-	var omissions []ToolEvidenceOmission
-	kept := make(map[[2]int]map[string]string, len(rows))
-	for _, f := range fields {
-		text := f.text
-		if limit >= 0 && len(text) > limit {
-			text = stringutil.SafeTruncate(text, limit)
-			omissions = append(omissions, ToolEvidenceOmission{
-				Reason: OmissionBudget, Ordinal: new(f.ordinal), CallIndex: new(f.callIndex),
-				ToolName: f.toolName, Field: f.field, KeptBytes: new(len(text)), OriginalBytes: new(len(f.text)),
-			})
-		}
-		key := [2]int{f.ordinal, f.callIndex}
-		if kept[key] == nil {
-			kept[key] = map[string]string{}
-		}
-		kept[key][f.field] = text
-	}
-
-	b.WriteString("\n## Tool evidence\n\n")
-	if len(rows) == 0 {
-		b.WriteString("No tool calls found for this session.\n\n")
-	}
-	for i, row := range rows {
-		key := [2]int{row.MessageOrdinal, row.CallIndex}
-		ev.sentCalls[key] = true
-		fmt.Fprintf(&b, "### Call msg %d #%d %s\n", row.MessageOrdinal, row.CallIndex, row.ToolName)
-		fmt.Fprintf(&b, "- Outcome: %s\n", observed.Calls[i].Outcome)
-		if row.EventStatus != "" {
-			fmt.Fprintf(&b, "- Status: %s\n", row.EventStatus)
-		}
-		if sequenceOf[i] > 0 {
-			fmt.Fprintf(&b, "- Sequence: %d\n", sequenceOf[i])
-		} else {
-			b.WriteString("- Sequence: none\n")
-		}
-		b.WriteString("\nInput:\n")
-		writeFenced(&b, kept[key]["input"])
-		b.WriteString("Result:\n")
-		if unretained[i] {
-			b.WriteString("(result not retained)\n\n")
-			omission := ToolEvidenceOmission{
-				Reason: OmissionUnretained, Ordinal: new(row.MessageOrdinal), CallIndex: new(row.CallIndex),
-				ToolName: row.ToolName, Field: "result",
-			}
-			if row.ResultContentLength > 0 {
-				omission.OriginalBytes = new(row.ResultContentLength)
-			}
-			omissions = append(omissions, omission)
-			continue
-		}
-		writeFenced(&b, kept[key]["result"])
-	}
-	if len(observed.Sequences) > 0 {
-		b.WriteString("### Sequences\n\n")
-		for i, seq := range observed.Sequences {
-			var ordinals []string
-			var tools []string
-			for j := seq.Start; j < seq.End && j < len(rows); j++ {
-				ordinals = append(ordinals, strconv.Itoa(rows[j].MessageOrdinal))
-				if !slices.Contains(tools, rows[j].ToolName) {
-					tools = append(tools, rows[j].ToolName)
-				}
-			}
-			line := fmt.Sprintf("messages %s; tools %s; ending %s; identical repeat %s; near-identical repeat %s; tool switch %s",
-				strings.Join(ordinals, ", "), strings.Join(tools, ", "), seq.Ending,
-				yesNo(seq.Identical), yesNo(seq.NearIdentical), yesNo(seq.ToolChanged))
-			ev.sequenceLines = append(ev.sequenceLines, line)
-			fmt.Fprintf(&b, "- Sequence %d: %s\n", i+1, line)
-		}
-		b.WriteString("\n")
-	}
-
-	slices.SortStableFunc(omissions, compareOmissions)
 	if previews > 0 {
-		omissions = append(omissions, ToolEvidenceOmission{Reason: OmissionPreviews, Count: previews})
+		omissions = append(omissions, ToolEvidenceOmission{
+			Reason: OmissionPreviews, Count: previews, KeptChars: new(sessionPreviewRunes),
+		})
 	}
 	ev.Omissions = omissions
 
@@ -399,14 +303,223 @@ func buildToolEffectivenessPrompt(
 	return b.String(), ev, nil
 }
 
-// toolEvidenceCap returns the largest per-field byte cap that fits every
-// field within budget, or -1 when nothing needs cutting.
-func toolEvidenceCap(fields []toolEvidenceField, budget int) int {
-	lengths := make([]int, len(fields))
+// resultState says whether a call's result text can go in the prompt.
+type resultState int
+
+const (
+	resultSent resultState = iota
+	// resultWithheld keeps the result's length or error status but not its text.
+	resultWithheld
+	// resultMissing means the call never recorded a finished result.
+	resultMissing
+)
+
+// classifyResult treats a finished call with no output and no length as
+// having returned nothing, which is evidence too.
+func classifyResult(row signals.ToolCallRow, outcome signals.ToolOutcome) resultState {
+	if row.ResultContentUnknown || (row.ResultContent == "" && row.ResultContentLength > 0) {
+		return resultWithheld
+	}
+	if row.ResultContent == "" && outcome == signals.ToolOutcomeUnknown && !signals.IsCompletedToolStatus(row.EventStatus) {
+		return resultMissing
+	}
+	return resultSent
+}
+
+// recordToolCalls notes every call the prompt sends and the details a
+// citation of it saves, and returns each call's result state.
+func recordToolCalls(
+	ev *ToolEffectivenessEvidence,
+	rows []signals.ToolCallRow,
+	observed signals.ToolSequences,
+) []resultState {
+	ev.CallCount = len(rows)
+	ev.sentCalls = make(map[[2]int]bool, len(rows))
+	ev.callDetails = make(map[[2]int]ToolEffectivenessCitedCall, len(rows))
+	ev.allResultsUnknown = len(rows) > 0
+	states := make([]resultState, len(rows))
+	for i, row := range rows {
+		outcome := observed.Calls[i].Outcome
+		states[i] = classifyResult(row, outcome)
+		// A finished call whose result is retained, even a silent command's empty one, is known evidence though its outcome class is unknown.
+		if outcome != signals.ToolOutcomeUnknown || (signals.IsCompletedToolStatus(row.EventStatus) && states[i] == resultSent) {
+			ev.allResultsUnknown = false
+		}
+		detail := ToolEffectivenessCitedCall{
+			Ordinal: row.MessageOrdinal, CallIndex: row.CallIndex, ToolUseID: row.ToolUseID, ToolName: row.ToolName,
+			InputPreview: strings.Clone(stringutil.SafeTruncate(row.InputJSON, toolCitationPreviewBytes)),
+			Outcome:      string(outcome),
+		}
+		if states[i] == resultSent || row.ResultContentLength > 0 {
+			detail.ResultBytes = new(max(row.ResultContentLength, len(row.ResultContent)))
+		}
+		key := [2]int{row.MessageOrdinal, row.CallIndex}
+		ev.sentCalls[key] = true
+		ev.callDetails[key] = detail
+	}
+	return states
+}
+
+// keptText is the part of one input or result the prompt sends.
+type keptText struct {
+	text string
+	// original is the length before a budget cut, or zero when uncut.
+	original int
+}
+
+type keptCall struct {
+	input, result keptText
+}
+
+func keepText(text string, limit int) keptText {
+	if limit < 0 || len(text) <= limit {
+		return keptText{text: text}
+	}
+	return keptText{text: stringutil.SafeTruncate(text, limit), original: len(text)}
+}
+
+// fitToolEvidence cuts call inputs and results to fit budget, records how
+// much of each cut result a citation's reader should know the model saw, and
+// returns one omission per field kind that was cut.
+func fitToolEvidence(
+	ev *ToolEffectivenessEvidence,
+	rows []signals.ToolCallRow,
+	states []resultState,
+	budget int,
+) ([]keptCall, []ToolEvidenceOmission) {
+	lengths := make([]int, 0, 2*len(rows))
+	for i, row := range rows {
+		lengths = append(lengths, len(row.InputJSON))
+		if states[i] == resultSent {
+			lengths = append(lengths, len(row.ResultContent))
+		}
+	}
 	total := 0
-	for i, f := range fields {
-		lengths[i] = len(f.text)
-		total += lengths[i]
+	for _, n := range lengths {
+		total += n
+	}
+	ev.evidenceBytes = min(total, budget)
+	limit := toolEvidenceCap(lengths, budget)
+
+	kept := make([]keptCall, len(rows))
+	inputCuts, resultCuts := 0, 0
+	for i, row := range rows {
+		kept[i].input = keepText(row.InputJSON, limit)
+		if kept[i].input.original > 0 {
+			inputCuts++
+		}
+		if states[i] != resultSent {
+			continue
+		}
+		kept[i].result = keepText(row.ResultContent, limit)
+		if kept[i].result.original > 0 {
+			resultCuts++
+			key := [2]int{row.MessageOrdinal, row.CallIndex}
+			detail := ev.callDetails[key]
+			detail.ResultKeptBytes = new(len(kept[i].result.text))
+			ev.callDetails[key] = detail
+		}
+	}
+	var omissions []ToolEvidenceOmission
+	if inputCuts > 0 {
+		omissions = append(omissions, ToolEvidenceOmission{
+			Reason: OmissionBudget, Field: "input", Count: inputCuts, KeptBytes: new(limit),
+		})
+	}
+	if resultCuts > 0 {
+		omissions = append(omissions, ToolEvidenceOmission{
+			Reason: OmissionBudget, Field: "result", Count: resultCuts, KeptBytes: new(limit),
+		})
+	}
+	return kept, omissions
+}
+
+func writeToolEvidence(
+	b *strings.Builder,
+	ev *ToolEffectivenessEvidence,
+	rows []signals.ToolCallRow,
+	observed signals.ToolSequences,
+	states []resultState,
+	kept []keptCall,
+) {
+	sequenceOf := make([]int, len(rows))
+	for i, seq := range observed.Sequences {
+		for j := seq.Start; j < seq.End && j < len(rows); j++ {
+			sequenceOf[j] = i + 1
+		}
+	}
+	b.WriteString("\n## Tool evidence\n\n")
+	if len(rows) == 0 {
+		b.WriteString("No tool calls found for this session.\n\n")
+	}
+	for i, row := range rows {
+		fmt.Fprintf(b, "### Call msg %d #%d %s\n", row.MessageOrdinal, row.CallIndex, row.ToolName)
+		fmt.Fprintf(b, "- Outcome: %s\n", observed.Calls[i].Outcome)
+		if row.EventStatus != "" {
+			fmt.Fprintf(b, "- Status: %s\n", row.EventStatus)
+		}
+		if sequenceOf[i] > 0 {
+			fmt.Fprintf(b, "- Sequence: %d\n", sequenceOf[i])
+		} else {
+			b.WriteString("- Sequence: none\n")
+		}
+		b.WriteString("\n")
+		writeEvidenceText(b, "Input", kept[i].input)
+		switch states[i] {
+		case resultWithheld:
+			b.WriteString("Result:\n(result not retained)\n\n")
+		case resultMissing:
+			b.WriteString("Result:\n(no result recorded)\n\n")
+		case resultSent:
+			writeEvidenceText(b, "Result", kept[i].result)
+		}
+	}
+	writeToolSequences(b, ev, rows, observed)
+}
+
+func writeEvidenceText(b *strings.Builder, label string, kept keptText) {
+	if kept.original > 0 {
+		fmt.Fprintf(b, "%s (cut to %d of %d bytes):\n", label, len(kept.text), kept.original)
+	} else {
+		b.WriteString(label + ":\n")
+	}
+	writeFenced(b, kept.text)
+}
+
+func writeToolSequences(
+	b *strings.Builder,
+	ev *ToolEffectivenessEvidence,
+	rows []signals.ToolCallRow,
+	observed signals.ToolSequences,
+) {
+	if len(observed.Sequences) == 0 {
+		return
+	}
+	b.WriteString("### Sequences\n\n")
+	for i, seq := range observed.Sequences {
+		var ordinals []string
+		var tools []string
+		for j := seq.Start; j < seq.End && j < len(rows); j++ {
+			ordinals = append(ordinals, strconv.Itoa(rows[j].MessageOrdinal))
+			if !slices.Contains(tools, rows[j].ToolName) {
+				tools = append(tools, rows[j].ToolName)
+			}
+		}
+		line := fmt.Sprintf("messages %s; tools %s; ending %s; identical repeat %s; near-identical repeat %s; tool switch %s",
+			strings.Join(ordinals, ", "), strings.Join(tools, ", "), seq.Ending,
+			yesNo(seq.Identical), yesNo(seq.NearIdentical), yesNo(seq.ToolChanged))
+		ev.sequenceLines = append(ev.sequenceLines, line)
+		fmt.Fprintf(b, "- Sequence %d: %s\n", i+1, line)
+	}
+	b.WriteString("\n")
+}
+
+// toolEvidenceCap returns the largest per-field byte cap that fits every
+// field within budget, or -1 when nothing needs cutting. It sorts lengths.
+func toolEvidenceCap(lengths []int, budget int) int {
+	total := 0
+	for _, n := range lengths {
+		total += n
 	}
 	if total <= budget {
 		return -1
@@ -421,16 +534,6 @@ func toolEvidenceCap(fields []toolEvidenceField, budget int) int {
 		remaining -= n
 	}
 	return -1
-}
-
-func compareOmissions(a, b ToolEvidenceOmission) int {
-	if c := derefInt(a.Ordinal) - derefInt(b.Ordinal); c != 0 {
-		return c
-	}
-	if c := derefInt(a.CallIndex) - derefInt(b.CallIndex); c != 0 {
-		return c
-	}
-	return strings.Compare(a.Field, b.Field)
 }
 
 func derefInt(v *int) int {
@@ -472,18 +575,13 @@ func writeFenced(b *strings.Builder, text string) {
 func describeOmission(o ToolEvidenceOmission) string {
 	switch o.Reason {
 	case OmissionBudget:
-		return fmt.Sprintf("msg %d #%d %s %s: cut to %d of %d bytes",
-			derefInt(o.Ordinal), derefInt(o.CallIndex), o.ToolName, o.Field,
-			derefInt(o.KeptBytes), derefInt(o.OriginalBytes))
+		return fmt.Sprintf("%d call %ss cut to at most %d bytes each", o.Count, o.Field, derefInt(o.KeptBytes))
 	case OmissionUnretained:
-		if o.OriginalBytes != nil {
-			return fmt.Sprintf("msg %d #%d %s result: not retained (%d bytes originally)",
-				derefInt(o.Ordinal), derefInt(o.CallIndex), o.ToolName, *o.OriginalBytes)
-		}
-		return fmt.Sprintf("msg %d #%d %s result: not retained",
-			derefInt(o.Ordinal), derefInt(o.CallIndex), o.ToolName)
+		return fmt.Sprintf("%d call results not retained", o.Count)
+	case OmissionNoResult:
+		return fmt.Sprintf("%d calls with no recorded result", o.Count)
 	case OmissionPreviews:
-		return fmt.Sprintf("%d messages shown as %d-character previews", o.Count, sessionPreviewRunes)
+		return fmt.Sprintf("%d messages shown as %d-character previews", o.Count, derefInt(o.KeptChars))
 	}
 	return o.Reason
 }
@@ -500,9 +598,10 @@ func ToolEffectivenessCorrectionPrompt(prompt string, rejected error) string {
 		"\nReply again with the complete JSON object, corrected.\n"
 }
 
-// ParseToolEffectivenessReport decodes the model reply strictly, after
-// removing one surrounding code fence. A reply that wraps the object in prose,
-// before or after it, falls back to the text between its first and last brace.
+// ParseToolEffectivenessReport decodes the model reply after removing one
+// surrounding code fence. A reply that wraps the object in prose, before or
+// after it, falls back to the text between its first and last brace. Members
+// the schema doesn't name are ignored, since validation checks every citation.
 func ParseToolEffectivenessReport(content string) (ToolEffectivenessReport, error) {
 	clean := strings.TrimSpace(content)
 	if rest, fenced := strings.CutPrefix(clean, "```"); fenced {
@@ -513,12 +612,12 @@ func ParseToolEffectivenessReport(content string) (ToolEffectivenessReport, erro
 		clean = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(clean), "```"))
 	}
 	var out ToolEffectivenessReport
-	err := json.Unmarshal([]byte(clean), &out, json.RejectUnknownMembers(true))
+	err := json.Unmarshal([]byte(clean), &out)
 	if err != nil {
 		start, end := strings.IndexByte(clean, '{'), strings.LastIndexByte(clean, '}')
 		if start >= 0 && end > start {
 			out = ToolEffectivenessReport{}
-			if json.Unmarshal([]byte(clean[start:end+1]), &out, json.RejectUnknownMembers(true)) == nil {
+			if json.Unmarshal([]byte(clean[start:end+1]), &out) == nil {
 				err = nil
 			}
 		}
@@ -649,7 +748,9 @@ func RenderToolEffectivenessMarkdown(r ToolEffectivenessReport, ev ToolEffective
 		for _, call := range c.Calls {
 			cites = append(cites, fmt.Sprintf("msg %d #%d", call.Ordinal, call.CallIndex))
 		}
-		fmt.Fprintf(&b, "- **%s**: %s (%s)\n", assessmentLabel(c.Assessment), c.Text, strings.Join(cites, ", "))
+		// A line break in the model's text would end the list item early.
+		text := strings.Join(strings.Fields(c.Text), " ")
+		fmt.Fprintf(&b, "- **%s**: %s (%s)\n", assessmentLabel(c.Assessment), text, strings.Join(cites, ", "))
 	}
 	b.WriteString("\n## Observed tool sequences\n\n")
 	if len(ev.sequenceLines) == 0 {
