@@ -833,6 +833,66 @@ describe("UsagePage refresh behavior", () => {
 
 
 describe("Usage attribution history", () => {
+  it("reopens a project after remounting its history entry", async () => {
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    window.history.replaceState({ usageZoom: true }, "", "/usage");
+    router.route = "usage";
+    router.params = {};
+    usage.focus = { by: "project", id: "pl1:sha256:alpha", label: "Alpha" };
+    usage.summary = usageSummaryWithUnsupported();
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".attribution-panel")?.textContent).toContain("All projects");
+    await unmount(component);
+    component = undefined;
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".attribution-panel")?.textContent).toContain("All projects");
+    window.history.replaceState(null, "", "/usage");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await flushEffects();
+    expect(usage.zoomedProject).toBeNull();
+    expect(document.querySelector(".attribution-panel")?.textContent).not.toContain("All projects");
+  });
+
+  it("refreshes once after an agent click and keeps the brush and project selection", async () => {
+    const refresh = vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    router.route = "usage";
+    router.params = {};
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+    usage.focus = { by: "project", id: "pl1:sha256:alpha", label: "Alpha" };
+    refresh.mockClear();
+    usage.toggleFocus("agent", "codex", "Codex");
+    await flushEffects();
+    expect(refresh).toHaveBeenCalledExactlyOnceWith({ preserveTimeRange: true });
+    expect(usage.isFocused("agent", "codex")).toBe(true);
+    expect(usage.isFocused("project", "pl1:sha256:alpha")).toBe(true);
+    expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
+    sessions.filters.agent = "";
+    usage.selectedTimeRange = null;
+  });
+
+
   it.each(["button", "Escape", "Backspace", "browser"])("%s Back keeps the current dates and selection", async (action) => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();

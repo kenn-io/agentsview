@@ -359,7 +359,7 @@ class UsageStore {
 
   summary = $state<UsageSummaryResponse | null>(null);
   attributionSummary = $state<UsageSummaryResponse | null>(null);
-  focus = $state<{ by: GroupBy; id: string; label: string } | null>(null);
+  focus = $state<{ by: "project" | "model"; id: string; label: string } | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
@@ -426,7 +426,7 @@ class UsageStore {
     this.hasNewData = true;
   }
 
-  private baseParams(options: { focus?: boolean } = {}): UsageParams {
+  private baseParams(): UsageParams {
     const sessionFilters = sessions.filters;
     const range = this.selectedTimeRange ?? {
       from: this.from,
@@ -462,14 +462,19 @@ class UsageStore {
     if (this.excludedModels) {
       p.exclude_model = this.excludedModels;
     }
-    if (options.focus !== false && this.focus) {
-      if (this.focus.by === "project") p.project_key = this.focus.id;
-      else if (this.focus.by === "agent") p.agent = this.focus.id;
-      else p.model = this.focus.id;
-    } else if (options.focus === false && this.focus?.by === "agent") {
-      p.agent = undefined;
-    }
+    if (this.focus?.by === "project") p.project_key = this.focus.id;
+    else if (this.focus?.by === "model") p.model = this.focus.id;
     return p;
+  }
+
+  private attributionParams(): UsageParams | undefined {
+    const by = this.toggles.attribution.groupBy;
+    if (by === "agent" ? !sessions.filters.agent : this.focus?.by !== by) return undefined;
+    const params = this.baseParams();
+    if (by === "project") delete params.project_key;
+    else if (by === "model") delete params.model;
+    else delete params.agent;
+    return params;
   }
 
   get timeSeriesSummary(): UsageSummaryResponse | null {
@@ -477,7 +482,7 @@ class UsageStore {
   }
 
   get colorSummary(): UsageSummaryResponse | null {
-    return this.timeSeriesContextSummary ?? this.attributionSummary ?? this.summary;
+    return this.attributionSummary ?? this.timeSeriesSummary;
   }
 
   get pairwiseModelOptions(): string[] {
@@ -574,6 +579,7 @@ class UsageStore {
   }
 
   applyDateRange(from: string, to: string) {
+    if (this.isPinned && this.from === from && this.to === to) return;
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
     this.isTimeRangeSummaryProvisional = false;
@@ -583,6 +589,14 @@ class UsageStore {
   }
 
   applyRollingWindow(days: number) {
+    const range = rollingRange(days);
+    if (
+      !this.isPinned &&
+      this.windowDays === days &&
+      this.from === range.from &&
+      this.to === range.to
+    )
+      return;
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
     this.isTimeRangeSummaryProvisional = false;
@@ -609,10 +623,10 @@ class UsageStore {
       return;
     }
     if (this.selectedTimeRange === null) {
-      this.timeSeriesContextSummary = this.attributionSummary ?? this.summary;
+      this.timeSeriesContextSummary = this.summary;
     }
     this.selectedTimeRange = { from, to };
-    if (this.timeSeriesContextSummary && !this.focus) {
+    if (this.timeSeriesContextSummary) {
       this.summary = summaryForDateRange(this.timeSeriesContextSummary, from, to);
       this.isTimeRangeSummaryProvisional = true;
     }
@@ -655,14 +669,18 @@ class UsageStore {
   }
 
   isFocused(by: GroupBy, id: string): boolean {
-    return this.focus?.by === by && this.focus.id === id;
+    return by === "agent"
+      ? sessions.filters.agent === id
+      : this.focus?.by === by && this.focus.id === id;
   }
 
   toggleFocus(by: GroupBy, id: string, label: string): void {
     const clear = this.isFocused(by, id);
-    if (this.focus?.by === "agent") sessions.filters.agent = "";
+    if (by === "agent") {
+      sessions.filters.agent = clear ? "" : id;
+      return;
+    }
     this.focus = clear ? null : { by, id, label };
-    if (by === "agent") sessions.filters.agent = clear ? "" : id;
     void this.fetchAll({ preserveTimeRange: true });
   }
 
@@ -702,18 +720,6 @@ class UsageStore {
     void this.fetchAllWithResult(options).then((result) => {
       if (result !== "error" || !hadSelectedTimeRange || this.excludedAgents !== changed) return;
       this.excludedAgents = previous;
-      void this.fetchAll({ preserveTimeRange: true });
-    });
-  }
-
-  hideModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
-    const previous = this.excludedModels;
-    const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
-    this.excludedModels = joinCsvParts(this.excludedModels, name);
-    const changed = this.excludedModels;
-    void this.fetchAllWithResult(options).then((result) => {
-      if (result !== "error" || !hadSelectedTimeRange || this.excludedModels !== changed) return;
-      this.excludedModels = previous;
       void this.fetchAll({ preserveTimeRange: true });
     });
   }
@@ -800,7 +806,6 @@ class UsageStore {
   }
 
   clearFilters(): void {
-    if (this.focus?.by === "agent") sessions.filters.agent = "";
     this.focus = null;
     this.backToProjects();
     this.excludedProjects = "";
@@ -858,6 +863,7 @@ class UsageStore {
     this.toggles.timeSeries.groupBy = g;
     this.toggles.attribution.groupBy = g;
     saveToggles(this.toggles);
+    void this.fetchAll({ preserveTimeRange: true });
   }
 
   setTimeSeriesView(v: TimeSeriesView) {
@@ -870,6 +876,7 @@ class UsageStore {
     this.toggles.timeSeries.groupBy = g;
     this.toggles.attribution.groupBy = g;
     saveToggles(this.toggles);
+    void this.fetchAll({ preserveTimeRange: true });
   }
 
   setAttributionView(v: AttributionView) {
@@ -921,13 +928,13 @@ class UsageStore {
       options.preserveTimeRange &&
       options.refreshTimeSeriesContext !== false &&
       selectedRangeAtStart !== null
-        ? { ...this.baseParams({ focus: false }), from: this.from, to: this.to }
+        ? { ...params, from: this.from, to: this.to }
         : undefined;
     const summaryPromise = this.fetchSummary({
       loadComparison: false,
       params,
       contextParams,
-      attributionParams: this.focus ? this.baseParams({ focus: false }) : undefined,
+      attributionParams: this.attributionParams(),
     });
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
@@ -1055,7 +1062,14 @@ class UsageStore {
         if (contextData !== null) {
           this.noteStep("contextSummary", liveContextStep, started, contextData, applyStartedAt);
         }
-        if (attributionData) this.noteStep("attributionSummary", liveAttributionStep, started, attributionData, applyStartedAt);
+        if (attributionData)
+          this.noteStep(
+            "attributionSummary",
+            liveAttributionStep,
+            started,
+            attributionData,
+            applyStartedAt,
+          );
         this.isTimeRangeSummaryProvisional = false;
         if (contextData !== null) {
           this.timeSeriesContextSummary = contextData;
@@ -1087,10 +1101,14 @@ class UsageStore {
       if (
         recoverProjectScope &&
         this.versions.summary === v &&
-        this.excludedProjectKeys !== "" &&
+        (this.excludedProjectKeys !== "" || this.focus?.by === "project") &&
         isUnknownProjectKeyError(e)
       ) {
         this.excludedProjectKeys = "";
+        if (this.focus?.by === "project") {
+          this.focus = null;
+          this.backToProjects();
+        }
         this.abortPanel("topSessions");
         const recoveredParams = this.baseParams();
         const loaded = await this.fetchSummary({
@@ -1098,12 +1116,12 @@ class UsageStore {
           params: recoveredParams,
           contextParams: options.contextParams
             ? {
-                ...this.baseParams({ focus: false }),
+                ...recoveredParams,
                 from: options.contextParams.from,
                 to: options.contextParams.to,
               }
             : undefined,
-          attributionParams: options.attributionParams ? this.baseParams({ focus: false }) : undefined,
+          attributionParams: this.attributionParams(),
           recoverProjectScope: false,
         });
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };
@@ -1248,18 +1266,17 @@ class UsageStore {
     }
   }
 
-  private zoomHistoryEntry = false;
-
-  get hasZoomHistory(): boolean {
-    return this.zoomHistoryEntry;
+  restoreZoomFromHistory(): void {
+    this.zoomed = window.history.state?.usageZoom === true && this.focus?.by === "project";
+    if (!this.zoomed) {
+      this.invalidatePanel("zoom");
+      this.zoomRows = null;
+      this.errors.zoom = null;
+    }
   }
 
   backToProjects(popHistory = true): void {
-    if (popHistory && this.zoomHistoryEntry && window.history.state?.usageZoom) {
-      window.history.back();
-    } else {
-      this.zoomHistoryEntry = false;
-    }
+    if (popHistory && window.history.state?.usageZoom === true) window.history.back();
     this.invalidatePanel("zoom");
     this.zoomed = false;
     this.zoomRows = null;
@@ -1272,9 +1289,8 @@ class UsageStore {
       this.toggleFocus("project", key, label);
     }
     this.zoomed = true;
-    if (!this.zoomHistoryEntry) {
+    if (window.history.state?.usageZoom !== true) {
       window.history.pushState({ ...window.history.state, usageZoom: true }, "");
-      this.zoomHistoryEntry = true;
     }
     void this.fetchZoom();
   }
@@ -1282,56 +1298,32 @@ class UsageStore {
   private async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
     const projectKey = this.zoomedProject?.key;
     if (!projectKey) return "ok";
-    const version = ++this.versions.zoom;
-    const signal = this.nextAbortSignal("zoom");
-    this.zoomRows = null;
-    this.loading.zoom = true;
-    this.errors.zoom = null;
-    const started = performance.now();
-    const liveStep = this.liveQuery.start("zoom", started);
-    let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
-    try {
-      const data = await UsageService.getApiV1UsageTopSessions(
-        {
-          ...params,
-          group_by: "group",
-          limit: 100,
-          sort: this.mode === "token" ? "tokens" : "cost",
-          token_types: this.mode === "token" ? this.selectedTokenTypes.join(",") : undefined,
-        },
-        { signal },
-      );
-      if (this.versions.zoom !== version) return "aborted";
-      this.zoomRows = data;
-      this.noteStep("zoom", liveStep, started, data);
-      return "ok";
-    } catch (error) {
-      status = isAbortError(error) ? "aborted" : "error";
-      if (status === "error" && this.versions.zoom === version) {
-        this.errors.zoom = error instanceof Error ? error.message : m.shared_failed_to_load();
-      }
-      return status;
-    } finally {
-      this.recordStep("zoom", started, status);
-      this.liveQuery.abandon(liveStep);
-      this.clearAbortSignal("zoom", signal);
-      if (this.versions.zoom === version) this.loading.zoom = false;
-    }
+    return this.fetchRanking("zoom", { ...params, group_by: "group", limit: 100 });
   }
 
   async fetchTopSessions(params: UsageParams | null = null): Promise<FetchResult> {
-    const v = ++this.versions.topSessions;
-    const signal = this.nextAbortSignal("topSessions");
-    const isFirstLoad = this.topSessions === null;
-    if (isFirstLoad) this.loading.topSessions = true;
-    if (isFirstLoad) this.errors.topSessions = null;
+    return this.fetchRanking("topSessions", params ?? this.baseParams());
+  }
+
+  private async fetchRanking(
+    panel: "topSessions" | "zoom",
+    query: UsageParams & { group_by?: "group"; limit?: number },
+  ): Promise<FetchResult> {
+    const version = ++this.versions[panel];
+    const signal = this.nextAbortSignal(panel);
+    if (panel === "zoom") this.zoomRows = null;
+    const isFirstLoad = (panel === "zoom" ? this.zoomRows : this.topSessions) === null;
+    if (isFirstLoad) {
+      this.loading[panel] = true;
+      this.errors[panel] = null;
+    }
     const started = performance.now();
-    const liveStep = this.liveQuery.start("topSessions", started);
+    const liveStep = this.liveQuery.start(panel, started);
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await UsageService.getApiV1UsageTopSessions(
         {
-          ...(params ?? this.baseParams()),
+          ...query,
           sort: this.mode === "token" ? "tokens" : "cost",
           token_types:
             this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
@@ -1340,34 +1332,25 @@ class UsageStore {
         },
         { signal },
       );
-      if (this.versions.topSessions === v) {
-        this.topSessions = data;
-        this.errors.topSessions = null;
-        this.noteStep("topSessions", liveStep, started, data);
-        return "ok";
+      if (this.versions[panel] !== version) return "aborted";
+      if (panel === "zoom") this.zoomRows = data;
+      else this.topSessions = data;
+      this.errors[panel] = null;
+      this.noteStep(panel, liveStep, started, data);
+      return "ok";
+    } catch (error) {
+      status = isAbortError(error) ? "aborted" : "error";
+      if (status === "error" && this.versions[panel] === version) {
+        if ((panel === "zoom" ? this.zoomRows : this.topSessions) === null) {
+          this.errors[panel] = error instanceof Error ? error.message : m.shared_failed_to_load();
+        } else console.warn(`usage.${panel} refetch failed:`, error);
       }
-      return "aborted";
-    } catch (e) {
-      if (isAbortError(e)) {
-        status = "aborted";
-        return "aborted";
-      }
-      status = "error";
-      if (this.versions.topSessions === v) {
-        if (this.topSessions === null) {
-          this.errors.topSessions = e instanceof Error ? e.message : m.shared_failed_to_load();
-        } else {
-          console.warn("usage.fetchTopSessions refetch failed:", e);
-        }
-      }
-      return "error";
+      return status;
     } finally {
-      this.recordStep("topSessions", started, status);
+      this.recordStep(panel, started, status);
       this.liveQuery.abandon(liveStep);
-      this.clearAbortSignal("topSessions", signal);
-      if (this.versions.topSessions === v) {
-        this.loading.topSessions = false;
-      }
+      this.clearAbortSignal(panel, signal);
+      if (this.versions[panel] === version) this.loading[panel] = false;
     }
   }
 

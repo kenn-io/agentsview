@@ -418,15 +418,6 @@
   });
 
   $effect(() => {
-    const agent = sessions.filters.agent;
-    untrack(() => {
-      if (usage.focus?.by === "agent" && usage.focus.id !== agent) {
-        usage.focus = null;
-      }
-    });
-  });
-
-  $effect(() => {
     const signature = sessionFilterSignature;
     const ready = urlInitRan && urlWritebackReady;
     untrack(() => {
@@ -436,15 +427,15 @@
       if (!initialFetchDone) {
         initialFetchDone = true;
       }
-      usage.fetchAll();
+      usage.fetchAll({ preserveTimeRange: true });
     });
   });
 
   onMount(() => {
+    usage.restoreZoomFromHistory();
     mounted = true;
     const onPopState = () => {
-      if (!usage.hasZoomHistory) return;
-      usage.backToProjects(false);
+      usage.restoreZoomFromHistory();
       if (router.route === "usage") router.replaceParams(usageUrlParams());
     };
     window.addEventListener("popstate", onPopState);
@@ -460,7 +451,6 @@
     });
     return () => {
       window.removeEventListener("popstate", onPopState);
-      usage.backToProjects(false);
     };
   });
 

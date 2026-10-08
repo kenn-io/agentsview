@@ -183,9 +183,11 @@ describe("AttributionPanel selection", () => {
     await tick();
     const row = document.querySelectorAll(".list-row")[1]!;
     row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
     await vi.waitFor(() => expect(usage.attributionSummary).toEqual(full));
     await tick();
     expect(row.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector(".list-row.dimmed")).not.toBeNull();
     expect(document.querySelectorAll(".list-row")).toHaveLength(2);
     expect(usage.zoomedProject).toBeNull();
     row.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));

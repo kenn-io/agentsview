@@ -4,6 +4,7 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import { Button } from "@kenn-io/kit-ui";
   import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
@@ -24,6 +25,7 @@
   }
 
   const groupBy = $derived(usage.toggles.attribution.groupBy);
+  const hasSelection = $derived(groupBy === "agent" ? sessions.filters.agent !== "" : usage.focus?.by === groupBy);
   const view = $derived(usage.toggles.attribution.view);
   const isTokenMode = $derived(usage.mode === "token");
 
@@ -133,7 +135,7 @@
       color: r.color,
       title: rowTitle(r.id, r.label),
       selected: usage.isFocused(groupBy, r.id),
-      dimmed: !zoomedProject && usage.focus !== null && !usage.isFocused(groupBy, r.id),
+      dimmed: !zoomedProject && hasSelection && !usage.isFocused(groupBy, r.id),
       meta: fmtPct(r.value, rows.reduce(
         (sum, item) => sum + item.value, 0,
       )),
@@ -166,6 +168,14 @@
     panel.focus();
   }
 
+  function handleWindowClick(event: MouseEvent) {
+    if (event.detail === 1 && !(event.target as Element).closest(".list-row, .rail-row, .tile")) clickedProject = undefined;
+  }
+
+  function handleWindowDoubleClick(event: MouseEvent) {
+    if (clickedProject && panel.contains(event.target as Node)) handleOpen(clickedProject.id, event);
+  }
+
   function handleClick(event: MouseEvent, id: string) {
     if (event.detail < 2) handleSelect(id);
   }
@@ -187,7 +197,7 @@
   }
 </script>
 
-<svelte:window onkeydown={handleBackKey} />
+<svelte:window onkeydown={handleBackKey} onclick={handleWindowClick} ondblclick={handleWindowDoubleClick} />
 
 <section class="attribution-panel" aria-label={isTokenMode ? m.usage_tokens_attribution_title() : m.usage_cost_attribution_title()} tabindex="-1" bind:this={panel}>
   <div class="panel-header">
@@ -267,7 +277,7 @@
             <div
               class="rail-row"
               class:selected={usage.isFocused(groupBy, row.id)}
-              class:dimmed={!zoomedProject && usage.focus !== null && !usage.isFocused(groupBy, row.id)}
+              class:dimmed={!zoomedProject && hasSelection && !usage.isFocused(groupBy, row.id)}
               role="button"
               tabindex={zoomedProject ? -1 : 0}
               aria-pressed={usage.isFocused(groupBy, row.id)}
@@ -298,7 +308,7 @@
           <div
             class="list-row"
             class:selected={usage.isFocused(groupBy, row.id)}
-            class:dimmed={!zoomedProject && usage.focus !== null && !usage.isFocused(groupBy, row.id)}
+            class:dimmed={!zoomedProject && hasSelection && !usage.isFocused(groupBy, row.id)}
             role="button"
             tabindex={zoomedProject ? -1 : 0}
             aria-pressed={usage.isFocused(groupBy, row.id)}

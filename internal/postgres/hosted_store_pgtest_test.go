@@ -397,17 +397,35 @@ func TestHostedUnresolvedPinRetainsCreationTime(t *testing.T) {
 func TestHostedUsageGroups(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("cron usage")))
-	raw, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET group_key = 'job-a', group_label = 'Daily digest' WHERE id = $1`, raw.SessionID)
-	require.NoError(t, err)
+	outcome := projectionOutcome("cron usage")
+	outcome.Outcome.Results[0].Result.Session.GroupKey = "job-a"
+	outcome.Outcome.Results[0].Result.Session.GroupLabel = "Daily digest"
+	continuation := projectionOutcome("next cron run").Outcome.Results[0]
+	continuation.Result.Session.ID = "codex:continuation"
+	continuation.Result.Session.SourceSessionID = "continuation"
+	continuation.Result.Session.GroupKey = "job-a"
+	continuation.Result.Session.GroupLabel = "Renamed digest"
+	continuation.Result.Session.StartedAt = time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	individual := projectionOutcome("individual usage").Outcome.Results[0]
+	individual.Result.Session.ID = "codex:individual"
+	individual.Result.Session.SourceSessionID = "individual"
+	outcome.Outcome.Results = append(outcome.Outcome.Results, continuation, individual)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
 	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	defer store.Close()
 	rows, err := store.GetTopSessionsByCost(t.Context(), db.UsageFilter{}, 100)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "codex:portable", rows[0].SessionID)
+	require.Len(t, rows, 3)
+	assert.ElementsMatch(t, []string{"codex:portable", "codex:continuation", "codex:individual"}, []string{rows[0].SessionID, rows[1].SessionID, rows[2].SessionID})
+	rows, err = store.GetTopSessionsByCost(t.Context(), db.UsageFilter{TopSessionsByGroup: true}, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Empty(t, rows[0].SessionID)
 	assert.Equal(t, "job-a", rows[0].GroupKey)
+	assert.Equal(t, "Renamed digest", rows[0].DisplayName)
+	assert.Equal(t, 22, rows[0].InputTokens)
+	assert.Equal(t, 14, rows[0].OutputTokens)
+	assert.Equal(t, "codex:individual", rows[1].SessionID)
+	assert.Empty(t, rows[1].GroupKey)
 }

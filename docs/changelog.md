@@ -20,7 +20,8 @@ The latest release is
   selected range, including on hosted PostgreSQL archives.
   The first sync after upgrading rebuilds the archive once to populate groups.
   Orphaned Hermes sessions synced before the upgrade can't be reparsed and
-  appear under **Other**. For DuckDB mirrors, run `agentsview duckdb push --full` once.
+  appear as individual sessions. For DuckDB mirrors, run
+  `agentsview duckdb push --full` once.
 
 **Bug fixes**
 

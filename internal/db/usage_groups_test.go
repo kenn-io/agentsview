@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -52,4 +53,18 @@ func TestHermesCronGroupsCombineProfilesOnOneMachine(t *testing.T) {
 		assert.Equal(t, "hermes-cron", group.Project)
 		assert.Equal(t, 40, group.InputTokens)
 	}
+}
+
+func TestUsageGroupsRemainderUsesRankedOrder(t *testing.T) {
+	rows, err := db.GroupTopSessions([]db.TopSessionEntry{
+		{SessionID: "low", InputTokens: 3, Cost: money.Money{Microdollars: 2}},
+		{SessionID: "high", InputTokens: 20, Cost: money.Money{Microdollars: 30}},
+		{SessionID: "middle", InputTokens: 7, Cost: money.Money{Microdollars: 10}},
+	}, 1, db.TopSessionsSortCost, db.UsageTokenTypesAll)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "high", rows[0].SessionID)
+	assert.Empty(t, rows[1].SessionID)
+	assert.Equal(t, 10, rows[1].InputTokens)
+	assert.Equal(t, int64(12), rows[1].Cost.Microdollars)
 }

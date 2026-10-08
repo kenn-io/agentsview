@@ -156,15 +156,12 @@ or remove its filter chip to clear it. The selection stays active when dates wid
 Double click, double tap, or press Enter on a project to open its groups and
 individual sessions for the selected date range. Enter selects a model or agent;
 Space selects any item. Hermes cron jobs show their latest recorded name in
-that range and their ID on hover. Matching names get a short ID suffix. Matching
-job IDs on different machines get a machine suffix. Colliding session IDs retain
-their provider. **All projects**, Escape, Backspace, and browser Back return to
-project tiles with the current dates, filters, and selection.
+that range and their ID on hover. **All projects**, Escape, Backspace, and
+browser Back return to project tiles with the current dates, filters, and selection.
 The **Projects** picker excludes a project. Usage outside the top 100 tiles
 appears under **Other**. Archives without `state.db` titles show job IDs.
-Matching job IDs in profiles on the same machine share one row.
 Orphaned Hermes sessions synced before the upgrade can't be reparsed and appear
-under **Other**.
+as individual sessions.
 
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,
@@ -184,9 +181,7 @@ Deselect all shortcuts, and a colored dot for agents so you can tell them apart
 at a glance.
 
 In the Model picker, checked models are visible and unchecked models are
-hidden. Clicking a model in attribution checks it and unchecks every other
-model. Click it again to show all models, or use the picker to change which
-models are visible. Hidden models
+hidden. Attribution selections leave the picker unchanged. Hidden models
 remain in the picker after a reload or when opening a shared URL.
 
 Usage saves model visibility with `exclude_model`. The previous Usage-only

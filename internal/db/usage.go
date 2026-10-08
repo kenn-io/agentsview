@@ -2712,7 +2712,9 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 		}
 		out = append(out, *row)
 	}
-	ranked := SortAndLimitTopSessions(out, limit, sortBy, tokenTypes)
+	sortTopSessions(out, sortBy, tokenTypes)
+	limit = min(len(out), normalizeTopSessionsLimit(limit))
+	ranked := out[:limit]
 	if len(ranked) < len(out) {
 		var remainder TopSessionEntry
 		for _, row := range out[len(ranked):] {
@@ -2744,12 +2746,22 @@ func SortAndLimitTopSessions(
 	result []TopSessionEntry, limit int, sortBy string,
 	tokenTypes UsageTokenTypes,
 ) []TopSessionEntry {
+	sortTopSessions(result, sortBy, tokenTypes)
+	limit = normalizeTopSessionsLimit(limit)
+	if len(result) > limit {
+		return result[:limit]
+	}
+	return result
+}
+
+func normalizeTopSessionsLimit(limit int) int {
 	if limit <= 0 {
-		limit = 20
+		return 20
 	}
-	if limit > 100 {
-		limit = 100
-	}
+	return min(limit, 100)
+}
+
+func sortTopSessions(result []TopSessionEntry, sortBy string, tokenTypes UsageTokenTypes) {
 	byTokens := strings.EqualFold(sortBy, TopSessionsSortTokens)
 	sort.Slice(result, func(i, j int) bool {
 		if byTokens {
@@ -2782,10 +2794,6 @@ func SortAndLimitTopSessions(
 		}
 		return result[i].Machine < result[j].Machine
 	})
-	if len(result) > limit {
-		return result[:limit]
-	}
-	return result
 }
 
 // getTopSessionsByCostLegacy is the wide-row test oracle for the facts path.

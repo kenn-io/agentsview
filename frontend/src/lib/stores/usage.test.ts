@@ -2030,9 +2030,13 @@ describe("UsageStore attribution focus", () => {
     const { usage } = await loadStore();
     usage.summary = usageSummary();
     usage.applyDateRange("2024-01-08", "2024-01-14");
+    usage.toggles.attribution.groupBy = by;
     usage.toggleFocus(by, id, id);
+    if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
     await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params)).toContainEqual(
+    expect(
+      usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params),
+    ).toContainEqual(
       expect.objectContaining({ [param]: id, from: "2024-01-08", to: "2024-01-14" }),
     );
     const unfocused = usageServiceMocks.getApiV1UsageSummary.mock.calls[1]![0];
@@ -2047,7 +2051,9 @@ describe("UsageStore attribution focus", () => {
     expect(usage.isFocused(by, id)).toBe(true);
     expect(usage.zoomedProject).toBeNull();
     usageServiceMocks.getApiV1UsageSummary.mockClear();
+    usage.toggles.attribution.groupBy = by;
     usage.toggleFocus(by, id, id);
+    if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledOnce();
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0][param]).toBeUndefined();
@@ -2055,21 +2061,27 @@ describe("UsageStore attribution focus", () => {
     usage.cancelInFlightReads();
   });
 
-  it("drops focus from the chart context while the brush narrows totals", async () => {
+  it("keeps project selection in range and context summaries while attribution shows every project", async () => {
     const { usage } = await loadStore();
     usage.summary = usageSummary();
     usage.applyDateRange("2024-01-01", "2024-01-31");
-    usage.toggleFocus("model", "gpt-4o", "gpt-4o");
+    usage.toggleFocus("project", "pl1:sha256:alpha", "Alpha");
     await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
     usage.setTimeRange("2024-01-08", "2024-01-14");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     usageServiceMocks.getApiV1UsageSummary.mockClear();
     await usage.fetchAll({ preserveTimeRange: true });
     const calls = usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params);
-    expect(calls[0]).toEqual(expect.objectContaining({ model: "gpt-4o", from: "2024-01-08", to: "2024-01-14" }));
+    expect(calls[0]).toEqual(
+      expect.objectContaining({
+        project_key: "pl1:sha256:alpha",
+        from: "2024-01-08",
+        to: "2024-01-14",
+      }),
+    );
     expect(calls[1]).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }));
-    expect(calls[1].model).toBeUndefined();
-    expect(calls[2].model).toBeUndefined();
+    expect(calls[1].project_key).toBe("pl1:sha256:alpha");
+    expect(calls[2].project_key).toBeUndefined();
     usage.cancelInFlightReads();
   });
 
@@ -2082,6 +2094,42 @@ describe("UsageStore attribution focus", () => {
     usage.clearFilters();
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].model).toBeUndefined();
+    usage.cancelInFlightReads();
+  });
+});
+
+describe("UsageStore project scope recovery", () => {
+  beforeEach(() => {
+    installStorage();
+    vi.clearAllMocks();
+  });
+
+  it.each([false, true])("recovers a vanished project, zoomed=%s", async (zoomed) => {
+    const { usage } = await loadStore();
+    usage.focus = { by: "project", id: "pl1:sha256:gone", label: "Gone" };
+    if (zoomed) usage.selectAttributionProject(usage.focus.id, usage.focus.label);
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation((params) =>
+      params.project_key || params.exclude_project_key
+        ? Promise.reject(
+            new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+          )
+        : Promise.resolve(usageSummary(9)),
+    );
+    await usage.fetchAll({ preserveTimeRange: true });
+    expect(usage.focus).toBeNull();
+    expect(usage.zoomedProject).toBeNull();
+    expect(usage.excludedProjectKeys).toBe("");
+    expect(usage.summary?.totals.totalCost).toEqual(testMoney(9));
+    expect(usage.errors.summary).toBeNull();
+    expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(5);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[4]![0]).toEqual(
+      expect.objectContaining({ from: usage.from, to: usage.to }),
+    );
+    expect(back).toHaveBeenCalledTimes(zoomed ? 1 : 0);
+    back.mockRestore();
     usage.cancelInFlightReads();
   });
 });
