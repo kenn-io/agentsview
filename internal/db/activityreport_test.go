@@ -40,6 +40,33 @@ func dayQuery(t *testing.T, date, tz string) activity.Query {
 	return q
 }
 
+func TestGetActivityReportAutomatedSubagentPrecedence(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "root", "project-a")
+	for _, tc := range []struct {
+		id     string
+		parent *string
+	}{
+		{"task", Ptr("root")},
+		{"worker", nil},
+	} {
+		insertSession(t, d, tc.id, "project-a", func(s *Session) {
+			s.ParentSessionID = tc.parent
+			s.RelationshipType = "subagent"
+			s.FirstMessage = Ptr("You are a code reviewer. Review this change.")
+			s.UserMessageCount = 1
+			s.StartedAt = Ptr("2026-06-14T10:00:00Z")
+			s.EndedAt = Ptr("2026-06-14T10:01:00Z")
+		})
+		seedMessage(t, d, tc.id, 0, "assistant", "2026-06-14T10:00:00Z", "")
+	}
+	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Totals.SubagentSessions)
+	assert.Equal(t, 1, report.Totals.AutomatedSessions)
+	assert.Zero(t, report.Totals.InteractiveSessions)
+}
+
 func TestActivityReportMessageCounts(t *testing.T) {
 	d := testDB(t)
 	for _, id := range []string{"conversation", "lone", "automated", "subagent", "other-project"} {

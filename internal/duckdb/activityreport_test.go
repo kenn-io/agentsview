@@ -259,6 +259,7 @@ func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	parent := "root"
 	sub := syncSession("agent-sub", "proj1", "sub first", "2026-06-14T10:02:00.000Z", 1)
 	sub.RelationshipType = "subagent"
+	sub.IsAutomated = true
 	sub.ParentSessionID = &parent
 	subMsg := syncMessage("agent-sub", 0, "assistant", "y", "2026-06-14T10:03:00.000Z")
 	subMsg.Model = "sub-model"

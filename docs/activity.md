@@ -60,19 +60,23 @@ qualify when their first real normalized prompt records `turnOrigin=sdk`.
 Human origin wins conflicting markers. A queued first prompt, missing or unknown
 origin, SDK library entrypoints, or an explicit provider kind blocks this
 inference. Human SDK conversations stay Interactive unless their prompts match
-an automation pattern. Recorded non-interactive Codex and Grok runs count as
-Subagents and keep their automation flag.
+an automation pattern. Headless Claude, Codex, and Grok runs count as Subagents
+unless they carry script evidence: a roborev tag or a first prompt matching a
+built-in or user `[automated]` pattern. Prompt matching requires one or fewer
+real user messages.
 
 Parentless workers appear as sidebar roots. Flat lists, search, CLI, stats, and
 pickers include them only when children are included, like other parentless
 subagents. Automation filters still apply. Readable sources reparse once to
-recover classification evidence. Sessions whose sources are unreadable keep
-their stored category.
+recover classification evidence. Stored parentless non-interactive runs gain
+the Subagent relationship even when their sources are unreadable. Usage-only
+archives retain their stored automation flag because they discard prompt text.
 
 The session count separates subagents from interactive and automated
-conversations. A subagent counts only in the subagent category, even if its
-prompt also matches the automation classifier. Forks remain in the interactive
-or automated category. Costs, agent-minutes, and concurrency use the same three
+conversations. A parentless subagent with script evidence counts as Automated.
+Subagents with a parent count as Subagents even when their prompts match the
+automation classifier. Forks remain in the interactive or automated category.
+Costs, agent-minutes, and concurrency use the same three
 separate categories. Automation filters still use each session's automation
 flag, including subagents.
 

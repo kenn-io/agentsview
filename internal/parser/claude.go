@@ -500,7 +500,7 @@ func claudeParseFile(
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
 	for i := range results {
-		results[i].Session.RelationshipType = PromoteParentlessWorker(
+		results[i].Session.RelationshipType = promoteParentlessWorker(
 			results[i].Session.ParentSessionID, results[i].Session.RelationshipType,
 			claudeWorkerMessages(results[i].Session.Entrypoint, results[i].Session.SessionKind, results[i].Messages),
 		)
@@ -3131,7 +3131,7 @@ func isRealClaudeUserMessage(m ParsedMessage) bool {
 func isUsageProbeSession(messages []ParsedMessage) bool {
 	sawUsage := false
 	for _, m := range messages {
-		if m.IsSystem || m.Role != RoleUser || m.Content == "" {
+		if !isRealClaudeUserMessage(m) {
 			continue
 		}
 		if strings.TrimSpace(m.Content) != "/usage" {

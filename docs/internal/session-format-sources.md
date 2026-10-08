@@ -154,7 +154,7 @@ evidence; they do not establish whether a tool helped the task.
   Explicit provider kinds remain intact.
   Data version 127 reparses readable sources once. Reverified 2026-10-08
   against parser fixtures and the engine's first-real-prompt fallback for
-  transcript and usage-only archives. The original evidence came from the
+  archives that retain transcripts. The original evidence came from the
   installed producer and local transcripts.
   Public source is unavailable. Queued fixtures follow the bundled ingress and
   persistence path; no native queued-origin transcript has been captured.
@@ -574,9 +574,10 @@ fixtures retain this field; missing identities remain source-local.
   `session_meta.payload.originator=codex_exec` is durable producer evidence
   of a non-interactive `codex exec` invocation. Agentsview persists that as
   `session_kind = non-interactive` and assigns parentless runs with no existing
-  relationship to Subagents. Launch mode keeps them automated, including runs
-  with multiple user messages. Reverified against exec and spawned child parser
-  fixtures. When `thread_source` is `roborev` (from
+  relationship to Subagents. Automation requires a roborev tag or a matching
+  built-in or user prompt pattern. Reverified against exec and native child
+  parser fixtures and stored-row classification audits. When `thread_source`
+  is `roborev` (from
   `codex exec --thread-source roborev`), Agentsview stores
   `session_kind = roborev` instead so roborev reviews stay identifiable as
   code review while remaining automated. Native `spawn_agent` children still
@@ -1173,8 +1174,8 @@ fixtures retain this field; missing identities remain source-local.
   supplies it. Agentsview retains an explicit true value in a valid,
   session-associated file as `session_kind=non-interactive` and assigns
   parentless runs with no existing relationship to Subagents. Reverified
-  2026-10-08 against the prompt-context parser and sync fixtures; explicit
-  non-interactive metadata keeps these runs automated.
+  2026-10-08 against the prompt-context parser and sync fixtures; automation
+  requires script evidence rather than non-interactive launch mode.
 
 - **Subagent attribution (reverified 2026-09-18):** Grok Build stores each
   `spawn_subagent` child as a sibling session directory in the normal sessions

@@ -281,6 +281,9 @@ func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 			 '2026-06-16T10:05:00Z'::timestamptz,
 			 '2026-06-16T10:06:00Z'::timestamptz, 1, 1, 'root', 'fork')`)
 	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `UPDATE sessions SET is_automated = true WHERE id = 'agent-sub'`)
+	require.NoError(t, err)
+
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp,

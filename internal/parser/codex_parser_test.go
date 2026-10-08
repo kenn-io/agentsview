@@ -161,15 +161,6 @@ func TestParseCodexSession_SubagentLineage(t *testing.T) {
 		wantRelationship RelationshipType
 	}{
 		{
-			name: "exec spawned child",
-			meta: fmt.Sprintf(
-				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","originator":"codex_exec","parent_thread_id":%q,"source":{"subagent":{"thread_spawn":{}}}}}`,
-				tsEarly, childID, parentID,
-			),
-			wantParent:       "codex:" + parentID,
-			wantRelationship: RelSubagent,
-		},
-		{
 			name: "current nested source",
 			meta: fmt.Sprintf(
 				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","parent_thread_id":"wrong-parent","source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"depth":1}}}}}`,

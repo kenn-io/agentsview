@@ -41,7 +41,7 @@ type SessionMeta struct {
 	StartedAt   string // RFC3339 or ""
 	EndedAt     string // RFC3339 or ""
 	IsAutomated bool   // automation flag, independent of delegation
-	IsSubagent  bool   // delegated session, counted separately from conversations
+	IsSubagent  bool   // counts as a subagent; parentless automated workers are excluded
 }
 
 // ActivityEvent is one timestamped message (backends send only timestamped rows).
@@ -506,7 +506,7 @@ func (s SessionMeta) kind() sessionKind {
 }
 
 // ActivityCategory names the session's disjoint activity category for exports.
-// Delegation takes precedence over the independent automation flag.
+// Parented subagents take precedence; backends exclude parentless automated workers.
 func (s SessionMeta) ActivityCategory() string {
 	switch s.kind() {
 	case subagentSession:

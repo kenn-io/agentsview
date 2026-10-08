@@ -230,11 +230,10 @@ The latest published release is
 **Bug fixes**
 
 - Oversized telemetry requests return HTTP 413.
-- Activity counts headless Claude workers and recorded non-interactive Codex
-  and Grok runs as Subagents. Human SDK conversations stay Interactive.
-  Parentless workers appear as sidebar roots and require children to be included
-  in flat lists. Codex and Grok runs keep their automation flag through appends.
-  Readable sources reparse once; unreadable sources keep their stored category.
+- Activity counts headless Claude, Codex, and Grok workers as Subagents unless
+  they have script evidence; `codex exec` runs are no longer automated by launch
+  mode alone, changing the rule from
+  [agentsview#1855](https://github.com/kenn-io/agentsview/issues/1855).
 - Hosted raw sync keeps a session listed and searchable after its source file
   disappears from the device that uploaded it, matching the local archive.
   Before, `raw-sync watch` reporting a missing file hid the session, emptied it

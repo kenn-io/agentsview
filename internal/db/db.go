@@ -3799,6 +3799,9 @@ func ensureUsageIndexColumnsLocked(ctx context.Context,
 // complete integrity marker: rows can be copied from older DBs
 // or stale remote machines after the hash was stamped.
 func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) error {
+	if err := repairParentlessWorkers(ctx, w); err != nil {
+		return err
+	}
 	current := ClassifierHash()
 	if db.usageOnlyStorage() {
 		// Usage-only archives deliberately discard the text this migration
