@@ -53,6 +53,14 @@ func (e *Engine) sourceCollisionID(
 	if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {
 		return s.ID, stored != lookupPath, nil
 	}
+	// Two paths that resolve to the same discovered source are one logical
+	// session, not a second file sharing the id. Codex keeps a rollout in both
+	// a live and an archived root; discovery already picked the preferred copy,
+	// so its write replaces the stored path instead of becoming a continuation.
+	if hasStored && stored != "" &&
+		sameDiscoveredFileKey(provider.Definition().Type, stored, lookupPath) {
+		return s.ID, true, nil
+	}
 	altID, moved := e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath)
 	if altID == "" && !admitted {
 		return s.ID, false, nil
@@ -102,6 +110,15 @@ func (e *Engine) storedSourceGone(ctx context.Context, provider parser.Provider,
 // rules, including planned moves between its files.
 func collisionPolicyApplies(provider parser.Provider) bool {
 	return provider.Capabilities().Source.SharedSessionIDs == parser.CapabilitySupported
+}
+
+// sameDiscoveredFileKey reports whether two paths are the same discovered
+// source. Codex rollout filenames that name the thread resolve to one key even
+// across a live and an archived root; an unnamed continuation keeps its path as
+// the key, so it stays a separate source.
+func sameDiscoveredFileKey(agent parser.AgentType, a, b string) bool {
+	return discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: a}) ==
+		discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: b})
 }
 
 // collisionPolicyAgents lists shared-id providers with roots participating in

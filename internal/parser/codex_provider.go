@@ -1347,6 +1347,7 @@ func codexProviderCapabilities() Capabilities {
 			ActivityHints:        CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,
+			SharedSessionIDs:     CapabilitySupported,
 			CompositeFingerprint: CapabilitySupported,
 			IncrementalAppend:    CapabilitySupported,
 			MultiSessionSource:   CapabilityNotApplicable,
