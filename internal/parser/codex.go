@@ -438,6 +438,10 @@ func (b *codexSessionBuilder) handleSessionMeta(
 		}
 	}
 
+	if b.sessionKind == SessionKindNonInteractive && b.parentSessionID == "" && b.relationshipType == RelNone {
+		b.relationshipType = RelSubagent
+	}
+
 	b.armForkGate(payload)
 
 	return false

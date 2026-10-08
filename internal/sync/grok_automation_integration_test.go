@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 )
 
-func TestGrokPromptContextAutomationSurvivesResyncAndAudit(t *testing.T) {
+func TestGrokPromptContextSubagentSurvivesResyncAndAudit(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "cwd-key", "sess-1")
 	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
@@ -57,11 +57,13 @@ func TestGrokPromptContextAutomationSurvivesResyncAndAudit(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	assert.Equal(t, "non-interactive", after.SessionKind)
-	require.True(t, after.IsAutomated)
+	assert.False(t, after.IsAutomated)
+	assert.Equal(t, "subagent", after.RelationshipType)
 
 	require.NoError(t, database.ForceBackfillIsAutomated(t.Context()))
 	afterAudit, err := database.GetSession(t.Context(), "grok:sess-1")
 	require.NoError(t, err)
 	require.NotNil(t, afterAudit)
-	assert.True(t, afterAudit.IsAutomated)
+	assert.False(t, afterAudit.IsAutomated)
+	assert.Equal(t, "subagent", afterAudit.RelationshipType)
 }

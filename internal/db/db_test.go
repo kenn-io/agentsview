@@ -8396,7 +8396,7 @@ func TestUpdateSessionIncremental(t *testing.T) {
 		Project:              "my-project",
 		Machine:              "test",
 		Agent:                "codex",
-		SessionKind:          parser.SessionKindNonInteractive,
+		SessionKind:          parser.SessionKindRoborev,
 		FirstMessage:         new("hello"),
 		StartedAt:            new("2024-01-15T10:00:00Z"),
 		MessageCount:         3,
@@ -8441,7 +8441,7 @@ func TestUpdateSessionIncremental(t *testing.T) {
 	requireNoError(t, err, "get session")
 	assert.Equal(t, 7, got.MessageCount, "MessageCount")
 	assert.Equal(t, 3, got.UserMessageCount, "UserMessageCount")
-	assert.True(t, got.IsAutomated, "metadata keeps worker follow-ups automated")
+	assert.True(t, got.IsAutomated, "metadata keeps roborev follow-ups automated")
 	require.NotNil(t, got.EndedAt, "EndedAt nil")
 	assert.Equal(t, ended, *got.EndedAt, "EndedAt")
 	require.NotNil(t, got.FileSize, "FileSize nil")

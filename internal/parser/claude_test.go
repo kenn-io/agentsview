@@ -119,9 +119,10 @@ func TestClaudeSessionKindAndPromptSourceAbsent(t *testing.T) {
 
 func TestClaudeWorkerOrigin(t *testing.T) {
 	for _, tc := range []struct {
-		name, entrypoint, origin, prefix, explicitKind, want string
+		name, entrypoint, origin, prefix, explicitKind string
+		want                                           RelationshipType
 	}{
-		{name: "worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, want: SessionKindNonInteractive},
+		{name: "worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, want: RelSubagent},
 		{name: "human relay", entrypoint: "sdk-cli", origin: `"turnOrigin":"human","origin":{"kind":"human"},`},
 		{name: "human conflict", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk","origin":{"kind":"human"},`},
 		{name: "missing origin", entrypoint: "sdk-cli"},
@@ -129,7 +130,7 @@ func TestClaudeWorkerOrigin(t *testing.T) {
 		{name: "TypeScript SDK", entrypoint: "sdk-ts", origin: `"turnOrigin":"sdk",`},
 		{name: "Python SDK", entrypoint: "sdk-py", origin: `"turnOrigin":"sdk",`},
 		{name: "terminal", entrypoint: "cli", origin: `"turnOrigin":"sdk",`},
-		{name: "explicit kind", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, explicitKind: "bg", want: "bg"},
+		{name: "explicit kind", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, explicitKind: "bg"},
 		{name: "system delivery", entrypoint: "sdk-cli", prefix: `{"type":"user","turnOrigin":"sdk","isMeta":true,"message":{"content":"delivery"}}`},
 		{name: "tool result", entrypoint: "sdk-cli", prefix: `{"type":"user","turnOrigin":"sdk","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"result"}]}}`},
 		{name: "attachment", entrypoint: "sdk-cli", prefix: `{"type":"attachment","attachment":{"type":"queued_command","prompt":"delivery"}}`},
@@ -146,7 +147,9 @@ func TestClaudeWorkerOrigin(t *testing.T) {
 			results, _, err := claudeParseWithExclusions(path, "project", "local")
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			assert.Equal(t, tc.want, results[0].Session.SessionKind)
+			assert.Equal(t, tc.want, results[0].Session.RelationshipType)
+			assert.Empty(t, results[0].Session.ParentSessionID)
+			assert.Equal(t, tc.explicitKind, results[0].Session.SessionKind)
 			assert.Equal(t, tc.entrypoint, results[0].Session.Entrypoint)
 		})
 	}
@@ -154,14 +157,14 @@ func TestClaudeWorkerOrigin(t *testing.T) {
 
 func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
 	for _, tc := range []struct {
-		name, initial, kind, tail string
-		userCount                 int
-		fallback                  bool
+		name, initial, tail string
+		userCount           int
+		fallback            bool
 	}{
 		{name: "first worker", initial: `"isMeta":true,`, fallback: true},
 		{name: "first queued human", initial: `"isMeta":true,`, tail: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Human question"}}` + "\n"},
 		{name: "first queued missing origin", initial: `"isMeta":true,`, tail: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","prompt":"Unknown question"}}` + "\n"},
-		{name: "established worker", kind: SessionKindNonInteractive, userCount: 1},
+		{name: "established worker", userCount: 1},
 		{name: "established human", initial: `"turnOrigin":"human",`, userCount: 1},
 		{name: "established unknown", userCount: 1},
 	} {
@@ -171,7 +174,7 @@ func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
 			tail := tc.tail + `{"type":"user","turnOrigin":"sdk","timestamp":"2026-01-01T00:01:00Z","message":{"content":"Plan a settings change."}}` + "\n"
 			require.NoError(t, os.WriteFile(path, []byte(initial+tail), 0o600))
 			_, _, _, _, err := claudeParseSessionFrom(path, int64(len(initial)), claudeIncrementalScan{
-				stored: claudeStoredIdentity{entrypoint: "sdk-cli", sessionKind: tc.kind, userMessageCount: tc.userCount},
+				stored: claudeStoredIdentity{entrypoint: "sdk-cli", userMessageCount: tc.userCount},
 			})
 			if tc.fallback {
 				require.Error(t, err)
@@ -179,31 +182,6 @@ func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-		})
-	}
-}
-
-func TestClaudeNativeKindAfterWorkerOrigin(t *testing.T) {
-	for _, tc := range []struct {
-		initial, stored, appended, want string
-		fallback                        bool
-	}{
-		{stored: SessionKindNonInteractive, appended: "bg", want: "bg", fallback: true},
-		{initial: SessionKindNonInteractive, stored: SessionKindNonInteractive, appended: "bg", want: SessionKindNonInteractive, fallback: true},
-		{initial: "bg", stored: "bg", appended: "bg", want: "bg"},
-		{stored: SessionKindNonInteractive, appended: SessionKindNonInteractive, want: SessionKindNonInteractive},
-	} {
-		t.Run(tc.initial+"/"+tc.appended, func(t *testing.T) {
-			initial := buildMetadataLine(map[string]any{"type": "agent-setting", "entrypoint": "sdk-cli", "sessionKind": tc.initial}) + "\n" +
-				`{"type":"user","turnOrigin":"sdk","message":{"content":"Worker prompt"}}` + "\n"
-			tail := buildMetadataLine(map[string]any{"type": "agent-setting", "sessionKind": tc.appended}) + "\n"
-			path := createTestFile(t, "worker.jsonl", initial+tail)
-			_, _, _, _, err := claudeParseSessionFrom(path, int64(len(initial)), claudeIncrementalScan{stored: claudeStoredIdentity{entrypoint: "sdk-cli", sessionKind: tc.stored, userMessageCount: 1}})
-			assert.Equal(t, tc.fallback, IsIncrementalFullParseFallback(err))
-			results, _, err := claudeParseWithExclusions(path, "project", "local")
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			assert.Equal(t, tc.want, results[0].Session.SessionKind)
 		})
 	}
 }

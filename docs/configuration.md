@@ -1373,27 +1373,19 @@ record is preserved through the bulk-resync rebuild-and-copy path.
 
 ## Automated Session Detection
 
-Claude Code `sdk-cli` sessions are automated when their first real normalized
-prompt records `turnOrigin=sdk`. Follow-ups retain this classification.
-A queued first prompt supplies no SDK evidence and blocks inference from later turns.
-Human origin wins conflicting markers. Missing or unknown origin on the first
-prompt keeps the existing prompt-based classification, as do Python and TypeScript
-SDK entrypoints.
+Headless workers count as Subagents. This includes Claude Code `sdk-cli`
+sessions whose first real normalized prompt records `turnOrigin=sdk`, plus
+recorded non-interactive Codex and Grok runs. `codex exec` runs are visible by
+default. See [Activity](https://agentsview.io/docs/activity/) for classification
+and parent-link behavior.
 
-AgentsView classifies every `codex exec` run as automated, including runs with
-multiple user messages.
-
-Roborev-tagged runs are automated code
-reviews. Other sessions are classified as automated when they have one or fewer
-real user messages and their first user message matches the automation
+Roborev-tagged runs are automated code reviews. Other sessions are automated
+when they have one or fewer real user messages and their first user message
+matches the automation
 classifier. Automated sessions (roborev reviews, title generation, warmup pings,
 changelog generation, and similar scripted runs) are filtered out of session
 lists, counts, and analytics by default — the **Include automated** toggle in
 the session filter dropdown opts them back in.
-
-Missing-source archives retain their available evidence; empty kinds cannot recover
-discarded origin. Stored non-interactive kinds can repair flags in usage-only
-archives, while discarded prompts cannot support other corrections.
 
 A set of built-in patterns covers the roborev family and AgentsView's own
 internal prompts. To teach AgentsView about first-message patterns unique to

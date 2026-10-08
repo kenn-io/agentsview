@@ -565,9 +565,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // rows with source_subtype peer_message instead of user prompts. Re-parse
 // unchanged Claude sources so user-message counts and first messages drop
 // them.)
-// (127: Claude sdk-cli workers with explicit SDK prompt origin normalize to
-// non-interactive. Re-parse unchanged sources to recover that origin evidence.)
-const dataVersion = 127
+// (128: headless workers count as subagents; reparse Claude SDK prompt origin.)
+const dataVersion = 128
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -2969,6 +2968,12 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	progress.report("Backfilling database metadata")
+	if _, err := w.Exec(ctx, `UPDATE sessions
+		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE session_kind = 'non-interactive' AND COALESCE(parent_session_id, '') = ''
+		AND COALESCE(relationship_type, '') = ''`); err != nil {
+		return fmt.Errorf("backfilling headless subagents: %w", err)
+	}
 	if err := db.backfillIsAutomatedLocked(ctx, w); err != nil {
 		return err
 	}
@@ -3802,24 +3807,10 @@ func ensureUsageIndexColumnsLocked(ctx context.Context,
 func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) error {
 	current := ClassifierHash()
 	if db.usageOnlyStorage() {
-		// Discarded prompts cannot disprove stored flags; metadata can promote them.
-		rows, err := w.Query(ctx, `SELECT id, agent, session_kind, NULL, user_message_count, is_automated, NULL
-			FROM sessions WHERE is_automated = 0 AND session_kind <> ''`)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		setIDs, _, err := scanFullAutomationCandidates(rows, snapshotAutomationPatterns())
-		if closeErr := rows.Close(); err == nil && closeErr != nil {
-			err = closeErr
-		}
-		if err != nil {
-			return err
-		}
-		if err := batchUpdateAutomated(ctx, w, setIDs, 1); err != nil {
-			return err
-		}
-		_, err = w.Exec(ctx,
+		// Usage-only archives deliberately discard the text this migration
+		// audits. Session writes classify while raw parser/importer data is
+		// still available, so the stored flag is the durable authority here.
+		_, err := w.Exec(ctx,
 			`INSERT INTO stats (key, value) VALUES (?, ?)
 			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 			ClassifierHashKey, current,

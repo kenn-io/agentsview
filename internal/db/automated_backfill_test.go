@@ -5,12 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	sqlite3 "github.com/mattn/go-sqlite3"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -773,34 +770,6 @@ func TestForceBackfillIsAutomatedRunsDespiteMatchingHash(t *testing.T) {
 	require.NoError(t, err, "read hash after force")
 	assert.Equal(t, ClassifierHash(), stored,
 		"stored hash not refreshed after force")
-	d.SetArchiveContent(config.ArchiveContentUsage)
-	require.NoError(t, d.UpsertSession(ctx, Session{
-		ID: "headless", Project: "project", Agent: "claude", Machine: "local",
-		Entrypoint: "sdk-cli", SessionKind: parser.SessionKindNonInteractive, UserMessageCount: 1,
-	}))
-	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 0 WHERE id = 'headless'`)
-	require.NoError(t, err)
-	func() {
-		conn, err := d.getWriter().Conn(t.Context())
-		require.NoError(t, err)
-		var sqliteConn *sqlite3.SQLiteConn
-		require.NoError(t, conn.Raw(func(raw any) error {
-			sqliteConn = raw.(*sqlite3.SQLiteConn)
-			sqliteConn.RegisterAuthorizer(func(op int, table, _, _ string) int {
-				if op == sqlite3.SQLITE_READ && table == "messages" {
-					return sqlite3.SQLITE_DENY
-				}
-				return sqlite3.SQLITE_OK
-			})
-			return nil
-		}))
-		defer sqliteConn.RegisterAuthorizer(nil)
-		require.NoError(t, conn.Close())
-		require.NoError(t, d.ForceBackfillIsAutomated(t.Context()), "usage-only repair reads metadata without messages")
-	}()
-	got, err = d.GetSession(ctx, "headless")
-	require.NoError(t, err)
-	assert.True(t, got.IsAutomated)
 }
 
 func TestAutomationIgnoresToolResultAsFirstPrompt(t *testing.T) {
@@ -832,5 +801,37 @@ func TestAutomationIgnoresToolResultAsFirstPrompt(t *testing.T) {
 			require.NotNil(t, stored)
 			assert.Equal(t, automated, stored.IsAutomated, "audit classification")
 		})
+	}
+}
+
+func TestOpenBackfillsHeadlessRelationships(t *testing.T) {
+	d := testDB(t)
+	sessions := []struct {
+		id, kind, parent, relationship, want string
+	}{
+		{id: "headless", kind: "non-interactive", want: "subagent"},
+		{id: "parented", kind: "non-interactive", parent: "parent"},
+		{id: "fork", kind: "non-interactive", relationship: "fork", want: "fork"},
+		{id: "continuation", kind: "non-interactive", relationship: "continuation", want: "continuation"},
+		{id: "child", kind: "non-interactive", parent: "parent", relationship: "subagent", want: "subagent"},
+		{id: "roborev", kind: "roborev"},
+	}
+	for _, session := range sessions {
+		require.NoError(t, d.UpsertSession(t.Context(), Session{
+			ID: session.id, Project: "project", Agent: "codex", Machine: "local", SessionKind: session.kind,
+			ParentSessionID: new(session.parent), RelationshipType: session.relationship,
+		}))
+	}
+	path := d.Path()
+	require.NoError(t, d.Close())
+	reopened, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	for _, session := range sessions {
+		stored, err := reopened.GetSession(t.Context(), session.id)
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		assert.Equal(t, session.want, stored.RelationshipType, session.id)
+		assert.Equal(t, new(session.parent), stored.ParentSessionID, session.id)
 	}
 }

@@ -500,8 +500,9 @@ func claudeParseFile(
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
 	for i := range results {
-		if claudeWorkerMessages(results[i].Session.Entrypoint, results[i].Session.SessionKind, results[i].Messages) {
-			results[i].Session.SessionKind = SessionKindNonInteractive
+		if results[i].Session.ParentSessionID == "" && results[i].Session.RelationshipType == RelNone &&
+			claudeWorkerMessages(results[i].Session.Entrypoint, results[i].Session.SessionKind, results[i].Messages) {
+			results[i].Session.RelationshipType = RelSubagent
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
@@ -1060,8 +1061,11 @@ func claudeParseSessionFrom(
 }
 
 // claudeSessionIdentityUpdate reports whether an appended line carries an
-// identity value that could change the stored session. First native kinds
-// override inferred worker kinds; established matching identities stay incremental.
+// identity value that could change the stored session. Identity is
+// first-non-empty-wins, so a field whose stored value is already set can
+// never be changed by an append; gating on the stored values keeps routine
+// appends incremental even though real CLI transcripts carry a top-level
+// entrypoint on most message lines.
 func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool {
 	if stored.agentLabel == "" &&
 		strings.TrimSpace(gjson.Get(line, "agentSetting").Str) != "" {
@@ -1071,10 +1075,8 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 		strings.TrimSpace(gjson.Get(line, "entrypoint").Str) != "" {
 		return true
 	}
-	kind := strings.TrimSpace(gjson.Get(line, "sessionKind").Str)
-	return kind != "" && (stored.sessionKind == "" ||
-		(stored.entrypoint == "sdk-cli" && stored.sessionKind == SessionKindNonInteractive &&
-			kind != stored.sessionKind))
+	return stored.sessionKind == "" &&
+		strings.TrimSpace(gjson.Get(line, "sessionKind").Str) != ""
 }
 
 func claudeSDKPrompt(line string) bool {

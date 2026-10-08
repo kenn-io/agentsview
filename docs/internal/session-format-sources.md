@@ -145,15 +145,17 @@ evidence; they do not establish whether a tool helped the task.
   for interactive terminal launches; SDK libraries use `sdk-py` or `sdk-ts`.
   Worker prompts record `turnOrigin=sdk`; relayed human prompts record
   `turnOrigin=human` and `origin.kind=human`, even when `promptSource=sdk`.
-  AgentsView derives `session_kind=non-interactive` for `sdk-cli` when the
-  first real normalized prompt has SDK origin, after queued prompts merge.
+  AgentsView assigns `relationship_type=subagent` for parentless `sdk-cli`
+  sessions with no existing relationship when the first real normalized prompt
+  has SDK origin, after queued prompts merge.
   SDK ingress discards queued SDK origin before attachments are persisted.
   A queued first prompt supplies no SDK evidence and blocks later-turn inference.
   Human origin wins conflicting markers; missing origin remains ambiguous.
   Explicit provider kinds remain intact.
-  Data version 127 reparses readable sources once. Checked against the
-  installed producer and local transcripts; no public producer source is
-  available. Queued fixtures follow the bundled ingress and persistence path;
+  Data version 128 reparses readable sources once. Reverified 2026-10-08
+  against parser fixtures and the stored-count incremental path. The original
+  evidence came from the installed producer and local transcripts. Public source
+  is unavailable. Queued fixtures follow the bundled ingress and persistence path;
   no native queued-origin transcript has been captured.
 
 Rechecked 2026-09-11 against the existing provider parser and its metadata
@@ -567,11 +569,13 @@ fixtures retain this field; missing identities remain source-local.
   pair defines the parent edge. `thread_source` is a legacy fallback, and
   `session_id` identifies the root or tree rather than the parent.
 
-- **Automation (reverified 2026-09-19):** `session_meta.payload.originator` of
-  `codex_exec` is durable producer evidence of a non-interactive `codex exec`
-  invocation. Agentsview persists that as `session_kind = non-interactive` so
-  every exec session is automated, including one-shots whose first message
-  does not match a built-in prefix. When `thread_source` is `roborev` (from
+- **Launch classification (reverified 2026-10-08):**
+  `session_meta.payload.originator=codex_exec` is durable producer evidence
+  of a non-interactive `codex exec` invocation. Agentsview persists that as
+  `session_kind = non-interactive` and
+  assigns parentless runs with no existing relationship to Subagents. Launch
+  mode alone no longer marks them automated. Reverified against exec and spawned
+  child parser fixtures. When `thread_source` is `roborev` (from
   `codex exec --thread-source roborev`), Agentsview stores
   `session_kind = roborev` instead so roborev reviews stay identifiable as
   code review while remaining automated. Native `spawn_agent` children still
@@ -1151,7 +1155,7 @@ fixtures retain this field; missing identities remain source-local.
   Agentsview emits one usage event per prompt and model, subtracts cache
   reads from the full input count, and uses reported cost ticks when present.
 
-- **Automation:** The first-party
+- **Launch classification:** The first-party
   [headless guide](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
   defines prompt flags as non-interactive invocation. The producer
   propagates that startup mode into
@@ -1165,9 +1169,10 @@ fixtures retain this field; missing identities remain source-local.
   writes that context to the same session directory as
   `prompt_context.json`, and the
   [spawn call](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L1049-L1055)
-  supplies it. Agentsview treats only an explicit true value in a valid,
-  session-associated file as durable automation evidence; file presence, a
-  missing field, or a missing file does not classify a session as automated.
+  supplies it. Agentsview retains an explicit true value in a valid,
+  session-associated file as `session_kind=non-interactive` and assigns
+  parentless runs with no existing relationship to Subagents. Reverified
+  2026-10-08 against the prompt-context parser fixture.
 
 - **Subagent attribution (reverified 2026-09-18):** Grok Build stores each
   `spawn_subagent` child as a sibling session directory in the normal sessions

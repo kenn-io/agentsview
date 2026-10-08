@@ -130,23 +130,28 @@ func TestBackfillIsAutomatedPGPreservesDurableClassification(t *testing.T) {
 	defer cancel()
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
-	_, err = ps.DB().ExecContext(ctx,
-		`INSERT INTO sessions (
-			id, machine, project, agent, session_kind, first_message,
-			user_message_count, is_automated
-		 ) VALUES ($1, 'host', 'proj', 'grok', 'non-interactive', $2, 2, true)`,
-		"grok-headless", "Explain this function",
-	)
-	require.NoError(t, err, "insert durably classified session")
-
-	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()), "backfill automation")
-
-	var got bool
-	require.NoError(t, ps.DB().QueryRowContext(ctx,
-		`SELECT is_automated FROM sessions WHERE id = $1`,
-		"grok-headless",
-	).Scan(&got), "query automation classification")
-	assert.True(t, got)
+	for _, tc := range []struct {
+		kind string
+		want bool
+	}{
+		{kind: "non-interactive", want: false},
+		{kind: "roborev", want: true},
+	} {
+		_, err = ps.DB().ExecContext(ctx,
+			`INSERT INTO sessions (
+				id, machine, project, agent, session_kind, first_message,
+				user_message_count, is_automated
+			 ) VALUES ($1, 'host', 'proj', 'codex', $1, $2, 2, true)`,
+			tc.kind, "Explain this function",
+		)
+		require.NoError(t, err, "insert classified session")
+		require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()), "backfill automation")
+		var got bool
+		require.NoError(t, ps.DB().QueryRowContext(ctx,
+			`SELECT is_automated FROM sessions WHERE id = $1`, tc.kind,
+		).Scan(&got), "query automation classification")
+		assert.Equal(t, tc.want, got, tc.kind)
+	}
 }
 
 // TestPushSessionTrustsLocalIsAutomated verifies that

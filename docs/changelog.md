@@ -230,10 +230,11 @@ The latest published release is
 **Bug fixes**
 
 - Oversized telemetry requests return HTTP 413.
-- Activity counts Claude workers with recorded SDK prompt origin as Automated
-  through follow-ups, while relayed human conversations stay Interactive.
-  Codex exec jobs keep their classification when new messages arrive.
-  Existing readable sources are reparsed once to recover origin evidence.
+- Activity counts headless Claude workers and recorded non-interactive Codex
+  and Grok runs as Subagents. Human SDK conversations stay Interactive.
+  `codex exec` runs are visible by default; roborev tags and configured
+  automation prompt patterns still hide scripted runs. Existing readable
+  Claude sources reparse once, and archived non-interactive roots are repaired.
 
 - Hosted raw sync keeps a session listed and searchable after its source file
   disappears from the device that uploaded it, matching the local archive.

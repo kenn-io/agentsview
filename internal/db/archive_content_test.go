@@ -25,12 +25,6 @@ func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 		ID: "automated", Project: "project", Agent: "claude", Machine: "local",
 		FirstMessage: &prompt, StartedAt: &startedAt, UserMessageCount: 1,
 	}))
-	require.NoError(t, database.UpsertSession(t.Context(), Session{
-		ID: "headless", Project: "project", Agent: "claude", Machine: "local",
-		Entrypoint: "sdk-cli", SessionKind: parser.SessionKindNonInteractive, UserMessageCount: 1,
-	}))
-	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'headless'`)
-	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
 	reopened, err := OpenWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
@@ -42,9 +36,6 @@ func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 	assert.True(t, stored.IsAutomated,
 		"startup migrations cannot reclassify discarded transcript text")
 	assert.Nil(t, stored.FirstMessage)
-	headless, err := reopened.GetSessionFull(t.Context(), "headless")
-	require.NoError(t, err)
-	assert.True(t, headless.IsAutomated)
 }
 
 func TestUsageOnlyUpsertsPreserveAutomationWithoutPreview(t *testing.T) {
