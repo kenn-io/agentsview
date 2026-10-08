@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ import (
 
 var syncSummary = func() string {
 	var page struct {
-		Data []json.RawMessage `json:"data"`
+		Data []jsontext.Value `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(syncActiveList), &page); err != nil {
 		panic(err)
@@ -258,7 +259,7 @@ func TestSyncClaudeAI(t *testing.T) {
 			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
 				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
 			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=1":
-				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `,` + strings.ReplaceAll(strings.Replace(syncSummary, `"is_starred":true`, `"is_archived":true`, 1), "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223") + `],"has_more":true}`)}, nil
+				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `,` + strings.ReplaceAll(strings.Replace(syncSummary, `"is_archived":false`, `"is_archived":true`, 1), "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223") + `],"has_more":true}`)}, nil
 			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=3":
 				return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":false}`)}, nil
 			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":

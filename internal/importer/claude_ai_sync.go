@@ -3,7 +3,8 @@ package importer
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/url"
@@ -86,8 +87,8 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				return stats, err
 			}
 			var page struct {
-				Data    []json.RawMessage `json:"data"`
-				HasMore *bool             `json:"has_more"`
+				Data    []jsontext.Value `json:"data"`
+				HasMore *bool            `json:"has_more"`
 			}
 			if err := json.Unmarshal(raw, &page); err != nil {
 				return stats, err
@@ -107,9 +108,9 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					return stats, err
 				}
 				var marker struct {
-					UUID        string          `json:"uuid"`
-					UpdatedAt   string          `json:"updated_at"`
-					CurrentLeaf json.RawMessage `json:"current_leaf_message_uuid"`
+					UUID        string         `json:"uuid"`
+					UpdatedAt   string         `json:"updated_at"`
+					CurrentLeaf jsontext.Value `json:"current_leaf_message_uuid"`
 				}
 				if err := json.Unmarshal(summary, &marker); err != nil || marker.UUID == "" || marker.UpdatedAt == "" {
 					stats.Errors++
