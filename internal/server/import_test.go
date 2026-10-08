@@ -45,12 +45,11 @@ func readImportEvents(t *testing.T, body io.Reader, handle func(string, string))
 
 func TestClaudeAISyncRelay(t *testing.T) {
 	for _, tt := range []struct {
-		name, query   string
-		seed, replace bool
+		name string
+		seed bool
 	}{
 		{name: "large result stores session"},
-		{name: "shorter result is refused", seed: true},
-		{name: "replace query keeps previous version", seed: true, replace: true, query: "?replace=claude-ai:relay&replace=claude-ai:other"},
+		{name: "shorter result updates in place", seed: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -70,7 +69,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				require.Equal(t, want, response.StatusCode, "%s", data)
 			}
 			postResult("unknown", `{}`, http.StatusNotFound)
-			response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync"+tt.query, "application/json", nil)
+			response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
 			require.NoError(t, err)
 			defer response.Body.Close()
 			require.Equal(t, http.StatusOK, response.StatusCode)
@@ -101,24 +100,8 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					require.NoError(t, json.Unmarshal([]byte(data), &stats))
 				}
 			})
-			if tt.seed && !tt.replace {
-				assert.Equal(t, 1, stats.Errors)
-				assert.Equal(t, []importer.ImportRefusal{{SessionID: "claude-ai:relay", Reason: importer.RefusalShorterExport}}, stats.Refusals)
-				old, err := srv.db.GetAllMessages(t.Context(), "claude-ai:relay")
-				require.NoError(t, err)
-				require.Len(t, old, 2)
-				assert.Equal(t, "Previous answer", old[1].Content)
-				return
-			}
-			if tt.replace {
+			if tt.seed {
 				assert.Equal(t, 1, stats.Updated)
-				trashed, err := srv.db.(*db.DB).ListTrashedSessions(t.Context())
-				require.NoError(t, err)
-				require.Len(t, trashed, 1)
-				old, err := srv.db.GetAllMessages(t.Context(), trashed[0].ID)
-				require.NoError(t, err)
-				require.Len(t, old, 2)
-				assert.Equal(t, "Previous answer", old[1].Content)
 			} else {
 				assert.Equal(t, 1, stats.Imported)
 			}
@@ -678,7 +661,7 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 }
 
 func TestClaudeAISyncMutationNotifications(t *testing.T) {
-	for _, ending := range []string{"done", "error", "cancel"} {
+	for _, ending := range []string{"done", "detail error", "cancel"} {
 		t.Run(ending, func(t *testing.T) {
 			mutations := make(chan struct{}, 2)
 			recall := make(chan struct{}, 2)
@@ -743,7 +726,11 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 				require.Equal(t, http.StatusNoContent, answer.StatusCode)
 				require.NoError(t, answer.Body.Close())
 			}
-			assert.Equal(t, ending, terminal)
+			wantTerminal := ending
+			if ending == "detail error" {
+				wantTerminal = "done"
+			}
+			assert.Equal(t, wantTerminal, terminal)
 			for _, ch := range []<-chan struct{}{mutations, recall} {
 				select {
 				case <-ch:

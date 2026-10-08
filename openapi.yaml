@@ -13071,16 +13071,6 @@ paths:
   /api/v1/import/claude-ai/sync:
     post:
       operationId: post-api-v1-import-claude-ai-sync
-      parameters:
-        - description: Session IDs whose archived messages this import may replace when the default import refuses the export; the previous version moves to the trash. Repeatable
-          explode: true
-          in: query
-          name: replace
-          schema:
-            description: Session IDs whose archived messages this import may replace when the default import refuses the export; the previous version moves to the trash. Repeatable
-            items:
-              type: string
-            type: array
       responses:
         "200":
           content:
@@ -13122,12 +13112,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Conflict
-        "422":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Unprocessable Entity
         "500":
           content:
             application/json:

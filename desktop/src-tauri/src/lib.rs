@@ -4083,11 +4083,6 @@ fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
             const response = await fetch({url}, {{ method: "GET", credentials: "include", redirect: "error", signal: controller.signal }});
             const limit = 32 * 1024 * 1024;
             const oversized = () => window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 413, body: "" }} }});
-            if (Number(response.headers.get("content-length")) > limit) {{
-                controller.abort();
-                await oversized();
-                return;
-            }}
             const reader = response.body?.getReader();
             const decoder = new TextDecoder();
             let size = 0;
@@ -4119,10 +4114,30 @@ fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
 }
 
 fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
-    if !path.starts_with("/api/") {
-        return Err("Claude fetch path must start with /api/".into());
+    if path == "/api/organizations" {
+        return Ok(());
     }
-    Ok(())
+    let valid_uuid = |id: &str| {
+        uuid::Uuid::parse_str(id)
+            .is_ok_and(|uuid| uuid.hyphenated().to_string() == id.to_ascii_lowercase())
+    };
+    let parts: Vec<_> = path.split('/').collect();
+    if parts.len() >= 5 && parts[..3] == ["", "api", "organizations"] && valid_uuid(parts[3]) {
+        if parts.len() == 5 {
+            if let Some(offset) = parts[4].strip_prefix("chat_conversations_v2?limit=50&offset=") {
+                if !offset.is_empty() && offset.bytes().all(|b| b.is_ascii_digit()) {
+                    return Ok(());
+                }
+            }
+        } else if parts.len() == 6 && parts[4] == "chat_conversations" {
+            if let Some(id) = parts[5].strip_suffix("?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true") {
+                if valid_uuid(id) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err("Unsupported Claude fetch path".into())
 }
 
 fn create_claude_auth_window(
@@ -6631,12 +6646,26 @@ mod claude_sync_tests {
     }
 
     #[test]
-    fn claude_fetch_requires_api_path() {
-        for path in ["/api/organizations", "/api/organizations/org/chat_conversations/one?tree=True"] {
-            assert!(super::validate_claude_fetch_path(path).is_ok());
+    fn claude_fetch_accepts_only_sync_requests() {
+        let base = "/api/organizations/11111111-1111-4111-8111-111111111111";
+        let list = format!("{base}/chat_conversations_v2?limit=50&offset=0");
+        let detail = format!("{base}/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true");
+        for path in ["/api/organizations", &list, &list.replace("offset=0", "offset=50"), &detail] {
+            assert!(super::validate_claude_fetch_path(path).is_ok(), "{path}");
         }
-        for path in ["", "/api", "/settings", "//example.com/api/", "https://example.com/api/", "@example.com/api/"] {
-            assert!(super::validate_claude_fetch_path(path).is_err());
+        for path in [
+            "".into(), "/api".into(), "/api/../settings".into(), "/api/organizations/../organizations".into(),
+            "//example.com/api/organizations".into(), "https://claude.ai/api/organizations".into(),
+            "/api/organizations?extra=true".into(), format!("{base}/settings"),
+            list.replace("limit=50", "limit=100"), list.replace("offset=0", "offset=-1"),
+            format!("{list}&extra=true"), format!("{list}#fragment"),
+            list.replace("11111111-1111-4111-8111-111111111111", "%2e%2e"),
+            detail.replace("22222222-2222-4222-8222-222222222222", ".."),
+            detail.replace("22222222-2222-4222-8222-222222222222", "%2e%2e"),
+            detail.replace("22222222-2222-4222-8222-222222222222", "one/../../settings"),
+            detail.replace("tree=True", "tree=False"), format!("{detail}&extra=true"),
+        ] {
+            assert!(super::validate_claude_fetch_path(&path).is_err(), "{path}");
         }
     }
 

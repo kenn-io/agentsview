@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -34,7 +33,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	db.Store
 	IsSessionTrashed(context.Context, string) bool
 	IsSessionExcluded(context.Context, string) bool
-}, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks, opts ImportOptions) (stats ImportStats, retErr error) {
+}, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks) (stats ImportStats, retErr error) {
 	raw, err := fetchClaudeAI(ctx, fetch, "/api/organizations")
 	if err != nil {
 		return stats, err
@@ -50,9 +49,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	for _, org := range organizations {
 		if !slices.Contains(org.Capabilities, "chat") {
 			continue
-		}
-		if !safeConversationID(org.UUID) {
-			return stats, errors.New("invalid Claude organization")
 		}
 		base := "/api/organizations/" + url.PathEscape(org.UUID)
 		for offset := 0; ; {
@@ -86,7 +82,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					UpdatedAt   string `json:"updated_at"`
 					CurrentLeaf string `json:"current_leaf_message_uuid"`
 				}
-				if err := json.Unmarshal(summary, &marker); err != nil || !safeConversationID(marker.UUID) || marker.UpdatedAt == "" {
+				if err := json.Unmarshal(summary, &marker); err != nil || marker.UUID == "" || marker.UpdatedAt == "" {
 					stats.Errors++
 					cb.progress(stats)
 					continue
@@ -119,7 +115,11 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				}
 				detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true")
 				var detailError *claudeAIHTTPError
-				if errors.As(err, &detailError) || errors.Is(err, ErrClaudeAIResponseTooLarge) {
+				if err != nil {
+					if ctx.Err() != nil {
+						return stats, ctx.Err()
+					}
+					errors.As(err, &detailError)
 					if detailError != nil && detailError.status == 404 {
 						stats.record(id, importSkipped, nil)
 					} else {
@@ -127,9 +127,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					}
 					cb.progress(stats)
 					continue
-				}
-				if err != nil {
-					return stats, err
 				}
 				write := func() error {
 					result, err := parser.ParseClaudeAIDetail(detail)
@@ -140,7 +137,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						stats.record(id, importSkipped, err)
 						return nil
 					}
-					status, err := claudeAIImport.importConversation(ctx, store, result, nil, opts)
+					status, err := claudeAIImport.importConversation(ctx, store, result, nil, ImportOptions{})
 					if errors.Is(err, db.ErrSessionTrashed) {
 						status, err = importSkipped, nil
 					}
@@ -195,8 +192,4 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 		case <-time.After(delay):
 		}
 	}
-}
-
-func safeConversationID(id string) bool {
-	return id != "" && !strings.ContainsAny(id, `/\\?#%`) && id != "." && id != ".."
 }

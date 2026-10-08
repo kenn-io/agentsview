@@ -43,7 +43,7 @@ func (s *Server) registerImportRoutes() {
 			}
 			value.(chan claudeAISyncResult) <- claudeAISyncResult{status: in.Status, body: in.RawBody, retryAfter: in.RetryAfter}
 			return &struct{}{}, nil
-		}, maxBodyBytes(claudeAIResponseLimit+1), func(op *huma.Operation) {
+		}, maxBodyBytes(-1), func(op *huma.Operation) {
 			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
 				body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), claudeAIResponseLimit+1))
 				if len(body) > claudeAIResponseLimit || ctx.Query("status") == "413" {
@@ -74,9 +74,7 @@ func (s *Server) registerImportRoutes() {
 	)
 }
 
-type claudeAISyncInput struct {
-	Replace []string `query:"replace,explode" doc:"Session IDs whose archived messages this import may replace when the default import refuses the export; the previous version moves to the trash. Repeatable"`
-}
+type claudeAISyncInput struct{}
 
 type claudeAISyncResultInput struct {
 	ID         string `path:"id"`
@@ -139,7 +137,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 					cancel()
 				}
 			},
-		}, importer.ImportOptions{Replace: in.Replace})
+		})
 		if stats.Imported+stats.Updated > 0 {
 			if s.broadcaster != nil {
 				s.broadcaster.Emit("sessions")
