@@ -5,9 +5,12 @@ import (
 	"strings"
 	"testing"
 
+	sqlite3 "github.com/mattn/go-sqlite3"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -770,6 +773,34 @@ func TestForceBackfillIsAutomatedRunsDespiteMatchingHash(t *testing.T) {
 	require.NoError(t, err, "read hash after force")
 	assert.Equal(t, ClassifierHash(), stored,
 		"stored hash not refreshed after force")
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, d.UpsertSession(ctx, Session{
+		ID: "headless", Project: "project", Agent: "claude", Machine: "local",
+		Entrypoint: "sdk-cli", SessionKind: parser.SessionKindNonInteractive, UserMessageCount: 1,
+	}))
+	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 0 WHERE id = 'headless'`)
+	require.NoError(t, err)
+	func() {
+		conn, err := d.getWriter().Conn(t.Context())
+		require.NoError(t, err)
+		var sqliteConn *sqlite3.SQLiteConn
+		require.NoError(t, conn.Raw(func(raw any) error {
+			sqliteConn = raw.(*sqlite3.SQLiteConn)
+			sqliteConn.RegisterAuthorizer(func(op int, table, _, _ string) int {
+				if op == sqlite3.SQLITE_READ && table == "messages" {
+					return sqlite3.SQLITE_DENY
+				}
+				return sqlite3.SQLITE_OK
+			})
+			return nil
+		}))
+		defer sqliteConn.RegisterAuthorizer(nil)
+		require.NoError(t, conn.Close())
+		require.NoError(t, d.ForceBackfillIsAutomated(t.Context()), "usage-only repair reads metadata without messages")
+	}()
+	got, err = d.GetSession(ctx, "headless")
+	require.NoError(t, err)
+	assert.True(t, got.IsAutomated)
 }
 
 func TestAutomationIgnoresToolResultAsFirstPrompt(t *testing.T) {

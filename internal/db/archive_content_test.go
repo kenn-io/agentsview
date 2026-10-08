@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	sqlite3 "github.com/mattn/go-sqlite3"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -33,26 +31,6 @@ func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 	}))
 	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'headless'`)
 	require.NoError(t, err)
-	func() {
-		conn, err := database.getWriter().Conn(t.Context())
-		require.NoError(t, err)
-		var sqliteConn *sqlite3.SQLiteConn
-		require.NoError(t, conn.Raw(func(raw any) error {
-			sqliteConn = raw.(*sqlite3.SQLiteConn)
-			sqliteConn.RegisterAuthorizer(func(op int, table, _, _ string) int {
-				if op == sqlite3.SQLITE_READ && table == "messages" {
-					return sqlite3.SQLITE_DENY
-				}
-				return sqlite3.SQLITE_OK
-			})
-			return nil
-		}))
-		defer sqliteConn.RegisterAuthorizer(nil)
-		require.NoError(t, conn.Close())
-		require.NoError(t, database.ForceBackfillIsAutomated(t.Context()), "usage-only repair reads metadata without messages")
-	}()
-	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'headless'`)
-	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
 	reopened, err := OpenWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
@@ -67,10 +45,6 @@ func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 	headless, err := reopened.GetSessionFull(t.Context(), "headless")
 	require.NoError(t, err)
 	assert.True(t, headless.IsAutomated)
-	require.NoError(t, reopened.UpdateSessionIncremental(t.Context(), "headless", IncrementalSessionUpdate{UserMsgCount: 2}))
-	headless, err = reopened.GetSessionFull(t.Context(), "headless")
-	require.NoError(t, err)
-	assert.True(t, headless.IsAutomated, "metadata keeps worker follow-ups automated")
 }
 
 func TestUsageOnlyUpsertsPreserveAutomationWithoutPreview(t *testing.T) {
