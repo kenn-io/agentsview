@@ -321,6 +321,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             claude_auth_connect,
             claude_auth_fetch,
+            claude_auth_close,
             claude_auth_disconnect,
             claude_auth_fetch_result
         ]);
@@ -4012,6 +4013,22 @@ async fn claude_auth_connect(handle: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn claude_auth_close(handle: AppHandle) -> Result<(), String> {
+    handle
+        .state::<ClaudeAuthState>()
+        .pending_browser_requests
+        .lock()
+        .map_err(|_| "Claude request lock failed")?
+        .clear();
+    if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        if !window.is_visible().map_err(|e| e.to_string())? {
+            window.close().map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn claude_auth_disconnect(handle: AppHandle) -> Result<(), String> {
     let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
         Some(window) => window,
@@ -4114,15 +4131,18 @@ fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
 }
 
 fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
+    const ORGANIZATIONS_REQUEST: usize = 0;
+    const CONVERSATIONS_REQUEST: usize = 1;
+    const CONVERSATION_REQUEST: usize = 2;
     let shapes: Vec<_> = include_str!("../../../internal/importer/claude_ai_requests.txt").lines().collect();
-    if path == shapes[0] {
+    if path == shapes[ORGANIZATIONS_REQUEST] {
         return Ok(());
     }
     let valid_uuid = |id: &str| {
         uuid::Uuid::parse_str(id)
             .is_ok_and(|uuid| uuid.hyphenated().to_string() == id.to_ascii_lowercase())
     };
-    let (prefix, rest) = shapes[1].split_once("{organization}").unwrap();
+    let (prefix, rest) = shapes[CONVERSATIONS_REQUEST].split_once("{organization}").unwrap();
     if let Some(rest_path) = path.strip_prefix(prefix) {
         if let Some((org, tail)) = rest_path.split_once('/') {
             if valid_uuid(org) {
@@ -4132,7 +4152,7 @@ fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
                         return Ok(());
                     }
                 }
-                let detail = shapes[2].split_once("{organization}/").unwrap().1;
+                let detail = shapes[CONVERSATION_REQUEST].split_once("{organization}/").unwrap().1;
                 let (detail_prefix, detail_suffix) = detail.split_once("{conversation}").unwrap();
                 if let Some(id) = tail.strip_prefix(detail_prefix).and_then(|s| s.strip_suffix(detail_suffix)) {
                     if valid_uuid(id) {

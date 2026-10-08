@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
+import { EventSource } from "eventsource";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
 import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
@@ -27,6 +28,7 @@ import { dismissFlash } from "@kenn-io/kit-ui";
 vi.mock("./lib/feature-flags.js", () => ({
   PROJECT_MAPPING_WORKSPACE_ENABLED: true,
 }));
+vi.mock("eventsource", () => ({ EventSource: vi.fn() }));
 // @ts-ignore
 import App, { findUserPromptOrdinal } from "./App.svelte";
 
@@ -89,6 +91,7 @@ afterEach(() => {
     unmount(component);
     component = undefined;
   }
+  events.setAvailable(false);
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -150,32 +153,32 @@ it.each([
   expect(pins.loadForSession).toHaveBeenLastCalledWith(id);
 });
 
-it("reloads pins only when Sync changes a pinned session", async () => {
+it("debounces pin reloads on sessions events", async () => {
+  vi.useFakeTimers();
   stubAppDependencies();
   vi.spyOn(pins, "loadAll").mockResolvedValue();
-  const subscribe = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
+  const source = Object.assign(new EventTarget(), { readyState: 1, close: vi.fn() });
+  vi.mocked(EventSource).mockImplementation(function () {
+    return source as unknown as EventSource;
+  });
+  events.setAvailable(true);
   window.history.replaceState(null, "", "/pinned");
   router.route = "pinned";
   component = mount(App, { target: document.body });
   await flushEffects();
   expect(pins.loadAll).toHaveBeenCalledOnce();
-  expect(subscribe).toHaveBeenCalledOnce();
-  pins.pins = [
-    {
-      id: 1,
-      session_id: "claude-ai:pinned",
-      message_id: 1,
-      ordinal: 0,
-      created_at: "2026-03-01T10:00:00Z",
-    },
-  ];
-  const update = subscribe.mock.calls[0]![0];
+  const update = (data: Record<string, unknown>) => source.dispatchEvent(
+    new MessageEvent("data_changed", { data: JSON.stringify(data) }),
+  );
+  update({ scope: "messages" });
+  await vi.advanceTimersByTimeAsync(300);
+  expect(pins.loadAll).toHaveBeenCalledOnce();
   update({ scope: "sessions" });
   update({ scope: "sessions", session_ids: ["codex:other"] });
   update({ scope: "sessions", session_ids: ["claude-ai:other"] });
-  await flushEffects();
+  await vi.advanceTimersByTimeAsync(299);
   expect(pins.loadAll).toHaveBeenCalledOnce();
-  update({ scope: "sessions", session_ids: ["claude-ai:pinned"] });
+  await vi.advanceTimersByTimeAsync(1);
   await flushEffects();
   expect(pins.loadAll).toHaveBeenCalledTimes(2);
 });

@@ -1086,7 +1086,7 @@ func TestRecallEvidenceWriteSessionBatchRemapsStableEndpoints(t *testing.T) {
 	assert.Equal(t, 12, got.Evidence[0].MessageEndOrdinal)
 }
 
-func TestRecallEvidenceSourceUUIDFillRollsBackAtomically(t *testing.T) {
+func TestRecallEvidenceCompleteStoredRowsPreservesMissingSourceUUIDs(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "legacy-fill", 10, "", "")
 	insertVerifiedRecallSelection(t, d, "fill-entry", "legacy-fill", 10, 11, nil)
@@ -1111,8 +1111,14 @@ func TestRecallEvidenceSourceUUIDFillRollsBackAtomically(t *testing.T) {
 	require.NoError(t, err)
 	entry = requireRecallEntry(t, d, "fill-entry")
 	assert.True(t, entry.ProvenanceOK)
-	assert.Equal(t, "filled-10", entry.Evidence[0].MessageStartSourceUUID)
-	assert.Equal(t, "filled-11", entry.Evidence[0].MessageEndSourceUUID)
+	assert.Empty(t, entry.Evidence[0].MessageStartSourceUUID)
+	assert.Empty(t, entry.Evidence[0].MessageEndSourceUUID)
+	stored, err = d.GetAllMessages(t.Context(), "legacy-fill")
+	require.NoError(t, err)
+	assert.Equal(t, messages[0].ID, stored[0].ID)
+	for _, message := range stored {
+		assert.Empty(t, message.SourceUUID)
+	}
 }
 
 func seedRecallEvidenceWindow(

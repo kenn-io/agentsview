@@ -34,6 +34,12 @@ var ErrClaudeAIAccessDenied = errors.New("claude.ai access denied (HTTP 403)")
 //go:embed claude_ai_requests.txt
 var claudeAIRequests string
 
+const (
+	claudeAIOrganizationsRequest = iota
+	claudeAIConversationsRequest
+	claudeAIConversationRequest
+)
+
 func claudeAIRequest(shape int, organization, conversation string, offset int) string {
 	return strings.NewReplacer("{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset)).Replace(strings.Split(claudeAIRequests, "\n")[shape])
 }
@@ -69,7 +75,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	IsSessionExcluded(context.Context, string) bool
 }, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks,
 ) (stats ImportStats, retErr error) {
-	raw, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(0, "", "", 0))
+	raw, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(claudeAIOrganizationsRequest, "", "", 0))
 	if err != nil {
 		return stats, err
 	}
@@ -86,7 +92,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 			continue
 		}
 		for offset := 0; ; {
-			raw, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(1, org.UUID, "", offset))
+			raw, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(claudeAIConversationsRequest, org.UUID, "", offset))
 			if err != nil {
 				return stats, err
 			}
@@ -164,7 +170,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					cb.progress(stats)
 					continue
 				}
-				detail, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(2, org.UUID, marker.UUID, 0))
+				detail, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(claudeAIConversationRequest, org.UUID, marker.UUID, 0))
 				if err != nil {
 					if ctx.Err() != nil {
 						return stats, ctx.Err()

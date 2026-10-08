@@ -73,35 +73,23 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	if len(write.UsageEvents) == 0 {
 		write.UsageEvents = events
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT m.ordinal, p.note, p.created_at FROM pinned_messages p JOIN messages m ON m.id = p.message_id WHERE p.session_id = ?`, id)
-	if err != nil {
-		return "", err
-	}
 	var pins []savedPin
-	for rows.Next() {
-		var pin savedPin
-		if err := rows.Scan(&pin.ordinal, &pin.note, &pin.createdAt); err != nil {
-			_ = rows.Close()
-			return "", fmt.Errorf("reading copy pins: %w", err)
-		}
-		pins = append(pins, pin)
-	}
-	err = rows.Err()
-	_ = rows.Close()
-	if err != nil {
-		return "", fmt.Errorf("reading copy pins: %w", err)
-	}
 	if _, err := writeOneSessionBatchTx(
-		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(),
+		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(), &pins,
 	); err != nil {
 		return "", err
 	}
-	var restored int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pinned_messages p JOIN messages m ON m.id = p.message_id WHERE p.session_id = ?`, id).Scan(&restored); err != nil {
-		return "", fmt.Errorf("counting restored pins: %w", err)
+	pins = slices.DeleteFunc(pins, func(pin savedPin) bool { return pin.messageFound == 0 })
+	keepCopy := !write.KeepTrashedCopyOnlyOnPinLoss
+	if !keepCopy {
+		var restored int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pinned_messages p JOIN messages m ON m.id = p.message_id WHERE p.session_id = ?`, id).Scan(&restored); err != nil {
+			return "", fmt.Errorf("counting restored pins: %w", err)
+		}
+		keepCopy = restored < len(pins)
 	}
 	copyID := ""
-	if !write.KeepTrashedCopyOnlyOnPinLoss || restored < len(pins) {
+	if keepCopy {
 		copyID = replacedSessionCopyID(id, time.Now())
 		copyWrite := db.storageSessionBatchWrite(sessionCopyWrite(*src, copyID, stored))
 		copyWrite.UsageEvents = make([]UsageEvent, len(events))
@@ -110,7 +98,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 			copyWrite.UsageEvents[i] = ev
 		}
 		if _, err := writeOneSessionBatchTx(
-			ctx, tx, ctxTx, copyWrite, &pending, db.usageOnlyStorage(),
+			ctx, tx, ctxTx, copyWrite, &pending, db.usageOnlyStorage(), nil,
 		); err != nil {
 			return "", fmt.Errorf("writing replaced session copy: %w", err)
 		}

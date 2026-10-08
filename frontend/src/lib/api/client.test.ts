@@ -33,6 +33,7 @@ describe("syncClaudeAI browser relay", () => {
     const host: BrowserHost = {
       connect: vi.fn(),
       disconnect: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
       fetch: vi.fn().mockResolvedValue({ status, body: status === 413 ? "" : "browser response", retryAfter: "12" }),
     };
     const fetch = vi.fn(async (url: string, options: RequestInit) => {
@@ -69,6 +70,8 @@ describe("syncClaudeAI browser relay", () => {
     );
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(progress).toHaveBeenCalledWith({ imported: 1, updated: 0, skipped: 0, errors: 0 });
+    expect(host.close).toHaveBeenCalledOnce();
+    expect(host.disconnect).not.toHaveBeenCalled();
   });
 
   it.each(["returned", "thrown"])("relays %s browser errors to the user", async (kind) => {
@@ -76,6 +79,7 @@ describe("syncClaudeAI browser relay", () => {
     const encoder = new TextEncoder();
     const message = "TypeError: Failed to fetch";
     const host = {
+      close: vi.fn().mockResolvedValue(undefined),
       fetch:
         kind === "returned"
           ? vi.fn().mockResolvedValue({ status: 0, body: "", error: message })
@@ -111,11 +115,13 @@ describe("syncClaudeAI browser relay", () => {
     );
     await expect(syncClaudeAI(host)).rejects.toThrow(expected);
     expect(host.fetch).toHaveBeenCalledWith("/api/organizations/org/chat_conversations_v2");
+    expect(host.close).toHaveBeenCalledOnce();
   });
 
   it("ends the stream when posting a result fails", async () => {
     let signal!: AbortSignal;
     const host = {
+      close: vi.fn().mockResolvedValue(undefined),
       fetch: vi.fn().mockResolvedValue({ status: 200, body: "{}" }),
     } as unknown as BrowserHost;
     vi.stubGlobal(
@@ -142,6 +148,22 @@ describe("syncClaudeAI browser relay", () => {
     );
     await expect(syncClaudeAI(host)).rejects.toThrow("expired");
     expect(signal.aborted).toBe(true);
+    expect(host.close).toHaveBeenCalledOnce();
+  });
+
+  it("closes the browser when Sync is cancelled", async () => {
+    const controller = new AbortController();
+    const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
+    vi.stubGlobal("fetch", vi.fn(async (_url, options: RequestInit) => {
+      return new Response(new ReadableStream({
+        start(stream) {
+          options.signal!.addEventListener("abort", () => stream.error(new DOMException("Aborted", "AbortError")), { once: true });
+          controller.abort();
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
+    }));
+    await expect(syncClaudeAI(host, undefined, controller.signal)).rejects.toThrow("Aborted");
+    expect(host.close).toHaveBeenCalledOnce();
   });
 });
 
