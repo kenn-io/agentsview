@@ -51,6 +51,9 @@ func importSessions(cfg ImportConfig) error {
 	defer closeWriteDB(database, writeLock)
 
 	ctx := context.Background()
+	if err := database.RequireSourceSync(ctx); err != nil {
+		return err
+	}
 
 	// Handle zip files.
 	dir, cleanup, err := resolveImportSource(cfg.Path)

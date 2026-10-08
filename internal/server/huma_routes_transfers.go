@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"reflect"
 
@@ -55,7 +56,17 @@ func (s *Server) describeTransferRoutes() {
 		}
 		s.api.OpenAPI().AddOperation(op)
 		if route.tag != "Artifacts" || s.artifactExchangeRunner != nil {
-			s.handleHTTP(op, route.handler)
+			s.handleHTTP(op, func(w http.ResponseWriter, r *http.Request) {
+				if err := s.requireSourceSync(r.Context()); err != nil {
+					status := http.StatusInternalServerError
+					if statusErr, ok := errors.AsType[huma.StatusError](err); ok {
+						status = statusErr.GetStatus()
+					}
+					http.Error(w, err.Error(), status)
+					return
+				}
+				route.handler(w, r)
+			})
 			// GET also covers HEAD. Keep these paths out of the SPA fallback
 			// so the native handler can report an unsupported method.
 			s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: route.path, Hidden: true}, route.handler)

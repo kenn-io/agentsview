@@ -439,6 +439,14 @@ type Emitter interface {
 // EngineConfig holds the configuration needed by the sync
 // engine, replacing per-agent positional parameters.
 type EngineConfig struct {
+	// ArchiveReparse permits only the verified materialized inputs supplied by
+	// rawderive.PrepareLocalSource. It is not exposed in runtime configuration.
+	ArchiveReparse bool
+	// ArchiveSessionPolicy binds the native parser ID to the rewritten session
+	// before any content is published. False preserves source deletion policy.
+	// Used only by the local archive's scratch-database reparse.
+	ArchiveSessionPolicy func(context.Context, *db.Session, string) (bool, error)
+
 	AgentDirs      map[parser.AgentType][]string
 	SourceMachines map[parser.AgentType]map[string]string
 	// ProviderMetadata carries the resolved metadata directories used to
@@ -483,8 +491,8 @@ type EngineConfig struct {
 	// remote sync to namespace IDs by host (e.g. "host~").
 	IDPrefix string
 	// PathRewriter transforms file paths before storage.
-	// Used by remote sync to replace temp paths with
-	// "host:/remote/path" references.
+	// Used by remote sync and archived sources to replace temporary paths
+	// with stable references. Independent of IDPrefix.
 	PathRewriter func(string) string
 	// StoredPathResolver maps a canonical stored source path back to its
 	// physical path under the current mirror. Remote changed-path planning uses
@@ -548,6 +556,8 @@ type EngineConfig struct {
 
 // Engine orchestrates session file discovery and sync.
 type Engine struct {
+	sourceSyncErr error
+
 	db    *db.DB
 	stat  func(string) (os.FileInfo, error)
 	lstat func(string) (os.FileInfo, error)
@@ -635,6 +645,7 @@ type Engine struct {
 	disableSignalRecompute  bool
 	disableProjectDiscovery bool
 	stableSourceSnapshots   bool
+	archiveSessionPolicy    func(context.Context, *db.Session, string) (bool, error)
 	idPrefix                string
 	pathRewriter            func(string) string
 	storedPathResolver      func(string) (string, bool)
@@ -920,6 +931,22 @@ func NewEngine(ctx context.Context,
 	if cfg.ProviderFactories != nil {
 		providerFactories = append([]parser.ProviderFactory(nil), cfg.ProviderFactories...)
 	}
+	sourceSyncErr := database.RequireSourceSync(ctx)
+	if errors.Is(sourceSyncErr, db.ErrArchiveOnly) && cfg.ArchiveReparse {
+		sourceSyncErr = nil
+	}
+	if sourceSyncErr != nil {
+		// No provider may discover default roots, even during a parser rebuild or
+		// after source reconfiguration. Disabled providers retain their old rows.
+		cfg.DisabledAgents = nil
+		for _, factory := range providerFactories {
+			cfg.DisabledAgents = append(cfg.DisabledAgents, factory.Definition().Type)
+		}
+		cfg.AgentDirs = nil
+		cfg.SourceMachines = nil
+		cfg.ProviderMetadata = nil
+		cfg.DisableFilesystemProjectDiscovery = true
+	}
 	providerModes := parser.ProviderMigrationModes()
 	if cfg.ProviderMigrationModes != nil {
 		maps.Copy(providerModes, cfg.ProviderMigrationModes)
@@ -989,6 +1016,7 @@ func NewEngine(ctx context.Context,
 		disableProjectDiscovery: cfg.DisableFilesystemProjectDiscovery,
 		stableSourceSnapshots:   cfg.StableSourceSnapshots,
 		idPrefix:                cfg.IDPrefix,
+		archiveSessionPolicy:    cfg.ArchiveSessionPolicy,
 		pathRewriter:            cfg.PathRewriter,
 		storedPathResolver:      cfg.StoredPathResolver,
 		completeSourceMirror:    cfg.CompleteSourceMirror,
@@ -1007,6 +1035,7 @@ func NewEngine(ctx context.Context,
 			return newReconciliationSpool(ctx, path)
 		},
 	}
+	e.sourceSyncErr = sourceSyncErr
 	e.sourceSet.Store(newEngineSources(providerFactories, SourceConfig{
 		AgentDirs:        cfg.AgentDirs,
 		SourceMachines:   cfg.SourceMachines,
@@ -1895,6 +1924,19 @@ func (e *Engine) parsePolicyContext(ctx context.Context) context.Context {
 
 // file watcher threads the serve shutdown context through here.
 func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
+	return e.syncPathsContext(ctx, paths, false)
+}
+
+// ReparsePathsContext fully parses only the selected sources, retaining the
+// normal publication rules and bounded-memory staging for large Codex files.
+func (e *Engine) ReparsePathsContext(ctx context.Context, paths []string) error {
+	return e.syncPathsContext(ctx, paths, true)
+}
+
+func (e *Engine) syncPathsContext(ctx context.Context, paths []string, force bool) error {
+	if e.sourceSyncErr != nil {
+		return e.sourceSyncErr
+	}
 	if e.refuseWriteInForceParse("SyncPaths") {
 		return nil
 	}
@@ -1903,6 +1945,9 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 		e.syncMu.Lock()
 		defer e.syncMu.Unlock()
 		defer e.clearCurrentProgress()
+		previous := e.forceFullParse
+		e.forceFullParse = previous || force
+		defer func() { e.forceFullParse = previous }()
 		return e.syncChangedPathsLocked(ctx, paths)
 	}()
 	if stats.hasSessionChanges() || tombstoned > 0 {
@@ -3024,6 +3069,9 @@ func (e *Engine) resyncBuildLocked(
 	ctx context.Context, onProgress ProgressFunc, opts RebuildOptions,
 	ops rebuildOperations, restoreActiveWriterOnAbort bool,
 ) (stats SyncStats, retErr error) {
+	if e.sourceSyncErr != nil && (!errors.Is(e.sourceSyncErr, db.ErrArchiveOnly) || len(opts.Contributors) > 0) {
+		return SyncStats{Aborted: true}, e.sourceSyncErr
+	}
 	e.clearPiebaldFailureMemo()
 	defer e.clearPiebaldFailureMemo()
 	// Rebuild tombstones and links commit only inside the replacement, and every
@@ -4359,6 +4407,9 @@ func (e *Engine) SyncThenRun(
 	onProgress ProgressFunc,
 	work func(forceFull bool) error,
 ) (stats SyncStats, err error) {
+	if e.sourceSyncErr != nil {
+		return SyncStats{Aborted: true}, e.sourceSyncErr
+	}
 	if e.refuseWriteInForceParse("SyncThenRun") {
 		return SyncStats{}, nil
 	}
@@ -4458,6 +4509,9 @@ func (e *Engine) SyncThenRunWithRebuild(
 	rebuildDone func(SyncStats, error),
 	work func(forceFull, rebuilt bool) error,
 ) (stats SyncStats, retErr error) {
+	if e.sourceSyncErr != nil {
+		return SyncStats{Aborted: true}, e.sourceSyncErr
+	}
 	if e.refuseWriteInForceParse("SyncThenRunWithRebuild") {
 		return SyncStats{}, nil
 	}
@@ -5142,6 +5196,9 @@ func (e *Engine) reconcileScopedWatchRootsLocked(
 	ctx context.Context, agent parser.AgentType, roots []string, full, force bool,
 	onProgress ProgressFunc,
 ) (SyncStats, int, passEpilogueEligibility, error) {
+	if e.sourceSyncErr != nil {
+		return SyncStats{Aborted: true}, 0, passEpilogueEligibility{}, e.sourceSyncErr
+	}
 	e.reportProgress(onProgress, Progress{
 		Phase:  PhaseDiscovering,
 		Detail: "Reconciling watched session roots",
@@ -7853,6 +7910,9 @@ func (e *Engine) syncAllLocked(
 	scope *rootSyncScope, writeMode syncWriteMode, recordSyncState bool,
 	forceDiscoveredFiles bool,
 ) (stats SyncStats) {
+	if e.sourceSyncErr != nil && e.archiveStore == nil {
+		return SyncStats{Aborted: true, Warnings: []string{e.sourceSyncErr.Error()}}
+	}
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
 	}
@@ -11421,6 +11481,9 @@ func (e *Engine) processFile(
 	ctx context.Context,
 	file parser.DiscoveredFile,
 ) processResult {
+	if e.sourceSyncErr != nil {
+		return processResult{err: e.sourceSyncErr}
+	}
 	if res, ok := e.processProviderFile(ctx, file); ok {
 		return res
 	}
@@ -17171,6 +17234,9 @@ func (e *Engine) BackfillSignalComputer() func(context.Context, string) error {
 // stored session metadata. Candidate selection and progress are durable, while
 // filesystem and Git discovery happen here so database startup remains cheap.
 func (e *Engine) BackfillProjectIdentitySnapshots(ctx context.Context) error {
+	if e.sourceSyncErr != nil {
+		return e.sourceSyncErr
+	}
 	if e.refuseWriteInForceParse("BackfillProjectIdentitySnapshots") {
 		return errors.New(
 			"BackfillProjectIdentitySnapshots refused on report-only parse-diff engine",
@@ -18209,6 +18275,12 @@ func (e *Engine) prepareSessionNormalizedContext(
 	s, msgs := candidate.Session, candidate.Messages
 	if err := e.applyRemoteRewritesContext(ctx, &s, msgs); err != nil {
 		return ingest.PreparedSession{}, sessionWritePreserved, err
+	}
+	if e.archiveSessionPolicy != nil {
+		keep, err := e.archiveSessionPolicy(ctx, &s, pw.sess.ID)
+		if err != nil || !keep {
+			return ingest.PreparedSession{}, sessionWritePreserved, err
+		}
 	}
 	applySourceCwdResolution(
 		&s, pw.sourceCwdResolution, pw.sourceCwdStored, pw.sourceCwdStoredOK,
@@ -19821,8 +19893,8 @@ func (e *Engine) applyIDPrefixToSessionIDs(ids []string) []string {
 	return applyIDPrefixToIDs(e.idPrefix, ids)
 }
 
-// applyRemoteRewrites prefixes session IDs and rewrites
-// file paths for remote sync. No-op when idPrefix is empty.
+// applyRemoteRewrites rewrites stored source paths and, when configured,
+// prefixes session IDs for remote sync.
 func (e *Engine) applyRemoteRewrites(
 	s *db.Session, msgs []db.Message,
 ) {
@@ -19835,6 +19907,10 @@ func (e *Engine) applyRemoteRewritesContext(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if e.pathRewriter != nil && s.FilePath != nil {
+		fp := e.pathRewriter(*s.FilePath)
+		s.FilePath = &fp
+	}
 	if e.idPrefix == "" {
 		return nil
 	}
@@ -19846,10 +19922,6 @@ func (e *Engine) applyRemoteRewritesContext(
 	if s.ParserParentSessionID != nil && *s.ParserParentSessionID != "" {
 		p := applyIDPrefixToID(e.idPrefix, *s.ParserParentSessionID)
 		s.ParserParentSessionID = &p
-	}
-	if e.pathRewriter != nil && s.FilePath != nil {
-		fp := e.pathRewriter(*s.FilePath)
-		s.FilePath = &fp
 	}
 	for i := range msgs {
 		if err := ctx.Err(); err != nil {
@@ -20570,6 +20642,9 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 func (e *Engine) SyncSingleSessionContext(
 	ctx context.Context, sessionID string,
 ) (err error) {
+	if e.sourceSyncErr != nil {
+		return e.sourceSyncErr
+	}
 	if e.refuseWriteInForceParse("SyncSingleSession") {
 		return fmt.Errorf(
 			"cannot sync session %s on a report-only (parse-diff) engine",

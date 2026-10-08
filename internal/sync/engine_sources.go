@@ -86,6 +86,9 @@ func (e *Engine) sources() *engineSources {
 // what to reconcile. Sessions from providers that become disabled stay in
 // the archive, exactly as when the engine starts with them disabled.
 func (e *Engine) ReconfigureSources(cfg SourceConfig) {
+	if e.sourceSyncErr != nil {
+		return
+	}
 	next := newEngineSources(e.baseProviderFactories, cfg)
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()

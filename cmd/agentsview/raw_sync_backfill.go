@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
@@ -226,6 +227,13 @@ func runRawSyncBackfill(
 	appCfg, err := config.LoadReadOnly()
 	if err != nil {
 		return errors.New("raw-sync backfill: configuration could not be loaded")
+	}
+	archiveOnly, err := db.ArchiveOnlyAt(ctx, appCfg.DBPath)
+	if err != nil {
+		return err
+	}
+	if archiveOnly {
+		return db.ErrArchiveOnly
 	}
 	selected, err := selectRawSyncBackfillProviders(appCfg, cfg.Providers)
 	if err != nil {

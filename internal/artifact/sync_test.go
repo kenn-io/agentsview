@@ -555,3 +555,22 @@ func TestDrainArtifactSyncImportsReturnsMoreAtRoundBudget(t *testing.T) {
 	assert.Equal(t, 3, result.ImportedSessions)
 	assert.Equal(t, 6, result.ImportedMessages)
 }
+
+func TestArchiveOnlyRefusesArtifactExchange(t *testing.T) {
+	database := testDB(t)
+	seedSession(t, database, "archived", "project")
+	require.NoError(t, database.EnableArchiveOnly(t.Context()))
+	target := t.TempDir()
+	dataDir := t.TempDir()
+	_, err := Sync(t.Context(), database, SyncOptions{DataDir: dataDir, Target: target})
+	require.ErrorIs(t, err, db.ErrArchiveOnly)
+	assert.NoDirExists(t, filepath.Join(dataDir, "artifacts"))
+	repository, err := OpenRepository(t.Context(), dataDir)
+	require.NoError(t, err)
+	defer repository.Close()
+	_, err = SyncWithRepository(t.Context(), database, repository, SyncOptions{Target: target})
+	require.ErrorIs(t, err, db.ErrArchiveOnly)
+	entries, err := os.ReadDir(target)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}

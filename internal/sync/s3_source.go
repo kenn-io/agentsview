@@ -414,6 +414,9 @@ func (e *Engine) SyncS3SubagentTranscriptsContext(
 	ctx context.Context, parentSessionID string, parentAgent parser.AgentType,
 	paths []string,
 ) error {
+	if e.sourceSyncErr != nil {
+		return e.sourceSyncErr
+	}
 	if e.refuseWriteInForceParse("SyncS3SubagentTranscripts") {
 		return nil
 	}

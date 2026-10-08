@@ -1228,6 +1228,15 @@ func OpenIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	return open(ctx, path, false, config.ArchiveContentFull, nil)
 }
 
+// OpenIsolatedWithArchiveContent is OpenIsolatedContext under a storage
+// policy. The policy is active before startup migrations run, so a usage-only
+// archive keeps classifications whose source text was discarded.
+func OpenIsolatedWithArchiveContent(
+	ctx context.Context, path string, policy config.ArchiveContent,
+) (*DB, error) {
+	return open(ctx, path, false, policy, nil)
+}
+
 // OpenFreshIsolatedContext initializes a current-schema archive in an empty,
 // pre-created regular file without running historical migrations or backfills.
 // Short-lived workflows that own and rebuild their scratch archive use this

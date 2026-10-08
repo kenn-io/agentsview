@@ -143,6 +143,13 @@ func applyServeMemoryLimit() {
 }
 
 func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restartPort int) {
+	archiveOnly, err := db.ArchiveOnlyAt(ctx, cfg.DBPath)
+	if err != nil {
+		fatal("reading archive mode: %v", err)
+	}
+	if archiveOnly {
+		cfg.NoSync = true
+	}
 	start := time.Now()
 	setupLogFile(cfg.DataDir)
 	applyServeMemoryLimit()
@@ -263,12 +270,23 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 	}()
 
+	if archiveOnly && database.NeedsResync() {
+		// The engine disables every provider for an archive-only database and
+		// carries stored sessions forward without accessing receiving-host roots.
+		preserve := sync.NewEngine(ctx, database, sync.EngineConfig{Ephemeral: true, ArchiveContent: cfg.ArchiveContent})
+		stats, err := preserve.ResyncAllWithOptions(ctx, nil, sync.RebuildOptions{})
+		preserve.Close()
+		if err != nil || !stats.ArchiveRebuilt {
+			fatal("preserving archive after parser upgrade: %v", err)
+		}
+	}
+
 	if n := len(db.UserAutomationPrefixes()); n > 0 {
 		log.Printf("loaded %d user automation prefix(es) from config", n)
 	}
 
 	for _, def := range parser.Registry {
-		if !cfg.IsUserConfigured(def.Type) {
+		if archiveOnly || !cfg.IsUserConfigured(def.Type) {
 			continue
 		}
 		warnMissingDirs(
@@ -447,22 +465,24 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 	}
 
-	identityBackfillEngine := engine
-	if identityBackfillEngine == nil {
-		identityBackfillEngine = sync.NewEngine(ctx, database, sync.EngineConfig{
-			Machine:            cfg.InstallationID,
-			ScanProtectedPaths: cfg.ScanProtectedPaths,
-			ArchiveContent:     cfg.ArchiveContent,
+	if !archiveOnly {
+		identityBackfillEngine := engine
+		if identityBackfillEngine == nil {
+			identityBackfillEngine = sync.NewEngine(ctx, database, sync.EngineConfig{
+				Machine:            cfg.InstallationID,
+				ScanProtectedPaths: cfg.ScanProtectedPaths,
+				ArchiveContent:     cfg.ArchiveContent,
+			})
+		}
+		go idleTracker.Do(func() {
+			err := identityBackfillEngine.RunStartupMaintenance(ctx, func() error {
+				return identityBackfillEngine.BackfillProjectIdentitySnapshots(ctx)
+			})
+			if err != nil && ctx.Err() == nil {
+				log.Printf("project identity backfill: %v", err)
+			}
 		})
 	}
-	go idleTracker.Do(func() {
-		err := identityBackfillEngine.RunStartupMaintenance(ctx, func() error {
-			return identityBackfillEngine.BackfillProjectIdentitySnapshots(ctx)
-		})
-		if err != nil && ctx.Err() == nil {
-			log.Printf("project identity backfill: %v", err)
-		}
-	})
 
 	// Seed model_pricing so a fresh database (first run, or a
 	// resync whose pricing copy failed) is populated before

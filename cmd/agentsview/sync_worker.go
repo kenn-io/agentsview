@@ -138,21 +138,26 @@ func runSyncWorkerContext(
 		}
 	}
 	onProgress := func(p sync.Progress) { emit(workerLine{Progress: &p}) }
-	var err error
-	switch mode {
-	case "startup", "sync", "audit":
-		// All three share the sync body. Only "startup" may resync-and-swap: it
-		// runs before the daemon opens the DB, so no live reader pins the old
-		// inode. "sync" (live foreground pass) and "audit" (daily safety net)
-		// run inside a writer handoff while the daemon's readers stay open, so
-		// they must refuse a stale-version archive rather than swap it out from
-		// under those readers; the real resync path is the resync-build flow,
-		// which swaps and resets caches daemon-side.
-		err = runSyncWorkerStartup(ctx, cfg, request, emit, onProgress)
-	case "resync-build":
-		err = runSyncWorkerResyncBuild(ctx, cfg, mode, emit, onProgress)
-	default:
-		return fmt.Errorf("unknown sync-worker mode %q", mode)
+	archiveOnly, err := db.ArchiveOnlyAt(ctx, cfg.DBPath)
+	if archiveOnly {
+		err = db.ErrArchiveOnly
+	}
+	if err == nil {
+		switch mode {
+		case "startup", "sync", "audit":
+			// All three share the sync body. Only "startup" may resync-and-swap: it
+			// runs before the daemon opens the DB, so no live reader pins the old
+			// inode. "sync" (live foreground pass) and "audit" (daily safety net)
+			// run inside a writer handoff while the daemon's readers stay open, so
+			// they must refuse a stale-version archive rather than swap it out from
+			// under those readers; the real resync path is the resync-build flow,
+			// which swaps and resets caches daemon-side.
+			err = runSyncWorkerStartup(ctx, cfg, request, emit, onProgress)
+		case "resync-build":
+			err = runSyncWorkerResyncBuild(ctx, cfg, mode, emit, onProgress)
+		default:
+			return fmt.Errorf("unknown sync-worker mode %q", mode)
+		}
 	}
 	if err != nil {
 		if !emittedResult {

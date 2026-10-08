@@ -1,0 +1,263 @@
+package rawarchive
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/rawderive"
+	"go.kenn.io/agentsview/internal/rawsync"
+	syncer "go.kenn.io/agentsview/internal/sync"
+)
+
+// ReparseOptions selects accepted current generations. Empty selection is an
+// error; All must be explicit. ScratchBytes bounds one source materialization.
+type ReparseOptions struct {
+	ManifestIDs  []string
+	All          bool
+	ScratchBytes int64
+}
+
+// Reparse builds one full archive copy for the selected batch. A failed parse
+// discards that copy; publication reuses the existing checked database swap.
+func (a *Archive) Reparse(ctx context.Context, opts ReparseOptions) (report Report, retErr error) {
+	if opts.All == (len(opts.ManifestIDs) > 0) {
+		return report, errors.New("select manifest IDs or explicitly select all current sources")
+	}
+	if opts.ScratchBytes <= 0 {
+		return report, errors.New("a positive scratch byte budget is required")
+	}
+	ownerData, err := os.ReadFile(filepath.Join(a.dataDir, "telemetry-install-id"))
+	if err != nil {
+		return report, err
+	}
+	if err := validateRecoveryIdentity(ownerData); err != nil {
+		return report, err
+	}
+	owner := strings.TrimSpace(string(ownerData))
+	roots, err := a.roots(ctx)
+	if err != nil {
+		return report, err
+	}
+	var selected []db.RawArchiveSource
+	choose := func(source db.RawArchiveSource) error {
+		head, err := a.database.RawArchiveHead(ctx, source.RootID, source.SourceKey)
+		if err != nil {
+			return err
+		}
+		if head == nil || head.ManifestID != source.ManifestID {
+			if opts.All {
+				return nil
+			}
+			return errors.New("selected manifest is not the accepted source head")
+		}
+		selected = append(selected, source)
+		return nil
+	}
+	if opts.All {
+		err = a.sourcePages(ctx, choose)
+	} else {
+		seen := map[string]bool{}
+		for _, id := range opts.ManifestIDs {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			source, getErr := a.database.GetRawArchiveSource(ctx, id)
+			if getErr != nil {
+				return report, getErr
+			}
+			if err = choose(source); err != nil {
+				break
+			}
+		}
+	}
+	if err != nil {
+		return report, err
+	}
+	if len(selected) == 0 {
+		return report, errors.New("no accepted sources selected")
+	}
+	parent := filepath.Dir(a.database.Path())
+	scratchDir, err := os.MkdirTemp(parent, ".archive-reparse-")
+	if err != nil {
+		return report, err
+	}
+	defer func() { retErr = errors.Join(retErr, os.RemoveAll(scratchDir)) }()
+	scratchPath := filepath.Join(scratchDir, "sessions.db")
+	a.report("Copying SQLite once for atomic reparse publication")
+	if err := a.database.SnapshotTo(ctx, scratchPath); err != nil {
+		return report, err
+	}
+	scratch, err := db.OpenIsolatedWithArchiveContent(ctx, scratchPath, a.database.ArchiveContent())
+	if err != nil {
+		return report, err
+	}
+	defer func() { retErr = errors.Join(retErr, scratch.Close()) }()
+	scratch.SetToolResultImages(a.database.ToolResultImages())
+	scratch.SetAssetsDir(a.database.AssetsDir())
+	suppressed := make(map[string]bool)
+	policies := make(map[string]map[string]db.RawArchiveSuppression)
+	for i, source := range selected {
+		device := roots[source.RootID].DeviceID
+		policy, ok := policies[device]
+		if !ok {
+			deletions, err := scratch.RawArchiveSuppressions(ctx, device)
+			if err != nil {
+				return report, err
+			}
+			policy = make(map[string]db.RawArchiveSuppression, len(deletions))
+			for _, d := range deletions {
+				policy[d.ParserID] = d
+			}
+			policies[device] = policy
+		}
+		a.report(fmt.Sprintf("Reparsing source %d of %d", i+1, len(selected)))
+		err = a.reparseSource(ctx, scratch, scratchDir, source, roots, owner, policy, suppressed, opts.ScratchBytes)
+		if err != nil {
+			recordErr := a.database.RecordRawArchiveParse(context.WithoutCancel(ctx), source.ManifestID, strconv.Itoa(db.CurrentDataVersion()), err.Error())
+			return report, errors.Join(err, recordErr)
+		}
+		// The cloned database holds the parse record in the same replacement as
+		// its normalized content. Acceptance in the original remains unchanged.
+		if err := scratch.RecordRawArchiveParse(ctx, source.ManifestID, strconv.Itoa(db.CurrentDataVersion()), ""); err != nil {
+			return report, err
+		}
+	}
+	if err := scratch.CopySessionMetadataFrom(a.database.Path()); err != nil {
+		return report, err
+	}
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
+	if err := scratch.CheckpointWALTruncate(ctx); err != nil {
+		return report, err
+	}
+	if err := scratch.Close(); err != nil {
+		return report, err
+	}
+	engine := syncer.NewEngine(ctx, a.database, syncer.EngineConfig{Ephemeral: true})
+	defer engine.Close()
+	a.report("Installing reparsed archive")
+	installed, err := engine.SwapResyncDatabase(scratchPath)
+	if installed {
+		report.Parsed = len(selected)
+		report.Suppressed = len(suppressed)
+	}
+	return report, err
+}
+
+func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir string, source db.RawArchiveSource, roots map[string]db.RawArchiveRoot, owner string, policy map[string]db.RawArchiveSuppression, suppressed map[string]bool, budget int64) (retErr error) {
+	manifest, err := a.canonical(ctx, source, roots)
+	if err != nil {
+		return err
+	}
+	if manifest.Manifest.Kind != rawsync.ManifestSnapshot {
+		return errors.New("only retained snapshots can be reparsed")
+	}
+	materialized, err := (rawderive.Materializer{Store: a.objects, BaseDir: scratchDir, MaxTotalBytes: budget}).Materialize(ctx, manifest)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, materialized.Cleanup()) }()
+	root := roots[source.RootID]
+	storedPath := source.OriginalPath
+	if root.DeviceID != owner {
+		storedPath = "archive://" + root.ID + "/" + url.PathEscape(source.SourceKey)
+	}
+	prepared, err := rawderive.PrepareLocalSource(ctx, manifest, materialized, root.DeviceID, storedPath)
+	if err != nil {
+		return err
+	}
+	if root.DeviceID != owner {
+		prepared.Config.IDPrefix = root.DeviceID + "~"
+	}
+	aliases, err := scratch.GetMachineAliases(ctx)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]bool)
+	var policyError error
+	prepared.Config.ArchiveSessionPolicy = func(ctx context.Context, s *db.Session, native string) (keep bool, retErr error) {
+		defer func() { policyError = errors.Join(policyError, retErr) }()
+		if strings.Contains(native, "~") {
+			return false, errors.New("parser returned a transport-qualified session identity")
+		}
+		known, err := scratch.BindRawArchiveSession(ctx, root, source.SourceKey, native, s.ID)
+		if err != nil {
+			return false, err
+		}
+		existing, err := scratch.GetSessionFull(ctx, s.ID)
+		if err != nil {
+			return false, err
+		}
+		if existing != nil {
+			// A joined continuation may have been stored under either verified
+			// transcript on the source machine. Keep that spelling and identity.
+			if root.DeviceID == owner && existing.FilePath != nil && slices.Contains(prepared.SourcePaths, *existing.FilePath) {
+				s.FilePath = existing.FilePath
+			}
+			machineMatches := existing.Machine == root.DeviceID ||
+				(root.DeviceID == owner && (existing.Machine == "" || existing.Machine == "local" || aliases[existing.Machine] == owner))
+			if (!known && root.DeviceID != owner) || existing.Agent != root.Provider || !machineMatches || existing.FilePath == nil || s.FilePath == nil || *existing.FilePath != *s.FilePath {
+				return false, fmt.Errorf("session identity conflicts with a different source: %s", s.ID)
+			}
+		}
+		s.Machine = root.DeviceID
+		seen[s.ID] = true
+		if d, ok := policy[native]; ok && (d.Provider == "" || d.Provider == root.Provider) {
+			suppressed[s.ID] = true
+			return false, nil
+		}
+		if root.DeviceID == owner && root.Provider == "claude" {
+			recorded, err := scratch.GetClaudeSubagentSources(ctx, s.ID)
+			if err != nil {
+				return false, err
+			}
+			for _, path := range recorded {
+				if !slices.Contains(prepared.SourcePaths, path) {
+					return false, fmt.Errorf("missing recorded Claude continuation for %s", s.ID)
+				}
+			}
+		}
+		return true, nil
+	}
+	engine := syncer.NewEngine(ctx, scratch, prepared.Config)
+	defer engine.Close()
+	if err := engine.ReparsePathsContext(ctx, []string{prepared.Path}); err != nil || policyError != nil {
+		return errors.Join(err, policyError)
+	}
+	if len(seen) == 0 {
+		return errors.New("provider produced no archived sessions")
+	}
+	for id := range seen {
+		if suppressed[id] {
+			continue
+		}
+		session, err := scratch.GetSessionFull(ctx, id)
+		if err != nil {
+			return err
+		}
+		if session == nil {
+			var excluded bool
+			if err := scratch.Reader().QueryRow(ctx,
+				"SELECT EXISTS(SELECT 1 FROM excluded_sessions WHERE id = ?)", id,
+			).Scan(&excluded); err != nil {
+				return fmt.Errorf("checking receiving archive deletion for %s: %w", id, err)
+			}
+			if excluded {
+				suppressed[id] = true
+				continue
+			}
+			return fmt.Errorf("provider did not publish reparsed session %s", id)
+		}
+	}
+	return nil
+}

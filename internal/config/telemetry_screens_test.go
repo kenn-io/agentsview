@@ -26,7 +26,7 @@ func TestClaimScreenView(t *testing.T) {
 		{"usage", true, "", ""},
 		{"sessions", true, "", "install-two"},
 		{"sessions", false, "enqueue", ""},
-		{"sessions", true, "lock", ""},
+		{"sessions", true, "state", ""},
 		{"sessions", true, "write", ""},
 	} {
 		if tc.identity != "" {
@@ -35,10 +35,12 @@ func TestClaimScreenView(t *testing.T) {
 		if tc.failure != "" {
 			c.DataDir = t.TempDir()
 		}
-		path := filepath.Join(c.DataDir, telemetryScreensFilename)
-		if tc.failure == "lock" {
-			require.NoError(t, os.Mkdir(c.configPath()+".lock", 0o700))
+		if tc.failure == "state" {
+			// A directory can be locked on macOS; a file blocks state setup everywhere.
+			c.DataDir = filepath.Join(c.DataDir, "not-a-directory")
+			require.NoError(t, os.WriteFile(c.DataDir, nil, 0o600))
 		}
+		path := filepath.Join(c.DataDir, telemetryScreensFilename)
 		sends := 0
 		day, claimed, err := c.ClaimScreenView(tc.screen, func() error {
 			sends++
@@ -69,9 +71,9 @@ func TestClaimScreenView(t *testing.T) {
 			}
 			continue
 		}
-		require.Error(t, err)
+		require.Error(t, err, "failure case %q", tc.failure)
 		switch tc.failure {
-		case "lock", "write":
+		case "state", "write":
 			assert.Equal(t, 1, sends)
 		case "enqueue":
 			assert.NoFileExists(t, path)

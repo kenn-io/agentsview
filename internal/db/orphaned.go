@@ -144,7 +144,8 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	// change main.sessions. Exclude permanently deleted sessions
 	// so they are not resurrected as orphans.
 	//
-	// Also exclude stale Codex rows whose file was reparsed into
+	// Copied trash is not evidence of a new parse. Exclude stale Codex
+	// rows only when their file was reparsed into
 	// the new DB under a different session id: before dataVersion
 	// 40 a forked rollout's replayed parent session_meta overwrote
 	// the fork's id (#643), so the fork file's row was stored under
@@ -167,6 +168,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 				ON new_s.file_path = old_s.file_path
 			WHERE old_s.agent = 'codex'
 			  AND new_s.agent = 'codex'
+			  AND new_s.deleted_at IS NULL
 		  )`,
 	); err != nil {
 		return nil, fmt.Errorf(
@@ -420,6 +422,23 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 			INSERT OR IGNORE INTO main.subagent_parent_cleanup_queue (session_id)
 			SELECT session_id FROM old_db.subagent_parent_cleanup_queue`); err != nil {
 			return fmt.Errorf("copying subagent parent cleanup queue: %w", err)
+		}
+	}
+
+	for _, tableCopy := range []struct{ table, columns string }{
+		{"raw_archive_roots", "id,device_id,machine,provider,original_path,configured_root_id"},
+		{"raw_archive_files", "id,root_id,path,sha256,size,mod_time_ns,covered"},
+		{"raw_archive_sources", rawSourceColumns},
+		{"raw_archive_heads", "root_id,source_key,manifest_id"},
+		{"raw_archive_devices", "device_id,suppressions"},
+		{"raw_archive_sessions", "device_id,provider,parser_id,session_id,root_id,source_key"},
+	} {
+		if oldDBHasTable(ctx, tx, tableCopy.table) {
+			query := "INSERT INTO main." + tableCopy.table + " (" + tableCopy.columns +
+				") SELECT " + tableCopy.columns + " FROM old_db." + tableCopy.table
+			if _, err := tx.ExecContext(ctx, query); err != nil {
+				return fmt.Errorf("copying %s: %w", tableCopy.table, err)
+			}
 		}
 	}
 

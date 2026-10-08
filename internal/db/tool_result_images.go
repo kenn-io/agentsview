@@ -139,17 +139,27 @@ func stripToolResultImageArrayWithInline(
 	return result.String(), stats
 }
 
-func stripOffloadedImagePlaceholder(raw jsontext.Value) (jsontext.Value, bool) {
-	var placeholder struct {
-		Type      string `json:"type"`
-		ImageRef  string `json:"image_ref"`
-		MediaType string `json:"media_type"`
-		ByteSize  int64  `json:"byte_size"`
-	}
+type offloadedImagePlaceholder struct {
+	Type      string `json:"type"`
+	ImageRef  string `json:"image_ref"`
+	MediaType string `json:"media_type"`
+	ByteSize  int64  `json:"byte_size"`
+}
+
+func parseOffloadedImagePlaceholder(raw jsontext.Value) (offloadedImagePlaceholder, bool) {
+	var placeholder offloadedImagePlaceholder
 	if err := json.Unmarshal(raw, &placeholder, json.MatchCaseInsensitiveNames(true)); err != nil ||
 		placeholder.Type != "agentsview_image" ||
 		!strings.HasPrefix(placeholder.ImageRef, "asset://") ||
 		placeholder.MediaType == "" || placeholder.ByteSize < 0 {
+		return placeholder, false
+	}
+	return placeholder, true
+}
+
+func stripOffloadedImagePlaceholder(raw jsontext.Value) (jsontext.Value, bool) {
+	placeholder, ok := parseOffloadedImagePlaceholder(raw)
+	if !ok {
 		return nil, false
 	}
 	var fields map[string]jsontext.Value

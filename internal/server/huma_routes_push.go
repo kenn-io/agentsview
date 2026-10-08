@@ -230,7 +230,10 @@ func WithMirror(mirror storage.Mirror) Option {
 	return func(s *Server) { s.mirror = mirror }
 }
 
-func (s *Server) localPushTarget() (*db.DB, error) {
+func (s *Server) localPushTarget(ctx context.Context) (*db.DB, error) {
+	if err := s.requireSourceSync(ctx); err != nil {
+		return nil, err
+	}
 	local, ok := s.db.(*db.DB)
 	if !ok {
 		return nil, apiError(
@@ -549,7 +552,7 @@ func (s *Server) humaReplicaPush(
 	); err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
-	local, err := s.localPushTarget()
+	local, err := s.localPushTarget(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -639,7 +642,7 @@ func (s *Server) humaMirrorPush(
 	); err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
-	local, err := s.localPushTarget()
+	local, err := s.localPushTarget(ctx)
 	if err != nil {
 		return nil, err
 	}
