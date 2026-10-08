@@ -462,6 +462,21 @@ Full resync drops these indexes in the temporary database during the bulk load
 must rebuild them before the swap; a failed rebuild aborts the swap because
 read-only opens require the indexes.
 
+### Dashboard metadata index
+
+SQLite's summary and tool analytics can read model names and message timestamps
+through `idx_messages_analytics_metadata` on
+`messages(session_id, id, timestamp, model)` without loading message body pages.
+The next writable open builds this index once and logs that startup is waiting
+for the message scan. Existing rows are preserved; no parser resync is required.
+
+Writable opens and completed bulk index builds run `PRAGMA optimize = 0x10012`.
+This considers all archive tables and limits the statistics samples. Statistics
+must cover competing indexes too: analyzing only the metadata index can leave
+SQLite choosing an older index that still reads message bodies. Full resync
+defers this index during import and rebuilds it before the replacement archive
+is installed. Read-only opens do not create indexes or collect statistics.
+
 ### Transcript usage identity
 
 Token usage, Claude message/request identities, and source UUID participate in

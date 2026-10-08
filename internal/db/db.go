@@ -3645,6 +3645,9 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 	if err := ensureUsageIndexesLocked(ctx, w); err != nil {
 		return err
 	}
+	if err := ensureAnalyticsIndexLocked(ctx, w); err != nil {
+		return err
+	}
 	var sourceIndexColumns sql.NullString
 	if err := w.QueryRow(ctx, `
 		SELECT group_concat(name, ',')
@@ -4669,6 +4672,7 @@ func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
 		"idx_messages_activity_timestamp",
+		"idx_messages_analytics_metadata",
 		"idx_tool_calls_session_tool_use",
 		"idx_tool_result_events_identity",
 		"idx_tool_result_events_summary",
@@ -4703,7 +4707,7 @@ func (db *DB) RebuildBulkImportIndexes(ctx context.Context) error {
 			return fmt.Errorf("rebuilding tool result import indexes: %w", err)
 		}
 	}
-	return nil
+	return ensureAnalyticsIndexLocked(ctx, db.getWriter())
 }
 
 // checkFTSModuleLoads fails when messages_fts is in the schema but this

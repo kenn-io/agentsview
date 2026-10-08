@@ -1116,12 +1116,19 @@ func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string
 	if sessionID != "" {
 		preds = append(preds, "m.session_id = ?")
 	}
+	sessionJoin := "JOIN"
+	if since != "" {
+		// Keep the candidate message lookup outermost and in index order.
+		// Additional metadata indexes can otherwise reorder this join and
+		// introduce a sort of the selected message bodies.
+		sessionJoin = "CROSS JOIN"
+	}
 	return `
 		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
 		       m.is_sidechain, s.relationship_type, s.parent_session_id,
 		       s.ended_at
 		FROM messages m
-		JOIN sessions s ON s.id = m.session_id
+		` + sessionJoin + ` sessions s ON s.id = m.session_id
 		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
 		` + sinceSessionScopeClause(since, includeAutomated) + `
 		ORDER BY m.session_id, m.ordinal`
