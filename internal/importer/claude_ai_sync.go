@@ -198,6 +198,9 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						status, err = importSkipped, nil
 					}
 					stats.record(id, status, err)
+					if err == nil && status != importSkipped && cb != nil && cb.OnSessionChanged != nil {
+						cb.OnSessionChanged(id)
+					}
 					return nil
 				}
 				if cb != nil && cb.SerializeWrite != nil {

@@ -34,7 +34,7 @@ type SessionBatchWrite struct {
 	// KeepTrashedCopyOnlyOnPinLoss limits ReplaceSessionKeepingTrashedCopy to replacements that lose a pin or note.
 	KeepTrashedCopyOnlyOnPinLoss bool
 	// CompleteStoredRows lets an append write complete stored rows at stored ordinals: it sets results on stored calls that are still empty and replaces stored text with longer text that starts with it (IsTextExtension). Rows keep their IDs; other stored rows are untouched.
-	// Results come from ToolCall.ResultContent and ResultContentLength; result events are not written. Missing source UUIDs are filled only on matching stored turns.
+	// Results come from ToolCall.ResultContent and ResultContentLength; result events are not written.
 	CompleteStoredRows bool
 	// RejectMessageCountDecrease prevents full replacement with fewer messages.
 	RejectMessageCountDecrease bool
@@ -565,7 +565,6 @@ func writeOneSessionBatchTx(
 	msgs := write.Messages
 	var pins []savedPin
 	filled, extended := 0, 0
-	var sourceFilled int64
 	if replaceMessages && sessionExists {
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
@@ -578,22 +577,6 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	} else {
-		if write.CompleteStoredRows {
-			for _, msg := range msgs {
-				if msg.SourceUUID == "" {
-					continue
-				}
-				result, err := queries.Exec(`UPDATE messages SET source_uuid = ? WHERE session_id = ? AND ordinal = ? AND COALESCE(source_uuid, '') = '' AND role = ? AND content = ? AND content_length = ? AND timestamp = ? AND is_system = ?`, msg.SourceUUID, write.Session.ID, msg.Ordinal, msg.Role, msg.Content, msg.ContentLength, msg.Timestamp, msg.IsSystem)
-				if err != nil {
-					return 0, err
-				}
-				count, err := result.RowsAffected()
-				if err != nil {
-					return 0, err
-				}
-				sourceFilled += count
-			}
-		}
 		maxOrd, err := maxOrdinalTx(queries, write.Session.ID)
 		if err != nil {
 			return 0, err
@@ -617,7 +600,7 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	transcriptChanged := len(msgs) > 0 || filled > 0 || extended > 0 || sourceFilled > 0
+	transcriptChanged := len(msgs) > 0 || filled > 0 || extended > 0
 	if replaceMessages && sessionExists {
 		transcriptChanged = replacementTranscriptChanged
 	}
@@ -636,7 +619,7 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if extended > 0 || sourceFilled > 0 {
+	if extended > 0 {
 		active, err := conversationExportActiveTx(queries)
 		if err != nil {
 			return 0, err
@@ -662,7 +645,7 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if replaceMessages && sessionExists || filled > 0 || extended > 0 || sourceFilled > 0 {
+	if replaceMessages && sessionExists || filled > 0 || extended > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
 			ctx,
 			tx,
@@ -711,7 +694,7 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if write.TouchModified && !transcriptChanged && write.DataVersion == 0 {
-		if _, err := queries.Exec(bumpLocalModifiedAtSQL, write.Session.ID); err != nil {
+		if err := bumpLocalModifiedAt(ctx, tx, write.Session.ID); err != nil {
 			return 0, fmt.Errorf("touching session %s: %w", write.Session.ID, err)
 		}
 	}

@@ -50,6 +50,8 @@ type ImportCallbacks struct {
 	OnProgress func(ImportStats)
 	// OnIndexing fires before the FTS index rebuild starts.
 	OnIndexing func()
+	// OnSessionChanged names a conversation whose Sync changed stored turns.
+	OnSessionChanged func(string)
 }
 
 func (c *ImportCallbacks) progress(s ImportStats) {
@@ -281,12 +283,7 @@ func upsertConversation(
 			return importSkipped, nil
 		}
 		if live {
-			for i, row := range archived {
-				if i < len(canonical) && row.SourceUUID == "" && canonical[i].SourceUUID != "" {
-					unchanged = false
-					break
-				}
-			}
+			// Claude branch appends need exact prefixes; compareChatGPTPrefix also accepts text completion.
 			replaceMessages = !unchanged && (canonical == nil || len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)]))
 		}
 	}

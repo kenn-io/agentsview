@@ -833,6 +833,7 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 			select {
 			case event := <-events:
 				assert.Equal(t, "sessions", event.Scope)
+				assert.Equal(t, []string{"claude-ai:22222222-2222-4222-8222-222222222222"}, event.SessionIDs)
 			case <-time.After(5 * time.Second):
 				require.FailNow(t, "committed chat did not broadcast sessions")
 			}

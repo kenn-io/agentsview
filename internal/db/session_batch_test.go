@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -557,26 +556,4 @@ func TestWriteSessionBatchAtomicExtendedTextReconcilesConversationExport(t *test
 		}
 		require.True(t, found)
 	})
-}
-
-func TestWriteSessionBatchAtomicCompletesSourceUUIDs(t *testing.T) {
-	d := testDB(t)
-	const id = "source-completion"
-	session := extendTestSession(id, 2)
-	before := []Message{extendTestMsg(id, 0, "Same turn"), extendTestMsg(id, 1, "Old branch")}
-	_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{Session: session, Messages: before}})
-	require.NoError(t, err)
-	stored, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	require.Len(t, stored, 2)
-	incoming := []Message{extendTestMsg(id, 0, "Same turn"), extendTestMsg(id, 1, "New branch")}
-	incoming[0].SourceUUID, incoming[1].SourceUUID = "same", "new"
-	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{Session: session, Messages: incoming, CompleteStoredRows: true}})
-	require.NoError(t, err)
-	after, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	require.Len(t, after, 2)
-	assert.Equal(t, stored[0].ID, after[0].ID)
-	assert.Equal(t, "same", after[0].SourceUUID)
-	assert.Equal(t, stored[1], after[1])
 }

@@ -14,7 +14,8 @@ const broadcasterBufferCap = 8
 // that wrote data. Scope is advisory — subscribers may filter on
 // it but are free to treat it as "refetch now".
 type Event struct {
-	Scope string
+	Scope      string   `json:"scope"`
+	SessionIDs []string `json:"session_ids,omitempty"`
 }
 
 // Broadcaster fans out Event values from the sync engine to all
@@ -97,6 +98,13 @@ func (b *Broadcaster) Emit(scope string) {
 			b.flushTrailing(gen)
 		})
 	}
+}
+
+// EmitSessions delivers the committed Sync batch without coalescing away its session IDs.
+func (b *Broadcaster) EmitSessions(ids []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.broadcastLocked(Event{Scope: "sessions", SessionIDs: ids})
 }
 
 // flushTrailing is invoked by the trailing-edge timer. It delivers

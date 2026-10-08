@@ -121,41 +121,61 @@ afterEach(() => {
   settings.readOnly = false;
   settings.error = null;
   sync.serverVersion = null;
+  pins.pins = [];
   settings.saveError = null;
   dismissFlash();
 });
 
-it("reloads surviving pins when the open session changes", async () => {
+it.each([
+  ["claude-ai:chat", 2],
+  ["codex:chat", 1],
+] as const)("reloads pins for a synced Claude.ai session %s", async (id, loads) => {
   stubAppDependencies();
   vi.spyOn(sessions, "load").mockResolvedValue();
   vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
   vi.spyOn(messages, "reload").mockResolvedValue();
-  window.history.replaceState(null, "", "/sessions/chat");
+  window.history.replaceState(null, "", `/sessions/${id}`);
   router.route = "sessions";
-  router.sessionId = "chat";
-  sessions.activeSessionId = "chat";
+  router.sessionId = id;
+  sessions.activeSessionId = id;
   component = mount(App, { target: document.body });
   await flushEffects();
-  expect(pins.loadForSession).toHaveBeenCalledExactlyOnceWith("chat");
-  const update = vi.mocked(sync.watchSession).mock.calls[0][1];
+  expect(pins.loadForSession).toHaveBeenCalledExactlyOnceWith(id);
+  expect(sync.watchSession).toHaveBeenCalledOnce();
+  const update = vi.mocked(sync.watchSession).mock.calls[0]![1];
   update();
   await flushEffects();
   expect(messages.reload).toHaveBeenCalledOnce();
-  expect(pins.loadForSession).toHaveBeenCalledTimes(2);
-  expect(pins.loadForSession).toHaveBeenLastCalledWith("chat");
+  expect(pins.loadForSession).toHaveBeenCalledTimes(loads);
+  expect(pins.loadForSession).toHaveBeenLastCalledWith(id);
 });
 
-it("reloads all pins after a sessions event", async () => {
+it("reloads pins only when Sync changes a pinned session", async () => {
   stubAppDependencies();
   vi.spyOn(pins, "loadAll").mockResolvedValue();
-  const subscribe = vi.spyOn(events, "subscribeDebounced").mockReturnValue(() => {});
+  const subscribe = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
   window.history.replaceState(null, "", "/pinned");
   router.route = "pinned";
   component = mount(App, { target: document.body });
   await flushEffects();
   expect(pins.loadAll).toHaveBeenCalledOnce();
   expect(subscribe).toHaveBeenCalledOnce();
-  subscribe.mock.calls[0][0]({ scope: "sessions" });
+  pins.pins = [
+    {
+      id: 1,
+      session_id: "claude-ai:pinned",
+      message_id: 1,
+      ordinal: 0,
+      created_at: "2026-03-01T10:00:00Z",
+    },
+  ];
+  const update = subscribe.mock.calls[0]![0];
+  update({ scope: "sessions" });
+  update({ scope: "sessions", session_ids: ["codex:other"] });
+  update({ scope: "sessions", session_ids: ["claude-ai:other"] });
+  await flushEffects();
+  expect(pins.loadAll).toHaveBeenCalledOnce();
+  update({ scope: "sessions", session_ids: ["claude-ai:pinned"] });
   await flushEffects();
   expect(pins.loadAll).toHaveBeenCalledTimes(2);
 });
