@@ -428,6 +428,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	if cwd := payload.Get("cwd").Str; cwd != "" {
 		b.cwd = cwd
 		branch := payload.Get("git.branch").Str
+		b.gitBranch = branch
 		if proj := ExtractProjectFromCwdWithBranchContext(
 			b.projectContext, cwd, branch,
 		); proj != "" {
@@ -1901,6 +1902,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		RelationshipType:   b.relationshipType,
 		SessionKind:        b.sessionKind,
 		Cwd:                b.cwd,
+		GitBranch:          b.gitBranch,
 		FirstMessage:       b.firstMessage,
 		SessionName:        sessionName,
 		SessionNamePresent: sessionNamePresent,

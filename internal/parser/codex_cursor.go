@@ -20,12 +20,13 @@ const (
 	// codexCursorCheckpointVersion is the wire version for the persisted
 	// cursor encoding. Bump when the encoding changes; decode failures fall
 	// back to a full parse.
+	// Version 5 stores the git branch from session_meta alongside the cwd.
 	// Version 4 stores the current reasoning effort alongside the model.
 	// Version 3 replaces duplicate IDs with their latest occurrence, matching
 	// full parsing; version 2 retained the oldest unresolved occurrence.
 	// The fork replay gate is process-only state: it is re-armed from the
 	// transcript on every parse and is not part of the persisted cursor.
-	codexCursorCheckpointVersion   = 4
+	codexCursorCheckpointVersion   = 5
 	codexCursorCheckpointMaxString = 1 << 20
 
 	// Account for the map bucket, list element, pointers, string headers, and
@@ -53,6 +54,7 @@ type codexCursorState struct {
 	model                    string
 	reasoningEffort          string
 	cwd                      string
+	gitBranch                string
 	agentPath                string
 	firstUserDigest          [sha256.Size]byte
 	firstUserSeen            bool
@@ -92,7 +94,7 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	if err := write(uint8(codexCursorCheckpointVersion)); err != nil {
 		return nil, err
 	}
-	for _, str := range []string{s.model, s.reasoningEffort, s.cwd, s.agentPath} {
+	for _, str := range []string{s.model, s.reasoningEffort, s.cwd, s.gitBranch, s.agentPath} {
 		if err := writeStr(str); err != nil {
 			return nil, err
 		}
@@ -194,6 +196,9 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	if s.cwd, err = readStr(); err != nil {
+		return err
+	}
+	if s.gitBranch, err = readStr(); err != nil {
 		return err
 	}
 	if s.agentPath, err = readStr(); err != nil {
@@ -531,6 +536,7 @@ func cloneCodexCursorState(state codexCursorState) codexCursorState {
 	state.model = strings.Clone(state.model)
 	state.reasoningEffort = strings.Clone(state.reasoningEffort)
 	state.cwd = strings.Clone(state.cwd)
+	state.gitBranch = strings.Clone(state.gitBranch)
 	state.agentPath = strings.Clone(state.agentPath)
 	state.lastTaskEvent = strings.Clone(state.lastTaskEvent)
 	for i := range state.pendingCallCount {
@@ -552,6 +558,7 @@ func estimateCodexCursorEntryBytes(
 			len(state.model)+
 			len(state.reasoningEffort)+
 			len(state.cwd)+
+			len(state.gitBranch)+
 			len(state.agentPath)+
 			len(state.lastTaskEvent)+
 			codexPendingCallStringBytes(state)+
