@@ -184,7 +184,7 @@ func ApplySessionMessageDerivedFieldsContext(
 		session.UserMessageCount = user
 	}
 	session.IsAutomated = db.IsAutomatedSessionMetadata(
-		session.Agent, session.SessionKind, session.Entrypoint, session.UserMessageCount,
+		session.Agent, session.SessionKind,
 	) || db.IsAutomatedTranscript(
 		session.UserMessageCount, messages, session.FirstMessage,
 	)

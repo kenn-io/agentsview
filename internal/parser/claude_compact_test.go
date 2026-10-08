@@ -13,6 +13,11 @@ func TestCompactClaudeEntry(t *testing.T) {
 		want string
 	}{
 		{
+			name: "prompt origin retains kind without unrelated origin fields",
+			line: `{"turnOrigin":"sdk","origin":{"kind":"human","body":"discard"}}`,
+			want: `{"turnOrigin":"sdk","origin":{"kind":"human"}}`,
+		},
+		{
 			name: "assistant entry keeps whitelisted fields in fixed order",
 			line: `{"type":"assistant","uuid":"u1","parentUuid":"p1",` +
 				`"timestamp":"2026-01-02T03:04:05Z","cwd":"/tmp/x",` +

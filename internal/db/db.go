@@ -565,7 +565,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // rows with source_subtype peer_message instead of user prompts. Re-parse
 // unchanged Claude sources so user-message counts and first messages drop
 // them.)
-const dataVersion = 126
+// (127: Claude sdk-cli workers with explicit SDK prompt origin normalize to
+// non-interactive. Re-parse unchanged sources to recover that origin evidence.)
+const dataVersion = 127
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -3801,8 +3803,26 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 	current := ClassifierHash()
 	if db.usageOnlyStorage() {
 		// Discarded prompts cannot disprove stored flags; metadata can promote them.
-		setIDs, _, err := auditAutomatedFull(ctx, w, snapshotAutomationPatterns())
+		rows, err := w.Query(ctx, `SELECT id, agent, session_kind FROM sessions WHERE is_automated = 0`)
 		if err != nil {
+			return err
+		}
+		var setIDs []string
+		for rows.Next() {
+			var id, agent, kind string
+			if err := rows.Scan(&id, &agent, &kind); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if IsAutomatedSessionMetadata(agent, kind) {
+				setIDs = append(setIDs, id)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
 			return err
 		}
 		if err := batchUpdateAutomated(ctx, w, setIDs, 1); err != nil {

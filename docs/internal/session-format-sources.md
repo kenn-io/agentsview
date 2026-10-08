@@ -143,11 +143,14 @@ evidence; they do not establish whether a tool helped the task.
 - **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
   initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`
   for interactive terminal launches; SDK libraries use `sdk-py` or `sdk-ts`.
-  AgentsView classifies Claude `sdk-cli` sessions with at most one real user
-  prompt as automated. Multiple-prompt sessions retain the interactive
-  classification because stream-json can relay human conversations as well
-  as resumed workers. Checked against the installed producer and local
-  transcripts; no public producer source is available.
+  Worker prompts record `turnOrigin=sdk`; relayed human prompts record
+  `turnOrigin=human` and `origin.kind=human`, even when `promptSource=sdk`.
+  AgentsView derives `session_kind=non-interactive` for `sdk-cli` when the
+  first real prompt has SDK origin. Human origin wins conflicting markers;
+  missing origin remains ambiguous. Explicit provider kinds remain intact.
+  Data version 127 reparses readable sources once. Checked against the
+  installed producer and local transcripts; no public producer source is
+  available.
 
 Rechecked 2026-09-11 against the existing provider parser and its metadata
 fixtures: the first nonempty JSONL `sessionId` supplies `SourceSessionID`. A

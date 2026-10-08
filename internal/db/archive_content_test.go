@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	sqlite3 "github.com/mattn/go-sqlite3"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -27,8 +29,30 @@ func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 	}))
 	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID: "headless", Project: "project", Agent: "claude", Machine: "local",
-		Entrypoint: "sdk-cli", UserMessageCount: 1,
+		Entrypoint: "sdk-cli", SessionKind: parser.SessionKindNonInteractive, UserMessageCount: 1,
 	}))
+	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'headless'`)
+	require.NoError(t, err)
+	conn, err := database.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "messages" {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	require.NoError(t, database.ForceBackfillIsAutomated(t.Context()), "usage-only repair reads metadata without messages")
+	conn, err = database.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
+		return nil
+	}))
+	require.NoError(t, conn.Close())
 	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'headless'`)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
@@ -48,7 +72,7 @@ func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 	require.NoError(t, reopened.UpdateSessionIncremental(t.Context(), "headless", IncrementalSessionUpdate{UserMsgCount: 2}))
 	headless, err = reopened.GetSessionFull(t.Context(), "headless")
 	require.NoError(t, err)
-	assert.False(t, headless.IsAutomated, "several prompts retain the interactive classification")
+	assert.True(t, headless.IsAutomated, "metadata keeps worker follow-ups automated")
 }
 
 func TestUsageOnlyUpsertsPreserveAutomationWithoutPreview(t *testing.T) {

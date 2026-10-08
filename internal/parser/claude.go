@@ -569,6 +569,7 @@ func compactClaudeEntry(line []byte) string {
 		{name: "isMeta"},
 		{name: "requestId"},
 		{name: "promptSource"},
+		{name: "turnOrigin"},
 		{name: "effort"},
 	}
 	messageFields := []claudeCompactField{
@@ -581,6 +582,7 @@ func compactClaudeEntry(line []byte) string {
 	snapshotFields := []claudeCompactField{
 		{name: "timestamp"},
 	}
+	originFields := []claudeCompactField{{name: "kind"}}
 	// searchCount is how many billed server-side web searches a
 	// WebSearch tool result performed; it is the only surviving record
 	// of them in a Claude Code transcript.
@@ -595,7 +597,7 @@ func compactClaudeEntry(line []byte) string {
 	// scan per field made it the dominant per-line parse cost. Only the
 	// first occurrence of a key is kept, matching gjson.Get's
 	// duplicate-key behavior.
-	var seenMessage, seenSnapshot, seenToolResult bool
+	var seenMessage, seenSnapshot, seenToolResult, seenOrigin bool
 	gjson.Parse(string(line)).ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {
 		case "message":
@@ -613,6 +615,11 @@ func compactClaudeEntry(line []byte) string {
 				seenToolResult = true
 				setClaudeCompactFields(toolResultFields, value)
 			}
+		case "origin":
+			if !seenOrigin {
+				seenOrigin = true
+				setClaudeCompactFields(originFields, value)
+			}
 		default:
 			setClaudeCompactField(topFields, key.Str, value)
 		}
@@ -621,7 +628,7 @@ func compactClaudeEntry(line []byte) string {
 
 	var b strings.Builder
 	b.Grow(compactClaudeEntrySize(
-		topFields, snapshotFields, messageFields, toolResultFields,
+		topFields, snapshotFields, messageFields, toolResultFields, originFields,
 	))
 	b.WriteByte('{')
 	first := true
@@ -629,6 +636,7 @@ func compactClaudeEntry(line []byte) string {
 	writeClaudeCompactObject(&b, &first, "snapshot", snapshotFields)
 	writeClaudeCompactObject(&b, &first, "message", messageFields)
 	writeClaudeCompactObject(&b, &first, "toolUseResult", toolResultFields)
+	writeClaudeCompactObject(&b, &first, "origin", originFields)
 	b.WriteByte('}')
 	return b.String()
 }
@@ -1060,7 +1068,14 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 		return true
 	}
 	return stored.sessionKind == "" &&
-		strings.TrimSpace(gjson.Get(line, "sessionKind").Str) != ""
+		(strings.TrimSpace(gjson.Get(line, "sessionKind").Str) != "" ||
+			(stored.entrypoint == "sdk-cli" && claudeSDKPrompt(line) &&
+				isCountedClaudeUserTurn(context.Background(), dagEntry{entryType: gjson.Get(line, "type").Str, line: line})))
+}
+
+func claudeSDKPrompt(line string) bool {
+	return gjson.Get(line, "turnOrigin").Str == "sdk" &&
+		gjson.Get(line, "origin.kind").Str != "human"
 }
 
 // collectClaudeUnmatchedToolResults returns result links for appended
@@ -1431,7 +1446,7 @@ type claudeSessionMeta struct {
 }
 
 // applyTo sets source metadata fields on a ParsedSession.
-func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
+func (m claudeSessionMeta) applyTo(ctx context.Context, sess *ParsedSession, entries []dagEntry) {
 	sess.SourceSessionID = m.sourceSessionID
 	sess.SourceVersion = m.sourceVersion
 	sess.Cwd = m.cwd
@@ -1440,6 +1455,17 @@ func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
 	sess.AgentLabel = m.agentLabel
 	sess.Entrypoint = m.entrypoint
 	sess.SessionKind = m.sessionKind
+	if m.sessionKind == "" && m.entrypoint == "sdk-cli" {
+		for _, entry := range entries {
+			if !isCountedClaudeUserTurn(ctx, entry) {
+				continue
+			}
+			if claudeSDKPrompt(entry.line) {
+				sess.SessionKind = SessionKindNonInteractive
+			}
+			break
+		}
+	}
 	sess.MalformedLines = m.malformedLines
 	sess.IsTruncated = m.isTruncated
 }
@@ -1489,7 +1515,7 @@ func parseLinear(
 		File:              fileInfo,
 		ClaudeLinearParse: &linear,
 	}
-	meta.applyTo(&sess)
+	meta.applyTo(ctx, &sess, entries)
 	if err := accumulateMessageTokenUsageContext(ctx, &sess, messages); err != nil {
 		return nil, err
 	}
@@ -1698,7 +1724,7 @@ func parseDAG(
 			File:              fileInfo,
 			ClaudeLinearParse: &linear,
 		}
-		meta.applyTo(&sess)
+		meta.applyTo(ctx, &sess, branchEntries)
 		if err := accumulateMessageTokenUsageContext(
 			ctx, &sess, messages,
 		); err != nil {

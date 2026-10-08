@@ -117,6 +117,59 @@ func TestClaudeSessionKindAndPromptSourceAbsent(t *testing.T) {
 	}
 }
 
+func TestClaudeWorkerOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		name, entrypoint, origin, prefix, explicitKind, want string
+	}{
+		{name: "worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, want: SessionKindNonInteractive},
+		{name: "human relay", entrypoint: "sdk-cli", origin: `"turnOrigin":"human","origin":{"kind":"human"},`},
+		{name: "human conflict", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk","origin":{"kind":"human"},`},
+		{name: "human turn conflict", entrypoint: "sdk-cli", origin: `"turnOrigin":"human","origin":{"kind":"sdk"},`},
+		{name: "missing origin", entrypoint: "sdk-cli"},
+		{name: "unknown origin", entrypoint: "sdk-cli", origin: `"turnOrigin":"unknown",`},
+		{name: "TypeScript SDK", entrypoint: "sdk-ts", origin: `"turnOrigin":"sdk",`},
+		{name: "Python SDK", entrypoint: "sdk-py", origin: `"turnOrigin":"sdk",`},
+		{name: "terminal", entrypoint: "cli", origin: `"turnOrigin":"sdk",`},
+		{name: "explicit kind", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, explicitKind: "bg", want: "bg"},
+		{name: "system delivery", entrypoint: "sdk-cli", prefix: `{"type":"user","turnOrigin":"sdk","isMeta":true,"message":{"content":"delivery"}}`},
+		{name: "tool result", entrypoint: "sdk-cli", prefix: `{"type":"user","turnOrigin":"sdk","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"result"}]}}`},
+		{name: "attachment", entrypoint: "sdk-cli", prefix: `{"type":"attachment","turnOrigin":"sdk","attachment":{"type":"queued_command","prompt":"delivery"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := buildMetadataLine(map[string]any{"type": "agent-setting", "entrypoint": tc.entrypoint, "sessionKind": tc.explicitKind})
+			content := metadata + "\n" + tc.prefix + "\n" +
+				`{"type":"user",` + tc.origin + `"promptSource":"sdk","message":{"content":"Plan a settings change."}}` + "\n" +
+				`{"type":"user","turnOrigin":"sdk","message":{"content":"Revise the plan."}}` + "\n"
+			path := createTestFile(t, "worker.jsonl", content)
+			results, _, err := claudeParseWithExclusions(path, "project", "local")
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, tc.want, results[0].Session.SessionKind)
+			assert.Equal(t, tc.entrypoint, results[0].Session.Entrypoint)
+		})
+	}
+}
+
+func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
+	for _, kind := range []string{"", SessionKindNonInteractive} {
+		t.Run(kind, func(t *testing.T) {
+			initial := `{"type":"user","isMeta":true,"entrypoint":"sdk-cli","message":{"content":"delivery"}}` + "\n"
+			path := createTestFile(t, "worker.jsonl", initial)
+			tail := `{"type":"user","turnOrigin":"sdk","message":{"content":"Plan a settings change."}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(initial+tail), 0o600))
+			_, _, _, _, err := claudeParseSessionFrom(path, int64(len(initial)), claudeIncrementalScan{
+				stored: claudeStoredIdentity{entrypoint: "sdk-cli", sessionKind: kind},
+			})
+			if kind == "" {
+				require.Error(t, err)
+				assert.True(t, IsIncrementalFullParseFallback(err))
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestClaudeSessionIdentityLineage(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lineage.jsonl")

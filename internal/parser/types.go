@@ -1419,7 +1419,8 @@ type ParsedSession struct {
 	Entrypoint string
 	// SessionKind is a provider-owned top-level session classification marker
 	// (for example, Claude Code "bg" or Grok "non-interactive"); empty for
-	// interactive sessions and for agents that do not emit one.
+	// interactive sessions and for agents that do not emit one. Claude sdk-cli
+	// workers derive "non-interactive" from their first real prompt's SDK origin.
 	SessionKind      string
 	ParentSessionID  string
 	RelationshipType RelationshipType

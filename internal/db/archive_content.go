@@ -445,16 +445,16 @@ func updateUsageOnlyAutomationTx(
 	}
 	var userMessageCount int
 	var automated bool
-	var agent, sessionKind, entrypoint string
+	var agent, sessionKind string
 	err := tx.QueryRow(
-		`SELECT user_message_count, is_automated, agent, session_kind, entrypoint
+		`SELECT user_message_count, is_automated, agent, session_kind
 		   FROM sessions WHERE id = ?`,
 		sessionID,
-	).Scan(&userMessageCount, &automated, &agent, &sessionKind, &entrypoint)
+	).Scan(&userMessageCount, &automated, &agent, &sessionKind)
 	if err != nil {
 		return err
 	}
-	if IsAutomatedSessionMetadata(agent, sessionKind, entrypoint, userMessageCount) {
+	if IsAutomatedSessionMetadata(agent, sessionKind) {
 		if automated {
 			return nil
 		}

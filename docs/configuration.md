@@ -1374,11 +1374,14 @@ record is preserved through the bulk-resync rebuild-and-copy path.
 ## Automated Session Detection
 
 AgentsView classifies every `codex exec` run as automated, including runs with
-multiple user messages. Claude Code print-mode runs with `entrypoint=sdk-cli`
-are automated when they have one or fewer real user messages. Sessions with
-several prompts stay interactive, including resumed workers and human
-conversations relayed through the CLI. Python and TypeScript SDK entrypoints
-keep their existing classification. Roborev-tagged runs are automated code
+multiple user messages. Claude Code `sdk-cli` sessions whose first real prompt
+records `turnOrigin=sdk` are automated, including follow-ups. A human origin
+keeps a relayed conversation interactive. Sessions with missing origin
+evidence and Python or TypeScript SDK entrypoints keep prompt-based
+classification. Existing readable sources are reparsed once; archives whose
+sources are missing retain their available evidence. Usage-only archives
+preserve stored flags when discarded prompts cannot support a correction.
+Roborev-tagged runs are automated code
 reviews. Other sessions are classified as automated when they have one or fewer
 real user messages and their first user message matches the automation
 classifier. Automated sessions (roborev reviews, title generation, warmup pings,

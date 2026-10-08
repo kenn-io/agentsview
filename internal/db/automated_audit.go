@@ -30,7 +30,6 @@ func auditAutomatedFull(ctx context.Context,
 			s.id,
 			s.agent,
 			s.session_kind,
-			s.entrypoint,
 			s.first_message,
 			s.user_message_count,
 			s.is_automated,
@@ -70,7 +69,6 @@ func auditAutomatedMatchingHash(ctx context.Context,
 			s.id,
 			s.agent,
 			s.session_kind,
-			s.entrypoint,
 			s.user_message_count,
 			s.is_automated,
 			substr(CAST(first_user.content AS BLOB), 1, ?)
@@ -115,7 +113,6 @@ func auditAutomatedMatchingHash(ctx context.Context,
 			id               string
 			agent            string
 			sessionKind      string
-			entrypoint       string
 			userMessageCount int
 			rowAutomated     bool
 			firstUser        boundedAutomationText
@@ -124,7 +121,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 		if err := rows.Scan(
 			&id,
 			&agent,
-			&sessionKind, &entrypoint,
+			&sessionKind,
 			&userMessageCount,
 			&rowAutomated,
 			&firstUser.prefix,
@@ -137,7 +134,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 				"scanning bounded automated audit candidate: %w", err,
 			)
 		}
-		if IsAutomatedSessionMetadata(agent, sessionKind, entrypoint, userMessageCount) {
+		if IsAutomatedSessionMetadata(agent, sessionKind) {
 			setIDs, clearIDs = AppendAutomationFlagChange(
 				setIDs, clearIDs, id, rowAutomated, true,
 			)
@@ -170,7 +167,6 @@ func auditAutomatedMatchingHash(ctx context.Context,
 				s.id,
 				s.agent,
 				s.session_kind,
-				s.entrypoint,
 				s.first_message,
 				s.user_message_count,
 				s.is_automated,
@@ -223,21 +219,20 @@ func scanFullAutomationCandidates(
 			id           string
 			agent        string
 			sessionKind  string
-			entrypoint   string
 			firstMessage sql.NullString
 			firstUser    sql.NullString
 			userCount    int
 			rowAutomated bool
 		)
 		if err := rows.Scan(
-			&id, &agent, &sessionKind, &entrypoint,
+			&id, &agent, &sessionKind,
 			&firstMessage, &userCount, &rowAutomated, &firstUser,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning automated audit candidate: %w", err,
 			)
 		}
-		want := IsAutomatedSessionMetadata(agent, sessionKind, entrypoint, userCount) ||
+		want := IsAutomatedSessionMetadata(agent, sessionKind) ||
 			patterns.matchesTextCandidates(
 				userCount, firstUser, firstMessage,
 			)

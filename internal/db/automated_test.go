@@ -21,28 +21,18 @@ func TestIsAutomatedSessionMetadata(t *testing.T) {
 		name        string
 		agent       string
 		sessionKind string
-		entrypoint  string
-		userCount   int
 		want        bool
 	}{
-		{"GrokNonInteractive", "grok", parser.SessionKindNonInteractive, "", 2, true},
-		{"CodexRoborev", "codex", parser.SessionKindRoborev, "", 2, true},
-		{"EmptyKind", "codex", "", "", 1, false},
-		{"ClaudeBackground", "claude", "bg", "", 1, false},
-		{"GrokInteractive", "grok", "", "", 1, false},
-		{"CodexExecWithoutTag", "codex", parser.SessionKindNonInteractive, "", 2, true},
-		{"ClaudePrint", "claude", "", "sdk-cli", 1, true},
-		{"ClaudePrintNoPrompt", "claude", "", "sdk-cli", 0, true},
-		{"ClaudeRelayedConversation", "claude", "", "sdk-cli", 6, false},
-		{"ClaudeCLI", "claude", "", "cli", 1, false},
-		{"ClaudePythonSDK", "claude", "", "sdk-py", 1, false},
-		{"ClaudeTypeScriptSDK", "claude", "", "sdk-ts", 1, false},
-		{"OtherProvider", "codex", "", "sdk-cli", 1, false},
-		{"UnknownEntrypoint", "claude", "", "SDK-CLI", 1, false},
+		{"GrokNonInteractive", "grok", parser.SessionKindNonInteractive, true},
+		{"CodexRoborev", "codex", parser.SessionKindRoborev, true},
+		{"EmptyKind", "codex", "", false},
+		{"ClaudeBackground", "claude", "bg", false},
+		{"GrokInteractive", "grok", "", false},
+		{"CodexExecWithoutTag", "codex", parser.SessionKindNonInteractive, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := IsAutomatedSessionMetadata(tt.agent, tt.sessionKind, tt.entrypoint, tt.userCount)
+			got := IsAutomatedSessionMetadata(tt.agent, tt.sessionKind)
 			assert.Equal(t, tt.want, got,
 				"IsAutomatedSessionMetadata(%q, %q)", tt.agent, tt.sessionKind)
 		})
