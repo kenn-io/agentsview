@@ -90,7 +90,9 @@ or failed Sync leaves each chat as either its old or its new version. Completed
 chats appear in the sidebar, and the next Sync picks up any unfinished chats.
 
 Sign-in persists in the browser's cookie store across app restarts. **Disconnect**
-deletes the Claude.ai cookies and closes the sign-in window. Credentials stay
+deletes cookies for `https://claude.ai/`, cancels pending browser requests,
+and closes the sign-in window. Other sites' cookies, browser local storage,
+and imported chats remain. Credentials stay
 inside that window's browser host. Sync requires the desktop app and a local
 connection; file imports remain available in the web UI.
 

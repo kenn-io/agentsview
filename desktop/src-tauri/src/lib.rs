@@ -4114,25 +4114,30 @@ fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
 }
 
 fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
-    if path == "/api/organizations" {
+    let shapes: Vec<_> = include_str!("../../../internal/importer/claude_ai_requests.txt").lines().collect();
+    if path == shapes[0] {
         return Ok(());
     }
     let valid_uuid = |id: &str| {
         uuid::Uuid::parse_str(id)
             .is_ok_and(|uuid| uuid.hyphenated().to_string() == id.to_ascii_lowercase())
     };
-    let parts: Vec<_> = path.split('/').collect();
-    if parts.len() >= 5 && parts[..3] == ["", "api", "organizations"] && valid_uuid(parts[3]) {
-        if parts.len() == 5 {
-            if let Some(offset) = parts[4].strip_prefix("chat_conversations_v2?limit=50&offset=") {
-                if !offset.is_empty() && offset.bytes().all(|b| b.is_ascii_digit()) {
-                    return Ok(());
+    let (prefix, rest) = shapes[1].split_once("{organization}").unwrap();
+    if let Some(rest_path) = path.strip_prefix(prefix) {
+        if let Some((org, tail)) = rest_path.split_once('/') {
+            if valid_uuid(org) {
+                let list_prefix = rest.trim_start_matches('/').strip_suffix("{offset}").unwrap();
+                if let Some(offset) = tail.strip_prefix(list_prefix) {
+                    if !offset.is_empty() && offset.bytes().all(|b| b.is_ascii_digit()) {
+                        return Ok(());
+                    }
                 }
-            }
-        } else if parts.len() == 6 && parts[4] == "chat_conversations" {
-            if let Some(id) = parts[5].strip_suffix("?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true") {
-                if valid_uuid(id) {
-                    return Ok(());
+                let detail = shapes[2].split_once("{organization}/").unwrap().1;
+                let (detail_prefix, detail_suffix) = detail.split_once("{conversation}").unwrap();
+                if let Some(id) = tail.strip_prefix(detail_prefix).and_then(|s| s.strip_suffix(detail_suffix)) {
+                    if valid_uuid(id) {
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -6627,12 +6632,19 @@ mod claude_sync_tests {
     #[test]
     fn claude_fetch_bounds_browser_response() {
         use std::io::Write;
-        let mut child = std::process::Command::new("node")
+        let child = std::process::Command::new("node")
             .arg("-e")
             .arg(include_str!("claude_fetch_test.cjs"))
             .stdin(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
+            .spawn();
+        let mut child = match child {
+            Ok(child) => child,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("skipping browser response bounds test: Node.js is unavailable in this desktop development environment");
+                return;
+            }
+            Err(err) => panic!("could not start Node.js: {err}"),
+        };
         child
             .stdin
             .take()
