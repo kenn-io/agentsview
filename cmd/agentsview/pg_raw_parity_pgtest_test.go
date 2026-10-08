@@ -219,6 +219,7 @@ func TestHostedRuntimeCapturedParity(t *testing.T) {
 				resolved, err := core.Resolve(t.Context(), id)
 				require.NoError(t, err)
 				rawtest.EqualUsageEvents(t, t.Context(), oracle, store.DB(), id, resolved.SessionID)
+				rawtest.EqualFriction(t, t.Context(), oracle, store.DB(), id, resolved.SessionID)
 			}
 			if tc.agent == parser.AgentCodex {
 				return

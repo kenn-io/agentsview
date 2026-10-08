@@ -32,6 +32,7 @@ type PreparedSession struct {
 	UsageEvents []db.UsageEvent
 	Signals     db.SessionSignalUpdate
 	Findings    []db.SecretFinding
+	Friction    db.SessionFrictionUpdate
 	Validation  db.ValidationStats
 }
 
@@ -65,7 +66,8 @@ func PrepareCandidate(
 }
 
 // Finalize applies post-reconciliation validation, aggregate repair, storage
-// projection, usage conversion, and content-derived state.
+// projection, usage conversion, signals, and secret findings. Friction is
+// computed separately after the caller assigns the final session identity.
 func Finalize(
 	ctx context.Context, candidate Candidate, options ContentOptions,
 ) (PreparedSession, error) {

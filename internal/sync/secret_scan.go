@@ -132,7 +132,11 @@ func (e *Engine) computeSignalsAndSecretsForStorage(
 			msgs, e.toolResultImages,
 		)
 	}
-	return computeSignalsAndSecrets(s, msgs)
+	update, findings := computeSignalsAndSecrets(s, msgs)
+	// Friction reads the same stored projection, so offloaded images neither
+	// count toward its budget nor leak into finding text.
+	e.attachFriction(&update, s, msgs)
+	return update, findings
 }
 
 // computeFullSignalsAndSecretsForStorage seeds full-parse state from the same
@@ -140,7 +144,8 @@ func (e *Engine) computeSignalsAndSecretsForStorage(
 func (e *Engine) computeFullSignalsAndSecretsForStorage(
 	s db.Session, msgs []db.Message, failures map[string]bool,
 ) (db.SessionSignalUpdate, []db.SecretFinding, error) {
-	if e.db.ArchiveContent().OmitsToolContent() {
+	omitsToolContent := e.db.ArchiveContent().OmitsToolContent()
+	if omitsToolContent {
 		s, msgs = e.db.ProjectSessionForStorage(s, msgs)
 		failures = nil
 	} else {
@@ -148,5 +153,15 @@ func (e *Engine) computeFullSignalsAndSecretsForStorage(
 			msgs, e.toolResultImages,
 		)
 	}
-	return computeFullSignalsAndSecrets(s, msgs, failures)
+	update, findings, err := computeFullSignalsAndSecrets(s, msgs, failures)
+	if err != nil {
+		return update, findings, err
+	}
+	// Full-content staged writes hold placeholder results in memory, so
+	// backfill reviews them after commit. Archives that drop tool content
+	// store exactly these projected rows, so later reads reproduce them.
+	if omitsToolContent {
+		e.attachFriction(&update, s, msgs)
+	}
+	return update, findings, nil
 }

@@ -589,6 +589,11 @@ func (s *Server) humaReplicaPush(
 			err := s.syncThenRunForPush(
 				ctx, engine, local, body.Full, body.WatchBatch, body.WatchRecovery,
 				func(forceFull bool) error {
+					if storage.StoresFriction(replica) {
+						if err := engine.DrainStaleFrictionLocked(ctx); err != nil {
+							return err
+						}
+					}
 					if refreshErr := s.ensurePricing(ctx, local); refreshErr != nil {
 						if ctxErr := ctx.Err(); ctxErr != nil {
 							return ctxErr

@@ -756,7 +756,7 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 		"marker", nil,
 	)
 	require.NoError(t, err)
-	require.Len(t, state.upsertArgs, 70)
+	require.Len(t, state.upsertArgs, 73)
 	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
 	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
 	assert.Equal(t, cause, state.upsertArgs[14].Value)
@@ -1254,6 +1254,27 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 			modify: func(s db.Session) db.Session {
 				s.QualitySignalVersion = db.CurrentQualitySignalVersion
 				s.UnstructuredStart = true
+				return s
+			},
+		},
+		{
+			name: "friction hash change",
+			modify: func(s db.Session) db.Session {
+				s.FrictionHash = "abc"
+				return s
+			},
+		},
+		{
+			name: "friction count change",
+			modify: func(s db.Session) db.Session {
+				s.FrictionCount = 2
+				return s
+			},
+		},
+		{
+			name: "friction rules version change",
+			modify: func(s db.Session) db.Session {
+				s.FrictionRulesVersion = "friction-v1"
 				return s
 			},
 		},

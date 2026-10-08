@@ -61,6 +61,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -96,6 +97,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -127,6 +129,7 @@ const sessionFullCols = `id, project, machine, agent,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
 	secret_leak_count, secrets_rules_version,
+	friction_count, friction_rules_version, friction_hash,
 	quality_signal_version,
 	short_prompt_count, unstructured_start,
 	missing_success_criteria_count,
@@ -188,6 +191,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 		&s.QualitySignalVersion,
 		&s.ShortPromptCount, &s.UnstructuredStart,
 		&s.MissingSuccessCriteriaCount,
@@ -348,28 +352,32 @@ type Session struct {
 	HealthGrade            *string  `json:"health_grade,omitempty"`
 	// QualitySignals mirrors the scalar persistence fields below for API
 	// schema and JSON transport.
-	QualitySignals              *QualitySignals `json:"quality_signals,omitempty"`
-	HasToolCalls                bool            `json:"-"`
-	HasContextData              bool            `json:"-"`
-	SecretLeakCount             int             `json:"secret_leak_count"`
-	SecretsRulesVersion         string          `json:"-"`
-	QualitySignalVersion        int             `json:"-"`
-	ShortPromptCount            int             `json:"-"`
-	UnstructuredStart           bool            `json:"-"`
-	MissingSuccessCriteriaCount int             `json:"-"`
-	MissingVerificationCount    int             `json:"-"`
-	DuplicatePromptCount        int             `json:"-"`
-	NoCodeContextCount          int             `json:"-"`
-	RunawayToolLoopCount        int             `json:"-"`
-	DataVersion                 int             `json:"-"`
-	Cwd                         string          `json:"cwd,omitempty"`
-	GitBranch                   string          `json:"git_branch,omitempty"`
-	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
-	SourceSessionID             string          `json:"source_session_id,omitempty"`
-	SourceVersion               string          `json:"source_version,omitempty"`
-	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
-	IsTruncated                 bool            `json:"is_truncated,omitzero"`
+	QualitySignals      *QualitySignals `json:"quality_signals,omitempty"`
+	HasToolCalls        bool            `json:"-"`
+	HasContextData      bool            `json:"-"`
+	SecretLeakCount     int             `json:"secret_leak_count"`
+	SecretsRulesVersion string          `json:"-"`
+	// Friction summary columns stay out of the session API payload.
+	FrictionCount               int    `json:"-"`
+	FrictionRulesVersion        string `json:"-"`
+	FrictionHash                string `json:"-"`
+	QualitySignalVersion        int    `json:"-"`
+	ShortPromptCount            int    `json:"-"`
+	UnstructuredStart           bool   `json:"-"`
+	MissingSuccessCriteriaCount int    `json:"-"`
+	MissingVerificationCount    int    `json:"-"`
+	DuplicatePromptCount        int    `json:"-"`
+	NoCodeContextCount          int    `json:"-"`
+	RunawayToolLoopCount        int    `json:"-"`
+	DataVersion                 int    `json:"-"`
+	Cwd                         string `json:"cwd,omitempty"`
+	GitBranch                   string `json:"git_branch,omitempty"`
+	ProjectAssigned             bool   `json:"project_assigned,omitempty"`
+	SourceSessionID             string `json:"source_session_id,omitempty"`
+	SourceVersion               string `json:"source_version,omitempty"`
+	TranscriptFidelity          string `json:"transcript_fidelity,omitempty"`
+	ParserMalformedLines        int    `json:"parser_malformed_lines,omitzero"`
+	IsTruncated                 bool   `json:"is_truncated,omitzero"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	DeletionCause     *string `json:"-"`
@@ -1226,6 +1234,7 @@ func scanSessionFullRow(row interface{ Scan(...any) error }, id string) (*Sessio
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 		&s.QualitySignalVersion,
 		&s.ShortPromptCount, &s.UnstructuredStart,
 		&s.MissingSuccessCriteriaCount,
@@ -1441,6 +1450,11 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			parent_session_id = excluded.parent_session_id,
 			parser_parent_session_id = excluded.parser_parent_session_id,
 			relationship_type = excluded.relationship_type,
+			friction_rules_version = CASE
+				WHEN sessions.parent_session_id IS NOT excluded.parent_session_id
+				  OR sessions.relationship_type IS NOT excluded.relationship_type
+				  OR sessions.agent IS NOT excluded.agent
+				THEN '' ELSE sessions.friction_rules_version END,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
 			has_total_output_tokens = excluded.has_total_output_tokens,
@@ -1836,6 +1850,7 @@ const linkSubagentSessionsQuery = `
 	SET parent_session_id = (` + subagentSpawnerExpr + `
 	),
 	relationship_type = 'subagent',
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	-- The tool_calls edge (from toolUseResult.agentId) records the actual
 	-- spawn, authoritative over the path-derived parent set at parse time.
@@ -1940,6 +1955,7 @@ const selfParentRepairStateKey = "subagent_self_parent_repair_v1"
 const clearSelfParentedSessionsSQL = `
 	UPDATE sessions
 	SET parent_session_id = NULLIF(parser_parent_session_id, id),
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE parent_session_id IS id`
 
@@ -2003,6 +2019,7 @@ func linkSubagentSessionsForSessionsQuery(ph string) string {
 	SET parent_session_id = (` + subagentSpawnerExpr + `
 	),
 	relationship_type = 'subagent',
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN (
 		SELECT tc.subagent_session_id FROM tool_calls tc
@@ -2036,6 +2053,7 @@ func clearDanglingSubagentParentQuery(ph string) string {
 	return `
 	UPDATE sessions AS s
 	SET parent_session_id = NULL,
+	friction_rules_version = '',
 	local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	WHERE s.id IN ` + ph + `
 	AND s.relationship_type = 'subagent'
@@ -5962,6 +5980,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,
@@ -6408,6 +6427,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,
@@ -6517,6 +6537,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
 			&s.SecretLeakCount, &s.SecretsRulesVersion,
+			&s.FrictionCount, &s.FrictionRulesVersion, &s.FrictionHash,
 			&s.QualitySignalVersion,
 			&s.ShortPromptCount, &s.UnstructuredStart,
 			&s.MissingSuccessCriteriaCount,

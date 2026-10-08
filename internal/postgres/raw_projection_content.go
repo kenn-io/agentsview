@@ -184,9 +184,13 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 		out := map[string]any{}
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			// This transient projection marker adds no content to the existing
-			// normalized-content-v1 representation.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" {
+				continue
+			}
+			// Friction is derived after content identity is assigned; including it
+			// would make finding subjects participate in their own session ID.
+			if f.Name == "Friction" || f.Name == "FrictionCount" ||
+				f.Name == "FrictionRulesVersion" || f.Name == "FrictionHash" {
 				continue
 			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)

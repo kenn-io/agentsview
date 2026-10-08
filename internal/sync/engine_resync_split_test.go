@@ -200,6 +200,40 @@ func TestResyncBuildThenSwapMatchesResyncAll(t *testing.T) {
 	assert.Zero(t, warm.Synced, "persisted skip state must survive the swap")
 }
 
+func TestResyncQueuedHierarchyRepairMarksFrictionStale(t *testing.T) {
+	e, database, _ := newResyncSplitEngine(t)
+	ctx := t.Context()
+	missingParent := "deleted-parent"
+	require.NoError(t, database.UpsertSession(ctx, db.Session{
+		ID: "resync-child", Project: "project", Machine: "local",
+		Agent: "claude", ParentSessionID: &missingParent,
+		RelationshipType: "subagent",
+	}))
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "resync-child", []db.Message{{
+		SessionID: "resync-child", Ordinal: 0, Role: "user", Content: "run the task",
+	}}))
+	_, err := e.recomputeFrictionFromDatabase(ctx, e.db, "resync-child")
+	require.NoError(t, err)
+	require.NoError(t, database.QueueSubagentParentCleanupRepairs(
+		ctx, []string{"resync-child"},
+	))
+
+	tempPath, stats, err := e.ResyncBuild(ctx, nil)
+	require.NoError(t, err)
+	require.False(t, stats.Aborted)
+	require.FileExists(t, tempPath)
+
+	replacement, err := db.Open(ctx, tempPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, replacement.Close()) })
+	child, err := replacement.GetSessionFull(ctx, "resync-child")
+	require.NoError(t, err)
+	assert.Nil(t, child.ParentSessionID)
+	assert.Empty(t, child.FrictionRulesVersion,
+		"queued hierarchy changes leave friction stale for the next backfill",
+	)
+}
+
 // TestSwapWindowRejectsDirectWrites proves the write barrier: with the writer
 // closed a direct star write is rejected with ErrWriterClosed, and the rejected
 // write is absent from the rebuilt archive after the swap.

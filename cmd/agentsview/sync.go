@@ -880,17 +880,7 @@ func coordinateLocalSync(
 
 	cleanResyncTemp(appCfg.DBPath)
 
-	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
-		AgentDirs:               appCfg.AgentDirs,
-		SourceMachines:          appCfg.SourceMachines,
-		ProviderMetadata:        appCfg.ProviderMetadata,
-		DisabledAgents:          appCfg.DisabledAgents,
-		IncludeCwdPrefixes:      appCfg.SyncIncludeCwdPrefixes,
-		ScanProtectedPaths:      appCfg.ScanProtectedPaths,
-		Machine:                 appCfg.InstallationID,
-		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
-		ArchiveContent:          appCfg.ArchiveContent,
-	})
+	engine := sync.NewEngine(ctx, database, localSyncEngineConfig(appCfg))
 	defer engine.Close()
 
 	if fallbackOnAbort {
@@ -917,6 +907,37 @@ func coordinateLocalSync(
 		return didResync, stats, errors.New("local sync processing incomplete")
 	}
 	return didResync, stats, nil
+}
+
+func localSyncEngineConfig(appCfg config.Config) sync.EngineConfig {
+	return sync.EngineConfig{
+		AgentDirs:               appCfg.AgentDirs,
+		SourceMachines:          appCfg.SourceMachines,
+		ProviderMetadata:        appCfg.ProviderMetadata,
+		DisabledAgents:          appCfg.DisabledAgents,
+		IncludeCwdPrefixes:      appCfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths:      appCfg.ScanProtectedPaths,
+		Machine:                 appCfg.InstallationID,
+		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
+		ArchiveContent:          appCfg.ArchiveContent,
+	}
+}
+
+// backfillFrictionBeforePush brings stale findings current so a replica push
+// sends them. Plain syncs leave this to the daemon's reconcile tick.
+func backfillFrictionBeforePush(ctx context.Context, appCfg config.Config, database *db.DB) {
+	engine := sync.NewEngine(ctx, database, localSyncEngineConfig(appCfg))
+	defer engine.Close()
+	drainStaleFriction(ctx, engine)
+}
+
+// drainStaleFriction finishes the friction backfill so a push sends current
+// findings. It holds the sync lock, which push processes own.
+func drainStaleFriction(ctx context.Context, engine *sync.Engine) {
+	err := engine.RunExclusive(func() error { return engine.DrainStaleFrictionLocked(ctx) })
+	if err != nil && ctx.Err() == nil {
+		log.Printf("friction backfill: %v", err)
+	}
 }
 
 func printDirectSyncResult(

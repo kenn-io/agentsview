@@ -33,15 +33,21 @@ type SessionSignalUpdate struct {
 	HasContextData         bool
 	SecretLeakCount        int
 	SecretsRulesVersion    string
-	QualitySignals         QualitySignals
+	// Friction, when non-nil, replaces the session's friction findings,
+	// dims and summary columns in the same transaction as the signals.
+	// Nil leaves stored friction untouched for incremental maintenance.
+	Friction       *SessionFrictionUpdate
+	QualitySignals QualitySignals
 }
 
 // usageOnlySignalUpdate is the canonical derived-signal state for an archive
 // that deliberately omits the transcript content those signals require. The
-// current version marks the empty result as intentional so startup backfill
-// does not revisit the row on every process launch.
+// current quality and friction versions mark the empty results as intentional
+// so startup backfills do not revisit the row on every process launch.
 func usageOnlySignalUpdate() SessionSignalUpdate {
+	frictionUpdate := SettledFriction()
 	return SessionSignalUpdate{
+		Friction: &frictionUpdate,
 		QualitySignals: QualitySignals{
 			Version: CurrentQualitySignalVersion,
 		},
@@ -125,6 +131,52 @@ func (db *DB) UpdateSessionSignals(ctx context.Context,
 func updateSessionSignalsTx(
 	tx transactionQueries, sessionID string, u SessionSignalUpdate,
 ) error {
+	// Friction rows go first so their summary columns ride on the signals
+	// UPDATE instead of rewriting the session row a second time.
+	frictionColumns := ""
+	var frictionArgs []any
+	if u.Friction != nil {
+		changed, err := replaceSessionFrictionRowsTx(tx, sessionID, *u.Friction)
+		if err != nil {
+			return err
+		}
+		if changed {
+			frictionColumns = `
+			friction_count = ?,
+			friction_rules_version = ?,
+			friction_hash = ?,`
+			frictionArgs = []any{
+				len(u.Friction.Findings), u.Friction.RulesVersion, u.Friction.Hash,
+			}
+		}
+	}
+	args := []any{
+		u.ToolFailureSignalCount,
+		u.ToolRetryCount,
+		u.EditChurnCount,
+		u.ConsecutiveFailureMax,
+		u.Outcome,
+		u.OutcomeConfidence,
+		u.EndedWithRole,
+		u.FinalFailureStreak,
+		u.SignalsPendingSince,
+		u.CompactionCount,
+		u.MidTaskCompactionCount,
+		u.ContextPressureMax,
+		u.HealthScore,
+		u.HealthGrade,
+		u.HasToolCalls,
+		u.HasContextData,
+		u.QualitySignals.Version,
+		u.QualitySignals.ShortPromptCount,
+		u.QualitySignals.UnstructuredStart,
+		u.QualitySignals.MissingSuccessCriteriaCount,
+		u.QualitySignals.MissingVerificationCount,
+		u.QualitySignals.DuplicatePromptCount,
+		u.QualitySignals.NoCodeContextCount,
+		u.QualitySignals.RunawayToolLoopCount,
+	}
+	args = append(append(args, frictionArgs...), sessionID)
 	_, err := tx.Exec(`
 		UPDATE sessions SET
 			tool_failure_signal_count = ?,
@@ -150,35 +202,9 @@ func updateSessionSignalsTx(
 			missing_verification_count = ?,
 			duplicate_prompt_count = ?,
 			no_code_context_count = ?,
-			runaway_tool_loop_count = ?,
+			runaway_tool_loop_count = ?,`+frictionColumns+`
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id = ?`,
-		u.ToolFailureSignalCount,
-		u.ToolRetryCount,
-		u.EditChurnCount,
-		u.ConsecutiveFailureMax,
-		u.Outcome,
-		u.OutcomeConfidence,
-		u.EndedWithRole,
-		u.FinalFailureStreak,
-		u.SignalsPendingSince,
-		u.CompactionCount,
-		u.MidTaskCompactionCount,
-		u.ContextPressureMax,
-		u.HealthScore,
-		u.HealthGrade,
-		u.HasToolCalls,
-		u.HasContextData,
-		u.QualitySignals.Version,
-		u.QualitySignals.ShortPromptCount,
-		u.QualitySignals.UnstructuredStart,
-		u.QualitySignals.MissingSuccessCriteriaCount,
-		u.QualitySignals.MissingVerificationCount,
-		u.QualitySignals.DuplicatePromptCount,
-		u.QualitySignals.NoCodeContextCount,
-		u.QualitySignals.RunawayToolLoopCount,
-		sessionID,
-	)
+		WHERE id = ?`, args...)
 	if err != nil {
 		return fmt.Errorf(
 			"updating session signals for %s: %w",

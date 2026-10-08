@@ -79,7 +79,7 @@ func TestRedactedToolUseRenderingKeepsPathsAndDropsArguments(t *testing.T) {
 
 func TestToolUseRenderingCandidatesRebuildGrokSummaries(t *testing.T) {
 	pairs := ToolUseRenderingCandidates(
-		"WebSearch", "web_search", `{"type":"search","query":"payroll export"}`,
+		"", "WebSearch", "web_search", `{"type":"search","query":"payroll export"}`,
 	)
 	var found bool
 	for _, pair := range pairs {

@@ -1,6 +1,7 @@
 package friction
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,10 @@ func TestDetectWorkarounds(t *testing.T) {
 		{"todo_in_ordinary_prose", []Message{assistant("All data collected. Let me update the todo list and finalize")}, []string{"TODO"}},
 		{"empty_text_skipped", []Message{assistant("")}, []string{}},
 		{"tool_role_skipped", []Message{tool("bash", "for now")}, []string{}},
+		{"unicode_case_fold", []Message{assistant("A worKaround remains.")}, []string{"workaround"}},
+		{"lowercase_is_not_case_fold", []Message{assistant("A quİck fİx remains.")}, []string{}},
+		{"folded_prefix_byte_width", []Message{assistant("ȺİſK: A quİck fİx and a worKaround remain.")}, []string{"workaround"}},
+		{"marker_after_long_reply", []Message{assistant(strings.Repeat("All tests pass. ", 1000) + "for now")}, []string{"for now"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -86,6 +91,13 @@ func TestDetectDeferrals(t *testing.T) {
 		{"park_for_now", []Message{assistant("Parking this for now.")}, []string{"park for now"}},
 		{"circle_back", []Message{assistant("We can circle back on the naming.")}, []string{"circle back"}},
 		{"skipping_for_now", []Message{assistant("Skipping for now.")}, []string{"skipping for now"}},
+		{"unicode_case_fold", []Message{assistant("Next ſeſſion.")}, []string{"next session"}},
+		{"unicode_initial_keeps_ascii_boundary", []Message{assistant("ſkipping for now.")}, []string{}},
+		{"embedded_marker_is_not_a_word", []Message{assistant("unext session")}, []string{}},
+		{"unmatched_earlier_marker", []Message{assistant("Leave the notes here for the next session.")}, []string{"next session"}},
+		{"folded_prefix_byte_width", []Message{assistant("ȺİſK: I'll come back to this.")}, []string{"come back later"}},
+		{"long_prefix_keeps_word_boundary", []Message{assistant(strings.Repeat("x", 1000) + "next session")}, []string{}},
+		{"marker_after_long_reply", []Message{assistant(strings.Repeat("All tests pass. ", 1000) + "defer this")}, []string{"defer"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -97,6 +109,32 @@ func TestDetectDeferrals(t *testing.T) {
 				assert.Equal(t, DetectorDeferral, s.Detector)
 				assert.Equal(t, "s1", s.SubjectID)
 				assert.Empty(t, s.Text)
+			}
+		})
+	}
+}
+
+func BenchmarkTextDetectors(b *testing.B) {
+	msgs := []Message{assistant(strings.Repeat("The implementation is complete and all tests pass. ", 160))}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(msgs[0].Text)))
+	for b.Loop() {
+		DetectWorkarounds(msgs, "s1")
+		DetectDeferrals(msgs, "s1")
+	}
+}
+
+// Common marker words must not send long replies through every regex. Include
+// both actual findings and ordinary prose that contains a necessary keyword.
+func BenchmarkTextDetectorsMarkers(b *testing.B) {
+	for _, suffix := range []string{"TODO: finish the configuration.", "hack", "next session", "I will leave the details here."} {
+		b.Run(suffix, func(b *testing.B) {
+			msgs := []Message{assistant(strings.Repeat("The implementation is complete and all tests pass. ", 160) + suffix)}
+			b.ReportAllocs()
+			b.SetBytes(int64(len(msgs[0].Text)))
+			for b.Loop() {
+				DetectWorkarounds(msgs, "s1")
+				DetectDeferrals(msgs, "s1")
 			}
 		})
 	}
@@ -120,6 +158,20 @@ func TestTextDetectorsIndependentAndPreserveMessageIdentity(t *testing.T) {
 			assert.Equal(t, msgs[i].Ordinal, *s.Ordinal)
 			assert.Equal(t, msgs[i].Timestamp, s.OccurredAt)
 			assert.Equal(t, "s1", s.SubjectID)
+		}
+	}
+}
+
+func TestTextMarkersAlignWithPatterns(t *testing.T) {
+	for _, set := range []struct {
+		patterns []*regexp.Regexp
+		markers  []string
+	}{{workaroundPatterns, workaroundMarkers}, {deferralPatterns, deferralMarkers}} {
+		require.Len(t, set.markers, len(set.patterns))
+		for i, marker := range set.markers {
+			assert.Equal(t, strings.ToLower(marker), marker)
+			assert.Contains(t, strings.ToLower(set.patterns[i].String()), marker,
+				"each marker must be a literal its pattern requires")
 		}
 	}
 }

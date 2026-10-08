@@ -22,6 +22,9 @@ func (Backend) Name() string { return "pg" }
 
 func (Backend) DisplayName() string { return "PostgreSQL" }
 
+// StoresFriction reports that pushes copy Friction Log findings.
+func (Backend) StoresFriction() bool { return true }
+
 // Targets lists the configured [pg.NAME] sections, default first, or one
 // unnamed default target for a legacy [pg] block or no block at all.
 func (Backend) Targets(cfg config.Config) ([]storage.ReplicaTargetRef, error) {

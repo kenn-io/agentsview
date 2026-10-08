@@ -740,3 +740,23 @@ func TestToolResultImagesStagedRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestToolResultImagesOffloadFrictionUsesStoredContent(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local", ToolResultImages: config.ToolResultImages("offload"), AssetsDir: t.TempDir()})
+	t.Cleanup(engine.Close)
+	outcome := engine.writeBatchBulkWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{ID: "offload-friction", Project: "project", Machine: "local", Agent: parser.AgentCodex, StartedAt: time.Unix(1, 0)},
+		msgs: []parser.ParsedMessage{{Ordinal: 0, Role: parser.RoleAssistant, Content: "answer", ToolCalls: []parser.ParsedToolCall{{ToolUseID: "image", ToolName: "Bash", Category: "Bash", ResultEvents: []parser.ParsedToolResultEvent{{ToolUseID: "image", Source: "tool", Status: "errored", Content: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="},{"type":"text","text":"render failed"}]`}}}}}},
+	}}, false)
+	require.NotNil(t, outcome)
+	stored, err := database.SessionFrictionFindings(t.Context(), "offload-friction")
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	assert.NotContains(t, stored[0].Text, "data:image", "findings come from the offloaded rows the archive stores")
+	_, err = engine.recomputeFrictionFromDatabase(t.Context(), database, "offload-friction")
+	require.NoError(t, err)
+	recomputed, err := database.SessionFrictionFindings(t.Context(), "offload-friction")
+	require.NoError(t, err)
+	assert.Equal(t, stored, recomputed, "import and backfill must agree")
+}
