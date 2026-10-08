@@ -1,6 +1,9 @@
 package db
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // BuildAnalyticsWhere shares filter decisions; callers append their date and time predicates in query order.
 func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID string, datePreds []string) string {
@@ -9,28 +12,24 @@ func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID s
 		sessionID = q("id")
 	}
 	preds := append([]string{q("message_count") + " > 0", RelationshipExclusionSQL(f.IncludeSubagents, f.IncludeForks, prefix), q("deleted_at") + " IS NULL"}, datePreds...)
-	for _, item := range []struct{ col, raw string }{{"machine", f.Machine}, {"project", f.Project}, {"git_branch", f.GitBranch}, {"agent", f.Agent}, {"model", f.Model}} {
-		if item.raw == "" {
-			continue
-		}
-		switch item.col {
-		case "project":
-			preds = append(preds, q("project")+" = "+b.Add(item.raw))
-		case "git_branch":
-			preds = append(preds, BranchPairPredicate(q("project"), q("git_branch"), item.raw, func(v string) string { return b.Add(v) }))
-		case "model":
-			if values := CSVFilterValues(item.raw); len(values) > 0 {
-				pred := inPredicate("m.model", values, b)
-				if b.dialect.messageMembership != nil {
-					preds = append(preds, b.dialect.messageMembership(sessionID, pred))
-				} else {
-					preds = append(preds, "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = "+sessionID+" AND "+pred+")")
-				}
-			}
-		default:
-			if values := CSVFilterValues(item.raw); len(values) > 0 {
-				preds = append(preds, inPredicate(q(item.col), values, b))
-			}
+	if values := CSVFilterValues(f.Machine); len(values) > 0 {
+		preds = append(preds, inPredicate(q("machine"), values, b))
+	}
+	if f.Project != "" {
+		preds = append(preds, q("project")+" = "+b.Add(f.Project))
+	}
+	if f.GitBranch != "" {
+		preds = append(preds, BranchPairPredicate(q("project"), q("git_branch"), f.GitBranch, func(v string) string { return b.Add(v) }))
+	}
+	if values := CSVFilterValues(f.Agent); len(values) > 0 {
+		preds = append(preds, inPredicate(q("agent"), values, b))
+	}
+	if values := CSVFilterValues(f.Model); len(values) > 0 {
+		pred := inPredicate("m.model", values, b)
+		if b.dialect.messageMembership != nil {
+			preds = append(preds, b.dialect.messageMembership(sessionID, pred))
+		} else {
+			preds = append(preds, "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = "+sessionID+" AND "+pred+")")
 		}
 	}
 	if f.MinUserMessages > 0 {
@@ -61,13 +60,17 @@ func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID s
 }
 
 func (b *QueryBuilder) reportActivityExpr(prefix string) string {
-	return strings.NewReplacer("ended_at", prefix+"ended_at", "started_at", prefix+"started_at", "created_at", prefix+"created_at").Replace(b.dialect.cursorActivityExpr)
+	return "COALESCE(" + b.dialect.timestampExpr(prefix+"ended_at") + ", " + b.dialect.timestampExpr(prefix+"started_at") + ", " + prefix + "created_at)"
 }
 
 func (b *QueryBuilder) reportTerminationPredicate(status, prefix string) string {
-	dialect := b.dialect
-	b.dialect.terminationExpr = strings.NewReplacer("ended_at", prefix+"ended_at", "started_at", prefix+"started_at", "created_at", prefix+"created_at").Replace(dialect.terminationExpr)
-	b.dialect.reportTermination = true
-	defer func() { b.dialect = dialect }()
-	return terminationPredicate(status, b, func(col string) string { return prefix + col })
+	activity := b.reportActivityExpr(prefix)
+	if b.dialect.terminationKind == timestampUnixSeconds {
+		activity = "CAST(strftime('%s', " + activity + ") AS INTEGER)"
+	}
+	param := b.terminationParam
+	if b.dialect.reportTerminationRawTime {
+		param = func(t time.Time) string { return b.Add(t) }
+	}
+	return renderTerminationPredicate(status, activity, prefix+"termination_status", param, b.dialect.reportTerminationFlagFirst, b.dialect.reportTerminationFlagFirst)
 }

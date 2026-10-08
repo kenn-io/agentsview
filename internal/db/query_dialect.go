@@ -50,7 +50,6 @@ type QueryDialect struct {
 	emptyStringIsNull           bool
 	terminationExpr             string
 	terminationKind             timestampKind
-	reportTermination           bool
 	trimUsageCSV                bool
 	usageFalseLiteral           string
 	messageMembership           func(string, string) string
@@ -888,17 +887,28 @@ func buildSessionBaseFilter(f SessionFilter) (string, []any) {
 }
 
 func inPredicate(col string, values []string, b *QueryBuilder) string {
+	return valuesPredicate(col, values, b, true)
+}
+
+func valuesPredicate(col string, values []string, b *QueryBuilder, include bool) string {
 	if len(values) == 0 {
+		if !include {
+			return "1 = 1"
+		}
 		return "1 = 0"
 	}
+	equalOp, listOp := " = ", " IN "
+	if !include {
+		equalOp, listOp = " != ", " NOT IN "
+	}
 	if len(values) == 1 {
-		return col + " = " + b.Add(values[0])
+		return col + equalOp + b.Add(values[0])
 	}
 	placeholders := make([]string, len(values))
 	for i, v := range values {
 		placeholders[i] = b.Add(v)
 	}
-	return col + " IN (" + strings.Join(placeholders, ",") + ")"
+	return col + listOp + "(" + strings.Join(placeholders, ",") + ")"
 }
 
 func splitCSV(s string) []string {
@@ -994,13 +1004,17 @@ func nonEmpty(values []string) []string {
 func terminationPredicate(
 	status string, b *QueryBuilder, q func(string) string,
 ) string {
+	return renderTerminationPredicate(status, b.dialect.terminationExpr, q("termination_status"), b.terminationParam, false, false)
+}
+
+func renderTerminationPredicate(status, activityExpr, statusExpr string, param func(time.Time) string, flagFirst, wrapSingle bool) string {
 	if status == "" || status == "all" {
 		return ""
 	}
 	now := time.Now().UTC()
 	activeCutoff := now.Add(-activeWindow)
 	staleCutoff := now.Add(-staleWindow)
-	flagged := q("termination_status") +
+	flagged := statusExpr +
 		" IN ('tool_call_pending', 'truncated')"
 
 	parts := strings.Split(status, ",")
@@ -1008,37 +1022,33 @@ func terminationPredicate(
 	for _, p := range parts {
 		switch strings.TrimSpace(p) {
 		case "active":
-			preds = append(preds, b.dialect.terminationExpr+" > "+
-				b.terminationParam(activeCutoff))
+			preds = append(preds, activityExpr+" > "+param(activeCutoff))
 		case "stale":
-			pred := b.dialect.terminationExpr + " > " +
-				b.terminationParam(staleCutoff) + " AND " +
-				b.dialect.terminationExpr + " <= " +
-				b.terminationParam(activeCutoff)
-			if b.dialect.reportTermination && b.dialect.reportTerminationFlagFirst {
+			pred := activityExpr + " > " + param(staleCutoff) + " AND " + activityExpr + " <= " + param(activeCutoff)
+			if flagFirst {
 				preds = append(preds, "("+flagged+" AND "+pred+")")
 			} else {
 				preds = append(preds, "("+pred+" AND "+flagged+")")
 			}
 		case "unclean":
-			pred := b.dialect.terminationExpr + " <= " + b.terminationParam(staleCutoff)
-			if b.dialect.reportTermination && b.dialect.reportTerminationFlagFirst {
+			pred := activityExpr + " <= " + param(staleCutoff)
+			if flagFirst {
 				preds = append(preds, "("+flagged+" AND "+pred+")")
 			} else {
 				preds = append(preds, "("+pred+" AND "+flagged+")")
 			}
 		case "clean":
 			preds = append(preds,
-				q("termination_status")+" = 'clean'")
+				statusExpr+" = 'clean'")
 		case "awaiting_user":
 			preds = append(preds,
-				q("termination_status")+" = 'awaiting_user'")
+				statusExpr+" = 'awaiting_user'")
 		}
 	}
 	if len(preds) == 0 {
 		return ""
 	}
-	if len(preds) == 1 && !(b.dialect.reportTermination && b.dialect.reportTerminationFlagFirst) {
+	if len(preds) == 1 && !wrapSingle {
 		return preds[0]
 	}
 	return "(" + strings.Join(preds, " OR ") + ")"
@@ -1051,9 +1061,6 @@ func (b *QueryBuilder) terminationParam(t time.Time) string {
 	case timestampCast:
 		return b.dialect.activityParam(b.Add(t.Format(time.RFC3339)))
 	default:
-		if b.dialect.reportTermination && b.dialect.reportTerminationRawTime {
-			return b.Add(t)
-		}
 		return b.dialect.activityParam(b.Add(t))
 	}
 }

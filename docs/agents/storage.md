@@ -224,9 +224,9 @@ mirror is a disposable local derived file. A new remote SQL backend is a
 replica. Do not model it on DuckDB, and do not add a fourth role.
 
 Common pure storage helpers live in `internal/db`; every backend calls that
-owner. `BuildAnalyticsWhere`, `BuildUsageSourceFilter`,
-`BuildUsageSessionFilter`, and `BuildRecentEditsQuery` own shared reporting SQL. Helpers with different timestamp parsing, UTC padding, or output formats
-stay in their backend.
+owner. `BuildAnalyticsWhere`, `BuildUsageSourceFilter`, `BuildUsageSessionFilter`,
+and `BuildRecentEditsQuery` own shared reporting SQL. Helpers with different
+timestamp parsing, UTC padding, or output formats stay in their backend.
 
 ### How to add a replica backend
 

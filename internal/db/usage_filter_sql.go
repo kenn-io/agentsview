@@ -16,15 +16,7 @@ func (b *QueryBuilder) usageValuesPredicate(col string, values []string, include
 	if len(values) == 0 {
 		return ""
 	}
-	pred := inPredicate(col, values, b)
-	if !include {
-		if len(values) == 1 {
-			pred = strings.Replace(pred, " = ", " != ", 1)
-		} else {
-			pred = strings.Replace(pred, " IN ", " NOT IN ", 1)
-		}
-	}
-	return pred
+	return valuesPredicate(col, values, b, include)
 }
 
 // BuildUsageSourceFilter renders model filters before session predicates.
