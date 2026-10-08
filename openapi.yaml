@@ -4003,9 +4003,6 @@ components:
           type: string
         sessionId:
           type: string
-        session_count:
-          format: int64
-          type: integer
         startedAt:
           type: string
         totalTokens:

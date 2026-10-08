@@ -15,7 +15,6 @@ export interface DbTopSessionEntry {
   outputTokens: number;
   project: string;
   sessionId: string;
-  session_count?: number;
   startedAt: string;
   totalTokens: number;
 }

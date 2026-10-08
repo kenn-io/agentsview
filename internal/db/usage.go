@@ -2645,7 +2645,6 @@ func (db *DB) getDailyUsageLegacy(
 type TopSessionEntry struct {
 	GroupKey            string      `json:"group_key,omitempty"`
 	GroupLabel          string      `json:"group_label,omitempty"`
-	SessionCount        int         `json:"session_count,omitempty"`
 	SessionID           string      `json:"sessionId"`
 	DisplayName         string      `json:"displayName"`
 	Agent               string      `json:"agent"`
@@ -2675,7 +2674,6 @@ func GroupTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 			row = &TopSessionEntry{Project: entry.Project, GroupKey: entry.GroupKey, Agent: entry.Agent}
 			grouped[k] = row
 		}
-		row.SessionCount++
 		row.InputTokens += entry.InputTokens
 		row.OutputTokens += entry.OutputTokens
 		row.CacheCreationTokens += entry.CacheCreationTokens
@@ -2686,9 +2684,13 @@ func GroupTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		started, _ := time.Parse(time.RFC3339Nano, entry.StartedAt)
-		previousStarted, _ := time.Parse(time.RFC3339Nano, row.StartedAt)
-		if entry.GroupLabel != "" && (row.GroupLabel == "" || started.After(previousStarted) || started.Equal(previousStarted) && entry.SessionID > row.SessionID) {
+		started, startedErr := time.Parse(time.RFC3339Nano, entry.StartedAt)
+		previousStarted, previousErr := time.Parse(time.RFC3339Nano, row.StartedAt)
+		newer, same := started.After(previousStarted), started.Equal(previousStarted)
+		if startedErr != nil || previousErr != nil {
+			newer, same = entry.StartedAt > row.StartedAt, entry.StartedAt == row.StartedAt
+		}
+		if entry.GroupLabel != "" && (row.GroupLabel == "" || newer || same && entry.SessionID > row.SessionID) {
 			row.GroupLabel = entry.GroupLabel
 			row.StartedAt = entry.StartedAt
 			row.SessionID = entry.SessionID

@@ -487,7 +487,6 @@ describe("AttributionPanel job groups", () => {
   afterEach(() => {
     usage.cancelInFlightReads();
     usage.backToProjects();
-    usage.backToProjects();
     usage.summary = null;
     usage.excludedProjectKeys = "";
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);

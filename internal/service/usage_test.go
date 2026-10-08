@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,9 +12,42 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
+
+type usageCatalogStore struct {
+	db.Store
+	labelReads, catalogReads int
+}
+
+func (s *usageCatalogStore) GetActiveProjectLabels(ctx context.Context) ([]string, error) {
+	s.labelReads++
+	return s.Store.GetActiveProjectLabels(ctx)
+}
+
+func (s *usageCatalogStore) BuildProjectIdentityMap(ctx context.Context, labels []string) (map[string]export.ProjectMapEntry, error) {
+	s.catalogReads++
+	return s.Store.BuildProjectIdentityMap(ctx, labels)
+}
+
+func TestResolveUsageProjectKeysSharesCatalog(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "included", "project-a")
+	dbtest.SeedSession(t, d, "excluded", "project-b")
+	catalog, err := d.BuildProjectIdentityMap(t.Context(), []string{"project-a", "project-b"})
+	require.NoError(t, err)
+	store := &usageCatalogStore{Store: d}
+	resolved, err := service.ResolveUsageProjectKeys(t.Context(), store, service.UsageRequest{
+		ProjectKey: catalog["project-a"].ProjectKey, ExcludeProjectKey: catalog["project-b"].ProjectKey,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"project-a"}, resolved.ProjectLabels)
+	assert.Equal(t, []string{"project-b"}, resolved.ExcludeProjectLabels)
+	assert.Equal(t, 1, store.labelReads)
+	assert.Equal(t, 1, store.catalogReads)
+}
 
 func seedPairwiseUsageFixture(t *testing.T, d *db.DB) {
 	t.Helper()

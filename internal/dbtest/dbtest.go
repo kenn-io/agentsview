@@ -280,29 +280,39 @@ func SeedUsageGroups(t *testing.T, conn *sql.DB) {
  ('group-b', 'hermes-cron', 'host-a.example', 'hermes', 'job-b', 'Research digest', '2026-10-08T12:00:00Z', NULL, 1, 1),
  ('group-other', 'hermes-cron', 'host-a.example', 'hermes', '', '', '2026-10-08T12:00:00Z', NULL, 1, 1),
  ('group-another-project', 'another-project', 'host-a.example', 'hermes', 'job-a', 'Separate project', '2026-10-08T12:00:00Z', NULL, 1, 1);
- INSERT INTO messages(session_id, ordinal, role, content, timestamp, model, token_usage)
- SELECT id, 0, 'assistant', 'run message', started_at, 'gpt-5.4', '{"input_tokens":10,"output_tokens":2}' FROM sessions WHERE id LIKE 'group-%';`)
+ INSERT INTO messages(session_id, ordinal, role, content, timestamp)
+ SELECT id, 0, 'assistant', 'run message', started_at FROM sessions WHERE id LIKE 'group-%';
+ INSERT INTO usage_events(session_id, source, model, input_tokens, output_tokens, cost_microdollars, cost_status, cost_source, occurred_at, dedup_key)
+ SELECT id, 'session', 'gpt-5.4', 10, 2, CASE WHEN id = 'group-b' THEN 4000000 ELSE 1000000 END, 'exact', 'provider-reported', started_at, id FROM sessions WHERE id LIKE 'group-%';`)
 	require.NoError(t, err)
 }
 
 // AssertUsageGroups protects the same filtered grouping contract on each backend.
 func AssertUsageGroups(t *testing.T, store db.Store) {
 	t.Helper()
-	filter := db.UsageFilter{From: "2026-10-07", To: "2026-10-10", Agent: "hermes", ProjectLabels: []string{"hermes-cron"}, TopSessionsByGroup: true, TopSessionsSort: "tokens"}
-	rows, err := store.GetTopSessionsByCost(t.Context(), filter, 1)
+	filter := db.UsageFilter{From: "2026-10-07", To: "2026-10-10", Agent: "hermes", ProjectLabels: []string{"hermes-cron"}, TopSessionsByGroup: true, TopSessionsSort: "cost"}
+	rows, err := store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "job-a", rows[0].GroupKey)
-	assert.Equal(t, "Research digest", rows[0].GroupLabel)
-	assert.Equal(t, 3, rows[0].SessionCount)
-	assert.Equal(t, 30, rows[0].InputTokens)
-	assert.Equal(t, 6, rows[0].OutputTokens)
+	require.Len(t, rows, 3)
+	assert.Equal(t, "job-b", rows[0].GroupKey)
+	assert.Equal(t, int64(4_000_000), rows[0].Cost.Microdollars)
+	assert.Equal(t, "job-a", rows[1].GroupKey)
+	assert.Equal(t, int64(3_000_000), rows[1].Cost.Microdollars)
+	assert.Equal(t, "Research digest", rows[1].GroupLabel)
+	assert.Equal(t, 30, rows[1].InputTokens)
+	assert.Equal(t, 6, rows[1].OutputTokens)
 	filter.From, filter.To = "2026-10-07", "2026-10-07"
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "Old digest", rows[0].GroupLabel)
-	assert.Equal(t, 1, rows[0].SessionCount)
+	assert.Equal(t, int64(1_000_000), rows[0].Cost.Microdollars)
+	filter.From, filter.To = "2026-10-01", "2026-10-31"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 1)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "job-b", rows[0].GroupKey)
+	assert.Equal(t, int64(4_000_000), rows[0].Cost.Microdollars)
 	filter.From, filter.To = "2026-10-07", "2026-10-10"
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)

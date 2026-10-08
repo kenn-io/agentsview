@@ -62,8 +62,12 @@ func ResolveUsageProjectKeys(
 	if req.ExcludeProjectKey == "" && req.ProjectKey == "" {
 		return req, nil
 	}
+	byKey, err := usageProjectKeyCatalog(ctx, store)
+	if err != nil {
+		return UsageRequest{}, err
+	}
 	if req.ProjectKey != "" {
-		resolved, err := resolveUsageProjectKeyLabels(ctx, store, req.ProjectKey)
+		resolved, err := usageProjectKeyLabels(byKey, req.ProjectKey)
 		if err != nil {
 			return UsageRequest{}, err
 		}
@@ -78,7 +82,7 @@ func ResolveUsageProjectKeys(
 		req.ProjectKey = ""
 	}
 	if req.ExcludeProjectKey != "" {
-		resolved, err := resolveUsageProjectKeyLabels(ctx, store, req.ExcludeProjectKey)
+		resolved, err := usageProjectKeyLabels(byKey, req.ExcludeProjectKey)
 		if err != nil {
 			return UsageRequest{}, err
 		}
@@ -91,6 +95,14 @@ func ResolveUsageProjectKeys(
 func resolveUsageProjectKeyLabels(
 	ctx context.Context, store db.Store, keys string,
 ) ([]string, error) {
+	byKey, err := usageProjectKeyCatalog(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	return usageProjectKeyLabels(byKey, keys)
+}
+
+func usageProjectKeyCatalog(ctx context.Context, store db.Store) (map[string]string, error) {
 	labels, err := store.GetActiveProjectLabels(ctx)
 	if err != nil {
 		return nil, err
@@ -105,6 +117,10 @@ func resolveUsageProjectKeyLabels(
 			byKey[entry.ProjectKey] = label
 		}
 	}
+	return byKey, nil
+}
+
+func usageProjectKeyLabels(byKey map[string]string, keys string) ([]string, error) {
 	resolved := make([]string, 0)
 	for _, key := range splitCSVTokens(keys) {
 		label, ok := byKey[key]

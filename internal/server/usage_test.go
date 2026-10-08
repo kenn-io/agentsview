@@ -526,7 +526,7 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	assert.Equal(t, "hermes-cron", entries[0].Project)
 	assert.Equal(t, "job-a", entries[0].GroupKey)
 	assert.Equal(t, "Research digest", entries[0].GroupLabel)
-	assert.Equal(t, 3, entries[0].SessionCount)
+	assert.Equal(t, int64(3_000_000), entries[0].Cost.Microdollars)
 	params["project"] = "unrelated-page-filter"
 	w = te.get(t, buildPathURL("/api/v1/usage/top-sessions", params))
 	assertStatus(t, w, http.StatusOK)

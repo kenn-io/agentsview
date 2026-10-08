@@ -6140,7 +6140,6 @@ func TestGroupTopSessionsLatestRecordedLabel(t *testing.T) {
 	require.Len(t, rows, 2)
 	assert.Equal(t, TopSessionEntry{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15}, rows[0])
 	assert.Equal(t, "Tie winner", rows[1].GroupLabel)
-	assert.Equal(t, 4, rows[1].SessionCount)
 	assert.Empty(t, rows[1].SessionID)
 }
 
@@ -6153,4 +6152,21 @@ func TestGroupTopSessionsRanksTiesByGroup(t *testing.T) {
 	rows = SortAndLimitTopSessions(rows, 1, TopSessionsSortTokens, UsageTokenTypesAll)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "job-a", rows[0].GroupKey)
+}
+
+func TestGroupTopSessionsMalformedStartedAt(t *testing.T) {
+	for _, entries := range [][]TopSessionEntry{
+		{{StartedAt: "2026-10-08T12:00:00Z", GroupLabel: "Earlier"}, {StartedAt: "unknown", GroupLabel: "Fallback"}},
+		{{StartedAt: "unknown", GroupLabel: "Fallback"}, {StartedAt: "2026-10-08T12:00:00Z", GroupLabel: "Earlier"}},
+		{{StartedAt: "", GroupLabel: "Earlier"}, {StartedAt: "unknown", GroupLabel: "Fallback"}},
+	} {
+		for i := range entries {
+			entries[i].Project = "hermes-cron"
+			entries[i].GroupKey = "job-a"
+		}
+		rows, err := GroupTopSessions(entries)
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		assert.Equal(t, "Fallback", rows[0].GroupLabel)
+	}
 }
