@@ -1824,16 +1824,16 @@ generating; opening a cached insight does not count.
 Downloads and Gist publishes count export attempts, including attempts that
 fail. Markdown links count after the link is copied successfully.
 
-| Event               | Property     | Allowed values                                                                                                        |
-| ------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `search_run`        | `query_type` | `text`, `semantic`, `hybrid`                                                                                          |
-| `session_viewed`    | `agent`      | the session's agent type                                                                                              |
-| `export_run`        | `format`     | `html`, `insight_html`, `csv`, `markdown_link`, `gist`, `insight_gist`                                                |
-| `insight_generated` | `kind`       | `daily_activity`, `agent_analysis`, or a generated-insight template name                                              |
-| `analytics_viewed`  | `page`       | `usage`, `activity`, `trends`, `quality`                                                                              |
-| `screen_viewed`     | `screen`     | `sessions`, `usage`, `activity`, `trends`, `recall`, `quality`, `pinned`, `trash`, `recent-edits`, `data`, `settings` |
-| `session_ended`     | `surface`    | `web` |
-| `session_ended`     | `duration_bucket` | `under_1m`, `1_to_5m`, `5_to_30m`, `over_30m` |
+| Event               | Property          | Allowed values                                                                                                        |
+| ------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `search_run`        | `query_type`      | `text`, `semantic`, `hybrid`                                                                                          |
+| `session_viewed`    | `agent`           | the session's agent type                                                                                              |
+| `export_run`        | `format`          | `html`, `insight_html`, `csv`, `markdown_link`, `gist`, `insight_gist`                                                |
+| `insight_generated` | `kind`            | `daily_activity`, `agent_analysis`, or a generated-insight template name                                              |
+| `analytics_viewed`  | `page`            | `usage`, `activity`, `trends`, `quality`                                                                              |
+| `screen_viewed`     | `screen`          | `sessions`, `usage`, `activity`, `trends`, `recall`, `quality`, `pinned`, `trash`, `recent-edits`, `data`, `settings` |
+| `session_ended`     | `surface`         | `web`                                                                                                                 |
+| `session_ended`     | `duration_bucket` | `under_1m`, `1_to_5m`, `5_to_30m`, `over_30m`                                                                         |
 
 Every event contains only:
 

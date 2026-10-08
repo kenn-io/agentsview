@@ -777,7 +777,9 @@ Troubleshooting:
 
 agentsview sends limited anonymous telemetry to PostHog: a `daemon_active` ping
 at most once per UTC day while the server runs, and an `app_opened` event when
-the web UI loads and on the first focus of a later UTC day. The web UI also
+the web UI loads and on the first focus of a later UTC day. The web UI sends
+`session_ended` with `surface: web` and visible visit duration in fixed buckets:
+`under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. The web UI also
 reports searches (search mode), session views (the session's agent type), screen
 views (screen name, once per install per UTC day), exports (format), generated
 insights (insight kind) and analytics page views (page name), each with one

@@ -1,4 +1,4 @@
-const SERVER_URL_KEY = "agentsview-server-url";
+export const SERVER_URL_KEY = "agentsview-server-url";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
 
 export function getGeneratedBase(): string {
@@ -16,10 +16,22 @@ export function getServerUrl(): string {
 }
 
 export function setServerUrl(url: string): void {
+  const oldValue = localStorage.getItem(SERVER_URL_KEY);
   if (url) {
     localStorage.setItem(SERVER_URL_KEY, url);
   } else {
     localStorage.removeItem(SERVER_URL_KEY);
+  }
+  const newValue = url || null;
+  if (oldValue !== newValue) {
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: SERVER_URL_KEY,
+        oldValue,
+        newValue,
+        storageArea: localStorage,
+      }),
+    );
   }
 }
 

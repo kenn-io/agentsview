@@ -16,12 +16,10 @@ export function reportTelemetry(
   properties?: Record<string, string>,
   options?: ApiRequestOptions,
 ): void {
-  const headers = new Headers(options?.headers);
-  headers.set("Content-Type", "application/json");
   orvalRequest("/api/v1/telemetry/events", {
     ...options,
     method: "POST",
-    headers,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ event, properties }),
   }).catch(() => {});
 }

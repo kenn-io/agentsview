@@ -115,7 +115,17 @@ export function installFallbackMatchMedia(): void {
   });
 }
 
-installFallbackStorage("localStorage");
+const browserStorage = (globalThis as typeof globalThis & { jsdom?: { window: Window } }).jsdom
+  ?.window.localStorage;
+if (browserStorage) {
+  Object.defineProperty(globalThis, "localStorage", {
+    value: browserStorage,
+    configurable: true,
+    writable: true,
+  });
+} else {
+  installFallbackStorage("localStorage");
+}
 installFallbackResizeObserver();
 installFallbackPointerCapture();
 installFallbackMatchMedia();

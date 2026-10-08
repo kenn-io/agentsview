@@ -1,12 +1,14 @@
-import { getGeneratedBase } from "../api/runtime.js";
+import { getGeneratedBase, getServerUrl, SERVER_URL_KEY } from "../api/runtime.js";
 import { reportTelemetry } from "./telemetry.js";
 
 const THIRTY_MINUTES = 1_800_000;
 
 export function setupSessionEndedReporting(): () => void {
-  let destination = getGeneratedBase();
   let visibleMs = 0;
   let started = document.hidden ? undefined : performance.now();
+  let destination = started === undefined ? undefined : getGeneratedBase();
+  let selection = getServerUrl();
+  let invalid = false;
   let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
   let hiddenAt: number | undefined;
 
@@ -20,7 +22,7 @@ export function setupSessionEndedReporting(): () => void {
     hiddenAt = undefined;
     pause();
     const currentDestination = getGeneratedBase();
-    if (visibleMs > 0 && destination === currentDestination) {
+    if (visibleMs > 0 && !invalid && destination === currentDestination) {
       const bucket =
         visibleMs < 60_000
           ? "under_1m"
@@ -36,14 +38,30 @@ export function setupSessionEndedReporting(): () => void {
       );
     }
     visibleMs = 0;
-    destination = currentDestination;
+    destination = undefined;
+    invalid = false;
   };
   const resume = () => {
     if (document.hidden) return;
     if (hiddenAt !== undefined && Date.now() - hiddenAt >= THIRTY_MINUTES) end();
     clearTimeout(hiddenTimer);
     hiddenAt = undefined;
-    if (started === undefined) started = performance.now();
+    if (started === undefined) {
+      if (destination === undefined) {
+        destination = getGeneratedBase();
+        selection = getServerUrl();
+      }
+      started = performance.now();
+    }
+  };
+  const storage = (event: StorageEvent) => {
+    if (
+      destination !== undefined &&
+      event.storageArea === localStorage &&
+      (event.key === SERVER_URL_KEY || event.key === null) &&
+      (event.newValue ?? "") !== selection
+    )
+      invalid = true;
   };
   const visibility = () => {
     if (document.hidden) {
@@ -57,10 +75,12 @@ export function setupSessionEndedReporting(): () => void {
   document.addEventListener("visibilitychange", visibility);
   window.addEventListener("pagehide", end);
   window.addEventListener("pageshow", resume);
+  window.addEventListener("storage", storage);
   return () => {
     clearTimeout(hiddenTimer);
     document.removeEventListener("visibilitychange", visibility);
     window.removeEventListener("pagehide", end);
     window.removeEventListener("pageshow", resume);
+    window.removeEventListener("storage", storage);
   };
 }

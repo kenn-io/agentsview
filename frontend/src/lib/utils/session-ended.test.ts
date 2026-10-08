@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { setAuthToken, setServerUrl } from "../api/runtime.js";
+import { SERVER_URL_KEY, setAuthToken, setServerUrl } from "../api/runtime.js";
 import { setupSessionEndedReporting } from "./session-ended.js";
 
 describe("session ended reporting", () => {
@@ -101,6 +101,31 @@ describe("session ended reporting", () => {
       "https://example.org/remote",
       "https://example.org/remote/api/v1/telemetry/events",
     ],
+    ["round trip", "", "https://example.com/remote", "/agentsview/api/v1/telemetry/events"],
+    [
+      "round trip",
+      "https://example.com/remote",
+      "",
+      "https://example.com/remote/api/v1/telemetry/events",
+    ],
+    [
+      "another tab round trip",
+      "",
+      "https://example.com/remote",
+      "/agentsview/api/v1/telemetry/events",
+    ],
+    [
+      "another tab round trip",
+      "https://example.com/remote",
+      "",
+      "https://example.com/remote/api/v1/telemetry/events",
+    ],
+    [
+      "clear and restore",
+      "https://example.com/remote",
+      "",
+      "https://example.com/remote/api/v1/telemetry/events",
+    ],
   ])(
     "discards a visit across %s and reports the next visit to the current server",
     (action, from, to, url) => {
@@ -112,19 +137,40 @@ describe("session ended reporting", () => {
         setAuthToken("old-token");
         stop = setupSessionEndedReporting();
         advance(120_000);
-        if (action === "reset") {
+        if (action === "reset" || action === "clear and restore") {
           localStorage.clear();
-        } else if (action === "another tab") {
-          localStorage.setItem("agentsview-server-url", to);
+          if (action === "clear and restore") {
+            localStorage.setItem(SERVER_URL_KEY, from);
+            window.dispatchEvent(new StorageEvent("storage", { storageArea: localStorage }));
+          }
+        } else if (action.startsWith("another tab")) {
+          if (to) localStorage.setItem(SERVER_URL_KEY, to);
+          else localStorage.removeItem(SERVER_URL_KEY);
+          if (action === "another tab round trip") {
+            if (from) localStorage.setItem(SERVER_URL_KEY, from);
+            else localStorage.removeItem(SERVER_URL_KEY);
+          }
           window.dispatchEvent(
             new StorageEvent("storage", {
-              key: "agentsview-server-url",
-              oldValue: from,
-              newValue: to,
+              key: SERVER_URL_KEY,
+              oldValue: from || null,
+              newValue: to || null,
+              storageArea: localStorage,
             }),
           );
+          if (action === "another tab round trip") {
+            window.dispatchEvent(
+              new StorageEvent("storage", {
+                key: SERVER_URL_KEY,
+                oldValue: to || null,
+                newValue: from || null,
+                storageArea: localStorage,
+              }),
+            );
+          }
         } else {
           setServerUrl(to);
+          if (action === "round trip") setServerUrl(from);
         }
         if (action === "reset") {
           visibility(true);
@@ -145,6 +191,60 @@ describe("session ended reporting", () => {
       } finally {
         base.remove();
       }
+    },
+  );
+
+  it.each(["same server", "local clear", "unrelated key", "session storage"])(
+    "keeps a visit across %s",
+    (action) => {
+      stop = setupSessionEndedReporting();
+      advance(120_000);
+      if (action === "same server") setServerUrl("");
+      else {
+        if (action === "local clear") localStorage.clear();
+        window.dispatchEvent(
+          new StorageEvent("storage", {
+            key:
+              action === "local clear"
+                ? null
+                : action === "unrelated key"
+                  ? "other-key"
+                  : SERVER_URL_KEY,
+            newValue: action === "local clear" ? null : "https://example.com/remote",
+            storageArea: action === "session storage" ? sessionStorage : localStorage,
+          }),
+        );
+      }
+      close();
+      expect(buckets()).toEqual(["1_to_5m"]);
+    },
+  );
+
+  it.each(["hidden expiry", "cached page", "initially hidden"])(
+    "captures the server at the next visible start after %s",
+    (action) => {
+      hidden = action === "initially hidden";
+      stop = setupSessionEndedReporting();
+      if (!hidden) {
+        advance(120_000);
+        if (action === "hidden expiry") {
+          visibility(true);
+          advance(1_800_000);
+        } else close();
+      }
+      setServerUrl("https://example.com/remote");
+      setAuthToken("current-token");
+      visibility(false);
+      window.dispatchEvent(new Event("pageshow"));
+      advance(30_000);
+      close();
+      expect(buckets()).toEqual(
+        action === "initially hidden" ? ["under_1m"] : ["1_to_5m", "under_1m"],
+      );
+      expect(fetch.mock.lastCall?.[0]).toBe("https://example.com/remote/api/v1/telemetry/events");
+      expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("Authorization")).toBe(
+        "Bearer current-token",
+      );
     },
   );
 

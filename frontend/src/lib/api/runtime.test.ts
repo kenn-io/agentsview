@@ -1,12 +1,43 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
-import { ApiError, orvalFetch, responseTimingOf, setAuthToken } from "./runtime.js";
+import {
+  ApiError,
+  orvalFetch,
+  responseTimingOf,
+  SERVER_URL_KEY,
+  setAuthToken,
+  setServerUrl,
+} from "./runtime.js";
 
 describe("orvalFetch", () => {
   afterEach(() => {
     localStorage.clear();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it("notifies this tab only when the selected server changes", () => {
+    const listener = vi.fn();
+    window.addEventListener("storage", listener);
+    try {
+      setServerUrl("https://example.com/remote");
+      setServerUrl("https://example.com/remote");
+      setServerUrl("");
+      setServerUrl("");
+      expect(
+        listener.mock.calls.map(([event]) => [
+          event.key,
+          event.oldValue,
+          event.newValue,
+          event.storageArea,
+        ]),
+      ).toEqual([
+        [SERVER_URL_KEY, null, "https://example.com/remote", localStorage],
+        [SERVER_URL_KEY, "https://example.com/remote", null, localStorage],
+      ]);
+    } finally {
+      window.removeEventListener("storage", listener);
+    }
   });
 
   it("records when a JSON response was sent, answered, and read", async () => {
