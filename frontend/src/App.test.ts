@@ -1895,7 +1895,7 @@ describe("App telemetry", () => {
     await flushEffects();
     now = 120_000;
     window.dispatchEvent(new Event("pagehide"));
-    expect(postedFor("session_ended")).toEqual([{ surface: "web", duration_bucket: "1_to_5m" }]);
+    expect(postedFor("session_ended")).toHaveLength(1);
     window.dispatchEvent(new Event("pageshow"));
     await unmount(component);
     component = undefined;

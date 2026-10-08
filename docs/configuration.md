@@ -1803,8 +1803,9 @@ of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,
 1 to below 5 minutes, 5 through 30 minutes, and above 30 minutes. Visible time
 adds up across tab switches and includes idle visible time; hidden time adds
 nothing. Closing or reloading the page, or leaving it hidden for 30 minutes,
-ends a visit. Visits that span a server change are discarded. The next visit
-uses the selected server. Each visit can send an event.
+ends a visit. Visits that span a server change are discarded in full. The next
+visit uses the selected server after a reload, reopening, or return from
+30 minutes hidden. Each visit can send an event.
 There's no daily limit. Delivery is best effort; a browser crash or forced
 discard can lose it.
 
