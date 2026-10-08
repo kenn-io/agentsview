@@ -120,14 +120,13 @@ The latest published release is
 
 **Improvements**
 
+- Dashboard repository discovery reuses unchanged Git trust settings, reducing repeated Git launches.
 - Dashboard Git totals reuse discovery for ordinary checkouts owned by the
   server's user. Other layouts use fresh Git discovery. Directories with no
   repository metadata no longer launch Git.
 - The daemon sends its anonymous `daemon_active` ping at most once per UTC day,
   even when it restarts often or several servers share a data directory. A
   server that stays up sends one ping for each UTC day it runs.
-- Dashboard Git totals reuse repository lookups when you reload or change the
-  date range. Directories with no repository metadata no longer launch Git.
 - The Usage page stays fast after a pricing update. A changed price now
   rebuilds only the sessions that used that model, instead of every session in
   the archive, and a refresh that changes no rates rebuilds nothing. The daemon
