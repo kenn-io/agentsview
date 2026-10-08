@@ -423,6 +423,9 @@ func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
 	source := testDB(t)
 	leaf := "reply"
 	otherLeaf := "other-reply"
+	fullMarker := "claude-ai:v1:full:reply"
+	usageMarker := "claude-ai:v1:usage:reply"
+	newerMarker := "claude-ai:v2:opaque"
 	rows := []struct {
 		id     string
 		marker *string
@@ -431,6 +434,9 @@ func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
 		{"imported", &leaf, &leaf},
 		{"imported-other", &otherLeaf, &otherLeaf},
 		{"imported-null", nil, nil},
+		{"full-marker", &fullMarker, &fullMarker},
+		{"usage-marker", &usageMarker, nil},
+		{"newer-marker", &newerMarker, &newerMarker},
 		{"file-backed", &otherLeaf, nil},
 	}
 	for _, row := range rows {
@@ -447,7 +453,7 @@ func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
 	destination := testDB(t)
 	count, err := destination.CopyOrphanedDataFrom(source.Path())
 	require.NoError(t, err)
-	require.Equal(t, 4, count)
+	require.Equal(t, 7, count)
 	for _, row := range rows {
 		session, err := destination.GetSessionFull(t.Context(), row.id)
 		require.NoError(t, err)

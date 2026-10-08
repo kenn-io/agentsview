@@ -1941,10 +1941,10 @@ func copySessionDataForIDs(
 	if oldDBHasColumn(ctx, tx, "sessions", "last_entry_uuid") {
 		if _, err := tx.ExecContext(ctx,
 			"UPDATE sessions AS destination SET last_entry_uuid = (SELECT CASE "+
-				"WHEN source.last_entry_uuid GLOB 'claude-ai:v1:*' AND source.last_entry_uuid NOT GLOB ? THEN NULL "+
+				"WHEN source.last_entry_uuid GLOB ? AND source.last_entry_uuid NOT GLOB ? THEN NULL "+
 				"ELSE source.last_entry_uuid END FROM old_db.sessions AS source WHERE source.id = destination.id) "+
 				"WHERE COALESCE(destination.file_path, '') = '' AND destination.id IN (SELECT id FROM "+tempIDsTable+")",
-			"claude-ai:v1:"+string(policy)+":*",
+			claudeAIMarkerPrefix()+"*", ClaudeAIMarker(policy, "*"),
 		); err != nil {
 			return fmt.Errorf("copying import freshness markers: %w", err)
 		}

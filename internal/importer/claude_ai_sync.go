@@ -41,11 +41,17 @@ func claudeAIRequest(shape int, organization, conversation string, offset int) s
 	return strings.NewReplacer("{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset)).Replace(strings.Split(claudeAIRequests, "\n")[shape])
 }
 
-// Bump the marker version when parser output changes.
-const claudeAIMarkerVersion = 1
-
 func claudeAIMarker(store db.Store, leaf string) string {
-	return "claude-ai:v" + strconv.Itoa(claudeAIMarkerVersion) + ":" + string(storeArchiveContent(store)) + ":" + leaf
+	return db.ClaudeAIMarker(storeArchiveContent(store), leaf)
+}
+
+func checkClaudeAIMarker(existing *db.Session) error {
+	if existing != nil && existing.LastEntryUUID != nil {
+		if version := db.ParseClaudeAIMarkerVersion(*existing.LastEntryUUID); version > db.ClaudeAIMarkerVersion {
+			return refuse(RefusalNewerMarker, fmt.Errorf("stored claude.ai marker version %d is newer than supported version %d", version, db.ClaudeAIMarkerVersion))
+		}
+	}
+	return nil
 }
 
 type claudeAIHTTPError struct{ status int }
@@ -156,16 +162,10 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err != nil {
 					return stats, err
 				}
-				if existing != nil && existing.LastEntryUUID != nil {
-					parts := strings.SplitN(*existing.LastEntryUUID, ":", 3)
-					if len(parts) == 3 && parts[0] == "claude-ai" && strings.HasPrefix(parts[1], "v") {
-						version, err := strconv.Atoi(strings.TrimPrefix(parts[1], "v"))
-						if err == nil && version > claudeAIMarkerVersion {
-							stats.record(id, importSkipped, refuse(RefusalNewerMarker, fmt.Errorf("stored Claude.ai marker version %d is newer than supported version %d", version, claudeAIMarkerVersion)))
-							cb.progress(stats)
-							continue
-						}
-					}
+				if err := checkClaudeAIMarker(existing); err != nil {
+					stats.record(id, importSkipped, err)
+					cb.progress(stats)
+					continue
 				}
 				updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
 				if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) && existing.LastEntryUUID != nil && *existing.LastEntryUUID == claudeAIMarker(store, leaf) {

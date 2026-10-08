@@ -2799,8 +2799,9 @@ schemas keep their existing ordering behavior.
   Malformed selected paths and mismatched conversation UUIDs fail before writes.
   Exports preserve their original message order.
 - **Freshness:** Sync compares `updated_at` with archived `ended_at` and stores
-  a versioned leaf marker with the archive content policy in `last_entry_uuid`.
-  A policy change or zip import requires one new detail fetch. Sync commits
+  a versioned leaf marker with effective content retention in `last_entry_uuid`.
+  Full and transcripts retain identical output and share a marker. Switching
+  usage retention or importing a zip requires one new detail fetch. Sync commits
   metadata, messages, and the marker together. Unchanged transcripts and appends
   keep existing row IDs; branch replacements assign new row IDs. Sync writes
   message identities only when it adds or replaces turns. Unchanged zip imports
@@ -2809,7 +2810,7 @@ schemas keep their existing ordering behavior.
   updates and Trash copies.
   Shorter zip exports remain refused. Pins follow source UUIDs, or role, content,
   and occurrence rank when the replacement has no UUIDs. Full resync preserves
-  import markers only when their policy matches the target archive policy,
+  import markers only when their retention matches the target archive,
   verified by `TestSyncClaudeAIResyncArchivePolicy` on 2026-10-08.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
@@ -2828,6 +2829,8 @@ schemas keep their existing ordering behavior.
   as errors. Reverified 2026-10-08 against the importer regression:
   the `claude-ai:vN:` prefix rejects
   N greater than 1 regardless of payload layout, with a `newer_marker` refusal.
+  File import and explicit replacement enforce the same boundary, verified by
+  `TestImportClaudeAINewerMarkerError` on 2026-10-08.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks
   found `current_leaf_message_uuid` on list items and byte-identical list and
   detail `updated_at` values with microseconds. Branch switches changed the

@@ -80,8 +80,43 @@ func TestSyncClaudeAIArchivePolicySwitch(t *testing.T) {
 	assert.Equal(t, strPtr("claude-ai:v1:full:reply"), session.LastEntryUUID)
 }
 
+func TestSyncClaudeAIEquivalentArchivePolicies(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
+		t.Run(string(policy), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d, err := db.OpenWithArchiveContent(t.Context(), path, policy)
+			require.NoError(t, err)
+			t.Cleanup(func() { d.Close() })
+			details := 0
+			fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+				details++
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+			})
+			_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			before, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+			require.NoError(t, err)
+			require.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(before))
+			require.NoError(t, d.Close())
+			other := config.ArchiveContentTranscripts
+			if policy == config.ArchiveContentTranscripts {
+				other = config.ArchiveContentFull
+			}
+			d, err = db.OpenWithArchiveContent(t.Context(), path, other)
+			require.NoError(t, err)
+			stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Skipped)
+			assert.Equal(t, 1, details)
+			after, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+}
+
 func TestSyncClaudeAIResyncArchivePolicy(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
 			const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 			dir := t.TempDir()
@@ -1036,8 +1071,50 @@ func TestSyncClaudeAIShorterZipStillRefused(t *testing.T) {
 	assert.Equal(t, strPtr("claude-ai:v1:full:reply"), marked.LastEntryUUID)
 }
 
+func TestImportClaudeAINewerMarkerError(t *testing.T) {
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	for _, mode := range []string{"equal length", "equal length replacement", "shorter replacement"} {
+		t.Run(mode, func(t *testing.T) {
+			d := testDB(t)
+			stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+syncDetail+"]"), nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, stats.Imported)
+			session, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			session.LastEntryUUID = strPtr("claude-ai:v2:full:future-leaf")
+			require.NoError(t, d.UpsertSession(t.Context(), *session))
+			before, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			messages, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			opts := ImportOptions{}
+			if mode != "equal length" {
+				opts.Replace = []string{id}
+			}
+			exported := strings.Replace(syncDetail, "Chosen reply", "Changed reply", 1)
+			if mode == "shorter replacement" {
+				exported = `{"uuid":"22222222-2222-4222-8222-222222222222","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:04:00Z","chat_messages":[{"sender":"human","text":"Hello"}]}`
+			}
+			stats, err = ImportClaudeAIWithOptions(t.Context(), d, strings.NewReader("["+exported+"]"), nil, opts)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Errors)
+			assert.Equal(t, []ImportRefusal{{SessionID: id, Reason: RefusalNewerMarker}}, stats.Refusals)
+			assert.Zero(t, stats.Imported+stats.Updated+stats.Skipped)
+			after, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			afterMessages, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, messages, afterMessages)
+			assert.Empty(t, replacedCopies(t, d, id))
+		})
+	}
+}
+
 func TestSyncClaudeAINewerMarkerError(t *testing.T) {
-	for _, marker := range []string{"claude-ai:v2:full:future-leaf", "claude-ai:v2:opaque", "claude-ai:v3:"} {
+	for _, marker := range []string{"claude-ai:v2:full:future-leaf", "claude-ai:v2:opaque", "claude-ai:v3:", "claude-ai:v20:unknown:payload"} {
 		t.Run(marker, func(t *testing.T) {
 			d := testDB(t)
 			const id = "claude-ai:22222222-2222-4222-8222-222222222222"
