@@ -1426,7 +1426,6 @@ func extractMessagesFrom(
 			SourceParentUUID:   e.parentUuid,
 			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
 			PromptSource:       gjson.Get(e.line, "promptSource").Str,
-			claudeSDKOrigin:    claudeSDKPrompt(e.line),
 			tokenPresenceKnown: e.entryType == "assistant",
 		}
 

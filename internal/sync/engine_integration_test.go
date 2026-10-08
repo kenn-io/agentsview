@@ -13379,30 +13379,46 @@ func TestIncrementalSync_ClaudeAgentSettingAppendUsesFullParse(t *testing.T) {
 }
 
 func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
+	continuation := testjsonl.JoinJSONL(
+		`{"type":"agent-setting","entrypoint":"sdk-cli"}`,
+		testjsonl.ClaudeUserJSON("This session is being continued from a previous conversation that ran out of context.", tsZero),
+	)
 	for _, tc := range []struct {
-		name, initial       string
-		malformed, messages int
+		name, initial, appended, relationship string
+		messages, userMessages                int
+		incremental                           bool
 	}{
-		{name: "first worker", initial: `"isMeta":true,`, malformed: 1, messages: 1},
-		{name: "established session", initial: `"turnOrigin":"sdk",`, messages: 2},
+		{name: "promptless SDK continuation", initial: continuation, appended: testjsonl.ClaudeAssistantJSON("still working", tsZeroS1), messages: 2, incremental: true},
+		{name: "first SDK prompt in append", initial: continuation, appended: `{"type":"user","turnOrigin":"sdk","timestamp":"2026-06-01T00:00:02Z","message":{"content":"Plan a settings change."}}`, relationship: "subagent", messages: 2, userMessages: 1},
+		{name: "established session", initial: `{"type":"user","entrypoint":"sdk-cli","turnOrigin":"sdk","timestamp":"2026-06-01T00:00:00Z","message":{"content":"first prompt"}}` + "\n", appended: `{"type":"user","turnOrigin":"sdk","timestamp":"2026-06-01T00:00:02Z","message":{"content":"Plan a settings change."}}`, relationship: "subagent", messages: 2, userMessages: 2, incremental: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupTestEnv(t)
-			initial := `{"type":"user","uuid":"u1","entrypoint":"sdk-cli",` + tc.initial + `"timestamp":"2026-06-01T00:00:00Z","message":{"content":"first prompt"}}` + "\n"
-			path := env.writeClaudeSession(t, "proj", "worker-append.jsonl", initial)
+			path := env.writeClaudeSession(t, "proj", "worker-append.jsonl", tc.initial)
 			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-			appended := "not json\n" + `{"type":"user","uuid":"u2","parentUuid":"u1","turnOrigin":"sdk","timestamp":"2026-06-01T00:00:02Z","message":{"content":"Plan a settings change."}}` + "\n"
-			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+			appendLine := func(line string) {
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+				require.NoError(t, err)
+				_, err = f.WriteString(line + "\n")
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				env.engine.SyncPaths([]string{path})
+			}
+			appendLine(tc.appended)
+			stored, err := env.db.GetSessionFull(t.Context(), "worker-append")
 			require.NoError(t, err)
-			_, err = f.WriteString(appended)
+			require.NotNil(t, stored)
+			assert.Equal(t, tc.messages, stored.MessageCount)
+			assert.Equal(t, tc.relationship, stored.RelationshipType)
+			assert.Equal(t, tc.userMessages, stored.UserMessageCount)
+			assert.Equal(t, tc.incremental, stored.LastWriteIncremental)
+			appendLine(testjsonl.ClaudeAssistantJSON("continued work", tsZeroS5))
+			stored, err = env.db.GetSessionFull(t.Context(), "worker-append")
 			require.NoError(t, err)
-			require.NoError(t, f.Close())
-			env.engine.SyncPaths([]string{path})
-			assertSessionMessageCount(t, env.db, "worker-append", tc.messages)
-			assertSessionState(t, env.db, "worker-append", func(sess *db.Session) {
-				assert.Equal(t, "subagent", sess.RelationshipType)
-				assert.Equal(t, tc.malformed, sess.ParserMalformedLines)
-			})
+			require.NotNil(t, stored)
+			assert.Equal(t, tc.messages+1, stored.MessageCount)
+			assert.Equal(t, tc.relationship, stored.RelationshipType)
+			assert.True(t, stored.LastWriteIncremental)
 		})
 	}
 }
@@ -16750,6 +16766,7 @@ func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) 
 	env := setupTestEnv(t)
 
 	initial := testjsonl.JoinJSONL(
+		`{"type":"agent-setting","entrypoint":"sdk-cli"}`,
 		testjsonl.ClaudeUserJSON(
 			"This session is being continued from a previous "+
 				"conversation that ran out of context.",
@@ -16799,6 +16816,7 @@ func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) 
 	require.NoError(t, err, "GetSessionFull after append")
 	assert.True(t, updated.LastWriteIncremental,
 		"promptless append should use the incremental write path")
+	assert.Empty(t, updated.RelationshipType)
 	assert.Equal(t, 4, updated.MessageCount,
 		"MessageCount after append = %d, want 4", updated.MessageCount)
 	assert.Equal(t, 1, updated.UserMessageCount,

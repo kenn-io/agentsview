@@ -15971,10 +15971,6 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
-	if agent == parser.AgentClaude && inc.UserMsgCount == 0 && inc.Entrypoint == "sdk-cli" && inc.SessionKind == "" {
-		return processResult{forceReplace: true}, false
-	}
-
 	currentSize := info.Size()
 
 	// A prior sync that stored no message rows has no safe append
@@ -16356,11 +16352,12 @@ func (e *Engine) tryIncrementalJSONL(
 	// alongside real user rows — for example Codex inserts orphan
 	// subagent notifications as Role=user messages that bypass
 	// firstMessage — so this fall-through is gated on Claude. Usage-only
-	// archives deliberately discard every preview; their incremental
-	// automation classifier consumes the raw appended rows instead.
-	if !e.db.ArchiveContent().UsageOnly() &&
-		agent == parser.AgentClaude && inc.FirstMessage == "" &&
-		chunkHasRealUserPrompt(newMsgs) {
+	// archives use the stored user count because they discard previews.
+	noPrompt := inc.FirstMessage == ""
+	if e.db.ArchiveContent().UsageOnly() {
+		noPrompt = inc.UserMsgCount == 0
+	}
+	if agent == parser.AgentClaude && noPrompt && chunkHasRealUserPrompt(newMsgs) {
 		log.Printf(
 			"incremental %s %s: first real user prompt after "+
 				"empty preview, full parse",

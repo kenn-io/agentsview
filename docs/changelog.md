@@ -235,7 +235,6 @@ The latest published release is
   Parentless workers appear as sidebar roots and require children to be included
   in flat lists. Codex and Grok runs keep their automation flag through appends.
   Readable sources reparse once; unreadable sources keep their stored category.
-
 - Hosted raw sync keeps a session listed and searchable after its source file
   disappears from the device that uploaded it, matching the local archive.
   Before, `raw-sync watch` reporting a missing file hid the session, emptied it

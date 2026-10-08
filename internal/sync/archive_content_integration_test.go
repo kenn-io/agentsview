@@ -269,6 +269,50 @@ func TestUsageOnlyStorageClaudeUserAppendStaysIncremental(t *testing.T) {
 	assert.Nil(t, stored.FirstMessage)
 }
 
+func TestUsageOnlyStorageClaudeWorkerOriginIncrementalFallback(t *testing.T) {
+	claudeRoot := t.TempDir()
+	sessionID := "usage-only-worker-append"
+	path := filepath.Join(claudeRoot, "project", sessionID+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	initial := testjsonl.JoinJSONL(
+		`{"type":"agent-setting","entrypoint":"sdk-cli"}`,
+		testjsonl.ClaudeUserJSON("This session is being continued from a previous conversation that ran out of context.", tsZero),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {claudeRoot}},
+		Machine:   "local", ArchiveContent: config.ArchiveContentUsage,
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	for _, tc := range []struct {
+		line, relationship string
+		userMessages       int
+		incremental        bool
+	}{
+		{line: testjsonl.ClaudeAssistantJSON("still working", tsZeroS1), incremental: true},
+		{line: `{"type":"user","turnOrigin":"sdk","timestamp":"2026-06-01T00:00:02Z","message":{"content":"Plan a settings change."}}`, relationship: "subagent", userMessages: 1},
+		{line: `{"type":"user","turnOrigin":"sdk","timestamp":"2026-06-01T00:00:03Z","message":{"content":"Apply the settings change."}}`, relationship: "subagent", userMessages: 2, incremental: true},
+	} {
+		appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		require.NoError(t, err)
+		_, err = appendFile.WriteString(tc.line + "\n")
+		require.NoError(t, err)
+		require.NoError(t, appendFile.Close())
+		engine.SyncPathsContext(t.Context(), []string{path})
+		stored, err := database.GetSessionFull(t.Context(), sessionID)
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		assert.Equal(t, tc.relationship, stored.RelationshipType)
+		assert.Equal(t, tc.userMessages, stored.UserMessageCount)
+		if tc.incremental {
+			assert.True(t, stored.LastWriteIncremental)
+		}
+		assert.Nil(t, stored.FirstMessage)
+	}
+}
+
 func TestUsageOnlyStorageClaudeAITitleAppendStaysIncremental(t *testing.T) {
 	claudeRoot := t.TempDir()
 	sessionID := "usage-only-ai-title"

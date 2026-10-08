@@ -153,8 +153,9 @@ evidence; they do not establish whether a tool helped the task.
   Human origin wins conflicting markers; missing origin remains ambiguous.
   Explicit provider kinds remain intact.
   Data version 127 reparses readable sources once. Reverified 2026-10-08
-  against parser fixtures and the engine's zero-user-count escalation. The
-  original evidence came from the installed producer and local transcripts.
+  against parser fixtures and the engine's first-real-prompt fallback for
+  transcript and usage-only archives. The original evidence came from the
+  installed producer and local transcripts.
   Public source is unavailable. Queued fixtures follow the bundled ingress and
   persistence path; no native queued-origin transcript has been captured.
 
