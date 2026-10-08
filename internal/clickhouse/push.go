@@ -158,7 +158,7 @@ func (s *Sync) PushWithOptions(
 	}
 
 	var vectorScope []string
-	if opts.ScopeVectorsToChangedSessions && !full && !opts.FullVectors {
+	if opts.ScopeVectorsToChangedSessions && !opts.FullVectors {
 		vectorScope = sessionIDs(changed)
 	}
 	result.Vectors, err = s.pushVectors(ctx, full || opts.FullVectors, vectorScope, failed, onProgress)
