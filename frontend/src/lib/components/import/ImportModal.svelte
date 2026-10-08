@@ -54,24 +54,29 @@
   const host = getBrowserHost();
   let syncController = $state<AbortController>();
   let syncTask: Promise<ImportStats> | undefined;
+  let disconnecting = $state(false);
   const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection() && !syncState.readOnly);
 
   async function connect() {
+    if (disconnecting) return;
     try { await host?.connect(); }
     catch (e) { error = String(e); }
   }
 
   async function disconnect() {
+    if (disconnecting) return;
+    disconnecting = true;
     syncController?.abort();
     try {
       await syncTask?.catch(() => {});
       await host?.disconnect();
     }
     catch (e) { error = String(e); }
+    finally { disconnecting = false; }
   }
 
   async function sync() {
-    if (!host || importing) return;
+    if (!host || importing || disconnecting) return;
     importing = true;
     error = null;
     result = null;
@@ -367,9 +372,9 @@
       </p>
 
       {#if canSync}
-        <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing} onclick={connect} />
-        <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing} onclick={sync} />
-        <Button label={m.import_claude_disconnect()} tone="neutral" surface="outline" onclick={disconnect} />
+        <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing || disconnecting} onclick={connect} />
+        <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing || disconnecting} onclick={sync} />
+        <Button label={m.import_claude_disconnect()} tone="neutral" surface="outline" disabled={disconnecting} onclick={disconnect} />
         <p class="hint">{m.import_claude_help()}</p>
       {/if}
 

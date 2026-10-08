@@ -118,3 +118,33 @@ it("disconnect waits for sync to close the browser before deleting cookies", asy
   await waitFor(() => expect(host.disconnect).toHaveBeenCalledOnce());
   expect(screen.queryByText("Cancelled")).toBeNull();
 });
+
+it.each(["success", "error"])("blocks browser actions while disconnect is pending, then recovers after %s", async (outcome) => {
+  let resolveDisconnect!: () => void;
+  let rejectDisconnect!: (error: Error) => void;
+  host.disconnect.mockImplementation(() => new Promise<void>((resolve, reject) => {
+    resolveDisconnect = resolve;
+    rejectDisconnect = reject;
+  }));
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  const signIn = screen.getByRole("button", { name: m.import_claude_connect() }) as HTMLButtonElement;
+  const sync = screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement;
+  const disconnect = screen.getByRole("button", { name: m.import_claude_disconnect() }) as HTMLButtonElement;
+  await fireEvent.click(disconnect);
+  await waitFor(() => expect(host.disconnect).toHaveBeenCalledOnce());
+  await fireEvent.click(sync);
+  expect(syncClaudeAI).not.toHaveBeenCalled();
+  await fireEvent.click(signIn);
+  await fireEvent.click(disconnect);
+  expect(host.connect).not.toHaveBeenCalled();
+  expect(host.disconnect).toHaveBeenCalledOnce();
+  expect(signIn.disabled).toBe(true);
+  expect(sync.disabled).toBe(true);
+  expect(disconnect.disabled).toBe(true);
+  if (outcome === "success") resolveDisconnect();
+  else rejectDisconnect(new Error("Disconnect failed"));
+  await waitFor(() => expect(sync.disabled).toBe(false));
+  expect(signIn.disabled).toBe(false);
+  expect(disconnect.disabled).toBe(false);
+  if (outcome === "error") expect(screen.getByText("Error: Disconnect failed")).toBeTruthy();
+});
