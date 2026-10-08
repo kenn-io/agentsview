@@ -209,7 +209,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					if tt.signIn {
 						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again"}`, data)
 					} else if tt.status == 413 {
-						assert.JSONEq(t, `{"error":"claude returned HTTP 413"}`, data)
+						assert.JSONEq(t, `{"error":"claude response exceeds 32 MiB"}`, data)
 					} else {
 						assert.JSONEq(t, `{"error":"claude.ai access denied (HTTP 403)"}`, data)
 					}
