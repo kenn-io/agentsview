@@ -3808,6 +3808,7 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 		if err != nil {
 			return err
 		}
+		defer rows.Close()
 		setIDs, _, err := scanFullAutomationCandidates(rows, snapshotAutomationPatterns())
 		if closeErr := rows.Close(); err == nil && closeErr != nil {
 			err = closeErr
