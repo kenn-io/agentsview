@@ -39,9 +39,9 @@ func TestHeadlessAutomationSurvivesSyncAppends(t *testing.T) {
 			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
 		},
 		{
-			name: "queued worker", id: "queued-worker", agent: parser.AgentClaude,
+			name: "queued missing origin", id: "queued-missing", agent: parser.AgentClaude, interactive: true,
 			initial: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
-				`{"type":"attachment","timestamp":"2026-10-01T10:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"sdk"},"prompt":"Plan a settings change."}}` + "\n",
+				`{"type":"attachment","timestamp":"2026-10-01T10:00:00Z","attachment":{"type":"queued_command","prompt":"Plan a settings change."}}` + "\n",
 			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "").String(),
 			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
 		},

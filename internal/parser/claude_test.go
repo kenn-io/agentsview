@@ -124,7 +124,6 @@ func TestClaudeWorkerOrigin(t *testing.T) {
 		{name: "worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, want: SessionKindNonInteractive},
 		{name: "human relay", entrypoint: "sdk-cli", origin: `"turnOrigin":"human","origin":{"kind":"human"},`},
 		{name: "human conflict", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk","origin":{"kind":"human"},`},
-		{name: "human turn conflict", entrypoint: "sdk-cli", origin: `"turnOrigin":"human","origin":{"kind":"sdk"},`},
 		{name: "missing origin", entrypoint: "sdk-cli"},
 		{name: "unknown origin", entrypoint: "sdk-cli", origin: `"turnOrigin":"unknown",`},
 		{name: "TypeScript SDK", entrypoint: "sdk-ts", origin: `"turnOrigin":"sdk",`},
@@ -136,8 +135,7 @@ func TestClaudeWorkerOrigin(t *testing.T) {
 		{name: "attachment", entrypoint: "sdk-cli", prefix: `{"type":"attachment","attachment":{"type":"queued_command","prompt":"delivery"}}`},
 		{name: "queued human before worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Human question"}}`},
 		{name: "queued human before DAG worker", entrypoint: "sdk-cli", origin: `"uuid":"u1","turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Human question"}}`},
-		{name: "queued unknown before worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"unknown"},"prompt":"Unknown question"}}`},
-		{name: "first queued worker", entrypoint: "sdk-cli", prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"sdk"},"prompt":"Worker question"}}`, want: SessionKindNonInteractive},
+		{name: "queued missing origin before worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","prompt":"Unknown question"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			metadata := buildMetadataLine(map[string]any{"type": "agent-setting", "entrypoint": tc.entrypoint, "sessionKind": tc.explicitKind})
@@ -161,9 +159,8 @@ func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
 		fallback                  bool
 	}{
 		{name: "first worker", initial: `"isMeta":true,`, fallback: true},
-		{name: "first queued worker", initial: `"isMeta":true,`, tail: `{"type":"attachment","attachment":{"type":"queued_command","origin":{"kind":"sdk"},"prompt":"Worker question"}}` + "\n", fallback: true},
-		{name: "first queued human", initial: `"isMeta":true,`, tail: `{"type":"attachment","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Human question"}}` + "\n"},
-		{name: "first queued unknown", initial: `"isMeta":true,`, tail: `{"type":"attachment","attachment":{"type":"queued_command","origin":{"kind":"unknown"},"prompt":"Unknown question"}}` + "\n"},
+		{name: "first queued human", initial: `"isMeta":true,`, tail: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Human question"}}` + "\n"},
+		{name: "first queued missing origin", initial: `"isMeta":true,`, tail: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","prompt":"Unknown question"}}` + "\n"},
 		{name: "established worker", kind: SessionKindNonInteractive, userCount: 1},
 		{name: "established human", initial: `"turnOrigin":"human",`, userCount: 1},
 		{name: "established unknown", userCount: 1},
@@ -171,7 +168,7 @@ func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			initial := `{"type":"user",` + tc.initial + `"entrypoint":"sdk-cli","message":{"content":"first prompt"}}` + "\n"
 			path := createTestFile(t, "worker.jsonl", initial)
-			tail := firstNonEmptyJSONLString(tc.tail, `{"type":"user","turnOrigin":"sdk","message":{"content":"Plan a settings change."}}`+"\n")
+			tail := tc.tail + `{"type":"user","turnOrigin":"sdk","timestamp":"2026-01-01T00:01:00Z","message":{"content":"Plan a settings change."}}` + "\n"
 			require.NoError(t, os.WriteFile(path, []byte(initial+tail), 0o600))
 			_, _, _, _, err := claudeParseSessionFrom(path, int64(len(initial)), claudeIncrementalScan{
 				stored: claudeStoredIdentity{entrypoint: "sdk-cli", sessionKind: tc.kind, userMessageCount: tc.userCount},

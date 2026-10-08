@@ -64,7 +64,6 @@ type dagEntry struct {
 type claudeQueuedCommand struct {
 	prompt       string
 	promptSource string
-	sdkOrigin    bool
 	timestamp    time.Time
 }
 
@@ -1819,7 +1818,6 @@ func extractQueuedCommand(line string) (claudeQueuedCommand, bool) {
 	return claudeQueuedCommand{
 		prompt:       prompt,
 		promptSource: gjson.Get(line, "promptSource").Str,
-		sdkOrigin:    gjson.Get(line, "attachment.origin.kind").Str == "sdk",
 		timestamp:    extractTimestamp(line),
 	}, true
 }
@@ -2016,14 +2014,13 @@ func queuedCommandMessage(
 		}
 	}
 	return ParsedMessage{
-		Role:            RoleUser,
-		Content:         q.prompt,
-		Timestamp:       q.timestamp,
-		ContentLength:   len(q.prompt),
-		SourceType:      "user",
-		SourceSubtype:   "queued_command",
-		PromptSource:    q.promptSource,
-		claudeSDKOrigin: q.sdkOrigin,
+		Role:          RoleUser,
+		Content:       q.prompt,
+		Timestamp:     q.timestamp,
+		ContentLength: len(q.prompt),
+		SourceType:    "user",
+		SourceSubtype: "queued_command",
+		PromptSource:  q.promptSource,
 	}
 }
 

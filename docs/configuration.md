@@ -1374,8 +1374,8 @@ record is preserved through the bulk-resync rebuild-and-copy path.
 ## Automated Session Detection
 
 Claude Code `sdk-cli` sessions are automated when their first real normalized
-prompt has SDK origin: ordinary prompts record `turnOrigin=sdk`, and queued
-prompts record `attachment.origin.kind=sdk`. Follow-ups retain this classification.
+prompt records `turnOrigin=sdk`. Follow-ups retain this classification.
+A queued first prompt supplies no SDK evidence and blocks inference from later turns.
 Human origin wins conflicting markers. Missing or unknown origin on the first
 prompt keeps the existing prompt-based classification, as do Python and TypeScript
 SDK entrypoints.
