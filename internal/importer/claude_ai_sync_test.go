@@ -307,9 +307,9 @@ func TestSyncClaudeAI(t *testing.T) {
 					if status == 401 || status == 403 {
 						require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
 						if status == 401 {
-							assert.EqualError(t, err, "claude.ai sign-in required")
+							require.EqualError(t, err, "claude.ai sign-in required")
 						} else {
-							assert.EqualError(t, err, "claude.ai access denied (HTTP 403)")
+							require.EqualError(t, err, "claude.ai access denied (HTTP 403)")
 						}
 						assert.Equal(t, 1, calls)
 					} else {
@@ -325,21 +325,21 @@ func TestSyncClaudeAI(t *testing.T) {
 type trashDuringImportStore struct{ *db.DB }
 
 func (s trashDuringImportStore) UpsertSession(ctx context.Context, session db.Session) error {
-	if err := s.DB.SoftDeleteSession(ctx, session.ID); err != nil {
+	if err := s.SoftDeleteSession(ctx, session.ID); err != nil {
 		return err
 	}
 	return s.DB.UpsertSession(ctx, session)
 }
 
 func (s trashDuringImportStore) WriteSessionBatchAtomic(ctx context.Context, writes []db.SessionBatchWrite, beforeCommit ...func() error) (db.SessionBatchResult, error) {
-	if err := s.DB.SoftDeleteSession(ctx, writes[0].Session.ID); err != nil {
+	if err := s.SoftDeleteSession(ctx, writes[0].Session.ID); err != nil {
 		return db.SessionBatchResult{}, err
 	}
 	return s.DB.WriteSessionBatchAtomic(ctx, writes, beforeCommit...)
 }
 
 func (s trashDuringImportStore) ReplaceSessionKeepingTrashedCopy(ctx context.Context, write db.SessionBatchWrite) (string, error) {
-	if err := s.DB.SoftDeleteSession(ctx, write.Session.ID); err != nil {
+	if err := s.SoftDeleteSession(ctx, write.Session.ID); err != nil {
 		return "", err
 	}
 	return s.DB.ReplaceSessionKeepingTrashedCopy(ctx, write)
@@ -557,7 +557,7 @@ func TestSyncClaudeAIEmptyListSkipsDetail(t *testing.T) {
 			require.NoError(t, err)
 			summary := strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":null`, 1)
 			fetch := syncOneFetch(t, summary, func() (ClaudeAIResponse, error) {
-				t.Fatal("empty list item fetched its detail")
+				require.FailNow(t, "empty list item fetched its detail")
 				return ClaudeAIResponse{}, nil
 			})
 			for range 2 {
@@ -589,9 +589,14 @@ func TestSyncClaudeAIDetailFailures(t *testing.T) {
 		err       error
 		wantCalls int
 	}{
-		{name: "bad request", status: 400, wantCalls: 1}, {name: "not found", status: 404, wantCalls: 1}, {name: "exhausted retries", status: 503, wantCalls: 5},
-		{name: "oversize", err: ErrClaudeAIResponseTooLarge, wantCalls: 1}, {name: "unauthorized", status: 401, wantCalls: 1}, {name: "forbidden", status: 403, wantCalls: 1},
-		{name: "transport", err: errors.New("transport failed"), wantCalls: 1}, {name: "host cancelled", err: context.Canceled, wantCalls: 1},
+		{name: "bad request", status: 400, wantCalls: 1},
+		{name: "not found", status: 404, wantCalls: 1},
+		{name: "exhausted retries", status: 503, wantCalls: 5},
+		{name: "oversize", err: ErrClaudeAIResponseTooLarge, wantCalls: 1},
+		{name: "unauthorized", status: 401, wantCalls: 1},
+		{name: "forbidden", status: 403, wantCalls: 1},
+		{name: "transport", err: errors.New("transport failed"), wantCalls: 1},
+		{name: "host cancelled", err: context.Canceled, wantCalls: 1},
 		{name: "host deadline", err: context.DeadlineExceeded, wantCalls: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -725,7 +730,7 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 				_, err := d.PinMessage(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222", message.ID, nil)
 				require.NoError(t, err)
 			}
-			for flip := 0; flip < 5; flip++ {
+			for flip := range 5 {
 				selected = leaf
 				if flip%2 == 1 {
 					selected = "a2"
@@ -738,9 +743,10 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 				messages, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 				require.NoError(t, err)
 				want := []string{"Hello", "Chosen reply"}
-				if selected == "a2" {
+				switch selected {
+				case "a2":
 					want = append(want, "More", "Answer")
-				} else if selected == "b2" {
+				case "b2":
 					want = append(want, "Edited question", "Edited answer")
 				}
 				assert.Equal(t, want, messageContents(messages))

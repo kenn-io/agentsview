@@ -281,7 +281,7 @@ func upsertConversation(
 			return importSkipped, nil
 		}
 		if live {
-			replaceMessages = !unchanged && (len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)]))
+			replaceMessages = !unchanged && (canonical == nil || len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)]))
 		}
 	}
 
@@ -315,7 +315,7 @@ func upsertConversation(
 	if isNew {
 		return importNew, nil
 	}
-	if unchanged && existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) {
+	if unchanged && existing != nil && existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) {
 		return importSkipped, nil
 	}
 	return importUpdated, nil

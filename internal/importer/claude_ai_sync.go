@@ -62,7 +62,8 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	db.Store
 	IsSessionTrashed(context.Context, string) bool
 	IsSessionExcluded(context.Context, string) bool
-}, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks) (stats ImportStats, retErr error) {
+}, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks,
+) (stats ImportStats, retErr error) {
 	raw, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(0, "", "", 0))
 	if err != nil {
 		return stats, err
@@ -159,7 +160,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					continue
 				}
 				detail, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(2, org.UUID, marker.UUID, 0))
-				var detailError *claudeAIHTTPError
 				if err != nil {
 					if ctx.Err() != nil {
 						return stats, ctx.Err()
@@ -167,7 +167,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					if errors.Is(err, ErrClaudeAIAuthRequired) {
 						return stats, err
 					}
-					errors.As(err, &detailError)
+					detailError, _ := errors.AsType[*claudeAIHTTPError](err)
 					if detailError != nil && detailError.status == 404 {
 						stats.record(id, importSkipped, nil)
 					} else {

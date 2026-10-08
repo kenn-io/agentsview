@@ -32,11 +32,11 @@ func readImportEvents(t *testing.T, body io.Reader, handle func(string, string))
 	terminal := false
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "event: ") {
-			event = strings.TrimPrefix(line, "event: ")
+		if value, ok := strings.CutPrefix(line, "event: "); ok {
+			event = value
 		}
-		if strings.HasPrefix(line, "data: ") {
-			handle(event, strings.TrimPrefix(line, "data: "))
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			handle(event, data)
 			terminal = terminal || event == "done" || event == "error"
 		}
 	}
@@ -62,7 +62,10 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			httpServer := httptest.NewServer(srv.mux)
 			defer httpServer.Close()
 			postResult := func(id, body string, want int) {
-				response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+id+"?status=200", "application/octet-stream", strings.NewReader(body))
+				post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+id+"?status=200", strings.NewReader(body))
+				require.NoError(t, err)
+				post.Header.Set("Content-Type", "application/octet-stream")
+				response, err := http.DefaultClient.Do(post)
 				require.NoError(t, err)
 				defer response.Body.Close()
 				data, err := io.ReadAll(response.Body)
@@ -70,7 +73,10 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				require.Equal(t, want, response.StatusCode, "%s", data)
 			}
 			postResult("unknown", `{}`, http.StatusNotFound)
-			response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
+			post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
+			require.NoError(t, err)
+			post.Header.Set("Content-Type", "application/json")
+			response, err := http.DefaultClient.Do(post)
 			require.NoError(t, err)
 			defer response.Body.Close()
 			require.Equal(t, http.StatusOK, response.StatusCode)
@@ -93,10 +99,10 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222225?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 						postResult(request.ID, `{"uuid":"22222222-2222-4222-8222-222222222225","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
 					default:
-						t.Fatalf("unexpected path %s", request.Path)
+						require.FailNowf(t, "unexpected path", "%s", request.Path)
 					}
 				case "error":
-					t.Fatalf("sync failed: %s", data)
+					require.FailNowf(t, "sync failed", "%s", data)
 				case "done":
 					require.NoError(t, json.Unmarshal([]byte(data), &stats))
 				}
@@ -113,7 +119,6 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			assert.Equal(t, "Archived relay message", messages[0].Content)
 			postResult(answered, `{}`, http.StatusNotFound)
 		})
-
 	}
 
 	for _, stage := range []string{"organizations", "detail"} {
@@ -171,7 +176,10 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		srv := testServer(t, 5*time.Second)
 		httpServer := httptest.NewServer(srv.mux)
 		defer httpServer.Close()
-		response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
+		post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
+		require.NoError(t, err)
+		post.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(post)
 		require.NoError(t, err)
 		defer response.Body.Close()
 		answered := ""
@@ -184,7 +192,10 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				}
 				require.NoError(t, json.Unmarshal([]byte(data), &request))
 				answered = request.ID
-				result, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status=0", "application/octet-stream", strings.NewReader("TypeError: Failed to fetch"))
+				post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status=0", strings.NewReader("TypeError: Failed to fetch"))
+				require.NoError(t, err)
+				post.Header.Set("Content-Type", "application/octet-stream")
+				result, err := http.DefaultClient.Do(post)
 				require.NoError(t, err)
 				require.Equal(t, http.StatusNoContent, result.StatusCode)
 				require.NoError(t, result.Body.Close())
@@ -194,7 +205,10 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			}
 		})
 		assert.True(t, gotError)
-		result, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+answered+"?status=200", "application/octet-stream", strings.NewReader("{}"))
+		post, err = http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+answered+"?status=200", strings.NewReader("{}"))
+		require.NoError(t, err)
+		post.Header.Set("Content-Type", "application/octet-stream")
+		result, err := http.DefaultClient.Do(post)
 		require.NoError(t, err)
 		defer result.Body.Close()
 		assert.Equal(t, http.StatusNotFound, result.StatusCode)
@@ -214,9 +228,9 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			var request struct {
 				ID string `json:"id"`
 			}
-			for _, line := range strings.Split(recorder.Body.String(), "\n") {
-				if strings.HasPrefix(line, "data: ") {
-					require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &request))
+			for line := range strings.SplitSeq(recorder.Body.String(), "\n") {
+				if data, ok := strings.CutPrefix(line, "data: "); ok {
+					require.NoError(t, json.Unmarshal([]byte(data), &request))
 					break
 				}
 			}
@@ -652,11 +666,14 @@ func TestHandleImportReplaceQuery(t *testing.T) {
 
 func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 	for _, oversizedStatus := range []int{200, 413} {
-		t.Run(fmt.Sprint(oversizedStatus), func(t *testing.T) {
+		t.Run(strconv.Itoa(oversizedStatus), func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			httpServer := httptest.NewServer(srv.mux)
 			defer httpServer.Close()
-			response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
+			post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
+			require.NoError(t, err)
+			post.Header.Set("Content-Type", "application/json")
+			response, err := http.DefaultClient.Do(post)
 			require.NoError(t, err)
 			defer response.Body.Close()
 			var stats importer.ImportStats
@@ -684,14 +701,17 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222227?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 						body = `{"uuid":"22222222-2222-4222-8222-222222222227","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"assistant","text":"Later reply","created_at":"2026-03-01T10:05:00Z"}]}`
 					default:
-						t.Fatalf("unexpected path %s", request.Path)
+						require.FailNowf(t, "unexpected path", "%s", request.Path)
 					}
-					result, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status="+fmt.Sprint(status), "application/octet-stream", strings.NewReader(body))
+					post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status="+strconv.Itoa(status), strings.NewReader(body))
+					require.NoError(t, err)
+					post.Header.Set("Content-Type", "application/octet-stream")
+					result, err := http.DefaultClient.Do(post)
 					require.NoError(t, err)
 					assert.Equal(t, http.StatusNoContent, result.StatusCode)
 					require.NoError(t, result.Body.Close())
 				case "error":
-					t.Fatalf("sync failed: %s", data)
+					require.FailNowf(t, "sync failed", "%s", data)
 				case "done":
 					require.NoError(t, json.Unmarshal([]byte(data), &stats))
 					done = true
@@ -768,12 +788,15 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 					}
 					status, body = 0, "browser disconnected"
 				default:
-					t.Fatalf("unexpected fetch %s", fetch.Path)
+					require.FailNowf(t, "unexpected fetch", "%s", fetch.Path)
 				}
 				if terminal == "cancel" {
 					break
 				}
-				answer, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+fetch.ID+"?status="+fmt.Sprint(status), "application/octet-stream", strings.NewReader(body))
+				post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+fetch.ID+"?status="+strconv.Itoa(status), strings.NewReader(body))
+				require.NoError(t, err)
+				post.Header.Set("Content-Type", "application/octet-stream")
+				answer, err := http.DefaultClient.Do(post)
 				require.NoError(t, err)
 				require.Equal(t, http.StatusNoContent, answer.StatusCode)
 				require.NoError(t, answer.Body.Close())
@@ -787,14 +810,14 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 				select {
 				case <-ch:
 				case <-time.After(5 * time.Second):
-					t.Fatal("committed chat did not notify mutation consumer")
+					require.FailNow(t, "committed chat did not notify mutation consumer")
 				}
 			}
 			select {
 			case event := <-events:
 				assert.Equal(t, "sessions", event.Scope)
 			case <-time.After(5 * time.Second):
-				t.Fatal("committed chat did not broadcast sessions")
+				require.FailNow(t, "committed chat did not broadcast sessions")
 			}
 			messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 			require.NoError(t, err)

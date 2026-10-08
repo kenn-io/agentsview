@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -109,7 +110,7 @@ func ParseClaudeAIDetail(data []byte) (ParseResult, error) {
 		return ParseResult{}, err
 	}
 	if conv == nil || conv.UUID == "" || len(conv.Messages) == 0 {
-		return ParseResult{}, fmt.Errorf("expected conversation with chat_messages")
+		return ParseResult{}, errors.New("expected conversation with chat_messages")
 	}
 	messages, err := selectedClaudeAIPath(*conv)
 	if err != nil {
@@ -203,7 +204,7 @@ func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) 
 	const root = "00000000-0000-4000-8000-000000000000"
 	var leaf string
 	if conv.CurrentLeaf.Kind() != jsontext.KindString || json.Unmarshal(conv.CurrentLeaf, &leaf) != nil || leaf == "" || leaf == root {
-		return nil, fmt.Errorf("expected current_leaf_message_uuid string naming a message")
+		return nil, errors.New("expected current_leaf_message_uuid string naming a message")
 	}
 	byID := make(map[string]claudeAIMessage, len(conv.Messages))
 	for _, m := range conv.Messages {
@@ -212,7 +213,7 @@ func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) 
 		}
 		byID[m.UUID] = m
 	}
-	var path []claudeAIMessage
+	path := []claudeAIMessage{}
 	seen := make(map[string]bool)
 	for id := leaf; id != root; {
 		m, exists := byID[id]
