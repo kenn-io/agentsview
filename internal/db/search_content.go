@@ -20,7 +20,7 @@ import (
 const (
 	DefaultContentSearchLimit = 50
 	MaxContentSearchLimit     = 500
-	contentSnippetRadius      = 60 // chars of context on each side of a match
+	ContentSnippetRadius      = 60 // chars of context on each side of a match
 )
 
 // ContentSearchFilter parameterises SearchContent. Session-scoping fields
@@ -216,12 +216,12 @@ func AppendExcludeSessionIDs(
 	return where + " AND " + col + " NOT IN " + ph, out
 }
 
-// semanticContentSessionFilter maps a ContentSearchFilter for the
+// SemanticContentSessionFilter maps a ContentSearchFilter for the
 // semantic/hybrid session scope: the shared ContentSessionFilter mapping
 // plus the child one-shot exemption (SessionFilter.ChildExemptOneShot) —
 // child sessions must not be dropped by the one-shot gate in these modes,
 // while top-level one-shots keep today's exclusion.
-func semanticContentSessionFilter(f ContentSearchFilter) SessionFilter {
+func SemanticContentSessionFilter(f ContentSearchFilter) SessionFilter {
 	sf := ContentSessionFilter(f)
 	sf.ChildExemptOneShot = true
 	return sf
@@ -234,7 +234,7 @@ func semanticContentSessionFilter(f ContentSearchFilter) SessionFilter {
 // agent, dates, automated, one-shot for top-level sessions) still applies
 // to each session's own row.
 func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
-	where, args := buildSessionBaseFilter(semanticContentSessionFilter(f))
+	where, args := buildSessionBaseFilter(SemanticContentSessionFilter(f))
 	where, args = AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
@@ -487,7 +487,7 @@ func (db *DB) searchContentRegex(
 	if err != nil {
 		return ContentSearchPage{}, searchInputErrorf("search: invalid regex: %v", err)
 	}
-	lit := literalPrefix(f.Pattern)
+	lit := LiteralPrefix(f.Pattern)
 
 	rows, err := db.regexCandidateRows(ctx, f, lit)
 	if err != nil {
@@ -518,7 +518,7 @@ func (db *DB) searchContentRegex(
 			seen++
 			continue
 		}
-		m.Snippet = f.buildSnippet(body, loc[0], loc[1])
+		m.Snippet = f.BuildSnippet(body, loc[0], loc[1])
 		out = append(out, m)
 		if len(out) > f.Limit {
 			break
@@ -651,10 +651,10 @@ func (db *DB) regexCandidateRows(
 	return db.getReader().QueryContext(ctx, query, args...)
 }
 
-// snippetBounds returns the byte window [lo,hi) = [start-radius, end+radius)
+// SnippetBounds returns the byte window [lo,hi) = [start-radius, end+radius)
 // with the padding edges snapped to rune boundaries so a slice never splits a
 // multibyte character (the matched span itself is already rune-aligned).
-func snippetBounds(text string, start, end, radius int) (int, int) {
+func SnippetBounds(text string, start, end, radius int) (int, int) {
 	lo := max(start-radius, 0)
 	hi := min(end+radius, len(text))
 	for lo < start && !utf8.RuneStart(text[lo]) {
@@ -666,11 +666,11 @@ func snippetBounds(text string, start, end, radius int) (int, int) {
 	return lo, hi
 }
 
-// buildSnippet windows body around [start,end) and, unless the filter opts into
+// BuildSnippet windows body around [start,end) and, unless the filter opts into
 // reveal, masks any secret overlapping the window via secrets.RedactWindow
 // (which also catches secrets straddling the window edges).
-func (f ContentSearchFilter) buildSnippet(body string, start, end int) string {
-	lo, hi := snippetBounds(body, start, end, contentSnippetRadius)
+func (f ContentSearchFilter) BuildSnippet(body string, start, end int) string {
+	lo, hi := SnippetBounds(body, start, end, ContentSnippetRadius)
 	return f.redactedWindow(body, lo, hi)
 }
 
@@ -715,7 +715,7 @@ const ContentSearchScopeUnsupportedMsg = "scope is only supported for semantic, 
 // windows it.
 func (f ContentSearchFilter) substringSnippet(body string) string {
 	start, end, _ := CaseInsensitiveSpan(body, f.Pattern)
-	return f.buildSnippet(body, start, end)
+	return f.BuildSnippet(body, start, end)
 }
 
 // CaseInsensitiveSpan returns the byte range [start, end) that the first
@@ -731,7 +731,7 @@ func (f ContentSearchFilter) substringSnippet(body string) string {
 // end comes from s for the same reason it cannot come from sub: those same
 // mappings make the matched bytes shorter or longer than sub, so start +
 // len(sub) can land inside a rune of s or past the end of the match. Snippet
-// windowing relies on the span being rune-aligned (see snippetBounds, which
+// windowing relies on the span being rune-aligned (see SnippetBounds, which
 // snaps only the padding edges), so every backend derives the end here.
 func CaseInsensitiveSpan(s, sub string) (int, int, bool) {
 	if sub == "" {
@@ -764,9 +764,9 @@ func foldPrefixEnd(s string, i int, sub string) (int, bool) {
 	return i, true
 }
 
-// literalPrefix extracts a required literal prefix from a regex for use
+// LiteralPrefix extracts a required literal prefix from a regex for use
 // as a cheap SQL LIKE prefilter. Returns "" when no literal prefix exists.
-func literalPrefix(pattern string) string {
+func LiteralPrefix(pattern string) string {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return ""
@@ -839,7 +839,7 @@ func (f ContentSearchFilter) ftsSnippet(body, segmentedTerm string) string {
 	if start == end && segmentedTerm != "" {
 		start, end, _ = CaseInsensitiveSpan(body, segmentedTerm)
 	}
-	return f.buildSnippet(body, start, end)
+	return f.BuildSnippet(body, start, end)
 }
 
 // FTSSnippetRange returns the byte range around which FTS-like snippets should
@@ -978,7 +978,7 @@ func (db *DB) searchContentSemantic(
 		return ContentSearchPage{}, nil
 	}
 
-	allowed, err := db.semanticAllowedSessionIDs(ctx, f, uniqueSessionIDs(hits))
+	allowed, err := db.semanticAllowedSessionIDs(ctx, f, UniqueSessionIDs(hits))
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
@@ -1210,7 +1210,7 @@ func (db *DB) hybridVectorLeg(
 	if len(hits) == 0 {
 		return leg, nil
 	}
-	allowed, err := db.semanticAllowedSessionIDs(ctx, f, uniqueSessionIDs(hits))
+	allowed, err := db.semanticAllowedSessionIDs(ctx, f, UniqueSessionIDs(hits))
 	if err != nil {
 		return hybridLeg{}, err
 	}
@@ -1444,9 +1444,9 @@ func (db *DB) enrichHybridMatches(
 	return ContentSearchPage{Matches: out}, nil
 }
 
-// uniqueSessionIDs returns the distinct session IDs referenced by hits.
+// UniqueSessionIDs returns the distinct session IDs referenced by hits.
 // Order is irrelevant: the result only feeds an IN (...) clause.
-func uniqueSessionIDs(hits []VectorHit) []string {
+func UniqueSessionIDs(hits []VectorHit) []string {
 	seen := make(map[string]bool, len(hits))
 	ids := make([]string, 0, len(hits))
 	for _, h := range hits {
@@ -1464,7 +1464,7 @@ func uniqueSessionIDs(hits []VectorHit) []string {
 // SessionFilter mapping sessionScopeSubquery uses so the two paths cannot
 // drift apart. Like semanticSessionScopeSubquery it deliberately omits the
 // sidebar-child exclusion and exempts child sessions from the one-shot
-// gate (semanticContentSessionFilter): in semantic/hybrid modes Scope
+// gate (SemanticContentSessionFilter): in semantic/hybrid modes Scope
 // supersedes IncludeChildren, so subordinate units stay visible to the
 // vector leg. Chunking keeps each query's bind count under SQLite's
 // 999-variable limit: a semantic overfetch can surface hits from thousands
@@ -1475,7 +1475,7 @@ func (db *DB) semanticAllowedSessionIDs(
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	where, filterArgs := buildSessionBaseFilter(semanticContentSessionFilter(f))
+	where, filterArgs := buildSessionBaseFilter(SemanticContentSessionFilter(f))
 	where, filterArgs = AppendExcludeSessionIDs(where, filterArgs, "id", f.ExcludeSessionIDs)
 	query := "SELECT id FROM sessions WHERE " + where + " AND id IN "
 
@@ -1643,7 +1643,7 @@ func approxSnippetSpan(content, approx string) (start, end int, ok bool) {
 // SemanticSnippet builds the returned snippet for "semantic" and "hybrid"
 // matches from the message's full content, not from the searcher's
 // pre-truncated approx (chunk or FTS snippet() text): redaction
-// (buildSnippet -> secrets.RedactWindow) must see the whole message so a
+// (BuildSnippet -> secrets.RedactWindow) must see the whole message so a
 // secret straddling approx's truncation boundary cannot leak a fragment that
 // full-content redaction would otherwise catch. approx is used only to
 // center the window; when it cannot be located in content, FTSSnippetRange
@@ -1651,8 +1651,8 @@ func approxSnippetSpan(content, approx string) (start, end int, ok bool) {
 // content -- content is still what gets redacted either way.
 func (f ContentSearchFilter) SemanticSnippet(content, approx string) string {
 	if start, end, ok := approxSnippetSpan(content, approx); ok {
-		return f.buildSnippet(content, start, end)
+		return f.BuildSnippet(content, start, end)
 	}
 	start, end := FTSSnippetRange(f.Pattern, content)
-	return f.buildSnippet(content, start, end)
+	return f.BuildSnippet(content, start, end)
 }

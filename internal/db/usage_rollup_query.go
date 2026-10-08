@@ -526,7 +526,7 @@ func rankUsageRollupSnapshots(
 		group.rest = append(group.rest, index)
 		bySnapshot[key] = group
 	}
-	keys := usageSortedMapKeys(bySnapshot)
+	keys := SortedKeys(bySnapshot)
 	for _, key := range keys {
 		group := bySnapshot[key]
 		if len(group.rest) == 0 {
@@ -644,7 +644,7 @@ func deduplicateUsageRollupGeneral(facts []usageRollupFact) []usageRollupFact {
 		byKey[usageRollupGeneralKey(fact)] = append(
 			byKey[usageRollupGeneralKey(fact)], fact)
 	}
-	keys := usageSortedMapKeys(byKey)
+	keys := SortedKeys(byKey)
 	result := make([]usageRollupFact, 0, len(keys))
 	for _, key := range keys {
 		result = append(result, slices.MinFunc(byKey[key], compareUsageGeneralWinner))
@@ -806,13 +806,4 @@ func usageRollupDateBounds(snapshot usageQuerySnapshot) (string, string) {
 	}
 	return snapshot.Intervals[0].FromLocalDate,
 		snapshot.Intervals[len(snapshot.Intervals)-1].ToLocalDate
-}
-
-func usageSortedMapKeys[T any](values map[string]T) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	return keys
 }

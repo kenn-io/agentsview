@@ -124,9 +124,3 @@ func TestLastMessageAtAndTimeValue(t *testing.T) {
 	assert.Equal(t, "2026-01-10T00:03:00Z", latest.Format("2006-01-02T15:04:05Z"))
 	assert.Nil(t, lastMessageAt(nil))
 }
-
-func TestCanonicalPushScope(t *testing.T) {
-	assert.Empty(t, canonicalPushScope(nil, nil))
-	assert.Equal(t, canonicalPushScope([]string{"b", "a"}, nil), canonicalPushScope([]string{"a", "b"}, nil))
-	assert.NotEqual(t, canonicalPushScope([]string{"a"}, nil), canonicalPushScope(nil, []string{"a"}))
-}

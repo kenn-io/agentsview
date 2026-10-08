@@ -87,7 +87,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 			if ts != nil {
 				tsStr = FormatISO8601(*ts)
 			}
-			parsed, has := localTime(tsStr, loc)
+			parsed, has := db.LocalTime(tsStr, loc)
 			if err := reducer.Push(db.MessageInput{
 				SessionID:       sessionID,
 				Ordinal:         ordinal,

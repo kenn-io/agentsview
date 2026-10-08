@@ -192,7 +192,7 @@ func NewTrendAccumulator(
 // Add counts content in the bucket holding local's calendar date. Messages
 // whose local date falls outside [from, to] are ignored.
 func (a *TrendAccumulator) Add(content string, local time.Time) {
-	if !inDateRange(local.Format("2006-01-02"), a.from, a.to) {
+	if !InDateRange(local.Format("2006-01-02"), a.from, a.to) {
 		return
 	}
 	bucket, ok := a.index[TrendBucketDate(local, local.Location(), a.granularity)]
@@ -409,7 +409,7 @@ func trendMessageLocalTime(
 	loc *time.Location,
 ) (time.Time, bool) {
 	for _, ts := range []string{messageTS, startedAt, createdAt} {
-		if t, ok := localTime(ts, loc); ok {
+		if t, ok := LocalTime(ts, loc); ok {
 			return t, true
 		}
 	}

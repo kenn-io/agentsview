@@ -31,7 +31,7 @@ func (s *Store) ListArchiveWorktreeCandidates(
 	for _, session := range sessions {
 		labels[session.project] = struct{}{}
 	}
-	projects, err := s.BuildProjectIdentityMap(ctx, sortedKeys(labels))
+	projects, err := s.BuildProjectIdentityMap(ctx, db.SortedKeys(labels))
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (s *Store) worktreeCandidatesFromSelection(
 	if err != nil {
 		return nil, err
 	}
-	observations, err := s.ListProjectIdentityObservations(ctx, sortedKeys(selectedProjects))
+	observations, err := s.ListProjectIdentityObservations(ctx, db.SortedKeys(selectedProjects))
 	if err != nil {
 		return nil, err
 	}

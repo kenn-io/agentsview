@@ -340,7 +340,7 @@ func buildMirrorInto(
 	if err != nil {
 		return result, err
 	}
-	scope := canonicalPushScope(opts.Projects, opts.ExcludeProjects)
+	scope := db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects)
 	if err := s.writeRebuildMetadata(
 		ctx, scope, snapshot, identityRevision, mappingRevision,
 	); err != nil {

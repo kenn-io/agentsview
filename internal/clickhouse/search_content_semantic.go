@@ -100,19 +100,6 @@ func (s *Store) survivingVectorHits(
 	return surviving, nil
 }
 
-// semanticSessionFilter is the content-search session scope for the
-// semantic and hybrid modes: the shared db.ContentSessionFilter mapping plus
-// the child one-shot exemption, so child sessions are not dropped by the
-// one-shot gate while top-level one-shots keep their exclusion. Both modes
-// build their SQL with db.BuildSessionBaseFilterSQL, never the sidebar
-// filter: unit visibility for child sessions is governed by f.Scope, which
-// supersedes IncludeChildren, matching the SQLite and PostgreSQL paths.
-func semanticSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
-	sf := db.ContentSessionFilter(f)
-	sf.ChildExemptOneShot = true
-	return sf
-}
-
 // semanticAllowedSessionIDs returns the subset of ids whose session passes
 // the filter's metadata scope, reusing the shared session filter SQL so this
 // path cannot drift from the substring and regex scope.
@@ -123,7 +110,7 @@ func (s *Store) semanticAllowedSessionIDs(
 	if len(ids) == 0 {
 		return allowed, nil
 	}
-	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(semanticSessionFilter(f), db.ClickHouseQueryDialect())
+	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(db.SemanticContentSessionFilter(f), db.ClickHouseQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	for batch := range idBatches(ids) {
 		placeholders, args := inArgs(batch)

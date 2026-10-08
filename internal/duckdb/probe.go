@@ -3,7 +3,6 @@ package duckdb
 import (
 	"context"
 	"database/sql"
-	"encoding/json/v2"
 	"fmt"
 	"os"
 	"sort"
@@ -51,7 +50,7 @@ type MirrorProbe struct {
 	// SourceArchiveID is the provenance id stamped onto mirror rows. "" on
 	// mirrors written before the id was recorded.
 	SourceArchiveID  string
-	Scope            string // canonical scope string, see canonicalPushScope
+	Scope            string // canonical scope string, see db.CanonicalPushScope
 	LastPushCutoff   string
 	LastPushAt       string
 	LastPushMachine  string
@@ -314,37 +313,4 @@ func rebuildReason(
 	default:
 		return ""
 	}
-}
-
-// canonicalPushScope renders a push's project filters into a deterministic
-// string suitable for storing in mirror metadata and comparing across runs.
-// Unfiltered pushes (no include/exclude projects) canonicalize to "" so the
-// common case never round-trips through JSON.
-func canonicalPushScope(projects, excludeProjects []string) string {
-	if len(projects) == 0 && len(excludeProjects) == 0 {
-		return ""
-	}
-	scope := struct {
-		Projects []string `json:"projects,omitempty"`
-		Exclude  []string `json:"exclude,omitempty"`
-	}{
-		Projects: sortedCopy(projects),
-		Exclude:  sortedCopy(excludeProjects),
-	}
-	data, err := json.Marshal(scope)
-	if err != nil {
-		// json.Marshal only fails on unsupported types; []string always
-		// marshals, so this is unreachable in practice.
-		return ""
-	}
-	return string(data)
-}
-
-func sortedCopy(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	out := append([]string(nil), values...)
-	sort.Strings(out)
-	return out
 }

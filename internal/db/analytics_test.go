@@ -1358,9 +1358,9 @@ func TestMedianInt(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := medianInt(tt.sorted, len(tt.sorted))
+			got := MedianInt(tt.sorted, len(tt.sorted))
 			assert.Equal(t, tt.want, got,
-				"medianInt(%v)", tt.sorted)
+				"MedianInt(%v)", tt.sorted)
 		})
 	}
 }
@@ -1382,9 +1382,9 @@ func TestLocalDate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := localDate(tt.ts, utc)
+			got := LocalDate(tt.ts, utc)
 			assert.Equal(t, tt.want, got,
-				"localDate(%q)", tt.ts)
+				"LocalDate(%q)", tt.ts)
 		})
 	}
 }
@@ -2452,9 +2452,9 @@ func TestPercentileFloat(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := percentileFloat(tt.sorted, tt.pct)
+			got := PercentileFloat(tt.sorted, tt.pct)
 			assert.InDelta(t, tt.want, got, 1e-9,
-				"percentileFloat(%v, %f)",
+				"PercentileFloat(%v, %f)",
 				tt.sorted, tt.pct)
 		})
 	}
@@ -5142,9 +5142,9 @@ func TestLocalTime(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, ok := localTime(tt.ts, time.UTC)
+			_, ok := LocalTime(tt.ts, time.UTC)
 			assert.Equal(t, tt.valid, ok,
-				"localTime(%q) ok", tt.ts)
+				"LocalTime(%q) ok", tt.ts)
 		})
 	}
 }

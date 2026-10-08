@@ -149,7 +149,7 @@ func Push(
 	if err := sweepStaleTempFiles(path); err != nil {
 		log.Printf("duckdbsync: sweeping stale rebuild temp files: %v", err)
 	}
-	scope := canonicalPushScope(opts.Projects, opts.ExcludeProjects)
+	scope := db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects)
 	probe, err := ProbeMirror(ctx, path)
 	if err != nil {
 		return storage.MirrorPushResult{}, err
@@ -447,7 +447,7 @@ func (s *Sync) partitionPushScope(
 	}
 	inScope = make([]db.Session, 0, len(candidates))
 	for _, sess := range candidates {
-		if projectMatchesPushScope(sess.Project, s.projects, s.excludeProjects) {
+		if db.ProjectMatchesPushScope(sess.Project, s.projects, s.excludeProjects) {
 			inScope = append(inScope, sess)
 		} else {
 			outOfScope = append(outOfScope, sess)
@@ -643,7 +643,7 @@ func (s *Sync) finalizeIncrementalPush(
 		DataVersion:      db.CurrentDataVersion(),
 		SourceDatabaseID: sourceDatabaseID,
 		SourceArchiveID:  s.archiveID,
-		Scope:            canonicalPushScope(opts.Projects, opts.ExcludeProjects),
+		Scope:            db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects),
 		LastPushCutoff:   cutoff,
 		LastPushAt:       time.Now().UTC().Format(time.RFC3339),
 		LastPushMachine:  s.machine,
@@ -911,7 +911,7 @@ func (s *Sync) sessionFingerprints(
 			Pins           []db.PinnedMessage
 		}{
 			SessionFields: duckSessionFingerprintFields(
-				sess, mirroredSessionMachine(sess, s.machine),
+				sess, db.MirroredSessionMachine(sess, s.machine),
 			),
 			Messages:       msgs,
 			Usage:          usage[sess.ID],
@@ -944,7 +944,7 @@ func (s *Sync) sessionFingerprints(
 func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 	return []any{
 		sess.ID, sess.Project, sess.ProjectAssigned,
-		mirroredSessionMachine(sess, machine), sess.Agent,
+		db.MirroredSessionMachine(sess, machine), sess.Agent,
 		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
 		nilString(sess.FirstMessage), nilString(sess.DisplayName),
 		nilString(sess.SessionName),

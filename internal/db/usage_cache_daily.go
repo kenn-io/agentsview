@@ -154,7 +154,7 @@ func (db *DB) assembleDailyUsageFacts(
 	if !filter.SkipSessionCounts {
 		sessionCounts = NewUsageSessionCounts(facts.MatchingSessions)
 	}
-	projects, err := db.BuildProjectIdentityMap(ctx, sortedSetKeys(projectLabels))
+	projects, err := db.BuildProjectIdentityMap(ctx, SortedKeys(projectLabels))
 	if err != nil {
 		return DailyUsageResult{}, err
 	}

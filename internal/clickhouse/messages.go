@@ -518,12 +518,3 @@ func timingMillis(start, end string) (int64, bool) {
 	}
 	return endTime.Sub(startTime).Milliseconds(), true
 }
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}

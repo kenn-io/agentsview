@@ -109,8 +109,8 @@ func (db *DB) loadReportingExportSource(
 		return source, err
 	}
 
-	lowerBound := paddedUTCBound(start.UTC().Format(time.RFC3339), -14)
-	upperBound := paddedUTCBound(end.UTC().Format(time.RFC3339), 14)
+	lowerBound := PaddedUTCBound(start.UTC().Format(time.RFC3339), -14)
+	upperBound := PaddedUTCBound(end.UTC().Format(time.RFC3339), 14)
 	usageSessions, usageIDs, err := db.reportingUsageSessionsFrom(
 		ctx, tx, lowerBound, upperBound,
 	)
@@ -158,7 +158,7 @@ func (db *DB) loadReportingExportSource(
 	}
 
 	allSessions := mergeReportingSessions(sessions, usageSessions)
-	labels := activityReportProjectLabels(allSessions)
+	labels := ActivityReportProjectLabels(allSessions)
 	observations := []export.ProjectIdentityObservation{}
 	archiveScope := export.IdentityScope{}
 	if len(labels) > 0 || schemaVersion == export.ReportingJointSchemaVersion {
@@ -233,8 +233,8 @@ func (src reportingExportSource) forDate(
 		}
 	}
 
-	lowerBound := paddedUTCBound(date.Format(time.RFC3339), -14)
-	upperBound := paddedUTCBound(end.Format(time.RFC3339), 14)
+	lowerBound := PaddedUTCBound(date.Format(time.RFC3339), -14)
+	upperBound := PaddedUTCBound(end.Format(time.RFC3339), 14)
 	usageCandidates := make([]activityReportUsageCandidate, 0, len(src.usageCandidates))
 	usageIDs := make(map[string]struct{}, len(src.usageCandidates))
 	for _, candidate := range src.usageCandidates {
@@ -260,7 +260,7 @@ func (src reportingExportSource) forDate(
 	}
 
 	allSessions := mergeReportingSessions(selectedSessions, usageSessions)
-	labels := activityReportProjectLabels(allSessions)
+	labels := ActivityReportProjectLabels(allSessions)
 	labelSet := make(map[string]struct{}, len(labels))
 	for _, label := range labels {
 		labelSet[label] = struct{}{}

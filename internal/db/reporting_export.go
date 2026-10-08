@@ -528,10 +528,10 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		)
 	}
 
-	lowerBound := paddedUTCBound(
+	lowerBound := PaddedUTCBound(
 		query.RangeStart.UTC().Format(time.RFC3339), -14,
 	)
-	upperBound := paddedUTCBound(
+	upperBound := PaddedUTCBound(
 		query.RangeEnd.UTC().Format(time.RFC3339), 14,
 	)
 	rows, err := tx.QueryContext(ctx, `
@@ -572,7 +572,7 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		row.InputTokens,
 			row.OutputTokens,
 			row.CacheCreationTokens,
-			row.CacheReadTokens = usageEventRowTokens(
+			row.CacheReadTokens = UsageEventRowTokens(
 			"cursor",
 			inputTokens,
 			outputTokens,
@@ -773,7 +773,7 @@ func allocateReportingUsageCosts(
 			continue
 		}
 		key := usageCostAllocationKey{
-			date:       localDate(row.Timestamp, time.UTC),
+			date:       LocalDate(row.Timestamp, time.UTC),
 			project:    row.Project,
 			agent:      row.Agent,
 			machine:    row.Machine,
@@ -1275,7 +1275,7 @@ func addReportingUsageBreakdown(
 func reportingUsageBreakdowns(
 	values map[string]*reportingUsageAccum,
 ) []export.ReportingUsageBreakdown {
-	keys := reportingSortedKeys(values)
+	keys := SortedKeys(values)
 	out := make([]export.ReportingUsageBreakdown, 0, len(keys))
 	for _, key := range keys {
 		value := values[key]
@@ -1298,7 +1298,7 @@ func reportingUsageProjectBreakdowns(
 	values map[string]*reportingUsageAccum,
 	projects map[string]export.ProjectMapEntry,
 ) []export.ReportingUsageProjectBreakdown {
-	keys := reportingSortedKeys(values)
+	keys := SortedKeys(values)
 	out := make([]export.ReportingUsageProjectBreakdown, 0, len(keys))
 	for _, project := range keys {
 		value := values[project]
@@ -1324,7 +1324,9 @@ func reportingUsageProjectBreakdowns(
 	return out
 }
 
-func reportingSortedKeys[T any](values map[string]T) []string {
+// SortedKeys returns the map keys sorted; never nil so JSON renders "[]"
+// rather than "null".
+func SortedKeys[T any](values map[string]T) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)

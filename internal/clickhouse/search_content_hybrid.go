@@ -119,7 +119,7 @@ func (s *Store) hybridKeywordLeg(
 func (s *Store) fetchHybridKeywordBatch(
 	ctx context.Context, f db.ContentSearchFilter, k, offset int,
 ) ([]hybridDisplay, error) {
-	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(semanticSessionFilter(f), db.ClickHouseQueryDialect())
+	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(db.SemanticContentSessionFilter(f), db.ClickHouseQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	kf := f
 	kf.Mode = "fts"
@@ -152,7 +152,7 @@ func (s *Store) fetchHybridKeywordBatch(
 		}
 		hit.ordinal = int(ordinal)
 		start, end := db.FTSSnippetRange(f.Pattern, content)
-		lo, hi := snippetBounds(content, start, end, 60)
+		lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
 		hit.snippet = content[lo:hi]
 		hits = append(hits, hit)
 	}

@@ -180,7 +180,7 @@ type sessionExportUsageAccum struct {
 	authoritativeCost        *money.Money
 	contributing             bool
 	allPriced                bool
-	seen                     map[usageDedupToken]struct{}
+	seen                     map[UsageDedupToken]struct{}
 }
 
 type sessionExportModelUsageAccum struct {
@@ -977,7 +977,7 @@ func (db *DB) attachSessionExportUsage(
 		if a == nil {
 			continue
 		}
-		if key, ok := usageDedupTokenForRow(
+		if key, ok := UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
 		); ok {
@@ -1082,7 +1082,7 @@ func (db *DB) attachSessionExportUsage(
 			continue
 		}
 		rows[i].ModelUsage = &SessionModelUsage{
-			Models:                   sortedSetKeys(a.models),
+			Models:                   SortedKeys(a.models),
 			InputTokens:              a.inputTokens,
 			OutputTokens:             a.outputTokens,
 			CacheCreationInputTokens: a.cacheCreationInputTokens,
@@ -1210,7 +1210,7 @@ func sessionExportUsageTokens(
 	if r.usageSource == "message" {
 		return clampedUsageTokenCountersWithReasoning(r.tokenJSON)
 	}
-	inputTok, outputTok, cacheCrTok, cacheRdTok = usageEventRowTokens(
+	inputTok, outputTok, cacheCrTok, cacheRdTok = UsageEventRowTokens(
 		r.usageSource,
 		r.inputTokens,
 		r.outputTokens,
@@ -1226,7 +1226,7 @@ func (db *DB) attachSessionExportWorktrees(
 	if len(rows) == 0 {
 		return nil
 	}
-	labels := sortedSetKeys(sessionExportProjectLabels(rows))
+	labels := SortedKeys(sessionExportProjectLabels(rows))
 	observations, err := db.listProjectIdentityObservationsFrom(ctx, q, labels)
 	if err != nil {
 		return err
@@ -1477,7 +1477,7 @@ func newSessionExportUsageAccum() *sessionExportUsageAccum {
 		models:    make(map[string]struct{}),
 		byModel:   make(map[string]*sessionExportModelUsageAccum),
 		allPriced: true,
-		seen:      make(map[usageDedupToken]struct{}),
+		seen:      make(map[UsageDedupToken]struct{}),
 	}
 }
 

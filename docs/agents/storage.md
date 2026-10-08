@@ -223,6 +223,10 @@ UI read-only. A replica may keep its push cursor in the archive sync state
 mirror is a disposable local derived file. A new remote SQL backend is a
 replica. Do not model it on DuckDB, and do not add a fourth role.
 
+Common pure storage helpers live in `internal/db`; every backend calls that
+owner. Helpers with different timestamp parsing, UTC padding, or output formats
+stay in their backend.
+
 ### How to add a replica backend
 
 1. Create `internal/<name>` with a `Store` that implements `db.Store` with

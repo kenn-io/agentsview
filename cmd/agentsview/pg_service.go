@@ -212,7 +212,7 @@ func writeServiceStatus(
 	if !lastPushAvailable {
 		return
 	}
-	fmt.Fprintf(out, "Last push: %s\n", valueOrNever(lastPush))
+	fmt.Fprintf(out, "Last push: %s\n", db.ValueOrNever(lastPush))
 }
 
 func readServiceLastPush(ctx context.Context,

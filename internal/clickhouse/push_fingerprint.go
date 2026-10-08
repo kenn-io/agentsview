@@ -50,7 +50,7 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 		SecretFindings []db.SecretFinding
 		Pins           []db.PinnedMessage
 	}{
-		SessionFields:  sessionFingerprintFields(sess, mirroredSessionMachine(sess, s.machine)),
+		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine)),
 		Messages:       snapshot.Messages,
 		Usage:          snapshot.UsageFingerprint,
 		ToolCalls:      snapshot.ToolCallFingerprint,

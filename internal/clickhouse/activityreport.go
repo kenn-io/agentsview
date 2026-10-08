@@ -64,7 +64,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
-	clickReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
+	db.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	ctx, err := s.withPartsSnapshot(ctx)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
@@ -88,7 +88,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if onDisk {
 				s.touchActivityReport(selection, key, kept)
 			}
-			clickReportProgress(onProgress, kept.done)
+			db.ReportProgress(onProgress, kept.done)
 			return kept.artifacts, nil
 		}
 	}
@@ -111,7 +111,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if onDisk {
 				s.touchActivityReport(selection, memoKey, kept[0])
 			}
-			clickReportProgress(onProgress, kept[0].done)
+			db.ReportProgress(onProgress, kept[0].done)
 			return kept[0].artifacts, nil
 		}
 		if onDisk {
@@ -119,7 +119,7 @@ func (s *Store) BuildActivityReportArtifacts(
 				s.reportMemo(onDisk).put(selection, memoKey, []activityReportEntry{kept})
 				s.markActivityReportChecked(selection, fingerprint, memoKey)
 				s.touchActivityReport(selection, memoKey, kept)
-				clickReportProgress(onProgress, kept.done)
+				db.ReportProgress(onProgress, kept.done)
 				return kept.artifacts, nil
 			}
 		}
@@ -142,7 +142,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
 	candidates := chSessionSet{body: "SELECT id FROM activity_candidate_ids"}
-	clickReportProgress(onProgress, activity.Progress{
+	db.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
@@ -170,12 +170,12 @@ func (s *Store) BuildActivityReportArtifacts(
 	}, sessions, func(
 		ctx context.Context, yield func(activity.IntervalCandidate) error,
 	) error {
-		clickReportProgress(onProgress, activity.Progress{
+		db.ReportProgress(onProgress, activity.Progress{
 			Phase: activity.ProgressScanningActivity, SessionsTotal: len(sessions),
 		})
 		return source(ctx, func(candidate activity.IntervalCandidate) error {
 			rowsProcessed++
-			clickReportProgress(onProgress, activity.Progress{
+			db.ReportProgress(onProgress, activity.Progress{
 				Phase:         activity.ProgressScanningActivity,
 				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
 			})
@@ -188,13 +188,13 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err := pairs.countMessages(ctx, ids, q, &artifacts); err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	clickReportProgress(onProgress, activity.Progress{
+	db.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
 	})
 	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
 	artifacts.Report.Pricing = pricing
-	projects, err := s.BuildProjectIdentityMap(ctx, activityReportProjectLabels(sessions))
+	projects, err := s.BuildProjectIdentityMap(ctx, db.ActivityReportProjectLabels(sessions))
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -207,7 +207,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
 	}
-	clickReportProgress(onProgress, done)
+	db.ReportProgress(onProgress, done)
 	if memoKey != "" {
 		entry := activityReportEntry{artifacts: artifacts, done: done}
 		s.reportMemo(onDisk).put(selection, memoKey, []activityReportEntry{entry})
@@ -358,12 +358,6 @@ type activityReportEntry struct {
 	done      activity.Progress
 }
 
-func clickReportProgress(callback activity.ProgressFunc, progress activity.Progress) {
-	if callback != nil {
-		callback(progress)
-	}
-}
-
 // countMessages adds the user and assistant message counts to artifacts.
 // The pairing inputs hold every message of the candidate sessions, so the
 // counts need no read of their own.
@@ -387,23 +381,6 @@ func (pairing *activityReportPairing) countMessages(
 		}
 	}
 	return nil
-}
-
-func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
-	set := make(map[string]bool, len(sessions))
-	for _, session := range sessions {
-		set[session.Project] = true
-	}
-	return sortedBoolKeys(set)
-}
-
-func sortedBoolKeys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // chSessionIDsDigest names a session set independent of its order.
@@ -702,7 +679,7 @@ func (s *Store) GetSessionUsageRows(
 		snapshotRows[i] = activity.UsageRow{
 			SessionID:           o.scan.sessionID,
 			Timestamp:           o.scan.ts,
-			MessageOrdinal:      clickUsageOrdinalOrNeg(o.scan.messageOrdinal),
+			MessageOrdinal:      db.UsageRowMessageOrdinal(o.scan.messageOrdinal),
 			UsageSource:         o.scan.source,
 			InputTokens:         o.scan.inputTok,
 			OutputTokens:        o.scan.outputTok,
@@ -781,7 +758,7 @@ func (s *Store) GetSessionUsageRows(
 			UsageDedupKey:   r.usageDedupKey,
 
 			UsageSource:         r.source,
-			MessageOrdinal:      clickUsageOrdinalOrNeg(r.messageOrdinal),
+			MessageOrdinal:      db.UsageRowMessageOrdinal(r.messageOrdinal),
 			InputTokens:         r.inputTok,
 			CacheCreationTokens: r.cacheCr,
 			CacheReadTokens:     r.cacheRd,
@@ -1330,13 +1307,6 @@ func (s *Store) scanActivityUsageRows(
 	return append(rowsAcc, chunk...), nil
 }
 
-func clickUsageOrdinalOrNeg(v sql.NullInt64) int64 {
-	if !v.Valid {
-		return -1
-	}
-	return v.Int64
-}
-
 func clickSessionUsageDedupKey(r clickActivityReportUsageRow) (string, bool) {
 	if r.claudeMessageID != "" && r.claudeRequestID != "" {
 		return "claude:" + r.claudeMessageID + ":" + r.claudeRequestID, true
@@ -1751,7 +1721,7 @@ func keptUsageBefore(a *clickSessionUsageOrderedRow, b *keptUsageRow) bool {
 	if a.scan.sessionID != b.sessionID {
 		return a.scan.sessionID < b.sessionID
 	}
-	return a.ordinal < clickUsageOrdinalOrNeg(b.messageOrdinal)
+	return a.ordinal < db.UsageRowMessageOrdinal(b.messageOrdinal)
 }
 
 // mergeActivityUsage returns prev without the rows of the sessions in

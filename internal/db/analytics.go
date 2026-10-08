@@ -290,7 +290,8 @@ func (f AnalyticsFilter) buildWhereWithoutDate() (string, []any) {
 	return f.buildWhereWithDate("", false, "sessions.id")
 }
 
-func csvFilterValues(raw string) []string {
+// CSVFilterValues splits a comma-separated filter and drops blank entries.
+func CSVFilterValues(raw string) []string {
 	values := strings.Split(raw, ",")
 	out := values[:0]
 	for _, value := range values {
@@ -306,7 +307,7 @@ func sqliteAnalyticsCSVPredicate(
 	col string,
 	raw string,
 ) (string, []any) {
-	values := csvFilterValues(raw)
+	values := CSVFilterValues(raw)
 	if len(values) == 0 {
 		return "", nil
 	}
@@ -394,7 +395,7 @@ func (f AnalyticsFilter) buildWhereWithDate(
 	}
 
 	if f.Machine != "" {
-		machines := csvFilterValues(f.Machine)
+		machines := CSVFilterValues(f.Machine)
 		if len(machines) == 1 {
 			preds = append(preds, "machine = ?")
 			args = append(args, machines[0])
@@ -426,7 +427,7 @@ func (f AnalyticsFilter) buildWhereWithDate(
 	}
 
 	if f.Agent != "" {
-		agents := csvFilterValues(f.Agent)
+		agents := CSVFilterValues(f.Agent)
 		if len(agents) == 1 {
 			preds = append(preds, "agent = ?")
 			args = append(args, agents[0])
@@ -447,7 +448,7 @@ func (f AnalyticsFilter) buildWhereWithDate(
 	}
 
 	if f.Model != "" {
-		models := csvFilterValues(f.Model)
+		models := CSVFilterValues(f.Model)
 		if len(models) == 1 {
 			preds = append(preds,
 				"EXISTS (SELECT 1 FROM messages m WHERE "+
@@ -651,7 +652,7 @@ func (db *DB) getAnalyticsModelsForSessionIDsFiltered(
 		unique = append(unique, sessionID)
 	}
 
-	filterModels := csvFilterValues(f.Model)
+	filterModels := CSVFilterValues(f.Model)
 	allowedModels := make(map[string]struct{}, len(filterModels))
 	for _, model := range filterModels {
 		allowedModels[model] = struct{}{}
@@ -684,7 +685,7 @@ func (db *DB) getAnalyticsModelsForSessionIDsFiltered(
 				}
 			}
 			if f.HasTimeFilter() {
-				t, ok := localTime(ts, loc)
+				t, ok := LocalTime(ts, loc)
 				if !ok || !f.matchesTimeFilter(t) {
 					continue
 				}
@@ -892,7 +893,7 @@ func (db *DB) filteredSessionIDs(
 		if ids[sid] {
 			continue // already matched
 		}
-		t, ok := localTime(msgTS, loc)
+		t, ok := LocalTime(msgTS, loc)
 		if !ok {
 			continue
 		}
@@ -931,9 +932,9 @@ func (db *DB) filteredSessionIDsModel(
 	return ids, nil
 }
 
-// localTime parses a UTC timestamp string and converts it to the
+// LocalTime parses a UTC timestamp string and converts it to the
 // given location. Returns the local time and true on success.
-func localTime(
+func LocalTime(
 	ts string, loc *time.Location,
 ) (time.Time, bool) {
 	t, err := time.Parse(time.RFC3339Nano, ts)
@@ -946,10 +947,10 @@ func localTime(
 	return t.In(loc), true
 }
 
-// localDate converts a UTC timestamp string to a local date
+// LocalDate converts a UTC timestamp string to a local date
 // string (YYYY-MM-DD) in the given location.
-func localDate(ts string, loc *time.Location) string {
-	t, ok := localTime(ts, loc)
+func LocalDate(ts string, loc *time.Location) string {
+	t, ok := LocalTime(ts, loc)
 	if !ok {
 		if len(ts) >= 10 {
 			return ts[:10]
@@ -959,9 +960,9 @@ func localDate(ts string, loc *time.Location) string {
 	return t.Format("2006-01-02")
 }
 
-// percentileFloat returns the value at the given percentile
+// PercentileFloat returns the value at the given percentile
 // from a pre-sorted float64 slice.
-func percentileFloat(sorted []float64, pct float64) float64 {
+func PercentileFloat(sorted []float64, pct float64) float64 {
 	n := len(sorted)
 	if n == 0 {
 		return 0
@@ -973,10 +974,10 @@ func percentileFloat(sorted []float64, pct float64) float64 {
 	return sorted[idx]
 }
 
-// inDateRange checks if a local date falls within [from, to].
+// InDateRange checks if a local date falls within [from, to].
 // Empty bounds are treated as unbounded so callers can pass a
 // zero AnalyticsFilter to get every session.
-func inDateRange(date, from, to string) bool {
+func InDateRange(date, from, to string) bool {
 	if from != "" && date < from {
 		return false
 	}
@@ -986,10 +987,10 @@ func inDateRange(date, from, to string) bool {
 	return true
 }
 
-// medianInt returns the median of a sorted int slice of
+// MedianInt returns the median of a sorted int slice of
 // length n. For even n, returns the average of the two
 // middle elements.
-func medianInt(sorted []int, n int) int {
+func MedianInt(sorted []int, n int) int {
 	if n == 0 {
 		return 0
 	}
@@ -1234,8 +1235,8 @@ func (db *DB) getAnalyticsSummaryGo(
 			return AnalyticsSummary{},
 				fmt.Errorf("scanning summary row: %w", err)
 		}
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := LocalDate(ts, loc)
+		if !InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -1389,8 +1390,8 @@ type ActivityResponse struct {
 	Series      []ActivityEntry `json:"series"`
 }
 
-// bucketDate truncates a date to the start of its bucket.
-func bucketDate(date string, granularity string) string {
+// BucketDate truncates a date to the start of its bucket.
+func BucketDate(date string, granularity string) string {
 	t, err := time.Parse("2006-01-02", date)
 	if err != nil {
 		return date
@@ -1447,7 +1448,7 @@ func (db *DB) getModelScopedToolCallCounts(
 			if _, ok := flt.Models[model]; !ok {
 				continue
 			}
-			parsed, has := localTime(ts, loc)
+			parsed, has := LocalTime(ts, loc)
 			if !flt.MatchesDayHour(parsed, has) {
 				continue
 			}
@@ -1497,8 +1498,8 @@ func (db *DB) getAnalyticsActivityFilteredByModelTime(
 			return ActivityResponse{},
 				fmt.Errorf("scanning analytics activity session: %w", err)
 		}
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := LocalDate(ts, loc)
+		if !InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -1527,7 +1528,7 @@ func (db *DB) getAnalyticsActivityFilteredByModelTime(
 
 	buckets := make(map[string]*ActivityEntry)
 	for _, session := range sessions {
-		bucket := bucketDate(session.date, granularity)
+		bucket := BucketDate(session.date, granularity)
 		entry := buckets[bucket]
 		if entry == nil {
 			entry = &ActivityEntry{
@@ -1624,14 +1625,14 @@ func (db *DB) GetAnalyticsActivity(
 				fmt.Errorf("scanning activity row: %w", err)
 		}
 
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := LocalDate(ts, loc)
+		if !InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[sid] {
 			continue
 		}
-		bucket := bucketDate(date, granularity)
+		bucket := BucketDate(date, granularity)
 
 		entry, ok := buckets[bucket]
 		if !ok {
@@ -1832,8 +1833,8 @@ func (db *DB) GetAnalyticsHeatmap(
 			return HeatmapResponse{},
 				fmt.Errorf("scanning heatmap row: %w", err)
 		}
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := LocalDate(ts, loc)
+		if !InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -2079,8 +2080,8 @@ func (db *DB) GetAnalyticsProjects(
 			return ProjectsAnalyticsResponse{},
 				fmt.Errorf("scanning project row: %w", err)
 		}
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := LocalDate(ts, loc)
+		if !InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -2170,7 +2171,7 @@ func (db *DB) GetAnalyticsProjects(
 			FirstSession:   pd.first,
 			LastSession:    pd.last,
 			AvgMessages:    avg,
-			MedianMessages: medianInt(pd.counts, n),
+			MedianMessages: MedianInt(pd.counts, n),
 			Agents:         pd.agents,
 			DailyTrend:     trend,
 		})
@@ -2230,11 +2231,11 @@ func (db *DB) GetAnalyticsHourOfWeek(
 			return HourOfWeekResponse{},
 				fmt.Errorf("scanning hour-of-week row: %w", err)
 		}
-		sessDate := localDate(sessTS, loc)
-		if !inDateRange(sessDate, f.From, f.To) {
+		sessDate := LocalDate(sessTS, loc)
+		if !InDateRange(sessDate, f.From, f.To) {
 			continue
 		}
-		t, ok := localTime(msgTS, loc)
+		t, ok := LocalTime(msgTS, loc)
 		if !ok {
 			continue
 		}
@@ -2283,7 +2284,7 @@ func (db *DB) analyticsModelCandidateSessionIDs(
 		if err := rows.Scan(&id, &ts); err != nil {
 			return nil, fmt.Errorf("scanning model candidate session: %w", err)
 		}
-		if !inDateRange(localDate(ts, loc), f.From, f.To) {
+		if !InDateRange(LocalDate(ts, loc), f.From, f.To) {
 			continue
 		}
 		ids = append(ids, id)
@@ -2360,8 +2361,8 @@ type SessionShapeResponse struct {
 	AutonomyDistribution []DistributionBucket `json:"autonomy_distribution"`
 }
 
-// lengthBucket returns the bucket label for a message count.
-func lengthBucket(mc int) string {
+// LengthBucket returns the bucket label for a message count.
+func LengthBucket(mc int) string {
 	switch {
 	case mc <= 5:
 		return "1-5"
@@ -2378,9 +2379,9 @@ func lengthBucket(mc int) string {
 	}
 }
 
-// durationBucket returns the bucket label for a duration in
+// DurationBucket returns the bucket label for a duration in
 // minutes.
-func durationBucket(mins float64) string {
+func DurationBucket(mins float64) string {
 	switch {
 	case mins < 5:
 		return "<5m"
@@ -2397,8 +2398,8 @@ func durationBucket(mins float64) string {
 	}
 }
 
-// autonomyBucket returns the bucket label for an autonomy ratio.
-func autonomyBucket(ratio float64) string {
+// AutonomyBucket returns the bucket label for an autonomy ratio.
+func AutonomyBucket(ratio float64) string {
 	switch {
 	case ratio < 0.5:
 		return "<0.5"
@@ -2455,6 +2456,21 @@ func mapToBuckets(
 	return buckets
 }
 
+// LengthDistributionBuckets orders message-count buckets for display.
+func LengthDistributionBuckets(counts map[string]int) []DistributionBucket {
+	return mapToBuckets(counts, lengthOrder)
+}
+
+// DurationDistributionBuckets orders duration buckets for display.
+func DurationDistributionBuckets(counts map[string]int) []DistributionBucket {
+	return mapToBuckets(counts, durationOrder)
+}
+
+// AutonomyDistributionBuckets orders autonomy-ratio buckets for display.
+func AutonomyDistributionBuckets(counts map[string]int) []DistributionBucket {
+	return mapToBuckets(counts, autonomyOrder)
+}
+
 // GetAnalyticsSessionShape returns distribution histograms for
 // session length, duration, and autonomy ratio.
 func (db *DB) GetAnalyticsSessionShape(
@@ -2500,8 +2516,8 @@ func (db *DB) GetAnalyticsSessionShape(
 			return SessionShapeResponse{},
 				fmt.Errorf("scanning session shape row: %w", err)
 		}
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := LocalDate(ts, loc)
+		if !InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -2510,18 +2526,18 @@ func (db *DB) GetAnalyticsSessionShape(
 
 		totalCount++
 		if !modelFilter {
-			lengthCounts[lengthBucket(mc)]++
+			lengthCounts[LengthBucket(mc)]++
 		}
 		sessionIDs = append(sessionIDs, id)
 
 		if startedAt != nil && endedAt != nil &&
 			*startedAt != "" && *endedAt != "" {
-			tStart, okS := localTime(*startedAt, loc)
-			tEnd, okE := localTime(*endedAt, loc)
+			tStart, okS := LocalTime(*startedAt, loc)
+			tEnd, okE := LocalTime(*endedAt, loc)
 			if okS && okE {
 				mins := tEnd.Sub(tStart).Minutes()
 				if mins >= 0 {
-					durationCounts[durationBucket(mins)]++
+					durationCounts[DurationBucket(mins)]++
 				}
 			}
 		}
@@ -2547,11 +2563,11 @@ func (db *DB) GetAnalyticsSessionShape(
 			}
 			seen[sessionID] = struct{}{}
 			stat := stats[sessionID]
-			lengthCounts[lengthBucket(stat.Messages)]++
+			lengthCounts[LengthBucket(stat.Messages)]++
 			if stat.UserMessages > 0 {
 				ratio := float64(stat.ToolUseMessages) /
 					float64(stat.UserMessages)
-				autonomyCounts[autonomyBucket(ratio)]++
+				autonomyCounts[AutonomyBucket(ratio)]++
 			}
 		}
 	} else if len(sessionIDs) > 0 {
@@ -2568,9 +2584,9 @@ func (db *DB) GetAnalyticsSessionShape(
 
 	return SessionShapeResponse{
 		Count:                totalCount,
-		LengthDistribution:   mapToBuckets(lengthCounts, lengthOrder),
-		DurationDistribution: mapToBuckets(durationCounts, durationOrder),
-		AutonomyDistribution: mapToBuckets(autonomyCounts, autonomyOrder),
+		LengthDistribution:   LengthDistributionBuckets(lengthCounts),
+		DurationDistribution: DurationDistributionBuckets(durationCounts),
+		AutonomyDistribution: AutonomyDistributionBuckets(autonomyCounts),
 	}, nil
 }
 
@@ -2608,7 +2624,7 @@ func (db *DB) queryAutonomyChunk(
 		}
 		if userCount > 0 {
 			ratio := float64(toolCount) / float64(userCount)
-			counts[autonomyBucket(ratio)]++
+			counts[AutonomyBucket(ratio)]++
 		}
 	}
 	return rows.Err()
@@ -2753,7 +2769,7 @@ func BuildToolsAnalytics(rows []ToolAnalyticsRow) ToolsAnalyticsResponse {
 		}
 		agentCats[row.Agent][row.Category] += row.Count
 
-		week := bucketDate(row.Date, "week")
+		week := BucketDate(row.Date, "week")
 		if trendBuckets[week] == nil {
 			trendBuckets[week] = make(map[string]int)
 		}
@@ -2890,8 +2906,8 @@ func timestampAfter(a, b string) bool {
 	if a == "" {
 		return false
 	}
-	ta, aok := localTime(a, time.UTC)
-	tb, bok := localTime(b, time.UTC)
+	ta, aok := LocalTime(a, time.UTC)
+	tb, bok := LocalTime(b, time.UTC)
 	if aok && bok {
 		return ta.After(tb)
 	}
@@ -2955,7 +2971,7 @@ func BuildSkillsAnalytics(
 			acc.lastUsedAt = row.LastUsedAt
 		}
 		if row.Date != "" {
-			date := bucketDate(row.Date, bucket)
+			date := BucketDate(row.Date, bucket)
 			if trendBuckets[date] == nil {
 				trendBuckets[date] = map[string]int{}
 			}
@@ -3242,12 +3258,12 @@ func (f AnalyticsFilter) ResolveSkillRowTime(
 	if strings.TrimSpace(usedTS) == "" {
 		usedTS = sessionTS
 	}
-	date = localDate(usedTS, loc)
-	if !inDateRange(date, f.From, f.To) {
+	date = LocalDate(usedTS, loc)
+	if !InDateRange(date, f.From, f.To) {
 		return usedTS, date, false
 	}
 	if f.HasTimeFilter() {
-		t, ok := localTime(usedTS, loc)
+		t, ok := LocalTime(usedTS, loc)
 		if !ok || !f.matchesTimeFilter(t) {
 			return usedTS, date, false
 		}
@@ -3391,7 +3407,7 @@ func (db *DB) queryVelocityMsgs(
 	ph, args := inPlaceholders(chunk)
 	// COALESCE the nullable timestamp column to '' so a NULL (only present
 	// on imported/migrated archives) does not fail rows.Scan with
-	// "converting NULL to string is unsupported". localTime treats "" as
+	// "converting NULL to string is unsupported". LocalTime treats "" as
 	// invalid, so the row is excluded from velocity stats rather than
 	// crashing the analytics endpoint. This matches the NULL-safe
 	// PostgreSQL and DuckDB velocity twins.
@@ -3421,7 +3437,7 @@ func (db *DB) queryVelocityMsgs(
 				"scanning velocity msg: %w", err,
 			)
 		}
-		t, ok := localTime(ts, loc)
+		t, ok := LocalTime(ts, loc)
 		sessionMsgs[sid] = append(sessionMsgs[sid],
 			velocityMsg{
 				role: role, ts: t, valid: ok,
@@ -3496,9 +3512,9 @@ type VelocityResponse struct {
 	ByComplexity []VelocityBreakdown `json:"by_complexity"`
 }
 
-// complexityBucket returns the complexity label based on
+// ComplexityBucket returns the complexity label based on
 // message count.
-func complexityBucket(mc int) string {
+func ComplexityBucket(mc int) string {
 	switch {
 	case mc <= 15:
 		return "1-15"
@@ -3721,15 +3737,15 @@ func (a *velocityAccumulator) computeOverview() VelocityOverview {
 	var v VelocityOverview
 	v.TurnCycleSec = Percentiles{
 		P50: math.Round(
-			percentileFloat(a.turnCycles, 0.5)*10) / 10,
+			PercentileFloat(a.turnCycles, 0.5)*10) / 10,
 		P90: math.Round(
-			percentileFloat(a.turnCycles, 0.9)*10) / 10,
+			PercentileFloat(a.turnCycles, 0.9)*10) / 10,
 	}
 	v.FirstResponseSec = Percentiles{
 		P50: math.Round(
-			percentileFloat(a.firstResponses, 0.5)*10) / 10,
+			PercentileFloat(a.firstResponses, 0.5)*10) / 10,
 		P90: math.Round(
-			percentileFloat(a.firstResponses, 0.9)*10) / 10,
+			PercentileFloat(a.firstResponses, 0.9)*10) / 10,
 	}
 	if a.activeMinutes > 0 {
 		v.MsgsPerActiveMin = math.Round(
@@ -3789,8 +3805,8 @@ func (db *DB) GetAnalyticsVelocity(
 			return VelocityResponse{},
 				fmt.Errorf("scanning velocity session: %w", err)
 		}
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := LocalDate(ts, loc)
+		if !InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -3889,7 +3905,7 @@ func (db *DB) GetAnalyticsVelocity(
 		}
 
 		agentKey := info.agent
-		compKey := complexityBucket(info.mc)
+		compKey := ComplexityBucket(info.mc)
 
 		if byAgent[agentKey] == nil {
 			byAgent[agentKey] = &velocityAccumulator{}
@@ -4205,8 +4221,8 @@ func (db *DB) GetAnalyticsSignals(
 					"scanning signals row: %w", err,
 				)
 		}
-		r.Date = localDate(ts, loc)
-		if !inDateRange(r.Date, f.From, f.To) {
+		r.Date = LocalDate(ts, loc)
+		if !InDateRange(r.Date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[r.ID] {
@@ -4306,7 +4322,7 @@ func (db *DB) signalRows(
 		if err != nil {
 			return nil, err
 		}
-		if !inDateRange(r.Date, f.From, f.To) {
+		if !InDateRange(r.Date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[r.ID] {
@@ -4398,7 +4414,7 @@ func scanSignalRow(rs rowScanner, loc *time.Location) (SignalRow, error) {
 			"scanning signal row: %w", err,
 		)
 	}
-	r.Date = localDate(ts, loc)
+	r.Date = LocalDate(ts, loc)
 	return r, nil
 }
 
@@ -4472,7 +4488,7 @@ func (db *DB) signalMessages(
 		}
 		return out, nil
 	}
-	filterModels := csvFilterValues(f.Model)
+	filterModels := CSVFilterValues(f.Model)
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := inPlaceholders(chunk)
 		q := `SELECT session_id, ordinal, role, content,
@@ -5312,13 +5328,13 @@ func calibrateSignal(rows []SignalRow, signal string) SignalCalibration {
 		BaselineSessions: baseline.count,
 	}
 	if affected.count > 0 {
-		result.AffectedIncompleteRate = round1(
+		result.AffectedIncompleteRate = Round1(
 			float64(affected.incomplete) /
 				float64(affected.count) * 100,
 		)
 	}
 	if baseline.count > 0 {
-		result.BaselineIncompleteRate = round1(
+		result.BaselineIncompleteRate = Round1(
 			float64(baseline.incomplete) /
 				float64(baseline.count) * 100,
 		)
@@ -5326,14 +5342,14 @@ func calibrateSignal(rows []SignalRow, signal string) SignalCalibration {
 	if baseline.count > 0 &&
 		result.BaselineIncompleteRate > 0 &&
 		affected.count > 0 {
-		lift := round1(
+		lift := Round1(
 			result.AffectedIncompleteRate /
 				result.BaselineIncompleteRate,
 		)
 		result.IncompleteLift = &lift
 	}
 	if affected.scoreCount > 0 && baseline.scoreCount > 0 {
-		delta := round1(
+		delta := Round1(
 			float64(affected.scoreSum)/
 				float64(affected.scoreCount) -
 				float64(baseline.scoreSum)/
@@ -5407,7 +5423,8 @@ func isIncompleteOrLowQuality(r SignalRow) bool {
 	return *r.HealthGrade == "D" || *r.HealthGrade == "F"
 }
 
-func round1(v float64) float64 {
+// Round1 rounds v to one decimal place.
+func Round1(v float64) float64 {
 	return math.Round(v*10) / 10
 }
 
@@ -5637,8 +5654,8 @@ func (db *DB) getAnalyticsTopSessionsGo(
 			return TopSessionsResponse{},
 				fmt.Errorf("scanning top session: %w", err)
 		}
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := LocalDate(ts, loc)
+		if !InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -5646,8 +5663,8 @@ func (db *DB) getAnalyticsTopSessionsGo(
 		}
 		durMin := 0.0
 		if startedAt != nil && endedAt != nil {
-			tS, okS := localTime(*startedAt, loc)
-			tE, okE := localTime(*endedAt, loc)
+			tS, okS := LocalTime(*startedAt, loc)
+			tE, okE := LocalTime(*endedAt, loc)
 			if okS && okE {
 				durMin = math.Round(
 					tE.Sub(tS).Minutes()*10) / 10
@@ -5735,8 +5752,8 @@ func rankTopSessions(sessions []TopSession, needsGoSort bool) []TopSession {
 		})
 	}
 	for i := range sessions {
-		sessions[i].DurationMin = round1(sessions[i].DurationMin)
-		sessions[i].ActiveDurationMin = round1(sessions[i].ActiveDurationMin)
+		sessions[i].DurationMin = Round1(sessions[i].DurationMin)
+		sessions[i].ActiveDurationMin = Round1(sessions[i].ActiveDurationMin)
 	}
 	return sessions
 }

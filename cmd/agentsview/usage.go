@@ -520,33 +520,11 @@ func applyEmptyCatalogPricing(
 func fallbackPricingRates(
 	custom map[string]config.CustomModelRate,
 ) map[string]export.ModelRates {
-	rates := make(map[string]export.ModelRates)
-	for _, p := range pricing.FallbackPricing() {
-		// These keys are the same concrete model-pattern keys that the
-		// model_pricing table stores. SQLite usage lookups run the merged map
-		// through pricing.Resolve, so normalized/canonical aliases still match
-		// when this read-only path cannot seed model_pricing rows.
-		bands := make([]export.PricingBand, len(p.Bands))
-		for i, band := range p.Bands {
-			bands[i] = export.PricingBand{
-				AboveInputTokens:    band.AboveInputTokens,
-				InputPerMTok:        band.InputPerMTok,
-				OutputPerMTok:       band.OutputPerMTok,
-				CacheWritePerMTok:   band.CacheCreationPerMTok,
-				CacheWrite1hPerMTok: band.CacheCreation1hPerMTok,
-				CacheReadPerMTok:    band.CacheReadPerMTok,
-			}
-		}
-		rates[p.ModelPattern] = export.ModelRates{
-			InputPerMTok:        p.InputPerMTok,
-			OutputPerMTok:       p.OutputPerMTok,
-			CacheWritePerMTok:   p.CacheCreationPerMTok,
-			CacheWrite1hPerMTok: p.CacheCreation1hPerMTok,
-			CacheReadPerMTok:    p.CacheReadPerMTok,
-			Source:              export.PricingRowSourceEmbedded,
-			Bands:               bands,
-		}
-	}
+	// These keys are the same concrete model-pattern keys that the
+	// model_pricing table stores. SQLite usage lookups run the merged map
+	// through pricing.Resolve, so normalized/canonical aliases still match
+	// when this read-only path cannot seed model_pricing rows.
+	rates := db.FallbackRateMap()
 	for model, rate := range custom {
 		rates[model] = export.ModelRates{
 			InputPerMTok: money.Money{

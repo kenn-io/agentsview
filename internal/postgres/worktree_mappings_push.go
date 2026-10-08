@@ -29,7 +29,7 @@ func (s *Sync) syncWorktreeMappings(ctx context.Context, force bool) error {
 		if err != nil {
 			return err
 		}
-		mappings = filterWorktreeMappingsForPGScope(
+		mappings = db.FilterWorktreeMappingsForScope(
 			mappings, s.projects, s.excludeProjects,
 		)
 		return s.commitWorktreeMappingPublication(
@@ -86,27 +86,6 @@ func (s *Sync) syncWorktreeMappings(ctx context.Context, force bool) error {
 		return fmt.Errorf("advancing mapping publication cursor: %w", err)
 	}
 	return nil
-}
-
-func filterWorktreeMappingsForPGScope(
-	mappings []db.WorktreeProjectMapping,
-	projects, excludeProjects []string,
-) []db.WorktreeProjectMapping {
-	out := make([]db.WorktreeProjectMapping, 0, len(mappings))
-	for _, mapping := range mappings {
-		if mapping.Project == "" ||
-			!projectInPGSyncScope(mapping.Project, projects, excludeProjects) {
-			continue
-		}
-		if mapping.OriginalProject == "" ||
-			!projectInPGSyncScope(
-				mapping.OriginalProject, projects, excludeProjects,
-			) {
-			mapping.OriginalProject = ""
-		}
-		out = append(out, mapping)
-	}
-	return out
 }
 
 // commitWorktreeMappingPublication writes one publication window (a full

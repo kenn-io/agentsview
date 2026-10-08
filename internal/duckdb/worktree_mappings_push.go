@@ -33,7 +33,7 @@ func (s *Sync) syncWorktreeMappings(
 		if err != nil {
 			return 0, err
 		}
-		mappings = filterWorktreeMappingsForDuckScope(
+		mappings = db.FilterWorktreeMappingsForScope(
 			mappings, s.projects, s.excludeProjects,
 		)
 		if err := s.commitWorktreeMappingPublication(
@@ -71,29 +71,6 @@ func (s *Sync) syncWorktreeMappings(
 		return 0, err
 	}
 	return revision, nil
-}
-
-func filterWorktreeMappingsForDuckScope(
-	mappings []db.WorktreeProjectMapping,
-	projects, excludeProjects []string,
-) []db.WorktreeProjectMapping {
-	out := make([]db.WorktreeProjectMapping, 0, len(mappings))
-	for _, mapping := range mappings {
-		if mapping.Project == "" ||
-			!projectMatchesPushScope(
-				mapping.Project, projects, excludeProjects,
-			) {
-			continue
-		}
-		if mapping.OriginalProject == "" ||
-			!projectMatchesPushScope(
-				mapping.OriginalProject, projects, excludeProjects,
-			) {
-			mapping.OriginalProject = ""
-		}
-		out = append(out, mapping)
-	}
-	return out
 }
 
 // commitWorktreeMappingPublication writes one publication window (a full

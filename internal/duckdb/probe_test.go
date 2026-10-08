@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	duckdbdriver "github.com/duckdb/duckdb-go/v2"
+	"go.kenn.io/agentsview/internal/db"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,7 +58,7 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	// NeedsRebuild triggers: version drift either direction, scope drift.
 	assert.False(t, p.NeedsRebuild("", 68))
 	assert.True(t, p.NeedsRebuild("", 69))
-	assert.True(t, p.NeedsRebuild(canonicalPushScope([]string{"p"}, nil), 68))
+	assert.True(t, p.NeedsRebuild(db.CanonicalPushScope([]string{"p"}, nil), 68))
 	older := p
 	older.SchemaVersion = SchemaVersion - 1
 	assert.True(t, older.NeedsRebuild("", 68))
@@ -229,23 +230,6 @@ func TestProbeMirrorRecognitionRequiresSentinel(t *testing.T) {
 			assert.Equal(t, tt.wantRecognized, p.RecognizedMirror)
 		})
 	}
-}
-
-func TestCanonicalPushScopeIsDeterministicAndSorted(t *testing.T) {
-	assert.Empty(t, canonicalPushScope(nil, nil))
-	assert.Empty(t, canonicalPushScope([]string{}, []string{}))
-
-	forward := canonicalPushScope([]string{"b", "a"}, []string{"y", "x"})
-	reordered := canonicalPushScope([]string{"a", "b"}, []string{"x", "y"})
-	assert.Equal(t, forward, reordered)
-	assert.NotEmpty(t, forward)
-
-	assert.NotEqual(t, canonicalPushScope([]string{"a"}, nil),
-		canonicalPushScope([]string{"a", "b"}, nil),
-	)
-	assert.NotEqual(t, canonicalPushScope([]string{"a"}, nil),
-		canonicalPushScope(nil, []string{"a"}),
-	)
 }
 
 // TestIsMirrorLockConflictErrorClassifiesLockMessages tests the pure

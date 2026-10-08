@@ -233,11 +233,11 @@ func (f ContentSearchFilter) TermsSnippet(body string, terms []string) string {
 		if !ok {
 			continue
 		}
-		lo, hi := snippetBounds(body, start, end, contentSnippetRadius)
+		lo, hi := SnippetBounds(body, start, end, ContentSnippetRadius)
 		windows = append(windows, window{lo, hi})
 	}
 	if len(windows) == 0 {
-		return f.buildSnippet(body, 0, 0)
+		return f.BuildSnippet(body, 0, 0)
 	}
 	slices.SortFunc(windows, func(a, b window) int { return cmp.Compare(a.lo, b.lo) })
 	merged := windows[:1]

@@ -133,7 +133,7 @@ func trendMessageLocalTime(
 	loc *time.Location,
 ) (time.Time, bool) {
 	for _, ts := range []string{messageTS, startedAt, createdAt} {
-		if t, ok := localTime(ts, loc); ok {
+		if t, ok := db.LocalTime(ts, loc); ok {
 			return t, true
 		}
 	}

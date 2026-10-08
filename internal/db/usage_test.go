@@ -29,11 +29,11 @@ func TestPaddedUTCBoundClampsBeforeYearOne(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t,
 		"0001-01-01T00:00:00Z",
-		paddedUTCBound("0001-01-01T00:00:00Z", -14),
+		PaddedUTCBound("0001-01-01T00:00:00Z", -14),
 	)
 	assert.Equal(t,
 		"2026-03-10T10:00:00Z",
-		paddedUTCBound("2026-03-11T00:00:00Z", -14),
+		PaddedUTCBound("2026-03-11T00:00:00Z", -14),
 	)
 }
 
@@ -5958,7 +5958,7 @@ func TestGetDailyUsage_CodexAutoReviewLunaPricing(t *testing.T) {
 
 func TestGetDailyUsage_CodexNamespacedPricing(t *testing.T) {
 	d := testDB(t)
-	d.SetEmptyCatalogPricing(fallbackRateMap())
+	d.SetEmptyCatalogPricing(FallbackRateMap())
 	// This region-qualified row is newer than the embedded snapshot.
 	d.SetEffectivePricing(map[string]export.ModelRates{
 		"bedrock_mantle/us-gov-west-1/openai.gpt-5.4": {
@@ -6110,4 +6110,20 @@ func TestDailyUsageAmountsPrefersExactCustomKimiAlias(t *testing.T) {
 	resolutions := block.Models["kimi-for-coding"].Resolutions
 	require.Len(t, resolutions, 1)
 	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
+}
+
+func TestUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+	got, ok := UsageDedupTokenForRow(
+		"message",
+		"claude-code",
+		"msg-dup",
+		"",
+		"source-dup",
+		"",
+	)
+	require.True(t, ok, "expected source_uuid fallback key")
+	assert.Equal(t, UsageDedupToken{
+		Kind:  "source",
+		Value: "claude-code:source-dup",
+	}, got)
 }
