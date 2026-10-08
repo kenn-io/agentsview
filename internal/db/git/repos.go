@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"net/url"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	gitenv "go.kenn.io/kit/git/env"
 	gitrepo "go.kenn.io/kit/git/repo"
 	"go.kenn.io/kit/pathresolve"
 )
@@ -24,7 +26,6 @@ import (
 // returns one group of checkout paths per repository. Cwds with no enclosing
 // repo (or whose resolution fails) are silently dropped. Order follows
 // first-seen order in the input.
-// Ordinary roots are reused; fresh filesystem checks skip directories with no repository metadata.
 //
 // Resolution prefers `git rev-parse --show-toplevel`, which handles standard
 // `.git` directories, linked worktrees (`.git` is a file pointing at the
@@ -32,6 +33,7 @@ import (
 // helper falls back to walking upward from the nearest existing ancestor and
 // invoking `git rev-parse` from there — that mirrors how the parser package
 // recovers repo roots for archived sessions whose cwd has been deleted.
+// Ordinary owned roots are reused; fresh checks skip directories without repository metadata.
 //
 // Checkouts with the same origin form one group. Keep every checkout so
 // callers can count the union of their commits, including diverged branches.
@@ -197,6 +199,7 @@ type repoRootFile struct {
 type repoRootConfig struct {
 	gitdir, common   string
 	config, worktree repoRootFile
+	worktreeInactive bool
 }
 
 func readRepoRootFile(path string, read func(io.Reader) error) (bool, error) {
@@ -217,18 +220,20 @@ func readRepoRootFile(path string, read func(io.Reader) error) (bool, error) {
 
 var repoRootWorktreeKey = regexp.MustCompile(`(?i)(^|])[[:space:]]*worktree([[:space:]=#;]|$)`)
 
-func fingerprintRepoRootFile(path string) (repoRootFile, error) {
+func fingerprintRepoRootFile(path string) (repoRootFile, bool, error) {
 	hash := sha256.New()
+	worktree := false
 	exists, err := readRepoRootFile(path, func(file io.Reader) error {
 		scanner := bufio.NewScanner(io.TeeReader(file, hash))
 		for scanner.Scan() {
-			if repoRootWorktreeKey.Match(scanner.Bytes()) {
+			if strings.HasSuffix(scanner.Text(), "\\") {
 				return os.ErrInvalid
 			}
+			worktree = worktree || repoRootWorktreeKey.Match(scanner.Bytes())
 		}
 		return scanner.Err()
 	})
-	return repoRootFile{sum: [sha256.Size]byte(hash.Sum(nil)), exists: exists}, err
+	return repoRootFile{sum: [sha256.Size]byte(hash.Sum(nil)), exists: exists}, worktree, err
 }
 
 func readRepoRootPointer(path string) (string, bool, error) {
@@ -241,8 +246,8 @@ func readRepoRootPointer(path string) (string, bool, error) {
 }
 
 // Git root setup reads these two config files directly, without expanding includes.
-func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
-	if marker.info == nil {
+func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConfig, bool) {
+	if marker.info == nil || !repoRootOwned(filepath.Dir(marker.path)) || !repoRootOwned(marker.path) {
 		return repoRootConfig{}, false
 	}
 	gitdir := marker.path
@@ -264,7 +269,7 @@ func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
 		}
 	}
 	gitdir, err := pathresolve.EvalSymlinks(gitdir)
-	if err != nil {
+	if err != nil || !repoRootOwned(gitdir) || !repoRootHeadValid(filepath.Join(gitdir, "HEAD")) {
 		return repoRootConfig{}, false
 	}
 	text, exists, err := readRepoRootPointer(filepath.Join(gitdir, "commondir"))
@@ -285,12 +290,75 @@ func snapshotRepoRootConfig(marker gitMarker) (repoRootConfig, bool) {
 			return repoRootConfig{}, false
 		}
 	}
-	config, err := fingerprintRepoRootFile(filepath.Join(common, "config"))
+	if !repoRootAccessible(filepath.Join(common, "objects")) || !repoRootAccessible(filepath.Join(common, "refs")) {
+		return repoRootConfig{}, false
+	}
+	config, key, err := fingerprintRepoRootFile(filepath.Join(common, "config"))
+	if err != nil || key {
+		return repoRootConfig{}, false
+	}
+	result := repoRootConfig{gitdir: gitdir, common: common, config: config}
+	repoRoots.Lock()
+	entry := repoRoots.entries[marker.path]
+	if entry != nil {
+		select {
+		case <-entry.ready:
+			result.worktreeInactive = entry.marker.matches(marker) && entry.config.gitdir == gitdir &&
+				entry.config.common == common && entry.config.config == config && entry.config.worktreeInactive
+		default:
+		}
+	}
+	repoRoots.Unlock()
+	if result.worktreeInactive {
+		return result, true
+	}
+	result.worktree, key, err = fingerprintRepoRootFile(filepath.Join(gitdir, "config.worktree"))
 	if err != nil {
 		return repoRootConfig{}, false
 	}
-	worktree, err := fingerprintRepoRootFile(filepath.Join(gitdir, "config.worktree"))
-	return repoRootConfig{gitdir: gitdir, common: common, config: config, worktree: worktree}, err == nil
+	if key {
+		if !repoRootWorktreeInactive(ctx, filepath.Join(common, "config")) {
+			return repoRootConfig{}, false
+		}
+		result.worktree, result.worktreeInactive = repoRootFile{}, true
+	}
+	return result, true
+}
+
+var repoRootHead = regexp.MustCompile(`^(ref: refs/[A-Za-z0-9_./-]+|[0-9a-f]{40})\n?$`)
+
+func repoRootHeadValid(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		return err == nil && strings.HasPrefix(target, "refs/")
+	}
+	if !info.Mode().IsRegular() || info.Size() > 256 {
+		return false
+	}
+	var data []byte
+	_, err = readRepoRootFile(path, func(file io.Reader) error {
+		data, err = io.ReadAll(io.LimitReader(file, 257))
+		return err
+	})
+	return err == nil && repoRootHead.Match(data)
+}
+
+func repoRootWorktreeInactive(ctx context.Context, config string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "config", "--no-includes", "--file", config,
+		"--type=bool", "--get", "extensions.worktreeConfig")
+	cmd.Env = gitenv.StripAll(os.Environ())
+	out, err := cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(out)) == "false"
+	}
+	exit, ok := errors.AsType[*exec.ExitError](err)
+	return ok && exit.ExitCode() == 1 && ctx.Err() == nil
 }
 
 // Cleaning a parent component after a name can change which linked directory Git reads.
@@ -373,7 +441,7 @@ func findRepoRoot(ctx context.Context, start string) string {
 		if absent {
 			return ""
 		}
-		config, known := snapshotRepoRootConfig(marker)
+		config, known := snapshotRepoRootConfig(ctx, marker)
 		if !known {
 			if dir == "" {
 				return ""
@@ -386,11 +454,14 @@ func findRepoRoot(ctx context.Context, start string) string {
 			repoRoots.Unlock()
 			select {
 			case <-entry.ready:
-			case <-ctx.Done():
-				return ""
+			default:
+				select {
+				case <-entry.ready:
+					continue
+				case <-ctx.Done():
+					return ""
+				}
 			}
-			marker, _ := nearestGitMarker(existingAncestor(start))
-			config, known := snapshotRepoRootConfig(marker)
 			if entry.root == "" || !entry.marker.matches(marker) || !known || entry.config != config {
 				repoRoots.Lock()
 				if repoRoots.entries[key] == entry {

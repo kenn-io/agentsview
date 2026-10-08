@@ -43,7 +43,7 @@ func mkdirIn(t *testing.T, root, rel string) string {
 func linkRepoDirectory(t *testing.T, link, target string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		out, err := exec.CommandContext(t.Context(), "cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+		out, err := exec.CommandContext(t.Context(), "cmd", "/c", "mklink", "/J", filepath.FromSlash(link), filepath.FromSlash(target)).CombinedOutput()
 		require.NoError(t, err, "%s", out)
 	} else {
 		require.NoError(t, os.Symlink(target, link))
@@ -94,9 +94,12 @@ func TestFindRepoRoot_DirectoryAlias(t *testing.T) {
 	alias := filepath.Join(t.TempDir(), "alias")
 	linkRepoDirectory(t, alias, filepath.Dir(sub))
 	want := canonAll([]string{repo})[0]
+	ctx := &pausedRepoFill{Context: t.Context(), started: make(chan struct{}), resume: make(chan struct{})}
+	close(ctx.resume)
 	for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
-		assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
+		assert.Equal(t, want, findRepoRoot(ctx, cwd))
 	}
+	assert.Equal(t, int32(1), ctx.attempts.Load(), "cold sibling directories share one lookup")
 	t.Setenv("PATH", t.TempDir())
 	for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
 		assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
@@ -240,6 +243,56 @@ func TestFindRepoRoot_PendingFill(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestFindRepoRoot_InvalidNestedRepository(t *testing.T) {
+	for _, name := range []string{"HEAD missing", "HEAD malformed", "HEAD directory", "objects missing", "refs missing"} {
+		t.Run(name, func(t *testing.T) {
+			skipIfNoGit(t)
+			outer := initBareRepo(t)
+			commitAt(t, outer, "2026-01-01T00:00:00Z", "outer")
+			inner := mkdirIn(t, outer, "inner")
+			gitRun(t, inner, nil, "init", "-q", "-b", "main")
+			configureTestRepoIdentity(t, inner)
+			commitAt(t, inner, "2026-01-01T00:00:00Z", "inner one")
+			commitAt(t, inner, "2026-01-02T00:00:00Z", "inner two")
+			count := func() int {
+				groups := DiscoverRepos(t.Context(), []string{inner})
+				require.Len(t, groups, 1)
+				result, err := AggregateLog(t.Context(), groups[0][0], "test@example.com", "1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z")
+				require.NoError(t, err)
+				return result.Commits
+			}
+			require.Equal(t, 2, count())
+			metadata := strings.Fields(name)[0]
+			path := filepath.Join(inner, ".git", metadata)
+			require.NoError(t, os.Rename(path, filepath.Join(t.TempDir(), metadata)))
+			switch name {
+			case "HEAD malformed":
+				require.NoError(t, os.WriteFile(path, []byte("invalid\n"), 0o600))
+			case "HEAD directory":
+				require.NoError(t, os.Mkdir(path, 0o700))
+			}
+			assert.Equal(t, 1, count())
+		})
+	}
+}
+
+func TestFindRepoRoot_InactiveWorktreeConfig(t *testing.T) {
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	configured := mkdirIn(t, repo, "configured")
+	worktreeConfig := filepath.Join(repo, ".git", "config.worktree")
+	gitRun(t, repo, nil, "config", "--file", worktreeConfig, "core.worktree", configured)
+	require.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
+	t.Run("reuse inactive file without Git", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		require.NoError(t, os.WriteFile(worktreeConfig, []byte("[core]\n worktree = other\n"), 0o600))
+		assert.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), mkdirIn(t, repo, "unseen")))
+	})
+	gitRun(t, repo, nil, "config", "--file", worktreeConfig, "core.worktree", configured)
+	gitRun(t, repo, nil, "config", "extensions.worktreeConfig", "true")
+	assert.Equal(t, canonAll([]string{configured})[0], findRepoRoot(t.Context(), repo))
 }
 
 func TestFindRepoRoot_ConfiguredLinkRetarget(t *testing.T) {
