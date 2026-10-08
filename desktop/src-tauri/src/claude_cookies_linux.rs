@@ -19,7 +19,7 @@ pub fn delete_cookies(manager: CookieManager, sender: Completion) {
             let _ = sender.send(Err(error.to_string()));
             return;
         }
-        let cookies: Vec<soup3::Cookie> = FromGlibPtrContainer::from_glib_full(cookies);
+        let cookies: Vec<soup::Cookie> = FromGlibPtrContainer::from_glib_full(cookies);
         glib::MainContext::ref_thread_default().spawn_local(async move {
             for mut cookie in cookies {
                 let domain = cookie.domain().map(|domain| domain.to_string()).unwrap_or_default();
