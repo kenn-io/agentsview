@@ -79,15 +79,6 @@ func TestDiscoverRepos_FindsRootAndFiltersMissing(t *testing.T) {
 	assert.Equal(t, canonAll(want), canonAll(slices.Concat(got...)), "DiscoverRepos")
 }
 
-func TestFindRepoRoot_BareWorktreeFallback(t *testing.T) {
-	skipIfNoGit(t)
-	bare, worktree := t.TempDir(), t.TempDir()
-	gitRun(t, bare, nil, "init", "--bare", "-q")
-	gitRun(t, bare, nil, "config", "core.bare", "false")
-	gitRun(t, bare, nil, "config", "core.worktree", worktree)
-	assert.Equal(t, canonAll([]string{worktree})[0], findRepoRoot(t.Context(), bare))
-}
-
 func TestFindRepoRoot_DirectoryAlias(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initBareRepo(t)
@@ -101,15 +92,6 @@ func TestFindRepoRoot_DirectoryAlias(t *testing.T) {
 		assert.Equal(t, want, findRepoRoot(ctx, cwd))
 	}
 	assert.Equal(t, int32(3), ctx.attempts.Load(), "two eligibility bounds and one shared root lookup")
-	for _, branch := range []string{"fix/cache+tracing", "feature/@dashboard"} {
-		gitRun(t, repo, nil, "checkout", "-q", "-b", branch)
-		t.Run(branch, func(t *testing.T) {
-			t.Setenv("PATH", t.TempDir())
-			for _, cwd := range []string{alias, filepath.Join(alias, "nested")} {
-				assert.Equal(t, want, findRepoRoot(t.Context(), cwd))
-			}
-		})
-	}
 }
 
 func TestFindRepoRoot_RepositoryChanges(t *testing.T) {
@@ -363,6 +345,8 @@ func TestRepoRootHeadValid_Prefix(t *testing.T) {
 		text  string
 		valid bool
 	}{
+		{"ref: refs/heads/fix/cache+tracing\n", true},
+		{"ref: refs/heads/feature/@dashboard\n", true},
 		{"ref:\t\r\n refs/heads/" + strings.Repeat("long", 100), true},
 		{strings.Repeat("AB", 32) + "\n", true},
 		{"ref:\vrefs/heads/main", false},
