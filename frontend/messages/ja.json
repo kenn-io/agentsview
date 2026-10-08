@@ -2455,6 +2455,7 @@
   "import_claude_help": "サインインしてウィンドウを閉じ、同期をクリックしてください。",
   "import_claude_auth_required": "Claude.ai にサインインしてから、もう一度同期してください。",
   "import_claude_sign_in_pending": "Claude.ai へのサインインを完了してウィンドウを閉じ、もう一度同期してください。",
+  "import_newer_marker": "アーカイブ済みのセッション {session} には新しいバージョンの AgentsView が必要です。AgentsView を更新してから、もう一度同期してください。",
   "usage_click_project": "クリックして {label} に絞り込み、ダブルクリックでグループとセッションを開く",
   "usage_click_project_hint": "プロジェクトを選択するとページを絞り込み、開くとグループとセッションを表示します。",
   "usage_click_to_focus": "クリックして {label} に絞り込む",

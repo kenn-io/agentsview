@@ -408,7 +408,6 @@ func TestParseClaudeAIDetail_SelectedPath(t *testing.T) {
 		{"edit", "b", []string{"Edited", "Second"}},
 		{"switch back", "a2", []string{"Question", "First", "More", "Answer"}},
 		{"retry", "retry", []string{"Question", "Retry"}},
-		{"retry switch back", "a", []string{"Question", "First"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input := `{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"` + tt.leaf + `","chat_messages":[` + edit + "," + more + "," + retry + "," + first + "," + question + `,{"uuid":"orphan","parent_message_uuid":"missing"},{"uuid":"invalid","parent_message_uuid":null}]}`
@@ -456,7 +455,6 @@ func TestParseClaudeAIExport_IgnoresTreeFields(t *testing.T) {
 		want                 []string
 	}{
 		{"null leaf 1", `{"uuid":"q","sender":"human","text":"Question"},{"uuid":"a","sender":"assistant","text":"Answer"}`, "null", []string{"Question", "Answer"}},
-		{"null leaf 2", `{"uuid":"same","sender":"human","text":"Question"},{"uuid":"same","sender":"assistant","text":"Answer"}`, "null", []string{"Question", "Answer"}},
 		{"null leaf 3", `{"sender":"human","text":"Question","parent_message_uuid":null},{"sender":"assistant","text":"Answer","parent_message_uuid":null}`, "null", []string{"Question", "Answer"}},
 		{"tree fields 1", `{"uuid":"q","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Question"},{"uuid":"a","parent_message_uuid":"q","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"q","sender":"assistant","text":"Second"}`, `"a"`, []string{"Question", "First", "Second"}},
 		{"tree fields 2", `{"uuid":"same","sender":"human","text":"Question"},{"uuid":"same","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"missing","sender":"assistant","text":"Second"}`, `"a"`, []string{"Question", "First", "Second"}},

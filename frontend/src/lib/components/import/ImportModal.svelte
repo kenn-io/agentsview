@@ -31,13 +31,6 @@
     onimported,
   }: Props = $props();
 
-  type ImportResult = {
-    imported: number;
-    updated: number;
-    skipped: number;
-    errors: number;
-  };
-
   let fileInput: HTMLInputElement | undefined = $state();
   let selectedFile = $state<File | null>(null);
   let provider: "claude-ai" | "chatgpt" =
@@ -45,7 +38,7 @@
   let importing = $state(false);
   let dragOver = $state(false);
   let dragCount = $state(0);
-  let result = $state<ImportResult | null>(null);
+  let result = $state<ImportStats | null>(null);
   let error = $state<string | null>(null);
   let phase = $state<"importing" | "indexing">(
     "importing",
@@ -339,6 +332,14 @@
             </div>
           {/if}
         </div>
+        {#each result.refusals ?? [] as refusal}
+          {#if refusal.reason === "newer_marker"}
+            <div class="import-error" role="alert">
+              <TriangleAlertIcon size="14" aria-hidden="true" />
+              <span>{m.import_newer_marker({ session: refusal.session_id })}</span>
+            </div>
+          {/if}
+        {/each}
       </div>
     {:else}
       <!-- ── Provider selector ── -->

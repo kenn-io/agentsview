@@ -44,7 +44,7 @@ func (s *Server) registerImportRoutes() {
 		}, maxBodyBytes(-1), func(op *huma.Operation) {
 			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
 				if _, ok := results.Load(ctx.Param("id")); !ok {
-					ctx.SetStatus(http.StatusNotFound)
+					writeHumaJSON(ctx, http.StatusNotFound, apiResponseError{Message: "fetch request expired or already answered"})
 					return
 				}
 				body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), importer.ClaudeAIResponseLimit+1))
@@ -56,7 +56,7 @@ func (s *Server) registerImportRoutes() {
 						value.(chan claudeAISyncResult) <- claudeAISyncResult{err: err}
 						ctx.SetStatus(http.StatusNoContent)
 					} else {
-						ctx.SetStatus(http.StatusNotFound)
+						writeHumaJSON(ctx, http.StatusNotFound, apiResponseError{Message: "fetch request expired or already answered"})
 					}
 					return
 				}
