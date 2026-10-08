@@ -116,7 +116,11 @@
     cursor: pointer;
   }
 
-  .treemap-container :global(.tile:hover rect) {
+  .treemap-container :global(.tile[aria-disabled="true"]) {
+    cursor: default;
+  }
+
+  .treemap-container :global(.tile:hover:not([aria-disabled="true"]) rect) {
     opacity: 0.92;
   }
 
@@ -138,9 +142,7 @@
   }
 
   .treemap-container :global(.tile-value) {
-    /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
-    fill-opacity: 0.85;
     font-size: 11px;
     font-weight: 500;
     font-family: var(--font-mono);
@@ -148,9 +150,7 @@
   }
 
   .treemap-container :global(.tile-meta) {
-    /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
-    fill-opacity: 0.7;
     font-size: 9px;
     font-family: var(--font-sans);
     pointer-events: none;

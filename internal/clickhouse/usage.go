@@ -174,6 +174,7 @@ SELECT
 	toInt64(0) AS user_message_count,
 	cu.is_headless AS is_automated,
 	'' AS display_name,
+	'' AS group_key, '' AS group_label,
 	CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS started_at,
 	cu.occurred_at AS activity_at
 FROM cursor_usage_events cu
@@ -261,6 +262,7 @@ func chUsageRawSQLFromWheres(
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
+			s.group_key AS group_key, s.group_label AS group_label,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM messages m
@@ -287,6 +289,7 @@ func chUsageRawSQLFromWheres(
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
+			s.group_key AS group_key, s.group_label AS group_label,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM usage_events ue
@@ -450,6 +453,7 @@ func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			ifNull(COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id), '') AS display_name,
+			s.group_key AS group_key, s.group_label AS group_label,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at,
 			p.price_model AS stored_price_model, p.price_key AS stored_price_key,
@@ -853,6 +857,8 @@ func chUsageCTEFromRawSource(
 					attributed.display_name, attributed.session_name,
 					attributed.first_message, attributed.project, attributed.id
 				), '')) AS display_name,
+				if(attributed.id = '', ranked.group_key, attributed.group_key) AS group_key,
+				if(attributed.id = '', ranked.group_label, attributed.group_label) AS group_label,
 				if(attributed.id = '', ranked.started_at, attributed.started_at) AS started_at,
 				if(attributed.id = '', ranked.activity_at, COALESCE(
 					attributed.ended_at, attributed.started_at,
@@ -1910,7 +1916,6 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			cache_create_1h_norm AS cache_creation_1h_tokens,
 			cache_read_norm AS cache_read_tokens,` + chUsageBillableSelect + `
 		FROM usage_localized
-		LEFT JOIN (SELECT id AS group_session_id, group_key, group_label FROM sessions) grouping_metadata ON usage_localized.session_id = group_session_id
 		ORDER BY session_id ASC, model ASC, price_model ASC, ts ASC,
 			COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC`
 	readCtx, err := withUsageDeltaTables(ctx, state)

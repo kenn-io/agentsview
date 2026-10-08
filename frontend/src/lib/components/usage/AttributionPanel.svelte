@@ -50,18 +50,21 @@
       const names = zoomRows.map((row) => row.group_key ? row.group_label || row.group_key : row.displayName);
       items = zoomRows.map((row, index) => {
         const id = row.group_key || row.sessionId;
-        const duplicates = zoomRows.filter((other, otherIndex) => other !== row && other.group_key && row.group_key && names[otherIndex] === names[index]);
+        const duplicates = zoomRows.filter((other, otherIndex) => other !== row && names[otherIndex] === names[index]);
+        const suffixID = row.group_key || row.sessionId.replace(/^[^:]+:/, "");
         let length = 6;
-        while (length < id.length && duplicates.some((other) => other.group_key!.slice(0, length) === id.slice(0, length))) length++;
+        while (length < suffixID.length && duplicates.some((other) => (other.group_key || other.sessionId.replace(/^[^:]+:/, "")).slice(0, length) === suffixID.slice(0, length))) length++;
         return {
           id,
-          label: duplicates.length ? `${names[index]} · ${id.slice(0, length)}` : names[index]!,
+          label: duplicates.length ? `${names[index]} · ${suffixID.slice(0, length)}` : names[index]!,
           value: isTokenMode ? sumSelectedTokens(row, usage.selectedTokenTypes) : row.cost.microdollars,
         };
       });
-      const total = isTokenMode ? sumSelectedTokens(zoomedProject, usage.selectedTokenTypes) : zoomedProject.cost.microdollars;
-      const remainder = total - items.reduce((sum, item) => sum + item.value, 0);
-      if (remainder > 0) items.push({ id: "", label: m.usage_other_runs(), value: remainder });
+      if (usage.attributionTotalsMatch) {
+        const total = isTokenMode ? sumSelectedTokens(zoomedProject, usage.selectedTokenTypes) : zoomedProject.cost.microdollars;
+        const remainder = total - items.reduce((sum, item) => sum + item.value, 0);
+        if (remainder > 0) items.push({ id: "", label: m.usage_other_runs(), value: remainder });
+      }
     } else if (groupBy === "project") {
       items = s.projectTotals.map((p) => ({
         id: p.project_key,
@@ -96,12 +99,13 @@
     const items = rowItems;
     const total = items.reduce((sum, item) => sum + item.value, 0);
 
+    // At most 45% of any sRGB color over black gives white text at least 4.5:1 contrast.
     return items.map((d, index) => ({
       id: d.id,
       label: d.label,
       value: d.value,
       color: zoomedProject
-        ? `color-mix(in srgb, ${colorMap.get(zoomedProject.project_key) ?? "var(--text-muted)"} ${55 + 40 * (index + 1) / items.length}%, ${index % 2 ? "black" : "white"})`
+        ? `color-mix(in srgb, ${colorMap.get(zoomedProject.project_key) ?? "var(--text-muted)"} ${30 + 15 * (index + 1) / items.length}%, black)`
         : colorMap.get(d.id) ?? "var(--text-muted)",
       pct: total > 0 ? d.value / total : 0,
     }));
@@ -121,7 +125,11 @@
   );
 
   function rowTitle(id: string, label: string): string {
-    if (zoomedProject) return id ? `${label} · ${id}` : label;
+    if (zoomedProject) {
+      const row = usage.zoomRows?.find((row) => (row.group_key || row.sessionId) === id);
+      const name = row?.group_label || row?.displayName || label;
+      return id && name !== id ? `${name} · ${id}` : name;
+    }
     return groupBy === "project" ? m.usage_click_project({ label }) : m.usage_click_to_hide({ label });
   }
 
@@ -375,8 +383,12 @@
     transition: background 0.1s;
   }
 
-  .rail-row:hover {
+  .rail-row:hover:not([aria-disabled="true"]) {
     background: var(--bg-surface-hover);
+  }
+
+  .rail-row[aria-disabled="true"], .list-row[aria-disabled="true"] {
+    cursor: default;
   }
 
   .rail-rank {
@@ -428,7 +440,7 @@
     transition: background 0.1s;
   }
 
-  .list-row:hover {
+  .list-row:hover:not([aria-disabled="true"]) {
     background: var(--bg-surface-hover);
   }
 

@@ -26,6 +26,10 @@ export type GetApiV1UsageTopSessionsParams = {
    */
   project?: string;
   /**
+   * Filter by an opaque project key
+   */
+  project_key?: string;
+  /**
    * Filter by machine
    */
   machine?: string;
@@ -100,10 +104,6 @@ export type GetApiV1UsageTopSessionsParams = {
    * Merge sessions by project and group
    */
   group_by?: GetApiV1UsageTopSessionsGroupBy;
-  /**
-   * Filter by an opaque project key
-   */
-  project_key?: string;
   /**
    * Comma-separated token counters for token ranking: input, cache_write, cache_read, output
    */

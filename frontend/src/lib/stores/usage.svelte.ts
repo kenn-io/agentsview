@@ -365,6 +365,8 @@ class UsageStore {
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
   zoomedProjectKey = $state<string | null>(null);
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
+  private summaryScope = $state<string | null>(null);
+  private zoomScope = $state<string | null>(null);
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
   // Wall-clock ms of the most recent full refresh, request start to data
@@ -458,6 +460,10 @@ class UsageStore {
       p.exclude_model = this.excludedModels;
     }
     return p;
+  }
+
+  get attributionTotalsMatch(): boolean {
+    return this.summaryScope !== null && this.summaryScope === this.zoomScope && !this.isTimeRangeSummaryProvisional;
   }
 
   get timeSeriesSummary(): UsageSummaryResponse | null {
@@ -999,6 +1005,7 @@ class UsageStore {
       }
       if (this.versions.summary === v) {
         this.summary = data;
+        this.summaryScope = JSON.stringify([v, params]);
         if (
           this.zoomedProjectKey &&
           !data.projectTotals.some((project) => project.project_key === this.zoomedProjectKey)
@@ -1222,6 +1229,7 @@ class UsageStore {
     const projectKey = this.zoomedProjectKey;
     if (!projectKey) return "ok";
     const version = ++this.versions.zoom;
+    const summaryGeneration = this.versions.summary;
     const signal = this.nextAbortSignal("zoom");
     this.zoomRows = null;
     this.loading.zoom = true;
@@ -1243,6 +1251,7 @@ class UsageStore {
       );
       if (this.versions.zoom !== version || this.zoomedProjectKey !== projectKey) return "aborted";
       this.zoomRows = data;
+      this.zoomScope = JSON.stringify([summaryGeneration, params]);
       this.noteStep("zoom", liveStep, started, data);
       return "ok";
     } catch (error) {

@@ -2946,7 +2946,8 @@ schemas keep their existing ordering behavior.
   for state parent walks and transcript run IDs on 2026-10-08.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
-  recognized. Exported `source` identifies cron only. State continuations follow
+  recognized. Transcript projects use `platform`; transcript titles supply group
+  labels without overriding session display names. State continuations follow
   `parent_session_id` until a cron run ID identifies the job. Transcript-only
   runs use their own ID. A missing state parent leaves a continuation ungrouped.
   All cron runs retain the `hermes-cron` project.

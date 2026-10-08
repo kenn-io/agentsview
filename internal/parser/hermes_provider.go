@@ -338,18 +338,8 @@ func (p *hermesProvider) parseStateMember(
 		return ParseOutcome{ResultSetComplete: true, ForceReplace: true, SkipReason: SkipNoSession}, nil
 	}
 
-	if ss.source == "cron" {
-		var lookupErr error
-		ss.cronJob = HermesCronJobID(ss.id, func(id string) string {
-			parent, err := hermesCronParent(ctx, conn, id)
-			if err != nil {
-				lookupErr = err
-			}
-			return parent
-		})
-		if lookupErr != nil {
-			return ParseOutcome{}, lookupErr
-		}
+	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) }); err != nil {
+		return ParseOutcome{}, err
 	}
 	messages, err := readHermesStateMessagesForSession(ctx, conn, src.SessionID)
 	if err != nil {

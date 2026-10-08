@@ -66,7 +66,12 @@ func ResolveUsageProjectKeys(
 		if err != nil {
 			return UsageRequest{}, err
 		}
-		req.ProjectLabels = resolved
+		labels, ok := intersectValues(mergeResolvedProjectLabels(req.Project, req.ProjectLabels), resolved)
+		if !ok {
+			req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
+			labels = resolved
+		}
+		req.ProjectLabels = labels
 		req.Project = ""
 		req.ProjectKey = ""
 	}

@@ -415,4 +415,5 @@ func TestHostedUsageGroups(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "codex:portable", rows[0].SessionID)
+	assert.Equal(t, "job-a", rows[0].GroupKey)
 }

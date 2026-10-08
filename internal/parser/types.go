@@ -1427,13 +1427,13 @@ type ParsedSession struct {
 	GitBranch        string
 	SourceSessionID  string
 	SourceVersion    string
+	GroupKey         string `json:"group_key,omitempty"`
+	GroupLabel       string `json:"group_label,omitempty"`
 	// TranscriptFidelity classifies how complete a stored transcript is
 	// relative to the agent's full session data: "full" when the
 	// high-resolution source was used, "summary" for a degraded/fallback
 	// decode. Empty means full (parser did not classify). Currently set
 	// only by the Antigravity CLI parser.
-	GroupKey           string `json:"group_key,omitempty"`
-	GroupLabel         string `json:"group_label,omitempty"`
 	TranscriptFidelity string
 	// GenMetadataWithoutUsage reports whether this Antigravity session's steps
 	// table carried gen_metadata rows but none decoded into a usage event --

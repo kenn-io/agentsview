@@ -495,6 +495,8 @@ describe("AttributionPanel job groups", () => {
   });
 
   it("zooms into stable jobs, keeps the remainder, and returns to projects", async () => {
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usage.summary);
+    await usage.fetchSummary({ loadComparison: false });
     const group = (key: string, cost: number): DbTopSessionEntry => ({
       group_key: key,
       group_label: "Daily digest",
@@ -537,7 +539,7 @@ describe("AttributionPanel job groups", () => {
       "$2.00",
       "$1.00",
     ]);
-    expect(rows[0]!.title).toContain("abcdef-job");
+    expect(rows[0]!.title).toBe("Daily digest · abcdef-job");
     expect(
       new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size,
     ).toBe(4);
@@ -551,6 +553,47 @@ describe("AttributionPanel job groups", () => {
     expect(usage.zoomedProjectKey).toBeNull();
     expect(document.querySelectorAll(".list-row")).toHaveLength(2);
     unmount(component);
+  });
+
+  it("omits Other when summary fails and zoom succeeds after a date change", async () => {
+    const summary = summaryWithDuplicateProjectLabels();
+    summary.projectTotals[0]!.project = "hermes-cron";
+    summary.projectTotals[0]!.cost = testMoney(100);
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summary);
+    await usage.fetchAll();
+    const component = mountPanel();
+    await tick();
+    document.querySelectorAll<HTMLElement>(".list-row")[0]!.click();
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    usageServiceMocks.getApiV1UsageSummary.mockRejectedValue(new Error("Summary unavailable"));
+    usageServiceMocks.getApiV1UsageTopSessions.mockImplementation((params) =>
+      Promise.resolve(params.group_by === "group" ? [{
+        group_key: "job-a",
+        group_label: "Digest",
+        sessionId: "",
+        displayName: "Digest",
+        project: "hermes-cron",
+        agent: "hermes",
+        startedAt: "",
+        inputTokens: 10,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        totalTokens: 10,
+        cost: testMoney(2),
+      }] : []),
+    );
+    usage.applyDateRange("2024-02-01", "2024-02-29");
+    await usage.fetchAll();
+    await tick();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(expect.objectContaining({ from: "2024-02-01", to: "2024-02-29" }));
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls).toContainEqual([
+      expect.objectContaining({ from: "2024-02-01", to: "2024-02-29", group_by: "group" }),
+      expect.anything(),
+    ]);
+    expect([...document.querySelectorAll(".list-label")].map((row) => row.textContent)).toEqual(["Digest"]);
+    expect(document.querySelector(".list-cost")?.textContent?.trim()).toBe("$2.00");
+    await unmount(component);
   });
 
   it("hides the project from the zoom breadcrumb", async () => {

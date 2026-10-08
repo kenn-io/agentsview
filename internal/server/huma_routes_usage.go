@@ -50,6 +50,7 @@ type UsageFilterInput struct {
 	Timezone          string `query:"timezone" doc:"IANA timezone name"`
 	Agent             string `query:"agent" doc:"Filter by agent"`
 	Project           string `query:"project" doc:"Filter by project"`
+	ProjectKey        string `query:"project_key" doc:"Filter by an opaque project key"`
 	Machine           string `query:"machine" doc:"Filter by machine"`
 	GitBranch         string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	ExcludeProject    string `query:"exclude_project" doc:"Exclude a project"`
@@ -72,7 +73,6 @@ type usageTopSessionsInput struct {
 	Limit      int    `query:"limit" minimum:"0" maximum:"100" default:"20" doc:"Maximum number of sessions"`
 	Sort       string `query:"sort" enum:"cost,tokens" default:"cost" doc:"Rank sessions by cost or selected token types"`
 	GroupBy    string `query:"group_by" enum:"group" doc:"Merge sessions by project and group"`
-	ProjectKey string `query:"project_key" doc:"Filter by an opaque project key"`
 	TokenTypes string `query:"token_types" doc:"Comma-separated token counters for token ranking: input, cache_write, cache_read, output"`
 }
 
@@ -98,6 +98,7 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		Timezone:          in.Timezone,
 		Agent:             in.Agent,
 		Project:           in.Project,
+		ProjectKey:        in.ProjectKey,
 		Machine:           in.Machine,
 		GitBranch:         in.GitBranch,
 		ExcludeProject:    in.ExcludeProject,
@@ -336,15 +337,9 @@ func (s *Server) humaUsageTopSessions(
 	ctx context.Context,
 	in *usageTopSessionsInput,
 ) (*jsonOutput[[]db.TopSessionEntry], error) {
-	req := usageRequestFromInput(in.UsageFilterInput)
-	req.ProjectKey = in.ProjectKey
-	req, err := service.ResolveUsageProjectKeys(ctx, s.db, req)
+	f, err := s.usageFilterFromInput(ctx, in.UsageFilterInput)
 	if err != nil {
-		return nil, usageSummaryAPIError(err)
-	}
-	f, err := service.BuildUsageFilter(req)
-	if err != nil {
-		return nil, usageSummaryAPIError(err)
+		return nil, err
 	}
 	f.TopSessionsByGroup = in.GroupBy == "group"
 	f.Breakdowns = false
