@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v7"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/httputil"
 	"go.kenn.io/agentsview/internal/parser"
@@ -172,6 +173,9 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						return stats, err
 					}
 					detailError, _ := errors.AsType[*claudeAIHTTPError](err)
+					if (detailError == nil || detailError.status == 0) && !errors.Is(err, ErrClaudeAIResponseTooLarge) {
+						return stats, err
+					}
 					if detailError != nil && detailError.status == 404 {
 						stats.record(id, importSkipped, nil)
 					} else {
@@ -219,12 +223,16 @@ func SyncClaudeAI(ctx context.Context, store interface {
 }
 
 func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), path string) ([]byte, error) {
-	for attempt := 0; ; attempt++ {
+	attempt := 0
+	body, err := backoff.Retry(ctx, func() ([]byte, error) {
 		response, err := fetch(ctx, path)
 		if err != nil {
-			return nil, err
+			return nil, backoff.Permanent(err)
 		}
 		status := response.Status
+		if status >= 200 && status < 300 {
+			return response.Body, nil
+		}
 		var apiError struct {
 			Error struct {
 				Details struct {
@@ -234,25 +242,27 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 		}
 		_ = json.Unmarshal(response.Body, &apiError)
 		if status == 401 || apiError.Error.Details.Code == "account_session_invalid" {
-			return nil, ErrClaudeAIAuthRequired
+			return nil, backoff.Permanent(ErrClaudeAIAuthRequired)
 		}
 		if status == 403 {
-			return nil, &claudeAIHTTPError{status: status}
+			return nil, backoff.Permanent(&claudeAIHTTPError{status: status})
 		}
-		if status != 429 && status < 500 || attempt == 4 {
-			if status < 200 || status >= 300 {
-				return nil, &claudeAIHTTPError{status: status}
-			}
-			return response.Body, nil
+		httpErr := &claudeAIHTTPError{status: status}
+		if status != 429 && status < 500 {
+			return nil, backoff.Permanent(httpErr)
 		}
 		delay := time.Duration(1<<attempt) * time.Second
+		attempt++
 		if retryAfter := httputil.ParseRetryAfter(response.RetryAfter); retryAfter > 0 {
 			delay = min(retryAfter, 60*time.Second)
 		}
-		select {
-		case <-ctx.Done():
+		return nil, backoff.RetryAfter(delay, httpErr)
+	}, backoff.WithMaxTries(5), backoff.WithMaxElapsedTime(0))
+	if retryErr := backoff.AsRetryError(err); retryErr != nil {
+		if ctx.Err() != nil {
 			return nil, ctx.Err()
-		case <-time.After(delay):
 		}
+		return nil, retryErr.LastErr
 	}
+	return body, err
 }

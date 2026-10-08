@@ -14,6 +14,7 @@ import { createSessionsStore, sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
+import { events } from "./lib/stores/events.svelte.js";
 import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
@@ -122,6 +123,41 @@ afterEach(() => {
   sync.serverVersion = null;
   settings.saveError = null;
   dismissFlash();
+});
+
+it("reloads surviving pins when the open session changes", async () => {
+  stubAppDependencies();
+  vi.spyOn(sessions, "load").mockResolvedValue();
+  vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
+  vi.spyOn(messages, "reload").mockResolvedValue();
+  window.history.replaceState(null, "", "/sessions/chat");
+  router.route = "sessions";
+  router.sessionId = "chat";
+  sessions.activeSessionId = "chat";
+  component = mount(App, { target: document.body });
+  await flushEffects();
+  expect(pins.loadForSession).toHaveBeenCalledExactlyOnceWith("chat");
+  const update = vi.mocked(sync.watchSession).mock.calls[0][1];
+  update();
+  await flushEffects();
+  expect(messages.reload).toHaveBeenCalledOnce();
+  expect(pins.loadForSession).toHaveBeenCalledTimes(2);
+  expect(pins.loadForSession).toHaveBeenLastCalledWith("chat");
+});
+
+it("reloads all pins after a sessions event", async () => {
+  stubAppDependencies();
+  vi.spyOn(pins, "loadAll").mockResolvedValue();
+  const subscribe = vi.spyOn(events, "subscribeDebounced").mockReturnValue(() => {});
+  window.history.replaceState(null, "", "/pinned");
+  router.route = "pinned";
+  component = mount(App, { target: document.body });
+  await flushEffects();
+  expect(pins.loadAll).toHaveBeenCalledOnce();
+  expect(subscribe).toHaveBeenCalledOnce();
+  subscribe.mock.calls[0][0]({ scope: "sessions" });
+  await flushEffects();
+  expect(pins.loadAll).toHaveBeenCalledTimes(2);
 });
 
 it("shows settings save errors through the app shell", async () => {

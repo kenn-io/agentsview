@@ -88,7 +88,8 @@ from a zip needs one detail fetch to verify its visible branch. Re-importing a
 zip clears that verification, so the next Sync fetches it once again. Each chat
 has a 32 MiB response limit; larger chats count as failed while Sync continues.
 A chat first imported from a zip takes claude.ai's message identities on its
-first Sync, and pins on turns still shown stay put.
+first Sync, and pins on turns still shown stay put. Sync reports it as updated.
+
 Sync runs while the dialog is open. Closing it cancels the sync. A cancelled
 or failed Sync leaves each chat as either its old or its new version. Completed
 chats appear in the sidebar, and the next Sync picks up any unfinished chats.

@@ -281,6 +281,12 @@ func upsertConversation(
 			return importSkipped, nil
 		}
 		if live {
+			for i, row := range archived {
+				if i < len(canonical) && row.SourceUUID == "" && canonical[i].SourceUUID != "" {
+					unchanged = false
+					break
+				}
+			}
 			replaceMessages = !unchanged && (canonical == nil || len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)]))
 		}
 	}
