@@ -16,7 +16,7 @@ import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usa
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
-type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions" | "groups";
+type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions" | "zoom";
 // Steps of a full refresh in execution order; the breakdown follows it. The
 // window summary is the second summary request made while a time range is
 // selected on the chart.
@@ -25,7 +25,7 @@ const USAGE_STEP_ORDER: readonly UsageStep[] = [
   "summary",
   "contextSummary",
   "topSessions",
-  "groups",
+  "zoom",
   "comparison",
   "pairwise",
 ];
@@ -193,7 +193,7 @@ function joinCsvParts(...parts: string[]): string {
   return out.join(",");
 }
 
-type Endpoint = "summary" | "pairwise" | "topSessions" | "groups";
+type Endpoint = "summary" | "pairwise" | "topSessions" | "zoom";
 
 function emptyPairwiseSelection(): UsagePairwiseSelection {
   return {
@@ -364,7 +364,7 @@ class UsageStore {
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
   zoomedProjectKey = $state<string | null>(null);
-  groups = $state<DbTopSessionEntry[] | null>(null);
+  zoomRows = $state<DbTopSessionEntry[] | null>(null);
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
   // Wall-clock ms of the most recent full refresh, request start to data
@@ -385,20 +385,20 @@ class UsageStore {
     summary: false,
     pairwise: false,
     topSessions: false,
-    groups: false,
+    zoom: false,
   });
   querying = $state<Record<UsagePanel, boolean>>({
     summary: false,
     comparison: false,
     pairwise: false,
     topSessions: false,
-    groups: false,
+    zoom: false,
   });
   errors = $state<Record<Endpoint, string | null>>({
     summary: null,
     pairwise: null,
     topSessions: null,
-    groups: null,
+    zoom: null,
   });
 
   toggles: Toggles = $state(loadToggles());
@@ -407,7 +407,7 @@ class UsageStore {
     summary: 0,
     pairwise: 0,
     topSessions: 0,
-    groups: 0,
+    zoom: 0,
   };
   private fetchAllVersion = 0;
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
@@ -786,8 +786,9 @@ class UsageStore {
   setMode(mode: UsageMode): boolean {
     if (this.mode === mode) return false;
     this.mode = mode;
-    this.invalidatePanel("groups");
-    this.groups = null;
+    this.invalidatePanel("zoom");
+    this.zoomRows = null;
+    if (this.zoomedProjectKey) void this.fetchZoom();
     this.invalidatePanel("topSessions");
     this.topSessions = null;
     this.errors.topSessions = null;
@@ -805,8 +806,9 @@ class UsageStore {
       return false;
     }
     this.selectedTokenTypes = canonical;
-    this.invalidatePanel("groups");
-    this.groups = null;
+    this.invalidatePanel("zoom");
+    this.zoomRows = null;
+    if (this.zoomedProjectKey) void this.fetchZoom();
     this.invalidatePanel("topSessions");
     this.topSessions = null;
     this.errors.topSessions = null;
@@ -873,7 +875,7 @@ class UsageStore {
     }
     const fetchVersion = ++this.fetchAllVersion;
     this.invalidatePanel("pairwise");
-    this.invalidatePanel("groups");
+    this.invalidatePanel("zoom");
     this.invalidatePanel("topSessions");
     this.rollDates();
     saveUsageFilters(this);
@@ -890,14 +892,14 @@ class UsageStore {
       contextParams,
     });
     const topSessionsPromise = this.fetchTopSessions(params);
-    const groupsPromise = this.fetchGroups(params);
+    const zoomPromise = this.fetchZoom(params);
     const loadedSummary = await summaryPromise;
     if (fetchVersion !== this.fetchAllVersion) {
-      await Promise.all([topSessionsPromise, groupsPromise]);
+      await Promise.all([topSessionsPromise, zoomPromise]);
       return "aborted";
     }
     if (!loadedSummary) {
-      await Promise.all([topSessionsPromise, groupsPromise]);
+      await Promise.all([topSessionsPromise, zoomPromise]);
       if (fetchVersion !== this.fetchAllVersion) return "aborted";
       if (
         selectedRangeAtStart !== null &&
@@ -909,7 +911,7 @@ class UsageStore {
         this.errors.topSessions = null;
         await Promise.all([
           this.fetchTopSessions(this.baseParams()),
-          this.fetchGroups(this.baseParams()),
+          this.fetchZoom(this.baseParams()),
         ]);
       }
       return "error";
@@ -920,22 +922,22 @@ class UsageStore {
           return this.fetchTopSessions(loadedSummary.params);
         })
       : topSessionsPromise;
-    const currentGroupsPromise = loadedSummary.projectScopeRecovered
-      ? groupsPromise.then(() => {
+    const currentZoomPromise = loadedSummary.projectScopeRecovered
+      ? zoomPromise.then(() => {
           if (fetchVersion !== this.fetchAllVersion) return "aborted";
-          return this.fetchGroups(loadedSummary.params);
+          return this.fetchZoom(loadedSummary.params);
         })
-      : groupsPromise;
-    const [topSessionsResult, groupsResult, comparisonResult, pairwiseResult] = await Promise.all([
+      : zoomPromise;
+    const [topSessionsResult, zoomResult, comparisonResult, pairwiseResult] = await Promise.all([
       currentTopSessionsPromise,
-      currentGroupsPromise,
+      currentZoomPromise,
       this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
       this.fetchPairwise(loadedSummary.version, loadedSummary.params),
     ]);
     if (
       fetchVersion === this.fetchAllVersion &&
       topSessionsResult === "ok" &&
-      groupsResult === "ok" &&
+      zoomResult === "ok" &&
       comparisonResult === "ok" &&
       pairwiseResult === "ok"
     ) {
@@ -945,7 +947,7 @@ class UsageStore {
     if (
       fetchVersion !== this.fetchAllVersion ||
       topSessionsResult === "aborted" ||
-      groupsResult === "aborted" ||
+      zoomResult === "aborted" ||
       comparisonResult === "aborted" ||
       pairwiseResult === "aborted"
     ) {
@@ -1204,29 +1206,34 @@ class UsageStore {
   }
 
   backToProjects(): void {
+    this.invalidatePanel("zoom");
     this.zoomedProjectKey = null;
+    this.zoomRows = null;
+    this.errors.zoom = null;
   }
 
   selectAttributionProject(key: string): void {
-    if (this.groups?.some((row) => row.project_key === key && row.group_key)) {
-      this.zoomedProjectKey = key;
-    } else {
-      this.toggleProjectKey(key, { preserveTimeRange: true });
-    }
+    this.zoomedProjectKey = key;
+    this.zoomRows = null;
+    void this.fetchZoom();
   }
 
-  private async fetchGroups(params: UsageParams = this.baseParams()): Promise<FetchResult> {
-    const version = ++this.versions.groups;
-    const signal = this.nextAbortSignal("groups");
-    this.loading.groups = true;
-    this.errors.groups = null;
+  private async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
+    const projectKey = this.zoomedProjectKey;
+    if (!projectKey) return "ok";
+    const version = ++this.versions.zoom;
+    const signal = this.nextAbortSignal("zoom");
+    this.zoomRows = null;
+    this.loading.zoom = true;
+    this.errors.zoom = null;
     const started = performance.now();
-    const liveStep = this.liveQuery.start("groups", started);
+    const liveStep = this.liveQuery.start("zoom", started);
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await UsageService.getApiV1UsageTopSessions(
         {
           ...params,
+          project_key: projectKey,
           group_by: "group",
           limit: 100,
           sort: this.mode === "token" ? "tokens" : "cost",
@@ -1234,21 +1241,26 @@ class UsageStore {
         },
         { signal },
       );
-      if (this.versions.groups !== version) return "aborted";
-      this.groups = data;
-      this.noteStep("groups", liveStep, started, data);
+      if (this.versions.zoom !== version || this.zoomedProjectKey !== projectKey) return "aborted";
+      this.zoomRows = data;
+      this.noteStep("zoom", liveStep, started, data);
       return "ok";
     } catch (error) {
       status = isAbortError(error) ? "aborted" : "error";
-      if (status === "error" && this.versions.groups === version) {
-        this.errors.groups = error instanceof Error ? error.message : m.shared_failed_to_load();
+      if (
+        status === "error" &&
+        this.versions.zoom === version &&
+        this.zoomedProjectKey === projectKey
+      ) {
+        this.errors.zoom = error instanceof Error ? error.message : m.shared_failed_to_load();
       }
       return status;
     } finally {
-      this.recordStep("groups", started, status);
+      this.recordStep("zoom", started, status);
       this.liveQuery.abandon(liveStep);
-      this.clearAbortSignal("groups", signal);
-      if (this.versions.groups === version) this.loading.groups = false;
+      this.clearAbortSignal("zoom", signal);
+      if (this.versions.zoom === version && this.zoomedProjectKey === projectKey)
+        this.loading.zoom = false;
     }
   }
 
@@ -1313,7 +1325,7 @@ class UsageStore {
     this.abortControllers[panel]?.abort();
     delete this.abortControllers[panel];
     this.querying[panel] = false;
-    if (panel === "pairwise" || panel === "groups") {
+    if (panel === "pairwise" || panel === "zoom") {
       this.loading[panel] = false;
     }
   }
@@ -1341,7 +1353,7 @@ class UsageStore {
     this.versions.summary++;
     this.versions.pairwise++;
     this.versions.topSessions++;
-    this.versions.groups++;
+    this.versions.zoom++;
     for (const panel of Object.keys(this.abortControllers) as UsagePanel[]) {
       this.abortControllers[panel]?.abort();
       delete this.abortControllers[panel];
@@ -1350,7 +1362,8 @@ class UsageStore {
     this.loading.summary = false;
     this.loading.pairwise = false;
     this.loading.topSessions = false;
-    this.loading.groups = false;
+    this.loading.zoom = false;
+    this.zoomRows = null;
   }
 
   private markRefreshComplete(startedAt: number): void {

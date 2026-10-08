@@ -2643,7 +2643,6 @@ func (db *DB) getDailyUsageLegacy(
 
 // TopSessionEntry is one row in the "top sessions by cost" result.
 type TopSessionEntry struct {
-	ProjectKey          string      `json:"project_key,omitempty"`
 	GroupKey            string      `json:"group_key,omitempty"`
 	GroupLabel          string      `json:"group_label,omitempty"`
 	SessionCount        int         `json:"session_count,omitempty"`
@@ -2660,12 +2659,16 @@ type TopSessionEntry struct {
 	Cost                money.Money `json:"cost"`
 }
 
-// GroupTopSessions merges runs before ranking; ungrouped runs form the remainder.
+// GroupTopSessions merges grouped runs and preserves individual sessions.
 func GroupTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 	type key struct{ project, group string }
 	grouped := make(map[key]*TopSessionEntry)
-	labels := make(map[key]TopSessionEntry)
+	out := make([]TopSessionEntry, 0, len(entries))
 	for _, entry := range entries {
+		if entry.GroupKey == "" {
+			out = append(out, entry)
+			continue
+		}
 		k := key{entry.Project, entry.GroupKey}
 		row := grouped[k]
 		if row == nil {
@@ -2683,17 +2686,16 @@ func GroupTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		previous := labels[k]
 		started, _ := time.Parse(time.RFC3339Nano, entry.StartedAt)
-		previousStarted, _ := time.Parse(time.RFC3339Nano, previous.StartedAt)
-		if entry.GroupLabel != "" && (previous.GroupLabel == "" || started.After(previousStarted) || started.Equal(previousStarted) && entry.SessionID > previous.SessionID) {
-			labels[k] = entry
+		previousStarted, _ := time.Parse(time.RFC3339Nano, row.StartedAt)
+		if entry.GroupLabel != "" && (row.GroupLabel == "" || started.After(previousStarted) || started.Equal(previousStarted) && entry.SessionID > row.SessionID) {
 			row.GroupLabel = entry.GroupLabel
+			row.StartedAt = entry.StartedAt
+			row.SessionID = entry.SessionID
 		}
 	}
-	out := make([]TopSessionEntry, 0, len(grouped))
 	for _, row := range grouped {
-		row.SessionID = row.Project + "/" + row.GroupKey
+		row.SessionID = ""
 		row.DisplayName = row.GroupLabel
 		if row.DisplayName == "" {
 			row.DisplayName = row.GroupKey
@@ -2742,7 +2744,13 @@ func SortAndLimitTopSessions(
 		} else if result[i].Cost.Microdollars != result[j].Cost.Microdollars {
 			return result[i].Cost.Microdollars > result[j].Cost.Microdollars
 		}
-		return result[i].SessionID < result[j].SessionID
+		if result[i].SessionID != result[j].SessionID {
+			return result[i].SessionID < result[j].SessionID
+		}
+		if result[i].Project != result[j].Project {
+			return result[i].Project < result[j].Project
+		}
+		return result[i].GroupKey < result[j].GroupKey
 	})
 	if len(result) > limit {
 		return result[:limit]

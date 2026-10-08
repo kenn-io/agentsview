@@ -2464,9 +2464,10 @@
   "tool_sequences_full_input_in_message": "La entrada completa está en el mensaje {ordinal}.",
   "tool_sequences_full_result_in_message": "El resultado completo está en el mensaje {ordinal}.",
   "tool_sequences_retry": "Reintentar",
-  "usage_other_runs": "Otras ejecuciones",
+  "usage_hide_project": "Ocultar proyecto",
+  "usage_other_runs": "Otros",
   "usage_all_projects": "Todos los proyectos",
-  "usage_click_project": "Haz clic en {label} para ver los grupos u ocultar el proyecto",
-  "usage_click_project_hint": "Haz clic en un proyecto para ver sus grupos u ocultarlo",
-  "usage_groups_loading": "Cargando grupos..."
+  "usage_click_project": "Haz clic en {label} para ver sus grupos y sesiones",
+  "usage_click_project_hint": "Haz clic en un proyecto para ver sus grupos y sesiones",
+  "usage_zoom_loading": "Cargando..."
 }

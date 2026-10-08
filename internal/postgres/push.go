@@ -2226,10 +2226,10 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			missing_success_criteria_count,
 			missing_verification_count, duplicate_prompt_count,
 			no_code_context_count, runaway_tool_loop_count,
-			group_key, group_label, transcript_fidelity, transcript_revision,
+			transcript_fidelity, transcript_revision,
 			agent_label, entrypoint, session_kind,
 			source_archive_id, source_database_generation, file_path,
-			project_assigned, prompt_evidence_discarded, updated_at
+			project_assigned, prompt_evidence_discarded, group_key, group_label, updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
@@ -2245,9 +2245,9 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 				$45,
 				$46, $47, $48, $49,
 				$50, $51,
-				$52, $53, $54, $55, $56, $57, $58, $59, $71, $72,
-				$60, $61, $62, $63, $64, $65, $66, $67, $68,
-				$70, NOW()
+				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
+				$62, $63, $64, $65, $66, $67, $68,
+				$70, $71, $72, NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
 			)

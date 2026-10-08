@@ -219,12 +219,13 @@ describe("AttributionPanel project identity", () => {
   });
 
   afterEach(() => {
+    usage.backToProjects();
     usage.summary = null;
     usage.excludedProjectKeys = "";
     document.body.innerHTML = "";
   });
 
-  it("keeps duplicate display labels distinct and filters by project key", async () => {
+  it("keeps duplicate display labels distinct and zooms by project key", async () => {
     const component = mountPanel();
     await tick();
 
@@ -233,9 +234,9 @@ describe("AttributionPanel project identity", () => {
     rows[1]!.click();
 
     await vi.waitFor(() =>
-      expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).toEqual(
         expect.objectContaining({
-          exclude_project_key: "pl1:sha256:second",
+          project_key: "pl1:sha256:second",
         }),
       ),
     );
@@ -475,7 +476,7 @@ describe("AttributionPanel job groups", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     usage.backToProjects();
-    usage.groups = null;
+    usage.zoomRows = null;
     usage.summary = summaryWithDuplicateProjectLabels();
     usage.summary.projectTotals[0]!.project = "hermes-cron";
     usage.excludedProjectKeys = "";
@@ -486,6 +487,7 @@ describe("AttributionPanel job groups", () => {
   afterEach(() => {
     usage.cancelInFlightReads();
     usage.backToProjects();
+    usage.backToProjects();
     usage.summary = null;
     usage.excludedProjectKeys = "";
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
@@ -494,7 +496,6 @@ describe("AttributionPanel job groups", () => {
 
   it("zooms into stable jobs, keeps the remainder, and returns to projects", async () => {
     const group = (key: string, cost: number): DbTopSessionEntry => ({
-      project_key: "pl1:sha256:first",
       group_key: key,
       group_label: "Daily digest",
       session_count: 2,
@@ -510,29 +511,36 @@ describe("AttributionPanel job groups", () => {
       totalTokens: 10,
       cost: testMoney(cost),
     });
-    usage.groups = [group("abcdef-job", 3), group("abcdef-other", 2)];
+    usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([
+      group("abcdef-job", 3),
+      group("abcdef-other", 2),
+      { ...group("", 1), sessionId: "hermes:ungrouped", displayName: "Ungrouped run" },
+    ]);
     const component = mountPanel();
     await tick();
     document.querySelectorAll<HTMLElement>(".list-row")[0]!.click();
     await vi.waitFor(() => expect(usage.zoomedProjectKey).toBe("pl1:sha256:first"));
     expect(usage.excludedProjectKeys).toBe("");
-    expect(usageServiceMocks.getApiV1UsageTopSessions).not.toHaveBeenCalled();
+    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     await tick();
     const rows = [...document.querySelectorAll<HTMLElement>(".list-row")];
     expect(rows.map((row) => row.querySelector(".list-label")!.textContent)).toEqual([
       "Daily digest · abcdef-j",
-      "Other runs",
       "Daily digest · abcdef-o",
+      "Other",
+      "Ungrouped run",
     ]);
     expect(rows.map((row) => row.querySelector(".list-cost")!.textContent?.trim())).toEqual([
       "$3.00",
-      "$3.00",
       "$2.00",
+      "$2.00",
+      "$1.00",
     ]);
     expect(rows[0]!.title).toContain("abcdef-job");
     expect(
       new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size,
-    ).toBe(3);
+    ).toBe(4);
     rows[0]!.click();
     expect(usage.excludedProjectKeys).toBe("");
     const back = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -543,6 +551,26 @@ describe("AttributionPanel job groups", () => {
     expect(usage.zoomedProjectKey).toBeNull();
     expect(document.querySelectorAll(".list-row")).toHaveLength(2);
     unmount(component);
+  });
+
+  it("hides the project from the zoom breadcrumb", async () => {
+    usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithDuplicateProjectLabels());
+    const component = mountPanel();
+    await tick();
+    document.querySelectorAll<HTMLElement>(".list-row")[0]!.click();
+    await tick();
+    [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Hide project")!
+      .click();
+    expect(usage.zoomedProjectKey).toBeNull();
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:first");
+    await vi.waitFor(() =>
+      expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({ exclude_project_key: "pl1:sha256:first" }),
+      ),
+    );
+    await unmount(component);
   });
 
   it("clears zoom when switching attribution dimensions", async () => {
@@ -557,20 +585,20 @@ describe("AttributionPanel job groups", () => {
   });
   it("clears zoom when the project leaves the refreshed summary", async () => {
     usage.zoomedProjectKey = "pl1:sha256:first";
-    usage.groups = [];
+    usage.zoomRows = [];
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithAgents([]));
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
     await usage.fetchAll({ preserveTimeRange: true });
     expect(usage.zoomedProjectKey).toBeNull();
-    expect(usage.groups).toEqual([]);
+    expect(usage.zoomRows).toBeNull();
   });
 
-  it("retains fetched groups when returning to projects", async () => {
-    usage.groups = [];
+  it("clears zoom rows when returning to projects", async () => {
+    usage.zoomRows = [];
     usage.zoomedProjectKey = "pl1:sha256:first";
     usage.backToProjects();
     expect(usage.zoomedProjectKey).toBeNull();
-    expect(usage.groups).toEqual([]);
+    expect(usage.zoomRows).toBeNull();
     expect(usageServiceMocks.getApiV1UsageTopSessions).not.toHaveBeenCalled();
   });
 });

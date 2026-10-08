@@ -129,7 +129,7 @@ const usageServiceMocks = vi.hoisted(() => {
       },
     }),
     getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
-    getUsageGroups: vi.fn().mockResolvedValue([]),
+    getUsageZoom: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -163,7 +163,7 @@ vi.mock("../api/generated/index", () => ({
     getApiV1UsagePairwiseComparison: usageServiceMocks.getApiV1UsagePairwiseComparison,
     getApiV1UsageTopSessions: vi.fn((params, options) =>
       params?.group_by === "group"
-        ? usageServiceMocks.getUsageGroups(params, options)
+        ? usageServiceMocks.getUsageZoom(params, options)
         : usageServiceMocks.getApiV1UsageTopSessions(params, options),
     ),
   },
@@ -2015,55 +2015,135 @@ describe("parseWindowDays", () => {
   });
 });
 
-describe("UsageStore job group refreshes", () => {
+describe("UsageStore project zoom", () => {
   beforeEach(() => {
     installStorage();
     vi.clearAllMocks();
-    usageServiceMocks.getUsageGroups.mockReset().mockResolvedValue([]);
+    usageServiceMocks.getUsageZoom.mockReset().mockResolvedValue([]);
     usageServiceMocks.getApiV1UsageTopSessions.mockReset().mockResolvedValue([]);
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
   });
 
   const group = (cost: number): DbTopSessionEntry => ({
-    ...topSession("run-a"),
-    project_key: "pl1:sha256:alpha",
+    ...topSession(""),
     group_key: "job-a",
     group_label: "Digest",
     cost: testMoney(cost),
   });
 
-  it("refreshes groups while top sessions are pending and discards stale groups", async () => {
+  it("loads groups only after a project click, scoped to that project", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchAll();
+    expect(usageServiceMocks.getUsageZoom).not.toHaveBeenCalled();
+    usage.selectAttributionProject("pl1:sha256:alpha");
+    expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(1);
+    expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        project_key: "pl1:sha256:alpha",
+        group_by: "group",
+        limit: 100,
+        sort: "cost",
+      }),
+    );
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    expect(usage.excludedProjectKeys).toBe("");
+  });
+
+  it("keeps filters while pending and failed, and retries on another click", async () => {
+    const { usage } = await loadStore();
+    let reject!: (error: Error) => void;
+    usage.excludedProjectKeys = "pl1:sha256:beta";
+    usageServiceMocks.getUsageZoom.mockImplementationOnce(
+      () =>
+        new Promise((_, r) => {
+          reject = r;
+        }),
+    );
+    usage.selectAttributionProject("pl1:sha256:alpha");
+    expect(usage.loading.zoom).toBe(true);
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:beta");
+    reject(new Error("zoom failed"));
+    await vi.waitFor(() => expect(usage.errors.zoom).toBe("zoom failed"));
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:beta");
+    usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(9)]);
+    usage.selectAttributionProject("pl1:sha256:alpha");
+    await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(9)]));
+  });
+
+  it("drops stale results and clears loading when returning to projects", async () => {
     const { usage } = await loadStore();
     let resolveOld!: (rows: DbTopSessionEntry[]) => void;
-    let resolveTop!: (rows: DbTopSessionEntry[]) => void;
-    usageServiceMocks.getUsageGroups.mockImplementationOnce(
+    usageServiceMocks.getUsageZoom.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           resolveOld = resolve;
         }),
     );
-    const first = usage.fetchAll();
-    expect(usage.loading.groups).toBe(true);
-    const oldSignal = usageServiceMocks.getUsageGroups.mock.lastCall?.[1].signal as AbortSignal;
-    usageServiceMocks.getUsageGroups.mockResolvedValueOnce([group(9)]);
-    usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(
+    usage.selectAttributionProject("pl1:sha256:alpha");
+    const oldSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
+    usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(9)]);
+    usage.selectAttributionProject("pl1:sha256:beta");
+    await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(9)]));
+    expect(oldSignal.aborted).toBe(true);
+    resolveOld([group(1)]);
+    await Promise.resolve();
+    expect(usage.zoomRows).toEqual([group(9)]);
+    usageServiceMocks.getUsageZoom.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          resolveTop = resolve;
+          resolveOld = resolve;
         }),
     );
-    const second = usage.fetchAll();
-    await vi.waitFor(() => expect(usage.groups).toEqual([group(9)]));
-    expect(oldSignal.aborted).toBe(true);
-    expect(usage.loading.groups).toBe(false);
-    usage.selectAttributionProject("pl1:sha256:alpha");
-    expect(usage.zoomedProjectKey).toBe("pl1:sha256:alpha");
-    expect(usageServiceMocks.getUsageGroups).toHaveBeenCalledTimes(2);
+    usage.selectAttributionProject("pl1:sha256:beta");
+    usage.backToProjects();
+    expect(usage.loading.zoom).toBe(false);
     resolveOld([group(1)]);
-    await first;
-    expect(usage.groups).toEqual([group(9)]);
-    resolveTop([]);
-    await second;
-    expect(usage.groups).toEqual([group(9)]);
+    await Promise.resolve();
+    expect(usage.zoomRows).toBeNull();
+    expect(usage.zoomedProjectKey).toBeNull();
+  });
+
+  it("clears old range rows and refreshes zoom even when top sessions fail", async () => {
+    const { usage } = await loadStore();
+    usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
+    usage.selectAttributionProject("pl1:sha256:alpha");
+    await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(1)]));
+    let resolveZoom!: (rows: DbTopSessionEntry[]) => void;
+    usageServiceMocks.getUsageZoom.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveZoom = resolve;
+        }),
+    );
+    usageServiceMocks.getApiV1UsageTopSessions.mockRejectedValueOnce(new Error("top failed"));
+    usage.applyDateRange("2026-10-01", "2026-10-08");
+    const refreshed = usage.fetchAll();
+    expect(usage.zoomRows).toBeNull();
+    expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        project_key: "pl1:sha256:alpha",
+        from: "2026-10-01",
+        to: "2026-10-08",
+      }),
+    );
+    resolveZoom([group(9)]);
+    await refreshed;
+    expect(usage.zoomRows).toEqual([group(9)]);
+    expect(usage.excludedProjectKeys).toBe("");
+  });
+
+  it("refreshes zoom for metric and token selection changes", async () => {
+    const { usage } = await loadStore();
+    usage.selectAttributionProject("pl1:sha256:alpha");
+    usage.setMode("token");
+    usage.setSelectedTokenTypes(["output"]);
+    expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        project_key: "pl1:sha256:alpha",
+        sort: "tokens",
+        token_types: "output",
+      }),
+    );
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
   });
 });

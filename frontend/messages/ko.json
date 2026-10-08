@@ -2379,9 +2379,10 @@
   "tool_sequences_full_input_in_message": "전체 입력은 메시지 {ordinal}에 있습니다.",
   "tool_sequences_full_result_in_message": "전체 결과는 메시지 {ordinal}에 있습니다.",
   "tool_sequences_retry": "다시 시도",
-  "usage_other_runs": "기타 실행",
+  "usage_hide_project": "프로젝트 숨기기",
+  "usage_other_runs": "기타",
   "usage_all_projects": "모든 프로젝트",
-  "usage_click_project": "{label}을 클릭하여 그룹을 보거나 프로젝트를 숨기세요",
-  "usage_click_project_hint": "프로젝트를 클릭하여 그룹을 보거나 숨기세요",
-  "usage_groups_loading": "그룹 로딩 중..."
+  "usage_click_project": "{label}을 클릭하여 그룹과 세션 보기",
+  "usage_click_project_hint": "프로젝트를 클릭하여 그룹과 세션 보기",
+  "usage_zoom_loading": "로딩 중..."
 }

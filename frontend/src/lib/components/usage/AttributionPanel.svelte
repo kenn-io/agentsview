@@ -46,15 +46,16 @@
     }> = [];
 
     if (zoomedProject && groupBy === "project") {
-      const groups = (usage.groups ?? []).filter((row) => row.project_key === usage.zoomedProjectKey && row.group_key);
-      const names = groups.map((row) => row.group_label || row.group_key!);
-      items = groups.map((row, index) => {
-        const duplicates = groups.filter((other, otherIndex) => other !== row && names[otherIndex] === names[index]);
+      const zoomRows = usage.zoomRows ?? [];
+      const names = zoomRows.map((row) => row.group_key ? row.group_label || row.group_key : row.displayName);
+      items = zoomRows.map((row, index) => {
+        const id = row.group_key || row.sessionId;
+        const duplicates = zoomRows.filter((other, otherIndex) => other !== row && other.group_key && row.group_key && names[otherIndex] === names[index]);
         let length = 6;
-        while (length < row.group_key!.length && duplicates.some((other) => other.group_key!.slice(0, length) === row.group_key!.slice(0, length))) length++;
+        while (length < id.length && duplicates.some((other) => other.group_key!.slice(0, length) === id.slice(0, length))) length++;
         return {
-          id: row.group_key!,
-          label: duplicates.length ? `${names[index]} · ${row.group_key!.slice(0, length)}` : names[index]!,
+          id,
+          label: duplicates.length ? `${names[index]} · ${id.slice(0, length)}` : names[index]!,
           value: isTokenMode ? sumSelectedTokens(row, usage.selectedTokenTypes) : row.cost.microdollars,
         };
       });
@@ -195,12 +196,15 @@
   </div>
 
   {#if zoomedProject}
-    <div class="hint breadcrumb"><button onclick={() => usage.backToProjects()}>{m.usage_all_projects()}</button> › {zoomedProject.project}</div>
+    <div class="hint breadcrumb">
+      <span><button onclick={() => usage.backToProjects()}>{m.usage_all_projects()}</button> › {zoomedProject.project}</span>
+      <button onclick={() => { usage.toggleProjectKey(zoomedProject.project_key, { preserveTimeRange: true }); usage.backToProjects(); }}>{m.usage_hide_project()}</button>
+    </div>
   {/if}
-  {#if zoomedProject && usage.errors.groups}
-    <div class="empty">{usage.errors.groups}</div>
-  {:else if zoomedProject && usage.loading.groups && usage.groups === null}
-    <div class="empty">{m.usage_groups_loading()}</div>
+  {#if zoomedProject && usage.errors.zoom}
+    <div class="empty">{usage.errors.zoom}</div>
+  {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
+    <div class="empty">{m.usage_zoom_loading()}</div>
   {:else if rows.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
@@ -506,6 +510,11 @@
     line-height: 14px;
     height: 14px;
     font-style: italic;
+  }
+
+  .breadcrumb {
+    display: flex;
+    justify-content: space-between;
   }
 
   .breadcrumb, .breadcrumb button {

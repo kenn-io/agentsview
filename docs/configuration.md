@@ -495,8 +495,7 @@ explicitly.
 
 Cron runs stay under `hermes-cron`, with stable job groups in Usage attribution.
 Renames keep costs together, and jobs with the same name stay separate.
-Compressed sessions follow recorded parent links. Upgrading also groups saved
-runs whose sources are missing when their IDs or ancestry identify the job.
+Compressed sessions follow parent links available in `state.db` when parsed.
 
 **Cline support covers the CLI**, not the VS Code extension. Set `CLINE_DIR` or
 `agents.cline.dirs` to its data root or directly to its sessions directory.

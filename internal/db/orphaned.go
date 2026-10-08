@@ -8,94 +8,10 @@ import (
 	"log"
 	"strings"
 	"time"
-
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 type sqlContextExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-// ResolveHermesCronJob completes source ancestry with recorded automatic identity.
-func (d *DB) ResolveHermesCronJob(ctx context.Context, id, parent, agent string) (string, error) {
-	return resolveArchivedHermesCronJob(ctx, id, parent, agent, func(ctx context.Context, query string, args ...any) rowScanner {
-		return d.getReader().QueryRowContext(ctx, query, args...)
-	})
-}
-
-func resolveArchivedHermesCronJob(ctx context.Context, id, parent, agent string, queryRow contextQueryRow) (string, error) {
-	namespace := id[:strings.LastIndexByte(id, ':')+1]
-	return parser.ResolveHermesCronAncestry(id, func(current string) (string, string, error) {
-		var next, group string
-		err := queryRow(ctx, `SELECT COALESCE(NULLIF(parser_parent_session_id, ''), parent_session_id, ''), group_key
-			FROM sessions WHERE id = ? AND agent = ?`, current, agent).Scan(&next, &group)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return "", "", err
-		}
-		if current == id && parent != "" {
-			next = parent
-		}
-		if !strings.HasPrefix(next, namespace) {
-			next = ""
-		}
-		return next, group, nil
-	})
-}
-
-// RepairHermesCronGroups backfills preserved runs after archive copies.
-func (d *DB) RepairHermesCronGroups(ctx context.Context) error {
-	if err := d.requireWritable(); err != nil {
-		return err
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	tx, err := d.getWriter().BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var clauses []string
-	var args []any
-	for _, agent := range parser.HermesFormatAgents() {
-		clauses = append(clauses, `(agent = ? AND (project = ? OR EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = sessions.id AND a.original_project = ?)))`)
-		project := parser.HermesSourceProject(agent, "cron")
-		args = append(args, string(agent), project, project)
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, agent, COALESCE(NULLIF(parser_parent_session_id, ''), parent_session_id, ''), COALESCE(session_name, '') FROM sessions WHERE group_key = '' AND (`+strings.Join(clauses, " OR ")+`)`, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	type candidate struct{ id, agent, parent, title string }
-	var candidates []candidate
-	for rows.Next() {
-		var row candidate
-		if err := rows.Scan(&row.id, &row.agent, &row.parent, &row.title); err != nil {
-			rows.Close()
-			return err
-		}
-		candidates = append(candidates, row)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	for _, row := range candidates {
-		job, err := resolveArchivedHermesCronJob(ctx, row.id, row.parent, row.agent, func(ctx context.Context, query string, args ...any) rowScanner {
-			return tx.QueryRowContext(ctx, query, args...)
-		})
-		if err != nil {
-			return err
-		}
-		if job == "" {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET group_key = ?, group_label = ?, local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`, job, parser.HermesCronRecordedName(job, row.title), row.id); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }
 
 // execWithoutCancel runs cleanup SQL even if the operation context was canceled.

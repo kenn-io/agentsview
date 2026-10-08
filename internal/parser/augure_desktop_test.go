@@ -263,7 +263,7 @@ func TestAugureDesktopTranscriptProjectRelabel(t *testing.T) {
 		require.True(t, ok)
 		hp, ok := provider.(*hermesProvider)
 		require.True(t, ok)
-		sess, msgs, err := hp.parseSession(path, hint, "devbox", nil)
+		sess, msgs, err := hp.parseSession(path, hint, "devbox")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		result := &ParseResult{Session: *sess, Messages: msgs}

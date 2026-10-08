@@ -2464,9 +2464,10 @@
   "tool_sequences_full_input_in_message": "Tam giriş {ordinal} nömrəli mesajdadır.",
   "tool_sequences_full_result_in_message": "Tam nəticə {ordinal} nömrəli mesajdadır.",
   "tool_sequences_retry": "Yenidən cəhd et",
-  "usage_other_runs": "Digər icralar",
+  "usage_hide_project": "Layihəni gizlət",
+  "usage_other_runs": "Digər",
   "usage_all_projects": "Bütün layihələr",
-  "usage_click_project": "Qruplara baxmaq və ya layihəni gizlətmək üçün {label} üzərinə klikləyin",
-  "usage_click_project_hint": "Qruplara baxmaq və ya gizlətmək üçün layihəyə klikləyin",
-  "usage_groups_loading": "Qruplar yüklənir..."
+  "usage_click_project": "{label} qruplarını və sessiyalarını görmək üçün klikləyin",
+  "usage_click_project_hint": "Qruplarını və sessiyalarını görmək üçün layihəyə klikləyin",
+  "usage_zoom_loading": "Yüklənir..."
 }

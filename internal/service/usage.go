@@ -28,6 +28,7 @@ type UsageRequest struct {
 	Machine           string `json:"machine,omitempty"`
 	GitBranch         string `json:"git_branch,omitempty"`
 	ExcludeProject    string `json:"exclude_project,omitempty"`
+	ProjectKey        string `json:"project_key,omitempty"`
 	ExcludeProjectKey string `json:"exclude_project_key,omitempty"`
 	ExcludeAgent      string `json:"exclude_agent,omitempty"`
 	ExcludeModel      string `json:"exclude_model,omitempty"`
@@ -57,21 +58,30 @@ type UsageRequest struct {
 func ResolveUsageProjectKeys(
 	ctx context.Context, store db.Store, req UsageRequest,
 ) (UsageRequest, error) {
-	if req.ExcludeProjectKey == "" {
+	if req.ExcludeProjectKey == "" && req.ProjectKey == "" {
 		return req, nil
 	}
-	resolved, err := ResolveUsageProjectKeyLabels(
-		ctx, store, req.ExcludeProjectKey,
-	)
-	if err != nil {
-		return UsageRequest{}, err
+	if req.ProjectKey != "" {
+		resolved, err := resolveUsageProjectKeyLabels(ctx, store, req.ProjectKey)
+		if err != nil {
+			return UsageRequest{}, err
+		}
+		req.ProjectLabels = resolved
+		req.Project = ""
+		req.ProjectKey = ""
 	}
-	req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
-	req.ExcludeProjectKey = ""
+	if req.ExcludeProjectKey != "" {
+		resolved, err := resolveUsageProjectKeyLabels(ctx, store, req.ExcludeProjectKey)
+		if err != nil {
+			return UsageRequest{}, err
+		}
+		req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
+		req.ExcludeProjectKey = ""
+	}
 	return req, nil
 }
 
-func ResolveUsageProjectKeyLabels(
+func resolveUsageProjectKeyLabels(
 	ctx context.Context, store db.Store, keys string,
 ) ([]string, error) {
 	labels, err := store.GetActiveProjectLabels(ctx)
@@ -131,7 +141,7 @@ func resolvePairwiseProjectLabels(
 	if dimension != "project" || !strings.HasPrefix(value, "pl1:sha256:") {
 		return nil, nil
 	}
-	return ResolveUsageProjectKeyLabels(ctx, store, value)
+	return resolveUsageProjectKeyLabels(ctx, store, value)
 }
 
 // UsageInputError flags an invalid usage filter (bad timezone, date, or

@@ -336,24 +336,17 @@ func (s *Server) humaUsageTopSessions(
 	ctx context.Context,
 	in *usageTopSessionsInput,
 ) (*jsonOutput[[]db.TopSessionEntry], error) {
-	f, err := s.usageFilterFromInput(ctx, in.UsageFilterInput)
+	req := usageRequestFromInput(in.UsageFilterInput)
+	req.ProjectKey = in.ProjectKey
+	req, err := service.ResolveUsageProjectKeys(ctx, s.db, req)
 	if err != nil {
-		return nil, err
+		return nil, usageSummaryAPIError(err)
+	}
+	f, err := service.BuildUsageFilter(req)
+	if err != nil {
+		return nil, usageSummaryAPIError(err)
 	}
 	f.TopSessionsByGroup = in.GroupBy == "group"
-	if in.ProjectKey != "" {
-		resolved, err := service.ResolveUsageProjectKeyLabels(ctx, s.db, in.ProjectKey)
-		if err != nil {
-			return nil, usageSummaryAPIError(err)
-		}
-		if included := f.ProjectFilterLabels(); len(included) > 0 {
-			resolved = slices.DeleteFunc(resolved, func(label string) bool { return !slices.Contains(included, label) })
-		}
-		if len(resolved) == 0 {
-			return &jsonOutput[[]db.TopSessionEntry]{Body: []db.TopSessionEntry{}}, nil
-		}
-		f.ProjectLabels = resolved
-	}
 	f.Breakdowns = false
 	switch strings.ToLower(strings.TrimSpace(in.Sort)) {
 	case "", db.TopSessionsSortCost:
@@ -385,19 +378,6 @@ func (s *Server) humaUsageTopSessions(
 			return nil, handled
 		}
 		return nil, internalError("usage top sessions error", err)
-	}
-	if f.TopSessionsByGroup {
-		labels := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			labels = append(labels, entry.Project)
-		}
-		catalog, err := s.db.BuildProjectIdentityMap(ctx, labels)
-		if err != nil {
-			return nil, internalError("resolve project identities", err)
-		}
-		for i := range entries {
-			entries[i].ProjectKey = catalog[entries[i].Project].ProjectKey
-		}
 	}
 	return &jsonOutput[[]db.TopSessionEntry]{Body: entries}, nil
 }

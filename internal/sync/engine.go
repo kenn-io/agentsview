@@ -3807,17 +3807,6 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
-	if err := newDB.RepairHermesCronGroups(ctx); err != nil {
-		stats.Aborted = true
-		stats.Warnings = append(stats.Warnings, "preserved cron group repair failed: "+err.Error())
-		newDB.Close()
-		removeTempDB(tempPath)
-		restoreSkipCache()
-		e.mu.Lock()
-		e.lastSyncStats = stats
-		e.mu.Unlock()
-		return stats, err
-	}
 	mappingMachines, err := ops.listActiveWorktreeMappingMachines(ctx, newDB)
 	if err != nil {
 		warning := "worktree mapping machine discovery failed, aborting swap: " +
@@ -15193,7 +15182,7 @@ func (e *Engine) providerFingerprintHashMatchesDB(ctx context.Context,
 // members instead of the whole archive. Providers whose fingerprint stat is
 // per-source stay stat-gated: a stat mismatch there means real change.
 func providerFingerprintHashEstablishesFreshness(agent parser.AgentType) bool {
-	return parser.HermesSourceProject(agent, "") != ""
+	return agent == parser.AgentHermes || agent == parser.AgentAugureDesktop
 }
 
 // providerSourceHashFreshDespiteStat is the stat-mismatch arm of
@@ -17773,22 +17762,6 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	indexes := make(map[string][]int)
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
-		if batch[i].sess.GroupKey == "" && parser.HermesSourceProject(batch[i].sess.Agent, "cron") != "" && batch[i].sess.Project == parser.HermesSourceProject(batch[i].sess.Agent, "cron") {
-			sess := &batch[i].sess
-			job, err := e.db.ResolveHermesCronJob(ctx, applyIDPrefixToID(e.idPrefix, sess.ID), applyIDPrefixToID(e.idPrefix, sess.ParentSessionID), string(sess.Agent))
-			if err == nil && job == "" {
-				if archive, ok := e.archiveStore.(*db.DB); ok {
-					job, err = archive.ResolveHermesCronJob(ctx, applyIDPrefixToID(e.idPrefix, sess.ID), applyIDPrefixToID(e.idPrefix, sess.ParentSessionID), string(sess.Agent))
-				}
-			}
-			if err != nil {
-				return batch, err
-			}
-			if job != "" {
-				sess.GroupKey = job
-				sess.GroupLabel = parser.HermesCronRecordedName(job, sess.SessionName)
-			}
-		}
 		if batch[i].sourceProjectResolved {
 			continue
 		}

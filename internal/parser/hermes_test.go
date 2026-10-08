@@ -40,7 +40,7 @@ func parseHermesTestSession(
 	t *testing.T, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	t.Helper()
-	return newHermesTestProvider(t).parseSession(path, project, machine, nil)
+	return newHermesTestProvider(t).parseSession(path, project, machine)
 }
 
 // parseHermesTestArchive parses a Hermes archive root through the provider-owned
@@ -924,110 +924,31 @@ func TestParseHermesArchiveIncludesTranscriptsMissingFromStateDB(
 	assert.Contains(t, ids, "hermes:extra")
 }
 
-func TestBuildHermesStateResultCronProjects(t *testing.T) {
-	const runID = "cron_a1b2c3d4e5f6_20261007_120000"
-	tests := []struct {
-		name, id, source, title, hint, want, group, parent, producerParent, label string
-		transcript                                                                bool
-	}{
-		{"named job", runID, "cron", "Daily digest · Oct 07 12:00", "", "hermes-cron", "a1b2c3d4e5f6", "", "", "Daily digest", false},
-		{"untitled current ID", runID, "cron", "", "", "hermes-cron", "a1b2c3d4e5f6", "", "", "", false},
-		{"legacy ID with underscores", "cron_job_daily_20261007_120000", "cron", "", "", "hermes-cron", "job_daily", "", "", "", false},
-		{"missing ID", "", "cron", "", "", "hermes-cron", "", "", "", "", false},
-		{"malformed ID", "cron_job-1_20261007_noon", "cron", "", "", "hermes-cron", "", "", "", "", false},
-		{"empty job ID", "cron__20261007_120000", "cron", "", "", "hermes-cron", "", "", "", "", false},
-		{"job ID with slash", "cron_a/b_20261007_120000", "cron", "", "", "hermes-cron", "", "", "", "", false},
-		{"job ID starting with punctuation", "cron_-a_20261007_120000", "cron", "", "", "hermes-cron", "", "", "", "", false},
-		{"non-cron", runID, "cli", "Daily digest · Oct 07 12:00", "", "hermes-cli", "", "", "", "", false},
-		{"explicit hint", runID, "cron", "Daily digest · Oct 07 12:00", "chosen-project", "chosen-project", "a1b2c3d4e5f6", "", "", "Daily digest", false},
-		{"continuation without identity", "20261007_121000_abcdef", "cron", "Daily digest · Oct 07 12:00", "", "hermes-cron", "", "", "", "", false},
-		{"richer transcript", runID, "cron", "Daily digest · Oct 07 12:00", "", "hermes-cron", "a1b2c3d4e5f6", "", "", "Daily digest", true},
-		{"transcript ancestry", "tip", "cron", "", "", "hermes-cron", "a1b2c3d4e5f6", "middle", "", "", true},
-		{"conflicting producer ancestry", "tip", "cron", "", "", "hermes-cron", "job-b", "middle", "cron_job-b_20261007_120000", "", true},
-		{"renamed job", runID, "cron", "Research digest · Oct 08 12:00", "", "hermes-cron", "a1b2c3d4e5f6", "", "", "Research digest", false},
-		{"same name different job", "cron_job-other_20261007_120000", "cron", "Daily digest · Oct 07 12:00", "", "hermes-cron", "job-other", "", "", "Daily digest", false},
-		{"missing separator", runID, "cron", "Daily digest", "", "hermes-cron", "a1b2c3d4e5f6", "", "", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			transcript := filepath.Join(dir, "session_"+tt.id+".json")
-			if tt.transcript {
-				body := fmt.Sprintf(`{"source":%q,"parent_session_id":%q,"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"richer reply"}]}`, tt.source, tt.parent)
-				require.NoError(t, os.WriteFile(transcript, []byte(body), 0o600))
-			}
-			if tt.parent != "" {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "session_middle.json"), []byte(fmt.Sprintf(`{"source":"cron","parent_session_id":%q}`, runID)), 0o600))
-			}
-			state := []hermesStateSession{{id: tt.id, source: tt.source, title: tt.title, parentSessionID: tt.parent}, {id: "middle", parentSessionID: tt.producerParent}}
-			resolveHermesCronJobs(state, dir)
-			res, ok := buildHermesStateResult(
-				state[0],
-				[]hermesStateMessage{{role: "user", content: "hello"}},
-				dir, "state.db", tt.hint, "local",
-			)
-			require.True(t, ok)
-			assert.Equal(t, tt.want, res.Session.Project)
-			assert.Equal(t, tt.group, res.Session.GroupKey)
-			assert.Equal(t, tt.label, res.Session.GroupLabel)
-			assert.Equal(t, tt.hint == "", res.Session.projectSynthesizedByHermes)
-			if tt.transcript {
-				assert.Equal(t, transcript, res.Session.File.Path)
-				require.Len(t, res.Messages, 2)
-				assert.Equal(t, "richer reply", res.Messages[1].Content)
-			}
-		})
-	}
-}
-
 func TestHermesCronTranscriptProjects(t *testing.T) {
 	for _, format := range []string{"json", "jsonl"} {
-		for _, tc := range []struct{ id, parent, ancestor, project, group, source string }{
-			{"cron_job-1_20261007_120000", "", "", "hermes-cron", "job-1", "cron"},
-			{"child", "cron_job-1_20261007_120000", "", "hermes-cron", "job-1", "cron"},
-			{"tip", "middle", "cron_job-1_20261007_120000", "hermes-cron", "job-1", "cron"},
-			{"missing", "unknown", "", "hermes-cron", "", "cron"},
-			{"cycle", "middle", "cycle", "hermes-cron", "", "cron"},
-			{"non-cron", "cron_job-1_20261007_120000", "", "hermes", "", "cli"},
+		for _, tc := range []struct{ id, source, project, group string }{
+			{"cron_job-1_20261007_120000", "cron", "hermes-cron", "job-1"},
+			{"child", "cron", "hermes-cron", ""},
+			{"cron_job-1_20261007_120000", "cli", "hermes-cli", ""},
 		} {
-			t.Run(format+"/"+tc.id, func(t *testing.T) {
-				name, body := "session_"+tc.id+".json", fmt.Sprintf(`{"title":"Daily digest · Oct 07 12:00","source":%q,"parent_session_id":%q,"messages":[{"role":"user","content":"hello"}]}`, tc.source, tc.parent)
+			t.Run(format+"/"+tc.id+"/"+tc.source, func(t *testing.T) {
+				name := "session_" + tc.id + ".json"
+				body := fmt.Sprintf(`{"title":"Daily digest · Oct 07 12:00","platform":%q,"parent_session_id":"cron_job-1_20261007_120000","messages":[{"role":"user","content":"hello"}]}`, tc.source)
 				if format == "jsonl" {
-					name, body = tc.id+".jsonl", fmt.Sprintf("{\"role\":\"session_meta\",\"title\":\"Daily digest · Oct 07 12:00\",\"platform\":%q,\"parent_session_id\":%q}\n{\"role\":\"user\",\"content\":\"hello\"}\n", tc.source, tc.parent)
-					if tc.source == "cli" {
-						tc.project = "hermes-cli"
-					}
+					name = tc.id + ".jsonl"
+					body = fmt.Sprintf("{\"role\":\"session_meta\",\"title\":\"Daily digest · Oct 07 12:00\",\"platform\":%q,\"parent_session_id\":\"cron_job-1_20261007_120000\"}\n{\"role\":\"user\",\"content\":\"hello\"}\n", tc.source)
 				}
-				path := createTestFile(t, name, body)
-				if tc.ancestor != "" {
-					ancestor := fmt.Sprintf(`{"source":"cron","parent_session_id":%q}`, tc.ancestor)
-					require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(path), "session_middle.json"), []byte(ancestor), 0o600))
-					if format == "jsonl" {
-						header := fmt.Sprintf("{\"role\":\"session_meta\",\"platform\":\"cron\",\"parent_session_id\":%q}\n", tc.ancestor)
-						require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(path), "middle.jsonl"), []byte(header), 0o600))
-						require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(path), "session_middle.json"), []byte(`{"parent_session_id":"missing"}`), 0o600))
-					}
+				sess, _, err := parseHermesTestSession(t, createTestFile(t, name, body), "", "local")
+				require.NoError(t, err)
+				require.NotNil(t, sess)
+				assert.Equal(t, tc.project, sess.Project)
+				assert.Equal(t, tc.group, sess.GroupKey)
+				if tc.group == "" {
+					assert.Empty(t, sess.GroupLabel)
+				} else {
+					assert.Equal(t, "Daily digest", sess.GroupLabel)
 				}
-				for _, hint := range []string{"", "explicit-project"} {
-					sess, _, err := parseHermesTestSession(t, path, hint, "local")
-					require.NoError(t, err)
-					require.NotNil(t, sess)
-					assert.Equal(t, firstNonEmptyJSONLString(hint, tc.project), sess.Project)
-					assert.Equal(t, tc.group, sess.GroupKey)
-					if tc.group != "" {
-						assert.Equal(t, "Daily digest", sess.GroupLabel)
-					} else {
-						assert.Empty(t, sess.GroupLabel)
-					}
-					assert.Equal(t, hint == "", sess.projectSynthesizedByHermes)
-					if tc.source == "cron" && tc.parent != "" {
-						assert.Equal(t, "hermes:"+tc.parent, sess.ParentSessionID)
-						assert.Equal(t, RelContinuation, sess.RelationshipType)
-					} else {
-						assert.Empty(t, sess.ParentSessionID)
-						assert.Empty(t, sess.RelationshipType)
-					}
-				}
+				assert.Empty(t, sess.ParentSessionID)
 			})
 		}
 	}

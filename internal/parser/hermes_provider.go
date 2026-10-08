@@ -17,10 +17,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-
-	"github.com/tidwall/gjson"
-
-	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 var _ Provider = (*hermesProvider)(nil)
@@ -38,37 +34,16 @@ type hermesProviderSpec struct {
 	relabel func(*ParseResult)
 }
 
-var hermesProviderSpecs = map[AgentType]hermesProviderSpec{
-	AgentHermes:        {agent: AgentHermes},
-	AgentAugureDesktop: {agent: AgentAugureDesktop},
-}
-
 func hermesProviderSpecForAgent(agent AgentType) hermesProviderSpec {
-	spec := hermesProviderSpecs[agent]
-	if agent == AgentAugureDesktop {
-		spec.relabel = relabelHermesResultAsAugureDesktop
+	switch agent {
+	case AgentAugureDesktop:
+		return hermesProviderSpec{
+			agent:   AgentAugureDesktop,
+			relabel: relabelHermesResultAsAugureDesktop,
+		}
+	default:
+		return hermesProviderSpec{agent: AgentHermes}
 	}
-	return spec
-}
-
-func HermesFormatAgents() []AgentType {
-	agents := make([]AgentType, 0, len(hermesProviderSpecs))
-	for agent := range hermesProviderSpecs {
-		agents = append(agents, agent)
-	}
-	slices.Sort(agents)
-	return agents
-}
-
-func HermesSourceProject(agent AgentType, source string) string {
-	spec, ok := hermesProviderSpecs[agent]
-	if !ok {
-		return ""
-	}
-	if source == "" {
-		return string(spec.agent)
-	}
-	return string(spec.agent) + "-" + source
 }
 
 type hermesProviderFactory struct {
@@ -176,7 +151,7 @@ func (p *hermesProvider) ReconciliationAggregateMemberPaths(
 		return nil
 	}
 	rawID := strings.TrimPrefix(fullSessionID, string(p.sources.agent)+":")
-	if rawID == fullSessionID || !isValidHermesSessionID(rawID) {
+	if rawID == fullSessionID || !IsValidSessionID(rawID) {
 		return nil
 	}
 	sessionsDir := filepath.Join(filepath.Dir(path), "sessions")
@@ -309,9 +284,7 @@ func (p *hermesProvider) Parse(
 		}, nil
 	}
 
-	parents, closeParents := hermesTranscriptParents(ctx, src)
-	defer closeParents()
-	sess, msgs, err := p.parseSession(path, req.Source.ProjectHint, machine, parents)
+	sess, msgs, err := p.parseSession(path, req.Source.ProjectHint, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -364,8 +337,19 @@ func (p *hermesProvider) parseStateMember(
 	if !found {
 		return ParseOutcome{ResultSetComplete: true, ForceReplace: true, SkipReason: SkipNoSession}, nil
 	}
-	if err := resolveHermesCronMember(ctx, conn, src.StateDB, &ss); err != nil {
-		return ParseOutcome{}, err
+
+	if ss.source == "cron" {
+		var lookupErr error
+		ss.cronJob = HermesCronJobID(ss.id, func(id string) string {
+			parent, err := hermesCronParent(ctx, conn, id)
+			if err != nil {
+				lookupErr = err
+			}
+			return parent
+		})
+		if lookupErr != nil {
+			return ParseOutcome{}, lookupErr
+		}
 	}
 	messages, err := readHermesStateMessagesForSession(ctx, conn, src.SessionID)
 	if err != nil {
@@ -411,27 +395,6 @@ type hermesSource struct {
 	Path      string
 	StateDB   string
 	SessionID string
-}
-
-func hermesTranscriptParents(ctx context.Context, src hermesSource) (func(string) (string, error), func()) {
-	var conn *sql.DB
-	return func(id string) (string, error) {
-			if src.StateDB == "" {
-				return "", nil
-			}
-			if conn == nil {
-				var err error
-				conn, err = openSQLiteReadOnly(src.StateDB, sqliteReadOptions{})
-				if err != nil {
-					return "", err
-				}
-			}
-			return hermesCronParent(ctx, conn, id)
-		}, func() {
-			if conn != nil {
-				conn.Close()
-			}
-		}
 }
 
 type hermesSourceSet struct {
@@ -544,7 +507,7 @@ func (s hermesSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			return nil, err
 		}
 		for _, file := range discoverHermesSessions(root) {
-			source, ok := s.sourceRef(root, file.Path, "")
+			source, ok := s.sourceRef(root, file.Path)
 			if !ok {
 				continue
 			}
@@ -667,7 +630,7 @@ func (s hermesSourceSet) discoverStateEach(
 		if err := rows.Scan(&id); err != nil {
 			return yieldedAny, fmt.Errorf("scan hermes session id: %w", err)
 		}
-		if !isValidHermesSessionID(id) {
+		if !IsValidSessionID(id) {
 			continue
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
@@ -699,7 +662,7 @@ func (s hermesSourceSet) discoverTranscriptEach(
 		}
 		name := entry.Name()
 		id := HermesSessionID(name)
-		if !isValidHermesSessionID(id) {
+		if !IsValidSessionID(id) {
 			return nil
 		}
 		switch {
@@ -727,7 +690,7 @@ func (s hermesSourceSet) discoverTranscriptEach(
 				return nil
 			}
 		}
-		ref, ok := s.transcriptSourceRef(root, filepath.Join(sessionsDir, name), stateDB)
+		ref, ok := s.transcriptSourceRef(root, filepath.Join(sessionsDir, name))
 		if !ok {
 			return nil
 		}
@@ -1066,10 +1029,10 @@ func (s hermesSourceSet) SourceForReconciliation(
 			case samePath(path, stateDB):
 				source, ok = s.archiveSourceRef(root, stateDB)
 			case hermesPathInTranscriptDir(sessionsDir, path) && IsRegularFile(path):
-				source, ok = s.transcriptSourceRef(root, path, stateDB)
+				source, ok = s.transcriptSourceRef(root, path)
 			}
 		} else {
-			source, ok = s.sourceRef(root, path, "")
+			source, ok = s.sourceRef(root, path)
 		}
 		if !ok {
 			continue
@@ -1193,9 +1156,8 @@ func (s hermesSourceSet) FindSource(
 		return notFound()
 	}
 	for _, root := range roots {
-		parentStateDB := ""
 		if stateDB, _, ok := hermesStatePaths(root); ok &&
-			isValidHermesSessionID(req.RawSessionID) {
+			IsValidSessionID(req.RawSessionID) {
 			found, err := hermesStateDBHasSession(ctx, stateDB, req.RawSessionID)
 			switch {
 			case err != nil:
@@ -1208,7 +1170,6 @@ func (s hermesSourceSet) FindSource(
 						"falling back to transcripts", stateDB, err,
 				)
 			case !found:
-				parentStateDB = stateDB
 			default:
 				return s.stateMemberSourceRef(root, stateDB, req.RawSessionID), true, nil
 			}
@@ -1218,7 +1179,7 @@ func (s hermesSourceSet) FindSource(
 		if path == "" {
 			continue
 		}
-		if source, ok := s.sourceRef(root, path, parentStateDB); ok {
+		if source, ok := s.sourceRef(root, path); ok {
 			return source, true, nil
 		}
 	}
@@ -1283,47 +1244,9 @@ func (s hermesSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	var hash string
-	var metadata hermesStateSession
-	f, err := os.Open(path)
-	if err != nil {
-		return SourceFingerprint{}, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-	reader := ctxio.Reader{Context: ctx, Reader: f}
-	if strings.HasSuffix(path, ".json") {
-		var data []byte
-		data, err = io.ReadAll(reader)
-		if gjson.ValidBytes(data) {
-			metadata = hermesTranscriptMetadata(gjson.ParseBytes(data))
-		}
-		hash = fmt.Sprintf("%x", sha256.Sum256(data))
-	} else {
-		h := sha256.New()
-		lr := newLineReader(io.TeeReader(reader, h), maxLineSize)
-		defer releaseLineReader(lr)
-		parsed, metadataErr := readHermesJSONLMetadata(lr)
-		if metadataErr != nil {
-			return SourceFingerprint{}, metadataErr
-		}
-		metadata = parsed
-		// TeeReader already hashed the buffered prefix.
-		if _, copyErr := io.Copy(h, reader); copyErr != nil {
-			return SourceFingerprint{}, copyErr
-		}
-		hash = hex.EncodeToString(h.Sum(nil))
-	}
+	hash, err := hashJSONLSourceFile(path)
 	if err != nil {
 		return SourceFingerprint{}, err
-	}
-	metadata.id = HermesSessionID(filepath.Base(path))
-	parents, closeParents := hermesTranscriptParents(ctx, src)
-	defer closeParents()
-	if err := resolveHermesCronJob(filepath.Dir(path), &metadata, parents); err != nil {
-		return SourceFingerprint{}, err
-	}
-	if metadata.source == "cron" {
-		hash = fmt.Sprintf("%x", sha256.Sum256([]byte(hash+"\x00cron-job\x00"+metadata.cronJob)))
 	}
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
@@ -1374,7 +1297,7 @@ func (s hermesSourceSet) sourceForChangedPath(
 	path = filepath.Clean(path)
 	if stateDB, sessionID, ok := ParseVirtualSourcePathForBase(path, "state.db"); ok {
 		if expected, _, valid := hermesArchivePathsForEvent(root, stateDB); valid &&
-			samePath(expected, stateDB) && isValidHermesSessionID(sessionID) {
+			samePath(expected, stateDB) && IsValidSessionID(sessionID) {
 			return s.stateMemberSourceRef(root, stateDB, sessionID), true
 		}
 		return SourceRef{}, false
@@ -1394,17 +1317,17 @@ func (s hermesSourceSet) sourceForChangedPath(
 		}
 		transcriptRoot := hermesTranscriptRoot(root)
 		if hermesPathInTranscriptDir(transcriptRoot, path) {
-			return s.transcriptSourceRef(root, path, "")
+			return s.transcriptSourceRef(root, path)
 		}
 	}
-	return s.sourceRef(root, path, "")
+	return s.sourceRef(root, path)
 }
 
 func hermesStatePathAffectsArchive(path, stateDB string) bool {
 	return samePath(path, stateDB) || samePath(path, stateDB+"-wal")
 }
 
-func (s hermesSourceSet) sourceRef(root, path, parentStateDB string) (SourceRef, bool) {
+func (s hermesSourceSet) sourceRef(root, path string) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if stateDB, _, ok := hermesStatePaths(root); ok && samePath(path, stateDB) {
@@ -1414,7 +1337,7 @@ func (s hermesSourceSet) sourceRef(root, path, parentStateDB string) (SourceRef,
 	if !hermesPathInTranscriptDir(transcriptRoot, path) || !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
-	return s.transcriptSourceRef(root, path, parentStateDB)
+	return s.transcriptSourceRef(root, path)
 }
 
 func (s hermesSourceSet) archiveSourceRef(
@@ -1453,7 +1376,7 @@ func (s hermesSourceSet) stateMemberSourceRef(
 }
 
 func (s hermesSourceSet) transcriptSourceRef(
-	root, path, parentStateDB string,
+	root, path string,
 ) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
@@ -1464,9 +1387,8 @@ func (s hermesSourceSet) transcriptSourceRef(
 		DisplayPath:    path,
 		FingerprintKey: path,
 		Opaque: hermesSource{
-			Root:    root,
-			Path:    path,
-			StateDB: parentStateDB,
+			Root: root,
+			Path: path,
 		},
 	}, true
 }
@@ -1683,21 +1605,13 @@ func hermesStateMemberFingerprint(
 		}
 	}
 	observeSharedContainerScan(ctx)
-	conn, err := openSQLiteReadOnly(src.StateDB, sqliteReadOptions{})
-	if err != nil {
-		return SourceFingerprint{}, hermesStateLookupError{err: fmt.Errorf("open hermes state db: %w", err)}
-	}
-	defer conn.Close()
-	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(ctx,
-		conn, src.StateDB, src.SessionID,
+	ss, messages, selectedPath, err := readHermesStateSessionSource(ctx,
+		src.StateDB, src.SessionID,
 	)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return SourceFingerprint{Key: source.FingerprintKey}, nil
 		}
-		return SourceFingerprint{}, err
-	}
-	if err := resolveHermesCronMember(ctx, conn, src.StateDB, &ss); err != nil {
 		return SourceFingerprint{}, err
 	}
 	h := sha256.New()
@@ -1785,7 +1699,7 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 		if err := rows.Scan(&id); err != nil {
 			return fmt.Errorf("scan hermes session id: %w", err)
 		}
-		if !isValidHermesSessionID(id) {
+		if !IsValidSessionID(id) {
 			continue
 		}
 		retainedIDBytes := int64(len(id))
@@ -1812,9 +1726,6 @@ func cacheHermesMemberCore(
 		conn, stateDB, id,
 	)
 	if err != nil {
-		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
-	}
-	if err := resolveHermesCronMember(ctx, conn, stateDB, &ss); err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	h := sha256.New()
@@ -1867,11 +1778,6 @@ func cachedHermesMemberCore(
 func addHermesStateSessionFingerprint(
 	h hash.Hash, ss hermesStateSession, messages []hermesStateMessage,
 ) error {
-	if ss.source == "cron" {
-		if _, err := fmt.Fprintf(h, "cron-job\x00%q\x00", ss.cronJob); err != nil {
-			return err
-		}
-	}
 	if _, err := fmt.Fprintf(
 		h,
 		"state-member\x00%q\x00%q\x00%q\x00%q\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%t\x00%g\x00%t\x00%g\x00%q\x00%q\x00%q\x00%d\x00",

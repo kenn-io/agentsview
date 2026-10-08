@@ -64,22 +64,6 @@ func TestJSONLProviderFingerprintStopsAfterContextCancellation(t *testing.T) {
 			require.ErrorIs(t, err, context.Canceled)
 		})
 	}
-	for _, format := range []string{"json", "jsonl"} {
-		t.Run("hermes/"+format, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "session_tip."+format)
-			body := strings.Repeat("x", 256*1024)
-			if format == "jsonl" {
-				body = "{\"role\":\"session_meta\",\"platform\":\"cli\"}\n" + body
-			}
-			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
-			provider, ok := NewProvider(AgentHermes, ProviderConfig{})
-			require.True(t, ok)
-			_, err := provider.Fingerprint(newCancelOnErrCheckContext(t, 3), SourceRef{
-				Provider: AgentHermes, Opaque: hermesSource{Path: path},
-			})
-			require.ErrorIs(t, err, context.Canceled)
-		})
-	}
 }
 
 func TestClaudeCanceledHeadSniffIsNotCached(t *testing.T) {

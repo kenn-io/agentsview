@@ -393,3 +393,26 @@ func TestHostedUnresolvedPinRetainsCreationTime(t *testing.T) {
 	assert.Equal(t, before[0].CreatedAt, after[0].CreatedAt)
 	assert.NotEmpty(t, after[0].CreatedAt)
 }
+
+func TestHostedUsageGroups(t *testing.T) {
+	f := newProjectionFixture(t)
+	m, _ := f.accept(t, "device-a", "capture-a", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("cron usage")))
+	raw, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET group_key = 'job-a', group_label = 'Daily digest' WHERE id = $1`, raw.SessionID)
+	require.NoError(t, err)
+	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	defer store.Close()
+	rows, err := store.GetTopSessionsByCost(t.Context(), db.UsageFilter{TopSessionsByGroup: true}, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "job-a", rows[0].GroupKey)
+	assert.Equal(t, "Daily digest", rows[0].GroupLabel)
+	assert.Empty(t, rows[0].SessionID)
+	rows, err = store.GetTopSessionsByCost(t.Context(), db.UsageFilter{}, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "codex:portable", rows[0].SessionID)
+}

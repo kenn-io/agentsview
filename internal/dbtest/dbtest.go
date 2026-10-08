@@ -313,7 +313,9 @@ func AssertUsageGroups(t *testing.T, store db.Store) {
 		assert.Equal(t, "hermes-cron", row.Project)
 	}
 	assert.Equal(t, "Research digest", byKey["job-b"].GroupLabel)
-	assert.Equal(t, 1, byKey[""].SessionCount)
+	assert.Equal(t, "group-other", byKey[""].SessionID)
+	assert.Equal(t, 10, byKey[""].InputTokens)
+	assert.Empty(t, byKey["job-a"].SessionID)
 	filter.ProjectLabels = nil
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)

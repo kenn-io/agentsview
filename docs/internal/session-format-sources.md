@@ -2943,16 +2943,13 @@ schemas keep their existing ordering behavior.
   records `source = "cron"` and titles as the job name followed by ` · `
   and the run timestamp. Agentsview keeps the stable job ID in `group_key`
   and the recorded name in `group_label`. Reverified both producer files
-  for the shared provider and archive ancestry lookup on 2026-10-08.
-  [export_session](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_portability.py)
-  retains `source` and `parent_session_id`. Live transcripts supply ancestry
-  only when they record cron source and parent metadata.
+  for state parent walks and transcript run IDs on 2026-10-08.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
-  recognized. Exported `source` identifies cron only. Producer ancestry wins;
-  sibling transcripts, archived parents and saved automatic jobs on visited
-  ancestors complete missing evidence. All cron runs retain the `hermes-cron`
-  project; unresolved runs have no group.
+  recognized. Exported `source` identifies cron only. State continuations follow
+  `parent_session_id` until a cron run ID identifies the job. Transcript-only
+  runs use their own ID. A missing state parent leaves a continuation ungrouped.
+  All cron runs retain the `hermes-cron` project.
 
 ## Forge (`forge`)
 

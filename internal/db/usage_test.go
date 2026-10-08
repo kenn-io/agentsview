@@ -6134,9 +6134,23 @@ func TestGroupTopSessionsLatestRecordedLabel(t *testing.T) {
 		{SessionID: "a", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Newer", StartedAt: "2026-10-08T12:00:00Z"},
 		{SessionID: "b", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", StartedAt: "2026-10-08T12:00:00Z"},
 		{SessionID: "c", Project: "hermes-cron", GroupKey: "job-a", StartedAt: "2026-10-09T12:00:00Z"},
+		{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
 	})
 	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, TopSessionEntry{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15}, rows[0])
+	assert.Equal(t, "Tie winner", rows[1].GroupLabel)
+	assert.Equal(t, 4, rows[1].SessionCount)
+	assert.Empty(t, rows[1].SessionID)
+}
+
+func TestGroupTopSessionsRanksTiesByGroup(t *testing.T) {
+	rows, err := GroupTopSessions([]TopSessionEntry{
+		{Project: "hermes-cron", GroupKey: "job-b", InputTokens: 10},
+		{Project: "hermes-cron", GroupKey: "job-a", InputTokens: 10},
+	})
+	require.NoError(t, err)
+	rows = SortAndLimitTopSessions(rows, 1, TopSessionsSortTokens, UsageTokenTypesAll)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "Tie winner", rows[0].GroupLabel)
-	assert.Equal(t, 4, rows[0].SessionCount)
+	assert.Equal(t, "job-a", rows[0].GroupKey)
 }

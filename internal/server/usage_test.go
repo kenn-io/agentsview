@@ -517,7 +517,7 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	require.NoError(t, err)
 	key := catalog["hermes-cron"].ProjectKey
 	require.NotEmpty(t, key)
-	params := map[string]string{"from": "2026-10-07", "to": "2026-10-10", "timezone": "UTC", "include_automated": "true", "group_by": "group", "project_key": key, "sort": "tokens", "limit": "1"}
+	params := map[string]string{"from": "2026-10-07", "to": "2026-10-10", "timezone": "UTC", "include_automated": "true", "group_by": "group", "project_key": key, "project": "unrelated-page-filter", "sort": "tokens", "limit": "1"}
 	w := te.get(t, buildPathURL("/api/v1/usage/top-sessions", params))
 	assertStatus(t, w, http.StatusOK)
 	var entries []db.TopSessionEntry
@@ -530,4 +530,5 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	params["project_key"] = "unknown-key"
 	w = te.get(t, buildPathURL("/api/v1/usage/top-sessions", params))
 	assertStatus(t, w, http.StatusBadRequest)
+	assert.Contains(t, w.Body.String(), "unknown_project_key")
 }

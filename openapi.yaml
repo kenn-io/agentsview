@@ -4001,8 +4001,6 @@ components:
           type: integer
         project:
           type: string
-        project_key:
-          type: string
         sessionId:
           type: string
         session_count:
