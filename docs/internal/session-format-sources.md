@@ -2805,19 +2805,19 @@ schemas keep their existing ordering behavior.
   keep existing row IDs; branch replacements assign new row IDs. Sync writes
   message identities only when it adds or replaces turns. Unchanged zip imports
   keep their stored turns and derived state.
-  Live branch changes update in place at every length. A replacement that loses
-  a pin or note keeps a fresh copy of the previous version in Trash in the same
-  transaction; other replacements make no copy. Dropped pins and notes stay in
-  the Trash copy when a later Sync restores those turns to the live chat.
+  See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for branch
+  updates and Trash copies.
   Shorter zip exports remain refused. Pins follow source UUIDs, or role, content,
   and occurrence rank when the replacement has no UUIDs. Full resync preserves
   import markers.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
   `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
-  Other 403 responses stop Sync with an access-denied error.
-  Status-0 relay failures stop Sync. Other detail failures allow later chats
-  to sync.
+  Other detail failures stop Sync after two chats fail in a row; a successful
+  detail resets the streak. A 404 or oversized body leaves the streak unchanged.
+  Reverified 2026-10-08 against `TestSyncClaudeAIDetailFailures` and
+  `TestSyncClaudeAIConsecutiveDetailFailures`. See
+  [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for failure handling.
   Organization responses must decode to an array; null and other shapes fail.
   Reverified 2026-10-08 against `TestSyncClaudeAIInvalidOrganizations`.
   Organization and list failures, cancellation, and an empty page with
