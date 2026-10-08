@@ -32,4 +32,4 @@ tauri = { version = "2", features = ["image-png", "tray-icon"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 webview2-com = "0.38.2"
-windows = "0.61"
+windows = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }

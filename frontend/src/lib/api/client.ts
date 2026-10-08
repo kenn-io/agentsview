@@ -428,7 +428,7 @@ export async function syncClaudeAI(
   } finally {
     signal?.removeEventListener("abort", abort);
     abort();
-    await host.close();
+    await host.close().catch(() => {}); // Cleanup failure must preserve the sync outcome.
   }
 }
 

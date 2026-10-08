@@ -2755,27 +2755,21 @@ schemas keep their existing ordering behavior.
   updates and Trash copies.
   Shorter zip exports remain refused. Pins follow source UUIDs, or role, content,
   and occurrence rank when the replacement has no UUIDs. Full resync preserves
-  import markers only when their retention matches the target archive,
-  verified by `TestSyncClaudeAIResyncArchivePolicy` on 2026-10-08.
+  import markers only when their retention matches the target archive.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
   `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
   Other detail failures stop Sync after two chats fail in a row. Unchanged and
   skipped chats, successful writes, 404s, and oversized responses reset the
-  streak. Reverified 2026-10-08 against `TestSyncClaudeAIDetailFailures`,
-  `TestSyncClaudeAIConsecutiveDetailFailures`, and
-  `TestSyncClaudeAIDetailProcessingFailureStreak`. See
+  streak. See
   [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for failure handling.
   Organization responses must decode to an array; null and other shapes fail.
-  Reverified 2026-10-08 against `TestSyncClaudeAIInvalidOrganizations`.
   Organization and list failures, cancellation, and an empty page with
   `has_more: true` stop Sync. Null and root-sentinel list leaves skip detail
   fetches; absent or malformed leaves and newer stored marker versions count
-  as errors. Reverified 2026-10-08 against the importer regression:
-  the `claude-ai:vN:` prefix rejects
+  as errors. The `claude-ai:vN:` prefix rejects
   N greater than 1 regardless of payload layout, with a `newer_marker` refusal.
-  File import and explicit replacement enforce the same boundary, verified by
-  `TestImportClaudeAINewerMarkerError` on 2026-10-08.
+  File import and explicit replacement enforce the same boundary.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks
   found `current_leaf_message_uuid` on list items and byte-identical list and
   detail `updated_at` values with microseconds. Branch switches changed the
