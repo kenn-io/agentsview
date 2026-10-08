@@ -219,9 +219,9 @@ controls work in Tokens mode.
 The attribution panel breaks down total spend for the window into a treemap plus
 a ranked side rail. Switch the group-by between **Project**, **Model**, and
 **Agent**, or flip the view from **Treemap** to **List** for a table-style
-readout. Click any cell (or row) to hide it from the chart above, which is the
-primary drill-down mechanic — hide the obvious outliers and the remaining
-breakdown tells you where the smaller spend is going.
+readout. Click a project cell or row to open the project. Use **Hide project**
+or the **Projects** filter to hide it from the chart above and see where the
+remaining spend is going.
 
 ![Cost attribution treemap](/docs/assets/generated/screenshots/usage-attribution.png)
 

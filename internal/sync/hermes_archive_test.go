@@ -143,7 +143,7 @@ func TestHermesArchiveStoresCronGroups(t *testing.T) {
 	stored, err := database.GetSession(t.Context(), "hermes:cron_job-a_20261008_120000")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Equal(t, "job-a", stored.GroupKey)
+	assert.Regexp(t, "^job-a@[0-9a-f]{8}$", stored.GroupKey)
 	assert.Equal(t, "Daily digest", stored.GroupLabel)
 }
 
