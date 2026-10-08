@@ -46,6 +46,17 @@ func readImportEvents(t *testing.T, body io.Reader, handle func(string, string))
 }
 
 func TestClaudeAISyncRelay(t *testing.T) {
+	t.Run("unknown result leaves body unread", func(t *testing.T) {
+		srv := testServer(t, 5*time.Second)
+		body := strings.NewReader(`{}`)
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/import/claude-ai/sync/results/unknown?status=200", body)
+		request.Header.Set("Content-Type", "application/octet-stream")
+		response := httptest.NewRecorder()
+		srv.mux.ServeHTTP(response, request)
+		assert.Equal(t, http.StatusNotFound, response.Code)
+		assert.Equal(t, 2, body.Len())
+	})
+
 	t.Run("large result stores session", func(t *testing.T) {
 		srv := testServer(t, 5*time.Second)
 		httpServer := httptest.NewServer(srv.mux)
@@ -132,9 +143,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 						body = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222226","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
 					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222226?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 						status = oversizedStatus
-						if status == 200 {
-							body = strings.Repeat("x", importer.ClaudeAIResponseLimit+2)
-						}
+						body = strings.Repeat("x", importer.ClaudeAIResponseLimit+2)
 					default:
 						require.FailNowf(t, "unexpected path", "%s", request.Path)
 					}
@@ -166,6 +175,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		{"unauthorized", "{}", 401, true},
 		{"forbidden", "{}", 403, false},
 		{"signed out", string(signedOut), 403, true},
+		{"upstream body limit", "{}", 413, false},
 	} {
 		t.Run("access failure "+tt.name+" reaches stream error", func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -198,6 +208,8 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				case "error":
 					if tt.signIn {
 						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again"}`, data)
+					} else if tt.status == 413 {
+						assert.JSONEq(t, `{"error":"claude returned HTTP 413"}`, data)
 					} else {
 						assert.JSONEq(t, `{"error":"claude.ai access denied (HTTP 403)"}`, data)
 					}

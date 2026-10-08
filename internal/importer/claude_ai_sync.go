@@ -28,9 +28,6 @@ const ClaudeAIResponseLimit = 32 << 20
 // ErrClaudeAIAuthRequired reports expired or missing browser credentials.
 var ErrClaudeAIAuthRequired = errors.New("claude.ai sign-in required")
 
-// ErrClaudeAIAccessDenied reports a browser request forbidden by Claude.ai.
-var ErrClaudeAIAccessDenied = errors.New("claude.ai access denied (HTTP 403)")
-
 //go:embed claude_ai_requests.txt
 var claudeAIRequests string
 
@@ -45,8 +42,10 @@ func claudeAIRequest(shape int, organization, conversation string, offset int) s
 }
 
 // Bump the marker version when parser output changes.
+const claudeAIMarkerVersion = 1
+
 func claudeAIMarker(store db.Store, leaf string) string {
-	return "claude-ai:v1:" + string(storeArchiveContent(store)) + ":" + leaf
+	return "claude-ai:v" + strconv.Itoa(claudeAIMarkerVersion) + ":" + string(storeArchiveContent(store)) + ":" + leaf
 }
 
 type claudeAIHTTPError struct{ status int }
@@ -56,10 +55,6 @@ func (e *claudeAIHTTPError) Error() string {
 		return "claude.ai access denied (HTTP 403)"
 	}
 	return fmt.Sprintf("claude returned HTTP %d", e.status)
-}
-
-func (e *claudeAIHTTPError) Is(target error) bool {
-	return e.status == 403 && target == ErrClaudeAIAccessDenied
 }
 
 // ClaudeAIResponse carries the browser response without credentials.
@@ -91,6 +86,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 		return stats, errors.New("claude organizations must be an array")
 	}
 
+	failedLast := false
 	for _, org := range organizations {
 		if !slices.Contains(org.Capabilities, "chat") {
 			continue
@@ -161,8 +157,8 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					parts := strings.SplitN(*existing.LastEntryUUID, ":", 3)
 					if len(parts) == 3 && parts[0] == "claude-ai" && strings.HasPrefix(parts[1], "v") {
 						version, err := strconv.Atoi(strings.TrimPrefix(parts[1], "v"))
-						if err == nil && version > 1 {
-							stats.record(id, importSkipped, refuse(RefusalNewerMarker, fmt.Errorf("stored Claude.ai marker version %d is newer than supported version 1", version)))
+						if err == nil && version > claudeAIMarkerVersion {
+							stats.record(id, importSkipped, refuse(RefusalNewerMarker, fmt.Errorf("stored Claude.ai marker version %d is newer than supported version %d", version, claudeAIMarkerVersion)))
 							cb.progress(stats)
 							continue
 						}
@@ -179,21 +175,25 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					if ctx.Err() != nil {
 						return stats, ctx.Err()
 					}
-					if errors.Is(err, ErrClaudeAIAuthRequired) || errors.Is(err, ErrClaudeAIAccessDenied) {
+					if errors.Is(err, ErrClaudeAIAuthRequired) {
 						return stats, err
 					}
 					detailError, _ := errors.AsType[*claudeAIHTTPError](err)
-					if (detailError == nil || detailError.status == 0) && !errors.Is(err, ErrClaudeAIResponseTooLarge) {
-						return stats, err
-					}
 					if detailError != nil && detailError.status == 404 {
 						stats.record(id, importSkipped, nil)
 					} else {
+						if !errors.Is(err, ErrClaudeAIResponseTooLarge) {
+							if failedLast {
+								return stats, err
+							}
+							failedLast = true
+						}
 						stats.record(id, importSkipped, err)
 					}
 					cb.progress(stats)
 					continue
 				}
+				failedLast = false
 				write := func() error {
 					result, err := parser.ParseClaudeAIDetail(detail)
 					if err == nil && result.Session.ID != id {

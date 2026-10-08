@@ -92,6 +92,9 @@ Sync continues.
 A chat first imported from a zip keeps its stored turns when Sync finds no
 change; turns Sync adds or replaces carry claude.ai's message identities.
 
+A chat that fails counts as failed while Sync continues. An expired sign-in,
+or two chats failing in a row, ends the Sync.
+
 Sync runs while the dialog is open. Closing it cancels the sync. A cancelled
 or failed Sync leaves each chat as either its old or its new version. Completed
 chats appear in the sidebar, and the next Sync picks up any unfinished chats.
@@ -207,6 +210,8 @@ with the provider prefix) and a reason:
 - `shorter_export`: the export has fewer messages than the archive.
 - `trashed`: a Claude.ai or Gemini Apps session is in the trash. Restore it
   first. A trashed ChatGPT conversation stays a skip.
+- `newer_marker`: a Claude.ai chat was synced by a newer marker version. Use
+  an AgentsView version that supports it.
 - `transient`: anything else. Importing again may work.
 
 For `diverged` or `shorter_export`, you can explicitly
