@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/kit/vector/sqlitevec"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 // fakeBuildEncoder returns a deterministic 3-dimensional encoder that never
@@ -432,6 +433,56 @@ func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t 
 	assert.Equal(t, 1, result.Fill.Documents, "only the newly in-scope automated doc is embedded")
 	assert.ElementsMatch(t, []string{"u:s1:human", "u:s2:auto"}, mirrorDocKeys(t, ix),
 		"the older automated doc must be picked up despite predating the stored refresh watermark")
+}
+
+func TestBuildClassifierChangeEmbedsOlderReclassifiedSession(t *testing.T) {
+	for _, name := range []string{"changed hash", "missing hash"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			previousMatches := db.UserAutomationExactMatches()
+			t.Cleanup(func() { db.SetUserAutomationExactMatches(previousMatches) })
+			db.SetUserAutomationExactMatches([]string{"older session content"})
+			archive := dbtest.OpenTestDB(t)
+			seedEndedSession(t, archive, "human", "hello", "2024-01-02T00:00:00Z")
+			seedEndedSession(t, archive, "reclassified", "older session content", "2024-01-01T00:00:00Z")
+			databaseID, err := archive.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			ix := openTestIndex(t)
+			gen := fakeGeneration("fake-model")
+			result, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+			require.NoError(t, err)
+			require.Equal(t, 1, result.Fill.Documents)
+			require.Equal(t, []string{"human"}, mirrorSessionIDs(t, ix))
+			watermark, err := ix.refreshWatermark(ctx)
+			require.NoError(t, err)
+			require.Equal(t, "2024-01-02T00:00:00Z", watermark)
+			if name == "missing hash" {
+				_, err := ix.db.ExecContext(ctx, `DELETE FROM vector_meta WHERE key = ?`, scopeClassifierHashKey)
+				require.NoError(t, err)
+			}
+
+			db.SetUserAutomationExactMatches(nil)
+			require.NoError(t, archive.ForceBackfillIsAutomated(ctx))
+			currentID, err := archive.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			require.Equal(t, databaseID, currentID)
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Fill.Documents, "only the older reclassified session needs embedding")
+			hits, err := ix.Search(ctx, fakeBuildEncoder(), "older session content", 10)
+			require.NoError(t, err)
+			var sessionIDs []string
+			for _, hit := range hits {
+				sessionIDs = append(sessionIDs, hit.SessionID)
+			}
+			assert.ElementsMatch(t, []string{"human", "reclassified"}, sessionIDs)
+
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+			require.NoError(t, err)
+			assert.Zero(t, result.Fill.Documents)
+			assert.Equal(t, 1, result.Refresh.Unchanged, "unchanged classifier returns to scanning at the watermark")
+		})
+	}
 }
 
 // TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow covers the

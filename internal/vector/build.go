@@ -14,6 +14,8 @@ import (
 	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // progressInterval bounds how often BuildOptions.Progress is invoked during
@@ -136,15 +138,17 @@ func (ix *Index) Build(
 	if err != nil {
 		return BuildResult{}, err
 	}
-	// A mirror refreshed before the scope key existed (a refresh watermark
-	// is stamped, but scope_include_automated is not) predates this scope
-	// feature entirely. Treat that the same as a genuine scope change: force
-	// one full reconciliation now so any automated rows that were never
-	// meant to be in scope (or, if the config default is true, newly
-	// in-scope automated sessions older than the watermark) get resolved,
-	// then setIncludeAutomatedScope below stamps the key so every later
-	// build compares against a real stored scope again.
+	// Missing scope metadata also requires one full reconciliation for older indexes.
 	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
+	classifierHash := ""
+	if ix.spec.SupportsAutomatedScope {
+		classifierHash = db.ClassifierHash()
+		storedHash, hasHash, err := ix.metaGet(ctx, scopeClassifierHashKey)
+		if err != nil {
+			return BuildResult{}, fmt.Errorf("reading scope classifier hash: %w", err)
+		}
+		scopeChanged = scopeChanged || !hasHash || storedHash != classifierHash
+	}
 	corpusFingerprint := gen.Params[CorpusFingerprintParam]
 	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
 		ctx, corpusFingerprintMetaKey,
@@ -174,6 +178,11 @@ func (ix *Index) Build(
 	}
 	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
 		return BuildResult{}, err
+	}
+	if classifierHash != "" {
+		if err := ix.metaSet(ctx, scopeClassifierHashKey, classifierHash); err != nil {
+			return BuildResult{}, fmt.Errorf("storing scope classifier hash: %w", err)
+		}
 	}
 	if corpusFingerprint != "" {
 		if err := ix.metaSet(ctx, corpusFingerprintMetaKey, corpusFingerprint); err != nil {

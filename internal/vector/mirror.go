@@ -28,6 +28,9 @@ const refreshWatermarkKey = "refresh_watermark"
 // sessions an incremental scan's watermark would skip.
 const scopeIncludeAutomatedKey = "scope_include_automated"
 
+// scopeClassifierHashKey tracks classification changes that move sessions into or out of scope.
+const scopeClassifierHashKey = "scope_classifier_hash"
+
 // activeFullRebuildKey holds the fingerprint of an active generation whose
 // same-fingerprint full rebuild cleared stamps in place and has not completed
 // yet. Scoped PG pushes may ignore out-of-scope missing docs from an ordinary
