@@ -622,6 +622,24 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
+  it.each([
+    ["digest@12345678", "digest@abcdef01", "Daily digest · digest@1", "Daily digest · digest@a"],
+    ["host-a~digest@12345678", "host-b~digest@12345678", "Daily digest · host-a~d", "Daily digest · host-b~d"],
+  ])("distinguishes matching jobs across profiles and hosts: %s", async (first, second, firstLabel, secondLabel) => {
+    usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
+    usage.zoomRows = [first, second].map((groupKey) => ({
+      ...topSessionForRemainder(),
+      groupKey,
+      groupLabel: "Daily digest",
+    }));
+    const component = mountPanel();
+    await tick();
+    const rows = document.querySelectorAll<HTMLElement>(".list-row");
+    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual([firstLabel, secondLabel]);
+    expect(Array.from(rows, (row) => row.title)).toEqual([`Daily digest · ${first}`, `Daily digest · ${second}`]);
+    await unmount(component);
+  });
+
   it("hides the project from the zoom breadcrumb", async () => {
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithDuplicateProjectLabels());

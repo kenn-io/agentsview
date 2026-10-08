@@ -42,7 +42,8 @@
 
   function groupJobId(key: string): string {
     const separator = key.lastIndexOf("@");
-    return separator < 0 ? key : key.slice(0, separator);
+    const job = separator < 0 ? key : key.slice(0, separator);
+    return job.slice(job.indexOf("~") + 1);
   }
 
   const rowItems = $derived.by(() => {
@@ -61,8 +62,8 @@
       items = zoomRows.map((row, index) => {
         const id = zoomRowId(row);
         const duplicates = zoomRows.filter((other, otherIndex) => other !== row && (other.groupKey || other.sessionId) && names[otherIndex] === names[index]);
-        const suffixID = row.groupKey ? groupJobId(row.groupKey) : row.sessionId.replace(/^[^:]+:/, "") || row.sessionId;
-        const peers = duplicates.map((other) => other.groupKey ? groupJobId(other.groupKey) : other.sessionId.replace(/^[^:]+:/, ""));
+        const suffixID = row.groupKey || row.sessionId.replace(/^[^:]+:/, "") || row.sessionId;
+        const peers = duplicates.map((other) => other.groupKey || other.sessionId.replace(/^[^:]+:/, ""));
         return {
           id,
           label: (row.groupKey || row.sessionId) && duplicates.length ? `${names[index]} · ${shortenId(suffixID, peers)}` : names[index]!,
@@ -131,7 +132,8 @@
     if (zoomedProject) {
       const row = usage.zoomRows?.find((row) => zoomRowId(row) === id);
       const name = row?.groupKey ? row.groupLabel || groupJobId(row.groupKey) : row?.displayName || label;
-      const sourceID = row?.groupKey ? groupJobId(row.groupKey) : row?.sessionId;
+      const collidingJob = row?.groupKey && usage.zoomRows?.some((other) => other !== row && other.groupKey && groupJobId(other.groupKey) === groupJobId(row.groupKey!));
+      const sourceID = row?.groupKey ? collidingJob ? row.groupKey : groupJobId(row.groupKey) : row?.sessionId;
       return sourceID && name !== sourceID ? `${name} · ${sourceID}` : name;
     }
     return groupBy === "project" ? m.usage_click_project({ label }) : m.usage_click_to_hide({ label });

@@ -619,6 +619,47 @@ func TestImporterImportsHermesDatabaseOnlySession(t *testing.T) {
 	assert.Equal(t, 320, session.PeakContextTokens)
 }
 
+func TestImporterHermesCronGroupsSurviveRepeatedSnapshots(t *testing.T) {
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	const remoteRoot = "/profiles/profile-a"
+	var previous string
+	for _, host := range []string{"host-a", "host-a", "host-b"} {
+		extracted := t.TempDir()
+		localStateDB := remappedRemotePath(extracted, remoteRoot+"/state.db")
+		require.NoError(t, os.MkdirAll(filepath.Dir(localStateDB), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(filepath.Dir(localStateDB), "sessions"), 0o755))
+		writeHermesImportStateDB(t, localStateDB)
+		conn, err := sql.Open("sqlite3", localStateDB)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), `
+			UPDATE sessions SET id = 'cron_job-a_20261008_120000', source = 'cron', parent_session_id = NULL, title = 'Digest · Oct 08';
+			UPDATE messages SET session_id = 'cron_job-a_20261008_120000';
+		`)
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+		stats, err := (Importer{Host: host, DB: database, Full: true}).ImportExtracted(t.Context(), TargetSet{
+			Dirs: map[parser.AgentType][]string{parser.AgentHermes: {remoteRoot + "/sessions"}},
+		}, extracted)
+		require.NoError(t, err)
+		require.Equal(t, 1, stats.SessionsSynced)
+		session, err := database.GetSession(t.Context(), host+"~hermes:cron_job-a_20261008_120000")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Regexp(t, "^"+host+"~job-a@[0-9a-f]{8}$", session.GroupKey)
+		assert.Equal(t, "Digest", session.GroupLabel)
+		if previous != "" {
+			if host == "host-a" {
+				assert.Equal(t, previous, session.GroupKey)
+			} else {
+				assert.NotEqual(t, previous, session.GroupKey)
+			}
+		}
+		previous = session.GroupKey
+	}
+}
+
 func writeHermesImportStateDB(t *testing.T, path string) {
 	t.Helper()
 	stateDB, err := sql.Open("sqlite3", path)

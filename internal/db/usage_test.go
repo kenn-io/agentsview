@@ -6162,6 +6162,17 @@ func TestGroupTopSessions(t *testing.T) {
 			},
 		},
 		{
+			name: "unnamed scoped jobs", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-a@12345678", TotalTokens: 10},
+				{Project: "hermes-cron", GroupKey: "host-a~job-a@12345678", TotalTokens: 20},
+			},
+			want: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "host-a~job-a@12345678", DisplayName: "job-a", TotalTokens: 20},
+				{Project: "hermes-cron", GroupKey: "job-a@12345678", DisplayName: "job-a", TotalTokens: 10},
+			},
+		},
+		{
 			name: "remainder", limit: 1, sort: TopSessionsSortCost,
 			input: []TopSessionEntry{
 				{GroupKey: "job-a", InputTokens: 10, Cost: money.Money{Microdollars: 4_000_000}},

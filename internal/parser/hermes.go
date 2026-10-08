@@ -1519,6 +1519,10 @@ func hermesCronJobID(id string, parent func(string) string) string {
 }
 
 func hermesCronGroupKey(path, job string) string {
+	return hermesCronGroupKeyWithRewriter(path, job, nil)
+}
+
+func hermesCronGroupKeyWithRewriter(path, job string, rewrite func(string) string) string {
 	if job == "" {
 		return ""
 	}
@@ -1526,7 +1530,11 @@ func hermesCronGroupKey(path, job string) string {
 	if filepath.Base(root) == "sessions" {
 		root = filepath.Dir(root)
 	}
-	digest := sha256.Sum256([]byte(absoluteHermesPath(filepath.Join(root, "state.db"))))
+	scope := absoluteHermesPath(filepath.Join(root, "state.db"))
+	if rewrite != nil {
+		scope = rewrite(scope)
+	}
+	digest := sha256.Sum256([]byte(scope))
 	return fmt.Sprintf("%s@%x", job, digest[:4])
 }
 

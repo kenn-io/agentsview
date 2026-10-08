@@ -143,9 +143,10 @@ The toolbar at the top of the page scopes the entire dashboard. Pick a start and
 end date with the date inputs, or narrow down with the Project, Agent, and Model
 filter dropdowns. Usage opens to a rolling 30-day range. Linking its date
 selection to other date-aware pages is optional. Turn it on with **Settings >
-Date ranges > Link date ranges across pages**. Filter state is written back to
-the URL — copying the address bar gives you a shareable link to the exact view
-you're looking at. A **Clear filters** link appears next to the refresh button
+Date ranges > Link date ranges across pages**. The URL preserves dates and
+shareable filters. Project keys belong to the current archive set, so project
+exclusions by key and the opened attribution project stay in the current page.
+A **Clear filters** link appears next to the refresh button
 when anything is active.
 
 Click any project in Usage attribution to see its groups and individual

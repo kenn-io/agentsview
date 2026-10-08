@@ -1374,3 +1374,37 @@ func TestHermesCronGroupKey(t *testing.T) {
 		assert.Empty(t, hermesCronGroupKey(path, ""))
 	}
 }
+
+func TestHermesProviderRemoteTranscriptGroupScope(t *testing.T) {
+	var previous string
+	for _, profile := range []string{"profile-a", "profile-a", "profile-b"} {
+		root := t.TempDir()
+		transcript := filepath.Join(root, "sessions", "cron_job-a_20261008_120000.jsonl")
+		writeSourceFile(t, transcript, `{"role":"session_meta","platform":"cron","timestamp":"2026-10-08T12:00:00"}`+"\n"+`{"role":"user","content":"Generate digest","timestamp":"2026-10-08T12:00:01"}`+"\n")
+		provider, ok := NewProvider(AgentHermes, ProviderConfig{
+			Roots: []string{root},
+			PathRewriter: func(path string) string {
+				rel, err := filepath.Rel(root, path)
+				require.NoError(t, err)
+				return "host-a:/profiles/" + profile + "/" + filepath.ToSlash(rel)
+			},
+		})
+		require.True(t, ok)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		out, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+		require.NoError(t, err)
+		require.Len(t, out.Results, 1)
+		key := out.Results[0].Result.Session.GroupKey
+		assert.Regexp(t, "^job-a@[0-9a-f]{8}$", key)
+		if previous != "" {
+			if profile == "profile-a" {
+				assert.Equal(t, previous, key)
+			} else {
+				assert.NotEqual(t, previous, key)
+			}
+		}
+		previous = key
+	}
+}

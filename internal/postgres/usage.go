@@ -516,7 +516,8 @@ LEFT JOIN sessions attributed
 	if includeSessionGroups {
 		sessionMetadataColumns = `,
 	COALESCE(attributed.group_key, '') AS group_key,
-	COALESCE(attributed.group_label, '') AS group_label`
+	COALESCE(attributed.group_label, '') AS group_label,
+	attributed.started_at AS group_started_at`
 	}
 	return `
 SELECT
@@ -2114,9 +2115,11 @@ func (s *Store) GetTopSessionsByCost(
 
 	for rows.Next() {
 		var entry db.TopSessionEntry
+		var startedAt sql.NullTime
 		r, err := scanPGDailyUsageRowWithMachine(rows, false,
-			&entry.GroupKey, &entry.GroupLabel)
+			&entry.GroupKey, &entry.GroupLabel, &startedAt)
 		entry.Project, entry.Agent = r.project, r.agent
+		entry.StartedAt = startedAtString(startedAt)
 		if err != nil {
 			return nil,
 				fmt.Errorf("scanning top sessions row: %w", err)
@@ -2179,6 +2182,7 @@ func (s *Store) GetTopSessionsByCost(
 			SessionID: id, DisplayName: id,
 			Project: sa.entry.Project, Agent: sa.entry.Agent,
 			GroupKey: sa.entry.GroupKey, GroupLabel: sa.entry.GroupLabel,
+			StartedAt:           sa.entry.StartedAt,
 			InputTokens:         sa.inputTokens,
 			OutputTokens:        sa.outputTokens,
 			CacheCreationTokens: sa.cacheCreateTokens,
@@ -2194,20 +2198,8 @@ func (s *Store) GetTopSessionsByCost(
 	}
 
 	if f.TopSessionsByGroup {
-		members := make(map[[2]string][]string)
-		for i, entry := range result {
-			if entry.GroupKey == "" {
-				continue
-			}
-			key := [2]string{entry.Project, entry.GroupKey}
-			members[key] = append(members[key], entry.SessionID)
-			result[i].GroupLabel = ""
-		}
 		result, err = db.GroupTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 		if err != nil {
-			return nil, err
-		}
-		if err := s.loadPGTopGroupMetadata(ctx, result, members); err != nil {
 			return nil, err
 		}
 	} else {
@@ -2234,46 +2226,6 @@ func (s *Store) GetTopSessionsByCost(
 	}
 
 	return result, nil
-}
-
-// loadPGTopGroupMetadata resolves the newest named member only for retained groups.
-func (s *Store) loadPGTopGroupMetadata(ctx context.Context, entries []db.TopSessionEntry, members map[[2]string][]string) error {
-	pb := &paramBuilder{}
-	var values []string
-	for i, entry := range entries {
-		if entry.GroupKey == "" {
-			continue
-		}
-		ids := members[[2]string{entry.Project, entry.GroupKey}]
-		values = append(values, "("+pb.add(i)+"::int, "+pb.add(ids)+"::text[])")
-	}
-	if len(values) == 0 {
-		return nil
-	}
-	rows, err := s.pg.QueryContext(ctx, `
-SELECT selected.position, latest.group_label, latest.started_at
-FROM (VALUES `+strings.Join(values, ",")+`) selected(position, session_ids)
-JOIN LATERAL (
-	SELECT group_label, started_at FROM sessions
-	WHERE id = ANY(selected.session_ids) AND group_label != ''
-	ORDER BY started_at DESC NULLS LAST, id DESC LIMIT 1
-) latest ON TRUE`, pb.args...)
-	if err != nil {
-		return fmt.Errorf("querying pg top group metadata: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var i int
-		var label string
-		var startedAt sql.NullTime
-		if err := rows.Scan(&i, &label, &startedAt); err != nil {
-			return fmt.Errorf("scanning pg top group metadata: %w", err)
-		}
-		entries[i].GroupLabel = label
-		entries[i].DisplayName = label
-		entries[i].StartedAt = startedAtString(startedAt)
-	}
-	return rows.Err()
 }
 
 // GetUsageSessionCounts returns distinct session counts grouped by project and agent.
