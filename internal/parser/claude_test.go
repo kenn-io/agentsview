@@ -133,11 +133,11 @@ func TestClaudeWorkerOrigin(t *testing.T) {
 		{name: "explicit kind", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, explicitKind: "bg", want: "bg"},
 		{name: "system delivery", entrypoint: "sdk-cli", prefix: `{"type":"user","turnOrigin":"sdk","isMeta":true,"message":{"content":"delivery"}}`},
 		{name: "tool result", entrypoint: "sdk-cli", prefix: `{"type":"user","turnOrigin":"sdk","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"result"}]}}`},
-		{name: "attachment", entrypoint: "sdk-cli", prefix: `{"type":"attachment","turnOrigin":"sdk","attachment":{"type":"queued_command","prompt":"delivery"}}`},
-		{name: "queued human before worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","turnOrigin":"human","attachment":{"type":"queued_command","prompt":"Human question"}}`},
-		{name: "queued human before DAG worker", entrypoint: "sdk-cli", origin: `"uuid":"u1","turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","turnOrigin":"human","attachment":{"type":"queued_command","prompt":"Human question"}}`},
-		{name: "first queued worker", entrypoint: "sdk-cli", prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","turnOrigin":"sdk","attachment":{"type":"queued_command","prompt":"Worker question"}}`, want: SessionKindNonInteractive},
-		{name: "queued human veto", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","turnOrigin":"sdk","origin":{"kind":"human"},"attachment":{"type":"queued_command","prompt":"Human question"}}`},
+		{name: "attachment", entrypoint: "sdk-cli", prefix: `{"type":"attachment","attachment":{"type":"queued_command","prompt":"delivery"}}`},
+		{name: "queued human before worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Human question"}}`},
+		{name: "queued human before DAG worker", entrypoint: "sdk-cli", origin: `"uuid":"u1","turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Human question"}}`},
+		{name: "queued unknown before worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"unknown"},"prompt":"Unknown question"}}`},
+		{name: "first queued worker", entrypoint: "sdk-cli", prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"sdk"},"prompt":"Worker question"}}`, want: SessionKindNonInteractive},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			metadata := buildMetadataLine(map[string]any{"type": "agent-setting", "entrypoint": tc.entrypoint, "sessionKind": tc.explicitKind})
@@ -161,8 +161,9 @@ func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
 		fallback                  bool
 	}{
 		{name: "first worker", initial: `"isMeta":true,`, fallback: true},
-		{name: "first queued worker", initial: `"isMeta":true,`, tail: `{"type":"attachment","turnOrigin":"sdk","attachment":{"type":"queued_command","prompt":"Worker question"}}` + "\n", fallback: true},
-		{name: "first queued human", initial: `"isMeta":true,`, tail: `{"type":"attachment","turnOrigin":"human","attachment":{"type":"queued_command","prompt":"Human question"}}` + "\n"},
+		{name: "first queued worker", initial: `"isMeta":true,`, tail: `{"type":"attachment","attachment":{"type":"queued_command","origin":{"kind":"sdk"},"prompt":"Worker question"}}` + "\n", fallback: true},
+		{name: "first queued human", initial: `"isMeta":true,`, tail: `{"type":"attachment","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Human question"}}` + "\n"},
+		{name: "first queued unknown", initial: `"isMeta":true,`, tail: `{"type":"attachment","attachment":{"type":"queued_command","origin":{"kind":"unknown"},"prompt":"Unknown question"}}` + "\n"},
 		{name: "established worker", kind: SessionKindNonInteractive, userCount: 1},
 		{name: "established human", initial: `"turnOrigin":"human",`, userCount: 1},
 		{name: "established unknown", userCount: 1},

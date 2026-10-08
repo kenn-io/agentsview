@@ -3803,26 +3803,16 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 	current := ClassifierHash()
 	if db.usageOnlyStorage() {
 		// Discarded prompts cannot disprove stored flags; metadata can promote them.
-		rows, err := w.Query(ctx, `SELECT id, agent, session_kind FROM sessions WHERE is_automated = 0 AND session_kind <> ''`)
+		rows, err := w.Query(ctx, `SELECT id, agent, session_kind, NULL, user_message_count, is_automated, NULL
+			FROM sessions WHERE is_automated = 0 AND session_kind <> ''`)
 		if err != nil {
 			return err
 		}
-		var setIDs []string
-		for rows.Next() {
-			var id, agent, kind string
-			if err := rows.Scan(&id, &agent, &kind); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			if IsAutomatedSessionMetadata(agent, kind) {
-				setIDs = append(setIDs, id)
-			}
+		setIDs, _, err := scanFullAutomationCandidates(rows, snapshotAutomationPatterns())
+		if closeErr := rows.Close(); err == nil && closeErr != nil {
+			err = closeErr
 		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		if err := rows.Close(); err != nil {
+		if err != nil {
 			return err
 		}
 		if err := batchUpdateAutomated(ctx, w, setIDs, 1); err != nil {

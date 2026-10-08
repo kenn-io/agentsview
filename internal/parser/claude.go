@@ -501,8 +501,7 @@ func claudeParseFile(
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
 	for i := range results {
-		if results[i].Session.Entrypoint == "sdk-cli" && results[i].Session.SessionKind == "" &&
-			claudeWorkerMessages(results[i].Messages) {
+		if claudeWorkerMessages(results[i].Session.Entrypoint, results[i].Session.SessionKind, results[i].Messages) {
 			results[i].Session.SessionKind = SessionKindNonInteractive
 		}
 		if err := ctx.Err(); err != nil {
@@ -1049,8 +1048,7 @@ func claudeParseSessionFrom(
 			}
 		}
 	}
-	if stored.userMessageCount == 0 && stored.entrypoint == "sdk-cli" &&
-		stored.sessionKind == "" && claudeWorkerMessages(msgs) {
+	if stored.userMessageCount == 0 && claudeWorkerMessages(stored.entrypoint, stored.sessionKind, msgs) {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 	// Use the latest timestamp from all lines (including
@@ -1085,7 +1083,10 @@ func claudeSDKPrompt(line string) bool {
 		gjson.Get(line, "origin.kind").Str != "human"
 }
 
-func claudeWorkerMessages(messages []ParsedMessage) bool {
+func claudeWorkerMessages(entrypoint, kind string, messages []ParsedMessage) bool {
+	if entrypoint != "sdk-cli" || kind != "" {
+		return false
+	}
 	for _, message := range messages {
 		if isRealClaudeUserMessage(message) {
 			return message.claudeSDKOrigin
@@ -1818,7 +1819,7 @@ func extractQueuedCommand(line string) (claudeQueuedCommand, bool) {
 	return claudeQueuedCommand{
 		prompt:       prompt,
 		promptSource: gjson.Get(line, "promptSource").Str,
-		sdkOrigin:    claudeSDKPrompt(line),
+		sdkOrigin:    gjson.Get(line, "attachment.origin.kind").Str == "sdk",
 		timestamp:    extractTimestamp(line),
 	}, true
 }

@@ -21,6 +21,8 @@ func TestHeadlessAutomationSurvivesSyncAppends(t *testing.T) {
 	for _, tc := range []struct {
 		name, id, initial, reply, followup string
 		agent                              parser.AgentType
+		interactive                        bool
+		nativeKind                         string
 	}{
 		{
 			name: "claude", id: "worker", agent: parser.AgentClaude,
@@ -30,11 +32,40 @@ func TestHeadlessAutomationSurvivesSyncAppends(t *testing.T) {
 			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
 		},
 		{
-			name: "human", id: "human", agent: parser.AgentClaude,
+			name: "human", id: "human", agent: parser.AgentClaude, interactive: true,
 			initial: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
 				`{"type":"user","uuid":"u1","turnOrigin":"human","origin":{"kind":"human"},"promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Plan a settings change."}}` + "\n",
 			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
 			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
+		},
+		{
+			name: "queued worker", id: "queued-worker", agent: parser.AgentClaude,
+			initial: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
+				`{"type":"attachment","timestamp":"2026-10-01T10:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"sdk"},"prompt":"Plan a settings change."}}` + "\n",
+			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "").String(),
+			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
+		},
+		{
+			name: "queued human", id: "queued-human", agent: parser.AgentClaude, interactive: true,
+			initial: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
+				`{"type":"attachment","timestamp":"2026-10-01T10:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Plan a settings change."}}` + "\n",
+			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "").String(),
+			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
+		},
+		{
+			name: "unknown", id: "unknown", agent: parser.AgentClaude, interactive: true,
+			initial: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
+				`{"type":"user","uuid":"u1","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Plan a settings change."}}` + "\n",
+			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
+			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
+		},
+		{
+			name: "native kind after worker", id: "native-worker", agent: parser.AgentClaude, nativeKind: "bg",
+			initial: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
+				`{"type":"user","uuid":"u1","turnOrigin":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Plan a settings change."}}` + "\n",
+			reply: testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
+			followup: `{"type":"agent-setting","sessionKind":"bg"}` + "\n" +
+				`{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
 		},
 		{
 			name: "codex", id: "codex:019eb791-cf7d-75c1-8439-9ed74c122c80", agent: parser.AgentCodex,
@@ -59,7 +90,7 @@ func TestHeadlessAutomationSurvivesSyncAppends(t *testing.T) {
 			query, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-10-01", Timezone: "UTC"}, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
 			require.NoError(t, err)
 			wantAutomated := 1
-			if tc.name == "human" {
+			if tc.interactive {
 				wantAutomated = 0
 			}
 			content := tc.initial
@@ -70,7 +101,15 @@ func TestHeadlessAutomationSurvivesSyncAppends(t *testing.T) {
 				stored, err := database.GetSession(t.Context(), tc.id)
 				require.NoError(t, err)
 				require.NotNil(t, stored)
-				assert.Equal(t, tc.name != "human", stored.IsAutomated)
+				if tc.nativeKind != "" {
+					if i == 2 {
+						wantAutomated = 0
+						assert.Equal(t, tc.nativeKind, stored.SessionKind)
+					} else {
+						assert.Equal(t, parser.SessionKindNonInteractive, stored.SessionKind)
+					}
+				}
+				assert.Equal(t, wantAutomated == 1, stored.IsAutomated)
 				if i == 0 {
 					raw, err := sql.Open("sqlite3", database.Path())
 					require.NoError(t, err)
@@ -97,7 +136,7 @@ func TestHeadlessAutomationSurvivesSyncAppends(t *testing.T) {
 			stored, err := reopened.GetSession(t.Context(), tc.id)
 			require.NoError(t, err)
 			require.NotNil(t, stored)
-			assert.Equal(t, tc.name != "human", stored.IsAutomated, "source-less archive after restart")
+			assert.Equal(t, wantAutomated == 1, stored.IsAutomated, "source-less archive after restart")
 			report, err := reopened.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{}, query, nil)
 			require.NoError(t, err)
 			assert.Equal(t, wantAutomated, report.Report.Totals.AutomatedSessions)

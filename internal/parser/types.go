@@ -1611,8 +1611,8 @@ type ParsedMessage struct {
 	// on user turns (e.g. "typed", "queued", "system", "sdk"); empty
 	// on older transcripts that predate the field and for agents that
 	// do not emit it.
-	PromptSource      string
-	// Origin is transient evidence for classification after queued prompts merge.
+	PromptSource string
+	// claudeSDKOrigin carries transient evidence through queued prompt merging.
 	claudeSDKOrigin   bool
 	SourceUUID        string
 	SourceParentUUID  string
