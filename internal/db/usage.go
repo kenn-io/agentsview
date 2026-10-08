@@ -2643,6 +2643,7 @@ func (db *DB) getDailyUsageLegacy(
 
 // TopSessionEntry is one row in the "top sessions by cost" result.
 type TopSessionEntry struct {
+	Machine             string      `json:"machine,omitempty"`
 	GroupKey            string      `json:"groupKey,omitempty"`
 	GroupLabel          string      `json:"groupLabel,omitempty"`
 	SessionID           string      `json:"sessionId"`
@@ -2660,7 +2661,7 @@ type TopSessionEntry struct {
 
 // GroupTopSessions merges grouped runs and preserves individual sessions.
 func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, tokenTypes UsageTokenTypes) ([]TopSessionEntry, error) {
-	type key struct{ project, group string }
+	type key struct{ project, machine, group string }
 	grouped := make(map[key]*TopSessionEntry)
 	out := make([]TopSessionEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -2668,10 +2669,10 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 			out = append(out, entry)
 			continue
 		}
-		k := key{entry.Project, entry.GroupKey}
+		k := key{entry.Project, entry.Machine, entry.GroupKey}
 		row := grouped[k]
 		if row == nil {
-			row = &TopSessionEntry{Project: entry.Project, GroupKey: entry.GroupKey, Agent: entry.Agent}
+			row = &TopSessionEntry{Machine: entry.Machine, Project: entry.Project, GroupKey: entry.GroupKey, Agent: entry.Agent}
 			grouped[k] = row
 		}
 		row.InputTokens += entry.InputTokens
@@ -2698,10 +2699,7 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 		row.SessionID = ""
 		row.DisplayName = row.GroupLabel
 		if row.DisplayName == "" {
-			row.DisplayName, _, _ = strings.Cut(row.GroupKey, "@")
-			if _, job, ok := strings.Cut(row.DisplayName, "~"); ok {
-				row.DisplayName = job
-			}
+			row.DisplayName = row.GroupKey
 		}
 		out = append(out, *row)
 	}
@@ -2770,7 +2768,10 @@ func SortAndLimitTopSessions(
 		if result[i].Project != result[j].Project {
 			return result[i].Project < result[j].Project
 		}
-		return result[i].GroupKey < result[j].GroupKey
+		if result[i].GroupKey != result[j].GroupKey {
+			return result[i].GroupKey < result[j].GroupKey
+		}
+		return result[i].Machine < result[j].Machine
 	})
 	if len(result) > limit {
 		return result[:limit]

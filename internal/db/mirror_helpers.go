@@ -2,7 +2,6 @@ package db
 
 import (
 	"sort"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -34,18 +33,6 @@ func MirroredSessionMachine(sess Session, fallbackMachine string) string {
 		return sess.Machine
 	}
 	return fallbackMachine
-}
-
-// MirroredSessionGroupKey keeps local jobs separate across push machines.
-func MirroredSessionGroupKey(sess Session, fallbackMachine string) string {
-	if sess.GroupKey == "" || strings.Contains(sess.GroupKey, "~") {
-		return sess.GroupKey
-	}
-	machine := MirroredSessionMachine(sess, fallbackMachine)
-	if machine == "" {
-		return sess.GroupKey
-	}
-	return machine + "~" + sess.GroupKey
 }
 
 // ValueOrNever returns v, or "never" when v is empty.

@@ -3996,6 +3996,8 @@ components:
         inputTokens:
           format: int64
           type: integer
+        machine:
+          type: string
         outputTokens:
           format: int64
           type: integer

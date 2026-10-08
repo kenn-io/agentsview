@@ -35,7 +35,7 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 			ID: "session", Project: "project", Machine: contractOrigin,
 			Agent: "claude", ParentSessionID: &parent,
 			SourceSessionID: "source",
-			GroupKey:        "job-a@12345678",
+			GroupKey:        "job-a",
 			SecretLeakCount: 4,
 			FilePath:        &filePath,
 			FileSize:        &fileSize,
@@ -73,7 +73,7 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	write := rewriteManifestForImport(m, messages)
 	importedID := contractOrigin + "~session"
 	assert.Equal(t, importedID, write.Session.ID)
-	assert.Equal(t, contractOrigin+"~job-a@12345678", write.Session.GroupKey)
+	assert.Equal(t, "job-a", write.Session.GroupKey)
 	assert.Equal(t, contractOrigin, write.Session.Machine)
 	assert.Equal(t, m.SessionName, write.Session.SessionName)
 	assert.Nil(t, write.Session.FilePath)
@@ -147,7 +147,7 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	m := importTestManifest("session")
-	m.Session.GroupKey = "job-a@12345678"
+	m.Session.GroupKey = "job-a"
 	messages := []db.Message{{
 		Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5,
 	}}
@@ -161,27 +161,27 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, importClosureComplete, outcome)
 	assert.Equal(t, contractOrigin+"~session", write.Session.ID)
-	assert.Equal(t, contractOrigin+"~job-a@12345678", write.Session.GroupKey)
+	assert.Equal(t, "job-a", write.Session.GroupKey)
 	require.Len(t, write.Messages, 1)
 	assert.Equal(t, "hello", write.Messages[0].Content)
 }
 
 func TestImportedGroupsStaySeparateFromLocalAndOtherOrigins(t *testing.T) {
-	entries := []db.TopSessionEntry{{Project: "hermes-cron", GroupKey: "job-a@12345678", Cost: money.Money{Microdollars: 1_000_000}}}
+	entries := []db.TopSessionEntry{{Project: "hermes-cron", GroupKey: "job-a", Cost: money.Money{Microdollars: 1_000_000}}}
 	for _, origin := range []string{"host-a", "host-b"} {
 		write := rewriteManifestForImport(manifest{
 			Origin: origin, NativeSessionID: "run",
-			Session: manifestSession{Project: "hermes-cron", GroupKey: "job-a@12345678"},
+			Session: manifestSession{Project: "hermes-cron", GroupKey: "job-a"},
 		}, nil)
 		entries = append(entries, db.TopSessionEntry{
-			SessionID: write.Session.ID, Project: write.Session.Project, GroupKey: write.Session.GroupKey,
+			SessionID: write.Session.ID, Project: write.Session.Project, GroupKey: write.Session.GroupKey, Machine: write.Session.Machine,
 			Cost: money.Money{Microdollars: 1_000_000},
 		})
 	}
 	rows, err := db.GroupTopSessions(entries, 100, db.TopSessionsSortCost, db.UsageTokenTypesAll)
 	require.NoError(t, err)
 	require.Len(t, rows, 3)
-	assert.Equal(t, []string{"host-a~job-a@12345678", "host-b~job-a@12345678", "job-a@12345678"}, []string{rows[0].GroupKey, rows[1].GroupKey, rows[2].GroupKey})
+	assert.ElementsMatch(t, []string{"", "host-a", "host-b"}, []string{rows[0].Machine, rows[1].Machine, rows[2].Machine})
 	for _, row := range rows {
 		assert.Equal(t, int64(1_000_000), row.Cost.Microdollars)
 		assert.Equal(t, "job-a", row.DisplayName)

@@ -19929,9 +19929,6 @@ func (e *Engine) applyRemoteRewritesContext(
 		return nil
 	}
 	s.ID = applyIDPrefixToID(e.idPrefix, s.ID)
-	if s.GroupKey != "" {
-		s.GroupKey = applyIDPrefixToID(e.idPrefix, s.GroupKey)
-	}
 	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
 		p := applyIDPrefixToID(e.idPrefix, *s.ParentSessionID)
 		s.ParentSessionID = &p

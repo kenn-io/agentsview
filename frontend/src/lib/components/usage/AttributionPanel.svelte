@@ -4,6 +4,8 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
+  import { onMount } from "svelte";
+  import { Button } from "@kenn-io/kit-ui";
   import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
@@ -34,16 +36,30 @@
     pct: number;
   }
 
+  let panel: HTMLElement;
+
   const zoomedProject = $derived(usage.zoomedProject);
 
-  function zoomRowId(row: { groupKey?: string; sessionId: string }): string {
-    return row.groupKey ? `group:${row.groupKey}` : row.sessionId ? `session:${row.sessionId}` : "remainder";
+  function zoomRowId(row: { groupKey?: string; machine?: string; sessionId: string }): string {
+    return row.groupKey ? `group:${JSON.stringify([row.groupKey, row.machine ?? ""])}` : row.sessionId ? `session:${row.sessionId}` : "remainder";
   }
 
-  function groupJobId(key: string): string {
-    const separator = key.lastIndexOf("@");
-    const job = separator < 0 ? key : key.slice(0, separator);
-    return job.slice(job.indexOf("~") + 1);
+  onMount(() => {
+    const onPopState = () => usage.backToProjects(false);
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      usage.backToProjects();
+    };
+  });
+
+  function handleBackKey(event: KeyboardEvent) {
+    const target = event.target as HTMLElement;
+    if (!zoomedProject || !panel.contains(document.activeElement) || target.closest("input, textarea, select, [contenteditable]")) return;
+    if (event.key === "Escape" || event.key === "Backspace") {
+      event.preventDefault();
+      usage.backToProjects();
+    }
   }
 
   const rowItems = $derived.by(() => {
@@ -58,14 +74,15 @@
 
     if (zoomedProject && groupBy === "project") {
       const zoomRows = usage.zoomRows ?? [];
-      const names = zoomRows.map((row) => row.groupKey ? row.groupLabel || groupJobId(row.groupKey) : row.sessionId ? row.displayName : m.shared_other());
+      const names = zoomRows.map((row) => row.groupKey ? row.groupLabel || row.groupKey : row.sessionId ? row.displayName : m.shared_other());
       items = zoomRows.map((row, index) => {
         const id = zoomRowId(row);
         const duplicates = zoomRows.filter((other, otherIndex) => other !== row && (other.groupKey || other.sessionId) && names[otherIndex] === names[index]);
         const sessionSuffix = row.sessionId.replace(/^[^:]+:/, "");
         const keepProvider = !row.groupKey && duplicates.some((other) => !other.groupKey && other.sessionId.replace(/^[^:]+:/, "") === sessionSuffix);
-        const suffixID = row.groupKey || (keepProvider ? row.sessionId : sessionSuffix) || row.sessionId;
-        const peers = duplicates.map((other) => other.groupKey || (keepProvider ? other.sessionId : other.sessionId.replace(/^[^:]+:/, "")));
+        const sameJob = row.groupKey && duplicates.some((other) => other.groupKey === row.groupKey);
+        const suffixID = (sameJob ? row.machine : row.groupKey) || (keepProvider ? row.sessionId : sessionSuffix) || row.sessionId;
+        const peers = duplicates.map((other) => (sameJob ? other.machine : other.groupKey) || (keepProvider ? other.sessionId : other.sessionId.replace(/^[^:]+:/, "")));
         return {
           id,
           label: (row.groupKey || row.sessionId) && duplicates.length ? `${names[index]} · ${shortenId(suffixID, peers)}` : names[index]!,
@@ -133,10 +150,9 @@
   function rowTitle(id: string, label: string): string {
     if (zoomedProject) {
       const row = usage.zoomRows?.find((row) => zoomRowId(row) === id);
-      const name = row?.groupKey ? row.groupLabel || groupJobId(row.groupKey) : row?.displayName || label;
-      const collidingJob = row?.groupKey && usage.zoomRows?.some((other) => other !== row && other.groupKey && groupJobId(other.groupKey) === groupJobId(row.groupKey!));
-      const sourceID = row?.groupKey ? collidingJob ? row.groupKey : groupJobId(row.groupKey) : row?.sessionId;
-      return sourceID && name !== sourceID ? `${name} · ${sourceID}` : name;
+      const name = row?.groupKey ? row.groupLabel || row.groupKey : row?.displayName || label;
+      if (row?.groupKey) return [name === row.groupKey ? "" : name, row.groupKey, row.machine].filter(Boolean).join(" · ");
+      return row?.sessionId && name !== row.sessionId ? `${name} · ${row.sessionId}` : name;
     }
     return groupBy === "project" ? m.usage_click_project({ label }) : m.usage_click_to_hide({ label });
   }
@@ -145,6 +161,7 @@
     if (zoomedProject) return;
     if (groupBy === "project") {
       usage.selectAttributionProject(id, rows.find((row) => row.id === id)!.label);
+      panel.focus();
     } else if (groupBy === "agent") {
       usage.toggleAgent(id, { preserveTimeRange: true });
     } else {
@@ -161,13 +178,20 @@
   }
 </script>
 
-<div class="attribution-panel">
+<svelte:window onkeydown={handleBackKey} />
+
+<section class="attribution-panel" aria-label={isTokenMode ? m.usage_tokens_attribution_title() : m.usage_cost_attribution_title()} tabindex="-1" bind:this={panel}>
   <div class="panel-header">
-    <h3 class="chart-title">
-      {isTokenMode
-        ? m.usage_tokens_attribution_title()
-        : m.usage_cost_attribution_title()}
-    </h3>
+    {#if zoomedProject}
+      <Button size="sm" surface="soft" label={`← ${m.usage_all_projects()}`} onclick={() => usage.backToProjects()} />
+      <h3 class="chart-title">{zoomedProject.label}</h3>
+    {:else}
+      <h3 class="chart-title">
+        {isTokenMode
+          ? m.usage_tokens_attribution_title()
+          : m.usage_cost_attribution_title()}
+      </h3>
+    {/if}
     <div class="toggles">
       <div class="segment-toggle">
         <button
@@ -209,14 +233,10 @@
         </button>
       </div>
     </div>
+    {#if zoomedProject}
+      <Button size="sm" surface="soft" label={m.usage_hide_project()} onclick={() => usage.excludeProjectKey(zoomedProject.key, { preserveTimeRange: true })} />
+    {/if}
   </div>
-
-  {#if zoomedProject}
-    <div class="hint breadcrumb">
-      <span><button onclick={() => usage.backToProjects()}>{m.usage_all_projects()}</button> › {zoomedProject.label}</span>
-      <button onclick={() => usage.excludeProjectKey(zoomedProject.key, { preserveTimeRange: true })}>{m.usage_hide_project()}</button>
-    </div>
-  {/if}
   {#if zoomedProject && usage.errors.zoom}
     <div class="empty">{usage.errors.zoom}</div>
   {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
@@ -299,7 +319,7 @@
       </div>
     {/if}
   {/if}
-</div>
+</section>
 
 <style>
   .attribution-panel {
@@ -524,24 +544,6 @@
     line-height: 14px;
     height: 14px;
     font-style: italic;
-  }
-
-  .breadcrumb {
-    display: flex;
-    justify-content: space-between;
-  }
-
-  .breadcrumb button {
-    background: none;
-    border: 0;
-    padding: 0;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .breadcrumb button:hover {
-    text-decoration: underline;
   }
 
   @media (max-width: 640px) {

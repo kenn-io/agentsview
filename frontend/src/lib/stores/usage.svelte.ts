@@ -1205,7 +1205,22 @@ class UsageStore {
     }
   }
 
-  backToProjects(): void {
+  private zoomHistoryEntry = false;
+  private zoomHistoryPath = "";
+  private zoomHistoryBack: Promise<void> | null = null;
+
+  backToProjects(popHistory = true): void {
+    if (!popHistory && this.zoomHistoryBack) return;
+    if (this.zoomHistoryEntry && popHistory && window.location.pathname === this.zoomHistoryPath) {
+      this.zoomHistoryBack = new Promise((resolve) => {
+        window.addEventListener("popstate", () => {
+          this.zoomHistoryBack = null;
+          resolve();
+        }, { once: true });
+      });
+      window.history.back();
+    }
+    this.zoomHistoryEntry = false;
     this.invalidatePanel("zoom");
     this.zoomedProject = null;
     this.zoomRows = null;
@@ -1213,6 +1228,18 @@ class UsageStore {
   }
 
   selectAttributionProject(key: string, label: string): void {
+    if (this.zoomHistoryBack) {
+      const version = this.versions.zoom;
+      void this.zoomHistoryBack.then(() => {
+        if (version === this.versions.zoom) this.selectAttributionProject(key, label);
+      });
+      return;
+    }
+    if (!this.zoomHistoryEntry) {
+      window.history.pushState(window.history.state, "");
+      this.zoomHistoryEntry = true;
+      this.zoomHistoryPath = window.location.pathname;
+    }
     this.zoomedProject = { key, label };
     void this.fetchZoom();
   }

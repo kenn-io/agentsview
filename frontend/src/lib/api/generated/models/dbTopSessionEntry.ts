@@ -12,6 +12,7 @@ export interface DbTopSessionEntry {
   groupKey?: string;
   groupLabel?: string;
   inputTokens: number;
+  machine?: string;
   outputTokens: number;
   project: string;
   sessionId: string;

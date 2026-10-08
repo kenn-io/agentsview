@@ -940,11 +940,7 @@ func TestHermesCronTranscriptProjects(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, sess)
 				assert.Equal(t, tc.project, sess.Project)
-				if tc.group != "" {
-					assert.Regexp(t, "^"+tc.group+"@[0-9a-f]{8}$", sess.GroupKey)
-				} else {
-					assert.Empty(t, sess.GroupKey)
-				}
+				assert.Equal(t, tc.group, sess.GroupKey)
 				assert.Empty(t, sess.GroupLabel)
 				assert.Empty(t, sess.ParentSessionID)
 			})

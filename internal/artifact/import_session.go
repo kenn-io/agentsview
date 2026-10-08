@@ -294,7 +294,6 @@ func rewriteManifestForImport(
 	importedID := m.Origin + "~" + m.NativeSessionID
 	session := m.Session.dbSession()
 	session.ID = importedID
-	session.GroupKey = prefixImportedSessionID(m.Origin, session.GroupKey)
 	session.Machine = m.Origin
 	session.SessionName = m.SessionName
 	session.DeletedAt = nil

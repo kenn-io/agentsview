@@ -624,7 +624,6 @@ func TestImporterHermesCronGroupsSurviveRepeatedSnapshots(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	const remoteRoot = "/profiles/profile-a"
-	var previous string
 	for _, host := range []string{"host-a", "host-a", "host-b"} {
 		extracted := t.TempDir()
 		localStateDB := remappedRemotePath(extracted, remoteRoot+"/state.db")
@@ -647,16 +646,9 @@ func TestImporterHermesCronGroupsSurviveRepeatedSnapshots(t *testing.T) {
 		session, err := database.GetSession(t.Context(), host+"~hermes:cron_job-a_20261008_120000")
 		require.NoError(t, err)
 		require.NotNil(t, session)
-		assert.Regexp(t, "^"+host+"~job-a@[0-9a-f]{8}$", session.GroupKey)
+		assert.Equal(t, "job-a", session.GroupKey)
+		assert.Equal(t, host, session.Machine)
 		assert.Equal(t, "Digest", session.GroupLabel)
-		if previous != "" {
-			if host == "host-a" {
-				assert.Equal(t, previous, session.GroupKey)
-			} else {
-				assert.NotEqual(t, previous, session.GroupKey)
-			}
-		}
-		previous = session.GroupKey
 	}
 }
 

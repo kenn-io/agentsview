@@ -242,22 +242,6 @@ func (p *hermesProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,
 ) (ParseOutcome, error) {
-	out, err := p.parse(ctx, req)
-	if err == nil && p.Config.PathRewriter != nil {
-		for i := range out.Results {
-			sess := &out.Results[i].Result.Session
-			if job, _, ok := strings.Cut(sess.GroupKey, "@"); ok {
-				sess.GroupKey = hermesCronGroupKeyWithRewriter(ResolveSourceFilePath(sess.File.Path), job, p.Config.PathRewriter)
-			}
-		}
-	}
-	return out, err
-}
-
-func (p *hermesProvider) parse(
-	ctx context.Context,
-	req ParseRequest,
-) (ParseOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return ParseOutcome{}, err
 	}

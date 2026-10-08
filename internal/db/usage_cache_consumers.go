@@ -202,6 +202,7 @@ func (db *DB) GetTopSessionsByCost(
 			entry.Agent = session.Agent
 			entry.Project = session.Project
 			entry.StartedAt = session.StartedAt
+			entry.Machine = session.Machine
 			entry.GroupKey = session.GroupKey
 			entry.GroupLabel = session.GroupLabel
 		}

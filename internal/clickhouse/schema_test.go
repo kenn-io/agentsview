@@ -107,25 +107,30 @@ func TestRowBuildersMatchInsertColumns(t *testing.T) {
 	}
 }
 
-func TestSessionRowScopesCronGroupsByMachine(t *testing.T) {
+func TestSessionRowPreservesCronJobAndMachine(t *testing.T) {
 	spec, ok := tableByName("sessions")
 	require.True(t, ok)
-	groupColumn := -1
+	groupColumn, machineColumn := -1, -1
 	for i, column := range spec.columns {
 		if column.name == "group_key" {
 			groupColumn = i
 		}
+		if column.name == "machine" {
+			machineColumn = i
+		}
 	}
 	require.GreaterOrEqual(t, groupColumn, 0)
-	for _, tc := range []struct{ machine, key, want string }{
-		{"host-a", "job-a@12345678", "host-a~job-a@12345678"},
-		{"host-b", "job-a@12345678", "host-b~job-a@12345678"},
-		{"host-a", "host-c~job-a@12345678", "host-c~job-a@12345678"},
+	require.GreaterOrEqual(t, machineColumn, 0)
+	for _, tc := range []struct{ source, machine, wantMachine string }{
+		{"local", "host-a", "host-a"},
+		{"local", "host-b", "host-b"},
+		{"host-c", "host-a", "host-c"},
 	} {
 		row := (&Sync{machine: tc.machine}).sessionRow(sessionPayload{session: db.Session{
-			Machine: "local", GroupKey: tc.key,
+			Machine: tc.source, GroupKey: "job-a",
 		}}, "fp", 1)
-		assert.Equal(t, tc.want, row[groupColumn])
+		assert.Equal(t, "job-a", row[groupColumn])
+		assert.Equal(t, tc.wantMachine, row[machineColumn])
 	}
 }
 

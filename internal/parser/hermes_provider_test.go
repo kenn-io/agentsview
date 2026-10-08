@@ -1349,95 +1349,10 @@ func TestHermesCronStateGroups(t *testing.T) {
 			}
 			require.Len(t, sessions, 2)
 			for _, session := range sessions {
-				if tc.key != "" {
-					assert.Regexp(t, "^"+tc.key+"@[0-9a-f]{8}$", session.GroupKey)
-				} else {
-					assert.Empty(t, session.GroupKey)
-				}
+				assert.Equal(t, tc.key, session.GroupKey)
 				assert.Equal(t, tc.label, session.GroupLabel)
 			}
 			assert.Equal(t, sessions[0].GroupKey, sessions[1].GroupKey)
 		})
-	}
-}
-
-func TestHermesCronGroupKey(t *testing.T) {
-	root, want := "/profiles/profile-a", "job-a@bbda7b41"
-	if runtime.GOOS == "windows" {
-		root, want = `C:\profiles\profile-a`, "job-a@f0c8a58d"
-	}
-	for _, path := range []string{
-		filepath.Join(root, "state.db"),
-		filepath.Join(root, "sessions", "cron_job-a_20261007_120000.jsonl"),
-	} {
-		assert.Equal(t, want, hermesCronGroupKey(path, "job-a"))
-		assert.Empty(t, hermesCronGroupKey(path, ""))
-	}
-}
-
-func TestHermesCronGroupsInHomeNamedSessions(t *testing.T) {
-	for _, home := range []string{"sessions", filepath.Join(".hermes", "profiles", "sessions")} {
-		t.Run(home, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), home)
-			require.NoError(t, os.MkdirAll(root, 0o755))
-			createHermesStateDB(t, root)
-			conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
-			require.NoError(t, err)
-			_, err = conn.ExecContext(t.Context(), `
-				INSERT INTO sessions(id, source, started_at, title) VALUES ('cron_job-a_20261007_120000', 'cron', 1, 'Daily digest · Oct 07');
-				INSERT INTO messages(session_id, role, content, timestamp) VALUES ('cron_job-a_20261007_120000', 'user', 'Generate digest', 1);
-			`)
-			require.NoError(t, err)
-			require.NoError(t, conn.Close())
-			writeSourceFile(t, filepath.Join(root, "sessions", "cron_job-a_20261008_120000.jsonl"), `{"role":"session_meta","platform":"cron","timestamp":"2026-10-08T12:00:00"}`+"\n"+`{"role":"user","content":"Generate digest","timestamp":"2026-10-08T12:00:01"}`+"\n")
-			provider := newHermesTestProvider(t, root)
-			var keys []string
-			for _, id := range []string{"cron_job-a_20261007_120000", "cron_job-a_20261008_120000"} {
-				source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-				require.NoError(t, err)
-				require.True(t, found)
-				out, err := provider.Parse(t.Context(), ParseRequest{Source: source})
-				require.NoError(t, err)
-				require.Len(t, out.Results, 1)
-				keys = append(keys, out.Results[0].Result.Session.GroupKey)
-			}
-			assert.NotEmpty(t, keys[0])
-			assert.Equal(t, keys[0], keys[1])
-			assert.NotEqual(t, hermesCronGroupKey(filepath.Join(filepath.Dir(root), "state.db"), "job-a"), keys[0])
-		})
-	}
-}
-
-func TestHermesProviderRemoteTranscriptGroupScope(t *testing.T) {
-	var previous string
-	for _, profile := range []string{"profile-a", "profile-a", "profile-b"} {
-		root := t.TempDir()
-		transcript := filepath.Join(root, "sessions", "cron_job-a_20261008_120000.jsonl")
-		writeSourceFile(t, transcript, `{"role":"session_meta","platform":"cron","timestamp":"2026-10-08T12:00:00"}`+"\n"+`{"role":"user","content":"Generate digest","timestamp":"2026-10-08T12:00:01"}`+"\n")
-		provider, ok := NewProvider(AgentHermes, ProviderConfig{
-			Roots: []string{root},
-			PathRewriter: func(path string) string {
-				rel, err := filepath.Rel(root, path)
-				require.NoError(t, err)
-				return "host-a:/profiles/" + profile + "/" + filepath.ToSlash(rel)
-			},
-		})
-		require.True(t, ok)
-		sources, err := provider.Discover(t.Context())
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		out, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-		require.NoError(t, err)
-		require.Len(t, out.Results, 1)
-		key := out.Results[0].Result.Session.GroupKey
-		assert.Regexp(t, "^job-a@[0-9a-f]{8}$", key)
-		if previous != "" {
-			if profile == "profile-a" {
-				assert.Equal(t, previous, key)
-			} else {
-				assert.NotEqual(t, previous, key)
-			}
-		}
-		previous = key
 	}
 }

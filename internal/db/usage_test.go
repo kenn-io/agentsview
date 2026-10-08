@@ -6162,14 +6162,25 @@ func TestGroupTopSessions(t *testing.T) {
 			},
 		},
 		{
-			name: "unnamed scoped jobs", limit: 100, sort: TopSessionsSortCost,
+			name: "unnamed jobs on different machines", limit: 100, sort: TopSessionsSortTokens,
 			input: []TopSessionEntry{
-				{Project: "hermes-cron", GroupKey: "job-a@12345678", TotalTokens: 10},
-				{Project: "hermes-cron", GroupKey: "host-a~job-a@12345678", TotalTokens: 20},
+				{Project: "hermes-cron", GroupKey: "job-a", InputTokens: 10},
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-a", InputTokens: 20},
 			},
 			want: []TopSessionEntry{
-				{Project: "hermes-cron", GroupKey: "host-a~job-a@12345678", DisplayName: "job-a", TotalTokens: 20},
-				{Project: "hermes-cron", GroupKey: "job-a@12345678", DisplayName: "job-a", TotalTokens: 10},
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-a", DisplayName: "job-a", InputTokens: 20},
+				{Project: "hermes-cron", GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10},
+			},
+		},
+		{
+			name: "ranks matching jobs by machine on a tie", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-b"},
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-a"},
+			},
+			want: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-a", DisplayName: "job-a"},
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-b", DisplayName: "job-a"},
 			},
 		},
 		{

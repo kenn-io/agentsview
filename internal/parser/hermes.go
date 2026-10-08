@@ -5,7 +5,6 @@ package parser
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -372,7 +371,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	sess := &ParsedSession{
 		ID:                         fullID,
 		Project:                    project,
-		GroupKey:                   hermesCronGroupKey(path, job),
+		GroupKey:                   job,
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
@@ -567,7 +566,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 	sess := &ParsedSession{
 		ID:                         fullID,
 		Project:                    project,
-		GroupKey:                   hermesCronGroupKey(path, job),
+		GroupKey:                   job,
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
@@ -1056,7 +1055,7 @@ func applyHermesStateMetadata(
 		sess.ParentSessionID = "hermes:" + ss.parentSessionID
 		sess.RelationshipType = RelContinuation
 	}
-	sess.GroupKey = hermesCronGroupKey(selectedPath, ss.cronJob)
+	sess.GroupKey = ss.cronJob
 	sess.GroupLabel = hermesCronRecordedName(ss.cronJob, ss.title)
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
@@ -1516,26 +1515,6 @@ func hermesCronJobID(id string, parent func(string) string) string {
 		id = parent(id)
 	}
 	return ""
-}
-
-func hermesCronGroupKey(path, job string) string {
-	return hermesCronGroupKeyWithRewriter(path, job, nil)
-}
-
-func hermesCronGroupKeyWithRewriter(path, job string, rewrite func(string) string) string {
-	if job == "" {
-		return ""
-	}
-	root := filepath.Dir(path)
-	if filepath.Base(path) != "state.db" && filepath.Base(root) == "sessions" {
-		root = filepath.Dir(root)
-	}
-	scope := absoluteHermesPath(filepath.Join(root, "state.db"))
-	if rewrite != nil {
-		scope = rewrite(scope)
-	}
-	digest := sha256.Sum256([]byte(scope))
-	return fmt.Sprintf("%s@%x", job, digest[:4])
 }
 
 func hermesCronRunJob(id string) string {

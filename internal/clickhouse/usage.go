@@ -1908,7 +1908,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	cte, args := source.cte, source.args
 	query := cte + `
 		SELECT session_id, project, agent, model, provider_id, price_model, source, message_ordinal, ts,
-			pricing_ts, display_name, started_at, group_key, group_label,
+			pricing_ts, display_name, started_at, group_key, group_label, machine,
 			input_tokens_norm AS input_tokens,
 			output_tokens_norm AS output_tokens,
 			snapshot_deduplicated_output_tokens,
@@ -1934,7 +1934,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		if err := rows.Scan(
 			&r.sessionID, &r.project, &r.agent, &r.model, &r.providerID,
 			&r.priceModel, &r.source, &r.messageOrdinal, &ts, &pricingTS,
-			&r.displayName, &startedAt, &r.groupKey, &r.groupLabel,
+			&r.displayName, &startedAt, &r.groupKey, &r.groupLabel, &r.machine,
 			&r.inputTok, &r.outputTok, &r.snapshotDedupOutput,
 			&r.cacheCr, &r.cacheCr1h, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
@@ -2069,7 +2069,7 @@ func (s *Store) GetTopSessionsByCost(
 				a = &acc{row: db.TopSessionEntry{
 					SessionID: r.sessionID, DisplayName: r.displayName,
 					Agent: r.agent, Project: r.project, StartedAt: r.startedAt,
-					GroupKey: r.groupKey, GroupLabel: r.groupLabel,
+					GroupKey: r.groupKey, GroupLabel: r.groupLabel, Machine: r.machine,
 				}}
 				bySession[r.sessionID] = a
 			}

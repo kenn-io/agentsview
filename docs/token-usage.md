@@ -152,11 +152,15 @@ when anything is active.
 Click any project in Usage attribution to see its groups and individual
 sessions for the selected date range. Hermes cron jobs show their latest
 recorded name in that range and their ID on hover. Matching names get a short
-ID suffix. Matching job IDs retain their profile or machine scope; colliding
-session IDs retain their provider. **All projects** returns to the project view.
+ID suffix. Matching job IDs on different machines get a machine suffix.
+Colliding session IDs retain their provider. **All projects** returns to the
+project view.
 **Hide project** or the Projects picker excludes a project. Usage outside the
 top 100 tiles appears under **Other**. Archives without `state.db` titles show
-job IDs. Page totals and charts keep their current scope.
+job IDs. Matching job IDs in profiles on the same machine share one row.
+With the panel focused, Escape or Backspace returns to all projects. Browser
+Back also returns to all projects. Page totals and charts keep their current
+scope.
 
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,

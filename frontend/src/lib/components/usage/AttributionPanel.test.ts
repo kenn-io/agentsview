@@ -489,6 +489,7 @@ const topSessionForRemainder = (): DbTopSessionEntry => ({
 describe("AttributionPanel job groups", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(window.history, "back").mockImplementation(() => window.dispatchEvent(new PopStateEvent("popstate")));
     usage.backToProjects();
     usage.zoomRows = null;
     usage.summary = summaryWithDuplicateProjectLabels();
@@ -505,6 +506,7 @@ describe("AttributionPanel job groups", () => {
     usage.excludedProjectKeys = "";
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
     document.body.innerHTML = "";
+    vi.restoreAllMocks();
   });
 
   it("zooms into stable jobs, keeps the remainder, and returns to projects", async () => {
@@ -526,8 +528,8 @@ describe("AttributionPanel job groups", () => {
       cost: testMoney(cost),
     });
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([
-      group("abcdef-job@12345678", 3),
-      group("abcdef-other@abcdef01", 2),
+      group("abcdef-job", 3),
+      group("abcdef-other", 2),
       { ...group("", 1), sessionId: "hermes:ungrouped", displayName: "Ungrouped run" },
       { ...group("", 2), groupLabel: "", sessionId: "", displayName: "" },
       { ...group("remainder", 0.5), groupLabel: "Other" },
@@ -540,6 +542,7 @@ describe("AttributionPanel job groups", () => {
     await vi.waitFor(() => expect(usage.zoomedProject?.key).toBe("pl1:sha256:first"));
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     await tick();
+    expect(document.activeElement).toBe(document.querySelector(".attribution-panel"));
     const rows = [...document.querySelectorAll<HTMLElement>(".list-row")];
     expect(rows.map((row) => row.querySelector(".list-label")!.textContent)).toEqual([
       "Daily digest · abcdef-j",
@@ -567,7 +570,7 @@ describe("AttributionPanel job groups", () => {
     ).toBe(1);
     rows[0]!.click();
     const back = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "All projects",
+      (button) => button.textContent?.trim() === "← All projects",
     )!;
     back.click();
     await tick();
@@ -610,9 +613,9 @@ describe("AttributionPanel job groups", () => {
     usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
     usage.zoomRows = [{
       ...topSessionForRemainder(),
-      groupKey: "digest@12345678",
+      groupKey: "digest",
       groupLabel: "",
-      displayName: "digest@12345678",
+      displayName: "digest",
     }];
     const component = mountPanel();
     await tick();
@@ -622,22 +625,73 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
-  it.each([
-    ["digest@12345678", "digest@abcdef01", "Daily digest · digest@1", "Daily digest · digest@a"],
-    ["host-a~digest@12345678", "host-b~digest@12345678", "Daily digest · host-a~d", "Daily digest · host-b~d"],
-  ])("distinguishes matching jobs across profiles and hosts: %s", async (first, second, firstLabel, secondLabel) => {
+  it("distinguishes matching jobs across machines", async () => {
     usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
-    usage.zoomRows = [first, second].map((groupKey) => ({
-      ...topSessionForRemainder(),
-      groupKey,
-      groupLabel: "Daily digest",
+    usage.zoomRows = ["host-a", "host-b"].map((machine) => ({
+      ...topSessionForRemainder(), groupKey: "digest", machine, groupLabel: "Daily digest",
     }));
     const component = mountPanel();
     await tick();
     const rows = document.querySelectorAll<HTMLElement>(".list-row");
-    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual([firstLabel, secondLabel]);
-    expect(Array.from(rows, (row) => row.title)).toEqual([`Daily digest · ${first}`, `Daily digest · ${second}`]);
+    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual(["Daily digest · host-a", "Daily digest · host-b"]);
+    expect(Array.from(rows, (row) => row.title)).toEqual(["Daily digest · digest · host-a", "Daily digest · digest · host-b"]);
     await unmount(component);
+  });
+
+  it.each(["Escape", "Backspace"])("returns to projects with %s while the panel has focus", async (key) => {
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    const component = mountPanel();
+    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+    await tick();
+    const panel = document.querySelector<HTMLElement>(".attribution-panel")!;
+    panel.focus();
+    panel.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    await tick();
+    expect(usage.zoomedProject).toBeNull();
+    expect(back).toHaveBeenCalledOnce();
+    expect(document.querySelectorAll(".list-row")).toHaveLength(2);
+    await unmount(component);
+    back.mockRestore();
+  });
+
+  it("balances button Back and reopening before the history event", async () => {
+    const back = vi.mocked(window.history.back).mockImplementation(() => {});
+    const push = vi.spyOn(window.history, "pushState");
+    const component = mountPanel();
+    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+    await tick();
+    [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "← All projects")!.click();
+    expect(usage.zoomedProject).toBeNull();
+    expect(back).toHaveBeenCalledOnce();
+    usage.selectAttributionProject("pl1:sha256:second", "Another project");
+    expect(push).toHaveBeenCalledOnce();
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await tick();
+    expect(usage.zoomedProject?.key).toBe("pl1:sha256:second");
+    expect(push).toHaveBeenCalledTimes(2);
+    back.mockImplementation(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    await unmount(component);
+    push.mockRestore();
+  });
+
+  it("opens without changing the URL and returns on browser Back without another pop", async () => {
+    const push = vi.spyOn(window.history, "pushState");
+    const back = vi.spyOn(window.history, "back");
+    const url = window.location.href;
+    const component = mountPanel();
+    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+    await tick();
+    expect(push).toHaveBeenCalledOnce();
+    expect(window.location.href).toBe(url);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await tick();
+    expect(usage.zoomedProject).toBeNull();
+    expect(back).not.toHaveBeenCalled();
+    expect(document.querySelectorAll(".list-row")).toHaveLength(2);
+    await unmount(component);
+    push.mockRestore();
+    back.mockRestore();
   });
 
   it("keeps providers when ungrouped session IDs collide", async () => {
@@ -696,7 +750,7 @@ describe("AttributionPanel job groups", () => {
     await usage.fetchAll({ preserveTimeRange: true });
     const component = mountPanel();
     await tick();
-    expect(document.querySelector(".breadcrumb")?.textContent).toContain("hermes-cron");
+    expect(document.querySelector(".panel-header")?.textContent).toContain("hermes-cron");
     expect(document.querySelector(".empty")?.textContent).toBe("No data for this period");
     unmount(component);
   });

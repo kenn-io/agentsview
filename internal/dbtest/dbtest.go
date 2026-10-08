@@ -277,6 +277,7 @@ func SeedUsageGroups(t *testing.T, conn *sql.DB) {
  ('group-a-new', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Research digest', '2026-10-08T12:00:00Z', NULL, 1, 1),
  ('group-a-untitled', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', '', '2026-10-09T12:00:00Z', NULL, 1, 1),
  ('group-a-deleted', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Deleted digest', '2026-10-10T12:00:00Z', '2026-10-10T13:00:00Z', 1, 1),
+ ('group-second-machine', 'hermes-cron', 'host-b.example', 'hermes', 'job-a', 'Research digest', '2026-10-08T12:00:00Z', NULL, 1, 1),
  ('group-b', 'hermes-cron', 'host-a.example', 'hermes', 'job-b', 'Research digest', '2026-10-08T12:00:00Z', NULL, 1, 1),
  ('group-other', 'hermes-cron', 'host-a.example', 'hermes', '', '', '2026-10-08T12:00:00Z', NULL, 1, 1),
  ('group-another-project', 'another-project', 'host-a.example', 'hermes', 'job-a', 'Separate project', '2026-10-08T12:00:00Z', NULL, 1, 1);
@@ -293,7 +294,7 @@ func AssertUsageGroups(t *testing.T, store db.Store) {
 	filter := db.UsageFilter{From: "2026-10-07", To: "2026-10-10", Agent: "hermes", ProjectLabels: []string{"hermes-cron"}, TopSessionsByGroup: true, TopSessionsSort: "cost"}
 	rows, err := store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)
-	require.Len(t, rows, 3)
+	require.Len(t, rows, 4)
 	assert.Equal(t, "job-b", rows[0].GroupKey)
 	assert.Equal(t, int64(4_000_000), rows[0].Cost.Microdollars)
 	assert.Equal(t, "job-a", rows[1].GroupKey)
@@ -310,20 +311,28 @@ func AssertUsageGroups(t *testing.T, store db.Store) {
 	filter.From, filter.To = "2026-10-07", "2026-10-10"
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)
-	require.Len(t, rows, 3)
+	require.Len(t, rows, 4)
 	byKey := make(map[string]db.TopSessionEntry)
 	for _, row := range rows {
-		byKey[row.GroupKey] = row
+		byKey[row.Machine+"/"+row.GroupKey] = row
 		assert.Equal(t, "hermes-cron", row.Project)
 	}
-	assert.Equal(t, "Research digest", byKey["job-b"].GroupLabel)
-	assert.Equal(t, "group-other", byKey[""].SessionID)
-	assert.Equal(t, 10, byKey[""].InputTokens)
-	assert.Empty(t, byKey["job-a"].SessionID)
+	assert.Equal(t, "Research digest", byKey["host-a.example/job-b"].GroupLabel)
+	assert.Equal(t, "group-other", byKey["host-a.example/"].SessionID)
+	assert.Equal(t, 10, byKey["host-a.example/"].InputTokens)
+	assert.Empty(t, byKey["host-a.example/job-a"].SessionID)
+	assert.Equal(t, int64(1_000_000), byKey["host-b.example/job-a"].Cost.Microdollars)
+	assert.Equal(t, 10, byKey["host-b.example/job-a"].InputTokens)
+	filter.Machine = "host-b.example"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "host-b.example", rows[0].Machine)
+	filter.Machine = ""
 	filter.ProjectLabels = nil
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)
-	require.Len(t, rows, 4)
+	require.Len(t, rows, 5)
 	filter.Model = "absent-model"
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)

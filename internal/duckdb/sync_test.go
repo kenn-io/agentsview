@@ -51,7 +51,7 @@ func TestPushScopesCronGroupsByMachine(t *testing.T) {
 		t.Run(machine, func(t *testing.T) {
 			local, path := newPushFixture(t, 2)
 			require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET group_key = CASE id WHEN 'sess-1' THEN 'job-a@12345678' ELSE 'host-c~job-a@12345678' END`)
+				_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET group_key = 'job-a', machine = CASE id WHEN 'sess-1' THEN 'local' ELSE 'host-c' END`)
 				return err
 			}))
 			_, err := Push(t.Context(), path, local, machine, storage.MirrorPushOptions{}, false, nil)
@@ -59,11 +59,13 @@ func TestPushScopesCronGroupsByMachine(t *testing.T) {
 			conn, err := Open(t.Context(), path)
 			require.NoError(t, err)
 			defer conn.Close()
-			var key string
-			require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key FROM sessions WHERE id = 'sess-1'`).Scan(&key))
-			assert.Equal(t, machine+"~job-a@12345678", key)
-			require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key FROM sessions WHERE id = 'sess-2'`).Scan(&key))
-			assert.Equal(t, "host-c~job-a@12345678", key)
+			var key, gotMachine string
+			require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key, machine FROM sessions WHERE id = 'sess-1'`).Scan(&key, &gotMachine))
+			assert.Equal(t, "job-a", key)
+			assert.Equal(t, machine, gotMachine)
+			require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key, machine FROM sessions WHERE id = 'sess-2'`).Scan(&key, &gotMachine))
+			assert.Equal(t, "job-a", key)
+			assert.Equal(t, "host-c", gotMachine)
 		})
 	}
 }

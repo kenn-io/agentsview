@@ -22,7 +22,7 @@ func TestUsageGroups(t *testing.T) {
 	dbtest.AssertUsageGroups(t, database)
 }
 
-func TestHermesCronGroupsKeepProfilesSeparate(t *testing.T) {
+func TestHermesCronGroupsCombineProfilesOnOneMachine(t *testing.T) {
 	profiles := filepath.Join(t.TempDir(), ".hermes", "profiles")
 	for _, profile := range []string{"profile-a", "profile-b"} {
 		sessions := filepath.Join(profiles, profile, "sessions")
@@ -41,15 +41,15 @@ func TestHermesCronGroupsKeepProfilesSeparate(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, outcome.Results, 1)
 		session := outcome.Results[0].Result.Session
-		entries = append(entries, db.TopSessionEntry{SessionID: session.ID, Project: session.Project, GroupKey: session.GroupKey, InputTokens: 10})
+		entries = append(entries, db.TopSessionEntry{SessionID: session.ID, Project: session.Project, GroupKey: session.GroupKey, Machine: session.Machine, InputTokens: 10})
 	}
 	groups, err := db.GroupTopSessions(entries, 100, db.TopSessionsSortTokens, db.UsageTokenTypesAll)
 	require.NoError(t, err)
-	require.Len(t, groups, 2)
-	assert.NotEqual(t, groups[0].GroupKey, groups[1].GroupKey)
+	require.Len(t, groups, 1)
 	for _, group := range groups {
-		assert.Regexp(t, `^digest@[0-9a-f]{8}$`, group.GroupKey)
+		assert.Equal(t, "digest", group.GroupKey)
+		assert.Equal(t, "local", group.Machine)
 		assert.Equal(t, "hermes-cron", group.Project)
-		assert.Equal(t, 20, group.InputTokens)
+		assert.Equal(t, 40, group.InputTokens)
 	}
 }

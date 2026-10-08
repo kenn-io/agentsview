@@ -2941,15 +2941,9 @@ schemas keep their existing ordering behavior.
   `[A-Za-z0-9][A-Za-z0-9._-]*`.
   [cron/scheduler.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/cron/scheduler.py)
   records `source = "cron"` and titles as the job name followed by ` · `
-  and the run timestamp. Agentsview stores `group_key` as the job ID followed
-    by `@` and the first eight SHA-256 hex digits of the absolute `state.db`
-    path, using the existing remote path rewrite before hashing imported raw
-    sources. Imports apply the session ID's origin prefix to group keys too.
-    This keeps profiles and hosts separate across repeated imports. The pinned
-    ID and title formats were reverified on 2026-10-08. Names stay in `group_label`.
-    The pinned home override also accepts a home named `sessions`; only
-    transcript paths remove the trailing `sessions` directory. Mirrors prefix
-    local group keys with the push machine and preserve imported origin prefixes.
+  and the run timestamp. Agentsview stores `group_key` as the job ID. Usage
+  groups by project, machine and job ID. Names stay in `group_label`. The pinned ID and title
+  formats were reverified on 2026-10-08.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized. Transcript projects use `platform`. Cron continuations follow
