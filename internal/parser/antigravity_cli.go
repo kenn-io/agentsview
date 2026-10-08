@@ -328,6 +328,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 		Machine:            machine,
 		Agent:              AgentAntigravityCLI,
 		FirstMessage:       firstMessage,
+		SessionName:        firstMessage,
 		StartedAt:          startedAt,
 		EndedAt:            endedAt,
 		MessageCount:       len(messages),
