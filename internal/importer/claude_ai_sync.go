@@ -2,11 +2,14 @@ package importer
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -15,11 +18,25 @@ import (
 )
 
 // ErrClaudeAIResponseTooLarge marks a chat that exceeds the browser relay limit.
-var ErrClaudeAIResponseTooLarge = errors.New("Claude response exceeds 32 MiB")
+var ErrClaudeAIResponseTooLarge = errors.New("claude response exceeds 32 MiB")
+
+// ErrClaudeAIAuthRequired reports expired or missing browser credentials.
+var ErrClaudeAIAuthRequired = errors.New("claude.ai sign-in required")
+
+//go:embed claude_ai_requests.txt
+var claudeAIRequests string
+
+func claudeAIRequest(shape int, organization, conversation string, offset int) string {
+	return strings.NewReplacer("{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset)).Replace(strings.Split(claudeAIRequests, "\n")[shape])
+}
+
+func claudeAIMarker(store db.Store, leaf string) string {
+	return "claude-ai:v1:" + string(storeArchiveContent(store)) + ":" + leaf
+}
 
 type claudeAIHTTPError struct{ status int }
 
-func (e *claudeAIHTTPError) Error() string { return fmt.Sprintf("Claude returned HTTP %d", e.status) }
+func (e *claudeAIHTTPError) Error() string { return fmt.Sprintf("claude returned HTTP %d", e.status) }
 
 // ClaudeAIResponse carries the browser response without credentials.
 type ClaudeAIResponse struct {
@@ -34,7 +51,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	IsSessionTrashed(context.Context, string) bool
 	IsSessionExcluded(context.Context, string) bool
 }, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks) (stats ImportStats, retErr error) {
-	raw, err := fetchClaudeAI(ctx, fetch, "/api/organizations")
+	raw, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(0, "", "", 0))
 	if err != nil {
 		return stats, err
 	}
@@ -50,9 +67,8 @@ func SyncClaudeAI(ctx context.Context, store interface {
 		if !slices.Contains(org.Capabilities, "chat") {
 			continue
 		}
-		base := "/api/organizations/" + url.PathEscape(org.UUID)
 		for offset := 0; ; {
-			raw, err := fetchClaudeAI(ctx, fetch, fmt.Sprintf("%s/chat_conversations_v2?limit=50&offset=%d", base, offset))
+			raw, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(1, org.UUID, "", offset))
 			if err != nil {
 				return stats, err
 			}
@@ -65,11 +81,11 @@ func SyncClaudeAI(ctx context.Context, store interface {
 			}
 			items := page.Data
 			if items == nil {
-				return stats, errors.New("Claude list had no data")
+				return stats, errors.New("claude list had no data")
 			}
 			if len(items) == 0 {
 				if page.HasMore != nil && *page.HasMore {
-					return stats, errors.New("Claude list returned an empty page with has_more: true")
+					return stats, errors.New("claude list returned an empty page with has_more: true")
 				}
 				break
 			}
@@ -108,12 +124,12 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					return stats, err
 				}
 				updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
-				if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) && existing.LastEntryUUID != nil && *existing.LastEntryUUID == marker.CurrentLeaf {
+				if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) && existing.LastEntryUUID != nil && *existing.LastEntryUUID == claudeAIMarker(store, marker.CurrentLeaf) {
 					stats.Skipped++
 					cb.progress(stats)
 					continue
 				}
-				detail, err := fetchClaudeAI(ctx, fetch, base+"/chat_conversations/"+url.PathEscape(marker.UUID)+"?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true")
+				detail, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(2, org.UUID, marker.UUID, 0))
 				var detailError *claudeAIHTTPError
 				if err != nil {
 					if ctx.Err() != nil {
@@ -174,7 +190,7 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 		}
 		status := response.Status
 		if status == 401 || status == 403 {
-			return nil, errors.New("Sign in to Claude.ai, then Sync again")
+			return nil, ErrClaudeAIAuthRequired
 		}
 		if status != 429 && status < 500 || attempt == 4 {
 			if status < 200 || status >= 300 {

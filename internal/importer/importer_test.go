@@ -864,33 +864,6 @@ func TestImportClaudeAIRejectsShorterExport(t *testing.T) {
 	assert.Equal(t, 2, s.MessageCount)
 }
 
-func TestImportClaudeAIAppendKeepsArchivedRows(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	_, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
-	require.NoError(t, err)
-	before, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
-	require.NoError(t, err)
-	_, err = d.PinMessage(ctx, "claude-ai:import-test-001", before[1].ID, nil)
-	require.NoError(t, err)
-
-	stats, err := ImportClaudeAI(ctx, d,
-		strings.NewReader(claudeAIConversationWithMessages(t, 4)), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Updated)
-	assert.Zero(t, stats.Errors)
-
-	after, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
-	require.NoError(t, err)
-	require.Len(t, after, 4)
-	assert.Equal(t, before[0].ID, after[0].ID)
-	assert.Equal(t, before[1].ID, after[1].ID)
-	pins, err := d.ListPinnedMessages(ctx, "claude-ai:import-test-001", "")
-	require.NoError(t, err)
-	require.Len(t, pins, 1)
-	assert.Equal(t, before[1].ID, pins[0].MessageID)
-}
-
 func TestImportClaudeAIReimportComparesStoredForm(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

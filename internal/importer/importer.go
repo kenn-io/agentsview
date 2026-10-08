@@ -252,14 +252,33 @@ func upsertConversation(
 	}
 
 	sess := chatGPTSession(s)
-	replaceMessages := false
-	if existing != nil {
+	live := s.LastEntryUUID != nil
+	if live {
+		sess.LastEntryUUID = strPtr(claudeAIMarker(store, *s.LastEntryUUID))
+	} else {
+		if err := store.UpsertSession(ctx, sess); err != nil {
+			if errors.Is(err, db.ErrSessionExcluded) {
+				return importSkipped, nil
+			}
+			return importNew, fmt.Errorf("upserting session: %w", err)
+		}
+		if localDB, ok := store.(*db.DB); ok {
+			if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
+				log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
+			}
+		}
+	}
+	replaceMessages := true
+	if existing != nil && (live || existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt)) {
 		archived, err := store.GetAllMessages(ctx, s.ID)
 		if err != nil {
 			return importNew, fmt.Errorf("loading existing messages: %w", err)
 		}
 		canonical := storedFormMessages(store, msgs)
 		if sameMessages(archived, canonical) {
+			if !live {
+				return importSkipped, nil
+			}
 			_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 				Session: sess, Messages: msgs, SkipSignalUpdates: true, TouchModified: true,
 			}})
@@ -273,10 +292,21 @@ func upsertConversation(
 			}
 			return importUpdated, nil
 		}
-		replaceMessages = len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)])
+		if live {
+			replaceMessages = len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)])
+		}
 	}
 
 	fts.suspend(ctx)
+	if !live {
+		if err := store.ReplaceSessionMessages(ctx, s.ID, msgs); err != nil {
+			return importNew, fmt.Errorf("replacing messages: %w", err)
+		}
+		if isNew {
+			return importNew, nil
+		}
+		return importUpdated, nil
+	}
 	_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session:         sess,
 		Messages:        msgs,

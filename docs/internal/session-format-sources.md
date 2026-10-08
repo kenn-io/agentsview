@@ -2787,66 +2787,33 @@ schemas keep their existing ordering behavior.
   not authoritative token, cache, reasoning, credit, or USD accounting.
 - **Agentsview:** `internal/parser/claude_ai.go` parses exports;
   `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
-- **Desktop sync evidence:** `source` and live responses, reverified 2026-10-07
-  against Anthropic's published client and responses from Team and personal
-  accounts.
-  The list client reads `data` and `has_more` from
-  `https://claude.ai/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}`.
-  Sync omits the `archived` filter to include active and archived chats in one
-  pass. It omits `starred` so starred chats remain eligible. Repeated summaries
-  skip detail fetches when summary `updated_at` matches archived `ended_at` and
-  `current_leaf_message_uuid` matches `sessions.last_entry_uuid` under every
-  archive policy. Sync stores the raw detail leaf in that column, including
-  when the stored messages are unchanged. Branch switches change the leaf
-  without changing `updated_at`. Zip imports clear the marker, so their next
-  Sync fetches the visible branch once. Unchanged rows keep their identities.
-  The client's detail builder defaults to `tree=True`,
-  `rendering_mode=messages`, `render_all_tools=true`, and
-  `include_inline_comparison=true`; the client enables `consistency=strong`.
-  Sync uses these parameters on
-  `https://claude.ai/api/organizations/{organization}/chat_conversations/{uuid}`.
-  Live details identified the visible branch with `current_leaf_message_uuid`
-  and string `parent_message_uuid` links ending at the root sentinel,
-  `00000000-0000-4000-8000-000000000000`. `ParseClaudeAIDetail` walks those
-  ancestors and reverses the path. Sync carries each live message's `uuid` into
-  `messages.source_uuid`, so pins follow that message across reconciliation.
-  Missing or null leaves, missing selected messages or parents, non-string
-  selected parents, duplicate UUIDs, and selected cycles fail before writing.
-  Exports retain their original order even when tree fields are present.
-  Sync also rejects a detail UUID that differs from the requested chat.
-  List items with a null leaf skip detail fetches; exports skip empty chats.
-  Sync commits session metadata, messages, and the freshness marker in one
-  transaction, including `local_modified_at` for unchanged text, so interrupted
-  writes leave either the old or new chat version.
-  Full resync preserves markers for import-only sessions. Usage-only archives
-  refresh session metadata under their content
-  policy. Detail HTTP 404 counts as skipped. Other detail HTTP failures and
-  responses over 32 MiB fail that chat. The browser caps stream reads before
-  IPC, returning HTTP 413 with an empty body. The Go relay independently caps
-  request bodies at 32 MiB. Detail authentication and host errors fail that
-  chat and allow later chats to sync. Organization or list failures and
-  cancellation stop Sync. The native fetch command accepts only the organization
-  list, paginated chat list, and chat detail paths built by Go, with UUID-shaped
-  organization and chat IDs.
-  Sync uses the export importer's message reconciliation. New turns preserve
-  existing message IDs. Changed live histories update in place at every length,
-  without a Trash copy. Shorter zip exports remain refused as `shorter_export`.
-  Matching
-  text keeps stored rows and IDs even when source UUIDs differ. Metadata
-  refreshes preserve findings and signals when messages match. Rechecked against the selected-path
-  and Sync regression fixtures on 2026-10-07. Usage-only writes reconcile
-  assistant activity rows to the selected path.
-  An empty list page with `has_more: true` fails.
-  The export parser reads message `sender`, `text`, `content`, timestamps,
-  and attachments. Live checks confirmed the list and detail shapes in Team
-  and personal accounts: parent links are strings with the root sentinel,
-  message text is in `content[].text`, and list items carry
-  `current_leaf_message_uuid`. Omitting the archived flag returns active and
-  archived chats. `render_all_tools=true` preserves artifact tool blocks instead
-  of unsupported-device placeholders.
-  Organization `capabilities` included `chat`.
-  **Unverified live:** multiple chat organizations, web-search blocks,
-  unanswered final prompts, and tree fields in official exports.
+- **Desktop sync:** The browser reads organizations, paginated conversation
+  summaries, and selected conversation trees from Claude.ai's private API.
+  Request shapes are shared by Go and Rust in
+  `internal/importer/claude_ai_requests.txt`. Lists use `data` and `has_more`
+  and include active, archived, and starred chats.
+  Details select `current_leaf_message_uuid` and follow string
+  `parent_message_uuid` links to the root sentinel
+  `00000000-0000-4000-8000-000000000000`. Message text comes from
+  `content[].text`; `render_all_tools=true` preserves artifact tool blocks.
+  Malformed selected paths and mismatched conversation UUIDs fail before writes.
+  Exports preserve their original message order.
+- **Freshness:** Sync compares `updated_at` with archived `ended_at` and stores
+  a versioned leaf marker with the archive content policy in `last_entry_uuid`.
+  A policy change or zip import requires one new detail fetch. Sync commits
+  metadata, messages, and the marker together. Unchanged text keeps row IDs;
+  live branch changes update in place at every length. Shorter zip exports
+  remain refused. Pins follow source UUIDs, or role, content, and occurrence
+  rank when the replacement has no UUIDs. Full resync preserves import markers.
+- **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
+  responses count as skipped; other detail failures allow later chats to sync.
+  Organization and list failures, cancellation, and an empty page with
+  `has_more: true` stop Sync. Null list leaves skip detail fetches.
+- **Evidence limits:** Existing selected-path and Sync fixtures cover these
+  shapes. Authenticated producer verification has no recorded reproducible
+  client asset or response fixture. Multiple chat organizations, web-search
+  blocks, unanswered final prompts, and tree fields in official exports still
+  need live verification.
 
 ## ChatGPT Export (`chatgpt`)
 

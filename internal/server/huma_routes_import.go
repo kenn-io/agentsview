@@ -121,7 +121,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			case <-ctx.Done():
 				return importer.ClaudeAIResponse{}, ctx.Err()
 			case <-time.After(2 * time.Minute):
-				return importer.ClaudeAIResponse{}, errors.New("Claude browser fetch timed out")
+				return importer.ClaudeAIResponse{}, errors.New("claude browser fetch timed out")
 			case response := <-answer:
 				err := response.err
 				if err == nil && response.status == 0 {
@@ -146,7 +146,11 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			s.notifyRecallCorpusMutation()
 		}
 		if err != nil {
-			stream.SendJSON("error", map[string]string{"error": err.Error()})
+			message := err.Error()
+			if errors.Is(err, importer.ErrClaudeAIAuthRequired) {
+				message = "Sign in to Claude.ai, then Sync again"
+			}
+			stream.SendJSON("error", map[string]string{"error": message})
 			return
 		}
 		stream.SendJSON("done", stats)
