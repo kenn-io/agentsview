@@ -50,6 +50,14 @@ type QueryDialect struct {
 	emptyStringIsNull           bool
 	terminationExpr             string
 	terminationKind             timestampKind
+	reportTermination           bool
+	trimUsageCSV                bool
+	usageFalseLiteral           string
+	messageMembership           func(string, string) string
+	reportTerminationFlagFirst  bool
+	reportTerminationRawTime    bool
+	signedWindowCounts          bool
+	recentEditTimestamp         func(string) string
 	caseInsensitiveLike         string
 	caseInsensitiveLikeEsc      string
 	regexPredicate              func(string, string) string
@@ -144,10 +152,12 @@ func SQLiteQueryDialect() QueryDialect {
 // read-only shared store.
 func PostgresQueryDialect() QueryDialect {
 	return QueryDialect{
-		name:             "postgres",
-		placeholderStyle: placeholderDollar,
-		trueLiteral:      "TRUE",
-		falseLiteral:     "FALSE",
+		name:                     "postgres",
+		placeholderStyle:         placeholderDollar,
+		trueLiteral:              "TRUE",
+		falseLiteral:             "FALSE",
+		usageFalseLiteral:        "false",
+		reportTerminationRawTime: true,
 		dateStartExpr: func(q func(string) string) string {
 			return "COALESCE(" + q("started_at") + ", " +
 				q("created_at") + ")"
@@ -191,10 +201,17 @@ func PostgresQueryDialect() QueryDialect {
 // inline case-insensitive flag.
 func ClickHouseQueryDialect() QueryDialect {
 	return QueryDialect{
-		name:             "clickhouse",
-		placeholderStyle: placeholderQuestion,
-		trueLiteral:      "true",
-		falseLiteral:     "false",
+		name:                       "clickhouse",
+		placeholderStyle:           placeholderQuestion,
+		trueLiteral:                "true",
+		falseLiteral:               "false",
+		trimUsageCSV:               true,
+		reportTerminationFlagFirst: true,
+		messageMembership: func(sessionID, pred string) string {
+			return sessionID + " IN (SELECT m.session_id FROM messages m WHERE " + pred + ")"
+		},
+		signedWindowCounts:  true,
+		recentEditTimestamp: recentEditsRFC3339Expr,
 		dateStartExpr: func(q func(string) string) string {
 			return "COALESCE(" + q("started_at") + ", " + q("created_at") + ")"
 		},
@@ -251,10 +268,12 @@ func clickhouseCastCursor(ph string, kind valueKind) string {
 // and future backend use. It does not couple to internal/duckdb.
 func DuckDBQueryDialect() QueryDialect {
 	return QueryDialect{
-		name:             "duckdb",
-		placeholderStyle: placeholderQuestion,
-		trueLiteral:      "TRUE",
-		falseLiteral:     "FALSE",
+		name:                       "duckdb",
+		placeholderStyle:           placeholderQuestion,
+		trueLiteral:                "TRUE",
+		falseLiteral:               "FALSE",
+		trimUsageCSV:               true,
+		reportTerminationFlagFirst: true,
 		dateStartExpr: func(q func(string) string) string {
 			return "CAST(COALESCE(" + q("started_at") + ", " +
 				q("created_at") + ") AS TIMESTAMP)"
@@ -992,17 +1011,22 @@ func terminationPredicate(
 			preds = append(preds, b.dialect.terminationExpr+" > "+
 				b.terminationParam(activeCutoff))
 		case "stale":
-			preds = append(preds, "("+
-				b.dialect.terminationExpr+" > "+
-				b.terminationParam(staleCutoff)+" AND "+
-				b.dialect.terminationExpr+" <= "+
-				b.terminationParam(activeCutoff)+" AND "+
-				flagged+")")
+			pred := b.dialect.terminationExpr + " > " +
+				b.terminationParam(staleCutoff) + " AND " +
+				b.dialect.terminationExpr + " <= " +
+				b.terminationParam(activeCutoff)
+			if b.dialect.reportTermination && b.dialect.reportTerminationFlagFirst {
+				preds = append(preds, "("+flagged+" AND "+pred+")")
+			} else {
+				preds = append(preds, "("+pred+" AND "+flagged+")")
+			}
 		case "unclean":
-			preds = append(preds, "("+
-				b.dialect.terminationExpr+" <= "+
-				b.terminationParam(staleCutoff)+" AND "+
-				flagged+")")
+			pred := b.dialect.terminationExpr + " <= " + b.terminationParam(staleCutoff)
+			if b.dialect.reportTermination && b.dialect.reportTerminationFlagFirst {
+				preds = append(preds, "("+flagged+" AND "+pred+")")
+			} else {
+				preds = append(preds, "("+pred+" AND "+flagged+")")
+			}
 		case "clean":
 			preds = append(preds,
 				q("termination_status")+" = 'clean'")
@@ -1014,7 +1038,7 @@ func terminationPredicate(
 	if len(preds) == 0 {
 		return ""
 	}
-	if len(preds) == 1 {
+	if len(preds) == 1 && !(b.dialect.reportTermination && b.dialect.reportTerminationFlagFirst) {
 		return preds[0]
 	}
 	return "(" + strings.Join(preds, " OR ") + ")"
@@ -1027,6 +1051,9 @@ func (b *QueryBuilder) terminationParam(t time.Time) string {
 	case timestampCast:
 		return b.dialect.activityParam(b.Add(t.Format(time.RFC3339)))
 	default:
+		if b.dialect.reportTermination && b.dialect.reportTerminationRawTime {
+			return b.Add(t)
+		}
 		return b.dialect.activityParam(b.Add(t))
 	}
 }

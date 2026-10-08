@@ -26,11 +26,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
 )
 
-const (
-	chActiveWindow = 10 * time.Minute
-	chStaleWindow  = 60 * time.Minute
-	chTimestampSQL = "parseDateTime64BestEffort(?, 6, 'UTC')"
-)
+const chTimestampSQL = "parseDateTime64BestEffort(?, 6, 'UTC')"
 
 // chLoadPricing reads the mirrored model catalog and layers the reader's
 // custom rates on top. Push passes no custom rates.
@@ -133,57 +129,13 @@ func appendChUsageColumnBounds(
 	return where, args
 }
 
-func appendChUsageCSVFilter(
-	where string, args []any, col, csv string, include bool,
-) (string, []any) {
-	if csv == "" {
-		return where, args
-	}
-	parts := strings.Split(csv, ",")
-	vals := make([]string, 0, len(parts))
-	for _, value := range parts {
-		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			vals = append(vals, trimmed)
-		}
-	}
-	return appendChUsageValuesFilter(where, args, col, vals, include)
-}
-
-func appendChUsageValuesFilter(
-	where string, args []any, col string, vals []string, include bool,
-) (string, []any) {
-	if len(vals) == 0 {
-		return where, args
-	}
-	op := "IN"
-	if !include {
-		op = "NOT IN"
-	}
-	if len(vals) == 1 {
-		if include {
-			where += "\n\t\t\tAND " + col + " = ?"
-		} else {
-			where += "\n\t\t\tAND " + col + " != ?"
-		}
-		args = append(args, vals[0])
-		return where, args
-	}
-	ph := make([]string, len(vals))
-	for i, value := range vals {
-		ph[i] = "?"
-		args = append(args, value)
-	}
-	where += "\n\t\t\tAND " + col + " " + op +
-		" (" + strings.Join(ph, ",") + ")"
-	return where, args
-}
-
 func appendChUsageSourceFilterClauses(
 	where string, args []any, modelCol string, f db.UsageFilter,
 ) (string, []any) {
-	where, args = appendChUsageCSVFilter(where, args, modelCol, f.Model, true)
-	return appendChUsageCSVFilter(where, args, modelCol, f.ExcludeModel, false)
+	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+	preds := db.BuildUsageSourceFilter(f, b, modelCol)
+	where = db.AppendUsagePredicates(where, preds, "\t\t\t")
+	return where, append(args, b.Args()...)
 }
 
 func chNormalizeAutomatedScope(
@@ -214,62 +166,14 @@ func chAutomatedScopePredicate(scope, col string) string {
 func appendChUsageSessionFilterClauses(
 	where string, args []any, f db.UsageFilter, sessionID string,
 ) (string, []any) {
-	where, args = appendChUsageCSVFilter(where, args, "s.agent", f.Agent, true)
-	where, args = appendChUsageValuesFilter(
-		where, args, "s.project", f.ProjectFilterLabels(), true,
-	)
-	where, args = appendChUsageCSVFilter(where, args, "s.machine", f.Machine, true)
-	if f.GitBranch != "" {
-		var clause string
-		clause, args = db.BranchPairClauseArgs("s.project", "s.git_branch", f.GitBranch, args)
-		where += "\n\t\t\tAND " + clause
-	}
-	where, args = appendChUsageValuesFilter(
-		where, args, "s.project", f.ExcludedProjectFilterLabels(), false,
-	)
-	where, args = appendChUsageCSVFilter(where, args, "s.agent", f.ExcludeAgent, false)
-	if sessionID != "" {
-		where += "\n\t\t\tAND s.id = ?"
-		args = append(args, sessionID)
-	}
-	if f.MinUserMessages > 0 {
-		where += "\n\t\t\tAND s.user_message_count >= ?"
-		args = append(args, f.MinUserMessages)
-	}
-	scope := chNormalizeAutomatedScope(
-		f.AutomatedScope, f.ExcludeAutomated)
-	if f.ExcludeOneShot {
-		if scope == "human" {
-			where += "\n\t\t\tAND s.user_message_count > 1"
-		} else {
-			where += "\n\t\t\tAND (s.user_message_count > 1 OR COALESCE(s.is_automated, false) = true)"
-		}
-	}
-	if pred := chAutomatedScopePredicate(
-		scope, "COALESCE(s.is_automated, false)"); pred != "" {
-		where += "\n\t\t\tAND " + pred
-	}
-	if f.ActiveSince != "" {
-		where += "\n\t\t\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= " + chTimestampSQL
-		args = append(args, f.ActiveSince)
-	}
-	if pred, predArgs := chUsageTerminationPred(f.Termination); pred != "" {
-		where += "\n\t\t\tAND " + pred
-		args = append(args, predArgs...)
-	}
-	return where, args
-}
-
-func chUsageTerminationPred(status string) (string, []any) {
-	return chTerminationPred(
-		status,
-		"COALESCE(s.ended_at, s.started_at, s.created_at)",
-		"s.termination_status",
-	)
+	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+	preds := db.BuildUsageSessionFilter(f, b, sessionID)
+	where = db.AppendUsagePredicates(where, preds, "\t\t\t")
+	return where, append(args, b.Args()...)
 }
 
 // chTerminationUsesTime reports whether a termination filter compares
-// session times with the current time; see chTerminationPred.
+// session times with the current time.
 func chTerminationUsesTime(status string) bool {
 	for part := range strings.SplitSeq(status, ",") {
 		switch strings.TrimSpace(part) {
@@ -278,49 +182,6 @@ func chTerminationUsesTime(status string) bool {
 		}
 	}
 	return false
-}
-
-func chTerminationPred(
-	status string,
-	activityExpr string,
-	statusExpr string,
-) (string, []any) {
-	if status == "" || status == "all" {
-		return "", nil
-	}
-	now := time.Now().UTC()
-	activeCutoff := now.Add(-chActiveWindow)
-	staleCutoff := now.Add(-chStaleWindow)
-	flagged := statusExpr + " IN ('tool_call_pending', 'truncated')"
-	var parts []string
-	var args []any
-	for part := range strings.SplitSeq(status, ",") {
-		switch strings.TrimSpace(part) {
-		case "active":
-			parts = append(parts, activityExpr+" > "+chTimestampSQL)
-			args = append(args, activeCutoff.Format(time.RFC3339))
-		case "stale":
-			parts = append(parts, "("+flagged+
-				" AND "+activityExpr+" > "+chTimestampSQL+
-				" AND "+activityExpr+" <= "+chTimestampSQL+")")
-			args = append(args,
-				staleCutoff.Format(time.RFC3339),
-				activeCutoff.Format(time.RFC3339),
-			)
-		case "unclean":
-			parts = append(parts, "("+flagged+
-				" AND "+activityExpr+" <= "+chTimestampSQL+")")
-			args = append(args, staleCutoff.Format(time.RFC3339))
-		case "clean":
-			parts = append(parts, statusExpr+" = 'clean'")
-		case "awaiting_user":
-			parts = append(parts, statusExpr+" = 'awaiting_user'")
-		}
-	}
-	if len(parts) == 0 {
-		return "", nil
-	}
-	return "(" + strings.Join(parts, " OR ") + ")", args
 }
 
 const chDailyCursorUsageRowsSQLTemplate = `

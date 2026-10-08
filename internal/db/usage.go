@@ -144,122 +144,19 @@ func (f UsageFilter) appendUsageBranchFilterClauses(
 func (f UsageFilter) appendUsageSourceFilterClauses(
 	where string, args []any, modelCol string,
 ) (string, []any) {
-	appendCSV := func(
-		q string, a []any, col, csv string, include bool,
-	) (string, []any) {
-		if csv == "" {
-			return q, a
-		}
-		vals := strings.Split(csv, ",")
-		op := "IN"
-		if !include {
-			op = "NOT IN"
-		}
-		if len(vals) == 1 {
-			if include {
-				q += "\n\tAND " + col + " = ?"
-			} else {
-				q += "\n\tAND " + col + " != ?"
-			}
-			a = append(a, vals[0])
-		} else {
-			ph := make([]string, len(vals))
-			for i, v := range vals {
-				ph[i] = "?"
-				a = append(a, v)
-			}
-			q += "\n\tAND " + col + " " + op +
-				" (" + strings.Join(ph, ",") + ")"
-		}
-		return q, a
-	}
-
-	where, args = appendCSV(where, args, modelCol, f.Model, true)
-	where, args = appendCSV(where, args, modelCol, f.ExcludeModel, false)
-
-	return where, args
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	preds := BuildUsageSourceFilter(f, b, modelCol)
+	where = AppendUsagePredicates(where, preds, "\t")
+	return where, append(args, b.Args()...)
 }
 
 func (f UsageFilter) appendUsageSessionFilterClauses(
 	where string, args []any,
 ) (string, []any) {
-	appendValues := func(
-		q string, a []any, col string, vals []string, include bool,
-	) (string, []any) {
-		if len(vals) == 0 {
-			return q, a
-		}
-		op := "IN"
-		if !include {
-			op = "NOT IN"
-		}
-		if len(vals) == 1 {
-			if include {
-				q += "\n\tAND " + col + " = ?"
-			} else {
-				q += "\n\tAND " + col + " != ?"
-			}
-			a = append(a, vals[0])
-		} else {
-			ph := make([]string, len(vals))
-			for i, v := range vals {
-				ph[i] = "?"
-				a = append(a, v)
-			}
-			q += "\n\tAND " + col + " " + op +
-				" (" + strings.Join(ph, ",") + ")"
-		}
-		return q, a
-	}
-	appendCSV := func(
-		q string, a []any, col, csv string, include bool,
-	) (string, []any) {
-		if csv == "" {
-			return q, a
-		}
-		return appendValues(q, a, col, strings.Split(csv, ","), include)
-	}
-
-	where, args = appendCSV(where, args, "s.agent", f.Agent, true)
-	where, args = appendValues(
-		where, args, "s.project", f.ProjectFilterLabels(), true,
-	)
-	where, args = appendCSV(where, args, "s.machine", f.Machine, true)
-	if f.GitBranch != "" {
-		var clause string
-		clause, args = BranchPairClauseArgs("s.project", "s.git_branch", f.GitBranch, args)
-		where += "\n\tAND " + clause
-	}
-	where, args = appendValues(
-		where, args, "s.project", f.ExcludedProjectFilterLabels(), false,
-	)
-	where, args = appendCSV(where, args, "s.agent", f.ExcludeAgent, false)
-
-	if f.MinUserMessages > 0 {
-		where += "\n\tAND s.user_message_count >= ?"
-		args = append(args, f.MinUserMessages)
-	}
-	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
-	if f.ExcludeOneShot {
-		if scope == "human" {
-			where += "\n\tAND s.user_message_count > 1"
-		} else {
-			where += "\n\tAND (s.user_message_count > 1 OR COALESCE(s.is_automated, 0) = 1)"
-		}
-	}
-	if pred := automatedScopePredicate(scope, "COALESCE(s.is_automated, 0)"); pred != "" {
-		where += "\n\tAND " + pred
-	}
-	if f.ActiveSince != "" {
-		where += "\n\tAND COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) >= ?"
-		args = append(args, f.ActiveSince)
-	}
-	if pred, pargs := buildUsageTerminationPredSQLite(f.Termination); pred != "" {
-		where += "\n\tAND " + pred
-		args = append(args, pargs...)
-	}
-
-	return where, args
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	preds := BuildUsageSessionFilter(f, b, "")
+	where = AppendUsagePredicates(where, preds, "\t")
+	return where, append(args, b.Args()...)
 }
 
 // appendUsageMatchingActivityClauses requires the session to have at
@@ -304,43 +201,9 @@ func (f UsageFilter) appendUsageMatchingActivityClauses(
 }
 
 func buildUsageTerminationPredSQLite(status string) (string, []any) {
-	if status == "" || status == "all" {
-		return "", nil
-	}
-	now := time.Now().Unix()
-	activeCutoff := now - int64(activeWindow.Seconds())
-	staleCutoff := now - int64(staleWindow.Seconds())
-	const activityExpr = "CAST(strftime('%s', COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)) AS INTEGER)"
-	const flagged = "s.termination_status IN ('tool_call_pending', 'truncated')"
-
-	parts := strings.Split(status, ",")
-	preds := make([]string, 0, len(parts))
-	args := make([]any, 0, len(parts)*2)
-	for _, p := range parts {
-		switch strings.TrimSpace(p) {
-		case "active":
-			preds = append(preds, activityExpr+" > ?")
-			args = append(args, activeCutoff)
-		case "stale":
-			preds = append(preds, "("+activityExpr+" > ? AND "+
-				activityExpr+" <= ? AND "+flagged+")")
-			args = append(args, staleCutoff, activeCutoff)
-		case "unclean":
-			preds = append(preds, "("+activityExpr+" <= ? AND "+flagged+")")
-			args = append(args, staleCutoff)
-		case "clean":
-			preds = append(preds, "s.termination_status = 'clean'")
-		case "awaiting_user":
-			preds = append(preds, "s.termination_status = 'awaiting_user'")
-		}
-	}
-	if len(preds) == 0 {
-		return "", nil
-	}
-	if len(preds) == 1 {
-		return preds[0], args
-	}
-	return "(" + strings.Join(preds, " OR ") + ")", args
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	pred := b.reportTerminationPredicate(status, "s.")
+	return pred, b.Args()
 }
 
 // location loads the timezone or returns the system local timezone.
