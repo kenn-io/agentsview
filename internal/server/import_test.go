@@ -49,7 +49,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 	t.Run("unknown result leaves body unread", func(t *testing.T) {
 		srv := testServer(t, 5*time.Second)
 		body := strings.NewReader(`{}`)
-		request := httptest.NewRequest(http.MethodPost, "/api/v1/import/claude-ai/sync/results/unknown?status=200", body)
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync/results/unknown?status=200", body)
 		request.Header.Set("Content-Type", "application/octet-stream")
 		response := httptest.NewRecorder()
 		srv.mux.ServeHTTP(response, request)
