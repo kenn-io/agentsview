@@ -2743,8 +2743,8 @@ func restorePinsTx(
 	if len(pins) == 0 {
 		return nil
 	}
-	var hasSourceUUID bool
-	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM messages WHERE session_id = ? AND source_uuid != '')`, sessionID).Scan(&hasSourceUUID); err != nil {
+	var claudeAILegacyReplacement bool
+	if err := tx.QueryRow(`SELECT agent = 'claude-ai' AND NOT EXISTS(SELECT 1 FROM messages WHERE session_id = ? AND source_uuid != '') FROM sessions WHERE id = ?`, sessionID, sessionID).Scan(&claudeAILegacyReplacement); err != nil {
 		return fmt.Errorf("checking pin source identities: %w", err)
 	}
 	// Re-attach saved pins only when the old and new message identities
@@ -2760,7 +2760,7 @@ func restorePinsTx(
 			continue
 		}
 		var err error
-		if sp.sourceUUID != "" && hasSourceUUID {
+		if sp.sourceUUID != "" && !claudeAILegacyReplacement {
 			err = restorePinBySourceUUIDTx(tx, sessionID, sp)
 		} else {
 			err = restoreLegacyPinByRankTx(tx, sessionID, sp)

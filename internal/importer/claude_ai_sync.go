@@ -123,6 +123,17 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err != nil {
 					return stats, err
 				}
+				if existing != nil && existing.LastEntryUUID != nil {
+					parts := strings.SplitN(*existing.LastEntryUUID, ":", 4)
+					if len(parts) == 4 && parts[0] == "claude-ai" && strings.HasPrefix(parts[1], "v") {
+						version, err := strconv.Atoi(strings.TrimPrefix(parts[1], "v"))
+						if err == nil && version > 1 {
+							stats.Skipped++
+							cb.progress(stats)
+							continue
+						}
+					}
+				}
 				updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
 				if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) && existing.LastEntryUUID != nil && *existing.LastEntryUUID == claudeAIMarker(store, marker.CurrentLeaf) {
 					stats.Skipped++
@@ -134,6 +145,9 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err != nil {
 					if ctx.Err() != nil {
 						return stats, ctx.Err()
+					}
+					if errors.Is(err, ErrClaudeAIAuthRequired) {
+						return stats, err
 					}
 					errors.As(err, &detailError)
 					if detailError != nil && detailError.status == 404 {
