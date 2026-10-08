@@ -1,14 +1,17 @@
 package rawarchive
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/testjsonl"
 	"go.kenn.io/docbank"
 )
 
@@ -89,4 +92,56 @@ func TestImportRejectsChangedValidatedFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestImportOfCopiedCaptureUsesInventoryTimes(t *testing.T) {
+	ctx := t.Context()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	root := t.TempDir()
+	dbtest.WriteTestFile(t, filepath.Join(root, "project", id+".jsonl"), []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "archived history", id).String()))
+	opts := newImportCapture(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "source", RootSpec{Provider: "claude", Path: root})
+	spec := loadTestCapture(t, &opts)
+	database := dbtest.OpenTestDB(t)
+	require.NoError(t, database.EnableArchiveOnly(ctx))
+	archive, err := Open(ctx, database, t.TempDir(), nil)
+	require.NoError(t, err)
+	defer archive.Close()
+	first, err := archive.Import(ctx, spec)
+	require.NoError(t, err)
+	require.Empty(t, first.Gaps)
+
+	// A copy that does not preserve timestamps is still the same capture.
+	copied := filepath.Join(t.TempDir(), "copied")
+	copiedAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	require.NoError(t, filepath.WalkDir(opts.Destination, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(opts.Destination, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(copied, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, data, 0o600); err != nil {
+			return err
+		}
+		return os.Chtimes(target, copiedAt, copiedAt)
+	}))
+	retry, err := LoadImportSpec(ctx, filepath.Join(copied, "capture.json"))
+	require.NoError(t, err)
+	second, err := archive.Import(ctx, retry)
+	require.NoError(t, err)
+	assert.Empty(t, second.Gaps, "retrying an identical capture must not report a source conflict")
+	assert.Equal(t, first.Sources, second.Sources)
+	sources, err := database.ListRawArchiveSources(ctx, "", 10)
+	require.NoError(t, err)
+	assert.Len(t, sources, first.Sources)
 }

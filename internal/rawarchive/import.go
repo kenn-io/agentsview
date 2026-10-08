@@ -161,7 +161,9 @@ func (a *Archive) Import(ctx context.Context, spec ImportSpec) (Report, error) {
 			if final.Size() != info.Size() || !final.ModTime().Equal(info.ModTime()) {
 				return errors.New("capture changed while storing")
 			}
-			record := db.RawArchiveFile{RootID: binding.ID, Path: filepath.ToSlash(rel), SHA256: ref.SHA256, Size: ref.Length, ModTimeNS: info.ModTime().UnixNano()}
+			// The verified inventory owns source timestamps. A copied capture may
+			// carry new filesystem times; those only detect concurrent changes.
+			record := db.RawArchiveFile{RootID: binding.ID, Path: filepath.ToSlash(rel), SHA256: ref.SHA256, Size: ref.Length, ModTimeNS: want.ModTimeNS}
 			if err := a.database.RecordRawArchiveFile(ctx, record); err != nil {
 				return err
 			}
