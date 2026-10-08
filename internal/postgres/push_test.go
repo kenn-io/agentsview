@@ -752,11 +752,12 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 			ID: "session", Project: "project", Machine: "push-machine",
 			Agent: "claude", CreatedAt: "2026-01-01T00:00:00Z",
 			DeletedAt: &deletedAt, DeletionCause: &cause,
+			GroupKey: "group-key", GroupLabel: "group-label",
 		},
 		"marker", nil,
 	)
 	require.NoError(t, err)
-	require.Len(t, state.upsertArgs, 70)
+	require.Len(t, state.upsertArgs, 72)
 	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
 	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
 	assert.Equal(t, cause, state.upsertArgs[14].Value)
@@ -765,6 +766,8 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 	assert.Empty(t, state.upsertArgs[63].Value)
 	assert.Equal(t, false, state.upsertArgs[67].Value)
 	assert.Equal(t, "[]", state.upsertArgs[68].Value)
+	assert.Equal(t, "group-key", state.upsertArgs[70].Value)
+	assert.Equal(t, "group-label", state.upsertArgs[71].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
 	assert.Contains(t, query,
