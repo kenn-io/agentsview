@@ -86,6 +86,12 @@ func TestTelemetryCaptureRoute(t *testing.T) {
 			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
 		},
 		{
+			name: "disabled session duration", srv: authSrv,
+			body:   `{"event":"session_ended","properties":{"surface":"web","duration_bucket":"1_to_5m"}}`,
+			origin: origin, token: "test-token",
+			wantCode: http.StatusAccepted, wantBody: `{"status":"disabled"}`,
+		},
+		{
 			name: "unknown event", srv: authSrv, body: `{"event":"unknown_event"}`,
 			origin: origin, token: "test-token",
 			wantCode: http.StatusBadRequest,

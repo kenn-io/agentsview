@@ -11,6 +11,10 @@ The latest published release is
 
 **New features**
 
+- Anonymous visit duration counts visible time across tab switches and reports
+  one time bucket when the page closes or stays hidden for 30 minutes. The
+  existing telemetry opt-out turns it off.
+
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.

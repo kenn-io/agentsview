@@ -1798,6 +1798,14 @@ not send another ping that day. The web UI also reports an anonymous
 UTC day. The server sends it to PostHog with the same fields and opt-out as the
 ping. The browser never contacts PostHog.
 
+The web UI reports `session_ended` with `surface: web` and a `duration_bucket`
+of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,
+1 to below 5 minutes, 5 through 30 minutes, and above 30 minutes. Visible time
+adds up across tab switches; hidden time adds nothing. Closing the page or
+leaving it hidden for 30 minutes ends a visit. Each visit can send an event.
+There's no daily limit. Delivery is best effort; a browser crash or forced
+discard can lose it.
+
 The web UI also reports `screen_viewed` with `surface: web`. The server counts
 each screen once per installation per UTC day, across tabs and server restarts.
 It stores the installation ID, date, and that day's screen names in
@@ -1831,6 +1839,7 @@ Every event contains only:
   `~/.agentsview/telemetry-install-id`
 - for the five UI actions, the one listed value above
 - for screen views, the listed screen name and `surface: web`
+- for visit duration, the listed bucket and `surface: web`, without exact times
 
 It contains no session data, prompts, project names, file paths, account
 information, or hostname, and the events are sent with person-profile processing
