@@ -255,6 +255,9 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 		if status == 401 || apiError.Error.Details.Code == "account_session_invalid" {
 			return nil, backoff.Permanent(ErrClaudeAIAuthRequired)
 		}
+		if status == 413 {
+			return nil, backoff.Permanent(ErrClaudeAIResponseTooLarge)
+		}
 		if status == 403 {
 			return nil, backoff.Permanent(&claudeAIHTTPError{status: status})
 		}
