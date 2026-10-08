@@ -53,8 +53,8 @@ func TestProviderCapabilitiesS3DiscoveryMatchConsumers(t *testing.T) {
 }
 
 // Only the providers with same-id files opt into keeping both: Gemini chat
-// segments, Cursor transcripts copied between projects, and the Codex rollout
-// format that also serves TraeX and Augure Code.
+// segments, Cursor transcripts copied between projects, and reverted Codex
+// threads in the rollout format that also serves TraeX and Augure Code.
 func TestProviderCapabilitiesSharedSessionIDsOptIn(t *testing.T) {
 	for _, factory := range ProviderFactories() {
 		agent := factory.Definition().Type

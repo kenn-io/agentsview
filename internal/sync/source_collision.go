@@ -118,9 +118,10 @@ func collisionPolicyApplies(provider parser.Provider) bool {
 
 // sameDiscoveredSource reports whether two paths are the same discovered
 // source. A Codex rollout filename that names the thread resolves to one key
-// even across a live and an archived root. An unnamed continuation has no
-// thread id in its name, so its filename stands in for the path key and a move
-// between roots keeps the same identity.
+// even across a live and an archived root. A reverted thread's rollout has no
+// discovery key of its own, but its name carries a unique rollout id, so its
+// filename stands in for the path key and a move between roots keeps the same
+// identity.
 func sameDiscoveredSource(agent parser.AgentType, a, b string) bool {
 	if discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: a}) ==
 		discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: b}) {

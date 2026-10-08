@@ -16653,11 +16653,11 @@ func (e *Engine) codexIndexSessionNameChanged(path string) bool {
 func (e *Engine) codexIndexSessionNameState(
 	path string,
 ) (changed, verified bool) {
-	uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(path))
-	if uuid == "" {
+	threadID := parser.CodexThreadIDFromFilename(filepath.Base(path))
+	if threadID == "" {
 		return false, false
 	}
-	currentName, ok, err := e.codexMetadata().ReadThreadName(path, uuid)
+	currentName, ok, err := e.codexMetadata().ReadThreadName(path, threadID)
 	if err != nil {
 		return false, false
 	}
@@ -16669,13 +16669,37 @@ func (e *Engine) codexIndexSessionNameState(
 		// rewrite preserves the title, so the loop could never converge.
 		return false, true
 	}
+	ctx := context.Background()
 	storedName, found, err := e.db.GetSessionName(
-		context.Background(), e.idPrefix+"codex:"+uuid,
+		ctx, e.codexStoredSessionIDForPath(ctx, path, threadID),
 	)
 	if err != nil || !found {
 		return true, true
 	}
 	return codexSessionNameDiffers(storedName, currentName), true
+}
+
+// codexStoredSessionIDForPath returns the stored session id for a Codex
+// rollout. A thread's rollouts share its id, so a reverted rollout, or the
+// ordinary rollout when the reverted one synced first, is stored under a
+// derived id; the path finds that row. A live or archived copy of the thread's
+// stored rollout has no row of its own and falls back to the thread's id.
+func (e *Engine) codexStoredSessionIDForPath(
+	ctx context.Context, path, threadID string,
+) string {
+	threadSessionID := e.idPrefix + "codex:" + threadID
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	if e.db.GetSessionFilePath(ctx, threadSessionID) == lookupPath {
+		return threadSessionID
+	}
+	ids, err := e.db.ListSessionIDsByFilePath(ctx, lookupPath, string(parser.AgentCodex))
+	if err != nil || len(ids) != 1 {
+		return threadSessionID
+	}
+	return ids[0]
 }
 
 // codexCachedIndexSessionNameState limits title-based cache invalidation to

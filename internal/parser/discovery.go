@@ -24,6 +24,15 @@ var uuidRe = regexp.MustCompile(
 		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
 )
 
+// revertedRolloutRe matches the stem Codex writes when it reverts a thread:
+// the stable thread UUID, an underscore, then the new rollout's own UUID.
+var revertedRolloutRe = regexp.MustCompile(
+	`^rollout-.*-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-` +
+		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_` +
+		`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-` +
+		`[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`,
+)
+
 const (
 	copilotStateDir = "session-state"
 	geminiChatsDir  = "chats"
@@ -784,6 +793,25 @@ func CodexSessionUUIDFromFilename(name string) string {
 		return ""
 	}
 	return extractUUIDFromRollout(name)
+}
+
+// CodexThreadIDFromFilename returns the thread UUID a Codex rollout filename
+// names, including a reverted thread's rollout
+// (rollout-<timestamp>-<thread>_<rollout>.jsonl). Discovery keys stay on
+// CodexSessionUUIDFromFilename, which leaves a reverted rollout as its own
+// source; use this only to find the thread's metadata, such as its name.
+func CodexThreadIDFromFilename(name string) string {
+	if id := CodexSessionUUIDFromFilename(name); id != "" {
+		return id
+	}
+	if !isCodexSessionFilename(name) {
+		return ""
+	}
+	match := revertedRolloutRe.FindStringSubmatch(strings.TrimSuffix(name, ".jsonl"))
+	if len(match) < 2 {
+		return ""
+	}
+	return match[1]
 }
 
 // CodexLayout reports which on-disk layout a Codex session path uses.

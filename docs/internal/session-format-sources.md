@@ -573,6 +573,25 @@ fixtures retain this field; missing identities remain source-local.
   call per file. `custom_tool_call` items carry the same patch text under
   `input` instead of a JSON `patch` argument.
 
+- **Reverted rollouts (verified 2026-10-08):** `thread/revert` keeps the thread
+  ID and writes a new immutable rollout named
+  `rollout-<timestamp>-<thread_id>_<rollout_id>.jsonl`; ordinary rollouts name
+  only the thread ID. See the pinned
+  [recorder parameters](https://github.com/openai/codex/blob/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e/codex-rs/rollout/src/recorder.rs#L98-L104)
+  and
+  [rollout filename parser](https://github.com/openai/codex/blob/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e/codex-rs/rollout/src/rollout_file_name.rs#L10-L14).
+  The old rollout stays on disk. The new file's `session_meta` carries the
+  same thread ID plus a `history_base` reference to the retained prefix
+  instead of a copy, and Codex repoints its SQLite thread record at the new
+  file; see
+  [revert_thread.rs](https://github.com/openai/codex/blob/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e/codex-rs/thread-store/src/local/revert_thread.rs#L15-L18).
+  Agentsview keeps both files: the stored rollout keeps the thread's session
+  ID and the other is stored under a derived ID as a linked session. The
+  parser ignores `history_base`, so the reverted rollout's session holds only
+  turns written after the revert. Discovery keys a reverted rollout by its
+  path because its filename has no plain thread UUID suffix; thread-name
+  refresh reads the thread ID from the name.
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/openai/codex.git` at
