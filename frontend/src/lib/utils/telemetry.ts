@@ -2,6 +2,7 @@ import { orvalRequest } from "../api/runtime.js";
 
 export type TelemetryEvent =
   | "app_opened"
+  | "screen_viewed"
   | "search_run"
   | "session_viewed"
   | "export_run"
