@@ -303,7 +303,7 @@ func upsertConversation(
 		Session:           sess,
 		Messages:          msgs,
 		ReplaceMessages:   replaceMessages,
-		SkipSignalUpdates: unchanged,
+		SkipSignalUpdates: true,
 		TouchModified:     true,
 	}
 	if replaceMessages && !isNew {

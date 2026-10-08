@@ -2814,7 +2814,8 @@ schemas keep their existing ordering behavior.
   responses count as skipped; 401 or `error.details.error_code` equal to
   `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
   Other detail failures stop Sync after two chats fail in a row; a successful
-  detail resets the streak. A 404 or oversized body leaves the streak unchanged.
+  detail resets the streak. A 404, oversized body, or host HTTP 413 leaves the
+  streak unchanged.
   Reverified 2026-10-08 against `TestSyncClaudeAIDetailFailures` and
   `TestSyncClaudeAIConsecutiveDetailFailures`. See
   [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for failure handling.
