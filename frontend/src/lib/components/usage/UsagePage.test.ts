@@ -124,10 +124,11 @@ afterEach(() => {
   router.params = {};
   router.sessionId = null;
   window.history.replaceState(null, "", "/");
-  usage.backToProjects(false);
+  usage.backToProjects();
   usage.focus = null;
   usage.attributionSummary = null;
   usage.summary = null;
+  usage.colorSummary = null;
   usage.topSessions = null;
   usage.errors.summary = null;
   usage.errors.topSessions = null;
@@ -565,6 +566,7 @@ describe("UsagePage refresh behavior", () => {
     router.route = "usage";
     router.params = {};
     usage.summary = tenModelUsageSummary();
+    usage.colorSummary = usage.summary;
     usage.toggles.timeSeries.groupBy = "model";
     usage.toggles.attribution.groupBy = "model";
     usage.toggles.attribution.view = "list";
@@ -832,38 +834,7 @@ describe("UsagePage refresh behavior", () => {
 });
 
 
-describe("Usage attribution history", () => {
-  it("reopens a project after remounting its history entry", async () => {
-    vi.spyOn(usage, "fetchAll").mockResolvedValue();
-    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    window.history.replaceState({ usageZoom: true }, "", "/usage");
-    router.route = "usage";
-    router.params = {};
-    usage.focus = { by: "project", id: "pl1:sha256:alpha", label: "Alpha" };
-    usage.summary = usageSummaryWithUnsupported();
-    component = mount(UsagePage, { target: document.body });
-    await flushEffects();
-    expect(document.querySelector(".attribution-panel")?.textContent).toContain("All projects");
-    await unmount(component);
-    component = undefined;
-    component = mount(UsagePage, { target: document.body });
-    await flushEffects();
-    expect(document.querySelector(".attribution-panel")?.textContent).toContain("All projects");
-    window.history.replaceState(null, "", "/usage");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-    await flushEffects();
-    expect(usage.zoomedProject).toBeNull();
-    expect(document.querySelector(".attribution-panel")?.textContent).not.toContain("All projects");
-  });
-
+describe("Usage attribution navigation", () => {
   it("refreshes once after an agent click and keeps the brush and project selection", async () => {
     const refresh = vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -880,9 +851,9 @@ describe("Usage attribution history", () => {
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
     usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
-    usage.focus = { by: "project", id: "pl1:sha256:alpha", label: "Alpha" };
+    usage.focus = { by: "project", id: "pl1:sha256:alpha" };
     refresh.mockClear();
-    usage.toggleFocus("agent", "codex", "Codex");
+    usage.toggleFocus("agent", "codex");
     await flushEffects();
     expect(refresh).toHaveBeenCalledExactlyOnceWith({ preserveTimeRange: true });
     expect(usage.isFocused("agent", "codex")).toBe(true);
@@ -893,7 +864,7 @@ describe("Usage attribution history", () => {
   });
 
 
-  it.each(["button", "Escape", "Backspace", "browser"])("%s Back keeps the current dates and selection", async (action) => {
+  it.each(["button", "Escape", "Backspace"])("%s Back keeps the current dates and selection", async (action) => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -903,20 +874,14 @@ describe("Usage attribution history", () => {
     usage.summary = usageSummaryWithUnsupported();
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
-    usage.toggleFocus("project", "pl1:sha256:alpha", "Alpha");
-    usage.selectAttributionProject("pl1:sha256:alpha", "Alpha");
+    usage.toggleFocus("project", "pl1:sha256:alpha");
+    usage.setOpenProject("pl1:sha256:alpha");
     await flushEffects();
     usage.applyDateRange("2024-01-01", "2024-03-31");
     usage.excludedModels = "model-hidden";
     await flushEffects();
-    expect(window.history.state?.usageZoom).toBe(true);
-    const pop = () => {
-      window.history.replaceState(null, "", "/usage?from=2024-01-01&to=2024-01-31");
-      window.dispatchEvent(new PopStateEvent("popstate"));
-    };
-    const back = vi.spyOn(window.history, "back").mockImplementation(pop);
-    if (action === "browser") pop();
-    else if (action === "button") {
+    expect(window.location.search).toContain("to=2024-03-31");
+    if (action === "button") {
       [...document.querySelectorAll<HTMLButtonElement>(".attribution-panel button")]
         .find((button) => button.textContent?.trim() === "← All projects")!.click();
     } else {
@@ -929,6 +894,6 @@ describe("Usage attribution history", () => {
     expect(usage.isFocused("project", "pl1:sha256:alpha")).toBe(true);
     expect(router.params).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-03-31", exclude_model: "model-hidden" }));
     expect(usage.to).toBe("2024-03-31");
-    expect(back).toHaveBeenCalledTimes(action === "browser" ? 0 : 1);
+    expect(window.location.search).toContain("to=2024-03-31");
   });
 });

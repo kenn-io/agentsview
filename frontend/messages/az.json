@@ -2462,7 +2462,8 @@
   "tool_sequences_retry": "Yenidən cəhd et",
   "usage_all_projects": "Bütün layihələr",
   "usage_click_project": "{label} üzrə fokuslanmaq üçün klikləyin, qrupları və sessiyaları açmaq üçün iki dəfə klikləyin",
-  "usage_click_project_hint": "Fokuslanmaq üçün klikləyin, açmaq üçün iki dəfə klikləyin. Enter açır, Space seçir.",
+  "usage_click_project_hint": "Seçmək üçün klikləyin, açmaq üçün iki dəfə klikləyin və ya Aç düyməsini basın. Enter və Space seçir.",
+  "usage_open_project": "{label} aç",
   "usage_zoom_loading": "Yüklənir...",
   "usage_click_to_focus": "{label} üzrə fokuslanmaq üçün klikləyin",
   "usage_click_to_focus_hint": "Fokuslanmaq üçün klikləyin, təmizləmək üçün yenidən klikləyin"

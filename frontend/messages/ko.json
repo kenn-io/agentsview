@@ -2377,7 +2377,8 @@
   "tool_sequences_retry": "다시 시도",
   "usage_all_projects": "모든 프로젝트",
   "usage_click_project": "클릭하여 {label}에 집중, 두 번 클릭하여 그룹과 세션 열기",
-  "usage_click_project_hint": "클릭하여 집중, 두 번 클릭하여 열기. Enter로 열고 Space로 선택합니다.",
+  "usage_click_project_hint": "클릭하여 선택하고, 두 번 클릭하거나 열기 버튼으로 엽니다. Enter와 Space로 선택합니다.",
+  "usage_open_project": "{label} 열기",
   "usage_zoom_loading": "로딩 중...",
   "usage_click_to_focus": "클릭하여 {label}에 집중",
   "usage_click_to_focus_hint": "클릭하여 집중, 다시 클릭하여 해제"

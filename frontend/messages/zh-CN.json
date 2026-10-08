@@ -2377,7 +2377,8 @@
   "tool_sequences_retry": "重试",
   "usage_all_projects": "所有项目",
   "usage_click_project": "点击聚焦 {label}，双击打开其分组和会话",
-  "usage_click_project_hint": "点击聚焦，双击打开。Enter 打开，空格选择。",
+  "usage_click_project_hint": "点击选择，双击或使用打开按钮展开。Enter 和空格键选择。",
+  "usage_open_project": "打开 {label}",
   "usage_zoom_loading": "正在加载...",
   "usage_click_to_focus": "点击聚焦 {label}",
   "usage_click_to_focus_hint": "点击聚焦，再次点击清除"

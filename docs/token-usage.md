@@ -152,12 +152,15 @@ when anything is active.
 Click a tile or row in Usage attribution to select a project, model, or agent
 and narrow the page's stats. Every tile and row stays visible at its own color;
 the selection is highlighted and the others dimmed. Click the selection again
-or remove its filter chip to clear it. The selection stays active when dates widen.
-Double click, double tap, or press Enter on a project to open its groups and
-individual sessions for the selected date range. Enter selects a model or agent;
-Space selects any item. Hermes cron jobs show their latest recorded name in
-that range and their ID on hover. **All projects**, Escape, Backspace, and
-browser Back return to project tiles with the current dates, filters, and selection.
+or use **Clear filters** to clear it. The selection stays active when dates
+widen.
+Double click a project or select it and use **Open** to see its groups and
+individual sessions for the selected date range. Enter and Space select any item.
+Hermes cron jobs show their latest recorded name in
+that range and their ID on hover. **All projects**, Escape, and Backspace
+return to project tiles with the current dates, filters, and selection.
+Opening a project stays in the panel; browser Back and Forward follow page
+history.
 The **Projects** picker excludes a project. Usage outside the top 100 tiles
 appears under **Other**. Archives without `state.db` titles show job IDs.
 Orphaned Hermes sessions synced before the upgrade can't be reparsed and appear
@@ -226,7 +229,7 @@ The attribution panel breaks down total spend for the window into a treemap plus
 a ranked side rail. Switch the group-by between **Project**, **Model**, and
 **Agent**, or flip the view from **Treemap** to **List** for a table-style
 readout. Click a tile or row to select it while keeping every item visible.
-Double click, double tap, or press Enter on a project to open its groups and
+Double click a project or select it and use **Open** to see its groups and
 sessions. Use the **Projects** filter to hide projects.
 
 ![Cost attribution treemap](/docs/assets/generated/screenshots/usage-attribution.png)

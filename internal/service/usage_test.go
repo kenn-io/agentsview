@@ -268,6 +268,24 @@ func TestDirectBackend_UsageSummary_UnknownProjectKeyHasStableCode(t *testing.T)
 	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, inputErr.Code)
 }
 
+func TestUsageSummary_WhitespaceProjectKeys(t *testing.T) {
+	env := newHTTPBackendEnv(t)
+	for _, tc := range []struct {
+		param  string
+		status int
+	}{
+		{param: "exclude_project_key", status: http.StatusOK},
+		{param: "project_key", status: http.StatusBadRequest},
+	} {
+		t.Run(tc.param, func(t *testing.T) {
+			resp, err := http.Get(env.BaseURL + "/api/v1/usage/summary?" + tc.param + "=%20")
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, tc.status, resp.StatusCode)
+		})
+	}
+}
+
 func TestDirectBackend_UsageSummary_EmptyRange(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)

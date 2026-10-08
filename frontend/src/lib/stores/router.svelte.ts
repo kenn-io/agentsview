@@ -246,7 +246,7 @@ export class RouterStore {
     this.#updateSticky(params);
     this.params = { ...this.#stickyParams, ...params };
     this.isRootPath = false;
-    window.history.replaceState(window.history.state, "", url);
+    window.history.replaceState(null, "", url);
   }
 }
 

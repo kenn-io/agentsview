@@ -359,7 +359,8 @@ class UsageStore {
 
   summary = $state<UsageSummaryResponse | null>(null);
   attributionSummary = $state<UsageSummaryResponse | null>(null);
-  focus = $state<{ by: "project" | "model"; id: string; label: string } | null>(null);
+  focus = $state<{ by: "project" | "model"; id: string } | null>(null);
+  colorSummary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
@@ -367,7 +368,14 @@ class UsageStore {
   private zoomed = $state(false);
 
   get zoomedProject(): { key: string; label: string } | null {
-    return this.zoomed && this.focus?.by === "project" ? { key: this.focus.id, label: this.focus.label } : null;
+    return this.zoomed && this.focus?.by === "project" ? { key: this.focus.id, label: this.focusLabel } : null;
+  }
+  get focusLabel(): string {
+    const focus = this.focus;
+    if (!focus) return "";
+    return focus.by === "project"
+      ? this.knownProjects.find((project) => project.id === focus.id)?.name ?? focus.id
+      : focus.id;
   }
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
   topSessions = $state<DbTopSessionEntry[] | null>(null);
@@ -479,10 +487,6 @@ class UsageStore {
 
   get timeSeriesSummary(): UsageSummaryResponse | null {
     return this.timeSeriesContextSummary ?? this.summary;
-  }
-
-  get colorSummary(): UsageSummaryResponse | null {
-    return this.attributionSummary ?? this.timeSeriesSummary;
   }
 
   get pairwiseModelOptions(): string[] {
@@ -674,21 +678,21 @@ class UsageStore {
       : this.focus?.by === by && this.focus.id === id;
   }
 
-  toggleFocus(by: GroupBy, id: string, label: string): void {
+  toggleFocus(by: GroupBy, id: string): void {
     const clear = this.isFocused(by, id);
     if (by === "agent") {
       sessions.filters.agent = clear ? "" : id;
       return;
     }
-    this.focus = clear ? null : { by, id, label };
+    this.focus = clear ? null : { by, id };
     void this.fetchAll({ preserveTimeRange: true });
   }
 
   clearFocus(): void {
     if (!this.focus) return;
     if (this.zoomed) this.backToProjects();
-    const { by, id, label } = this.focus;
-    this.toggleFocus(by, id, label);
+    const { by, id } = this.focus;
+    this.toggleFocus(by, id);
   }
 
   // Toggle an item's exclusion. Clicking an included item
@@ -1051,6 +1055,8 @@ class UsageStore {
       if (this.versions.summary === v) {
         this.summary = data;
         this.attributionSummary = attributionData;
+        if (!attributionData) this.colorSummary = contextData ?? this.timeSeriesContextSummary ?? data;
+        else if (!this.selectedTimeRange) this.colorSummary = attributionData;
         // Both responses are applied together, so each request's apply
         // phase starts once the later body has arrived; the earlier one
         // shows a gap while it waited for its sibling.
@@ -1266,33 +1272,23 @@ class UsageStore {
     }
   }
 
-  restoreZoomFromHistory(): void {
-    this.zoomed = window.history.state?.usageZoom === true && this.focus?.by === "project";
-    if (!this.zoomed) {
-      this.invalidatePanel("zoom");
-      this.zoomRows = null;
-      this.errors.zoom = null;
-    }
-  }
-
-  backToProjects(popHistory = true): void {
-    if (popHistory && window.history.state?.usageZoom === true) window.history.back();
+  backToProjects(): void {
     this.invalidatePanel("zoom");
     this.zoomed = false;
     this.zoomRows = null;
     this.errors.zoom = null;
   }
 
-  selectAttributionProject(key: string, label: string): void {
-    if (!this.isFocused("project", key)) {
-      this.zoomed = false;
-      this.toggleFocus("project", key, label);
+  setOpenProject(key: string | null): void {
+    if (key === null) {
+      this.backToProjects();
+      return;
     }
+    const needsFocus = !this.isFocused("project", key);
+    this.focus = { by: "project", id: key };
     this.zoomed = true;
-    if (window.history.state?.usageZoom !== true) {
-      window.history.pushState({ ...window.history.state, usageZoom: true }, "");
-    }
-    void this.fetchZoom();
+    if (needsFocus) void this.fetchAll({ preserveTimeRange: true });
+    else void this.fetchZoom();
   }
 
   private async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {

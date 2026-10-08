@@ -42,7 +42,7 @@ describe("Treemap", () => {
 
     unmount(component);
   });
-  it("selects with Enter without a project opener and opens on double click", async () => {
+  it("selects with Enter and opens on double click", async () => {
     const onSelect = vi.fn();
     const onOpen = vi.fn();
     const items = [
@@ -62,10 +62,11 @@ describe("Treemap", () => {
     const project = mount(Treemap, { target: document.body, props: { items, onSelect, onOpen } });
     await tick();
     const tile = document.querySelector(".tile")!;
-    tile.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    tile.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(onOpen).not.toHaveBeenCalled();
     tile.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
     tile.dispatchEvent(new MouseEvent("dblclick", { detail: 2, bubbles: true }));
-    expect(onOpen).toHaveBeenCalledWith("alpha", expect.any(MouseEvent));
+    expect(onOpen).toHaveBeenCalledWith("alpha");
     expect(onSelect.mock.calls).toEqual([["beta"], ["alpha"]]);
     await unmount(project);
   });

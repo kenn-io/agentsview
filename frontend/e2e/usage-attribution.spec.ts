@@ -1,13 +1,15 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, devices } from "@playwright/test";
 import { clickNavTab } from "./helpers/nav";
 
 test.describe("Usage attribution touch", () => {
-  test.use({ hasTouch: true, isMobile: true, viewport: { width: 900, height: 1000 } });
+  const { defaultBrowserType: _browser, ...iPhone } = devices["iPhone 13"];
+  test.use(iPhone);
 
   for (const view of ["treemap", "list"] as const) {
-    test(`double tap opens a project in ${view}`, async ({ page }) => {
+    test(`Open opens a selected project in ${view}`, async ({ page }) => {
       await page.goto("/usage");
       const panel = page.locator(".attribution-panel");
+      await expect(panel.locator(".tile").first()).toBeVisible();
       if (view === "list") await panel.getByRole("button", { name: "List", exact: true }).tap();
       const rows = panel.locator(view === "treemap" ? ".tile" : ".list-row");
       await expect(rows.first()).toBeVisible();
@@ -19,13 +21,9 @@ test.describe("Usage attribution touch", () => {
       await expect(rows).toHaveCount(count);
       await expect(panel.locator(".dimmed").first()).toBeVisible();
       expect(await rows.evaluateAll((items) => items.map((item) => item.querySelector("rect")?.getAttribute("fill") ?? item.querySelector(".list-dot")?.getAttribute("style")))).toEqual(colors);
-      // Separate the single tap assertion from the next double tap gesture.
-      await page.waitForTimeout(600);
-      const box = await rows.first().boundingBox();
-      expect(box).not.toBeNull();
-      await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
-      await page.touchscreen.tap(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      await panel.getByRole("button", { name: /^Open / }).tap();
       await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
+      await expect(rows.first()).toBeVisible();
       await panel.getByRole("button", { name: "All projects" }).tap();
       await expect(rows).toHaveCount(count);
       await expect(rows.first()).toHaveAttribute("aria-pressed", "true");
@@ -91,12 +89,14 @@ test.describe("Usage attribution selection", () => {
 
     await panel.getByRole("button", { name: "Agent", exact: true }).click();
     await expect(rows.first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Refresh usage data", exact: true })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Clear selection", exact: true })).toBeVisible();
     summaries.length = 0;
     const agentResponse = page.waitForResponse(
       (response) =>
         response.url().includes("/usage/summary") &&
         new URL(response.url()).searchParams.has("agent") &&
+        new URL(response.url()).searchParams.get("from") === range.get("from") &&
         response.ok(),
     );
     await rows.first().click();
@@ -111,24 +111,63 @@ test.describe("Usage attribution selection", () => {
     expect(summaries[2]!.searchParams.has("project_key")).toBe(true);
   });
 
-  test("Back remounts the opened project and a second Back returns to all projects", async ({
-    page,
-  }) => {
-    await page.goto("/usage");
+  test("Back and Forward follow page history and retain populated project rows", async ({ page }) => {
+    await page.goto("/sessions");
+    await clickNavTab(page, "Usage");
     const panel = page.locator(".attribution-panel");
+    await expect(panel.locator(".tile").first()).toBeVisible();
+    await panel.getByRole("button", { name: "List", exact: true }).click();
+    await panel.locator(".list-row").first().dblclick();
+    await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
+    await expect(panel.locator(".list-row").first()).toBeVisible();
+    const usageURL = page.url();
+    await page.goBack();
+    await expect(page.locator(".usage-page")).toBeHidden();
+    await expect(page).toHaveURL(/\/sessions/);
+    await page.goForward();
+    await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
+    await expect(panel.locator(".list-row").first()).toBeVisible();
+    expect(page.url()).toBe(usageURL);
+    await clickNavTab(page, "Sessions");
+    await page.goBack();
+    await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
+    await expect(panel.locator(".list-row").first()).toBeVisible();
+    await page.goForward();
+    await expect(page.locator(".usage-page")).toBeHidden();
+  });
+
+  test("All projects and Escape keep the brush, dates and filters", async ({ page }) => {
+    await page.goto("/usage?window_days=30&exclude_model=hidden-model");
+    const panel = page.locator(".attribution-panel");
+    await expect(panel.locator(".tile").first()).toBeVisible();
     await panel.getByRole("button", { name: "List", exact: true }).click();
     const row = panel.locator(".list-row").first();
     await expect(row).toBeVisible();
-    await row.dblclick();
-    await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
-    const usageURL = page.url();
-    await clickNavTab(page, "Sessions");
-    await expect(page.locator(".usage-page")).toBeHidden();
-    await page.goBack();
-    await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
-    await page.goBack();
-    await expect(panel.getByRole("button", { name: "All projects" })).toBeHidden();
-    await expect(panel.locator('.list-row[aria-pressed="true"]')).toBeVisible();
-    expect(page.url()).toBe(usageURL);
+    const brush = page.locator(".chart-container .chart-body").first();
+    const bounds = (await brush.boundingBox())!;
+    const y = bounds.y + bounds.height / 2;
+    await page.mouse.move(bounds.x + bounds.width * 0.2, y);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width * 0.75, y, { steps: 8 });
+    await page.mouse.up();
+    await expect(page.getByRole("button", { name: "Clear selection", exact: true })).toBeVisible();
+    for (const action of ["All projects", "Escape", "Backspace"]) {
+      if (action === "Escape") {
+        await row.press("Enter");
+        await expect(row).toHaveAttribute("aria-pressed", "false");
+        await row.press("Enter");
+        await expect(row).toHaveAttribute("aria-pressed", "true");
+        await panel.getByRole("button", { name: /^Open / }).press("Enter");
+      } else await row.dblclick();
+      await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
+      await expect(panel.locator(".list-row").first()).toBeVisible();
+      const url = page.url();
+      if (action === "All projects") await panel.getByRole("button", { name: action }).click();
+      else await page.keyboard.press(action);
+      await expect(panel.getByRole("button", { name: "All projects" })).toBeHidden();
+      await expect(row).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByRole("button", { name: "Clear selection", exact: true })).toBeVisible();
+      expect(page.url()).toBe(url);
+    }
   });
 });

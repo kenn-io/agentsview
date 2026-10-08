@@ -71,6 +71,9 @@ func ResolveUsageProjectKeys(
 		if err != nil {
 			return UsageRequest{}, err
 		}
+		if len(resolved) == 0 {
+			return UsageRequest{}, &UsageInputError{Code: UsageErrorCodeUnknownProjectKey, Msg: "unknown project key"}
+		}
 		base := append(splitCSVTokens(req.Project), req.ProjectLabels...)
 		for _, label := range resolved {
 			if len(base) > 0 && !slices.Contains(base, label) {
@@ -131,9 +134,6 @@ func usageProjectKeyLabels(byKey map[string]string, keys string) ([]string, erro
 			}
 		}
 		resolved = append(resolved, label)
-	}
-	if len(resolved) == 0 {
-		return nil, &UsageInputError{Code: UsageErrorCodeUnknownProjectKey, Msg: "unknown project key"}
 	}
 	return resolved, nil
 }

@@ -20,7 +20,7 @@
     items: TreemapItem[];
     height?: number;
     onSelect?: (id: string) => void;
-    onOpen?: (id: string, event?: MouseEvent) => void;
+    onOpen?: (id: string) => void;
     formatValue?: (value: number) => string;
   }
 
@@ -50,8 +50,7 @@
   function handleKey(e: KeyboardEvent, id: string) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      if (e.key === "Enter" && onOpen) onOpen(id);
-      else onSelect?.(id);
+      onSelect?.(id);
     }
   }
 </script>
@@ -81,7 +80,7 @@
               aria-pressed={tile.selected ?? false}
               aria-label={tile.title ?? m.usage_click_to_focus({ label: tile.label })}
               onclick={(event) => { if (event.detail < 2) onSelect?.(tile.id); }}
-              ondblclick={(event) => onOpen?.(tile.id, event)}
+              ondblclick={() => onOpen?.(tile.id)}
               onkeydown={(event) => handleKey(event, tile.id)}
             >
               <title>{tile.title ?? m.usage_click_to_focus({ label: tile.label })}</title>

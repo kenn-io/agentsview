@@ -111,6 +111,7 @@ function summaryWithModels(): UsageSummaryResponse {
 
 function mountPanel(colorMap?: ReadonlyMap<string, string>) {
   const groupBy = usage.toggles.attribution.groupBy;
+  usage.mergeKnownProjects((usage.attributionSummary ?? usage.summary)?.projectTotals ?? [], {});
   return mount(AttributionPanel, {
     target: document.body,
     props: {
@@ -122,8 +123,9 @@ function mountPanel(colorMap?: ReadonlyMap<string, string>) {
 beforeEach(() => {
   vi.clearAllMocks();
   usage.focus = null;
+  usage.knownProjects = [];
   usage.attributionSummary = null;
-  usage.backToProjects(false);
+  usage.backToProjects();
   usage.excludedProjectKeys = "";
   usage.excludedAgents = "";
   usage.excludedModels = "";
@@ -131,7 +133,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  usage.backToProjects(false);
+  usage.backToProjects();
   usage.focus = null;
   usage.attributionSummary = null;
   sessions.filters.agent = "";
@@ -190,6 +192,7 @@ describe("AttributionPanel selection", () => {
     expect(document.querySelector(".list-row.dimmed")).not.toBeNull();
     expect(document.querySelectorAll(".list-row")).toHaveLength(2);
     expect(usage.zoomedProject).toBeNull();
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.trim().startsWith("Open "))).toBe(false);
     row.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     await tick();
     expect(row.getAttribute("aria-pressed")).toBe("false");
@@ -200,7 +203,7 @@ describe("AttributionPanel selection", () => {
     const full = summaryWithDuplicateProjectLabels();
     const narrowed = structuredClone(full);
     narrowed.projectTotals = [narrowed.projectTotals[0]!];
-    usage.focus = { by: "project", id: "pl1:sha256:first", label: "First" };
+    usage.focus = { by: "project", id: "pl1:sha256:first" };
     usage.summary = narrowed;
     usage.attributionSummary = full;
     usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
@@ -218,18 +221,26 @@ describe("AttributionPanel selection", () => {
     usage.cancelInFlightReads();
   });
 
-  it("Space selects a project and Enter opens it", async () => {
+  it.each(["Enter", " "])("%s selects a project and Open opens it", async (key) => {
     usage.summary = summaryWithDuplicateProjectLabels();
+    usage.summary.projectTotals[1]!.project = "Project B";
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usage.summary);
     usage.toggles.attribution.groupBy = "project";
     usage.toggles.attribution.view = "list";
     const component = mountPanel();
     await tick();
+    const openButton = () => [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Open Project B");
+    expect(openButton()).toBeUndefined();
     const row = document.querySelectorAll(".list-row")[1]!;
-    row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+    row.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    await tick();
+    expect(row.getAttribute("aria-pressed")).toBe("true");
     expect(usage.zoomedProject).toBeNull();
-    row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-    expect(usage.zoomedProject?.key).toBe("pl1:sha256:second");
+    expect(openButton()).toBeDefined();
+    openButton()!.click();
+    await tick();
+    expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:second", label: "Project B" });
+    expect(openButton()).toBeUndefined();
     await unmount(component);
   });
 });
@@ -384,13 +395,11 @@ const topSessionForRemainder = (): DbTopSessionEntry => ({
 describe("AttributionPanel job groups", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(window.history, "back").mockImplementation(() =>
-      window.dispatchEvent(new PopStateEvent("popstate")),
-    );
     usage.backToProjects();
     usage.zoomRows = null;
     usage.summary = summaryWithDuplicateProjectLabels();
     usage.summary.projectTotals[0]!.project = "hermes-cron";
+    usage.mergeKnownProjects(usage.summary.projectTotals, {});
     usage.excludedProjectKeys = "";
     usage.mode = "cost";
     usage.toggles.attribution.groupBy = "project";
@@ -472,7 +481,7 @@ describe("AttributionPanel job groups", () => {
       (button) => button.textContent?.trim() === "← All projects",
     )!;
     back.click();
-    usage.backToProjects(false);
+    usage.backToProjects();
     await tick();
     expect(usage.zoomedProject).toBeNull();
     expect(document.querySelectorAll(".list-row")).toHaveLength(2);
@@ -482,7 +491,7 @@ describe("AttributionPanel job groups", () => {
   it("uses zoom rows and remainder when summary fails after a date change", async () => {
     usage.applyDateRange("2024-02-01", "2024-02-29");
     usage.summary = null;
-    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+    usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usage.zoomRows = [
       { ...topSessionForRemainder(), groupKey: "job-a", groupLabel: "Digest", cost: testMoney(2) },
@@ -511,7 +520,7 @@ describe("AttributionPanel job groups", () => {
   });
 
   it("shows the job ID for an unnamed group in its label and tooltip", async () => {
-    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+    usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usage.zoomRows = [
       {
@@ -530,7 +539,7 @@ describe("AttributionPanel job groups", () => {
   });
 
   it("distinguishes matching jobs across machines", async () => {
-    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+    usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usage.zoomRows = ["host-a", "host-b"].map((machine) => ({
       ...topSessionForRemainder(), groupKey: "digest", machine, groupLabel: "Daily digest",
@@ -550,7 +559,7 @@ describe("AttributionPanel job groups", () => {
   });
 
   it("keeps providers when ungrouped session IDs collide", async () => {
-    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+    usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usage.zoomRows = ["hermes:run-a", "augure-desktop:run-a"].map((sessionId) => ({
       ...topSessionForRemainder(),
@@ -572,7 +581,7 @@ describe("AttributionPanel job groups", () => {
   });
 
   it("clears zoom when switching attribution dimensions", async () => {
-    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+    usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     const component = mountPanel();
     await tick();
@@ -583,7 +592,7 @@ describe("AttributionPanel job groups", () => {
     unmount(component);
   });
   it("keeps zoom when the project leaves the refreshed summary", async () => {
-    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+    usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usage.zoomRows = [];
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithAgents([]));

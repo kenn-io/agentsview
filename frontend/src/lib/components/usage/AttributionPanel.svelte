@@ -38,7 +38,6 @@
   }
 
   let panel: HTMLElement;
-  let clickedProject: { id: string; label: string } | undefined;
 
   const zoomedProject = $derived(usage.zoomedProject);
 
@@ -51,7 +50,7 @@
     if (!zoomedProject || !panel.contains(document.activeElement) || target.closest("input, textarea, select, [contenteditable]")) return;
     if (event.key === "Escape" || event.key === "Backspace") {
       event.preventDefault();
-      usage.backToProjects();
+      usage.setOpenProject(null);
     }
   }
 
@@ -154,26 +153,15 @@
 
   function handleSelect(id: string) {
     if (zoomedProject) return;
-    const row = rows.find((row) => row.id === id);
-    if (groupBy === "project") clickedProject = row;
-    if (row) usage.toggleFocus(groupBy, id, row.label);
+    if (rows.some((row) => row.id === id)) usage.toggleFocus(groupBy, id);
   }
 
-  function handleOpen(id: string, event?: MouseEvent) {
+  function handleOpen(id: string) {
     if (zoomedProject || groupBy !== "project") return;
-    // Adding or removing a filter chip can move the panel under the second tap.
-    const project = event && clickedProject ? clickedProject : rows.find((row) => row.id === id);
+    const project = rows.find((row) => row.id === id);
     if (!project) return;
-    usage.selectAttributionProject(project.id, project.label);
+    usage.setOpenProject(project.id);
     panel.focus();
-  }
-
-  function handleWindowClick(event: MouseEvent) {
-    if (event.detail === 1 && !(event.target as Element).closest(".list-row, .rail-row, .tile")) clickedProject = undefined;
-  }
-
-  function handleWindowDoubleClick(event: MouseEvent) {
-    if (clickedProject && panel.contains(event.target as Node)) handleOpen(clickedProject.id, event);
   }
 
   function handleClick(event: MouseEvent, id: string) {
@@ -183,8 +171,7 @@
   function handleKey(event: KeyboardEvent, id: string) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      if (event.key === "Enter" && groupBy === "project") handleOpen(id);
-      else handleSelect(id);
+      handleSelect(id);
     }
   }
 
@@ -197,12 +184,12 @@
   }
 </script>
 
-<svelte:window onkeydown={handleBackKey} onclick={handleWindowClick} ondblclick={handleWindowDoubleClick} />
+<svelte:window onkeydown={handleBackKey} />
 
 <section class="attribution-panel" aria-label={isTokenMode ? m.usage_tokens_attribution_title() : m.usage_cost_attribution_title()} tabindex="-1" bind:this={panel}>
   <div class="panel-header">
     {#if zoomedProject}
-      <Button size="sm" surface="soft" label={`← ${m.usage_all_projects()}`} onclick={() => usage.backToProjects()} />
+      <Button surface="soft" label={`← ${m.usage_all_projects()}`} onclick={() => usage.setOpenProject(null)} />
       <h3 class="chart-title">{zoomedProject.label}</h3>
     {:else}
       <h3 class="chart-title">
@@ -210,6 +197,9 @@
           ? m.usage_tokens_attribution_title()
           : m.usage_cost_attribution_title()}
       </h3>
+      {#if groupBy === "project" && usage.focus?.by === "project"}
+        <Button size="sm" surface="soft" label={m.usage_open_project({ label: usage.focusLabel })} onclick={() => handleOpen(usage.focus!.id)} />
+      {/if}
     {/if}
     <div class="toggles">
       <div class="segment-toggle">
@@ -284,7 +274,7 @@
               title={rowTitle(row.id, row.label)}
               aria-disabled={!!zoomedProject}
               onclick={(event) => handleClick(event, row.id)}
-              ondblclick={(event) => handleOpen(row.id, event)}
+              ondblclick={() => handleOpen(row.id)}
               onkeydown={(event) => handleKey(event, row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
@@ -315,7 +305,7 @@
             title={rowTitle(row.id, row.label)}
             aria-disabled={!!zoomedProject}
             onclick={(event) => handleClick(event, row.id)}
-            ondblclick={(event) => handleOpen(row.id, event)}
+            ondblclick={() => handleOpen(row.id)}
             onkeydown={(event) => handleKey(event, row.id)}
           >
             <span class="list-rank">{i + 1}</span>

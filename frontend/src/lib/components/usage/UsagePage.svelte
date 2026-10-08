@@ -432,13 +432,7 @@
   });
 
   onMount(() => {
-    usage.restoreZoomFromHistory();
     mounted = true;
-    const onPopState = () => {
-      usage.restoreZoomFromHistory();
-      if (router.route === "usage") router.replaceParams(usageUrlParams());
-    };
-    window.addEventListener("popstate", onPopState);
     // The Agent dropdown reads sessions.agents, which is otherwise loaded
     // lazily by the sidebar filter control; a direct /usage visit needs it too.
     sessions.loadAgents();
@@ -449,9 +443,6 @@
     tick().then(() => {
       urlWritebackReady = true;
     });
-    return () => {
-      window.removeEventListener("popstate", onPopState);
-    };
   });
 
   onDestroy(() => {
@@ -541,10 +532,6 @@
   </div>
 
   <SessionActiveFilters
-    projectFilters={usage.focus?.by === "project" ? [usage.focus.label] : []}
-    modelFilters={usage.focus?.by === "model" ? [usage.focus.label] : []}
-    onRemoveProject={() => usage.clearFocus()}
-    onRemoveModel={() => usage.clearFocus()}
     onClearProjects={() => usage.clearFilters()}
     onClearAgents={() => usage.selectAllAgents()}
     onClearModels={() => usage.selectAllModels()}

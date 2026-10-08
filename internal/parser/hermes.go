@@ -626,8 +626,8 @@ func (p *hermesProvider) parseStateDB(ctx context.Context,
 		parents[ss.id] = ss.parentSessionID
 	}
 	for i := range sessions {
-		if sessions[i].source == "cron" {
-			sessions[i].cronJob = hermesCronJobID(sessions[i].id, func(id string) string { return parents[id] })
+		if err := resolveHermesStateCronJob(&sessions[i], func(id string) (string, error) { return parents[id], nil }); err != nil {
+			return nil, err
 		}
 	}
 	messages, err := readHermesStateMessages(ctx, conn)

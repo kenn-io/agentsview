@@ -2459,7 +2459,8 @@
   "tool_sequences_retry": "Réessayer",
   "usage_all_projects": "Tous les projets",
   "usage_click_project": "Cliquer pour cibler {label}, double-cliquer pour ouvrir ses groupes et sessions",
-  "usage_click_project_hint": "Cliquer pour cibler, double-cliquer pour ouvrir. Entrée ouvre, Espace sélectionne.",
+  "usage_click_project_hint": "Cliquer pour sélectionner, double-cliquer ou Ouvrir pour ouvrir. Entrée et Espace sélectionnent.",
+  "usage_open_project": "Ouvrir {label}",
   "usage_zoom_loading": "Chargement...",
   "usage_click_to_focus": "Cliquer pour cibler {label}",
   "usage_click_to_focus_hint": "Cliquer pour cibler, recliquer pour effacer"
