@@ -238,6 +238,13 @@ func (s trashDuringImportStore) WriteSessionBatchAtomic(ctx context.Context, wri
 	return s.DB.WriteSessionBatchAtomic(ctx, writes, beforeCommit...)
 }
 
+func (s trashDuringImportStore) ReplaceSessionKeepingTrashedCopy(ctx context.Context, write db.SessionBatchWrite) (string, error) {
+	if err := s.DB.SoftDeleteSession(ctx, write.Session.ID); err != nil {
+		return "", err
+	}
+	return s.DB.ReplaceSessionKeepingTrashedCopy(ctx, write)
+}
+
 type interruptedSyncStore struct {
 	*db.DB
 	fail   error
@@ -532,7 +539,7 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			for _, m := range after {
 				assert.NotEmpty(t, m.SourceUUID)
 			}
-			assert.Empty(t, replacedCopies(t, d, "claude-ai:one"))
+			require.Len(t, replacedCopies(t, d, "claude-ai:one"), 1)
 			_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+syncDetail+"]"), nil)
 			require.NoError(t, err)
 			session, err := d.GetSessionFull(t.Context(), "claude-ai:one")
@@ -577,29 +584,98 @@ func TestSyncClaudeAIIdenticalRetryPin(t *testing.T) {
 	require.Len(t, pins, 1)
 	assert.Equal(t, messages[0].ID, pins[0].MessageID)
 	assert.Equal(t, strPtr("prompt"), pins[0].Note)
-}
-
-func TestSyncClaudeAIZipBranchNoTrash(t *testing.T) {
-	d := testDB(t)
-	zipDetail := strings.TrimSuffix(syncDetail, "]}") + `,{"uuid":"retry","parent_message_uuid":"root","sender":"assistant","text":"Retried reply"}]}`
-	for range 2 {
-		stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+zipDetail+"]"), nil)
-		require.NoError(t, err)
-		require.Equal(t, 1, stats.Imported+stats.Updated)
-		for i := range 2 {
-			stats, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) { return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil }), nil)
+	copies := replacedCopies(t, d, "claude-ai:one")
+	require.Len(t, copies, 1)
+	oldPins, err := d.ListPinnedMessages(t.Context(), copies[0].ID, "")
+	require.NoError(t, err)
+	require.Len(t, oldPins, 2)
+	assert.ElementsMatch(t, []int{0, 1}, []int{oldPins[0].Ordinal, oldPins[1].Ordinal})
+	oldLeaf := "retry"
+	for range 3 {
+		for _, leaf := range []string{"reply", "retry"} {
+			detail = strings.Replace(detail, `"current_leaf_message_uuid":"`+oldLeaf+`"`, `"current_leaf_message_uuid":"`+leaf+`"`, 1)
+			oldLeaf = leaf
+			stats, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, strings.Replace(syncSummary, "reply", leaf, 1), getDetail), nil)
 			require.NoError(t, err)
-			if i == 0 {
-				assert.Equal(t, 1, stats.Updated)
-			} else {
-				assert.Equal(t, 1, stats.Skipped)
-			}
-			messages, err := d.GetAllMessages(t.Context(), "claude-ai:one")
-			require.NoError(t, err)
-			assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
-			assert.Empty(t, replacedCopies(t, d, "claude-ai:one"))
+			assert.Equal(t, 1, stats.Updated)
+			assert.Zero(t, stats.Errors)
+			require.Len(t, replacedCopies(t, d, "claude-ai:one"), 2)
 		}
 	}
+}
+
+func TestSyncClaudeAIZipBranchRetention(t *testing.T) {
+	d := testDB(t)
+	zipDetail := strings.TrimSuffix(syncDetail, "]}") + `,{"uuid":"retry","parent_message_uuid":"root","sender":"assistant","text":"Retried reply"}]}`
+	for range 3 {
+		zipPath := createTestZip(t, map[string]string{"conversations.json": "[" + zipDetail + "]"})
+		dir, cleanup, err := ExtractZip(zipPath)
+		require.NoError(t, err)
+		reader, err := os.Open(filepath.Join(dir, "conversations.json"))
+		require.NoError(t, err)
+		stats, err := ImportClaudeAI(t.Context(), d, reader, nil)
+		require.NoError(t, reader.Close())
+		cleanup()
+		require.NoError(t, err)
+		require.Equal(t, 1, stats.Imported+stats.Updated)
+		archived, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+		require.NoError(t, err)
+		require.Len(t, archived, 3)
+		_, err = d.PinMessage(t.Context(), "claude-ai:one", archived[2].ID, strPtr("alternate reply"))
+		require.NoError(t, err)
+		stats, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+		}), nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Updated)
+		assert.Zero(t, stats.Errors)
+		messages, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+		copies := replacedCopies(t, d, "claude-ai:one")
+		require.Len(t, copies, 1)
+		old, err := d.GetAllMessages(t.Context(), copies[0].ID)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"Hello", "Chosen reply", "Retried reply"}, messageContents(old))
+		pins, err := d.ListPinnedMessages(t.Context(), copies[0].ID, "")
+		require.NoError(t, err)
+		require.Len(t, pins, 1)
+		assert.Equal(t, 2, pins[0].Ordinal)
+		assert.Equal(t, strPtr("alternate reply"), pins[0].Note)
+	}
+}
+
+func TestSyncClaudeAIMetadataPreservesFindings(t *testing.T) {
+	d := testDB(t)
+	fetch := func(detail, summary string) (ImportStats, error) {
+		return SyncClaudeAI(t.Context(), d, syncOneFetch(t, summary, func() (ClaudeAIResponse, error) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+		}), nil)
+	}
+	_, err := fetch(syncDetail, syncSummary)
+	require.NoError(t, err)
+	finding := db.SecretFinding{RuleName: "test-secret", Confidence: "high", LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 5, RedactedMatch: "[redacted]"}
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "claude-ai:one", []db.SecretFinding{finding}, 1, "test-rules"))
+	require.NoError(t, d.UpdateSessionSignals(t.Context(), "claude-ai:one", db.SessionSignalUpdate{ToolRetryCount: 7, Outcome: "success"}))
+	before, err := d.SessionSecretFindings(t.Context(), "claude-ai:one")
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	stats, err := fetch(strings.ReplaceAll(syncDetail, "10:05:00Z", "10:06:00Z"), strings.ReplaceAll(syncSummary, "10:05:00Z", "10:06:00Z"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	after, err := d.SessionSecretFindings(t.Context(), "claude-ai:one")
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	session, err := d.GetSessionFull(t.Context(), "claude-ai:one")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, strPtr("2026-03-01T10:06:00Z"), session.EndedAt)
+	assert.Equal(t, strPtr("reply"), session.LastEntryUUID)
+	assert.Equal(t, 1, session.SecretLeakCount)
+	assert.Equal(t, "test-rules", session.SecretsRulesVersion)
+	assert.Equal(t, 7, session.ToolRetryCount)
+	assert.Equal(t, "success", session.Outcome)
+	assert.Empty(t, replacedCopies(t, d, session.ID))
 }
 
 func TestSyncClaudeAIUsageWithoutRows(t *testing.T) {
@@ -679,15 +755,24 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 				} else {
 					assert.Equal(t, []string{"Hello", "Chosen reply", "Changed question", "Changed answer"}, messageContents(messages))
 				}
-				if leaf == "retry" {
-					require.Len(t, replacedCopies(t, d, session.ID), 1)
-				} else {
-					assert.Empty(t, replacedCopies(t, d, session.ID))
-				}
+				require.Len(t, replacedCopies(t, d, session.ID), 1)
 				stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
 				require.NoError(t, err)
 				assert.Equal(t, 1, stats.Skipped)
 				assert.Equal(t, 2, calls)
+				oldLeaf = leaf
+				for range 3 {
+					for _, selected := range []string{"a2", leaf} {
+						detail = strings.Replace(detail, `"current_leaf_message_uuid":"`+oldLeaf+`"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
+						summary = strings.Replace(summary, oldLeaf, selected, 1)
+						oldLeaf = selected
+						stats, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, summary, getDetail), nil)
+						require.NoError(t, err)
+						assert.Equal(t, 1, stats.Updated)
+						assert.Zero(t, stats.Errors)
+						require.Len(t, replacedCopies(t, d, session.ID), 2)
+					}
+				}
 			})
 		}
 	}

@@ -206,25 +206,15 @@ func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) 
 		return nil, fmt.Errorf("expected current_leaf_message_uuid string naming a message")
 	}
 	byID := make(map[string]claudeAIMessage, len(conv.Messages))
-	parents := make(map[string]string, len(conv.Messages))
 	for _, m := range conv.Messages {
 		if _, exists := byID[m.UUID]; exists {
 			return nil, fmt.Errorf("duplicate message uuid %s", m.UUID)
 		}
-		var parent string
-		if m.Parent.Kind() != jsontext.KindString || json.Unmarshal(m.Parent, &parent) != nil {
-			return nil, fmt.Errorf("message %s's parent must be a string", m.UUID)
-		}
-		byID[m.UUID], parents[m.UUID] = m, parent
-	}
-	for id, parent := range parents {
-		if _, exists := byID[parent]; parent != root && !exists {
-			return nil, fmt.Errorf("message %s's parent %s is missing", id, parent)
-		}
+		byID[m.UUID] = m
 	}
 	var path []claudeAIMessage
 	seen := make(map[string]bool)
-	for id := leaf; id != root; id = parents[id] {
+	for id := leaf; id != root; {
 		m, exists := byID[id]
 		if !exists {
 			return nil, fmt.Errorf("message %s is missing", id)
@@ -233,7 +223,12 @@ func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) 
 			return nil, fmt.Errorf("cycle at message %s", id)
 		}
 		seen[id] = true
+		var parent string
+		if m.Parent.Kind() != jsontext.KindString || json.Unmarshal(m.Parent, &parent) != nil {
+			return nil, fmt.Errorf("message %s's parent must be a string", m.UUID)
+		}
 		path = append(path, m)
+		id = parent
 	}
 	slices.Reverse(path)
 	return path, nil

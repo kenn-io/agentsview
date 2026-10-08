@@ -245,11 +245,10 @@ func upsertConversation(
 		return importNew, fmt.Errorf("checking session: %w", err)
 	}
 	isNew := existing == nil
-	adoptingZip := existing != nil && existing.LastEntryUUID == nil && s.LastEntryUUID != nil
 	// A shorter export (for example an older archive or one with deleted
 	// turns) would make the replacement below drop stored messages.
 	// Refuse it before touching the session row.
-	if existing != nil && !adoptingZip && len(msgs) < existing.MessageCount {
+	if existing != nil && len(msgs) < existing.MessageCount {
 		return importNew, refuse(RefusalShorterExport, fmt.Errorf(
 			"export has %d messages, archive has %d",
 			len(msgs), existing.MessageCount,
@@ -272,7 +271,7 @@ func upsertConversation(
 				}
 			}
 		}
-		if !replaceMessages && existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) && sameMessages(archived, canonical) {
+		if !replaceMessages && sameMessages(archived, canonical) {
 			if err := store.UpsertSession(ctx, sess); errors.Is(err, db.ErrSessionExcluded) {
 				return importSkipped, nil
 			} else if err != nil {
@@ -283,16 +282,22 @@ func upsertConversation(
 					log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
 				}
 			}
-			return importSkipped, nil
+			if existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) {
+				return importSkipped, nil
+			}
+			return importUpdated, nil
 		}
 		replaceMessages = replaceMessages || len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)])
+		if s.LastEntryUUID != nil && replaceMessages {
+			return importNew, refuse(RefusalDiverged, errors.New("visible branch differs from archived messages"))
+		}
 	}
 
 	fts.suspend(ctx)
 	_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session:                    sess,
 		Messages:                   msgs,
-		RejectMessageCountDecrease: !adoptingZip,
+		RejectMessageCountDecrease: true,
 		ReplaceMessages:            replaceMessages,
 	}})
 	if errors.Is(err, db.ErrSessionExcluded) {
