@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -113,9 +114,17 @@ func (ci conversationImport) importConversation(
 func claudeAIMessages(
 	sessionID string, parsed []parser.ParsedMessage,
 ) []db.Message {
-	msgs := chatGPTMessages(sessionID, parsed)
+	msgs := make([]db.Message, len(parsed))
 	for i, m := range parsed {
-		msgs[i].SourceUUID = m.SourceUUID
+		msgs[i] = db.Message{
+			SourceUUID:    m.SourceUUID,
+			SessionID:     sessionID,
+			Ordinal:       m.Ordinal,
+			Role:          string(m.Role),
+			Content:       m.Content,
+			Timestamp:     m.Timestamp.UTC().Format(time.RFC3339Nano),
+			ContentLength: m.ContentLength,
+		}
 	}
 	return msgs
 }

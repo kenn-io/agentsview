@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -10,8 +9,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/tidwall/gjson"
 )
 
 type claudeAIConversation struct {
@@ -27,10 +24,19 @@ type claudeAIMessage struct {
 	UUID        string               `json:"uuid"`
 	Parent      jsontext.Value       `json:"parent_message_uuid"`
 	Text        string               `json:"text"`
-	Content     []jsontext.Value     `json:"content"`
+	Content     []claudeAIBlock      `json:"content"`
 	Sender      string               `json:"sender"`
 	CreatedAt   string               `json:"created_at"`
 	Attachments []claudeAIAttachment `json:"attachments"`
+}
+
+// claudeAIBlock represents a content block within a message.
+// Block types: text, thinking, tool_use, tool_result,
+// voice_note, token_budget.
+type claudeAIBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Thinking string `json:"thinking"`
 }
 
 // ClaudeAIExportParser is implemented by the Claude.ai import-only provider to
@@ -128,12 +134,12 @@ func ParseClaudeAIDetail(data []byte) (ParseResult, error) {
 // content blocks have usable text.
 func assembleClaudeAIContent(
 	m claudeAIMessage,
-) (content string, hasThinking bool, calls []ParsedToolCall) {
+) (content string, hasThinking bool) {
 	attachmentParts := buildClaudeAttachmentText(m.Attachments)
 
 	if len(m.Content) == 0 {
 		if len(attachmentParts) == 0 {
-			return m.Text, false, nil
+			return m.Text, false
 		}
 
 		contentParts := make([]string, 0, 1+len(attachmentParts))
@@ -141,47 +147,30 @@ func assembleClaudeAIContent(
 			contentParts = append(contentParts, m.Text)
 		}
 		contentParts = append(contentParts, attachmentParts...)
-		return strings.Join(contentParts, "\n\n"), false, nil
+		return strings.Join(contentParts, "\n\n"), false
 	}
 
 	var contentParts []string
-	for _, raw := range m.Content {
-		b := gjson.ParseBytes(raw)
-		switch b.Get("type").Str {
+	for _, b := range m.Content {
+		switch b.Type {
 		case "text":
-			if text := b.Get("text").Str; text != "" {
-				contentParts = append(contentParts, text)
+			if b.Text != "" {
+				contentParts = append(contentParts, b.Text)
 			}
 		case "thinking":
-			if thinking := b.Get("thinking").Str; thinking != "" {
+			if b.Thinking != "" {
 				hasThinking = true
 				contentParts = append(contentParts,
-					"[Thinking]\n"+thinking+"\n[/Thinking]")
+					"[Thinking]\n"+b.Thinking+"\n[/Thinking]")
 			}
-		case "tool_use":
-			if call, ok := parseToolCall(context.Background(), b); ok {
-				calls = append(calls, call)
-			}
-		case "tool_result":
-			if result, ok := parseToolResult(b); ok {
-				for i := len(calls) - 1; i >= 0; i-- {
-					if calls[i].ToolUseID == result.ToolUseID {
-						calls[i].ResultEvents = append(calls[i].ResultEvents, ParsedToolResultEvent{
-							ToolUseID: result.ToolUseID,
-							Source:    result.Source,
-							Status:    result.Status,
-							Content:   DecodeContent(result.ContentRaw),
-						})
-						break
-					}
-				}
-			}
+			// tool_use, tool_result, voice_note, token_budget
+			// are metadata blocks — skip for display content.
 		}
 	}
 
 	if len(contentParts) == 0 {
 		if len(attachmentParts) == 0 {
-			return m.Text, hasThinking, calls
+			return m.Text, hasThinking
 		}
 		if m.Text != "" {
 			contentParts = append(contentParts, m.Text)
@@ -190,7 +179,7 @@ func assembleClaudeAIContent(
 
 	contentParts = append(contentParts, attachmentParts...)
 
-	return strings.Join(contentParts, "\n\n"), hasThinking, calls
+	return strings.Join(contentParts, "\n\n"), hasThinking
 }
 
 func buildClaudeAttachmentText(
@@ -268,7 +257,7 @@ func convertClaudeAIConversation(
 	)
 
 	for i, m := range conv.Messages {
-		content, hasThinking, calls := assembleClaudeAIContent(m)
+		content, hasThinking := assembleClaudeAIContent(m)
 
 		role := RoleAssistant
 		if m.Sender == "human" {
@@ -287,8 +276,6 @@ func convertClaudeAIConversation(
 			Content:       content,
 			Timestamp:     ts,
 			HasThinking:   hasThinking,
-			HasToolUse:    len(calls) > 0,
-			ToolCalls:     calls,
 			ContentLength: len(content),
 		})
 	}

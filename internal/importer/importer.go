@@ -298,12 +298,12 @@ func upsertConversation(
 		return importUpdated, nil
 	}
 	write := db.SessionBatchWrite{
-		Session:           sess,
-		Messages:          msgs,
-		ReplaceMessages:   replaceMessages,
-		FillSourceUUIDs:   !replaceMessages,
-		SkipSignalUpdates: unchanged,
-		TouchModified:     true,
+		Session:            sess,
+		Messages:           msgs,
+		ReplaceMessages:    replaceMessages,
+		CompleteStoredRows: !replaceMessages,
+		SkipSignalUpdates:  unchanged,
+		TouchModified:      true,
 	}
 	if replaceMessages && !isNew {
 		r, ok := store.(sessionReplacer)
@@ -703,15 +703,6 @@ func sameMessages(existing, incoming []db.Message) bool {
 			existing[i].ContentLength != incoming[i].ContentLength ||
 			existing[i].SourceUUID != "" && incoming[i].SourceUUID != "" && existing[i].SourceUUID != incoming[i].SourceUUID {
 			return false
-		}
-		if len(existing[i].ToolCalls) != len(incoming[i].ToolCalls) {
-			return false
-		}
-		for j, call := range existing[i].ToolCalls {
-			other := incoming[i].ToolCalls[j]
-			if call.ToolUseID != other.ToolUseID || call.ToolName != other.ToolName || call.InputJSON != other.InputJSON || call.ResultContent != other.ResultContent {
-				return false
-			}
 		}
 	}
 	return true

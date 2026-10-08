@@ -27,15 +27,14 @@ type SessionBatchWrite struct {
 	// SkipSignalUpdates omits automatic quality-signal and secret-finding
 	// persistence for bounded ingestion callers that do not consume it.
 	SkipSignalUpdates bool
-	TouchModified     bool
-	// FillSourceUUIDs fills empty identities at verified unchanged ordinals.
-	FillSourceUUIDs bool
+	// TouchModified publishes metadata-only writes to incremental mirrors in the same transaction.
+	TouchModified   bool
 	DataVersion     int
 	ReplaceMessages bool
 	// KeepTrashedCopyOnlyOnPinLoss limits ReplaceSessionKeepingTrashedCopy to replacements that lose a pin or note.
 	KeepTrashedCopyOnlyOnPinLoss bool
 	// CompleteStoredRows lets an append write complete stored rows at stored ordinals: it sets results on stored calls that are still empty and replaces stored text with longer text that starts with it (IsTextExtension). Rows keep their IDs; other stored rows are untouched.
-	// Results come from ToolCall.ResultContent and ResultContentLength; result events are not written.
+	// Results come from ToolCall.ResultContent and ResultContentLength; result events are not written. Missing source UUIDs are filled only on matching stored turns.
 	CompleteStoredRows bool
 	// RejectMessageCountDecrease prevents full replacement with fewer messages.
 	RejectMessageCountDecrease bool
@@ -579,12 +578,12 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	} else {
-		if write.FillSourceUUIDs {
+		if write.CompleteStoredRows {
 			for _, msg := range msgs {
 				if msg.SourceUUID == "" {
 					continue
 				}
-				result, err := queries.Exec(`UPDATE messages SET source_uuid = ? WHERE session_id = ? AND ordinal = ? AND COALESCE(source_uuid, '') = ''`, msg.SourceUUID, write.Session.ID, msg.Ordinal)
+				result, err := queries.Exec(`UPDATE messages SET source_uuid = ? WHERE session_id = ? AND ordinal = ? AND COALESCE(source_uuid, '') = '' AND role = ? AND content = ? AND content_length = ? AND timestamp = ? AND is_system = ?`, msg.SourceUUID, write.Session.ID, msg.Ordinal, msg.Role, msg.Content, msg.ContentLength, msg.Timestamp, msg.IsSystem)
 				if err != nil {
 					return 0, err
 				}
@@ -712,7 +711,7 @@ func writeOneSessionBatchTx(
 		}
 	}
 	if write.TouchModified && !transcriptChanged && write.DataVersion == 0 {
-		if _, err := queries.Exec(`UPDATE sessions SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`, write.Session.ID); err != nil {
+		if _, err := queries.Exec(bumpLocalModifiedAtSQL, write.Session.ID); err != nil {
 			return 0, fmt.Errorf("touching session %s: %w", write.Session.ID, err)
 		}
 	}

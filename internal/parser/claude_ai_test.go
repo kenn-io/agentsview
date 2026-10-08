@@ -1,34 +1,12 @@
 package parser
 
 import (
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestParseClaudeAIDetailArtifact(t *testing.T) {
-	raw, err := os.ReadFile("testdata/claude-ai/artifact-detail.json")
-	require.NoError(t, err)
-	result, err := ParseClaudeAIDetail(raw)
-	require.NoError(t, err)
-	require.Len(t, result.Messages, 2)
-	message := result.Messages[1]
-	assert.True(t, message.HasToolUse)
-	require.Len(t, message.ToolCalls, 3)
-	call := message.ToolCalls[1]
-	assert.Equal(t, "toolu_test1", call.ToolUseID)
-	assert.Equal(t, "create_file", call.ToolName)
-	assert.Equal(t, "Write", call.Category)
-	assert.Contains(t, call.InputJSON, `<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>Hello</title>`)
-	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(t, "File created successfully: /mnt/user-data/outputs/hello.html", call.ResultEvents[0].Content)
-	require.Len(t, message.ToolCalls[2].ResultEvents, 1)
-	assert.Contains(t, message.ToolCalls[2].ResultEvents[0].Content, "Published /mnt/user-data/outputs/hello.html")
-	assert.Contains(t, message.Content, `Your "Hello" page is published.`)
-}
 
 const testExportJSON = `[
   {
