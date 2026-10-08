@@ -2766,9 +2766,10 @@ schemas keep their existing ordering behavior.
   Organization responses must decode to an array; null and other shapes fail.
   Reverified 2026-10-08 against `TestSyncClaudeAIInvalidOrganizations`.
   Organization and list failures, cancellation, and an empty page with
-  `has_more: true` stop Sync. Null list leaves skip detail fetches; absent or
-  malformed leaves and newer stored marker versions count as errors. Reverified
-  2026-10-08 against the importer regression: the `claude-ai:vN:` prefix rejects
+  `has_more: true` stop Sync. Null and root-sentinel list leaves skip detail
+  fetches; absent or malformed leaves and newer stored marker versions count
+  as errors. Reverified 2026-10-08 against the importer regression:
+  the `claude-ai:vN:` prefix rejects
   N greater than 1 regardless of payload layout, with a `newer_marker` refusal.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks
   found `current_leaf_message_uuid` on list items and byte-identical list and

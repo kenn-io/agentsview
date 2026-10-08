@@ -137,7 +137,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					cb.progress(stats)
 					continue
 				}
-				if leaf == "" {
+				if leaf == "" || leaf == "00000000-0000-4000-8000-000000000000" {
 					stats.Skipped++
 					cb.progress(stats)
 					continue
