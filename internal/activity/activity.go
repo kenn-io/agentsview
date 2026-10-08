@@ -32,7 +32,9 @@ type Params struct {
 
 // SubagentSQL selects the activity subagent category from a sessions alias s.
 const SubagentSQL = `s.relationship_type = 'subagent'
-	AND (COALESCE(s.parent_session_id, '') <> '' OR NOT COALESCE(s.is_automated, false))`
+	AND (COALESCE(s.parent_session_id, '') <> '' OR NOT COALESCE(s.is_automated, false)
+		OR NOT (COALESCE(s.session_kind, '') = 'non-interactive'
+			OR (s.agent = 'claude' AND COALESCE(s.entrypoint, '') = 'sdk-cli')))`
 
 // SessionMeta is one candidate session whose window intersects the day.
 type SessionMeta struct {
@@ -510,7 +512,7 @@ func (s SessionMeta) kind() sessionKind {
 }
 
 // ActivityCategory names the session's disjoint activity category for exports.
-// Parented subagents take precedence; backends exclude parentless automated workers.
+// Subagents take precedence; backends exclude parentless automated headless workers.
 func (s SessionMeta) ActivityCategory() string {
 	switch s.kind() {
 	case subagentSession:

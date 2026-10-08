@@ -26,6 +26,7 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 		{"worker", nil, false},
 		{"script", nil, true},
 		{"child", new("worker"), true},
+		{"dangling-task", nil, true},
 	} {
 		prompt := "Explain this function."
 		if tc.automated {
@@ -36,6 +37,9 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 		sess.RelationshipType = "subagent"
 		sess.ParentSessionID = tc.parent
 		sess.IsAutomated = tc.automated
+		if tc.id == "script" {
+			sess.SessionKind = "non-interactive"
+		}
 		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 			Session: sess,
 			Messages: []db.Message{
@@ -59,7 +63,7 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 	require.NoError(t, err)
 	report, err := store.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true}, q)
 	require.NoError(t, err)
-	assert.Equal(t, 2, report.Totals.SubagentSessions)
+	assert.Equal(t, 3, report.Totals.SubagentSessions)
 	assert.Equal(t, 1, report.Totals.AutomatedSessions)
 	assert.Zero(t, report.Totals.InteractiveSessions)
 }
