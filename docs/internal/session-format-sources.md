@@ -2948,7 +2948,8 @@ schemas keep their existing ordering behavior.
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized. Transcript projects use `platform`; transcript titles supply group
   labels without overriding session display names. State continuations follow
-  `parent_session_id` until a cron run ID identifies the job. Transcript-only
+  the loaded `parent_session_id` until a cron run ID identifies the job.
+  Rechecked the pinned ID contract and continuation fixtures on 2026-10-08. Transcript-only
   runs use their own ID. A missing state parent leaves a continuation ungrouped.
   All cron runs retain the `hermes-cron` project.
 

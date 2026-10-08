@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -66,12 +67,13 @@ func ResolveUsageProjectKeys(
 		if err != nil {
 			return UsageRequest{}, err
 		}
-		labels, ok := intersectValues(mergeResolvedProjectLabels(req.Project, req.ProjectLabels), resolved)
-		if !ok {
-			req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
-			labels = resolved
+		base := append(splitCSVTokens(req.Project), req.ProjectLabels...)
+		for _, label := range resolved {
+			if len(base) > 0 && !slices.Contains(base, label) {
+				req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, label)
+			}
 		}
-		req.ProjectLabels = labels
+		req.ProjectLabels = resolved
 		req.Project = ""
 		req.ProjectKey = ""
 	}

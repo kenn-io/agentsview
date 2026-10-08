@@ -358,7 +358,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	// Derive project from the session platform or default.
 	job := ""
 	if sessionPlatform == "cron" {
-		job = HermesCronJobID(sessionID, nil)
+		job = hermesCronJobID(sessionID, nil)
 	}
 	projectSynthesized := false
 	if project == "" {
@@ -374,7 +374,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		ID:                         fullID,
 		Project:                    project,
 		GroupKey:                   job,
-		GroupLabel:                 HermesCronRecordedName(job, sessionTitle),
+		GroupLabel:                 hermesCronRecordedName(job, sessionTitle),
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
@@ -555,7 +555,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 
 	job := ""
 	if sessionPlatform == "cron" {
-		job = HermesCronJobID(sessionID, nil)
+		job = hermesCronJobID(sessionID, nil)
 	}
 	projectSynthesized := false
 	if project == "" {
@@ -571,7 +571,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 		ID:                         fullID,
 		Project:                    project,
 		GroupKey:                   job,
-		GroupLabel:                 HermesCronRecordedName(job, sessionTitle),
+		GroupLabel:                 hermesCronRecordedName(job, sessionTitle),
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
@@ -1061,7 +1061,7 @@ func applyHermesStateMetadata(
 		sess.RelationshipType = RelContinuation
 	}
 	sess.GroupKey = ss.cronJob
-	sess.GroupLabel = HermesCronRecordedName(ss.cronJob, ss.title)
+	sess.GroupLabel = hermesCronRecordedName(ss.cronJob, ss.title)
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
 	sess.SessionName = ss.title
@@ -1509,8 +1509,8 @@ func stripHermesSkillPrefix(s string) string {
 	return s
 }
 
-// HermesCronJobID follows state parents until a cron run identifies its job.
-func HermesCronJobID(id string, parent func(string) string) string {
+// hermesCronJobID follows state parents until a cron run identifies its job.
+func hermesCronJobID(id string, parent func(string) string) string {
 	seen := make(map[string]bool)
 	for id != "" && !seen[id] {
 		seen[id] = true
@@ -1530,7 +1530,10 @@ func resolveHermesStateCronJob(ss *hermesStateSession, parent func(string) (stri
 		return nil
 	}
 	var lookupErr error
-	ss.cronJob = HermesCronJobID(ss.id, func(id string) string {
+	ss.cronJob = hermesCronJobID(ss.id, func(id string) string {
+		if id == ss.id {
+			return ss.parentSessionID
+		}
 		var next string
 		next, lookupErr = parent(id)
 		return next
@@ -1547,8 +1550,8 @@ func hermesCronParent(ctx context.Context, conn *sql.DB, id string) (string, err
 	return parent, err
 }
 
-// HermesCronRecordedName strips the run timestamp from a recorded job title.
-func HermesCronRecordedName(job, title string) string {
+// hermesCronRecordedName strips the run timestamp from a recorded job title.
+func hermesCronRecordedName(job, title string) string {
 	i := strings.LastIndex(title, " · ")
 	if job == "" || i < 0 || strings.TrimSpace(title[i+len(" · "):]) == "" {
 		return ""

@@ -17,6 +17,7 @@
   interface Props {
     items: TreemapItem[];
     height?: number;
+    fullTextOpacity?: boolean;
     onSelect?: (id: string) => void;
     formatValue?: (value: number) => string;
   }
@@ -30,6 +31,7 @@
   const {
     items,
     height = 260,
+    fullTextOpacity = false,
     onSelect,
     formatValue = formatCost,
   }: Props = $props();
@@ -51,7 +53,7 @@
   }
 </script>
 
-<div class="treemap-container" bind:clientWidth={measuredWidth}>
+<div class="treemap-container" style:--tile-value-opacity={fullTextOpacity ? 1 : 0.85} style:--tile-meta-opacity={fullTextOpacity ? 1 : 0.7} bind:clientWidth={measuredWidth}>
   <Chart width={chartWidth} {height} padding={0}>
     <Layer class="treemap" title={m.usage_treemap()}>
       <LayerTreemap hierarchy={root} padding={2}>
@@ -143,6 +145,7 @@
 
   .treemap-container :global(.tile-value) {
     fill: white;
+    fill-opacity: var(--tile-value-opacity);
     font-size: 11px;
     font-weight: 500;
     font-family: var(--font-mono);
@@ -151,6 +154,7 @@
 
   .treemap-container :global(.tile-meta) {
     fill: white;
+    fill-opacity: var(--tile-meta-opacity);
     font-size: 9px;
     font-family: var(--font-sans);
     pointer-events: none;

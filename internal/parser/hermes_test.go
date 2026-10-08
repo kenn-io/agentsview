@@ -2188,6 +2188,6 @@ func TestHermesCronRecordedNames(t *testing.T) {
 		{"job-a · Oct 08", ""},
 		{"cron job-a · Oct 08", ""},
 	} {
-		t.Run(tc.title, func(t *testing.T) { assert.Equal(t, tc.want, HermesCronRecordedName("job-a", tc.title)) })
+		t.Run(tc.title, func(t *testing.T) { assert.Equal(t, tc.want, hermesCronRecordedName("job-a", tc.title)) })
 	}
 }

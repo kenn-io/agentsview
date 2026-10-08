@@ -41,6 +41,7 @@ const (
 	// integer-microdollar cost objects. Manifest v3 adds the optional
 	// session_kind provenance field. Manifest v4 adds the optional
 	// provider_id billing field on usage events. Manifest v5 adds session groups.
+	// Writers retain v4 for sessions without group fields.
 	// Versions v2 through v4 decode with missing fields defaulting to empty.
 	manifestFormatVersion    = 5
 	manifestMinDecodeVersion = 2
@@ -357,4 +358,11 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		}
 	}
 	return record
+}
+
+func manifestWriteVersion(session manifestSession) int {
+	if session.GroupKey != "" || session.GroupLabel != "" {
+		return manifestFormatVersion
+	}
+	return 4
 }

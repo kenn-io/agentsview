@@ -4,6 +4,7 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
+  import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
@@ -52,11 +53,10 @@
         const id = row.group_key || row.sessionId;
         const duplicates = zoomRows.filter((other, otherIndex) => other !== row && names[otherIndex] === names[index]);
         const suffixID = row.group_key || row.sessionId.replace(/^[^:]+:/, "");
-        let length = 6;
-        while (length < suffixID.length && duplicates.some((other) => (other.group_key || other.sessionId.replace(/^[^:]+:/, "")).slice(0, length) === suffixID.slice(0, length))) length++;
+        const peers = duplicates.map((other) => other.group_key || other.sessionId.replace(/^[^:]+:/, ""));
         return {
           id,
-          label: duplicates.length ? `${names[index]} · ${suffixID.slice(0, length)}` : names[index]!,
+          label: duplicates.length ? `${names[index]} · ${shortenId(suffixID, peers)}` : names[index]!,
           value: isTokenMode ? sumSelectedTokens(row, usage.selectedTokenTypes) : row.cost.microdollars,
         };
       });
@@ -223,6 +223,7 @@
           <Treemap
             items={treemapItems}
             height={260}
+            fullTextOpacity={!!zoomedProject}
             onSelect={zoomedProject ? undefined : handleSelect}
             formatValue={isTokenMode ? formatTokenCount : undefined}
           />

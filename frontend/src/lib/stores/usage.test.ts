@@ -2132,6 +2132,41 @@ describe("UsageStore project zoom", () => {
     expect(usage.excludedProjectKeys).toBe("");
   });
 
+  it("completes refresh when summary closes zoom before its delayed response", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-08T12:00:00Z"));
+      const { usage } = await loadStore();
+      await usage.fetchAll();
+      usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
+      usage.selectAttributionProject("pl1:sha256:alpha");
+      await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(1)]));
+      let resolveZoom!: (rows: DbTopSessionEntry[]) => void;
+      usageServiceMocks.getUsageZoom.mockImplementationOnce(
+        () => new Promise((resolve) => {
+          resolveZoom = resolve;
+        }),
+      );
+      const emptySummary = { ...usageSummary(), projectTotals: [] };
+      usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(emptySummary);
+      usage.markNewData();
+      usage.applyDateRange("2026-10-01", "2026-10-07");
+      const refreshed = usage.fetchAll();
+      const signal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
+      await vi.waitFor(() => expect(usage.zoomedProjectKey).toBeNull());
+      expect(signal.aborted).toBe(true);
+      vi.setSystemTime(new Date("2026-10-08T12:03:00Z"));
+      resolveZoom([group(9)]);
+      await refreshed;
+      expect(usage.summary).toMatchObject(emptySummary);
+      expect(usage.zoomRows).toBeNull();
+      expect(usage.lastUpdatedAt).toBe(new Date("2026-10-08T12:03:00Z").getTime());
+      expect(usage.hasNewData).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshes zoom for metric and token selection changes", async () => {
     const { usage } = await loadStore();
     usage.selectAttributionProject("pl1:sha256:alpha");

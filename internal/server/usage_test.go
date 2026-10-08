@@ -517,7 +517,7 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	require.NoError(t, err)
 	key := catalog["hermes-cron"].ProjectKey
 	require.NotEmpty(t, key)
-	params := map[string]string{"from": "2026-10-07", "to": "2026-10-10", "timezone": "UTC", "include_automated": "true", "group_by": "group", "project_key": key, "project": "unrelated-page-filter", "sort": "tokens", "limit": "1"}
+	params := map[string]string{"from": "2026-10-07", "to": "2026-10-10", "timezone": "UTC", "include_automated": "true", "group_by": "group", "project_key": key, "project": "hermes-cron", "sort": "tokens", "limit": "1"}
 	w := te.get(t, buildPathURL("/api/v1/usage/top-sessions", params))
 	assertStatus(t, w, http.StatusOK)
 	var entries []db.TopSessionEntry
@@ -527,6 +527,11 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	assert.Equal(t, "job-a", entries[0].GroupKey)
 	assert.Equal(t, "Research digest", entries[0].GroupLabel)
 	assert.Equal(t, 3, entries[0].SessionCount)
+	params["project"] = "unrelated-page-filter"
+	w = te.get(t, buildPathURL("/api/v1/usage/top-sessions", params))
+	assertStatus(t, w, http.StatusOK)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	assert.Empty(t, entries)
 	params["project_key"] = "unknown-key"
 	w = te.get(t, buildPathURL("/api/v1/usage/top-sessions", params))
 	assertStatus(t, w, http.StatusBadRequest)

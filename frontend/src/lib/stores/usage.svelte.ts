@@ -934,12 +934,13 @@ class UsageStore {
           return this.fetchZoom(loadedSummary.params);
         })
       : zoomPromise;
-    const [topSessionsResult, zoomResult, comparisonResult, pairwiseResult] = await Promise.all([
+    const [topSessionsResult, loadedZoomResult, comparisonResult, pairwiseResult] = await Promise.all([
       currentTopSessionsPromise,
       currentZoomPromise,
       this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
       this.fetchPairwise(loadedSummary.version, loadedSummary.params),
     ]);
+    const zoomResult = this.zoomedProjectKey === null ? "ok" : loadedZoomResult;
     if (
       fetchVersion === this.fetchAllVersion &&
       topSessionsResult === "ok" &&
