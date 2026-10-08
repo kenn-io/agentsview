@@ -2763,6 +2763,8 @@ schemas keep their existing ordering behavior.
   Other 403 responses stop Sync with an access-denied error.
   Status-0 relay failures stop Sync. Other detail failures allow later chats
   to sync.
+  Organization responses must decode to an array; null and other shapes fail.
+  Reverified 2026-10-08 against `TestSyncClaudeAIInvalidOrganizations`.
   Organization and list failures, cancellation, and an empty page with
   `has_more: true` stop Sync. Null list leaves skip detail fetches; absent or
   malformed leaves and newer stored marker versions count as errors. Reverified

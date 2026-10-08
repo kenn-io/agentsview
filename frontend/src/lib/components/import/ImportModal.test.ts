@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import ImportModal from "./ImportModal.svelte";
 import { m } from "../../i18n/index.js";
 
-const host = vi.hoisted(() => ({ connect: vi.fn(), disconnect: vi.fn(), fetch: vi.fn() }));
+const host = vi.hoisted(() => ({ connect: vi.fn(), disconnect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
 vi.mock("../../api/browserHost.js", () => ({ getBrowserHost: () => host }));
 vi.mock("../../api/runtime.js", async (original) => ({
   ...(await original<typeof import("../../api/runtime.js")>()),
@@ -19,27 +19,6 @@ vi.mock("../../api/client.js", () => ({
   importChatGPT: vi.fn(),
 }));
 afterEach(() => { vi.resetAllMocks(); syncState.readOnly = false; });
-
-it("closing during sync leaves no error after reopening", async () => {
-  let rejectSync!: (error: Error) => void;
-  let signal!: AbortSignal;
-  syncClaudeAI.mockImplementation((_host, _callbacks, runSignal) => {
-    signal = runSignal;
-    return new Promise((_, reject) => { rejectSync = reject; });
-  });
-  const onclose = vi.fn();
-  const onimported = vi.fn();
-  const { rerender } = render(ImportModal, { open: true, onclose, onimported });
-  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
-  await fireEvent.click(screen.getByRole("button", { name: m.import_cancel() }));
-  expect(signal.aborted).toBe(true);
-  expect(onclose).toHaveBeenCalledOnce();
-  rejectSync(new Error("Import stream ended without result"));
-  await rerender({ open: true, onclose, onimported });
-  await waitFor(() => expect((screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement).disabled).toBe(false));
-  expect(screen.queryByText("Import stream ended without result")).toBeNull();
-  expect(onimported).toHaveBeenCalledOnce();
-});
 
 it("offers sign in, sync and disconnect without a sign-in probe", async () => {
   host.connect.mockResolvedValue(undefined);
@@ -75,13 +54,20 @@ it.each(["cancel", "disconnect", "error"])("refreshes completed chats after sync
     return new Promise((_, reject) => { rejectSync = reject; });
   });
   const onimported = vi.fn();
-  render(ImportModal, { open: true, onclose: vi.fn(), onimported });
+  const onclose = vi.fn();
+  const { rerender } = render(ImportModal, { open: true, onclose, onimported });
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
   if (exit !== "error") {
     await fireEvent.click(screen.getByRole("button", { name: exit === "cancel" ? m.import_cancel() : m.import_claude_disconnect() }));
     expect(signal.aborted).toBe(true);
   }
   rejectSync(new Error("Interrupted sync"));
+  if (exit === "cancel") {
+    expect(onclose).toHaveBeenCalledOnce();
+    await rerender({ open: true, onclose, onimported });
+    await waitFor(() => expect((screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByText("Interrupted sync")).toBeNull();
+  }
   await waitFor(() => expect(onimported).toHaveBeenCalledOnce());
 });
 
@@ -91,4 +77,30 @@ it("hides browser sync controls for a read-only archive", () => {
   expect(screen.queryByRole("button", { name: m.import_claude_sync() })).toBeNull();
   expect(screen.queryByRole("button", { name: m.import_claude_connect() })).toBeNull();
   expect(screen.queryByRole("button", { name: m.import_claude_disconnect() })).toBeNull();
+});
+
+it("disconnect waits for sync to close the browser before deleting cookies", async () => {
+  let finishClose!: () => void;
+  let signal!: AbortSignal;
+  host.close.mockImplementation(() => new Promise<void>((resolve) => { finishClose = resolve; }));
+  host.disconnect.mockResolvedValue(undefined);
+  syncClaudeAI.mockImplementation(async (_host, _callbacks, runSignal) => {
+    signal = runSignal;
+    try {
+      await new Promise((_, reject) => {
+        runSignal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true });
+      });
+    } finally {
+      await host.close();
+    }
+  });
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_disconnect() }));
+  expect(signal.aborted).toBe(true);
+  expect(host.close).toHaveBeenCalledOnce();
+  expect(host.disconnect).not.toHaveBeenCalled();
+  finishClose();
+  await waitFor(() => expect(host.disconnect).toHaveBeenCalledOnce());
+  expect(screen.queryByText("Cancelled")).toBeNull();
 });

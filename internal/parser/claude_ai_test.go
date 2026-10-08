@@ -450,36 +450,28 @@ func TestParseClaudeAIDetail_InvalidTree(t *testing.T) {
 	}
 }
 
-func TestParseClaudeAIExport_FlatNullLeaf(t *testing.T) {
-	for _, messages := range []string{
-		`{"uuid":"q","sender":"human","text":"Question"},{"uuid":"a","sender":"assistant","text":"Answer"}`,
-		`{"uuid":"same","sender":"human","text":"Question"},{"uuid":"same","sender":"assistant","text":"Answer"}`,
-		`{"sender":"human","text":"Question","parent_message_uuid":null},{"sender":"assistant","text":"Answer","parent_message_uuid":null}`,
-	} {
-		input := `[null,{"uuid":"flat","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":null,"chat_messages":[` + messages + `]}]`
-		var results []ParseResult
-		require.NoError(t, parseClaudeAIExport(strings.NewReader(input), func(r ParseResult) error { results = append(results, r); return nil }))
-		require.Len(t, results, 1)
-		require.Len(t, results[0].Messages, 2)
-		assert.Equal(t, "Question", results[0].Messages[0].Content)
-		assert.Equal(t, "Answer", results[0].Messages[1].Content)
-	}
-}
-
 func TestParseClaudeAIExport_IgnoresTreeFields(t *testing.T) {
-	for _, messages := range []string{
-		`{"uuid":"q","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Question"},{"uuid":"a","parent_message_uuid":"q","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"q","sender":"assistant","text":"Second"}`,
-		`{"uuid":"same","sender":"human","text":"Question"},{"uuid":"same","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"missing","sender":"assistant","text":"Second"}`,
-		`{"uuid":"q","parent_message_uuid":"b","sender":"human","text":"Question"},{"uuid":"a","parent_message_uuid":"q","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"a","sender":"assistant","text":"Second"}`,
+	for _, tt := range []struct {
+		name, messages, leaf string
+		want                 []string
+	}{
+		{"null leaf 1", `{"uuid":"q","sender":"human","text":"Question"},{"uuid":"a","sender":"assistant","text":"Answer"}`, "null", []string{"Question", "Answer"}},
+		{"null leaf 2", `{"uuid":"same","sender":"human","text":"Question"},{"uuid":"same","sender":"assistant","text":"Answer"}`, "null", []string{"Question", "Answer"}},
+		{"null leaf 3", `{"sender":"human","text":"Question","parent_message_uuid":null},{"sender":"assistant","text":"Answer","parent_message_uuid":null}`, "null", []string{"Question", "Answer"}},
+		{"tree fields 1", `{"uuid":"q","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Question"},{"uuid":"a","parent_message_uuid":"q","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"q","sender":"assistant","text":"Second"}`, `"a"`, []string{"Question", "First", "Second"}},
+		{"tree fields 2", `{"uuid":"same","sender":"human","text":"Question"},{"uuid":"same","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"missing","sender":"assistant","text":"Second"}`, `"a"`, []string{"Question", "First", "Second"}},
+		{"tree fields 3", `{"uuid":"q","parent_message_uuid":"b","sender":"human","text":"Question"},{"uuid":"a","parent_message_uuid":"q","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"a","sender":"assistant","text":"Second"}`, `"a"`, []string{"Question", "First", "Second"}},
 	} {
-		input := `[{"uuid":"export","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"a","chat_messages":[` + messages + `]}]`
-		var results []ParseResult
-		require.NoError(t, parseClaudeAIExport(strings.NewReader(input), func(r ParseResult) error { results = append(results, r); return nil }))
-		require.Len(t, results, 1)
-		require.Len(t, results[0].Messages, 3)
-		assert.Equal(t, "Question", results[0].Messages[0].Content)
-		assert.Equal(t, "First", results[0].Messages[1].Content)
-		assert.Equal(t, "Second", results[0].Messages[2].Content)
-		assert.Empty(t, results[0].Messages[2].SourceUUID)
+		t.Run(tt.name, func(t *testing.T) {
+			input := `[null,{"uuid":"export","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":` + tt.leaf + `,"chat_messages":[` + tt.messages + `]}]`
+			var results []ParseResult
+			require.NoError(t, parseClaudeAIExport(strings.NewReader(input), func(r ParseResult) error { results = append(results, r); return nil }))
+			require.Len(t, results, 1)
+			require.Len(t, results[0].Messages, len(tt.want))
+			for i, want := range tt.want {
+				assert.Equal(t, want, results[0].Messages[i].Content)
+			}
+			assert.Empty(t, results[0].Messages[len(tt.want)-1].SourceUUID)
+		})
 	}
 }

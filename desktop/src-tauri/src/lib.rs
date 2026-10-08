@@ -6701,27 +6701,6 @@ mod claude_sync_tests {
     }
 
     #[test]
-    fn claude_fetch_unsolicited_result_leaves_request_pending() {
-        let state = super::ClaudeAuthState::default();
-        let (id, mut receiver) = state.start_browser_request().unwrap();
-        assert!(state
-            .finish_browser_request(super::ClaudeBrowserFetchResult {
-                request_id: "0".into(),
-                status: 200,
-                body: "unsolicited".into(),
-                error: None,
-                retry_after: None,
-            })
-            .is_err());
-        assert!(receiver.try_recv().is_err());
-        let payload = serde_json::json!({"requestId": id, "status": 200, "body": "chat"});
-        state
-            .finish_browser_request(serde_json::from_value(payload).unwrap())
-            .unwrap();
-        assert_eq!(receiver.try_recv().unwrap().body, "chat");
-    }
-
-    #[test]
     fn claude_fetch_cancelled_request_does_not_block_next() {
         let state = super::ClaudeAuthState::default();
         let (old_id, old_receiver) = state.start_browser_request().unwrap();
@@ -6737,6 +6716,7 @@ mod claude_sync_tests {
         assert!(state
             .finish_browser_request(result(old_id, "stale"))
             .is_err());
+        assert!(receiver.try_recv().is_err());
         state
             .finish_browser_request(result(id.clone(), "new chat"))
             .unwrap();
