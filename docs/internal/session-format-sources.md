@@ -2809,7 +2809,8 @@ schemas keep their existing ordering behavior.
   updates and Trash copies.
   Shorter zip exports remain refused. Pins follow source UUIDs, or role, content,
   and occurrence rank when the replacement has no UUIDs. Full resync preserves
-  import markers.
+  import markers only when their policy matches the target archive policy,
+  verified by `TestSyncClaudeAIResyncArchivePolicy` on 2026-10-08.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
   `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
