@@ -706,7 +706,7 @@ func TestHandleImportReplaceQuery(t *testing.T) {
 }
 
 func TestClaudeAISyncMutationNotifications(t *testing.T) {
-	for _, ending := range []string{"done", "detail error", "cancel"} {
+	for _, ending := range []string{"done", "detail error", "two detail errors", "cancel"} {
 		t.Run(ending, func(t *testing.T) {
 			mutations := make(chan struct{}, 2)
 			recall := make(chan struct{}, 2)
@@ -750,10 +750,13 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 					if ending != "done" {
 						body += `,{"uuid":"22222222-2222-4222-8222-222222222223","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
 					}
+					if ending == "two detail errors" {
+						body += `,{"uuid":"22222222-2222-4222-8222-222222222224","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
+					}
 					body += `],"has_more":false}`
 				case strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222222?"):
 					body = `{"uuid":"22222222-2222-4222-8222-222222222222","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Committed chat"}]}`
-				case strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222223?"):
+				case strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222223?"), strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222224?"):
 					if ending == "cancel" {
 						cancel()
 						terminal = "cancel"
@@ -776,6 +779,9 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 			}
 			wantTerminal := ending
 			if ending == "detail error" {
+				wantTerminal = "done"
+			}
+			if ending == "two detail errors" {
 				wantTerminal = "error"
 			}
 			assert.Equal(t, wantTerminal, terminal)

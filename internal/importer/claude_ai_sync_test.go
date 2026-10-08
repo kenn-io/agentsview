@@ -533,9 +533,11 @@ func TestSyncClaudeAIConsecutiveDetailFailures(t *testing.T) {
 		wantErrors int
 		wantImport int
 		wantStop   bool
+		wantThird  int
 	}{
-		{"two retry ladders stop sync", [3]int{503, 503, 200}, 10, 1, 0, true},
-		{"success resets failure streak", [3]int{503, 200, 503}, 11, 2, 1, false},
+		{"two retry ladders stop sync", [3]int{503, 503, 200}, 10, 1, 0, true, 0},
+		{"success resets failure streak", [3]int{503, 200, 503}, 11, 2, 1, false, 5},
+		{"two oversized host responses continue", [3]int{413, 413, 200}, 3, 2, 1, false, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -557,21 +559,28 @@ func TestSyncClaudeAIConsecutiveDetailFailures(t *testing.T) {
 							if i == 2 {
 								third++
 							}
-							return ClaudeAIResponse{Status: tt.statuses[i], RetryAfter: "1", Body: []byte(strings.ReplaceAll(syncDetail, ids[0], id))}, nil
+							response := ClaudeAIResponse{Status: tt.statuses[i], RetryAfter: "1"}
+							if response.Status == 200 {
+								response.Body = []byte(strings.ReplaceAll(syncDetail, ids[0], id))
+							}
+							return response, nil
 						}
 					}
 					return fetch(ctx, path)
 				}, nil)
 				if tt.wantStop {
 					require.EqualError(t, err, "claude returned HTTP 503")
-					assert.Zero(t, third)
 				} else {
 					require.NoError(t, err)
-					assert.Equal(t, 5, third)
-					messages, err := d.GetAllMessages(t.Context(), "claude-ai:"+ids[1])
-					require.NoError(t, err)
-					assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+					for i, status := range tt.statuses {
+						if status == 200 {
+							messages, err := d.GetAllMessages(t.Context(), "claude-ai:"+ids[i])
+							require.NoError(t, err)
+							assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+						}
+					}
 				}
+				assert.Equal(t, tt.wantThird, third)
 				assert.Equal(t, tt.wantCalls, calls)
 				assert.Equal(t, tt.wantErrors, stats.Errors)
 				assert.Equal(t, tt.wantImport, stats.Imported)
@@ -663,6 +672,12 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			require.NotNil(t, marked.TranscriptRevision)
 			if !tt.updated {
 				assert.Equal(t, *initial.TranscriptRevision, *marked.TranscriptRevision)
+			}
+			if tt.name == "shorter result updates in place" {
+				assert.NotEqual(t, *initial.TranscriptRevision, *marked.TranscriptRevision)
+				assert.Empty(t, marked.SecretsRulesVersion)
+			} else {
+				assert.Equal(t, "test-rules", marked.SecretsRulesVersion)
 			}
 			assert.Equal(t, strPtr("claude-ai:v1:full:reply"), marked.LastEntryUUID)
 			_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+tt.detail+"]"), nil)
