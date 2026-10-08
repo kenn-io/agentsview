@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/pathutil"
+
 	gitenv "go.kenn.io/kit/git/env"
 	gitrepo "go.kenn.io/kit/git/repo"
 	"go.kenn.io/kit/pathresolve"
@@ -181,9 +183,13 @@ func normalizeRemoteURL(raw, root string) string {
 // Ordinary roots are shared while their Git marker and root configuration remain unchanged.
 var repoRoots = struct {
 	sync.Mutex
-	entries               map[string]*repoRootEntry
-	pending, pendingEnded <-chan struct{}
-}{entries: make(map[string]*repoRootEntry)}
+	entries map[string]*repoRootEntry
+	pending map[string]*repoRootCheck
+}{entries: make(map[string]*repoRootEntry), pending: make(map[string]*repoRootCheck)}
+
+type repoRootCheck struct {
+	done, ended <-chan struct{}
+}
 
 type repoRootEntry struct {
 	ready  chan struct{}
@@ -206,10 +212,11 @@ type repoRootConfig struct {
 type repoRootEligibility struct {
 	marker        gitMarker
 	config        repoRootConfig
+	dir           string
 	absent, known bool
 }
 
-func boundedRepoRootEligibility(ctx context.Context, check func(context.Context) repoRootEligibility) repoRootEligibility {
+func boundedRepoRootEligibility(ctx context.Context, key string, check func(context.Context) repoRootEligibility) repoRootEligibility {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	for ctx.Err() == nil {
@@ -218,16 +225,17 @@ func boundedRepoRootEligibility(ctx context.Context, check func(context.Context)
 			repoRoots.Unlock()
 			break
 		}
-		pending, ended := repoRoots.pending, repoRoots.pendingEnded
+		pending := repoRoots.pending[key]
 		if pending == nil {
 			done := make(chan struct{})
-			repoRoots.pending, repoRoots.pendingEnded = done, ctx.Done()
+			pending = &repoRootCheck{done: done, ended: ctx.Done()}
+			repoRoots.pending[key] = pending
 			repoRoots.Unlock()
 			var result repoRootEligibility
 			go func() {
 				result = check(ctx)
 				repoRoots.Lock()
-				repoRoots.pending, repoRoots.pendingEnded = nil, nil
+				delete(repoRoots.pending, key)
 				close(done)
 				repoRoots.Unlock()
 			}()
@@ -242,11 +250,11 @@ func boundedRepoRootEligibility(ctx context.Context, check func(context.Context)
 		}
 		repoRoots.Unlock()
 		select {
-		case <-pending:
+		case <-pending.done:
 			continue
-		case <-ended:
+		case <-pending.ended:
 			select {
-			case <-pending:
+			case <-pending.done:
 				continue
 			default:
 				return repoRootEligibility{}
@@ -334,7 +342,7 @@ func readRepoRootPointer(ctx context.Context, path string) (string, bool, error)
 }
 
 // Git root setup reads these two config files directly, without expanding includes.
-func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConfig, bool) {
+func snapshotRepoRootConfig(ctx context.Context, marker gitMarker, cwd string) (repoRootConfig, bool) {
 	if marker.info == nil || ctx.Err() != nil || !repoRootOwned(filepath.Dir(marker.path)) || ctx.Err() != nil || !repoRootOwned(marker.path) {
 		return repoRootConfig{}, false
 	}
@@ -349,8 +357,9 @@ func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConf
 		if !repoRootPointerEligible(gitdir) {
 			return repoRootConfig{}, false
 		}
-		if !filepath.IsAbs(gitdir) {
-			gitdir = filepath.Join(filepath.Dir(marker.path), gitdir)
+		gitdir = pathutil.GitPointerPath(gitdir, filepath.Dir(marker.path), cwd)
+		if gitdir == "" {
+			return repoRootConfig{}, false
 		}
 	}
 	if ctx.Err() != nil {
@@ -370,8 +379,9 @@ func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConf
 		if common == "" || !repoRootPointerEligible(common) {
 			return repoRootConfig{}, false
 		}
-		if !filepath.IsAbs(common) {
-			common = filepath.Join(gitdir, common)
+		common = pathutil.GitPointerPath(common, gitdir, cwd)
+		if common == "" {
+			return repoRootConfig{}, false
 		}
 		if ctx.Err() != nil {
 			return repoRootConfig{}, false
@@ -538,19 +548,20 @@ func findRepoRoot(ctx context.Context, start string) string {
 		return ""
 	}
 	for ctx.Err() == nil {
-		dir := existingAncestor(start)
-		eligibility := boundedRepoRootEligibility(ctx, func(batch context.Context) repoRootEligibility {
+		eligibility := boundedRepoRootEligibility(ctx, start, func(batch context.Context) repoRootEligibility {
+			dir := existingAncestor(batch, start)
 			marker, absent := nearestGitMarker(batch, dir)
-			config, known := snapshotRepoRootConfig(batch, marker)
-			return repoRootEligibility{marker: marker, config: config, absent: absent, known: known}
+			config, known := snapshotRepoRootConfig(batch, marker, dir)
+			return repoRootEligibility{marker: marker, config: config, dir: dir, absent: absent, known: known}
 		})
 		if ctx.Err() != nil || eligibility.absent {
 			return ""
 		}
 		marker, config := eligibility.marker, eligibility.config
 		if !eligibility.known {
+			dir := eligibility.dir
 			if dir == "" {
-				return ""
+				dir = start
 			}
 			return gitToplevel(ctx, dir)
 		}
@@ -588,7 +599,7 @@ func findRepoRoot(ctx context.Context, start string) string {
 		entry := &repoRootEntry{ready: make(chan struct{})}
 		repoRoots.entries[key] = entry
 		repoRoots.Unlock()
-		root := gitToplevel(ctx, dir)
+		root := gitToplevel(ctx, eligibility.dir)
 		repoRoots.Lock()
 		if ctx.Err() != nil {
 			root = ""
@@ -611,10 +622,13 @@ func findRepoRoot(ctx context.Context, start string) string {
 // and is a directory. If path itself is an existing directory, it is
 // returned. Returns "" when no ancestor exists (only possible on torn
 // filesystems or invalid roots).
-func existingAncestor(path string) string {
+func existingAncestor(ctx context.Context, path string) string {
 	dir := path
-	for {
+	for ctx.Err() == nil {
 		info, err := os.Stat(dir)
+		if ctx.Err() != nil {
+			return ""
+		}
 		if err == nil {
 			if info.IsDir() {
 				return dir
@@ -628,6 +642,7 @@ func existingAncestor(path string) string {
 		}
 		dir = parent
 	}
+	return ""
 }
 
 // gitToplevel runs `git rev-parse --show-toplevel` from dir and returns the

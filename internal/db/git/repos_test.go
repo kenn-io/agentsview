@@ -236,6 +236,12 @@ func TestFindRepoRoot_PendingFill(t *testing.T) {
 func TestBoundedRepoRootEligibility_StalledBatch(t *testing.T) {
 	for _, cancelOwner := range []bool{true, false} {
 		t.Run(fmt.Sprintf("cancel owner %t", cancelOwner), func(t *testing.T) {
+			skipIfNoGit(t)
+			healthy := []string{initBareRepo(t), initBareRepo(t), initBareRepo(t)}
+			stalled := t.TempDir()
+			for _, dir := range healthy {
+				require.Equal(t, canonAll([]string{dir})[0], findRepoRoot(t.Context(), dir))
+			}
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
@@ -245,7 +251,7 @@ func TestBoundedRepoRootEligibility_StalledBatch(t *testing.T) {
 				var attempts atomic.Int32
 				owner := make(chan repoRootEligibility, 1)
 				go func() {
-					owner <- boundedRepoRootEligibility(ctx, func(context.Context) repoRootEligibility {
+					owner <- boundedRepoRootEligibility(ctx, stalled, func(context.Context) repoRootEligibility {
 						attempts.Add(1)
 						close(started)
 						<-release
@@ -254,7 +260,7 @@ func TestBoundedRepoRootEligibility_StalledBatch(t *testing.T) {
 				}()
 				<-started
 				repoRoots.Lock()
-				pending, entries := repoRoots.pending, len(repoRoots.entries)
+				pending, entries := repoRoots.pending[stalled], len(repoRoots.entries)
 				repoRoots.Unlock()
 				check := func(context.Context) repoRootEligibility {
 					attempts.Add(1)
@@ -264,7 +270,7 @@ func TestBoundedRepoRootEligibility_StalledBatch(t *testing.T) {
 					cancel()
 				} else {
 					waiter := make(chan repoRootEligibility, 1)
-					go func() { waiter <- boundedRepoRootEligibility(t.Context(), check) }()
+					go func() { waiter <- boundedRepoRootEligibility(t.Context(), stalled, check) }()
 					synctest.Wait()
 					assert.Empty(t, waiter, "healthy ownership keeps later admission waiting")
 					time.Sleep(5 * time.Second)
@@ -272,15 +278,19 @@ func TestBoundedRepoRootEligibility_StalledBatch(t *testing.T) {
 				}
 				assert.False(t, (<-owner).known)
 				before := time.Now()
-				assert.False(t, boundedRepoRootEligibility(t.Context(), check).known)
+				assert.False(t, boundedRepoRootEligibility(t.Context(), stalled, check).known)
 				assert.Equal(t, before, time.Now(), "abandoned worker declines admission immediately")
 				assert.Equal(t, int32(1), attempts.Load())
+				t.Setenv("PATH", t.TempDir())
+				for _, dir := range healthy {
+					assert.Equal(t, canonAll([]string{dir})[0], findRepoRoot(t.Context(), dir), "a stalled check must leave unrelated warm roots reusable")
+				}
 				releaseOnce.Do(func() { close(release) })
-				<-pending
+				<-pending.done
 				repoRoots.Lock()
 				assert.Len(t, repoRoots.entries, entries, "late completion publishes no root")
 				repoRoots.Unlock()
-				assert.True(t, boundedRepoRootEligibility(t.Context(), check).known)
+				assert.True(t, boundedRepoRootEligibility(t.Context(), stalled, check).known)
 				assert.Equal(t, int32(2), attempts.Load())
 			})
 		})
@@ -367,6 +377,70 @@ func TestRepoRootPointer_Oversized(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrInvalid)
 	assert.True(t, exists)
 	assert.Empty(t, text)
+}
+
+func TestFindRepoRoot_WindowsRootedPointers(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows rooted paths use the discovery drive")
+	}
+	for _, name := range []string{"gitfile", "commondir", "commondir other drive"} {
+		for _, slash := range []string{"/", "\\"} {
+			t.Run(name+slash, func(t *testing.T) {
+				skipIfNoGit(t)
+				repo := initBareRepo(t)
+				commitAt(t, repo, "2026-01-01T00:00:00Z", "one")
+				configured := initBareRepo(t)
+				commitAt(t, configured, "2026-01-01T00:00:00Z", "one")
+				commitAt(t, configured, "2026-01-02T00:00:00Z", "two")
+				gitdir := filepath.Join(repo, ".git")
+				actual := filepath.Join(t.TempDir(), "actual")
+				config := filepath.Join(actual, "config")
+				require.NoError(t, os.Rename(gitdir, actual))
+				pointer := strings.ReplaceAll(filepath.ToSlash(strings.TrimPrefix(actual, filepath.VolumeName(actual))), "/", slash)
+				base := repo
+				if name == "gitfile" {
+					require.NoError(t, os.WriteFile(gitdir, []byte("gitdir: "+pointer+"\n"), 0o600))
+				} else {
+					if name == "commondir other drive" {
+						cache, err := os.UserCacheDir()
+						require.NoError(t, err)
+						if filepath.VolumeName(cache) == filepath.VolumeName(repo) {
+							t.Skip("a second drive is unavailable")
+						}
+						t.Setenv("GOTMPDIR", cache)
+						original := gitdir
+						gitdir = t.TempDir()
+						require.NoError(t, os.WriteFile(original, []byte("gitdir: "+filepath.ToSlash(gitdir)+"\n"), 0o600))
+					} else {
+						require.NoError(t, os.Mkdir(gitdir, 0o700))
+					}
+					base = gitdir
+					head, err := os.ReadFile(filepath.Join(actual, "HEAD"))
+					require.NoError(t, err)
+					require.NoError(t, os.WriteFile(filepath.Join(gitdir, "HEAD"), head, 0o600))
+					require.NoError(t, os.WriteFile(filepath.Join(gitdir, "commondir"), []byte(pointer+"\n"), 0o600))
+					gitRun(t, repo, nil, "config", "--file", config, "extensions.worktreeConfig", "true")
+					config = filepath.Join(gitdir, "config.worktree")
+					gitRun(t, repo, nil, "config", "--file", config, "core.worktree", repo)
+				}
+				decoy := mkdirIn(t, base, pointer)
+				gitRun(t, decoy, nil, "init", "--bare", "-q")
+				gitRun(t, repo, nil, "config", "--file", filepath.Join(decoy, "config"), "core.bare", "false")
+				count := func() int {
+					groups := DiscoverRepos(t.Context(), []string{repo})
+					require.Len(t, groups, 1)
+					assert.Equal(t, gitToplevel(t.Context(), repo), groups[0][0])
+					result, err := AggregateLog(t.Context(), groups[0][0], "test@example.com", "1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z")
+					require.NoError(t, err)
+					return result.Commits
+				}
+				require.Equal(t, 1, count())
+				gitRun(t, repo, nil, "config", "--file", config, "core.worktree", configured)
+				require.Equal(t, canonAll([]string{configured})[0], gitToplevel(t.Context(), repo))
+				assert.Equal(t, 2, count())
+			})
+		}
+	}
 }
 
 func TestRepoRootReader_Cancelled(t *testing.T) {

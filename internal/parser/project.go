@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 // osStat and osLstat are indirected through vars so tests can intercept
@@ -838,14 +839,10 @@ func scanSiblingRepoCandidates(dir string) siblingScanResult {
 		if !gitFileTargetsProbeable(filepath.Join(dir, entry.Name()), gitPath) {
 			continue
 		}
-		gitDir := readGitDirFromFile(gitPath)
+		gitDir := pathutil.GitPointerPath(readGitDirFromFile(gitPath), filepath.Dir(gitPath), filepath.Join(dir, entry.Name()))
 		if gitDir == "" {
 			continue
 		}
-		if !filepath.IsAbs(gitDir) {
-			gitDir = filepath.Join(dir, entry.Name(), gitDir)
-		}
-		gitDir = filepath.Clean(gitDir)
 		if !strings.Contains(gitDir, worktreeMarker) {
 			continue
 		}
@@ -927,16 +924,11 @@ func deletedChildIsWorktree(
 }
 
 func repoRootFromGitFile(repoDir, gitFilePath string) string {
-	gitDir := readGitDirFromFile(gitFilePath)
+	gitDir := pathutil.GitPointerPath(readGitDirFromFile(gitFilePath), filepath.Dir(gitFilePath), repoDir)
 	if gitDir == "" {
 		return ""
 	}
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(filepath.Dir(gitFilePath), gitDir)
-	}
-	gitDir = filepath.Clean(gitDir)
-
-	commonDir := readCommonDir(gitDir)
+	commonDir := readCommonDir(gitDir, repoDir)
 	if commonDir != "" {
 		if filepath.Base(commonDir) == ".git" {
 			return filepath.Dir(commonDir)
@@ -982,10 +974,10 @@ func gitFileTargetsProbeable(dir, gitPath string) bool {
 		// Nothing parseable means no target will be read from here.
 		return true
 	}
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(dir, gitDir)
+	gitDir = pathutil.GitPointerPath(gitDir, filepath.Dir(gitPath), dir)
+	if gitDir == "" {
+		return false
 	}
-	gitDir = filepath.Clean(gitDir)
 	if !probeGitfileTarget(gitDir) {
 		return false
 	}
@@ -996,7 +988,7 @@ func gitFileTargetsProbeable(dir, gitPath string) bool {
 	if !probeGitfileTarget(filepath.Join(gitDir, "commondir")) {
 		return false
 	}
-	commonDir := readCommonDir(gitDir)
+	commonDir := readCommonDir(gitDir, dir)
 	if commonDir == "" {
 		// No commondir means a submodule-style gitdir: the gitdir is the
 		// effective common directory holding config and HEAD. Vet them
@@ -1027,7 +1019,7 @@ func readGitDirFromFile(path string) string {
 	return ""
 }
 
-func readCommonDir(gitDir string) string {
+func readCommonDir(gitDir, cwd string) string {
 	b, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
 	if err != nil {
 		return ""
@@ -1036,10 +1028,7 @@ func readCommonDir(gitDir string) string {
 	if value == "" {
 		return ""
 	}
-	if filepath.IsAbs(value) {
-		return filepath.Clean(value)
-	}
-	return filepath.Clean(filepath.Join(gitDir, value))
+	return pathutil.GitPointerPath(value, gitDir, cwd)
 }
 
 func gitConfigCoreBare(gitDir string) bool {
