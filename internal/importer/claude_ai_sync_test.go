@@ -589,6 +589,84 @@ func TestSyncClaudeAIConsecutiveDetailFailures(t *testing.T) {
 	}
 }
 
+func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		details     [3]string
+		statuses    [3]int
+		failWrite   bool
+		wantStop    bool
+		wantCalls   int
+		wantErrors  int
+		wantImport  int
+		wantSkipped int
+	}{
+		{name: "malformed details stop after second", details: [3]string{"null", "null", "null"}, wantStop: true, wantCalls: 2, wantErrors: 2},
+		{name: "valid write resets streak", details: [3]string{"null", "", "null"}, wantCalls: 3, wantErrors: 2, wantImport: 1},
+		{name: "uuid mismatches stop after second", details: [3]string{syncDetail, syncDetail, syncDetail}, wantStop: true, wantCalls: 2, wantErrors: 2},
+		{name: "write failures stop after second", failWrite: true, wantStop: true, wantCalls: 2, wantErrors: 2},
+		{name: "404 preserves streak", details: [3]string{"null", "", "null"}, statuses: [3]int{200, 404, 200}, wantStop: true, wantCalls: 3, wantErrors: 2, wantSkipped: 1},
+		{name: "oversized preserves streak", details: [3]string{"null", "", "null"}, statuses: [3]int{200, 413, 200}, wantStop: true, wantCalls: 3, wantErrors: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			ids := []string{"22222222-2222-4222-8222-222222222223", "22222222-2222-4222-8222-222222222224", "22222222-2222-4222-8222-222222222225"}
+			var summaries []string
+			for _, id := range ids {
+				summaries = append(summaries, strings.ReplaceAll(syncSummary, "22222222-2222-4222-8222-222222222222", id))
+			}
+			calls := 0
+			fetch := syncOneFetch(t, strings.Join(summaries, ","), func() (ClaudeAIResponse, error) {
+				require.FailNow(t, "detail must use its own response")
+				return ClaudeAIResponse{}, nil
+			})
+			var store interface {
+				db.Store
+				IsSessionTrashed(context.Context, string) bool
+				IsSessionExcluded(context.Context, string) bool
+			} = d
+			if tt.failWrite {
+				store = failFillStore{d}
+			}
+			stats, err := SyncClaudeAI(t.Context(), store, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+				for i, id := range ids {
+					if strings.Contains(path, "/chat_conversations/"+id+"?") {
+						calls++
+						status := tt.statuses[i]
+						if status == 0 {
+							status = 200
+						}
+						detail := tt.details[i]
+						if detail == "" {
+							detail = strings.ReplaceAll(syncDetail, "22222222-2222-4222-8222-222222222222", id)
+						}
+						return ClaudeAIResponse{Status: status, Body: []byte(detail)}, nil
+					}
+				}
+				return fetch(ctx, path)
+			}, nil)
+			if tt.wantStop {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantCalls, calls)
+			assert.Equal(t, tt.wantErrors, stats.Errors)
+			assert.Equal(t, tt.wantImport, stats.Imported)
+			assert.Equal(t, tt.wantSkipped, stats.Skipped)
+			for i, id := range ids {
+				messages, err := d.GetAllMessages(t.Context(), "claude-ai:"+id)
+				require.NoError(t, err)
+				if tt.wantImport == 1 && i == 1 {
+					assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+				} else {
+					assert.Empty(t, messages)
+				}
+			}
+		})
+	}
+}
+
 func TestSyncClaudeAIMalformedRetries(t *testing.T) {
 	for _, detail := range []string{"null", `{"uuid":"22222222-2222-4222-8222-222222222222"}`, strings.ReplaceAll(syncDetail, "10:05:00.123456Z", "bad"), strings.Replace(syncDetail, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":null`, 1)} {
 		d := testDB(t)
