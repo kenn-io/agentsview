@@ -679,7 +679,7 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222226?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 						status = oversizedStatus
 						if status == 200 {
-							body = strings.Repeat("x", (32<<20)+2)
+							body = strings.Repeat("x", importer.ClaudeAIResponseLimit+2)
 						}
 					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222227?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 						body = `{"uuid":"22222222-2222-4222-8222-222222222227","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"assistant","text":"Later reply","created_at":"2026-03-01T10:05:00Z"}]}`

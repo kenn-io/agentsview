@@ -22,8 +22,6 @@ import (
 	"go.kenn.io/agentsview/internal/importer"
 )
 
-const claudeAIResponseLimit = 32 << 20
-
 func (s *Server) registerImportRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/import")
 	configureRouteGroup(group, "Import")
@@ -45,8 +43,8 @@ func (s *Server) registerImportRoutes() {
 			return &struct{}{}, nil
 		}, maxBodyBytes(-1), func(op *huma.Operation) {
 			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
-				body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), claudeAIResponseLimit+1))
-				if len(body) > claudeAIResponseLimit || ctx.Query("status") == "413" {
+				body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), importer.ClaudeAIResponseLimit+1))
+				if len(body) > importer.ClaudeAIResponseLimit || ctx.Query("status") == "413" {
 					err = importer.ErrClaudeAIResponseTooLarge
 				}
 				if err != nil {
