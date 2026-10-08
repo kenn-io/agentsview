@@ -770,6 +770,7 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "inc.jsonl")
 	initial := testjsonl.JoinJSONL(
+		`{"type":"agent-setting","entrypoint":"sdk-cli"}`,
 		testjsonl.ClaudeUserJSON("hello world", tsEarly),
 		testjsonl.ClaudeAssistantJSON("hi there", tsEarlyS1),
 	)
@@ -803,11 +804,13 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 	outcome, status, err := provider.ParseIncremental(
 		t.Context(),
 		IncrementalRequest{
-			Source:       source,
-			Fingerprint:  SourceFingerprint{Key: sourcePath, Size: currentInfo.Size()},
-			SessionID:    "inc",
-			Offset:       info.Size(),
-			StartOrdinal: 2,
+			Source:                 source,
+			Fingerprint:            SourceFingerprint{Key: sourcePath, Size: currentInfo.Size()},
+			SessionID:              "inc",
+			Offset:                 info.Size(),
+			StartOrdinal:           2,
+			StoredEntrypoint:       "sdk-cli",
+			StoredUserMessageCount: 1,
 		},
 	)
 	require.NoError(t, err)

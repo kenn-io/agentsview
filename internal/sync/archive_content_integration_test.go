@@ -220,6 +220,61 @@ func TestUsageOnlyStoragePreservesUsageWithoutTranscriptContent(t *testing.T) {
 	}
 }
 
+func TestUsageOnlyStorageClaudeContextFirstWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin, relationship string
+	}{
+		{"sdk", "sdk", "subagent"},
+		{"human", "human", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "project", "context-first.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+			content := `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
+				`{"type":"user","uuid":"context","timestamp":"2026-10-01T10:00:00Z","message":{"content":"<ide_opened_file>The user opened a file.</ide_opened_file>"}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+			database := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+				Machine:   "local", ArchiveContent: config.ArchiveContentUsage,
+			})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			stored, err := database.GetSessionFull(t.Context(), "context-first")
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			require.Zero(t, stored.UserMessageCount)
+			appends := []string{
+				testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "Reading context.", "a1", "context").String(),
+				fmt.Sprintf(`{"type":"user","uuid":"u1","parentUuid":"a1","turnOrigin":"%s","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain this function."}}`, tc.origin) + "\n",
+				testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:03:00Z", "The explanation.", "a2", "u1").String(),
+				fmt.Sprintf(`{"type":"user","uuid":"u2","parentUuid":"a2","turnOrigin":"%s","timestamp":"2026-10-01T10:04:00Z","message":{"content":"Explain the next function."}}`, tc.origin) + "\n",
+			}
+			for stage, appendText := range appends {
+				content += appendText
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+				engine.SyncPathsContext(t.Context(), []string{path})
+				stored, err = database.GetSessionFull(t.Context(), "context-first")
+				require.NoError(t, err)
+				require.NotNil(t, stored)
+				if stage != 1 {
+					assert.True(t, stored.LastWriteIncremental)
+				}
+				if stage > 0 {
+					assert.Equal(t, tc.relationship, stored.RelationshipType)
+					wantCount := 1
+					if stage == 3 {
+						wantCount = 2
+					}
+					assert.Equal(t, wantCount, stored.UserMessageCount)
+				}
+				assert.Nil(t, stored.FirstMessage)
+			}
+		})
+	}
+}
+
 func TestUsageOnlyStorageClaudeUserAppendStaysIncremental(t *testing.T) {
 	claudeRoot := t.TempDir()
 	sessionID := "usage-only-incremental-claude"

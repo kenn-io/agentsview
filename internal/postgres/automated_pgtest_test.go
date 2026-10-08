@@ -144,7 +144,8 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ps.DB().ExecContext(ctx, `UPDATE sync_metadata SET value = 'old-classifier' WHERE key = $1`, db.ClassifierHashKey)
 	require.NoError(t, err)
-	require.NoError(t, ps.EnsureSchema(ctx))
+	require.NoError(t, repairParentlessWorkersPG(ctx, ps.DB()))
+	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
 	for _, tc := range []struct {
 		id, relationship string
 		automated        bool
@@ -167,10 +168,20 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 	}
 	_, err = ps.DB().ExecContext(ctx, `UPDATE sessions SET relationship_type = '' WHERE id = 'plain'`)
 	require.NoError(t, err)
-	require.NoError(t, ps.EnsureSchema(ctx))
+	require.NoError(t, repairParentlessWorkersPG(ctx, ps.DB()))
 	var relationship string
 	require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT relationship_type FROM sessions WHERE id = 'plain'`).Scan(&relationship))
 	assert.Empty(t, relationship, "the relationship repair runs once")
+	tx, err := ps.DB().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	require.NoError(t, ps.pushSession(ctx, tx, db.Session{
+		ID: "late-worker", Project: "project-a", Agent: "codex", SessionKind: "non-interactive",
+		CreatedAt: "2026-10-01T10:00:00Z",
+	}, "test-marker", nil))
+	require.NoError(t, tx.Commit())
+	require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT relationship_type FROM sessions WHERE id = 'late-worker'`).Scan(&relationship))
+	assert.Equal(t, "subagent", relationship)
 }
 
 // TestPushSessionTrustsLocalIsAutomated verifies that

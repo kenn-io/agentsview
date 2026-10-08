@@ -152,6 +152,7 @@ func TestReportingJointUsageOnlySubagentRetainsClassification(t *testing.T) {
 				s.Agent = "agent-a"
 				s.StartedAt, s.EndedAt = new("2026-07-27T08:00:00Z"), new("2026-07-27T08:01:00Z")
 				s.RelationshipType = "subagent"
+				s.ParentSessionID = new("parent")
 				s.IsAutomated = tc.automated
 			})
 			cost := money.MustParseDollars("0.003")

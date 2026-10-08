@@ -2146,6 +2146,7 @@ type pgSessionWriteOptions struct {
 // writePGSession is the shared transaction-owned row kernel. Mirror ownership
 // is passed explicitly; it never reads the source archive or global pool.
 func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID string, legacyMarkerMachines []string, options pgSessionWriteOptions) error {
+	sess.RelationshipType = db.SessionRelationship(sess)
 	createdAt, ok := ParseSQLiteTimestamp(sess.CreatedAt)
 	if !ok {
 		return fmt.Errorf(

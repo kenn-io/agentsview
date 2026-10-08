@@ -1495,6 +1495,7 @@ func parserParentSessionID(s Session) *string {
 }
 
 func upsertSessionArgs(s Session) []any {
+	s.RelationshipType = SessionRelationship(s)
 	return []any{
 		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
 		s.AgentLabel, s.Entrypoint, s.SessionKind,
@@ -1518,6 +1519,15 @@ func upsertSessionArgs(s Session) []any {
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
 	}
+}
+
+// SessionRelationship normalizes older parentless workers at every session write.
+func SessionRelationship(s Session) string {
+	if s.SessionKind == "non-interactive" && s.RelationshipType == "" &&
+		(s.ParentSessionID == nil || *s.ParentSessionID == "") {
+		return "subagent"
+	}
+	return s.RelationshipType
 }
 
 // UpsertSession inserts or updates a session.
