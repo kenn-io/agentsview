@@ -121,7 +121,7 @@ it("keeps the dialog cleared after cancelling completed sync during browser clea
   await waitFor(() => expect(host.close).toHaveBeenCalledOnce());
   await fireEvent.click(screen.getByRole("button", { name: m.import_cancel() }));
   expect(onclose).toHaveBeenCalledOnce();
-  expect(syncClaudeAI.mock.calls[0][2].aborted).toBe(true);
+  expect(syncClaudeAI.mock.calls[0]?.[2]?.aborted).toBe(true);
   await rerender({ open: false, onclose, onimported });
   finishClose();
   await waitFor(() => expect(onimported).toHaveBeenCalledOnce());
