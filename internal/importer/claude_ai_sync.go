@@ -20,6 +20,9 @@ import (
 // ErrClaudeAIResponseTooLarge marks a chat that exceeds the browser relay limit.
 var ErrClaudeAIResponseTooLarge = errors.New("claude response exceeds 32 MiB")
 
+// ClaudeAIResponseLimit caps browser responses and relay bodies in bytes.
+const ClaudeAIResponseLimit = 32 << 20
+
 // ErrClaudeAIAuthRequired reports expired or missing browser credentials.
 var ErrClaudeAIAuthRequired = errors.New("claude.ai sign-in required")
 
@@ -36,7 +39,16 @@ func claudeAIMarker(store db.Store, leaf string) string {
 
 type claudeAIHTTPError struct{ status int }
 
-func (e *claudeAIHTTPError) Error() string { return fmt.Sprintf("claude returned HTTP %d", e.status) }
+func (e *claudeAIHTTPError) Error() string {
+	if e.status == 403 {
+		return "claude.ai access denied (HTTP 403)"
+	}
+	return fmt.Sprintf("claude returned HTTP %d", e.status)
+}
+
+func (e *claudeAIHTTPError) Is(target error) bool {
+	return e.status == 403 && target == ErrClaudeAIAuthRequired
+}
 
 // ClaudeAIResponse carries the browser response without credentials.
 type ClaudeAIResponse struct {
@@ -94,16 +106,22 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					return stats, err
 				}
 				var marker struct {
-					UUID        string `json:"uuid"`
-					UpdatedAt   string `json:"updated_at"`
-					CurrentLeaf string `json:"current_leaf_message_uuid"`
+					UUID        string          `json:"uuid"`
+					UpdatedAt   string          `json:"updated_at"`
+					CurrentLeaf json.RawMessage `json:"current_leaf_message_uuid"`
 				}
 				if err := json.Unmarshal(summary, &marker); err != nil || marker.UUID == "" || marker.UpdatedAt == "" {
 					stats.Errors++
 					cb.progress(stats)
 					continue
 				}
-				if marker.CurrentLeaf == "" {
+				var leaf string
+				if err := json.Unmarshal(marker.CurrentLeaf, &leaf); err != nil || leaf == "" && string(marker.CurrentLeaf) != "null" {
+					stats.Errors++
+					cb.progress(stats)
+					continue
+				}
+				if leaf == "" {
 					stats.Skipped++
 					cb.progress(stats)
 					continue
@@ -128,14 +146,14 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					if len(parts) == 4 && parts[0] == "claude-ai" && strings.HasPrefix(parts[1], "v") {
 						version, err := strconv.Atoi(strings.TrimPrefix(parts[1], "v"))
 						if err == nil && version > 1 {
-							stats.Skipped++
+							stats.Errors++
 							cb.progress(stats)
 							continue
 						}
 					}
 				}
 				updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
-				if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) && existing.LastEntryUUID != nil && *existing.LastEntryUUID == claudeAIMarker(store, marker.CurrentLeaf) {
+				if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) && existing.LastEntryUUID != nil && *existing.LastEntryUUID == claudeAIMarker(store, leaf) {
 					stats.Skipped++
 					cb.progress(stats)
 					continue
@@ -203,8 +221,11 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 			return nil, err
 		}
 		status := response.Status
-		if status == 401 || status == 403 {
+		if status == 401 {
 			return nil, ErrClaudeAIAuthRequired
+		}
+		if status == 403 {
+			return nil, &claudeAIHTTPError{status: status}
 		}
 		if status != 429 && status < 500 || attempt == 4 {
 			if status < 200 || status >= 300 {

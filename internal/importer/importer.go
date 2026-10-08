@@ -269,35 +269,25 @@ func upsertConversation(
 		}
 	}
 	replaceMessages := true
+	unchanged := false
 	if existing != nil && (live || existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt)) {
 		archived, err := store.GetAllMessages(ctx, s.ID)
 		if err != nil {
 			return importNew, fmt.Errorf("loading existing messages: %w", err)
 		}
 		canonical := storedFormMessages(store, msgs)
-		if sameMessages(archived, canonical) {
-			if !live {
-				return importSkipped, nil
-			}
-			_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-				Session: sess, Messages: msgs, SkipSignalUpdates: true, TouchModified: true, FillSourceUUIDs: true,
-			}})
-			if errors.Is(err, db.ErrSessionExcluded) {
-				return importSkipped, nil
-			} else if err != nil {
-				return importNew, err
-			}
-			if existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) {
-				return importSkipped, nil
-			}
-			return importUpdated, nil
+		unchanged = sameMessages(archived, canonical)
+		if unchanged && !live {
+			return importSkipped, nil
 		}
 		if live {
-			replaceMessages = len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)])
+			replaceMessages = !unchanged && (len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)]))
 		}
 	}
 
-	fts.suspend(ctx)
+	if !unchanged {
+		fts.suspend(ctx)
+	}
 	if !live {
 		if err := store.ReplaceSessionMessages(ctx, s.ID, msgs); err != nil {
 			return importNew, fmt.Errorf("replacing messages: %w", err)
@@ -308,9 +298,12 @@ func upsertConversation(
 		return importUpdated, nil
 	}
 	_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-		Session:         sess,
-		Messages:        msgs,
-		ReplaceMessages: replaceMessages,
+		Session:           sess,
+		Messages:          msgs,
+		ReplaceMessages:   replaceMessages,
+		FillSourceUUIDs:   !replaceMessages,
+		SkipSignalUpdates: unchanged,
+		TouchModified:     true,
 	}})
 	if errors.Is(err, db.ErrSessionExcluded) {
 		return importSkipped, nil
@@ -321,6 +314,9 @@ func upsertConversation(
 
 	if isNew {
 		return importNew, nil
+	}
+	if unchanged && existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) {
+		return importSkipped, nil
 	}
 	return importUpdated, nil
 }
@@ -694,7 +690,8 @@ func sameMessages(existing, incoming []db.Message) bool {
 	for i := range existing {
 		if !sameTurn(existing[i], incoming[i]) ||
 			existing[i].Content != incoming[i].Content ||
-			existing[i].ContentLength != incoming[i].ContentLength {
+			existing[i].ContentLength != incoming[i].ContentLength ||
+			existing[i].SourceUUID != "" && incoming[i].SourceUUID != "" && existing[i].SourceUUID != incoming[i].SourceUUID {
 			return false
 		}
 	}
