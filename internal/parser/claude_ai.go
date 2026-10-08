@@ -203,7 +203,7 @@ func buildClaudeAttachmentText(
 func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) {
 	const root = "00000000-0000-4000-8000-000000000000"
 	var leaf string
-	if conv.CurrentLeaf.Kind() != jsontext.KindString || json.Unmarshal(conv.CurrentLeaf, &leaf) != nil || leaf == "" || leaf == root {
+	if json.Unmarshal(conv.CurrentLeaf, &leaf) != nil || leaf == "" || leaf == root {
 		return nil, errors.New("expected current_leaf_message_uuid string naming a message")
 	}
 	byID := make(map[string]claudeAIMessage, len(conv.Messages))
