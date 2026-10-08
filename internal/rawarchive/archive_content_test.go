@@ -94,3 +94,27 @@ func TestSelectedReparseKeepsUnselectedUsageOnlyAutomation(t *testing.T) {
 	require.NotNil(t, foreignSession)
 	requireUsageAutomation(t, database)
 }
+
+func TestRestoreKeepsUsageOnlyAutomation(t *testing.T) {
+	ctx := t.Context()
+	data := t.TempDir()
+	dbtest.WriteTestFile(t, filepath.Join(data, "telemetry-install-id"), []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+	database := writeUsageAutomatedSession(t, filepath.Join(data, "sessions.db"))
+	require.NoError(t, database.EnableArchiveOnly(ctx))
+	archive, err := Open(ctx, database, data, nil)
+	require.NoError(t, err)
+	settings := RecoverySettings{ArchiveContent: config.ArchiveContentUsage, LocalMachineName: "source-device"}
+	repository := filepath.Join(t.TempDir(), "backup")
+	backup, err := archive.Backup(ctx, repository, settings, "test-build")
+	require.NoError(t, err)
+	require.NoError(t, archive.Close())
+	require.NoError(t, database.Close())
+
+	restored := filepath.Join(t.TempDir(), "restored")
+	_, err = Restore(ctx, repository, backup.SnapshotID, restored, nil)
+	require.NoError(t, err)
+	reopened, err := db.OpenWithArchiveContent(ctx, filepath.Join(restored, "sessions.db"), config.ArchiveContentUsage)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	requireUsageAutomation(t, reopened)
+}

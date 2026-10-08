@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"mime/multipart"
@@ -56,6 +57,32 @@ func TestArchiveOnlyRejectsManualSync(t *testing.T) {
 	assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
 }
 
+// chatGPTImageExportZip packs a ChatGPT export whose message references an
+// image, so a successful import writes an asset.
+func chatGPTImageExportZip(t *testing.T) []byte {
+	t.Helper()
+	var archive bytes.Buffer
+	zw := zip.NewWriter(&archive)
+	for name, data := range map[string]string{
+		"conversations-000.json": `[{"id":"cg-1","conversation_id":"cg-1","title":"Import",
+  "create_time":1706745600.0,"update_time":1706745660.0,"current_node":"n1","mapping":{
+    "r":{"id":"r","parent":null,"children":["n1"],"message":null},
+    "n1":{"id":"n1","parent":"r","children":[],"message":{"id":"m1","create_time":1706745600.0,
+      "author":{"role":"user","name":null,"metadata":{}},
+      "content":{"content_type":"multimodal_text","parts":["See this:",
+        {"content_type":"image_asset_pointer","asset_pointer":"file-service://file-img1"}]},
+      "status":"finished_successfully","metadata":{}}}}}]`,
+		"file-img1-aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.png": "\x89PNG\r\n\x1a\n",
+	} {
+		entry, err := zw.Create(name)
+		require.NoError(t, err)
+		_, err = entry.Write([]byte(data))
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	return archive.Bytes()
+}
+
 func TestArchiveOnlyRejectsOrdinaryImports(t *testing.T) {
 	claudeAI := []byte(`[{"uuid":"archive-import","name":"Import","summary":"",` +
 		`"created_at":"2026-03-01T10:00:00.000000Z","updated_at":"2026-03-01T10:05:00.000000Z",` +
@@ -63,6 +90,7 @@ func TestArchiveOnlyRejectsOrdinaryImports(t *testing.T) {
 		`"content":[{"type":"text","text":"Imported"}],"sender":"human",` +
 		`"created_at":"2026-03-01T10:00:00.000000Z","updated_at":"2026-03-01T10:00:00.000000Z",` +
 		`"attachments":[],"files":[]}]}]`)
+	chatGPT := chatGPTImageExportZip(t)
 	for _, tt := range []struct {
 		name, path, filename string
 		data                 []byte
@@ -70,14 +98,26 @@ func TestArchiveOnlyRejectsOrdinaryImports(t *testing.T) {
 	}{
 		{name: "claude-ai", path: "/api/v1/import/claude-ai", filename: "conversations.json", data: claudeAI},
 		{name: "claude-ai-stream", path: "/api/v1/import/claude-ai", filename: "conversations.json", data: claudeAI, stream: true},
-		{name: "chatgpt", path: "/api/v1/import/chatgpt", filename: "export.zip", data: chatGPTExportZip(t, chatGPTRefusalConv)},
-		{name: "chatgpt-stream", path: "/api/v1/import/chatgpt", filename: "export.zip", data: chatGPTExportZip(t, chatGPTRefusalConv), stream: true},
+		{name: "chatgpt", path: "/api/v1/import/chatgpt", filename: "export.zip", data: chatGPT},
+		{name: "chatgpt-stream", path: "/api/v1/import/chatgpt", filename: "export.zip", data: chatGPT, stream: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			// The same upload imports into an ordinary archive.
+			ordinary := testServer(t, 5*time.Second)
+			stats := postImport(t, ordinary, tt.path, tt.filename, tt.data, tt.stream)
+			require.Equal(t, 1, stats.Imported)
+
 			srv := testServer(t, 5*time.Second)
 			local, ok := srv.db.(*db.DB)
 			require.True(t, ok)
+			first := "preserved history"
+			require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+				ID: "preserved", Agent: "claude", Project: "project-a", Machine: "retired", FirstMessage: &first,
+			}))
 			require.NoError(t, local.EnableArchiveOnly(t.Context()))
+			assetsDir := filepath.Join(srv.cfg.DataDir, "assets")
+			require.NoError(t, os.MkdirAll(assetsDir, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(assetsDir, "existing.png"), []byte("existing"), 0o600))
 
 			var body bytes.Buffer
 			writer := multipart.NewWriter(&body)
@@ -98,11 +138,28 @@ func TestArchiveOnlyRejectsOrdinaryImports(t *testing.T) {
 			assert.Contains(t, rec.Body.String(), "archive-only")
 			assert.NotContains(t, rec.Body.String(), "event:",
 				"the rejection must not open an SSE stream")
-			var sessions int
-			require.NoError(t, local.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&sessions))
-			assert.Zero(t, sessions, "a preserved archive does not gain imported conversations")
-			_, err = os.Stat(filepath.Join(srv.cfg.DataDir, "assets"))
-			assert.ErrorIs(t, err, os.ErrNotExist, "a preserved archive does not gain imported assets")
+			var ids []string
+			rows, err := local.Reader().Query(t.Context(), "SELECT id FROM sessions ORDER BY id")
+			require.NoError(t, err)
+			defer rows.Close()
+			for rows.Next() {
+				var id string
+				require.NoError(t, rows.Scan(&id))
+				ids = append(ids, id)
+			}
+			require.NoError(t, rows.Err())
+			assert.Equal(t, []string{"preserved"}, ids, "a preserved archive does not gain imported conversations")
+			preserved, err := local.GetSessionFull(t.Context(), "preserved")
+			require.NoError(t, err)
+			require.NotNil(t, preserved)
+			require.NotNil(t, preserved.FirstMessage)
+			assert.Equal(t, first, *preserved.FirstMessage)
+			entries, err := os.ReadDir(assetsDir)
+			require.NoError(t, err)
+			require.Len(t, entries, 1, "a preserved archive does not gain imported assets")
+			data, err := os.ReadFile(filepath.Join(assetsDir, "existing.png"))
+			require.NoError(t, err)
+			assert.Equal(t, "existing", string(data))
 		})
 	}
 }

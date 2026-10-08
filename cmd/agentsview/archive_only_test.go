@@ -130,31 +130,106 @@ func TestArchiveOnlyConfigOnlyBackgroundStart(t *testing.T) {
 	assert.Zero(t, count)
 }
 
-func TestArchiveOnlyRefusesOrdinaryImports(t *testing.T) {
-	dataDir := testDataDir(t)
-	dbPath := filepath.Join(dataDir, "sessions.db")
-	database, err := db.Open(t.Context(), dbPath)
-	require.NoError(t, err)
-	require.NoError(t, database.EnableArchiveOnly(t.Context()))
-	require.NoError(t, database.Close())
-	input := filepath.Join(t.TempDir(), "conversations.json")
-	require.NoError(t, os.WriteFile(input, []byte(`[{"uuid":"archive-import","name":"Import",`+
+// ordinaryImportInputs writes one valid export per import type. The ChatGPT
+// export includes an image, so a successful import also writes an asset.
+func ordinaryImportInputs(t *testing.T) map[string]string {
+	t.Helper()
+	root := t.TempDir()
+	claudeAI := filepath.Join(root, "claude-ai", "conversations.json")
+	chatGPT := filepath.Join(root, "chatgpt")
+	gemini := filepath.Join(root, "gemini-apps")
+	for _, dir := range []string{filepath.Dir(claudeAI), chatGPT, gemini} {
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+	}
+	require.NoError(t, os.WriteFile(claudeAI, []byte(`[{"uuid":"archive-import","name":"Import",`+
 		`"created_at":"2026-03-01T10:00:00.000000Z","updated_at":"2026-03-01T10:05:00.000000Z",`+
 		`"chat_messages":[{"uuid":"m1","text":"Imported","sender":"human",`+
-		`"created_at":"2026-03-01T10:00:00.000000Z"}]}]`), 0o600))
+		`"content":[{"type":"text","text":"Imported"}],"created_at":"2026-03-01T10:00:00.000000Z"}]}]`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(chatGPT, "conversations-000.json"), []byte(`[{
+  "id":"cg-1","conversation_id":"cg-1","title":"Import",
+  "create_time":1706745600.0,"update_time":1706745660.0,
+  "current_node":"n1","mapping":{
+    "r":{"id":"r","parent":null,"children":["n1"],"message":null},
+    "n1":{"id":"n1","parent":"r","children":[],"message":{
+      "id":"m1","create_time":1706745600.0,
+      "author":{"role":"user","name":null,"metadata":{}},
+      "content":{"content_type":"multimodal_text","parts":["See this:",
+        {"content_type":"image_asset_pointer","asset_pointer":"file-service://file-img1"}]},
+      "status":"finished_successfully","metadata":{}}}
+  }
+}]`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(chatGPT, "file-img1-aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.png"),
+		[]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(gemini, "activity.html"), []byte(`<!doctype html>
+<html><head><title>My Activity History</title></head><body>
+<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>first prompt</p><p>first answer</p></div></div>
+</body></html>`), 0o600))
+	return map[string]string{"claude-ai": claudeAI, "chatgpt": chatGPT, "gemini-apps": gemini}
+}
+
+// archiveImportState captures what an import could change: session rows and
+// stored asset bytes.
+func archiveImportState(t *testing.T, dataDir string) (map[string]string, map[string]string) {
+	t.Helper()
+	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, database.Close()) }()
+	rows, err := database.Reader().Query(t.Context(), "SELECT id, coalesce(first_message,'') FROM sessions ORDER BY id")
+	require.NoError(t, err)
+	defer rows.Close()
+	sessions := map[string]string{}
+	for rows.Next() {
+		var id, first string
+		require.NoError(t, rows.Scan(&id, &first))
+		sessions[id] = first
+	}
+	require.NoError(t, rows.Err())
+	assets := map[string]string{}
+	entries, err := os.ReadDir(filepath.Join(dataDir, "assets"))
+	if !os.IsNotExist(err) {
+		require.NoError(t, err)
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(dataDir, "assets", entry.Name()))
+		require.NoError(t, err)
+		assets[entry.Name()] = string(data)
+	}
+	return sessions, assets
+}
+
+func TestArchiveOnlyRefusesOrdinaryImports(t *testing.T) {
+	inputs := ordinaryImportInputs(t)
 	for _, importType := range []string{"claude-ai", "chatgpt", "gemini-apps"} {
 		t.Run(importType, func(t *testing.T) {
-			err := importSessions(ImportConfig{Type: importType, Path: input})
+			// The same input imports into an ordinary data directory.
+			ordinary := testDataDir(t)
+			require.NoError(t, importSessions(ImportConfig{Type: importType, Path: inputs[importType]}))
+			imported, importedAssets := archiveImportState(t, ordinary)
+			require.Len(t, imported, 1)
+			if importType == "chatgpt" {
+				require.Len(t, importedAssets, 1)
+			}
+
+			preserved := testDataDir(t)
+			database, err := db.Open(t.Context(), filepath.Join(preserved, "sessions.db"))
+			require.NoError(t, err)
+			first := "preserved history"
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+				ID: "preserved", Agent: "claude", Project: "project-a", Machine: "retired", FirstMessage: &first,
+			}))
+			require.NoError(t, database.EnableArchiveOnly(t.Context()))
+			require.NoError(t, database.Close())
+			require.NoError(t, os.MkdirAll(filepath.Join(preserved, "assets"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(preserved, "assets", "existing.png"), []byte("existing"), 0o600))
+			beforeSessions, beforeAssets := archiveImportState(t, preserved)
+
+			err = importSessions(ImportConfig{Type: importType, Path: inputs[importType]})
 			require.ErrorIs(t, err, db.ErrArchiveOnly)
+			afterSessions, afterAssets := archiveImportState(t, preserved)
+			assert.Equal(t, beforeSessions, afterSessions, "a preserved archive does not gain or change sessions")
+			assert.Equal(t, beforeAssets, afterAssets, "a preserved archive does not gain or change assets")
 		})
 	}
-	database, err = db.OpenIsolatedContext(t.Context(), dbPath)
-	require.NoError(t, err)
-	defer database.Close()
-	var sessions int
-	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&sessions))
-	assert.Zero(t, sessions, "a preserved archive does not gain imported conversations")
-	assert.NoDirExists(t, filepath.Join(dataDir, "assets"))
 }
 
 func TestArchiveOnlyRefusesDaemonPushWatch(t *testing.T) {
