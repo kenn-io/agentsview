@@ -151,7 +151,8 @@ never replaces the accepted source automatically. An import with gaps exits
 unsuccessfully after printing its report. No files are pruned automatically.
 
 `reparse --manifest ID` selects specific accepted sources; repeat the flag or
-supply comma-separated IDs. `--all` must be explicit. Reparsing clones SQLite
+supply comma-separated IDs. `--all` must be explicit. Reparse applies the
+receiving archive's `result_content_blocked_categories`. Reparsing clones SQLite
 once for the batch and uses the normal sync engine, including its large-Codex
 streaming path. It installs the replacement only after all selected sources
 succeed. Failed work leaves the previous browsable archive in place and records

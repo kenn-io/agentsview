@@ -23,6 +23,9 @@ type ReparseOptions struct {
 	ManifestIDs  []string
 	All          bool
 	ScratchBytes int64
+	// BlockedResultCategories is the receiving archive's tool-result retention
+	// filter. Reparse applies it exactly as ordinary sync does.
+	BlockedResultCategories []string
 }
 
 // Reparse builds one full archive copy for the selected batch. A failed parse
@@ -120,7 +123,7 @@ func (a *Archive) Reparse(ctx context.Context, opts ReparseOptions) (report Repo
 			policies[device] = policy
 		}
 		a.report(fmt.Sprintf("Reparsing source %d of %d", i+1, len(selected)))
-		err = a.reparseSource(ctx, scratch, scratchDir, source, roots, owner, policy, suppressed, opts.ScratchBytes)
+		err = a.reparseSource(ctx, scratch, scratchDir, source, roots, owner, policy, suppressed, opts)
 		if err != nil {
 			recordErr := a.database.RecordRawArchiveParse(context.WithoutCancel(ctx), source.ManifestID, strconv.Itoa(db.CurrentDataVersion()), err.Error())
 			return report, errors.Join(err, recordErr)
@@ -154,7 +157,7 @@ func (a *Archive) Reparse(ctx context.Context, opts ReparseOptions) (report Repo
 	return report, err
 }
 
-func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir string, source db.RawArchiveSource, roots map[string]db.RawArchiveRoot, owner string, policy map[string]db.RawArchiveSuppression, suppressed map[string]bool, budget int64) (retErr error) {
+func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir string, source db.RawArchiveSource, roots map[string]db.RawArchiveRoot, owner string, policy map[string]db.RawArchiveSuppression, suppressed map[string]bool, opts ReparseOptions) (retErr error) {
 	manifest, err := a.canonical(ctx, source, roots)
 	if err != nil {
 		return err
@@ -162,7 +165,7 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 	if manifest.Manifest.Kind != rawsync.ManifestSnapshot {
 		return errors.New("only retained snapshots can be reparsed")
 	}
-	materialized, err := (rawderive.Materializer{Store: a.objects, BaseDir: scratchDir, MaxTotalBytes: budget}).Materialize(ctx, manifest)
+	materialized, err := (rawderive.Materializer{Store: a.objects, BaseDir: scratchDir, MaxTotalBytes: opts.ScratchBytes}).Materialize(ctx, manifest)
 	if err != nil {
 		return err
 	}
@@ -179,6 +182,7 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 	if root.DeviceID != owner {
 		prepared.Config.IDPrefix = root.DeviceID + "~"
 	}
+	prepared.Config.BlockedResultCategories = opts.BlockedResultCategories
 	aliases, err := scratch.GetMachineAliases(ctx)
 	if err != nil {
 		return err

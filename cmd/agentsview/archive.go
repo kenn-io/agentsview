@@ -79,8 +79,15 @@ func newArchiveCommand() *cobra.Command {
 	var ids []string
 	var budget int64
 	reparseCmd := &cobra.Command{Use: "reparse", Short: "Reparse selected accepted sources and publish the complete batch atomically", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, err := config.LoadReadOnly()
+		if err != nil {
+			return err
+		}
 		return withRawArchive(cmd, func(a *rawarchive.Archive) error {
-			report, err := a.Reparse(cmd.Context(), rawarchive.ReparseOptions{All: all, ManifestIDs: ids, ScratchBytes: budget})
+			report, err := a.Reparse(cmd.Context(), rawarchive.ReparseOptions{
+				All: all, ManifestIDs: ids, ScratchBytes: budget,
+				BlockedResultCategories: cfg.ResultContentBlockedCategories,
+			})
 			return errors.Join(err, writeArchiveJSON(cmd.OutOrStdout(), report))
 		})
 	}}
