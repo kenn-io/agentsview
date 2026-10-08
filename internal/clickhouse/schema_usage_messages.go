@@ -142,6 +142,19 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("creating complete usage snapshots: %w", err)
 	}
+	// Snapshots copy the sessions columns, so a sessions column added later must reach a snapshot table created before it.
+	existing, err := readColumns(ctx, conn)
+	if err != nil {
+		return err
+	}
+	for _, c := range spec.columns {
+		if _, has := existing[spec.name][c.name]; has {
+			continue
+		}
+		if _, err := conn.ExecContext(ctx, spec.addColumnSQL(c)); err != nil {
+			return fmt.Errorf("adding clickhouse column %s.%s: %w", spec.name, c.name, err)
+		}
+	}
 	return ensurePreparedUsage(ctx, conn)
 }
 

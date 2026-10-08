@@ -154,14 +154,14 @@ func classifyToolOutcome(call ToolCallRow) ToolOutcome {
 	if IsFailure(call) {
 		return ToolOutcomeErrored
 	}
-	if call.EventStatus != "" && !isCompletedToolStatus(call.EventStatus) {
+	if call.EventStatus != "" && !IsCompletedToolStatus(call.EventStatus) {
 		return ToolOutcomeUnknown
 	}
 
 	if call.ResultContentUnknown {
 		return ToolOutcomeUnknown
 	}
-	if isCompletedToolStatus(call.EventStatus) && call.ResultContentLength == 0 &&
+	if IsCompletedToolStatus(call.EventStatus) && call.ResultContentLength == 0 &&
 		call.ResultContent == "" && isSupportedEmptyTool(call) {
 		return ToolOutcomeEmpty
 	}
@@ -174,7 +174,8 @@ func classifyToolOutcome(call ToolCallRow) ToolOutcome {
 	return ToolOutcomeContent
 }
 
-func isCompletedToolStatus(status string) bool {
+// IsCompletedToolStatus reports a provider status that means the call finished normally.
+func IsCompletedToolStatus(status string) bool {
 	return status == "completed" || status == "success"
 }
 

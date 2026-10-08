@@ -103,7 +103,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
-		rows := scope.MessagesBySession()[sessionA]
+		rows := scope[sessionA]
 		require.Len(t, rows, 2)
 		for _, r := range rows {
 			assert.Empty(t, r.Content)
@@ -115,7 +115,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, true)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
-		rows := scope.MessagesBySession()[sessionA]
+		rows := scope[sessionA]
 		require.Len(t, rows, 2)
 		assert.Equal(t, "hello", rows[0].Content)
 		assert.Equal(t, "world", rows[1].Content)

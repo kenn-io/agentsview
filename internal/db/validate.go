@@ -455,7 +455,7 @@ func clampTokens(p *int) bool {
 // BlankImplausibleTimestamp blanks a stored timestamp string in place
 // when it parses to a time outside the plausibility window, returning
 // whether it changed. An empty string is left empty (no change), and an
-// unparseable-but-nonempty value is left as-is: downstream localTime
+// unparseable-but-nonempty value is left as-is: downstream LocalTime
 // already treats both as invalid, so blanking only the parseable-yet-
 // absurd case avoids reformatting otherwise-untouched values.
 func BlankImplausibleTimestamp(p *string) bool {
@@ -488,7 +488,7 @@ func BlankImplausibleTimestampPtr(p *string) (*string, bool) {
 }
 
 // ParseStoredTimestamp parses a timestamp stored in the same formats
-// the read path (db.localTime) accepts.
+// the read path (db.LocalTime) accepts.
 func ParseStoredTimestamp(s string) (time.Time, bool) {
 	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
 		return t, true

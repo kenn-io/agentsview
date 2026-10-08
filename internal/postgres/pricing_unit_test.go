@@ -204,7 +204,7 @@ func (s *pricingProbeState) unblockNextQuery() {
 }
 
 func TestCustomPricingOverridesPricingMap(t *testing.T) {
-	fallback := fallbackPricingMap()
+	fallback := db.FallbackPricingMap()
 	tests := []struct {
 		name       string
 		dbPrices   []db.ModelPricing
@@ -308,21 +308,20 @@ func TestClonePricingRowsDeepClonesPricingBands(t *testing.T) {
 	assert.Equal(t, 200_000, rows[0].Rates.Bands[0].AboveInputTokens)
 }
 
-func TestPGModelPricingSourceDetectsBandOnlyFallbackMismatch(t *testing.T) {
-	fallback := pgFallbackRateMap()
-	rates, ok := fallback["gpt-5.5"]
+func TestPricingRowsToMapClassifiesBandOnlyFallbackMismatchAsFetched(t *testing.T) {
+	rates, ok := db.FallbackRateMap()["gpt-5.5"]
 	require.True(t, ok)
 	require.NotEmpty(t, rates.Bands)
-	p := db.ModelPricing{
+
+	out := pricingRowsToMap([]db.ModelPricing{{
 		ModelPattern:         "gpt-5.5",
 		InputPerMTok:         rates.InputPerMTok,
 		OutputPerMTok:        rates.OutputPerMTok,
 		CacheCreationPerMTok: rates.CacheWritePerMTok,
 		CacheReadPerMTok:     rates.CacheReadPerMTok,
-	}
+	}})
 
-	assert.Equal(t, export.PricingRowSourceFetched,
-		pgModelPricingSource(p, fallback))
+	assert.Equal(t, export.PricingRowSourceFetched, out["gpt-5.5"].Source)
 }
 
 func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {

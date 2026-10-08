@@ -202,7 +202,7 @@ func TestRebuildMirrorScopesToProjectFilters(t *testing.T) {
 
 	probe, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
-	assert.Equal(t, canonicalPushScope(opts.Projects, opts.ExcludeProjects), probe.Scope)
+	assert.Equal(t, db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects), probe.Scope)
 
 	conn, err := Open(ctx, path)
 	require.NoError(t, err)

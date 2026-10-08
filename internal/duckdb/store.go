@@ -17,11 +17,9 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/secrets"
 )
 
 // Compile-time check: *Store satisfies db.Store.
@@ -541,9 +539,7 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 }
 
 func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.SessionPage, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSessionLimit {
-		f.Limit = db.DefaultSessionLimit
-	}
+	f.Limit = db.NormalizeSessionLimit(f.Limit)
 	where, args := db.BuildSessionFilterSQL(f, db.DuckDBQueryDialect())
 	rs := db.ResolveSort(f)
 	total := 0
@@ -592,13 +588,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 	if err != nil {
 		return db.SessionPage{}, err
 	}
-	page := db.SessionPage{Sessions: sessions, Total: total}
-	if len(sessions) > f.Limit {
-		page.Sessions = sessions[:f.Limit]
-		last := page.Sessions[f.Limit-1]
-		page.NextCursor = s.EncodeCursor(db.NextSessionCursor(&last, rs, total, f))
-	}
-	return page, nil
+	return db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor), nil
 }
 
 func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {
@@ -1226,7 +1216,7 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 		for _, m := range all {
 			loc := re.FindStringIndex(m.body)
 			if loc != nil {
-				m.match.Snippet = duckContentSnippet(f, m.body, loc[0], loc[1])
+				m.match.Snippet = f.BuildSnippet(m.body, loc[0], loc[1])
 				filtered = append(filtered, m)
 			}
 		}
@@ -1346,10 +1336,10 @@ func (s *Store) collectContentSubstringMatches(
 	return s.scanContentMatches(ctx, query, args, func(body string) string {
 		if f.Mode == "fts" {
 			start, end := db.FTSSnippetRange(f.Pattern, body)
-			return duckContentSnippet(f, body, start, end)
+			return f.BuildSnippet(body, start, end)
 		}
 		start, end, _ := db.CaseInsensitiveSpan(body, f.Pattern)
-		return duckContentSnippet(f, body, start, end)
+		return f.BuildSnippet(body, start, end)
 	})
 }
 
@@ -1374,26 +1364,6 @@ func duckContentSearchPredicate(
 		return "FALSE"
 	}
 	return strings.Join(clauses, " AND ")
-}
-
-func duckContentSnippet(f db.ContentSearchFilter, body string, start, end int) string {
-	lo, hi := duckSnippetBounds(body, start, end, 60)
-	if f.RevealSecrets {
-		return body[lo:hi]
-	}
-	return secrets.RedactWindow(body, lo, hi)
-}
-
-func duckSnippetBounds(text string, start, end, radius int) (int, int) {
-	lo := max(start-radius, 0)
-	hi := min(end+radius, len(text))
-	for lo < start && !utf8.RuneStart(text[lo]) {
-		lo++
-	}
-	for hi > end && hi < len(text) && !utf8.RuneStart(text[hi]) {
-		hi--
-	}
-	return lo, hi
 }
 
 type duckContentCandidate struct {

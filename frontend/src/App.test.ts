@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "./lib/stores/analytics.svelte.js";
+import { activity } from "./lib/stores/activity.svelte.js";
 import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
 import { insights } from "./lib/stores/insights.svelte.js";
 import { messages } from "./lib/stores/messages.svelte.js";
@@ -1860,6 +1861,8 @@ describe("App telemetry", () => {
 
   function setup() {
     stubAppDependencies();
+    vi.spyOn(activity, "load").mockResolvedValue(false);
+    vi.spyOn(activity, "loadFilterOptions").mockResolvedValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     // Selects without fetching, as the real store does before hydration lands.
     vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id: string) => {
@@ -1883,6 +1886,33 @@ describe("App telemetry", () => {
     return posted.filter((p) => p.event === event).map((p) => p.properties);
   }
 
+  it("reports authenticated route changes, the usage alias, and focus until unmount", async () => {
+    setup();
+    router.replace("recall");
+    settings.needsAuth = true;
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(postedFor("screen_viewed")).toEqual([]);
+    settings.needsAuth = false;
+    await flushEffects();
+    for (const route of ["sessions", "token-usage"] as const) {
+      router.navigate(route);
+      await flushEffects();
+    }
+    expect(postedFor("screen_viewed")).toEqual([
+      { screen: "recall", surface: "web" },
+      { screen: "sessions", surface: "web" },
+      { screen: "usage", surface: "web" },
+    ]);
+    window.dispatchEvent(new Event("focus"));
+    await flushEffects();
+    expect(postedFor("screen_viewed").at(-1)).toEqual({ screen: "usage", surface: "web" });
+    expect(postedFor("screen_viewed")).toHaveLength(4);
+    await unmount(component!);
+    component = undefined;
+    window.dispatchEvent(new Event("focus"));
+    expect(postedFor("screen_viewed")).toHaveLength(4);
+  });
   async function open(id: string | null) {
     router.route = "sessions";
     router.sessionId = id;

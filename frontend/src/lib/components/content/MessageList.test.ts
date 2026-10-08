@@ -5,7 +5,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { readProgress } from "../../stores/read-progress.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
-import { ui } from "../../stores/ui.svelte.js";
+import { ui, type ScrollCall } from "../../stores/ui.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 
 const virtualizerMock = vi.hoisted(() => ({
@@ -180,6 +180,92 @@ describe("MessageList follow cancellation", () => {
     expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, {
       align: "start",
     });
+  });
+
+  function withCall(message: Message, toolUseId: string): Message {
+    return {
+      ...message,
+      tool_calls: [{ tool_name: "Grep", category: "Search", tool_use_id: toolUseId }],
+    } as Message;
+  }
+
+  type JumpList = ReturnType<typeof mount> & {
+    scrollToOrdinal: (ordinal: number, call?: ScrollCall) => void;
+  };
+
+  it("drops a jump to a tool call once its ordinal holds a different message", async () => {
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      // A resync renumbered the transcript, so ordinal 0 now holds another call.
+      messages.messages = [withCall(makeMessage(0), "other-call"), makeMessage(10)];
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    ui.setFollowLatest(false);
+    ui.selectedOrdinal = 0;
+    (component as JumpList).scrollToOrdinal(0, { index: 0, toolUseId: "grep-call" });
+    await vi.waitFor(() => expect(ui.selectedOrdinal).toBeNull());
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("drops a jump to a call with no tool ID once a rewrite moves the transcript revision", async () => {
+    messages.loadedRevision = "r1";
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      // A resync replaced the call at this position with another one that also has no tool ID.
+      messages.messages = [withCall(makeMessage(0), ""), makeMessage(10)];
+      messages.loadedRevision = "r2";
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    ui.setFollowLatest(false);
+    ui.selectedOrdinal = 0;
+    (component as JumpList).scrollToOrdinal(0, { index: 0, toolUseId: "", revision: "r1" });
+    await vi.waitFor(() => expect(ui.selectedOrdinal).toBeNull());
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("keeps a jump to a call with no tool ID while the revision still matches", async () => {
+    messages.loadedRevision = "r1";
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      messages.messages = [withCall(makeMessage(0), ""), makeMessage(10)];
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    ui.setFollowLatest(false);
+    ui.selectedOrdinal = 0;
+    (component as JumpList).scrollToOrdinal(0, { index: 0, toolUseId: "", revision: "r1" });
+    await vi.waitFor(() => {
+      expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" });
+    });
+    expect(ui.selectedOrdinal).toBe(0);
+  });
+
+  it("keeps a jump to a tool call when new messages arrive under it", async () => {
+    messages.loadedRevision = "r1";
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      messages.messages = [withCall(makeMessage(0), "grep-call"), makeMessage(10)];
+      // A sync appends a message while the list re-renders the loaded page.
+      requestAnimationFrame(() => {
+        messages.messages = [...messages.messages, makeMessage(11)];
+        messages.loadedRevision = "r2";
+      });
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    ui.setFollowLatest(false);
+    ui.selectedOrdinal = 0;
+    (component as JumpList).scrollToOrdinal(0, { index: 0, toolUseId: "grep-call" });
+    await vi.waitFor(() => {
+      expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" });
+    });
+    expect(ui.selectedOrdinal).toBe(0);
   });
 
   it("renders an unknown revision divider at the earliest message", async () => {

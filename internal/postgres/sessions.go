@@ -439,9 +439,7 @@ func (s *Store) DecodeCursor(
 func (s *Store) ListSessions(
 	ctx context.Context, f db.SessionFilter,
 ) (db.SessionPage, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSessionLimit {
-		f.Limit = db.DefaultSessionLimit
-	}
+	f.Limit = db.NormalizeSessionLimit(f.Limit)
 
 	where, args := db.BuildSessionFilterSQL(f, s.sessionDialect())
 
@@ -507,18 +505,7 @@ func (s *Store) ListSessions(
 		return db.SessionPage{}, err
 	}
 
-	page := db.SessionPage{
-		Sessions: sessions, Total: total,
-	}
-	if len(sessions) > f.Limit {
-		page.Sessions = sessions[:f.Limit]
-		last := page.Sessions[f.Limit-1]
-		page.NextCursor = s.EncodeCursor(
-			db.NextSessionCursor(&last, rs, total, f),
-		)
-	}
-
-	return page, nil
+	return db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor), nil
 }
 
 // GetSidebarSessionIndex returns the skinny session rows needed by
@@ -602,9 +589,7 @@ func (s *Store) GetSidebarSessionIndex(
 func (s *Store) getSidebarSessionIndexPage(
 	ctx context.Context, f db.SessionFilter,
 ) (db.SidebarSessionIndex, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSessionLimit {
-		f.Limit = db.DefaultSessionLimit
-	}
+	f.Limit = db.NormalizeSessionLimit(f.Limit)
 
 	rootFilter := f
 	rootFilter.IncludeChildren = false

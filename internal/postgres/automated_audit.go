@@ -210,7 +210,7 @@ func auditAutomatedMatchingHashPG(
 		}
 		progress.RowsPrefetched++
 		if db.IsAutomatedSessionMetadata(agent, sessionKind) {
-			setIDs, clearIDs = appendAutomationFlagChangePG(
+			setIDs, clearIDs = db.AppendAutomationFlagChange(
 				setIDs, clearIDs, id, rowAutomated, true,
 			)
 			continue
@@ -231,7 +231,7 @@ func auditAutomatedMatchingHashPG(
 			unresolved = append(unresolved, id)
 			continue
 		}
-		setIDs, clearIDs = appendAutomationFlagChangePG(
+		setIDs, clearIDs = db.AppendAutomationFlagChange(
 			setIDs, clearIDs, id, rowAutomated, want,
 		)
 	}
@@ -317,7 +317,7 @@ func scanFullAutomationCandidatesPG(
 		want = want || classifier.IsAutomatedFromTextCandidates(
 			userCount, firstUser, firstMessage,
 		)
-		setIDs, clearIDs = appendAutomationFlagChangePG(
+		setIDs, clearIDs = db.AppendAutomationFlagChange(
 			setIDs, clearIDs, id, rowAutomated, want,
 		)
 	}
@@ -336,17 +336,4 @@ func automationEvidencePG(
 		FullByteLength: fullByteLength.Int64,
 		Valid:          fullByteLength.Valid,
 	}
-}
-
-func appendAutomationFlagChangePG(
-	setIDs, clearIDs []string,
-	id string,
-	rowAutomated, want bool,
-) ([]string, []string) {
-	if want && !rowAutomated {
-		setIDs = append(setIDs, id)
-	} else if !want && rowAutomated {
-		clearIDs = append(clearIDs, id)
-	}
-	return setIDs, clearIDs
 }

@@ -144,7 +144,7 @@ func chLoadPricingCatalog(
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
-	shared := append(chPricingRows(pricing), genAI)
+	shared := append(db.MirrorPricingRows(pricing), genAI)
 	digest, err := chUsagePricingDigest(shared, document)
 	if err != nil {
 		return chPricingCatalog{}, err
@@ -153,7 +153,7 @@ func chLoadPricingCatalog(
 		return chPricingCatalog{rows: shared, digest: digest}, nil
 	}
 	chApplyCustomPricing(pricing, customPricing)
-	return chPricingCatalog{rows: append(chPricingRows(pricing), genAI), digest: digest}, nil
+	return chPricingCatalog{rows: append(db.MirrorPricingRows(pricing), genAI), digest: digest}, nil
 }
 
 // chUsagePricingDigest changes when any rate, band, source classification,

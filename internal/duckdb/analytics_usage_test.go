@@ -1831,6 +1831,35 @@ func TestDuckTrendsTermsModelFilterStaysOnMatchingMessages(t *testing.T) {
 	assert.Equal(t, 1, resp.Series[0].Total, "Total")
 }
 
+func TestDuckTrendsTermsPreservesCalendarBucketsAcrossMidnightGap(t *testing.T) {
+	ctx := t.Context()
+	const timestamp = "2023-10-15T12:00:00Z"
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session:     syncSession("trend-gap", "alpha", "trend gap", timestamp, 1),
+		Messages:    []db.Message{syncMessage("trend-gap", 0, "user", "seam", timestamp)},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	terms, err := db.ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	for _, tc := range []struct{ granularity, bucket string }{
+		{"month", "2023-10-01"}, {"", "2023-10-09"},
+	} {
+		t.Run(tc.granularity, func(t *testing.T) {
+			resp, err := store.GetTrendsTerms(ctx, db.AnalyticsFilter{
+				From: "2023-10-01", To: "2023-10-31", Timezone: "America/Asuncion",
+			}, terms, tc.granularity)
+			require.NoError(t, err)
+			assert.Equal(t, 1, resp.MessageCount)
+			require.Len(t, resp.Series, 1)
+			assert.Equal(t, 1, resp.Series[0].Total)
+			assert.Contains(t, resp.Series[0].Points, db.TrendPoint{Date: tc.bucket, Count: 1})
+			if tc.granularity == "" {
+				assert.Equal(t, "week", resp.Granularity)
+			}
+		})
+	}
+}
+
 func newDuckAnalyticsStore(
 	t *testing.T, writes []db.SessionBatchWrite,
 ) *Store {

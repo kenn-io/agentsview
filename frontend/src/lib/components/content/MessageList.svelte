@@ -4,7 +4,7 @@
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
   import { messages } from "../../stores/messages.svelte.js";
-  import { ui } from "../../stores/ui.svelte.js";
+  import { ui, type ScrollCall } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { readProgress } from "../../stores/read-progress.svelte.js";
@@ -501,12 +501,13 @@
     scrollRetries = 0,
     reqId = lastScrollRequest,
     align: ScrollAlign = "start",
+    stillValid: () => boolean = () => true,
   ): Promise<boolean> {
     return settleVirtualScroll({
       index, align, waitFrames, scrollRetries,
       getVirtualizer: () => virtualizer.instance,
       getCount: () => displayItemsAsc.length,
-      isCurrent: () => !destroyed && reqId === lastScrollRequest,
+      isCurrent: () => !destroyed && reqId === lastScrollRequest && stillValid(),
       nextFrame: raf,
     });
   }
@@ -515,9 +516,25 @@
     return new Promise((r) => requestAnimationFrame(() => r()));
   }
 
-  async function scrollToOrdinalInternal(ordinal: number) {
+  async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall) {
     const reqId = ++lastScrollRequest;
     activeFollowScrollRequest = null;
+    // A rewrite can renumber messages, so a jump to a tool call stops once its ordinal holds a different message.
+    const targetHolds = () => {
+      if (call === undefined) return true;
+      // Without a tool ID, a position can name another call after a rewrite, so the revision must still match.
+      if (!call.toolUseId && call.revision !== undefined && messages.loadedRevision !== call.revision) {
+        return false;
+      }
+      const message = messages.messages.find((m) => m.ordinal === ordinal);
+      if (message === undefined) return true;
+      const held = message.tool_calls?.[call.index];
+      return held !== undefined && (held.tool_use_id ?? "") === call.toolUseId;
+    };
+    const abandon = () => {
+      if (ui.selectedOrdinal === ordinal) ui.selectedOrdinal = null;
+    };
+    if (!targetHolds()) return abandon();
 
     const idxAsc = displayItemsAsc.findIndex((item) =>
       item.ordinals.includes(ordinal),
@@ -526,12 +543,15 @@
       const idx = ui.sortNewestFirst
         ? displayItemsAsc.length - 1 - idxAsc
         : idxAsc;
-      scrollToDisplayIndex(idx, 0, 0, reqId);
+      void scrollToDisplayIndex(idx, 0, 0, reqId, "start", targetHolds).then(() => {
+        if (reqId === lastScrollRequest && !targetHolds()) abandon();
+      });
       return;
     }
 
     await messages.ensureOrdinalLoaded(ordinal);
     if (reqId !== lastScrollRequest) return;
+    if (!targetHolds()) return abandon();
 
     // Let Svelte re-derive displayItemsAsc and the
     // virtualizer update its count after loading.
@@ -540,6 +560,7 @@
     await raf();
     await raf();
     if (reqId !== lastScrollRequest) return;
+    if (!targetHolds()) return abandon();
 
     const loadedIdxAsc = displayItemsAsc.findIndex(
       (item) => item.ordinals.includes(ordinal),
@@ -548,11 +569,13 @@
     const loadedIdx = ui.sortNewestFirst
       ? displayItemsAsc.length - 1 - loadedIdxAsc
       : loadedIdxAsc;
-    scrollToDisplayIndex(loadedIdx, 0, 0, reqId);
+    void scrollToDisplayIndex(loadedIdx, 0, 0, reqId, "start", targetHolds).then(() => {
+      if (reqId === lastScrollRequest && !targetHolds()) abandon();
+    });
   }
 
-  export function scrollToOrdinal(ordinal: number) {
-    void scrollToOrdinalInternal(ordinal);
+  export function scrollToOrdinal(ordinal: number, call?: ScrollCall) {
+    void scrollToOrdinalInternal(ordinal, call);
   }
 
   function scrollToLatestInternal() {

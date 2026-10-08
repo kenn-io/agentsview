@@ -588,7 +588,7 @@ func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 
-	fallback := fallbackRateMap()
+	fallback := FallbackRateMap()
 	fallbackRates, ok := fallback["gpt-5.5"]
 	require.True(t, ok, "expected gpt-5.5 fallback rates")
 	d.SetCustomPricing(map[string]config.CustomModelRate{
@@ -658,7 +658,7 @@ func TestDeleteModelPricing(t *testing.T) {
 
 func TestLoadPricingMapTreatsBandOnlyFallbackMismatchAsFetched(t *testing.T) {
 	d := testDB(t)
-	fallback, ok := fallbackRateMap()["gpt-5.5"]
+	fallback, ok := FallbackRateMap()["gpt-5.5"]
 	require.True(t, ok)
 	require.NotEmpty(t, fallback.Bands)
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{

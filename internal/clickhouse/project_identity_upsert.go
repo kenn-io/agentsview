@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -111,7 +110,7 @@ func (s *Sync) loadIdentityPublicationScope(
 				"loading project identity observations: %w", err,
 			)
 		}
-		observations = filterIdentityScope(
+		observations = db.FilterIdentityScope(
 			observations, s.projects, s.excludeProjects,
 		)
 		snapshots, err = s.local.ListPublishableSessionProjectIdentitySnapshots(
@@ -133,47 +132,9 @@ func (s *Sync) loadIdentityPublicationScope(
 				loadErr,
 			)
 		}
-		snapshots = mergeProjectIdentitySnapshots(snapshots, refreshSnapshots)
+		snapshots = db.MergeProjectIdentitySnapshots(snapshots, refreshSnapshots)
 	}
 	return observations, snapshots, delta, nil
-}
-
-// filterIdentityScope restricts a full-publication listing to the push
-// scope. The delta path does not need this: LoadProjectIdentityPublicationDelta
-// applies projects/excludeProjects in SQL.
-func filterIdentityScope(
-	items []export.ProjectIdentityObservation, projects, excludeProjects []string,
-) []export.ProjectIdentityObservation {
-	if len(projects) == 0 && len(excludeProjects) == 0 {
-		return items
-	}
-	out := items[:0]
-	for _, item := range items {
-		if projectMatchesPushScope(item.Project, projects, excludeProjects) {
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
-func mergeProjectIdentitySnapshots(
-	base, refresh []export.ProjectIdentityObservation,
-) []export.ProjectIdentityObservation {
-	merged := make(map[string]export.ProjectIdentityObservation, len(base)+len(refresh))
-	for _, snapshot := range base {
-		merged[snapshot.SessionID] = snapshot
-	}
-	for _, snapshot := range refresh {
-		merged[snapshot.SessionID] = snapshot
-	}
-	out := make([]export.ProjectIdentityObservation, 0, len(merged))
-	for _, snapshot := range merged {
-		out = append(out, snapshot)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].SessionID < out[j].SessionID
-	})
-	return out
 }
 
 func (s *Sync) writeIdentityPublication(
@@ -309,18 +270,18 @@ func (s *Sync) publishProjectIdentityObservations(
 	observations []export.ProjectIdentityObservation,
 	version uint64,
 ) error {
-	plan := planProjectIdentityObservationSync(observations)
+	plan := db.PlanProjectIdentityObservationSync(observations)
 	toInsert := make([]export.ProjectIdentityObservation, 0,
-		len(plan.realRemote)+len(plan.ambiguous)+len(plan.fallbacks))
-	toInsert = append(toInsert, plan.realRemote...)
-	toInsert = append(toInsert, plan.ambiguous...)
+		len(plan.RealRemote)+len(plan.Ambiguous)+len(plan.Fallbacks))
+	toInsert = append(toInsert, plan.RealRemote...)
+	toInsert = append(toInsert, plan.Ambiguous...)
 	if fullPublication {
-		toInsert = append(toInsert, plan.fallbacks...)
+		toInsert = append(toInsert, plan.Fallbacks...)
 	} else {
-		if err := s.deleteProjectIdentityFallbackRows(ctx, plan.realRoots); err != nil {
+		if err := s.deleteProjectIdentityFallbackRows(ctx, plan.RealRoots); err != nil {
 			return err
 		}
-		fallbacks, err := s.projectIdentityFallbacksWithoutRealRemote(ctx, plan.fallbacks)
+		fallbacks, err := s.projectIdentityFallbacksWithoutRealRemote(ctx, plan.Fallbacks)
 		if err != nil {
 			return err
 		}
@@ -493,86 +454,9 @@ func observedAtValue(t time.Time) *time.Time {
 	return &utc
 }
 
-type projectIdentityRootKey struct {
-	archiveID string
-	project   string
-	machine   string
-	rootPath  string
-}
-
-func observationRootKey(obs export.ProjectIdentityObservation) projectIdentityRootKey {
-	return projectIdentityRootKey{
-		archiveID: obs.SourceArchiveID,
-		project:   obs.Project,
-		machine:   obs.Machine,
-		rootPath:  obs.RootPath,
-	}
-}
-
-type projectIdentityObservationPlan struct {
-	realRemote []export.ProjectIdentityObservation
-	ambiguous  []export.ProjectIdentityObservation
-	fallbacks  []export.ProjectIdentityObservation
-	realRoots  []projectIdentityRootKey
-}
-
-// planProjectIdentityObservationSync reduces a batch to the final state of
-// applying the DuckDB per-row upsert in order: the last observation per
-// conflict key wins. Ordinary empty-remote fallbacks never survive
-// alongside real-remote evidence for the same root, while ambiguous
-// observations always survive because they are conflicting evidence rather
-// than root-derived fallbacks.
-func planProjectIdentityObservationSync(
-	observations []export.ProjectIdentityObservation,
-) projectIdentityObservationPlan {
-	type conflictKey struct {
-		root      projectIdentityRootKey
-		gitRemote string
-	}
-	keyOrder := make([]conflictKey, 0, len(observations))
-	latest := make(map[conflictKey]export.ProjectIdentityObservation,
-		len(observations))
-	realRootSet := make(map[projectIdentityRootKey]bool)
-
-	var plan projectIdentityObservationPlan
-	for _, obs := range observations {
-		key := conflictKey{
-			root: observationRootKey(obs), gitRemote: obs.GitRemote,
-		}
-		previous, seen := latest[key]
-		if !seen {
-			keyOrder = append(keyOrder, key)
-		} else if key.gitRemote == "" &&
-			previous.RemoteResolution == export.ProjectResolutionAmbiguous &&
-			obs.RemoteResolution != export.ProjectResolutionAmbiguous {
-			continue
-		}
-		latest[key] = obs
-		if obs.GitRemote != "" && !realRootSet[key.root] {
-			realRootSet[key.root] = true
-			plan.realRoots = append(plan.realRoots, key.root)
-		}
-	}
-	for _, key := range keyOrder {
-		obs := latest[key]
-		if obs.GitRemote != "" {
-			plan.realRemote = append(plan.realRemote, obs)
-			continue
-		}
-		if obs.RemoteResolution == export.ProjectResolutionAmbiguous {
-			plan.ambiguous = append(plan.ambiguous, obs)
-			continue
-		}
-		if !realRootSet[key.root] {
-			plan.fallbacks = append(plan.fallbacks, obs)
-		}
-	}
-	return plan
-}
-
 func (s *Sync) deleteProjectIdentityFallbackRows(
 	ctx context.Context,
-	roots []projectIdentityRootKey,
+	roots []db.ProjectIdentityRootKey,
 ) error {
 	for start := 0; start < len(roots); start += projectIdentityDeleteBatchSize {
 		end := min(start+projectIdentityDeleteBatchSize, len(roots))
@@ -593,12 +477,12 @@ func (s *Sync) deleteProjectIdentityFallbackRows(
 	return nil
 }
 
-func rootKeyTupleArgs(keys []projectIdentityRootKey) (string, []any) {
+func rootKeyTupleArgs(keys []db.ProjectIdentityRootKey) (string, []any) {
 	tuples := make([]string, len(keys))
 	args := make([]any, 0, len(keys)*4)
 	for i, key := range keys {
 		tuples[i] = "(?, ?, ?, ?)"
-		args = append(args, key.archiveID, key.project, key.machine, key.rootPath)
+		args = append(args, key.ArchiveID, key.Project, key.Machine, key.RootPath)
 	}
 	return strings.Join(tuples, ", "), args
 }
@@ -610,12 +494,12 @@ func (s *Sync) projectIdentityFallbacksWithoutRealRemote(
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	shadowed := make(map[projectIdentityRootKey]bool)
+	shadowed := make(map[db.ProjectIdentityRootKey]bool)
 	for start := 0; start < len(candidates); start += projectIdentityDeleteBatchSize {
 		end := min(start+projectIdentityDeleteBatchSize, len(candidates))
-		keys := make([]projectIdentityRootKey, 0, end-start)
+		keys := make([]db.ProjectIdentityRootKey, 0, end-start)
 		for _, obs := range candidates[start:end] {
-			keys = append(keys, observationRootKey(obs))
+			keys = append(keys, db.ObservationRootKey(obs))
 		}
 		tuples, tupleArgs := rootKeyTupleArgs(keys)
 		args := append([]any{export.ProjectResolutionAmbiguous}, tupleArgs...)
@@ -637,7 +521,7 @@ func (s *Sync) projectIdentityFallbacksWithoutRealRemote(
 	}
 	out := make([]export.ProjectIdentityObservation, 0, len(candidates))
 	for _, obs := range candidates {
-		if !shadowed[observationRootKey(obs)] {
+		if !shadowed[db.ObservationRootKey(obs)] {
 			out = append(out, obs)
 		}
 	}
@@ -645,13 +529,13 @@ func (s *Sync) projectIdentityFallbacksWithoutRealRemote(
 }
 
 func scanProjectIdentityRootKeys(
-	rows *sql.Rows, out map[projectIdentityRootKey]bool,
+	rows *sql.Rows, out map[db.ProjectIdentityRootKey]bool,
 ) error {
 	defer rows.Close()
 	for rows.Next() {
-		var key projectIdentityRootKey
+		var key db.ProjectIdentityRootKey
 		if err := rows.Scan(
-			&key.archiveID, &key.project, &key.machine, &key.rootPath,
+			&key.ArchiveID, &key.Project, &key.Machine, &key.RootPath,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning clickhouse project identity remote observation: %w", err,

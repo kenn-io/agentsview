@@ -13,17 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-// activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
-// of the resolved range `q` as RFC3339 strings. It mirrors the SQLite and
-// PostgreSQL backends so the candidate-session predicate selects exactly
-// the sessions whose window intersects the range, with no padding slop.
-// DuckDB compares parsed instants (the bounds are cast to TIMESTAMP), so
-// it keeps the zone suffix, unlike SQLite's zone-less TEXT comparison.
-func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
-	return q.RangeStart.UTC().Format(time.RFC3339),
-		q.RangeEnd.UTC().Format(time.RFC3339)
-}
-
 // GetActivityReport assembles a concurrency- and usage-oriented report
 // for the resolved range `q`, reading from the DuckDB store. It mirrors
 // the SQLite (*DB).GetActivityReport and PostgreSQL
@@ -58,10 +47,10 @@ func (s *Store) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
-	duckReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
+	db.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true
-	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
+	rangeStartUTC, rangeEndUTC := db.ActivityReportInstantBoundsUTC(q)
 	lowerBound := duckUsagePaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := duckUsagePaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
@@ -70,7 +59,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	duckReportProgress(onProgress, activity.Progress{
+	db.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
@@ -93,12 +82,12 @@ func (s *Store) BuildActivityReportArtifacts(
 	}, sessions, func(
 		ctx context.Context, yield func(activity.IntervalCandidate) error,
 	) error {
-		duckReportProgress(onProgress, activity.Progress{
+		db.ReportProgress(onProgress, activity.Progress{
 			Phase: activity.ProgressScanningActivity, SessionsTotal: len(sessions),
 		})
 		return source(ctx, func(candidate activity.IntervalCandidate) error {
 			rowsProcessed++
-			duckReportProgress(onProgress, activity.Progress{
+			db.ReportProgress(onProgress, activity.Progress{
 				Phase:         activity.ProgressScanningActivity,
 				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
 			})
@@ -111,14 +100,14 @@ func (s *Store) BuildActivityReportArtifacts(
 	if err := s.activityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	duckReportProgress(onProgress, activity.Progress{
+	db.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
 	})
 	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
 	artifacts.Report.Pricing = pricing
 	projects, err := s.BuildProjectIdentityMap(ctx,
-		activityReportProjectLabels(sessions))
+		db.ActivityReportProjectLabels(sessions))
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -127,17 +116,11 @@ func (s *Store) BuildActivityReportArtifacts(
 	artifacts.Sessions = artifacts.Report.BySession
 	artifacts.Report.BySession = []activity.SessionRow{}
 	artifacts.Report.Projects = export.ProjectMapForWire(projects)
-	duckReportProgress(onProgress, activity.Progress{
+	db.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
 	})
 	return artifacts, nil
-}
-
-func duckReportProgress(callback activity.ProgressFunc, progress activity.Progress) {
-	if callback != nil {
-		callback(progress)
-	}
 }
 
 func (s *Store) activityReportMessageCounts(
@@ -452,14 +435,6 @@ func duckSessionUsageRowLess(
 		return a.scan.usageDedupKey < b.scan.usageDedupKey
 	}
 	return !a.validTS && a.scan.ts < b.scan.ts
-}
-
-func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
-	set := make(map[string]bool, len(sessions))
-	for _, session := range sessions {
-		set[session.Project] = true
-	}
-	return sortedBoolKeys(set)
 }
 
 // activityReportSessions returns the candidate sessions whose window

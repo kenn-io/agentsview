@@ -185,29 +185,6 @@ func TestFullResyncPreservesImportedSessionUsage(t *testing.T) {
 		DedupKey:                 "imported-usage",
 	}}))
 
-	head := ArtifactPeerCheckpointHead{
-		Origin:           origin,
-		Sequence:         3,
-		CheckpointSHA256: strings.Repeat("a", 64),
-		CheckpointSize:   123,
-	}
-	_, err := source.RecordArtifactPeerCheckpointHead(ctx, head)
-	require.NoError(t, err)
-	manifestHash := strings.Repeat("b", 64)
-	require.NoError(t, source.RecordArtifactCheckpointLanding(
-		ctx,
-		ArtifactCheckpointLanding(head),
-		map[string]string{gid: manifestHash},
-	))
-	require.NoError(t, source.RecordArtifactImportedSession(
-		ctx,
-		ArtifactImportedSession{
-			Origin:            origin,
-			GID:               gid,
-			ManifestHash:      manifestHash,
-			ImportedSessionID: gid,
-		},
-	))
 	require.NoError(t, source.Close())
 
 	destination := testDBAtPath(
@@ -238,12 +215,6 @@ func TestFullResyncPreservesImportedSessionUsage(t *testing.T) {
 		OccurredAt:               "2026-07-29T12:00:00Z",
 		DedupKey:                 "imported-usage",
 	}, events[0])
-
-	provenance, err := destination.ArtifactImportedManifestHashes(
-		ctx, origin, []string{gid},
-	)
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{gid: manifestHash}, provenance)
 }
 
 func TestCopySyncStateAcceptsDatabaseWithoutArtifactImportTables(t *testing.T) {
@@ -263,42 +234,6 @@ func TestCopySyncStateAcceptsDatabaseWithoutArtifactImportTables(t *testing.T) {
 	)
 	defer destination.Close()
 	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
-}
-
-func TestCopySyncStateRejectsEqualLandingWithDifferentMap(t *testing.T) {
-	ctx := t.Context()
-	dir := t.TempDir()
-	sourcePath := filepath.Join(dir, "source.db")
-	source := testDBAtPath(t, sourcePath, "source")
-	head := ArtifactPeerCheckpointHead{
-		Origin:           "peer-a1b2c3",
-		Sequence:         2,
-		CheckpointSHA256: strings.Repeat("a", 64),
-		CheckpointSize:   42,
-	}
-	_, err := source.RecordArtifactPeerCheckpointHead(ctx, head)
-	require.NoError(t, err)
-	require.NoError(t, source.RecordArtifactCheckpointLanding(
-		ctx,
-		ArtifactCheckpointLanding(head),
-		map[string]string{head.Origin + "~source": strings.Repeat("b", 64)},
-	))
-	require.NoError(t, source.Close())
-
-	destination := testDBAtPath(
-		t, filepath.Join(dir, "destination.db"), "destination",
-	)
-	defer destination.Close()
-	_, err = destination.RecordArtifactPeerCheckpointHead(ctx, head)
-	require.NoError(t, err)
-	require.NoError(t, destination.RecordArtifactCheckpointLanding(
-		ctx,
-		ArtifactCheckpointLanding(head),
-		map[string]string{head.Origin + "~destination": strings.Repeat("c", 64)},
-	))
-
-	err = destination.CopySyncStateFrom(sourcePath)
-	require.ErrorIs(t, err, ErrArtifactImportConflict)
 }
 
 func TestCopySyncStateRejectsIncompatibleCheckpointStages(t *testing.T) {
@@ -437,9 +372,12 @@ func stageCheckpointForCopyTest(
 	ctx := t.Context()
 	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
 	if complete {
-		require.NoError(t, database.StageArtifactCheckpointSessions(
-			ctx, landing, entries,
-		))
+		for start := 0; start < len(entries); start += maxArtifactImportSessionPageSize {
+			end := min(start+maxArtifactImportSessionPageSize, len(entries))
+			require.NoError(t, database.StageArtifactCheckpointSessions(
+				ctx, landing, entries[start:end],
+			))
+		}
 		require.NoError(t, database.CompleteArtifactCheckpointStage(
 			ctx, landing, len(entries),
 		))

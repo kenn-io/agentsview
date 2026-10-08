@@ -102,7 +102,7 @@ func TestCaseInsensitiveSpanUnicodeOffset(t *testing.T) {
 // taken from the matched bytes rather than from the pattern. U+212A KELVIN
 // SIGN is three bytes and folds to the one-byte "k", so start+len(pattern)
 // lands inside a rune of the body when the body carries the long form and
-// overshoots the match when the pattern does. snippetBounds snaps only its
+// overshoots the match when the pattern does. SnippetBounds snaps only its
 // padding edges and leaves the span alone, so a span that is not rune-aligned
 // reaches the slice unrepaired.
 func TestCaseInsensitiveSpanEndTracksMatchedBytes(t *testing.T) {
@@ -878,7 +878,7 @@ func TestSnippetWindowRuneBoundaries(t *testing.T) {
 	start := strings.Index(text, "MATCH")
 	end := start + len("MATCH")
 	window := func(radius int) string {
-		lo, hi := snippetBounds(text, start, end, radius)
+		lo, hi := SnippetBounds(text, start, end, radius)
 		return text[lo:hi]
 	}
 	// radius 3 lands mid-rune on both sides, so the partial padding runes are

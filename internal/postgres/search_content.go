@@ -8,14 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/secrets"
-)
-
-const (
-	pgSnippetRadius = 60 // chars of context on each side of a match
 )
 
 // SearchContent implements content search for the PostgreSQL read-only store.
@@ -380,7 +374,7 @@ func (s *Store) searchContentRegexPG(
 		return db.ContentSearchPage{},
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid regex: %v", err)}
 	}
-	lit := literalPrefixPG(f.Pattern)
+	lit := db.LiteralPrefix(f.Pattern)
 
 	rows, err := s.pgRegexCandidateRows(ctx, f, lit)
 	if err != nil {
@@ -413,7 +407,7 @@ func (s *Store) searchContentRegexPG(
 			seen++
 			continue
 		}
-		m.Snippet = pgBuildSnippet(f, body, loc[0], loc[1])
+		m.Snippet = f.BuildSnippet(body, loc[0], loc[1])
 		out = append(out, m)
 		if len(out) > f.Limit {
 			break
@@ -563,31 +557,6 @@ func pgToolResultEventsCandidateBranch(
 	return "\n\t\tSELECT tre.session_id, s.project, s.agent,\n\t\t\tCOALESCE(s.transcript_revision,'') AS transcript_revision,\n\t\t\t'tool_result' AS location, 'assistant' AS role, '' AS tool_name,\n\t\t\ttre.tool_call_message_ordinal AS ordinal, tre.timestamp AS ts,\n\t\t\ttre.content AS body, 3 AS src, tre.id AS row_id,\n\t\t\tCOALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts\n\t\tFROM tool_result_events tre\n\t\tJOIN sessions s ON s.id = tre.session_id\n\t\tJOIN scoped sc ON sc.id = tre.session_id\n\t\tWHERE " + prefilter
 }
 
-// pgSnippetBounds returns the rune-snapped byte window around [start,end),
-// mirroring snippetBounds in internal/db/search_content.go.
-func pgSnippetBounds(text string, start, end int) (int, int) {
-	lo := max(start-pgSnippetRadius, 0)
-	hi := min(end+pgSnippetRadius, len(text))
-	for lo < start && !utf8.RuneStart(text[lo]) {
-		lo++
-	}
-	for hi > end && hi < len(text) && !utf8.RuneStart(text[hi]) {
-		hi--
-	}
-	return lo, hi
-}
-
-// pgBuildSnippet windows body around [start,end) and, unless reveal is set,
-// masks secrets overlapping the window (including straddling ones) via
-// secrets.RedactWindow, so a pre-truncated snippet can never leak a fragment.
-func pgBuildSnippet(f db.ContentSearchFilter, body string, start, end int) string {
-	lo, hi := pgSnippetBounds(body, start, end)
-	if f.RevealSecrets {
-		return body[lo:hi]
-	}
-	return secrets.RedactWindow(body, lo, hi)
-}
-
 // pgSubstringSnippet builds a substring-match snippet: it locates the
 // case-insensitive pattern (the ILIKE already matched, so it is present; fall
 // back to the start) and windows it. It uses db.CaseInsensitiveSpan so both
@@ -595,19 +564,8 @@ func pgBuildSnippet(f db.ContentSearchFilter, body string, start, end int) strin
 func pgSubstringSnippet(f db.ContentSearchFilter, body string) string {
 	if f.Mode == "fts" {
 		start, end := db.FTSSnippetRange(f.Pattern, body)
-		return pgBuildSnippet(f, body, start, end)
+		return f.BuildSnippet(body, start, end)
 	}
 	start, end, _ := db.CaseInsensitiveSpan(body, f.Pattern)
-	return pgBuildSnippet(f, body, start, end)
-}
-
-// literalPrefixPG returns the required literal prefix from a regex pattern,
-// identical to the SQLite-side literalPrefix.
-func literalPrefixPG(pattern string) string {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return ""
-	}
-	prefix, _ := re.LiteralPrefix()
-	return prefix
+	return f.BuildSnippet(body, start, end)
 }

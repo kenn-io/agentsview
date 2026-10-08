@@ -20,18 +20,6 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
-func TestPaddedUTCBoundClampsBeforeYearOne(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t,
-		"0001-01-01T00:00:00Z",
-		paddedUTCBound("0001-01-01T00:00:00Z", -14),
-	)
-	assert.Equal(t,
-		"2026-03-10T10:00:00Z",
-		paddedUTCBound("2026-03-11T00:00:00Z", -14),
-	)
-}
-
 type usageProbeDriver struct{}
 
 type usageProbeConn struct {
@@ -279,22 +267,6 @@ func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
 	assert.Equal(t, 1, result.SessionCounts.ByAgent["claude"])
 	assert.NotContains(t, countsByDisplay, "proj-b")
 	assert.Zero(t, result.SessionCounts.ByAgent["codex"])
-}
-
-func TestPGUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
-	got, ok := pgUsageDedupTokenForRow(
-		"message",
-		"claude-code",
-		"msg-dup",
-		"",
-		"source-dup",
-		"",
-	)
-	require.True(t, ok, "expected source_uuid fallback key")
-	assert.Equal(t, pgUsageDedupToken{
-		kind:  "source",
-		value: "claude-code:source-dup",
-	}, got)
 }
 
 func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {

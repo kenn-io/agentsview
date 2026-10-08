@@ -129,9 +129,7 @@ func scanSessionRowsWithSource(rows *sql.Rows, includeSource bool) ([]db.Session
 }
 
 func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.SessionPage, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSessionLimit {
-		f.Limit = db.DefaultSessionLimit
-	}
+	f.Limit = db.NormalizeSessionLimit(f.Limit)
 	dialect := db.ClickHouseQueryDialect()
 	where, args := db.BuildSessionFilterSQL(f, dialect)
 	rs := db.ResolveSort(f)
@@ -180,13 +178,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 	if err != nil {
 		return db.SessionPage{}, err
 	}
-	page := db.SessionPage{Sessions: sessions, Total: total}
-	if len(sessions) > f.Limit {
-		page.Sessions = sessions[:f.Limit]
-		last := page.Sessions[f.Limit-1]
-		page.NextCursor = s.EncodeCursor(db.NextSessionCursor(&last, rs, total, f))
-	}
-	return page, nil
+	return db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor), nil
 }
 
 func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) (db.SidebarSessionIndex, error) {

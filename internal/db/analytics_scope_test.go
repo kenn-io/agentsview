@@ -91,7 +91,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, scope)
 
-		bySession := scope.MessagesBySession()
+		bySession := scope
 
 		// sessionA: user + assistant pair both emitted
 		rowsA := bySession[sessionA]
@@ -150,7 +150,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, scope)
 
-		rows := scope.MessagesBySession()[sessionA]
+		rows := scope[sessionA]
 		require.Len(t, rows, 2)
 		for _, row := range rows {
 			assert.Empty(t, row.Content, "content should be empty when includeContent=false")
@@ -168,7 +168,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, scope)
 
-		rows := scope.MessagesBySession()[sessionA]
+		rows := scope[sessionA]
 		require.Len(t, rows, 2)
 		assert.Equal(t, "hello content", rows[0].Content,
 			"user row content should be populated")
@@ -188,7 +188,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, scope)
 
-		rows := scope.MessagesBySession()[sessionA]
+		rows := scope[sessionA]
 		assert.Len(t, rows, 2, "dedup should keep exactly 2 rows")
 	})
 }

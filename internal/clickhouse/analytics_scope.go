@@ -8,29 +8,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// messageScopeFilter adapts the model/day/hour parts of an AnalyticsFilter into
-// the pure db.ScopeFilter. It is a free function because AnalyticsFilter
-// is defined in package db.
-func messageScopeFilter(f db.AnalyticsFilter) db.ScopeFilter {
-	models := make(map[string]struct{})
-	for _, m := range chAnalyticsCSVValues(f.Model) {
-		models[m] = struct{}{}
-	}
-	return db.ScopeFilter{
-		Models:    models,
-		DayOfWeek: f.DayOfWeek,
-		Hour:      f.Hour,
-	}
-}
-
-// messageScope holds the matched messages for a model-filtered analytics
-// request, grouped by session. It is a pure value; all DB work happens during
-// resolution. Its consumers are message stats, velocity timing, and signal
-// evidence (which reads message content), mirroring the SQLite/Postgres scopes.
-type messageScope struct {
-	bySession map[string][]db.ScopedMessage
-}
-
 // resolveAnalyticsMessageScope streams candidate messages for sessionIDs and
 // reduces them to the model/time-matched set. It returns nil when no model
 // filter is set, signalling the caller to keep its session-grain path.
@@ -39,7 +16,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 	sessionIDs []string,
 	f db.AnalyticsFilter,
 	includeContent bool,
-) (*messageScope, error) {
+) (db.MessageScope, error) {
 	if strings.TrimSpace(f.Model) == "" {
 		return nil, nil
 	}
@@ -54,9 +31,9 @@ func (s *Store) resolveAnalyticsMessageScope(
 		unique = append(unique, id)
 	}
 
-	flt := messageScopeFilter(f)
+	flt := f.MessageScopeFilter()
 	loc := analyticsLocation(f.Timezone)
-	bySession := make(map[string][]db.ScopedMessage, len(unique))
+	bySession := make(db.MessageScope, len(unique))
 	emit := func(m db.ScopedMessage) {
 		bySession[m.SessionID] = append(bySession[m.SessionID], m)
 	}
@@ -127,28 +104,5 @@ func (s *Store) resolveAnalyticsMessageScope(
 		return nil, err
 	}
 
-	return &messageScope{bySession: bySession}, nil
-}
-
-// MessagesBySession returns the matched rows per session.
-func (s *messageScope) MessagesBySession() map[string][]db.ScopedMessage {
-	return s.bySession
-}
-
-// StatsBySession aggregates matched rows per session.
-func (s *messageScope) StatsBySession() map[string]db.MessageStats {
-	out := make(map[string]db.MessageStats, len(s.bySession))
-	for id, rows := range s.bySession {
-		out[id] = db.ScopeStats(rows)
-	}
-	return out
-}
-
-// TimingBySession projects matched rows into the velocity timing view.
-func (s *messageScope) TimingBySession() map[string][]db.TimingMessage {
-	out := make(map[string][]db.TimingMessage, len(s.bySession))
-	for id, rows := range s.bySession {
-		out[id] = db.ScopeTiming(rows)
-	}
-	return out
+	return bySession, nil
 }

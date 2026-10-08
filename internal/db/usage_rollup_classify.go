@@ -199,7 +199,7 @@ func classifyUsageRollupFacts(
 	for _, index := range plain {
 		survivors = append(survivors, usageRollupSurvivor{Fact: facts[index]})
 	}
-	for _, key := range usageSortedMapKeys(snapshots) {
+	for _, key := range SortedKeys(snapshots) {
 		members := snapshots[key]
 		if len(members) == 0 {
 			continue
@@ -212,7 +212,7 @@ func classifyUsageRollupFacts(
 		}
 		survivors = append(survivors, rankSafeSnapshotGroup(facts, members))
 	}
-	for _, key := range usageSortedMapKeys(generals) {
+	for _, key := range SortedKeys(generals) {
 		members := generals[key]
 		if len(members) == 0 {
 			continue

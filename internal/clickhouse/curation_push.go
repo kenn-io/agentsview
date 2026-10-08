@@ -58,7 +58,7 @@ func (snap curationSnapshot) fingerprint() (string, error) {
 	payload := struct {
 		Starred []string
 		Pinned  []db.PinCurationEntry
-	}{Starred: sortedCopy(snap.starred), Pinned: pinned}
+	}{Starred: db.SortedCopy(snap.starred), Pinned: pinned}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("encoding curation fingerprint: %w", err)
@@ -111,14 +111,14 @@ func (s *Sync) replaceCuration(
 	written := curationSnapshot{pinsBySession: map[string][]db.PinnedMessage{}}
 	var starRows, pinRows [][]any
 	now := time.Now().UTC()
-	for _, id := range sortedCopy(snap.starred) {
+	for _, id := range db.SortedCopy(snap.starred) {
 		if !resident[id] {
 			continue
 		}
 		written.starred = append(written.starred, id)
 		starRows = append(starRows, []any{id, &now, version})
 	}
-	for _, id := range sortedCopy(pinnedSessions) {
+	for _, id := range db.SortedCopy(pinnedSessions) {
 		if !resident[id] {
 			continue
 		}

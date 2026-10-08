@@ -25,9 +25,7 @@ import (
 // sessions in the first sub-second of the range. A zone-less bound is a
 // strict prefix of every stored RFC3339Nano-UTC value at that second, so
 // whole-second and fractional values both compare correctly.
-// PostgreSQL/DuckDB compare parsed instants and keep the zone in their own
-// copies of this helper; this divergence makes SQLite match their
-// already-correct boundary behavior.
+// PostgreSQL/DuckDB use ActivityReportInstantBoundsUTC for parsed instants with a zone suffix.
 func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 	const boundLayout = "2006-01-02T15:04:05"
 	return q.RangeStart.UTC().Format(boundLayout),
@@ -67,19 +65,19 @@ func (db *DB) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
-	reportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
+	ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
-	lowerBound := paddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
-	upperBound := paddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+	lowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
+	upperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
 	sessions, ids, err := db.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	reportProgress(onProgress, activity.Progress{
+	ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
@@ -101,12 +99,12 @@ func (db *DB) BuildActivityReportArtifacts(
 	}, sessions, func(
 		ctx context.Context, yield func(activity.IntervalCandidate) error,
 	) error {
-		reportProgress(onProgress, activity.Progress{
+		ReportProgress(onProgress, activity.Progress{
 			Phase: activity.ProgressScanningActivity, SessionsTotal: len(sessions),
 		})
 		return source(ctx, func(candidate activity.IntervalCandidate) error {
 			rowsProcessed++
-			reportProgress(onProgress, activity.Progress{
+			ReportProgress(onProgress, activity.Progress{
 				Phase:         activity.ProgressScanningActivity,
 				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
 			})
@@ -119,14 +117,14 @@ func (db *DB) BuildActivityReportArtifacts(
 	if err := db.activityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	reportProgress(onProgress, activity.Progress{
+	ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
 	})
 	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
 	artifacts.Report.Pricing = pricing
 	projects, err := db.BuildProjectIdentityMap(ctx,
-		activityReportProjectLabels(sessions))
+		ActivityReportProjectLabels(sessions))
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -135,14 +133,15 @@ func (db *DB) BuildActivityReportArtifacts(
 	artifacts.Sessions = artifacts.Report.BySession
 	artifacts.Report.BySession = []activity.SessionRow{}
 	artifacts.Report.Projects = export.ProjectMapForWire(projects)
-	reportProgress(onProgress, activity.Progress{
+	ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
 	})
 	return artifacts, nil
 }
 
-func reportProgress(callback activity.ProgressFunc, progress activity.Progress) {
+// ReportProgress calls callback with progress when callback is set.
+func ReportProgress(callback activity.ProgressFunc, progress activity.Progress) {
 	if callback != nil {
 		callback(progress)
 	}
@@ -155,8 +154,8 @@ func (db *DB) activityReportMessageCounts(
 	return queryChunked(ids, func(chunk []string) error {
 		ph, args := inPlaceholders(chunk)
 		args = append(args,
-			paddedUTCBound(q.RangeStart.Format(time.RFC3339Nano), -14),
-			paddedUTCBound(q.EffectiveEnd.Format(time.RFC3339Nano), 14),
+			PaddedUTCBound(q.RangeStart.Format(time.RFC3339Nano), -14),
+			PaddedUTCBound(q.EffectiveEnd.Format(time.RFC3339Nano), 14),
 		)
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT session_id, role, timestamp
@@ -295,7 +294,7 @@ func (db *DB) GetSessionUsageRows(
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[usageDedupToken]struct{})
+	seen := make(map[UsageDedupToken]struct{})
 	deduplicatedOutputTokens := make(map[string]int)
 	discardedContributingSessions := make(map[string]struct{})
 	out := make([]activity.UsageRow, 0, len(rowsAcc))
@@ -319,7 +318,7 @@ func (db *DB) GetSessionUsageRows(
 				discardedContributingSessions[r.sessionID] = struct{}{}
 			}
 		}
-		if key, ok := usageDedupTokenForRow(
+		if key, ok := UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
 		); ok {
@@ -368,7 +367,7 @@ func (db *DB) GetSessionUsageRows(
 			UsageDedupKey:   r.usageDedupKey,
 
 			UsageSource:         r.usageSource,
-			MessageOrdinal:      usageRowMessageOrdinal(r.messageOrdinal),
+			MessageOrdinal:      UsageRowMessageOrdinal(r.messageOrdinal),
 			InputTokens:         inputTok,
 			CacheCreationTokens: cacheCrTok,
 			CacheReadTokens:     cacheRdTok,
@@ -439,9 +438,9 @@ func stableSortContext[T any](
 	return ctx.Err()
 }
 
-// nullInt64Pointer converts a nullable message ordinal into the pointer
+// NullInt64Pointer converts a nullable message ordinal into the pointer
 // shape SessionUsageBreakdownEntry and activity.UsageRow use.
-func nullInt64Pointer(v sql.NullInt64) *int {
+func NullInt64Pointer(v sql.NullInt64) *int {
 	if !v.Valid {
 		return nil
 	}
@@ -449,9 +448,9 @@ func nullInt64Pointer(v sql.NullInt64) *int {
 	return &out
 }
 
-// usageRowMessageOrdinal renders a nullable message ordinal in
+// UsageRowMessageOrdinal renders a nullable message ordinal in
 // activity.UsageRow's COALESCE(message_ordinal, -1) convention.
-func usageRowMessageOrdinal(v sql.NullInt64) int64 {
+func UsageRowMessageOrdinal(v sql.NullInt64) int64 {
 	if !v.Valid {
 		return -1
 	}
@@ -464,7 +463,7 @@ func sqliteSessionUsageRowTokens(
 	if r.usageSource == "message" {
 		return clampedUsageTokenCountersWithReasoning(r.tokenJSON)
 	}
-	inputTok, outputTok, cacheCrTok, cacheRdTok = usageEventRowTokens(
+	inputTok, outputTok, cacheCrTok, cacheRdTok = UsageEventRowTokens(
 		r.usageSource,
 		r.inputTokens, r.outputTokens,
 		r.cacheCreationInputTokens, r.cacheReadInputTokens,
@@ -503,14 +502,15 @@ func sqliteSessionUsageRowLess(
 	return !a.validTS && a.scan.ts < b.scan.ts
 }
 
-func activityReportProjectLabels(
+// ActivityReportProjectLabels returns the distinct session projects, sorted.
+func ActivityReportProjectLabels(
 	sessions []activity.SessionMeta,
 ) []string {
 	set := make(map[string]struct{}, len(sessions))
 	for _, session := range sessions {
 		set[session.Project] = struct{}{}
 	}
-	return sortedSetKeys(set)
+	return SortedKeys(set)
 }
 
 // activityReportSessions returns the candidate sessions whose window
@@ -900,8 +900,8 @@ func (db *DB) activityReportCandidateSource(
 		upperTime := q.EffectiveEnd.UTC()
 		lower := lowerTime.UnixMicro()
 		upper := upperTime.UnixMicro()
-		paddedLower := paddedUTCBound(lowerTime.Format(time.RFC3339), -14)
-		paddedUpper := paddedUTCBound(upperTime.Format(time.RFC3339), 14)
+		paddedLower := PaddedUTCBound(lowerTime.Format(time.RFC3339), -14)
+		paddedUpper := PaddedUTCBound(upperTime.Format(time.RFC3339), 14)
 		scanCandidate := func(
 			row interface{ Scan(dest ...any) error },
 		) (activity.IntervalCandidate, error) {
@@ -1303,7 +1303,7 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 		inTok, outTok, crTok, rdTok, reasoningTok = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
 		cr1hTok = clampedCacheCreation1hTokens(r.tokenJSON)
 	} else {
-		inTok, outTok, crTok, rdTok = usageEventRowTokens(
+		inTok, outTok, crTok, rdTok = UsageEventRowTokens(
 			r.usageSource,
 			r.inputTokens, r.outputTokens,
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
@@ -1331,7 +1331,7 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 	if err != nil {
 		return money.Money{}, false, false, err
 	}
-	requestScoped := usageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
+	requestScoped := UsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
 	cost, err = lookup.Rates.CostForTokensScoped(
 		requestScoped,
 		inTok, outTok, reasoningTok, crTok, cr1hTok, rdTok)
@@ -1344,7 +1344,7 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 		return money.Money{}, false, false,
 			fmt.Errorf("pricing activity usage for model %q: %w", r.model, err)
 	}
-	recordComputedUsagePricing(
+	RecordComputedUsagePricing(
 		pricing,
 		r.model,
 		pricedModel,

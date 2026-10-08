@@ -8,10 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/secrets"
 )
 
 // embeddableMessagePredicate matches messages the search surfaces: not
@@ -389,10 +387,10 @@ func (s *Store) collectContentSubstringMatches(
 	return scanContentRows(rows, func(body string) string {
 		if f.Mode == "fts" {
 			start, end := db.FTSSnippetRange(f.Pattern, body)
-			return contentSnippet(f, body, start, end)
+			return f.BuildSnippet(body, start, end)
 		}
 		start, end, _ := db.CaseInsensitiveSpan(body, f.Pattern)
-		return contentSnippet(f, body, start, end)
+		return f.BuildSnippet(body, start, end)
 	})
 }
 
@@ -417,7 +415,7 @@ func (s *Store) collectContentRegexMatches(
 	filtered := all[:0]
 	for _, m := range all {
 		if loc := re.FindStringIndex(m.body); loc != nil {
-			m.match.Snippet = contentSnippet(f, m.body, loc[0], loc[1])
+			m.match.Snippet = f.BuildSnippet(m.body, loc[0], loc[1])
 			filtered = append(filtered, m)
 		}
 	}
@@ -505,26 +503,6 @@ func (s *Store) collectContentSource(
 		return nil, fmt.Errorf("clickhouse content search: %w", err)
 	}
 	return scanContentCandidateRows(rows)
-}
-
-func contentSnippet(f db.ContentSearchFilter, body string, start, end int) string {
-	lo, hi := snippetBounds(body, start, end, 60)
-	if f.RevealSecrets {
-		return body[lo:hi]
-	}
-	return secrets.RedactWindow(body, lo, hi)
-}
-
-func snippetBounds(text string, start, end, radius int) (int, int) {
-	lo := max(start-radius, 0)
-	hi := min(end+radius, len(text))
-	for lo < start && !utf8.RuneStart(text[lo]) {
-		lo++
-	}
-	for hi > end && hi < len(text) && !utf8.RuneStart(text[hi]) {
-		hi--
-	}
-	return lo, hi
 }
 
 type contentCandidate struct {

@@ -712,9 +712,7 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 func (db *DB) ListSessions(
 	ctx context.Context, f SessionFilter,
 ) (SessionPage, error) {
-	if f.Limit <= 0 || f.Limit > MaxSessionLimit {
-		f.Limit = DefaultSessionLimit
-	}
+	f.Limit = NormalizeSessionLimit(f.Limit)
 
 	where, args := buildSessionFilter(f)
 
@@ -780,16 +778,7 @@ func (db *DB) ListSessions(
 		return SessionPage{}, err
 	}
 
-	page := SessionPage{Sessions: sessions, Total: total}
-	if len(sessions) > f.Limit {
-		page.Sessions = sessions[:f.Limit]
-		last := page.Sessions[f.Limit-1]
-		page.NextCursor = db.EncodeCursor(
-			NextSessionCursor(&last, rs, total, f),
-		)
-	}
-
-	return page, nil
+	return BuildSessionPage(sessions, total, f, rs, db.EncodeCursor), nil
 }
 
 // GetSidebarSessionIndex returns the skinny session rows needed by
@@ -904,9 +893,7 @@ func (db *DB) GetSidebarSessionIndex(
 func (db *DB) getSidebarSessionIndexPage(
 	ctx context.Context, f SessionFilter,
 ) (SidebarSessionIndex, error) {
-	if f.Limit <= 0 || f.Limit > MaxSessionLimit {
-		f.Limit = DefaultSessionLimit
-	}
+	f.Limit = NormalizeSessionLimit(f.Limit)
 
 	rootFilter := f
 	rootFilter.Cursor = ""

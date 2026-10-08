@@ -485,3 +485,28 @@ func SortKeys() []string {
 	}
 	return keys
 }
+
+// NormalizeSessionLimit applies the session list's default and upper bound.
+func NormalizeSessionLimit(limit int) int {
+	if limit <= 0 || limit > MaxSessionLimit {
+		return DefaultSessionLimit
+	}
+	return limit
+}
+
+// BuildSessionPage trims the extra row and encodes the next page's cursor.
+func BuildSessionPage(
+	sessions []Session,
+	total int,
+	f SessionFilter,
+	rs []ResolvedSort,
+	encode func(SessionCursor) string,
+) SessionPage {
+	page := SessionPage{Sessions: sessions, Total: total}
+	if len(sessions) > f.Limit {
+		page.Sessions = sessions[:f.Limit]
+		last := &page.Sessions[f.Limit-1]
+		page.NextCursor = encode(NextSessionCursor(last, rs, total, f))
+	}
+	return page
+}

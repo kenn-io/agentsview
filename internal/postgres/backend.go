@@ -172,7 +172,7 @@ func (b Backend) Status(
 	}
 	return storage.ReplicaStatus{Rows: []storage.StatusRow{
 		{Label: "Machine:", Value: status.Machine},
-		{Label: "Last push:", Value: valueOrNever(status.LastPushAt)},
+		{Label: "Last push:", Value: db.ValueOrNever(status.LastPushAt)},
 		{Label: "PG sessions:", Value: strconv.Itoa(status.PGSessions)},
 		{Label: "PG messages:", Value: strconv.Itoa(status.PGMessages)},
 	}}, nil
@@ -191,13 +191,6 @@ func (Backend) LastPushAt(
 		ctx, local, target.SyncStateTarget(), projects, excludeProjects,
 		target.MigrateLegacySyncState(),
 	)
-}
-
-func valueOrNever(v string) string {
-	if v == "" {
-		return "never"
-	}
-	return v
 }
 
 // VectorGenerations lists the embedding generations pushed to store, oldest

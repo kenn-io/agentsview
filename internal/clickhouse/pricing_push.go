@@ -24,7 +24,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 		return err
 	}
 	if len(prices) == 0 {
-		prices = fallbackPricingRows()
+		prices = db.FallbackMirrorPricingRows(time.Now().UTC().Format(time.RFC3339Nano))
 	}
 	if len(prices) == 0 {
 		return s.syncGenAIPricing(ctx)
@@ -48,37 +48,6 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 		return err
 	}
 	return s.syncGenAIPricing(ctx)
-}
-
-func fallbackPricingRows() []db.ModelPricing {
-	src := pricingpkg.FallbackPricing()
-	out := make([]db.ModelPricing, len(src))
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	for i, p := range src {
-		bands := make([]db.PricingBand, len(p.Bands))
-		for j, band := range p.Bands {
-			bands[j] = db.PricingBand{
-				AboveInputTokens:       band.AboveInputTokens,
-				InputPerMTok:           band.InputPerMTok,
-				OutputPerMTok:          band.OutputPerMTok,
-				CacheCreationPerMTok:   band.CacheCreationPerMTok,
-				CacheCreation1hPerMTok: band.CacheCreation1hPerMTok,
-				CacheReadPerMTok:       band.CacheReadPerMTok,
-				UpdatedAt:              now,
-			}
-		}
-		out[i] = db.ModelPricing{
-			ModelPattern:           p.ModelPattern,
-			InputPerMTok:           p.InputPerMTok,
-			OutputPerMTok:          p.OutputPerMTok,
-			CacheCreationPerMTok:   p.CacheCreationPerMTok,
-			CacheCreation1hPerMTok: p.CacheCreation1hPerMTok,
-			CacheReadPerMTok:       p.CacheReadPerMTok,
-			UpdatedAt:              now,
-			Bands:                  bands,
-		}
-	}
-	return out
 }
 
 func (s *Sync) removeModelPricing(ctx context.Context, patterns []string) error {
@@ -170,14 +139,6 @@ type genAIPricingRow interface {
 	Scan(...any) error
 }
 
-func embeddedGenAIPricingDocument() db.GenAIPricingDocument {
-	embedded := pricingpkg.EmbeddedGenAIDocument()
-	return db.GenAIPricingDocument{
-		Version: embedded.Version, SourceRef: embedded.SourceRef,
-		Source: db.GenAIPricingSourceEmbedded, Data: embedded.RawJSON(),
-	}
-}
-
 func loadGenAIPricing(
 	ctx context.Context, q genAIPricingQuerier,
 ) (*db.GenAIPricingDocument, error) {
@@ -244,7 +205,7 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 		return fmt.Errorf("reading local GenAI pricing document: %w", err)
 	}
 	if document == nil {
-		embedded := embeddedGenAIPricingDocument()
+		embedded := db.EmbeddedGenAIPricingDocument()
 		document = &embedded
 	}
 	existing, err := loadGenAIPricing(ctx, s.conn)

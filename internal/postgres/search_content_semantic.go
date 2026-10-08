@@ -91,7 +91,7 @@ func (s *Store) survivingVectorHitsPG(
 	if len(hits) == 0 {
 		return nil, nil
 	}
-	allowed, err := s.semanticAllowedSessionIDsPG(ctx, f, pgUniqueSessionIDs(hits))
+	allowed, err := s.semanticAllowedSessionIDsPG(ctx, f, db.UniqueSessionIDs(hits))
 	if err != nil {
 		return nil, err
 	}
@@ -104,37 +104,12 @@ func (s *Store) survivingVectorHitsPG(
 	return surviving, nil
 }
 
-// pgUniqueSessionIDs returns the distinct session IDs referenced by hits.
-// Order is irrelevant: the result only feeds an ANY(...) array bind.
-func pgUniqueSessionIDs(hits []db.VectorHit) []string {
-	seen := make(map[string]bool, len(hits))
-	ids := make([]string, 0, len(hits))
-	for _, h := range hits {
-		if !seen[h.SessionID] {
-			seen[h.SessionID] = true
-			ids = append(ids, h.SessionID)
-		}
-	}
-	return ids
-}
-
-// semanticPGSessionFilter maps a ContentSearchFilter for the semantic/hybrid
-// session scope: the shared db.ContentSessionFilter mapping plus the child one-shot
-// exemption (SessionFilter.ChildExemptOneShot) -- child sessions must not be
-// dropped by the one-shot gate in these modes, while top-level one-shots keep
-// today's exclusion. It mirrors internal/db.semanticContentSessionFilter.
-func semanticPGSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
-	sf := db.ContentSessionFilter(f)
-	sf.ChildExemptOneShot = true
-	return sf
-}
-
 // semanticAllowedSessionIDsPG returns the subset of ids whose session passes
 // the ContentSearchFilter's metadata scope (project, agent, date range,
 // one-shot/automated, ...), reusing buildPGSessionBaseFilter so this path
 // cannot drift from the substring/regex scope subquery. Like SQLite's
 // semanticAllowedSessionIDs it omits the sidebar-child exclusion and exempts
-// child sessions from the one-shot gate (semanticPGSessionFilter): in
+// child sessions from the one-shot gate (db.SemanticContentSessionFilter): in
 // semantic/hybrid modes Scope supersedes IncludeChildren, so subordinate units
 // stay visible to the vector leg. The whole id set binds as one array
 // parameter (pgx expands ANY natively), so no IN chunking is needed.
@@ -144,7 +119,7 @@ func (s *Store) semanticAllowedSessionIDsPG(
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	where, args := buildPGSessionBaseFilter(semanticPGSessionFilter(f))
+	where, args := buildPGSessionBaseFilter(db.SemanticContentSessionFilter(f))
 	where, args = appendExcludeSessionIDsPG(where, args, "id", f.ExcludeSessionIDs)
 	query := fmt.Sprintf(
 		"SELECT id FROM sessions WHERE %s AND id = ANY($%d)", where, len(args)+1)

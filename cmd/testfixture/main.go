@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -131,6 +132,12 @@ func run() error {
 		return fmt.Errorf("creating duration showcase: %w", err)
 	}
 
+	if err := createToolSequencesFixture(
+		ctx, database, base.Add(144*time.Hour),
+	); err != nil {
+		return fmt.Errorf("creating tool-sequences fixture: %w", err)
+	}
+
 	if err := createRecentEditsFixture(ctx,
 		database, base.Add(96*time.Hour),
 	); err != nil {
@@ -225,6 +232,52 @@ func createProjectReclassificationFixture(
 		)
 	}
 	return nil
+}
+
+func createToolSequencesFixture(
+	ctx context.Context, database *db.DB, start time.Time,
+) error {
+	const sessionID = "test-session-tool-sequences"
+	msgs := dbtest.ToolSequencesExampleMessages(sessionID)
+	for i := range msgs {
+		messageTime := start.Add(time.Duration(msgs[i].Ordinal) * time.Minute)
+		msgs[i].Timestamp = messageTime.Format(time.RFC3339Nano)
+		for callIndex := range msgs[i].ToolCalls {
+			for eventIndex := range msgs[i].ToolCalls[callIndex].ResultEvents {
+				event := &msgs[i].ToolCalls[callIndex].ResultEvents[eventIndex]
+				eventTime := messageTime
+				if event.Status == "completed" || event.Status == "errored" {
+					eventTime = eventTime.Add(2 * time.Second)
+				}
+				event.Timestamp = eventTime.Format(time.RFC3339Nano)
+			}
+		}
+	}
+	for ordinal := len(msgs); ordinal < 54; ordinal++ {
+		role := "user"
+		if ordinal%2 == 1 {
+			role = "assistant"
+		}
+		content := fmt.Sprintf("Transcript context message %d", ordinal)
+		msgs = append(msgs, db.Message{
+			SessionID: sessionID, Ordinal: ordinal, Role: role,
+			Content: content, ContentLength: len(content),
+			Timestamp: start.Add(time.Duration(ordinal) * time.Minute).Format(time.RFC3339Nano),
+		})
+	}
+	startedAt := start.Format(time.RFC3339Nano)
+	endedAt := start.Add(55 * time.Minute).Format(time.RFC3339Nano)
+	firstMessage := "Find the config"
+	session := db.Session{
+		ID: sessionID, Project: "project-alpha", Machine: "test-machine", Agent: "claude",
+		FirstMessage: &firstMessage, StartedAt: &startedAt, EndedAt: &endedAt,
+		MessageCount: len(msgs), UserMessageCount: 26,
+		TerminationStatus: new("clean"),
+	}
+	if err := database.UpsertSession(ctx, session); err != nil {
+		return err
+	}
+	return database.ReplaceSessionMessages(ctx, sessionID, msgs)
 }
 
 func writeDuckDBMirror(database *db.DB, path string) error {

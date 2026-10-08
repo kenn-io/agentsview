@@ -1330,10 +1330,11 @@ func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.Id
 
 func telemetryOptions(cfg config.Config) telemetry.Options {
 	opts := telemetry.Options{
-		InstallationID: cfg.InstallationID,
-		InstalledAt:    cfg.InstallationCreatedAt,
-		Version:        version,
-		Commit:         commit,
+		InstallationID:  cfg.InstallationID,
+		InstalledAt:     cfg.InstallationCreatedAt,
+		ClaimScreenView: cfg.ClaimScreenView,
+		Version:         version,
+		Commit:          commit,
 	}
 	for _, def := range parser.Registry {
 		opts.AgentTypes = append(opts.AgentTypes, string(def.Type))

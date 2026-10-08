@@ -5,6 +5,7 @@ import { parseContent } from "../utils/content-parser.js";
 import type { Session } from "../api/types.js";
 import type { DbMessage as Message } from "../api/generated/index.js";
 import type { ServiceMessageList as MessagesResponse } from "../api/generated/index.js";
+import { ApiError } from "../api/runtime.js";
 
 const api = vi.hoisted(() => ({
   getMessages: vi.fn(),
@@ -16,6 +17,14 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/runtime.js", () => ({
+  ApiError: class ApiError extends Error {
+    constructor(
+      public readonly status: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
   isAbortError: (err: unknown) => {
     if (err instanceof DOMException && err.name === "AbortError") {
       return true;
@@ -49,6 +58,7 @@ vi.mock("../api/generated/index", () => ({
           from: params.from,
           limit: params.limit,
           direction: params.direction,
+          ...(params.expected_revision ? { expected_revision: params.expected_revision } : {}),
         },
         options,
       ),
@@ -955,6 +965,366 @@ describe("MessagesStore", () => {
     await reloadPromise;
 
     expect(messages.messageCount).toBe(4);
+  });
+
+  describe("transcript revision", () => {
+    function page(ordinals: number[], revision: string, content = "msg"): MessagesResponse {
+      return {
+        messages: ordinals.map((ordinal) => ({
+          ...makeMessage(ordinal),
+          content: `${content} ${ordinal}`,
+        })),
+        count: ordinals.length,
+        transcript_revision: revision,
+      };
+    }
+    const range = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, i) => from + i);
+
+    it("records the revision of the pages it accepted and binds later pages to it", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 1500));
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r1"))
+        .mockResolvedValueOnce(page(range(1000, 1500), "r1"));
+
+      await messages.loadSession("s1");
+
+      expect(messages.messages).toHaveLength(1500);
+      expect(messages.loadedRevision).toBe("r1");
+      expect(vi.mocked(api.getMessages).mock.calls[0]![1]).not.toHaveProperty("expected_revision");
+      expect(vi.mocked(api.getMessages).mock.calls[1]![1]).toMatchObject({
+        from: 1000,
+        expected_revision: "r1",
+      });
+    });
+
+    it("starts over when a sync lands between pages, so every row shares one revision", async () => {
+      vi.mocked(api.getSession).mockResolvedValue({
+        ...makeSession("s1", 1500),
+        transcript_revision: "r1",
+      });
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r1", "old"))
+        .mockRejectedValueOnce(new ApiError(409, "transcript revision does not match"))
+        .mockResolvedValueOnce(page(range(0, 1000), "r2", "new"))
+        .mockResolvedValueOnce(page(range(1000, 1500), "r2", "new"));
+
+      await messages.loadSession("s1");
+
+      expect(messages.loadedRevision).toBe("r2");
+      expect(messages.messages).toHaveLength(1500);
+      expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+      // Read progress names the revision on screen, not the one the metadata read saw.
+      expect(messages.activeSessionToken).toBe("r2");
+      expect(vi.mocked(api.getMessages).mock.calls[3]![1]).toMatchObject({
+        from: 1000,
+        expected_revision: "r2",
+      });
+    });
+
+    it("drops parsed content from an attempt a sync interrupted", async () => {
+      const first = page(range(0, 1000), "r1");
+      first.messages[0] = { ...first.messages[0]!, content: "alpha1", content_length: 6 };
+      const rewritten = page(range(0, 1000), "r2");
+      rewritten.messages[0] = { ...rewritten.messages[0]!, content: "bravo2", content_length: 6 };
+      const gate = createDeferred<MessagesResponse>();
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 1500));
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(first)
+        .mockReturnValueOnce(gate.promise as ReturnType<typeof api.getMessages>)
+        .mockImplementationOnce(async () => {
+          // The old row is parsed again while the restarted page is in flight.
+          parseContent(shown.content, shown.has_tool_use, shown.id, shown.content_length);
+          return rewritten;
+        })
+        .mockResolvedValueOnce(page(range(1000, 1500), "r2"));
+
+      let shown = first.messages[0]!;
+      const load = messages.loadSession("s1");
+      await vi.waitFor(() => expect(messages.messages).toHaveLength(1000));
+      shown = messages.messages[0]!;
+      expect(
+        parseContent(shown.content, shown.has_tool_use, shown.id, shown.content_length),
+      ).toEqual([{ type: "text", content: "alpha1" }]);
+      gate.reject(new ApiError(409, "transcript revision does not match"));
+      await load;
+
+      const row = messages.messages[0]!;
+      expect(messages.loadedRevision).toBe("r2");
+      expect(parseContent(row.content, row.has_tool_use, row.id, row.content_length)).toEqual([
+        { type: "text", content: "bravo2" },
+      ]);
+    });
+
+    it("ignores a continuation page that a reload overtook", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 1500));
+      const second = createDeferred<MessagesResponse>();
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r1", "old"))
+        .mockReturnValueOnce(second.promise as ReturnType<typeof api.getMessages>);
+      const load = messages.loadSession("s1");
+      await vi.waitFor(() => expect(messages.messages).toHaveLength(1000));
+
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r2", "new"))
+        .mockResolvedValueOnce(page(range(1000, 1500), "r2", "new"));
+      await messages.reload();
+      expect(messages.loadedRevision).toBe("r2");
+
+      second.resolve(page(range(1000, 1500), "r1", "old"));
+      await load;
+      expect(messages.loadedRevision).toBe("r2");
+      expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+    });
+
+    it("lets a reload outrank an initial load whose metadata read is still in flight", async () => {
+      const metadata = createDeferred<Session>();
+      vi.mocked(api.getSession).mockReturnValueOnce(metadata.promise);
+      const load = messages.loadSession("s1");
+
+      vi.mocked(api.getSession).mockResolvedValue({
+        ...makeSession("s1", 3),
+        transcript_revision: "r2",
+      });
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r2", "new"));
+      await messages.reload();
+      expect(messages.loadedRevision).toBe("r2");
+
+      // The stale metadata says the session is large, which would load only the newest page.
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([2, 1, 0], "r1", "old"));
+      metadata.resolve({ ...makeSession("s1", 5_000), transcript_revision: "r1" });
+      await load;
+      expect(messages.loadedRevision).toBe("r2");
+      expect(messages.activeSessionToken).toBe("r2");
+      expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+    });
+
+    it("serializes overlapping jumps into older history without duplicating rows", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 5_000));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page(range(4000, 5000).reverse(), "r1"));
+      await messages.loadSession("s1");
+
+      vi.mocked(api.getMessages).mockImplementation(async (_id, params) => {
+        const from = params.from as number;
+        return page(range(Math.max(0, from - 999), from + 1).reverse(), "r1");
+      });
+      await Promise.all([
+        messages.ensureOrdinalLoaded(3500),
+        messages.ensureOrdinalLoaded(2500),
+        messages.ensureOrdinalLoaded(1500),
+      ]);
+
+      const ordinals = messages.messages.map((message) => message.ordinal);
+      expect(new Set(ordinals).size).toBe(ordinals.length);
+      expect(ordinals[0]).toBeLessThanOrEqual(1500);
+    });
+
+    it("ignores a delayed first page that a reload overtook", async () => {
+      vi.mocked(api.getSession)
+        .mockResolvedValueOnce({ ...makeSession("s1", 3), transcript_revision: "r1" })
+        .mockResolvedValue({ ...makeSession("s1", 3), transcript_revision: "r2" });
+      const first = createDeferred<MessagesResponse>();
+      vi.mocked(api.getMessages).mockReturnValueOnce(
+        first.promise as ReturnType<typeof api.getMessages>,
+      );
+      const load = messages.loadSession("s1");
+      await vi.waitFor(() => expect(api.getMessages).toHaveBeenCalledTimes(1));
+
+      // A sync-triggered reload lands the newer transcript before the initial page returns.
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r2", "new"));
+      await messages.reload();
+      expect(messages.loadedRevision).toBe("r2");
+      const tokenAfterReload = messages.activeSessionToken;
+      expect(tokenAfterReload).toBe("r2");
+
+      first.resolve(page([0, 1, 2], "r1", "old"));
+      await load;
+      expect(messages.loadedRevision).toBe("r2");
+      expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+      // The overtaken load keeps its stale read-progress token to itself.
+      expect(messages.activeSessionToken).toBe(tokenAfterReload);
+    });
+
+    it("replaces the window rather than merging rows from a new revision", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r1", "old"));
+      await messages.loadSession("s1");
+
+      // A resync rewrote the transcript in place; the new revision has no row 2.
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1], "r2", "new"));
+      await messages.reload();
+
+      expect(messages.loadedRevision).toBe("r2");
+      expect(messages.messages.map((message) => message.content)).toEqual(["new 0", "new 1"]);
+    });
+
+    it("keeps the loaded revision while a refresh is delayed and after it fails", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r1", "old"));
+      await messages.loadSession("s1");
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const delayed = createDeferred<MessagesResponse>();
+      vi.mocked(api.getMessages).mockReturnValueOnce(
+        delayed.promise as ReturnType<typeof api.getMessages>,
+      );
+      const reload = messages.reload();
+      await Promise.resolve();
+      expect(messages.loadedRevision).toBe("r1");
+
+      delayed.reject(new Error("offline"));
+      await reload;
+      expect(messages.loadedRevision).toBe("r1");
+      expect(messages.messages.map((message) => message.content)).toEqual([
+        "old 0",
+        "old 1",
+        "old 2",
+      ]);
+    });
+
+    it("drops an older page from a moved transcript and reloads instead", async () => {
+      const count = 5_000;
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", count));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page(range(4000, 5000).reverse(), "r1"));
+      await messages.loadSession("s1");
+      expect(messages.hasOlder).toBe(true);
+
+      vi.mocked(api.getMessages)
+        .mockRejectedValueOnce(new ApiError(409, "transcript revision does not match"))
+        .mockResolvedValueOnce(page(range(4000, 5000), "r2", "new"))
+        .mockResolvedValueOnce(page([], "r2"));
+      await messages.loadOlder();
+      await vi.waitFor(() => expect(messages.loadedRevision).toBe("r2"));
+
+      expect(vi.mocked(api.getMessages).mock.calls[1]![1]).toMatchObject({
+        from: 3999,
+        expected_revision: "r1",
+      });
+      expect(messages.messages[0]!.ordinal).toBe(4000);
+      expect(messages.messages.every((message) => message.content.startsWith("new"))).toBe(true);
+    });
+
+    it("still reaches a jump target after the transcript moves under it", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 5_000));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page(range(4000, 5000).reverse(), "r1"));
+      await messages.loadSession("s1");
+
+      vi.mocked(api.getMessages)
+        .mockRejectedValueOnce(new ApiError(409, "transcript revision does not match"))
+        .mockResolvedValueOnce(page(range(4000, 5000), "r2"))
+        .mockResolvedValueOnce(page([], "r2"))
+        .mockResolvedValueOnce(page(range(3000, 4000).reverse(), "r2"));
+      await messages.ensureOrdinalLoaded(3500);
+
+      expect(messages.loadedRevision).toBe("r2");
+      expect(messages.messages[0]!.ordinal).toBe(3000);
+      expect(vi.mocked(api.getMessages).mock.calls.at(-1)![1]).toMatchObject({
+        from: 3999,
+        expected_revision: "r2",
+      });
+    });
+
+    it("stops reloading after a few passes that a busy transcript keeps refusing", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 1500));
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r1"))
+        .mockResolvedValueOnce(page(range(1000, 1500), "r1"));
+      await messages.loadSession("s1");
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      // Every refresh sees its first page, then a sync lands before the second.
+      let call = 0;
+      vi.mocked(api.getMessages).mockImplementation(async () => {
+        call++;
+        if (call % 2 === 1) return page(range(0, 1000), `r${call + 1}`);
+        throw new ApiError(409, "transcript revision does not match");
+      });
+      const sessionReads = vi.mocked(api.getSession).mock.calls.length;
+      await messages.reload();
+
+      expect(vi.mocked(api.getSession).mock.calls.length - sessionReads).toBe(3);
+      expect(messages.loadedRevision).toBe("r1");
+      expect(messages.messages).toHaveLength(1500);
+    });
+
+    it("gives a later reload request its own passes after a busy burst used them up", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 1500));
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r1"))
+        .mockResolvedValueOnce(page(range(1000, 1500), "r1"));
+      await messages.loadSession("s1");
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const conflict = () => new ApiError(409, "transcript revision does not match");
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r2"))
+        .mockRejectedValueOnce(conflict())
+        .mockResolvedValueOnce(page(range(0, 1000), "r3"))
+        .mockRejectedValueOnce(conflict())
+        .mockResolvedValueOnce(page(range(0, 1000), "r4"))
+        .mockRejectedValueOnce(conflict());
+      await messages.reload();
+      expect(messages.loadedRevision).toBe("r1");
+
+      // The transcript settles; one more interrupted pass is followed by a clean one.
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page(range(0, 1000), "r5"))
+        .mockRejectedValueOnce(conflict())
+        .mockResolvedValueOnce(page(range(0, 1000), "r6"))
+        .mockResolvedValueOnce(page(range(1000, 1500), "r6"));
+      await messages.reload();
+      expect(messages.loadedRevision).toBe("r6");
+      expect(messages.messages).toHaveLength(1500);
+    });
+
+    it("reloads an empty session without another message read", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 0));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([], "r1"));
+      await messages.loadSession("s1");
+      const messageReads = vi.mocked(api.getMessages).mock.calls.length;
+
+      const reload = messages.reload();
+      await Promise.resolve();
+      expect(messages.loading).toBe(false);
+      await reload;
+
+      expect(vi.mocked(api.getMessages).mock.calls.length).toBe(messageReads);
+      expect(messages.messages).toEqual([]);
+      expect(messages.loading).toBe(false);
+    });
+
+    it("clears rows when an unchanged count hides a transcript emptied under the window", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r1"));
+      await messages.loadSession("s1");
+
+      // The session read still reports three rows, but the transcript empties before the page read.
+      vi.mocked(api.getMessages)
+        .mockResolvedValueOnce(page([], "r2"))
+        .mockResolvedValueOnce(page([], "r2"));
+      await messages.reload();
+
+      expect(messages.messages).toEqual([]);
+      expect(messages.loadedRevision).toBe("r2");
+
+      // The rows come back while the count still matches the stale one.
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r3"));
+      await messages.reload();
+      expect(messages.messages).toHaveLength(3);
+      expect(messages.loadedRevision).toBe("r3");
+    });
+
+    it("clears rows when a full reload finds the session emptied", async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([0, 1, 2], "r1"));
+      await messages.loadSession("s1");
+
+      vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 0));
+      vi.mocked(api.getMessages).mockResolvedValueOnce(page([], "r2"));
+      await messages.reload();
+
+      expect(messages.messages).toEqual([]);
+      expect(messages.loadedRevision).toBe("r2");
+    });
   });
 
   describe("loadOlder abort handling", () => {

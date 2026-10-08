@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -32,7 +31,7 @@ func (s *Store) ListArchiveWorktreeCandidates(
 	for _, session := range sessions {
 		labels[session.project] = struct{}{}
 	}
-	projects, err := s.BuildProjectIdentityMap(ctx, sortedProjectLabels(labels))
+	projects, err := s.BuildProjectIdentityMap(ctx, db.SortedKeys(labels))
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +103,7 @@ func (s *Store) worktreeCandidatesFromSelection(
 		return nil, err
 	}
 	observations, err := s.ListProjectIdentityObservations(
-		ctx, sortedProjectLabels(selectedProjects))
+		ctx, db.SortedKeys(selectedProjects))
 	if err != nil {
 		return nil, err
 	}
@@ -166,15 +165,4 @@ func (s *Store) loadWorktreeCandidateSessions(
 		}
 	}
 	return result, nil
-}
-
-// sortedProjectLabels returns the deterministic, sorted key list of a
-// project-label set, matching internal/db's sortedSetKeys helper.
-func sortedProjectLabels(set map[string]struct{}) []string {
-	keys := make([]string, 0, len(set))
-	for key := range set {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }

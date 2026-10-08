@@ -35,6 +35,7 @@ const (
 	curationFingerprintKeyBase = "agentsview_curation_fingerprint"
 	cursorUsageMaxIDKeyBase    = "agentsview_cursor_usage_max_id"
 	usageSnapshotReadyKeyBase  = "agentsview_usage_snapshot_ready"
+	storedCountRepairKeyBase   = "agentsview_stored_message_count_repair"
 )
 
 // archiveMetadataKey scopes a sync_metadata key to one source archive so
@@ -224,6 +225,7 @@ var mirrorTables = []tableSpec{
 			col("last_message_at", tNullTime),
 			col("agentsview_push_fingerprint", tString),
 			col("source_archive_id", tString),
+			col("stored_message_count", tNullInt),
 		},
 		orderBy: []string{"id"},
 	},
@@ -636,6 +638,15 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 		for _, c := range append(t.columns, col(pushVersionCol, tVersion)) {
 			if _, has := cols[c.name]; !has {
 				missing = append(missing, t.name+"."+c.name)
+			}
+		}
+	}
+	if snapshot, err := usageSessionSnapshotSpec(); err != nil {
+		return err
+	} else if cols, ok := existing[snapshot.name]; ok {
+		for _, c := range snapshot.columns {
+			if _, has := cols[c.name]; !has {
+				missing = append(missing, snapshot.name+"."+c.name)
 			}
 		}
 	}

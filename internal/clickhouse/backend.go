@@ -172,7 +172,7 @@ func (Backend) Status(
 	}
 	rows := []storage.StatusRow{
 		{Label: "Machine:", Value: status.Machine},
-		{Label: "Last push:", Value: valueOrNever(status.LastPushAt)},
+		{Label: "Last push:", Value: db.ValueOrNever(status.LastPushAt)},
 		{Label: "Last push machine:", Value: status.LastPushMachine},
 	}
 	if status.Scope != "" {
@@ -208,13 +208,6 @@ func (Backend) LastPushAt(
 		return "", err
 	}
 	return status.LastPushAt, nil
-}
-
-func valueOrNever(v string) string {
-	if v == "" {
-		return "never"
-	}
-	return v
 }
 
 // VectorGenerations lists the embedding generations pushed to store, oldest

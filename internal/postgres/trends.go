@@ -18,15 +18,8 @@ func (s *Store) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
+	acc := db.NewTrendAccumulator(f.From, f.To, granularity, terms)
 	loc := analyticsLocation(f)
-	buckets := db.TrendBucketRange(f.From, f.To, granularity)
-	bucketIndex := trendBucketIndex(buckets)
-	counts := make([][]int, len(terms))
-	for i := range counts {
-		counts[i] = make([]int, len(buckets))
-	}
-	messageCounts := make([]int, len(buckets))
-
 	sessionFilter := f
 	sessionFilter.From = ""
 	sessionFilter.To = ""
@@ -37,7 +30,7 @@ func (s *Store) GetTrendsTerms(
 	preds := []string{buildAnalyticsWhereWithDate(
 		sessionFilter, "", pb, false, "s.id",
 	)}
-	flt := messageScopeFilter(f)
+	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
 	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
 			COALESCE(m.model, ''), m.content,
@@ -76,22 +69,7 @@ func (s *Store) GetTrendsTerms(
 		if !ok {
 			return
 		}
-		msgDate := msgTime.Format("2006-01-02")
-		if !inDateRange(msgDate, f.From, f.To) {
-			return
-		}
-		bucketDate := db.TrendBucketDate(msgTime, loc, granularity)
-		bucket, ok := bucketIndex[bucketDate]
-		if !ok {
-			return
-		}
-		messageCounts[bucket]++
-		for i, term := range terms {
-			count := db.CountTrendOccurrences(row.content, term)
-			if count > 0 {
-				counts[i][bucket] += count
-			}
-		}
+		acc.Add(row.content, msgTime)
 	}
 	rowStartedAt := make(map[string]string)
 	rowCreatedAt := make(map[string]string)
@@ -145,9 +123,7 @@ func (s *Store) GetTrendsTerms(
 		return db.TrendsTermsResponse{}, fmt.Errorf("iterating trends term rows: %w", err)
 	}
 
-	return db.BuildTrendsTermsResponse(
-		f.From, f.To, granularity, buckets, terms, counts, messageCounts,
-	), nil
+	return acc.Response(), nil
 }
 
 func trendMessageLocalTime(
@@ -157,17 +133,9 @@ func trendMessageLocalTime(
 	loc *time.Location,
 ) (time.Time, bool) {
 	for _, ts := range []string{messageTS, startedAt, createdAt} {
-		if t, ok := localTime(ts, loc); ok {
+		if t, ok := db.LocalTime(ts, loc); ok {
 			return t, true
 		}
 	}
 	return time.Time{}, false
-}
-
-func trendBucketIndex(buckets []db.TrendBucket) map[string]int {
-	index := make(map[string]int, len(buckets))
-	for i, bucket := range buckets {
-		index[bucket.Date] = i
-	}
-	return index
 }

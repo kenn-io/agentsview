@@ -66,6 +66,7 @@ func (s *Sync) PushWithOptions(
 		s.archiveKey(identityRevisionKeyBase),
 		s.archiveKey(mappingRevisionKeyBase),
 		s.archiveKey(usageSnapshotReadyKeyBase),
+		s.archiveKey(storedCountRepairKeyBase),
 	)
 	if err != nil {
 		return result, err
@@ -79,6 +80,26 @@ func (s *Sync) PushWithOptions(
 	full, reason := s.decideFull(opts, storedCutoff, storedScope)
 	if !full && meta[s.archiveKey(usageSnapshotReadyKeyBase)] == "" {
 		full, reason = true, "preparing complete usage snapshots"
+	}
+	// Rows from before stored_message_count, or from an older writer, read as unknown until a full push republishes them.
+	repairing := meta[s.archiveKey(storedCountRepairKeyBase)] != ""
+	if !repairing {
+		var unknown uint64
+		if err := conn.QueryRowContext(ctx,
+			"SELECT count() FROM sessions WHERE source_archive_id = ? AND stored_message_count IS NULL", s.archiveID,
+		).Scan(&unknown); err != nil {
+			return result, fmt.Errorf("reading clickhouse sessions without stored message counts: %w", err)
+		}
+		if unknown > 0 {
+			// Republishing fills the NULLs before every session lands, so keep repairing until a push finishes cleanly.
+			if err := writeMetadata(ctx, conn, map[string]string{s.archiveKey(storedCountRepairKeyBase): "1"}); err != nil {
+				return result, err
+			}
+			repairing = true
+		}
+	}
+	if !full && repairing {
+		full, reason = true, "publishing stored message counts"
 	}
 	localDeletion, err := s.local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
@@ -205,6 +226,9 @@ func (s *Sync) PushWithOptions(
 			}
 			pushed[s.archiveKey(usageSnapshotReadyKeyBase)] = completed
 		}
+		if repairing {
+			pushed[s.archiveKey(storedCountRepairKeyBase)] = ""
+		}
 		if err := writeMetadata(ctx, conn, pushed); err != nil {
 			return result, err
 		}
@@ -243,20 +267,13 @@ func (s *Sync) partitionPushScope(candidates []db.Session) (inScope, outOfScope 
 		return candidates, nil
 	}
 	for _, sess := range candidates {
-		if projectMatchesPushScope(sess.Project, s.projects, s.excludeProjects) {
+		if db.ProjectMatchesPushScope(sess.Project, s.projects, s.excludeProjects) {
 			inScope = append(inScope, sess)
 		} else {
 			outOfScope = append(outOfScope, sess)
 		}
 	}
 	return inScope, outOfScope
-}
-
-func projectMatchesPushScope(project string, projects, excludeProjects []string) bool {
-	if len(projects) > 0 && !slices.Contains(projects, project) {
-		return false
-	}
-	return !slices.Contains(excludeProjects, project)
 }
 
 func sessionIDs(sessions []db.Session) []string {
@@ -449,7 +466,7 @@ func (s *Sync) applyDeletionDelta(ctx context.Context, after, through int64, res
 		if t.SessionID == "" {
 			continue
 		}
-		if projectMatchesPushScope(t.Project, s.projects, s.excludeProjects) {
+		if db.ProjectMatchesPushScope(t.Project, s.projects, s.excludeProjects) {
 			inScope = append(inScope, t.SessionID)
 		} else {
 			outOfScope = append(outOfScope, t.SessionID)
@@ -585,7 +602,7 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 	if snapshot == nil {
 		return sessionPayload{}, fmt.Errorf("session %s was removed before its snapshot was loaded", sess.ID)
 	}
-	if !projectMatchesPushScope(snapshot.Session.Project, s.projects, s.excludeProjects) {
+	if !db.ProjectMatchesPushScope(snapshot.Session.Project, s.projects, s.excludeProjects) {
 		return sessionPayload{}, fmt.Errorf("session %s moved outside the push scope before its snapshot was loaded", sess.ID)
 	}
 	fingerprint, err := s.snapshotFingerprint(snapshot)
@@ -767,27 +784,18 @@ func insertSQL(spec tableSpec) string {
 	return "INSERT INTO " + spec.name + " (" + strings.Join(names, ", ") + ")"
 }
 
-// mirroredSessionMachine keeps the recorded machine key except for the
-// local-only sentinels, which take the machine configured for this push.
-func mirroredSessionMachine(sess db.Session, fallback string) string {
-	if sess.Machine != "" && sess.Machine != "local" {
-		return sess.Machine
-	}
-	return fallback
-}
-
 func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) []any {
 	sess := p.session
 	return []any{
 		sess.ID, sess.Project, sess.ProjectAssigned,
-		mirroredSessionMachine(sess, s.machine), sess.Agent,
+		db.MirroredSessionMachine(sess, s.machine), sess.Agent,
 		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
 		nullString(sess.FirstMessage), nullString(sess.DisplayName), nullString(sess.SessionName),
 		nullTime(sess.StartedAt), nullTime(sess.EndedAt),
 		int64(sess.MessageCount), int64(sess.UserMessageCount),
 		nullString(sess.FilePath), nullInt64(sess.FileSize), nullInt64(sess.FileMtime),
 		nullInt64(sess.FileInode), nullInt64(sess.FileDevice), nullString(sess.FileHash),
-		nullTime(sess.LocalModifiedAt), transcriptRevisionValue(sess.TranscriptRevision),
+		nullTime(sess.LocalModifiedAt), db.TranscriptRevisionValue(sess.TranscriptRevision),
 		nullString(sess.ParentSessionID), sess.RelationshipType,
 		int64(sess.TotalOutputTokens), int64(sess.PeakContextTokens),
 		sess.HasTotalOutputTokens, sess.HasPeakContextTokens, sess.IsAutomated,
@@ -808,7 +816,7 @@ func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) 
 		nullString(sess.TerminationStatus),
 		int64(sess.SecretLeakCount), sess.SecretsRulesVersion,
 		lastMessageAt(p.messages), fingerprint, s.archiveID,
-		version,
+		int64(len(p.messages)), version,
 	}
 }
 
@@ -916,13 +924,6 @@ func nullIntPtr(v *int) *int64 {
 	}
 	n := int64(*v)
 	return &n
-}
-
-func transcriptRevisionValue(v *string) string {
-	if v == nil || *v == "" {
-		return "0"
-	}
-	return *v
 }
 
 func nullTime(v *string) *time.Time {

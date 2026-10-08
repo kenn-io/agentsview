@@ -955,25 +955,6 @@ func copyArtifactCheckpointLandings(ctx context.Context, tx *sql.Tx) error {
 	if !oldDBHasTable(ctx, tx, "artifact_checkpoint_landings") {
 		return nil
 	}
-	oldHasLandingSessions := oldDBHasTable(
-		ctx, tx, "artifact_checkpoint_landing_sessions",
-	)
-	if !oldHasLandingSessions {
-		var landings int
-		if err := tx.QueryRowContext(ctx, `
-			SELECT count(*) FROM old_db.artifact_checkpoint_landings`,
-		).Scan(&landings); err != nil {
-			return fmt.Errorf(
-				"checking copied artifact checkpoint landing maps: %w", err,
-			)
-		}
-		if landings > 0 {
-			return fmt.Errorf(
-				"%w: copied artifact checkpoint landing map is unavailable",
-				ErrArtifactImportConflict,
-			)
-		}
-	}
 	var conflicts int
 	err := tx.QueryRowContext(ctx, `
 		SELECT count(*)
@@ -993,62 +974,6 @@ func copyArtifactCheckpointLandings(ctx context.Context, tx *sql.Tx) error {
 			ErrArtifactImportConflict,
 		)
 	}
-	if oldHasLandingSessions {
-		err = tx.QueryRowContext(ctx, `
-			SELECT count(*)
-			FROM old_db.artifact_checkpoint_landings old
-			JOIN main.artifact_checkpoint_landings current
-			  ON current.origin = old.origin
-			 AND current.sequence = old.sequence
-			 AND current.checkpoint_sha256 = old.checkpoint_sha256
-			 AND current.checkpoint_size = old.checkpoint_size
-			WHERE EXISTS (
-				SELECT gid, manifest_hash
-				FROM old_db.artifact_checkpoint_landing_sessions
-				WHERE origin = old.origin
-				EXCEPT
-				SELECT gid, manifest_hash
-				FROM main.artifact_checkpoint_landing_sessions
-				WHERE origin = old.origin
-			)
-			OR EXISTS (
-				SELECT gid, manifest_hash
-				FROM main.artifact_checkpoint_landing_sessions
-				WHERE origin = old.origin
-				EXCEPT
-				SELECT gid, manifest_hash
-				FROM old_db.artifact_checkpoint_landing_sessions
-				WHERE origin = old.origin
-			)`,
-		).Scan(&conflicts)
-		if err != nil {
-			return fmt.Errorf(
-				"checking copied artifact checkpoint landing maps: %w", err,
-			)
-		}
-		if conflicts > 0 {
-			return fmt.Errorf(
-				"%w: copied artifact checkpoint landing map changed",
-				ErrArtifactImportConflict,
-			)
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `
-		CREATE TEMP TABLE _artifact_import_replaced_landings AS
-		SELECT old.origin
-		FROM old_db.artifact_checkpoint_landings old
-		LEFT JOIN main.artifact_checkpoint_landings current
-		  ON current.origin = old.origin
-		WHERE current.origin IS NULL OR old.sequence > current.sequence`,
-	); err != nil {
-		return fmt.Errorf("selecting copied artifact checkpoint landings: %w", err)
-	}
-	defer func() {
-		_, _ = tx.ExecContext(
-			context.WithoutCancel(ctx),
-			"DROP TABLE IF EXISTS _artifact_import_replaced_landings",
-		)
-	}()
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO main.artifact_checkpoint_landings (
 			origin, sequence, checkpoint_sha256, checkpoint_size
@@ -1062,27 +987,6 @@ func copyArtifactCheckpointLandings(ctx context.Context, tx *sql.Tx) error {
 		WHERE excluded.sequence > artifact_checkpoint_landings.sequence`)
 	if err != nil {
 		return fmt.Errorf("copying artifact checkpoint landings: %w", err)
-	}
-	if oldHasLandingSessions {
-		_, err = tx.ExecContext(ctx, `
-			DELETE FROM main.artifact_checkpoint_landing_sessions
-			WHERE origin IN (
-				SELECT origin FROM _artifact_import_replaced_landings
-			)`)
-		if err != nil {
-			return fmt.Errorf("clearing copied artifact landing maps: %w", err)
-		}
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO main.artifact_checkpoint_landing_sessions (
-				origin, gid, manifest_hash
-			)
-			SELECT sessions.origin, sessions.gid, sessions.manifest_hash
-			FROM old_db.artifact_checkpoint_landing_sessions sessions
-			JOIN _artifact_import_replaced_landings replaced
-			  ON replaced.origin = sessions.origin`)
-		if err != nil {
-			return fmt.Errorf("copying artifact checkpoint landing maps: %w", err)
-		}
 	}
 	return nil
 }

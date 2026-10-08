@@ -19,6 +19,7 @@ filter:
       - get-api-v1-sessions
       - get-api-v1-sessions-id-messages
       - get-api-v1-sessions-id-tool-calls
+      - get-api-v1-sessions-id-tool-sequences
       - post-api-v1-sessions-sync
       - get-api-v1-sessions-id-watch
       - get-api-v1-session-stats

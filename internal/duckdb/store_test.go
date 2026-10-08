@@ -999,15 +999,15 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 	require.NoError(t, err)
 
 	assert.NotContains(t, got, "gpt-5.5")
-	assert.Equal(t, duckRates{
-		input: money.MustParseDollars("30"), output: money.MustParseDollars("150"), cacheCreation: money.MustParseDollars("37.5"), cacheRead: money.MustParseDollars("3"),
-		updatedAt: ptrTime(t, "2026-06-08T12:00:00Z"),
-		source:    export.PricingRowSourceFetched,
+	assert.Equal(t, export.ModelRates{
+		InputPerMTok: money.MustParseDollars("30"), OutputPerMTok: money.MustParseDollars("150"), CacheWritePerMTok: money.MustParseDollars("37.5"), CacheReadPerMTok: money.MustParseDollars("3"),
+		UpdatedAt: ptrTime(t, "2026-06-08T12:00:00Z"),
+		Source:    export.PricingRowSourceFetched,
 	}, got["claude-sonnet-4-6"])
 	assert.NotContains(t, got, "_fallback_version")
-	assert.Equal(t, duckRates{
-		input: money.MustParseDollars("9"), output: money.MustParseDollars("10"), cacheCreation: money.MustParseDollars("11"), cacheRead: money.MustParseDollars("12"),
-		source: export.PricingRowSourceCustom,
+	assert.Equal(t, export.ModelRates{
+		InputPerMTok: money.MustParseDollars("9"), OutputPerMTok: money.MustParseDollars("10"), CacheWritePerMTok: money.MustParseDollars("11"), CacheReadPerMTok: money.MustParseDollars("12"),
+		Source: export.PricingRowSourceCustom,
 	}, got["custom-model"])
 }
 
@@ -1156,10 +1156,10 @@ func TestLoadPricingUsesFallbackWhenEffectiveTableEmpty(t *testing.T) {
 
 	fallback := pricingByPattern(t, pricingpkg.FallbackPricing(), "gpt-5.5")
 	require.Contains(t, got, "gpt-5.5")
-	assert.Equal(t, fallback.InputPerMTok, got["gpt-5.5"].input)
-	assert.Equal(t, fallback.OutputPerMTok, got["gpt-5.5"].output)
-	assert.Equal(t, export.PricingRowSourceEmbedded, got["gpt-5.5"].source)
-	assert.Equal(t, duckCatalogPricingBands(fallback.Bands), got["gpt-5.5"].bands)
+	assert.Equal(t, fallback.InputPerMTok, got["gpt-5.5"].InputPerMTok)
+	assert.Equal(t, fallback.OutputPerMTok, got["gpt-5.5"].OutputPerMTok)
+	assert.Equal(t, export.PricingRowSourceEmbedded, got["gpt-5.5"].Source)
+	assert.Equal(t, db.FallbackRateMap()["gpt-5.5"].Bands, got["gpt-5.5"].Bands)
 }
 
 func TestLoadPricingClassifiesBandOnlyFallbackMismatchAsFetched(t *testing.T) {
@@ -1188,7 +1188,7 @@ func TestLoadPricingClassifiesBandOnlyFallbackMismatchAsFetched(t *testing.T) {
 
 	got, err := store.loadPricing(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, export.PricingRowSourceFetched, got["gpt-5.5"].source)
+	assert.Equal(t, export.PricingRowSourceFetched, got["gpt-5.5"].Source)
 }
 
 func TestLoadPricingRetainsCustomOverrideSource(t *testing.T) {
@@ -1208,8 +1208,8 @@ func TestLoadPricingRetainsCustomOverrideSource(t *testing.T) {
 
 	got, err := store.loadPricing(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, got["gpt-5.5"].bands)
-	block, err := export.NewPricingResolver(duckPricingRows(got)).BuildBlock()
+	assert.Empty(t, got["gpt-5.5"].Bands)
+	block, err := export.NewPricingResolver(db.MirrorPricingRows(got)).BuildBlock()
 	require.NoError(t, err)
 
 	assert.Equal(t, "custom+embedded", block.Source)

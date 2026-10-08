@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -50,30 +50,8 @@ func (s *Store) ListProjectIdentityObservations(
 	if err != nil {
 		return nil, err
 	}
-	sortProjectIdentityObservations(out)
+	db.SortProjectIdentityObservations(out)
 	return out, nil
-}
-
-// sortProjectIdentityObservations restores the documented
-// (source_archive_id, project, machine, root_path, git_remote) ordering
-// after chunked queries are concatenated.
-func sortProjectIdentityObservations(obs []export.ProjectIdentityObservation) {
-	sort.SliceStable(obs, func(i, j int) bool {
-		a, b := obs[i], obs[j]
-		if a.SourceArchiveID != b.SourceArchiveID {
-			return a.SourceArchiveID < b.SourceArchiveID
-		}
-		if a.Project != b.Project {
-			return a.Project < b.Project
-		}
-		if a.Machine != b.Machine {
-			return a.Machine < b.Machine
-		}
-		if a.RootPath != b.RootPath {
-			return a.RootPath < b.RootPath
-		}
-		return a.GitRemote < b.GitRemote
-	})
 }
 
 // listProjectIdentityObservationsChunk runs one observation query for a
@@ -202,34 +180,7 @@ func (s *Store) sourceArchiveIdentityScope(
 		return scopes[0], nil
 	}
 	if len(scopes) == 0 {
-		return observationIdentityScope(observations), nil
+		return db.ObservationIdentityScope(observations), nil
 	}
 	return export.AggregateIdentityScope(scopes), nil
-}
-
-func observationIdentityScope(
-	observations []export.ProjectIdentityObservation,
-) export.IdentityScope {
-	unique := make(map[string]export.IdentityScope)
-	for _, obs := range observations {
-		scope := export.IdentityScope{
-			ArchiveID:   strings.TrimSpace(obs.SourceArchiveID),
-			ArchiveSalt: strings.TrimSpace(obs.SourceArchiveSalt),
-		}
-		if scope.ArchiveID == "" || scope.ArchiveSalt == "" {
-			continue
-		}
-		unique[scope.ArchiveID+"\x00"+scope.ArchiveSalt] = scope
-	}
-	if len(unique) == 0 {
-		return export.LegacySharedStoreIdentityScope()
-	}
-	scopes := make([]export.IdentityScope, 0, len(unique))
-	for _, scope := range unique {
-		scopes = append(scopes, scope)
-	}
-	if len(scopes) == 1 {
-		return scopes[0]
-	}
-	return export.AggregateIdentityScope(scopes)
 }

@@ -3,10 +3,8 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -151,33 +149,7 @@ func (s *Sync) isFiltered() bool {
 }
 
 func (s *Sync) scopeString() string {
-	return canonicalPushScope(s.projects, s.excludeProjects)
-}
-
-// canonicalPushScope renders the project filters so a scope change is
-// detectable across pushes. Unfiltered is the empty string.
-func canonicalPushScope(projects, excludeProjects []string) string {
-	if len(projects) == 0 && len(excludeProjects) == 0 {
-		return ""
-	}
-	scope := struct {
-		Projects []string `json:"projects,omitempty"`
-		Exclude  []string `json:"exclude,omitempty"`
-	}{Projects: sortedCopy(projects), Exclude: sortedCopy(excludeProjects)}
-	data, err := json.Marshal(scope)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-func sortedCopy(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	out := append([]string(nil), values...)
-	sort.Strings(out)
-	return out
+	return db.CanonicalPushScope(s.projects, s.excludeProjects)
 }
 
 // Status reads this archive's push state and the mirror's row counts.

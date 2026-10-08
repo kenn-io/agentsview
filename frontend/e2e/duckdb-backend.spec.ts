@@ -13,8 +13,8 @@ test.describe("DuckDB backend", () => {
 
     const sp = new SessionsPage(page);
     await sp.goto();
-    await expect(sp.sessionItems).toHaveCount(12);
-    await expect(sp.sessionListHeader).toContainText("12 sessions");
+    await expect(sp.sessionItems).toHaveCount(13);
+    await expect(sp.sessionListHeader).toContainText("13 sessions");
   });
 
   // Listing sessions exercises none of the message path, which is how

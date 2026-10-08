@@ -4,23 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/export"
 )
-
-// projectInventoryAgg mirrors internal/db's per-project aggregate over
-// visible (non-deleted) sessions, before display-label sanitization.
-type projectInventoryAgg struct {
-	sessions     int
-	machines     int
-	agents       int
-	distinctCwds int
-	first        *time.Time
-	last         *time.Time
-}
 
 // GetProjectInventory aggregates every visible session across every source
 // archive mirrored into this ClickHouse store into a per-project inventory,
@@ -46,8 +33,8 @@ func (s *Store) GetProjectInventory(ctx context.Context, filter db.ProjectDateFi
 	if err != nil {
 		return db.ProjectInventory{}, err
 	}
-	rows, totalSessions := buildProjectInventoryRows(agg, rawProjects, projects)
-	annotateProjectInventoryRows(rows, mappings, eval, projects)
+	rows, totalSessions := db.BuildProjectInventoryRows(agg, rawProjects, projects)
+	db.AnnotateProjectInventoryRows(rows, mappings, eval, projects)
 
 	return db.ProjectInventory{
 		Projects:         rows,
@@ -65,7 +52,7 @@ func (s *Store) GetProjectInventory(ctx context.Context, filter db.ProjectDateFi
 func (s *Store) projectInventoryAggregate(
 	ctx context.Context,
 	filter db.ProjectDateFilter,
-) (map[string]projectInventoryAgg, error) {
+) (map[string]db.ProjectInventoryAgg, error) {
 	where, args := db.BuildSessionBaseFilterSQL(filter.SessionFilter(), db.ClickHouseQueryDialect())
 	rows, err := s.queryContext(ctx, `
 		SELECT project,
@@ -85,22 +72,22 @@ func (s *Store) projectInventoryAggregate(
 	}
 	defer rows.Close()
 
-	out := map[string]projectInventoryAgg{}
+	out := map[string]db.ProjectInventoryAgg{}
 	for rows.Next() {
 		var project string
-		var agg projectInventoryAgg
+		var agg db.ProjectInventoryAgg
 		var first, last any
 		if err := rows.Scan(
-			&project, &agg.sessions, &agg.machines, &agg.agents,
-			&agg.distinctCwds, &first, &last,
+			&project, &agg.Sessions, &agg.Machines, &agg.Agents,
+			&agg.DistinctCwds, &first, &last,
 		); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse project inventory row: %w", err)
 		}
-		agg.first, err = parseClickInventoryTime(first)
+		agg.First, err = parseClickInventoryTime(first)
 		if err != nil {
 			return nil, fmt.Errorf("parsing clickhouse project inventory first activity: %w", err)
 		}
-		agg.last, err = parseClickInventoryTime(last)
+		agg.Last, err = parseClickInventoryTime(last)
 		if err != nil {
 			return nil, fmt.Errorf("parsing clickhouse project inventory last activity: %w", err)
 		}
@@ -124,53 +111,6 @@ func parseClickInventoryTime(v any) (*time.Time, error) {
 		return nil, err
 	}
 	return &t, nil
-}
-
-// buildProjectInventoryRows groups raw labels by opaque project key. Mirrors
-// internal/db.buildProjectInventoryRows exactly.
-func buildProjectInventoryRows(
-	agg map[string]projectInventoryAgg,
-	rawProjects []string,
-	projects map[string]export.ProjectMapEntry,
-) ([]db.ProjectInventoryRow, int) {
-	sort.Strings(rawProjects)
-
-	byKey := map[string]*db.ProjectInventoryRow{}
-	totalSessions := 0
-	for _, project := range rawProjects {
-		a := agg[project]
-		totalSessions += a.sessions
-		label := export.SafeProjectDisplayLabel(project)
-		projectKey := export.ProjectKeyForEntry(projects[project])
-		row, ok := byKey[projectKey]
-		if !ok {
-			row = &db.ProjectInventoryRow{
-				Label:      label,
-				ProjectKey: projectKey,
-			}
-			byKey[projectKey] = row
-		} else if row.Label == "" && label != "" {
-			row.Label = label
-		}
-		row.Sessions += a.sessions
-		row.Machines += a.machines
-		row.Agents += a.agents
-		row.DistinctCwds += a.distinctCwds
-		row.FirstActivity = minTimePtr(row.FirstActivity, a.first)
-		row.LastActivity = maxTimePtr(row.LastActivity, a.last)
-	}
-
-	rowList := make([]db.ProjectInventoryRow, 0, len(byKey))
-	for _, row := range byKey {
-		rowList = append(rowList, *row)
-	}
-	sort.Slice(rowList, func(i, j int) bool {
-		if rowList[i].Label != rowList[j].Label {
-			return rowList[i].Label < rowList[j].Label
-		}
-		return rowList[i].ProjectKey < rowList[j].ProjectKey
-	})
-	return rowList, totalSessions
 }
 
 // projectInventoryGovernance loads every worktree mapping rule (enabled and
@@ -376,71 +316,4 @@ func (s *Store) projectInventoryCandidateRows(
 			"iterating clickhouse project inventory candidate sessions: %w", err)
 	}
 	return out, nil
-}
-
-// annotateProjectInventoryRows sets EnabledRulesTargeting and
-// RecordedAsOriginal on rows in place, keyed by opaque project identity.
-// Mirrors internal/db.annotateProjectInventoryRows exactly; mappings is
-// already scoped to in-scope source archives by the caller.
-func annotateProjectInventoryRows(
-	rows []db.ProjectInventoryRow,
-	mappings []db.WorktreeProjectMapping,
-	eval db.GovernedEvaluation,
-	projects map[string]export.ProjectMapEntry,
-) {
-	byKey := make(map[string]*db.ProjectInventoryRow, len(rows))
-	byLabel := make(map[string][]*db.ProjectInventoryRow, len(rows))
-	for i := range rows {
-		row := &rows[i]
-		byKey[row.ProjectKey] = row
-		byLabel[row.Label] = append(byLabel[row.Label], row)
-	}
-	rowForProject := func(project string) *db.ProjectInventoryRow {
-		key := export.ProjectKeyForEntry(projects[project])
-		return byKey[key]
-	}
-
-	for _, m := range mappings {
-		if m.Enabled && m.Layout != db.WorktreeMappingLayoutRepoDotWorktrees && m.Project != "" {
-			if row := rowForProject(m.Project); row != nil {
-				row.EnabledRulesTargeting++
-			}
-		}
-		if m.OriginalProject != "" {
-			if matches := byLabel[m.OriginalProject]; len(matches) == 1 {
-				matches[0].RecordedAsOriginal = true
-			}
-		}
-	}
-	for project, rules := range eval.DynamicLabelRules {
-		if row := rowForProject(project); row != nil {
-			row.EnabledRulesTargeting += len(rules)
-		}
-	}
-}
-
-func minTimePtr(a, b *time.Time) *time.Time {
-	if a == nil {
-		return b
-	}
-	if b == nil {
-		return a
-	}
-	if b.Before(*a) {
-		return b
-	}
-	return a
-}
-
-func maxTimePtr(a, b *time.Time) *time.Time {
-	if a == nil {
-		return b
-	}
-	if b == nil {
-		return a
-	}
-	if b.After(*a) {
-		return b
-	}
-	return a
 }

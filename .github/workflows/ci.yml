@@ -175,6 +175,9 @@ jobs:
 
       - name: Install docs check tools
         run: |
+          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
+            -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
+            -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
           sudo apt-get update
           sudo apt-get install -y ripgrep
 
@@ -757,7 +760,11 @@ jobs:
           cache: playwright
 
       - name: Install Playwright browsers and system dependencies
-        run: npx playwright install --with-deps chromium webkit
+        run: |
+          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
+            -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
+            -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
+          npx playwright install --with-deps chromium webkit
         working-directory: frontend
 
       - name: Run E2E tests

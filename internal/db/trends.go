@@ -55,15 +55,8 @@ func (db *DB) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
+	acc := NewTrendAccumulator(f.From, f.To, granularity, terms)
 	loc := f.location()
-	buckets := TrendBucketRange(f.From, f.To, granularity)
-	bucketIndex := trendBucketIndex(buckets)
-	counts := make([][]int, len(terms))
-	for i := range counts {
-		counts[i] = make([]int, len(buckets))
-	}
-	messageCounts := make([]int, len(buckets))
-
 	sessionFilter := f
 	sessionFilter.From = ""
 	sessionFilter.To = ""
@@ -71,7 +64,7 @@ func (db *DB) GetTrendsTerms(
 	sessionFilter.Hour = nil
 	sessionFilter.Model = ""
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
-	flt := f.messageScopeFilter()
+	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
 	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
 			COALESCE(m.model, ''), m.content, COALESCE(m.timestamp, ''),
@@ -105,22 +98,7 @@ func (db *DB) GetTrendsTerms(
 		if !ok {
 			return
 		}
-		msgDate := msgTime.Format("2006-01-02")
-		if !inDateRange(msgDate, f.From, f.To) {
-			return
-		}
-		bucketDate := trendBucketDate(msgTime, loc, granularity)
-		bucket, ok := bucketIndex[bucketDate]
-		if !ok {
-			return
-		}
-		messageCounts[bucket]++
-		for i, term := range terms {
-			count := countTrendOccurrences(row.content, term)
-			if count > 0 {
-				counts[i][bucket] += count
-			}
-		}
+		acc.Add(row.content, msgTime)
 	}
 	rowStartedAt := make(map[string]string)
 	rowCreatedAt := make(map[string]string)
@@ -175,9 +153,63 @@ func (db *DB) GetTrendsTerms(
 		return TrendsTermsResponse{}, fmt.Errorf("iterating trends term rows: %w", err)
 	}
 
+	return acc.Response(), nil
+}
+
+// TrendAccumulator counts term occurrences per trend bucket. Backends feed it
+// messages with their local timestamps; it owns date filtering and bucketing.
+type TrendAccumulator struct {
+	from, to, granularity string
+	terms                 []TrendTermInput
+	buckets               []TrendBucket
+	index                 map[string]int
+	counts                [][]int
+	messageCounts         []int
+}
+
+// NewTrendAccumulator returns an accumulator for the buckets spanning
+// [from, to] at the given granularity.
+func NewTrendAccumulator(
+	from, to, granularity string, terms []TrendTermInput,
+) *TrendAccumulator {
+	buckets := TrendBucketRange(from, to, granularity)
+	counts := make([][]int, len(terms))
+	for i := range counts {
+		counts[i] = make([]int, len(buckets))
+	}
+	return &TrendAccumulator{
+		from:          from,
+		to:            to,
+		granularity:   granularity,
+		terms:         terms,
+		buckets:       buckets,
+		index:         trendBucketIndex(buckets),
+		counts:        counts,
+		messageCounts: make([]int, len(buckets)),
+	}
+}
+
+// Add counts content in the bucket holding local's calendar date. Messages
+// whose local date falls outside [from, to] are ignored.
+func (a *TrendAccumulator) Add(content string, local time.Time) {
+	if !InDateRange(local.Format("2006-01-02"), a.from, a.to) {
+		return
+	}
+	bucket, ok := a.index[TrendBucketDate(local, local.Location(), a.granularity)]
+	if !ok {
+		return
+	}
+	a.messageCounts[bucket]++
+	for i, term := range a.terms {
+		a.counts[i][bucket] += CountTrendOccurrences(content, term)
+	}
+}
+
+// Response builds the trends response from the accumulated counts.
+func (a *TrendAccumulator) Response() TrendsTermsResponse {
 	return BuildTrendsTermsResponse(
-		f.From, f.To, granularity, buckets, terms, counts, messageCounts,
-	), nil
+		a.from, a.to, a.granularity, a.buckets, a.terms, a.counts, a.messageCounts,
+	)
 }
 
 func ParseTrendTerms(values []string) ([]TrendTermInput, error) {
@@ -281,10 +313,6 @@ type matchSpan struct {
 	end   int
 }
 
-func countTrendOccurrences(text string, term TrendTermInput) int {
-	return CountTrendOccurrences(text, term)
-}
-
 func CountTrendOccurrences(text string, term TrendTermInput) int {
 	spans := make([]matchSpan, 0)
 	for _, matcher := range term.Matchers {
@@ -381,38 +409,29 @@ func trendMessageLocalTime(
 	loc *time.Location,
 ) (time.Time, bool) {
 	for _, ts := range []string{messageTS, startedAt, createdAt} {
-		if t, ok := localTime(ts, loc); ok {
+		if t, ok := LocalTime(ts, loc); ok {
 			return t, true
 		}
 	}
 	return time.Time{}, false
 }
 
-func trendBucketDate(t time.Time, loc *time.Location, granularity string) string {
-	return TrendBucketDate(t, loc, granularity)
-}
-
 func TrendBucketDate(t time.Time, loc *time.Location, granularity string) string {
 	local := t.In(loc)
+	// Calendar math runs in UTC because local midnight does not exist on some
+	// DST transition days, and time.Date would move it to the previous day.
+	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
 	switch granularity {
 	case "week":
-		weekday := int(local.Weekday())
+		weekday := int(day.Weekday())
 		if weekday == 0 {
 			weekday = 7
 		}
-		start := local.AddDate(0, 0, -(weekday - 1))
-		return time.Date(
-			start.Year(), start.Month(), start.Day(),
-			0, 0, 0, 0, loc,
-		).Format("2006-01-02")
+		day = day.AddDate(0, 0, -(weekday - 1))
 	case "month":
-		return time.Date(
-			local.Year(), local.Month(), 1,
-			0, 0, 0, 0, loc,
-		).Format("2006-01-02")
-	default:
-		return local.Format("2006-01-02")
+		day = day.AddDate(0, 0, 1-day.Day())
 	}
+	return day.Format("2006-01-02")
 }
 
 func TrendBucketRange(from, to, granularity string) []TrendBucket {
@@ -427,8 +446,8 @@ func TrendBucketRange(from, to, granularity string) []TrendBucket {
 	if err != nil {
 		return nil
 	}
-	startDate := trendBucketDate(start, time.UTC, granularity)
-	endDate := trendBucketDate(end, time.UTC, granularity)
+	startDate := TrendBucketDate(start, time.UTC, granularity)
+	endDate := TrendBucketDate(end, time.UTC, granularity)
 	cur, err := time.Parse("2006-01-02", startDate)
 	if err != nil {
 		return nil

@@ -466,7 +466,7 @@ func (db *DB) loadSessionsInWindow(
 	}
 
 	if f.Agent != "" {
-		agents := csvFilterValues(f.Agent)
+		agents := CSVFilterValues(f.Agent)
 		if len(agents) == 1 {
 			preds = append(preds, "agent = ?")
 			args = append(args, agents[0])

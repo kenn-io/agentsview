@@ -1052,7 +1052,7 @@ func TestGetSessionStats_Velocity(t *testing.T) {
 	require.NoError(t, err, "GetSessionStats")
 
 	// Turn cycle seconds, sorted = [5,10,15,20,30].
-	// percentileFloat: P50 idx=int(5*0.5)=2 → 15, P90 idx=4 → 30.
+	// PercentileFloat: P50 idx=int(5*0.5)=2 → 15, P90 idx=4 → 30.
 	// Mean = (5+10+15+20+30)/5 = 16.
 	tc := stats.Velocity.TurnCycleSeconds
 	assert.InDelta(t, 15.0, tc.P50, 0, "TurnCycleSeconds.P50")
@@ -1061,7 +1061,7 @@ func TestGetSessionStats_Velocity(t *testing.T) {
 		"TurnCycleSeconds.Mean")
 
 	// First response seconds, sorted = [10,30].
-	// percentileFloat: P50 idx=int(2*0.5)=1 → 30, P90 idx=1 → 30.
+	// PercentileFloat: P50 idx=int(2*0.5)=1 → 30, P90 idx=1 → 30.
 	// Mean = (10+30)/2 = 20.
 	fr := stats.Velocity.FirstResponseSeconds
 	assert.InDelta(t, 30.0, fr.P50, 0, "FirstResponseSeconds.P50")

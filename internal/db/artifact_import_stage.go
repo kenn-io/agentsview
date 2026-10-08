@@ -757,32 +757,6 @@ func (db *DB) PruneArtifactCheckpointStages(
 		}
 		removed += int(headers64)
 	}
-	if remaining := limit - removed; remaining > 0 {
-		result, err = tx.ExecContext(ctx, `
-			DELETE FROM artifact_checkpoint_landing_sessions
-			WHERE rowid IN (
-				SELECT legacy.rowid
-				FROM artifact_checkpoint_landing_sessions legacy
-				JOIN artifact_checkpoint_landings landing
-				  ON landing.origin = legacy.origin
-				JOIN artifact_checkpoint_stages stage
-				  ON stage.origin = landing.origin
-				 AND stage.sequence = landing.sequence
-				 AND stage.checkpoint_sha256 = landing.checkpoint_sha256
-				 AND stage.checkpoint_size = landing.checkpoint_size
-				 AND stage.complete = 1
-				ORDER BY legacy.origin, legacy.gid
-				LIMIT ?
-			)`, remaining)
-		if err != nil {
-			return 0, false, fmt.Errorf("pruning legacy artifact landing sessions: %w", err)
-		}
-		legacy64, rowsErr := result.RowsAffected()
-		if rowsErr != nil {
-			return 0, false, fmt.Errorf("reading legacy artifact landing prune: %w", rowsErr)
-		}
-		removed += int(legacy64)
-	}
 	var more int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (
@@ -799,18 +773,6 @@ func (db *DB) PruneArtifactCheckpointStages(
 				  AND landing.checkpoint_sha256 = stage.checkpoint_sha256
 				  AND landing.checkpoint_size = stage.checkpoint_size
 			  )
-		)
-		OR EXISTS (
-			SELECT 1
-			FROM artifact_checkpoint_landing_sessions legacy
-			JOIN artifact_checkpoint_landings landing
-			  ON landing.origin = legacy.origin
-			JOIN artifact_checkpoint_stages stage
-			  ON stage.origin = landing.origin
-			 AND stage.sequence = landing.sequence
-			 AND stage.checkpoint_sha256 = landing.checkpoint_sha256
-			 AND stage.checkpoint_size = landing.checkpoint_size
-			 AND stage.complete = 1
 		)`,
 	).Scan(&more); err != nil {
 		return 0, false, fmt.Errorf("checking artifact checkpoint prune remainder: %w", err)

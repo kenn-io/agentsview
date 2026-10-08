@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 )
@@ -584,143 +583,6 @@ func (db *DB) GetArtifactPeerCheckpointHead(
 	return head, true, nil
 }
 
-// RecordArtifactCheckpointLanding atomically binds the complete session map to
-// the exact currently recorded peer head.
-func (db *DB) RecordArtifactCheckpointLanding(
-	ctx context.Context,
-	landing ArtifactCheckpointLanding,
-	sessionMap map[string]string,
-) error {
-	if err := validateArtifactCheckpointLanding(landing); err != nil {
-		return err
-	}
-	gids := make([]string, 0, len(sessionMap))
-	for gid, manifestHash := range sessionMap {
-		if !strings.HasPrefix(gid, landing.Origin+"~") ||
-			len(gid) == len(landing.Origin)+1 {
-			return fmt.Errorf("artifact checkpoint GID %q has wrong origin", gid)
-		}
-		if len(manifestHash) != 64 {
-			return fmt.Errorf("artifact checkpoint manifest %q is incomplete", gid)
-		}
-		if err := validateLowerHex(manifestHash); err != nil {
-			return fmt.Errorf("validating artifact checkpoint manifest %q: %w", gid, err)
-		}
-		gids = append(gids, gid)
-	}
-	slices.Sort(gids)
-
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	tx, err := db.getWriter().BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning artifact checkpoint landing: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var head ArtifactPeerCheckpointHead
-	err = tx.QueryRowContext(ctx, `
-		SELECT origin, sequence, checkpoint_sha256, checkpoint_size
-		FROM artifact_peer_checkpoint_heads WHERE origin = ?`, landing.Origin,
-	).Scan(
-		&head.Origin, &head.Sequence,
-		&head.CheckpointSHA256, &head.CheckpointSize,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf(
-			"%w: artifact checkpoint landing has no peer head",
-			ErrArtifactImportConflict,
-		)
-	}
-	if err != nil {
-		return fmt.Errorf("reading artifact peer head for landing: %w", err)
-	}
-	if head.Sequence != landing.Sequence ||
-		head.CheckpointSHA256 != landing.CheckpointSHA256 ||
-		head.CheckpointSize != landing.CheckpointSize {
-		return fmt.Errorf(
-			"%w: artifact checkpoint landing does not match peer head",
-			ErrArtifactImportConflict,
-		)
-	}
-
-	var existing ArtifactCheckpointLanding
-	err = tx.QueryRowContext(ctx, `
-		SELECT origin, sequence, checkpoint_sha256, checkpoint_size
-		FROM artifact_checkpoint_landings WHERE origin = ?`, landing.Origin,
-	).Scan(
-		&existing.Origin, &existing.Sequence,
-		&existing.CheckpointSHA256, &existing.CheckpointSize,
-	)
-	switch {
-	case err != nil && !errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("reading artifact checkpoint landing: %w", err)
-	case err == nil && existing.Sequence > landing.Sequence:
-		return fmt.Errorf(
-			"%w: artifact checkpoint landing would regress",
-			ErrArtifactImportConflict,
-		)
-	case err == nil && existing.Sequence == landing.Sequence:
-		if existing.CheckpointSHA256 != landing.CheckpointSHA256 ||
-			existing.CheckpointSize != landing.CheckpointSize {
-			return fmt.Errorf(
-				"%w: artifact checkpoint landing identity changed",
-				ErrArtifactImportConflict,
-			)
-		}
-		equal, compareErr := artifactLandingMapEqualTx(
-			ctx, tx, landing.Origin, sessionMap,
-		)
-		if compareErr != nil {
-			return compareErr
-		}
-		if !equal {
-			return fmt.Errorf(
-				"%w: artifact checkpoint landing map changed",
-				ErrArtifactImportConflict,
-			)
-		}
-		return nil
-	}
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO artifact_checkpoint_landings (
-			origin, sequence, checkpoint_sha256, checkpoint_size
-		) VALUES (?, ?, ?, ?)
-		ON CONFLICT(origin) DO UPDATE SET
-			sequence = excluded.sequence,
-			checkpoint_sha256 = excluded.checkpoint_sha256,
-			checkpoint_size = excluded.checkpoint_size`,
-		landing.Origin, landing.Sequence,
-		landing.CheckpointSHA256, landing.CheckpointSize,
-	)
-	if err != nil {
-		return fmt.Errorf("recording artifact checkpoint landing: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM artifact_checkpoint_landing_sessions
-		WHERE origin = ?`, landing.Origin,
-	); err != nil {
-		return fmt.Errorf("clearing artifact checkpoint landing map: %w", err)
-	}
-	for _, gid := range gids {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO artifact_checkpoint_landing_sessions (
-				origin, gid, manifest_hash
-			) VALUES (?, ?, ?)`,
-			landing.Origin, gid, sessionMap[gid],
-		); err != nil {
-			return fmt.Errorf(
-				"recording artifact checkpoint landing session %q: %w", gid, err,
-			)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing artifact checkpoint landing: %w", err)
-	}
-	return nil
-}
-
 // GetArtifactCheckpointLanding returns an identity and a fresh copy of its
 // complete landed session map.
 func (db *DB) GetArtifactCheckpointLanding(
@@ -789,37 +651,18 @@ func (db *DB) getArtifactCheckpointLanding(
 	if afterIdentity != nil {
 		afterIdentity()
 	}
-	var staged bool
-	var complete int
-	err = tx.QueryRowContext(ctx, `
-		SELECT complete
-		FROM artifact_checkpoint_stages
-		WHERE origin = ? AND sequence = ?
-		  AND checkpoint_sha256 = ? AND checkpoint_size = ?`,
+	rows, err := tx.QueryContext(ctx, `
+		SELECT sessions.gid, sessions.manifest_hash
+		FROM artifact_checkpoint_stage_sessions sessions
+		JOIN artifact_checkpoint_stages stage
+		  ON stage.origin = sessions.origin AND stage.sequence = sessions.sequence
+		WHERE stage.origin = ? AND stage.sequence = ?
+		  AND stage.checkpoint_sha256 = ? AND stage.checkpoint_size = ?
+		  AND stage.complete = 1
+		ORDER BY sessions.gid`,
 		landing.Origin, landing.Sequence,
 		landing.CheckpointSHA256, landing.CheckpointSize,
-	).Scan(&complete)
-	switch {
-	case err == nil:
-		staged = complete == 1
-	case errors.Is(err, sql.ErrNoRows):
-	default:
-		return ArtifactCheckpointLanding{}, nil, false,
-			fmt.Errorf("reading artifact checkpoint landing stage: %w", err)
-	}
-	query := `
-		SELECT gid, manifest_hash
-		FROM artifact_checkpoint_landing_sessions
-		WHERE origin = ? ORDER BY gid`
-	args := []any{origin}
-	if staged {
-		query = `
-			SELECT gid, manifest_hash
-			FROM artifact_checkpoint_stage_sessions
-			WHERE origin = ? AND sequence = ? ORDER BY gid`
-		args = append(args, landing.Sequence)
-	}
-	rows, err := tx.QueryContext(ctx, query, args...)
+	)
 	if err != nil {
 		return ArtifactCheckpointLanding{}, nil, false,
 			fmt.Errorf("reading artifact checkpoint landing map: %w", err)
@@ -974,43 +817,6 @@ func recordArtifactImportedSessionTx(
 		return fmt.Errorf("recording artifact imported-session provenance: %w", err)
 	}
 	return nil
-}
-
-func artifactLandingMapEqualTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	origin string,
-	want map[string]string,
-) (bool, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT gid, manifest_hash
-		FROM artifact_checkpoint_landing_sessions
-		WHERE origin = ?`, origin,
-	)
-	if err != nil {
-		return false, fmt.Errorf("reading existing artifact landing map: %w", err)
-	}
-	defer rows.Close()
-	got := make(map[string]string)
-	for rows.Next() {
-		var gid, manifestHash string
-		if err := rows.Scan(&gid, &manifestHash); err != nil {
-			return false, fmt.Errorf("scanning existing artifact landing map: %w", err)
-		}
-		got[gid] = manifestHash
-	}
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("iterating existing artifact landing map: %w", err)
-	}
-	if len(got) != len(want) {
-		return false, nil
-	}
-	for gid, manifestHash := range want {
-		if got[gid] != manifestHash {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 func validateArtifactImportWork(

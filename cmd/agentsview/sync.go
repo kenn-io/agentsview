@@ -1153,10 +1153,3 @@ func reportDaemonSyncProgress(raw string, onProgress sync.ProgressFunc) error {
 	onProgress(progress)
 	return nil
 }
-
-func valueOrNever(s string) string {
-	if s == "" {
-		return "never"
-	}
-	return s
-}

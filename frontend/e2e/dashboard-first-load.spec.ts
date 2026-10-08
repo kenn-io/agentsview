@@ -23,7 +23,7 @@ test.describe("Chromium dashboard evidence", () => {
   const fixture = await page.request.get("/api/v1/sessions?project=project-alpha");
   expect(fixture.ok()).toBe(true);
   const body = await fixture.json();
-  expect(body.sessions).toHaveLength(2);
+  expect(body.sessions).toHaveLength(3);
   expect(body.sessions.every((session: { project: string }) => session.project === "project-alpha")).toBe(true);
   preHydrationRows = await page.locator(".session-item").count();
   await page.goto("/", { waitUntil: "commit" });

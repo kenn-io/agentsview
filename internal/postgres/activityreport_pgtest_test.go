@@ -582,8 +582,8 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	ids := []string{"dup-b", "dup-a"}
 
 	q := pgDayQuery(t, "2026-06-16", "UTC")
-	lower := paddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
-	upper := paddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+	lower := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
+	upper := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q)
 	require.NoError(t, err)
 

@@ -32,54 +32,32 @@ const (
 	chTimestampSQL = "parseDateTime64BestEffort(?, 6, 'UTC')"
 )
 
-type chRates struct {
-	input           money.Money
-	output          money.Money
-	cacheCreation   money.Money
-	cacheCreation1h money.Money
-	cacheRead       money.Money
-	updatedAt       *time.Time
-	source          export.PricingRowSource
-	bands           []export.PricingBand
-}
-
 // chLoadPricing reads the mirrored model catalog and layers the reader's
 // custom rates on top. Push passes no custom rates.
 func chLoadPricing(
 	ctx context.Context, conn *sql.DB,
 	customPricing map[string]config.CustomModelRate,
-) (map[string]chRates, error) {
+) (map[string]export.ModelRates, error) {
 	rows, err := readModelPricing(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]chRates{}
+	out := map[string]export.ModelRates{}
 	count := 0
 	for _, p := range rows {
 		if strings.HasPrefix(p.ModelPattern, "_") {
 			continue
 		}
-		rates := chRates{
-			input:           p.InputPerMTok,
-			output:          p.OutputPerMTok,
-			cacheCreation:   p.CacheCreationPerMTok,
-			cacheCreation1h: p.CacheCreation1hPerMTok,
-			cacheRead:       p.CacheReadPerMTok,
-			bands:           chExportPricingBands(p.Bands),
-		}
-		if parsed, err := time.Parse(time.RFC3339Nano, p.UpdatedAt); err == nil {
-			t := parsed.UTC()
-			rates.updatedAt = &t
-		}
+		rates := db.ModelPricingRates(p)
 		out[p.ModelPattern] = rates
 		count++
 	}
 	if count == 0 {
-		out = chFallbackPricingMap()
+		out = db.FallbackPricingMap()
 	} else {
-		fallback := chFallbackPricingMap()
+		fallback := db.FallbackPricingMap()
 		for model, rates := range out {
-			rates.source = chPricingSource(model, rates, fallback)
+			rates.Source = db.ModelPricingSource(model, rates, fallback)
 			out[model] = rates
 		}
 	}
@@ -87,22 +65,22 @@ func chLoadPricing(
 	return out, nil
 }
 
-func chApplyCustomPricing(out map[string]chRates, customPricing map[string]config.CustomModelRate) {
+func chApplyCustomPricing(out map[string]export.ModelRates, customPricing map[string]config.CustomModelRate) {
 	for model, custom := range customPricing {
-		rates := chRates{
-			input:  money.Money{Microdollars: custom.InputMicrodollarsPerMTok},
-			output: money.Money{Microdollars: custom.OutputMicrodollarsPerMTok},
-			cacheCreation: money.Money{
+		rates := export.ModelRates{
+			InputPerMTok:  money.Money{Microdollars: custom.InputMicrodollarsPerMTok},
+			OutputPerMTok: money.Money{Microdollars: custom.OutputMicrodollarsPerMTok},
+			CacheWritePerMTok: money.Money{
 				Microdollars: custom.CacheCreationMicrodollarsPerMTok,
 			},
-			cacheCreation1h: money.Money{
+			CacheWrite1hPerMTok: money.Money{
 				Microdollars: custom.CacheCreation1hMicrodollarsPerMTok,
 			},
-			cacheRead: money.Money{
+			CacheReadPerMTok: money.Money{
 				Microdollars: custom.CacheReadMicrodollarsPerMTok,
 			},
 		}
-		rates.source = chCustomPricingSource()
+		rates.Source = export.PricingRowSourceCustom
 		out[model] = rates
 	}
 }
@@ -115,127 +93,6 @@ func (s *Store) loadPricingResolver(
 		return nil, err
 	}
 	return export.NewPricingResolverWithDigest(snapshot.rows, snapshot.digest), nil
-}
-
-func chCustomPricingSource() export.PricingRowSource {
-	return export.PricingRowSourceCustom
-}
-
-func chFallbackPricingMap() map[string]chRates {
-	prices := pricingpkg.FallbackPricing()
-	out := make(map[string]chRates, len(prices))
-	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
-		out[p.ModelPattern] = chRates{
-			input:           p.InputPerMTok,
-			output:          p.OutputPerMTok,
-			cacheCreation:   p.CacheCreationPerMTok,
-			cacheCreation1h: p.CacheCreation1hPerMTok,
-			cacheRead:       p.CacheReadPerMTok,
-			source:          export.PricingRowSourceEmbedded,
-			bands:           chCatalogPricingBands(p.Bands),
-		}
-	}
-	return out
-}
-
-func chPricingSource(
-	model string, rates chRates, fallback map[string]chRates,
-) export.PricingRowSource {
-	if f, ok := fallback[model]; ok &&
-		f.input == rates.input &&
-		f.output == rates.output &&
-		f.cacheCreation == rates.cacheCreation &&
-		f.cacheCreation1h == rates.cacheCreation1h &&
-		f.cacheRead == rates.cacheRead &&
-		chPricingBandsEqual(f.bands, rates.bands) {
-		return export.PricingRowSourceEmbedded
-	}
-	return export.PricingRowSourceFetched
-}
-
-func chCatalogPricingBands(
-	bands []pricingpkg.PricingBand,
-) []export.PricingBand {
-	out := make([]export.PricingBand, len(bands))
-	for i, band := range bands {
-		out[i] = export.PricingBand{
-			AboveInputTokens:    band.AboveInputTokens,
-			InputPerMTok:        band.InputPerMTok,
-			OutputPerMTok:       band.OutputPerMTok,
-			CacheWritePerMTok:   band.CacheCreationPerMTok,
-			CacheWrite1hPerMTok: band.CacheCreation1hPerMTok,
-			CacheReadPerMTok:    band.CacheReadPerMTok,
-		}
-	}
-	return out
-}
-
-func chExportPricingBands(bands []db.PricingBand) []export.PricingBand {
-	out := make([]export.PricingBand, 0, len(bands))
-	for _, band := range bands {
-		var parsedUpdatedAt *time.Time
-		if parsed, err := time.Parse(time.RFC3339Nano, band.UpdatedAt); err == nil {
-			t := parsed.UTC()
-			parsedUpdatedAt = &t
-		}
-		out = append(out, export.PricingBand{
-			AboveInputTokens:    band.AboveInputTokens,
-			InputPerMTok:        band.InputPerMTok,
-			OutputPerMTok:       band.OutputPerMTok,
-			CacheWritePerMTok:   band.CacheCreationPerMTok,
-			CacheWrite1hPerMTok: band.CacheCreation1hPerMTok,
-			CacheReadPerMTok:    band.CacheReadPerMTok,
-			UpdatedAt:           parsedUpdatedAt,
-		})
-	}
-	return out
-}
-
-func chPricingBandsEqual(a, b []export.PricingBand) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].AboveInputTokens != b[i].AboveInputTokens ||
-			a[i].InputPerMTok != b[i].InputPerMTok ||
-			a[i].OutputPerMTok != b[i].OutputPerMTok ||
-			a[i].CacheWritePerMTok != b[i].CacheWritePerMTok ||
-			a[i].CacheWrite1hPerMTok != b[i].CacheWrite1hPerMTok ||
-			a[i].CacheReadPerMTok != b[i].CacheReadPerMTok {
-			return false
-		}
-	}
-	return true
-}
-
-func chPricingRows(
-	in map[string]chRates,
-) []export.EffectivePricingRow {
-	out := make([]export.EffectivePricingRow, 0, len(in))
-	fallback := chFallbackPricingMap()
-	for pattern, rates := range in {
-		source := rates.source
-		if source == "" {
-			source = chPricingSource(pattern, rates, fallback)
-		}
-		out = append(out, export.EffectivePricingRow{
-			ModelPattern: pattern,
-			Rates: export.ModelRates{
-				InputPerMTok:        rates.input,
-				OutputPerMTok:       rates.output,
-				CacheWritePerMTok:   rates.cacheCreation,
-				CacheWrite1hPerMTok: rates.cacheCreation1h,
-				CacheReadPerMTok:    rates.cacheRead,
-				UpdatedAt:           rates.updatedAt,
-				Source:              source,
-				Bands:               append([]export.PricingBand(nil), rates.bands...),
-			},
-		})
-	}
-	return out
 }
 
 type chUsageBounds struct {
@@ -1400,7 +1257,7 @@ func chUsageAggregateResolvedCost(
 		pricing.RecordResolvedReported(reportedModel, pricedModel, lookup)
 	}
 	if hasComputedUsage {
-		chRecordComputedUsagePricing(
+		db.RecordComputedUsagePricing(
 			pricing, reportedModel, pricedModel, lookup, requestScoped,
 			billableInput, billableCacheCr, billableCacheRd,
 		)
@@ -1457,22 +1314,6 @@ func chUsageAggregateResolvedCost(
 		priced = true
 	}
 	return cost, savings, priced, true, nil
-}
-
-func chRecordComputedUsagePricing(
-	pricing *export.PricingResolver,
-	reportedModel, pricedModel string,
-	lookup export.PricingLookup,
-	requestScoped bool,
-	inputTokens, cacheWriteTokens, cacheReadTokens int,
-) {
-	if requestScoped {
-		pricing.RecordResolvedComputedRequest(
-			reportedModel, pricedModel, lookup,
-			inputTokens, cacheWriteTokens, cacheReadTokens)
-		return
-	}
-	pricing.RecordResolvedComputedAggregate(reportedModel, pricedModel, lookup)
 }
 
 func chSessionUsageRowCost(
@@ -2071,7 +1912,7 @@ func (s *Store) dailyUsageForCatalog(
 	}
 
 	var result db.DailyUsageResult
-	for _, date := range sortedKeys(days) {
+	for _, date := range db.SortedKeys(days) {
 		day := days[date]
 		if day == nil {
 			continue
@@ -2165,7 +2006,7 @@ func (s *Store) dailyUsageForCatalog(
 			"building pricing block: %w", err)
 	}
 	result.Pricing = &pricingBlock
-	projects, err := s.BuildProjectIdentityMap(ctx, sortedKeys(projectLabels))
+	projects, err := s.BuildProjectIdentityMap(ctx, db.SortedKeys(projectLabels))
 	if err != nil {
 		if !errors.Is(err, errNotImplemented) {
 			return db.DailyUsageResult{}, err
@@ -2937,8 +2778,8 @@ func (s *Store) GetSessionUsage(
 		TotalOutputTokens: max(sess.TotalOutputTokens-deduplicatedOutputTokens, 0),
 		PeakContextTokens: sess.PeakContextTokens,
 		HasTokenData:      sess.HasTotalOutputTokens || sess.HasPeakContextTokens,
-		Models:            sortedKeys(models),
-		UnpricedModels:    sortedKeys(unpriced),
+		Models:            db.SortedKeys(models),
+		UnpricedModels:    db.SortedKeys(unpriced),
 		BreakdownCount:    breakdownCount,
 		Breakdown:         breakdown,
 	}

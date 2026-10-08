@@ -186,7 +186,7 @@ func buildAnalyticsWhereWithDate(
 			preds, "agent", f.Agent, pb)
 	}
 	if f.Model != "" {
-		models := csvFilterValues(f.Model)
+		models := db.CSVFilterValues(f.Model)
 		if len(models) == 1 {
 			preds = append(preds,
 				"EXISTS (SELECT 1 FROM messages m WHERE "+
@@ -246,7 +246,7 @@ func appendPGAnalyticsCSVFilter(
 	raw string,
 	pb *paramBuilder,
 ) []string {
-	values := pgAnalyticsCSVValues(raw)
+	values := db.CSVFilterValues(raw)
 	if len(values) == 0 {
 		return preds
 	}
@@ -259,22 +259,6 @@ func appendPGAnalyticsCSVFilter(
 	}
 	return append(preds,
 		col+" IN ("+strings.Join(phs, ",")+")")
-}
-
-func pgAnalyticsCSVValues(raw string) []string {
-	return csvFilterValues(raw)
-}
-
-func csvFilterValues(raw string) []string {
-	values := strings.Split(raw, ",")
-	out := values[:0]
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			out = append(out, trimmed)
-		}
-	}
-	return out
 }
 
 func (s *Store) getAnalyticsFilteredMessageCounts(
@@ -307,7 +291,7 @@ func (s *Store) getAnalyticsModelScopedMessages(
 	if scope == nil {
 		return map[string][]db.ScopedMessage{}, nil
 	}
-	return scope.MessagesBySession(), nil
+	return scope, nil
 }
 
 func (s *Store) getAnalyticsFilteredMessageStats(
@@ -323,74 +307,6 @@ func (s *Store) getAnalyticsFilteredMessageStats(
 		return map[string]db.MessageStats{}, nil
 	}
 	return scope.StatsBySession(), nil
-}
-
-// localTime parses a UTC timestamp string and converts it to
-// the given location.
-func localTime(
-	ts string, loc *time.Location,
-) (time.Time, bool) {
-	t, err := time.Parse(time.RFC3339Nano, ts)
-	if err != nil {
-		t, err = time.Parse("2006-01-02T15:04:05Z", ts)
-		if err != nil {
-			return time.Time{}, false
-		}
-	}
-	return t.In(loc), true
-}
-
-// localDate converts a UTC timestamp string to a local date
-// string (YYYY-MM-DD).
-func localDate(ts string, loc *time.Location) string {
-	t, ok := localTime(ts, loc)
-	if !ok {
-		if len(ts) >= 10 {
-			return ts[:10]
-		}
-		return ""
-	}
-	return t.Format("2006-01-02")
-}
-
-// inDateRange checks if a local date falls within [from, to].
-// Empty bounds are treated as unbounded so callers can pass a
-// zero AnalyticsFilter to get every session.
-func inDateRange(date, from, to string) bool {
-	if from != "" && date < from {
-		return false
-	}
-	if to != "" && date > to {
-		return false
-	}
-	return true
-}
-
-// medianInt returns the median of a sorted int slice.
-func medianInt(sorted []int, n int) int {
-	if n == 0 {
-		return 0
-	}
-	if n%2 == 0 {
-		return (sorted[n/2-1] + sorted[n/2]) / 2
-	}
-	return sorted[n/2]
-}
-
-// percentileFloat returns the value at the given percentile
-// from a pre-sorted float64 slice.
-func percentileFloat(
-	sorted []float64, pct float64,
-) float64 {
-	n := len(sorted)
-	if n == 0 {
-		return 0
-	}
-	idx := int(float64(n) * pct)
-	if idx >= n {
-		idx = n - 1
-	}
-	return sorted[idx]
 }
 
 // analyticsLocation loads the timezone from the filter.
@@ -482,7 +398,7 @@ func (s *Store) filteredSessionIDs(
 		if ids[sid] {
 			continue
 		}
-		t, ok := localTime(msgTS, loc)
+		t, ok := db.LocalTime(msgTS, loc)
 		if !ok {
 			continue
 		}
@@ -515,33 +431,10 @@ func (s *Store) filteredSessionIDsModel(
 		return nil, err
 	}
 	ids := make(map[string]bool)
-	if scope != nil {
-		for id := range scope.MessagesBySession() {
-			ids[id] = true
-		}
+	for id := range scope {
+		ids[id] = true
 	}
 	return ids, nil
-}
-
-// bucketDate truncates a date to the start of its bucket.
-func bucketDate(date string, granularity string) string {
-	t, err := time.Parse("2006-01-02", date)
-	if err != nil {
-		return date
-	}
-	switch granularity {
-	case "week":
-		weekday := int(t.Weekday())
-		if weekday == 0 {
-			weekday = 7
-		}
-		t = t.AddDate(0, 0, -(weekday - 1))
-		return t.Format("2006-01-02")
-	case "month":
-		return t.Format("2006-01") + "-01"
-	default:
-		return date
-	}
 }
 
 func (s *Store) getModelScopedToolCallCounts(
@@ -554,7 +447,7 @@ func (s *Store) getModelScopedToolCallCounts(
 		return counts, nil
 	}
 
-	flt := messageScopeFilter(f)
+	flt := f.MessageScopeFilter()
 	loc := analyticsLocation(f)
 	if err := pgQueryChunked(sessionIDs, func(chunk []string) error {
 		pb := &paramBuilder{}
@@ -594,7 +487,7 @@ func (s *Store) getModelScopedToolCallCounts(
 			if _, ok := flt.Models[model]; !ok {
 				continue
 			}
-			parsed, has := localTime(ts, loc)
+			parsed, has := db.LocalTime(ts, loc)
 			if !flt.MatchesDayHour(parsed, has) {
 				continue
 			}
@@ -646,8 +539,8 @@ func (s *Store) getAnalyticsActivityFilteredByModelTime(
 			return db.ActivityResponse{},
 				fmt.Errorf("scanning analytics activity session: %w", err)
 		}
-		date := localDate(scanDateCol(ts), loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := db.LocalDate(scanDateCol(ts), loc)
+		if !db.InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -676,7 +569,7 @@ func (s *Store) getAnalyticsActivityFilteredByModelTime(
 
 	buckets := make(map[string]*db.ActivityEntry)
 	for _, session := range sessions {
-		bucket := bucketDate(session.date, granularity)
+		bucket := db.BucketDate(session.date, granularity)
 		entry := buckets[bucket]
 		if entry == nil {
 			entry = &db.ActivityEntry{
@@ -791,7 +684,7 @@ func (s *Store) getAnalyticsModelsForSessionIDsFiltered(
 		unique = append(unique, sessionID)
 	}
 
-	filterModels := csvFilterValues(f.Model)
+	filterModels := db.CSVFilterValues(f.Model)
 	allowedModels := make(map[string]struct{}, len(filterModels))
 	for _, model := range filterModels {
 		allowedModels[model] = struct{}{}
@@ -826,7 +719,7 @@ func (s *Store) getAnalyticsModelsForSessionIDsFiltered(
 				}
 			}
 			if f.HasTimeFilter() {
-				t, ok := localTime(ts, loc)
+				t, ok := db.LocalTime(ts, loc)
 				if !ok || !matchesTimeFilter(f, t) {
 					continue
 				}
@@ -913,8 +806,8 @@ func (s *Store) GetAnalyticsSummary(
 					"scanning summary row: %w", err,
 				)
 		}
-		date := localDate(scanDateCol(ts), loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := db.LocalDate(scanDateCol(ts), loc)
+		if !db.InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -1125,14 +1018,14 @@ func (s *Store) GetAnalyticsActivity(
 				)
 		}
 
-		date := localDate(scanDateCol(tsVal), loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := db.LocalDate(scanDateCol(tsVal), loc)
+		if !db.InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[sid] {
 			continue
 		}
-		bucket := bucketDate(date, granularity)
+		bucket := db.BucketDate(date, granularity)
 
 		entry, ok := buckets[bucket]
 		if !ok {
@@ -1252,92 +1145,6 @@ func (s *Store) mergeActivityToolCalls(
 
 // --- Heatmap ---
 
-// MaxHeatmapDays is the maximum number of day entries.
-const MaxHeatmapDays = 366
-
-// clampFrom returns from clamped so [from, to] spans at
-// most MaxHeatmapDays.
-func clampFrom(from, to string) string {
-	start, err := time.Parse("2006-01-02", from)
-	if err != nil {
-		return from
-	}
-	end, err := time.Parse("2006-01-02", to)
-	if err != nil {
-		return from
-	}
-	earliest := end.AddDate(0, 0, -(MaxHeatmapDays - 1))
-	if start.Before(earliest) {
-		return earliest.Format("2006-01-02")
-	}
-	return from
-}
-
-// computeQuartileLevels computes thresholds from sorted
-// values.
-func computeQuartileLevels(
-	sorted []int,
-) db.HeatmapLevels {
-	if len(sorted) == 0 {
-		return db.HeatmapLevels{
-			L1: 1, L2: 2, L3: 3, L4: 4,
-		}
-	}
-	n := len(sorted)
-	return db.HeatmapLevels{
-		L1: sorted[0],
-		L2: sorted[n/4],
-		L3: sorted[n/2],
-		L4: sorted[n*3/4],
-	}
-}
-
-// assignLevel determines the heatmap level (0-4) for a value.
-func assignLevel(value int, levels db.HeatmapLevels) int {
-	if value <= 0 {
-		return 0
-	}
-	if value <= levels.L2 {
-		return 1
-	}
-	if value <= levels.L3 {
-		return 2
-	}
-	if value <= levels.L4 {
-		return 3
-	}
-	return 4
-}
-
-// buildDateEntries creates a HeatmapEntry for each day in
-// [from, to].
-func buildDateEntries(
-	from, to string,
-	values map[string]int,
-	levels db.HeatmapLevels,
-) []db.HeatmapEntry {
-	start, err := time.Parse("2006-01-02", from)
-	if err != nil {
-		return nil
-	}
-	end, err := time.Parse("2006-01-02", to)
-	if err != nil {
-		return nil
-	}
-
-	entries := []db.HeatmapEntry{}
-	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-		date := d.Format("2006-01-02")
-		v := values[date]
-		entries = append(entries, db.HeatmapEntry{
-			Date:  date,
-			Value: v,
-			Level: assignLevel(v, levels),
-		})
-	}
-	return entries
-}
-
 // GetAnalyticsHeatmap returns daily counts with intensity
 // levels.
 func (s *Store) GetAnalyticsHeatmap(
@@ -1403,8 +1210,8 @@ func (s *Store) GetAnalyticsHeatmap(
 					"scanning heatmap row: %w", err,
 				)
 		}
-		date := localDate(scanDateCol(ts), loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := db.LocalDate(scanDateCol(ts), loc)
+		if !db.InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -1458,38 +1265,7 @@ func (s *Store) GetAnalyticsHeatmap(
 		source = dayOutputTokens
 	}
 
-	// For output_tokens, an empty source means no sessions
-	// reported token coverage. Return an empty heatmap so the
-	// UI can show "no data" instead of a misleading zero grid.
-	if metric == "output_tokens" && len(source) == 0 {
-		return db.HeatmapResponse{
-			Metric:      metric,
-			EntriesFrom: clampFrom(f.From, f.To),
-		}, nil
-	}
-
-	entriesFrom := clampFrom(f.From, f.To)
-
-	var values []int
-	for date, v := range source {
-		if v > 0 && date >= entriesFrom && date <= f.To {
-			values = append(values, v)
-		}
-	}
-	sort.Ints(values)
-
-	levels := computeQuartileLevels(values)
-
-	entries := buildDateEntries(
-		entriesFrom, f.To, source, levels,
-	)
-
-	return db.HeatmapResponse{
-		Metric:      metric,
-		Entries:     entries,
-		Levels:      levels,
-		EntriesFrom: entriesFrom,
-	}, nil
+	return db.BuildHeatmapResponse(f.From, f.To, metric, source), nil
 }
 
 // --- Projects ---
@@ -1563,8 +1339,8 @@ func (s *Store) GetAnalyticsProjects(
 					"scanning project row: %w", err,
 				)
 		}
-		date := localDate(scanDateCol(ts), loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := db.LocalDate(scanDateCol(ts), loc)
+		if !db.InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -1661,7 +1437,7 @@ func (s *Store) GetAnalyticsProjects(
 			FirstSession:   pd.first,
 			LastSession:    pd.last,
 			AvgMessages:    avg,
-			MedianMessages: medianInt(pd.counts, n),
+			MedianMessages: db.MedianInt(pd.counts, n),
 			Agents:         pd.agents,
 			DailyTrend:     trend,
 		})
@@ -1723,11 +1499,11 @@ func (s *Store) GetAnalyticsHourOfWeek(
 					err,
 				)
 		}
-		sessDate := localDate(scanDateCol(sessTS), loc)
-		if !inDateRange(sessDate, f.From, f.To) {
+		sessDate := db.LocalDate(scanDateCol(sessTS), loc)
+		if !db.InDateRange(sessDate, f.From, f.To) {
 			continue
 		}
-		t, ok := localTime(msgTS, loc)
+		t, ok := db.LocalTime(msgTS, loc)
 		if !ok {
 			continue
 		}
@@ -1780,7 +1556,7 @@ func (s *Store) analyticsModelCandidateSessionIDs(
 		if err := rows.Scan(&id, &ts); err != nil {
 			return nil, fmt.Errorf("scanning model candidate session: %w", err)
 		}
-		if !inDateRange(localDate(scanDateCol(ts), loc), f.From, f.To) {
+		if !db.InDateRange(db.LocalDate(scanDateCol(ts), loc), f.From, f.To) {
 			continue
 		}
 		ids = append(ids, id)
@@ -1810,15 +1586,13 @@ func (s *Store) getAnalyticsHourOfWeekFilteredByModel(
 	}
 
 	var grid [7][24]int
-	if scope != nil {
-		for _, msgs := range scope.MessagesBySession() {
-			for _, m := range msgs {
-				if !m.HasLocalTime {
-					continue
-				}
-				dow := (int(m.LocalTime.Weekday()) + 6) % 7
-				grid[dow][m.LocalTime.Hour()]++
+	for _, msgs := range scope {
+		for _, m := range msgs {
+			if !m.HasLocalTime {
+				continue
 			}
+			dow := (int(m.LocalTime.Weekday()) + 6) % 7
+			grid[dow][m.LocalTime.Hour()]++
 		}
 	}
 
@@ -1826,104 +1600,6 @@ func (s *Store) getAnalyticsHourOfWeekFilteredByModel(
 }
 
 // --- Session Shape ---
-
-// lengthBucket returns the bucket label for a message count.
-func lengthBucket(mc int) string {
-	switch {
-	case mc <= 5:
-		return "1-5"
-	case mc <= 15:
-		return "6-15"
-	case mc <= 30:
-		return "16-30"
-	case mc <= 60:
-		return "31-60"
-	case mc <= 120:
-		return "61-120"
-	default:
-		return "121+"
-	}
-}
-
-// durationBucket returns the bucket label for a duration in
-// minutes.
-func durationBucket(mins float64) string {
-	switch {
-	case mins < 5:
-		return "<5m"
-	case mins < 15:
-		return "5-15m"
-	case mins < 30:
-		return "15-30m"
-	case mins < 60:
-		return "30-60m"
-	case mins < 120:
-		return "1-2h"
-	default:
-		return "2h+"
-	}
-}
-
-// autonomyBucket returns the bucket label for an autonomy
-// ratio.
-func autonomyBucket(ratio float64) string {
-	switch {
-	case ratio < 0.5:
-		return "<0.5"
-	case ratio < 1:
-		return "0.5-1"
-	case ratio < 2:
-		return "1-2"
-	case ratio < 5:
-		return "2-5"
-	case ratio < 10:
-		return "5-10"
-	default:
-		return "10+"
-	}
-}
-
-var (
-	lengthOrder = map[string]int{
-		"1-5": 0, "6-15": 1, "16-30": 2,
-		"31-60": 3, "61-120": 4, "121+": 5,
-	}
-	durationOrder = map[string]int{
-		"<5m": 0, "5-15m": 1, "15-30m": 2,
-		"30-60m": 3, "1-2h": 4, "2h+": 5,
-	}
-	autonomyOrder = map[string]int{
-		"<0.5": 0, "0.5-1": 1, "1-2": 2,
-		"2-5": 3, "5-10": 4, "10+": 5,
-	}
-)
-
-// sortBuckets sorts distribution buckets by defined order.
-func sortBuckets(
-	buckets []db.DistributionBucket,
-	order map[string]int,
-) {
-	sort.Slice(buckets, func(i, j int) bool {
-		return order[buckets[i].Label] <
-			order[buckets[j].Label]
-	})
-}
-
-// mapToBuckets converts a label->count map to sorted buckets.
-func mapToBuckets(
-	m map[string]int, order map[string]int,
-) []db.DistributionBucket {
-	buckets := make(
-		[]db.DistributionBucket, 0, len(m),
-	)
-	for label, count := range m {
-		buckets = append(buckets, db.DistributionBucket{
-			Label: label, Count: count,
-		})
-	}
-	sortBuckets(buckets, order)
-	return buckets
-}
 
 // GetAnalyticsSessionShape returns distribution histograms
 // for session length, duration, and autonomy ratio.
@@ -1979,8 +1655,8 @@ func (s *Store) GetAnalyticsSessionShape(
 					err,
 				)
 		}
-		date := localDate(scanDateCol(tsVal), loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := db.LocalDate(scanDateCol(tsVal), loc)
+		if !db.InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -1989,13 +1665,13 @@ func (s *Store) GetAnalyticsSessionShape(
 
 		totalCount++
 		if !modelFilter {
-			lengthCounts[lengthBucket(mc)]++
+			lengthCounts[db.LengthBucket(mc)]++
 		}
 		sessionIDs = append(sessionIDs, id)
 
 		if durationSec != nil && *durationSec >= 0 {
 			mins := *durationSec / 60.0
-			durationCounts[durationBucket(mins)]++
+			durationCounts[db.DurationBucket(mins)]++
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -2022,11 +1698,11 @@ func (s *Store) GetAnalyticsSessionShape(
 			}
 			seen[sessionID] = struct{}{}
 			stat := stats[sessionID]
-			lengthCounts[lengthBucket(stat.Messages)]++
+			lengthCounts[db.LengthBucket(stat.Messages)]++
 			if stat.UserMessages > 0 {
 				ratio := float64(stat.ToolUseMessages) /
 					float64(stat.UserMessages)
-				autonomyCounts[autonomyBucket(ratio)]++
+				autonomyCounts[db.AutonomyBucket(ratio)]++
 			}
 		}
 	} else if len(sessionIDs) > 0 {
@@ -2042,16 +1718,10 @@ func (s *Store) GetAnalyticsSessionShape(
 	}
 
 	return db.SessionShapeResponse{
-		Count: totalCount,
-		LengthDistribution: mapToBuckets(
-			lengthCounts, lengthOrder,
-		),
-		DurationDistribution: mapToBuckets(
-			durationCounts, durationOrder,
-		),
-		AutonomyDistribution: mapToBuckets(
-			autonomyCounts, autonomyOrder,
-		),
+		Count:                totalCount,
+		LengthDistribution:   db.LengthDistributionBuckets(lengthCounts),
+		DurationDistribution: db.DurationDistributionBuckets(durationCounts),
+		AutonomyDistribution: db.AutonomyDistributionBuckets(autonomyCounts),
 	}, nil
 }
 
@@ -2093,7 +1763,7 @@ func (s *Store) queryAutonomyChunk(
 		if userCount > 0 {
 			ratio := float64(toolCount) /
 				float64(userCount)
-			counts[autonomyBucket(ratio)]++
+			counts[db.AutonomyBucket(ratio)]++
 		}
 	}
 	return rows.Err()
@@ -2404,18 +2074,6 @@ func (s *Store) getAnalyticsVelocityMessages(
 	return sessionMsgs, nil
 }
 
-// complexityBucket returns the complexity label.
-func complexityBucket(mc int) string {
-	switch {
-	case mc <= 15:
-		return "1-15"
-	case mc <= 60:
-		return "16-60"
-	default:
-		return "61+"
-	}
-}
-
 // velocityAccumulator collects raw values for a velocity
 // group.
 type velocityAccumulator struct {
@@ -2435,16 +2093,16 @@ func (a *velocityAccumulator) computeOverview() db.VelocityOverview {
 	var v db.VelocityOverview
 	v.TurnCycleSec = db.Percentiles{
 		P50: math.Round(
-			percentileFloat(a.turnCycles, 0.5)*10) / 10,
+			db.PercentileFloat(a.turnCycles, 0.5)*10) / 10,
 		P90: math.Round(
-			percentileFloat(a.turnCycles, 0.9)*10) / 10,
+			db.PercentileFloat(a.turnCycles, 0.9)*10) / 10,
 	}
 	v.FirstResponseSec = db.Percentiles{
 		P50: math.Round(
-			percentileFloat(
+			db.PercentileFloat(
 				a.firstResponses, 0.5)*10) / 10,
 		P90: math.Round(
-			percentileFloat(
+			db.PercentileFloat(
 				a.firstResponses, 0.9)*10) / 10,
 	}
 	if a.activeMinutes > 0 {
@@ -2513,8 +2171,8 @@ func (s *Store) GetAnalyticsVelocity(
 					err,
 				)
 		}
-		date := localDate(scanDateCol(ts), loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := db.LocalDate(scanDateCol(ts), loc)
+		if !db.InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -2622,7 +2280,7 @@ func (s *Store) GetAnalyticsVelocity(
 		}
 
 		agentKey := info.agent
-		compKey := complexityBucket(info.mc)
+		compKey := db.ComplexityBucket(info.mc)
 
 		if byAgent[agentKey] == nil {
 			byAgent[agentKey] = &velocityAccumulator{}
@@ -2885,8 +2543,8 @@ func (s *Store) GetAnalyticsTopSessions(
 					"scanning top session: %w", err,
 				)
 		}
-		date := localDate(scanDateCol(ts), loc)
-		if !inDateRange(date, f.From, f.To) {
+		date := db.LocalDate(scanDateCol(ts), loc)
+		if !db.InDateRange(date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[id] {
@@ -3038,8 +2696,8 @@ func (s *Store) GetAnalyticsSignals(
 				"scanning signals row: %w", err,
 			)
 		}
-		r.Date = localDate(scanDateCol(ts), loc)
-		if !inDateRange(r.Date, f.From, f.To) {
+		r.Date = db.LocalDate(scanDateCol(ts), loc)
+		if !db.InDateRange(r.Date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[r.ID] {
@@ -3132,7 +2790,7 @@ func (s *Store) signalRows(
 		if err != nil {
 			return nil, err
 		}
-		if !inDateRange(r.Date, f.From, f.To) {
+		if !db.InDateRange(r.Date, f.From, f.To) {
 			continue
 		}
 		if timeIDs != nil && !timeIDs[r.ID] {
@@ -3176,7 +2834,7 @@ func scanPGSignalRow(
 			"scanning signal row: %w", err,
 		)
 	}
-	r.Date = localDate(scanDateCol(ts), loc)
+	r.Date = db.LocalDate(scanDateCol(ts), loc)
 	return r, nil
 }
 
@@ -3214,7 +2872,7 @@ func (s *Store) signalMessages(
 		}
 		return out, nil
 	}
-	filterModels := csvFilterValues(f.Model)
+	filterModels := db.CSVFilterValues(f.Model)
 	err := pgQueryChunked(ids, func(chunk []string) error {
 		pb := &paramBuilder{}
 		placeholders := make([]string, 0, len(chunk))
