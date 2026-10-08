@@ -76,6 +76,11 @@ type UnitSource interface {
 		fn func(db.EmbeddableUnit) error) (string, error)
 }
 
+// appliedClassifierSource reports the classification used by the source's stored flags.
+type appliedClassifierSource interface {
+	AppliedClassifierHash(context.Context) (string, error)
+}
+
 // sessionJournalSource is implemented by *db.DB. Incremental refreshes use the
 // archive's session deletion journal to drop permanently deleted sessions and
 // rescan reinserted ones; other sources keep watermark-only refreshes.

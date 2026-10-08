@@ -436,7 +436,7 @@ func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t 
 }
 
 func TestBuildClassifierChangeEmbedsOlderReclassifiedSession(t *testing.T) {
-	for _, name := range []string{"changed hash", "missing hash"} {
+	for _, name := range []string{"changed hash", "missing hash", "build before reclassification"} {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
 			previousMatches := db.UserAutomationExactMatches()
@@ -462,6 +462,15 @@ func TestBuildClassifierChangeEmbedsOlderReclassifiedSession(t *testing.T) {
 			}
 
 			db.SetUserAutomationExactMatches(nil)
+			if name == "build before reclassification" {
+				readOnlyArchive, err := db.OpenReadOnly(ctx, archive.Path())
+				require.NoError(t, err)
+				defer readOnlyArchive.Close()
+				result, err = ix.Build(ctx, readOnlyArchive, fakeBuildEncoder(), gen, BuildOptions{})
+				require.NoError(t, err)
+				require.Zero(t, result.Fill.Documents)
+				require.Equal(t, []string{"human"}, mirrorSessionIDs(t, ix))
+			}
 			require.NoError(t, archive.ForceBackfillIsAutomated(ctx))
 			currentID, err := archive.GetDatabaseID(ctx)
 			require.NoError(t, err)

@@ -14,8 +14,6 @@ import (
 	"go.kenn.io/kit/embedmodel"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
-
-	"go.kenn.io/agentsview/internal/db"
 )
 
 // progressInterval bounds how often BuildOptions.Progress is invoked during
@@ -141,8 +139,13 @@ func (ix *Index) Build(
 	// Missing scope metadata also requires one full reconciliation for older indexes.
 	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
 	classifierHash := ""
-	if ix.spec.SupportsAutomatedScope {
-		classifierHash = db.ClassifierHash()
+	classifierSource, tracksClassifier := src.(appliedClassifierSource)
+	tracksClassifier = tracksClassifier && ix.spec.SupportsAutomatedScope
+	if tracksClassifier {
+		classifierHash, err = classifierSource.AppliedClassifierHash(ctx)
+		if err != nil {
+			return BuildResult{}, fmt.Errorf("reading archive classifier hash: %w", err)
+		}
 		storedHash, hasHash, err := ix.metaGet(ctx, scopeClassifierHashKey)
 		if err != nil {
 			return BuildResult{}, fmt.Errorf("reading scope classifier hash: %w", err)
@@ -179,7 +182,7 @@ func (ix *Index) Build(
 	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
 		return BuildResult{}, err
 	}
-	if classifierHash != "" {
+	if tracksClassifier {
 		if err := ix.metaSet(ctx, scopeClassifierHashKey, classifierHash); err != nil {
 			return BuildResult{}, fmt.Errorf("storing scope classifier hash: %w", err)
 		}
