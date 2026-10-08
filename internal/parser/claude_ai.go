@@ -122,6 +122,9 @@ func ParseClaudeAIDetail(data []byte) (ParseResult, error) {
 	}
 	leaf := messages[len(messages)-1].UUID
 	result.Session.LastEntryUUID = &leaf
+	for i, m := range messages {
+		result.Messages[i].SourceUUID = m.UUID
+	}
 	return result, nil
 }
 

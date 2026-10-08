@@ -6461,22 +6461,7 @@ async fn claude_auth_fetch(
     let request_id_json = serde_json::to_string(&request_id).map_err(|e| e.to_string())?;
     let url =
         serde_json::to_string(&format!("https://claude.ai{path}")).map_err(|e| e.to_string())?;
-    let script = format!(
-        r#"(async () => {{
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 45000);
-        try {{
-            const response = await fetch({url}, {{ method: "GET", credentials: "include", redirect: "error", signal: controller.signal }});
-            const body = await response.text();
-            const retryAfter = response.headers.get("retry-after") ?? undefined;
-            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: response.status, body, retryAfter }} }});
-        }} catch (error) {{
-            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 0, body: "", error: String(error) }} }});
-        }} finally {{
-            clearTimeout(timer);
-        }}
-    }})()"#
-    );
+    let script = claude_fetch_script(&url, &request_id_json);
     let response = match window.eval(&script) {
         Err(err) => Err(err.to_string()),
         Ok(()) => match tokio::time::timeout(Duration::from_secs(60), receiver).await {
@@ -6492,6 +6477,50 @@ async fn claude_auth_fetch(
     response
 }
 
+fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
+    format!(
+        r#"(async () => {{
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 45000);
+        try {{
+            const response = await fetch({url}, {{ method: "GET", credentials: "include", redirect: "error", signal: controller.signal }});
+            const limit = 32 * 1024 * 1024;
+            const oversized = () => window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 413, body: "" }} }});
+            if (Number(response.headers.get("content-length")) > limit) {{
+                controller.abort();
+                await oversized();
+                return;
+            }}
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let size = 0;
+            let body = "";
+            if (reader) {{
+                for (;;) {{
+                    const {{ done, value }} = await reader.read();
+                    if (done) break;
+                    size += value.byteLength;
+                    if (size > limit) {{
+                        controller.abort();
+                        await reader.cancel();
+                        await oversized();
+                        return;
+                    }}
+                    body += decoder.decode(value, {{ stream: true }});
+                }}
+                body += decoder.decode();
+            }}
+            const retryAfter = response.headers.get("retry-after") ?? undefined;
+            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: response.status, body, retryAfter }} }});
+        }} catch (error) {{
+            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 0, body: "", error: String(error) }} }});
+        }} finally {{
+            clearTimeout(timer);
+        }}
+    }})()"#
+    )
+}
+
 fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
     if !path.starts_with("/api/") {
         return Err("Claude fetch path must start with /api/".into());
@@ -6501,6 +6530,27 @@ fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod claude_sync_tests {
+
+    #[test]
+    fn claude_fetch_bounds_browser_response() {
+        use std::io::Write;
+        let mut child = std::process::Command::new("node")
+            .arg("-e")
+            .arg(include_str!("claude_fetch_test.cjs"))
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                super::claude_fetch_script("\"https://claude.ai/api/detail\"", "\"request\"")
+                    .as_bytes(),
+            )
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
 
     #[test]
     fn claude_fetch_requires_api_path() {
