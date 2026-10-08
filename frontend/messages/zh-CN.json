@@ -2381,7 +2381,9 @@
   "tool_sequences_retry": "重试",
   "usage_hide_project": "隐藏项目",
   "usage_all_projects": "所有项目",
-  "usage_click_project": "点击 {label} 查看其分组和会话",
-  "usage_click_project_hint": "点击项目查看其分组和会话",
-  "usage_zoom_loading": "正在加载..."
+  "usage_click_project": "点击聚焦 {label}，双击打开其分组和会话",
+  "usage_click_project_hint": "点击聚焦，双击打开。Enter 打开，空格选择。",
+  "usage_zoom_loading": "正在加载...",
+  "usage_click_to_focus": "点击聚焦 {label}",
+  "usage_click_to_focus_hint": "点击聚焦，再次点击清除"
 }

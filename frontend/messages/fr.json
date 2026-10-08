@@ -2463,7 +2463,9 @@
   "tool_sequences_retry": "Réessayer",
   "usage_hide_project": "Masquer le projet",
   "usage_all_projects": "Tous les projets",
-  "usage_click_project": "Cliquez sur {label} pour voir ses groupes et sessions",
-  "usage_click_project_hint": "Cliquez sur un projet pour voir ses groupes et sessions",
-  "usage_zoom_loading": "Chargement..."
+  "usage_click_project": "Cliquer pour cibler {label}, double-cliquer pour ouvrir ses groupes et sessions",
+  "usage_click_project_hint": "Cliquer pour cibler, double-cliquer pour ouvrir. Entrée ouvre, Espace sélectionne.",
+  "usage_zoom_loading": "Chargement...",
+  "usage_click_to_focus": "Cliquer pour cibler {label}",
+  "usage_click_to_focus_hint": "Cliquer pour cibler, recliquer pour effacer"
 }

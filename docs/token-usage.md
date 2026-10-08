@@ -149,8 +149,11 @@ exclusions by key and the opened attribution project stay in the current page.
 A **Clear filters** link appears next to the refresh button
 when anything is active.
 
-Click any project in Usage attribution to see its groups and individual
-sessions for the selected date range. Hermes cron jobs show their latest
+Click a tile or row in Usage attribution to focus the page's stats on that
+project, model, or agent. Click it again to clear that grouping's exclusions.
+Double-click a project to open its groups and individual sessions for the
+selected date range. Enter opens a project; Space selects it. Touch taps
+select without opening. Hermes cron jobs show their latest
 recorded name in that range and their ID on hover. Matching names get a short
 ID suffix. Matching job IDs on different machines get a machine suffix.
 Colliding session IDs retain their provider. **All projects** returns to the
@@ -180,8 +183,9 @@ Deselect all shortcuts, and a colored dot for agents so you can tell them apart
 at a glance.
 
 In the Model picker, checked models are visible and unchecked models are
-hidden. Clicking a model in the attribution chart unchecks it in the picker.
-Recheck it to show it again without changing the other models. Hidden models
+hidden. Clicking a model in attribution checks it and unchecks every other
+model. Click it again to show all models, or use the picker to change which
+models are visible. Hidden models
 remain in the picker after a reload or when opening a shared URL.
 
 Usage saves model visibility with `exclude_model`. The previous Usage-only

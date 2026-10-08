@@ -12,12 +12,14 @@
     color: string;
     meta?: string;
     title?: string;
+    selected?: boolean;
   }
 
   interface Props {
     items: TreemapItem[];
     height?: number;
     onSelect?: (id: string) => void;
+    onOpen?: (id: string) => void;
     formatValue?: (value: number) => string;
   }
 
@@ -31,6 +33,7 @@
     items,
     height = 260,
     onSelect,
+    onOpen,
     formatValue = formatCost,
   }: Props = $props();
 
@@ -41,12 +44,14 @@
   );
 
   let measuredWidth = $state(0);
+  let touchClick = false;
   const chartWidth = $derived(measuredWidth > 0 ? measuredWidth : 600);
 
   function handleKey(e: KeyboardEvent, id: string) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onSelect?.(id);
+      if (e.key === "Enter") onOpen?.(id);
+      else onSelect?.(id);
     }
   }
 </script>
@@ -72,11 +77,16 @@
               tabindex={onSelect ? 0 : -1}
               role="button"
               aria-disabled={!onSelect}
-              aria-label={tile.title ?? m.usage_hide_from_chart({ label: tile.label })}
-              onclick={() => onSelect?.(tile.id)}
+              aria-pressed={tile.selected ?? false}
+              aria-label={tile.title ?? m.usage_click_to_focus({ label: tile.label })}
+              onclick={(event) => {
+                touchClick = "pointerType" in event && event.pointerType === "touch";
+                if (!onOpen || touchClick || event.detail < 2) onSelect?.(tile.id);
+              }}
+              ondblclick={() => { if (!touchClick) onOpen?.(tile.id); }}
               onkeydown={(event) => handleKey(event, tile.id)}
             >
-              <title>{tile.title ?? m.usage_click_to_hide({ label: tile.label })}</title>
+              <title>{tile.title ?? m.usage_click_to_focus({ label: tile.label })}</title>
               <Group x={node.x0} y={node.y0}>
                 <Rect
                   width={tileWidth}
@@ -129,6 +139,11 @@
   }
 
   .treemap-container :global(.tile:focus-visible rect) {
+    stroke: white;
+    stroke-width: 2;
+  }
+
+  .treemap-container :global(.tile[aria-pressed="true"] rect) {
     stroke: white;
     stroke-width: 2;
   }

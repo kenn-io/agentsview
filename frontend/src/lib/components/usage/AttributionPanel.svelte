@@ -37,6 +37,7 @@
   }
 
   let panel: HTMLElement;
+  let touchClick = false;
 
   const zoomedProject = $derived(usage.zoomedProject);
 
@@ -141,6 +142,7 @@
       value: r.value,
       color: r.color,
       title: rowTitle(r.id, r.label),
+      selected: usage.isAttributionFocused(groupBy, r.id),
       meta: fmtPct(r.value, rows.reduce(
         (sum, item) => sum + item.value, 0,
       )),
@@ -154,18 +156,30 @@
       if (row?.groupKey) return [name === row.groupKey ? "" : name, row.groupKey, row.machine].filter(Boolean).join(" · ");
       return row?.sessionId && name !== row.sessionId ? `${name} · ${row.sessionId}` : name;
     }
-    return groupBy === "project" ? m.usage_click_project({ label }) : m.usage_click_to_hide({ label });
+    return groupBy === "project" ? m.usage_click_project({ label }) : m.usage_click_to_focus({ label });
   }
 
   function handleSelect(id: string) {
     if (zoomedProject) return;
-    if (groupBy === "project") {
-      usage.selectAttributionProject(id, rows.find((row) => row.id === id)!.label);
-      panel.focus();
-    } else if (groupBy === "agent") {
-      usage.toggleAgent(id, { preserveTimeRange: true });
-    } else {
-      usage.hideModel(id, { preserveTimeRange: true });
+    usage.focusAttribution(groupBy, id);
+  }
+
+  function handleOpen(id: string) {
+    if (zoomedProject || groupBy !== "project") return;
+    usage.selectAttributionProject(id, rows.find((row) => row.id === id)!.label);
+    panel.focus();
+  }
+
+  function handleClick(event: MouseEvent, id: string) {
+    touchClick = "pointerType" in event && event.pointerType === "touch";
+    if (groupBy !== "project" || touchClick || event.detail < 2) handleSelect(id);
+  }
+
+  function handleKey(event: KeyboardEvent, id: string) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (event.key === "Enter") handleOpen(id);
+      else handleSelect(id);
     }
   }
 
@@ -244,7 +258,7 @@
   {:else if rows.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    {#if !zoomedProject}<div class="hint">{groupBy === "project" ? m.usage_click_project_hint() : m.usage_click_to_hide_hint()}</div>{/if}
+    {#if !zoomedProject}<div class="hint">{groupBy === "project" ? m.usage_click_project_hint() : m.usage_click_to_focus_hint()}</div>{/if}
     {#if view === "treemap"}
       <div class="treemap-layout">
         <div class="treemap-main">
@@ -252,18 +266,23 @@
             items={treemapItems}
             height={260}
             onSelect={zoomedProject ? undefined : handleSelect}
+            onOpen={!zoomedProject && groupBy === "project" ? handleOpen : undefined}
             formatValue={isTokenMode ? formatTokenCount : undefined}
           />
         </div>
         <div class="side-rail">
           {#each rows as row, i (row.id)}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="rail-row"
+              class:selected={usage.isAttributionFocused(groupBy, row.id)}
+              role="button"
+              tabindex={zoomedProject ? -1 : 0}
+              aria-pressed={usage.isAttributionFocused(groupBy, row.id)}
               title={rowTitle(row.id, row.label)}
               aria-disabled={!!zoomedProject}
-              onclick={() => handleSelect(row.id)}
+              onclick={(event) => handleClick(event, row.id)}
+              ondblclick={() => { if (!touchClick) handleOpen(row.id); }}
+              onkeydown={(event) => handleKey(event, row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
               <span
@@ -283,13 +302,17 @@
     {:else}
       <div class="list-view">
         {#each rows as row, i (row.id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="list-row"
+            class:selected={usage.isAttributionFocused(groupBy, row.id)}
+            role="button"
+            tabindex={zoomedProject ? -1 : 0}
+            aria-pressed={usage.isAttributionFocused(groupBy, row.id)}
             title={rowTitle(row.id, row.label)}
             aria-disabled={!!zoomedProject}
-            onclick={() => handleSelect(row.id)}
+            onclick={(event) => handleClick(event, row.id)}
+            ondblclick={() => { if (!touchClick) handleOpen(row.id); }}
+            onkeydown={(event) => handleKey(event, row.id)}
           >
             <span class="list-rank">{i + 1}</span>
             <span
@@ -406,6 +429,10 @@
   }
 
   .rail-row:hover:not([aria-disabled="true"]) {
+    background: var(--bg-surface-hover);
+  }
+
+  .rail-row.selected, .list-row.selected {
     background: var(--bg-surface-hover);
   }
 

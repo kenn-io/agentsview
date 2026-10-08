@@ -638,6 +638,31 @@ class UsageStore {
     }
   }
 
+  private attributionFocus = $state<Partial<Record<GroupBy, { id: string; excluded: string }>>>({});
+
+  isAttributionFocused(groupBy: GroupBy, id: string): boolean {
+    const field = groupBy === "project" ? "excludedProjectKeys" : groupBy === "agent" ? "excludedAgents" : "excludedModels";
+    return this.attributionFocus[groupBy]?.id === id && this.attributionFocus[groupBy]?.excluded === this[field];
+  }
+
+  focusAttribution(groupBy: GroupBy, id: string): void {
+    const field = groupBy === "project" ? "excludedProjectKeys" : groupBy === "agent" ? "excludedAgents" : "excludedModels";
+    const previous = this[field];
+    const previousFocus = this.attributionFocus[groupBy];
+    const clear = this.isAttributionFocused(groupBy, id);
+    const keys = groupBy === "project" ? this.summary?.projectTotals.map((row) => row.project_key) : groupBy === "agent" ? this.summary?.agentTotals.map((row) => row.agent) : this.summary?.modelTotals.map((row) => row.model);
+    const all = new Set([...previous.split(",").filter(Boolean), ...(keys ?? [])]);
+    const excluded = clear ? "" : [...all].filter((key) => key !== id).join(",");
+    this[field] = excluded;
+    this.attributionFocus[groupBy] = clear ? undefined : { id, excluded };
+    void this.fetchAllWithResult({ preserveTimeRange: true }).then((result) => {
+      if (result !== "error" || this[field] !== excluded) return;
+      this[field] = previous;
+      this.attributionFocus[groupBy] = previousFocus;
+      void this.fetchAll({ preserveTimeRange: true });
+    });
+  }
+
   // Toggle an item's exclusion. Clicking an included item
   // excludes it; clicking an excluded item re-includes it.
   toggleProject(name: string): void {
@@ -646,6 +671,7 @@ class UsageStore {
   }
 
   toggleProjectKey(key: string, options: { preserveTimeRange?: boolean } = {}): void {
+    this.attributionFocus.project = undefined;
     const previous = this.excludedProjectKeys;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedProjectKeys = this.toggleCsv(this.excludedProjectKeys, key);
@@ -665,6 +691,7 @@ class UsageStore {
   }
 
   toggleAgent(name: string, options: { preserveTimeRange?: boolean } = {}): void {
+    this.attributionFocus.agent = undefined;
     const previous = this.excludedAgents;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedAgents = this.toggleCsv(this.excludedAgents, name);
@@ -677,6 +704,7 @@ class UsageStore {
   }
 
   hideModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
+    this.attributionFocus.model = undefined;
     const previous = this.excludedModels;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedModels = joinCsvParts(this.excludedModels, name);
@@ -689,6 +717,7 @@ class UsageStore {
   }
 
   toggleModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
+    this.attributionFocus.model = undefined;
     const previous = this.excludedModels;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedModels = this.toggleCsv(this.excludedModels, name);
@@ -734,12 +763,14 @@ class UsageStore {
   }
 
   selectAllProjects(): void {
+    this.attributionFocus.project = undefined;
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
     this.fetchAll();
   }
 
   deselectAllProjectKeys(all: string[]): void {
+    this.attributionFocus.project = undefined;
     const excluded = new Set(
       this.excludedProjectKeys ? this.excludedProjectKeys.split(",").filter(Boolean) : [],
     );
@@ -750,26 +781,31 @@ class UsageStore {
   }
 
   selectAllAgents(): void {
+    this.attributionFocus.agent = undefined;
     this.excludedAgents = "";
     this.fetchAll();
   }
 
   deselectAllAgents(all: string[]): void {
+    this.attributionFocus.agent = undefined;
     this.excludedAgents = all.join(",");
     this.fetchAll();
   }
 
   selectAllModels(): void {
+    this.attributionFocus.model = undefined;
     this.excludedModels = "";
     this.fetchAll();
   }
 
   deselectAllModels(all: string[]): void {
+    this.attributionFocus.model = undefined;
     this.excludedModels = joinCsvParts(this.excludedModels, all.join(","));
     this.fetchAll();
   }
 
   clearFilters(): void {
+    this.attributionFocus = {};
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
     this.excludedAgents = "";

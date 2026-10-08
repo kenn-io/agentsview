@@ -118,7 +118,7 @@ function mountPanel(colorMap?: ReadonlyMap<string, string>) {
   });
 }
 
-describe("AttributionPanel agent exclusion", () => {
+describe("AttributionPanel agent focus", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     usage.summary = summaryWithAgents(["claude", "codex"]);
@@ -140,25 +140,23 @@ describe("AttributionPanel agent exclusion", () => {
     document.body.innerHTML = "";
   });
 
-  // Drives the real click path: panel click -> store toggle -> outgoing
-  // request. Fails without the baseParams excludeAgent wiring.
-  it("sends agent exclusions in usage queries after an attribution click", async () => {
+  it("focuses page stats on the clicked agent", async () => {
     const component = mountPanel();
     await tick();
 
     const rows = document.querySelectorAll<HTMLElement>(".list-row");
     expect(rows.length).toBe(2);
-    rows[1]!.click(); // exclude "codex"
+    rows[1]!.click();
 
     await vi.waitFor(() =>
       expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-        expect.objectContaining({ exclude_agent: "codex" }),
+        expect.objectContaining({ exclude_agent: "claude" }),
       ),
     );
     unmount(component);
   });
 
-  it("keeps the active chart brush when excluding an attribution row", async () => {
+  it("keeps the active chart brush when focusing an attribution row", async () => {
     usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
     usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
     const component = mountPanel();
@@ -173,7 +171,7 @@ describe("AttributionPanel agent exclusion", () => {
     unmount(component);
   });
 
-  it("rolls back an agent exclusion when its active-range refresh fails", async () => {
+  it("rolls back agent focus when its active-range refresh fails", async () => {
     usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
     usage.isTimeRangeSummaryProvisional = false;
     usageServiceMocks.getApiV1UsageSummary
@@ -210,6 +208,10 @@ describe("AttributionPanel agent exclusion", () => {
 describe("AttributionPanel project identity", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(window.history, "back").mockImplementation(() =>
+      window.dispatchEvent(new PopStateEvent("popstate")),
+    );
+    usage.backToProjects();
     usage.summary = summaryWithDuplicateProjectLabels();
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithDuplicateProjectLabels());
     usage.excludedProjectKeys = "";
@@ -223,6 +225,7 @@ describe("AttributionPanel project identity", () => {
     usage.summary = null;
     usage.excludedProjectKeys = "";
     document.body.innerHTML = "";
+    vi.restoreAllMocks();
   });
 
   it("keeps duplicate display labels distinct and zooms by project key", async () => {
@@ -231,7 +234,7 @@ describe("AttributionPanel project identity", () => {
 
     const rows = document.querySelectorAll<HTMLElement>(".list-row");
     expect(rows.length).toBe(2);
-    rows[1]!.click();
+    rows[1]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
 
     await vi.waitFor(() =>
       expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).toEqual(
@@ -242,9 +245,73 @@ describe("AttributionPanel project identity", () => {
     );
     unmount(component);
   });
+
+  it.each([
+    ["treemap", ".tile"],
+    ["treemap", ".rail-row"],
+    ["list", ".list-row"],
+  ] as const)(
+    "selects on click and opens on double-click through %s %s",
+    async (view, selector) => {
+      usage.toggles.attribution.view = view;
+      const component = mountPanel();
+      await tick();
+      const row = document.querySelectorAll(selector)[1]!;
+      row.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+      expect(usage.excludedProjectKeys).toBe("pl1:sha256:first");
+      expect(usage.zoomedProject).toBeNull();
+      expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({ exclude_project_key: "pl1:sha256:first" }),
+      );
+      row.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+      row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(usage.excludedProjectKeys).toBe("pl1:sha256:first");
+      expect(usage.zoomedProject?.key).toBe("pl1:sha256:second");
+      await unmount(component);
+    },
+  );
+
+  it.each([
+    ["treemap", ".tile"],
+    ["treemap", ".rail-row"],
+    ["list", ".list-row"],
+  ] as const)("selects with Space and opens with Enter through %s %s", async (view, selector) => {
+    usage.toggles.attribution.view = view;
+    const component = mountPanel();
+    await tick();
+    const row = document.querySelectorAll(selector)[1]!;
+    row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:first");
+    expect(usage.zoomedProject).toBeNull();
+    row.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
+    expect(usage.zoomedProject?.key).toBe("pl1:sha256:second");
+    await unmount(component);
+  });
+
+  it.each([
+    ["treemap", ".tile"],
+    ["treemap", ".rail-row"],
+    ["list", ".list-row"],
+  ] as const)("keeps touch taps as selection through %s %s", async (view, selector) => {
+    usage.toggles.attribution.view = view;
+    const component = mountPanel();
+    await tick();
+    const row = document.querySelectorAll(selector)[1]!;
+    for (const detail of [1, 2]) {
+      const tap = new MouseEvent("click", { detail, bubbles: true });
+      Object.defineProperty(tap, "pointerType", { value: "touch" });
+      row.dispatchEvent(tap);
+      expect(usage.excludedProjectKeys).toBe(detail === 1 ? "pl1:sha256:first" : "");
+    }
+    row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(usage.zoomedProject).toBeNull();
+    await unmount(component);
+  });
 });
 
-describe("AttributionPanel model exclusion", () => {
+describe("AttributionPanel model focus", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     usage.summary = summaryWithModels();
@@ -266,52 +333,44 @@ describe("AttributionPanel model exclusion", () => {
     ["treemap", ".tile"],
     ["treemap", ".rail-row"],
     ["list", ".list-row"],
-  ] as const)("hides a model through %s %s instead of selecting it", async (view, selector) => {
-    usage.toggles.attribution.view = view;
-    const remaining = summaryWithModels();
-    remaining.modelTotals = [remaining.modelTotals[1]!];
-    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(remaining);
-    const component = mountPanel();
-    await tick();
-
-    try {
-      document.querySelector(selector)!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-      await vi.waitFor(() => {
-        const params = usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
-        expect(params).toEqual(expect.objectContaining({ exclude_model: "gpt-5.6-sol" }));
-        expect(params.model).toBeUndefined();
-      });
+  ] as const)(
+    "focuses a model through %s %s and clears focus on another click",
+    async (view, selector) => {
+      usage.toggles.attribution.view = view;
+      const remaining = summaryWithModels();
+      remaining.modelTotals = [remaining.modelTotals[0]!];
+      usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(remaining);
+      const component = mountPanel();
       await tick();
-      expect(Array.from(document.querySelectorAll(selector), (row) => row.textContent)).toEqual([
-        expect.stringContaining("claude-opus-5"),
-      ]);
-      expect(usage.hasActiveFilters).toBe(true);
 
-      const empty = summaryWithModels();
-      empty.modelTotals = [];
-      usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(empty);
-      document.querySelector(selector)!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await vi.waitFor(() =>
-        expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
-          expect.objectContaining({ exclude_model: "gpt-5.6-sol,claude-opus-5" }),
-        ),
-      );
-      await tick();
-      expect(document.querySelectorAll(selector)).toHaveLength(0);
+      try {
+        document.querySelector(selector)!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithModels());
-      usage.clearFilters();
-      await vi.waitFor(() => expect(document.querySelectorAll(selector)).toHaveLength(2));
-      expect(
-        usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].exclude_model,
-      ).toBeUndefined();
-    } finally {
-      await unmount(component);
-    }
-  });
+        await vi.waitFor(() => {
+          const params = usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
+          expect(params).toEqual(expect.objectContaining({ exclude_model: "claude-opus-5" }));
+          expect(params.model).toBeUndefined();
+        });
+        await tick();
+        expect(Array.from(document.querySelectorAll(selector), (row) => row.textContent)).toEqual([
+          expect.stringContaining("gpt-5.6-sol"),
+        ]);
+        expect(usage.hasActiveFilters).toBe(true);
 
-  it("keeps other hidden models and the chart brush when hiding a model", async () => {
+        expect(document.querySelector(selector)?.getAttribute("aria-pressed")).toBe("true");
+        usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithModels());
+        document.querySelector(selector)!.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+        await vi.waitFor(() => expect(document.querySelectorAll(selector)).toHaveLength(2));
+        expect(
+          usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].exclude_model,
+        ).toBeUndefined();
+      } finally {
+        await unmount(component);
+      }
+    },
+  );
+
+  it("keeps other hidden models and the chart brush when focusing a model", async () => {
     usage.excludedModels = "model-other";
     usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
     usage.toggles.attribution.view = "treemap";
@@ -328,7 +387,7 @@ describe("AttributionPanel model exclusion", () => {
           expect.objectContaining({
             from: "2024-01-08",
             to: "2024-01-14",
-            exclude_model: "model-other,gpt-5.6-sol",
+            exclude_model: "model-other,claude-opus-5",
           }),
         ),
       );
@@ -489,7 +548,9 @@ const topSessionForRemainder = (): DbTopSessionEntry => ({
 describe("AttributionPanel job groups", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(window.history, "back").mockImplementation(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    vi.spyOn(window.history, "back").mockImplementation(() =>
+      window.dispatchEvent(new PopStateEvent("popstate")),
+    );
     usage.backToProjects();
     usage.zoomRows = null;
     usage.summary = summaryWithDuplicateProjectLabels();
@@ -538,7 +599,9 @@ describe("AttributionPanel job groups", () => {
     ]);
     const component = mountPanel();
     await tick();
-    document.querySelectorAll<HTMLElement>(".list-row")[0]!.click();
+    document
+      .querySelectorAll<HTMLElement>(".list-row")[0]!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await vi.waitFor(() => expect(usage.zoomedProject?.key).toBe("pl1:sha256:first"));
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     await tick();
@@ -611,12 +674,14 @@ describe("AttributionPanel job groups", () => {
 
   it("shows the job ID for an unnamed group in its label and tooltip", async () => {
     usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
-    usage.zoomRows = [{
-      ...topSessionForRemainder(),
-      groupKey: "digest",
-      groupLabel: "",
-      displayName: "digest",
-    }];
+    usage.zoomRows = [
+      {
+        ...topSessionForRemainder(),
+        groupKey: "digest",
+        groupLabel: "",
+        displayName: "digest",
+      },
+    ];
     const component = mountPanel();
     await tick();
     const row = document.querySelector<HTMLElement>(".list-row")!;
@@ -633,26 +698,37 @@ describe("AttributionPanel job groups", () => {
     const component = mountPanel();
     await tick();
     const rows = document.querySelectorAll<HTMLElement>(".list-row");
-    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual(["Daily digest · host-a", "Daily digest · host-b"]);
-    expect(Array.from(rows, (row) => row.title)).toEqual(["Daily digest · digest · host-a", "Daily digest · digest · host-b"]);
+    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual([
+      "Daily digest · host-a",
+      "Daily digest · host-b",
+    ]);
+    expect(Array.from(rows, (row) => row.title)).toEqual([
+      "Daily digest · digest · host-a",
+      "Daily digest · digest · host-b",
+    ]);
     await unmount(component);
   });
 
-  it.each(["Escape", "Backspace"])("returns to projects with %s while the panel has focus", async (key) => {
-    const back = vi.spyOn(window.history, "back").mockImplementation(() => window.dispatchEvent(new PopStateEvent("popstate")));
-    const component = mountPanel();
-    usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
-    await tick();
-    const panel = document.querySelector<HTMLElement>(".attribution-panel")!;
-    panel.focus();
-    panel.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
-    await tick();
-    expect(usage.zoomedProject).toBeNull();
-    expect(back).toHaveBeenCalledOnce();
-    expect(document.querySelectorAll(".list-row")).toHaveLength(2);
-    await unmount(component);
-    back.mockRestore();
-  });
+  it.each(["Escape", "Backspace"])(
+    "returns to projects with %s while the panel has focus",
+    async (key) => {
+      const back = vi
+        .spyOn(window.history, "back")
+        .mockImplementation(() => window.dispatchEvent(new PopStateEvent("popstate")));
+      const component = mountPanel();
+      usage.selectAttributionProject("pl1:sha256:first", "hermes-cron");
+      await tick();
+      const panel = document.querySelector<HTMLElement>(".attribution-panel")!;
+      panel.focus();
+      panel.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      await tick();
+      expect(usage.zoomedProject).toBeNull();
+      expect(back).toHaveBeenCalledOnce();
+      expect(document.querySelectorAll(".list-row")).toHaveLength(2);
+      await unmount(component);
+      back.mockRestore();
+    },
+  );
 
   it("balances button Back and reopening before the history event", async () => {
     const back = vi.mocked(window.history.back).mockImplementation(() => {});
@@ -704,8 +780,14 @@ describe("AttributionPanel job groups", () => {
     const component = mountPanel();
     await tick();
     const rows = document.querySelectorAll<HTMLElement>(".list-row");
-    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual(["Repeated run · hermes:r", "Repeated run · augure-d"]);
-    expect(Array.from(rows, (row) => row.title)).toEqual(["Repeated run · hermes:run-a", "Repeated run · augure-desktop:run-a"]);
+    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual([
+      "Repeated run · hermes:r",
+      "Repeated run · augure-d",
+    ]);
+    expect(Array.from(rows, (row) => row.title)).toEqual([
+      "Repeated run · hermes:run-a",
+      "Repeated run · augure-desktop:run-a",
+    ]);
     await unmount(component);
   });
 
@@ -714,7 +796,9 @@ describe("AttributionPanel job groups", () => {
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithDuplicateProjectLabels());
     const component = mountPanel();
     await tick();
-    document.querySelectorAll<HTMLElement>(".list-row")[0]!.click();
+    document
+      .querySelectorAll<HTMLElement>(".list-row")[0]!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     await tick();
     const hide = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Hide project",

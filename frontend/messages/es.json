@@ -2466,7 +2466,9 @@
   "tool_sequences_retry": "Reintentar",
   "usage_hide_project": "Ocultar proyecto",
   "usage_all_projects": "Todos los proyectos",
-  "usage_click_project": "Haz clic en {label} para ver sus grupos y sesiones",
-  "usage_click_project_hint": "Haz clic en un proyecto para ver sus grupos y sesiones",
-  "usage_zoom_loading": "Cargando..."
+  "usage_click_project": "Haz clic para enfocar {label}; haz doble clic para abrir sus grupos y sesiones",
+  "usage_click_project_hint": "Haz clic para enfocar, doble clic para abrir. Enter abre; Espacio selecciona.",
+  "usage_zoom_loading": "Cargando...",
+  "usage_click_to_focus": "Haz clic para enfocar {label}",
+  "usage_click_to_focus_hint": "Haz clic para enfocar; vuelve a hacer clic para borrar"
 }

@@ -2466,7 +2466,9 @@
   "tool_sequences_retry": "Yenidən cəhd et",
   "usage_hide_project": "Layihəni gizlət",
   "usage_all_projects": "Bütün layihələr",
-  "usage_click_project": "{label} qruplarını və sessiyalarını görmək üçün klikləyin",
-  "usage_click_project_hint": "Qruplarını və sessiyalarını görmək üçün layihəyə klikləyin",
-  "usage_zoom_loading": "Yüklənir..."
+  "usage_click_project": "{label} üzrə fokuslanmaq üçün klikləyin, qrupları və sessiyaları açmaq üçün iki dəfə klikləyin",
+  "usage_click_project_hint": "Fokuslanmaq üçün klikləyin, açmaq üçün iki dəfə klikləyin. Enter açır, Space seçir.",
+  "usage_zoom_loading": "Yüklənir...",
+  "usage_click_to_focus": "{label} üzrə fokuslanmaq üçün klikləyin",
+  "usage_click_to_focus_hint": "Fokuslanmaq üçün klikləyin, təmizləmək üçün yenidən klikləyin"
 }

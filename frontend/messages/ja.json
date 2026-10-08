@@ -2452,7 +2452,9 @@
   "tool_sequences_retry": "再試行",
   "usage_hide_project": "プロジェクトを非表示",
   "usage_all_projects": "すべてのプロジェクト",
-  "usage_click_project": "{label} をクリックしてグループとセッションを表示",
-  "usage_click_project_hint": "プロジェクトをクリックしてグループとセッションを表示",
-  "usage_zoom_loading": "読み込み中..."
+  "usage_click_project": "クリックして {label} に絞り込み、ダブルクリックでグループとセッションを開く",
+  "usage_click_project_hint": "クリックで絞り込み、ダブルクリックで開く。Enterで開き、Spaceで選択。",
+  "usage_zoom_loading": "読み込み中...",
+  "usage_click_to_focus": "クリックして {label} に絞り込む",
+  "usage_click_to_focus_hint": "クリックして絞り込み、再クリックで解除"
 }
