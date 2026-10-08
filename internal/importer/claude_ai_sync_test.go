@@ -80,6 +80,69 @@ func TestSyncClaudeAIArchivePolicySwitch(t *testing.T) {
 	assert.Equal(t, strPtr("claude-ai:v1:full:reply"), session.LastEntryUUID)
 }
 
+func TestSyncClaudeAIResyncArchivePolicy(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+			dir := t.TempDir()
+			sourcePath := filepath.Join(dir, "source.db")
+			source, err := db.Open(t.Context(), sourcePath)
+			require.NoError(t, err)
+			t.Cleanup(func() { source.Close() })
+			details := 0
+			fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+				details++
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+			})
+			_, err = SyncClaudeAI(t.Context(), source, fetch, nil)
+			require.NoError(t, err)
+			before, err := source.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(before))
+			require.NoError(t, source.Close())
+
+			targetPath := filepath.Join(dir, "target.db")
+			target, err := db.OpenWithArchiveContent(t.Context(), targetPath, policy)
+			require.NoError(t, err)
+			t.Cleanup(func() { target.Close() })
+			copied, err := target.CopyOrphanedDataFrom(sourcePath)
+			require.NoError(t, err)
+			require.Equal(t, 1, copied)
+			session, err := target.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			messages, err := target.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			if policy == config.ArchiveContentUsage {
+				assert.Nil(t, session.LastEntryUUID)
+				assert.Equal(t, []string{""}, messageContents(messages))
+			} else {
+				assert.Equal(t, strPtr("claude-ai:v1:full:reply"), session.LastEntryUUID)
+				assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+			}
+			require.NoError(t, target.Close())
+			target, err = db.OpenWithArchiveContent(t.Context(), targetPath, config.ArchiveContentFull)
+			require.NoError(t, err)
+			for range 2 {
+				_, err = SyncClaudeAI(t.Context(), target, fetch, nil)
+				require.NoError(t, err)
+			}
+			wantDetails := 1
+			if policy == config.ArchiveContentUsage {
+				wantDetails = 2
+			}
+			assert.Equal(t, wantDetails, details)
+			messages, err = target.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+			session, err = target.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, strPtr("claude-ai:v1:full:reply"), session.LastEntryUUID)
+		})
+	}
+}
+
 func TestSyncClaudeAIInvalidAccountSession(t *testing.T) {
 	body, err := os.ReadFile("testdata/claude_ai_live/signed_out.json")
 	require.NoError(t, err)

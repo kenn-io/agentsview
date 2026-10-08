@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -237,7 +238,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		return nil, fmt.Errorf("reconciling conversation identities: %w", err)
 	}
 	if count > 0 {
-		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
+		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids", d.ArchiveContent()); err != nil {
 			return nil, fmt.Errorf("copying orphaned data: %w", err)
 		}
 		if err := removeGeneratedIdentitySnapshotsWithoutSource(
@@ -365,7 +366,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		return nil, nil
 	}
 
-	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
+	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids", d.ArchiveContent()); err != nil {
 		return nil, fmt.Errorf("copying trashed data: %w", err)
 	}
 	if err := removeGeneratedIdentitySnapshotsWithoutSource(
@@ -2127,6 +2128,7 @@ func copySessionDataForIDs(
 	ctx context.Context,
 	tx *sql.Tx,
 	tempIDsTable string,
+	policy config.ArchiveContent,
 ) error {
 	// Copy session rows. Build column list dynamically so
 	// older source DBs missing display_name/deleted_at don't
@@ -2143,8 +2145,11 @@ func copySessionDataForIDs(
 
 	if oldDBHasColumn(ctx, tx, "sessions", "last_entry_uuid") {
 		if _, err := tx.ExecContext(ctx,
-			"UPDATE sessions AS destination SET last_entry_uuid = (SELECT source.last_entry_uuid FROM old_db.sessions AS source WHERE source.id = destination.id) "+
+			"UPDATE sessions AS destination SET last_entry_uuid = (SELECT CASE "+
+				"WHEN source.last_entry_uuid GLOB 'claude-ai:v1:*' AND source.last_entry_uuid NOT GLOB ? THEN NULL "+
+				"ELSE source.last_entry_uuid END FROM old_db.sessions AS source WHERE source.id = destination.id) "+
 				"WHERE COALESCE(destination.file_path, '') = '' AND destination.id IN (SELECT id FROM "+tempIDsTable+")",
+			"claude-ai:v1:"+string(policy)+":*",
 		); err != nil {
 			return fmt.Errorf("copying import freshness markers: %w", err)
 		}
