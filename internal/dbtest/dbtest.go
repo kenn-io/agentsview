@@ -4,6 +4,7 @@ package dbtest
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -266,4 +267,59 @@ func SeedSessionWithMessages(
 	t.Helper()
 	SeedSession(t, d, id, project, opts...)
 	SeedMessages(t, d, msgs...)
+}
+
+// SeedUsageGroups records renamed jobs, matching names and ungrouped runs.
+func SeedUsageGroups(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions(id, project, machine, agent, group_key, group_label, started_at, deleted_at, message_count, user_message_count) VALUES
+ ('group-a-old', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Old digest', '2026-10-07T12:00:00Z', NULL, 1, 1),
+ ('group-a-new', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Research digest', '2026-10-08T12:00:00Z', NULL, 1, 1),
+ ('group-a-untitled', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', '', '2026-10-09T12:00:00Z', NULL, 1, 1),
+ ('group-a-deleted', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Deleted digest', '2026-10-10T12:00:00Z', '2026-10-10T13:00:00Z', 1, 1),
+ ('group-b', 'hermes-cron', 'host-a.example', 'hermes', 'job-b', 'Research digest', '2026-10-08T12:00:00Z', NULL, 1, 1),
+ ('group-other', 'hermes-cron', 'host-a.example', 'hermes', '', '', '2026-10-08T12:00:00Z', NULL, 1, 1),
+ ('group-another-project', 'another-project', 'host-a.example', 'hermes', 'job-a', 'Separate project', '2026-10-08T12:00:00Z', NULL, 1, 1);
+ INSERT INTO messages(session_id, ordinal, role, content, timestamp, model, token_usage)
+ SELECT id, 0, 'assistant', 'run message', started_at, 'gpt-5.4', '{"input_tokens":10,"output_tokens":2}' FROM sessions WHERE id LIKE 'group-%';`)
+	require.NoError(t, err)
+}
+
+// AssertUsageGroups protects the same filtered grouping contract on each backend.
+func AssertUsageGroups(t *testing.T, store db.Store) {
+	t.Helper()
+	filter := db.UsageFilter{From: "2026-10-07", To: "2026-10-10", Agent: "hermes", ProjectLabels: []string{"hermes-cron"}, TopSessionsByGroup: true, TopSessionsSort: "tokens"}
+	rows, err := store.GetTopSessionsByCost(t.Context(), filter, 1)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "job-a", rows[0].GroupKey)
+	assert.Equal(t, "Research digest", rows[0].GroupLabel)
+	assert.Equal(t, 3, rows[0].SessionCount)
+	assert.Equal(t, 30, rows[0].InputTokens)
+	assert.Equal(t, 6, rows[0].OutputTokens)
+	filter.From, filter.To = "2026-10-07", "2026-10-07"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "Old digest", rows[0].GroupLabel)
+	assert.Equal(t, 1, rows[0].SessionCount)
+	filter.From, filter.To = "2026-10-07", "2026-10-10"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	byKey := make(map[string]db.TopSessionEntry)
+	for _, row := range rows {
+		byKey[row.GroupKey] = row
+		assert.Equal(t, "hermes-cron", row.Project)
+	}
+	assert.Equal(t, "Research digest", byKey["job-b"].GroupLabel)
+	assert.Equal(t, 1, byKey[""].SessionCount)
+	filter.ProjectLabels = nil
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 4)
+	filter.Model = "absent-model"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
 }

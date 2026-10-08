@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/dbtest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -63,4 +65,11 @@ func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) 
 	require.Len(t, all, labelCount)
 	assert.Equal(t, all, got,
 		"chunked label lookup must match the unfiltered scan, order included")
+}
+
+func TestDuckUsageGroups(t *testing.T) {
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(t.Context(), conn))
+	dbtest.SeedUsageGroups(t, conn)
+	dbtest.AssertUsageGroups(t, NewStoreFromDB(conn))
 }

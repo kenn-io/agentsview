@@ -23,6 +23,7 @@ func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
 	sessionID := "fidelity-round-trip"
 	sess := syncSession(sessionID, "alpha", "fidelity first", "2026-01-20T00:00:00.000Z", 1)
 	sess.TranscriptFidelity = "high"
+	sess.GroupKey, sess.GroupLabel = "job-a", "Daily digest"
 
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session:         sess,
@@ -42,6 +43,8 @@ func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "high", got.TranscriptFidelity, "transcript_fidelity must survive push+read")
+	assert.Equal(t, "job-a", got.GroupKey)
+	assert.Equal(t, "Daily digest", got.GroupLabel)
 }
 
 // TestDuckSessionFingerprintFieldsIncludesTranscriptFidelity verifies that

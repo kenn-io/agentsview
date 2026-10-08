@@ -4,6 +4,7 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
+  import { Button } from "@kenn-io/kit-ui";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
@@ -33,6 +34,8 @@
     pct: number;
   }
 
+  const zoomedProject = $derived(usage.summary?.projectTotals.find((project) => project.project_key === usage.zoomedProjectKey));
+
   const rowItems = $derived.by(() => {
     const s = usage.summary;
     if (!s) return [];
@@ -43,7 +46,19 @@
       value: number;
     }> = [];
 
-    if (groupBy === "project") {
+    if (zoomedProject && groupBy === "project") {
+      const groups = (usage.groups ?? []).filter((row) => row.group_key);
+      const names = groups.map((row) => row.group_label || row.group_key!);
+      items = groups.map((row, index) => ({
+        id: row.group_key!,
+        label: names.filter((name) => name === names[index]).length > 1
+          ? `${names[index]} · ${row.group_key!.slice(0, 6)}` : names[index]!,
+        value: isTokenMode ? sumSelectedTokens(row, usage.selectedTokenTypes) : row.cost.microdollars,
+      }));
+      const total = isTokenMode ? sumSelectedTokens(zoomedProject, usage.selectedTokenTypes) : zoomedProject.cost.microdollars;
+      const remainder = total - items.reduce((sum, item) => sum + item.value, 0);
+      if (remainder > 0) items.push({ id: "", label: m.usage_other_runs(), value: remainder });
+    } else if (groupBy === "project") {
       items = s.projectTotals.map((p) => ({
         id: p.project_key,
         label: p.project,
@@ -81,7 +96,7 @@
       id: d.id,
       label: d.label,
       value: d.value,
-      color: colorMap.get(d.id) ?? "var(--text-muted)",
+      color: colorMap.get(usage.zoomedProjectKey ?? d.id) ?? "var(--text-muted)",
       pct: total > 0 ? d.value / total : 0,
     }));
   });
@@ -92,15 +107,22 @@
       label: r.label,
       value: r.value,
       color: r.color,
+      title: rowTitle(r.id, r.label),
       meta: fmtPct(r.value, rows.reduce(
         (sum, item) => sum + item.value, 0,
       )),
     })),
   );
 
+  function rowTitle(id: string, label: string): string {
+    if (zoomedProject) return id ? `${label} · ${id}` : label;
+    return groupBy === "project" ? m.usage_click_project({ label }) : m.usage_click_to_hide({ label });
+  }
+
   function handleSelect(id: string) {
+    if (zoomedProject) return;
     if (groupBy === "project") {
-      usage.toggleProjectKey(id, { preserveTimeRange: true });
+      void usage.selectAttributionProject(id);
     } else if (groupBy === "agent") {
       usage.toggleAgent(id, { preserveTimeRange: true });
     } else {
@@ -167,17 +189,24 @@
     </div>
   </div>
 
-  {#if rows.length === 0}
+  {#if zoomedProject}
+    <div class="hint"><Button onclick={() => usage.backToProjects()}>{m.usage_all_projects()}</Button> › {zoomedProject.project}</div>
+  {/if}
+  {#if usage.errors.groups}
+    <div class="empty">{usage.errors.groups}</div>
+  {:else if usage.loading.groups}
+    <div class="empty">{m.usage_groups_loading()}</div>
+  {:else if rows.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    <div class="hint">{m.usage_click_to_hide_hint()}</div>
+    {#if !zoomedProject}<div class="hint">{groupBy === "project" ? m.usage_click_project_hint() : m.usage_click_to_hide_hint()}</div>{/if}
     {#if view === "treemap"}
       <div class="treemap-layout">
         <div class="treemap-main">
           <Treemap
             items={treemapItems}
             height={260}
-            onSelect={handleSelect}
+            onSelect={zoomedProject ? undefined : handleSelect}
             formatValue={isTokenMode ? formatTokenCount : undefined}
           />
         </div>
@@ -187,7 +216,11 @@
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="rail-row"
-              title={m.usage_click_to_hide({ label: row.label })}
+              title={rowTitle(row.id, row.label)}
+              role="button"
+              aria-disabled={!!zoomedProject}
+              tabindex={zoomedProject ? -1 : 0}
+              onkeydown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleSelect(row.id); } }}
               onclick={() => handleSelect(row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
@@ -212,7 +245,11 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="list-row"
-            title={m.usage_click_to_hide({ label: row.label })}
+            title={rowTitle(row.id, row.label)}
+            role="button"
+            aria-disabled={!!zoomedProject}
+            tabindex={zoomedProject ? -1 : 0}
+            onkeydown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleSelect(row.id); } }}
             onclick={() => handleSelect(row.id)}
           >
             <span class="list-rank">{i + 1}</span>

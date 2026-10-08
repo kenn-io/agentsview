@@ -416,10 +416,11 @@ type pgDailyUsageScanRow struct {
 }
 
 type pgTopSessionMetadata struct {
-	displayName string
-	agent       string
-	project     string
-	startedAt   string
+	displayName          string
+	agent                string
+	project              string
+	startedAt            string
+	groupKey, groupLabel string
 }
 
 func pgUsageRowSelectFromRows(rowsSQL string) string {
@@ -1253,21 +1254,16 @@ func (s *Store) loadPGTopSessionMetadata(
 		return out, nil
 	}
 
-	pb := &paramBuilder{}
-	placeholders := make([]string, 0, len(sessionIDs))
-	for _, id := range sessionIDs {
-		placeholders = append(placeholders, pb.add(id))
-	}
 	query := `
 SELECT
 	id,
 	COALESCE(NULLIF(COALESCE(display_name, session_name), ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
 	agent,
 	project,
-	started_at
+	started_at, group_key, group_label
 FROM sessions
-WHERE id IN (` + strings.Join(placeholders, ",") + `)`
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+WHERE id = ANY($1)`
+	rows, err := s.pg.QueryContext(ctx, query, sessionIDs)
 	if err != nil {
 		return nil, fmt.Errorf("querying pg top session metadata: %w", err)
 	}
@@ -1282,7 +1278,7 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 			&meta.displayName,
 			&meta.agent,
 			&meta.project,
-			&startedAt,
+			&startedAt, &meta.groupKey, &meta.groupLabel,
 		); err != nil {
 			return nil,
 				fmt.Errorf("scanning pg top session metadata: %w", err)
@@ -2182,10 +2178,9 @@ func (s *Store) GetTopSessionsByCost(
 		})
 	}
 
-	result = db.SortAndLimitTopSessions(
-		result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
-	)
-
+	if !f.TopSessionsByGroup {
+		result = db.SortAndLimitTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	}
 	sessionIDs := make([]string, len(result))
 	for i := range result {
 		sessionIDs[i] = result[i].SessionID
@@ -2200,8 +2195,20 @@ func (s *Store) GetTopSessionsByCost(
 			result[i].Agent = meta.agent
 			result[i].Project = meta.project
 			result[i].StartedAt = meta.startedAt
+			result[i].GroupKey = meta.groupKey
+			result[i].GroupLabel = meta.groupLabel
 		}
 	}
+	if f.TopSessionsByGroup {
+		result, err = db.GroupTopSessions(result)
+		if err != nil {
+			return nil, err
+		}
+	}
+	result = db.SortAndLimitTopSessions(
+		result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
+	)
+
 	return result, nil
 }
 

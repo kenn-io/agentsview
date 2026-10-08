@@ -2449,5 +2449,10 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"プレビューは {countLabel} バイト中 {shownLabel} バイトを表示しています。","countPlural=other":"プレビューは {countLabel} バイト中 {shownLabel} バイトを表示しています。"}}],
   "tool_sequences_full_input_in_message": "完全な入力はメッセージ {ordinal} にあります。",
   "tool_sequences_full_result_in_message": "完全な結果はメッセージ {ordinal} にあります。",
-  "tool_sequences_retry": "再試行"
+  "tool_sequences_retry": "再試行",
+  "usage_other_runs": "その他の実行",
+  "usage_all_projects": "すべてのプロジェクト",
+  "usage_click_project": "{label} をクリックしてグループを表示するかプロジェクトを非表示にします",
+  "usage_click_project_hint": "プロジェクトをクリックしてグループを表示するか非表示にします",
+  "usage_groups_loading": "グループを読み込み中..."
 }

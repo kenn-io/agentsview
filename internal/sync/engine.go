@@ -3807,6 +3807,17 @@ func (e *Engine) resyncBuildLocked(
 		e.mu.Unlock()
 		return stats, err
 	}
+	if err := newDB.RepairHermesCronGroups(ctx); err != nil {
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings, "preserved cron group repair failed: "+err.Error())
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, err
+	}
 	mappingMachines, err := ops.listActiveWorktreeMappingMachines(ctx, newDB)
 	if err != nil {
 		warning := "worktree mapping machine discovery failed, aborting swap: " +
@@ -17762,6 +17773,22 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	indexes := make(map[string][]int)
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
+		if batch[i].sess.GroupKey == "" && (batch[i].sess.Agent == parser.AgentHermes || batch[i].sess.Agent == parser.AgentAugureDesktop) && batch[i].sess.Project == string(batch[i].sess.Agent)+"-cron" {
+			sess := &batch[i].sess
+			job, err := e.db.ResolveHermesCronJob(ctx, applyIDPrefixToID(e.idPrefix, sess.ID), applyIDPrefixToID(e.idPrefix, sess.ParentSessionID), string(sess.Agent))
+			if err == nil && job == "" {
+				if archive, ok := e.archiveStore.(*db.DB); ok {
+					job, err = archive.ResolveHermesCronJob(ctx, applyIDPrefixToID(e.idPrefix, sess.ID), applyIDPrefixToID(e.idPrefix, sess.ParentSessionID), string(sess.Agent))
+				}
+			}
+			if err != nil {
+				return batch, err
+			}
+			if job != "" {
+				sess.GroupKey = job
+				sess.GroupLabel = parser.HermesCronRecordedName(job, sess.SessionName)
+			}
+		}
 		if batch[i].sourceProjectResolved {
 			continue
 		}

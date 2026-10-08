@@ -16,7 +16,7 @@ import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usa
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
-type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions";
+type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions" | "groups";
 // Steps of a full refresh in execution order; the breakdown follows it. The
 // window summary is the second summary request made while a time range is
 // selected on the chart.
@@ -192,7 +192,7 @@ function joinCsvParts(...parts: string[]): string {
   return out.join(",");
 }
 
-type Endpoint = "summary" | "pairwise" | "topSessions";
+type Endpoint = "summary" | "pairwise" | "topSessions" | "groups";
 
 function emptyPairwiseSelection(): UsagePairwiseSelection {
   return {
@@ -362,6 +362,8 @@ class UsageStore {
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
+  zoomedProjectKey = $state<string | null>(null);
+  groups = $state<DbTopSessionEntry[] | null>(null);
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
   // Wall-clock ms of the most recent full refresh, request start to data
@@ -382,17 +384,20 @@ class UsageStore {
     summary: false,
     pairwise: false,
     topSessions: false,
+    groups: false,
   });
   querying = $state<Record<UsagePanel, boolean>>({
     summary: false,
     comparison: false,
     pairwise: false,
     topSessions: false,
+    groups: false,
   });
   errors = $state<Record<Endpoint, string | null>>({
     summary: null,
     pairwise: null,
     topSessions: null,
+    groups: null,
   });
 
   toggles: Toggles = $state(loadToggles());
@@ -401,6 +406,7 @@ class UsageStore {
     summary: 0,
     pairwise: 0,
     topSessions: 0,
+    groups: 0,
   };
   private fetchAllVersion = 0;
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
@@ -804,6 +810,7 @@ class UsageStore {
   }
 
   setTimeSeriesGroupBy(g: GroupBy) {
+    this.backToProjects();
     this.toggles.timeSeries.groupBy = g;
     this.toggles.attribution.groupBy = g;
     saveToggles(this.toggles);
@@ -815,6 +822,7 @@ class UsageStore {
   }
 
   setAttributionGroupBy(g: GroupBy) {
+    this.backToProjects();
     this.toggles.timeSeries.groupBy = g;
     this.toggles.attribution.groupBy = g;
     saveToggles(this.toggles);
@@ -860,6 +868,7 @@ class UsageStore {
     }
     const fetchVersion = ++this.fetchAllVersion;
     this.invalidatePanel("pairwise");
+    this.invalidatePanel("groups");
     this.invalidatePanel("topSessions");
     this.rollDates();
     saveUsageFilters(this);
@@ -970,6 +979,11 @@ class UsageStore {
       }
       if (this.versions.summary === v) {
         this.summary = data;
+        if (
+          this.zoomedProjectKey &&
+          !data.projectTotals.some((project) => project.project_key === this.zoomedProjectKey)
+        )
+          this.backToProjects();
         // Both responses are applied together, so each request's apply
         // phase starts once the later body has arrived; the earlier one
         // shows a gap while it waited for its sibling.
@@ -1171,7 +1185,62 @@ class UsageStore {
     }
   }
 
+  backToProjects(): void {
+    this.invalidatePanel("groups");
+    this.zoomedProjectKey = null;
+    this.groups = null;
+    this.errors.groups = null;
+    this.loading.groups = false;
+  }
+
+  async selectAttributionProject(key: string): Promise<void> {
+    const data = await this.fetchGroups(key);
+    if (!data) return;
+    if (data.some((row) => row.group_key)) {
+      this.zoomedProjectKey = key;
+      this.groups = data;
+    } else {
+      this.toggleProjectKey(key, { preserveTimeRange: true });
+    }
+  }
+
+  private async fetchGroups(
+    key: string,
+    params: UsageParams = this.baseParams(),
+  ): Promise<DbTopSessionEntry[] | null> {
+    const version = ++this.versions.groups;
+    const signal = this.nextAbortSignal("groups");
+    this.loading.groups = true;
+    this.errors.groups = null;
+    try {
+      const data = await UsageService.getApiV1UsageTopSessions(
+        {
+          ...params,
+          project_key: key,
+          group_by: "group",
+          limit: 100,
+          sort: this.mode === "token" ? "tokens" : "cost",
+          token_types: this.mode === "token" ? this.selectedTokenTypes.join(",") : undefined,
+        },
+        { signal },
+      );
+      return this.versions.groups === version ? data : null;
+    } catch (error) {
+      if (!isAbortError(error) && this.versions.groups === version) {
+        this.errors.groups = error instanceof Error ? error.message : m.shared_failed_to_load();
+      }
+      return null;
+    } finally {
+      this.clearAbortSignal("groups", signal);
+      if (this.versions.groups === version) this.loading.groups = false;
+    }
+  }
+
   async fetchTopSessions(params: UsageParams | null = null): Promise<FetchResult> {
+    const zoomedKey = this.zoomedProjectKey;
+    const groupPromise = zoomedKey
+      ? this.fetchGroups(zoomedKey, params ?? this.baseParams())
+      : Promise.resolve(null);
     const v = ++this.versions.topSessions;
     const signal = this.nextAbortSignal("topSessions");
     const isFirstLoad = this.topSessions === null;
@@ -1181,19 +1250,23 @@ class UsageStore {
     const liveStep = this.liveQuery.start("topSessions", started);
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const data = await UsageService.getApiV1UsageTopSessions(
-        {
-          ...(params ?? this.baseParams()),
-          sort: this.mode === "token" ? "tokens" : "cost",
-          token_types:
-            this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
-              ? this.selectedTokenTypes.join(",")
-              : undefined,
-        },
-        { signal },
-      );
+      const [data, groups] = await Promise.all([
+        UsageService.getApiV1UsageTopSessions(
+          {
+            ...(params ?? this.baseParams()),
+            sort: this.mode === "token" ? "tokens" : "cost",
+            token_types:
+              this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
+                ? this.selectedTokenTypes.join(",")
+                : undefined,
+          },
+          { signal },
+        ),
+        groupPromise,
+      ]);
       if (this.versions.topSessions === v) {
         this.topSessions = data;
+        if (zoomedKey && this.zoomedProjectKey === zoomedKey) this.groups = groups;
         this.errors.topSessions = null;
         this.noteStep("topSessions", liveStep, started, data);
         return "ok";
@@ -1260,6 +1333,7 @@ class UsageStore {
     this.versions.summary++;
     this.versions.pairwise++;
     this.versions.topSessions++;
+    this.versions.groups++;
     for (const panel of Object.keys(this.abortControllers) as UsagePanel[]) {
       this.abortControllers[panel]?.abort();
       delete this.abortControllers[panel];
@@ -1268,6 +1342,7 @@ class UsageStore {
     this.loading.summary = false;
     this.loading.pairwise = false;
     this.loading.topSessions = false;
+    this.loading.groups = false;
   }
 
   private markRefreshComplete(startedAt: number): void {

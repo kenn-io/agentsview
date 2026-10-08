@@ -974,6 +974,7 @@ type chUsageAggregateRow struct {
 	authoritativeCost     int64
 	authoritativeCostRows int
 	snapshotDedupOutput   int
+	groupKey, groupLabel  string
 }
 
 type chSessionUsageRow struct {
@@ -1901,7 +1902,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	cte, args := source.cte, source.args
 	query := cte + `
 		SELECT session_id, project, agent, model, provider_id, price_model, source, message_ordinal, ts,
-			pricing_ts, display_name, started_at,
+			pricing_ts, display_name, started_at, group_key, group_label,
 			input_tokens_norm AS input_tokens,
 			output_tokens_norm AS output_tokens,
 			snapshot_deduplicated_output_tokens,
@@ -1909,6 +1910,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			cache_create_1h_norm AS cache_creation_1h_tokens,
 			cache_read_norm AS cache_read_tokens,` + chUsageBillableSelect + `
 		FROM usage_localized
+		LEFT JOIN (SELECT id AS group_session_id, group_key, group_label FROM sessions) grouping_metadata ON usage_localized.session_id = group_session_id
 		ORDER BY session_id ASC, model ASC, price_model ASC, ts ASC,
 			COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC`
 	readCtx, err := withUsageDeltaTables(ctx, state)
@@ -1927,7 +1929,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		if err := rows.Scan(
 			&r.sessionID, &r.project, &r.agent, &r.model, &r.providerID,
 			&r.priceModel, &r.source, &r.messageOrdinal, &ts, &pricingTS,
-			&r.displayName, &startedAt,
+			&r.displayName, &startedAt, &r.groupKey, &r.groupLabel,
 			&r.inputTok, &r.outputTok, &r.snapshotDedupOutput,
 			&r.cacheCr, &r.cacheCr1h, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
@@ -2040,6 +2042,12 @@ func (s *Store) GetTopSessionsByCost(
 		return nil, err
 	}
 	if kept, ok := s.topSessionTotals.get(memoSlot, memoVersion); ok {
+		if f.TopSessionsByGroup {
+			kept, err = db.GroupTopSessions(kept)
+			if err != nil {
+				return nil, err
+			}
+		}
 		return db.SortAndLimitTopSessions(
 			slices.Clone(kept), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
 		), nil
@@ -2059,6 +2067,7 @@ func (s *Store) GetTopSessionsByCost(
 				a = &acc{row: db.TopSessionEntry{
 					SessionID: r.sessionID, DisplayName: r.displayName,
 					Agent: r.agent, Project: r.project, StartedAt: r.startedAt,
+					GroupKey: r.groupKey, GroupLabel: r.groupLabel,
 				}}
 				bySession[r.sessionID] = a
 			}
@@ -2105,6 +2114,12 @@ func (s *Store) GetTopSessionsByCost(
 		out = append(out, a.row)
 	}
 	s.topSessionTotals.put(memoSlot, memoVersion, out)
+	if f.TopSessionsByGroup {
+		out, err = db.GroupTopSessions(out)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return db.SortAndLimitTopSessions(
 		slices.Clone(out), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
 	), nil

@@ -128,6 +128,7 @@ func sessionForStoragePolicy(
 	session.FirstMessage = nil
 	session.DisplayName = nil
 	session.SessionName = nil
+	session.GroupLabel = ""
 	session.PreserveSessionName = false
 	session.SecretLeakCount = 0
 	session.SecretsRulesVersion = ""
@@ -403,7 +404,7 @@ func clearUsageOnlyTextTx(
 ) error {
 	if _, err := tx.Exec(
 		`UPDATE sessions
-		    SET first_message = NULL, display_name = NULL, session_name = NULL
+		    SET first_message = NULL, display_name = NULL, session_name = NULL, group_label = ''
 		  WHERE id = ? AND (first_message IS NOT NULL
 		     OR display_name IS NOT NULL OR session_name IS NOT NULL)`,
 		sessionID,
@@ -682,7 +683,7 @@ func compactCopiedSessionsForUsageTx(
 		{"session titles", `
 			UPDATE sessions
 			SET first_message = NULL, display_name = NULL,
-			    session_name = NULL, secret_leak_count = 0,
+			    session_name = NULL, group_label = '', secret_leak_count = 0,
 			    secrets_rules_version = ''
 			WHERE id` + inCopied},
 		{"pin notes", `

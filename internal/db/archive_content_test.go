@@ -132,6 +132,7 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 		ID: "direct", Project: "project", Agent: "claude", Machine: "local",
 		FirstMessage: &privatePrompt, DisplayName: &privateTitle,
 		SessionName: &privateTitle, PreserveSessionName: true,
+		GroupKey: "job-a", GroupLabel: privateTitle,
 		StartedAt:    &startedAt,
 		MessageCount: 4, UserMessageCount: 1,
 		SecretLeakCount: 2, SecretsRulesVersion: "private-rules",
@@ -174,6 +175,8 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 	assert.True(t, stored.IsAutomated,
 		"classification must be derived before private prompt text is discarded")
 	assert.Nil(t, stored.SessionName)
+	assert.Equal(t, "job-a", stored.GroupKey)
+	assert.Empty(t, stored.GroupLabel)
 	assert.Nil(t, stored.DisplayName)
 
 	batchSession := session

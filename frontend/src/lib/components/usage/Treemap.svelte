@@ -11,6 +11,7 @@
     value: number;
     color: string;
     meta?: string;
+    title?: string;
   }
 
   interface Props {
@@ -68,13 +69,14 @@
             <g
               class="tile"
               clip-path={`url(#${clipId})`}
-              tabindex={0}
+              tabindex={onSelect ? 0 : -1}
               role="button"
-              aria-label={m.usage_hide_from_chart({ label: tile.label })}
+              aria-disabled={!onSelect}
+              aria-label={tile.title ?? m.usage_hide_from_chart({ label: tile.label })}
               onclick={() => onSelect?.(tile.id)}
               onkeydown={(event) => handleKey(event, tile.id)}
             >
-              <title>{m.usage_click_to_hide({ label: tile.label })}</title>
+              <title>{tile.title ?? m.usage_click_to_hide({ label: tile.label })}</title>
               <Group x={node.x0} y={node.y0}>
                 <Rect
                   width={tileWidth}

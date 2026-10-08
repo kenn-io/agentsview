@@ -4,7 +4,10 @@ package clickhouse
 
 import (
 	"context"
+	"database/sql"
 	"testing"
+
+	"go.kenn.io/agentsview/internal/dbtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,4 +62,15 @@ func TestProjectIdentityMapKeptPerLabelSet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, first, second)
 	require.Len(t, store.projectIdentityMaps.order, 1)
+}
+
+func TestCHUsageGroups(t *testing.T) {
+	store, syncer, local := newPushedStore(t)
+	conn, err := sql.Open("sqlite3", local.Path())
+	require.NoError(t, err)
+	defer conn.Close()
+	dbtest.SeedUsageGroups(t, conn)
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	dbtest.AssertUsageGroups(t, store)
 }

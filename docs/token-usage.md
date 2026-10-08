@@ -148,6 +148,13 @@ the URL — copying the address bar gives you a shareable link to the exact view
 you're looking at. A **Clear filters** link appears next to the refresh button
 when anything is active.
 
+Click `hermes-cron` in Usage attribution to see its job groups for the selected
+date range. Each group shows its latest recorded name in that range and its job
+ID on hover. Matching names get a short ID suffix. **All projects** returns to
+the project view; use the Projects picker to hide a grouped project. Runs with
+no resolved job and groups outside the top 100 appear under **Other runs**.
+Usage-only archives show IDs. Page totals and charts keep their current scope.
+
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,
 comparisons, and top-session ranking to any combination of **Input**, **Cache

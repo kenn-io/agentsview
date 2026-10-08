@@ -85,20 +85,21 @@ type UsageFilter struct {
 	ProjectLabels        []string
 	ExcludeProjectLabels []string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
-	GitBranch         string
-	Model             string // "" for all; supports comma-separated
-	ExcludeProject    string // comma-separated projects to exclude
-	ExcludeAgent      string // comma-separated agents to exclude
-	ExcludeModel      string // comma-separated models to exclude
-	Timezone          string // IANA timezone, "" for UTC
-	MinUserMessages   int    // user_message_count >= N
-	ExcludeOneShot    bool   // user_message_count > 1
-	ExcludeAutomated  bool   // is_automated = false
-	AutomatedScope    string // "", "human", "all", or "automated"
-	ActiveSince       string // RFC3339 session recency cutoff
-	Termination       string // "", "clean", "unclean", "active", or "stale"
-	Breakdowns        bool   // populate Project/AgentBreakdowns per day
-	SkipSessionCounts bool   // skip distinct session counts when callers do not need them
+	GitBranch          string
+	Model              string // "" for all; supports comma-separated
+	ExcludeProject     string // comma-separated projects to exclude
+	ExcludeAgent       string // comma-separated agents to exclude
+	ExcludeModel       string // comma-separated models to exclude
+	Timezone           string // IANA timezone, "" for UTC
+	MinUserMessages    int    // user_message_count >= N
+	ExcludeOneShot     bool   // user_message_count > 1
+	ExcludeAutomated   bool   // is_automated = false
+	AutomatedScope     string // "", "human", "all", or "automated"
+	ActiveSince        string // RFC3339 session recency cutoff
+	Termination        string // "", "clean", "unclean", "active", or "stale"
+	Breakdowns         bool   // populate Project/AgentBreakdowns per day
+	SkipSessionCounts  bool   // skip distinct session counts when callers do not need them
+	TopSessionsByGroup bool   // merge runs by project and group before ranking
 	// TopSessionsSort ranks GetTopSessionsByCost results: ""/"cost"
 	// (default) or "tokens". Ignored by other usage queries.
 	TopSessionsSort string
@@ -2642,6 +2643,9 @@ func (db *DB) getDailyUsageLegacy(
 
 // TopSessionEntry is one row in the "top sessions by cost" result.
 type TopSessionEntry struct {
+	GroupKey            string      `json:"group_key,omitempty"`
+	GroupLabel          string      `json:"group_label,omitempty"`
+	SessionCount        int         `json:"session_count,omitempty"`
 	SessionID           string      `json:"sessionId"`
 	DisplayName         string      `json:"displayName"`
 	Agent               string      `json:"agent"`
@@ -2653,6 +2657,49 @@ type TopSessionEntry struct {
 	CacheReadTokens     int         `json:"cacheReadTokens"`
 	TotalTokens         int         `json:"totalTokens"`
 	Cost                money.Money `json:"cost"`
+}
+
+// GroupTopSessions merges runs before ranking; ungrouped runs form the remainder.
+func GroupTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
+	type key struct{ project, group string }
+	grouped := make(map[key]*TopSessionEntry)
+	labels := make(map[key]TopSessionEntry)
+	for _, entry := range entries {
+		k := key{entry.Project, entry.GroupKey}
+		row := grouped[k]
+		if row == nil {
+			row = &TopSessionEntry{Project: entry.Project, GroupKey: entry.GroupKey, Agent: entry.Agent}
+			grouped[k] = row
+		}
+		row.SessionCount++
+		row.InputTokens += entry.InputTokens
+		row.OutputTokens += entry.OutputTokens
+		row.CacheCreationTokens += entry.CacheCreationTokens
+		row.CacheReadTokens += entry.CacheReadTokens
+		row.TotalTokens += entry.TotalTokens
+		var err error
+		row.Cost, err = money.Add(row.Cost, entry.Cost)
+		if err != nil {
+			return nil, err
+		}
+		previous := labels[k]
+		started, _ := time.Parse(time.RFC3339Nano, entry.StartedAt)
+		previousStarted, _ := time.Parse(time.RFC3339Nano, previous.StartedAt)
+		if entry.GroupLabel != "" && (previous.GroupLabel == "" || started.After(previousStarted) || started.Equal(previousStarted) && entry.SessionID > previous.SessionID) {
+			labels[k] = entry
+			row.GroupLabel = entry.GroupLabel
+		}
+	}
+	out := make([]TopSessionEntry, 0, len(grouped))
+	for _, row := range grouped {
+		row.SessionID = row.Project + "/" + row.GroupKey
+		row.DisplayName = row.GroupLabel
+		if row.DisplayName == "" {
+			row.DisplayName = row.GroupKey
+		}
+		out = append(out, *row)
+	}
+	return out, nil
 }
 
 // TopSessionsSortCost and TopSessionsSortTokens select top-session ranking.

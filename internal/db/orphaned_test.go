@@ -774,3 +774,33 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 		}
 	}
 }
+
+func TestRepairHermesCronGroupsPreservesProjectsAndCopiedGroups(t *testing.T) {
+	source := testDB(t)
+	for _, session := range []Session{
+		{ID: "hermes:cron_job-a_20261007_120000", Project: "hermes-cron", Agent: "hermes", SessionName: new("Daily digest · Oct 07")},
+		{ID: "hermes:tip", Project: "hermes-cron", Agent: "hermes", ParentSessionID: new("hermes:missing"), GroupKey: "job-b", GroupLabel: "Retained digest"},
+		{ID: "hermes:child", Project: "hermes-cron", Agent: "hermes", ParentSessionID: new("hermes:tip"), SessionName: new("Research digest · Oct 08")},
+		{ID: "hermes:cron_job-c_20261007_120000", Project: "hermes-cli", Agent: "hermes"},
+	} {
+		require.NoError(t, source.UpsertSession(t.Context(), session))
+	}
+	replacement := testDB(t)
+	require.NoError(t, source.CloseConnections(t.Context()))
+	_, err := replacement.CopyOrphanedDataFrom(source.Path())
+	require.NoError(t, err)
+	require.NoError(t, replacement.RepairHermesCronGroups(t.Context()))
+	for _, tc := range []struct{ id, project, key, label string }{
+		{"hermes:cron_job-a_20261007_120000", "hermes-cron", "job-a", "Daily digest"},
+		{"hermes:tip", "hermes-cron", "job-b", "Retained digest"},
+		{"hermes:child", "hermes-cron", "job-b", "Research digest"},
+		{"hermes:cron_job-c_20261007_120000", "hermes-cli", "", ""},
+	} {
+		session, err := replacement.GetSession(t.Context(), tc.id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, tc.project, session.Project)
+		assert.Equal(t, tc.key, session.GroupKey)
+		assert.Equal(t, tc.label, session.GroupLabel)
+	}
+}

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/dbtest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -298,4 +300,16 @@ func TestPGSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
 		ctx, pg, "archive-a", "salt-a"))
 	err = upsertSourceArchiveScope(ctx, pg, "archive-a", "salt-b")
 	require.ErrorContains(t, err, "archive salt mismatch")
+}
+
+func TestPGUsageGroups(t *testing.T) {
+	const schema = "agentsview_usage_groups_test"
+	pg, err := Open(testPGURL(t), schema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	dbtest.SeedUsageGroups(t, pg)
+	dbtest.AssertUsageGroups(t, &Store{pg: pg})
 }

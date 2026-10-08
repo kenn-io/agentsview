@@ -9,6 +9,12 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- Usage attribution opens Hermes cron job groups under one `hermes-cron`
+  project. Stable job IDs keep renamed and compressed runs together; recorded
+  names label the groups, with IDs on hover.
+
 **Bug fixes**
 
 - Keep both Cursor conversations when S3 objects in different projects share

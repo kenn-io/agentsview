@@ -71,6 +71,8 @@ type usageTopSessionsInput struct {
 	UsageFilterInput
 	Limit      int    `query:"limit" minimum:"0" maximum:"100" default:"20" doc:"Maximum number of sessions"`
 	Sort       string `query:"sort" enum:"cost,tokens" default:"cost" doc:"Rank sessions by cost or selected token types"`
+	GroupBy    string `query:"group_by" enum:"group" doc:"Merge sessions by project and group"`
+	ProjectKey string `query:"project_key" doc:"Filter by an opaque project key"`
 	TokenTypes string `query:"token_types" doc:"Comma-separated token counters for token ranking: input, cache_write, cache_read, output"`
 }
 
@@ -337,6 +339,33 @@ func (s *Server) humaUsageTopSessions(
 	f, err := s.usageFilterFromInput(ctx, in.UsageFilterInput)
 	if err != nil {
 		return nil, err
+	}
+	f.TopSessionsByGroup = in.GroupBy == "group"
+	if in.ProjectKey != "" {
+		labels, err := s.db.GetActiveProjectLabels(ctx)
+		if err != nil {
+			return nil, internalError("list project labels", err)
+		}
+		catalog, err := s.db.BuildProjectIdentityMap(ctx, labels)
+		if err != nil {
+			return nil, internalError("resolve project identities", err)
+		}
+		var resolved []string
+		for label, entry := range catalog {
+			if entry.ProjectKey == in.ProjectKey {
+				resolved = append(resolved, label)
+			}
+		}
+		if len(resolved) == 0 {
+			return nil, huma.Error400BadRequest("unknown project key")
+		}
+		if included := f.ProjectFilterLabels(); len(included) > 0 {
+			resolved = slices.DeleteFunc(resolved, func(label string) bool { return !slices.Contains(included, label) })
+		}
+		if len(resolved) == 0 {
+			return &jsonOutput[[]db.TopSessionEntry]{Body: []db.TopSessionEntry{}}, nil
+		}
+		f.ProjectLabels = resolved
 	}
 	f.Breakdowns = false
 	switch strings.ToLower(strings.TrimSpace(in.Sort)) {

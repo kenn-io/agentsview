@@ -8,10 +8,110 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 type sqlContextExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// ResolveHermesCronJob completes source ancestry with recorded automatic identity.
+func (d *DB) ResolveHermesCronJob(ctx context.Context, id, parent, agent string) (string, error) {
+	return resolveArchivedHermesCronJob(ctx, id, parent, agent, func(ctx context.Context, query string, args ...any) rowScanner {
+		return d.getReader().QueryRowContext(ctx, query, args...)
+	})
+}
+
+func resolveArchivedHermesCronJob(ctx context.Context, id, parent, agent string, queryRow contextQueryRow) (string, error) {
+	namespace := id[:strings.LastIndexByte(id, ':')+1]
+	var lookupErr error
+	var visited []string
+	job := parser.HermesCronJobID(id, func(current string) string {
+		visited = append(visited, current)
+		next := parent
+		if current != id || next == "" {
+			err := queryRow(ctx, `SELECT COALESCE(NULLIF(parser_parent_session_id, ''), parent_session_id, '')
+				FROM sessions WHERE id = ? AND agent = ?`, current, agent).Scan(&next)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ""
+			}
+			if err != nil {
+				lookupErr = err
+				return ""
+			}
+		}
+		if !strings.HasPrefix(next, namespace) {
+			return ""
+		}
+		return next
+	})
+	if job != "" || lookupErr != nil {
+		return job, lookupErr
+	}
+	for _, current := range visited {
+		var group string
+		err := queryRow(ctx, `SELECT group_key FROM sessions WHERE id = ? AND agent = ?`, current, agent).Scan(&group)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if group != "" {
+			return group, nil
+		}
+	}
+	return "", nil
+}
+
+// RepairHermesCronGroups backfills preserved runs after archive copies.
+func (d *DB) RepairHermesCronGroups(ctx context.Context) error {
+	if err := d.requireWritable(); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tx, err := d.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `SELECT id, agent, COALESCE(NULLIF(parser_parent_session_id, ''), parent_session_id, ''), COALESCE(session_name, '') FROM sessions WHERE agent IN ('hermes', 'augure-desktop') AND group_key = '' AND (project = agent || '-cron' OR EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = sessions.id AND a.original_project = sessions.agent || '-cron'))`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type candidate struct{ id, agent, parent, title string }
+	var candidates []candidate
+	for rows.Next() {
+		var row candidate
+		if err := rows.Scan(&row.id, &row.agent, &row.parent, &row.title); err != nil {
+			rows.Close()
+			return err
+		}
+		candidates = append(candidates, row)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, row := range candidates {
+		job, err := resolveArchivedHermesCronJob(ctx, row.id, row.parent, row.agent, func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		})
+		if err != nil {
+			return err
+		}
+		if job == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET group_key = ?, group_label = ?, local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`, job, parser.HermesCronRecordedName(job, row.title), row.id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // execWithoutCancel runs cleanup SQL even if the operation context was canceled.
@@ -1787,7 +1887,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"duplicate_prompt_count", "no_code_context_count",
 		"runaway_tool_loop_count",
 		"cwd", "git_branch", "source_session_id",
-		"source_version", "transcript_fidelity", "parser_malformed_lines",
+		"source_version", "group_key", "group_label", "transcript_fidelity", "parser_malformed_lines",
 		"is_truncated", "last_write_incremental",
 		"transcript_revision",
 		"secret_leak_count", "secrets_rules_version",

@@ -6127,3 +6127,16 @@ func TestUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *t
 		Value: "claude-code:source-dup",
 	}, got)
 }
+
+func TestGroupTopSessionsLatestRecordedLabel(t *testing.T) {
+	rows, err := GroupTopSessions([]TopSessionEntry{
+		{SessionID: "z", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Earlier", StartedAt: "2026-10-08T13:00:00+02:00"},
+		{SessionID: "a", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Newer", StartedAt: "2026-10-08T12:00:00Z"},
+		{SessionID: "b", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", StartedAt: "2026-10-08T12:00:00Z"},
+		{SessionID: "c", Project: "hermes-cron", GroupKey: "job-a", StartedAt: "2026-10-09T12:00:00Z"},
+	})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "Tie winner", rows[0].GroupLabel)
+	assert.Equal(t, 4, rows[0].SessionCount)
+}
