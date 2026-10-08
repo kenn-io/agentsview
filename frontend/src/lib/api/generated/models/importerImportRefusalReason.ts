@@ -9,5 +9,6 @@ export const ImporterImportRefusalReason = {
   diverged: "diverged",
   shorter_export: "shorter_export",
   trashed: "trashed",
+  newer_marker: "newer_marker",
   transient: "transient",
 } as const;

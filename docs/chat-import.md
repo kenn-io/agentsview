@@ -83,10 +83,12 @@ place to show the branch Claude.ai shows. If an edit or branch switch would
 drop a pin or note, Sync keeps the previous version in Trash with its pins and
 notes, in the same transaction as the update. Each such replacement makes a
 fresh copy. Replacements that keep every pin and note make no copy.
-Switching back on Claude.ai and syncing restores those turns. A chat first imported
-from a zip needs one detail fetch to verify its visible branch. Re-importing a
-zip clears that verification, so the next Sync fetches it once again. Each chat
-has a 32 MiB response limit; larger chats count as failed while Sync continues.
+Switching back on Claude.ai and syncing restores those turns. Dropped pins and
+notes stay in the Trash copy and don't return to the live chat. A chat first
+imported from a zip needs one detail fetch to verify its visible branch.
+Re-importing a zip clears that verification, so the next Sync fetches it once
+again. Each chat has a 32 MiB response limit; larger chats count as failed while
+Sync continues.
 A chat first imported from a zip keeps its stored turns when Sync finds no
 change; turns Sync adds or replaces carry claude.ai's message identities.
 
