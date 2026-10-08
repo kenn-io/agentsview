@@ -75,9 +75,10 @@ func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) [
 		}
 		preds = append(preds, pred)
 	}
-	if scope == "human" {
+	switch scope {
+	case "human":
 		preds = append(preds, automated+" = "+b.dialect.falseLiteral)
-	} else if scope == "automated" {
+	case "automated":
 		preds = append(preds, automated+" = "+b.dialect.trueLiteral)
 	}
 	if f.ActiveSince != "" {
@@ -91,8 +92,9 @@ func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) [
 
 // AppendUsagePredicates keeps the existing backend query indentation.
 func AppendUsagePredicates(where string, preds []string, indent string) string {
-	for _, pred := range preds {
-		where += "\n" + indent + "AND " + pred
+	if len(preds) == 0 {
+		return where
 	}
-	return where
+	separator := "\n" + indent + "AND "
+	return where + separator + strings.Join(preds, separator)
 }
