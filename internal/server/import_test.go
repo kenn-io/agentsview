@@ -121,9 +121,9 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		})
 	}
 
-	for _, stage := range []string{"organizations", "detail"} {
+	for _, stage := range []string{"organizations", "list", "detail"} {
 		for _, status := range []int{401, 403} {
-			t.Run(fmt.Sprintf("expired sign-in %s %d reaches stream error", stage, status), func(t *testing.T) {
+			t.Run(fmt.Sprintf("access failure %s %d reaches stream error", stage, status), func(t *testing.T) {
 				srv := testServer(t, 5*time.Second)
 				httpServer := httptest.NewServer(srv.mux)
 				defer httpServer.Close()
@@ -143,12 +143,14 @@ func TestClaudeAISyncRelay(t *testing.T) {
 						}
 						require.NoError(t, json.Unmarshal([]byte(data), &request))
 						body, responseStatus := "{}", status
-						if stage == "detail" {
+						if stage != "organizations" {
 							switch request.Path {
 							case "/api/organizations":
 								body, responseStatus = `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`, 200
 							case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
-								body, responseStatus = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222222","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, 200
+								if stage == "detail" {
+									body, responseStatus = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222222","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, 200
+								}
 							default:
 								require.Contains(t, request.Path, "/chat_conversations/22222222-2222-4222-8222-222222222222?")
 							}
@@ -161,7 +163,11 @@ func TestClaudeAISyncRelay(t *testing.T) {
 						require.Equal(t, http.StatusNoContent, result.StatusCode)
 						require.NoError(t, result.Body.Close())
 					case "error":
-						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again"}`, data)
+						if status == 401 {
+							assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again"}`, data)
+						} else {
+							assert.JSONEq(t, `{"error":"claude.ai access denied (HTTP 403)"}`, data)
+						}
 						gotError = true
 					case "done":
 						require.FailNow(t, "expired credentials completed Sync")

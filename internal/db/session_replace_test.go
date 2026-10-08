@@ -122,6 +122,48 @@ func TestReplaceSessionKeepingTrashedCopyRollsBack(t *testing.T) {
 	assert.Len(t, pins, 2)
 }
 
+func TestReplaceSessionKeepingTrashedCopyOnlyOnPinLoss(t *testing.T) {
+	d := testDB(t)
+	before := seedReplaceSession(t, d)
+	write := replaceWrite(before[0].Content, before[1].Content, "Changed unpinned turn")
+	write.Messages[0] = before[0]
+	write.Messages[1] = before[1]
+	write.KeepTrashedCopyOnlyOnPinLoss = true
+	copyID, err := d.ReplaceSessionKeepingTrashedCopy(t.Context(), write)
+	require.NoError(t, err)
+	assert.Empty(t, copyID)
+	assert.Empty(t, trashedSessionIDs(t, d))
+	pins, err := d.ListPinnedMessages(t.Context(), "replace", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 2)
+	assert.Equal(t, Ptr("note"), pins[0].Note)
+	stored, err := d.GetAllMessages(t.Context(), "replace")
+	require.NoError(t, err)
+	require.Len(t, stored, 3)
+	assert.Equal(t, "Changed unpinned turn", stored[2].Content)
+}
+
+func TestReplaceSessionKeepingTrashedCopyPinLossRollsBackAfterCopy(t *testing.T) {
+	d := testDB(t)
+	before := seedReplaceSession(t, d)
+	_, err := d.getWriter().Exec(t.Context(), `CREATE TRIGGER reject_live_replacement BEFORE INSERT ON messages
+		WHEN NEW.session_id = 'replace' AND EXISTS(SELECT 1 FROM sessions WHERE id LIKE 'replace:replaced:%')
+		BEGIN SELECT RAISE(ABORT, 'replacement rejected'); END`)
+	require.NoError(t, err)
+	write := replaceWrite("Changed pinned turn", "Changed reply")
+	write.KeepTrashedCopyOnlyOnPinLoss = true
+	_, err = d.ReplaceSessionKeepingTrashedCopy(t.Context(), write)
+	require.ErrorContains(t, err, "replacement rejected")
+	assert.Empty(t, trashedSessionIDs(t, d))
+	after, err := d.GetAllMessages(t.Context(), "replace")
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	pins, err := d.ListPinnedMessages(t.Context(), "replace", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 2)
+	assert.Equal(t, Ptr("note"), pins[0].Note)
+}
+
 func TestReplaceSessionKeepingTrashedCopyRefusals(t *testing.T) {
 	t.Run("unchanged", func(t *testing.T) {
 		d := testDB(t)

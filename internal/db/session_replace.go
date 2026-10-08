@@ -12,7 +12,7 @@ import (
 // ErrReplaceUnchanged reports a replacement whose messages already match the stored transcript.
 var ErrReplaceUnchanged = errors.New("replacement matches the stored transcript")
 
-// ReplaceSessionKeepingTrashedCopy replaces an active session's messages with write.Messages and, in the same transaction, keeps the previous version as a trashed copy under a new ID: its row, messages, tool calls, display name, and pins. It returns the copy's ID.
+// ReplaceSessionKeepingTrashedCopy replaces messages and keeps the previous row, messages, tools, name, and pins in Trash atomically; with KeepTrashedCopyOnlyOnPinLoss, it returns an empty ID when all pins survive.
 func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	ctx context.Context, write SessionBatchWrite,
 ) (string, error) {
@@ -69,16 +69,45 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		return "", err
 	}
 
+	// The batch writer replaces a session's usage events, so keep the stored ones unless the import supplies its own.
+	if len(write.UsageEvents) == 0 {
+		write.UsageEvents = events
+	}
+	if write.KeepTrashedCopyOnlyOnPinLoss {
+		pins, err := savePinsTx(ctxTx, id)
+		if err != nil {
+			return "", err
+		}
+		if _, err := tx.ExecContext(ctx, "SAVEPOINT pin_loss"); err != nil {
+			return "", err
+		}
+		var trialRevocations recallEvidenceRevocationEvents
+		if _, err := writeOneSessionBatchTx(ctx, tx, ctxTx, write, &trialRevocations, db.usageOnlyStorage()); err != nil {
+			return "", err
+		}
+		var remaining int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pinned_messages WHERE session_id = ?`, id).Scan(&remaining); err != nil {
+			return "", err
+		}
+		if remaining == len(pins) {
+			if err := tx.Commit(); err != nil {
+				return "", fmt.Errorf("committing session replace: %w", err)
+			}
+			db.notifyUsageSessions([]string{id})
+			trialRevocations.flush()
+			return "", nil
+		}
+		// Reuse pin restoration to decide loss, then restore the old rows before copying them.
+		if err := rollbackSavepoint(ctxTx, "pin_loss"); err != nil {
+			return "", err
+		}
+	}
 	copyID := replacedSessionCopyID(id, time.Now())
 	copyWrite := db.storageSessionBatchWrite(sessionCopyWrite(*src, copyID, stored))
 	copyWrite.UsageEvents = make([]UsageEvent, len(events))
 	for i, ev := range events {
 		ev.ID, ev.SessionID = 0, copyID
 		copyWrite.UsageEvents[i] = ev
-	}
-	// The batch writer replaces a session's usage events, so keep the stored ones unless the import supplies its own.
-	if len(write.UsageEvents) == 0 {
-		write.UsageEvents = events
 	}
 	if _, err := writeOneSessionBatchTx(
 		ctx, tx, ctxTx, copyWrite, &pending, db.usageOnlyStorage(),

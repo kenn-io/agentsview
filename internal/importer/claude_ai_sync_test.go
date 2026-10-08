@@ -119,6 +119,166 @@ func TestSyncClaudeAIZipPreservesPromptPin(t *testing.T) {
 	assert.Equal(t, strPtr("Keep this prompt"), pins[0].Note)
 }
 
+func TestSyncClaudeAIZipRecallAnchors(t *testing.T) {
+	d := testDB(t)
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	zipPath := createTestZip(t, map[string]string{"conversations.json": "[" + syncDetail + "]"})
+	dir, cleanup, err := ExtractZip(zipPath)
+	require.NoError(t, err)
+	defer cleanup()
+	reader, err := os.Open(filepath.Join(dir, "conversations.json"))
+	require.NoError(t, err)
+	defer reader.Close()
+	_, err = ImportClaudeAI(t.Context(), d, reader, nil)
+	require.NoError(t, err)
+	window, err := d.BuildRecallEvidenceWindow(t.Context(), id, 0, 1)
+	require.NoError(t, err)
+	metadata, err := window.BindSelection(db.RecallEvidenceSelection{MessageStartOrdinal: 0, MessageEndOrdinal: 1})
+	require.NoError(t, err)
+	assert.Empty(t, metadata.MessageStartSourceUUID)
+	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "zip-evidence", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "Original turn", Body: "Evidence from the exported branch", SourceSessionID: id,
+		ProvenanceOK: true, Transferable: true,
+		Evidence: []db.RecallEvidence{{SessionID: id, MessageStartOrdinal: 0, MessageEndOrdinal: 1, ContentDigest: metadata.ContentDigest}},
+	})
+	require.NoError(t, err)
+	_, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	}), nil)
+	require.NoError(t, err)
+	entry, err := d.GetRecallEntry(t.Context(), "zip-evidence")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.True(t, entry.ProvenanceOK)
+	require.Len(t, entry.Evidence, 1)
+	assert.Equal(t, "root", entry.Evidence[0].MessageStartSourceUUID)
+	assert.Equal(t, "reply", entry.Evidence[0].MessageEndSourceUUID)
+	_, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, strings.Replace(syncSummary, "reply", "other-reply", 1), func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "reply", "other-reply"))}, nil
+	}), nil)
+	require.NoError(t, err)
+	entry, err = d.GetRecallEntry(t.Context(), "zip-evidence")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.False(t, entry.ProvenanceOK)
+	assert.Equal(t, "reply", entry.Evidence[0].MessageEndSourceUUID)
+}
+
+func TestSyncClaudeAIKeepsTrashOnlyWhenPinsLost(t *testing.T) {
+	d := testDB(t)
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	branchA := strings.TrimSuffix(strings.Replace(syncDetail, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"a2"`, 1), "]}") + `,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"},{"uuid":"a2","parent_message_uuid":"q2","sender":"assistant","text":"Answer"}]}`
+	branchB := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(branchA, "root", "edited-root"), "reply", "edited-reply"), "q2", "edited-q2"), "a2", "b2")
+	branchB = strings.Replace(branchB, "Hello", "Edited prompt", 1)
+	syncBranch := func(detail, leaf string) {
+		t.Helper()
+		stats, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, strings.Replace(syncSummary, "reply", leaf, 1), func() (ClaudeAIResponse, error) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+		}), nil)
+		require.NoError(t, err)
+		require.Zero(t, stats.Errors)
+	}
+	syncBranch(branchA, "a2")
+	before, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, before, 4)
+	_, err = d.PinMessage(t.Context(), id, before[3].ID, strPtr("Keep turn four"))
+	require.NoError(t, err)
+	syncBranch(branchB, "b2")
+	trash, err := d.ListTrashedSessions(t.Context())
+	require.NoError(t, err)
+	require.Len(t, trash, 1)
+	copyID := trash[0].ID
+	old, err := d.GetAllMessages(t.Context(), copyID)
+	require.NoError(t, err)
+	assert.Equal(t, messageContents(before), messageContents(old))
+	pins, err := d.ListPinnedMessages(t.Context(), copyID, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, 3, pins[0].Ordinal)
+	assert.Equal(t, strPtr("Keep turn four"), pins[0].Note)
+	for i := range 5 {
+		if i%2 == 0 {
+			syncBranch(branchA, "a2")
+		} else {
+			syncBranch(branchB, "b2")
+		}
+	}
+	trash, err = d.ListTrashedSessions(t.Context())
+	require.NoError(t, err)
+	require.Len(t, trash, 1)
+	assert.Equal(t, copyID, trash[0].ID)
+	live, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	pins, err = d.ListPinnedMessages(t.Context(), id, "")
+	require.NoError(t, err)
+	assert.Empty(t, pins)
+	_, err = d.PinMessage(t.Context(), id, live[3].ID, strPtr("A new note"))
+	require.NoError(t, err)
+	syncBranch(branchB, "b2")
+	trash, err = d.ListTrashedSessions(t.Context())
+	require.NoError(t, err)
+	require.Len(t, trash, 2)
+	assert.NotEqual(t, trash[0].ID, trash[1].ID)
+	for _, copy := range trash {
+		if copy.ID != copyID {
+			pins, err = d.ListPinnedMessages(t.Context(), copy.ID, "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, strPtr("A new note"), pins[0].Note)
+		}
+	}
+}
+
+func TestSyncClaudeAIArtifactContentSearch(t *testing.T) {
+	d := testDB(t)
+	raw, err := os.ReadFile("../parser/testdata/claude-ai/artifact-detail.json")
+	require.NoError(t, err)
+	raw = []byte(strings.ReplaceAll(string(raw), "00000000-0000-4000-8000-000000000001", "22222222-2222-4222-8222-222222222222"))
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	var detail struct {
+		UUID      string `json:"uuid"`
+		UpdatedAt string `json:"updated_at"`
+		Leaf      string `json:"current_leaf_message_uuid"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &detail))
+	summary, err := json.Marshal(map[string]string{"uuid": detail.UUID, "updated_at": detail.UpdatedAt, "current_leaf_message_uuid": detail.Leaf})
+	require.NoError(t, err)
+	fetch := syncOneFetch(t, string(summary), func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: raw}, nil
+	})
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Imported)
+	messages, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 3)
+	assert.Contains(t, messages[1].ToolCalls[1].InputJSON, "<!doctype html>")
+	assert.Equal(t, "File created successfully: /mnt/user-data/outputs/hello.html", messages[1].ToolCalls[1].ResultContent)
+	page, err := d.SearchContent(t.Context(), db.ContentSearchFilter{
+		SessionID: id, Pattern: "viewport-fit=cover", Sources: []string{"tool_input"}, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "create_file", page.Matches[0].ToolName)
+	assert.Equal(t, "tool_input", page.Matches[0].Location)
+	assert.Equal(t, id, page.Matches[0].SessionID)
+	raw = []byte(strings.ReplaceAll(strings.ReplaceAll(string(raw), "viewport-fit=cover", "viewport-fit=contain"), detail.UpdatedAt, "2026-10-08T12:08:00Z"))
+	summary = []byte(strings.ReplaceAll(string(summary), detail.UpdatedAt, "2026-10-08T12:08:00Z"))
+	stats, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, string(summary), func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: raw}, nil
+	}), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Updated)
+	page, err = d.SearchContent(t.Context(), db.ContentSearchFilter{
+		SessionID: id, Pattern: "viewport-fit=contain", Sources: []string{"tool_input"}, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+}
+
 func TestSyncClaudeAI(t *testing.T) {
 	t.Run("trashed during sync write is skipped", func(t *testing.T) {
 		d := testDB(t)
@@ -306,10 +466,12 @@ func TestSyncClaudeAI(t *testing.T) {
 					}, nil)
 					require.Error(t, err)
 					if status == 401 || status == 403 {
-						require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
 						if status == 401 {
+							require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
 							require.EqualError(t, err, "claude.ai sign-in required")
 						} else {
+							require.ErrorIs(t, err, ErrClaudeAIAccessDenied)
+							require.NotErrorIs(t, err, ErrClaudeAIAuthRequired)
 							require.EqualError(t, err, "claude.ai access denied (HTTP 403)")
 						}
 						assert.Equal(t, 1, calls)
@@ -618,7 +780,12 @@ func TestSyncClaudeAIDetailFailures(t *testing.T) {
 				}, nil)
 				assert.Equal(t, tt.wantCalls, calls)
 				if tt.status == 401 || tt.status == 403 {
-					require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
+					if tt.status == 401 {
+						require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
+					} else {
+						require.ErrorIs(t, err, ErrClaudeAIAccessDenied)
+						require.NotErrorIs(t, err, ErrClaudeAIAuthRequired)
+					}
 					assert.Zero(t, later)
 					assert.Zero(t, stats.Errors+stats.Imported+stats.Skipped)
 					return
@@ -755,7 +922,12 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, pins, 1)
 				assert.Equal(t, messages[1].ID, pins[0].MessageID)
-				assert.Empty(t, replacedCopies(t, d, "claude-ai:22222222-2222-4222-8222-222222222222"))
+				copies := replacedCopies(t, d, "claude-ai:22222222-2222-4222-8222-222222222222")
+				require.Len(t, copies, 1)
+				oldPins, err := d.ListPinnedMessages(t.Context(), copies[0].ID, "")
+				require.NoError(t, err)
+				require.Len(t, oldPins, 2)
+				assert.ElementsMatch(t, []int{1, 3}, []int{oldPins[0].Ordinal, oldPins[1].Ordinal})
 			}
 		})
 	}

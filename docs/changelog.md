@@ -14,8 +14,10 @@ The latest release is
 - Sync Claude.ai chats from the desktop Import dialog without downloading an
   export. Later runs fetch new or changed chats, including branch switches.
   Sync shows the branch Claude.ai shows. Turns after an edit or branch switch
-  change in place, and pins on replaced turns go with them. Switching back on
-  Claude.ai and syncing restores those turns.
+  change in place. If the update would drop a pin or note, Sync saves the
+  previous version in Trash with its pins and notes in the same transaction.
+  Each such update makes a fresh copy; updates that keep every pin and note
+  make no copy. Switching back on Claude.ai and syncing restores those turns.
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on

@@ -4094,7 +4094,7 @@ fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
                     size += value.byteLength;
                     if (size > limit) {{
                         controller.abort();
-                        await reader.cancel();
+                        try {{ await reader.cancel(); }} catch {{}}
                         await oversized();
                         return;
                     }}
