@@ -2746,9 +2746,10 @@ schemas keep their existing ordering behavior.
 - **Freshness:** Sync compares `updated_at` with archived `ended_at` and stores
   a versioned leaf marker with the archive content policy in `last_entry_uuid`.
   A policy change or zip import requires one new detail fetch. Sync commits
-  metadata, messages, and the marker together. Matching turns with compatible
-  UUIDs keep row IDs. Sync writes message identities only when it adds or
-  replaces turns. Unchanged zip imports keep their stored turns and derived state.
+  metadata, messages, and the marker together. Unchanged transcripts and appends
+  keep existing row IDs; branch replacements assign new row IDs. Sync writes
+  message identities only when it adds or replaces turns. Unchanged zip imports
+  keep their stored turns and derived state.
   Live branch changes update in place at every length. A replacement that loses
   a pin or note keeps a fresh copy of the previous version in Trash in the same
   transaction; other replacements make no copy. Dropped pins and notes stay in
@@ -2772,9 +2773,7 @@ schemas keep their existing ordering behavior.
   detail `updated_at` values with microseconds. Branch switches changed the
   leaf without changing that timestamp. `archived=false` returned active chats,
   `archived=true` returned archived chats, and omitting it returned both.
-  [Sanitized list fixtures](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_all.json),
-  [active pass](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_active.json),
-  [archived pass](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_archived.json),
+  [Sanitized list fixture](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_all.json)
   and [detail](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/detail.json)
   reconstruct the observed fields with synthetic identities and content.
 - **Observed 2026-10-08:** With `render_all_tools=true`, an artifact's file

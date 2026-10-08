@@ -25,7 +25,7 @@ var syncSummary = func() string {
 	var page struct {
 		Data []jsontext.Value `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(syncActiveList), &page); err != nil {
+	if err := json.Unmarshal([]byte(syncAllList), &page); err != nil {
 		panic(err)
 	}
 	return string(page.Data[0])
@@ -36,12 +36,6 @@ var syncDetail string
 
 //go:embed testdata/claude_ai_live/organizations.json
 var syncOrgs string
-
-//go:embed testdata/claude_ai_live/list_active.json
-var syncActiveList string
-
-//go:embed testdata/claude_ai_live/list_archived.json
-var syncArchivedList string
 
 //go:embed testdata/claude_ai_live/list_all.json
 var syncAllList string
@@ -1119,41 +1113,30 @@ func TestSyncClaudeAIZipDuplicatePromptPin(t *testing.T) {
 }
 
 func TestSyncClaudeAIObservedLists(t *testing.T) {
-	for _, tt := range []struct {
-		name, page string
-		want       int
-	}{
-		{"archived=false", syncActiveList, 1},
-		{"archived=true", syncArchivedList, 1},
-		{"no archived parameter", syncAllList, 2},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			d := testDB(t)
-			details := 0
-			fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
-				switch path {
-				case "/api/organizations":
-					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
-				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
-					return ClaudeAIResponse{Status: 200, Body: []byte(tt.page)}, nil
-				default:
-					details++
-					detail := syncDetail
-					if strings.Contains(path, "/22222222-2222-4222-8222-222222222223?") {
-						detail = strings.ReplaceAll(detail, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223")
-					} else {
-						require.Contains(t, path, "/chat_conversations/22222222-2222-4222-8222-222222222222?")
-					}
-					return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
-				}
+	d := testDB(t)
+	details := 0
+	fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+		switch path {
+		case "/api/organizations":
+			return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+		case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
+			return ClaudeAIResponse{Status: 200, Body: []byte(syncAllList)}, nil
+		default:
+			details++
+			detail := syncDetail
+			if strings.Contains(path, "/22222222-2222-4222-8222-222222222223?") {
+				detail = strings.ReplaceAll(detail, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223")
+			} else {
+				require.Contains(t, path, "/chat_conversations/22222222-2222-4222-8222-222222222222?")
 			}
-			stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, stats.Imported)
-			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, stats.Skipped)
-			assert.Equal(t, tt.want, details)
-		})
+			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+		}
 	}
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, stats.Imported)
+	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, stats.Skipped)
+	assert.Equal(t, 2, details)
 }
