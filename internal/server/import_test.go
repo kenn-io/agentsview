@@ -165,7 +165,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			assert.Equal(t, 1, stats.Errors)
 		})
 	}
-	signedOut, err := os.ReadFile("../importer/testdata/claude_ai_live/signed_out.json")
+	signedOut, err := os.ReadFile("../importer/testdata/claude_ai_sync/signed_out.json")
 	require.NoError(t, err)
 	for _, tt := range []struct {
 		name, body string

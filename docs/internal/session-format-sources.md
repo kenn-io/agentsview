@@ -2781,9 +2781,10 @@ schemas keep their existing ordering behavior.
   detail `updated_at` values with microseconds. Branch switches changed the
   leaf without changing that timestamp. `archived=false` returned active chats,
   `archived=true` returned archived chats, and omitting it returned both.
-  [Sanitized list fixture](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_all.json)
-  and [detail](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/detail.json)
-  reconstruct the observed fields with synthetic identities and content.
+  [List](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_sync/list_all.json)
+  and [detail](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_sync/detail.json)
+  are sanitized reconstructions of observed fields with synthetic identities
+  and content.
 - **Observed 2026-10-08:** With `render_all_tools=true`, an artifact's file
   text arrived only in `tool_use(create_file).input.file_text`. Its
   `tool_result` and `Artifact` blocks held creation and publication status.

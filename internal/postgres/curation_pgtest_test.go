@@ -30,7 +30,7 @@ func TestPushClaudeAISyncZipPreservesPGPin(t *testing.T) {
 			require.NoError(t, err)
 			defer ps.Close()
 			require.NoError(t, ps.EnsureSchema(t.Context()))
-			raw, err := os.ReadFile("../importer/testdata/claude_ai_live/detail.json")
+			raw, err := os.ReadFile("../importer/testdata/claude_ai_sync/detail.json")
 			require.NoError(t, err)
 			detail := strings.TrimSpace(string(raw))
 			ordinal := 0
