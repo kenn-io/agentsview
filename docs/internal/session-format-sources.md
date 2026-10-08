@@ -2814,11 +2814,11 @@ schemas keep their existing ordering behavior.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
   `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
-  Other detail failures stop Sync after two chats fail in a row; a successful
-  detail resets the streak. A 404, oversized body, or host HTTP 413 leaves the
-  streak unchanged.
-  Reverified 2026-10-08 against `TestSyncClaudeAIDetailFailures` and
-  `TestSyncClaudeAIConsecutiveDetailFailures`. See
+  Other detail failures stop Sync after two chats fail in a row. Unchanged and
+  skipped chats, successful writes, 404s, and oversized responses reset the
+  streak. Reverified 2026-10-08 against `TestSyncClaudeAIDetailFailures`,
+  `TestSyncClaudeAIConsecutiveDetailFailures`, and
+  `TestSyncClaudeAIDetailProcessingFailureStreak`. See
   [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for failure handling.
   Organization responses must decode to an array; null and other shapes fail.
   Reverified 2026-10-08 against `TestSyncClaudeAIInvalidOrganizations`.
