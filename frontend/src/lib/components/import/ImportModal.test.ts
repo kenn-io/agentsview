@@ -105,6 +105,31 @@ it.each(["cancel", "disconnect", "error"])("refreshes completed chats after sync
   await waitFor(() => expect(onimported).toHaveBeenCalledOnce());
 });
 
+it("keeps the dialog cleared after cancelling completed sync during browser cleanup", async () => {
+  let finishClose!: () => void;
+  host.close.mockImplementation(() => new Promise<void>((resolve) => { finishClose = resolve; }));
+  syncClaudeAI.mockImplementation(async (_host, callbacks) => {
+    const stats = { imported: 1, updated: 0, skipped: 0, errors: 0 };
+    callbacks.onProgress(stats);
+    await host.close();
+    return stats;
+  });
+  const onimported = vi.fn();
+  const onclose = vi.fn();
+  const { rerender } = render(ImportModal, { open: true, onclose, onimported });
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
+  await waitFor(() => expect(host.close).toHaveBeenCalledOnce());
+  await fireEvent.click(screen.getByRole("button", { name: m.import_cancel() }));
+  expect(onclose).toHaveBeenCalledOnce();
+  expect(syncClaudeAI.mock.calls[0][2].aborted).toBe(true);
+  await rerender({ open: false, onclose, onimported });
+  finishClose();
+  await waitFor(() => expect(onimported).toHaveBeenCalledOnce());
+  await rerender({ open: true, onclose, onimported });
+  expect(screen.queryByText(m.import_processed({ count: 1 }))).toBeNull();
+  expect((screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement).disabled).toBe(false);
+});
+
 it("hides browser sync controls for a read-only archive", () => {
   syncState.readOnly = true;
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });

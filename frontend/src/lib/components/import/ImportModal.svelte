@@ -79,7 +79,8 @@
     syncController = controller;
     try {
       syncTask = syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
-      result = await syncTask;
+      const stats = await syncTask;
+      if (!controller.signal.aborted) result = stats;
     } catch (e) {
       if (controller.signal.aborted) return;
       error = e instanceof Error ? e.message : m.import_failed();
