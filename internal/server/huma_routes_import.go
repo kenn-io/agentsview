@@ -92,7 +92,7 @@ type claudeAISyncResult struct {
 	retryAfter string
 }
 
-var errClaudeAISignInPending = errors.New("Claude sign-in is still pending")
+var errClaudeAISignInPending = errors.New("claude sign-in is still pending")
 
 func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
 	if s.db.ReadOnly() {
