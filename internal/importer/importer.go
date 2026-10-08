@@ -244,7 +244,7 @@ func upsertConversation(
 	// A shorter export (for example an older archive or one with deleted
 	// turns) would make the replacement below drop stored messages.
 	// Refuse it before touching the session row.
-	if existing != nil && len(msgs) < existing.MessageCount {
+	if s.LastEntryUUID == nil && existing != nil && len(msgs) < existing.MessageCount {
 		return importNew, refuse(RefusalShorterExport, fmt.Errorf(
 			"export has %d messages, archive has %d",
 			len(msgs), existing.MessageCount,
@@ -260,15 +260,13 @@ func upsertConversation(
 		}
 		canonical := storedFormMessages(store, msgs)
 		if sameMessages(archived, canonical) {
-			if err := store.UpsertSession(ctx, sess); errors.Is(err, db.ErrSessionExcluded) {
+			_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+				Session: sess, Messages: msgs, SkipSignalUpdates: true, TouchModified: true,
+			}})
+			if errors.Is(err, db.ErrSessionExcluded) {
 				return importSkipped, nil
 			} else if err != nil {
-				return importNew, fmt.Errorf("upserting session: %w", err)
-			}
-			if localDB, ok := store.(*db.DB); ok {
-				if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
-					log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
-				}
+				return importNew, err
 			}
 			if existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) {
 				return importSkipped, nil
@@ -280,10 +278,9 @@ func upsertConversation(
 
 	fts.suspend(ctx)
 	_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-		Session:                    sess,
-		Messages:                   msgs,
-		RejectMessageCountDecrease: true,
-		ReplaceMessages:            replaceMessages,
+		Session:         sess,
+		Messages:        msgs,
+		ReplaceMessages: replaceMessages,
 	}})
 	if errors.Is(err, db.ErrSessionExcluded) {
 		return importSkipped, nil

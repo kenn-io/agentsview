@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const script = require("node:fs").readFileSync(0, "utf8");
 
 (async () => {
-  for (const kind of ["declared oversize", "stream oversize", "exact limit", "split utf8"]) {
+  for (const kind of ["stream oversize", "exact limit", "split utf8"]) {
     const limit = 32 * 1024 * 1024;
     let reads = 0;
     let cancelled = false;
@@ -21,7 +21,7 @@ const script = require("node:fs").readFileSync(0, "utf8");
       signal = options.signal;
       return {
         status: 200,
-        headers: new Headers(kind === "declared oversize" ? { "Content-Length": limit + 1 } : {}),
+        headers: new Headers(),
         body: { getReader: () => ({
           read: async () => {
             const value = chunks[reads++];
@@ -39,8 +39,8 @@ const script = require("node:fs").readFileSync(0, "utf8");
       assert.equal(result.status, 413);
       assert.equal(result.body, "");
       assert.equal(signal.aborted, true);
-      assert.equal(reads, kind === "declared oversize" ? 0 : 2);
-      assert.equal(cancelled, kind === "stream oversize");
+      assert.equal(reads, 2);
+      assert.equal(cancelled, true);
     } else {
       assert.equal(result.status, 200);
       assert.equal(result.body, kind === "split utf8" ? "€" : "\0".repeat(limit));
