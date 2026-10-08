@@ -4100,14 +4100,63 @@ fn delete_claude_native_cookies(manager: webview2_com::Microsoft::Web::WebView2:
     webview2_com::wait_with_pump(receiver).map_err(|e| e.to_string())?
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 async fn delete_claude_auth_cookies(window: &WebviewWindow) -> Result<(), String> {
-    for cookie in window.cookies().map_err(|e| e.to_string())? {
-        if cookie.domain().is_some_and(|domain| domain == "claude.ai" || domain.ends_with(".claude.ai")) {
-            window.delete_cookie(cookie).map_err(|e| e.to_string())?;
+    use block2::RcBlock;
+    use objc2_foundation::{NSArray, NSHTTPCookie};
+    use objc2_web_kit::WKWebView;
+    use std::{cell::{Cell, RefCell}, ptr::NonNull, rc::Rc};
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    window.with_webview(move |webview| unsafe {
+        let view = &*webview.inner().cast::<WKWebView>();
+        let store = view.configuration().websiteDataStore().httpCookieStore();
+        let callback_store = store.clone();
+        let sender = Rc::new(RefCell::new(Some(sender)));
+        store.getAllCookies(&RcBlock::new(move |cookies: NonNull<NSArray<NSHTTPCookie>>| {
+            let cookies: Vec<_> = cookies.as_ref().to_vec().into_iter().filter(|cookie| {
+                let domain = cookie.domain().to_string();
+                domain == "claude.ai" || domain.ends_with(".claude.ai")
+            }).collect();
+            let remaining = Rc::new(Cell::new(cookies.len()));
+            if cookies.is_empty() {
+                let _ = sender.borrow_mut().take().unwrap().send(Ok(()));
+            }
+            for cookie in cookies {
+                let remaining = remaining.clone();
+                let sender = sender.clone();
+                callback_store.deleteCookie_completionHandler(&cookie, Some(&RcBlock::new(move || {
+                    remaining.set(remaining.get() - 1);
+                    if remaining.get() == 0 {
+                        let _ = sender.borrow_mut().take().unwrap().send(Ok(()));
+                    }
+                })));
+            }
+        }));
+    }).map_err(|e| e.to_string())?;
+    tokio::time::timeout(Duration::from_secs(30), receiver).await
+        .map_err(|_| "Claude cookie deletion timed out")?
+        .map_err(|_| "Claude cookie deletion disconnected")?
+}
+
+#[cfg(target_os = "linux")]
+mod claude_cookies_linux;
+
+#[cfg(target_os = "linux")]
+async fn delete_claude_auth_cookies(window: &WebviewWindow) -> Result<(), String> {
+    use webkit2gtk::{WebViewExt, WebsiteDataManagerExt};
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    window.with_webview(move |webview| {
+        if let Some(manager) = webview.inner().website_data_manager().and_then(|store| store.cookie_manager()) {
+            claude_cookies_linux::delete_cookies(manager, sender);
+        } else {
+            let _ = sender.send(Err("Claude cookie manager unavailable".into()));
         }
-    }
-    Ok(())
+    }).map_err(|e| e.to_string())?;
+    tokio::time::timeout(Duration::from_secs(30), receiver).await
+        .map_err(|_| "Claude cookie deletion timed out")?
+        .map_err(|_| "Claude cookie deletion disconnected")?
 }
 
 #[tauri::command]

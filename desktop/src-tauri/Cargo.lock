@@ -12,8 +12,12 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "agentsview-desktop"
 version = "0.1.0"
 dependencies = [
+ "block2",
+ "objc2-foundation",
+ "objc2-web-kit",
  "serde",
  "serde_json",
+ "soup3",
  "tauri",
  "tauri-build",
  "tauri-plugin-deep-link",
@@ -25,6 +29,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "webkit2gtk",
  "webview2-com",
  "windows",
 ]
