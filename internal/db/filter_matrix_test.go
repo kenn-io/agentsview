@@ -122,43 +122,52 @@ func TestFilterMatrixUsage(t *testing.T) {
 func TestFilterMatrixTermination(t *testing.T) {
 	for _, d := range filterMatrixDialects {
 		t.Run(d.name, func(t *testing.T) {
-			before := time.Now().UTC()
-			b := NewQueryBuilder(d.dialect, 4)
-			preds := BuildUsageSessionFilter(UsageFilter{Termination: "active,stale,unclean"}, b, "")
-			require.Len(t, preds, 1)
-			args := b.Args()
-			require.Len(t, args, 4)
-			for i, delta := range []time.Duration{10 * time.Minute, 60 * time.Minute, 10 * time.Minute, 60 * time.Minute} {
-				var cutoff time.Time
-				switch d.name {
-				case "sqlite":
-					v, ok := args[i].(int64)
-					require.True(t, ok)
-					cutoff = time.Unix(v, 0)
-				case "postgres":
-					v, ok := args[i].(time.Time)
-					require.True(t, ok)
-					cutoff = v
-				default:
-					v, ok := args[i].(string)
-					require.True(t, ok)
-					var err error
-					cutoff, err = time.Parse(time.RFC3339, v)
-					require.NoError(t, err)
-				}
-				assert.WithinDuration(t, before.Add(-delta), cutoff, 2*time.Second)
+			for _, entry := range []string{"usage", "analytics"} {
+				t.Run(entry, func(t *testing.T) {
+					before := time.Now().UTC()
+					b := NewQueryBuilder(d.dialect, 4)
+					var preds []string
+					if entry == "analytics" {
+						preds = []string{BuildAnalyticsWhere(AnalyticsFilter{Termination: "active,stale,unclean"}, b, "s.", "", nil)}
+					} else {
+						preds = BuildUsageSessionFilter(UsageFilter{Termination: "active,stale,unclean"}, b, "")
+					}
+					require.Len(t, preds, 1)
+					args := b.Args()
+					require.Len(t, args, 4)
+					for i, delta := range []time.Duration{10 * time.Minute, 60 * time.Minute, 10 * time.Minute, 60 * time.Minute} {
+						var cutoff time.Time
+						switch d.name {
+						case "sqlite":
+							v, ok := args[i].(int64)
+							require.True(t, ok)
+							cutoff = time.Unix(v, 0)
+						case "postgres":
+							v, ok := args[i].(time.Time)
+							require.True(t, ok)
+							cutoff = v
+						default:
+							v, ok := args[i].(string)
+							require.True(t, ok)
+							var err error
+							cutoff, err = time.Parse(time.RFC3339, v)
+							require.NoError(t, err)
+						}
+						assert.WithinDuration(t, before.Add(-delta), cutoff, 2*time.Second)
+					}
+					assert.Contains(t, preds[0], "s.termination_status IN ('tool_call_pending', 'truncated')")
+					assert.Contains(t, preds[0], "s.ended_at")
+					assert.NotContains(t, preds[0], "COALESCE(ended_at")
+					assert.NotContains(t, preds[0], "NULLIF(ended_at")
+					if d.name == "postgres" {
+						for i := 5; i <= 8; i++ {
+							assert.Contains(t, preds[0], fmt.Sprintf("$%d", i))
+						}
+						assert.NotContains(t, preds[0], "::timestamptz")
+					}
+				})
 			}
-			assert.Contains(t, preds[0], "s.termination_status IN ('tool_call_pending', 'truncated')")
-			assert.Contains(t, preds[0], "s.ended_at")
-			assert.NotContains(t, preds[0], "COALESCE(ended_at")
-			assert.NotContains(t, preds[0], "NULLIF(ended_at")
-			if d.name == "postgres" {
-				for i := 5; i <= 8; i++ {
-					assert.Contains(t, preds[0], fmt.Sprintf("$%d", i))
-				}
-				assert.NotContains(t, preds[0], "::timestamptz")
-			}
-			b = NewQueryBuilder(d.dialect, 0)
+			b := NewQueryBuilder(d.dialect, 0)
 			got := BuildAnalyticsWhere(AnalyticsFilter{Termination: "clean"}, b, "s.", "", nil)
 			ending := "s.termination_status = 'clean'"
 			if d.name == "duckdb" || d.name == "clickhouse" {

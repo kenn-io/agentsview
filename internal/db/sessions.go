@@ -644,25 +644,6 @@ func buildCanonicalRootWhere(includeOrphans bool) string {
 	return BuildCanonicalRootWhere(SQLiteQueryDialect(), "sessions", includeOrphans)
 }
 
-// buildTerminationPredSQLite returns a WHERE fragment and args for
-// the multi-state termination filter (active / stale / unclean).
-// The status value may be comma-separated to OR multiple states
-// (e.g. "stale,unclean"). Returns ("", nil) when empty or "all".
-//
-// Stale and unclean both require a parser red flag
-// (tool_call_pending or truncated). Sessions classified as clean
-// or with NULL termination_status never appear under those
-// filters — the parser-side classifier is the only positive
-// signal that something is wrong. Active is purely time-based:
-// any session written to in the last activeWindow qualifies.
-func buildTerminationPredSQLite(status string) (string, []any) {
-	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	pred := terminationPredicate(status, b, func(col string) string {
-		return col
-	})
-	return pred, b.Args()
-}
-
 // SessionPage is a page of session results.
 type SessionPage struct {
 	Sessions   []Session `json:"sessions"`

@@ -41,7 +41,7 @@ func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID s
 		if scope != "human" {
 			pred = "(" + pred + " OR " + q("is_automated") + " = " + b.dialect.trueLiteral + ")"
 		}
-		pred = strings.ReplaceAll(f.OneShotExclusionSQL(pred), "relationship_type", q("relationship_type"))
+		pred = f.oneShotExclusionSQL(pred, prefix)
 		preds = append(preds, pred)
 	}
 	if pred := automationScopePredicate(SessionFilter{AutomatedScope: scope}, b.dialect, strings.TrimSuffix(prefix, ".")); pred != "" {

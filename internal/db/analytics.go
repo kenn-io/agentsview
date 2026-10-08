@@ -164,8 +164,12 @@ func RelationshipExclusionSQL(includeSubagents, includeForks bool, colPrefix str
 // meant to surface. Exported so the PostgreSQL and DuckDB builders
 // apply the same rule. base must be a self-contained boolean clause.
 func (f AnalyticsFilter) OneShotExclusionSQL(base string) string {
+	return f.oneShotExclusionSQL(base, "")
+}
+
+func (f AnalyticsFilter) oneShotExclusionSQL(base, colPrefix string) string {
 	if f.IncludeSubagents {
-		return "(" + base + " OR relationship_type = 'subagent')"
+		return "(" + base + " OR " + colPrefix + "relationship_type = 'subagent')"
 	}
 	return base
 }
