@@ -237,9 +237,15 @@ func upsertConversation(
 
 	msgs := claudeAIMessages(s.ID, result.Messages)
 
-	existing, err := store.GetSession(ctx, s.ID)
+	existing, err := store.GetSessionFull(ctx, s.ID)
 	if err != nil {
 		return importNew, fmt.Errorf("checking session: %w", err)
+	}
+	if err := checkClaudeAIMarker(existing); err != nil {
+		return importNew, err
+	}
+	if existing != nil && existing.DeletedAt != nil {
+		existing = nil
 	}
 	isNew := existing == nil
 	// A shorter export (for example an older archive or one with deleted
