@@ -13,7 +13,8 @@ The latest published release is
 
 - Sync Claude.ai chats from the desktop Import dialog without downloading an
   export. Later runs fetch new or changed chats, including branch switches.
-  Shorter histories keep the previous version in Trash.
+  Shorter histories are refused and listed, as file imports are. See
+  [Replacing archived history](chat-import.md#replacing-archived-history).
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.

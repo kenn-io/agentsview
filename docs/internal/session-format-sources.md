@@ -2770,11 +2770,12 @@ schemas keep their existing ordering behavior.
   Authentication, transport, and
   cancellation errors stop Sync.
   Sync uses the export importer's message reconciliation. New turns preserve
-  existing message IDs. Changed or removed rows keep the previous version and
-  its pins in Trash, including zip imports. Repeated versions reuse the existing
-  Trash copy. Metadata refreshes preserve findings and signals when messages
-  match. Rechecked against the selected-path and Sync regression fixtures on
-  2026-10-07. Usage-only writes reconcile
+  existing message IDs. Changed histories update in place. Shorter histories are
+  refused as `shorter_export`, as zip imports are. An explicit `replace` list
+  moves the previous version and all its pins to a fresh Trash copy. Matching
+  text keeps stored rows and IDs even when source UUIDs differ. Metadata
+  refreshes preserve findings and signals when messages match. Rechecked against the selected-path
+  and Sync regression fixtures on 2026-10-07. Usage-only writes reconcile
   assistant activity rows to the selected path.
   An empty list page with `has_more: true` fails.
   The export parser reads message `sender`, `text`, `content`, timestamps,
