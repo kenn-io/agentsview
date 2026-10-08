@@ -27,7 +27,7 @@ const script = require("node:fs").readFileSync(0, "utf8");
             const value = chunks[reads++];
             return value ? { value, done: false } : { done: true };
           },
-          cancel: async () => { cancelled = true; },
+          cancel: async () => { cancelled = true; assert.equal(signal.aborted, true); throw new DOMException("Aborted", "AbortError"); },
         }) },
       };
     };
