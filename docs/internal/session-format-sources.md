@@ -2802,8 +2802,8 @@ schemas keep their existing ordering behavior.
   a versioned leaf marker with the archive content policy in `last_entry_uuid`.
   A policy change or zip import requires one new detail fetch. Sync commits
   metadata, messages, and the marker together. Matching turns with compatible
-  UUIDs keep row IDs and gain missing source UUIDs on unchanged and append writes.
-  Identity fills advance the transcript revision and count as updated in Sync.
+  UUIDs keep row IDs. Sync writes message identities only when it adds or
+  replaces turns. Unchanged zip imports keep their stored turns and derived state.
   Live branch changes update in place at every length. A replacement that loses
   a pin or note keeps a fresh copy of the previous version in Trash in the same
   transaction; other replacements make no copy. Shorter zip exports

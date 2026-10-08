@@ -73,11 +73,24 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	if len(write.UsageEvents) == 0 {
 		write.UsageEvents = events
 	}
-	pins, err := savePinsTx(tx, id)
+	rows, err := tx.QueryContext(ctx, `SELECT m.ordinal, p.note, p.created_at FROM pinned_messages p JOIN messages m ON m.id = p.message_id WHERE p.session_id = ?`, id)
 	if err != nil {
 		return "", err
 	}
-	pins = slices.DeleteFunc(pins, func(pin savedPin) bool { return pin.messageFound == 0 })
+	var pins []savedPin
+	for rows.Next() {
+		var pin savedPin
+		if err := rows.Scan(&pin.ordinal, &pin.note, &pin.createdAt); err != nil {
+			_ = rows.Close()
+			return "", fmt.Errorf("reading copy pins: %w", err)
+		}
+		pins = append(pins, pin)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return "", fmt.Errorf("reading copy pins: %w", err)
+	}
 	if _, err := writeOneSessionBatchTx(
 		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(),
 	); err != nil {

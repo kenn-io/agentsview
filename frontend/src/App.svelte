@@ -179,7 +179,7 @@
           id,
           () => {
             messages.reload();
-            pins.loadForSession(id);
+            if (id.startsWith("claude-ai:")) pins.loadForSession(id);
             sessions.refreshActiveSession();
             sessions.loadChildSessions(id);
             if (ui.vitalsOpen) {

@@ -128,8 +128,10 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				return importer.ClaudeAIResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, err
 			}
 		}
+		var changed []string
 		stats, err := importer.SyncClaudeAI(ctx, store, fetch, &importer.ImportCallbacks{
-			SerializeWrite: func(write func() error) error { return s.serializeArchiveWrite(ctx, write) },
+			SerializeWrite:   func(write func() error) error { return s.serializeArchiveWrite(ctx, write) },
+			OnSessionChanged: func(id string) { changed = append(changed, id) },
 			OnProgress: func(stats importer.ImportStats) {
 				if !stream.SendJSON("progress", stats) {
 					cancel()
@@ -138,7 +140,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		})
 		if stats.Imported+stats.Updated > 0 {
 			if s.broadcaster != nil {
-				s.broadcaster.Emit("sessions")
+				s.broadcaster.EmitSessions(changed)
 			}
 			s.notifySessionMutation()
 			s.notifyRecallCorpusMutation()
