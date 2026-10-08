@@ -151,9 +151,7 @@ func (h *HostedStore) GetTopSessionsByCost(ctx context.Context, f db.UsageFilter
 	return hostedMapped(ctx, h, func() ([]db.TopSessionEntry, error) { return h.physical.GetTopSessionsByCost(ctx, f, limit) }, func(p *[]db.TopSessionEntry, r *hostedRefs) {
 		*p = slices.Clone(*p)
 		for i := range *p {
-			if (*p)[i].SessionID != "" {
-				r.add(&(*p)[i].SessionID)
-			}
+			r.add(&(*p)[i].SessionID)
 		}
 	})
 }

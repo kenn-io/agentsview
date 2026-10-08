@@ -1240,18 +1240,13 @@ class UsageStore {
         },
         { signal },
       );
-      if (this.versions.zoom !== version || this.zoomedProject?.key !== projectKey)
-        return "aborted";
+      if (this.versions.zoom !== version) return "aborted";
       this.zoomRows = data;
       this.noteStep("zoom", liveStep, started, data);
       return "ok";
     } catch (error) {
       status = isAbortError(error) ? "aborted" : "error";
-      if (
-        status === "error" &&
-        this.versions.zoom === version &&
-        this.zoomedProject?.key === projectKey
-      ) {
+      if (status === "error" && this.versions.zoom === version) {
         this.errors.zoom = error instanceof Error ? error.message : m.shared_failed_to_load();
       }
       return status;
@@ -1259,8 +1254,7 @@ class UsageStore {
       this.recordStep("zoom", started, status);
       this.liveQuery.abandon(liveStep);
       this.clearAbortSignal("zoom", signal);
-      if (this.versions.zoom === version && this.zoomedProject?.key === projectKey)
-        this.loading.zoom = false;
+      if (this.versions.zoom === version) this.loading.zoom = false;
     }
   }
 

@@ -935,11 +935,16 @@ func TestHermesCronTranscriptProjects(t *testing.T) {
 					name = tc.id + ".jsonl"
 					body = fmt.Sprintf("{\"role\":\"session_meta\",\"platform\":%q}\n{\"role\":\"user\",\"content\":\"hello\"}\n", tc.source)
 				}
-				sess, _, err := parseHermesTestSession(t, createTestFile(t, name, body), "", "local")
+				path := createTestFile(t, name, body)
+				sess, _, err := parseHermesTestSession(t, path, "", "local")
 				require.NoError(t, err)
 				require.NotNil(t, sess)
 				assert.Equal(t, tc.project, sess.Project)
-				assert.Equal(t, tc.group, sess.GroupKey)
+				group := ""
+				if tc.group != "" {
+					group = filepath.Join(filepath.Dir(path), "state.db") + "#" + tc.group
+				}
+				assert.Equal(t, group, sess.GroupKey)
 				assert.Empty(t, sess.GroupLabel)
 				assert.Empty(t, sess.ParentSessionID)
 			})

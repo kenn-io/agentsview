@@ -404,7 +404,7 @@ func clearUsageOnlyTextTx(
 ) error {
 	if _, err := tx.Exec(
 		`UPDATE sessions
-		    SET first_message = NULL, display_name = NULL, session_name = NULL, group_label = ''
+		    SET first_message = NULL, display_name = NULL, session_name = NULL
 		  WHERE id = ? AND (first_message IS NOT NULL
 		     OR display_name IS NOT NULL OR session_name IS NOT NULL)`,
 		sessionID,

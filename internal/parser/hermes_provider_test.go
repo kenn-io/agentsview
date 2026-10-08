@@ -1349,7 +1349,11 @@ func TestHermesCronStateGroups(t *testing.T) {
 			}
 			require.Len(t, sessions, 2)
 			for _, session := range sessions {
-				assert.Equal(t, tc.key, session.GroupKey)
+				key := ""
+				if tc.key != "" {
+					key = stateDB + "#" + tc.key
+				}
+				assert.Equal(t, key, session.GroupKey)
 				assert.Equal(t, tc.label, session.GroupLabel)
 			}
 		})

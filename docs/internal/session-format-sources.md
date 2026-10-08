@@ -2941,9 +2941,9 @@ schemas keep their existing ordering behavior.
   `[A-Za-z0-9][A-Za-z0-9._-]*`.
   [cron/scheduler.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/cron/scheduler.py)
   records `source = "cron"` and titles as the job name followed by ` · `
-  and the run timestamp. Agentsview keeps the stable job ID in `group_key`
-  and the recorded name in `group_label`. Reverified both producer files
-  for state parent walks and transcript run IDs on 2026-10-08.
+  and the run timestamp. Agentsview scopes the job ID to its archive's
+  `state.db` source path in `group_key` and keeps the recorded name in
+  `group_label`.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized. Transcript projects use `platform`. Cron continuations follow

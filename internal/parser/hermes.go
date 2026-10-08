@@ -371,7 +371,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	sess := &ParsedSession{
 		ID:                         fullID,
 		Project:                    project,
-		GroupKey:                   job,
+		GroupKey:                   hermesCronGroupKey(path, job),
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
@@ -566,7 +566,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 	sess := &ParsedSession{
 		ID:                         fullID,
 		Project:                    project,
-		GroupKey:                   job,
+		GroupKey:                   hermesCronGroupKey(path, job),
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
@@ -1055,7 +1055,7 @@ func applyHermesStateMetadata(
 		sess.ParentSessionID = "hermes:" + ss.parentSessionID
 		sess.RelationshipType = RelContinuation
 	}
-	sess.GroupKey = ss.cronJob
+	sess.GroupKey = hermesCronGroupKey(selectedPath, ss.cronJob)
 	sess.GroupLabel = hermesCronRecordedName(ss.cronJob, ss.title)
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
@@ -1515,6 +1515,17 @@ func hermesCronJobID(id string, parent func(string) string) string {
 		id = parent(id)
 	}
 	return ""
+}
+
+func hermesCronGroupKey(path, job string) string {
+	if job == "" {
+		return ""
+	}
+	root := filepath.Dir(path)
+	if filepath.Base(root) == "sessions" {
+		root = filepath.Dir(root)
+	}
+	return VirtualSourcePath(absoluteHermesPath(filepath.Join(root, "state.db")), job)
 }
 
 func hermesCronRunJob(id string) string {

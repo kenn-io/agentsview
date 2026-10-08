@@ -2176,8 +2176,8 @@ func (s *Store) GetTopSessionsByCost(
 			continue
 		}
 		result = append(result, db.TopSessionEntry{
-			SessionID: id,
-			Project:   sa.entry.Project, Agent: sa.entry.Agent,
+			SessionID: id, DisplayName: id,
+			Project: sa.entry.Project, Agent: sa.entry.Agent,
 			GroupKey: sa.entry.GroupKey, GroupLabel: sa.entry.GroupLabel,
 			InputTokens:         sa.inputTokens,
 			OutputTokens:        sa.outputTokens,
@@ -2195,9 +2195,13 @@ func (s *Store) GetTopSessionsByCost(
 
 	if f.TopSessionsByGroup {
 		members := make(map[[2]string][]string)
-		for _, entry := range result {
+		for i, entry := range result {
+			if entry.GroupKey == "" {
+				continue
+			}
 			key := [2]string{entry.Project, entry.GroupKey}
 			members[key] = append(members[key], entry.SessionID)
+			result[i].GroupLabel = ""
 		}
 		result, err = db.GroupTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 		if err != nil {
