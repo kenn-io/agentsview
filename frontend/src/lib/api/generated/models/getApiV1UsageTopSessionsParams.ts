@@ -26,10 +26,6 @@ export type GetApiV1UsageTopSessionsParams = {
    */
   project?: string;
   /**
-   * Filter by an opaque project key
-   */
-  project_key?: string;
-  /**
    * Filter by machine
    */
   machine?: string;
@@ -91,6 +87,10 @@ export type GetApiV1UsageTopSessionsParams = {
    */
   session_counts?: boolean;
   /**
+   * Filter by an opaque project key
+   */
+  project_key?: string;
+  /**
    * Maximum number of sessions
    * @minimum 0
    * @maximum 100
@@ -101,7 +101,7 @@ export type GetApiV1UsageTopSessionsParams = {
    */
   sort?: GetApiV1UsageTopSessionsSort;
   /**
-   * Merge sessions by project and group
+   * Merge sessions by project and group; a trailing row with no session or group ID sums rows past limit
    */
   group_by?: GetApiV1UsageTopSessionsGroupBy;
   /**

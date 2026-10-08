@@ -2140,10 +2140,7 @@ func (s *Store) GetTopSessionsByCost(
 	}
 
 	if f.TopSessionsByGroup {
-		result, err = db.GroupTopSessions(result)
-		if err != nil {
-			return nil, err
-		}
+		return db.GroupTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
 	result = db.SortAndLimitTopSessions(
 		result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,

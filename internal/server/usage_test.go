@@ -522,11 +522,15 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	var entries []db.TopSessionEntry
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
-	require.Len(t, entries, 1)
+	require.Len(t, entries, 2)
 	assert.Equal(t, "hermes-cron", entries[0].Project)
 	assert.Equal(t, "job-a", entries[0].GroupKey)
 	assert.Equal(t, "Research digest", entries[0].GroupLabel)
 	assert.Equal(t, int64(3_000_000), entries[0].Cost.Microdollars)
+	assert.Empty(t, entries[1].SessionID)
+	assert.Empty(t, entries[1].GroupKey)
+	assert.Equal(t, int64(5_000_000), entries[1].Cost.Microdollars)
+	assert.Equal(t, 20, entries[1].InputTokens)
 	params["project"] = "unrelated-page-filter"
 	w = te.get(t, buildPathURL("/api/v1/usage/top-sessions", params))
 	assertStatus(t, w, http.StatusOK)

@@ -24,10 +24,6 @@ export type GetApiV1UsageSummaryParams = {
    */
   project?: string;
   /**
-   * Filter by an opaque project key
-   */
-  project_key?: string;
-  /**
    * Filter by machine
    */
   machine?: string;

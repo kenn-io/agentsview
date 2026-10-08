@@ -140,30 +140,6 @@ func TestMessagesMapsSourceChangedConflict(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrSourceChanged)
 }
 
-func TestUsageForwardsProjectKeys(t *testing.T) {
-	for _, path := range []string{"/api/v1/usage/summary", "/api/v1/usage/pairwise-comparison"} {
-		t.Run(path, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(t, path, r.URL.Path)
-				assert.Equal(t, "hermes/hermes-cron", r.URL.Query().Get("project_key"))
-				assert.Equal(t, "claude-code/other", r.URL.Query().Get("exclude_project_key"))
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{}`))
-			}))
-			t.Cleanup(srv.Close)
-			backend := NewHTTPBackend(srv.URL, "", false, "")
-			req := service.UsageRequest{ProjectKey: "hermes/hermes-cron", ExcludeProjectKey: "claude-code/other"}
-			if path == "/api/v1/usage/summary" {
-				_, err := backend.UsageSummary(t.Context(), req)
-				require.NoError(t, err)
-			} else {
-				_, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: req})
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
 func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

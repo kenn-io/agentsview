@@ -16,6 +16,7 @@ The latest release is
   recorded parent links. Each job shows its latest recorded name in the
   selected range. Use **Hide project** in the zoom header to exclude it.
   The first sync after upgrading rebuilds the archive once to populate groups.
+  For DuckDB mirrors, run `agentsview duckdb push --full` once.
 
 **Bug fixes**
 

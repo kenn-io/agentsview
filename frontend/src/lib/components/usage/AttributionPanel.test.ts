@@ -472,6 +472,20 @@ describe("AttributionPanel colors", () => {
   });
 });
 
+const topSessionForRemainder = (): DbTopSessionEntry => ({
+  sessionId: "",
+  displayName: "",
+  project: "",
+  agent: "",
+  startedAt: "",
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheCreationTokens: 0,
+  cacheReadTokens: 0,
+  totalTokens: 0,
+  cost: testMoney(1),
+});
+
 describe("AttributionPanel job groups", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -515,11 +529,12 @@ describe("AttributionPanel job groups", () => {
       group("abcdef-job", 3),
       group("abcdef-other", 2),
       { ...group("", 1), sessionId: "hermes:ungrouped", displayName: "Ungrouped run" },
+      { ...group("", 2), sessionId: "", displayName: "" },
     ]);
     const component = mountPanel();
     await tick();
     document.querySelectorAll<HTMLElement>(".list-row")[0]!.click();
-    await vi.waitFor(() => expect(usage.zoomedProjectKey).toBe("pl1:sha256:first"));
+    await vi.waitFor(() => expect(usage.zoomedProject?.key).toBe("pl1:sha256:first"));
     expect(usage.excludedProjectKeys).toBe("");
     expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
@@ -540,7 +555,7 @@ describe("AttributionPanel job groups", () => {
     expect(rows[0]!.title).toBe("Daily digest · abcdef-job");
     expect(
       new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size,
-    ).toBe(4);
+    ).toBe(1);
     rows[0]!.click();
     expect(usage.excludedProjectKeys).toBe("");
     const back = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -548,12 +563,12 @@ describe("AttributionPanel job groups", () => {
     )!;
     back.click();
     await tick();
-    expect(usage.zoomedProjectKey).toBeNull();
+    expect(usage.zoomedProject).toBeNull();
     expect(document.querySelectorAll(".list-row")).toHaveLength(2);
     unmount(component);
   });
 
-  it("omits Other when summary fails and zoom succeeds after a date change", async () => {
+  it("uses zoom rows and remainder when summary fails after a date change", async () => {
     const summary = summaryWithDuplicateProjectLabels();
     summary.projectTotals[0]!.project = "hermes-cron";
     summary.projectTotals[0]!.cost = testMoney(100);
@@ -565,32 +580,57 @@ describe("AttributionPanel job groups", () => {
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usageServiceMocks.getApiV1UsageSummary.mockRejectedValue(new Error("Summary unavailable"));
     usageServiceMocks.getApiV1UsageTopSessions.mockImplementation((params) =>
-      Promise.resolve(params.group_by === "group" ? [{
-        group_key: "job-a",
-        group_label: "Digest",
-        sessionId: "",
-        displayName: "Digest",
-        project: "hermes-cron",
-        agent: "hermes",
-        startedAt: "",
-        inputTokens: 10,
-        outputTokens: 0,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
-        totalTokens: 10,
-        cost: testMoney(2),
-      }] : []),
+      Promise.resolve(
+        params.group_by === "group"
+          ? [
+              {
+                group_key: "job-a",
+                group_label: "Digest",
+                sessionId: "",
+                displayName: "Digest",
+                project: "hermes-cron",
+                agent: "hermes",
+                startedAt: "",
+                inputTokens: 10,
+                outputTokens: 0,
+                cacheCreationTokens: 0,
+                cacheReadTokens: 0,
+                totalTokens: 10,
+                cost: testMoney(2),
+              },
+              {
+                ...topSessionForRemainder(),
+                group_key: "job-b",
+                group_label: "Research",
+                displayName: "Research",
+                cost: testMoney(3),
+              },
+              topSessionForRemainder(),
+            ]
+          : [],
+      ),
     );
     usage.applyDateRange("2024-02-01", "2024-02-29");
     await usage.fetchAll();
     await tick();
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(expect.objectContaining({ from: "2024-02-01", to: "2024-02-29" }));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ from: "2024-02-01", to: "2024-02-29" }),
+    );
     expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls).toContainEqual([
       expect.objectContaining({ from: "2024-02-01", to: "2024-02-29", group_by: "group" }),
       expect.anything(),
     ]);
-    expect([...document.querySelectorAll(".list-label")].map((row) => row.textContent)).toEqual(["Digest"]);
-    expect(document.querySelector(".list-cost")?.textContent?.trim()).toBe("$2.00");
+    expect([...document.querySelectorAll(".list-label")].map((row) => row.textContent)).toEqual([
+      "Research",
+      "Digest",
+      "Other",
+    ]);
+    expect(
+      [...document.querySelectorAll(".list-cost")].map((row) => row.textContent?.trim()),
+    ).toEqual(["$3.00", "$2.00", "$1.00"]);
+    expect(
+      [...document.querySelectorAll(".list-pct")].map((row) => row.textContent?.trim()),
+    ).toEqual(["50.0%", "33.3%", "16.7%"]);
     await unmount(component);
   });
 
@@ -604,7 +644,7 @@ describe("AttributionPanel job groups", () => {
     [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.trim() === "Hide project")!
       .click();
-    expect(usage.zoomedProjectKey).toBeNull();
+    expect(usage.zoomedProject).toBeNull();
     expect(usage.excludedProjectKeys).toBe("pl1:sha256:first");
     await vi.waitFor(() =>
       expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(
@@ -615,30 +655,35 @@ describe("AttributionPanel job groups", () => {
   });
 
   it("clears zoom when switching attribution dimensions", async () => {
-    usage.zoomedProjectKey = "pl1:sha256:first";
+    usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
     const component = mountPanel();
     await tick();
     [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.trim() === "Agent")!
       .click();
-    expect(usage.zoomedProjectKey).toBeNull();
+    expect(usage.zoomedProject).toBeNull();
     unmount(component);
   });
-  it("clears zoom when the project leaves the refreshed summary", async () => {
-    usage.zoomedProjectKey = "pl1:sha256:first";
+  it("keeps zoom when the project leaves the refreshed summary", async () => {
+    usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
     usage.zoomRows = [];
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithAgents([]));
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
     await usage.fetchAll({ preserveTimeRange: true });
-    expect(usage.zoomedProjectKey).toBeNull();
-    expect(usage.zoomRows).toBeNull();
+    expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:first", label: "hermes-cron" });
+    expect(usage.zoomRows).toEqual([]);
+    const component = mountPanel();
+    await tick();
+    expect(document.querySelector(".breadcrumb")?.textContent).toContain("hermes-cron");
+    expect(document.querySelector(".empty")?.textContent).toBe("No data for this period");
+    unmount(component);
   });
 
   it("clears zoom rows when returning to projects", async () => {
     usage.zoomRows = [];
-    usage.zoomedProjectKey = "pl1:sha256:first";
+    usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
     usage.backToProjects();
-    expect(usage.zoomedProjectKey).toBeNull();
+    expect(usage.zoomedProject).toBeNull();
     expect(usage.zoomRows).toBeNull();
     expect(usageServiceMocks.getApiV1UsageTopSessions).not.toHaveBeenCalled();
   });

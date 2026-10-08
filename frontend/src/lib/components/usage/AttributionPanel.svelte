@@ -34,11 +34,11 @@
     pct: number;
   }
 
-  const zoomedProject = $derived(usage.summary?.projectTotals.find((project) => project.project_key === usage.zoomedProjectKey));
+  const zoomedProject = $derived(usage.zoomedProject);
 
   const rowItems = $derived.by(() => {
     const s = usage.summary;
-    if (!s) return [];
+    if (!s && !zoomedProject) return [];
 
     let items: Array<{
       id: string;
@@ -48,7 +48,7 @@
 
     if (zoomedProject && groupBy === "project") {
       const zoomRows = usage.zoomRows ?? [];
-      const names = zoomRows.map((row) => row.group_key ? row.group_label || row.group_key : row.displayName);
+      const names = zoomRows.map((row) => row.group_key ? row.group_label || row.group_key : row.sessionId ? row.displayName : m.usage_other_runs());
       items = zoomRows.map((row, index) => {
         const id = row.group_key || row.sessionId;
         const duplicates = zoomRows.filter((other, otherIndex) => other !== row && names[otherIndex] === names[index]);
@@ -60,13 +60,8 @@
           value: isTokenMode ? sumSelectedTokens(row, usage.selectedTokenTypes) : row.cost.microdollars,
         };
       });
-      if (usage.attributionTotalsMatch) {
-        const total = isTokenMode ? sumSelectedTokens(zoomedProject, usage.selectedTokenTypes) : zoomedProject.cost.microdollars;
-        const remainder = total - items.reduce((sum, item) => sum + item.value, 0);
-        if (remainder > 0) items.push({ id: "", label: m.usage_other_runs(), value: remainder });
-      }
     } else if (groupBy === "project") {
-      items = s.projectTotals.map((p) => ({
+      items = s!.projectTotals.map((p) => ({
         id: p.project_key,
         label: p.project,
         value: isTokenMode
@@ -74,7 +69,7 @@
           : p.cost.microdollars,
       }));
     } else if (groupBy === "model") {
-      items = s.modelTotals.map((m) => ({
+      items = s!.modelTotals.map((m) => ({
         id: m.model,
         label: m.model,
         value: isTokenMode
@@ -82,7 +77,7 @@
           : m.cost.microdollars,
       }));
     } else {
-      items = s.agentTotals.map((a) => ({
+      items = s!.agentTotals.map((a) => ({
         id: a.agent,
         label: a.agent,
         value: isTokenMode
@@ -99,13 +94,12 @@
     const items = rowItems;
     const total = items.reduce((sum, item) => sum + item.value, 0);
 
-    // At most 45% of any sRGB color over black gives white text at least 4.5:1 contrast.
-    return items.map((d, index) => ({
+    return items.map((d) => ({
       id: d.id,
       label: d.label,
       value: d.value,
       color: zoomedProject
-        ? `color-mix(in srgb, ${colorMap.get(zoomedProject.project_key) ?? "var(--text-muted)"} ${30 + 15 * (index + 1) / items.length}%, black)`
+        ? colorMap.get(zoomedProject.key) ?? "var(--text-muted)"
         : colorMap.get(d.id) ?? "var(--text-muted)",
       pct: total > 0 ? d.value / total : 0,
     }));
@@ -136,7 +130,7 @@
   function handleSelect(id: string) {
     if (zoomedProject) return;
     if (groupBy === "project") {
-      usage.selectAttributionProject(id);
+      usage.selectAttributionProject(id, rows.find((row) => row.id === id)!.label);
     } else if (groupBy === "agent") {
       usage.toggleAgent(id, { preserveTimeRange: true });
     } else {
@@ -205,8 +199,8 @@
 
   {#if zoomedProject}
     <div class="hint breadcrumb">
-      <span><button onclick={() => usage.backToProjects()}>{m.usage_all_projects()}</button> › {zoomedProject.project}</span>
-      <button onclick={() => { usage.toggleProjectKey(zoomedProject.project_key, { preserveTimeRange: true }); usage.backToProjects(); }}>{m.usage_hide_project()}</button>
+      <span><button onclick={() => usage.backToProjects()}>{m.usage_all_projects()}</button> › {zoomedProject.label}</span>
+      <button onclick={() => { usage.toggleProjectKey(zoomedProject.key, { preserveTimeRange: true }); usage.backToProjects(); }}>{m.usage_hide_project()}</button>
     </div>
   {/if}
   {#if zoomedProject && usage.errors.zoom}
@@ -223,7 +217,6 @@
           <Treemap
             items={treemapItems}
             height={260}
-            fullTextOpacity={!!zoomedProject}
             onSelect={zoomedProject ? undefined : handleSelect}
             formatValue={isTokenMode ? formatTokenCount : undefined}
           />
@@ -235,10 +228,7 @@
             <div
               class="rail-row"
               title={rowTitle(row.id, row.label)}
-              role="button"
               aria-disabled={!!zoomedProject}
-              tabindex={zoomedProject ? -1 : 0}
-              onkeydown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleSelect(row.id); } }}
               onclick={() => handleSelect(row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
@@ -264,10 +254,7 @@
           <div
             class="list-row"
             title={rowTitle(row.id, row.label)}
-            role="button"
             aria-disabled={!!zoomedProject}
-            tabindex={zoomedProject ? -1 : 0}
-            onkeydown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleSelect(row.id); } }}
             onclick={() => handleSelect(row.id)}
           >
             <span class="list-rank">{i + 1}</span>
@@ -528,10 +515,6 @@
   .breadcrumb {
     display: flex;
     justify-content: space-between;
-  }
-
-  .breadcrumb, .breadcrumb button {
-    font-style: normal;
   }
 
   .breadcrumb button {

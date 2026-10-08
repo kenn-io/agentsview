@@ -50,7 +50,6 @@ type UsageFilterInput struct {
 	Timezone          string `query:"timezone" doc:"IANA timezone name"`
 	Agent             string `query:"agent" doc:"Filter by agent"`
 	Project           string `query:"project" doc:"Filter by project"`
-	ProjectKey        string `query:"project_key" doc:"Filter by an opaque project key"`
 	Machine           string `query:"machine" doc:"Filter by machine"`
 	GitBranch         string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	ExcludeProject    string `query:"exclude_project" doc:"Exclude a project"`
@@ -70,9 +69,10 @@ type UsageFilterInput struct {
 
 type usageTopSessionsInput struct {
 	UsageFilterInput
+	ProjectKey string `query:"project_key" doc:"Filter by an opaque project key"`
 	Limit      int    `query:"limit" minimum:"0" maximum:"100" default:"20" doc:"Maximum number of sessions"`
 	Sort       string `query:"sort" enum:"cost,tokens" default:"cost" doc:"Rank sessions by cost or selected token types"`
-	GroupBy    string `query:"group_by" enum:"group" doc:"Merge sessions by project and group"`
+	GroupBy    string `query:"group_by" enum:"group" doc:"Merge sessions by project and group; a trailing row with no session or group ID sums rows past limit"`
 	TokenTypes string `query:"token_types" doc:"Comma-separated token counters for token ranking: input, cache_write, cache_read, output"`
 }
 
@@ -98,7 +98,6 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		Timezone:          in.Timezone,
 		Agent:             in.Agent,
 		Project:           in.Project,
-		ProjectKey:        in.ProjectKey,
 		Machine:           in.Machine,
 		GitBranch:         in.GitBranch,
 		ExcludeProject:    in.ExcludeProject,
@@ -143,15 +142,17 @@ func usagePairwiseRequestFromInput(
 // shared service validator (the single source of truth, also used by the
 // usage-summary seam method), mapping a validation failure to HTTP 400.
 func (s *Server) usageFilterFromInput(
-	ctx context.Context, in UsageFilterInput,
+	ctx context.Context, in UsageFilterInput, projectKey string,
 ) (db.UsageFilter, error) {
 	machine, err := db.ResolveMachineFilter(ctx, s.db, in.Machine)
 	if err != nil {
 		return db.UsageFilter{}, serverError(err)
 	}
 	in.Machine = machine
-	req, err := service.ResolveUsageProjectKeys(
-		ctx, s.db, usageRequestFromInput(in),
+	req := usageRequestFromInput(in)
+	req.ProjectKey = projectKey
+	req, err = service.ResolveUsageProjectKeys(
+		ctx, s.db, req,
 	)
 	if err == nil {
 		var f db.UsageFilter
@@ -230,7 +231,7 @@ func (s *Server) humaUsageComparison(
 	ctx context.Context,
 	in *usageComparisonInput,
 ) (*jsonOutput[Comparison], error) {
-	f, err := s.usageFilterFromInput(ctx, in.UsageFilterInput)
+	f, err := s.usageFilterFromInput(ctx, in.UsageFilterInput, "")
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +338,7 @@ func (s *Server) humaUsageTopSessions(
 	ctx context.Context,
 	in *usageTopSessionsInput,
 ) (*jsonOutput[[]db.TopSessionEntry], error) {
-	f, err := s.usageFilterFromInput(ctx, in.UsageFilterInput)
+	f, err := s.usageFilterFromInput(ctx, in.UsageFilterInput, in.ProjectKey)
 	if err != nil {
 		return nil, err
 	}

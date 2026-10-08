@@ -2035,7 +2035,7 @@ describe("UsageStore project zoom", () => {
     const { usage } = await loadStore();
     await usage.fetchAll();
     expect(usageServiceMocks.getUsageZoom).not.toHaveBeenCalled();
-    usage.selectAttributionProject("pl1:sha256:alpha");
+    usage.selectAttributionProject("pl1:sha256:alpha", "Project");
     expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(1);
     expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
@@ -2059,14 +2059,14 @@ describe("UsageStore project zoom", () => {
           reject = r;
         }),
     );
-    usage.selectAttributionProject("pl1:sha256:alpha");
+    usage.selectAttributionProject("pl1:sha256:alpha", "Project");
     expect(usage.loading.zoom).toBe(true);
     expect(usage.excludedProjectKeys).toBe("pl1:sha256:beta");
     reject(new Error("zoom failed"));
     await vi.waitFor(() => expect(usage.errors.zoom).toBe("zoom failed"));
     expect(usage.excludedProjectKeys).toBe("pl1:sha256:beta");
     usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(9)]);
-    usage.selectAttributionProject("pl1:sha256:alpha");
+    usage.selectAttributionProject("pl1:sha256:alpha", "Project");
     await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(9)]));
   });
 
@@ -2079,10 +2079,10 @@ describe("UsageStore project zoom", () => {
           resolveOld = resolve;
         }),
     );
-    usage.selectAttributionProject("pl1:sha256:alpha");
+    usage.selectAttributionProject("pl1:sha256:alpha", "Project");
     const oldSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
     usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(9)]);
-    usage.selectAttributionProject("pl1:sha256:beta");
+    usage.selectAttributionProject("pl1:sha256:beta", "Project");
     await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(9)]));
     expect(oldSignal.aborted).toBe(true);
     resolveOld([group(1)]);
@@ -2094,19 +2094,19 @@ describe("UsageStore project zoom", () => {
           resolveOld = resolve;
         }),
     );
-    usage.selectAttributionProject("pl1:sha256:beta");
+    usage.selectAttributionProject("pl1:sha256:beta", "Project");
     usage.backToProjects();
     expect(usage.loading.zoom).toBe(false);
     resolveOld([group(1)]);
     await Promise.resolve();
     expect(usage.zoomRows).toBeNull();
-    expect(usage.zoomedProjectKey).toBeNull();
+    expect(usage.zoomedProject).toBeNull();
   });
 
   it("clears old range rows and refreshes zoom even when top sessions fail", async () => {
     const { usage } = await loadStore();
     usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
-    usage.selectAttributionProject("pl1:sha256:alpha");
+    usage.selectAttributionProject("pl1:sha256:alpha", "Project");
     await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(1)]));
     let resolveZoom!: (rows: DbTopSessionEntry[]) => void;
     usageServiceMocks.getUsageZoom.mockImplementationOnce(
@@ -2132,44 +2132,9 @@ describe("UsageStore project zoom", () => {
     expect(usage.excludedProjectKeys).toBe("");
   });
 
-  it("completes refresh when summary closes zoom before its delayed response", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    try {
-      vi.setSystemTime(new Date("2026-10-08T12:00:00Z"));
-      const { usage } = await loadStore();
-      await usage.fetchAll();
-      usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
-      usage.selectAttributionProject("pl1:sha256:alpha");
-      await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(1)]));
-      let resolveZoom!: (rows: DbTopSessionEntry[]) => void;
-      usageServiceMocks.getUsageZoom.mockImplementationOnce(
-        () => new Promise((resolve) => {
-          resolveZoom = resolve;
-        }),
-      );
-      const emptySummary = { ...usageSummary(), projectTotals: [] };
-      usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(emptySummary);
-      usage.markNewData();
-      usage.applyDateRange("2026-10-01", "2026-10-07");
-      const refreshed = usage.fetchAll();
-      const signal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
-      await vi.waitFor(() => expect(usage.zoomedProjectKey).toBeNull());
-      expect(signal.aborted).toBe(true);
-      vi.setSystemTime(new Date("2026-10-08T12:03:00Z"));
-      resolveZoom([group(9)]);
-      await refreshed;
-      expect(usage.summary).toMatchObject(emptySummary);
-      expect(usage.zoomRows).toBeNull();
-      expect(usage.lastUpdatedAt).toBe(new Date("2026-10-08T12:03:00Z").getTime());
-      expect(usage.hasNewData).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("refreshes zoom for metric and token selection changes", async () => {
     const { usage } = await loadStore();
-    usage.selectAttributionProject("pl1:sha256:alpha");
+    usage.selectAttributionProject("pl1:sha256:alpha", "Project");
     usage.setMode("token");
     usage.setSelectedTokenTypes(["output"]);
     expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(

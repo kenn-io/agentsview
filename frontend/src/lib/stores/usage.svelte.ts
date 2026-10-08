@@ -363,10 +363,8 @@ class UsageStore {
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
-  zoomedProjectKey = $state<string | null>(null);
+  zoomedProject = $state<{ key: string; label: string } | null>(null);
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
-  private summaryScope = $state<string | null>(null);
-  private zoomScope = $state<string | null>(null);
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
   // Wall-clock ms of the most recent full refresh, request start to data
@@ -460,10 +458,6 @@ class UsageStore {
       p.exclude_model = this.excludedModels;
     }
     return p;
-  }
-
-  get attributionTotalsMatch(): boolean {
-    return this.summaryScope !== null && this.summaryScope === this.zoomScope && !this.isTimeRangeSummaryProvisional;
   }
 
   get timeSeriesSummary(): UsageSummaryResponse | null {
@@ -794,7 +788,7 @@ class UsageStore {
     this.mode = mode;
     this.invalidatePanel("zoom");
     this.zoomRows = null;
-    if (this.zoomedProjectKey) void this.fetchZoom();
+    if (this.zoomedProject?.key) void this.fetchZoom();
     this.invalidatePanel("topSessions");
     this.topSessions = null;
     this.errors.topSessions = null;
@@ -814,7 +808,7 @@ class UsageStore {
     this.selectedTokenTypes = canonical;
     this.invalidatePanel("zoom");
     this.zoomRows = null;
-    if (this.zoomedProjectKey) void this.fetchZoom();
+    if (this.zoomedProject?.key) void this.fetchZoom();
     this.invalidatePanel("topSessions");
     this.topSessions = null;
     this.errors.topSessions = null;
@@ -934,13 +928,14 @@ class UsageStore {
           return this.fetchZoom(loadedSummary.params);
         })
       : zoomPromise;
-    const [topSessionsResult, loadedZoomResult, comparisonResult, pairwiseResult] = await Promise.all([
-      currentTopSessionsPromise,
-      currentZoomPromise,
-      this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
-      this.fetchPairwise(loadedSummary.version, loadedSummary.params),
-    ]);
-    const zoomResult = this.zoomedProjectKey === null ? "ok" : loadedZoomResult;
+    const [topSessionsResult, loadedZoomResult, comparisonResult, pairwiseResult] =
+      await Promise.all([
+        currentTopSessionsPromise,
+        currentZoomPromise,
+        this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
+        this.fetchPairwise(loadedSummary.version, loadedSummary.params),
+      ]);
+    const zoomResult = this.zoomedProject === null ? "ok" : loadedZoomResult;
     if (
       fetchVersion === this.fetchAllVersion &&
       topSessionsResult === "ok" &&
@@ -1006,12 +1001,6 @@ class UsageStore {
       }
       if (this.versions.summary === v) {
         this.summary = data;
-        this.summaryScope = JSON.stringify([v, params]);
-        if (
-          this.zoomedProjectKey &&
-          !data.projectTotals.some((project) => project.project_key === this.zoomedProjectKey)
-        )
-          this.backToProjects();
         // Both responses are applied together, so each request's apply
         // phase starts once the later body has arrived; the earlier one
         // shows a gap while it waited for its sibling.
@@ -1215,22 +1204,21 @@ class UsageStore {
 
   backToProjects(): void {
     this.invalidatePanel("zoom");
-    this.zoomedProjectKey = null;
+    this.zoomedProject = null;
     this.zoomRows = null;
     this.errors.zoom = null;
   }
 
-  selectAttributionProject(key: string): void {
-    this.zoomedProjectKey = key;
+  selectAttributionProject(key: string, label: string): void {
+    this.zoomedProject = { key, label };
     this.zoomRows = null;
     void this.fetchZoom();
   }
 
   private async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
-    const projectKey = this.zoomedProjectKey;
+    const projectKey = this.zoomedProject?.key;
     if (!projectKey) return "ok";
     const version = ++this.versions.zoom;
-    const summaryGeneration = this.versions.summary;
     const signal = this.nextAbortSignal("zoom");
     this.zoomRows = null;
     this.loading.zoom = true;
@@ -1250,9 +1238,9 @@ class UsageStore {
         },
         { signal },
       );
-      if (this.versions.zoom !== version || this.zoomedProjectKey !== projectKey) return "aborted";
+      if (this.versions.zoom !== version || this.zoomedProject?.key !== projectKey)
+        return "aborted";
       this.zoomRows = data;
-      this.zoomScope = JSON.stringify([summaryGeneration, params]);
       this.noteStep("zoom", liveStep, started, data);
       return "ok";
     } catch (error) {
@@ -1260,7 +1248,7 @@ class UsageStore {
       if (
         status === "error" &&
         this.versions.zoom === version &&
-        this.zoomedProjectKey === projectKey
+        this.zoomedProject?.key === projectKey
       ) {
         this.errors.zoom = error instanceof Error ? error.message : m.shared_failed_to_load();
       }
@@ -1269,7 +1257,7 @@ class UsageStore {
       this.recordStep("zoom", started, status);
       this.liveQuery.abandon(liveStep);
       this.clearAbortSignal("zoom", signal);
-      if (this.versions.zoom === version && this.zoomedProjectKey === projectKey)
+      if (this.versions.zoom === version && this.zoomedProject?.key === projectKey)
         this.loading.zoom = false;
     }
   }

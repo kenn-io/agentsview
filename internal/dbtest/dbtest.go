@@ -310,9 +310,13 @@ func AssertUsageGroups(t *testing.T, store db.Store) {
 	filter.From, filter.To = "2026-10-01", "2026-10-31"
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 1)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
+	require.Len(t, rows, 2)
 	assert.Equal(t, "job-b", rows[0].GroupKey)
 	assert.Equal(t, int64(4_000_000), rows[0].Cost.Microdollars)
+	assert.Empty(t, rows[1].SessionID)
+	assert.Empty(t, rows[1].GroupKey)
+	assert.Equal(t, int64(4_000_000), rows[1].Cost.Microdollars)
+	assert.Equal(t, 40, rows[1].InputTokens)
 	filter.From, filter.To = "2026-10-07", "2026-10-10"
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)

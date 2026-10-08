@@ -2659,7 +2659,7 @@ type TopSessionEntry struct {
 }
 
 // GroupTopSessions merges grouped runs and preserves individual sessions.
-func GroupTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
+func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, tokenTypes UsageTokenTypes) ([]TopSessionEntry, error) {
 	type key struct{ project, group string }
 	grouped := make(map[key]*TopSessionEntry)
 	out := make([]TopSessionEntry, 0, len(entries))
@@ -2684,12 +2684,10 @@ func GroupTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		started, startedErr := time.Parse(time.RFC3339Nano, entry.StartedAt)
-		previousStarted, previousErr := time.Parse(time.RFC3339Nano, row.StartedAt)
+		// Unparseable timestamps count as zero time.
+		started, _ := time.Parse(time.RFC3339Nano, entry.StartedAt)
+		previousStarted, _ := time.Parse(time.RFC3339Nano, row.StartedAt)
 		newer, same := started.After(previousStarted), started.Equal(previousStarted)
-		if startedErr != nil || previousErr != nil {
-			newer, same = entry.StartedAt > row.StartedAt, entry.StartedAt == row.StartedAt
-		}
 		if entry.GroupLabel != "" && (row.GroupLabel == "" || newer || same && entry.SessionID > row.SessionID) {
 			row.GroupLabel = entry.GroupLabel
 			row.StartedAt = entry.StartedAt
@@ -2704,7 +2702,24 @@ func GroupTopSessions(entries []TopSessionEntry) ([]TopSessionEntry, error) {
 		}
 		out = append(out, *row)
 	}
-	return out, nil
+	ranked := SortAndLimitTopSessions(out, limit, sortBy, tokenTypes)
+	if len(ranked) < len(out) {
+		var remainder TopSessionEntry
+		for _, row := range out[len(ranked):] {
+			remainder.InputTokens += row.InputTokens
+			remainder.OutputTokens += row.OutputTokens
+			remainder.CacheCreationTokens += row.CacheCreationTokens
+			remainder.CacheReadTokens += row.CacheReadTokens
+			remainder.TotalTokens += row.TotalTokens
+			var err error
+			remainder.Cost, err = money.Add(remainder.Cost, row.Cost)
+			if err != nil {
+				return nil, err
+			}
+		}
+		ranked = append(ranked, remainder)
+	}
+	return ranked, nil
 }
 
 // TopSessionsSortCost and TopSessionsSortTokens select top-session ranking.

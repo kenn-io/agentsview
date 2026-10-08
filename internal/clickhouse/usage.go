@@ -2048,10 +2048,7 @@ func (s *Store) GetTopSessionsByCost(
 	}
 	if kept, ok := s.topSessionTotals.get(memoSlot, memoVersion); ok {
 		if f.TopSessionsByGroup {
-			kept, err = db.GroupTopSessions(kept)
-			if err != nil {
-				return nil, err
-			}
+			return db.GroupTopSessions(kept, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 		}
 		return db.SortAndLimitTopSessions(
 			slices.Clone(kept), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
@@ -2120,10 +2117,7 @@ func (s *Store) GetTopSessionsByCost(
 	}
 	s.topSessionTotals.put(memoSlot, memoVersion, out)
 	if f.TopSessionsByGroup {
-		out, err = db.GroupTopSessions(out)
-		if err != nil {
-			return nil, err
-		}
+		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
 	return db.SortAndLimitTopSessions(
 		slices.Clone(out), limit, f.TopSessionsSort, f.TopSessionsTokenTypes,

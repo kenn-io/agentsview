@@ -119,6 +119,36 @@ func TestHermesProviderFingerprintChangesWhenTranscriptRemoved(t *testing.T) {
 	assert.Equal(t, stateInfo.Size(), after.Size)
 }
 
+func TestHermesArchiveStoresCronGroups(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `
+		INSERT INTO sessions (id, source, title, started_at, ended_at, message_count)
+		VALUES ('cron_job-a_20261008_120000', 'cron', 'Daily digest · 2026-10-08 12:00:00', 1791460800, 1791460860, 1);
+		UPDATE sessions SET source = 'cron', parent_session_id = 'cron_job-a_20261008_120000', title = 'Daily digest · 2026-10-08 12:00:00' WHERE id = 'child';
+		INSERT INTO messages (session_id, role, content, timestamp)
+		VALUES ('cron_job-a_20261008_120000', 'user', 'Generate digest', 1791460801);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+	for _, id := range []string{"hermes:cron_job-a_20261008_120000", "hermes:child"} {
+		stored, err := database.GetSession(t.Context(), id)
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		assert.Equal(t, "job-a", stored.GroupKey)
+		assert.Equal(t, "Daily digest", stored.GroupLabel)
+	}
+}
+
 func TestHermesProfileCreatedAfterEngineInitializationIsDiscovered(t *testing.T) {
 	profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
 	require.NoError(t, os.MkdirAll(profilesRoot, 0o755))
