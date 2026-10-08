@@ -422,8 +422,20 @@ func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
 	source := testDB(t)
 	leaf := "reply"
-	for _, id := range []string{"imported", "file-backed"} {
-		session := Session{ID: id, Agent: "claude-ai", Project: "test", Machine: "test", LastEntryUUID: &leaf}
+	otherLeaf := "other-reply"
+	rows := []struct {
+		id     string
+		marker *string
+		want   *string
+	}{
+		{"imported", &leaf, &leaf},
+		{"imported-other", &otherLeaf, &otherLeaf},
+		{"imported-null", nil, nil},
+		{"file-backed", &otherLeaf, nil},
+	}
+	for _, row := range rows {
+		id := row.id
+		session := Session{ID: id, Agent: "claude-ai", Project: "test", Machine: "test", LastEntryUUID: row.marker}
 		if id == "file-backed" {
 			session.Agent = "claude"
 			path := filepath.Join(t.TempDir(), "session.jsonl")
@@ -435,17 +447,12 @@ func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
 	destination := testDB(t)
 	count, err := destination.CopyOrphanedDataFrom(source.Path())
 	require.NoError(t, err)
-	require.Equal(t, 2, count)
-	for _, id := range []string{"imported", "file-backed"} {
-		session, err := destination.GetSessionFull(t.Context(), id)
+	require.Equal(t, 4, count)
+	for _, row := range rows {
+		session, err := destination.GetSessionFull(t.Context(), row.id)
 		require.NoError(t, err)
 		require.NotNil(t, session)
-		if id == "imported" {
-			require.NotNil(t, session.LastEntryUUID)
-			assert.Equal(t, "reply", *session.LastEntryUUID)
-		} else {
-			assert.Nil(t, session.LastEntryUUID)
-		}
+		assert.Equal(t, row.want, session.LastEntryUUID, row.id)
 	}
 }
 

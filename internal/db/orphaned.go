@@ -1937,8 +1937,8 @@ func copySessionDataForIDs(
 
 	if oldDBHasColumn(ctx, tx, "sessions", "last_entry_uuid") {
 		if _, err := tx.ExecContext(ctx,
-			"UPDATE sessions SET last_entry_uuid = (SELECT last_entry_uuid FROM old_db.sessions WHERE id = sessions.id) "+
-				"WHERE COALESCE(file_path, '') = '' AND id IN (SELECT id FROM "+tempIDsTable+")",
+			"UPDATE sessions AS destination SET last_entry_uuid = (SELECT source.last_entry_uuid FROM old_db.sessions AS source WHERE source.id = destination.id) "+
+				"WHERE COALESCE(destination.file_path, '') = '' AND destination.id IN (SELECT id FROM "+tempIDsTable+")",
 		); err != nil {
 			return fmt.Errorf("copying import freshness markers: %w", err)
 		}
