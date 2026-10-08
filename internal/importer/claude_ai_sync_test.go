@@ -944,21 +944,26 @@ func TestSyncClaudeAIShorterZipStillRefused(t *testing.T) {
 }
 
 func TestSyncClaudeAINewerMarkerError(t *testing.T) {
-	d := testDB(t)
-	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
-	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude-ai", Project: "test", Machine: "test", LastEntryUUID: strPtr("claude-ai:v2:full:future-leaf")}))
-	before, err := d.GetSessionFull(t.Context(), id)
-	require.NoError(t, err)
-	stats, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		require.FailNow(t, "newer marker fetched its detail")
-		return ClaudeAIResponse{}, nil
-	}), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Errors)
-	assert.Zero(t, stats.Skipped+stats.Updated+stats.Imported)
-	after, err := d.GetSessionFull(t.Context(), id)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
+	for _, marker := range []string{"claude-ai:v2:full:future-leaf", "claude-ai:v2:opaque", "claude-ai:v3:"} {
+		t.Run(marker, func(t *testing.T) {
+			d := testDB(t)
+			const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+			require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude-ai", Project: "test", Machine: "test", LastEntryUUID: strPtr(marker)}))
+			before, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			stats, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+				require.FailNow(t, "newer marker fetched its detail")
+				return ClaudeAIResponse{}, nil
+			}), nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Errors)
+			assert.Equal(t, []ImportRefusal{{SessionID: id, Reason: RefusalNewerMarker}}, stats.Refusals)
+			assert.Zero(t, stats.Skipped+stats.Updated+stats.Imported)
+			after, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
 }
 
 func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {

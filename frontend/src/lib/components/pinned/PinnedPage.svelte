@@ -22,10 +22,8 @@
   });
 
   onDestroy(() => pins.cancelAllPinsRead());
-  onDestroy(events.subscribeDebounced((event) => {
-    if (event.scope === "sessions") {
-      pins.loadAll(sessions.filters.project || undefined);
-    }
+  onDestroy(events.subscribeDebounced(() => {
+    pins.loadAll(sessions.filters.project || undefined);
   }));
 
   /** Set of expanded pin IDs. */

@@ -18,6 +18,7 @@ The latest published release is
   previous version in Trash with its pins and notes in the same transaction.
   Each such update makes a fresh copy; updates that keep every pin and note
   make no copy. Switching back on Claude.ai and syncing restores those turns.
+  Dropped pins and notes stay in the Trash copy and don't return to the live chat.
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.

@@ -153,7 +153,7 @@ it.each([
   expect(pins.loadForSession).toHaveBeenLastCalledWith(id);
 });
 
-it("debounces pin reloads on sessions events", async () => {
+it.each(["messages", "sync"])("reloads pins when a sessions event is followed by %s", async (scope) => {
   vi.useFakeTimers();
   stubAppDependencies();
   vi.spyOn(pins, "loadAll").mockResolvedValue();
@@ -170,12 +170,9 @@ it("debounces pin reloads on sessions events", async () => {
   const update = (data: Record<string, unknown>) => source.dispatchEvent(
     new MessageEvent("data_changed", { data: JSON.stringify(data) }),
   );
-  update({ scope: "messages" });
-  await vi.advanceTimersByTimeAsync(300);
-  expect(pins.loadAll).toHaveBeenCalledOnce();
   update({ scope: "sessions" });
-  update({ scope: "sessions", session_ids: ["codex:other"] });
-  update({ scope: "sessions", session_ids: ["claude-ai:other"] });
+  await vi.advanceTimersByTimeAsync(100);
+  update({ scope });
   await vi.advanceTimersByTimeAsync(299);
   expect(pins.loadAll).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(1);

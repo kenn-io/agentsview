@@ -2751,9 +2751,11 @@ schemas keep their existing ordering behavior.
   replaces turns. Unchanged zip imports keep their stored turns and derived state.
   Live branch changes update in place at every length. A replacement that loses
   a pin or note keeps a fresh copy of the previous version in Trash in the same
-  transaction; other replacements make no copy. Shorter zip exports
-  remain refused. Pins follow source UUIDs, or role, content, and occurrence
-  rank when the replacement has no UUIDs. Full resync preserves import markers.
+  transaction; other replacements make no copy. Dropped pins and notes stay in
+  the Trash copy when a later Sync restores those turns to the live chat.
+  Shorter zip exports remain refused. Pins follow source UUIDs, or role, content,
+  and occurrence rank when the replacement has no UUIDs. Full resync preserves
+  import markers.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
   `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
@@ -2762,7 +2764,9 @@ schemas keep their existing ordering behavior.
   to sync.
   Organization and list failures, cancellation, and an empty page with
   `has_more: true` stop Sync. Null list leaves skip detail fetches; absent or
-  malformed leaves and newer stored marker versions count as errors.
+  malformed leaves and newer stored marker versions count as errors. Reverified
+  2026-10-08 against the importer regression: the `claude-ai:vN:` prefix rejects
+  N greater than 1 regardless of payload layout, with a `newer_marker` refusal.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks
   found `current_leaf_message_uuid` on list items and byte-identical list and
   detail `updated_at` values with microseconds. Branch switches changed the
