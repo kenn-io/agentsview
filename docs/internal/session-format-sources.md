@@ -2747,17 +2747,19 @@ schemas keep their existing ordering behavior.
   a versioned leaf marker with the archive content policy in `last_entry_uuid`.
   A policy change or zip import requires one new detail fetch. Sync commits
   metadata, messages, and the marker together. Matching turns with compatible
-  UUIDs keep row IDs and gain missing source UUIDs on unchanged and append writes;
-  live branch changes update in place at every length. A replacement that loses
+  UUIDs keep row IDs and gain missing source UUIDs on unchanged and append writes.
+  Identity fills advance the transcript revision and count as updated in Sync.
+  Live branch changes update in place at every length. A replacement that loses
   a pin or note keeps a fresh copy of the previous version in Trash in the same
   transaction; other replacements make no copy. Shorter zip exports
   remain refused. Pins follow source UUIDs, or role, content, and occurrence
   rank when the replacement has no UUIDs. Full resync preserves import markers.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
-  `account_session_invalid` at any status stop Sync with a sign-in error.
+  `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
   Other 403 responses stop Sync with an access-denied error.
-  Other detail failures allow later chats to sync.
+  Status-0 relay failures stop Sync. Other detail failures allow later chats
+  to sync.
   Organization and list failures, cancellation, and an empty page with
   `has_more: true` stop Sync. Null list leaves skip detail fetches; absent or
   malformed leaves and newer stored marker versions count as errors.
