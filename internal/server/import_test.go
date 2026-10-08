@@ -210,7 +210,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					if tt.signIn {
 						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again","code":"claude_ai_auth_required"}`, data)
 					} else if tt.status == 0 {
-						assert.JSONEq(t, `{"error":"Claude sign-in is still pending","code":"claude_ai_sign_in_pending"}`, data)
+						assert.JSONEq(t, `{"error":"claude sign-in is still pending","code":"claude_ai_sign_in_pending"}`, data)
 					} else if tt.status == 413 {
 						assert.JSONEq(t, `{"error":"claude response exceeds 32 MiB"}`, data)
 					} else {
