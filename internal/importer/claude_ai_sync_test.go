@@ -846,6 +846,8 @@ func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {
 		{"number", `"current_leaf_message_uuid":42,`, 0, false},
 		{"null without archive", `"current_leaf_message_uuid":null,`, 1, false},
 		{"null with archive", `"current_leaf_message_uuid":null,`, 1, true},
+		{"root without archive", `"current_leaf_message_uuid":"00000000-0000-4000-8000-000000000000",`, 1, false},
+		{"root with archive", `"current_leaf_message_uuid":"00000000-0000-4000-8000-000000000000",`, 1, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)

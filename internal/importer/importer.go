@@ -283,7 +283,7 @@ func upsertConversation(
 		}
 		if live {
 			// Claude branch appends need exact prefixes; compareChatGPTPrefix also accepts text completion.
-			replaceMessages = !unchanged && (canonical == nil || len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)]))
+			replaceMessages = !unchanged && (len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)]))
 		}
 	}
 
