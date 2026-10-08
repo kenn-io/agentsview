@@ -34,7 +34,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	db.Store
 	IsSessionTrashed(context.Context, string) bool
 	IsSessionExcluded(context.Context, string) bool
-}, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks) (stats ImportStats, retErr error) {
+}, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks, opts ImportOptions) (stats ImportStats, retErr error) {
 	raw, err := fetchClaudeAI(ctx, fetch, "/api/organizations")
 	if err != nil {
 		return stats, err
@@ -140,7 +140,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						stats.record(id, importSkipped, err)
 						return nil
 					}
-					status, err := claudeAIImport.importConversation(ctx, store, result, nil, ImportOptions{Replace: []string{id}})
+					status, err := claudeAIImport.importConversation(ctx, store, result, nil, opts)
 					if errors.Is(err, db.ErrSessionTrashed) {
 						status, err = importSkipped, nil
 					}
