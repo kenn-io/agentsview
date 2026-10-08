@@ -235,16 +235,14 @@ func auditAutomatedMatchingHashPG(
 			)
 		}
 		progress.RowsPrefetched++
+		// SQLite keeps the stored verdict when usage-only storage discarded prompt evidence.
+		if promptEvidenceDiscarded {
+			continue
+		}
 		if db.IsAutomatedSessionMetadata(agent, sessionKind) {
 			setIDs, clearIDs = db.AppendAutomationFlagChange(
 				setIDs, clearIDs, id, rowAutomated, true,
 			)
-			continue
-		}
-
-		// Usage-only archives discard both text candidates. With at most
-		// one prompt, missing text cannot disprove the stored verdict.
-		if promptEvidenceDiscarded && userMessageCount <= 1 && firstUserLength.Int64 == 0 && firstMessageLength.Int64 == 0 {
 			continue
 		}
 
@@ -334,12 +332,11 @@ func scanFullAutomationCandidatesPG(
 			)
 		}
 		count++
-		want := db.IsAutomatedSessionMetadata(agent, sessionKind)
-		// Match the bounded audit: retain the verdict when classification
-		// needs prompt text that the source archive no longer stores.
-		if promptEvidenceDiscarded && !want && userCount <= 1 && firstUser.String == "" && firstMessage.String == "" {
+		// SQLite keeps the stored verdict when usage-only storage discarded prompt evidence.
+		if promptEvidenceDiscarded {
 			continue
 		}
+		want := db.IsAutomatedSessionMetadata(agent, sessionKind)
 		want = want || classifier.IsAutomatedFromTextCandidates(
 			userCount, firstUser, firstMessage,
 		)

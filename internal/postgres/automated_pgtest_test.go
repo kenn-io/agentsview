@@ -353,8 +353,16 @@ func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 			// Full-content rows lacking evidence must still have stale flags corrected.
 			_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, user_message_count, is_automated) VALUES ('empty-full', 'other-machine', 'project', 'claude', 1, true)`)
 			require.NoError(t, err)
-			require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
-			for id, want := range map[string]bool{"automated": true, "interactive": false, "empty-full": false} {
+			// Legacy headless rows predate non-interactive session metadata.
+			_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, session_kind, user_message_count, is_automated, prompt_evidence_discarded) VALUES
+				('codex-headless', 'other-machine', 'project', 'codex', 'headless', 2, true, true),
+				('grok-headless', 'other-machine', 'project', 'grok', 'headless', 2, true, true),
+				('codex-interactive', 'other-machine', 'project', 'codex', '', 2, false, true),
+				('grok-interactive', 'other-machine', 'project', 'grok', '', 2, false, true),
+				('headless-full', 'other-machine', 'project', 'codex', 'headless', 2, true, false)`)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(ctx, ps.DB(), "agentsview"))
+			for id, want := range map[string]bool{"automated": true, "interactive": false, "empty-full": false, "codex-headless": true, "grok-headless": true, "codex-interactive": false, "grok-interactive": false, "headless-full": false} {
 				var got bool
 				require.NoError(t, ps.DB().QueryRowContext(ctx,
 					`SELECT is_automated FROM sessions WHERE id = $1`, id,
