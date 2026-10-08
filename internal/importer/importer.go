@@ -280,7 +280,7 @@ func upsertConversation(
 				return importSkipped, nil
 			}
 			_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-				Session: sess, Messages: msgs, SkipSignalUpdates: true, TouchModified: true,
+				Session: sess, Messages: msgs, SkipSignalUpdates: true, TouchModified: true, FillSourceUUIDs: true,
 			}})
 			if errors.Is(err, db.ErrSessionExcluded) {
 				return importSkipped, nil

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -54,7 +55,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			if tt.seed {
-				stats, err := importer.ImportClaudeAI(t.Context(), srv.db, strings.NewReader(`[{"uuid":"relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:04:00Z","chat_messages":[{"sender":"human","text":"Previous prompt"},{"sender":"assistant","text":"Previous answer"}]}]`), nil)
+				stats, err := importer.ImportClaudeAI(t.Context(), srv.db, strings.NewReader(`[{"uuid":"22222222-2222-4222-8222-222222222225","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:04:00Z","chat_messages":[{"sender":"human","text":"Previous prompt"},{"sender":"assistant","text":"Previous answer"}]}]`), nil)
 				require.NoError(t, err)
 				require.Equal(t, 1, stats.Imported)
 			}
@@ -86,11 +87,11 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					answered = request.ID
 					switch request.Path {
 					case "/api/organizations":
-						postResult(request.ID, `[{"uuid":"org","capabilities":["chat"]}]`, http.StatusNoContent)
-					case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-						postResult(request.ID, `{"data":[{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
-					case "/api/organizations/org/chat_conversations/relay?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-						postResult(request.ID, `{"uuid":"relay","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
+						postResult(request.ID, `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`, http.StatusNoContent)
+					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
+						postResult(request.ID, `{"data":[{"uuid":"22222222-2222-4222-8222-222222222225","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
+					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222225?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+						postResult(request.ID, `{"uuid":"22222222-2222-4222-8222-222222222225","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
 					default:
 						t.Fatalf("unexpected path %s", request.Path)
 					}
@@ -106,7 +107,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				assert.Equal(t, 1, stats.Imported)
 			}
 			assert.Zero(t, stats.Errors)
-			messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:relay")
+			messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222225")
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
 			assert.Equal(t, "Archived relay message", messages[0].Content)
@@ -115,40 +116,56 @@ func TestClaudeAISyncRelay(t *testing.T) {
 
 	}
 
-	t.Run("expired sign-in reaches stream error", func(t *testing.T) {
-		srv := testServer(t, 5*time.Second)
-		httpServer := httptest.NewServer(srv.mux)
-		defer httpServer.Close()
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
-		require.NoError(t, err)
-		request.Header.Set("Content-Type", "application/json")
-		response, err := http.DefaultClient.Do(request)
-		require.NoError(t, err)
-		defer response.Body.Close()
-		gotError := false
-		readImportEvents(t, response.Body, func(event, data string) {
-			switch event {
-			case "fetch":
-				var request struct {
-					ID string `json:"id"`
-				}
-				require.NoError(t, json.Unmarshal([]byte(data), &request))
-				answer, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status=401", strings.NewReader("{}"))
+	for _, stage := range []string{"organizations", "detail"} {
+		for _, status := range []int{401, 403} {
+			t.Run(fmt.Sprintf("expired sign-in %s %d reaches stream error", stage, status), func(t *testing.T) {
+				srv := testServer(t, 5*time.Second)
+				httpServer := httptest.NewServer(srv.mux)
+				defer httpServer.Close()
+				request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
 				require.NoError(t, err)
-				answer.Header.Set("Content-Type", "application/octet-stream")
-				result, err := http.DefaultClient.Do(answer)
+				request.Header.Set("Content-Type", "application/json")
+				response, err := http.DefaultClient.Do(request)
 				require.NoError(t, err)
-				require.Equal(t, http.StatusNoContent, result.StatusCode)
-				require.NoError(t, result.Body.Close())
-			case "error":
-				assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again"}`, data)
-				gotError = true
-			case "done":
-				require.FailNow(t, "expired credentials completed Sync")
-			}
-		})
-		assert.True(t, gotError)
-	})
+				defer response.Body.Close()
+				gotError := false
+				readImportEvents(t, response.Body, func(event, data string) {
+					switch event {
+					case "fetch":
+						var request struct {
+							ID   string `json:"id"`
+							Path string `json:"path"`
+						}
+						require.NoError(t, json.Unmarshal([]byte(data), &request))
+						body, responseStatus := "{}", status
+						if stage == "detail" {
+							switch request.Path {
+							case "/api/organizations":
+								body, responseStatus = `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`, 200
+							case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
+								body, responseStatus = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222222","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, 200
+							default:
+								require.Contains(t, request.Path, "/chat_conversations/22222222-2222-4222-8222-222222222222?")
+							}
+						}
+						answer, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status="+strconv.Itoa(responseStatus), strings.NewReader(body))
+						require.NoError(t, err)
+						answer.Header.Set("Content-Type", "application/octet-stream")
+						result, err := http.DefaultClient.Do(answer)
+						require.NoError(t, err)
+						require.Equal(t, http.StatusNoContent, result.StatusCode)
+						require.NoError(t, result.Body.Close())
+					case "error":
+						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again"}`, data)
+						gotError = true
+					case "done":
+						require.FailNow(t, "expired credentials completed Sync")
+					}
+				})
+				assert.True(t, gotError)
+			})
+		}
+	}
 
 	t.Run("browser failure reaches stream error", func(t *testing.T) {
 		srv := testServer(t, 5*time.Second)
@@ -656,16 +673,16 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 					status := 200
 					switch request.Path {
 					case "/api/organizations":
-						body = `[{"uuid":"org","capabilities":["chat"]}]`
-					case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-						body = `{"data":[{"uuid":"large","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"},{"uuid":"later","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
-					case "/api/organizations/org/chat_conversations/large?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+						body = `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`
+					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
+						body = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222226","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"},{"uuid":"22222222-2222-4222-8222-222222222227","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
+					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222226?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 						status = oversizedStatus
 						if status == 200 {
 							body = strings.Repeat("x", (32<<20)+2)
 						}
-					case "/api/organizations/org/chat_conversations/later?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-						body = `{"uuid":"later","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"assistant","text":"Later reply","created_at":"2026-03-01T10:05:00Z"}]}`
+					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222227?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+						body = `{"uuid":"22222222-2222-4222-8222-222222222227","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"assistant","text":"Later reply","created_at":"2026-03-01T10:05:00Z"}]}`
 					default:
 						t.Fatalf("unexpected path %s", request.Path)
 					}
@@ -683,7 +700,7 @@ func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
 			require.True(t, done)
 			assert.Equal(t, 1, stats.Errors)
 			assert.Equal(t, 1, stats.Imported)
-			session, err := srv.db.GetSession(t.Context(), "claude-ai:later")
+			session, err := srv.db.GetSession(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222227")
 			require.NoError(t, err)
 			require.NotNil(t, session)
 			assert.Equal(t, 1, session.MessageCount)
@@ -734,16 +751,16 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 				body, status := "", 200
 				switch {
 				case fetch.Path == "/api/organizations":
-					body = `[{"uuid":"org","capabilities":["chat"]}]`
+					body = `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`
 				case strings.Contains(fetch.Path, "chat_conversations_v2"):
-					body = `{"data":[{"uuid":"one","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
+					body = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222222","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
 					if ending != "done" {
-						body += `,{"uuid":"two","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
+						body += `,{"uuid":"22222222-2222-4222-8222-222222222223","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
 					}
 					body += `],"has_more":false}`
-				case strings.Contains(fetch.Path, "/one?"):
-					body = `{"uuid":"one","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Committed chat"}]}`
-				case strings.Contains(fetch.Path, "/two?"):
+				case strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222222?"):
+					body = `{"uuid":"22222222-2222-4222-8222-222222222222","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Committed chat"}]}`
+				case strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222223?"):
 					if ending == "cancel" {
 						cancel()
 						terminal = "cancel"
@@ -779,7 +796,7 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("committed chat did not broadcast sessions")
 			}
-			messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:one")
+			messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
 			assert.Equal(t, "Committed chat", messages[0].Content)

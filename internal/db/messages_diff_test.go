@@ -39,6 +39,33 @@ func seedDiffSession(
 		"seed messages for %s", sessionID)
 }
 
+func TestWriteSessionBatchUUIDLossPinFallbackClaudeAIOnly(t *testing.T) {
+	for _, agent := range []string{"claude-ai", "claude", "codex"} {
+		t.Run(agent, func(t *testing.T) {
+			d := testDB(t)
+			sess := Session{ID: "pin-scope", Agent: agent, Project: "test", Machine: defaultMachine, MessageCount: 1}
+			msg := diffTestMsg(sess.ID, 0, "user", "Pinned prompt")
+			msg.SourceUUID = "prompt-source"
+			_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{Session: sess, Messages: []Message{msg}}})
+			require.NoError(t, err)
+			pinFirstMessage(t, d, sess.ID)
+			msg.SourceUUID = ""
+			msg.Ordinal = 1
+			sess.MessageCount = 2
+			_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{Session: sess, Messages: []Message{diffTestMsg(sess.ID, 0, "assistant", "Earlier reply"), msg}, ReplaceMessages: true}})
+			require.NoError(t, err)
+			pins, err := d.ListPinnedMessages(t.Context(), sess.ID, "")
+			require.NoError(t, err)
+			if agent == "claude-ai" {
+				require.Len(t, pins, 1)
+				assert.Equal(t, 1, pins[0].Ordinal)
+			} else {
+				assert.Empty(t, pins)
+			}
+		})
+	}
+}
+
 func messageIDsByOrdinal(
 	t *testing.T, d *DB, sessionID string,
 ) map[int]int64 {
