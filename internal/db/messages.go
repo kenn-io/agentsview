@@ -2749,6 +2749,13 @@ func savePinsFromTx(
 func restorePinsTx(
 	tx transactionQueries, sessionID string, pins []savedPin,
 ) error {
+	if len(pins) == 0 {
+		return nil
+	}
+	var hasSourceUUID bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM messages WHERE session_id = ? AND source_uuid != '')`, sessionID).Scan(&hasSourceUUID); err != nil {
+		return fmt.Errorf("checking pin source identities: %w", err)
+	}
 	// Re-attach saved pins only when the old and new message identities
 	// are both unambiguous. A unique source_uuid may move to another
 	// ordinal. Duplicate UUIDs and legacy UUID-less rows must retain
@@ -2762,7 +2769,7 @@ func restorePinsTx(
 			continue
 		}
 		var err error
-		if sp.sourceUUID != "" {
+		if sp.sourceUUID != "" && hasSourceUUID {
 			err = restorePinBySourceUUIDTx(tx, sessionID, sp)
 		} else {
 			err = restoreLegacyPinByRankTx(tx, sessionID, sp)

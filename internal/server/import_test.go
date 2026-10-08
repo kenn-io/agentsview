@@ -115,6 +115,41 @@ func TestClaudeAISyncRelay(t *testing.T) {
 
 	}
 
+	t.Run("expired sign-in reaches stream error", func(t *testing.T) {
+		srv := testServer(t, 5*time.Second)
+		httpServer := httptest.NewServer(srv.mux)
+		defer httpServer.Close()
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
+		require.NoError(t, err)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		gotError := false
+		readImportEvents(t, response.Body, func(event, data string) {
+			switch event {
+			case "fetch":
+				var request struct {
+					ID string `json:"id"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(data), &request))
+				answer, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status=401", strings.NewReader("{}"))
+				require.NoError(t, err)
+				answer.Header.Set("Content-Type", "application/octet-stream")
+				result, err := http.DefaultClient.Do(answer)
+				require.NoError(t, err)
+				require.Equal(t, http.StatusNoContent, result.StatusCode)
+				require.NoError(t, result.Body.Close())
+			case "error":
+				assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again"}`, data)
+				gotError = true
+			case "done":
+				require.FailNow(t, "expired credentials completed Sync")
+			}
+		})
+		assert.True(t, gotError)
+	})
+
 	t.Run("browser failure reaches stream error", func(t *testing.T) {
 		srv := testServer(t, 5*time.Second)
 		httpServer := httptest.NewServer(srv.mux)
@@ -157,7 +192,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			start := time.Now()
 			srv.mux.ServeHTTP(recorder, req)
 			assert.Equal(t, 2*time.Minute, time.Since(start))
-			assert.Contains(t, recorder.Body.String(), "Claude browser fetch timed out")
+			assert.Contains(t, recorder.Body.String(), "claude browser fetch timed out")
 			assert.Contains(t, recorder.Body.String(), "event: error")
 			var request struct {
 				ID string `json:"id"`

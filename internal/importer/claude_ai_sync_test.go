@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -22,6 +23,79 @@ const syncDetail = `{"uuid":"one","name":"Chat","current_leaf_message_uuid":"rep
     {"uuid":"root","index":0,"parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"","content":[{"type":"text","text":"Hello"}],"created_at":"2026-03-01T10:00:00Z"},
     {"uuid":"reply","index":1,"parent_message_uuid":"root","sender":"assistant","text":"","content":[{"type":"text","text":"Chosen reply"}],"created_at":"2026-03-01T10:02:00Z"}]}`
 const syncOrgs = `[{"uuid":"ignored","capabilities":["api"]},{"uuid":"org","capabilities":["chat"]}]`
+
+func TestSyncClaudeAIArchivePolicySwitch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := db.OpenWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+	details := 0
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		details++
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	})
+	for range 2 {
+		_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, details)
+	session, err := d.GetSessionFull(t.Context(), "claude-ai:one")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, strPtr("claude-ai:v1:usage:reply"), session.LastEntryUUID)
+	before, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	assert.Empty(t, before[0].Content)
+	require.NoError(t, d.Close())
+	d, err = db.OpenWithArchiveContent(t.Context(), path, config.ArchiveContentFull)
+	require.NoError(t, err)
+	for range 2 {
+		_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 2, details)
+	after, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(after))
+	session, err = d.GetSessionFull(t.Context(), "claude-ai:one")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, strPtr("claude-ai:v1:full:reply"), session.LastEntryUUID)
+}
+
+func TestSyncClaudeAIZipPreservesPromptPin(t *testing.T) {
+	d := testDB(t)
+	_, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	}), nil)
+	require.NoError(t, err)
+	before, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+	_, err = d.PinMessage(t.Context(), "claude-ai:one", before[0].ID, strPtr("Keep this prompt"))
+	require.NoError(t, err)
+	zipPath := createTestZip(t, map[string]string{"conversations.json": "[" + strings.Replace(syncDetail, "Chosen reply", "Export reply", 1) + "]"})
+	dir, cleanup, err := ExtractZip(zipPath)
+	require.NoError(t, err)
+	defer cleanup()
+	reader, err := os.Open(filepath.Join(dir, "conversations.json"))
+	require.NoError(t, err)
+	defer reader.Close()
+	stats, err := ImportClaudeAI(t.Context(), d, reader, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	after, err := d.GetAllMessages(t.Context(), "claude-ai:one")
+	require.NoError(t, err)
+	require.Len(t, after, 2)
+	assert.Equal(t, []string{"Hello", "Export reply"}, messageContents(after))
+	assert.Empty(t, after[0].SourceUUID)
+	pins, err := d.ListPinnedMessages(t.Context(), "claude-ai:one", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, after[0].ID, pins[0].MessageID)
+	assert.Equal(t, strPtr("Keep this prompt"), pins[0].Note)
+}
 
 func TestSyncClaudeAI(t *testing.T) {
 	t.Run("trashed during sync write is skipped", func(t *testing.T) {
@@ -45,7 +119,7 @@ func TestSyncClaudeAI(t *testing.T) {
 			require.Equal(t, "/api/organizations/org/chat_conversations_v2?limit=50&offset=0", path)
 			return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[],"has_more":true}`)}, nil
 		}, nil)
-		require.EqualError(t, err, "Claude list returned an empty page with has_more: true")
+		require.EqualError(t, err, "claude list returned an empty page with has_more: true")
 	})
 	t.Run("restart and older zip freshness", func(t *testing.T) {
 		d := testDB(t)
@@ -194,7 +268,7 @@ func TestSyncClaudeAI(t *testing.T) {
 				require.Equal(t, "/api/organizations/org/chat_conversations_v2?limit=50&offset=0", path)
 				return ClaudeAIResponse{Status: 200, Body: []byte(page)}, nil
 			}, nil)
-			require.EqualError(t, err, "Claude list had no data")
+			require.EqualError(t, err, "claude list had no data")
 		}
 	})
 	t.Run("retry limit and sign in", func(t *testing.T) {
@@ -210,7 +284,7 @@ func TestSyncClaudeAI(t *testing.T) {
 					}, nil)
 					require.Error(t, err)
 					if status == 401 || status == 403 {
-						assert.Equal(t, "Sign in to Claude.ai, then Sync again", err.Error())
+						require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
 						assert.Equal(t, 1, calls)
 					} else {
 						assert.Equal(t, 5, calls)
@@ -291,7 +365,7 @@ func TestSyncClaudeAIInterruptedWrite(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, after)
 		assert.Equal(t, strPtr("2026-03-01T10:06:00Z"), after.EndedAt)
-		assert.Equal(t, strPtr("reply"), after.LastEntryUUID)
+		assert.Equal(t, strPtr("claude-ai:v1:full:reply"), after.LastEntryUUID)
 		assert.NotEqual(t, before.LocalModifiedAt, after.LocalModifiedAt)
 		stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
 		require.NoError(t, err)
@@ -335,7 +409,7 @@ func TestSyncClaudeAIInterruptedWrite(t *testing.T) {
 				assert.Zero(t, stats.Errors)
 				assert.Equal(t, 4, session.MessageCount)
 				assert.Equal(t, strPtr("2026-03-01T10:05:00Z"), session.EndedAt)
-				assert.Equal(t, strPtr("a2"), session.LastEntryUUID)
+				assert.Equal(t, strPtr("claude-ai:v1:full:a2"), session.LastEntryUUID)
 				assert.Equal(t, []string{"Hello", "Chosen reply", "More", "Answer"}, messageContents(messages))
 			} else {
 				require.NoError(t, err)
@@ -572,7 +646,7 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 	marked, err := d.GetSessionFull(t.Context(), "claude-ai:one")
 	require.NoError(t, err)
 	require.NotNil(t, marked)
-	assert.Equal(t, strPtr("reply"), marked.LastEntryUUID)
+	assert.Equal(t, strPtr("claude-ai:v1:full:reply"), marked.LastEntryUUID)
 	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+syncDetail+"]"), nil)
 	require.NoError(t, err)
 	session, err := d.GetSessionFull(t.Context(), "claude-ai:one")
@@ -651,5 +725,5 @@ func TestSyncClaudeAIShorterZipStillRefused(t *testing.T) {
 	marked, err := d.GetSessionFull(t.Context(), "claude-ai:one")
 	require.NoError(t, err)
 	require.NotNil(t, marked)
-	assert.Equal(t, strPtr("reply"), marked.LastEntryUUID)
+	assert.Equal(t, strPtr("claude-ai:v1:full:reply"), marked.LastEntryUUID)
 }
