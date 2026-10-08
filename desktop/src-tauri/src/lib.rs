@@ -6710,19 +6710,6 @@ agentsview running at http://127.0.0.1:18082
 #[cfg(test)]
 mod claude_sync_tests {
 
-    #[test]
-    fn claude_fetch_accepts_request_templates() {
-        let templates: Vec<_> = include_str!("../../../internal/importer/claude_ai_requests.txt").lines().collect();
-        assert_eq!(templates.len(), 3);
-        for template in templates {
-            let path = template
-                .replace("{organization}", "11111111-1111-4111-8111-111111111111")
-                .replace("{conversation}", "22222222-2222-4222-8222-222222222222")
-                .replace("{offset}", "50");
-            assert!(super::validate_claude_fetch_path(&path).is_ok(), "{path}");
-        }
-    }
-
     #[cfg(windows)]
     #[test]
     fn claude_disconnect_removes_native_domain_cookies() {
@@ -6836,8 +6823,13 @@ mod claude_sync_tests {
         let base = "/api/organizations/11111111-1111-4111-8111-111111111111";
         let list = format!("{base}/chat_conversations_v2?limit=50&offset=0");
         let detail = format!("{base}/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true");
-        for path in ["/api/organizations", &list, &list.replace("offset=0", "offset=50"), &detail] {
-            assert!(super::validate_claude_fetch_path(path).is_ok(), "{path}");
+        assert!(super::validate_claude_fetch_path(&list).is_ok(), "{list}");
+        for template in include_str!("../../../internal/importer/claude_ai_requests.txt").lines() {
+            let path = template
+                .replace("{organization}", "11111111-1111-4111-8111-111111111111")
+                .replace("{conversation}", "22222222-2222-4222-8222-222222222222")
+                .replace("{offset}", "50");
+            assert!(super::validate_claude_fetch_path(&path).is_ok(), "{path}");
         }
         for path in [
             "".into(), "/api".into(), "/api/../settings".into(), "/api/organizations/../organizations".into(),
