@@ -181,6 +181,7 @@ func TestReportingExportSeparatesSubagentsAndIndependentPeaks(t *testing.T) {
 			s.IsAutomated = session.automated
 			if session.id == "automated-a" {
 				s.RelationshipType = "subagent"
+				s.SessionKind = "non-interactive"
 			}
 			if session.subagent {
 				s.ParentSessionID = new("root-a")
