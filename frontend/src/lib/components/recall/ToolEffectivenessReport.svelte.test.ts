@@ -178,7 +178,8 @@ describe("ToolEffectivenessReport", () => {
 
     expect(getToolSequences).toHaveBeenCalledWith({ id: "s1" }, expect.anything());
     expect(document.querySelector(".report-title h3")?.textContent).toBe("Fix config loading");
-    const summary = document.querySelector("[data-testid=tool-effectiveness-summary]")?.textContent ?? "";
+    const summary =
+      document.querySelector("[data-testid=tool-effectiveness-summary]")?.textContent ?? "";
     expect(summary).toContain("2 conclusions");
     expect(summary).toContain("1 helped");
     expect(summary).toContain("1 did not help");
@@ -199,7 +200,9 @@ describe("ToolEffectivenessReport", () => {
       "Read config.ts · Message 3 ↗",
     ]);
 
-    document.querySelectorAll<HTMLButtonElement>(".citation-toggle").forEach((toggle) => toggle.click());
+    document
+      .querySelectorAll<HTMLButtonElement>(".citation-toggle")
+      .forEach((toggle) => toggle.click());
     flushSync();
     const text = document.body.textContent ?? "";
     expect(text).toContain("Did not help");
@@ -240,7 +243,9 @@ describe("ToolEffectivenessReport", () => {
     });
     await settle();
 
-    expect(citationButtons().map((b) => b.textContent?.replace(/\s+/g, " ").trim())[2]).toBe("Message 3 ↗");
+    expect(citationButtons().map((b) => b.textContent?.replace(/\s+/g, " ").trim())[2]).toBe(
+      "Message 3 ↗",
+    );
     unmount(component);
   });
 
@@ -290,7 +295,9 @@ describe("ToolEffectivenessReport", () => {
     });
     await settle();
 
-    document.querySelectorAll<HTMLButtonElement>(".citation-toggle").forEach((toggle) => toggle.click());
+    document
+      .querySelectorAll<HTMLButtonElement>(".citation-toggle")
+      .forEach((toggle) => toggle.click());
     flushSync();
     const jumps = [...document.querySelectorAll<HTMLAnchorElement>(".conclusions .jump")];
     const link = jumps.find((a) => a.textContent?.trim() === "Message 3 ↗")!;
@@ -303,6 +310,23 @@ describe("ToolEffectivenessReport", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(scroll).toHaveBeenCalledWith(3, "s1", { index: 0, toolUseId: "r1" });
     expect(navigate).toHaveBeenCalledWith("s1", { msg: "3", call: "0", tool_use_id: "r1" });
+
+    // Without a tool ID, a cited call and a cited message are checked against the report's revision.
+    const params = (text: string) =>
+      new URL(
+        jumps.find((a) => a.textContent?.trim() === text)!.getAttribute("href")!,
+        "http://localhost",
+      ).searchParams;
+    const blankCall = params("Message 2 ↗");
+    expect(blankCall.get("call")).toBe("0");
+    expect(blankCall.get("rev")).toBe("rev-1");
+    expect(blankCall.has("tool_use_id")).toBe(false);
+    const message = params("Message 1 ↗");
+    expect(message.get("rev")).toBe("rev-1");
+    expect(message.has("call")).toBe(false);
+    scroll.mockClear();
+    jumps.find((a) => a.textContent?.trim() === "Message 2 ↗")!.click();
+    expect(scroll).toHaveBeenCalledWith(2, "s1", { index: 0, toolUseId: "", revision: "rev-1" });
 
     scroll.mockRestore();
     navigate.mockRestore();
@@ -344,7 +368,9 @@ describe("ToolEffectivenessReport", () => {
     await settle();
     expect(getToolSequences).toHaveBeenCalledTimes(2);
     expect(document.querySelector(".tool-sequences-panel [role=alert]")).toBeNull();
-    expect(document.querySelectorAll(".tool-sequences-panel .sequence-row").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll(".tool-sequences-panel .sequence-row").length).toBeGreaterThan(
+      0,
+    );
     unmount(component);
   });
 
@@ -367,7 +393,9 @@ describe("ToolEffectivenessReport", () => {
     const insight = makeInsight();
     const raw = JSON.parse(insight.structured_json!);
     raw.call_count = 1;
-    raw.omissions = [{ reason: "unretained", ordinal: 4, call_index: 1, tool_name: "Read", original_bytes: 1 }];
+    raw.omissions = [
+      { reason: "unretained", ordinal: 4, call_index: 1, tool_name: "Read", original_bytes: 1 },
+    ];
     getToolSequences.mockResolvedValue(makeFacts(3));
     const component = mount(ToolEffectivenessReport, {
       target: document.body,
@@ -385,9 +413,26 @@ describe("ToolEffectivenessReport", () => {
   it("tells apart identical calls that share a message", async () => {
     const insight = makeInsight();
     const raw = JSON.parse(insight.structured_json!);
-    const call = { ordinal: 2, tool_name: "Grep", input_preview: "", outcome: "empty", result_bytes: 0, message_calls: 2 };
-    raw.cited_calls = [{ ...call, call_index: 0 }, { ...call, call_index: 1 }];
-    raw.conclusions = [{ assessment: "did_not_help", text: "Searched twice", ordinals: [2], calls: [{ ordinal: 2, call_index: 1 }] }];
+    const call = {
+      ordinal: 2,
+      tool_name: "Grep",
+      input_preview: "",
+      outcome: "empty",
+      result_bytes: 0,
+      message_calls: 2,
+    };
+    raw.cited_calls = [
+      { ...call, call_index: 0 },
+      { ...call, call_index: 1 },
+    ];
+    raw.conclusions = [
+      {
+        assessment: "did_not_help",
+        text: "Searched twice",
+        ordinals: [2],
+        calls: [{ ordinal: 2, call_index: 1 }],
+      },
+    ];
     const component = mount(ToolEffectivenessReport, {
       target: document.body,
       props: { insight: { ...insight, structured_json: JSON.stringify(raw) } },
@@ -472,7 +517,9 @@ describe("ToolEffectivenessReport", () => {
     const insight = makeInsight();
     const raw = JSON.parse(insight.structured_json!);
     raw.termination_status = "awaiting_user";
-    getSession.mockResolvedValue(makeSession({ transcript_revision: "rev-1", termination_status: "clean" }));
+    getSession.mockResolvedValue(
+      makeSession({ transcript_revision: "rev-1", termination_status: "clean" }),
+    );
     const component = mount(ToolEffectivenessReport, {
       target: document.body,
       props: { insight: { ...insight, structured_json: JSON.stringify(raw) } },

@@ -174,6 +174,15 @@ describe("UIStore", () => {
       });
     });
 
+    it("reads back a link to a whole message checked only by revision", () => {
+      const params = scrollCallParams({ toolUseId: "", revision: "r7" });
+      expect(params).toEqual({ rev: "r7" });
+      expect(parseScrollCall(params["call"], params["tool_use_id"], params["rev"])).toEqual({
+        toolUseId: "",
+        revision: "r7",
+      });
+    });
+
     it("ignores a revision when the link names the call's tool ID", () => {
       expect(parseScrollCall("2", "toolu_1", "r7")).toEqual({ index: 2, toolUseId: "toolu_1" });
     });

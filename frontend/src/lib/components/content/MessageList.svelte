@@ -526,6 +526,7 @@
       if (!call.toolUseId && call.revision !== undefined && messages.loadedRevision !== call.revision) {
         return false;
       }
+      if (call.index === undefined) return true;
       const message = messages.messages.find((m) => m.ordinal === ordinal);
       if (message === undefined) return true;
       const held = message.tool_calls?.[call.index];

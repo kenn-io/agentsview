@@ -26,7 +26,7 @@
     XIcon,
   } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
-  import { ui } from "../../stores/ui.svelte.js";
+  import { ui, type ScrollCall } from "../../stores/ui.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
@@ -270,6 +270,18 @@
     return preview ? summarizeToolInputPreview(preview) : m.tool_sequences_no_input();
   }
 
+  // A saved report can outlive the transcript it cites. A call with a tool ID is checked by that ID;
+  // anything else is checked against the revision the report was built from.
+  function citationTarget(citation: Citation): ScrollCall | undefined {
+    const toolUseId = citation.kind === "call" ? citation.detail?.tool_use_id : undefined;
+    if (citation.kind === "call" && citation.detail && toolUseId) return { index: citation.callIndex, toolUseId };
+    const revision = report?.transcript_revision;
+    if (!revision) return undefined;
+    return citation.kind === "call" && citation.detail
+      ? { index: citation.callIndex, toolUseId: "", revision }
+      : { toolUseId: "", revision };
+  }
+
   function callFallback(citation: Citation & { kind: "call" }): string {
     return m.tool_sequences_message_call({ ordinal: citation.ordinal, callIndex: citation.callIndex });
   }
@@ -420,6 +432,7 @@
                       <ToolCallRow
                         {sessionId}
                         ordinal={citation.ordinal}
+                        call={citationTarget(citation)}
                         message
                         tool={m.tool_effectiveness_message_label()}
                         input={m.tool_effectiveness_message_no_call()}
@@ -429,7 +442,7 @@
                       <ToolCallRow
                         {sessionId}
                         ordinal={citation.ordinal}
-                        call={citation.detail.tool_use_id ? { index: citation.callIndex, toolUseId: citation.detail.tool_use_id } : undefined}
+                        call={citationTarget(citation)}
                         tool={citation.detail.tool_name}
                         input={inputLabel(citation.detail.input_preview)}
                         inputTitle={citation.detail.input_preview}
@@ -443,6 +456,7 @@
                       <ToolCallRow
                         {sessionId}
                         ordinal={citation.ordinal}
+                        call={citationTarget(citation)}
                         tool=""
                         input={callFallback(citation)}
                         cut={modelSaw(citation)}
