@@ -1929,25 +1929,23 @@ func copySessionDataForIDs(
 	// older source DBs missing display_name/deleted_at don't
 	// abort the migration.
 	orphanCols := orphanSessionCols(ctx, tx)
+	sourceCols := orphanCols
+	var markerArgs []any
+	if oldDBHasColumn(ctx, tx, "sessions", "last_entry_uuid") {
+		orphanCols += ", last_entry_uuid"
+		sourceCols += ", CASE WHEN agent = 'claude-ai' AND COALESCE(file_path, '') = '' THEN " +
+			"CASE WHEN last_entry_uuid GLOB ? AND last_entry_uuid NOT GLOB ? THEN NULL " +
+			"ELSE last_entry_uuid END ELSE NULL END"
+		markerArgs = []any{claudeAIMarkerPrefix() + "*", ClaudeAIMarker(policy, "*")}
+	}
 
 	if _, err := tx.ExecContext(ctx,
 		"INSERT OR IGNORE INTO sessions ("+orphanCols+") "+
-			"SELECT "+orphanCols+" FROM old_db.sessions "+
+			"SELECT "+sourceCols+" FROM old_db.sessions "+
 			"WHERE id IN (SELECT id FROM "+tempIDsTable+")",
+		markerArgs...,
 	); err != nil {
 		return fmt.Errorf("copying sessions: %w", err)
-	}
-
-	if oldDBHasColumn(ctx, tx, "sessions", "last_entry_uuid") {
-		if _, err := tx.ExecContext(ctx,
-			"UPDATE sessions AS destination SET last_entry_uuid = (SELECT CASE "+
-				"WHEN source.last_entry_uuid GLOB ? AND source.last_entry_uuid NOT GLOB ? THEN NULL "+
-				"ELSE source.last_entry_uuid END FROM old_db.sessions AS source WHERE source.id = destination.id) "+
-				"WHERE COALESCE(destination.file_path, '') = '' AND destination.id IN (SELECT id FROM "+tempIDsTable+")",
-			claudeAIMarkerPrefix()+"*", ClaudeAIMarker(policy, "*"),
-		); err != nil {
-			return fmt.Errorf("copying import freshness markers: %w", err)
-		}
 	}
 
 	if oldDBHasTable(ctx, tx, "claude_subagent_sources") {
