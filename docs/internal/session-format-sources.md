@@ -2755,8 +2755,8 @@ schemas keep their existing ordering behavior.
   `00000000-0000-4000-8000-000000000000`. `ParseClaudeAIDetail` walks those
   ancestors and reverses the path. Sync carries each live message's `uuid` into
   `messages.source_uuid`, so pins follow that message across reconciliation.
-  Missing or null leaves, missing messages or
-  parents, non-string parents, duplicate UUIDs, and cycles fail before writing.
+  Missing or null leaves, missing selected messages or parents, non-string
+  selected parents, duplicate UUIDs, and selected cycles fail before writing.
   Exports retain their original order even when tree fields are present.
   Sync also rejects a detail UUID that differs from the requested chat.
   List items with a null leaf skip detail fetches; exports skip empty chats.
@@ -2770,10 +2770,11 @@ schemas keep their existing ordering behavior.
   Authentication, transport, and
   cancellation errors stop Sync.
   Sync uses the export importer's message reconciliation. New turns preserve
-  existing message IDs, and changed history updates in place. A shorter visible
-  history from an earlier Sync keeps the previous version in Trash. Sync
-  replaces zip imports without a freshness marker in place, without a Trash
-  copy. Usage-only writes reconcile
+  existing message IDs. Changed or removed rows keep the previous version and
+  its pins in Trash, including zip imports. Repeated versions reuse the existing
+  Trash copy. Metadata refreshes preserve findings and signals when messages
+  match. Rechecked against the selected-path and Sync regression fixtures on
+  2026-10-07. Usage-only writes reconcile
   assistant activity rows to the selected path.
   An empty list page with `has_more: true` fails.
   The export parser reads message `sender`, `text`, `content`, timestamps,

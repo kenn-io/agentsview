@@ -421,7 +421,7 @@ func TestParseClaudeAIDetail_SelectedPath(t *testing.T) {
 		{"retry switch back", "a", []string{"Question", "First"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			input := `{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"` + tt.leaf + `","chat_messages":[` + edit + "," + more + "," + retry + "," + first + "," + question + `]}`
+			input := `{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"` + tt.leaf + `","chat_messages":[` + edit + "," + more + "," + retry + "," + first + "," + question + `,{"uuid":"orphan","parent_message_uuid":"missing"},{"uuid":"invalid","parent_message_uuid":null}]}`
 			result, err := ParseClaudeAIDetail([]byte(input))
 			require.NoError(t, err)
 			require.NotNil(t, result.Session.LastEntryUUID)
@@ -447,7 +447,7 @@ func TestParseClaudeAIDetail_InvalidTree(t *testing.T) {
 		{"null parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":null}`, "parent must be a string"},
 		{"absent parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a"}`, "parent must be a string"},
 		{"numeric parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":42}`, "parent must be a string"},
-		{"orphan parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":"missing"}`, "parent missing is missing"},
+		{"orphan parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":"missing"}`, "message missing is missing"},
 		{"cycle", `"current_leaf_message_uuid":"a",`, `{"uuid":"q","parent_message_uuid":"a"},` + answer, "cycle"},
 		{"duplicate", `"current_leaf_message_uuid":"a",`, question + "," + answer + "," + answer, "duplicate message uuid a"},
 	} {
