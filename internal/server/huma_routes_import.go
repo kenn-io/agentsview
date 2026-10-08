@@ -43,8 +43,12 @@ func (s *Server) registerImportRoutes() {
 			return &struct{}{}, nil
 		}, maxBodyBytes(-1), func(op *huma.Operation) {
 			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
+				if _, ok := results.Load(ctx.Param("id")); !ok {
+					ctx.SetStatus(http.StatusNotFound)
+					return
+				}
 				body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), importer.ClaudeAIResponseLimit+1))
-				if len(body) > importer.ClaudeAIResponseLimit || ctx.Query("status") == "413" {
+				if len(body) > importer.ClaudeAIResponseLimit {
 					err = importer.ErrClaudeAIResponseTooLarge
 				}
 				if err != nil {

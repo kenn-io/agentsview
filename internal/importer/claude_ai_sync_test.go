@@ -504,19 +504,8 @@ func TestSyncClaudeAIDetailFailures(t *testing.T) {
 					return fetch(ctx, path)
 				}, nil)
 				assert.Equal(t, tt.wantCalls, calls)
-				if tt.status == 401 || tt.status == 403 {
-					if tt.status == 401 {
-						require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
-					} else {
-						require.ErrorIs(t, err, ErrClaudeAIAccessDenied)
-						require.NotErrorIs(t, err, ErrClaudeAIAuthRequired)
-					}
-					assert.Zero(t, later)
-					assert.Zero(t, stats.Errors+stats.Imported+stats.Skipped)
-					return
-				}
-				if tt.status == 0 && !errors.Is(tt.err, ErrClaudeAIResponseTooLarge) {
-					require.ErrorIs(t, err, tt.err)
+				if tt.status == 401 {
+					require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
 					assert.Zero(t, later)
 					assert.Zero(t, stats.Errors+stats.Imported+stats.Skipped)
 					return
@@ -531,6 +520,61 @@ func TestSyncClaudeAIDetailFailures(t *testing.T) {
 					assert.Equal(t, []ImportRefusal{{SessionID: "claude-ai:22222222-2222-4222-8222-222222222222", Reason: RefusalTransient}}, stats.Refusals)
 				}
 				assert.Equal(t, 1, stats.Imported)
+			})
+		})
+	}
+}
+
+func TestSyncClaudeAIConsecutiveDetailFailures(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		statuses   [3]int
+		wantCalls  int
+		wantErrors int
+		wantImport int
+		wantStop   bool
+	}{
+		{"two retry ladders stop sync", [3]int{503, 503, 200}, 10, 1, 0, true},
+		{"success resets failure streak", [3]int{503, 200, 503}, 11, 2, 1, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := testDB(t)
+				ids := []string{"22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223", "22222222-2222-4222-8222-222222222224"}
+				var summaries []string
+				for _, id := range ids {
+					summaries = append(summaries, strings.ReplaceAll(syncSummary, ids[0], id))
+				}
+				calls, third := 0, 0
+				fetch := syncOneFetch(t, strings.Join(summaries, ","), func() (ClaudeAIResponse, error) {
+					require.FailNow(t, "detail must use its own response")
+					return ClaudeAIResponse{}, nil
+				})
+				stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+					for i, id := range ids {
+						if strings.Contains(path, "/chat_conversations/"+id+"?") {
+							calls++
+							if i == 2 {
+								third++
+							}
+							return ClaudeAIResponse{Status: tt.statuses[i], RetryAfter: "1", Body: []byte(strings.ReplaceAll(syncDetail, ids[0], id))}, nil
+						}
+					}
+					return fetch(ctx, path)
+				}, nil)
+				if tt.wantStop {
+					require.EqualError(t, err, "claude returned HTTP 503")
+					assert.Zero(t, third)
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, 5, third)
+					messages, err := d.GetAllMessages(t.Context(), "claude-ai:"+ids[1])
+					require.NoError(t, err)
+					assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+				}
+				assert.Equal(t, tt.wantCalls, calls)
+				assert.Equal(t, tt.wantErrors, stats.Errors)
+				assert.Equal(t, tt.wantImport, stats.Imported)
 			})
 		})
 	}
