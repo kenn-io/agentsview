@@ -4001,6 +4001,208 @@ fn version_response_looks_valid(response: &[u8]) -> bool {
         && body.contains("\"data_version\"")
 }
 
+#[tauri::command]
+async fn claude_auth_connect(handle: AppHandle) -> Result<(), String> {
+    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        Some(window) => window,
+        None => create_claude_auth_window(&handle, true)?.0,
+    };
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn claude_auth_disconnect(handle: AppHandle) -> Result<(), String> {
+    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        Some(window) => window,
+        None => create_claude_auth_window(&handle, false)?.0,
+    };
+    for cookie in window
+        .cookies_for_url(Url::parse("https://claude.ai/").unwrap())
+        .map_err(|e| e.to_string())?
+    {
+        window.delete_cookie(cookie).map_err(|e| e.to_string())?;
+    }
+    handle
+        .state::<ClaudeAuthState>()
+        .pending_browser_requests
+        .lock()
+        .map_err(|_| "Claude request lock failed")?
+        .clear();
+    window.close().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn claude_auth_fetch(
+    handle: AppHandle,
+    path: String,
+) -> Result<ClaudeBrowserResponse, String> {
+    validate_claude_fetch_path(&path)?;
+    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        Some(window) => window,
+        None => {
+            let (window, loaded) = create_claude_auth_window(&handle, false)?;
+            tokio::time::timeout(Duration::from_secs(30), loaded)
+                .await
+                .map_err(|_| "Claude page load timed out")?
+                .map_err(|_| "Claude page load failed")?;
+            window
+        }
+    };
+    let origin = window.url().map_err(|e| e.to_string())?;
+    if origin.origin().ascii_serialization() != "https://claude.ai" {
+        return Err("Claude sign-in is still pending".into());
+    }
+    let state = handle.state::<ClaudeAuthState>();
+    let (request_id, receiver) = state.start_browser_request()?;
+    let request_id_json = serde_json::to_string(&request_id).map_err(|e| e.to_string())?;
+    let url =
+        serde_json::to_string(&format!("https://claude.ai{path}")).map_err(|e| e.to_string())?;
+    let script = claude_fetch_script(&url, &request_id_json);
+    let response = match window.eval(&script) {
+        Err(err) => Err(err.to_string()),
+        Ok(()) => match tokio::time::timeout(Duration::from_secs(60), receiver).await {
+            Ok(Ok(response)) => Ok(response),
+            _ => Err("Claude browser fetch timed out or disconnected".into()),
+        },
+    };
+    state
+        .pending_browser_requests
+        .lock()
+        .map_err(|_| "Claude request lock failed")?
+        .remove(&request_id);
+    response
+}
+
+fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
+    format!(
+        r#"(async () => {{
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 45000);
+        try {{
+            const response = await fetch({url}, {{ method: "GET", credentials: "include", redirect: "error", signal: controller.signal }});
+            const limit = 32 * 1024 * 1024;
+            const oversized = () => window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 413, body: "" }} }});
+            if (Number(response.headers.get("content-length")) > limit) {{
+                controller.abort();
+                await oversized();
+                return;
+            }}
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let size = 0;
+            let body = "";
+            if (reader) {{
+                for (;;) {{
+                    const {{ done, value }} = await reader.read();
+                    if (done) break;
+                    size += value.byteLength;
+                    if (size > limit) {{
+                        controller.abort();
+                        await reader.cancel();
+                        await oversized();
+                        return;
+                    }}
+                    body += decoder.decode(value, {{ stream: true }});
+                }}
+                body += decoder.decode();
+            }}
+            const retryAfter = response.headers.get("retry-after") ?? undefined;
+            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: response.status, body, retryAfter }} }});
+        }} catch (error) {{
+            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 0, body: "", error: String(error) }} }});
+        }} finally {{
+            clearTimeout(timer);
+        }}
+    }})()"#
+    )
+}
+
+fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
+    if !path.starts_with("/api/") {
+        return Err("Claude fetch path must start with /api/".into());
+    }
+    Ok(())
+}
+
+fn create_claude_auth_window(
+    handle: &AppHandle,
+    visible: bool,
+) -> Result<(WebviewWindow, tokio::sync::oneshot::Receiver<()>), String> {
+    let url = Url::parse(if visible {
+        CLAUDE_AUTH_URL
+    } else {
+        "https://claude.ai/"
+    })
+    .map_err(|err| err.to_string())?;
+    let (sender, loaded) = tokio::sync::oneshot::channel();
+    let sender = Mutex::new(Some(sender));
+    let window =
+        WebviewWindowBuilder::new(handle, CLAUDE_AUTH_WINDOW_LABEL, WebviewUrl::External(url))
+            .title("Sign in to Claude.ai")
+            .inner_size(1100.0, 800.0)
+            .min_inner_size(800.0, 600.0)
+            .visible(visible)
+            .background_throttling(BackgroundThrottlingPolicy::Disabled)
+            .on_page_load(move |_, payload| {
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    if let Ok(mut sender) = sender.lock() {
+                        if let Some(sender) = sender.take() {
+                            let _ = sender.send(());
+                        }
+                    }
+                }
+            })
+            .build()
+            .map_err(|err| format!("could not open the Claude sign-in window: {err}"))?;
+    Ok((window, loaded))
+}
+
+#[tauri::command]
+async fn claude_auth_fetch_result(
+    state: State<'_, ClaudeAuthState>,
+    payload: ClaudeBrowserFetchResult,
+) -> Result<(), String> {
+    state.finish_browser_request(payload)
+}
+
+impl ClaudeAuthState {
+    fn start_browser_request(
+        &self,
+    ) -> Result<
+        (
+            String,
+            tokio::sync::oneshot::Receiver<ClaudeBrowserResponse>,
+        ),
+        String,
+    > {
+        let id = uuid::Uuid::new_v4().to_string();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.pending_browser_requests
+            .lock()
+            .map_err(|_| "Claude request lock failed")?
+            .insert(id.clone(), sender);
+        Ok((id, receiver))
+    }
+
+    fn finish_browser_request(&self, payload: ClaudeBrowserFetchResult) -> Result<(), String> {
+        let sender = self
+            .pending_browser_requests
+            .lock()
+            .map_err(|_| "Claude browser request lock failed")?
+            .remove(&payload.request_id)
+            .ok_or("no Claude browser request is pending")?;
+        sender
+            .send(ClaudeBrowserResponse {
+                status: payload.status,
+                body: payload.body,
+                error: payload.error,
+                retry_after: payload.retry_after,
+            })
+            .map_err(|_| "Claude browser request was cancelled".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6404,130 +6606,6 @@ agentsview running at http://127.0.0.1:18082
     }
 }
 
-#[tauri::command]
-async fn claude_auth_connect(handle: AppHandle) -> Result<(), String> {
-    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
-        Some(window) => window,
-        None => create_claude_auth_window(&handle, true)?.0,
-    };
-    window.show().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn claude_auth_disconnect(handle: AppHandle) -> Result<(), String> {
-    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
-        Some(window) => window,
-        None => create_claude_auth_window(&handle, false)?.0,
-    };
-    for cookie in window
-        .cookies_for_url(Url::parse("https://claude.ai/").unwrap())
-        .map_err(|e| e.to_string())?
-    {
-        window.delete_cookie(cookie).map_err(|e| e.to_string())?;
-    }
-    handle
-        .state::<ClaudeAuthState>()
-        .pending_browser_requests
-        .lock()
-        .map_err(|_| "Claude request lock failed")?
-        .clear();
-    window.close().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn claude_auth_fetch(
-    handle: AppHandle,
-    path: String,
-) -> Result<ClaudeBrowserResponse, String> {
-    validate_claude_fetch_path(&path)?;
-    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
-        Some(window) => window,
-        None => {
-            let (window, loaded) = create_claude_auth_window(&handle, false)?;
-            tokio::time::timeout(Duration::from_secs(30), loaded)
-                .await
-                .map_err(|_| "Claude page load timed out")?
-                .map_err(|_| "Claude page load failed")?;
-            window
-        }
-    };
-    let origin = window.url().map_err(|e| e.to_string())?;
-    if origin.origin().ascii_serialization() != "https://claude.ai" {
-        return Err("Claude sign-in is still pending".into());
-    }
-    let state = handle.state::<ClaudeAuthState>();
-    let (request_id, receiver) = state.start_browser_request()?;
-    let request_id_json = serde_json::to_string(&request_id).map_err(|e| e.to_string())?;
-    let url =
-        serde_json::to_string(&format!("https://claude.ai{path}")).map_err(|e| e.to_string())?;
-    let script = claude_fetch_script(&url, &request_id_json);
-    let response = match window.eval(&script) {
-        Err(err) => Err(err.to_string()),
-        Ok(()) => match tokio::time::timeout(Duration::from_secs(60), receiver).await {
-            Ok(Ok(response)) => Ok(response),
-            _ => Err("Claude browser fetch timed out or disconnected".into()),
-        },
-    };
-    state
-        .pending_browser_requests
-        .lock()
-        .map_err(|_| "Claude request lock failed")?
-        .remove(&request_id);
-    response
-}
-
-fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
-    format!(
-        r#"(async () => {{
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 45000);
-        try {{
-            const response = await fetch({url}, {{ method: "GET", credentials: "include", redirect: "error", signal: controller.signal }});
-            const limit = 32 * 1024 * 1024;
-            const oversized = () => window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 413, body: "" }} }});
-            if (Number(response.headers.get("content-length")) > limit) {{
-                controller.abort();
-                await oversized();
-                return;
-            }}
-            const reader = response.body?.getReader();
-            const decoder = new TextDecoder();
-            let size = 0;
-            let body = "";
-            if (reader) {{
-                for (;;) {{
-                    const {{ done, value }} = await reader.read();
-                    if (done) break;
-                    size += value.byteLength;
-                    if (size > limit) {{
-                        controller.abort();
-                        await reader.cancel();
-                        await oversized();
-                        return;
-                    }}
-                    body += decoder.decode(value, {{ stream: true }});
-                }}
-                body += decoder.decode();
-            }}
-            const retryAfter = response.headers.get("retry-after") ?? undefined;
-            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: response.status, body, retryAfter }} }});
-        }} catch (error) {{
-            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 0, body: "", error: String(error) }} }});
-        }} finally {{
-            clearTimeout(timer);
-        }}
-    }})()"#
-    )
-}
-
-fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
-    if !path.starts_with("/api/") {
-        return Err("Claude fetch path must start with /api/".into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod claude_sync_tests {
 
@@ -6606,83 +6684,5 @@ mod claude_sync_tests {
         assert!(state
             .finish_browser_request(result(id, "duplicate"))
             .is_err());
-    }
-}
-
-fn create_claude_auth_window(
-    handle: &AppHandle,
-    visible: bool,
-) -> Result<(WebviewWindow, tokio::sync::oneshot::Receiver<()>), String> {
-    let url = Url::parse(if visible {
-        CLAUDE_AUTH_URL
-    } else {
-        "https://claude.ai/"
-    })
-    .map_err(|err| err.to_string())?;
-    let (sender, loaded) = tokio::sync::oneshot::channel();
-    let sender = Mutex::new(Some(sender));
-    let window =
-        WebviewWindowBuilder::new(handle, CLAUDE_AUTH_WINDOW_LABEL, WebviewUrl::External(url))
-            .title("Sign in to Claude.ai")
-            .inner_size(1100.0, 800.0)
-            .min_inner_size(800.0, 600.0)
-            .visible(visible)
-            .background_throttling(BackgroundThrottlingPolicy::Disabled)
-            .on_page_load(move |_, payload| {
-                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                    if let Ok(mut sender) = sender.lock() {
-                        if let Some(sender) = sender.take() {
-                            let _ = sender.send(());
-                        }
-                    }
-                }
-            })
-            .build()
-            .map_err(|err| format!("could not open the Claude sign-in window: {err}"))?;
-    Ok((window, loaded))
-}
-
-#[tauri::command]
-async fn claude_auth_fetch_result(
-    state: State<'_, ClaudeAuthState>,
-    payload: ClaudeBrowserFetchResult,
-) -> Result<(), String> {
-    state.finish_browser_request(payload)
-}
-
-impl ClaudeAuthState {
-    fn start_browser_request(
-        &self,
-    ) -> Result<
-        (
-            String,
-            tokio::sync::oneshot::Receiver<ClaudeBrowserResponse>,
-        ),
-        String,
-    > {
-        let id = uuid::Uuid::new_v4().to_string();
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        self.pending_browser_requests
-            .lock()
-            .map_err(|_| "Claude request lock failed")?
-            .insert(id.clone(), sender);
-        Ok((id, receiver))
-    }
-
-    fn finish_browser_request(&self, payload: ClaudeBrowserFetchResult) -> Result<(), String> {
-        let sender = self
-            .pending_browser_requests
-            .lock()
-            .map_err(|_| "Claude browser request lock failed")?
-            .remove(&payload.request_id)
-            .ok_or("no Claude browser request is pending")?;
-        sender
-            .send(ClaudeBrowserResponse {
-                status: payload.status,
-                body: payload.body,
-                error: payload.error,
-                retry_after: payload.retry_after,
-            })
-            .map_err(|_| "Claude browser request was cancelled".into())
     }
 }
