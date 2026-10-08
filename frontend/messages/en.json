@@ -2465,6 +2465,8 @@
   "import_claude_sync": "Sync",
   "import_claude_disconnect": "Disconnect",
   "import_claude_help": "Sign in, close the window, then Sync.",
+  "import_claude_auth_required": "Sign in to Claude.ai, then Sync again",
+  "import_claude_sign_in_pending": "Finish signing in to Claude.ai, close the window, then Sync again.",
   "usage_click_project": "Click to focus {label}; double-click to open its groups and sessions",
   "usage_click_project_hint": "Select a project to filter the page, or open it to see its groups and sessions.",
   "usage_click_to_focus": "Click to focus {label}",

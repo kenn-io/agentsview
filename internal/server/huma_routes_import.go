@@ -31,7 +31,7 @@ func (s *Server) registerImportRoutes() {
 		func(ctx context.Context, in *claudeAISyncInput) (*huma.StreamResponse, error) {
 			return s.humaSyncClaudeAI(ctx, in, &results)
 		}, func(op *huma.Operation) {
-			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync."
+			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required or claude_ai_sign_in_pending."
 		})
 	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
 		func(ctx context.Context, in *claudeAISyncResultInput) (*struct{}, error) {
@@ -92,6 +92,8 @@ type claudeAISyncResult struct {
 	retryAfter string
 }
 
+var errClaudeAISignInPending = errors.New("Claude sign-in is still pending")
+
 func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
 	if s.db.ReadOnly() {
 		return nil, apiError(http.StatusNotImplemented, "import not available in read-only mode")
@@ -128,6 +130,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				err := response.err
 				if err == nil && response.status == 0 {
 					err = errors.New(string(response.body))
+					if string(response.body) == "claude_ai_sign_in_pending" {
+						err = errClaudeAISignInPending
+					}
 				}
 				return importer.ClaudeAIResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, err
 			}
@@ -148,11 +153,14 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			s.notifyRecallCorpusMutation()
 		}
 		if err != nil {
-			message := err.Error()
+			payload := map[string]string{"error": err.Error()}
 			if errors.Is(err, importer.ErrClaudeAIAuthRequired) {
-				message = "Sign in to Claude.ai, then Sync again"
+				payload["error"] = "Sign in to Claude.ai, then Sync again"
+				payload["code"] = "claude_ai_auth_required"
+			} else if errors.Is(err, errClaudeAISignInPending) {
+				payload["code"] = "claude_ai_sign_in_pending"
 			}
-			stream.SendJSON("error", map[string]string{"error": message})
+			stream.SendJSON("error", payload)
 			return
 		}
 		stream.SendJSON("done", stats)

@@ -10,7 +10,7 @@
   } from "../../api/client.js";
   import { getBrowserHost } from "../../api/browserHost.js";
   import { sync as syncState } from "../../stores/sync.svelte.js";
-  import { isRemoteConnection } from "../../api/runtime.js";
+  import { ApiError, isRemoteConnection } from "../../api/runtime.js";
   import {
     FileCheckIcon,
     FileIcon,
@@ -85,6 +85,11 @@
     } catch (e) {
       if (controller.signal.aborted) return;
       error = e instanceof Error ? e.message : m.import_failed();
+      if (e instanceof ApiError && e.code === "claude_ai_auth_required") {
+        error = m.import_claude_auth_required();
+      } else if (e instanceof ApiError && e.code === "claude_ai_sign_in_pending") {
+        error = m.import_claude_sign_in_pending();
+      }
     }
     finally {
       importing = false;

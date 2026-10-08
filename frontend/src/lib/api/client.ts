@@ -371,7 +371,10 @@ async function readImportResponse(
       if (event === "progress") cb?.onProgress?.(JSON.parse(data));
       if (event === "indexing") cb?.onIndexing?.();
       if (event === "done") return JSON.parse(data);
-      if (event === "error") throw new Error(JSON.parse(data).error ?? "Import failed");
+      if (event === "error") {
+        const failure = JSON.parse(data);
+        throw new ApiError(response.status, failure.error ?? "Import failed", failure.code);
+      }
     },
     "Import stream ended without result",
   );

@@ -19,6 +19,16 @@ vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 describe("syncClaudeAI browser relay", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each(["claude_ai_auth_required", "claude_ai_sign_in_pending"])("preserves recovery code %s", async (code) => {
+    const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      `event: error\ndata: ${JSON.stringify({ error: "English recovery instruction", code })}\n\n`,
+      { headers: { "Content-Type": "text/event-stream" } },
+    )));
+    await expect(syncClaudeAI(host)).rejects.toMatchObject({ message: "English recovery instruction", code });
+    expect(host.close).toHaveBeenCalledOnce();
+  });
+
   it("answers fetch events with browser status", async () => {
     const status = 429;
     let stream: ReadableStreamDefaultController<Uint8Array>;

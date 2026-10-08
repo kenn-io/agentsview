@@ -2464,6 +2464,8 @@
   "import_claude_sync": "Synchroniser",
   "import_claude_disconnect": "Déconnecter",
   "import_claude_help": "Connectez-vous, fermez la fenêtre, puis cliquez sur Synchroniser.",
+  "import_claude_auth_required": "Connectez-vous à Claude.ai, puis relancez la synchronisation.",
+  "import_claude_sign_in_pending": "Terminez la connexion à Claude.ai, fermez la fenêtre, puis relancez la synchronisation.",
   "usage_click_project": "Cliquer pour cibler {label}, double-cliquer pour ouvrir ses groupes et sessions",
   "usage_click_project_hint": "Sélectionnez un projet pour filtrer la page, ou ouvrez-le pour voir ses groupes et sessions.",
   "usage_click_to_focus": "Cliquer pour cibler {label}",

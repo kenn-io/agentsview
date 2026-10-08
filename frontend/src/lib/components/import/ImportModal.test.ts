@@ -3,6 +3,8 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import ImportModal from "./ImportModal.svelte";
 import { m } from "../../i18n/index.js";
+import { setLocale } from "../../paraglide/runtime.js";
+import { ApiError } from "../../api/runtime.js";
 
 const host = vi.hoisted(() => ({ connect: vi.fn(), disconnect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
 vi.mock("../../api/browserHost.js", () => ({ getBrowserHost: () => host }));
@@ -18,7 +20,19 @@ vi.mock("../../api/client.js", () => ({
   importClaudeAI: vi.fn(),
   importChatGPT: vi.fn(),
 }));
-afterEach(() => { vi.resetAllMocks(); syncState.readOnly = false; });
+afterEach(() => { vi.resetAllMocks(); syncState.readOnly = false; setLocale("en", { reload: false }); });
+
+it.each([
+  ["claude_ai_auth_required", "Sign in to Claude.ai, then Sync again", "Connectez-vous à Claude.ai, puis relancez la synchronisation."],
+  ["claude_ai_sign_in_pending", "Claude sign-in is still pending", "Terminez la connexion à Claude.ai, fermez la fenêtre, puis relancez la synchronisation."],
+])("shows localized recovery for %s", async (code, message, expected) => {
+  setLocale("fr", { reload: false });
+  syncClaudeAI.mockRejectedValue(new ApiError(0, message, code));
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
+  await waitFor(() => expect(screen.getByText(expected)).toBeTruthy());
+  expect(screen.queryByText(message)).toBeNull();
+});
 
 it("offers sign in, sync and disconnect without a sign-in probe", async () => {
   host.connect.mockResolvedValue(undefined);
