@@ -3128,10 +3128,16 @@ func restorePinnedMessages(
 		}
 	}
 
+	var claudeAILegacyReplacement bool
+	if len(pins) > 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT agent = 'claude-ai' AND NOT EXISTS(SELECT 1 FROM messages WHERE session_id = $1 AND COALESCE(source_uuid, '') != '') FROM sessions WHERE id = $1`, sessionID).Scan(&claudeAILegacyReplacement); err != nil {
+			return fmt.Errorf("checking pg pin source identities: %w", err)
+		}
+	}
 	resolved := make(map[int]resolvedPostgresPin)
 	for _, pin := range pins {
 		target, sourceUUID, ok, err := resolvePinnedMessageTarget(
-			ctx, tx, sessionID, pin,
+			ctx, tx, sessionID, pin, claudeAILegacyReplacement,
 		)
 		if err != nil {
 			return err
@@ -3194,16 +3200,10 @@ func legacyDevinScopedSourceUUID(sessionID, uuid string) (string, bool) {
 
 func resolvePinnedMessageTarget(
 	ctx context.Context, tx *sql.Tx, sessionID string,
-	pin savedPostgresPin,
+	pin savedPostgresPin, claudeAILegacyReplacement bool,
 ) (int, string, bool, error) {
 	if !pin.messageFound {
 		return 0, "", false, nil
-	}
-	var claudeAILegacyReplacement bool
-	if pin.sourceUUID != "" {
-		if err := tx.QueryRowContext(ctx, `SELECT agent = 'claude-ai' AND NOT EXISTS(SELECT 1 FROM messages WHERE session_id = $1 AND COALESCE(source_uuid, '') != '') FROM sessions WHERE id = $1`, sessionID).Scan(&claudeAILegacyReplacement); err != nil {
-			return 0, "", false, fmt.Errorf("checking pg pin source identities: %w", err)
-		}
 	}
 	if pin.sourceUUID != "" && !claudeAILegacyReplacement {
 		// The stored uuid is matched alongside its session-scoped

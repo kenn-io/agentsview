@@ -2740,8 +2740,7 @@ schemas keep their existing ordering behavior.
   Details select `current_leaf_message_uuid` and follow string
   `parent_message_uuid` links to the root sentinel
   `00000000-0000-4000-8000-000000000000`. Message text comes from
-  `content[].text`. Tool calls store their input JSON and paired result text
-  in the same tool-call records used by the sibling chat importers.
+  `content[].text` and thinking blocks.
   Malformed selected paths and mismatched conversation UUIDs fail before writes.
   Exports preserve their original message order.
 - **Freshness:** Sync compares `updated_at` with archived `ended_at` and stores
@@ -2755,8 +2754,9 @@ schemas keep their existing ordering behavior.
   remain refused. Pins follow source UUIDs, or role, content, and occurrence
   rank when the replacement has no UUIDs. Full resync preserves import markers.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
-  responses count as skipped; 401 and 403 stop Sync with distinct sign-in and
-  access-denied errors.
+  responses count as skipped; 401 or `error.details.error_code` equal to
+  `account_session_invalid` at any status stop Sync with a sign-in error.
+  Other 403 responses stop Sync with an access-denied error.
   Other detail failures allow later chats to sync.
   Organization and list failures, cancellation, and an empty page with
   `has_more: true` stop Sync. Null list leaves skip detail fetches; absent or
@@ -2771,14 +2771,12 @@ schemas keep their existing ordering behavior.
   [archived pass](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_archived.json),
   and [detail](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/detail.json)
   reconstruct the observed fields with synthetic identities and content.
-- **Observed 2026-10-08:** An authenticated detail response fetched with
-  `render_all_tools=true` contained the HTML only in
-  `tool_use(create_file).input.file_text`. Its `tool_result` and `Artifact`
-  blocks held creation and publication status text. The sanitized
-  [artifact detail fixture](https://github.com/kenn-io/agentsview/blob/main/internal/parser/testdata/claude-ai/artifact-detail.json)
-  preserves those blocks, uses synthetic identities, normalizes the root
-  parent to the root sentinel, and removes the decorative favicon.
-  The parser stores the HTML as tool input, which content search can find.
+- **Observed 2026-10-08:** With `render_all_tools=true`, an artifact's file
+  text arrived only in `tool_use(create_file).input.file_text`. Its
+  `tool_result` and `Artifact` blocks held creation and publication status.
+  The importer, like zip import on main, stores text and thinking blocks only.
+  Signed-out organization, list, and detail requests returned HTTP 403 with
+  `error.details.error_code` equal to `account_session_invalid`.
 - **Evidence limits:** Existing selected-path and Sync fixtures cover these
   shapes. Multiple chat organizations, web-search blocks, unanswered final
   prompts, and tree fields in official exports still need live verification.

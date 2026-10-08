@@ -2492,6 +2492,8 @@ func (db *DB) GetSessionFilePath(ctx context.Context, id string) string {
 	return fp.String
 }
 
+const bumpLocalModifiedAtSQL = `UPDATE sessions SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND deleted_at IS NULL`
+
 // BumpLocalModifiedAt stamps the current time as local_modified_at so
 // incremental PG push picks up metadata changes (e.g. session_name updates
 // on the importer skip path) that don't go through the file-based sync path.
@@ -2499,8 +2501,7 @@ func (db *DB) BumpLocalModifiedAt(ctx context.Context, id string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	_, err := db.getWriter().Exec(ctx,
-		`UPDATE sessions SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		 WHERE id = ? AND deleted_at IS NULL`,
+		bumpLocalModifiedAtSQL,
 		id,
 	)
 	return err

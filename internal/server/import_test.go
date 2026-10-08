@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -121,9 +122,19 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		})
 	}
 
+	signedOut, err := os.ReadFile("../importer/testdata/claude_ai_live/signed_out.json")
+	require.NoError(t, err)
 	for _, stage := range []string{"organizations", "list", "detail"} {
-		for _, status := range []int{401, 403} {
-			t.Run(fmt.Sprintf("access failure %s %d reaches stream error", stage, status), func(t *testing.T) {
+		for _, tt := range []struct {
+			name, body string
+			status     int
+			signIn     bool
+		}{
+			{"unauthorized", "{}", 401, true},
+			{"forbidden", "{}", 403, false},
+			{"signed out", string(signedOut), 403, true},
+		} {
+			t.Run(fmt.Sprintf("access failure %s %s reaches stream error", stage, tt.name), func(t *testing.T) {
 				srv := testServer(t, 5*time.Second)
 				httpServer := httptest.NewServer(srv.mux)
 				defer httpServer.Close()
@@ -142,7 +153,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 							Path string `json:"path"`
 						}
 						require.NoError(t, json.Unmarshal([]byte(data), &request))
-						body, responseStatus := "{}", status
+						body, responseStatus := tt.body, tt.status
 						if stage != "organizations" {
 							switch request.Path {
 							case "/api/organizations":
@@ -163,7 +174,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 						require.Equal(t, http.StatusNoContent, result.StatusCode)
 						require.NoError(t, result.Body.Close())
 					case "error":
-						if status == 401 {
+						if tt.signIn {
 							assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again"}`, data)
 						} else {
 							assert.JSONEq(t, `{"error":"claude.ai access denied (HTTP 403)"}`, data)
