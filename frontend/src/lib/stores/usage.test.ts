@@ -2047,6 +2047,10 @@ describe("UsageStore project zoom", () => {
     );
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     expect(usage.excludedProjectKeys).toBe("");
+    usage.toggleProjectKey("pl1:sha256:alpha");
+    expect(usage.zoomedProject).toBeNull();
+    expect(usage.zoomRows).toBeNull();
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:alpha");
   });
 
   it("keeps filters while pending and failed, and retries on another click", async () => {
@@ -2130,6 +2134,13 @@ describe("UsageStore project zoom", () => {
     await refreshed;
     expect(usage.zoomRows).toEqual([group(9)]);
     expect(usage.excludedProjectKeys).toBe("");
+    const emptySummary = usageSummary();
+    emptySummary.projectTotals = [];
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(emptySummary);
+    usageServiceMocks.getUsageZoom.mockResolvedValue([]);
+    await usage.fetchAll({ preserveTimeRange: true });
+    expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:alpha", label: "Project" });
+    expect(usage.zoomRows).toEqual([]);
   });
 
   it("refreshes zoom for metric and token selection changes", async () => {

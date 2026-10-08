@@ -649,6 +649,7 @@ class UsageStore {
     const previous = this.excludedProjectKeys;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedProjectKeys = this.toggleCsv(this.excludedProjectKeys, key);
+    if (this.zoomedProject?.key === key && this.isProjectKeyExcluded(key)) this.backToProjects();
     const changed = this.excludedProjectKeys;
     void this.fetchAllWithResult(options).then((result) => {
       if (result !== "error" || !hadSelectedTimeRange || this.excludedProjectKeys !== changed)
@@ -656,6 +657,11 @@ class UsageStore {
       this.excludedProjectKeys = previous;
       void this.fetchAll({ preserveTimeRange: true });
     });
+  }
+
+  excludeProjectKey(key: string, options: { preserveTimeRange?: boolean } = {}): void {
+    if (!this.isProjectKeyExcluded(key)) this.toggleProjectKey(key, options);
+    if (this.zoomedProject?.key === key) this.backToProjects();
   }
 
   toggleAgent(name: string, options: { preserveTimeRange?: boolean } = {}): void {
@@ -739,6 +745,7 @@ class UsageStore {
     );
     for (const key of all) excluded.add(key);
     this.excludedProjectKeys = [...excluded].join(",");
+    if (this.zoomedProject && excluded.has(this.zoomedProject.key)) this.backToProjects();
     this.fetchAll();
   }
 

@@ -205,7 +205,7 @@
   {#if zoomedProject}
     <div class="hint breadcrumb">
       <span><button onclick={() => usage.backToProjects()}>{m.usage_all_projects()}</button> › {zoomedProject.label}</span>
-      <button onclick={() => { usage.toggleProjectKey(zoomedProject.key, { preserveTimeRange: true }); usage.backToProjects(); }}>{m.usage_hide_project()}</button>
+      <button onclick={() => usage.excludeProjectKey(zoomedProject.key, { preserveTimeRange: true })}>{m.usage_hide_project()}</button>
     </div>
   {/if}
   {#if zoomedProject && usage.errors.zoom}

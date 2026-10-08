@@ -132,6 +132,9 @@ func usageProjectKeyLabels(byKey map[string]string, keys string) ([]string, erro
 		}
 		resolved = append(resolved, label)
 	}
+	if len(resolved) == 0 {
+		return nil, &UsageInputError{Code: UsageErrorCodeUnknownProjectKey, Msg: "unknown project key"}
+	}
 	return resolved, nil
 }
 

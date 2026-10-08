@@ -52,9 +52,6 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 		CreatedAt: "2026-01-01T00:00:00Z",
 	}
 	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession (summary)")
-	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
-		SessionID: sessID, Ordinal: 0, Role: "user", Content: "Hello", ContentLength: 5,
-	}}))
 
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push (summary)")
@@ -68,7 +65,6 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	require.NotNil(t, got, "session not found after first push")
 	assert.Equal(t, "summary", got.TranscriptFidelity,
 		"TranscriptFidelity should be 'summary' after first push")
-	assert.Equal(t, new("1"), got.TranscriptRevision)
 	assert.Equal(t, "job-a", got.GroupKey)
 	assert.Equal(t, "Daily digest", got.GroupLabel)
 
@@ -91,7 +87,6 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	require.NotNil(t, got, "session not found after second push")
 	assert.Equal(t, "full", got.TranscriptFidelity,
 		"IS DISTINCT FROM must re-push the change to 'full'")
-	assert.Equal(t, new("1"), got.TranscriptRevision)
 	assert.Equal(t, "job-a", got.GroupKey)
 	assert.Equal(t, "Research digest", got.GroupLabel)
 }

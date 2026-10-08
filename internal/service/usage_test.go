@@ -47,6 +47,13 @@ func TestResolveUsageProjectKeysSharesCatalog(t *testing.T) {
 	assert.Equal(t, []string{"project-b"}, resolved.ExcludeProjectLabels)
 	assert.Equal(t, 1, store.labelReads)
 	assert.Equal(t, 1, store.catalogReads)
+	resolved, err = service.ResolveUsageProjectKeys(t.Context(), store, service.UsageRequest{
+		Project: "unrelated-page-filter", ProjectKey: catalog["project-a"].ProjectKey,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resolved.Project)
+	assert.Equal(t, []string{"project-a"}, resolved.ProjectLabels)
+	assert.Equal(t, []string{"project-a"}, resolved.ExcludeProjectLabels)
 }
 
 func seedPairwiseUsageFixture(t *testing.T, d *db.DB) {

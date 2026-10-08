@@ -69,11 +69,18 @@ type UsageFilterInput struct {
 
 type usageTopSessionsInput struct {
 	UsageFilterInput
-	ProjectKey string `query:"project_key" doc:"Filter by an opaque project key"`
-	Limit      int    `query:"limit" minimum:"0" maximum:"100" default:"20" doc:"Maximum number of sessions"`
-	Sort       string `query:"sort" enum:"cost,tokens" default:"cost" doc:"Rank sessions by cost or selected token types"`
-	GroupBy    string `query:"group_by" enum:"group" doc:"Merge sessions by project and group; a trailing row with no session or group ID sums rows past limit"`
-	TokenTypes string `query:"token_types" doc:"Comma-separated token counters for token ranking: input, cache_write, cache_read, output"`
+	ProjectKeySet bool
+	ProjectKey    string `query:"project_key" doc:"Filter by an opaque project key"`
+	Limit         int    `query:"limit" minimum:"0" maximum:"100" default:"20" doc:"Maximum number of sessions"`
+	Sort          string `query:"sort" enum:"cost,tokens" default:"cost" doc:"Rank sessions by cost or selected token types"`
+	GroupBy       string `query:"group_by" enum:"group" doc:"Merge sessions by project and group; a trailing row with no session or group ID sums rows past limit"`
+	TokenTypes    string `query:"token_types" doc:"Comma-separated token counters for token ranking: input, cache_write, cache_read, output"`
+}
+
+func (in *usageTopSessionsInput) Resolve(ctx huma.Context) []error {
+	requestURL := ctx.URL()
+	in.ProjectKeySet = requestURL.Query().Has("project_key")
+	return nil
 }
 
 type usageComparisonInput struct {
@@ -338,6 +345,9 @@ func (s *Server) humaUsageTopSessions(
 	ctx context.Context,
 	in *usageTopSessionsInput,
 ) (*jsonOutput[[]db.TopSessionEntry], error) {
+	if in.ProjectKeySet && in.ProjectKey == "" {
+		return nil, usageInputAPIError(&service.UsageInputError{Code: service.UsageErrorCodeUnknownProjectKey, Msg: "unknown project key"})
+	}
 	f, err := s.usageFilterFromInput(ctx, in.UsageFilterInput, in.ProjectKey)
 	if err != nil {
 		return nil, err

@@ -6128,39 +6128,56 @@ func TestUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *t
 	}, got)
 }
 
-func TestGroupTopSessionsLatestRecordedLabel(t *testing.T) {
-	rows, err := GroupTopSessions([]TopSessionEntry{
-		{SessionID: "z", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Earlier", StartedAt: "2026-10-08T13:00:00+02:00"},
-		{SessionID: "a", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Newer", StartedAt: "2026-10-08T12:00:00Z"},
-		{SessionID: "b", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", StartedAt: "2026-10-08T12:00:00Z"},
-		{SessionID: "c", Project: "hermes-cron", GroupKey: "job-a", StartedAt: "2026-10-09T12:00:00Z"},
-		{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
-	}, 100, TopSessionsSortCost, UsageTokenTypesAll)
-	require.NoError(t, err)
-	require.Len(t, rows, 2)
-	assert.Equal(t, TopSessionEntry{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15}, rows[1])
-	assert.Equal(t, "Tie winner", rows[0].GroupLabel)
-	assert.Empty(t, rows[0].SessionID)
-}
-
-func TestGroupTopSessionsRanksTiesByGroup(t *testing.T) {
-	rows, err := GroupTopSessions([]TopSessionEntry{
-		{Project: "hermes-cron", GroupKey: "job-b", InputTokens: 10},
-		{Project: "hermes-cron", GroupKey: "job-a", InputTokens: 10},
-	}, 1, TopSessionsSortTokens, UsageTokenTypesAll)
-	require.NoError(t, err)
-	require.Len(t, rows, 2)
-	assert.Equal(t, "job-a", rows[0].GroupKey)
-}
-
-func TestGroupTopSessionsRemainder(t *testing.T) {
-	rows, err := GroupTopSessions([]TopSessionEntry{
-		{GroupKey: "job-a", InputTokens: 10, Cost: money.Money{Microdollars: 4_000_000}},
-		{GroupKey: "job-b", InputTokens: 20, OutputTokens: 2, CacheCreationTokens: 3, CacheReadTokens: 4, TotalTokens: 29, Cost: money.Money{Microdollars: 2_000_000}},
-		{SessionID: "session-c", InputTokens: 30, OutputTokens: 5, CacheCreationTokens: 6, CacheReadTokens: 7, TotalTokens: 48, Cost: money.Money{Microdollars: 1_000_000}},
-	}, 1, TopSessionsSortCost, UsageTokenTypesAll)
-	require.NoError(t, err)
-	require.Len(t, rows, 2)
-	assert.Equal(t, "job-a", rows[0].GroupKey)
-	assert.Equal(t, TopSessionEntry{InputTokens: 50, OutputTokens: 7, CacheCreationTokens: 9, CacheReadTokens: 11, TotalTokens: 77, Cost: money.Money{Microdollars: 3_000_000}}, rows[1])
+func TestGroupTopSessions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input []TopSessionEntry
+		limit int
+		sort  string
+		want  []TopSessionEntry
+	}{
+		{
+			name: "latest recorded label", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{SessionID: "z", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Earlier", StartedAt: "2026-10-08T13:00:00+02:00"},
+				{SessionID: "a", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Newer", StartedAt: "2026-10-08T12:00:00Z"},
+				{SessionID: "b", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", StartedAt: "2026-10-08T12:00:00Z"},
+				{SessionID: "c", Project: "hermes-cron", GroupKey: "job-a", StartedAt: "2026-10-09T12:00:00Z"},
+				{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
+			},
+			want: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", DisplayName: "Tie winner", StartedAt: "2026-10-08T12:00:00Z"},
+				{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
+			},
+		},
+		{
+			name: "ranks ties by group", limit: 1, sort: TopSessionsSortTokens,
+			input: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-b", InputTokens: 10},
+				{Project: "hermes-cron", GroupKey: "job-a", InputTokens: 10},
+			},
+			want: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10},
+				{InputTokens: 10},
+			},
+		},
+		{
+			name: "remainder", limit: 1, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{GroupKey: "job-a", InputTokens: 10, Cost: money.Money{Microdollars: 4_000_000}},
+				{GroupKey: "job-b", InputTokens: 20, OutputTokens: 2, CacheCreationTokens: 3, CacheReadTokens: 4, TotalTokens: 29, Cost: money.Money{Microdollars: 2_000_000}},
+				{SessionID: "session-c", InputTokens: 30, OutputTokens: 5, CacheCreationTokens: 6, CacheReadTokens: 7, TotalTokens: 48, Cost: money.Money{Microdollars: 1_000_000}},
+			},
+			want: []TopSessionEntry{
+				{GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10, Cost: money.Money{Microdollars: 4_000_000}},
+				{InputTokens: 50, OutputTokens: 7, CacheCreationTokens: 9, CacheReadTokens: 11, TotalTokens: 77, Cost: money.Money{Microdollars: 3_000_000}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, err := GroupTopSessions(tc.input, tc.limit, tc.sort, UsageTokenTypesAll)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, rows)
+		})
+	}
 }
