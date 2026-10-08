@@ -5,6 +5,7 @@ env:
   GOPROXY: "https://proxy.golang.org|direct"
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:

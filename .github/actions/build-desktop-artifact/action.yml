@@ -31,6 +31,17 @@ runs:
         package-manager-cache: ${{ inputs.namespace-cache != 'true' }}
 
     - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable
+      id: rust-toolchain
+      continue-on-error: true
+
+    - name: Wait before retrying Rust setup
+      if: steps.rust-toolchain.outcome == 'failure'
+      shell: bash
+      run: sleep 10
+
+    - name: Retry Rust setup
+      if: steps.rust-toolchain.outcome == 'failure'
+      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable
 
     - name: Configure Namespace build caches
       if: inputs.namespace-cache == 'true'
