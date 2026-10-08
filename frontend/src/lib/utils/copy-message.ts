@@ -1,4 +1,5 @@
 import type { DbMessage as Message } from "../api/generated/index.js";
+import { parseToolInput } from "../search/tool-input.js";
 import { extractToolParamMeta, generateFallbackContent } from "./tool-params.js";
 
 /**
@@ -13,21 +14,15 @@ export function formatMessageForCopy(message: Message): string {
 
   if (message.tool_calls?.length) {
     for (const tc of message.tool_calls) {
-      let params: Record<string, unknown> = {};
-      if (tc.input_json) {
-        try {
-          params = JSON.parse(tc.input_json);
-        } catch {
-          // input_json may not be valid JSON for some tools
-        }
-      }
+      const input = parseToolInput(tc.input_json);
+      const params = input.params ?? {};
       const meta = extractToolParamMeta(tc.category ?? "", params) ?? [];
       const metaStr = meta.map((m) => `${m.label}: ${m.value}`).join(" | ");
       const header = metaStr ? `[${tc.tool_name}] ${metaStr}` : `[${tc.tool_name}]`;
 
       parts.push(header);
 
-      const body = generateFallbackContent(tc.tool_name, params);
+      const body = input.raw ?? generateFallbackContent(tc.tool_name, params);
       if (body) parts.push(body);
 
       if (tc.result_content) parts.push(tc.result_content);

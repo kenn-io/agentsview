@@ -9,6 +9,29 @@ export interface ToolInput {
   text: string;
 }
 
+export interface ParsedToolInput {
+  params: Record<string, unknown> | null;
+  raw: string | null;
+}
+
+/** Split input_json into object params or raw text such as a custom tool's script or patch. */
+export function parseToolInput(inputJson: string | undefined): ParsedToolInput {
+  if (!inputJson) return { params: null, raw: null };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(inputJson);
+  } catch {
+    return { params: null, raw: inputJson };
+  }
+  if (parsed === null || (Array.isArray(parsed) && parsed.length === 0)) {
+    return { params: null, raw: null };
+  }
+  if (typeof parsed === "object" && !Array.isArray(parsed)) {
+    return { params: parsed as Record<string, unknown>, raw: null };
+  }
+  return { params: null, raw: inputJson };
+}
+
 /** Resolve the same prompt/category/name precedence used by ToolBlock. */
 export function resolveToolInput(
   toolCall: ToolCall | undefined,
@@ -19,17 +42,7 @@ export function resolveToolInput(
     toolCall?.tool_name === "Agent" ||
     toolCall?.category === "Task" ||
     (toolCall?.tool_name.includes("subagent") ?? false);
-  let params: Record<string, unknown> | null = null;
-  if (toolCall?.input_json) {
-    try {
-      const parsed: unknown = JSON.parse(toolCall.input_json);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        params = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // A malformed input retains the legacy segment text.
-    }
-  }
+  const { params, raw: rawInput } = parseToolInput(toolCall?.input_json);
   const taskPrompt = isTask && typeof params?.prompt === "string" ? params.prompt : null;
   let fallbackContent: string | null = null;
   if (!segmentContent && params && toolCall) {
@@ -43,7 +56,7 @@ export function resolveToolInput(
     taskPrompt,
     fallbackContent,
     // An empty Task prompt takes the ordinary-content branch in ToolBlock.
-    text: taskPrompt || (fallbackContent ?? segmentContent),
+    text: taskPrompt || (fallbackContent ?? (segmentContent || rawInput || "")),
   };
 }
 

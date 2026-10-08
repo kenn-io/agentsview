@@ -5,7 +5,7 @@
   import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
   import SubagentInline from "./SubagentInline.svelte";
   import { extractToolParamMeta, type MetaTag } from "../../utils/tool-params.js";
-  import { resolveToolInput } from "../../search/tool-input.js";
+  import { parseToolInput, resolveToolInput } from "../../search/tool-input.js";
   import { searchBlock } from "../../search/session-block.svelte.js";
   import { searchCollapsed, toolSearchKey, type ToolSearchScope } from "../../search/component-state.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
@@ -151,10 +151,7 @@
     const last = resultEvents[resultEvents.length - 1];
     return last ? `${last.status}: ${last.content.split("\n")[0]}`.slice(0, 100) : "";
   });
-  let inputParams = $derived.by(() => {
-    if (!toolCall?.input_json) return null;
-    try { return JSON.parse(toolCall.input_json); } catch { return null; }
-  });
+  let inputParams = $derived(parseToolInput(toolCall?.input_json).params);
   let structuredSummary = $derived(toolCall ? summarizeToolCall(toolCall) : null);
   let structuredSummaryTitle = $derived(toolCall ? summarizeToolCallPath(toolCall) : null);
   const outputModeOptions = $derived<SegmentedControlOption[]>([
@@ -166,23 +163,23 @@
   let taskMeta = $derived.by(() => {
     if (!isTask || !inputParams) return null;
     const meta: { label: string; value: string }[] = [];
-    if (inputParams.subagent_type) meta.push({ label: "type", value: inputParams.subagent_type });
-    if (inputParams.description) meta.push({ label: "description", value: inputParams.description });
+    if (inputParams.subagent_type) meta.push({ label: "type", value: String(inputParams.subagent_type) });
+    if (inputParams.description) meta.push({ label: "description", value: String(inputParams.description) });
     return meta.length ? meta : null;
   });
   let taskCreateMeta = $derived.by(() => {
     if (toolCall?.tool_name !== "TaskCreate" || !inputParams) return null;
     const meta: { label: string; value: string }[] = [];
-    if (inputParams.subject) meta.push({ label: "subject", value: inputParams.subject });
-    if (inputParams.description) meta.push({ label: "description", value: inputParams.description });
+    if (inputParams.subject) meta.push({ label: "subject", value: String(inputParams.subject) });
+    if (inputParams.description) meta.push({ label: "description", value: String(inputParams.description) });
     return meta.length ? meta : null;
   });
   let taskUpdateMeta = $derived.by(() => {
     if (toolCall?.tool_name !== "TaskUpdate" || !inputParams) return null;
     const meta: { label: string; value: string }[] = [];
     if (inputParams.taskId) meta.push({ label: "task", value: `#${inputParams.taskId}` });
-    if (inputParams.status) meta.push({ label: "status", value: inputParams.status });
-    if (inputParams.subject) meta.push({ label: "subject", value: inputParams.subject });
+    if (inputParams.status) meta.push({ label: "status", value: String(inputParams.status) });
+    if (inputParams.subject) meta.push({ label: "subject", value: String(inputParams.subject) });
     return meta.length ? meta : null;
   });
   let toolParamMeta = $derived.by(() => {
@@ -202,7 +199,7 @@
     const result = cat ? generateInputCopyContent(cat, inputParams) : null;
     return result ?? generateInputCopyContent(toolCall.tool_name, inputParams);
   });
-  let inputCopySource = $derived(taskPrompt ?? inputCopyFallback ?? content ?? "");
+  let inputCopySource = $derived(taskPrompt ?? inputCopyFallback ?? resolvedInput.text);
   let subagentSessionId = $derived(isTask ? toolCall?.subagent_session_id ?? null : null);
   const CONTENT_PREVIEW_LINES = 20;
   let displayContent = $derived.by(() => {

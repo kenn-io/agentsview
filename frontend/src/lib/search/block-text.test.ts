@@ -144,6 +144,25 @@ describe("collectSearchBlocks", () => {
     ]);
   });
 
+  it("indexes complete raw tool inputs, including commands beyond the preview", () => {
+    const script =
+      "// setup\n".repeat(25) + 'text(await tools.exec_command({cmd: "echo needle"}));\n';
+    const patch = "*** Begin Patch\n*** Add File: example.txt\n+needle\n*** End Patch\n";
+    const blocks = collectSearchBlocks(
+      message("", {
+        has_tool_use: true,
+        tool_calls: [
+          { tool_name: "exec", category: "Bash", input_json: script },
+          { tool_name: "apply_patch", category: "Edit", input_json: patch },
+        ],
+      }),
+    );
+    expect(blocks.map((block) => [block.key, block.text])).toEqual([
+      ["7:tool-input:0", script],
+      ["7:tool-input:1", patch],
+    ]);
+  });
+
   it("gives parallel calls and each history event distinct keys", () => {
     const tools: ToolCall[] = [
       {
@@ -292,6 +311,24 @@ describe("resolveToolInputText", () => {
       ),
     ).toBe("legacy");
   });
+
+  it.each([undefined, "", "{}", "null", "[]"])(
+    "retains empty display behavior for input %s",
+    (input_json) => {
+      expect(resolveToolInputText({ tool_name: "exec", category: "Bash", input_json }, "")).toBe(
+        "",
+      );
+    },
+  );
+
+  it.each(['"use strict"', "42", "false", '["a"]'])(
+    "shows non-object JSON input %s verbatim",
+    (input_json) => {
+      expect(resolveToolInputText({ tool_name: "exec", category: "Bash", input_json }, "")).toBe(
+        input_json,
+      );
+    },
+  );
 
   it("retains legacy text when a Task prompt is empty", () => {
     expect(resolveToolInputText(call("Task", { prompt: "" }), "legacy")).toBe("legacy");

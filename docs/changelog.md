@@ -230,6 +230,10 @@ The latest published release is
 **Bug fixes**
 
 - Oversized telemetry requests return HTTP 413.
+- Tool calls whose input is a raw script or patch, such as Codex `exec` and
+  `apply_patch` calls, now show that input when expanded. Copy input, Copy
+  message, and in-session search include the complete input, even beyond the
+  preview limit. Existing sessions need no re-import.
 - Hosted raw sync keeps a session listed and searchable after its source file
   disappears from the device that uploaded it, matching the local archive.
   Before, `raw-sync watch` reporting a missing file hid the session, emptied it

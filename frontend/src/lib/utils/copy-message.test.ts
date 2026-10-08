@@ -112,6 +112,30 @@ describe("formatMessageForCopy", () => {
     expect(result).toContain("+port: 8080");
   });
 
+  it("includes a raw custom tool input verbatim", () => {
+    const script = '  // setup\ntext(await tools.exec_command({cmd: "echo hello"}));\n';
+    const result = formatMessageForCopy({
+      has_context_tokens: false,
+      has_output_tokens: false,
+      id: 5,
+      session_id: "s1",
+      ordinal: 5,
+      role: "assistant",
+      content: "",
+      timestamp: "",
+      has_thinking: false,
+      thinking_text: "",
+      has_tool_use: true,
+      content_length: 0,
+      model: "",
+      context_tokens: 0,
+      output_tokens: 0,
+      is_system: false,
+      tool_calls: [{ tool_name: "exec", category: "Bash", input_json: script }],
+    });
+    expect(result).toBe(`[exec]\n\n${script}`);
+  });
+
   it("copies the canonical long path in tool metadata", () => {
     const path =
       "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";

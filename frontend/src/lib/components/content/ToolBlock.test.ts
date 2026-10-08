@@ -445,6 +445,48 @@ describe("ToolBlock output and controls", () => {
 });
 
 describe("ToolBlock input source and copy", () => {
+  it.each([
+    ["exec", "Bash", '  text(await tools.exec_command({cmd: "echo hello"}));\n'],
+    ["apply_patch", "Edit", "*** Begin Patch\n*** Add File: example.txt\n+hello\n*** End Patch\n"],
+    ["exec", "Bash", '<script>throw new Error("must remain text")</script>'],
+    ["exec", "Bash", '"use strict"'],
+    ["exec", "Bash", '["a"]'],
+  ])("renders and copies raw %s input verbatim", async (name, category, input_json) => {
+    await render({ toolCall: call(name, {}, { category, input_json }) });
+    await click('button[aria-label="Copy input"]');
+    expect(copyToClipboardMock).toHaveBeenCalledExactlyOnceWith(input_json);
+    expect(document.querySelector(".tool-content")).toBeNull();
+    await click(".tool-header");
+    expect(text(".tool-content")).toBe(input_json);
+    expect(document.querySelector(".tool-content script")).toBeNull();
+  });
+  it("copies the full raw script while its preview is truncated", async () => {
+    const script =
+      "  // recorded script\n" + "await step();\n".repeat(25) + 'text("final command");\n';
+    await render({ toolCall: call("exec", {}, { category: "Bash", input_json: script }) });
+    await click(".tool-header");
+    expect(text(".tool-content")).toContain("  // recorded script\n");
+    expect(text(".tool-content")).not.toContain("final command");
+    await click('button[aria-label="Copy input"]');
+    expect(copyToClipboardMock).toHaveBeenCalledExactlyOnceWith(script);
+    expect(text(".tool-content")).not.toContain("final command");
+    await click(".show-more-btn");
+    expect(text(".tool-content")).toBe(script);
+    await click(".show-more-btn");
+    expect(text(".tool-content")).not.toContain("final command");
+  });
+  it("reveals the full raw script when search targets text beyond its preview", async () => {
+    const script = "await step();\n".repeat(25) + 'text("final command");';
+    searchState.active = true;
+    searchState.current = "7:tool-input:0";
+    searchState.query = "final command";
+    await render({
+      toolCall: call("exec", {}, { category: "Bash", input_json: script }),
+      searchScope: { ordinal: 7, callIdx: 0 },
+    });
+    expect(document.querySelector(".tool-header")?.getAttribute("aria-expanded")).toBe("true");
+    expect(text(".tool-content")).toBe(script);
+  });
   it("copies a complete task prompt without expanding", async () => {
     const prompt = "Work on this task\nwith all details.";
     await render({ toolCall: call("Task", { subagent_type: "Explore", prompt }) });
@@ -525,6 +567,8 @@ describe("ToolBlock input source and copy", () => {
     });
     await click(".tool-header");
     expect(text(".tool-content")).toBe("legacy");
+    await click('button[aria-label="Copy input"]');
+    expect(copyToClipboardMock).toHaveBeenCalledExactlyOnceWith("legacy");
   });
   it("handles a tool call without input_json", async () => {
     await render({
