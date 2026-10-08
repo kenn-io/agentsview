@@ -437,10 +437,14 @@ func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
 		{"usage-marker", &usageMarker, nil},
 		{"newer-marker", &newerMarker, &newerMarker},
 		{"file-backed", &otherLeaf, nil},
+		{"other-agent", &otherLeaf, nil},
 	}
 	for _, row := range rows {
 		id := row.id
 		session := Session{ID: id, Agent: "claude-ai", Project: "test", Machine: "test", LastEntryUUID: row.marker}
+		if id == "other-agent" {
+			session.Agent = "claude"
+		}
 		if id == "file-backed" {
 			session.Agent = "claude"
 			path := filepath.Join(t.TempDir(), "session.jsonl")
@@ -452,13 +456,33 @@ func TestCopyOrphanedDataPreservesImportFreshness(t *testing.T) {
 	destination := testDB(t)
 	count, err := destination.CopyOrphanedDataFrom(source.Path())
 	require.NoError(t, err)
-	require.Equal(t, 6, count)
+	require.Equal(t, 7, count)
 	for _, row := range rows {
 		session, err := destination.GetSessionFull(t.Context(), row.id)
 		require.NoError(t, err)
 		require.NotNil(t, session)
 		assert.Equal(t, row.want, session.LastEntryUUID, row.id)
 	}
+}
+
+func TestCopyTrashedDataPreservesExistingImportFreshness(t *testing.T) {
+	source := testDB(t)
+	sourceMarker := "claude-ai:v1:full:old-reply"
+	for _, id := range []string{"existing", "inserted"} {
+		require.NoError(t, source.UpsertSession(t.Context(), Session{ID: id, Agent: "claude-ai", Project: "test", Machine: "test", LastEntryUUID: &sourceMarker}))
+		require.NoError(t, source.SoftDeleteSession(t.Context(), id))
+	}
+	require.NoError(t, source.Close())
+	destination := testDB(t)
+	destinationMarker := "claude-ai:v1:full:new-reply"
+	require.NoError(t, destination.UpsertSession(t.Context(), Session{ID: "existing", Agent: "claude-ai", Project: "test", Machine: "test", LastEntryUUID: &destinationMarker}))
+	_, err := destination.CopyTrashedDataFrom(source.Path())
+	require.NoError(t, err)
+	var marker string
+	require.NoError(t, destination.getReader().QueryRow(t.Context(), "SELECT last_entry_uuid FROM sessions WHERE id = 'existing'").Scan(&marker))
+	assert.Equal(t, destinationMarker, marker)
+	require.NoError(t, destination.getReader().QueryRow(t.Context(), "SELECT last_entry_uuid FROM sessions WHERE id = 'inserted'").Scan(&marker))
+	assert.Equal(t, sourceMarker, marker)
 }
 
 func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {
