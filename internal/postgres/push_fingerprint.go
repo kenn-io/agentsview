@@ -699,7 +699,7 @@ func loadPushToolCallFingerprints(
 			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
 			COALESCE(result_content_length, 0),
 			COALESCE(result_content, ''),
-			COALESCE(file_path, '')
+			COALESCE(file_path, ''), COALESCE(observed_outcome, ''), COALESCE(observed_repeat, ''), COALESCE(sequence_ending, '')
 		 FROM tool_calls
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, message_ordinal ASC, call_index ASC
@@ -715,11 +715,12 @@ func loadPushToolCallFingerprints(
 		var messageOrdinal, callIndex, resultContentLength int
 		var toolName, category, toolUseID, inputJSON string
 		var skillName, subagentSessionID, resultContent, filePath string
+		var observedOutcome, observedRepeat, sequenceEnding string
 		if err := rows.Scan(
 			&sessionID, &messageOrdinal, &callIndex, &toolName,
 			&category, &toolUseID, &inputJSON,
 			&skillName, &subagentSessionID, &resultContentLength,
-			&resultContent, &filePath,
+			&resultContent, &filePath, &observedOutcome, &observedRepeat, &sequenceEnding,
 		); err != nil {
 			return err
 		}
@@ -742,6 +743,7 @@ func loadPushToolCallFingerprints(
 			len(resultContent), resultContent,
 			len(filePath), filePath,
 		)
+		fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(observedOutcome), observedOutcome, len(observedRepeat), observedRepeat, len(sequenceEnding), sequenceEnding)
 	}
 	if err := rows.Err(); err != nil {
 		return err

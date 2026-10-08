@@ -53,7 +53,7 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 		SessionHasToolCalls:   true,
 		SessionHasContextData: true,
 		SessionQualitySignals: &manifestQualitySignals{
-			Version: 3, ShortPromptCount: 2, UnstructuredStart: true,
+			Version: db.CurrentQualitySignalVersion, ShortPromptCount: 2, UnstructuredStart: true,
 		},
 	}
 	messages := []db.Message{{
@@ -61,10 +61,10 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 		Content: "done",
 		ToolCalls: []db.ToolCall{{
 			MessageID: 88, SessionID: "session",
-			ToolName: "Task", SubagentSessionID: "child",
+			ToolName: "Grep", Category: "Grep", SubagentSessionID: "child", ResultContent: "No matches found",
 			ResultEvents: []db.ToolResultEvent{{
 				SubagentSessionID: contractOrigin + "~existing",
-				EventIndex:        0,
+				EventIndex:        0, Status: "completed", Content: "No matches found",
 			}},
 		}},
 	}}
@@ -116,6 +116,19 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	assert.Equal(t, m.UsageEvents[0].Cost, write.UsageEvents[0].Cost)
 	assert.Empty(t, write.Signals.SecretsRulesVersion)
 	assert.Zero(t, write.Signals.SecretLeakCount)
+	require.Len(t, write.Signals.ToolObservations, 1)
+	assert.Equal(t, "empty", write.Signals.ToolObservations[0].Outcome)
+	assert.Equal(t, *write.Session.StoredQualitySignals(), write.Signals.QualitySignals)
+	database := testExportDB(t)
+	_, err := database.WriteSessionBatchContext(t.Context(), []db.SessionBatchWrite{write})
+	require.NoError(t, err)
+	stored, err := database.GetAllMessages(t.Context(), importedID)
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	assert.Equal(t, new("empty"), stored[0].ToolCalls[0].ObservedOutcome)
+	session, err := database.GetSessionFull(t.Context(), importedID)
+	require.NoError(t, err)
+	assert.Equal(t, write.Session.StoredQualitySignals(), session.StoredQualitySignals())
 }
 
 func TestDowngradeImportedAssetReferencesKeepsInlineImages(t *testing.T) {

@@ -142,13 +142,15 @@ func (m *incrementalSignalMaintainer) MaintainTx(
 			continue // update targeted nothing stored
 		}
 		row := signals.ToolCallRow{
-			ToolName:       fact.ToolName,
-			Category:       fact.Category,
-			InputJSON:      fact.InputJSON,
-			ResultContent:  fact.ResultContent,
-			MessageOrdinal: fact.MessageOrdinal,
-			CallIndex:      fact.CallIndex,
-			EventStatus:    fact.EventStatus,
+			ToolName:             fact.ToolName,
+			Category:             fact.Category,
+			InputJSON:            fact.InputJSON,
+			ResultContent:        fact.ResultContent,
+			MessageOrdinal:       fact.MessageOrdinal,
+			CallIndex:            fact.CallIndex,
+			EventStatus:          fact.EventStatus,
+			ResultContentLength:  fact.ResultContentLength,
+			ResultContentUnknown: fact.ResultContentUnknown,
 		}
 		f := signals.ToolFact{
 			MessageOrdinal: fact.MessageOrdinal,
@@ -157,6 +159,7 @@ func (m *incrementalSignalMaintainer) MaintainTx(
 			ExactSignature: signals.ExactToolSignature(row),
 			CommandClass:   signals.CommandClass(row),
 		}
+		f.Sequence = signals.SequenceFactFor(row)
 		modified[f.CallPos] = f
 
 		// Only the events this transaction inserted need scanning:
@@ -214,6 +217,22 @@ func (m *incrementalSignalMaintainer) MaintainTx(
 	)
 	if !ok {
 		return nil, nil // out-of-window modification: reseed
+	}
+
+	complete := parser.TerminationComplete(sess.TerminationStatus)
+	prefix, changes := state.FoldToolSequences(appendedRows, modified, complete)
+	nextState.SequencePrefix = prefix
+	observations := make([]db.ToolObservationDelta, 0, len(changes))
+	for _, change := range changes {
+		fact := db.ToolObservationDelta{MessageOrdinal: change.Position.MessageOrdinal, CallIndex: change.Position.CallIndex}
+		if change.Call != nil {
+			fact.Outcome = new(string(change.Call.Outcome))
+			fact.Repeat = new(string(change.Call.Repeat))
+		}
+		if change.Ending != nil {
+			fact.SequenceEnding = new(string(*change.Ending))
+		}
+		observations = append(observations, fact)
 	}
 
 	// Message-derived aggregates.
@@ -395,6 +414,7 @@ func (m *incrementalSignalMaintainer) MaintainTx(
 	}
 
 	return &db.SignalDelta{
+		ToolObservations:  observations,
 		Update:            update,
 		InsertFindings:    insertFindings,
 		DeleteFindingKeys: deleteKeys,

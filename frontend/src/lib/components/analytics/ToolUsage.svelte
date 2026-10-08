@@ -1,4 +1,12 @@
 <script lang="ts">
+  import { onDestroy, untrack } from "svelte";
+  import { Button } from "@kenn-io/kit-ui";
+  import { AnalyticsService, type DbToolUsageAnalysis as ToolUsageAnalysis, type DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
+  import { agentLabel } from "../../utils/agents.js";
+  import { LatestRead } from "../../utils/latest-read.js";
+  import { isAbortError } from "../../api/runtime.js";
+  import { router } from "../../stores/router.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { DbToolCategoryCount as ToolCategoryCount } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
@@ -30,6 +38,65 @@
 
   const trendEntries = $derived(analytics.tools?.trend ?? []);
   const toolRows = $derived(analytics.tools?.by_tool ?? []);
+
+  let expanded = $state(false);
+  let selectedRate = $state<{ tool: string; category: string; metric: string } | null>(null);
+  let evidence = $state<SignalSessionExample[]>([]);
+  let evidenceTotal = $state<number | undefined>();
+  let nextOffset = $state<number | null>(null);
+  let evidenceLoading = $state(false);
+  let evidenceError = $state<string | null>(null);
+  const evidenceRead = new LatestRead();
+  const evidenceParams = $derived(analytics.filterParams());
+  const evidenceKey = $derived(JSON.stringify({ params: evidenceParams, tools: analytics.tools }));
+
+  $effect(() => {
+    const key = evidenceKey;
+    const selection = untrack(() => selectedRate);
+    if (selection) untrack(() => loadEvidence(selection.tool, selection.category, selection.metric));
+  });
+  onDestroy(() => evidenceRead.cancel());
+
+  async function loadEvidence(tool: string, category: string, metric: string, offset = 0) {
+    const signal = evidenceRead.begin();
+    selectedRate = { tool, category, metric };
+    evidenceLoading = true;
+    evidenceError = null;
+    if (offset === 0) { evidence = []; evidenceTotal = undefined; nextOffset = null; }
+    try {
+      const response = await AnalyticsService.getApiV1AnalyticsSignalSessions({ ...evidenceParams, signal: metric, tool_name: tool, tool_category: category, limit: 10, offset }, { signal });
+      if (!evidenceRead.isCurrent(signal)) return;
+      evidence = offset ? [...evidence, ...response.sessions] : response.sessions;
+      evidenceTotal = response.total;
+      nextOffset = response.next_offset ?? null;
+    } catch (error) {
+      if (isAbortError(error) || !evidenceRead.isCurrent(signal)) return;
+      evidenceError = error instanceof Error ? error.message : m.insights_page_could_not_load_examples();
+    } finally {
+      if (evidenceRead.finish(signal)) evidenceLoading = false;
+    }
+  }
+
+  function openSession(event: MouseEvent, example: SignalSessionExample) {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    router.navigateToSession(example.session_id, example.message_ordinal == null ? {} : { msg: String(example.message_ordinal) });
+    if (example.message_ordinal != null) ui.scrollToOrdinal(example.message_ordinal, example.session_id);
+  }
+
+  function rateTitle(tool: ToolUsageAnalysis, metric: string): string {
+    switch (metric) {
+      case "tool_empty_rate": return m.analytics_tool_empty_explanation({ count: tool.empty_calls ?? 0, total: tool.known_outcome_calls ?? 0 });
+      case "tool_repeat_rate": return m.analytics_tool_repeat_explanation({ count: tool.repeated_calls ?? 0, total: tool.analyzed_calls ?? 0 });
+      default: return m.analytics_tool_recovery_explanation({ count: tool.recovered_sequences ?? 0, total: (tool.recovered_sequences ?? 0) + (tool.abandoned_sequences ?? 0), open: tool.open_sequences ?? 0, unknown: tool.unknown_sequences ?? 0 });
+    }
+  }
+
+  const rateColumns = $derived([
+    { metric: "tool_empty_rate", label: m.analytics_tool_empty_rate(), field: "empty_rate" as const },
+    { metric: "tool_repeat_rate", label: m.analytics_tool_repeat_rate(), field: "repeat_rate" as const },
+    { metric: "tool_recovery_rate", label: m.analytics_tool_recovery_rate(), field: "recovery_rate" as const },
+  ]);
 
   const trendMax = $derived.by(() => {
     let max = 1;
@@ -145,16 +212,20 @@
             {m.analytics_tool_usage_top_tools()}
           </h4>
           <div class="tool-table">
-            {#each toolRows.slice(0, 8) as tool}
+            <div class="tool-row tool-labels">
+              <span></span><span>{m.analytics_tool_name()}</span><span>{m.analytics_tool_coverage()}</span><span>{m.analytics_tool_calls()}</span><span>{m.analytics_tool_sessions()}</span><span>{m.analytics_tool_share()}</span>
+              {#each rateColumns as column}<span>{column.label}</span>{/each}
+            </div>
+            {#each expanded ? toolRows : toolRows.slice(0, 8) as tool}
               <div class="tool-row">
                 <span
                   class="tool-dot"
                   style="background: {colorFor(tool.category)}"
                 ></span>
                 <span class="tool-name" title={tool.tool_name}>
-                  {tool.tool_name}
+                  {tool.tool_name}<small class="tool-kind">{tool.category}</small>
                 </span>
-                <span class="tool-category">{tool.category}</span>
+                <span class="tool-category" title={m.analytics_tool_coverage_explanation()}>{tool.analyzed_calls ?? 0}/{tool.call_count}</span>
                 <span class="tool-count">
                   {tool.call_count.toLocaleString()}
                 </span>
@@ -165,9 +236,46 @@
                   })}
                 </span>
                 <span class="tool-pct">{tool.pct}%</span>
+                {#each rateColumns as column}
+                  <span class="tool-rate" data-label={column.label} title={rateTitle(tool, column.metric)}>
+                    {#if tool[column.field] == null}
+                      {m.analytics_tool_unavailable()}
+                    {:else if tool[column.field] === 0}
+                      0.0%
+                    {:else}
+                      <Button surface="soft" size="sm" onclick={() => loadEvidence(tool.tool_name, tool.category, column.metric)} ariaLabel={`${tool.tool_name} ${column.label}`}>
+                        {(tool[column.field]! * 100).toFixed(1)}%
+                      </Button>
+                    {/if}
+                  </span>
+                {/each}
               </div>
             {/each}
           </div>
+          <p class="rate-note">{m.analytics_tool_recovery_note()}</p>
+          {#if toolRows.some((tool) => tool.missing_calls > 0)}<p class="rate-note">{m.analytics_tool_history_note()}</p>{/if}
+          {#if toolRows.length > 8}<Button surface="soft" size="sm" onclick={() => expanded = !expanded}>{expanded ? m.analytics_tool_show_less() : m.analytics_tool_show_all()}</Button>{/if}
+          {#if selectedRate}
+            <section class="tool-evidence" aria-live="polite">
+              <h4 class="section-title">{selectedRate.tool} ({selectedRate.category}) · {rateColumns.find((c) => c.metric === selectedRate?.metric)?.label}</h4>
+              {#if evidenceTotal != null}<p class="rate-note">{m.analytics_tool_evidence_count({ count: evidenceTotal, countLabel: evidenceTotal.toLocaleString() })}</p>{/if}
+              {#if evidenceLoading}<p class="rate-note">{m.insights_page_loading_examples()}</p>{/if}
+              {#if evidenceError}<p class="error">{evidenceError}</p><Button surface="soft" size="sm" onclick={() => loadEvidence(selectedRate!.tool, selectedRate!.category, selectedRate!.metric)}>{m.shared_retry()}</Button>{/if}
+              <div class="evidence-list">
+                {#each evidence as example}
+                  {@const project = example.project || m.insights_page_unassigned_project()}
+                  <a class="evidence-row" href={router.buildSessionHref(example.session_id, example.message_ordinal == null ? {} : { msg: String(example.message_ordinal) })} onclick={(event) => openSession(event, example)}>
+                    <span class="evidence-main">
+                      <span class="evidence-project" title={project}>{project}</span>
+                      <span class="evidence-meta">{agentLabel(example.agent)} · {m.analytics_tool_latest_matching_call({ date: example.date })}</span>
+                    </span>
+                    <span class="evidence-count">{m.analytics_tool_matching_calls({ count: example.signal_total })}</span>
+                  </a>
+                {/each}
+              </div>
+              {#if nextOffset != null}<Button surface="soft" size="sm" disabled={evidenceLoading} onclick={() => loadEvidence(selectedRate!.tool, selectedRate!.category, selectedRate!.metric, nextOffset!)}>{m.analytics_tool_more_sessions()}</Button>{/if}
+            </section>
+          {/if}
         </div>
       {/if}
 
@@ -277,13 +385,14 @@
 
   .tool-table {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    overflow-x: auto;
+    grid-template-columns: minmax(720px, 1fr);
     gap: 2px;
   }
 
   .tool-row {
     display: grid;
-    grid-template-columns: 8px minmax(80px, 1fr) minmax(52px, 72px) 48px 72px 40px;
+    grid-template-columns: 8px minmax(80px, 1fr) 64px 48px 72px 40px repeat(3, 76px);
     align-items: center;
     gap: 8px;
     min-height: 28px;
@@ -302,6 +411,8 @@
     height: 8px;
     border-radius: 50%;
   }
+
+  .tool-kind { display: block; font-size: 10px; color: var(--text-muted); }
 
   .tool-name {
     min-width: 0;
@@ -328,15 +439,39 @@
     color: var(--text-muted);
   }
 
-  @media (max-width: 640px) {
-    .tool-row {
-      grid-template-columns: 8px minmax(0, 1fr) 44px 36px;
-    }
-
-    .tool-category,
-    .tool-sessions {
-      display: none;
-    }
+  .tool-labels { font-size: 10px; color: var(--text-muted); }
+  .tool-rate { text-align: right; font-family: var(--font-mono); font-size: 10px; }
+  .rate-note { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
+  .tool-evidence { margin-top: 12px; }
+  .evidence-list { display: grid; gap: 2px; margin: 6px 0 8px; }
+  .evidence-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 4px;
+    border-radius: var(--radius-sm);
+    color: inherit;
+    text-decoration: none;
+  }
+  .evidence-row:hover { background: var(--bg-surface-hover); }
+  .evidence-row:hover .evidence-project { color: var(--accent-blue); }
+  .evidence-main { display: grid; gap: 2px; min-width: 0; }
+  .evidence-project {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .evidence-meta { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .evidence-count {
+    white-space: nowrap;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
   }
 
   .bar-list {
@@ -471,5 +606,19 @@
     font-size: 11px;
     color: inherit;
     cursor: pointer;
+  }
+  @media (max-width: 640px) {
+    .evidence-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .evidence-count { text-align: left; }
+    .tool-table { display: block; overflow: visible; }
+    .tool-labels { display: none; }
+    .tool-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 4px; }
+    .tool-dot, .tool-count, .tool-sessions, .tool-pct { display: none; }
+    .tool-name { grid-column: 1 / 3; }
+    .tool-category { text-align: right; }
+    .tool-rate { grid-column: auto; display: flex; flex-direction: column; gap: 4px; font-family: inherit; align-items: center; }
+    .tool-rate::before { content: attr(data-label); font-size: 10px; }
+    .tool-row > .tool-rate:nth-of-type(7) { grid-column: 1; }
+    .tool-rate { min-width: 0; }
   }
 </style>

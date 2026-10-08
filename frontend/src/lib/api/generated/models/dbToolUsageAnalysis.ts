@@ -3,9 +3,24 @@
  */
 
 export interface DbToolUsageAnalysis {
+  abandoned_sequences: number;
+  analyzed_calls: number;
   call_count: number;
   category: string;
+  empty_calls: number;
+  /** @nullable */
+  empty_rate: number | null;
+  known_outcome_calls: number;
+  missing_calls: number;
+  open_sequences: number;
   pct: number;
+  recovered_sequences: number;
+  /** @nullable */
+  recovery_rate: number | null;
+  /** @nullable */
+  repeat_rate: number | null;
+  repeated_calls: number;
   session_count: number;
   tool_name: string;
+  unknown_sequences: number;
 }

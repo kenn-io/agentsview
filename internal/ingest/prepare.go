@@ -156,6 +156,9 @@ func finalize(
 	var findings []db.SecretFinding
 	if derive {
 		signalUpdate, findings = ComputeSignalsAndSecrets(session, messages)
+		if options.ArchiveContent.OmitsToolContent() {
+			signalUpdate.ToolObservations = []db.ToolObservation{}
+		}
 	}
 	return PreparedSession{
 		Session: session, Messages: messages, UsageEvents: usageEvents,

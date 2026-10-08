@@ -137,6 +137,7 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	// matching scalar fields, then the quality scalar fields expected by the
 	// existing SQL kernel. This does not encode public JSON or omit hidden fields.
 	copyRawSignalFields(&p.Session, p.Signals)
+	db.ApplyToolObservations(p.Messages, p.Signals.ToolObservations)
 	for i := range p.UsageEvents {
 		p.UsageEvents[i].SessionID = id
 	}

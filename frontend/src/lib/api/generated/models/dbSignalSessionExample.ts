@@ -5,19 +5,19 @@
 export interface DbSignalSessionExample {
   agent: string;
   date: string;
-  edit_churn: number;
-  excerpt: string;
-  failure_signals: number;
+  edit_churn?: number;
+  excerpt?: string;
+  failure_signals?: number;
   /** @nullable */
   health_grade: string | null;
   /** @nullable */
   health_score: number | null;
-  is_automated: boolean;
+  is_automated?: boolean;
   message_ordinal?: number;
-  outcome: string;
+  outcome?: string;
   project: string;
   reason_code: string;
-  retries: number;
+  retries?: number;
   session_id: string;
   signal_total: number;
 }

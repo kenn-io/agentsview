@@ -652,6 +652,7 @@ func TestResyncProjectsArchivedSessionsOntoArchiveContent(t *testing.T) {
 				require.NotNil(t, stored.FirstMessage)
 				assert.Contains(t, joinedContent(messages), "the build tool is missing")
 				require.Len(t, calls, 1)
+				assert.Nil(t, calls[0].ObservedOutcome)
 				assert.Empty(t, calls[0].InputJSON)
 				assert.Empty(t, calls[0].ResultContent)
 				assert.Equal(t, len("make: command not found"), calls[0].ResultContentLength)

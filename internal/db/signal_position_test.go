@@ -9,6 +9,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestToolCallsByPositionResultEvidence(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "project-a")
+	cases := []struct {
+		summary string
+		events  []ToolResultEvent
+		unknown bool
+		length  int
+	}{
+		{"[image]", nil, true, 7},
+		{"[image]", []ToolResultEvent{{Content: ""}}, false, 7},
+		{"", nil, false, 7},
+		{"", []ToolResultEvent{{Content: ""}}, false, 0},
+		{"", []ToolResultEvent{{AgentID: " a ", Content: "content"}, {AgentID: "a", Content: "[image]"}, {AgentID: "a", Content: ""}}, true, 0},
+	}
+	positions := make([]ToolCallPosition, len(cases))
+	for i, fixture := range cases {
+		for j := range fixture.events {
+			fixture.events[j].EventIndex = j
+		}
+		positions[i] = ToolCallPosition{MessageOrdinal: i}
+		insertMessages(t, d, Message{SessionID: "s1", Ordinal: i, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", Category: "Read", ResultContent: fixture.summary, ResultContentLength: fixture.length, ResultEvents: fixture.events}}})
+	}
+	tx, err := d.getWriter().Begin(t.Context())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, tx.Rollback()) }()
+	facts, err := (signalTxQuery{tx: tx, sessionID: "s1"}).ToolCallsByPosition(t.Context(), positions)
+	require.NoError(t, err)
+	require.Len(t, facts, len(cases))
+	for _, fact := range facts {
+		assert.Equal(t, cases[fact.MessageOrdinal].length, fact.ResultContentLength)
+		assert.Equal(t, cases[fact.MessageOrdinal].unknown, fact.ResultContentUnknown, "incremental classification %d", fact.MessageOrdinal)
+	}
+}
+
 func TestToolCallsByPositionWithinSQLiteVariableLimit(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")

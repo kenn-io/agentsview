@@ -1305,8 +1305,8 @@ func insertToolCalls(
 					message_id, session_id, tool_name, category,
 					call_index, tool_use_id, input_json, skill_name,
 					result_content_length, result_content,
-					subagent_session_id, file_path
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					subagent_session_id, file_path, observed_outcome, observed_repeat, sequence_ending
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				m.ID, m.SessionID, tc.ToolName, tc.Category,
 				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
 				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
@@ -1314,7 +1314,7 @@ func insertToolCalls(
 					tc.ResultContent, tc.ResultEvents,
 				)),
 				nilEmpty(tc.SubagentSessionID),
-				nilEmpty(tc.FilePath),
+				nilEmpty(tc.FilePath), tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding,
 			); err != nil {
 				return fmt.Errorf("inserting duckdb tool_call %s/%d/%d: %w",
 					m.SessionID, m.Ordinal, i, err)

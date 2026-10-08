@@ -1371,15 +1371,20 @@ func duckQueryChunked(ids []string, fn func(chunk []string) error) error {
 	return nil
 }
 
-func (s *Store) GetAnalyticsTools(
+func (s *Store) GetAnalyticsTools(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
+	rows, err := s.analyticsToolRows(ctx, f)
+	return db.BuildToolsAnalytics(rows), err
+}
+
+func (s *Store) analyticsToolRows(
 	ctx context.Context, f db.AnalyticsFilter,
-) (db.ToolsAnalyticsResponse, error) {
+) ([]db.ToolAnalyticsRow, error) {
 	sessionPred, sessionArgs := duckAnalyticsToolSessionWindow(f)
 	sessions, err := s.analyticsSessionsFiltered(
 		ctx, f, false, false, sessionPred, sessionArgs,
 	)
 	if err != nil {
-		return db.ToolsAnalyticsResponse{}, err
+		return nil, err
 	}
 	meta := map[string]duckAnalyticsSession{}
 	var ids []string
@@ -1388,7 +1393,7 @@ func (s *Store) GetAnalyticsTools(
 		ids = append(ids, r.id)
 	}
 	if len(ids) == 0 {
-		return db.BuildToolsAnalytics(nil), nil
+		return nil, nil
 	}
 	var toolRows []db.ToolAnalyticsRow
 	err = duckQueryChunked(ids, func(chunk []string) error {
@@ -1397,19 +1402,27 @@ func (s *Store) GetAnalyticsTools(
 		args = append(args, modelArgs...)
 		from, to := duckAnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
-		args = append(args, windowArgs...)
+
 		query := `SELECT tc.session_id, tc.category,
 				TRIM(COALESCE(tc.tool_name, '')), COUNT(*),
-				MAX(m.timestamp)
+				MAX(m.timestamp), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
 				FROM tool_calls tc
+			JOIN sessions s ON s.id = tc.session_id
 				LEFT JOIN messages m
 					ON m.session_id = tc.session_id
 					AND m.id = tc.message_id
 				WHERE tc.session_id IN ` + ph
+		for _, predicate := range db.ToolSelectionPredicates("tc", "s.quality_signal_version", f, func(value string) string { args = append(args, value); return "?" }) {
+			if modelPred != "" {
+				modelPred += " AND "
+			}
+			modelPred += predicate
+		}
 		if modelPred != "" {
 			query += `
 				AND ` + modelPred
 		}
+		args = append(args, windowArgs...)
 		query += duckAnalyticsAndClause(windowPred)
 		query += `
 				GROUP BY tc.session_id, tc.category,
@@ -1423,8 +1436,9 @@ func (s *Store) GetAnalyticsTools(
 		for rows.Next() {
 			var sid, cat, toolName string
 			var ts any
-			var count int
-			if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
+			var count, ordinal int
+			var facts db.ToolEffectivenessCounts
+			if err := rows.Scan(append([]any{&sid, &cat, &toolName, &count, &ts, &ordinal}, facts.ScanTargets()...)...); err != nil {
 				return err
 			}
 			r, ok := meta[sid]
@@ -1438,6 +1452,7 @@ func (s *Store) GetAnalyticsTools(
 				continue
 			}
 			toolRows = append(toolRows, db.ToolAnalyticsRow{
+				ToolEffectivenessCounts: facts, Ordinal: ordinal, Project: r.project,
 				SessionID: sid,
 				Category:  cat,
 				ToolName:  toolName,
@@ -1449,9 +1464,9 @@ func (s *Store) GetAnalyticsTools(
 		return rows.Err()
 	})
 	if err != nil {
-		return db.ToolsAnalyticsResponse{}, err
+		return nil, err
 	}
-	return db.BuildToolsAnalytics(toolRows), nil
+	return toolRows, nil
 }
 
 // GetAnalyticsSkills returns skill usage analytics. granularity picks
@@ -2102,6 +2117,14 @@ func (s *Store) GetAnalyticsSignalSessions(
 	signal string,
 	limit int,
 ) (db.SignalSessionsResponse, error) {
+	if db.IsToolMetric(signal) {
+		f.ToolMetric = signal
+		rows, err := s.analyticsToolRows(ctx, f)
+		if err != nil {
+			return db.SignalSessionsResponse{}, err
+		}
+		return db.BuildToolMetricEvidence(rows, signal, f.ToolName, f.EvidenceOffset, limit), nil
+	}
 	if !db.IsSupportedAnalyticsSignal(signal) {
 		return db.SignalSessionsResponse{}, db.ErrUnsupportedAnalyticsSignal
 	}

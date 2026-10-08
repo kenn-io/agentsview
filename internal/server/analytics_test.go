@@ -464,6 +464,42 @@ func TestAnalyticsSignalSessionsRejectsUnsupportedSignal(t *testing.T) {
 	assertStatus(t, w, http.StatusBadRequest)
 }
 
+func TestAnalyticsToolEvidenceOptionalCategory(t *testing.T) {
+	te := setup(t)
+	for i, call := range []db.ToolCall{{ToolName: "readFile", Category: "Read"}, {ToolName: "readFile", Category: "MCP"}, {ToolName: "Read", Category: "Read"}} {
+		id := fmt.Sprintf("tool-filter-%d", i)
+		dbtest.SeedSession(t, te.db, id, "fixture", func(s *db.Session) { s.StartedAt = new("2026-04-26T10:00:00Z"); s.UserMessageCount = 2 })
+		require.NoError(t, te.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 1, Role: "assistant", Timestamp: "2026-04-26T10:00:00Z", ToolCalls: []db.ToolCall{call}}}))
+		require.NoError(t, te.db.UpdateSessionSignals(t.Context(), id, db.SessionSignalUpdate{ToolObservations: []db.ToolObservation{{MessageOrdinal: 1, Outcome: "empty", Repeat: "none"}}, QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion, UnstructuredStart: true}}))
+	}
+	w := te.get(t, "/api/v1/analytics/signal-sessions?signal=tool_empty_rate&from=2026-04-26&to=2026-04-26&tool_name=readFile&tool_category=MCP")
+	assertStatus(t, w, http.StatusOK)
+	got := decode[db.SignalSessionsResponse](t, w)
+	require.Len(t, got.Sessions, 1)
+	document := decode[map[string]any](t, w)
+	for _, row := range document["sessions"].([]any) {
+		for _, key := range []string{"failure_signals", "retries", "edit_churn", "is_automated", "outcome", "excerpt"} {
+			assert.NotContains(t, row.(map[string]any), key)
+		}
+	}
+	path := "/api/v1/analytics/signal-sessions?signal=unstructured_start&from=2026-04-26&to=2026-04-26"
+	w = te.get(t, path+"&offset=0")
+	assertStatus(t, w, http.StatusOK)
+	quality := decode[map[string]any](t, w)
+	assert.NotContains(t, quality, "total")
+	assert.NotContains(t, quality, "next_offset")
+	require.Len(t, quality["sessions"], 3)
+	for _, row := range quality["sessions"].([]any) {
+		assert.Equal(t, false, row.(map[string]any)["is_automated"])
+		for _, key := range []string{"failure_signals", "retries", "edit_churn"} {
+			assert.InDelta(t, 0, row.(map[string]any)[key], 0)
+		}
+	}
+	for _, query := range []string{"&offset=1", "&tool_name=readFile", "&tool_category=Read"} {
+		assertStatus(t, te.get(t, path+query), http.StatusBadRequest)
+	}
+}
+
 func TestAnalyticsEndpoints_DefaultParams(t *testing.T) {
 	te, _ := setupAnalyticsEnv(t)
 

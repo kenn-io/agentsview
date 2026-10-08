@@ -4690,6 +4690,15 @@ func TestBackfillToolCallAgentStateTracksFirstAndLatest(t *testing.T) {
 		  AND agent_id = 'agent-a'`,
 		"s1", 0, 0,
 	).Scan(&first, &latest))
+	_, err = d.getWriter().Exec(t.Context(), "UPDATE tool_call_occurrence_agent_state SET latest_evidence_event_index=-1 WHERE session_id='s1'")
+	require.NoError(t, err)
+	tx, err = d.getWriter().Begin(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, ensureToolCallAgentStateTx(t.Context(), tx, "s1", ToolCallPosition{}))
+	require.NoError(t, tx.Commit())
+	var evidence int
+	require.NoError(t, d.Reader().QueryRow(t.Context(), "SELECT latest_evidence_event_index FROM tool_call_occurrence_agent_state WHERE session_id='s1'").Scan(&evidence))
+	assert.Equal(t, 2, evidence)
 	assert.Equal(t, 0, first)
 	assert.Equal(t, 2, latest,
 		"backfill keeps the newest event index per agent")
@@ -7818,6 +7827,12 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     result_content_length INTEGER,
     subagent_session_id TEXT
 );
+CREATE TABLE tool_call_occurrence_agent_state (
+ session_id TEXT NOT NULL, message_ordinal INTEGER NOT NULL, call_index INTEGER NOT NULL,
+ agent_id TEXT NOT NULL, first_event_index INTEGER NOT NULL, latest_event_index INTEGER NOT NULL,
+ PRIMARY KEY(session_id,message_ordinal,call_index,agent_id)
+);
+INSERT INTO tool_call_occurrence_agent_state VALUES ('keep-me',0,0,'',0,0);
 CREATE TABLE IF NOT EXISTS insights (
     id          INTEGER PRIMARY KEY,
     type        TEXT NOT NULL,
@@ -7855,6 +7870,9 @@ CREATE TABLE IF NOT EXISTS insights (
 	requireNoError(t, err, "Open with legacy schema")
 	defer d.Close()
 
+	var coordinate int
+	require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT latest_evidence_event_index FROM tool_call_occurrence_agent_state WHERE session_id='keep-me'").Scan(&coordinate))
+	assert.Equal(t, -1, coordinate)
 	// Session data must survive.
 	ctx := t.Context()
 	s, err := d.GetSession(ctx, "keep-me")

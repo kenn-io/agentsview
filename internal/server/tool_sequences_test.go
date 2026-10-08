@@ -388,12 +388,33 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 	require.Len(t, streamed.Sequences[0].Calls, 10)
 	assert.Equal(t, 260, streamed.Sequences[0].Calls[9].Ordinal)
 
+	for _, id := range sessionIDs {
+		session, err := te.db.GetSessionFull(t.Context(), id)
+		require.NoError(t, err)
+		messages, err := te.db.GetAllMessages(t.Context(), id)
+		require.NoError(t, err)
+		update, _ := ingest.ComputeSignalsAndSecrets(*session, messages)
+		require.NoError(t, te.db.UpdateSessionSignals(t.Context(), id, update))
+	}
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	_, err := duckdb.Push(t.Context(), path, te.db, "test-installation", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	store, err := duckdb.NewStore(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26", ToolName: "Grep"}
+	wantRates, err := te.db.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	gotRates, err := store.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantRates, gotRates)
+	wantEvidence, err := te.db.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	require.NotNil(t, wantEvidence.Total)
+	require.Positive(t, *wantEvidence.Total)
+	gotEvidence, err := store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	assert.Equal(t, wantEvidence, gotEvidence)
 	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
 	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
 	for sessionID, sqlite := range source {

@@ -327,7 +327,10 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     result_content        TEXT,
     subagent_session_id TEXT,
     file_path  TEXT,
-    call_index INTEGER
+    call_index INTEGER,
+    observed_outcome TEXT,
+    observed_repeat TEXT,
+    sequence_ending TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session
@@ -1416,6 +1419,7 @@ CREATE TABLE IF NOT EXISTS tool_call_occurrence_agent_state (
     agent_id           TEXT NOT NULL,
     first_event_index  INTEGER NOT NULL,
     latest_event_index INTEGER NOT NULL,
+    latest_evidence_event_index INTEGER DEFAULT -1,
     PRIMARY KEY (session_id, message_ordinal, call_index, agent_id)
 );
 

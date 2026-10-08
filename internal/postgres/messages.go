@@ -574,7 +574,7 @@ func (s *Store) attachToolCallsBatch(
 			COALESCE(result_content, ''),
 			COALESCE(subagent_session_id, ''),
 			COALESCE(file_path, ''),
-			COALESCE(call_index, 0)
+			COALESCE(call_index, 0), observed_outcome, observed_repeat, sequence_ending
 		FROM tool_calls
 		WHERE session_id = $1
 			AND message_ordinal IN (%s)
@@ -598,7 +598,7 @@ func (s *Store) attachToolCallsBatch(
 			&tc.ToolUseID, &tc.InputJSON, &tc.SkillName,
 			&tc.ResultContentLength, &tc.ResultContent,
 			&tc.SubagentSessionID,
-			&tc.FilePath, &tc.CallIndex,
+			&tc.FilePath, &tc.CallIndex, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning tool_call: %w", err,

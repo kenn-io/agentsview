@@ -230,7 +230,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 	rows, err := s.queryContext(ctx, `
 		SELECT message_ordinal, call_index, tool_name, category,
 			tool_use_id, input_json, skill_name, result_content_length,
-			result_content, subagent_session_id, file_path
+			result_content, subagent_session_id, file_path, observed_outcome, observed_repeat, sequence_ending
 		FROM tool_calls
 		WHERE session_id = ?
 		ORDER BY message_ordinal, call_index`, sessionID)
@@ -244,7 +244,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 		if err := rows.Scan(&ordinal, &callIndex, &tc.ToolName,
 			&tc.Category, &tc.ToolUseID, &tc.InputJSON,
 			&tc.SkillName, &tc.ResultContentLength,
-			&tc.ResultContent, &tc.SubagentSessionID, &tc.FilePath); err != nil {
+			&tc.ResultContent, &tc.SubagentSessionID, &tc.FilePath, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding); err != nil {
 			return fmt.Errorf("scanning clickhouse tool call: %w", err)
 		}
 		tc.CallIndex = callIndex

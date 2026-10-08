@@ -177,6 +177,38 @@ func TestCanceledResyncDoesNotRecordSourceFailure(t *testing.T) {
 // hand off warm skip state so an immediate sync is a no-op.
 func TestResyncBuildThenSwapMatchesResyncAll(t *testing.T) {
 	e, database, root := newResyncSplitEngine(t)
+	for _, id := range []string{"orphan", "keep1"} {
+		session, err := database.GetSessionFull(t.Context(), id)
+		require.NoError(t, err)
+		session.TerminationStatus = new("clean")
+		require.NoError(t, database.UpsertSession(t.Context(), *session))
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), id, []db.Message{
+			{SessionID: id, Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Grep", Category: "Grep", ResultContent: "No matches found"}}},
+			{SessionID: id, Ordinal: 1, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read", ResultContent: "file contents"}}},
+		}))
+		require.NoError(t, database.UpdateSessionSignals(t.Context(), id, db.SessionSignalUpdate{HealthScore: new(94), HealthGrade: new("A"), QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion, ShortPromptCount: 2, MissingVerificationCount: 3}}))
+		messages, err := database.GetAllMessages(t.Context(), id)
+		require.NoError(t, err)
+		require.Nil(t, messages[0].ToolCalls[0].ObservedOutcome)
+	}
+	require.NoError(t, database.UpdateToolObservations(t.Context(), "keep1", []db.ToolObservation{{Outcome: "empty", Repeat: "none", SequenceEnding: new("recovered")}, {MessageOrdinal: 1, Outcome: "content", Repeat: "none"}}))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "keep1"))
+	assertObservations := func(d *db.DB) {
+		for _, id := range []string{"orphan", "keep1"} {
+			session, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, new(94), session.HealthScore)
+			assert.Equal(t, 2, session.ShortPromptCount)
+			assert.Equal(t, 3, session.MissingVerificationCount)
+			messages, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			assert.Equal(t, new("empty"), messages[0].ToolCalls[0].ObservedOutcome)
+			assert.Equal(t, new("recovered"), messages[0].ToolCalls[0].SequenceEnding)
+			assert.Equal(t, new("content"), messages[1].ToolCalls[0].ObservedOutcome)
+			assert.Equal(t, new("none"), messages[1].ToolCalls[0].ObservedRepeat)
+		}
+	}
 	require.NoError(t, os.Remove(filepath.Join(root, "project", "orphan.jsonl")))
 
 	tempPath, stats, err := e.ResyncBuild(t.Context(), nil)
@@ -196,6 +228,10 @@ func TestResyncBuildThenSwapMatchesResyncAll(t *testing.T) {
 	assert.Positive(t, stats.TotalSessions)
 	assert.NoFileExists(t, tempPath)
 
+	assertObservations(database)
+	second := e.ResyncAll(t.Context(), nil)
+	require.False(t, second.Aborted, "warnings: %v", second.Warnings)
+	assertObservations(database)
 	warm := e.SyncAll(t.Context(), nil)
 	assert.Zero(t, warm.Synced, "persisted skip state must survive the swap")
 }
@@ -748,6 +784,37 @@ func requireOriginalArchiveServes(t *testing.T, e *Engine, database *db.DB) {
 // the replacement while later build steps commit, so the final truncate
 // checkpoint reports busy. The build must abort before closing or installing.
 func TestResyncAbortsWhenReplacementCheckpointFails(t *testing.T) {
+	for _, failure := range []string{"copied signals", "copied cancellation"} {
+		t.Run(failure, func(t *testing.T) {
+			e, database, root := newResyncSplitEngine(t)
+			require.NoError(t, os.Remove(filepath.Join(root, "project", "orphan.jsonl")))
+			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: "orphan", Ordinal: 2, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read", ResultContent: "content"}}}}))
+			require.NoError(t, database.UpdateSessionSignals(t.Context(), "orphan", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			stats, err := e.resyncAllWithOptionsAndOperations(ctx, nil, RebuildOptions{}, rebuildOperations{
+				rebuildUsageIndexes: func(ctx context.Context, newDB *db.DB) error {
+					if err := newDB.RebuildBulkImportIndexes(ctx); err != nil {
+						return err
+					}
+					if failure == "copied cancellation" {
+						cancel()
+						return nil
+					}
+					return newDB.Update(ctx, func(tx *sql.Tx) error {
+						_, err := tx.ExecContext(t.Context(), `CREATE TRIGGER fail_copied_signals BEFORE UPDATE OF observed_outcome ON tool_calls WHEN OLD.session_id = 'orphan' BEGIN SELECT RAISE(ABORT, 'fixture signal failure'); END`)
+						return err
+					})
+				},
+			})
+			require.Error(t, err)
+			assert.True(t, stats.Aborted)
+			assert.False(t, stats.ArchiveRebuilt)
+			assert.Same(t, database, e.db)
+			assert.Contains(t, stats.Warnings[len(stats.Warnings)-1], "copied session signal computation failed")
+			requireOriginalArchiveServes(t, e, database)
+		})
+	}
 	e, database, _ := newResyncSplitEngine(t)
 	restore := db.SetCloseDrainTimeoutForTest(100 * time.Millisecond)
 	defer restore()

@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -45,6 +46,14 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	}
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), boundaryID, messages))
 	sessionIDs = append(sessionIDs, boundaryID)
+	for _, id := range sessionIDs {
+		session, err := local.GetSessionFull(t.Context(), id)
+		require.NoError(t, err)
+		messages, err := local.GetAllMessages(t.Context(), id)
+		require.NoError(t, err)
+		update, _ := ingest.ComputeSignalsAndSecrets(*session, messages)
+		require.NoError(t, local.UpdateSessionSignals(t.Context(), id, update))
+	}
 	localHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "local"}, local, nil).Handler()
 
 	dsn, database := chtest.FreshDatabase(t)
@@ -58,6 +67,19 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	store, err := clickhouse.NewStore(t.Context(), target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26", ToolName: "Grep"}
+	wantRates, err := local.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	gotRates, err := store.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantRates, gotRates)
+	wantEvidence, err := local.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	require.NotNil(t, wantEvidence.Total)
+	require.Positive(t, *wantEvidence.Total)
+	gotEvidence, err := store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	assert.Equal(t, wantEvidence, gotEvidence)
 	remoteHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "remote"}, store, nil).Handler()
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	_, err = duckdb.Push(t.Context(), path, local, "tool-sequences-boundary", storage.MirrorPushOptions{}, true, nil)

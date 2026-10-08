@@ -151,3 +151,9 @@ func hasOrphanedToolCall(messages []ParsedMessage) bool {
 	}
 	return false
 }
+
+// TerminationComplete reports whether a stored termination status means the
+// session has ended, so a trailing failed tool sequence counts as abandoned.
+func TerminationComplete(status *string) bool {
+	return status != nil && (*status == string(TerminationClean) || *status == string(TerminationAwaitingUser))
+}

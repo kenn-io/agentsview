@@ -116,6 +116,9 @@ GRANT INSERT ON hosted_sessions.raw_device_tokens,
   hosted_sessions.raw_session_public_aliases,
   hosted_sessions.raw_embedding_outbox TO hosted_runtime;
 
+GRANT UPDATE (observed_outcome, observed_repeat, sequence_ending)
+  ON hosted_sessions.tool_calls TO hosted_runtime;
+
 GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
   hosted_sessions.raw_source_heads, hosted_sessions.raw_ingest_jobs,
   hosted_sessions.raw_source_projections, hosted_sessions.raw_session_groups,
@@ -438,6 +441,9 @@ Explicit hosted mode uses `raw_tenant` and requires the full hosted preflight;
 missing, startup logs `raw-sync routes disabled; missing requirements:` followed
 by the exact missing table privileges, sequence access, or read-only transaction
 setting.
+
+Tool effectiveness refreshes also require the three `tool_calls` column UPDATE
+grants shown above. Existing table-wide UPDATE grants satisfy this requirement.
 
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.

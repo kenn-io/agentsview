@@ -92,7 +92,7 @@ func TestStagedPublishCancellationPreservesTranscript(t *testing.T) {
 					ToolUseID: "call", ToolName: "exec_command", Category: "Bash",
 				}},
 			}}
-			err := d.ReplaceSessionContentStaged(ctx, "s1", msgs, staged, nil, func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
+			err := d.ReplaceSessionContentStaged(ctx, "s1", msgs, staged, nil, func(map[string]StagedToolVerdict) (SessionSignalUpdate, []SecretFinding, error) {
 				return SessionSignalUpdate{}, nil, nil
 			})
 			require.ErrorIs(t, err, context.Canceled)
@@ -139,7 +139,7 @@ func TestStagedPublishWithoutSignalsInvalidatesChangedTranscript(t *testing.T) {
 		ToolCalls: []ToolCall{{ToolUseID: "call", ToolName: "exec_command", Category: "Bash"}},
 	}}
 	require.NoError(t, d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil,
-		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
+		func(map[string]StagedToolVerdict) (SessionSignalUpdate, []SecretFinding, error) {
 			signals := SessionSignalUpdate{
 				QualitySignals:  QualitySignals{Version: CurrentQualitySignalVersion},
 				SecretLeakCount: 1, SecretsRulesVersion: "test-rules",

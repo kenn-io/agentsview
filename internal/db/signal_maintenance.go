@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/secrets"
+	"go.kenn.io/agentsview/internal/signals"
 )
 
 // ToolCallSignalFact is the bounded per-call fact set the incremental signal
@@ -16,14 +17,16 @@ import (
 // columns extractToolCallRows reads from stored rows, so facts the maintainer
 // sees match a full recompute over GetAllMessages.
 type ToolCallSignalFact struct {
-	MessageOrdinal int
-	CallIndex      int
-	ToolName       string
-	Category       string
-	InputJSON      string
-	ResultContent  string
-	EventStatus    string
-	ToolUseID      string
+	ResultContentLength  int
+	ResultContentUnknown bool
+	MessageOrdinal       int
+	CallIndex            int
+	ToolName             string
+	Category             string
+	InputJSON            string
+	ResultContent        string
+	EventStatus          string
+	ToolUseID            string
 }
 
 // FindingDeleteKey addresses secret findings by their natural coordinates:
@@ -39,11 +42,21 @@ type FindingDeleteKey struct {
 // the incremental write transaction, atomically with the message rows and
 // the parser checkpoint.
 type SignalDelta struct {
+	ToolObservations  []ToolObservationDelta
 	Update            SessionSignalUpdate
 	InsertFindings    []SecretFinding
 	DeleteFindingKeys []FindingDeleteKey
 	// State is the post-delta compact state row to persist (SQLite-only).
 	State *SessionSignalState
+}
+
+// ToolObservationDelta preserves call facts when only a crossing start's ending changes.
+type ToolObservationDelta struct {
+	MessageOrdinal int
+	CallIndex      int
+	Outcome        *string
+	Repeat         *string
+	SequenceEnding *string
 }
 
 // SessionSignalState is one session's persisted compact signal state row.
@@ -70,6 +83,7 @@ type SessionSignalInputSnapshot struct {
 	HasEndedAt           bool
 	PeakContextTokens    int
 	HasPeakContextTokens bool
+	TerminationStatus    string
 }
 
 // SignalInputSnapshot returns the signal-driving session-row inputs from s.
@@ -89,6 +103,9 @@ func SignalInputSnapshot(s Session) (SessionSignalInputSnapshot, error) {
 	if s.EndedAt != nil {
 		snapshot.EndedAt = *s.EndedAt
 		snapshot.HasEndedAt = true
+	}
+	if s.TerminationStatus != nil {
+		snapshot.TerminationStatus = *s.TerminationStatus
 	}
 	return snapshot, nil
 }
@@ -150,7 +167,7 @@ func (q signalTxQuery) Session(
 	var unstructuredStart int
 	var cpMax sql.NullFloat64
 	var healthScore sql.NullInt64
-	var healthGrade, endedAt, signalsPending sql.NullString
+	var healthGrade, endedAt, signalsPending, termination sql.NullString
 	err := q.tx.QueryRowContext(ctx, `
 		SELECT message_count, is_automated, ended_at,
 		       peak_context_tokens, has_peak_context_tokens,
@@ -165,7 +182,7 @@ func (q signalTxQuery) Session(
 		       quality_signal_version, short_prompt_count,
 		       unstructured_start, missing_success_criteria_count,
 		       missing_verification_count, duplicate_prompt_count,
-		       no_code_context_count, runaway_tool_loop_count
+		       no_code_context_count, runaway_tool_loop_count, termination_status
 		 FROM sessions WHERE id = ?`,
 		q.sessionID,
 	).Scan(
@@ -182,7 +199,7 @@ func (q signalTxQuery) Session(
 		&s.QualitySignalVersion, &s.ShortPromptCount,
 		&unstructuredStart, &s.MissingSuccessCriteriaCount,
 		&s.MissingVerificationCount, &s.DuplicatePromptCount,
-		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
+		&s.NoCodeContextCount, &s.RunawayToolLoopCount, &termination,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -191,6 +208,9 @@ func (q signalTxQuery) Session(
 		return nil, fmt.Errorf(
 			"loading session signal snapshot %s: %w", q.sessionID, err,
 		)
+	}
+	if termination.Valid {
+		s.TerminationStatus = &termination.String
 	}
 	s.ID = q.sessionID
 	s.IsAutomated = isAutomated != 0
@@ -261,7 +281,7 @@ func (q signalTxQuery) TrailingToolCalls(
 		SELECT m.ordinal, COALESCE(tc.call_index, 0),
 		       tc.tool_name, tc.category, COALESCE(tc.input_json, ''),
 		       `+ToolCallResultContentSQL("tc", "m.ordinal")+`,
-		       COALESCE(tc.tool_use_id, ''),
+		       COALESCE(tc.result_content_length, 0), COALESCE(tc.tool_use_id, ''),
 		       COALESCE((
 		           SELECT tre.status FROM tool_result_events tre
 		           WHERE tre.session_id = tc.session_id
@@ -288,7 +308,7 @@ func (q signalTxQuery) TrailingToolCalls(
 		var f ToolCallSignalFact
 		if err := rows.Scan(
 			&f.MessageOrdinal, &f.CallIndex, &f.ToolName, &f.Category,
-			&f.InputJSON, &f.ResultContent, &f.ToolUseID, &f.EventStatus,
+			&f.InputJSON, &f.ResultContent, &f.ResultContentLength, &f.ToolUseID, &f.EventStatus,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning trailing tool call %s: %w", q.sessionID, err,
@@ -342,6 +362,7 @@ func (q signalTxQuery) toolCallsByPositionChunk(
 		args = append(args, position.MessageOrdinal, position.CallIndex)
 	}
 	args = append(args, q.sessionID)
+	const eventCountSQL = `(SELECT COUNT(*) FROM (SELECT 1 FROM tool_result_events tre WHERE tre.session_id=tc.session_id AND tre.tool_call_message_ordinal=m.ordinal AND tre.call_index=COALESCE(tc.call_index,0) LIMIT 2))`
 	rows, err := q.tx.QueryContext(ctx, `
 		WITH wanted(message_ordinal, call_index) AS (
 			VALUES `+multiRowPlaceholders(len(positions), 2)+`
@@ -349,7 +370,7 @@ func (q signalTxQuery) toolCallsByPositionChunk(
 		SELECT m.ordinal, COALESCE(tc.call_index, 0),
 		       tc.tool_name, tc.category, COALESCE(tc.input_json, ''),
 		       `+ToolCallResultContentSQL("tc", "m.ordinal")+`,
-		       COALESCE(tc.tool_use_id, ''),
+		       COALESCE(tc.result_content_length, 0), COALESCE(tc.tool_use_id, ''),
 		       COALESCE((
 		           SELECT tre.status FROM tool_result_events tre
 		           WHERE tre.session_id = tc.session_id
@@ -357,7 +378,9 @@ func (q signalTxQuery) toolCallsByPositionChunk(
 		             AND tre.call_index = COALESCE(tc.call_index, 0)
 		           ORDER BY tre.event_index DESC, tre.id DESC
 		           LIMIT 1
-		       ), '')
+		       ), ''),
+		       `+eventCountSQL+`,
+		       CASE WHEN `+eventCountSQL+`=1 THEN COALESCE((SELECT tre.content FROM tool_result_events tre WHERE tre.session_id=tc.session_id AND tre.tool_call_message_ordinal=m.ordinal AND tre.call_index=COALESCE(tc.call_index,0) LIMIT 1), '') ELSE '' END
 		FROM wanted
 		JOIN messages m ON m.ordinal = wanted.message_ordinal
 		JOIN tool_calls tc ON tc.message_id = m.id
@@ -372,19 +395,78 @@ func (q signalTxQuery) toolCallsByPositionChunk(
 	}
 	defer rows.Close()
 	var facts []ToolCallSignalFact
+	counts := make([]int, 0, len(positions))
+	events := make([][]signals.ResultContentEvidence, 0, len(positions))
 	for rows.Next() {
 		var f ToolCallSignalFact
+		count := 0
+		var soleContent string
 		if err := rows.Scan(
 			&f.MessageOrdinal, &f.CallIndex, &f.ToolName, &f.Category,
-			&f.InputJSON, &f.ResultContent, &f.ToolUseID, &f.EventStatus,
+			&f.InputJSON, &f.ResultContent, &f.ResultContentLength, &f.ToolUseID, &f.EventStatus, &count, &soleContent,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning tool call fact %s: %w", q.sessionID, err,
 			)
 		}
 		facts = append(facts, f)
+		counts = append(counts, count)
+		evidence := make([]signals.ResultContentEvidence, 0)
+		if count == 1 {
+			evidence = []signals.ResultContentEvidence{{Content: soleContent}}
+		}
+		events = append(events, evidence)
 	}
-	return facts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	index := make(map[ToolCallPosition]int, len(facts))
+	multiple := make([]ToolCallPosition, 0, len(facts))
+	args = args[:0]
+	for i, fact := range facts {
+		if counts[i] > 1 {
+			position := ToolCallPosition{MessageOrdinal: fact.MessageOrdinal, CallIndex: fact.CallIndex}
+			multiple = append(multiple, position)
+			index[position] = i
+			args = append(args, position.MessageOrdinal, position.CallIndex)
+			if err := ensureToolCallAgentStateTx(ctx, q.tx, q.sessionID, position); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(multiple) > 0 {
+		args = append(args, q.sessionID)
+		evidence, err := q.tx.QueryContext(ctx, `
+		WITH wanted(message_ordinal, call_index) AS (VALUES `+multiRowPlaceholders(len(multiple), 2)+`)
+		SELECT s.message_ordinal,s.call_index,s.agent_id,e.content
+		FROM wanted JOIN tool_call_occurrence_agent_state s ON s.message_ordinal=wanted.message_ordinal AND s.call_index=wanted.call_index
+		JOIN tool_result_events e ON e.session_id=s.session_id AND e.tool_call_message_ordinal=s.message_ordinal AND e.call_index=s.call_index AND e.event_index=s.latest_evidence_event_index
+		WHERE s.session_id=?`, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer evidence.Close()
+		for evidence.Next() {
+			var position ToolCallPosition
+			var event signals.ResultContentEvidence
+			if err := evidence.Scan(&position.MessageOrdinal, &position.CallIndex, &event.AgentID, &event.Content); err != nil {
+				return nil, err
+			}
+			if i, ok := index[position]; ok {
+				events[i] = append(events[i], event)
+			}
+		}
+		if err := evidence.Err(); err != nil {
+			return nil, err
+		}
+	}
+	for i := range facts {
+		facts[i].ResultContentUnknown = signals.ToolResultContentUnknown(facts[i].ResultContent, counts[i], events[i])
+	}
+	return facts, nil
 }
 
 func (q signalTxQuery) CallResultEvents(
@@ -551,6 +633,9 @@ func (db *DB) ReplaceSessionSignalsIfInputsMatch(ctx context.Context,
 	); err != nil {
 		return false, err
 	}
+	if db.ArchiveContent().OmitsToolContent() {
+		update.ToolObservations = []ToolObservation{}
+	}
 	if err := updateSessionSignalsTx(tx, sessionID, update); err != nil {
 		return false, err
 	}
@@ -604,16 +689,17 @@ func sessionSignalInputSnapshotMatchesTx(ctx context.Context,
 		messageCount    int
 		isAutomated     int
 		endedAt         sql.NullString
+		termination     sql.NullString
 		peakTokens      int
 		hasPeak         int
 	)
 	err := tx.QueryRowContext(ctx, `
 		SELECT transcript_revision, message_count, is_automated, ended_at,
-		       peak_context_tokens, has_peak_context_tokens
+		       peak_context_tokens, has_peak_context_tokens, termination_status
 		FROM sessions WHERE id = ?`, sessionID,
 	).Scan(
 		&currentRevision, &messageCount, &isAutomated, &endedAt,
-		&peakTokens, &hasPeak,
+		&peakTokens, &hasPeak, &termination,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -624,6 +710,7 @@ func sessionSignalInputSnapshotMatchesTx(ctx context.Context,
 		)
 	}
 	current := SessionSignalInputSnapshot{
+		TerminationStatus:    termination.String,
 		TranscriptRevision:   currentRevision,
 		MessageCount:         messageCount,
 		IsAutomated:          isAutomated != 0,
@@ -638,6 +725,12 @@ func sessionSignalInputSnapshotMatchesTx(ctx context.Context,
 func applySignalDeltaTx(ctx context.Context,
 	tx *sql.Tx, sessionID string, d SignalDelta,
 ) error {
+	for _, fact := range d.ToolObservations {
+		if _, err := tx.ExecContext(ctx, `UPDATE tool_calls SET observed_outcome = COALESCE(?, observed_outcome), observed_repeat = COALESCE(?, observed_repeat), sequence_ending = ? WHERE session_id = ? AND call_index = ? AND message_id = (SELECT id FROM messages WHERE session_id = ? AND ordinal = ?)`, fact.Outcome, fact.Repeat, fact.SequenceEnding, sessionID, fact.CallIndex, sessionID, fact.MessageOrdinal); err != nil {
+			return fmt.Errorf("updating incremental tool observations: %w", err)
+		}
+	}
+
 	// Remove stale findings by natural coordinates, counting definite
 	// removals toward the leak-count adjustment.
 	deletedDefinite := 0

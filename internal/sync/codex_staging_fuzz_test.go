@@ -190,7 +190,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 			err = database.ReplaceSessionContentStaged(
 				t.Context(), row.ID, stagedDBMsgs, failing,
 				map[string]bool{},
-				func(verdicts map[string]bool) (
+				func(verdicts map[string]db.StagedToolVerdict) (
 					db.SessionSignalUpdate, []db.SecretFinding, error,
 				) {
 					update, findings := computeSignalsAndSecretsWithContentFailures(
@@ -232,7 +232,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 	require.NoError(t, database.ReplaceSessionContentStaged(
 		t.Context(), row.ID, stagedDBMsgs, staged,
 		map[string]bool{},
-		func(verdicts map[string]bool) (
+		func(verdicts map[string]db.StagedToolVerdict) (
 			db.SessionSignalUpdate, []db.SecretFinding, error,
 		) {
 			update, findings := computeSignalsAndSecretsWithContentFailures(

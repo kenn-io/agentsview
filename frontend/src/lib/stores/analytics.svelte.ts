@@ -455,7 +455,7 @@ class AnalyticsStore {
     return p;
   }
 
-  private filterParams(
+  filterParams(
     opts: {
       includeProject?: boolean;
       includeTime?: boolean;

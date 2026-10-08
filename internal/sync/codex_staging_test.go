@@ -822,7 +822,7 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 	require.NoError(t, dbStaged.ReplaceSessionContentStaged(
 		t.Context(), rowS.ID, stagedDBMsgs, stagedSink,
 		map[string]bool{},
-		func(verdicts map[string]bool) (
+		func(verdicts map[string]db.StagedToolVerdict) (
 			db.SessionSignalUpdate, []db.SecretFinding, error,
 		) {
 			update, findings := computeSignalsAndSecretsWithContentFailures(
@@ -858,6 +858,9 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 			assert.Equal(t, lc.ResultContent, sc.ResultContent,
 				"summaries must match byte for byte")
 			assert.Equal(t, lc.ResultContentLength, sc.ResultContentLength)
+			assert.Equal(t, lc.ObservedOutcome, sc.ObservedOutcome)
+			assert.Equal(t, lc.ObservedRepeat, sc.ObservedRepeat)
+			assert.Equal(t, lc.SequenceEnding, sc.SequenceEnding)
 			require.Len(t, sc.ResultEvents, len(lc.ResultEvents))
 			for k := range lc.ResultEvents {
 				le, se := lc.ResultEvents[k], sc.ResultEvents[k]
@@ -898,6 +901,8 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 		assert.Equal(t, findingsLegacy[i].MatchStart,
 			findingsStored[i].MatchStart)
 	}
+
+	assert.Equal(t, updateL.ToolObservations, computeSignalsFromMessages(rowS, msgsS).ToolObservations)
 
 	// Signals parity: call_b fails by event status (kept in the staged
 	// model) and call_c by content heuristics (folded in through the

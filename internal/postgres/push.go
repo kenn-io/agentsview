@@ -3550,7 +3550,7 @@ func pgToolCallFingerprint(
 			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
 			COALESCE(result_content_length, 0),
 			COALESCE(result_content, ''),
-			COALESCE(file_path, '')
+			COALESCE(file_path, ''), COALESCE(observed_outcome, ''), COALESCE(observed_repeat, ''), COALESCE(sequence_ending, '')
 		 FROM tool_calls
 		 WHERE session_id = $1
 		 ORDER BY message_ordinal ASC, call_index ASC`,
@@ -3566,10 +3566,11 @@ func pgToolCallFingerprint(
 		var messageOrdinal, callIndex, resultContentLength int
 		var toolName, category, toolUseID, inputJSON string
 		var skillName, subagentSessionID, resultContent, filePath string
+		var observedOutcome, observedRepeat, sequenceEnding string
 		if err := rows.Scan(
 			&messageOrdinal, &callIndex, &toolName, &category,
 			&toolUseID, &inputJSON, &skillName, &subagentSessionID,
-			&resultContentLength, &resultContent, &filePath,
+			&resultContentLength, &resultContent, &filePath, &observedOutcome, &observedRepeat, &sequenceEnding,
 		); err != nil {
 			return "", err
 		}
@@ -3586,6 +3587,7 @@ func pgToolCallFingerprint(
 			len(resultContent), resultContent,
 			len(filePath), filePath,
 		)
+		fmt.Fprintf(&b, "%d:%s|%d:%s|%d:%s;", len(observedOutcome), observedOutcome, len(observedRepeat), observedRepeat, len(sequenceEnding), sequenceEnding)
 	}
 	return b.String(), rows.Err()
 }
@@ -3900,18 +3902,18 @@ func bulkInsertToolCalls(
 			call_index, tool_use_id, input_json,
 			skill_name, result_content_length,
 			result_content, subagent_session_id,
-			message_ordinal, file_path) VALUES `)
-		args := make([]any, 0, len(batch)*12)
+			message_ordinal, file_path, observed_outcome, observed_repeat, sequence_ending) VALUES `)
+		args := make([]any, 0, len(batch)*15)
 		for j, r := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*12 + 1
+			p := j*15 + 1
 			fmt.Fprintf(&b,
 				"($%d,$%d,$%d,$%d,$%d,$%d,"+
-					"$%d,$%d,$%d,$%d,$%d,$%d)",
+					"$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4, p+5,
-				p+6, p+7, p+8, p+9, p+10, p+11,
+				p+6, p+7, p+8, p+9, p+10, p+11, p+12, p+13, p+14,
 			)
 			args = append(args,
 				sessionID,
@@ -3927,7 +3929,7 @@ func bulkInsertToolCalls(
 				)),
 				nilIfEmpty(r.tc.SubagentSessionID),
 				r.ordinal,
-				nilIfEmpty(r.tc.FilePath),
+				nilIfEmpty(r.tc.FilePath), r.tc.ObservedOutcome, r.tc.ObservedRepeat, r.tc.SequenceEnding,
 			)
 		}
 		if _, err := tx.ExecContext(

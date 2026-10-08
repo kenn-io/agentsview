@@ -400,6 +400,10 @@ var mirrorTables = []tableSpec{
 			col("message_ordinal", tInt),
 			col("session_id", tString),
 			col("tool_name", tString),
+			col("observed_outcome", tNullString),
+			col("observed_repeat", tNullString),
+			col("sequence_ending", tNullString),
+
 			col("category", tString),
 			col("call_index", tInt),
 			col("tool_use_id", tString),

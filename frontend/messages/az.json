@@ -2462,5 +2462,40 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir.","countPlural=other":"Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir."}}],
   "tool_sequences_full_input_in_message": "Tam giriş {ordinal} nömrəli mesajdadır.",
   "tool_sequences_full_result_in_message": "Tam nəticə {ordinal} nömrəli mesajdadır.",
-  "tool_sequences_retry": "Yenidən cəhd et"
+  "tool_sequences_retry": "Yenidən cəhd et",
+  "analytics_tool_empty_rate": "Boş nəticə faizi",
+  "analytics_tool_repeat_rate": "Təkrar faizi",
+  "analytics_tool_recovery_rate": "Bərpa faizi",
+  "analytics_tool_name": "Alət",
+  "analytics_tool_coverage": "Təhlil edilib",
+  "analytics_tool_sessions": "Sessiyalar",
+  "analytics_tool_share": "Pay",
+  "analytics_tool_unavailable": "Mövcud deyil",
+  "analytics_tool_show_all": "Bütün alətlər",
+  "analytics_tool_show_less": "Daha az alət",
+  "analytics_tool_more_sessions": "Daha çox sessiya",
+  "analytics_tool_empty_explanation": "Məlum nəticələr arasında {count}/{total} boş nəticə.",
+  "analytics_tool_repeat_explanation": "Təhlil edilmiş çağırışlar arasında {count}/{total} eyni və ya oxşar təkrar.",
+  "analytics_tool_recovery_explanation": "{count}/{total} bərpa edilmiş ardıcıllıq. Açıq: {open}. Naməlum: {unknown}.",
+  "analytics_tool_coverage_explanation": "Təhlil edilmiş çağırışlar / bütün çağırışlar. Gözləyən hesablamalar və köhnə hesablanmamış sessiyalar əhatəni azaldır.",
+  "analytics_tool_recovery_note": "Bərpa sonrakı çağırışın məzmun qaytarmasıdır. Bərpa faizi ardıcıllığı başlayan alətə aiddir.",
+  "analytics_tool_evidence_count": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} sessiya",
+        "countPlural=other": "{countLabel} sessiya"
+      }
+    }
+  ],
+  "analytics_tool_history_note": "Əvvəlki sessiyalar hesablanmamış ola bilər. Tarixi göstəriciləri doldurmaq üçün agentsview sync --full əmrini işlədin.",
+  "analytics_tool_latest_matching_call": "Son uyğun çağırış: {date}",
+  "analytics_tool_matching_calls": "Uyğun çağırışlar: {count}"
 }

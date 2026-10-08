@@ -1,0 +1,25 @@
+[
+  {"Session": {"id":"recovered","project":"project-a","started_at":"2025-06-01T23:59:00Z","user_message_count":2,"termination_status":"clean"},
+   "Messages": [
+    {"session_id":"recovered","ordinal":2,"timestamp":"2025-06-01T23:59:00Z","role":"assistant","model":"model-a","has_tool_use":true,"tool_calls":[{"tool_name":"Grep","category":"Grep","input_json":"{\"pattern\":\"alpha\"}","result_content":"No matches found"}]},
+    {"session_id":"recovered","ordinal":4,"timestamp":"2025-06-02T00:01:00Z","role":"assistant","model":"model-b","has_tool_use":true,"tool_calls":[{"tool_name":"Grep","category":"Grep","input_json":"{\"pattern\":\"alpha\"}","result_content":"No matches found"}]},
+    {"session_id":"recovered","ordinal":5,"timestamp":"2025-06-02T00:02:00Z","role":"assistant","model":"model-b","has_tool_use":true,"tool_calls":[{"tool_name":"Read","category":"Read","input_json":"{}","result_content":"content"}]}
+   ]},
+  {"Session": {"id":"abandoned","project":"project-a","started_at":"2025-06-01T23:59:00Z","user_message_count":2,"termination_status":"clean"},
+   "Messages": [
+    {"session_id":"abandoned","ordinal":0,"timestamp":"2025-06-02T01:00:00Z","role":"assistant","model":"model-b","has_tool_use":true,"tool_calls":[{"tool_name":"Grep","category":"Grep","input_json":"{}","result_content":"No matches found"}]}
+   ]},
+  {"Session": {"id":"open","project":"project-a","started_at":"2025-06-01T23:59:00Z","user_message_count":2,"termination_status":null},
+   "Messages": [
+    {"session_id":"open","ordinal":0,"timestamp":"2025-06-02T02:00:00Z","role":"assistant","model":"model-b","has_tool_use":true,"tool_calls":[{"tool_name":"Grep","category":"Grep","input_json":"{}","result_content":"No matches found"}]}
+   ]},
+  {"Session": {"id":"unknown","project":"project-a","started_at":"2025-06-01T23:59:00Z","user_message_count":2,"termination_status":"clean"},
+   "Messages": [
+    {"session_id":"unknown","ordinal":0,"timestamp":"2025-06-02T03:00:00Z","role":"assistant","model":"model-b","has_tool_use":true,"tool_calls":[{"tool_name":"Grep","category":"Grep","input_json":"{\"pattern\":\"alpha\"}","result_content":"No matches found"}]},
+    {"session_id":"unknown","ordinal":1,"timestamp":"2025-06-02T03:01:00Z","role":"assistant","model":"model-b","has_tool_use":true,"tool_calls":[{"tool_name":"Grep","category":"Grep","input_json":"{ \"pattern\": \"alpha\" }","result_content":"[image]"}]}
+   ]},
+  {"Session": {"id":"legacy","project":"project-a","started_at":"2025-06-01T23:59:00Z","user_message_count":2,"termination_status":null},
+   "Messages": [
+    {"session_id":"legacy","ordinal":0,"timestamp":"2025-06-02T04:00:00Z","role":"assistant","model":"model-b","has_tool_use":true,"tool_calls":[{"tool_name":"Grep","category":"Grep","input_json":"{}","result_content":"content"}]}
+   ]}
+]

@@ -9,6 +9,7 @@ import (
 
 // ToolCallRow is populated from a JOIN of tool_calls + messages.
 type ToolCallRow struct {
+	ContentOutcome      ToolOutcome
 	ToolName            string
 	Category            string // "Bash", "Edit", "Write", "Read", "Search"
 	InputJSON           string

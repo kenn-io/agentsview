@@ -730,7 +730,7 @@
         <SessionShape />
       </Card>
 
-      <Card level="default" padding="none" class="chart-panel">
+      <Card level="default" padding="none" class="chart-panel wide">
         <ToolUsage />
       </Card>
 

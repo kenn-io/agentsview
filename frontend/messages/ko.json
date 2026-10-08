@@ -2377,5 +2377,39 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다.","countPlural=other":"미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다."}}],
   "tool_sequences_full_input_in_message": "전체 입력은 메시지 {ordinal}에 있습니다.",
   "tool_sequences_full_result_in_message": "전체 결과는 메시지 {ordinal}에 있습니다.",
-  "tool_sequences_retry": "다시 시도"
+  "tool_sequences_retry": "다시 시도",
+  "analytics_tool_empty_rate": "빈 결과 비율",
+  "analytics_tool_repeat_rate": "반복 비율",
+  "analytics_tool_recovery_rate": "복구 비율",
+  "analytics_tool_name": "도구",
+  "analytics_tool_coverage": "분석됨",
+  "analytics_tool_sessions": "세션",
+  "analytics_tool_share": "비중",
+  "analytics_tool_unavailable": "사용 불가",
+  "analytics_tool_show_all": "모든 도구 표시",
+  "analytics_tool_show_less": "간략히 표시",
+  "analytics_tool_more_sessions": "세션 더 보기",
+  "analytics_tool_empty_explanation": "알려진 결과 중 빈 결과 {count}/{total}.",
+  "analytics_tool_repeat_explanation": "분석된 호출 중 동일하거나 거의 동일한 후속 호출 {count}/{total}.",
+  "analytics_tool_recovery_explanation": "복구된 시퀀스 {count}/{total}. 진행 중: {open}. 알 수 없음: {unknown}.",
+  "analytics_tool_coverage_explanation": "분석된 호출 / 전체 호출. 재계산 대기 및 미계산된 이전 세션은 분석 범위에 포함되지 않습니다.",
+  "analytics_tool_recovery_note": "복구는 이후 호출이 내용을 반환했다는 뜻입니다. 복구율은 시퀀스를 시작한 도구에 귀속됩니다.",
+  "analytics_tool_evidence_count": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "세션 {countLabel}개"
+      }
+    }
+  ],
+  "analytics_tool_history_note": "이전 세션은 분석되지 않았을 수 있습니다. agentsview sync --full을 실행하여 과거 비율을 계산하세요.",
+  "analytics_tool_latest_matching_call": "최근 일치 호출: {date}",
+  "analytics_tool_matching_calls": "일치하는 호출: {count}"
 }

@@ -709,7 +709,20 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 
 	assert.Equal(t, 1, sess.ToolFailureSignalCount, "failure detection reads the deduplicated event content")
 	incrementalSignals := snapshotSessionSignals(sess)
-
+	observations := func() []db.ToolObservation {
+		messages, err := database.GetAllMessages(t.Context(), sessionID)
+		require.NoError(t, err)
+		var facts []db.ToolObservation
+		for _, message := range messages {
+			for _, call := range message.ToolCalls {
+				require.NotNil(t, call.ObservedOutcome)
+				require.NotNil(t, call.ObservedRepeat)
+				facts = append(facts, db.ToolObservation{MessageOrdinal: message.Ordinal, CallIndex: call.CallIndex, Outcome: *call.ObservedOutcome, Repeat: *call.ObservedRepeat, SequenceEnding: call.SequenceEnding})
+			}
+		}
+		return facts
+	}
+	incrementalObservations := observations()
 	// Authoritative rebuild: rewrite the file in place (same size),
 	// drop the checkpoint, and bump the mtime so the engine takes the
 	// full-parse replacement path.
@@ -757,6 +770,7 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 		"incremental findings must match the authoritative full resync")
 	assert.Equal(t, incrementalSignals, snapshotSessionSignals(sess),
 		"incremental signals must match the authoritative full resync")
+	assert.Equal(t, incrementalObservations, observations(), "per-call observations must match full resync")
 
 	// The full resync reseeds the state; a follow-up append must fold
 	// again without a decline.
@@ -1119,4 +1133,33 @@ func TestIncrementalMaintainerIgnoresToolResultFinalRole(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, delta)
 	assert.Equal(t, "assistant", delta.Update.EndedWithRole)
+}
+
+func TestIncrementalMaintainerSequenceMetadataAndUnknown(t *testing.T) {
+	for _, tool := range []string{"Read", "Grep", "Glob"} {
+		t.Run(tool, func(t *testing.T) {
+			calls := []signals.ToolCallRow{{MessageOrdinal: 0, ToolName: "Grep", Category: "Grep", ResultContent: "No matches found"}, {MessageOrdinal: 1, ToolName: tool, Category: tool, ResultContent: "[image]", ResultContentUnknown: true}}
+			state := signals.SeedIncrementalState(calls, nil, "", "", nil, nil, 0, 0, 0)
+			blob, err := state.MarshalBinary()
+			require.NoError(t, err)
+			q := &fakeSignalQuery{sess: &db.Session{QualitySignalVersion: db.CurrentQualitySignalVersion, TerminationStatus: new("clean")}, state: db.SessionSignalState{State: blob, TranscriptRevision: "rev", SignalVersion: db.CurrentQualitySignalVersion}, hasState: true, revision: "rev"}
+			m := newTestMaintainer("rev", secrets.DefiniteRulesVersion(), nil)
+			delta, err := m.MaintainTx(t.Context(), q)
+			require.NoError(t, err)
+			require.NotNil(t, delta)
+			require.Len(t, delta.ToolObservations, 2)
+			assert.Equal(t, "unknown", *delta.ToolObservations[0].SequenceEnding)
+			assert.Equal(t, "unknown", *delta.ToolObservations[1].Outcome)
+			q.callFacts = []db.ToolCallSignalFact{{MessageOrdinal: 1, ToolName: tool, Category: tool, ResultContentLength: 7, EventStatus: "completed"}}
+			m.resultUpdates = []db.ToolCallResultUpdate{{Position: db.ToolCallPosition{MessageOrdinal: 1}}}
+			delta, err = m.MaintainTx(t.Context(), q)
+			require.NoError(t, err)
+			require.NotNil(t, delta)
+			assert.Equal(t, "unknown", *delta.ToolObservations[1].Outcome)
+			assert.Equal(t, "unknown", *delta.ToolObservations[0].SequenceEnding)
+			full, _ := computeSignalsAndSecrets(*q.sess, []db.Message{{Ordinal: 0, ToolCalls: []db.ToolCall{{ToolName: "Grep", Category: "Grep", ResultContent: "No matches found"}}}, {Ordinal: 1, ToolCalls: []db.ToolCall{{ToolName: tool, Category: tool, ResultContentLength: 7, ResultEvents: []db.ToolResultEvent{{Status: "completed", ContentLength: 7}}}}}})
+			assert.Equal(t, full.ToolObservations[1].Outcome, *delta.ToolObservations[1].Outcome)
+			assert.Equal(t, full.ToolObservations[0].SequenceEnding, delta.ToolObservations[0].SequenceEnding)
+		})
+	}
 }

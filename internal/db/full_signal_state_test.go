@@ -27,7 +27,9 @@ func TestFullContentCommitsSignalStateOnce(t *testing.T) {
 					return err
 				case "staged":
 					scratch := newScratchStagedResults(t)
-					return d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, scratch, nil, func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) { return update, nil, nil })
+					return d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, scratch, nil, func(map[string]StagedToolVerdict) (SessionSignalUpdate, []SecretFinding, error) {
+						return update, nil, nil
+					})
 				default:
 					return d.ReplaceSessionContent(t.Context(), "s1", msgs, update, nil)
 				}

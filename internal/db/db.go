@@ -2601,6 +2601,22 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE tool_calls ADD COLUMN file_path TEXT",
 		},
 		{
+			"tool_call_occurrence_agent_state", "latest_evidence_event_index",
+			"ALTER TABLE tool_call_occurrence_agent_state ADD COLUMN latest_evidence_event_index INTEGER DEFAULT -1",
+		},
+		{
+			"tool_calls", "observed_outcome",
+			"ALTER TABLE tool_calls ADD COLUMN observed_outcome TEXT",
+		},
+		{
+			"tool_calls", "observed_repeat",
+			"ALTER TABLE tool_calls ADD COLUMN observed_repeat TEXT",
+		},
+		{
+			"tool_calls", "sequence_ending",
+			"ALTER TABLE tool_calls ADD COLUMN sequence_ending TEXT",
+		},
+		{
 			"tool_calls", "call_index",
 			"ALTER TABLE tool_calls ADD COLUMN call_index INTEGER",
 		},

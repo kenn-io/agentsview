@@ -923,11 +923,7 @@ func sessionsFinal(root *db.Session, descendants []db.Session) bool {
 }
 
 func sessionFinal(session *db.Session) bool {
-	if session == nil || session.TerminationStatus == nil {
-		return false
-	}
-	status := parser.TerminationStatus(*session.TerminationStatus)
-	return status == parser.TerminationAwaitingUser || status == parser.TerminationClean
+	return session != nil && parser.TerminationComplete(session.TerminationStatus)
 }
 
 func sessionsHaveMalformedLines(root *db.Session, descendants []db.Session) bool {

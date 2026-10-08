@@ -77,62 +77,69 @@ func TestReplaceSessionSignalsIfRevisionRejectsStaleSnapshot(t *testing.T) {
 }
 
 func TestReplaceSessionSignalsIfInputsMatchRejectsMetadataOnlyRace(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "signal-metadata-race", "proj")
+	for _, mutation := range []string{
+		"ended_at = '2026-08-18T12:00:00Z', is_automated = 1, message_count = 7, peak_context_tokens = 12345, has_peak_context_tokens = 1",
+		"termination_status = 'clean'",
+	} {
+		t.Run(mutation, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "signal-metadata-race", "proj")
 
-	sess, err := d.GetSessionFull(t.Context(), "signal-metadata-race")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	expected, err := SignalInputSnapshot(*sess)
-	require.NoError(t, err)
-	initialOutcome := sess.Outcome
+			insertMessages(t, d, Message{SessionID: "signal-metadata-race", Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Grep", ObservedOutcome: new("empty")}}})
+			sess, err := d.GetSessionFull(t.Context(), "signal-metadata-race")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			expected, err := SignalInputSnapshot(*sess)
+			require.NoError(t, err)
+			initialOutcome := sess.Outcome
 
-	endedAt := "2026-08-18T12:00:00Z"
-	_, err = d.getWriter().Exec(t.Context(), `
-		UPDATE sessions
-		SET ended_at = ?, is_automated = 1, message_count = 7,
-		    peak_context_tokens = 12345, has_peak_context_tokens = 1
-		WHERE id = ?`, endedAt, "signal-metadata-race")
-	require.NoError(t, err)
+			_, err = d.getWriter().Exec(t.Context(), "UPDATE sessions SET "+mutation+" WHERE id = ?", "signal-metadata-race")
+			require.NoError(t, err)
 
-	update := SessionSignalUpdate{
-		Outcome: "stale-result", OutcomeConfidence: "high",
-		SecretsRulesVersion: "rules-v1",
-		QualitySignals:      QualitySignals{Version: CurrentQualitySignalVersion},
+			update := SessionSignalUpdate{
+				Outcome: "stale-result", OutcomeConfidence: "high",
+				ToolObservations:    []ToolObservation{{Outcome: "unknown", Repeat: "none"}},
+				SecretsRulesVersion: "rules-v1",
+				QualitySignals:      QualitySignals{Version: CurrentQualitySignalVersion},
+			}
+			state := SessionSignalState{
+				State: []byte("stale-state"), SignalVersion: CurrentQualitySignalVersion,
+			}
+			applied, err := d.ReplaceSessionSignalsIfInputsMatch(t.Context(),
+				"signal-metadata-race", expected, nil, update, state,
+			)
+			require.NoError(t, err)
+			require.False(t, applied,
+				"metadata-only changes must invalidate a full signal snapshot")
+
+			afterReject, err := d.GetSessionFull(t.Context(), "signal-metadata-race")
+			require.NoError(t, err)
+			require.Equal(t, initialOutcome, afterReject.Outcome)
+			messages, err := d.GetAllMessages(t.Context(), "signal-metadata-race")
+			require.NoError(t, err)
+			require.Equal(t, new("empty"), messages[0].ToolCalls[0].ObservedOutcome)
+			_, ok, err := d.GetSessionSignalState(t.Context(), "signal-metadata-race")
+			require.NoError(t, err)
+			require.False(t, ok)
+
+			fresh, err := SignalInputSnapshot(*afterReject)
+			require.NoError(t, err)
+			update.Outcome = "fresh-result"
+			state.State = []byte("fresh-state")
+			applied, err = d.ReplaceSessionSignalsIfInputsMatch(t.Context(),
+				"signal-metadata-race", fresh, nil, update, state,
+			)
+			require.NoError(t, err)
+			require.True(t, applied)
+
+			afterApply, err := d.GetSessionFull(t.Context(), "signal-metadata-race")
+			require.NoError(t, err)
+			require.Equal(t, "fresh-result", afterApply.Outcome)
+			stored, ok, err := d.GetSessionSignalState(t.Context(), "signal-metadata-race")
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, fresh.TranscriptRevision, stored.TranscriptRevision)
+			require.Equal(t, []byte("fresh-state"), stored.State)
+		})
 	}
-	state := SessionSignalState{
-		State: []byte("stale-state"), SignalVersion: CurrentQualitySignalVersion,
-	}
-	applied, err := d.ReplaceSessionSignalsIfInputsMatch(t.Context(),
-		"signal-metadata-race", expected, nil, update, state,
-	)
-	require.NoError(t, err)
-	require.False(t, applied,
-		"metadata-only changes must invalidate a full signal snapshot")
-
-	afterReject, err := d.GetSessionFull(t.Context(), "signal-metadata-race")
-	require.NoError(t, err)
-	require.Equal(t, initialOutcome, afterReject.Outcome)
-	_, ok, err := d.GetSessionSignalState(t.Context(), "signal-metadata-race")
-	require.NoError(t, err)
-	require.False(t, ok)
-
-	fresh, err := SignalInputSnapshot(*afterReject)
-	require.NoError(t, err)
-	update.Outcome = "fresh-result"
-	state.State = []byte("fresh-state")
-	applied, err = d.ReplaceSessionSignalsIfInputsMatch(t.Context(),
-		"signal-metadata-race", fresh, nil, update, state,
-	)
-	require.NoError(t, err)
-	require.True(t, applied)
-
-	afterApply, err := d.GetSessionFull(t.Context(), "signal-metadata-race")
-	require.NoError(t, err)
-	require.Equal(t, "fresh-result", afterApply.Outcome)
-	stored, ok, err := d.GetSessionSignalState(t.Context(), "signal-metadata-race")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, fresh.TranscriptRevision, stored.TranscriptRevision)
-	require.Equal(t, []byte("fresh-state"), stored.State)
 }

@@ -20,7 +20,7 @@ import (
 // assignment state. v16 rebuilds after SQLite data version 111 rewrote
 // stored Devin source identities; pre-111 mirrors would otherwise keep
 // serving bare ids that deduplicate across sessions.
-const SchemaVersion = 16
+const SchemaVersion = 17
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -611,6 +611,9 @@ var mirrorTables = []tableSpec{
 	{
 		name: "tool_calls",
 		create: `CREATE TABLE IF NOT EXISTS tool_calls (
+			observed_outcome TEXT,
+			observed_repeat TEXT,
+			sequence_ending TEXT,
 			id BIGINT,
 			message_id BIGINT,
 			session_id TEXT NOT NULL,
@@ -626,6 +629,10 @@ var mirrorTables = []tableSpec{
 			file_path TEXT
 		)`,
 		columns: []columnSpec{
+			{"observed_outcome", "observed_outcome TEXT"},
+			{"observed_repeat", "observed_repeat TEXT"},
+			{"sequence_ending", "sequence_ending TEXT"},
+
 			{"id", "id BIGINT"},
 			{"message_id", "message_id BIGINT"},
 			{"session_id", "session_id TEXT NOT NULL DEFAULT ''"},

@@ -859,7 +859,7 @@ func toolCallRow(m db.Message, tc db.ToolCall, callIndex int, version uint64) []
 		}
 	}
 	return []any{
-		m.ID, int64(m.Ordinal), m.SessionID, tc.ToolName, tc.Category, int64(callIndex),
+		m.ID, int64(m.Ordinal), m.SessionID, tc.ToolName, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding, tc.Category, int64(callIndex),
 		tc.ToolUseID, tc.InputJSON, tc.SkillName, int64(length),
 		stored,
 		tc.SubagentSessionID, tc.FilePath,

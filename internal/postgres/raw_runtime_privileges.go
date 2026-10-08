@@ -63,6 +63,14 @@ func CheckHostedRuntimeWritable(ctx context.Context, database *sql.DB, schema st
 			return err
 		}
 	}
+	var observationsWritable bool
+	err = database.QueryRowContext(ctx, `SELECT bool_and(has_column_privilege(format('%I.tool_calls',$1::text),column_name,'UPDATE')) FROM unnest(ARRAY['observed_outcome','observed_repeat','sequence_ending']) column_name`, schema).Scan(&observationsWritable)
+	if err != nil {
+		return err
+	}
+	if !observationsWritable {
+		return errors.New("hosted runtime projection privileges for tool_calls observations are incomplete; owner provisioning required")
+	}
 	// nextval accepts USAGE or UPDATE. GENERATED AS IDENTITY does not require
 	// sequence privileges; neither does a provisioned sequence-free ID default.
 	for _, table := range []string{"tool_calls", "tool_result_events", "usage_events", "pinned_messages"} {

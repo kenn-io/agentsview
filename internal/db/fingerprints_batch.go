@@ -419,7 +419,7 @@ func (db *DB) ToolCallFingerprints(ctx context.Context,
 				COALESCE(tc.subagent_session_id, ''),
 				COALESCE(tc.result_content_length, 0),
 				COALESCE(tc.result_content, ''),
-				COALESCE(tc.file_path, '')
+				COALESCE(tc.file_path, ''), COALESCE(tc.observed_outcome, ''), COALESCE(tc.observed_repeat, ''), COALESCE(tc.sequence_ending, '')
 			 FROM tool_calls tc
 			 JOIN messages m ON m.id = tc.message_id
 			 WHERE tc.session_id IN (`+ph+`)
@@ -439,7 +439,7 @@ func (db *DB) ToolCallFingerprints(ctx context.Context,
 				&sessionID, &r.messageOrdinal, &r.toolName, &r.category,
 				&r.toolUseID, &r.inputJSON, &r.skillName,
 				&r.subagentSessionID, &r.resultContentLength,
-				&r.resultContent, &r.filePath,
+				&r.resultContent, &r.filePath, &r.observedOutcome, &r.observedRepeat, &r.sequenceEnding,
 			); err != nil {
 				return err
 			}
@@ -698,6 +698,9 @@ type toolCallFingerprintRow struct {
 	resultContentLength int
 	resultContent       string
 	filePath            string
+	observedOutcome     string
+	observedRepeat      string
+	sequenceEnding      string
 }
 
 func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
@@ -722,6 +725,7 @@ func (r toolCallFingerprintRow) appendTo(b *strings.Builder) {
 		len(resultContent), resultContent,
 		len(filePath), filePath,
 	)
+	fmt.Fprintf(b, "%d:%s|%d:%s|%d:%s;", len(r.observedOutcome), r.observedOutcome, len(r.observedRepeat), r.observedRepeat, len(r.sequenceEnding), r.sequenceEnding)
 }
 
 // toolCallIndexer derives the per-message call index from rows ordered by

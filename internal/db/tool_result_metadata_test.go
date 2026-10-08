@@ -114,11 +114,16 @@ func TestWriteSessionIncrementalPreservesRawResultContract(t *testing.T) {
 		wantSummary string
 		wantLength  int
 		wantCount   int
+		wantUnknown bool
 	}{
-		{"whitespace", []string{"useful", " \t"}, false, "useful", 6, 2},
-		{"control_identity", []string{"x\x01", "x\x02"}, false, "x", 1, 2},
-		{"blocked_identity", []string{"yy", "zz"}, true, "", 2, 2},
-		{"blocked_whitespace", []string{"useful", " \t"}, true, "", 6, 2},
+		{"image_then_sanitized", []string{"[image]", "\x00"}, false, "", 0, 2, true},
+		{"whitespace", []string{"useful", " \t"}, false, "useful", 6, 2, false},
+		{"first_participant", []string{" \t", "useful", " "}, false, "useful", 6, 3, false},
+		{"all_blank", []string{" ", "\t"}, false, "", 0, 2, false},
+		{"sanitized_participant", []string{"\x00", "text"}, false, "text", 4, 2, false},
+		{"control_identity", []string{"x\x01", "x\x02"}, false, "x", 1, 2, false},
+		{"blocked_identity", []string{"yy", "zz"}, true, "", 2, 2, false},
+		{"blocked_whitespace", []string{"useful", " \t"}, true, "", 6, 2, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -149,6 +154,13 @@ func TestWriteSessionIncrementalPreservesRawResultContract(t *testing.T) {
 			assert.Equal(t, tt.wantSummary, call.ResultContent)
 			assert.Equal(t, tt.wantLength, call.ResultContentLength)
 			assert.Len(t, call.ResultEvents, tt.wantCount)
+			tx, err := d.getWriter().Begin(t.Context())
+			require.NoError(t, err)
+			facts, err := (signalTxQuery{tx: tx, sessionID: "s1"}).ToolCallsByPosition(t.Context(), []ToolCallPosition{{}})
+			require.NoError(t, err)
+			require.Len(t, facts, 1)
+			assert.Equal(t, tt.wantUnknown, facts[0].ResultContentUnknown)
+			require.NoError(t, tx.Rollback())
 		})
 	}
 }
@@ -199,6 +211,10 @@ func TestLateResultRequiresMetadataForArchivedEvents(t *testing.T) {
 	missing, err = d.HasMissingToolResultMetadata(t.Context(), "s1", []ToolCallPosition{{MessageOrdinal: 1}})
 	require.NoError(t, err)
 	assert.False(t, missing, "other call occurrences do not force a reparse")
+	tx, err := d.getWriter().Begin(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, ensureToolCallAgentStateTx(t.Context(), tx, "s1", ToolCallPosition{}))
+	require.NoError(t, tx.Commit())
 	_, err = d.WriteSessionIncremental(t.Context(), "s1", nil, IncrementalSessionUpdate{
 		MsgCount: 1, NextOrdinal: 1,
 		ToolCallResultUpdates: []ToolCallResultUpdate{{

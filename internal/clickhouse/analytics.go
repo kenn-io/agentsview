@@ -1477,15 +1477,20 @@ func analyticsSessionIDsContext(ctx context.Context, ids []string) (context.Cont
 	return chdriver.Context(ctx, chdriver.WithExternalTable(table)), "(SELECT id FROM analytics_session_ids)", nil
 }
 
-func (s *Store) GetAnalyticsTools(
+func (s *Store) GetAnalyticsTools(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
+	rows, err := s.analyticsToolRows(ctx, f)
+	return db.BuildToolsAnalytics(rows), err
+}
+
+func (s *Store) analyticsToolRows(
 	ctx context.Context, f db.AnalyticsFilter,
-) (db.ToolsAnalyticsResponse, error) {
+) ([]db.ToolAnalyticsRow, error) {
 	sessionPred, sessionArgs := chAnalyticsToolSessionWindow(f)
 	sessions, err := s.analyticsSessionsFiltered(
 		ctx, f, false, false, sessionPred, sessionArgs,
 	)
 	if err != nil {
-		return db.ToolsAnalyticsResponse{}, err
+		return nil, err
 	}
 	meta := map[string]chAnalyticsSession{}
 	var ids []string
@@ -1494,44 +1499,53 @@ func (s *Store) GetAnalyticsTools(
 		ids = append(ids, r.id)
 	}
 	if len(ids) == 0 {
-		return db.BuildToolsAnalytics(nil), nil
+		return nil, nil
 	}
 	var toolRows []db.ToolAnalyticsRow
 	ctx, ph, err := analyticsSessionIDsContext(ctx, ids)
 	if err != nil {
-		return db.ToolsAnalyticsResponse{}, err
+		return nil, err
 	}
 	modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
 	from, to := chAnalyticsWindowBounds(f)
 	windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
-	args := slices.Concat(modelArgs, windowArgs)
+	args := slices.Clone(modelArgs)
 	query := `SELECT tc.session_id, tc.category,
 			trim(COALESCE(tc.tool_name, '')), toInt64(COUNT(*)),
-			MAX(m.timestamp)
+			MAX(m.timestamp), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
 			FROM tool_calls tc
+			JOIN sessions s ON s.id = tc.session_id
 			LEFT JOIN (` + chAnalyticsToolCallMessagesSQL + ph + `) m
 				ON m.session_id = tc.session_id
 				AND m.ordinal = tc.message_ordinal
 			WHERE tc.session_id IN ` + ph
+	for _, predicate := range db.ToolSelectionPredicates("tc", "s.quality_signal_version", f, func(value string) string { args = append(args, value); return "?" }) {
+		if modelPred != "" {
+			modelPred += " AND "
+		}
+		modelPred += predicate
+	}
 	if modelPred != "" {
 		query += `
 			AND ` + modelPred
 	}
+	args = append(args, windowArgs...)
 	query += chAnalyticsAndClause(windowPred)
 	query += `
 			GROUP BY tc.session_id, tc.category,
 				trim(COALESCE(tc.tool_name, '')), toStartOfMinute(m.timestamp)`
 	rows, qErr := s.queryContext(ctx, query, args...)
 	if qErr != nil {
-		return db.ToolsAnalyticsResponse{}, qErr
+		return nil, qErr
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var sid, cat, toolName string
 		var ts any
-		var count int
-		if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
-			return db.ToolsAnalyticsResponse{}, err
+		var count, ordinal int
+		var facts db.ToolEffectivenessCounts
+		if err := rows.Scan(append([]any{&sid, &cat, &toolName, &count, &ts, &ordinal}, facts.ScanTargets()...)...); err != nil {
+			return nil, err
 		}
 		r, ok := meta[sid]
 		if !ok {
@@ -1544,6 +1558,7 @@ func (s *Store) GetAnalyticsTools(
 			continue
 		}
 		toolRows = append(toolRows, db.ToolAnalyticsRow{
+			ToolEffectivenessCounts: facts, Ordinal: ordinal, Project: r.project,
 			SessionID: sid,
 			Category:  cat,
 			ToolName:  toolName,
@@ -1553,9 +1568,9 @@ func (s *Store) GetAnalyticsTools(
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return db.ToolsAnalyticsResponse{}, err
+		return nil, err
 	}
-	return db.BuildToolsAnalytics(toolRows), nil
+	return toolRows, nil
 }
 
 // GetAnalyticsSkills returns skill usage analytics. granularity picks
@@ -2193,6 +2208,14 @@ func (s *Store) GetAnalyticsSignalSessions(
 	signal string,
 	limit int,
 ) (db.SignalSessionsResponse, error) {
+	if db.IsToolMetric(signal) {
+		f.ToolMetric = signal
+		rows, err := s.analyticsToolRows(ctx, f)
+		if err != nil {
+			return db.SignalSessionsResponse{}, err
+		}
+		return db.BuildToolMetricEvidence(rows, signal, f.ToolName, f.EvidenceOffset, limit), nil
+	}
 	if !db.IsSupportedAnalyticsSignal(signal) {
 		return db.SignalSessionsResponse{}, db.ErrUnsupportedAnalyticsSignal
 	}
