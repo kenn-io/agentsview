@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -50,7 +51,7 @@ func (e *Engine) sourceCollisionID(
 	// between Codex roots keeps the discovered key, so FindSource cannot see
 	// the deleted path and the key comparison keeps the session deleted.
 	if deletedAnyFile || e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) ||
-		(deleted != "" && sameDiscoveredFileKey(provider.Definition().Type, deleted, lookupPath)) {
+		(deleted != "" && sameDiscoveredSource(provider.Definition().Type, deleted, lookupPath)) {
 		return s.ID, false, nil
 	}
 	if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {
@@ -61,7 +62,7 @@ func (e *Engine) sourceCollisionID(
 	// a live and an archived root; discovery already picked the preferred copy,
 	// so its write replaces the stored path instead of becoming a continuation.
 	if hasStored && stored != "" &&
-		sameDiscoveredFileKey(provider.Definition().Type, stored, lookupPath) {
+		sameDiscoveredSource(provider.Definition().Type, stored, lookupPath) {
 		return s.ID, true, nil
 	}
 	altID, moved := e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath)
@@ -115,13 +116,22 @@ func collisionPolicyApplies(provider parser.Provider) bool {
 	return provider.Capabilities().Source.SharedSessionIDs == parser.CapabilitySupported
 }
 
-// sameDiscoveredFileKey reports whether two paths are the same discovered
-// source. Codex rollout filenames that name the thread resolve to one key even
-// across a live and an archived root; an unnamed continuation keeps its path as
-// the key, so it stays a separate source.
-func sameDiscoveredFileKey(agent parser.AgentType, a, b string) bool {
-	return discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: a}) ==
-		discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: b})
+// sameDiscoveredSource reports whether two paths are the same discovered
+// source. A Codex rollout filename that names the thread resolves to one key
+// even across a live and an archived root. An unnamed continuation has no
+// thread id in its name, so its filename stands in for the path key and a move
+// between roots keeps the same identity.
+func sameDiscoveredSource(agent parser.AgentType, a, b string) bool {
+	if discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: a}) ==
+		discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: b}) {
+		return true
+	}
+	if !isCodexFormatAgent(agent) {
+		return false
+	}
+	name := filepath.Base(a)
+	return name == filepath.Base(b) &&
+		parser.CodexSessionUUIDFromFilename(name) == ""
 }
 
 // collisionPolicyAgents lists shared-id providers with roots participating in
@@ -186,9 +196,12 @@ func (e *Engine) existingAltID(
 	ctx context.Context, provider parser.Provider, records []db.SessionPathRecord,
 	fullID, rawID, lookupPath string,
 ) (string, bool) {
+	agent := provider.Definition().Type
 	minted := applyIDPrefixToID(e.idPrefix, parser.AltSessionID(rawID, lookupPath))
 	for _, r := range records {
-		if r.ID != fullID && (r.ID == minted || e.storedSourceLivesAt(ctx, provider, r.FilePath, lookupPath)) {
+		if r.ID != fullID && (r.ID == minted ||
+			e.storedSourceLivesAt(ctx, provider, r.FilePath, lookupPath) ||
+			(r.FilePath != "" && sameDiscoveredSource(agent, r.FilePath, lookupPath))) {
 			return rawID + r.ID[len(fullID):], r.FilePath != "" && r.FilePath != lookupPath
 		}
 	}

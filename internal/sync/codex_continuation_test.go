@@ -30,6 +30,18 @@ func codexRollout(threadID string, messages int) string {
 	return builder.String()
 }
 
+// codexRootEnv returns an environment whose Codex roots are a live sessions
+// directory and an archived_sessions directory.
+func codexRootEnv(t *testing.T) (env *testEnv, liveDir, archivedDir string) {
+	t.Helper()
+	root := t.TempDir()
+	liveDir = filepath.Join(root, "sessions")
+	archivedDir = filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(liveDir, 0o755))
+	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+	return setupTestEnv(t, WithCodexDirs([]string{liveDir, archivedDir})), liveDir, archivedDir
+}
+
 // A paginated continuation rollout carries the thread's session id in its
 // session_meta payload. Syncing it after the base rollout must keep both files:
 // the stored transcript must not shrink to the continuation's shorter content.
@@ -77,20 +89,49 @@ func TestCodexContinuationKeepsBothFiles(t *testing.T) {
 	}
 }
 
+// requireSessionGone asserts that a session id has no stored row.
+func requireSessionGone(t *testing.T, env *testEnv, id string) {
+	t.Helper()
+	sess, err := env.db.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	assert.Nilf(t, sess, "session %s must stay deleted", id)
+}
+
+// requireNoStoredRecords asserts that neither the base id nor any derived id
+// has a stored row, so a deleted thread cannot come back under a new id.
+func requireNoStoredRecords(t *testing.T, env *testEnv, baseID string) {
+	t.Helper()
+	records, err := env.db.ListSessionPathRecords(t.Context(), baseID)
+	require.NoError(t, err)
+	for _, r := range records {
+		assert.Truef(t, r.Excluded, "record %s at %q must stay excluded", r.ID, r.FilePath)
+	}
+}
+
+// requireNoLiveDerivedRecords asserts that every derived id for baseID is
+// excluded, so a deleted derived session cannot come back under a new id while
+// the base session is still stored.
+func requireNoLiveDerivedRecords(t *testing.T, env *testEnv, baseID string) {
+	t.Helper()
+	records, err := env.db.ListSessionPathRecords(t.Context(), baseID)
+	require.NoError(t, err)
+	for _, r := range records {
+		if r.ID == baseID {
+			continue
+		}
+		assert.Truef(t, r.Excluded, "derived record %s at %q must stay excluded", r.ID, r.FilePath)
+	}
+}
+
 // A permanently deleted Codex session stays deleted when its rollout moves
 // between the live and archived roots. Both paths name the same thread, so the
 // move must not resurrect the session under the base id or a derived id.
 func TestCodexDeletedSessionStaysDeletedAfterRootMove(t *testing.T) {
 	for _, mode := range []string{"sync", "resync"} {
 		t.Run(mode, func(t *testing.T) {
-			root := t.TempDir()
-			liveDir := filepath.Join(root, "sessions")
-			archivedDir := filepath.Join(root, "archived_sessions")
-			require.NoError(t, os.MkdirAll(liveDir, 0o755))
-			require.NoError(t, os.MkdirAll(archivedDir, 0o755))
-			env := setupTestEnv(t, WithCodexDirs([]string{liveDir, archivedDir}))
-
+			env, _, archivedDir := codexRootEnv(t)
 			sessionID := "codex:" + codexThreadID
+
 			livePath := env.writeCodexSession(
 				t, filepath.Join("2026", "07", "28"),
 				"rollout-2026-07-28T14-53-01-"+codexThreadID+".jsonl",
@@ -114,15 +155,78 @@ func TestCodexDeletedSessionStaysDeletedAfterRootMove(t *testing.T) {
 				env.engine.SyncAll(t.Context(), nil)
 			}
 
-			sess, err := env.db.GetSessionFull(t.Context(), sessionID)
-			require.NoError(t, err)
-			assert.Nil(t, sess, "a permanently deleted session must not come back")
-
-			records, err := env.db.ListSessionPathRecords(t.Context(), sessionID)
-			require.NoError(t, err)
-			for _, r := range records {
-				assert.Truef(t, r.Excluded, "record %s at %q must stay excluded", r.ID, r.FilePath)
-			}
+			requireSessionGone(t, env, sessionID)
+			requireNoStoredRecords(t, env, sessionID)
 		})
 	}
+}
+
+// When the continuation is imported first it keeps the base id and the ordinary
+// rollout is stored under a derived id. Permanently deleting that derived row
+// and moving the ordinary rollout to the archive root must not bring it back.
+func TestCodexDeletedDerivedRolloutStaysDeletedAfterRootMove(t *testing.T) {
+	env, _, archivedDir := codexRootEnv(t)
+	sessionID := "codex:" + codexThreadID
+	day := filepath.Join("2026", "07", "28")
+
+	env.writeCodexSession(
+		t, day, "rollout-2026-07-28T15-00-00-"+codexThreadID+"_abcdef.jsonl",
+		codexRollout(codexThreadID, 1),
+	)
+	env.engine.SyncAll(t.Context(), nil)
+	requireStoredSession(t, env.db, sessionID)
+
+	ordinaryPath := env.writeCodexSession(
+		t, day, "rollout-2026-07-28T14-53-01-"+codexThreadID+".jsonl",
+		codexRollout(codexThreadID, 3),
+	)
+	env.engine.SyncAll(t.Context(), nil)
+	derivedID := parser.AltSessionID(sessionID, ordinaryPath)
+	requireStoredSession(t, env.db, derivedID)
+
+	require.NoError(t, env.db.DeleteSession(t.Context(), derivedID))
+
+	require.NoError(t, os.Remove(ordinaryPath))
+	env.writeSession(
+		t, archivedDir, "rollout-2026-07-28T14-53-01-"+codexThreadID+".jsonl",
+		codexRollout(codexThreadID, 3),
+	)
+	env.engine.SyncAll(t.Context(), nil)
+
+	requireSessionGone(t, env, derivedID)
+	requireNoLiveDerivedRecords(t, env, sessionID)
+}
+
+// Permanently deleting a continuation stored under a derived id and moving its
+// rollout to the archive root must not resurrect the transcript under a new id.
+func TestCodexDeletedContinuationStaysDeletedAfterRootMove(t *testing.T) {
+	env, _, archivedDir := codexRootEnv(t)
+	sessionID := "codex:" + codexThreadID
+	day := filepath.Join("2026", "07", "28")
+
+	env.writeCodexSession(
+		t, day, "rollout-2026-07-28T14-53-01-"+codexThreadID+".jsonl",
+		codexRollout(codexThreadID, 3),
+	)
+	env.engine.SyncAll(t.Context(), nil)
+
+	continuationPath := env.writeCodexSession(
+		t, day, "rollout-2026-07-28T15-00-00-"+codexThreadID+"_abcdef.jsonl",
+		codexRollout(codexThreadID, 1),
+	)
+	env.engine.SyncAll(t.Context(), nil)
+	altID := parser.AltSessionID(sessionID, continuationPath)
+	requireStoredSession(t, env.db, altID)
+
+	require.NoError(t, env.db.DeleteSession(t.Context(), altID))
+
+	require.NoError(t, os.Remove(continuationPath))
+	env.writeSession(
+		t, archivedDir, "rollout-2026-07-28T15-00-00-"+codexThreadID+"_abcdef.jsonl",
+		codexRollout(codexThreadID, 1),
+	)
+	env.engine.SyncAll(t.Context(), nil)
+
+	requireSessionGone(t, env, altID)
+	requireNoLiveDerivedRecords(t, env, sessionID)
 }
