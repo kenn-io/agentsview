@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 var syncSummary = func() string {
@@ -39,6 +40,31 @@ var syncOrgs string
 
 //go:embed testdata/claude_ai_sync/list_all.json
 var syncAllList string
+
+func TestClaudeAIParserOutputMatchesMarkerVersion(t *testing.T) {
+	result, err := parser.ParseClaudeAIDetail([]byte(syncDetail))
+	require.NoError(t, err)
+	leaf := "reply"
+	outputs := map[int]parser.ParseResult{
+		1: {
+			Session: parser.ParsedSession{
+				ID:      "claude-ai:22222222-2222-4222-8222-222222222222",
+				Project: "claude.ai", Machine: "local", Agent: parser.AgentClaudeAI,
+				FirstMessage: "Hello", SessionName: "Chat", LastEntryUUID: &leaf,
+				StartedAt:    time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+				EndedAt:      time.Date(2026, 3, 1, 10, 5, 0, 123456000, time.UTC),
+				MessageCount: 2, UserMessageCount: 1,
+			},
+			Messages: []parser.ParsedMessage{
+				{Ordinal: 0, Role: parser.RoleUser, Content: "Hello", ContentLength: 5, SourceUUID: "root", Timestamp: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)},
+				{Ordinal: 1, Role: parser.RoleAssistant, Content: "Chosen reply", ContentLength: 12, SourceUUID: "reply", Timestamp: time.Date(2026, 3, 1, 10, 2, 0, 0, time.UTC)},
+			},
+		},
+	}
+	want, ok := outputs[db.ClaudeAIMarkerVersion]
+	require.True(t, ok, "record the parser output for the new marker version")
+	assert.Equal(t, want, result, "parser output changed; bump ClaudeAIMarkerVersion and record its output")
+}
 
 func TestSyncClaudeAIEquivalentArchivePolicies(t *testing.T) {
 	for _, tt := range []struct {
