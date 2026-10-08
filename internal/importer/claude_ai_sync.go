@@ -134,17 +134,20 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					continue
 				}
 				if leaf == "" || leaf == "00000000-0000-4000-8000-000000000000" {
+					failedLast = false
 					stats.Skipped++
 					cb.progress(stats)
 					continue
 				}
 				id := "claude-ai:" + marker.UUID
 				if store.IsSessionTrashed(ctx, id) {
+					failedLast = false
 					stats.Skipped++
 					cb.progress(stats)
 					continue
 				}
 				if store.IsSessionExcluded(ctx, id) {
+					failedLast = false
 					stats.Skipped++
 					cb.progress(stats)
 					continue
@@ -166,6 +169,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				}
 				updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
 				if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) && existing.LastEntryUUID != nil && *existing.LastEntryUUID == claudeAIMarker(store, leaf) {
+					failedLast = false
 					stats.Skipped++
 					cb.progress(stats)
 					continue
@@ -180,6 +184,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					}
 					detailError, _ := errors.AsType[*claudeAIHTTPError](err)
 					if detailError != nil && detailError.status == 404 {
+						failedLast = false
 						stats.record(id, importSkipped, nil)
 					} else {
 						stats.record(id, importSkipped, err)
@@ -189,6 +194,8 @@ func SyncClaudeAI(ctx context.Context, store interface {
 								return stats, err
 							}
 							failedLast = true
+						} else {
+							failedLast = false
 						}
 					}
 					cb.progress(stats)

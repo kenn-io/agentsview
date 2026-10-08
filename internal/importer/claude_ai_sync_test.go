@@ -661,6 +661,7 @@ func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
 		details     [3]string
 		statuses    [3]int
 		failWrite   bool
+		unchanged   bool
 		wantStop    bool
 		wantCalls   int
 		wantErrors  int
@@ -671,12 +672,22 @@ func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
 		{name: "valid write resets streak", details: [3]string{"null", "", "null"}, wantCalls: 3, wantErrors: 2, wantImport: 1},
 		{name: "uuid mismatches stop after second", details: [3]string{syncDetail, syncDetail, syncDetail}, wantStop: true, wantCalls: 2, wantErrors: 2},
 		{name: "write failures stop after second", failWrite: true, wantStop: true, wantCalls: 2, wantErrors: 2},
-		{name: "404 preserves streak", details: [3]string{"null", "", "null"}, statuses: [3]int{200, 404, 200}, wantStop: true, wantCalls: 3, wantErrors: 2, wantSkipped: 1},
-		{name: "oversized preserves streak", details: [3]string{"null", "", "null"}, statuses: [3]int{200, 413, 200}, wantStop: true, wantCalls: 3, wantErrors: 3},
+		{name: "unchanged resets streak", details: [3]string{"null", "", "null"}, unchanged: true, wantCalls: 2, wantErrors: 2, wantSkipped: 1},
+		{name: "404 resets streak", details: [3]string{"null", "", "null"}, statuses: [3]int{200, 404, 200}, wantCalls: 3, wantErrors: 2, wantSkipped: 1},
+		{name: "oversized resets streak", details: [3]string{"null", "", "null"}, statuses: [3]int{200, 413, 200}, wantCalls: 3, wantErrors: 3},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
 			ids := []string{"22222222-2222-4222-8222-222222222223", "22222222-2222-4222-8222-222222222224", "22222222-2222-4222-8222-222222222225"}
+			if tt.unchanged {
+				_, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+					if strings.Contains(path, "/chat_conversations/") {
+						return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "22222222-2222-4222-8222-222222222222", ids[1]))}, nil
+					}
+					return syncOneFetch(t, strings.ReplaceAll(syncSummary, "22222222-2222-4222-8222-222222222222", ids[1]), nil)(ctx, path)
+				}, nil)
+				require.NoError(t, err)
+			}
 			var summaries []string
 			for _, id := range ids {
 				summaries = append(summaries, strings.ReplaceAll(syncSummary, "22222222-2222-4222-8222-222222222222", id))
@@ -723,7 +734,7 @@ func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
 			for i, id := range ids {
 				messages, err := d.GetAllMessages(t.Context(), "claude-ai:"+id)
 				require.NoError(t, err)
-				if tt.wantImport == 1 && i == 1 {
+				if (tt.wantImport == 1 || tt.unchanged) && i == 1 {
 					assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
 				} else {
 					assert.Empty(t, messages)
