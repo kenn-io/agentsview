@@ -2795,7 +2795,8 @@ schemas keep their existing ordering behavior.
   Details select `current_leaf_message_uuid` and follow string
   `parent_message_uuid` links to the root sentinel
   `00000000-0000-4000-8000-000000000000`. Message text comes from
-  `content[].text`; `render_all_tools=true` preserves artifact tool blocks.
+  `content[].text`. Tool calls store their input JSON and paired result text
+  in the same tool-call records used by the sibling chat importers.
   Malformed selected paths and mismatched conversation UUIDs fail before writes.
   Exports preserve their original message order.
 - **Freshness:** Sync compares `updated_at` with archived `ended_at` and stores
@@ -2803,7 +2804,9 @@ schemas keep their existing ordering behavior.
   A policy change or zip import requires one new detail fetch. Sync commits
   metadata, messages, and the marker together. Matching turns with compatible
   UUIDs keep row IDs and gain missing source UUIDs on unchanged and append writes;
-  live branch changes update in place at every length. Shorter zip exports
+  live branch changes update in place at every length. A replacement that loses
+  a pin or note keeps a fresh copy of the previous version in Trash in the same
+  transaction; other replacements make no copy. Shorter zip exports
   remain refused. Pins follow source UUIDs, or role, content, and occurrence
   rank when the replacement has no UUIDs. Full resync preserves import markers.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
@@ -2823,6 +2826,14 @@ schemas keep their existing ordering behavior.
   [archived pass](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_archived.json),
   and [detail](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/detail.json)
   reconstruct the observed fields with synthetic identities and content.
+- **Observed 2026-10-08:** An authenticated detail response fetched with
+  `render_all_tools=true` contained the HTML only in
+  `tool_use(create_file).input.file_text`. Its `tool_result` and `Artifact`
+  blocks held creation and publication status text. The sanitized
+  [artifact detail fixture](https://github.com/kenn-io/agentsview/blob/main/internal/parser/testdata/claude-ai/artifact-detail.json)
+  preserves those blocks, uses synthetic identities, normalizes the root
+  parent to the root sentinel, and removes the decorative favicon.
+  The parser stores the HTML as tool input, which content search can find.
 - **Evidence limits:** Existing selected-path and Sync fixtures cover these
   shapes. Multiple chat organizations, web-search blocks, unanswered final
   prompts, and tree fields in official exports still need live verification.

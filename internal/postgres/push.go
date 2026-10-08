@@ -3200,7 +3200,13 @@ func resolvePinnedMessageTarget(
 	if !pin.messageFound {
 		return 0, "", false, nil
 	}
+	var claudeAILegacyReplacement bool
 	if pin.sourceUUID != "" {
+		if err := tx.QueryRowContext(ctx, `SELECT agent = 'claude-ai' AND NOT EXISTS(SELECT 1 FROM messages WHERE session_id = $1 AND COALESCE(source_uuid, '') != '') FROM sessions WHERE id = $1`, sessionID).Scan(&claudeAILegacyReplacement); err != nil {
+			return 0, "", false, fmt.Errorf("checking pg pin source identities: %w", err)
+		}
+	}
+	if pin.sourceUUID != "" && !claudeAILegacyReplacement {
 		// The stored uuid is matched alongside its session-scoped
 		// form so a pin saved against a bare Devin node/step id
 		// re-attaches after the re-parse restamps rows. Passing the

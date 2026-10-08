@@ -297,14 +297,24 @@ func upsertConversation(
 		}
 		return importUpdated, nil
 	}
-	_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+	write := db.SessionBatchWrite{
 		Session:           sess,
 		Messages:          msgs,
 		ReplaceMessages:   replaceMessages,
 		FillSourceUUIDs:   !replaceMessages,
 		SkipSignalUpdates: unchanged,
 		TouchModified:     true,
-	}})
+	}
+	if replaceMessages && !isNew {
+		r, ok := store.(sessionReplacer)
+		if !ok {
+			return importNew, errors.New("store cannot preserve replaced chats")
+		}
+		write.KeepTrashedCopyOnlyOnPinLoss = true
+		_, err = r.ReplaceSessionKeepingTrashedCopy(ctx, write)
+	} else {
+		_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
+	}
 	if errors.Is(err, db.ErrSessionExcluded) {
 		return importSkipped, nil
 	}
@@ -693,6 +703,15 @@ func sameMessages(existing, incoming []db.Message) bool {
 			existing[i].ContentLength != incoming[i].ContentLength ||
 			existing[i].SourceUUID != "" && incoming[i].SourceUUID != "" && existing[i].SourceUUID != incoming[i].SourceUUID {
 			return false
+		}
+		if len(existing[i].ToolCalls) != len(incoming[i].ToolCalls) {
+			return false
+		}
+		for j, call := range existing[i].ToolCalls {
+			other := incoming[i].ToolCalls[j]
+			if call.ToolUseID != other.ToolUseID || call.ToolName != other.ToolName || call.InputJSON != other.InputJSON || call.ResultContent != other.ResultContent {
+				return false
+			}
 		}
 	}
 	return true

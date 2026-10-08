@@ -27,6 +27,9 @@ const ClaudeAIResponseLimit = 32 << 20
 // ErrClaudeAIAuthRequired reports expired or missing browser credentials.
 var ErrClaudeAIAuthRequired = errors.New("claude.ai sign-in required")
 
+// ErrClaudeAIAccessDenied reports a browser request forbidden by Claude.ai.
+var ErrClaudeAIAccessDenied = errors.New("claude.ai access denied (HTTP 403)")
+
 //go:embed claude_ai_requests.txt
 var claudeAIRequests string
 
@@ -48,7 +51,7 @@ func (e *claudeAIHTTPError) Error() string {
 }
 
 func (e *claudeAIHTTPError) Is(target error) bool {
-	return e.status == 403 && target == ErrClaudeAIAuthRequired
+	return e.status == 403 && target == ErrClaudeAIAccessDenied
 }
 
 // ClaudeAIResponse carries the browser response without credentials.
@@ -165,7 +168,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					if ctx.Err() != nil {
 						return stats, ctx.Err()
 					}
-					if errors.Is(err, ErrClaudeAIAuthRequired) {
+					if errors.Is(err, ErrClaudeAIAuthRequired) || errors.Is(err, ErrClaudeAIAccessDenied) {
 						return stats, err
 					}
 					detailError, _ := errors.AsType[*claudeAIHTTPError](err)

@@ -1,0 +1,228 @@
+{
+ "uuid": "00000000-0000-4000-8000-000000000001",
+ "name": "Tiny HTML hello page",
+ "summary": "",
+ "model": "claude-opus-5-5",
+ "created_at": "2026-10-08T12:07:04.715880Z",
+ "updated_at": "2026-10-08T12:07:17.406134Z",
+ "settings": {
+  "enabled_web_search": true,
+  "enabled_mcp_tools": {
+   "00000000-0000-4000-8000-000000000002:list_tools": true,
+   "00000000-0000-4000-8000-000000000002:get_diagram_title": true,
+   "00000000-0000-4000-8000-000000000002:get_diagram_summary": true,
+   "00000000-0000-4000-8000-000000000002:validate_and_render_mermaid_diagram": true,
+   "00000000-0000-4000-8000-000000000002:list_tools-8a5274917651f7b78439befe4e1de0ed": true,
+   "00000000-0000-4000-8000-000000000002:get_diagram_title-b3f55f41d3ff0422c37fa0d66a4fc3b6": true,
+   "00000000-0000-4000-8000-000000000002:get_diagram_summary-f084818ae31b2ce9d2d641d224803667": true,
+   "00000000-0000-4000-8000-000000000002:validate_and_render_mermaid_diagram-9bead30b87c2d28f5e236922f2ec6c29": true
+  },
+  "enabled_monkeys_in_a_barrel": true,
+  "enabled_saffron": false,
+  "tool_search_mode": "auto",
+  "thinking_mode": "auto",
+  "effort_level": "medium",
+  "preview_feature_uses_artifacts": true,
+  "enabled_artifacts_attachments": false,
+  "enabled_turmeric": true
+ },
+ "is_starred": false,
+ "is_archived": false,
+ "is_temporary": false,
+ "workspace_upgraded": false,
+ "is_multiplayer": false,
+ "platform": "CLAUDE_AI",
+ "is_wiggle_enabled": true,
+ "effective_thinking_mode": "auto",
+ "current_leaf_message_uuid": "00000000-0000-4000-8000-000000000003",
+ "chat_messages": [
+  {
+   "uuid": "00000000-0000-4000-8000-000000000004",
+   "text": "",
+   "content": [
+    {
+     "start_timestamp": "2026-10-08T12:07:05.719342Z",
+     "stop_timestamp": "2026-10-08T12:07:05.719342Z",
+     "type": "text",
+     "text": "agentsview test: create a tiny HTML artifact page titled Hello that shows the word hello. Keep it under 10 lines.",
+     "citations": []
+    }
+   ],
+   "sender": "human",
+   "index": 0,
+   "created_at": "2026-10-08T12:07:05.719639Z",
+   "updated_at": "2026-10-08T12:07:05.719639Z",
+   "truncated": false,
+   "attachments": [],
+   "files": [],
+   "sync_sources": [],
+   "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+  },
+  {
+   "uuid": "00000000-0000-4000-8000-000000000003",
+   "text": "",
+   "content": [
+    {
+     "start_timestamp": "2026-10-08T12:07:05.714737Z",
+     "stop_timestamp": "2026-10-08T12:07:08.032674Z",
+     "type": "thinking",
+     "thinking": "",
+     "summaries": [
+      {
+       "summary": "Preparing a simple HTML page for publishing."
+      }
+     ],
+     "cut_off": false,
+     "truncated": false,
+     "hidden": false,
+     "thinking_hidden": true
+    },
+    {
+     "start_timestamp": "2026-10-08T12:07:08.032766Z",
+     "stop_timestamp": "2026-10-08T12:07:08.469321Z",
+     "type": "tool_use",
+     "id": "toolu_test0",
+     "name": "view",
+     "input": {
+      "description": "Check frontend design skill before writing the page",
+      "path": "/mnt/skills/public/frontend-design/SKILL.md"
+     },
+     "message": "Check frontend design skill before writing the page",
+     "integration_name": "File Creation",
+     "icon_name": "bookText",
+     "display_content": {
+      "type": "text",
+      "text": "Check frontend design skill before writing the page"
+     },
+     "tool_origin": "first_party"
+    },
+    {
+     "start_timestamp": "2026-10-08T12:07:08.484178Z",
+     "stop_timestamp": "2026-10-08T12:07:08.484260Z",
+     "type": "tool_result",
+     "tool_use_id": "toolu_test0",
+     "name": "view",
+     "content": [
+      {
+       "type": "text",
+       "text": "(skill file text omitted)"
+      }
+     ],
+     "is_error": false,
+     "meta": {
+      "output_format_category": "md"
+     },
+     "integration_name": "File Creation",
+     "icon_name": "bookText",
+     "tool_origin": "first_party"
+    },
+    {
+     "start_timestamp": "2026-10-08T12:07:09.470445Z",
+     "stop_timestamp": "2026-10-08T12:07:12.325900Z",
+     "type": "tool_use",
+     "id": "toolu_test1",
+     "name": "create_file",
+     "input": {
+      "description": "Tiny hello page",
+      "path": "/mnt/user-data/outputs/hello.html",
+      "file_text": "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>Hello</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n<style>:root{--bg:#fff;--fg:#1f2a44}@media (prefers-color-scheme:dark){:root:not([data-theme=\"light\"]){--bg:#14182a;--fg:#e8ecf7}}:root[data-theme=\"dark\"]{--bg:#14182a;--fg:#e8ecf7}\nhtml,body{height:100%;margin:0}body{background:var(--bg);color:var(--fg);display:grid;place-items:center;font:600 clamp(3rem,15vw,8rem)/1 Georgia,serif}</style>\n</head><body>hello</body></html>\n"
+     },
+     "message": "Tiny hello page",
+     "integration_name": "File Creation",
+     "icon_name": "file",
+     "display_content": {
+      "type": "json_block",
+      "json_block": "{\"language\": \"html\", \"code\": \"<!doctype html>\\n<html><head><meta charset=\\\"utf-8\\\"><title>Hello</title>\\n<meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1, viewport-fit=cover\\\">\\n<style>:root{--bg:#fff;--fg:#1f2a44}@media (prefers-color-scheme:dark){:root:not([data-theme=\\\"light\\\"]){--bg:#14182a;--fg:#e8ecf7}}:root[data-theme=\\\"dark\\\"]{--bg:#14182a;--fg:#e8ecf7}\\nhtml,body{height:100%;margin:0}body{background:var(--bg);color:var(--fg);display:grid;place-items:center;font:600 clamp(3rem,15vw,8rem)/1 Georgia,serif}</style>\\n</head><body>hello</body></html>\\n\", \"filename\": \"/mnt/user-data/outputs/hello.html\"}"
+     },
+     "tool_origin": "first_party"
+    },
+    {
+     "start_timestamp": "2026-10-08T12:07:12.572588Z",
+     "stop_timestamp": "2026-10-08T12:07:12.572624Z",
+     "type": "tool_result",
+     "tool_use_id": "toolu_test1",
+     "name": "create_file",
+     "content": [
+      {
+       "type": "text",
+       "text": "File created successfully: /mnt/user-data/outputs/hello.html"
+      }
+     ],
+     "is_error": false,
+     "meta": {
+      "output_format_category": "html"
+     },
+     "integration_name": "File Creation",
+     "icon_name": "file",
+     "display_content": {
+      "type": "text",
+      "text": "File created successfully: /mnt/user-data/outputs/hello.html"
+     },
+     "tool_origin": "first_party"
+    },
+    {
+     "start_timestamp": "2026-10-08T12:07:14.262785Z",
+     "stop_timestamp": "2026-10-08T12:07:14.265318Z",
+     "type": "tool_use",
+     "id": "toolu_test2",
+     "name": "Artifact",
+     "input": {
+      "action": "publish",
+      "file_path": "/mnt/user-data/outputs/hello.html",
+      "title": "Hello",
+      "favicon": ""
+     },
+     "message": "Artifact",
+     "tool_origin": "first_party"
+    },
+    {
+     "start_timestamp": "2026-10-08T12:07:16.181881Z",
+     "stop_timestamp": "2026-10-08T12:07:16.181922Z",
+     "type": "tool_result",
+     "tool_use_id": "toolu_test2",
+     "name": "Artifact",
+     "content": [
+      {
+       "type": "text",
+       "text": "Published /mnt/user-data/outputs/hello.html at https://claude.ai/artifact/ExampleArtifactId00000\n\nFor the next change to this page, send it as edits on a publish call (action \"publish\" with url, file_path, and edits: old_str/new_str pairs, each old_str copied exactly from the file as it now stands) instead of editing the file with str_replace and publishing again; that one call changes the file and the page together. View the file first only if its text is no longer in this conversation. To rewrite most of the page, edit the file itself and publish it with url and no edits."
+      }
+     ],
+     "is_error": false,
+     "structured_content": {
+      "artifact_id": "00000000-0000-4000-8000-000000000006",
+      "path": "/mnt/user-data/outputs/hello.html",
+      "title": "Hello",
+      "url": "https://claude.ai/artifact/ExampleArtifactId00000"
+     },
+     "message": "Published artifact",
+     "display_content": {
+      "type": "file",
+      "published_url": "https://claude.ai/code/artifact/00000000-0000-4000-8000-000000000006",
+      "published_artifact_id": "00000000-0000-4000-8000-000000000006",
+      "published_action": "published",
+      "title": "Hello",
+      "owned_by_account": true
+     },
+     "tool_origin": "first_party"
+    },
+    {
+     "start_timestamp": "2026-10-08T12:07:17.321949Z",
+     "stop_timestamp": "2026-10-08T12:07:17.336195Z",
+     "type": "text",
+     "text": "Your \"Hello\" page is published. It's 7 lines, shows \"hello\" centered on the screen, and adapts to light and dark mode.",
+     "citations": []
+    }
+   ],
+   "sender": "assistant",
+   "index": 1,
+   "created_at": "2026-10-08T12:07:17.406134Z",
+   "updated_at": "2026-10-08T12:07:17.406134Z",
+   "truncated": false,
+   "stop_reason": "end_turn",
+   "attachments": [],
+   "files": [],
+   "sync_sources": [],
+   "parent_message_uuid": "00000000-0000-4000-8000-000000000004"
+  }
+ ]
+}

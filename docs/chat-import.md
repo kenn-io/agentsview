@@ -79,8 +79,10 @@ Sync skips trashed chats; file imports report them as refusals.
 Each sync includes archived chats, checks all conversation summaries, and
 downloads only new or changed chats. Search stays available during the import.
 Trashed or permanently deleted chats stay deleted. Changed chats update in
-place to show the branch Claude.ai shows. After an edit or branch switch, turns
-after the fork change in place, and pins on replaced turns go with them.
+place to show the branch Claude.ai shows. If an edit or branch switch would
+drop a pin or note, Sync keeps the previous version in Trash with its pins and
+notes, in the same transaction as the update. Each such replacement makes a
+fresh copy. Replacements that keep every pin and note make no copy.
 Switching back on Claude.ai and syncing restores those turns. A chat first imported
 from a zip needs one detail fetch to verify its visible branch. Re-importing a
 zip clears that verification, so the next Sync fetches it once again. Each chat
