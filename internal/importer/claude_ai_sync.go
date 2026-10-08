@@ -87,6 +87,9 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	if err := json.Unmarshal(raw, &organizations); err != nil {
 		return stats, err
 	}
+	if organizations == nil {
+		return stats, errors.New("claude organizations must be an array")
+	}
 
 	for _, org := range organizations {
 		if !slices.Contains(org.Capabilities, "chat") {

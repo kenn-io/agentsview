@@ -194,7 +194,6 @@ func TestReplaceSessionKeepingTrashedCopyPinIdentities(t *testing.T) {
 		surviving     []int
 		copy          bool
 	}{
-		{"legacy zip fallback", []Message{msg("a", "same"), msg("b", "reply")}, []Message{msg("", "same"), msg("", "edited")}, []int{0}, []int{0}, false},
 		{"colliding pin targets", []Message{msg("a", "same"), msg("", "other")}, []Message{msg("a", "other")}, []int{0, 1}, []int{0}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

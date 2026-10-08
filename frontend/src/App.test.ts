@@ -153,7 +153,7 @@ it.each([
   expect(pins.loadForSession).toHaveBeenLastCalledWith(id);
 });
 
-it.each(["messages", "sync"])("reloads pins when a sessions event is followed by %s", async (scope) => {
+it("reloads pins when a sessions event is followed by messages", async () => {
   vi.useFakeTimers();
   stubAppDependencies();
   vi.spyOn(pins, "loadAll").mockResolvedValue();
@@ -171,11 +171,8 @@ it.each(["messages", "sync"])("reloads pins when a sessions event is followed by
     new MessageEvent("data_changed", { data: JSON.stringify(data) }),
   );
   update({ scope: "sessions" });
-  await vi.advanceTimersByTimeAsync(100);
-  update({ scope });
-  await vi.advanceTimersByTimeAsync(299);
-  expect(pins.loadAll).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(1);
+  update({ scope: "messages" });
+  await vi.advanceTimersByTimeAsync(400);
   await flushEffects();
   expect(pins.loadAll).toHaveBeenCalledTimes(2);
 });

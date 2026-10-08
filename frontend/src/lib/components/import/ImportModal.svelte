@@ -53,6 +53,7 @@
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
   let syncController = $state<AbortController>();
+  let syncTask: Promise<ImportStats> | undefined;
   const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection() && !syncState.readOnly);
 
   async function connect() {
@@ -62,7 +63,10 @@
 
   async function disconnect() {
     syncController?.abort();
-    try { await host?.disconnect(); }
+    try {
+      await syncTask?.catch(() => {});
+      await host?.disconnect();
+    }
     catch (e) { error = String(e); }
   }
 
@@ -76,7 +80,8 @@
     const controller = new AbortController();
     syncController = controller;
     try {
-      result = await syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
+      syncTask = syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
+      result = await syncTask;
     } catch (e) {
       if (controller.signal.aborted) return;
       error = e instanceof Error ? e.message : m.import_failed();
@@ -84,6 +89,7 @@
     finally {
       importing = false;
       syncController = undefined;
+      syncTask = undefined;
       onimported();
     }
   }
