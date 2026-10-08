@@ -106,7 +106,7 @@ func TestSyncClaudeAIInvalidAccountSession(t *testing.T) {
 					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
 				}, nil)
 				require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
-				assert.EqualError(t, err, "claude.ai sign-in required")
+				require.EqualError(t, err, "claude.ai sign-in required")
 				assert.Equal(t, stage+1, calls)
 				assert.Zero(t, stats.Imported+stats.Errors+stats.Skipped)
 				session, err := d.GetSession(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
@@ -959,7 +959,7 @@ func TestSyncClaudeAIInvalidOrganizations(t *testing.T) {
 			}, nil)
 			require.Error(t, err)
 			if body == "null" {
-				assert.EqualError(t, err, "claude organizations must be an array")
+				require.EqualError(t, err, "claude organizations must be an array")
 			}
 			assert.Equal(t, 1, calls)
 			assert.Zero(t, stats.Imported+stats.Updated+stats.Skipped+stats.Errors)
