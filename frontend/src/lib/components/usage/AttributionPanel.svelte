@@ -4,7 +4,6 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
-  import { Button } from "@kenn-io/kit-ui";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
@@ -47,14 +46,18 @@
     }> = [];
 
     if (zoomedProject && groupBy === "project") {
-      const groups = (usage.groups ?? []).filter((row) => row.group_key);
+      const groups = (usage.groups ?? []).filter((row) => row.project_key === usage.zoomedProjectKey && row.group_key);
       const names = groups.map((row) => row.group_label || row.group_key!);
-      items = groups.map((row, index) => ({
-        id: row.group_key!,
-        label: names.filter((name) => name === names[index]).length > 1
-          ? `${names[index]} · ${row.group_key!.slice(0, 6)}` : names[index]!,
-        value: isTokenMode ? sumSelectedTokens(row, usage.selectedTokenTypes) : row.cost.microdollars,
-      }));
+      items = groups.map((row, index) => {
+        const duplicates = groups.filter((other, otherIndex) => other !== row && names[otherIndex] === names[index]);
+        let length = 6;
+        while (length < row.group_key!.length && duplicates.some((other) => other.group_key!.slice(0, length) === row.group_key!.slice(0, length))) length++;
+        return {
+          id: row.group_key!,
+          label: duplicates.length ? `${names[index]} · ${row.group_key!.slice(0, length)}` : names[index]!,
+          value: isTokenMode ? sumSelectedTokens(row, usage.selectedTokenTypes) : row.cost.microdollars,
+        };
+      });
       const total = isTokenMode ? sumSelectedTokens(zoomedProject, usage.selectedTokenTypes) : zoomedProject.cost.microdollars;
       const remainder = total - items.reduce((sum, item) => sum + item.value, 0);
       if (remainder > 0) items.push({ id: "", label: m.usage_other_runs(), value: remainder });
@@ -92,11 +95,13 @@
     const items = rowItems;
     const total = items.reduce((sum, item) => sum + item.value, 0);
 
-    return items.map((d) => ({
+    return items.map((d, index) => ({
       id: d.id,
       label: d.label,
       value: d.value,
-      color: colorMap.get(usage.zoomedProjectKey ?? d.id) ?? "var(--text-muted)",
+      color: zoomedProject
+        ? `color-mix(in srgb, ${colorMap.get(zoomedProject.project_key) ?? "var(--text-muted)"} ${55 + 40 * (index + 1) / items.length}%, ${index % 2 ? "black" : "white"})`
+        : colorMap.get(d.id) ?? "var(--text-muted)",
       pct: total > 0 ? d.value / total : 0,
     }));
   });
@@ -122,7 +127,7 @@
   function handleSelect(id: string) {
     if (zoomedProject) return;
     if (groupBy === "project") {
-      void usage.selectAttributionProject(id);
+      usage.selectAttributionProject(id);
     } else if (groupBy === "agent") {
       usage.toggleAgent(id, { preserveTimeRange: true });
     } else {
@@ -190,11 +195,11 @@
   </div>
 
   {#if zoomedProject}
-    <div class="hint"><Button onclick={() => usage.backToProjects()}>{m.usage_all_projects()}</Button> › {zoomedProject.project}</div>
+    <div class="hint breadcrumb"><button onclick={() => usage.backToProjects()}>{m.usage_all_projects()}</button> › {zoomedProject.project}</div>
   {/if}
-  {#if usage.errors.groups}
+  {#if zoomedProject && usage.errors.groups}
     <div class="empty">{usage.errors.groups}</div>
-  {:else if usage.loading.groups}
+  {:else if zoomedProject && usage.loading.groups && usage.groups === null}
     <div class="empty">{m.usage_groups_loading()}</div>
   {:else if rows.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
@@ -498,7 +503,26 @@
     font-size: 10px;
     color: var(--text-muted);
     margin-bottom: 6px;
+    line-height: 14px;
+    height: 14px;
     font-style: italic;
+  }
+
+  .breadcrumb, .breadcrumb button {
+    font-style: normal;
+  }
+
+  .breadcrumb button {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .breadcrumb button:hover {
+    text-decoration: underline;
   }
 
   @media (max-width: 640px) {

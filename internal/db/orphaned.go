@@ -25,44 +25,21 @@ func (d *DB) ResolveHermesCronJob(ctx context.Context, id, parent, agent string)
 
 func resolveArchivedHermesCronJob(ctx context.Context, id, parent, agent string, queryRow contextQueryRow) (string, error) {
 	namespace := id[:strings.LastIndexByte(id, ':')+1]
-	var lookupErr error
-	var visited []string
-	job := parser.HermesCronJobID(id, func(current string) string {
-		visited = append(visited, current)
-		next := parent
-		if current != id || next == "" {
-			err := queryRow(ctx, `SELECT COALESCE(NULLIF(parser_parent_session_id, ''), parent_session_id, '')
-				FROM sessions WHERE id = ? AND agent = ?`, current, agent).Scan(&next)
-			if errors.Is(err, sql.ErrNoRows) {
-				return ""
-			}
-			if err != nil {
-				lookupErr = err
-				return ""
-			}
+	return parser.ResolveHermesCronAncestry(id, func(current string) (string, string, error) {
+		var next, group string
+		err := queryRow(ctx, `SELECT COALESCE(NULLIF(parser_parent_session_id, ''), parent_session_id, ''), group_key
+			FROM sessions WHERE id = ? AND agent = ?`, current, agent).Scan(&next, &group)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", "", err
+		}
+		if current == id && parent != "" {
+			next = parent
 		}
 		if !strings.HasPrefix(next, namespace) {
-			return ""
+			next = ""
 		}
-		return next
+		return next, group, nil
 	})
-	if job != "" || lookupErr != nil {
-		return job, lookupErr
-	}
-	for _, current := range visited {
-		var group string
-		err := queryRow(ctx, `SELECT group_key FROM sessions WHERE id = ? AND agent = ?`, current, agent).Scan(&group)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		if group != "" {
-			return group, nil
-		}
-	}
-	return "", nil
 }
 
 // RepairHermesCronGroups backfills preserved runs after archive copies.
@@ -77,7 +54,14 @@ func (d *DB) RepairHermesCronGroups(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT id, agent, COALESCE(NULLIF(parser_parent_session_id, ''), parent_session_id, ''), COALESCE(session_name, '') FROM sessions WHERE agent IN ('hermes', 'augure-desktop') AND group_key = '' AND (project = agent || '-cron' OR EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = sessions.id AND a.original_project = sessions.agent || '-cron'))`)
+	var clauses []string
+	var args []any
+	for _, agent := range parser.HermesFormatAgents() {
+		clauses = append(clauses, `(agent = ? AND (project = ? OR EXISTS (SELECT 1 FROM session_project_assignments a WHERE a.session_id = sessions.id AND a.original_project = ?)))`)
+		project := parser.HermesSourceProject(agent, "cron")
+		args = append(args, string(agent), project, project)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, agent, COALESCE(NULLIF(parser_parent_session_id, ''), parent_session_id, ''), COALESCE(session_name, '') FROM sessions WHERE group_key = '' AND (`+strings.Join(clauses, " OR ")+`)`, args...)
 	if err != nil {
 		return err
 	}

@@ -67,7 +67,7 @@ func augureDesktopSessionID(id string) string {
 // ("hermes" or "hermes-<source>") to the fork's producer name.
 func augureDesktopProject(project string) string {
 	if project == "hermes" {
-		return "augure-desktop"
+		return HermesSourceProject(AgentAugureDesktop, "")
 	}
-	return "augure-desktop-" + strings.TrimPrefix(project, "hermes-")
+	return HermesSourceProject(AgentAugureDesktop, strings.TrimPrefix(project, "hermes-"))
 }

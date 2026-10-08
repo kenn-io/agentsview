@@ -60,7 +60,7 @@ func ResolveUsageProjectKeys(
 	if req.ExcludeProjectKey == "" {
 		return req, nil
 	}
-	resolved, err := resolveUsageProjectKeyLabels(
+	resolved, err := ResolveUsageProjectKeyLabels(
 		ctx, store, req.ExcludeProjectKey,
 	)
 	if err != nil {
@@ -71,7 +71,7 @@ func ResolveUsageProjectKeys(
 	return req, nil
 }
 
-func resolveUsageProjectKeyLabels(
+func ResolveUsageProjectKeyLabels(
 	ctx context.Context, store db.Store, keys string,
 ) ([]string, error) {
 	labels, err := store.GetActiveProjectLabels(ctx)
@@ -131,7 +131,7 @@ func resolvePairwiseProjectLabels(
 	if dimension != "project" || !strings.HasPrefix(value, "pl1:sha256:") {
 		return nil, nil
 	}
-	return resolveUsageProjectKeyLabels(ctx, store, value)
+	return ResolveUsageProjectKeyLabels(ctx, store, value)
 }
 
 // UsageInputError flags an invalid usage filter (bad timezone, date, or

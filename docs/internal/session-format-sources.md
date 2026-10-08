@@ -2942,7 +2942,8 @@ schemas keep their existing ordering behavior.
   [cron/scheduler.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/cron/scheduler.py)
   records `source = "cron"` and titles as the job name followed by ` · `
   and the run timestamp. Agentsview keeps the stable job ID in `group_key`
-  and the recorded name in `group_label`.
+  and the recorded name in `group_label`. Reverified both producer files
+  for the shared provider and archive ancestry lookup on 2026-10-08.
   [export_session](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_portability.py)
   retains `source` and `parent_session_id`. Live transcripts supply ancestry
   only when they record cron source and parent metadata.

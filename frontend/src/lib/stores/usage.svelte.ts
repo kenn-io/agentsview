@@ -25,6 +25,7 @@ const USAGE_STEP_ORDER: readonly UsageStep[] = [
   "summary",
   "contextSummary",
   "topSessions",
+  "groups",
   "comparison",
   "pairwise",
 ];
@@ -785,6 +786,8 @@ class UsageStore {
   setMode(mode: UsageMode): boolean {
     if (this.mode === mode) return false;
     this.mode = mode;
+    this.invalidatePanel("groups");
+    this.groups = null;
     this.invalidatePanel("topSessions");
     this.topSessions = null;
     this.errors.topSessions = null;
@@ -802,6 +805,8 @@ class UsageStore {
       return false;
     }
     this.selectedTokenTypes = canonical;
+    this.invalidatePanel("groups");
+    this.groups = null;
     this.invalidatePanel("topSessions");
     this.topSessions = null;
     this.errors.topSessions = null;
@@ -885,13 +890,14 @@ class UsageStore {
       contextParams,
     });
     const topSessionsPromise = this.fetchTopSessions(params);
+    const groupsPromise = this.fetchGroups(params);
     const loadedSummary = await summaryPromise;
     if (fetchVersion !== this.fetchAllVersion) {
-      await topSessionsPromise;
+      await Promise.all([topSessionsPromise, groupsPromise]);
       return "aborted";
     }
     if (!loadedSummary) {
-      await topSessionsPromise;
+      await Promise.all([topSessionsPromise, groupsPromise]);
       if (fetchVersion !== this.fetchAllVersion) return "aborted";
       if (
         selectedRangeAtStart !== null &&
@@ -901,7 +907,10 @@ class UsageStore {
         this.invalidatePanel("topSessions");
         this.topSessions = null;
         this.errors.topSessions = null;
-        await this.fetchTopSessions(this.baseParams());
+        await Promise.all([
+          this.fetchTopSessions(this.baseParams()),
+          this.fetchGroups(this.baseParams()),
+        ]);
       }
       return "error";
     }
@@ -911,14 +920,22 @@ class UsageStore {
           return this.fetchTopSessions(loadedSummary.params);
         })
       : topSessionsPromise;
-    const [topSessionsResult, comparisonResult, pairwiseResult] = await Promise.all([
+    const currentGroupsPromise = loadedSummary.projectScopeRecovered
+      ? groupsPromise.then(() => {
+          if (fetchVersion !== this.fetchAllVersion) return "aborted";
+          return this.fetchGroups(loadedSummary.params);
+        })
+      : groupsPromise;
+    const [topSessionsResult, groupsResult, comparisonResult, pairwiseResult] = await Promise.all([
       currentTopSessionsPromise,
+      currentGroupsPromise,
       this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
       this.fetchPairwise(loadedSummary.version, loadedSummary.params),
     ]);
     if (
       fetchVersion === this.fetchAllVersion &&
       topSessionsResult === "ok" &&
+      groupsResult === "ok" &&
       comparisonResult === "ok" &&
       pairwiseResult === "ok"
     ) {
@@ -928,6 +945,7 @@ class UsageStore {
     if (
       fetchVersion !== this.fetchAllVersion ||
       topSessionsResult === "aborted" ||
+      groupsResult === "aborted" ||
       comparisonResult === "aborted" ||
       pairwiseResult === "aborted"
     ) {
@@ -1186,37 +1204,29 @@ class UsageStore {
   }
 
   backToProjects(): void {
-    this.invalidatePanel("groups");
     this.zoomedProjectKey = null;
-    this.groups = null;
-    this.errors.groups = null;
-    this.loading.groups = false;
   }
 
-  async selectAttributionProject(key: string): Promise<void> {
-    const data = await this.fetchGroups(key);
-    if (!data) return;
-    if (data.some((row) => row.group_key)) {
+  selectAttributionProject(key: string): void {
+    if (this.groups?.some((row) => row.project_key === key && row.group_key)) {
       this.zoomedProjectKey = key;
-      this.groups = data;
     } else {
       this.toggleProjectKey(key, { preserveTimeRange: true });
     }
   }
 
-  private async fetchGroups(
-    key: string,
-    params: UsageParams = this.baseParams(),
-  ): Promise<DbTopSessionEntry[] | null> {
+  private async fetchGroups(params: UsageParams = this.baseParams()): Promise<FetchResult> {
     const version = ++this.versions.groups;
     const signal = this.nextAbortSignal("groups");
     this.loading.groups = true;
     this.errors.groups = null;
+    const started = performance.now();
+    const liveStep = this.liveQuery.start("groups", started);
+    let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await UsageService.getApiV1UsageTopSessions(
         {
           ...params,
-          project_key: key,
           group_by: "group",
           limit: 100,
           sort: this.mode === "token" ? "tokens" : "cost",
@@ -1224,23 +1234,25 @@ class UsageStore {
         },
         { signal },
       );
-      return this.versions.groups === version ? data : null;
+      if (this.versions.groups !== version) return "aborted";
+      this.groups = data;
+      this.noteStep("groups", liveStep, started, data);
+      return "ok";
     } catch (error) {
-      if (!isAbortError(error) && this.versions.groups === version) {
+      status = isAbortError(error) ? "aborted" : "error";
+      if (status === "error" && this.versions.groups === version) {
         this.errors.groups = error instanceof Error ? error.message : m.shared_failed_to_load();
       }
-      return null;
+      return status;
     } finally {
+      this.recordStep("groups", started, status);
+      this.liveQuery.abandon(liveStep);
       this.clearAbortSignal("groups", signal);
       if (this.versions.groups === version) this.loading.groups = false;
     }
   }
 
   async fetchTopSessions(params: UsageParams | null = null): Promise<FetchResult> {
-    const zoomedKey = this.zoomedProjectKey;
-    const groupPromise = zoomedKey
-      ? this.fetchGroups(zoomedKey, params ?? this.baseParams())
-      : Promise.resolve(null);
     const v = ++this.versions.topSessions;
     const signal = this.nextAbortSignal("topSessions");
     const isFirstLoad = this.topSessions === null;
@@ -1250,23 +1262,19 @@ class UsageStore {
     const liveStep = this.liveQuery.start("topSessions", started);
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const [data, groups] = await Promise.all([
-        UsageService.getApiV1UsageTopSessions(
-          {
-            ...(params ?? this.baseParams()),
-            sort: this.mode === "token" ? "tokens" : "cost",
-            token_types:
-              this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
-                ? this.selectedTokenTypes.join(",")
-                : undefined,
-          },
-          { signal },
-        ),
-        groupPromise,
-      ]);
+      const data = await UsageService.getApiV1UsageTopSessions(
+        {
+          ...(params ?? this.baseParams()),
+          sort: this.mode === "token" ? "tokens" : "cost",
+          token_types:
+            this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
+              ? this.selectedTokenTypes.join(",")
+              : undefined,
+        },
+        { signal },
+      );
       if (this.versions.topSessions === v) {
         this.topSessions = data;
-        if (zoomedKey && this.zoomedProjectKey === zoomedKey) this.groups = groups;
         this.errors.topSessions = null;
         this.noteStep("topSessions", liveStep, started, data);
         return "ok";
@@ -1305,8 +1313,8 @@ class UsageStore {
     this.abortControllers[panel]?.abort();
     delete this.abortControllers[panel];
     this.querying[panel] = false;
-    if (panel === "pairwise") {
-      this.loading.pairwise = false;
+    if (panel === "pairwise" || panel === "groups") {
+      this.loading[panel] = false;
     }
   }
 

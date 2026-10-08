@@ -15193,7 +15193,7 @@ func (e *Engine) providerFingerprintHashMatchesDB(ctx context.Context,
 // members instead of the whole archive. Providers whose fingerprint stat is
 // per-source stay stat-gated: a stat mismatch there means real change.
 func providerFingerprintHashEstablishesFreshness(agent parser.AgentType) bool {
-	return agent == parser.AgentHermes || agent == parser.AgentAugureDesktop
+	return parser.HermesSourceProject(agent, "") != ""
 }
 
 // providerSourceHashFreshDespiteStat is the stat-mismatch arm of
@@ -17773,7 +17773,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	indexes := make(map[string][]int)
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
-		if batch[i].sess.GroupKey == "" && (batch[i].sess.Agent == parser.AgentHermes || batch[i].sess.Agent == parser.AgentAugureDesktop) && batch[i].sess.Project == string(batch[i].sess.Agent)+"-cron" {
+		if batch[i].sess.GroupKey == "" && parser.HermesSourceProject(batch[i].sess.Agent, "cron") != "" && batch[i].sess.Project == parser.HermesSourceProject(batch[i].sess.Agent, "cron") {
 			sess := &batch[i].sess
 			job, err := e.db.ResolveHermesCronJob(ctx, applyIDPrefixToID(e.idPrefix, sess.ID), applyIDPrefixToID(e.idPrefix, sess.ParentSessionID), string(sess.Agent))
 			if err == nil && job == "" {

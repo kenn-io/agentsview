@@ -129,6 +129,7 @@ const usageServiceMocks = vi.hoisted(() => {
       },
     }),
     getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
+    getUsageGroups: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -160,7 +161,11 @@ vi.mock("../api/generated/index", () => ({
     getApiV1UsageSummary: usageServiceMocks.getApiV1UsageSummary,
     getApiV1UsageComparison: usageServiceMocks.getApiV1UsageComparison,
     getApiV1UsagePairwiseComparison: usageServiceMocks.getApiV1UsagePairwiseComparison,
-    getApiV1UsageTopSessions: usageServiceMocks.getApiV1UsageTopSessions,
+    getApiV1UsageTopSessions: vi.fn((params, options) =>
+      params?.group_by === "group"
+        ? usageServiceMocks.getUsageGroups(params, options)
+        : usageServiceMocks.getApiV1UsageTopSessions(params, options),
+    ),
   },
 }));
 
@@ -636,15 +641,15 @@ describe("UsageStore session filter params", () => {
 
     void usage.fetchTopSessions();
     await Promise.resolve();
-    expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
-    ).toBe(false);
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      false,
+    );
 
     usage.setMode("token");
 
-    expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
-    ).toBe(true);
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
     expect(usage.topSessions).toBeNull();
   });
 
@@ -1101,16 +1106,16 @@ describe("UsageStore session filter params", () => {
 
     void usage.fetchTopSessions();
     await Promise.resolve();
-    expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
-    ).toBe(false);
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      false,
+    );
 
     void usage.fetchAll();
     await Promise.resolve();
 
-    expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
-    ).toBe(true);
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 
   it("aborts visible panel requests on teardown", async () => {
@@ -2007,5 +2012,58 @@ describe("parseWindowDays", () => {
     expect(parseWindowDays("36500")).toBe(36500);
     expect(parseWindowDays("36501")).toBeNull();
     expect(parseWindowDays("1000000000")).toBeNull();
+  });
+});
+
+describe("UsageStore job group refreshes", () => {
+  beforeEach(() => {
+    installStorage();
+    vi.clearAllMocks();
+    usageServiceMocks.getUsageGroups.mockReset().mockResolvedValue([]);
+    usageServiceMocks.getApiV1UsageTopSessions.mockReset().mockResolvedValue([]);
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
+  });
+
+  const group = (cost: number): DbTopSessionEntry => ({
+    ...topSession("run-a"),
+    project_key: "pl1:sha256:alpha",
+    group_key: "job-a",
+    group_label: "Digest",
+    cost: testMoney(cost),
+  });
+
+  it("refreshes groups while top sessions are pending and discards stale groups", async () => {
+    const { usage } = await loadStore();
+    let resolveOld!: (rows: DbTopSessionEntry[]) => void;
+    let resolveTop!: (rows: DbTopSessionEntry[]) => void;
+    usageServiceMocks.getUsageGroups.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        }),
+    );
+    const first = usage.fetchAll();
+    expect(usage.loading.groups).toBe(true);
+    const oldSignal = usageServiceMocks.getUsageGroups.mock.lastCall?.[1].signal as AbortSignal;
+    usageServiceMocks.getUsageGroups.mockResolvedValueOnce([group(9)]);
+    usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveTop = resolve;
+        }),
+    );
+    const second = usage.fetchAll();
+    await vi.waitFor(() => expect(usage.groups).toEqual([group(9)]));
+    expect(oldSignal.aborted).toBe(true);
+    expect(usage.loading.groups).toBe(false);
+    usage.selectAttributionProject("pl1:sha256:alpha");
+    expect(usage.zoomedProjectKey).toBe("pl1:sha256:alpha");
+    expect(usageServiceMocks.getUsageGroups).toHaveBeenCalledTimes(2);
+    resolveOld([group(1)]);
+    await first;
+    expect(usage.groups).toEqual([group(9)]);
+    resolveTop([]);
+    await second;
+    expect(usage.groups).toEqual([group(9)]);
   });
 });

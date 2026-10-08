@@ -1017,9 +1017,6 @@ func chooseHermesStateSessionSource(
 	sessionsDir, stateDB, project, machine string,
 ) (selectedPath string, sess *ParsedSession, msgs []ParsedMessage, err error) {
 	selectedPath = stateDB
-	if project == "" && ss.source != "" {
-		project = hermesProject(ss)
-	}
 	jsonPath := filepath.Join(sessionsDir, "session_"+ss.id+".json")
 	jsonlPath := filepath.Join(sessionsDir, ss.id+".jsonl")
 	if IsRegularFile(jsonPath) {
@@ -1193,27 +1190,39 @@ func resolveHermesCronJob(sessionsDir string, ss *hermesStateSession, parentLook
 
 // HermesCronJobID follows recorded parents until a cron run identifies its job.
 func HermesCronJobID(id string, parent func(string) string) string {
+	job, _ := ResolveHermesCronAncestry(id, func(current string) (string, string, error) {
+		if parent == nil {
+			return "", "", nil
+		}
+		return parent(current), "", nil
+	})
+	return job
+}
+
+// ResolveHermesCronAncestry prefers producer run IDs over saved ancestor groups.
+func ResolveHermesCronAncestry(id string, lookup func(string) (string, string, error)) (string, error) {
 	seen := make(map[string]bool)
+	fallback := ""
 	for id != "" && !seen[id] {
 		seen[id] = true
 		raw := id[strings.LastIndexByte(id, ':')+1:]
 		if match := hermesCronSessionID.FindStringSubmatch(raw); match != nil {
-			return match[1]
+			return match[1], nil
 		}
-		if parent == nil {
-			break
+		next, group, err := lookup(id)
+		if err != nil {
+			return "", err
 		}
-		id = parent(id)
+		if fallback == "" {
+			fallback = group
+		}
+		id = next
 	}
-	return ""
+	return fallback, nil
 }
 
 func hermesProject(ss hermesStateSession) string {
-	if ss.source == "" {
-		return "hermes"
-	}
-	project := "hermes-" + ss.source
-	return project
+	return HermesSourceProject(AgentHermes, ss.source)
 }
 
 func resolveHermesCronJobs(sessions []hermesStateSession, sessionsDir string) {

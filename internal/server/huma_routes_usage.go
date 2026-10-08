@@ -342,22 +342,9 @@ func (s *Server) humaUsageTopSessions(
 	}
 	f.TopSessionsByGroup = in.GroupBy == "group"
 	if in.ProjectKey != "" {
-		labels, err := s.db.GetActiveProjectLabels(ctx)
+		resolved, err := service.ResolveUsageProjectKeyLabels(ctx, s.db, in.ProjectKey)
 		if err != nil {
-			return nil, internalError("list project labels", err)
-		}
-		catalog, err := s.db.BuildProjectIdentityMap(ctx, labels)
-		if err != nil {
-			return nil, internalError("resolve project identities", err)
-		}
-		var resolved []string
-		for label, entry := range catalog {
-			if entry.ProjectKey == in.ProjectKey {
-				resolved = append(resolved, label)
-			}
-		}
-		if len(resolved) == 0 {
-			return nil, huma.Error400BadRequest("unknown project key")
+			return nil, usageSummaryAPIError(err)
 		}
 		if included := f.ProjectFilterLabels(); len(included) > 0 {
 			resolved = slices.DeleteFunc(resolved, func(label string) bool { return !slices.Contains(included, label) })
@@ -398,6 +385,19 @@ func (s *Server) humaUsageTopSessions(
 			return nil, handled
 		}
 		return nil, internalError("usage top sessions error", err)
+	}
+	if f.TopSessionsByGroup {
+		labels := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			labels = append(labels, entry.Project)
+		}
+		catalog, err := s.db.BuildProjectIdentityMap(ctx, labels)
+		if err != nil {
+			return nil, internalError("resolve project identities", err)
+		}
+		for i := range entries {
+			entries[i].ProjectKey = catalog[entries[i].Project].ProjectKey
+		}
 	}
 	return &jsonOutput[[]db.TopSessionEntry]{Body: entries}, nil
 }

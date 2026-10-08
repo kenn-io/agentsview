@@ -13,7 +13,9 @@ The latest release is
 
 - Usage attribution opens Hermes cron job groups under one `hermes-cron`
   project. Stable job IDs keep renamed and compressed runs together; recorded
-  names label the groups, with IDs on hover.
+  names label the groups, with IDs on hover. The first sync after upgrading
+  rebuilds the archive once to populate job groups and preserves archived runs
+  whose source files are gone.
 
 **Bug fixes**
 

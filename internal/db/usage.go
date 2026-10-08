@@ -2643,6 +2643,7 @@ func (db *DB) getDailyUsageLegacy(
 
 // TopSessionEntry is one row in the "top sessions by cost" result.
 type TopSessionEntry struct {
+	ProjectKey          string      `json:"project_key,omitempty"`
 	GroupKey            string      `json:"group_key,omitempty"`
 	GroupLabel          string      `json:"group_label,omitempty"`
 	SessionCount        int         `json:"session_count,omitempty"`

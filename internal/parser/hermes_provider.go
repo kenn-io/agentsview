@@ -19,6 +19,8 @@ import (
 	"strings"
 
 	"github.com/tidwall/gjson"
+
+	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 var _ Provider = (*hermesProvider)(nil)
@@ -36,16 +38,37 @@ type hermesProviderSpec struct {
 	relabel func(*ParseResult)
 }
 
+var hermesProviderSpecs = map[AgentType]hermesProviderSpec{
+	AgentHermes:        {agent: AgentHermes},
+	AgentAugureDesktop: {agent: AgentAugureDesktop},
+}
+
 func hermesProviderSpecForAgent(agent AgentType) hermesProviderSpec {
-	switch agent {
-	case AgentAugureDesktop:
-		return hermesProviderSpec{
-			agent:   AgentAugureDesktop,
-			relabel: relabelHermesResultAsAugureDesktop,
-		}
-	default:
-		return hermesProviderSpec{agent: AgentHermes}
+	spec := hermesProviderSpecs[agent]
+	if agent == AgentAugureDesktop {
+		spec.relabel = relabelHermesResultAsAugureDesktop
 	}
+	return spec
+}
+
+func HermesFormatAgents() []AgentType {
+	agents := make([]AgentType, 0, len(hermesProviderSpecs))
+	for agent := range hermesProviderSpecs {
+		agents = append(agents, agent)
+	}
+	slices.Sort(agents)
+	return agents
+}
+
+func HermesSourceProject(agent AgentType, source string) string {
+	spec, ok := hermesProviderSpecs[agent]
+	if !ok {
+		return ""
+	}
+	if source == "" {
+		return string(spec.agent)
+	}
+	return string(spec.agent) + "-" + source
 }
 
 type hermesProviderFactory struct {
@@ -1267,7 +1290,7 @@ func (s hermesSourceSet) Fingerprint(
 		return SourceFingerprint{}, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	reader := checkedContextReader{ctx: ctx, reader: f}
+	reader := ctxio.Reader{Context: ctx, Reader: f}
 	if strings.HasSuffix(path, ".json") {
 		var data []byte
 		data, err = io.ReadAll(reader)
