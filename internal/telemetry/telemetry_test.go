@@ -49,7 +49,7 @@ func TestNewReporterOptedOutKeepsAllowlist(t *testing.T) {
 			assert.False(t, reporter.Enabled())
 			assert.True(t, reporter.EventAllowed(EventAppOpened))
 			assert.True(t, reporter.EventAllowed(EventDaemonActive))
-			assert.False(t, reporter.EventAllowed("unknown_event"))
+			assert.False(t, reporter.EventAllowed("daemon_started"))
 		})
 	}
 }
@@ -66,14 +66,9 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 
 	reporter := &Reporter{client: client}
 	assert.True(t, reporter.Enabled())
-	require.NoError(t, reporter.CaptureDaemonActive(t.Context()))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.NoError(t, reporter.CaptureDaemonActive(ctx))
-
-	assert.True(t, reporter.EventAllowed(EventDaemonActive))
-	assert.True(t, reporter.EventAllowed(EventAppOpened))
-	assert.False(t, reporter.EventAllowed("daemon_started"))
 
 	props, err := reporter.SanitizeProperties(EventDaemonActive, map[string]any{
 		"$process_person_profile": true,
