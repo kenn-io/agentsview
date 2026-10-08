@@ -4753,6 +4753,7 @@ components:
             - diverged
             - shorter_export
             - trashed
+            - newer_marker
             - transient
           type: string
         session_id:

@@ -154,11 +154,11 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					return stats, err
 				}
 				if existing != nil && existing.LastEntryUUID != nil {
-					parts := strings.SplitN(*existing.LastEntryUUID, ":", 4)
-					if len(parts) == 4 && parts[0] == "claude-ai" && strings.HasPrefix(parts[1], "v") {
+					parts := strings.SplitN(*existing.LastEntryUUID, ":", 3)
+					if len(parts) == 3 && parts[0] == "claude-ai" && strings.HasPrefix(parts[1], "v") {
 						version, err := strconv.Atoi(strings.TrimPrefix(parts[1], "v"))
 						if err == nil && version > 1 {
-							stats.Errors++
+							stats.record(id, importSkipped, refuse(RefusalNewerMarker, fmt.Errorf("stored Claude.ai marker version %d is newer than supported version 1", version)))
 							cb.progress(stats)
 							continue
 						}
@@ -204,9 +204,6 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						status, err = importSkipped, nil
 					}
 					stats.record(id, status, err)
-					if err == nil && status != importSkipped && cb != nil && cb.OnSessionChanged != nil {
-						cb.OnSessionChanged(id)
-					}
 					return nil
 				}
 				if cb != nil && cb.SerializeWrite != nil {

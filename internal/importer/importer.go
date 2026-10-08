@@ -22,7 +22,7 @@ type ImportStats struct {
 	Updated  int `json:"updated"`
 	Skipped  int `json:"skipped"`
 	Errors   int `json:"errors"`
-	// Refusals names each conversation a per-conversation write refused (each also counted in Errors); Gemini Apps parse errors are counted without an entry, and progress callbacks get counts only.
+	// Refusals names each refused conversation (each also counted in Errors); Gemini Apps parse errors are counted without an entry, and progress callbacks get counts only.
 	Refusals []ImportRefusal `json:"refusals,omitempty"`
 }
 
@@ -33,13 +33,14 @@ const (
 	RefusalDiverged      RefusalReason = "diverged"       // export rewrites archived messages
 	RefusalShorterExport RefusalReason = "shorter_export" // export has fewer messages than the archive
 	RefusalTrashed       RefusalReason = "trashed"        // session is in the trash
+	RefusalNewerMarker   RefusalReason = "newer_marker"   // archive marker requires a newer importer
 	RefusalTransient     RefusalReason = "transient"      // anything else; a later import may succeed
 )
 
 // ImportRefusal identifies one conversation the import did not write.
 type ImportRefusal struct {
 	SessionID string        `json:"session_id"`
-	Reason    RefusalReason `json:"reason" enum:"diverged,shorter_export,trashed,transient"`
+	Reason    RefusalReason `json:"reason" enum:"diverged,shorter_export,trashed,newer_marker,transient"`
 }
 
 // ImportCallbacks provides optional progress reporting.
@@ -50,8 +51,6 @@ type ImportCallbacks struct {
 	OnProgress func(ImportStats)
 	// OnIndexing fires before the FTS index rebuild starts.
 	OnIndexing func()
-	// OnSessionChanged names a conversation whose Sync changed stored turns.
-	OnSessionChanged func(string)
 }
 
 func (c *ImportCallbacks) progress(s ImportStats) {

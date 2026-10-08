@@ -18,6 +18,7 @@ The latest release is
   previous version in Trash with its pins and notes in the same transaction.
   Each such update makes a fresh copy; updates that keep every pin and note
   make no copy. Switching back on Claude.ai and syncing restores those turns.
+  Dropped pins and notes stay in the Trash copy and don't return to the live chat.
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on
