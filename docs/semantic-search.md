@@ -201,79 +201,59 @@ next build.
 
 #### EmbeddingGemma 2 text endpoint
 
-EmbeddingGemma 2 can use the existing text embeddings transport when you supply
-a conforming OpenAI-compatible endpoint. This is an optional recipe for
-`google/embeddinggemma-2` at checkpoint revision
-`914f7f89142e33e77833254d9c9b90c3cef7303b`, using its native 768-dimensional
-output. It does not add image, audio, or video inputs to AgentsView.
+You can use EmbeddingGemma 2 for text search through any OpenAI-compatible
+endpoint that serves it. This recipe targets `google/embeddinggemma-2` at
+checkpoint revision `914f7f89142e33e77833254d9c9b90c3cef7303b`, with its native
+768-dimensional output. AgentsView sends only text; it does not embed images,
+audio, or video.
 
 ```toml
 [vector]
 enabled = true
 
 [vector.embeddings]
-model = "embeddinggemma-2-914f7f89-text-768" # illustrative serving alias
+model = "embeddinggemma-2-914f7f89-text-768" # your serving alias
 dimension = 768
-request_dimensions = false
 query_prefix = "task: search result | query: "
 document_prefix = "title: none | text: "
-input_suffix = ""
-model_context_tokens = 8192
 
 [vector.embeddings.servers.local]
-endpoint = "http://127.0.0.1:8000/v1"       # your conforming endpoint
+endpoint = "http://127.0.0.1:8000/v1"       # your endpoint
 batch_size = 4
 concurrency = 1
 timeout = "120s"
 ```
 
-The alias and URL illustrate configuration; they do not install or identify a
-tested server. Batch size 4, concurrency 1, and a 120-second timeout are
-starting settings for CPU serving, not measured performance guarantees. Defaults
-stay unchanged.
+The prompts match the [EmbeddingGemma v1 example](#role-aware-task-prefixes) and
+the checkpoint's `config_sentence_transformers.json`. Keep the trailing spaces,
+leave `input_suffix` empty, and don't configure the endpoint to add the prompts
+again. The batch, concurrency, and timeout values are a cautious starting point
+for CPU serving, not measured settings.
 
-The operator must bind the serving alias to the checkpoint, tokenizer, mean
-pooling **including prompt tokens**, L2 normalization, and inference precision.
-Use `bfloat16` or `float32` activations, not `float16`. A conforming endpoint
-returns L2-normalized native vectors. AgentsView checks that vectors are finite,
-nonzero, and exactly the configured width, then preserves their values. It does
-not verify unit length or normalize them.
+AgentsView can't see how the endpoint runs the model. The operator must serve
+the alias with this checkpoint and its tokenizer, mean pooling that includes the
+prompt tokens, and L2 normalization, using `bfloat16` or `float32`. The model
+card warns that `float16` produces NaN or degraded embeddings. AgentsView
+rejects vectors that are non-finite, all zero, or not exactly 768 wide, and
+stores the rest unchanged. Search uses cosine similarity, so vector length does
+not affect ranking. When you change any part of the serving recipe, change
+`model` to a new alias so AgentsView builds a new generation.
 
-Keep the trailing spaces in both prefixes. AgentsView adds the appropriate
-prefix once to raw queries or each document chunk. Do not manually add it to
-queries or documents, or configure the endpoint to add it again. Keep
-`input_suffix` empty; clear any suffix retained from another model.
+The model accepts 8192 tokens per input, counting the prompt and special tokens.
+The endpoint must enforce that limit, because `max_input_chars` counts runes,
+not tokens. Leave headroom as described in
+[Role-aware task prefixes](#role-aware-task-prefixes).
 
-The serving implementation must enforce the shared 8192-token limit on the fully
-formatted input, including prompts and tokenizer special tokens.
-`max_input_chars` caps original document chunks in runes before affixes are
-added. `model_context_tokens` and `max_batch_tokens` shape build batches; they
-do not tokenize inputs or enforce per-input admission. Leave chunk headroom for
-the serving tokenizer and follow its documented overflow policy. An 8192-rune
-cap does not establish an 8192-token bound.
+For 512, 256, or 128 dimensions, set `dimension` and `request_dimensions = true`
+only if the endpoint truncates and re-normalizes server-side. See
+[Reduced output dimensions](#reduced-output-dimensions-matryoshka).
 
-Use the same vector-producing recipe on every named server. The alias is an
-operator convention; AgentsView cannot verify checkpoint, pooling, tokenizer,
-dtype, or quantization through the HTTP response. Change `model` to a new alias
-when the serving recipe changes, and build the new generation. Changing either
-prefix, the suffix, width, or `request_dimensions` also changes generation
-identity and prevents search against the old generation until it is rebuilt.
-
-Native 768 omits the HTTP `dimensions` field. Optional 512-, 256-, or
-128-dimensional output requires an endpoint that truncates and L2-renormalizes
-server-side. Set `request_dimensions = true` only if that endpoint explicitly
-supports the HTTP dimension-selection contract, with the same width for queries
-and documents. AgentsView never slices returned vectors to make them fit.
-
-The recipe and native width are source-verified against Google's
+Sources: the
 [EmbeddingGemma 2 model card](https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2)
 and the
-[pinned checkpoint metadata](https://huggingface.co/google/embeddinggemma-2/tree/914f7f89142e33e77833254d9c9b90c3cef7303b)
+[pinned checkpoint files](https://huggingface.co/google/embeddinggemma-2/tree/914f7f89142e33e77833254d9c9b90c3cef7303b)
 (`config_sentence_transformers.json`, `1_Pooling/config.json`, and
-`modules.json`). Synthetic HTTP tests exercise configuration, role formatting,
-build/search wiring, vector validation, and stale-generation rejection. Actual
-serving, server prompt handling, tokenizer admission, inference, and retrieval
-quality remain untested.
+`modules.json`).
 
 ### Reduced output dimensions (Matryoshka)
 

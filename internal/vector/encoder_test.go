@@ -2,9 +2,12 @@ package vector
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -112,6 +115,51 @@ func TestEncoderRequestsDimensionsWhenConfigured(t *testing.T) {
 	_, err = enc(t.Context(), []string{"alpha"})
 	require.NoError(t, err)
 	assert.JSONEq(t, "3", string(gotReq.Dimensions))
+}
+
+// base64Vector encodes components as the little-endian float32 payload of
+// the OpenAI base64 embedding format.
+func base64Vector(components ...float32) string {
+	data := make([]byte, 4*len(components))
+	for i, c := range components {
+		binary.LittleEndian.PutUint32(data[4*i:], math.Float32bits(c))
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+func TestEncoderRejectsInvalidVectors(t *testing.T) {
+	nan := float32(math.NaN())
+	inf := float32(math.Inf(1))
+	for _, tt := range []struct {
+		name      string
+		embedding any
+		err       string
+	}{
+		{"short", []float32{1, 0}, "2 dimensions"},
+		{"oversized", []float32{1, 0, 0, 0}, "4 dimensions"},
+		{"zero", []float32{0, 0, 0}, "zero norm"},
+		{"float32 overflow", []float64{1e39, 1, 0}, "not finite"},
+		{"base64 NaN", base64Vector(nan, 1, 0), "not finite"},
+		{"base64 infinity", base64Vector(inf, 1, 0), "not finite"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusOK, map[string]any{"data": []map[string]any{
+					{"index": 0, "embedding": tt.embedding},
+				}})
+			}))
+			defer srv.Close()
+
+			cfg := testEncoderConfig(srv.URL + "/v1")
+			cfg.MaxRetries = 0
+			enc, err := NewEncoder(cfg, embedconfig.RoleDocument)
+			require.NoError(t, err)
+
+			out, err := enc(t.Context(), []string{"alpha"})
+			require.ErrorContains(t, err, tt.err)
+			assert.Nil(t, out, "invalid output must not leave usable vectors")
+		})
+	}
 }
 
 // rateLimitedServer answers 429 for the first limited calls, then succeeds.
