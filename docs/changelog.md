@@ -226,6 +226,7 @@ The latest published release is
 
 **Bug fixes**
 
+- Oversized telemetry requests return HTTP 413.
 - Hosted raw sync keeps a session listed and searchable after its source file
   disappears from the device that uploaded it, matching the local archive.
   Before, `raw-sync watch` reporting a missing file hid the session, emptied it
