@@ -135,7 +135,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 					cancel()
 				}
 			},
-		})
+		}, s.cfg.InstallationID)
 		if stats.Imported+stats.Updated > 0 {
 			if s.broadcaster != nil {
 				s.broadcaster.Emit("sessions")
