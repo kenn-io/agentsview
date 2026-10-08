@@ -432,6 +432,9 @@ func TestParseClaudeAIDetail_InvalidTree(t *testing.T) {
 	for _, tt := range []struct{ name, leaf, messages, err string }{
 		{"null leaf", `"current_leaf_message_uuid":null,`, question + "," + answer, "expected current_leaf"},
 		{"absent leaf", "", question + "," + answer, "expected current_leaf"},
+		{"numeric leaf", `"current_leaf_message_uuid":42,`, question + "," + answer, "expected current_leaf"},
+		{"empty leaf", `"current_leaf_message_uuid":"",`, question + "," + answer, "expected current_leaf"},
+		{"root leaf", `"current_leaf_message_uuid":"00000000-0000-4000-8000-000000000000",`, question + "," + answer, "expected current_leaf"},
 		{"missing leaf message", `"current_leaf_message_uuid":"missing",`, question + "," + answer, "message missing is missing"},
 		{"null parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":null}`, "parent must be a string"},
 		{"absent parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a"}`, "parent must be a string"},
