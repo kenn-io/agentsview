@@ -1378,9 +1378,12 @@ multiple user messages. Claude Code `sdk-cli` sessions whose first real prompt
 records `turnOrigin=sdk` are automated, including follow-ups. A human origin
 keeps a relayed conversation interactive. Sessions with missing origin
 evidence and Python or TypeScript SDK entrypoints keep prompt-based
-classification. Existing readable sources are reparsed once; archives whose
-sources are missing retain their available evidence. Usage-only archives
-preserve stored flags when discarded prompts cannot support a correction.
+classification. A queued prompt without origin keeps the conversation
+ambiguous even when a later prompt has SDK origin. Existing readable sources
+are reparsed once. Missing-source
+archives retain their available evidence; empty kinds cannot recover discarded
+origin. Stored non-interactive kinds can repair flags in usage-only archives,
+while discarded prompts cannot support other corrections.
 Roborev-tagged runs are automated code
 reviews. Other sessions are classified as automated when they have one or fewer
 real user messages and their first user message matches the automation

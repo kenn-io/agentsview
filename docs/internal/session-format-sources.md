@@ -146,11 +146,13 @@ evidence; they do not establish whether a tool helped the task.
   Worker prompts record `turnOrigin=sdk`; relayed human prompts record
   `turnOrigin=human` and `origin.kind=human`, even when `promptSource=sdk`.
   AgentsView derives `session_kind=non-interactive` for `sdk-cli` when the
-  first real prompt has SDK origin. Human origin wins conflicting markers;
+  first real normalized prompt has SDK origin, after queued prompts merge.
+  Human origin wins conflicting markers;
   missing origin remains ambiguous. Explicit provider kinds remain intact.
   Data version 127 reparses readable sources once. Checked against the
   installed producer and local transcripts; no public producer source is
-  available.
+  available. Synthetic queued fixtures check ordering and available top-level
+  origin fields; no native queued-origin sample has been verified.
 
 Rechecked 2026-09-11 against the existing provider parser and its metadata
 fixtures: the first nonempty JSONL `sessionId` supplies `SourceSessionID`. A

@@ -1417,10 +1417,8 @@ type ParsedSession struct {
 	Agent      AgentType
 	AgentLabel string
 	Entrypoint string
-	// SessionKind is a provider-owned top-level session classification marker
-	// (for example, Claude Code "bg" or Grok "non-interactive"); empty for
-	// interactive sessions and for agents that do not emit one. Claude sdk-cli
-	// workers derive "non-interactive" from their first real prompt's SDK origin.
+	// SessionKind is normalized provider classification, such as Claude "bg"
+	// or non-interactive derived from Codex/Grok launch metadata and Claude SDK origin.
 	SessionKind      string
 	ParentSessionID  string
 	RelationshipType RelationshipType
@@ -1614,6 +1612,8 @@ type ParsedMessage struct {
 	// on older transcripts that predate the field and for agents that
 	// do not emit it.
 	PromptSource      string
+	// Origin is transient evidence for classification after queued prompts merge.
+	claudeSDKOrigin   bool
 	SourceUUID        string
 	SourceParentUUID  string
 	IsSidechain       bool

@@ -2623,9 +2623,8 @@ func sessionAutomationStateTx(
 		)
 	}
 
-	want = IsAutomatedSessionMetadata(agent, sessionKind) || isAutomatedFromTextCandidates(
-		userMsgCount, firstUserMessage, firstMessage,
-	)
+	want = IsAutomatedSessionMetadata(agent, sessionKind) ||
+		isAutomatedFromTextCandidates(userMsgCount, firstUserMessage, firstMessage)
 	return want, rowAutomated, true, nil
 }
 

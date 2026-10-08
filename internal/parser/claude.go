@@ -64,6 +64,7 @@ type dagEntry struct {
 type claudeQueuedCommand struct {
 	prompt       string
 	promptSource string
+	sdkOrigin    bool
 	timestamp    time.Time
 }
 
@@ -500,6 +501,10 @@ func claudeParseFile(
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
 	for i := range results {
+		if results[i].Session.Entrypoint == "sdk-cli" && results[i].Session.SessionKind == "" &&
+			claudeWorkerMessages(results[i].Messages) {
+			results[i].Session.SessionKind = SessionKindNonInteractive
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
@@ -771,9 +776,10 @@ type ClaudeSubagentLink struct {
 // only change the stored session when the corresponding stored value is
 // still empty.
 type claudeStoredIdentity struct {
-	agentLabel  string
-	entrypoint  string
-	sessionKind string
+	agentLabel       string
+	entrypoint       string
+	sessionKind      string
+	userMessageCount int
 }
 
 // claudeIncrementalScan carries the per-session stored state an
@@ -1043,6 +1049,10 @@ func claudeParseSessionFrom(
 			}
 		}
 	}
+	if stored.userMessageCount == 0 && stored.entrypoint == "sdk-cli" &&
+		stored.sessionKind == "" && claudeWorkerMessages(msgs) {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
 	// Use the latest timestamp from all lines (including
 	// non-message events) if it's later than what
 	// extractMessagesFrom found.
@@ -1053,11 +1063,8 @@ func claudeParseSessionFrom(
 }
 
 // claudeSessionIdentityUpdate reports whether an appended line carries an
-// identity value that could change the stored session. Identity is
-// first-non-empty-wins, so a field whose stored value is already set can
-// never be changed by an append; gating on the stored values keeps routine
-// appends incremental even though real CLI transcripts carry a top-level
-// entrypoint on most message lines.
+// identity value that could change the stored session. First native kinds
+// override inferred worker kinds; established matching identities stay incremental.
 func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool {
 	if stored.agentLabel == "" &&
 		strings.TrimSpace(gjson.Get(line, "agentSetting").Str) != "" {
@@ -1067,15 +1074,24 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 		strings.TrimSpace(gjson.Get(line, "entrypoint").Str) != "" {
 		return true
 	}
-	return stored.sessionKind == "" &&
-		(strings.TrimSpace(gjson.Get(line, "sessionKind").Str) != "" ||
-			(stored.entrypoint == "sdk-cli" && claudeSDKPrompt(line) &&
-				isCountedClaudeUserTurn(context.Background(), dagEntry{entryType: gjson.Get(line, "type").Str, line: line})))
+	kind := strings.TrimSpace(gjson.Get(line, "sessionKind").Str)
+	return kind != "" && (stored.sessionKind == "" ||
+		(stored.entrypoint == "sdk-cli" && stored.sessionKind == SessionKindNonInteractive &&
+			kind != stored.sessionKind))
 }
 
 func claudeSDKPrompt(line string) bool {
 	return gjson.Get(line, "turnOrigin").Str == "sdk" &&
 		gjson.Get(line, "origin.kind").Str != "human"
+}
+
+func claudeWorkerMessages(messages []ParsedMessage) bool {
+	for _, message := range messages {
+		if isRealClaudeUserMessage(message) {
+			return message.claudeSDKOrigin
+		}
+	}
+	return false
 }
 
 // collectClaudeUnmatchedToolResults returns result links for appended
@@ -1412,6 +1428,7 @@ func extractMessagesFrom(
 			SourceParentUUID:   e.parentUuid,
 			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
 			PromptSource:       gjson.Get(e.line, "promptSource").Str,
+			claudeSDKOrigin:    claudeSDKPrompt(e.line),
 			tokenPresenceKnown: e.entryType == "assistant",
 		}
 
@@ -1446,7 +1463,7 @@ type claudeSessionMeta struct {
 }
 
 // applyTo sets source metadata fields on a ParsedSession.
-func (m claudeSessionMeta) applyTo(ctx context.Context, sess *ParsedSession, entries []dagEntry) {
+func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
 	sess.SourceSessionID = m.sourceSessionID
 	sess.SourceVersion = m.sourceVersion
 	sess.Cwd = m.cwd
@@ -1455,17 +1472,6 @@ func (m claudeSessionMeta) applyTo(ctx context.Context, sess *ParsedSession, ent
 	sess.AgentLabel = m.agentLabel
 	sess.Entrypoint = m.entrypoint
 	sess.SessionKind = m.sessionKind
-	if m.sessionKind == "" && m.entrypoint == "sdk-cli" {
-		for _, entry := range entries {
-			if !isCountedClaudeUserTurn(ctx, entry) {
-				continue
-			}
-			if claudeSDKPrompt(entry.line) {
-				sess.SessionKind = SessionKindNonInteractive
-			}
-			break
-		}
-	}
 	sess.MalformedLines = m.malformedLines
 	sess.IsTruncated = m.isTruncated
 }
@@ -1515,7 +1521,7 @@ func parseLinear(
 		File:              fileInfo,
 		ClaudeLinearParse: &linear,
 	}
-	meta.applyTo(ctx, &sess, entries)
+	meta.applyTo(&sess)
 	if err := accumulateMessageTokenUsageContext(ctx, &sess, messages); err != nil {
 		return nil, err
 	}
@@ -1724,7 +1730,7 @@ func parseDAG(
 			File:              fileInfo,
 			ClaudeLinearParse: &linear,
 		}
-		meta.applyTo(ctx, &sess, branchEntries)
+		meta.applyTo(&sess)
 		if err := accumulateMessageTokenUsageContext(
 			ctx, &sess, messages,
 		); err != nil {
@@ -1812,6 +1818,7 @@ func extractQueuedCommand(line string) (claudeQueuedCommand, bool) {
 	return claudeQueuedCommand{
 		prompt:       prompt,
 		promptSource: gjson.Get(line, "promptSource").Str,
+		sdkOrigin:    claudeSDKPrompt(line),
 		timestamp:    extractTimestamp(line),
 	}, true
 }
@@ -2008,13 +2015,14 @@ func queuedCommandMessage(
 		}
 	}
 	return ParsedMessage{
-		Role:          RoleUser,
-		Content:       q.prompt,
-		Timestamp:     q.timestamp,
-		ContentLength: len(q.prompt),
-		SourceType:    "user",
-		SourceSubtype: "queued_command",
-		PromptSource:  q.promptSource,
+		Role:            RoleUser,
+		Content:         q.prompt,
+		Timestamp:       q.timestamp,
+		ContentLength:   len(q.prompt),
+		SourceType:      "user",
+		SourceSubtype:   "queued_command",
+		PromptSource:    q.promptSource,
+		claudeSDKOrigin: q.sdkOrigin,
 	}
 }
 
@@ -2730,6 +2738,7 @@ func extractMessagesContext(
 			SourceParentUUID:   e.parentUuid,
 			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
 			PromptSource:       gjson.Get(e.line, "promptSource").Str,
+			claudeSDKOrigin:    claudeSDKPrompt(e.line),
 			tokenPresenceKnown: e.entryType == "assistant",
 		}
 
@@ -3099,10 +3108,7 @@ func firstMessageAndUserCountContext(
 		if err := contextErrEvery(ctx, i); err != nil {
 			return "", 0, err
 		}
-		if m.IsSystem {
-			continue
-		}
-		if m.Role != RoleUser || m.Content == "" {
+		if !isRealClaudeUserMessage(m) {
 			continue
 		}
 		userCount++
@@ -3114,6 +3120,10 @@ func firstMessageAndUserCountContext(
 		}
 	}
 	return firstMsg, userCount, ctx.Err()
+}
+
+func isRealClaudeUserMessage(m ParsedMessage) bool {
+	return !m.IsSystem && m.Role == RoleUser && m.Content != ""
 }
 
 // isUsageProbeSession reports whether a parsed session's only real

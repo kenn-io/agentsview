@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func TestHeadlessAutomationSurvivesSyncAppends(t *testing.T) {
@@ -24,22 +26,22 @@ func TestHeadlessAutomationSurvivesSyncAppends(t *testing.T) {
 			name: "claude", id: "worker", agent: parser.AgentClaude,
 			initial: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
 				`{"type":"user","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Plan a settings change."}}` + "\n",
-			reply:    `{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-10-01T10:01:00Z","message":{"content":[{"type":"text","text":"The plan is ready."}]}}` + "\n",
+			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
 			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
 		},
 		{
 			name: "human", id: "human", agent: parser.AgentClaude,
 			initial: `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
 				`{"type":"user","uuid":"u1","turnOrigin":"human","origin":{"kind":"human"},"promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Plan a settings change."}}` + "\n",
-			reply:    `{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-10-01T10:01:00Z","message":{"content":[{"type":"text","text":"The plan is ready."}]}}` + "\n",
+			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
 			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"sdk","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
 		},
 		{
 			name: "codex", id: "codex:019eb791-cf7d-75c1-8439-9ed74c122c80", agent: parser.AgentCodex,
-			initial: `{"type":"session_meta","timestamp":"2026-10-01T10:00:00Z","payload":{"id":"019eb791-cf7d-75c1-8439-9ed74c122c80","originator":"codex_exec","source":"exec"}}` + "\n" +
-				`{"type":"response_item","timestamp":"2026-10-01T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Plan a settings change."}]}}` + "\n",
-			reply:    `{"type":"response_item","timestamp":"2026-10-01T10:01:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The plan is ready."}]}}` + "\n",
-			followup: `{"type":"response_item","timestamp":"2026-10-01T10:02:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Explain the plan."}]}}` + "\n",
+			initial: testjsonl.CodexSessionMetaJSON("019eb791-cf7d-75c1-8439-9ed74c122c80", "/workspace/project", "codex_exec", "2026-10-01T10:00:00Z") + "\n" +
+				testjsonl.CodexMsgJSON("user", "Plan a settings change.", "2026-10-01T10:00:01Z") + "\n",
+			reply:    testjsonl.CodexMsgJSON("assistant", "The plan is ready.", "2026-10-01T10:01:00Z") + "\n",
+			followup: testjsonl.CodexMsgJSON("user", "Explain the plan.", "2026-10-01T10:02:00Z") + "\n",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,7 +72,11 @@ func TestHeadlessAutomationSurvivesSyncAppends(t *testing.T) {
 				require.NotNil(t, stored)
 				assert.Equal(t, tc.name != "human", stored.IsAutomated)
 				if i == 0 {
-					require.NoError(t, database.SetSessionDataVersion(t.Context(), tc.id, 126))
+					raw, err := sql.Open("sqlite3", database.Path())
+					require.NoError(t, err)
+					_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET session_kind = '', is_automated = 0, data_version = 126 WHERE id = ?`, tc.id)
+					require.NoError(t, err)
+					require.NoError(t, raw.Close())
 					require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 					assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), tc.id))
 				}

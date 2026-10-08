@@ -371,9 +371,10 @@ func (p *claudeProvider) ParseIncremental(
 			startOrdinal:  req.StartOrdinal,
 			lastEntryUUID: req.LastEntryUUID,
 			stored: claudeStoredIdentity{
-				agentLabel:  req.StoredAgentLabel,
-				entrypoint:  req.StoredEntrypoint,
-				sessionKind: req.StoredSessionKind,
+				agentLabel:       req.StoredAgentLabel,
+				entrypoint:       req.StoredEntrypoint,
+				sessionKind:      req.StoredSessionKind,
+				userMessageCount: req.StoredUserMessageCount,
 			},
 			storedLinearParse:         req.StoredClaudeLinearParse,
 			storedTailClaudeMessageID: req.StoredLastClaudeMessageID,

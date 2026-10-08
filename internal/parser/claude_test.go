@@ -134,12 +134,16 @@ func TestClaudeWorkerOrigin(t *testing.T) {
 		{name: "system delivery", entrypoint: "sdk-cli", prefix: `{"type":"user","turnOrigin":"sdk","isMeta":true,"message":{"content":"delivery"}}`},
 		{name: "tool result", entrypoint: "sdk-cli", prefix: `{"type":"user","turnOrigin":"sdk","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"result"}]}}`},
 		{name: "attachment", entrypoint: "sdk-cli", prefix: `{"type":"attachment","turnOrigin":"sdk","attachment":{"type":"queued_command","prompt":"delivery"}}`},
+		{name: "queued human before worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","turnOrigin":"human","attachment":{"type":"queued_command","prompt":"Human question"}}`},
+		{name: "queued human before DAG worker", entrypoint: "sdk-cli", origin: `"uuid":"u1","turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","turnOrigin":"human","attachment":{"type":"queued_command","prompt":"Human question"}}`},
+		{name: "first queued worker", entrypoint: "sdk-cli", prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","turnOrigin":"sdk","attachment":{"type":"queued_command","prompt":"Worker question"}}`, want: SessionKindNonInteractive},
+		{name: "queued human veto", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","turnOrigin":"sdk","origin":{"kind":"human"},"attachment":{"type":"queued_command","prompt":"Human question"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			metadata := buildMetadataLine(map[string]any{"type": "agent-setting", "entrypoint": tc.entrypoint, "sessionKind": tc.explicitKind})
 			content := metadata + "\n" + tc.prefix + "\n" +
-				`{"type":"user",` + tc.origin + `"promptSource":"sdk","message":{"content":"Plan a settings change."}}` + "\n" +
-				`{"type":"user","turnOrigin":"sdk","message":{"content":"Revise the plan."}}` + "\n"
+				`{"type":"user",` + tc.origin + `"timestamp":"2026-01-01T00:01:00Z","promptSource":"sdk","message":{"content":"Plan a settings change."}}` + "\n" +
+				`{"type":"user","uuid":"u2","parentUuid":"u1","turnOrigin":"sdk","message":{"content":"Revise the plan."}}` + "\n"
 			path := createTestFile(t, "worker.jsonl", content)
 			results, _, err := claudeParseWithExclusions(path, "project", "local")
 			require.NoError(t, err)
@@ -151,21 +155,57 @@ func TestClaudeWorkerOrigin(t *testing.T) {
 }
 
 func TestClaudeWorkerOriginIncrementalFallback(t *testing.T) {
-	for _, kind := range []string{"", SessionKindNonInteractive} {
-		t.Run(kind, func(t *testing.T) {
-			initial := `{"type":"user","isMeta":true,"entrypoint":"sdk-cli","message":{"content":"delivery"}}` + "\n"
+	for _, tc := range []struct {
+		name, initial, kind, tail string
+		userCount                 int
+		fallback                  bool
+	}{
+		{name: "first worker", initial: `"isMeta":true,`, fallback: true},
+		{name: "first queued worker", initial: `"isMeta":true,`, tail: `{"type":"attachment","turnOrigin":"sdk","attachment":{"type":"queued_command","prompt":"Worker question"}}` + "\n", fallback: true},
+		{name: "first queued human", initial: `"isMeta":true,`, tail: `{"type":"attachment","turnOrigin":"human","attachment":{"type":"queued_command","prompt":"Human question"}}` + "\n"},
+		{name: "established worker", kind: SessionKindNonInteractive, userCount: 1},
+		{name: "established human", initial: `"turnOrigin":"human",`, userCount: 1},
+		{name: "established unknown", userCount: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initial := `{"type":"user",` + tc.initial + `"entrypoint":"sdk-cli","message":{"content":"first prompt"}}` + "\n"
 			path := createTestFile(t, "worker.jsonl", initial)
-			tail := `{"type":"user","turnOrigin":"sdk","message":{"content":"Plan a settings change."}}` + "\n"
+			tail := firstNonEmptyJSONLString(tc.tail, `{"type":"user","turnOrigin":"sdk","message":{"content":"Plan a settings change."}}`+"\n")
 			require.NoError(t, os.WriteFile(path, []byte(initial+tail), 0o600))
 			_, _, _, _, err := claudeParseSessionFrom(path, int64(len(initial)), claudeIncrementalScan{
-				stored: claudeStoredIdentity{entrypoint: "sdk-cli", sessionKind: kind},
+				stored: claudeStoredIdentity{entrypoint: "sdk-cli", sessionKind: tc.kind, userMessageCount: tc.userCount},
 			})
-			if kind == "" {
+			if tc.fallback {
 				require.Error(t, err)
 				assert.True(t, IsIncrementalFullParseFallback(err))
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestClaudeNativeKindAfterWorkerOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		initial, stored, appended, want string
+		fallback                        bool
+	}{
+		{stored: SessionKindNonInteractive, appended: "bg", want: "bg", fallback: true},
+		{initial: SessionKindNonInteractive, stored: SessionKindNonInteractive, appended: "bg", want: SessionKindNonInteractive, fallback: true},
+		{initial: "bg", stored: "bg", appended: "bg", want: "bg"},
+		{stored: SessionKindNonInteractive, appended: SessionKindNonInteractive, want: SessionKindNonInteractive},
+	} {
+		t.Run(tc.initial+"/"+tc.appended, func(t *testing.T) {
+			initial := buildMetadataLine(map[string]any{"type": "agent-setting", "entrypoint": "sdk-cli", "sessionKind": tc.initial}) + "\n" +
+				`{"type":"user","turnOrigin":"sdk","message":{"content":"Worker prompt"}}` + "\n"
+			tail := buildMetadataLine(map[string]any{"type": "agent-setting", "sessionKind": tc.appended}) + "\n"
+			path := createTestFile(t, "worker.jsonl", initial+tail)
+			_, _, _, _, err := claudeParseSessionFrom(path, int64(len(initial)), claudeIncrementalScan{stored: claudeStoredIdentity{entrypoint: "sdk-cli", sessionKind: tc.stored, userMessageCount: 1}})
+			assert.Equal(t, tc.fallback, IsIncrementalFullParseFallback(err))
+			results, _, err := claudeParseWithExclusions(path, "project", "local")
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, tc.want, results[0].Session.SessionKind)
 		})
 	}
 }

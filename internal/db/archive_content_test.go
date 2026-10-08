@@ -33,26 +33,24 @@ func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 	}))
 	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'headless'`)
 	require.NoError(t, err)
-	conn, err := database.getWriter().Conn(t.Context())
-	require.NoError(t, err)
-	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
-			if op == sqlite3.SQLITE_READ && table == "messages" {
-				return sqlite3.SQLITE_DENY
-			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
-	}))
-	require.NoError(t, conn.Close())
-	require.NoError(t, database.ForceBackfillIsAutomated(t.Context()), "usage-only repair reads metadata without messages")
-	conn, err = database.getWriter().Conn(t.Context())
-	require.NoError(t, err)
-	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
-		return nil
-	}))
-	require.NoError(t, conn.Close())
+	func() {
+		conn, err := database.getWriter().Conn(t.Context())
+		require.NoError(t, err)
+		var sqliteConn *sqlite3.SQLiteConn
+		require.NoError(t, conn.Raw(func(raw any) error {
+			sqliteConn = raw.(*sqlite3.SQLiteConn)
+			sqliteConn.RegisterAuthorizer(func(op int, table, _, _ string) int {
+				if op == sqlite3.SQLITE_READ && table == "messages" {
+					return sqlite3.SQLITE_DENY
+				}
+				return sqlite3.SQLITE_OK
+			})
+			return nil
+		}))
+		defer sqliteConn.RegisterAuthorizer(nil)
+		require.NoError(t, conn.Close())
+		require.NoError(t, database.ForceBackfillIsAutomated(t.Context()), "usage-only repair reads metadata without messages")
+	}()
 	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0 WHERE id = 'headless'`)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())

@@ -3803,7 +3803,7 @@ func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) er
 	current := ClassifierHash()
 	if db.usageOnlyStorage() {
 		// Discarded prompts cannot disprove stored flags; metadata can promote them.
-		rows, err := w.Query(ctx, `SELECT id, agent, session_kind FROM sessions WHERE is_automated = 0`)
+		rows, err := w.Query(ctx, `SELECT id, agent, session_kind FROM sessions WHERE is_automated = 0 AND session_kind <> ''`)
 		if err != nil {
 			return err
 		}

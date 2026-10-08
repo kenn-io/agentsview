@@ -1119,9 +1119,10 @@ type IncrementalRequest struct {
 	// transcripts carry a top-level entrypoint on most lines, so the
 	// incremental parser escalates to a full parse only when an appended
 	// non-empty value could fill a still-empty stored field.
-	StoredAgentLabel  string
-	StoredEntrypoint  string
-	StoredSessionKind string
+	StoredAgentLabel       string
+	StoredEntrypoint       string
+	StoredSessionKind      string
+	StoredUserMessageCount int
 	// StoredClaudeLinearParse mirrors the session's persisted
 	// claude_linear_parse flag: whether the last full parse fell back
 	// to linear processing. Linearity is monotonic across appends, so
