@@ -86,6 +86,68 @@ describe("session ended reporting", () => {
     expect(buckets()).toEqual(["5_to_30m"]);
   });
 
+  it.each([
+    [
+      "connect",
+      "",
+      "https://example.com/remote",
+      "https://example.com/remote/api/v1/telemetry/events",
+    ],
+    ["disconnect", "https://example.com/remote", "", "/agentsview/api/v1/telemetry/events"],
+    ["reset", "https://example.com/remote", "", "/agentsview/api/v1/telemetry/events"],
+    [
+      "another tab",
+      "https://example.com/remote",
+      "https://example.org/remote",
+      "https://example.org/remote/api/v1/telemetry/events",
+    ],
+  ])(
+    "discards a visit across %s and reports the next visit to the current server",
+    (action, from, to, url) => {
+      const base = document.createElement("base");
+      base.href = `${window.location.origin}/agentsview/`;
+      document.head.append(base);
+      try {
+        setServerUrl(from);
+        setAuthToken("old-token");
+        stop = setupSessionEndedReporting();
+        advance(120_000);
+        if (action === "reset") {
+          localStorage.clear();
+        } else if (action === "another tab") {
+          localStorage.setItem("agentsview-server-url", to);
+          window.dispatchEvent(
+            new StorageEvent("storage", {
+              key: "agentsview-server-url",
+              oldValue: from,
+              newValue: to,
+            }),
+          );
+        } else {
+          setServerUrl(to);
+        }
+        if (action === "reset") {
+          visibility(true);
+          advance(1_800_000);
+        }
+        close();
+        expect(fetch).not.toHaveBeenCalled();
+        visibility(false);
+        window.dispatchEvent(new Event("pageshow"));
+        setAuthToken("current-token");
+        advance(30_000);
+        close();
+        expect(buckets()).toEqual(["under_1m"]);
+        expect(fetch.mock.calls[0]![0]).toBe(url);
+        expect(new Headers(fetch.mock.calls[0]![1]?.headers).get("Authorization")).toBe(
+          "Bearer current-token",
+        );
+      } finally {
+        base.remove();
+      }
+    },
+  );
+
   it.each(["timer boundary", "suspended timer"])(
     "ends a hidden visit and starts a fresh visit on return: %s",
     (scenario) => {
@@ -106,6 +168,7 @@ describe("session ended reporting", () => {
       advance(30_000);
       close();
       expect(buckets()).toEqual(["1_to_5m", "under_1m"]);
+      expect(fetch.mock.calls[0]![1]?.signal).not.toBe(fetch.mock.calls[1]![1]?.signal);
     },
   );
 

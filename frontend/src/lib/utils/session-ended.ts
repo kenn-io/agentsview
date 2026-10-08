@@ -1,6 +1,10 @@
+import { getGeneratedBase } from "../api/runtime.js";
 import { reportTelemetry } from "./telemetry.js";
 
+const THIRTY_MINUTES = 1_800_000;
+
 export function setupSessionEndedReporting(): () => void {
+  let destination = getGeneratedBase();
   let visibleMs = 0;
   let started = document.hidden ? undefined : performance.now();
   let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
@@ -15,22 +19,28 @@ export function setupSessionEndedReporting(): () => void {
     clearTimeout(hiddenTimer);
     hiddenAt = undefined;
     pause();
-    if (visibleMs > 0) {
+    const currentDestination = getGeneratedBase();
+    if (visibleMs > 0 && destination === currentDestination) {
       const bucket =
         visibleMs < 60_000
           ? "under_1m"
           : visibleMs < 300_000
             ? "1_to_5m"
-            : visibleMs <= 1_800_000
+            : visibleMs <= THIRTY_MINUTES
               ? "5_to_30m"
               : "over_30m";
-      reportTelemetry("session_ended", { surface: "web", duration_bucket: bucket });
+      reportTelemetry(
+        "session_ended",
+        { surface: "web", duration_bucket: bucket },
+        { keepalive: true, signal: AbortSignal.timeout(10_000) },
+      );
     }
     visibleMs = 0;
+    destination = currentDestination;
   };
   const resume = () => {
     if (document.hidden) return;
-    if (hiddenAt !== undefined && Date.now() - hiddenAt >= 1_800_000) end();
+    if (hiddenAt !== undefined && Date.now() - hiddenAt >= THIRTY_MINUTES) end();
     clearTimeout(hiddenTimer);
     hiddenAt = undefined;
     if (started === undefined) started = performance.now();
@@ -39,7 +49,7 @@ export function setupSessionEndedReporting(): () => void {
     if (document.hidden) {
       pause();
       hiddenAt = Date.now();
-      hiddenTimer = setTimeout(end, 1_800_000);
+      hiddenTimer = setTimeout(end, THIRTY_MINUTES);
     } else {
       resume();
     }

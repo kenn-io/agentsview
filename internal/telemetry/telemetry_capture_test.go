@@ -64,12 +64,16 @@ func TestCoreActionAllowlist(t *testing.T) {
 		{EventSessionEnded, "duration_bucket", "120s", false},
 		{EventSessionEnded, "surface", "web", true},
 		{EventSessionEnded, "surface", "terminal", false},
+		// A later visit with the same bucket must reach the collector again.
 		{EventSessionEnded, "duration_bucket", "1_to_5m", true},
 	}
 	for _, c := range cases {
 		properties := map[string]any{c.key: c.value, "query": "secret prompt"}
 		if c.event == EventSessionEnded {
 			properties["duration_ms"] = 120000
+			if c.key == "duration_bucket" {
+				properties["surface"] = "web"
+			}
 		}
 		if c.event == EventScreenViewed {
 			// Each row checks filtering independently of daily deduplication.
@@ -138,6 +142,9 @@ func TestCoreActionAllowlist(t *testing.T) {
 		assert.NotContains(t, sent[i], "query", c.event)
 		if c.event == EventSessionEnded {
 			assert.NotContains(t, sent[i], "duration_ms")
+			if c.key == "duration_bucket" {
+				assert.Equal(t, "web", sent[i]["surface"])
+			}
 		}
 		value, ok := sent[i][c.key]
 		if c.kept {

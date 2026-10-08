@@ -1801,8 +1801,10 @@ ping. The browser never contacts PostHog.
 The web UI reports `session_ended` with `surface: web` and a `duration_bucket`
 of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,
 1 to below 5 minutes, 5 through 30 minutes, and above 30 minutes. Visible time
-adds up across tab switches; hidden time adds nothing. Closing the page or
-leaving it hidden for 30 minutes ends a visit. Each visit can send an event.
+adds up across tab switches and includes idle visible time; hidden time adds
+nothing. Closing or reloading the page, or leaving it hidden for 30 minutes,
+ends a visit. Visits that span a server change are discarded. The next visit
+uses the selected server. Each visit can send an event.
 There's no daily limit. Delivery is best effort; a browser crash or forced
 discard can lose it.
 
@@ -1813,10 +1815,10 @@ It stores the installation ID, date, and that day's screen names in
 are dropped.
 A claim that cannot be saved lasts only until the daemon exits.
 
-The web UI reports five core actions the same way. Each carries one property,
-and the server drops any value outside its fixed list. A search counts once per
-mode used during each command palette open. Typing pauses, sorting, and retries
-in the same mode do not add events. An insight counts once it finishes
+The web UI also reports core actions. The table lists their properties and
+allowed values; the server drops values outside these lists. A search counts
+once per mode used during each command palette open. Typing pauses, sorting,
+and retries in the same mode do not add events. An insight counts once it finishes
 generating; opening a cached insight does not count.
 
 Downloads and Gist publishes count export attempts, including attempts that
@@ -1830,6 +1832,8 @@ fail. Markdown links count after the link is copied successfully.
 | `insight_generated` | `kind`       | `daily_activity`, `agent_analysis`, or a generated-insight template name                                              |
 | `analytics_viewed`  | `page`       | `usage`, `activity`, `trends`, `quality`                                                                              |
 | `screen_viewed`     | `screen`     | `sessions`, `usage`, `activity`, `trends`, `recall`, `quality`, `pinned`, `trash`, `recent-edits`, `data`, `settings` |
+| `session_ended`     | `surface`    | `web` |
+| `session_ended`     | `duration_bucket` | `under_1m`, `1_to_5m`, `5_to_30m`, `over_30m` |
 
 Every event contains only:
 
@@ -1837,7 +1841,7 @@ Every event contains only:
 - operating system and CPU architecture
 - the application-owned installation ID stored in
   `~/.agentsview/telemetry-install-id`
-- for the five UI actions, the one listed value above
+- for core actions, the listed property value above
 - for screen views, the listed screen name and `surface: web`
 - for visit duration, the listed bucket and `surface: web`, without exact times
 
