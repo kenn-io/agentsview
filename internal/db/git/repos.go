@@ -269,7 +269,7 @@ func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConf
 		}
 	}
 	gitdir, err := pathresolve.EvalSymlinks(gitdir)
-	if err != nil || !repoRootOwned(gitdir) || !repoRootHeadValid(filepath.Join(gitdir, "HEAD")) {
+	if err != nil || (gitdir != marker.path && !repoRootOwned(gitdir)) || !repoRootHeadValid(filepath.Join(gitdir, "HEAD")) {
 		return repoRootConfig{}, false
 	}
 	text, exists, err := readRepoRootPointer(filepath.Join(gitdir, "commondir"))
@@ -317,7 +317,7 @@ func snapshotRepoRootConfig(ctx context.Context, marker gitMarker) (repoRootConf
 		return repoRootConfig{}, false
 	}
 	if key {
-		if !repoRootWorktreeInactive(ctx, filepath.Join(common, "config")) {
+		if !repoRootWorktreeInactive(ctx, gitdir, filepath.Join(common, "config")) {
 			return repoRootConfig{}, false
 		}
 		result.worktree, result.worktreeInactive = repoRootFile{}, true
@@ -347,11 +347,12 @@ func repoRootHeadValid(path string) bool {
 	return err == nil && repoRootHead.Match(data)
 }
 
-func repoRootWorktreeInactive(ctx context.Context, config string) bool {
+func repoRootWorktreeInactive(ctx context.Context, gitdir, config string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "config", "--no-includes", "--file", config,
 		"--type=bool", "--get", "extensions.worktreeConfig")
+	cmd.Dir = gitdir
 	cmd.Env = gitenv.StripAll(os.Environ())
 	out, err := cmd.Output()
 	if err == nil {
@@ -462,7 +463,7 @@ func findRepoRoot(ctx context.Context, start string) string {
 					return ""
 				}
 			}
-			if entry.root == "" || !entry.marker.matches(marker) || !known || entry.config != config {
+			if entry.root == "" || !entry.marker.matches(marker) || entry.config != config {
 				repoRoots.Lock()
 				if repoRoots.entries[key] == entry {
 					delete(repoRoots.entries, key)

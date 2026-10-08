@@ -284,6 +284,9 @@ func TestFindRepoRoot_InactiveWorktreeConfig(t *testing.T) {
 	configured := mkdirIn(t, repo, "configured")
 	worktreeConfig := filepath.Join(repo, ".git", "config.worktree")
 	gitRun(t, repo, nil, "config", "--file", worktreeConfig, "core.worktree", configured)
+	ambient := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(ambient, ".git"), []byte("gitdir: missing\n"), 0o600))
+	t.Chdir(ambient)
 	require.Equal(t, canonAll([]string{repo})[0], findRepoRoot(t.Context(), repo))
 	t.Run("reuse inactive file without Git", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
