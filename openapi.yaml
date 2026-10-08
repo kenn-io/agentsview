@@ -3989,9 +3989,9 @@ components:
           $ref: "#/components/schemas/MoneyMoney"
         displayName:
           type: string
-        group_key:
+        groupKey:
           type: string
-        group_label:
+        groupLabel:
           type: string
         inputTokens:
           format: int64

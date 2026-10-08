@@ -2462,7 +2462,6 @@
   "tool_sequences_full_result_in_message": "Le résultat complet se trouve dans le message {ordinal}.",
   "tool_sequences_retry": "Réessayer",
   "usage_hide_project": "Masquer le projet",
-  "usage_other_runs": "Autres",
   "usage_all_projects": "Tous les projets",
   "usage_click_project": "Cliquez sur {label} pour voir ses groupes et sessions",
   "usage_click_project_hint": "Cliquez sur un projet pour voir ses groupes et sessions",

@@ -2380,7 +2380,6 @@
   "tool_sequences_full_result_in_message": "完整结果在消息 {ordinal} 中。",
   "tool_sequences_retry": "重试",
   "usage_hide_project": "隐藏项目",
-  "usage_other_runs": "其他",
   "usage_all_projects": "所有项目",
   "usage_click_project": "点击 {label} 查看其分组和会话",
   "usage_click_project_hint": "点击项目查看其分组和会话",

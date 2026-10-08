@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 
 	"github.com/stretchr/testify/assert"
@@ -312,4 +313,25 @@ func TestPGUsageGroups(t *testing.T) {
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
 	dbtest.SeedUsageGroups(t, pg)
 	dbtest.AssertUsageGroups(t, &Store{pg: pg})
+	_, err = pg.Exec(`UPDATE sessions SET display_name = 'Individual run' WHERE id = 'group-other'`)
+	require.NoError(t, err)
+	store := &Store{pg: pg}
+	for _, grouped := range []bool{false, true} {
+		rows, err := store.GetTopSessionsByCost(t.Context(), db.UsageFilter{TopSessionsByGroup: grouped}, 100)
+		require.NoError(t, err)
+		byID := make(map[string]db.TopSessionEntry)
+		byGroup := make(map[string]db.TopSessionEntry)
+		for _, row := range rows {
+			byID[row.SessionID] = row
+			if row.Project == "hermes-cron" {
+				byGroup[row.GroupKey] = row
+			}
+		}
+		assert.Equal(t, "Individual run", byID["group-other"].DisplayName)
+		assert.Equal(t, "2026-10-08T12:00:00Z", byID["group-other"].StartedAt)
+		if grouped {
+			assert.Equal(t, "Research digest", byGroup["job-a"].DisplayName)
+			assert.Equal(t, "2026-10-08T12:00:00Z", byGroup["job-a"].StartedAt)
+		}
+	}
 }

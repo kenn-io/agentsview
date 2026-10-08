@@ -2380,7 +2380,6 @@
   "tool_sequences_full_result_in_message": "전체 결과는 메시지 {ordinal}에 있습니다.",
   "tool_sequences_retry": "다시 시도",
   "usage_hide_project": "프로젝트 숨기기",
-  "usage_other_runs": "기타",
   "usage_all_projects": "모든 프로젝트",
   "usage_click_project": "{label}을 클릭하여 그룹과 세션 보기",
   "usage_click_project_hint": "프로젝트를 클릭하여 그룹과 세션 보기",

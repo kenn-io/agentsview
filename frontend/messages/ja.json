@@ -2451,7 +2451,6 @@
   "tool_sequences_full_result_in_message": "完全な結果はメッセージ {ordinal} にあります。",
   "tool_sequences_retry": "再試行",
   "usage_hide_project": "プロジェクトを非表示",
-  "usage_other_runs": "その他",
   "usage_all_projects": "すべてのプロジェクト",
   "usage_click_project": "{label} をクリックしてグループとセッションを表示",
   "usage_click_project_hint": "プロジェクトをクリックしてグループとセッションを表示",

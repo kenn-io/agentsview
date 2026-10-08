@@ -526,6 +526,10 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	assert.Equal(t, "hermes-cron", entries[0].Project)
 	assert.Equal(t, "job-a", entries[0].GroupKey)
 	assert.Equal(t, "Research digest", entries[0].GroupLabel)
+	var response []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "job-a", response[0]["groupKey"])
+	assert.Equal(t, "Research digest", response[0]["groupLabel"])
 	assert.Equal(t, int64(3_000_000), entries[0].Cost.Microdollars)
 	assert.Empty(t, entries[1].SessionID)
 	assert.Empty(t, entries[1].GroupKey)

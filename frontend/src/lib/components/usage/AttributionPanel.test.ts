@@ -511,8 +511,8 @@ describe("AttributionPanel job groups", () => {
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usage.summary);
     await usage.fetchSummary({ loadComparison: false });
     const group = (key: string, cost: number): DbTopSessionEntry => ({
-      group_key: key,
-      group_label: "Daily digest",
+      groupKey: key,
+      groupLabel: "Daily digest",
       sessionId: key,
       displayName: "Daily digest",
       project: "hermes-cron",
@@ -568,6 +568,28 @@ describe("AttributionPanel job groups", () => {
     unmount(component);
   });
 
+  it("keeps a job named Other distinct from the remainder", async () => {
+    usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
+    usage.zoomRows = [
+      { ...topSessionForRemainder(), groupKey: "remainder", groupLabel: "Other", cost: testMoney(3) },
+      { ...topSessionForRemainder(), sessionId: "hermes:", displayName: "Repeated run", cost: testMoney(2) },
+      { ...topSessionForRemainder(), sessionId: "hermes:run-b", displayName: "Repeated run", cost: testMoney(2) },
+      topSessionForRemainder(),
+    ];
+    const component = mountPanel();
+    await tick();
+    expect([...document.querySelectorAll(".list-label")].map((row) => row.textContent)).toEqual([
+      "Other",
+      "Repeated run · hermes:",
+      "Repeated run · run-b",
+      "Other",
+    ]);
+    const rows = document.querySelectorAll<HTMLElement>(".list-row");
+    expect(rows[0]!.title).toBe("Other · remainder");
+    expect(rows[3]!.title).toBe("Other");
+    await unmount(component);
+  });
+
   it("uses zoom rows and remainder when summary fails after a date change", async () => {
     const summary = summaryWithDuplicateProjectLabels();
     summary.projectTotals[0]!.project = "hermes-cron";
@@ -584,8 +606,8 @@ describe("AttributionPanel job groups", () => {
         params.group_by === "group"
           ? [
               {
-                group_key: "job-a",
-                group_label: "Digest",
+                groupKey: "job-a",
+                groupLabel: "Digest",
                 sessionId: "",
                 displayName: "Digest",
                 project: "hermes-cron",
@@ -600,8 +622,8 @@ describe("AttributionPanel job groups", () => {
               },
               {
                 ...topSessionForRemainder(),
-                group_key: "job-b",
-                group_label: "Research",
+                groupKey: "job-b",
+                groupLabel: "Research",
                 displayName: "Research",
                 cost: testMoney(3),
               },

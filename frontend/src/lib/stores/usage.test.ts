@@ -2026,8 +2026,8 @@ describe("UsageStore project zoom", () => {
 
   const group = (cost: number): DbTopSessionEntry => ({
     ...topSession(""),
-    group_key: "job-a",
-    group_label: "Digest",
+    groupKey: "job-a",
+    groupLabel: "Digest",
     cost: testMoney(cost),
   });
 
@@ -2134,9 +2134,19 @@ describe("UsageStore project zoom", () => {
 
   it("refreshes zoom for metric and token selection changes", async () => {
     const { usage } = await loadStore();
+    const pending: Array<(rows: DbTopSessionEntry[]) => void> = [];
+    usageServiceMocks.getUsageZoom.mockImplementation(
+      () => new Promise((resolve) => pending.push(resolve)),
+    );
     usage.selectAttributionProject("pl1:sha256:alpha", "Project");
+    const firstSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
     usage.setMode("token");
+    const secondSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
     usage.setSelectedTokenTypes(["output"]);
+    expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(3);
+    expect(firstSignal.aborted).toBe(true);
+    expect(secondSignal.aborted).toBe(true);
+    expect(usage.zoomRows).toBeNull();
     expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({
         project_key: "pl1:sha256:alpha",
@@ -2144,6 +2154,11 @@ describe("UsageStore project zoom", () => {
         token_types: "output",
       }),
     );
+    pending[2]!([group(9)]);
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    pending[0]!([group(1)]);
+    pending[1]!([group(2)]);
+    await Promise.resolve();
+    expect(usage.zoomRows).toEqual([group(9)]);
   });
 });

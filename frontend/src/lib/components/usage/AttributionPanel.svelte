@@ -36,6 +36,10 @@
 
   const zoomedProject = $derived(usage.zoomedProject);
 
+  function zoomRowId(row: { groupKey?: string; sessionId: string }): string {
+    return row.groupKey ? `group:${row.groupKey}` : row.sessionId ? `session:${row.sessionId}` : "remainder";
+  }
+
   const rowItems = $derived.by(() => {
     const s = usage.summary;
     if (!s && !zoomedProject) return [];
@@ -48,15 +52,15 @@
 
     if (zoomedProject && groupBy === "project") {
       const zoomRows = usage.zoomRows ?? [];
-      const names = zoomRows.map((row) => row.group_key ? row.group_label || row.group_key : row.sessionId ? row.displayName : m.usage_other_runs());
+      const names = zoomRows.map((row) => row.groupKey ? row.groupLabel || row.groupKey : row.sessionId ? row.displayName : m.shared_other());
       items = zoomRows.map((row, index) => {
-        const id = row.group_key || row.sessionId;
-        const duplicates = zoomRows.filter((other, otherIndex) => other !== row && names[otherIndex] === names[index]);
-        const suffixID = row.group_key || row.sessionId.replace(/^[^:]+:/, "");
-        const peers = duplicates.map((other) => other.group_key || other.sessionId.replace(/^[^:]+:/, ""));
+        const id = zoomRowId(row);
+        const duplicates = zoomRows.filter((other, otherIndex) => other !== row && (other.groupKey || other.sessionId) && names[otherIndex] === names[index]);
+        const suffixID = row.groupKey || row.sessionId.replace(/^[^:]+:/, "") || row.sessionId;
+        const peers = duplicates.map((other) => other.groupKey || other.sessionId.replace(/^[^:]+:/, ""));
         return {
           id,
-          label: duplicates.length ? `${names[index]} · ${shortenId(suffixID, peers)}` : names[index]!,
+          label: (row.groupKey || row.sessionId) && duplicates.length ? `${names[index]} · ${shortenId(suffixID, peers)}` : names[index]!,
           value: isTokenMode ? sumSelectedTokens(row, usage.selectedTokenTypes) : row.cost.microdollars,
         };
       });
@@ -120,9 +124,10 @@
 
   function rowTitle(id: string, label: string): string {
     if (zoomedProject) {
-      const row = usage.zoomRows?.find((row) => (row.group_key || row.sessionId) === id);
-      const name = row?.group_label || row?.displayName || label;
-      return id && name !== id ? `${name} · ${id}` : name;
+      const row = usage.zoomRows?.find((row) => zoomRowId(row) === id);
+      const name = row?.groupLabel || row?.displayName || label;
+      const sourceID = row?.groupKey || row?.sessionId;
+      return sourceID && name !== sourceID ? `${name} · ${sourceID}` : name;
     }
     return groupBy === "project" ? m.usage_click_project({ label }) : m.usage_click_to_hide({ label });
   }

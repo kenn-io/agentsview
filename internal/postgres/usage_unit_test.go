@@ -543,9 +543,11 @@ func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 		From:     "2024-06-01",
 		To:       "2024-06-30",
 		Timezone: "America/New_York",
-	}, false)
+	}, true)
 
 	normalized := strings.ToLower(query)
+	assert.Contains(t, normalized, "coalesce(attributed.group_key, '') as group_key")
+	assert.Contains(t, normalized, "coalesce(attributed.group_label, '') as group_label")
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
 	assert.NotContains(t, normalized, "cost_status")

@@ -9,8 +9,8 @@ export interface DbTopSessionEntry {
   cacheReadTokens: number;
   cost: MoneyMoney;
   displayName: string;
-  group_key?: string;
-  group_label?: string;
+  groupKey?: string;
+  groupLabel?: string;
   inputTokens: number;
   outputTokens: number;
   project: string;

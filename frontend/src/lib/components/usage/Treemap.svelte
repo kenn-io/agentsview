@@ -142,6 +142,7 @@
   }
 
   .treemap-container :global(.tile-value) {
+    /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
     fill-opacity: 0.85;
     font-size: 11px;
@@ -151,6 +152,7 @@
   }
 
   .treemap-container :global(.tile-meta) {
+    /* White regardless of theme: drawn over saturated per-agent tile fills */
     fill: white;
     fill-opacity: 0.7;
     font-size: 9px;

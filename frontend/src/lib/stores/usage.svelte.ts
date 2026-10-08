@@ -786,8 +786,6 @@ class UsageStore {
   setMode(mode: UsageMode): boolean {
     if (this.mode === mode) return false;
     this.mode = mode;
-    this.invalidatePanel("zoom");
-    this.zoomRows = null;
     if (this.zoomedProject?.key) void this.fetchZoom();
     this.invalidatePanel("topSessions");
     this.topSessions = null;
@@ -806,8 +804,6 @@ class UsageStore {
       return false;
     }
     this.selectedTokenTypes = canonical;
-    this.invalidatePanel("zoom");
-    this.zoomRows = null;
     if (this.zoomedProject?.key) void this.fetchZoom();
     this.invalidatePanel("topSessions");
     this.topSessions = null;
@@ -1211,7 +1207,6 @@ class UsageStore {
 
   selectAttributionProject(key: string, label: string): void {
     this.zoomedProject = { key, label };
-    this.zoomRows = null;
     void this.fetchZoom();
   }
 
