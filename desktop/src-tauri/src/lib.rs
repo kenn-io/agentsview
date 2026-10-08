@@ -4068,7 +4068,7 @@ async fn claude_auth_fetch(
     };
     let origin = window.url().map_err(|e| e.to_string())?;
     if origin.origin().ascii_serialization() != "https://claude.ai" {
-        return Err("Claude sign-in is still pending".into());
+        return Err("claude_ai_sign_in_pending".into());
     }
     let state = handle.state::<ClaudeAuthState>();
     let (request_id, receiver) = state.start_browser_request()?;

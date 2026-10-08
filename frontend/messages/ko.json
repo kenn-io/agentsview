@@ -2381,5 +2381,7 @@
   "import_claude_connect": "로그인",
   "import_claude_sync": "동기화",
   "import_claude_disconnect": "연결 해제",
-  "import_claude_help": "로그인한 후 창을 닫고 동기화를 누르세요."
+  "import_claude_help": "로그인한 후 창을 닫고 동기화를 누르세요.",
+  "import_claude_auth_required": "Claude.ai에 로그인한 후 다시 동기화하세요.",
+  "import_claude_sign_in_pending": "Claude.ai 로그인을 완료하고 창을 닫은 후 다시 동기화하세요."
 }

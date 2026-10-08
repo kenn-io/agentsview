@@ -2466,5 +2466,7 @@
   "import_claude_connect": "Iniciar sesión",
   "import_claude_sync": "Sincronizar",
   "import_claude_disconnect": "Desconectar",
-  "import_claude_help": "Inicia sesión, cierra la ventana y pulsa Sincronizar."
+  "import_claude_help": "Inicia sesión, cierra la ventana y pulsa Sincronizar.",
+  "import_claude_auth_required": "Inicia sesión en Claude.ai y vuelve a sincronizar.",
+  "import_claude_sign_in_pending": "Termina de iniciar sesión en Claude.ai, cierra la ventana y vuelve a sincronizar."
 }

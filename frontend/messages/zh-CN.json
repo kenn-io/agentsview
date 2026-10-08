@@ -2381,5 +2381,7 @@
   "import_claude_connect": "登录",
   "import_claude_sync": "同步",
   "import_claude_disconnect": "断开连接",
-  "import_claude_help": "登录后关闭窗口，然后点击同步。"
+  "import_claude_help": "登录后关闭窗口，然后点击同步。",
+  "import_claude_auth_required": "请登录 Claude.ai，然后再次同步。",
+  "import_claude_sign_in_pending": "请完成 Claude.ai 登录，关闭窗口，然后再次同步。"
 }
