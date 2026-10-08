@@ -19,7 +19,7 @@ vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 describe("syncClaudeAI browser relay", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("answers fetch events with the browser body and retry header", async () => {
+  it.each([429, 413])("answers fetch events with browser status %s", async (status) => {
     let stream: ReadableStreamDefaultController<Uint8Array>;
     const encoder = new TextEncoder();
     const response = new Response(
@@ -33,7 +33,7 @@ describe("syncClaudeAI browser relay", () => {
     const host: BrowserHost = {
       connect: vi.fn(),
       disconnect: vi.fn(),
-      fetch: vi.fn().mockResolvedValue({ status: 429, body: "browser response", retryAfter: "12" }),
+      fetch: vi.fn().mockResolvedValue({ status, body: status === 413 ? "" : "browser response", retryAfter: "12" }),
     };
     const fetch = vi.fn(async (url: string, options: RequestInit) => {
       if (url === "/api/v1/import/claude-ai/sync") {
@@ -45,8 +45,8 @@ describe("syncClaudeAI browser relay", () => {
         );
         return response;
       }
-      expect(url).toBe("/api/v1/import/claude-ai/sync/results/request-1?status=429");
-      expect(await (options.body as Blob).text()).toBe("browser response");
+      expect(url).toBe(`/api/v1/import/claude-ai/sync/results/request-1?status=${status}`);
+      expect(await (options.body as Blob).text()).toBe(status === 413 ? "" : "browser response");
       expect(new Headers(options.headers).get("Retry-After")).toBe("12");
       stream.enqueue(
         encoder.encode(

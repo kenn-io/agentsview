@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -579,55 +580,151 @@ func TestHandleImportReplaceQuery(t *testing.T) {
 }
 
 func TestClaudeAISyncRelayOversizeContinues(t *testing.T) {
-	srv := testServer(t, 5*time.Second)
-	httpServer := httptest.NewServer(srv.mux)
-	defer httpServer.Close()
-	response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	var stats importer.ImportStats
-	done := false
-	readImportEvents(t, response.Body, func(event, data string) {
-		switch event {
-		case "fetch":
-			var request struct {
-				ID   string `json:"id"`
-				Path string `json:"path"`
-			}
-			require.NoError(t, json.Unmarshal([]byte(data), &request))
-			var body string
-			switch request.Path {
-			case "/api/organizations":
-				body = `[{"uuid":"org","capabilities":["chat"]}]`
-			case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
-				body = `{"data":[{"uuid":"large","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"},{"uuid":"later","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
-			case "/api/organizations/org/chat_conversations/large?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-				body = strings.Repeat("x", (32<<20)+2)
-			case "/api/organizations/org/chat_conversations/later?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-				body = `{"uuid":"later","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"assistant","text":"Later reply","created_at":"2026-03-01T10:05:00Z"}]}`
-			default:
-				t.Fatalf("unexpected path %s", request.Path)
-			}
-			result, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status=200", "application/octet-stream", strings.NewReader(body))
+	for _, oversizedStatus := range []int{200, 413} {
+		t.Run(fmt.Sprint(oversizedStatus), func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			httpServer := httptest.NewServer(srv.mux)
+			defer httpServer.Close()
+			response, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync", "application/json", nil)
 			require.NoError(t, err)
-			assert.Equal(t, http.StatusNoContent, result.StatusCode)
-			require.NoError(t, result.Body.Close())
-		case "error":
-			t.Fatalf("sync failed: %s", data)
-		case "done":
-			require.NoError(t, json.Unmarshal([]byte(data), &stats))
-			done = true
-		}
-	})
-	require.True(t, done)
-	assert.Equal(t, 1, stats.Errors)
-	assert.Equal(t, 1, stats.Imported)
-	session, err := srv.db.GetSession(t.Context(), "claude-ai:later")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, 1, session.MessageCount)
-	messages, err := srv.db.GetAllMessages(t.Context(), session.ID)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "Later reply", messages[0].Content)
+			defer response.Body.Close()
+			var stats importer.ImportStats
+			done := false
+			readImportEvents(t, response.Body, func(event, data string) {
+				switch event {
+				case "fetch":
+					var request struct {
+						ID   string `json:"id"`
+						Path string `json:"path"`
+					}
+					require.NoError(t, json.Unmarshal([]byte(data), &request))
+					var body string
+					status := 200
+					switch request.Path {
+					case "/api/organizations":
+						body = `[{"uuid":"org","capabilities":["chat"]}]`
+					case "/api/organizations/org/chat_conversations_v2?limit=50&offset=0":
+						body = `{"data":[{"uuid":"large","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"},{"uuid":"later","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
+					case "/api/organizations/org/chat_conversations/large?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+						status = oversizedStatus
+						if status == 200 {
+							body = strings.Repeat("x", (32<<20)+2)
+						}
+					case "/api/organizations/org/chat_conversations/later?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+						body = `{"uuid":"later","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"assistant","text":"Later reply","created_at":"2026-03-01T10:05:00Z"}]}`
+					default:
+						t.Fatalf("unexpected path %s", request.Path)
+					}
+					result, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status="+fmt.Sprint(status), "application/octet-stream", strings.NewReader(body))
+					require.NoError(t, err)
+					assert.Equal(t, http.StatusNoContent, result.StatusCode)
+					require.NoError(t, result.Body.Close())
+				case "error":
+					t.Fatalf("sync failed: %s", data)
+				case "done":
+					require.NoError(t, json.Unmarshal([]byte(data), &stats))
+					done = true
+				}
+			})
+			require.True(t, done)
+			assert.Equal(t, 1, stats.Errors)
+			assert.Equal(t, 1, stats.Imported)
+			session, err := srv.db.GetSession(t.Context(), "claude-ai:later")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, 1, session.MessageCount)
+			messages, err := srv.db.GetAllMessages(t.Context(), session.ID)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "Later reply", messages[0].Content)
+		})
+	}
+}
+
+func TestClaudeAISyncMutationNotifications(t *testing.T) {
+	for _, ending := range []string{"done", "error", "cancel"} {
+		t.Run(ending, func(t *testing.T) {
+			mutations := make(chan struct{}, 2)
+			recall := make(chan struct{}, 2)
+			srv := testServer(t, 5*time.Second,
+				WithSessionMutationNotifier(func() { mutations <- struct{}{} }),
+				WithRecallCorpusMutationNotifier(func() { recall <- struct{}{} }),
+			)
+			srv.broadcaster = NewBroadcaster(0)
+			events, unsubscribe := srv.broadcaster.Subscribe()
+			defer unsubscribe()
+			httpServer := httptest.NewServer(srv.mux)
+			defer httpServer.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
+			require.NoError(t, err)
+			response, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer response.Body.Close()
+			scanner := bufio.NewScanner(response.Body)
+			terminal := ""
+			for scanner.Scan() {
+				line := scanner.Text()
+				if line == "event: done" || line == "event: error" {
+					terminal = strings.TrimPrefix(line, "event: ")
+				}
+				if !strings.HasPrefix(line, "data: ") || !strings.Contains(line, `"path"`) {
+					continue
+				}
+				var fetch struct {
+					ID   string `json:"id"`
+					Path string `json:"path"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &fetch))
+				body, status := "", 200
+				switch {
+				case fetch.Path == "/api/organizations":
+					body = `[{"uuid":"org","capabilities":["chat"]}]`
+				case strings.Contains(fetch.Path, "chat_conversations_v2"):
+					body = `{"data":[{"uuid":"one","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
+					if ending != "done" {
+						body += `,{"uuid":"two","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
+					}
+					body += `],"has_more":false}`
+				case strings.Contains(fetch.Path, "/one?"):
+					body = `{"uuid":"one","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Committed chat"}]}`
+				case strings.Contains(fetch.Path, "/two?"):
+					if ending == "cancel" {
+						cancel()
+						terminal = "cancel"
+						break
+					}
+					status, body = 0, "browser disconnected"
+				default:
+					t.Fatalf("unexpected fetch %s", fetch.Path)
+				}
+				if terminal == "cancel" {
+					break
+				}
+				answer, err := http.Post(httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+fetch.ID+"?status="+fmt.Sprint(status), "application/octet-stream", strings.NewReader(body))
+				require.NoError(t, err)
+				require.Equal(t, http.StatusNoContent, answer.StatusCode)
+				require.NoError(t, answer.Body.Close())
+			}
+			assert.Equal(t, ending, terminal)
+			for _, ch := range []<-chan struct{}{mutations, recall} {
+				select {
+				case <-ch:
+				case <-time.After(5 * time.Second):
+					t.Fatal("committed chat did not notify mutation consumer")
+				}
+			}
+			select {
+			case event := <-events:
+				assert.Equal(t, "sessions", event.Scope)
+			case <-time.After(5 * time.Second):
+				t.Fatal("committed chat did not broadcast sessions")
+			}
+			messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:one")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "Committed chat", messages[0].Content)
+		})
+	}
 }

@@ -236,22 +236,24 @@ func upsertConversation(
 
 	msgs := claudeAIMessages(s.ID, result.Messages)
 
-	existing, err := store.GetSession(ctx, s.ID)
+	getSession := store.GetSession
+	if s.LastEntryUUID != nil {
+		getSession = store.GetSessionFull
+	}
+	existing, err := getSession(ctx, s.ID)
 	if err != nil {
 		return importNew, fmt.Errorf("checking session: %w", err)
 	}
 	isNew := existing == nil
+	adoptingZip := existing != nil && existing.LastEntryUUID == nil && s.LastEntryUUID != nil
 	// A shorter export (for example an older archive or one with deleted
 	// turns) would make the replacement below drop stored messages.
 	// Refuse it before touching the session row.
-	if existing != nil && len(msgs) < existing.MessageCount {
+	if existing != nil && !adoptingZip && len(msgs) < existing.MessageCount {
 		return importNew, refuse(RefusalShorterExport, fmt.Errorf(
 			"export has %d messages, archive has %d",
 			len(msgs), existing.MessageCount,
 		))
-	}
-	if localDB, ok := store.(*db.DB); ok && localDB.IsSessionExcluded(ctx, s.ID) {
-		return importSkipped, nil
 	}
 
 	sess := chatGPTSession(s)
@@ -262,7 +264,15 @@ func upsertConversation(
 			return importNew, fmt.Errorf("loading existing messages: %w", err)
 		}
 		canonical := storedFormMessages(store, msgs)
-		if existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) && sameMessages(archived, canonical) {
+		if s.LastEntryUUID != nil {
+			for i, m := range archived {
+				if i >= len(canonical) || m.SourceUUID != canonical[i].SourceUUID {
+					replaceMessages = true
+					break
+				}
+			}
+		}
+		if !replaceMessages && existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) && sameMessages(archived, canonical) {
 			if err := store.UpsertSession(ctx, sess); errors.Is(err, db.ErrSessionExcluded) {
 				return importSkipped, nil
 			} else if err != nil {
@@ -275,14 +285,14 @@ func upsertConversation(
 			}
 			return importSkipped, nil
 		}
-		replaceMessages = len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)])
+		replaceMessages = replaceMessages || len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)])
 	}
 
 	fts.suspend(ctx)
 	_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session:                    sess,
 		Messages:                   msgs,
-		RejectMessageCountDecrease: true,
+		RejectMessageCountDecrease: !adoptingZip,
 		ReplaceMessages:            replaceMessages,
 	}})
 	if errors.Is(err, db.ErrSessionExcluded) {
