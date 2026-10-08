@@ -118,6 +118,22 @@ func TestSyncClaudeAIInvalidAccountSession(t *testing.T) {
 }
 
 func TestSyncClaudeAI(t *testing.T) {
+	t.Run("installation machine", func(t *testing.T) {
+		d := testDB(t)
+		const machine = "installation-a"
+		_, err := d.EnsureInstallationIdentity(t.Context(), machine)
+		require.NoError(t, err)
+		stats, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+		}), nil, machine)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Imported)
+		assert.Zero(t, stats.Errors)
+		session, err := d.GetSession(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, machine, session.Machine)
+	})
 	t.Run("trashed during sync write is skipped", func(t *testing.T) {
 		d := testDB(t)
 		_, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+strings.Replace(syncDetail, "10:05:00.123456Z", "10:04:00Z", 1)+"]"), nil)
