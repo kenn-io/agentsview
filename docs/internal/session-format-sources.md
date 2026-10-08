@@ -2801,15 +2801,18 @@ schemas keep their existing ordering behavior.
 - **Freshness:** Sync compares `updated_at` with archived `ended_at` and stores
   a versioned leaf marker with the archive content policy in `last_entry_uuid`.
   A policy change or zip import requires one new detail fetch. Sync commits
-  metadata, messages, and the marker together. Unchanged text keeps row IDs;
+  metadata, messages, and the marker together. Matching turns with compatible
+  UUIDs keep row IDs and gain missing source UUIDs on unchanged and append writes;
   live branch changes update in place at every length. Shorter zip exports
   remain refused. Pins follow source UUIDs, or role, content, and occurrence
   rank when the replacement has no UUIDs. Full resync preserves import markers.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
-  responses count as skipped; 401 and 403 stop Sync with a sign-in error.
+  responses count as skipped; 401 and 403 stop Sync with distinct sign-in and
+  access-denied errors.
   Other detail failures allow later chats to sync.
   Organization and list failures, cancellation, and an empty page with
-  `has_more: true` stop Sync. Null list leaves skip detail fetches.
+  `has_more: true` stop Sync. Null list leaves skip detail fetches; absent or
+  malformed leaves and newer stored marker versions count as errors.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks
   found `current_leaf_message_uuid` on list items and byte-identical list and
   detail `updated_at` values with microseconds. Branch switches changed the

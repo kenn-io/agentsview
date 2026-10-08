@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -19,8 +20,15 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-//go:embed testdata/claude_ai_live/summary.json
-var syncSummary string
+var syncSummary = func() string {
+	var page struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(syncActiveList), &page); err != nil {
+		panic(err)
+	}
+	return string(page.Data[0])
+}()
 
 //go:embed testdata/claude_ai_live/detail.json
 var syncDetail string
@@ -298,6 +306,11 @@ func TestSyncClaudeAI(t *testing.T) {
 					require.Error(t, err)
 					if status == 401 || status == 403 {
 						require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
+						if status == 401 {
+							assert.EqualError(t, err, "claude.ai sign-in required")
+						} else {
+							assert.EqualError(t, err, "claude.ai access denied (HTTP 403)")
+						}
 						assert.Equal(t, 1, calls)
 					} else {
 						assert.Equal(t, 5, calls)
@@ -757,7 +770,7 @@ func TestSyncClaudeAIShorterZipStillRefused(t *testing.T) {
 	assert.Equal(t, strPtr("claude-ai:v1:full:reply"), marked.LastEntryUUID)
 }
 
-func TestSyncClaudeAINewerMarkerSkipped(t *testing.T) {
+func TestSyncClaudeAINewerMarkerError(t *testing.T) {
 	d := testDB(t)
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude-ai", Project: "test", Machine: "test", LastEntryUUID: strPtr("claude-ai:v2:full:future-leaf")}))
@@ -768,11 +781,131 @@ func TestSyncClaudeAINewerMarkerSkipped(t *testing.T) {
 		return ClaudeAIResponse{}, nil
 	}), nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
-	assert.Zero(t, stats.Errors+stats.Updated+stats.Imported)
+	assert.Equal(t, 1, stats.Errors)
+	assert.Zero(t, stats.Skipped+stats.Updated+stats.Imported)
 	after, err := d.GetSessionFull(t.Context(), id)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
+}
+
+func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {
+	for _, tt := range []struct {
+		name, field string
+	}{
+		{"absent", ""},
+		{"empty", `"current_leaf_message_uuid":"",`},
+		{"number", `"current_leaf_message_uuid":42,`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			summary := strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply",`, tt.field, 1)
+			stats, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, summary, func() (ClaudeAIResponse, error) {
+				require.FailNow(t, "invalid list leaf fetched its detail")
+				return ClaudeAIResponse{}, nil
+			}), nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Errors)
+			assert.Zero(t, stats.Skipped+stats.Imported+stats.Updated)
+		})
+	}
+}
+
+func TestSyncClaudeAIZipAppendDuplicatePromptPin(t *testing.T) {
+	d := testDB(t)
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	short := strings.ReplaceAll(strings.ReplaceAll(syncDetail, "Hello", "go"), "Chosen reply", "ok")
+	stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+short+"]"), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Imported)
+	before, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, before, 2)
+	_, err = d.PinMessage(t.Context(), id, before[0].ID, strPtr("Keep the first prompt"))
+	require.NoError(t, err)
+	long := strings.TrimSuffix(strings.Replace(short, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"a2"`, 1), "]}") + `,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"go","created_at":"2026-03-01T10:00:00Z"},{"uuid":"a2","parent_message_uuid":"q2","sender":"assistant","text":"ok2","created_at":"2026-03-01T10:02:00Z"}]}`
+	stats, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, strings.Replace(syncSummary, "reply", "a2", 1), func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(long)}, nil
+	}), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Updated)
+	stats, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(short)}, nil
+	}), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Updated)
+	pins, err := d.ListPinnedMessages(t.Context(), id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, 0, pins[0].Ordinal)
+	assert.Equal(t, strPtr("Keep the first prompt"), pins[0].Note)
+}
+
+func TestSyncClaudeAIEqualTextBranchIdentities(t *testing.T) {
+	d := testDB(t)
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	branchA := strings.TrimSuffix(strings.Replace(syncDetail, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"a2"`, 1), "]}") + `,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"},{"uuid":"a2","parent_message_uuid":"q2","sender":"assistant","text":"Answer"}]}`
+	branchB := strings.ReplaceAll(strings.ReplaceAll(branchA, "q2", "edit"), "a2", "b2")
+	syncBranch := func(detail, leaf string) {
+		t.Helper()
+		stats, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, strings.Replace(syncSummary, "reply", leaf, 1), func() (ClaudeAIResponse, error) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+		}), nil)
+		require.NoError(t, err)
+		require.Zero(t, stats.Errors)
+	}
+	syncBranch(branchA, "a2")
+	before, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, before, 4)
+	for _, ordinal := range []int{1, 2} {
+		_, err = d.PinMessage(t.Context(), id, before[ordinal].ID, nil)
+		require.NoError(t, err)
+	}
+	syncBranch(branchB, "b2")
+	after, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, after, 4)
+	assert.Equal(t, messageContents(before), messageContents(after))
+	for i, uuid := range []string{"root", "reply", "edit", "b2"} {
+		assert.Equal(t, uuid, after[i].SourceUUID)
+	}
+	session, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, strPtr("claude-ai:v1:full:b2"), session.LastEntryUUID)
+	pins, err := d.ListPinnedMessages(t.Context(), id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, after[1].ID, pins[0].MessageID)
+	_, err = d.PinMessage(t.Context(), id, after[2].ID, nil)
+	require.NoError(t, err)
+	syncBranch(branchA, "a2")
+	restored, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, restored, 4)
+	assert.Equal(t, "q2", restored[2].SourceUUID)
+	pins, err = d.ListPinnedMessages(t.Context(), id, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, restored[1].ID, pins[0].MessageID)
+}
+
+func TestSameMessagesSourceUUID(t *testing.T) {
+	for _, tt := range []struct {
+		name, existing, incoming string
+		want                     bool
+	}{
+		{"conflicting", "a", "b", false},
+		{"matching", "a", "a", true},
+		{"zip to sync", "", "a", true},
+		{"sync to zip", "a", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := []db.Message{{Role: "user", Content: "go", ContentLength: 2, SourceUUID: tt.existing}}
+			incoming := []db.Message{{Role: "user", Content: "go", ContentLength: 2, SourceUUID: tt.incoming}}
+			assert.Equal(t, tt.want, sameMessages(existing, incoming))
+		})
+	}
 }
 
 func TestSyncClaudeAIZipDuplicatePromptPin(t *testing.T) {

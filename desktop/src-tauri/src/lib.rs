@@ -4081,7 +4081,7 @@ fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
         const timer = setTimeout(() => controller.abort(), 45000);
         try {{
             const response = await fetch({url}, {{ method: "GET", credentials: "include", redirect: "error", signal: controller.signal }});
-            const limit = 32 * 1024 * 1024;
+            const limit = 32 * 1024 * 1024; // Matches importer.ClaudeAIResponseLimit in internal/importer/claude_ai_sync.go.
             const oversized = () => window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 413, body: "" }} }});
             const reader = response.body?.getReader();
             const decoder = new TextDecoder();
@@ -6640,8 +6640,7 @@ mod claude_sync_tests {
         let mut child = match child {
             Ok(child) => child,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("skipping browser response bounds test: Node.js is unavailable in this desktop development environment");
-                return;
+                panic!("Node.js is required for the browser response bounds test");
             }
             Err(err) => panic!("could not start Node.js: {err}"),
         };
