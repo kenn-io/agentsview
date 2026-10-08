@@ -3800,10 +3800,15 @@ func ensureUsageIndexColumnsLocked(ctx context.Context,
 func (db *DB) backfillIsAutomatedLocked(ctx context.Context, w *writerHandle) error {
 	current := ClassifierHash()
 	if db.usageOnlyStorage() {
-		// Usage-only archives deliberately discard the text this migration
-		// audits. Session writes classify while raw parser/importer data is
-		// still available, so the stored flag is the durable authority here.
-		_, err := w.Exec(ctx,
+		// Discarded prompts cannot disprove stored flags; metadata can promote them.
+		setIDs, _, err := auditAutomatedFull(ctx, w, snapshotAutomationPatterns())
+		if err != nil {
+			return err
+		}
+		if err := batchUpdateAutomated(ctx, w, setIDs, 1); err != nil {
+			return err
+		}
+		_, err = w.Exec(ctx,
 			`INSERT INTO stats (key, value) VALUES (?, ?)
 			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 			ClassifierHashKey, current,

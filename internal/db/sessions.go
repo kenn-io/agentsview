@@ -1481,7 +1481,7 @@ const upsertSessionSQL = upsertSessionBaseSQL + `,
 
 func sessionIsAutomated(s Session) bool {
 	return s.IsAutomated ||
-		IsAutomatedSessionMetadata(s.Agent, s.SessionKind) ||
+		IsAutomatedSessionMetadata(s.Agent, s.SessionKind, s.Entrypoint, s.UserMessageCount) ||
 		(s.UserMessageCount <= 1 &&
 			s.FirstMessage != nil &&
 			IsAutomatedSession(*s.FirstMessage))

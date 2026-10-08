@@ -230,10 +230,10 @@ The latest published release is
 **Bug fixes**
 
 - Oversized telemetry requests return HTTP 413.
-- Tool calls whose input is a raw script or patch, such as Codex `exec` and
-  `apply_patch` calls, now show that input when expanded. Copy input, Copy
-  message, and in-session search include the complete input, even beyond the
-  preview limit. Existing sessions need no re-import.
+- Activity counts single-prompt Claude print-mode workers as Automated, and
+  Codex exec jobs keep that classification when new messages arrive. Existing
+  archived sessions are corrected on startup.
+
 - Hosted raw sync keeps a session listed and searchable after its source file
   disappears from the device that uploaded it, matching the local archive.
   Before, `raw-sync watch` reporting a missing file hid the session, emptied it
@@ -241,6 +241,10 @@ The latest published release is
   a session yourself still removes it. Sessions already hidden this way stay
   hidden until their file returns; see
   [Hosted Raw Sync](/docs/hosted-raw-sync/#isolation-and-processing-limits).
+- Tool calls whose input is a raw script or patch, such as Codex `exec` and
+  `apply_patch` calls, now show that input when expanded. Copy input, Copy
+  message, and in-session search include the complete input, even beyond the
+  preview limit. Existing sessions need no re-import.
 - `recall query` and `recall brief` in `--mode vector` or `--mode hybrid` no
   longer turn unavailable every time recall extraction writes a new entry. The
   Recall index may now trail the corpus by up to `recall_max_revision_lag`

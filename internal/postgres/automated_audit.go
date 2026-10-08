@@ -20,6 +20,7 @@ const fullAutomationCandidatesPG = `SELECT
 	s.id,
 	s.agent,
 	s.session_kind,
+	s.entrypoint,
 	s.first_message,
 	s.user_message_count,
 	s.is_automated,
@@ -133,6 +134,7 @@ func auditAutomatedMatchingHashPG(
 			s.id,
 			s.agent,
 			s.session_kind,
+			s.entrypoint,
 			s.user_message_count,
 			s.is_automated,
 			s.prompt_evidence_discarded,
@@ -183,6 +185,7 @@ func auditAutomatedMatchingHashPG(
 			id                      string
 			agent                   string
 			sessionKind             string
+			entrypoint              string
 			userMessageCount        int
 			rowAutomated            bool
 			promptEvidenceDiscarded bool
@@ -194,7 +197,7 @@ func auditAutomatedMatchingHashPG(
 		if err := rows.Scan(
 			&id,
 			&agent,
-			&sessionKind,
+			&sessionKind, &entrypoint,
 			&userMessageCount,
 			&rowAutomated,
 			&promptEvidenceDiscarded,
@@ -209,7 +212,7 @@ func auditAutomatedMatchingHashPG(
 			)
 		}
 		progress.RowsPrefetched++
-		if db.IsAutomatedSessionMetadata(agent, sessionKind) {
+		if db.IsAutomatedSessionMetadata(agent, sessionKind, entrypoint, userMessageCount) {
 			setIDs, clearIDs = db.AppendAutomationFlagChange(
 				setIDs, clearIDs, id, rowAutomated, true,
 			)
@@ -293,6 +296,7 @@ func scanFullAutomationCandidatesPG(
 			id                      string
 			agent                   string
 			sessionKind             string
+			entrypoint              string
 			firstMessage            sql.NullString
 			firstUser               sql.NullString
 			userCount               int
@@ -300,7 +304,7 @@ func scanFullAutomationCandidatesPG(
 			promptEvidenceDiscarded bool
 		)
 		if err := rows.Scan(
-			&id, &agent, &sessionKind,
+			&id, &agent, &sessionKind, &entrypoint,
 			&firstMessage, &userCount, &rowAutomated, &promptEvidenceDiscarded, &firstUser,
 		); err != nil {
 			return nil, nil, count, fmt.Errorf(
@@ -308,7 +312,7 @@ func scanFullAutomationCandidatesPG(
 			)
 		}
 		count++
-		want := db.IsAutomatedSessionMetadata(agent, sessionKind)
+		want := db.IsAutomatedSessionMetadata(agent, sessionKind, entrypoint, userCount)
 		// Match the bounded audit: retain the verdict when classification
 		// needs prompt text that the source archive no longer stores.
 		if promptEvidenceDiscarded && !want && userCount <= 1 && firstUser.String == "" && firstMessage.String == "" {

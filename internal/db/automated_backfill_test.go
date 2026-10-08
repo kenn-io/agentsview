@@ -295,6 +295,39 @@ func TestBackfillIsAutomatedRepairsFalseNegativeWithMatchingHash(t *testing.T) {
 		"matching classifier hash must not hide stale is_automated=0")
 }
 
+func TestBackfillRepairsHeadlessLaunchMetadata(t *testing.T) {
+	for _, hash := range []string{ClassifierHash(), "old-classifier"} {
+		t.Run(hash, func(t *testing.T) {
+			d := testDB(t)
+			for _, entrypoint := range []string{"sdk-cli", "sdk-py", "sdk-ts", "cli", "sdk-multi"} {
+				insertSession(t, d, entrypoint, "project", func(s *Session) {
+					s.Agent, s.Entrypoint, s.UserMessageCount = "claude", entrypoint, 1
+					s.FirstMessage = Ptr("Plan a settings change.")
+					if entrypoint == "sdk-multi" {
+						s.Entrypoint, s.UserMessageCount = "sdk-cli", 6
+					}
+				})
+			}
+			_, err := d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 0, local_modified_at = '2020-01-01T00:00:00Z'`)
+			require.NoError(t, err)
+			_, err = d.getWriter().Exec(t.Context(), `UPDATE stats SET value = ? WHERE key = ?`, hash, ClassifierHashKey)
+			require.NoError(t, err)
+			d.mu.Lock()
+			err = d.backfillIsAutomatedLocked(t.Context(), d.getWriter())
+			d.mu.Unlock()
+			require.NoError(t, err)
+			for _, entrypoint := range []string{"sdk-cli", "sdk-py", "sdk-ts", "cli", "sdk-multi"} {
+				stored, err := d.GetSessionFull(t.Context(), entrypoint)
+				require.NoError(t, err)
+				assert.Equal(t, entrypoint == "sdk-cli", stored.IsAutomated)
+				if entrypoint == "sdk-cli" {
+					assert.NotEqual(t, "2020-01-01T00:00:00Z", *stored.LocalModifiedAt)
+				}
+			}
+		})
+	}
+}
+
 func TestBackfillIsAutomatedUsesFirstUserMessageWhenFirstMessageIsTitle(
 	t *testing.T,
 ) {

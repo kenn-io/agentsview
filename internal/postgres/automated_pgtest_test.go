@@ -138,8 +138,28 @@ func TestBackfillIsAutomatedPGPreservesDurableClassification(t *testing.T) {
 		"grok-headless", "Explain this function",
 	)
 	require.NoError(t, err, "insert durably classified session")
+	for _, entrypoint := range []string{"sdk-cli", "sdk-ts", "sdk-py", "cli"} {
+		_, err = ps.DB().ExecContext(ctx,
+			`INSERT INTO sessions (id, machine, project, agent, entrypoint, user_message_count, is_automated)
+			 VALUES ($1, 'host', 'proj', 'claude', $1, 1, false)`, entrypoint)
+		require.NoError(t, err)
+	}
+	_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, entrypoint, user_message_count, is_automated)
+		VALUES ('sdk-multi', 'host', 'proj', 'claude', 'sdk-cli', 6, false)`)
+	require.NoError(t, err)
 
-	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()), "backfill automation")
+	for _, hash := range []string{"old-classifier", db.ClassifierHash()} {
+		_, err = ps.DB().ExecContext(ctx, `UPDATE sessions SET is_automated = false WHERE agent = 'claude'`)
+		require.NoError(t, err)
+		_, err = ps.DB().ExecContext(ctx, `UPDATE sync_metadata SET value = $1 WHERE key = $2`, hash, db.ClassifierHashKey)
+		require.NoError(t, err)
+		require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()), "backfill automation")
+		for _, entrypoint := range []string{"sdk-cli", "sdk-ts", "sdk-py", "cli", "sdk-multi"} {
+			var automated bool
+			require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT is_automated FROM sessions WHERE id = $1`, entrypoint).Scan(&automated))
+			assert.Equal(t, entrypoint == "sdk-cli", automated)
+		}
+	}
 
 	var got bool
 	require.NoError(t, ps.DB().QueryRowContext(ctx,
