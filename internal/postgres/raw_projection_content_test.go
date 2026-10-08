@@ -40,6 +40,14 @@ func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, digest, got)
 	})
+	t.Run("group metadata", func(t *testing.T) {
+		p := clone()
+		p.Session.GroupKey = "job-a"
+		p.Session.GroupLabel = "Daily digest"
+		got, err := rawContentRevision(p)
+		require.NoError(t, err)
+		assert.Equal(t, digest, got)
+	})
 	t.Run("derivation version metadata", func(t *testing.T) {
 		p := clone()
 		p.Session.DataVersion = 123
