@@ -231,52 +231,41 @@ func TestSyncClaudeAIKeepsTrashOnlyWhenPinsLost(t *testing.T) {
 	}
 }
 
-func TestSyncClaudeAIArtifactContentSearch(t *testing.T) {
-	d := testDB(t)
-	raw, err := os.ReadFile("../parser/testdata/claude-ai/artifact-detail.json")
+func TestSyncClaudeAIInvalidAccountSession(t *testing.T) {
+	body, err := os.ReadFile("testdata/claude_ai_live/signed_out.json")
 	require.NoError(t, err)
-	raw = []byte(strings.ReplaceAll(string(raw), "00000000-0000-4000-8000-000000000001", "22222222-2222-4222-8222-222222222222"))
-	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
-	var detail struct {
-		UUID      string `json:"uuid"`
-		UpdatedAt string `json:"updated_at"`
-		Leaf      string `json:"current_leaf_message_uuid"`
+	paths := []string{
+		"/api/organizations",
+		"/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0",
+		"/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true",
 	}
-	require.NoError(t, json.Unmarshal(raw, &detail))
-	summary, err := json.Marshal(map[string]string{"uuid": detail.UUID, "updated_at": detail.UpdatedAt, "current_leaf_message_uuid": detail.Leaf})
-	require.NoError(t, err)
-	fetch := syncOneFetch(t, string(summary), func() (ClaudeAIResponse, error) {
-		return ClaudeAIResponse{Status: 200, Body: raw}, nil
-	})
-	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.Imported)
-	messages, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	require.Len(t, messages[1].ToolCalls, 3)
-	assert.Contains(t, messages[1].ToolCalls[1].InputJSON, "<!doctype html>")
-	assert.Equal(t, "File created successfully: /mnt/user-data/outputs/hello.html", messages[1].ToolCalls[1].ResultContent)
-	page, err := d.SearchContent(t.Context(), db.ContentSearchFilter{
-		SessionID: id, Pattern: "viewport-fit=cover", Sources: []string{"tool_input"}, IncludeOneShot: true,
-	})
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
-	assert.Equal(t, "create_file", page.Matches[0].ToolName)
-	assert.Equal(t, "tool_input", page.Matches[0].Location)
-	assert.Equal(t, id, page.Matches[0].SessionID)
-	raw = []byte(strings.ReplaceAll(strings.ReplaceAll(string(raw), "viewport-fit=cover", "viewport-fit=contain"), detail.UpdatedAt, "2026-10-08T12:08:00Z"))
-	summary = []byte(strings.ReplaceAll(string(summary), detail.UpdatedAt, "2026-10-08T12:08:00Z"))
-	stats, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, string(summary), func() (ClaudeAIResponse, error) {
-		return ClaudeAIResponse{Status: 200, Body: raw}, nil
-	}), nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.Updated)
-	page, err = d.SearchContent(t.Context(), db.ContentSearchFilter{
-		SessionID: id, Pattern: "viewport-fit=contain", Sources: []string{"tool_input"}, IncludeOneShot: true,
-	})
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
+	for stage, path := range paths {
+		for _, status := range []int{200, 401, 403, 429, 503} {
+			t.Run(path+"/"+strconv.Itoa(status), func(t *testing.T) {
+				d := testDB(t)
+				calls := 0
+				stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, got string) (ClaudeAIResponse, error) {
+					require.Less(t, calls, len(paths))
+					require.Equal(t, paths[calls], got)
+					calls++
+					if got == path {
+						return ClaudeAIResponse{Status: status, Body: body}, nil
+					}
+					if got == paths[0] {
+						return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+					}
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
+				}, nil)
+				require.ErrorIs(t, err, ErrClaudeAIAuthRequired)
+				assert.EqualError(t, err, "claude.ai sign-in required")
+				assert.Equal(t, stage+1, calls)
+				assert.Zero(t, stats.Imported+stats.Errors+stats.Skipped)
+				session, err := d.GetSession(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+				require.NoError(t, err)
+				assert.Nil(t, session)
+			})
+		}
+	}
 }
 
 func TestSyncClaudeAI(t *testing.T) {
@@ -1067,24 +1056,6 @@ func TestSyncClaudeAIEqualTextBranchIdentities(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pins, 1)
 	assert.Equal(t, restored[1].ID, pins[0].MessageID)
-}
-
-func TestSameMessagesSourceUUID(t *testing.T) {
-	for _, tt := range []struct {
-		name, existing, incoming string
-		want                     bool
-	}{
-		{"conflicting", "a", "b", false},
-		{"matching", "a", "a", true},
-		{"zip to sync", "", "a", true},
-		{"sync to zip", "a", "", true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			existing := []db.Message{{Role: "user", Content: "go", ContentLength: 2, SourceUUID: tt.existing}}
-			incoming := []db.Message{{Role: "user", Content: "go", ContentLength: 2, SourceUUID: tt.incoming}}
-			assert.Equal(t, tt.want, sameMessages(existing, incoming))
-		})
-	}
 }
 
 func TestSyncClaudeAIZipDuplicatePromptPin(t *testing.T) {

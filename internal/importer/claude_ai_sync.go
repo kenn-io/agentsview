@@ -225,7 +225,15 @@ func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (Cla
 			return nil, err
 		}
 		status := response.Status
-		if status == 401 {
+		var apiError struct {
+			Error struct {
+				Details struct {
+					Code string `json:"error_code"`
+				} `json:"details"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(response.Body, &apiError)
+		if status == 401 || apiError.Error.Details.Code == "account_session_invalid" {
 			return nil, ErrClaudeAIAuthRequired
 		}
 		if status == 403 {

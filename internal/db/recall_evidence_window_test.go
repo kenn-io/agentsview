@@ -1098,7 +1098,7 @@ func TestRecallEvidenceSourceUUIDFillRollsBackAtomically(t *testing.T) {
 	session, err := d.GetSession(t.Context(), "legacy-fill")
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	write := SessionBatchWrite{Session: *session, Messages: messages, FillSourceUUIDs: true}
+	write := SessionBatchWrite{Session: *session, Messages: messages, CompleteStoredRows: true}
 	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write}, func() error { return assert.AnError })
 	require.ErrorIs(t, err, assert.AnError)
 	entry := requireRecallEntry(t, d, "fill-entry")

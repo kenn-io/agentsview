@@ -182,3 +182,70 @@ func TestReplaceSessionKeepingTrashedCopyRefusals(t *testing.T) {
 		assert.Equal(t, []string{"replace"}, trashedSessionIDs(t, d))
 	})
 }
+
+func TestReplaceSessionKeepingTrashedCopyPinIdentities(t *testing.T) {
+	msg := func(uuid, content string) Message {
+		return Message{SourceUUID: uuid, Role: "user", Content: content, ContentLength: len(content)}
+	}
+	for _, tt := range []struct {
+		name          string
+		before, after []Message
+		pins          []int
+		surviving     []int
+		copy          bool
+	}{
+		{"unique uuid follows edited turn", []Message{msg("a", "old"), msg("b", "reply")}, []Message{msg("b", "reply"), msg("a", "edited")}, []int{0}, []int{1}, false},
+		{"duplicate uuid group shifts", []Message{msg("a", "same"), msg("a", "same")}, []Message{msg("b", "new"), msg("a", "same"), msg("a", "same")}, []int{1}, []int{2}, false},
+		{"duplicate uuid group shrinks", []Message{msg("a", "same"), msg("a", "same")}, []Message{msg("a", "same")}, []int{1}, nil, true},
+		{"legacy group shifts", []Message{msg("", "same"), msg("", "same")}, []Message{msg("", "new"), msg("", "same"), msg("", "same")}, []int{1}, []int{2}, false},
+		{"legacy zip fallback", []Message{msg("a", "same"), msg("b", "reply")}, []Message{msg("", "same"), msg("", "edited")}, []int{0}, []int{0}, false},
+		{"colliding pin targets", []Message{msg("a", "same"), msg("", "other")}, []Message{msg("a", "other")}, []int{0, 1}, []int{0}, true},
+		{"unpinned edit", []Message{msg("a", "old")}, []Message{msg("b", "edited")}, nil, nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			write := replaceWrite()
+			write.Session.Agent = "claude-ai"
+			write.Session.MessageCount = len(tt.before)
+			write.Messages = tt.before
+			for i := range write.Messages {
+				write.Messages[i].SessionID = "replace"
+				write.Messages[i].Ordinal = i
+			}
+			_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
+			require.NoError(t, err)
+			stored, err := d.GetAllMessages(t.Context(), "replace")
+			require.NoError(t, err)
+			for _, i := range tt.pins {
+				_, err := d.PinMessage(t.Context(), "replace", stored[i].ID, Ptr("saved note"))
+				require.NoError(t, err)
+			}
+			write.Messages = tt.after
+			write.Session.MessageCount = len(tt.after)
+			write.KeepTrashedCopyOnlyOnPinLoss = true
+			for i := range write.Messages {
+				write.Messages[i].SessionID = "replace"
+				write.Messages[i].Ordinal = i
+			}
+			copyID, err := d.ReplaceSessionKeepingTrashedCopy(t.Context(), write)
+			require.NoError(t, err)
+			assert.Equal(t, tt.copy, copyID != "")
+			pins, err := d.ListPinnedMessages(t.Context(), "replace", "")
+			require.NoError(t, err)
+			var ordinals []int
+			for _, pin := range pins {
+				ordinals = append(ordinals, pin.Ordinal)
+				assert.Equal(t, Ptr("saved note"), pin.Note)
+			}
+			assert.ElementsMatch(t, tt.surviving, ordinals)
+			if tt.copy {
+				oldPins, err := d.ListPinnedMessages(t.Context(), copyID, "")
+				require.NoError(t, err)
+				require.Len(t, oldPins, len(tt.pins))
+				assert.Equal(t, Ptr("saved note"), oldPins[0].Note)
+			} else {
+				assert.Empty(t, trashedSessionIDs(t, d))
+			}
+		})
+	}
+}
