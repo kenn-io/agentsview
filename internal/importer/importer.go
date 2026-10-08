@@ -300,12 +300,11 @@ func upsertConversation(
 		return importUpdated, nil
 	}
 	write := db.SessionBatchWrite{
-		Session:            sess,
-		Messages:           msgs,
-		ReplaceMessages:    replaceMessages,
-		CompleteStoredRows: !replaceMessages,
-		SkipSignalUpdates:  unchanged,
-		TouchModified:      true,
+		Session:           sess,
+		Messages:          msgs,
+		ReplaceMessages:   replaceMessages,
+		SkipSignalUpdates: unchanged,
+		TouchModified:     true,
 	}
 	if replaceMessages && !isNew {
 		r, ok := store.(sessionReplacer)

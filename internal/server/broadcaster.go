@@ -14,7 +14,7 @@ const broadcasterBufferCap = 8
 // that wrote data. Scope is advisory — subscribers may filter on
 // it but are free to treat it as "refetch now".
 type Event struct {
-	Scope string `json:"scope"`
+	Scope string
 }
 
 // Broadcaster fans out Event values from the sync engine to all
