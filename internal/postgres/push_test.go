@@ -766,7 +766,7 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 	assert.Empty(t, state.upsertArgs[63].Value)
 	assert.Equal(t, false, state.upsertArgs[67].Value)
 	assert.Equal(t, "[]", state.upsertArgs[68].Value)
-	assert.Equal(t, "group-key", state.upsertArgs[70].Value)
+	assert.Equal(t, "push-machine~group-key", state.upsertArgs[70].Value)
 	assert.Equal(t, "group-label", state.upsertArgs[71].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
@@ -789,6 +789,29 @@ func TestSessionPushFingerprintIncludesDeletionCause(t *testing.T) {
 		sessionPushFingerprint(base, base.Machine, "", "", "", ""),
 		sessionPushFingerprint(withCause, withCause.Machine, "", "", "", ""),
 	)
+}
+
+func TestPushSessionScopesCronGroupsByMachine(t *testing.T) {
+	for _, tc := range []struct{ machine, key, want string }{
+		{"host-a", "job-a@12345678", "host-a~job-a@12345678"},
+		{"host-b", "job-a@12345678", "host-b~job-a@12345678"},
+		{"host-a", "host-c~job-a@12345678", "host-c~job-a@12345678"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			state := &pushSessionProbeState{}
+			pg := newPushSessionProbeDB(t, state)
+			tx, err := pg.BeginTx(t.Context(), nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx.Rollback() })
+			err = (&Sync{machine: tc.machine}).pushSession(t.Context(), tx, db.Session{
+				ID: "hermes:cron_job-a_20261008_120000", Machine: "local", Agent: "hermes",
+				CreatedAt: "2026-10-08T12:00:00Z", GroupKey: tc.key,
+			}, "marker", nil)
+			require.NoError(t, err)
+			require.Len(t, state.upsertArgs, 72)
+			assert.Equal(t, tc.want, state.upsertArgs[70].Value)
+		})
+	}
 }
 
 func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {

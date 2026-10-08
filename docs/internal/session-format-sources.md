@@ -2947,6 +2947,9 @@ schemas keep their existing ordering behavior.
     sources. Imports apply the session ID's origin prefix to group keys too.
     This keeps profiles and hosts separate across repeated imports. The pinned
     ID and title formats were reverified on 2026-10-08. Names stay in `group_label`.
+    The pinned home override also accepts a home named `sessions`; only
+    transcript paths remove the trailing `sessions` directory. Mirrors prefix
+    local group keys with the push machine and preserve imported origin prefixes.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized. Transcript projects use `platform`. Cron continuations follow

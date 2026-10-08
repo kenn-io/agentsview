@@ -2040,7 +2040,7 @@ func sessionPushFingerprint(
 		sess.GitBranch,
 		sess.SourceSessionID,
 		sess.SourceVersion,
-		sess.TranscriptFidelity, sess.GroupKey, sess.GroupLabel,
+		sess.TranscriptFidelity, db.MirroredSessionGroupKey(sess, pushedMachine), sess.GroupLabel,
 		stringValue(sess.TranscriptRevision),
 		strconv.Itoa(sess.ParserMalformedLines),
 		strconv.FormatBool(sess.IsTruncated),
@@ -2481,7 +2481,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 		sess.ProjectAssigned,
 		string(legacyMarkerMachinesJSON),
 		options.UsageOnly,
-		sanitizePG(sess.GroupKey), sanitizePG(sess.GroupLabel),
+		sanitizePG(db.MirroredSessionGroupKey(sess, options.Machine)), sanitizePG(sess.GroupLabel),
 	)
 	if err != nil {
 		return err

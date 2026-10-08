@@ -46,6 +46,28 @@ func TestPushIncrementalReplacesOnlyChangedSessions(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-2", 3)
 }
 
+func TestPushScopesCronGroupsByMachine(t *testing.T) {
+	for _, machine := range []string{"host-a", "host-b"} {
+		t.Run(machine, func(t *testing.T) {
+			local, path := newPushFixture(t, 2)
+			require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET group_key = CASE id WHEN 'sess-1' THEN 'job-a@12345678' ELSE 'host-c~job-a@12345678' END`)
+				return err
+			}))
+			_, err := Push(t.Context(), path, local, machine, storage.MirrorPushOptions{}, false, nil)
+			require.NoError(t, err)
+			conn, err := Open(t.Context(), path)
+			require.NoError(t, err)
+			defer conn.Close()
+			var key string
+			require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key FROM sessions WHERE id = 'sess-1'`).Scan(&key))
+			assert.Equal(t, machine+"~job-a@12345678", key)
+			require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key FROM sessions WHERE id = 'sess-2'`).Scan(&key))
+			assert.Equal(t, "host-c~job-a@12345678", key)
+		})
+	}
+}
+
 func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 3)

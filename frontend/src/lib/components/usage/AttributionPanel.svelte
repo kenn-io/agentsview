@@ -62,8 +62,10 @@
       items = zoomRows.map((row, index) => {
         const id = zoomRowId(row);
         const duplicates = zoomRows.filter((other, otherIndex) => other !== row && (other.groupKey || other.sessionId) && names[otherIndex] === names[index]);
-        const suffixID = row.groupKey || row.sessionId.replace(/^[^:]+:/, "") || row.sessionId;
-        const peers = duplicates.map((other) => other.groupKey || other.sessionId.replace(/^[^:]+:/, ""));
+        const sessionSuffix = row.sessionId.replace(/^[^:]+:/, "");
+        const keepProvider = !row.groupKey && duplicates.some((other) => !other.groupKey && other.sessionId.replace(/^[^:]+:/, "") === sessionSuffix);
+        const suffixID = row.groupKey || (keepProvider ? row.sessionId : sessionSuffix) || row.sessionId;
+        const peers = duplicates.map((other) => other.groupKey || (keepProvider ? other.sessionId : other.sessionId.replace(/^[^:]+:/, "")));
         return {
           id,
           label: (row.groupKey || row.sessionId) && duplicates.length ? `${names[index]} · ${shortenId(suffixID, peers)}` : names[index]!,

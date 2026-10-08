@@ -1235,7 +1235,7 @@ func sessionInsertArgs(
 		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		sess.DataVersion,
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
-		sess.SourceVersion, sess.GroupKey, sess.GroupLabel, sess.TranscriptFidelity, sess.ParserMalformedLines,
+		sess.SourceVersion, db.MirroredSessionGroupKey(sess, fallbackMachine), sess.GroupLabel, sess.TranscriptFidelity, sess.ParserMalformedLines,
 		sess.IsTruncated, nilTime(sess.DeletedAt), nilString(sess.DeletionCause),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,

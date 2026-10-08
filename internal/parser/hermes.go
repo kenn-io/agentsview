@@ -1527,7 +1527,7 @@ func hermesCronGroupKeyWithRewriter(path, job string, rewrite func(string) strin
 		return ""
 	}
 	root := filepath.Dir(path)
-	if filepath.Base(root) == "sessions" {
+	if filepath.Base(path) != "state.db" && filepath.Base(root) == "sessions" {
 		root = filepath.Dir(root)
 	}
 	scope := absoluteHermesPath(filepath.Join(root, "state.db"))

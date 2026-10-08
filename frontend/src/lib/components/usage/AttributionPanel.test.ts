@@ -640,6 +640,21 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
+  it("keeps providers when ungrouped session IDs collide", async () => {
+    usage.zoomedProject = { key: "pl1:sha256:first", label: "hermes-cron" };
+    usage.zoomRows = ["hermes:run-a", "augure-desktop:run-a"].map((sessionId) => ({
+      ...topSessionForRemainder(),
+      sessionId,
+      displayName: "Repeated run",
+    }));
+    const component = mountPanel();
+    await tick();
+    const rows = document.querySelectorAll<HTMLElement>(".list-row");
+    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual(["Repeated run · hermes:r", "Repeated run · augure-d"]);
+    expect(Array.from(rows, (row) => row.title)).toEqual(["Repeated run · hermes:run-a", "Repeated run · augure-desktop:run-a"]);
+    await unmount(component);
+  });
+
   it("hides the project from the zoom breadcrumb", async () => {
     usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithDuplicateProjectLabels());

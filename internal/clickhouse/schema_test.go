@@ -107,6 +107,28 @@ func TestRowBuildersMatchInsertColumns(t *testing.T) {
 	}
 }
 
+func TestSessionRowScopesCronGroupsByMachine(t *testing.T) {
+	spec, ok := tableByName("sessions")
+	require.True(t, ok)
+	groupColumn := -1
+	for i, column := range spec.columns {
+		if column.name == "group_key" {
+			groupColumn = i
+		}
+	}
+	require.GreaterOrEqual(t, groupColumn, 0)
+	for _, tc := range []struct{ machine, key, want string }{
+		{"host-a", "job-a@12345678", "host-a~job-a@12345678"},
+		{"host-b", "job-a@12345678", "host-b~job-a@12345678"},
+		{"host-a", "host-c~job-a@12345678", "host-c~job-a@12345678"},
+	} {
+		row := (&Sync{machine: tc.machine}).sessionRow(sessionPayload{session: db.Session{
+			Machine: "local", GroupKey: tc.key,
+		}}, "fp", 1)
+		assert.Equal(t, tc.want, row[groupColumn])
+	}
+}
+
 func TestLastMessageAtAndTimeValue(t *testing.T) {
 	assert.Nil(t, timeValue(""))
 	assert.Nil(t, timeValue("not a time"))

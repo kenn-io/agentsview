@@ -92,7 +92,7 @@ func sessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.MissingSuccessCriteriaCount, sess.MissingVerificationCount,
 		sess.DuplicatePromptCount, sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		sess.DataVersion,
-		sess.Cwd, sess.GitBranch, sess.SourceSessionID, sess.SourceVersion, sess.GroupKey, sess.GroupLabel, sess.TranscriptFidelity,
+		sess.Cwd, sess.GitBranch, sess.SourceSessionID, sess.SourceVersion, db.MirroredSessionGroupKey(sess, machine), sess.GroupLabel, sess.TranscriptFidelity,
 		sess.ParserMalformedLines, sess.IsTruncated,
 		sess.DeletedAt, sess.DeletionCause, sess.CreatedAt, sess.TerminationStatus,
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
