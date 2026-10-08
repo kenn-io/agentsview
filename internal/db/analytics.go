@@ -156,17 +156,6 @@ func RelationshipExclusionSQL(includeSubagents, includeForks bool, colPrefix str
 	}
 }
 
-// OneShotExclusionSQL wraps the one-shot exclusion predicate so it does
-// not drop subagent rows when subagents are being counted. Workflow
-// subagents are inherently one-shot (a single orchestrator prompt
-// yields one result) but represent real work, so the one-shot filter
-// would otherwise re-hide exactly the sessions IncludeSubagents is
-// meant to surface. Exported so the PostgreSQL and DuckDB builders
-// apply the same rule. base must be a self-contained boolean clause.
-func (f AnalyticsFilter) OneShotExclusionSQL(base string) string {
-	return f.oneShotExclusionSQL(base, "")
-}
-
 func (f AnalyticsFilter) oneShotExclusionSQL(base, colPrefix string) string {
 	if f.IncludeSubagents {
 		return "(" + base + " OR " + colPrefix + "relationship_type = 'subagent')"

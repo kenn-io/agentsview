@@ -38,6 +38,10 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 	for _, d := range filterMatrixDialects {
 		t.Run(d.name, func(t *testing.T) {
 			base := "s.message_count > 0 AND s.relationship_type NOT IN ('subagent', 'fork') AND s.deleted_at IS NULL"
+			clean := "s.termination_status = 'clean'"
+			if d.name == "duckdb" || d.name == "clickhouse" {
+				clean = "(" + clean + ")"
+			}
 			cases := []struct {
 				name string
 				f    AnalyticsFilter
@@ -45,6 +49,7 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 				args []any
 			}{
 				{"empty", AnalyticsFilter{}, base, []any{}},
+				{"clean", AnalyticsFilter{Termination: "clean"}, base + " AND " + clean, []any{}},
 				{"machine", AnalyticsFilter{Machine: " laptop, server, "}, base + " AND s.machine IN (?,?)", []any{"laptop", "server"}},
 				{"blank-csv", AnalyticsFilter{Machine: " , ", Agent: " , ", Model: " , "}, base, []any{}},
 				{"project", AnalyticsFilter{Project: "team,tools"}, base + " AND s.project = ?", []any{"team,tools"}},
@@ -122,102 +127,126 @@ func TestFilterMatrixUsage(t *testing.T) {
 func TestFilterMatrixTermination(t *testing.T) {
 	for _, d := range filterMatrixDialects {
 		t.Run(d.name, func(t *testing.T) {
-			for _, entry := range []string{"usage", "analytics"} {
-				t.Run(entry, func(t *testing.T) {
-					before := time.Now().UTC()
-					b := NewQueryBuilder(d.dialect, 4)
-					var preds []string
-					if entry == "analytics" {
-						preds = []string{BuildAnalyticsWhere(AnalyticsFilter{Termination: "active,stale,unclean"}, b, "s.", "", nil)}
-					} else {
-						preds = BuildUsageSessionFilter(UsageFilter{Termination: "active,stale,unclean"}, b, "")
-					}
-					require.Len(t, preds, 1)
-					args := b.Args()
-					require.Len(t, args, 4)
-					for i, delta := range []time.Duration{10 * time.Minute, 60 * time.Minute, 10 * time.Minute, 60 * time.Minute} {
-						var cutoff time.Time
-						switch d.name {
-						case "sqlite":
-							v, ok := args[i].(int64)
-							require.True(t, ok)
-							cutoff = time.Unix(v, 0)
-						case "postgres":
-							v, ok := args[i].(time.Time)
-							require.True(t, ok)
-							cutoff = v
-						default:
-							v, ok := args[i].(string)
-							require.True(t, ok)
-							var err error
-							cutoff, err = time.Parse(time.RFC3339, v)
-							require.NoError(t, err)
-						}
-						assert.WithinDuration(t, before.Add(-delta), cutoff, 2*time.Second)
-					}
-					assert.Contains(t, preds[0], "s.termination_status IN ('tool_call_pending', 'truncated')")
-					assert.Contains(t, preds[0], "s.ended_at")
-					assert.NotContains(t, preds[0], "COALESCE(ended_at")
-					assert.NotContains(t, preds[0], "NULLIF(ended_at")
-					if d.name == "postgres" {
-						for i := 5; i <= 8; i++ {
-							assert.Contains(t, preds[0], fmt.Sprintf("$%d", i))
-						}
-						assert.NotContains(t, preds[0], "::timestamptz")
-					}
-				})
+			activity, ph := "COALESCE(s.ended_at, s.started_at, s.created_at)", "?"
+			switch d.name {
+			case "sqlite":
+				activity = "CAST(strftime('%s', COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)) AS INTEGER)"
+			case "duckdb":
+				ph = "CAST(? AS TIMESTAMP)"
+			case "clickhouse":
+				ph = "parseDateTime64BestEffort(?, 6, 'UTC')"
 			}
-			b := NewQueryBuilder(d.dialect, 0)
-			got := BuildAnalyticsWhere(AnalyticsFilter{Termination: "clean"}, b, "s.", "", nil)
-			ending := "s.termination_status = 'clean'"
-			if d.name == "duckdb" || d.name == "clickhouse" {
-				ending = "(" + ending + ")"
+			flagged := "s.termination_status IN ('tool_call_pending', 'truncated')"
+			active := activity + " > " + ph
+			stale := "(" + activity + " > " + ph + " AND " + activity + " <= " + ph + " AND " + flagged + ")"
+			unclean := "(" + activity + " <= " + ph + " AND " + flagged + ")"
+			wrapped := d.name == "duckdb" || d.name == "clickhouse"
+			if wrapped {
+				stale = "(" + flagged + " AND " + activity + " > " + ph + " AND " + activity + " <= " + ph + ")"
+				unclean = "(" + flagged + " AND " + activity + " <= " + ph + ")"
 			}
-			assert.True(t, strings.HasSuffix(got, " AND "+ending), got)
-			assert.Empty(t, b.Args())
+			for _, c := range []struct{ status, sql string }{{"active", active}, {"stale", stale}, {"unclean", unclean}, {"active,stale,unclean", "(" + active + " OR " + stale + " OR " + unclean + ")"}} {
+				before := time.Now().UTC()
+				b := NewQueryBuilder(d.dialect, 4)
+				want := c.sql
+				if wrapped && c.status != "active,stale,unclean" {
+					want = "(" + want + ")"
+				}
+				assert.Equal(t, []string{matrixSQL(d, want, 4)}, BuildUsageSessionFilter(UsageFilter{Termination: c.status}, b, ""))
+				if c.status != "active,stale,unclean" {
+					continue
+				}
+				args := b.Args()
+				require.Len(t, args, 4)
+				for i, delta := range []time.Duration{10 * time.Minute, 60 * time.Minute, 10 * time.Minute, 60 * time.Minute} {
+					var cutoff time.Time
+					switch d.name {
+					case "sqlite":
+						v, ok := args[i].(int64)
+						require.True(t, ok)
+						cutoff = time.Unix(v, 0)
+					case "postgres":
+						v, ok := args[i].(time.Time)
+						require.True(t, ok)
+						cutoff = v
+					default:
+						v, ok := args[i].(string)
+						require.True(t, ok)
+						var err error
+						cutoff, err = time.Parse(time.RFC3339, v)
+						require.NoError(t, err)
+					}
+					assert.WithinDuration(t, before.Add(-delta), cutoff, 2*time.Second)
+				}
+			}
 		})
 	}
 }
 
 func TestFilterMatrixRecentEdits(t *testing.T) {
+	const query = `WITH ranked AS (
+ SELECT s.project AS project, tc.file_path AS file_path,
+ tc.session_id AS session_id, tc.tool_name AS tool_name,
+ tc.category AS category, tc.tool_use_id AS tool_use_id,
+ tc.call_index AS call_index, m.ordinal AS ordinal,
+ m.timestamp AS timestamp,
+ %s AS rn,
+ %s AS edit_count
+ FROM tool_calls tc
+ JOIN messages m ON %s
+ JOIN sessions s ON s.id = tc.session_id
+ WHERE tc.category IN ('Edit','Write')
+ AND tc.file_path IS NOT NULL AND tc.file_path <> ''
+ AND s.deleted_at IS NULL %s
+ ), file_page AS (
+ SELECT project, file_path, edit_count,
+ timestamp AS last_edited_at, session_id AS last_session_id,
+ ordinal AS last_ordinal, call_index AS last_call_index
+ FROM ranked WHERE rn = 1
+ ORDER BY last_edited_at DESC NULLS LAST, last_session_id DESC,
+ last_ordinal DESC, last_call_index DESC, file_path DESC
+ LIMIT ? OFFSET ?
+ )
+ SELECT fp.project, fp.file_path, fp.edit_count, %s,
+ fp.last_session_id, r.session_id, r.ordinal, r.tool_use_id,
+ r.call_index, r.tool_name, r.category, %s
+ FROM file_page fp
+ JOIN ranked r ON r.project = fp.project AND r.file_path = fp.file_path
+ WHERE r.rn <= ?
+ ORDER BY fp.last_edited_at DESC NULLS LAST, fp.last_session_id DESC,
+ fp.last_ordinal DESC, fp.last_call_index DESC, fp.file_path DESC, r.rn`
 	for _, d := range filterMatrixDialects {
 		t.Run(d.name, func(t *testing.T) {
-			for _, p := range []RecentEditsParams{{}, {Project: "team,tools", Search: `  a%_\b  `, Limit: 5, Offset: 3, MaxEditsPerFile: 2}, {Limit: 201, Offset: -1, MaxEditsPerFile: -1}} {
+			row := "ROW_NUMBER() OVER ( PARTITION BY s.project, tc.file_path ORDER BY m.timestamp DESC NULLS LAST, tc.session_id DESC, m.ordinal DESC, tc.call_index DESC)"
+			count := "COUNT(*) OVER (PARTITION BY s.project, tc.file_path)"
+			lastEdited, timestamp := "fp.last_edited_at", "r.timestamp"
+			if d.name == "clickhouse" {
+				row = "toInt64(row_number() OVER ( PARTITION BY s.project, tc.file_path ORDER BY m.timestamp DESC NULLS LAST, tc.session_id DESC, m.ordinal DESC, tc.call_index DESC))"
+				count = "toInt64(count() OVER (PARTITION BY s.project, tc.file_path))"
+				lastEdited = "if(fp.last_edited_at IS NULL, CAST(NULL AS Nullable(String)), concat(replaceAll(toString(fp.last_edited_at), ' ', 'T'), 'Z'))"
+				timestamp = "if(r.timestamp IS NULL, CAST(NULL AS Nullable(String)), concat(replaceAll(toString(r.timestamp), ' ', 'T'), 'Z'))"
+			}
+			for _, raw := range []RecentEditsParams{{}, {Project: "team,tools", Search: `  a%_\b  `, Limit: 5, Offset: 3, MaxEditsPerFile: 2}, {Limit: 201, Offset: -1, MaxEditsPerFile: -1}} {
+				p := NormalizeRecentEditsParams(raw)
 				b := NewQueryBuilder(d.dialect, 2)
 				got := BuildRecentEditsQuery(p, b, d.join)
-				n := 2
-				wantArgs := []any{}
-				if p.Project != "" {
-					assert.Contains(t, got, matrixSQL(d, "AND s.project = ?", n))
-					wantArgs = append(wantArgs, p.Project)
-					n++
+				filters, wantArgs := "", []any{}
+				if raw.Project != "" {
+					filters += " AND s.project = ?"
+					wantArgs = append(wantArgs, raw.Project)
 				}
-				if p.Search != "" {
-					assert.Contains(t, got, matrixSQL(d, "AND "+d.search, n))
+				if raw.Search != "" {
+					filters += " AND " + d.search
 					wantArgs = append(wantArgs, `%a\%\_\\b%`)
-					n++
 				}
-				if p.Limit != 5 {
+				if raw.Limit != 5 {
 					wantArgs = append(wantArgs, 51, 0, 20)
 				} else {
 					wantArgs = append(wantArgs, 6, 3, 2)
 				}
+				want := matrixSQL(d, fmt.Sprintf(query, row, count, d.join, filters, lastEdited, timestamp), 2)
+				assert.Equal(t, strings.Join(strings.Fields(want), " "), strings.Join(strings.Fields(got), " "))
 				assert.Equal(t, wantArgs, b.Args())
-				assert.Contains(t, got, "JOIN messages m ON "+d.join)
-				assert.Contains(t, got, matrixSQL(d, "LIMIT ? OFFSET ?", n))
-				assert.Contains(t, got, matrixSQL(d, "WHERE r.rn <= ?", n+2))
-				assert.Contains(t, got, "s.deleted_at IS NULL")
-				assert.Contains(t, got, "last_ordinal DESC, fp.last_call_index DESC, fp.file_path DESC")
-				if d.name == "clickhouse" {
-					assert.Contains(t, got, "toInt64(row_number() OVER (")
-					assert.Contains(t, got, "toInt64(count() OVER (PARTITION BY s.project, tc.file_path)) AS edit_count")
-					assert.Contains(t, got, "toString(fp.last_edited_at)")
-					assert.Contains(t, got, "toString(r.timestamp)")
-					assert.NotContains(t, got, "ESCAPE")
-				} else {
-					assert.Contains(t, got, "COUNT(*) OVER (PARTITION BY s.project, tc.file_path) AS edit_count")
-					assert.Contains(t, got, "fp.edit_count, fp.last_edited_at,")
-				}
 			}
 		})
 	}

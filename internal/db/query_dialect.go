@@ -977,20 +977,6 @@ func BranchPairPredicate(
 	return "(" + strings.Join(parts, " OR ") + ")"
 }
 
-// BranchPairClauseArgs is the raw-args ("?" placeholder) form of
-// BranchPairPredicate.
-func BranchPairClauseArgs(
-	projectCol, branchCol, tokens string, args []any,
-) (string, []any) {
-	clause := BranchPairPredicate(
-		projectCol, branchCol, tokens,
-		func(v string) string {
-			args = append(args, v)
-			return "?"
-		})
-	return clause, args
-}
-
 func nonEmpty(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, v := range values {

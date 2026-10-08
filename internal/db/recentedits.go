@@ -141,9 +141,8 @@ func ScanRecentEdits(
 	return RecentEditsResult{Files: files, HasMore: hasMore}, nil
 }
 
-// BuildRecentEditsQuery renders paging and filename filters for the backend-owned message join.
+// BuildRecentEditsQuery renders normalized parameters with the backend-owned message join.
 func BuildRecentEditsQuery(p RecentEditsParams, b *QueryBuilder, messageJoin string) string {
-	p = NormalizeRecentEditsParams(p)
 	projectClause, searchClause := "", ""
 	if p.Project != "" {
 		projectClause = "AND s.project = " + b.Add(p.Project)

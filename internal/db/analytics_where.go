@@ -72,5 +72,6 @@ func (b *QueryBuilder) reportTerminationPredicate(status, prefix string) string 
 	if b.dialect.reportTerminationRawTime {
 		param = func(t time.Time) string { return b.Add(t) }
 	}
+	// Existing report SQL wraps single states on the same dialects that place flags first.
 	return renderTerminationPredicate(status, activity, prefix+"termination_status", param, b.dialect.reportTerminationFlagFirst, b.dialect.reportTerminationFlagFirst)
 }
