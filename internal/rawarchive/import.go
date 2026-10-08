@@ -201,16 +201,23 @@ func (a *Archive) Import(ctx context.Context, spec ImportSpec) (Report, error) {
 		if err != nil {
 			return report, err
 		}
-		dirs := input.SessionDirs
-		if len(dirs) == 0 {
-			dirs = []string{"."}
+		roots, err := captureSessionRoots(input)
+		if err != nil {
+			return report, err
 		}
-		var roots []string
-		for _, dir := range dirs {
-			if !filepath.IsLocal(dir) {
-				return report, errors.New("session directory must be relative to capture root")
+		if input.Provider == "codex" {
+			// A fork may name a parent captured under another Codex root. Later
+			// roots resolve companions only; this root still wins a duplicate.
+			for _, other := range spec.Roots {
+				if other.Provider != "codex" || other.ID == input.ID {
+					continue
+				}
+				companions, err := captureSessionRoots(other)
+				if err != nil {
+					return report, err
+				}
+				roots = append(roots, companions...)
 			}
-			roots = append(roots, filepath.Join(rootPath, dir))
 		}
 		provider, ok := parser.NewProvider(parser.AgentType(input.Provider), parser.ProviderConfig{Roots: roots, Machine: spec.Machine, StableSourceSnapshots: true})
 		if !ok {
@@ -224,6 +231,10 @@ func (a *Archive) Import(ctx context.Context, spec ImportSpec) (Report, error) {
 		if !discovery.Complete {
 			return report, errors.New("capture discovery is incomplete")
 		}
+		discovery.Sources = slices.DeleteFunc(discovery.Sources, func(source parser.SourceRef) bool {
+			_, err := containedPath(rootPath, source.DisplayPath)
+			return err != nil
+		})
 		grouped := make(map[string]bool)
 		for _, source := range discovery.Sources {
 			if grouped[source.Key] {
@@ -322,6 +333,27 @@ func (a *Archive) Import(ctx context.Context, spec ImportSpec) (Report, error) {
 		}
 	}
 	return report, nil
+}
+
+// captureSessionRoots returns the absolute provider roots recorded for one
+// capture root.
+func captureSessionRoots(input RootSpec) ([]string, error) {
+	rootPath, err := filepath.Abs(input.Path)
+	if err != nil {
+		return nil, err
+	}
+	dirs := input.SessionDirs
+	if len(dirs) == 0 {
+		dirs = []string{"."}
+	}
+	roots := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if !filepath.IsLocal(dir) {
+			return nil, errors.New("session directory must be relative to capture root")
+		}
+		roots = append(roots, filepath.Join(rootPath, dir))
+	}
+	return roots, nil
 }
 
 func maxTime(a, b time.Time) time.Time {
