@@ -64,7 +64,9 @@ its vault as well as its database; `capture` refuses that input.
 it does not stop them. A rolling capture is not a final retirement cutoff.
 The destination must be new and outside the selected inputs. Failed captures
 are not published. The completed directory contains `capture.json`, a hashed
-inventory and root-relative files; move the directory as a whole.
+inventory and root-relative files; move the directory as a whole. Import
+rejects any file the inventory does not list. On macOS, copy with `rsync -a`
+or `COPYFILE_DISABLE=1 tar`, because plain `tar` adds `._*` metadata files.
 
 Import verifies the generated descriptor and every file before accepting
 sources. Handwritten import specifications are no longer accepted. The capture
