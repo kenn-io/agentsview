@@ -250,6 +250,40 @@ describe("AttributionPanel project identity", () => {
     ["treemap", ".tile"],
     ["treemap", ".rail-row"],
     ["list", ".list-row"],
+  ] as const)("opens the first clicked project after focus reorders %s %s", async (view, selector) => {
+    usage.toggles.attribution.view = view;
+    const summary = summaryWithDuplicateProjectLabels();
+    summary.projectTotals[0]!.project = "Project A";
+    summary.projectTotals[1]!.project = "Project B";
+    usage.summary = summary;
+    const focused = structuredClone(summary);
+    focused.projectTotals[0]!.cost = testMoney(0);
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(focused);
+    const component = mountPanel();
+    await tick();
+
+    document.querySelectorAll(selector)[1]!.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    await vi.waitFor(() => expect(document.querySelectorAll(selector)[0]!.textContent).toContain("Project B"));
+    const secondClickTarget = document.querySelectorAll(selector)[1]!;
+    expect(secondClickTarget.textContent).toContain("Project A");
+    secondClickTarget.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+    secondClickTarget.dispatchEvent(new MouseEvent("dblclick", { detail: 2, bubbles: true }));
+
+    expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:second", label: "Project B" });
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:first");
+    await tick();
+    expect(document.querySelector(".chart-title")?.textContent).toBe("Project B");
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).toEqual(expect.objectContaining({
+      project_key: "pl1:sha256:second",
+      exclude_project_key: "pl1:sha256:first",
+    }));
+    await unmount(component);
+  });
+
+  it.each([
+    ["treemap", ".tile"],
+    ["treemap", ".rail-row"],
+    ["list", ".list-row"],
   ] as const)(
     "selects on click and opens on double-click through %s %s",
     async (view, selector) => {

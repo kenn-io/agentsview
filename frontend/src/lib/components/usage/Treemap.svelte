@@ -19,7 +19,7 @@
     items: TreemapItem[];
     height?: number;
     onSelect?: (id: string) => void;
-    onOpen?: (id: string) => void;
+    onOpen?: (id: string, event?: MouseEvent) => void;
     formatValue?: (value: number) => string;
   }
 
@@ -83,7 +83,7 @@
                 touchClick = "pointerType" in event && event.pointerType === "touch";
                 if (!onOpen || touchClick || event.detail < 2) onSelect?.(tile.id);
               }}
-              ondblclick={() => { if (!touchClick) onOpen?.(tile.id); }}
+              ondblclick={(event) => { if (!touchClick) onOpen?.(tile.id, event); }}
               onkeydown={(event) => handleKey(event, tile.id)}
             >
               <title>{tile.title ?? m.usage_click_to_focus({ label: tile.label })}</title>

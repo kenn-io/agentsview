@@ -38,6 +38,7 @@
 
   let panel: HTMLElement;
   let touchClick = false;
+  let clickedProject: { id: string; label: string } | undefined;
 
   const zoomedProject = $derived(usage.zoomedProject);
 
@@ -161,12 +162,16 @@
 
   function handleSelect(id: string) {
     if (zoomedProject) return;
+    if (groupBy === "project") clickedProject = rows.find((row) => row.id === id);
     usage.focusAttribution(groupBy, id);
   }
 
-  function handleOpen(id: string) {
+  function handleOpen(id: string, event?: MouseEvent) {
     if (zoomedProject || groupBy !== "project") return;
-    usage.selectAttributionProject(id, rows.find((row) => row.id === id)!.label);
+    // Focusing can move a different project under the second click.
+    const project = event && clickedProject ? clickedProject : rows.find((row) => row.id === id);
+    if (!project) return;
+    usage.selectAttributionProject(project.id, project.label);
     panel.focus();
   }
 
@@ -281,7 +286,7 @@
               title={rowTitle(row.id, row.label)}
               aria-disabled={!!zoomedProject}
               onclick={(event) => handleClick(event, row.id)}
-              ondblclick={() => { if (!touchClick) handleOpen(row.id); }}
+              ondblclick={(event) => { if (!touchClick) handleOpen(row.id, event); }}
               onkeydown={(event) => handleKey(event, row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
@@ -311,7 +316,7 @@
             title={rowTitle(row.id, row.label)}
             aria-disabled={!!zoomedProject}
             onclick={(event) => handleClick(event, row.id)}
-            ondblclick={() => { if (!touchClick) handleOpen(row.id); }}
+            ondblclick={(event) => { if (!touchClick) handleOpen(row.id, event); }}
             onkeydown={(event) => handleKey(event, row.id)}
           >
             <span class="list-rank">{i + 1}</span>
