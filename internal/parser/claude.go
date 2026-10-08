@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
@@ -2465,7 +2466,7 @@ func readClaudePersistedToolResultContext(
 			return "", false, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
 		b, readErr := io.ReadAll(io.LimitReader(
-			checkedContextReader{ctx: ctx, reader: f}, maxPersistedToolResultSize+1,
+			ctxio.Reader{Context: ctx, Reader: f}, maxPersistedToolResultSize+1,
 		))
 		closeErr := f.Close()
 		if errors.Is(readErr, context.Canceled) ||

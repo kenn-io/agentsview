@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 // Codex JSONL entry types.
@@ -1697,7 +1698,7 @@ func codexReplayParentIDContext(
 
 	parentID := ""
 	resolutionNeeded := false
-	scanner := bufio.NewScanner(checkedContextReader{ctx: ctx, reader: f})
+	scanner := bufio.NewScanner(ctxio.Reader{Context: ctx, Reader: f})
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 	for scanner.Scan() {
 		if ctx.Err() != nil {

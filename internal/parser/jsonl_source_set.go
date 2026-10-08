@@ -12,6 +12,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 // JSONLSource is the in-memory payload JSONLSourceSet stores in SourceRef.
@@ -1083,20 +1085,8 @@ func hashJSONLSourceFileContext(
 	defer f.Close()
 
 	h := sha256.New()
-	if _, err := io.Copy(h, checkedContextReader{ctx: ctx, reader: f}); err != nil {
+	if _, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: f}); err != nil {
 		return "", fmt.Errorf("hash %s: %w", path, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-type checkedContextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r checkedContextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.reader.Read(p)
 }

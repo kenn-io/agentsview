@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 type tauEntry struct {
@@ -31,7 +32,7 @@ func readTauEntries(ctx context.Context, path string) ([]tauEntry, error) {
 	}
 	defer f.Close()
 
-	reader := bufio.NewReader(checkedContextReader{ctx: ctx, reader: f})
+	reader := bufio.NewReader(ctxio.Reader{Context: ctx, Reader: f})
 	entries := make([]tauEntry, 0)
 	var line []byte
 	for {

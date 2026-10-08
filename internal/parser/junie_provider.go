@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 type junieSourceSet struct {
@@ -259,7 +260,7 @@ func (s junieSourceSet) Fingerprint(
 	}
 	inode, device := sourceFileIdentity(info)
 	h := sha256.New()
-	if _, err := io.Copy(h, checkedContextReader{ctx: ctx, reader: f}); err != nil {
+	if _, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: f}); err != nil {
 		return SourceFingerprint{}, fmt.Errorf("hash %s: %w", src.Path, err)
 	}
 	fingerprint := SourceFingerprint{

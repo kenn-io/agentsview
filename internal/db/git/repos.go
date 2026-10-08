@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/pathutil"
 
 	gitenv "go.kenn.io/kit/git/env"
@@ -266,18 +267,6 @@ func boundedRepoRootEligibility(ctx context.Context, key string, check func(cont
 	return repoRootEligibility{}
 }
 
-type repoRootReader struct {
-	io.Reader
-	ctx context.Context
-}
-
-func (r repoRootReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.Reader.Read(p)
-}
-
 func readRepoRootFile(ctx context.Context, path string, read func(io.Reader) error) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -300,7 +289,7 @@ func readRepoRootFile(ctx context.Context, path string, read func(io.Reader) err
 	if ctx.Err() != nil {
 		return true, ctx.Err()
 	}
-	err = read(repoRootReader{Reader: file, ctx: ctx})
+	err = read(ctxio.Reader{Reader: file, Context: ctx})
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}
