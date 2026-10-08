@@ -582,8 +582,10 @@ fixtures retain this field; missing identities remain source-local.
   is `roborev` (from
   `codex exec --thread-source roborev`), Agentsview stores
   `session_kind = roborev` instead so roborev reviews stay identifiable as
-  code review while remaining automated. Native `spawn_agent` children still
-  use `source.subagent` plus `parent_thread_id` for
+  code review while remaining automated. Reverified metadata ordering against
+  parser fixtures: the roborev tag survives later untagged metadata, and
+  parentless promotion uses the final session kind. Native `spawn_agent`
+  children still use `source.subagent` plus `parent_thread_id` for
   `relationship_type = subagent`; do not pass `--thread-source subagent` from
   roborev. Reverified against an isolated
   `codex-proxy exec --thread-source roborev` rollout.

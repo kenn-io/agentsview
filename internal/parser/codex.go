@@ -419,7 +419,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 		b.parentSessionID = codexSubagentSessionID(b.parentSessionID)
 		b.relationshipType = RelSubagent
 	}
-	if payload.Get("originator").Str == codexOriginatorExec {
+	if payload.Get("originator").Str == codexOriginatorExec && b.sessionKind != SessionKindRoborev {
 		b.sessionKind = SessionKindNonInteractive
 	}
 	if payload.Get("thread_source").Str == SessionKindRoborev {
@@ -437,8 +437,6 @@ func (b *codexSessionBuilder) handleSessionMeta(
 			b.project = "unknown"
 		}
 	}
-
-	b.relationshipType = PromoteParentlessWorker(b.parentSessionID, b.relationshipType, b.sessionKind == SessionKindNonInteractive)
 
 	b.armForkGate(payload)
 
@@ -1884,6 +1882,8 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		// Include session_index.jsonl mtime so Codex renames trigger a re-parse.
 		mtime = p.sources.metadata.EffectiveMtime(path, mtime)
 	}
+
+	b.relationshipType = PromoteParentlessWorker(b.parentSessionID, b.relationshipType, b.sessionKind == SessionKindNonInteractive)
 
 	sessionName := ""
 	sessionNamePresent := false
