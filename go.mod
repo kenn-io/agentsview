@@ -34,7 +34,7 @@ require (
 	github.com/thlib/go-timezone-local v0.0.8
 	github.com/tidwall/gjson v1.19.0
 	go.kenn.io/docbank v0.14.0
-	go.kenn.io/kit v0.29.3-0.20261002145319-8ef3d4c5134f
+	go.kenn.io/kit v0.32.2-0.20261008002952-f6c61862e66c
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b
 	golang.org/x/mod v0.41.0

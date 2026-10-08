@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	kittelemetry "go.kenn.io/kit/telemetry"
+	kittelemetry "go.kenn.io/kit/telemetry/posthog"
 )
 
 const (
 	EnabledEnv            = "AGENTSVIEW_TELEMETRY_ENABLED"
-	GenericEnabledEnv     = kittelemetry.GenericTelemetryEnabledEnv
+	GenericEnabledEnv     = kittelemetry.GenericEnabledEnv
 	postHogAPIKey         = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
 	EventDaemonActive     = "daemon_active"
 	EventAppOpened        = "app_opened"
@@ -27,10 +27,10 @@ const (
 	envPrefix             = "AGENTSVIEW"
 )
 
-var ErrUnsupportedEvent = kittelemetry.ErrUnsupportedTelemetryEvent
+var ErrUnsupportedEvent = kittelemetry.ErrUnsupportedEvent
 
 type Reporter struct {
-	client *kittelemetry.PostHogReporter
+	client *kittelemetry.Reporter
 }
 
 type Options struct {
@@ -45,7 +45,7 @@ type Options struct {
 }
 
 func EnabledFromEnv() bool {
-	return kittelemetry.PostHogTelemetryEnabledFromEnv(envPrefix)
+	return kittelemetry.EnabledFromEnv(envPrefix)
 }
 
 func NewReporter(opts Options) (*Reporter, error) {
@@ -72,7 +72,7 @@ func NewReporter(opts Options) (*Reporter, error) {
 }
 
 func DisabledReporter() *Reporter {
-	return &Reporter{client: kittelemetry.DisabledPostHogReporter()}
+	return &Reporter{client: kittelemetry.DisabledReporter()}
 }
 
 func NewReporterOrDisabled(opts Options) *Reporter {
@@ -107,11 +107,11 @@ func (r *Reporter) EventAllowed(event string) bool {
 
 // CaptureHandler lets the web UI report allowlisted events through this reporter.
 func (r *Reporter) CaptureHandler() http.Handler {
-	var client *kittelemetry.PostHogReporter
+	var client *kittelemetry.Reporter
 	if r != nil {
 		client = r.client
 	}
-	return kittelemetry.NewPostHogCaptureHandler(client)
+	return kittelemetry.NewCaptureHandler(client)
 }
 
 func (r *Reporter) SanitizeProperties(
@@ -135,8 +135,8 @@ func (r *Reporter) Close() error {
 	return r.client.Close()
 }
 
-func newKitReporter(opts Options) (*kittelemetry.PostHogReporter, error) {
-	return kittelemetry.NewPostHogReporter(kittelemetry.PostHogOptions{
+func newKitReporter(opts Options) (*kittelemetry.Reporter, error) {
+	return kittelemetry.NewReporter(kittelemetry.Options{
 		APIKey:      postHogAPIKey,
 		Application: application,
 		EnvPrefix:   envPrefix,
@@ -148,8 +148,8 @@ func newKitReporter(opts Options) (*kittelemetry.PostHogReporter, error) {
 	}, allowedEventOptions(opts)...)
 }
 
-func allowedEventOptions(opts Options) []kittelemetry.PostHogOption {
-	return []kittelemetry.PostHogOption{
+func allowedEventOptions(opts Options) []kittelemetry.Option {
+	return []kittelemetry.Option{
 		kittelemetry.WithAllowedEvent(EventDaemonActive),
 		kittelemetry.WithAllowedEvent(EventAppOpened),
 		oneOf(EventSearchRun, "query_type", "text", "semantic", "hybrid"),
@@ -160,7 +160,7 @@ func allowedEventOptions(opts Options) []kittelemetry.PostHogOption {
 	}
 }
 
-func oneOf(event, property string, values ...string) kittelemetry.PostHogOption {
+func oneOf(event, property string, values ...string) kittelemetry.Option {
 	return kittelemetry.WithAllowedEvent(event,
-		kittelemetry.AllowTelemetryProperty(property, kittelemetry.AllowTelemetryStringValues(values...)))
+		kittelemetry.AllowProperty(property, kittelemetry.AllowStringValues(values...)))
 }

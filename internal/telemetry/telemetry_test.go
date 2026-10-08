@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	kittelemetry "go.kenn.io/kit/telemetry"
+	kittelemetry "go.kenn.io/kit/telemetry/posthog"
 )
 
 func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
@@ -15,7 +15,7 @@ func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
 	assert.False(t, EnabledFromEnv())
 
 	t.Setenv(EnabledEnv, "1")
-	if kittelemetry.PostHogTelemetryDisabled() {
+	if kittelemetry.ProcessDisabled() {
 		assert.False(t, EnabledFromEnv())
 		return
 	}
@@ -129,7 +129,7 @@ func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
 }
 
 func TestReporterCaptureDaemonActiveTestBlockerWinsOverCanceledContext(t *testing.T) {
-	client := kittelemetry.DisabledPostHogReporter()
+	client := kittelemetry.DisabledReporter()
 	reporter := &Reporter{client: client}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

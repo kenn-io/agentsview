@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	kittelemetry "go.kenn.io/kit/telemetry"
+	kittelemetry "go.kenn.io/kit/telemetry/posthog"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -42,7 +42,7 @@ func TestCoreActionAllowlist(t *testing.T) {
 	}))
 	t.Cleanup(collector.Close)
 
-	client, err := kittelemetry.NewPostHogReporter(kittelemetry.PostHogOptions{
+	client, err := kittelemetry.NewReporter(kittelemetry.Options{
 		APIKey: "phc_test", Application: application, EnvPrefix: envPrefix,
 		DistinctID: "install-id", Source: "daemon", Endpoint: collector.URL,
 	}, allowedEventOptions(Options{
