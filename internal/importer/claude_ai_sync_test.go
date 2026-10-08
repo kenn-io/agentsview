@@ -31,13 +31,13 @@ var syncSummary = func() string {
 	return string(page.Data[0])
 }()
 
-//go:embed testdata/claude_ai_live/detail.json
+//go:embed testdata/claude_ai_sync/detail.json
 var syncDetail string
 
-//go:embed testdata/claude_ai_live/organizations.json
+//go:embed testdata/claude_ai_sync/organizations.json
 var syncOrgs string
 
-//go:embed testdata/claude_ai_live/list_all.json
+//go:embed testdata/claude_ai_sync/list_all.json
 var syncAllList string
 
 func TestSyncClaudeAIArchivePolicySwitch(t *testing.T) {
@@ -179,7 +179,7 @@ func TestSyncClaudeAIResyncArchivePolicy(t *testing.T) {
 }
 
 func TestSyncClaudeAIInvalidAccountSession(t *testing.T) {
-	body, err := os.ReadFile("testdata/claude_ai_live/signed_out.json")
+	body, err := os.ReadFile("testdata/claude_ai_sync/signed_out.json")
 	require.NoError(t, err)
 	paths := []string{
 		"/api/organizations",
