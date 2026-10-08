@@ -182,13 +182,14 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					if detailError != nil && detailError.status == 404 {
 						stats.record(id, importSkipped, nil)
 					} else {
+						stats.record(id, importSkipped, err)
 						if !errors.Is(err, ErrClaudeAIResponseTooLarge) {
 							if failedLast {
+								cb.progress(stats)
 								return stats, err
 							}
 							failedLast = true
 						}
-						stats.record(id, importSkipped, err)
 					}
 					cb.progress(stats)
 					continue

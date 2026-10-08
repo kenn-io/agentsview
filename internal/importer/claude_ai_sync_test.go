@@ -535,7 +535,7 @@ func TestSyncClaudeAIConsecutiveDetailFailures(t *testing.T) {
 		wantStop   bool
 		wantThird  int
 	}{
-		{"two retry ladders stop sync", [3]int{503, 503, 200}, 10, 1, 0, true, 0},
+		{"two retry ladders stop sync", [3]int{503, 503, 200}, 10, 2, 0, true, 0},
 		{"success resets failure streak", [3]int{503, 200, 503}, 11, 2, 1, false, 5},
 		{"two oversized host responses continue", [3]int{413, 413, 200}, 3, 2, 1, false, 1},
 	} {
@@ -548,6 +548,7 @@ func TestSyncClaudeAIConsecutiveDetailFailures(t *testing.T) {
 					summaries = append(summaries, strings.ReplaceAll(syncSummary, ids[0], id))
 				}
 				calls, third := 0, 0
+				var progress ImportStats
 				fetch := syncOneFetch(t, strings.Join(summaries, ","), func() (ClaudeAIResponse, error) {
 					require.FailNow(t, "detail must use its own response")
 					return ClaudeAIResponse{}, nil
@@ -567,7 +568,7 @@ func TestSyncClaudeAIConsecutiveDetailFailures(t *testing.T) {
 						}
 					}
 					return fetch(ctx, path)
-				}, nil)
+				}, &ImportCallbacks{OnProgress: func(stats ImportStats) { progress = stats }})
 				if tt.wantStop {
 					require.EqualError(t, err, "claude returned HTTP 503")
 				} else {
@@ -583,6 +584,8 @@ func TestSyncClaudeAIConsecutiveDetailFailures(t *testing.T) {
 				assert.Equal(t, tt.wantThird, third)
 				assert.Equal(t, tt.wantCalls, calls)
 				assert.Equal(t, tt.wantErrors, stats.Errors)
+				assert.Len(t, stats.Refusals, tt.wantErrors)
+				assert.Equal(t, tt.wantErrors, progress.Errors)
 				assert.Equal(t, tt.wantImport, stats.Imported)
 			})
 		})
