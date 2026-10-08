@@ -2500,10 +2500,11 @@ const bumpLocalModifiedAtSQL = `UPDATE sessions SET local_modified_at = strftime
 func (db *DB) BumpLocalModifiedAt(ctx context.Context, id string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(ctx,
-		bumpLocalModifiedAtSQL,
-		id,
-	)
+	return bumpLocalModifiedAt(ctx, db.getWriter(), id)
+}
+
+func bumpLocalModifiedAt(ctx context.Context, execer sqlContextExecer, id string) error {
+	_, err := execer.ExecContext(ctx, bumpLocalModifiedAtSQL, id)
 	return err
 }
 

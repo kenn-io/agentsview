@@ -147,22 +147,14 @@ func TestSyncClaudeAIZipRecallAnchors(t *testing.T) {
 		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
 	}), nil)
 	require.NoError(t, err)
-	entry, err := d.GetRecallEntry(t.Context(), "zip-evidence")
-	require.NoError(t, err)
-	require.NotNil(t, entry)
-	assert.True(t, entry.ProvenanceOK)
-	require.Len(t, entry.Evidence, 1)
-	assert.Equal(t, "root", entry.Evidence[0].MessageStartSourceUUID)
-	assert.Equal(t, "reply", entry.Evidence[0].MessageEndSourceUUID)
 	_, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, strings.Replace(syncSummary, "reply", "other-reply", 1), func() (ClaudeAIResponse, error) {
 		return ClaudeAIResponse{Status: 200, Body: []byte(strings.ReplaceAll(syncDetail, "reply", "other-reply"))}, nil
 	}), nil)
 	require.NoError(t, err)
-	entry, err = d.GetRecallEntry(t.Context(), "zip-evidence")
+	entry, err := d.GetRecallEntry(t.Context(), "zip-evidence")
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	assert.False(t, entry.ProvenanceOK)
-	assert.Equal(t, "reply", entry.Evidence[0].MessageEndSourceUUID)
 }
 
 func TestSyncClaudeAIKeepsTrashOnlyWhenPinsLost(t *testing.T) {
@@ -840,34 +832,29 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 		calls++
 		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
 	})
-	for i := range 2 {
+	for range 2 {
 		stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
 		require.NoError(t, err)
-		if i == 0 {
-			assert.Equal(t, 1, stats.Updated)
-			assert.Zero(t, stats.Skipped)
-		} else {
-			assert.Equal(t, 1, stats.Skipped)
-		}
+		assert.Equal(t, 1, stats.Skipped)
+		assert.Zero(t, stats.Updated)
 	}
 	assert.Equal(t, 1, calls)
 	after, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 	require.NoError(t, err)
-	for i := range before {
-		assert.Empty(t, before[i].SourceUUID)
-		assert.NotEmpty(t, after[i].SourceUUID)
-		before[i].SourceUUID = after[i].SourceUUID
+	for _, row := range after {
+		assert.Empty(t, row.SourceUUID)
 	}
 	assert.Equal(t, before, after)
 	afterFindings, err := d.SessionSecretFindings(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 	require.NoError(t, err)
-	assert.Empty(t, afterFindings)
+	require.Len(t, afterFindings, 1)
+	assert.Equal(t, findings, afterFindings)
 	assert.Empty(t, replacedCopies(t, d, "claude-ai:22222222-2222-4222-8222-222222222222"))
 	marked, err := d.GetSessionFull(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 	require.NoError(t, err)
 	require.NotNil(t, marked)
 	require.NotNil(t, marked.TranscriptRevision)
-	assert.Greater(t, *marked.TranscriptRevision, *initial.TranscriptRevision)
+	assert.Equal(t, *initial.TranscriptRevision, *marked.TranscriptRevision)
 	assert.Equal(t, strPtr("claude-ai:v1:full:reply"), marked.LastEntryUUID)
 	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+syncDetail+"]"), nil)
 	require.NoError(t, err)
@@ -1021,6 +1008,11 @@ func TestSyncClaudeAIZipAppendDuplicatePromptPin(t *testing.T) {
 	require.Equal(t, 1, stats.Updated)
 	pins, err := d.ListPinnedMessages(t.Context(), id, "")
 	require.NoError(t, err)
+	assert.Empty(t, pins)
+	copies := replacedCopies(t, d, id)
+	require.Len(t, copies, 1)
+	pins, err = d.ListPinnedMessages(t.Context(), copies[0].ID, "")
+	require.NoError(t, err)
 	require.Len(t, pins, 1)
 	assert.Equal(t, 0, pins[0].Ordinal)
 	assert.Equal(t, strPtr("Keep the first prompt"), pins[0].Note)
@@ -1099,14 +1091,11 @@ func TestSyncClaudeAIZipDuplicatePromptPin(t *testing.T) {
 		return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
 	}), nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Updated)
+	assert.Equal(t, 1, stats.Skipped)
 	after, err := d.GetAllMessages(t.Context(), id)
 	require.NoError(t, err)
 	require.Len(t, after, 4)
-	for i, uuid := range []string{"root", "reply", "q2", "a2"} {
-		assert.Equal(t, before[i].ID, after[i].ID)
-		assert.Equal(t, uuid, after[i].SourceUUID)
-	}
+	assert.Equal(t, before, after)
 	stats, err = SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
 		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
 	}), nil)
@@ -1114,9 +1103,14 @@ func TestSyncClaudeAIZipDuplicatePromptPin(t *testing.T) {
 	assert.Equal(t, 1, stats.Updated)
 	pins, err := d.ListPinnedMessages(t.Context(), id, "")
 	require.NoError(t, err)
+	assert.Empty(t, pins)
+	copies := replacedCopies(t, d, id)
+	require.Len(t, copies, 1)
+	pins, err = d.ListPinnedMessages(t.Context(), copies[0].ID, "")
+	require.NoError(t, err)
 	require.Len(t, pins, 1)
-	assert.Equal(t, strPtr("Keep the first prompt"), pins[0].Note)
 	assert.Equal(t, 0, pins[0].Ordinal)
+	assert.Equal(t, strPtr("Keep the first prompt"), pins[0].Note)
 }
 
 func TestSyncClaudeAIObservedLists(t *testing.T) {

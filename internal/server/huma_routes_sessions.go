@@ -1281,7 +1281,7 @@ func (s *Server) humaEvents(
 				if !ok {
 					return
 				}
-				stream.SendJSON("data_changed", map[string]string{"scope": ev.Scope})
+				stream.SendJSON("data_changed", ev)
 			case <-heartbeat.C:
 				stream.Send("heartbeat", time.Now().Format(time.RFC3339))
 			}
