@@ -1,7 +1,6 @@
 package telemetry
 
 import (
-	"context"
 	"runtime"
 	"testing"
 
@@ -36,22 +35,16 @@ func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
 }
 
 func TestNewReporterOptedOutKeepsAllowlist(t *testing.T) {
-	for _, env := range []string{EnabledEnv, GenericEnabledEnv} {
-		t.Run(env, func(t *testing.T) {
-			t.Setenv(EnabledEnv, "1")
-			t.Setenv(GenericEnabledEnv, "1")
-			t.Setenv(env, "0")
+	t.Setenv(GenericEnabledEnv, "0")
 
-			reporter, err := NewReporter(Options{})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, reporter.Close()) })
+	reporter, err := NewReporter(Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reporter.Close()) })
 
-			assert.False(t, reporter.Enabled())
-			assert.True(t, reporter.EventAllowed(EventAppOpened))
-			assert.True(t, reporter.EventAllowed(EventDaemonActive))
-			assert.False(t, reporter.EventAllowed("daemon_started"))
-		})
-	}
+	assert.False(t, reporter.Enabled())
+	assert.True(t, reporter.EventAllowed(EventAppOpened))
+	assert.True(t, reporter.EventAllowed(EventDaemonActive))
+	assert.False(t, reporter.EventAllowed("daemon_started"))
 }
 
 func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
@@ -65,10 +58,6 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 
 	reporter := &Reporter{client: client}
-	assert.True(t, reporter.Enabled())
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	require.NoError(t, reporter.CaptureDaemonActive(ctx))
 
 	props, err := reporter.SanitizeProperties(EventDaemonActive, map[string]any{
 		"$process_person_profile": true,

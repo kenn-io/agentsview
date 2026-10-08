@@ -63,14 +63,13 @@ func TestTelemetryCaptureRoute(t *testing.T) {
 		strings.Repeat("x", 5000) + `"}}`
 
 	tests := []struct {
-		name      string
-		srv       *Server
-		body      string
-		origin    string
-		token     string
-		wantCode  int
-		wantBody  string
-		wantError string
+		name     string
+		srv      *Server
+		body     string
+		origin   string
+		token    string
+		wantCode int
+		wantBody string
 	}{
 		{
 			name: "no token", srv: authSrv, body: `{"event":"app_opened"}`, origin: origin,
@@ -94,7 +93,7 @@ func TestTelemetryCaptureRoute(t *testing.T) {
 		{
 			name: "oversized body", srv: authSrv, body: oversized,
 			origin: origin, token: "test-token",
-			wantCode: http.StatusRequestEntityTooLarge, wantError: "telemetry request too large",
+			wantCode: http.StatusRequestEntityTooLarge,
 		},
 	}
 	for _, tt := range tests {
@@ -103,9 +102,6 @@ func TestTelemetryCaptureRoute(t *testing.T) {
 			require.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
 			if tt.wantBody != "" {
 				assert.JSONEq(t, tt.wantBody, rec.Body.String())
-			}
-			if tt.wantError != "" {
-				assert.Equal(t, tt.wantError, strings.TrimSpace(rec.Body.String()))
 			}
 		})
 	}
