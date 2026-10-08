@@ -85,7 +85,6 @@ export function triggerResync(onProgress?: (p: SyncProgress) => void): SyncHandl
 /** Event payload for /api/v1/events data_changed frames. */
 export interface DataChangedEvent {
   scope: "messages" | "sessions" | "sync";
-  session_ids?: string[];
 }
 
 /** Number of consecutive onerror firings without a successful
@@ -426,6 +425,7 @@ export async function syncClaudeAI(
   } finally {
     signal?.removeEventListener("abort", abort);
     abort();
+    await host.close();
   }
 }
 
