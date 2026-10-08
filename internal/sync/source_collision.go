@@ -46,8 +46,11 @@ func (e *Engine) sourceCollisionID(
 		}
 	}
 	// A permanently deleted id stays with the file it was deleted for; a
-	// deletion recorded without its file covers every file with the id.
-	if deletedAnyFile || e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) {
+	// deletion recorded without its file covers every file with the id. A move
+	// between Codex roots keeps the discovered key, so FindSource cannot see
+	// the deleted path and the key comparison keeps the session deleted.
+	if deletedAnyFile || e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) ||
+		(deleted != "" && sameDiscoveredFileKey(provider.Definition().Type, deleted, lookupPath)) {
 		return s.ID, false, nil
 	}
 	if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {

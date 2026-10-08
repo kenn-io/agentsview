@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -72,6 +73,56 @@ func TestCodexContinuationKeepsBothFiles(t *testing.T) {
 			assert.Equal(t, sessionID, *alt.ParentSessionID)
 			assert.Equal(t, string(parser.RelContinuation), alt.RelationshipType)
 			assertSessionMessageCount(t, env.db, altID, tt.next)
+		})
+	}
+}
+
+// A permanently deleted Codex session stays deleted when its rollout moves
+// between the live and archived roots. Both paths name the same thread, so the
+// move must not resurrect the session under the base id or a derived id.
+func TestCodexDeletedSessionStaysDeletedAfterRootMove(t *testing.T) {
+	for _, mode := range []string{"sync", "resync"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			liveDir := filepath.Join(root, "sessions")
+			archivedDir := filepath.Join(root, "archived_sessions")
+			require.NoError(t, os.MkdirAll(liveDir, 0o755))
+			require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+			env := setupTestEnv(t, WithCodexDirs([]string{liveDir, archivedDir}))
+
+			sessionID := "codex:" + codexThreadID
+			livePath := env.writeCodexSession(
+				t, filepath.Join("2026", "07", "28"),
+				"rollout-2026-07-28T14-53-01-"+codexThreadID+".jsonl",
+				codexRollout(codexThreadID, 3),
+			)
+			env.engine.SyncAll(t.Context(), nil)
+			assertSessionMessageCount(t, env.db, sessionID, 3)
+
+			require.NoError(t, env.db.DeleteSession(t.Context(), sessionID))
+
+			require.NoError(t, os.Remove(livePath))
+			env.writeSession(
+				t, archivedDir, "rollout-2026-07-28T15-00-00-"+codexThreadID+".jsonl",
+				codexRollout(codexThreadID, 3),
+			)
+
+			if mode == "resync" {
+				stats := env.engine.ResyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "%v", stats.Warnings)
+			} else {
+				env.engine.SyncAll(t.Context(), nil)
+			}
+
+			sess, err := env.db.GetSessionFull(t.Context(), sessionID)
+			require.NoError(t, err)
+			assert.Nil(t, sess, "a permanently deleted session must not come back")
+
+			records, err := env.db.ListSessionPathRecords(t.Context(), sessionID)
+			require.NoError(t, err)
+			for _, r := range records {
+				assert.Truef(t, r.Excluded, "record %s at %q must stay excluded", r.ID, r.FilePath)
+			}
 		})
 	}
 }
