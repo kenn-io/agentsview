@@ -193,7 +193,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					cb.progress(stats)
 					continue
 				}
-				failedLast = false
+				var detailErr error
 				write := func() error {
 					result, err := parser.ParseClaudeAIDetail(detail)
 					if err == nil && result.Session.ID != id {
@@ -201,6 +201,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					}
 					if err != nil {
 						stats.record(id, importSkipped, err)
+						detailErr = err
 						return nil
 					}
 					result.Session.Machine = resolvedImportMachine(result.Session.Machine, machine)
@@ -209,6 +210,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						status, err = importSkipped, nil
 					}
 					stats.record(id, status, err)
+					detailErr = err
 					return nil
 				}
 				if cb != nil && cb.SerializeWrite != nil {
@@ -223,6 +225,10 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err != nil {
 					return stats, err
 				}
+				if detailErr != nil && failedLast {
+					return stats, detailErr
+				}
+				failedLast = detailErr != nil
 			}
 			offset += len(items)
 			if page.HasMore != nil && !*page.HasMore {
