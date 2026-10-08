@@ -22,7 +22,7 @@ import (
 // ErrClaudeAIResponseTooLarge marks a chat that exceeds the browser relay limit.
 var ErrClaudeAIResponseTooLarge = errors.New("claude response exceeds 32 MiB")
 
-// ClaudeAIResponseLimit caps browser responses and relay bodies in bytes.
+// ClaudeAIResponseLimit also caps responses from hosts other than the bundled desktop app.
 const ClaudeAIResponseLimit = 32 << 20
 
 // ErrClaudeAIAuthRequired reports expired or missing browser credentials.
@@ -44,6 +44,7 @@ func claudeAIRequest(shape int, organization, conversation string, offset int) s
 	return strings.NewReplacer("{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset)).Replace(strings.Split(claudeAIRequests, "\n")[shape])
 }
 
+// Bump the marker version when parser output changes.
 func claudeAIMarker(store db.Store, leaf string) string {
 	return "claude-ai:v1:" + string(storeArchiveContent(store)) + ":" + leaf
 }
