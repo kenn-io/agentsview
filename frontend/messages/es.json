@@ -2468,5 +2468,6 @@
   "import_claude_disconnect": "Desconectar",
   "import_claude_help": "Inicia sesión, cierra la ventana y pulsa Sincronizar.",
   "import_claude_auth_required": "Inicia sesión en Claude.ai y vuelve a sincronizar.",
-  "import_claude_sign_in_pending": "Termina de iniciar sesión en Claude.ai, cierra la ventana y vuelve a sincronizar."
+  "import_claude_sign_in_pending": "Termina de iniciar sesión en Claude.ai, cierra la ventana y vuelve a sincronizar.",
+  "import_newer_marker": "La sesión archivada {session} requiere una versión más reciente de AgentsView. Actualiza AgentsView y vuelve a sincronizar."
 }

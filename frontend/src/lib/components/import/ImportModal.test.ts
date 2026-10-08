@@ -61,11 +61,23 @@ it("offers sign in, sync and disconnect without a sign-in probe", async () => {
 
 it.each(["cancel", "disconnect", "error"])("refreshes completed chats after sync %s", async (exit) => {
   let rejectSync!: (error: Error) => void;
+  let finishClose!: () => void;
+  host.close.mockImplementation(() => new Promise<void>((resolve) => { finishClose = resolve; }));
+  host.disconnect.mockResolvedValue(undefined);
   let signal!: AbortSignal;
-  syncClaudeAI.mockImplementation((_host, callbacks, runSignal) => {
+  syncClaudeAI.mockImplementation(async (_host, callbacks, runSignal) => {
     signal = runSignal;
     callbacks.onProgress({ imported: 0, updated: 1, skipped: 0, errors: 0 });
-    return new Promise((_, reject) => { rejectSync = reject; });
+    try {
+      return await new Promise((_, reject) => {
+        rejectSync = reject;
+        if (exit === "disconnect") {
+          runSignal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true });
+        }
+      });
+    } finally {
+      if (exit === "disconnect") await host.close();
+    }
   });
   const onimported = vi.fn();
   const onclose = vi.fn();
@@ -75,7 +87,15 @@ it.each(["cancel", "disconnect", "error"])("refreshes completed chats after sync
     await fireEvent.click(screen.getByRole("button", { name: exit === "cancel" ? m.import_cancel() : m.import_claude_disconnect() }));
     expect(signal.aborted).toBe(true);
   }
-  rejectSync(new Error("Interrupted sync"));
+  if (exit === "disconnect") {
+    expect(host.close).toHaveBeenCalledOnce();
+    expect(host.disconnect).not.toHaveBeenCalled();
+    finishClose();
+    await waitFor(() => expect(host.disconnect).toHaveBeenCalledOnce());
+    expect(screen.queryByText("Cancelled")).toBeNull();
+  } else {
+    rejectSync(new Error("Interrupted sync"));
+  }
   if (exit === "cancel") {
     expect(onclose).toHaveBeenCalledOnce();
     await rerender({ open: true, onclose, onimported });
@@ -91,32 +111,6 @@ it("hides browser sync controls for a read-only archive", () => {
   expect(screen.queryByRole("button", { name: m.import_claude_sync() })).toBeNull();
   expect(screen.queryByRole("button", { name: m.import_claude_connect() })).toBeNull();
   expect(screen.queryByRole("button", { name: m.import_claude_disconnect() })).toBeNull();
-});
-
-it("disconnect waits for sync to close the browser before deleting cookies", async () => {
-  let finishClose!: () => void;
-  let signal!: AbortSignal;
-  host.close.mockImplementation(() => new Promise<void>((resolve) => { finishClose = resolve; }));
-  host.disconnect.mockResolvedValue(undefined);
-  syncClaudeAI.mockImplementation(async (_host, _callbacks, runSignal) => {
-    signal = runSignal;
-    try {
-      await new Promise((_, reject) => {
-        runSignal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true });
-      });
-    } finally {
-      await host.close();
-    }
-  });
-  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
-  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_disconnect() }));
-  expect(signal.aborted).toBe(true);
-  expect(host.close).toHaveBeenCalledOnce();
-  expect(host.disconnect).not.toHaveBeenCalled();
-  finishClose();
-  await waitFor(() => expect(host.disconnect).toHaveBeenCalledOnce());
-  expect(screen.queryByText("Cancelled")).toBeNull();
 });
 
 it.each(["success", "error"])("blocks browser actions while disconnect is pending, then recovers after %s", async (outcome) => {
@@ -147,4 +141,17 @@ it.each(["success", "error"])("blocks browser actions while disconnect is pendin
   expect(signIn.disabled).toBe(false);
   expect(disconnect.disabled).toBe(false);
   if (outcome === "error") expect(screen.getByText("Error: Disconnect failed")).toBeTruthy();
+});
+
+it("shows localized recovery when an archived session requires a newer AgentsView version", async () => {
+  setLocale("fr", { reload: false });
+  syncClaudeAI.mockResolvedValue({
+    imported: 0, updated: 0, skipped: 0, errors: 1,
+    refusals: [{ session_id: "claude-ai:chat", reason: "newer_marker" }],
+  });
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
+  await waitFor(() => expect(screen.getByRole("alert").textContent?.trim()).toBe(
+    "La session archivée claude-ai:chat nécessite une version plus récente d'AgentsView. Mettez AgentsView à jour, puis relancez la synchronisation.",
+  ));
 });

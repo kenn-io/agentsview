@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,6 +53,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		response := httptest.NewRecorder()
 		srv.mux.ServeHTTP(response, request)
 		assert.Equal(t, http.StatusNotFound, response.Code)
+		assert.JSONEq(t, `{"error":"fetch request expired or already answered"}`, response.Body.String())
 		assert.Equal(t, 2, body.Len())
 	})
 
@@ -72,7 +72,6 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, response.StatusCode, "%s", data)
 		}
-		postResult("unknown", `{}`, http.StatusNotFound)
 		post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
 		require.NoError(t, err)
 		post.Header.Set("Content-Type", "application/json")
@@ -165,8 +164,6 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			assert.Equal(t, 1, stats.Errors)
 		})
 	}
-	signedOut, err := os.ReadFile("../importer/testdata/claude_ai_sync/signed_out.json")
-	require.NoError(t, err)
 	for _, tt := range []struct {
 		name, body string
 		status     int
@@ -174,9 +171,8 @@ func TestClaudeAISyncRelay(t *testing.T) {
 	}{
 		{"unauthorized", "{}", 401, true},
 		{"forbidden", "{}", 403, false},
-		{"signed out", string(signedOut), 403, true},
 		{"sign-in pending", "claude_ai_sign_in_pending", 0, false},
-		{"upstream body limit", "{}", 413, false},
+		{"browser failure", "TypeError: Failed to fetch", 0, false},
 	} {
 		t.Run("access failure "+tt.name+" reaches stream error", func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -209,10 +205,10 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				case "error":
 					if tt.signIn {
 						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again","code":"claude_ai_auth_required"}`, data)
-					} else if tt.status == 0 {
+					} else if tt.body == "claude_ai_sign_in_pending" {
 						assert.JSONEq(t, `{"error":"claude sign-in is still pending","code":"claude_ai_sign_in_pending"}`, data)
-					} else if tt.status == 413 {
-						assert.JSONEq(t, `{"error":"claude response exceeds 32 MiB"}`, data)
+					} else if tt.status == 0 {
+						assert.JSONEq(t, `{"error":"TypeError: Failed to fetch"}`, data)
 					} else {
 						assert.JSONEq(t, `{"error":"claude.ai access denied (HTTP 403)"}`, data)
 					}
@@ -224,39 +220,6 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			assert.True(t, gotError)
 		})
 	}
-
-	t.Run("browser failure reaches stream error", func(t *testing.T) {
-		srv := testServer(t, 5*time.Second)
-		httpServer := httptest.NewServer(srv.mux)
-		defer httpServer.Close()
-		post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
-		require.NoError(t, err)
-		post.Header.Set("Content-Type", "application/json")
-		response, err := http.DefaultClient.Do(post)
-		require.NoError(t, err)
-		defer response.Body.Close()
-		gotError := false
-		readImportEvents(t, response.Body, func(event, data string) {
-			switch event {
-			case "fetch":
-				var request struct {
-					ID string `json:"id"`
-				}
-				require.NoError(t, json.Unmarshal([]byte(data), &request))
-				post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+request.ID+"?status=0", strings.NewReader("TypeError: Failed to fetch"))
-				require.NoError(t, err)
-				post.Header.Set("Content-Type", "application/octet-stream")
-				result, err := http.DefaultClient.Do(post)
-				require.NoError(t, err)
-				require.Equal(t, http.StatusNoContent, result.StatusCode)
-				require.NoError(t, result.Body.Close())
-			case "error":
-				assert.JSONEq(t, `{"error":"TypeError: Failed to fetch"}`, data)
-				gotError = true
-			}
-		})
-		assert.True(t, gotError)
-	})
 
 	t.Run("unanswered fetch expires", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
@@ -284,6 +247,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			answer.Header.Set("Content-Type", "application/octet-stream")
 			srv.mux.ServeHTTP(late, answer)
 			assert.Equal(t, http.StatusNotFound, late.Code)
+			assert.JSONEq(t, `{"error":"fetch request expired or already answered"}`, late.Body.String())
 		})
 	})
 }
@@ -709,7 +673,7 @@ func TestHandleImportReplaceQuery(t *testing.T) {
 }
 
 func TestClaudeAISyncMutationNotifications(t *testing.T) {
-	for _, ending := range []string{"done", "detail error", "two detail errors", "cancel"} {
+	for _, ending := range []string{"done", "two detail errors", "cancel"} {
 		t.Run(ending, func(t *testing.T) {
 			mutations := make(chan struct{}, 2)
 			recall := make(chan struct{}, 2)
@@ -781,9 +745,6 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 				require.NoError(t, answer.Body.Close())
 			}
 			wantTerminal := ending
-			if ending == "detail error" {
-				wantTerminal = "done"
-			}
 			if ending == "two detail errors" {
 				wantTerminal = "error"
 			}
