@@ -1312,14 +1312,24 @@ func TestHermesCronStateGroups(t *testing.T) {
         ('cycle', 'cron', 'cycle', 7, 'Unknown · Oct 08');
         INSERT INTO messages(session_id, role, content, timestamp) SELECT id, 'user', 'run message', started_at FROM sessions;`)
 	require.NoError(t, err)
+	parent := "cron_job-a_20261007_120000"
+	for i := range 180 {
+		id := fmt.Sprintf("hop-%d", i)
+		_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions(id, source, parent_session_id, started_at, title) VALUES (?, 'cron', ?, 8, 'Daily digest · Oct 07');`, id, parent)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), `INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'user', 'run message', 8);`, id)
+		require.NoError(t, err)
+		parent = id
+	}
 	provider := newHermesTestProvider(t, root)
 	bulk, err := provider.parseArchive(t.Context(), stateDB, "", "local")
 	require.NoError(t, err)
-	require.Len(t, bulk, 8)
+	require.Len(t, bulk, 188)
 	for _, tc := range []struct{ id, key, label string }{
 		{"cron_job-a_20261007_120000", "job-a", "Daily digest"},
 		{"cron_job-a_20261008_120000", "job-a", "Research digest"},
 		{"tip", "job-a", "Research digest"},
+		{"hop-179", "job-a", "Daily digest"},
 		{"ordinary", "", ""},
 		{"missing", "", ""},
 		{"cycle", "", ""},

@@ -137,9 +137,6 @@ func createHermesStateDB(t *testing.T, root string) {
 			title TEXT,
 			api_call_count INTEGER DEFAULT 0
 		);
-		CREATE INDEX idx_sessions_source ON sessions(source);
-		CREATE INDEX idx_sessions_source_id ON sessions(source, id);
-		CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
 		CREATE TABLE messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,
@@ -928,72 +925,23 @@ func TestHermesCronTranscriptProjects(t *testing.T) {
 	for _, format := range []string{"json", "jsonl"} {
 		for _, tc := range []struct{ id, source, project, group string }{
 			{"cron_job-1_20261007_120000", "cron", "hermes-cron", "job-1"},
-			{"child", "cron", "hermes-cron", "job-1"},
+			{"child", "cron", "hermes-cron", ""},
 			{"cron_job-1_20261007_120000", "cli", "hermes-cli", ""},
 		} {
 			t.Run(format+"/"+tc.id+"/"+tc.source, func(t *testing.T) {
 				name := "session_" + tc.id + ".json"
-				body := fmt.Sprintf(`{"title":"Daily digest · Oct 07 12:00","platform":%q,"parent_session_id":"cron_job-1_20261007_120000","messages":[{"role":"user","content":"hello"}]}`, tc.source)
+				body := fmt.Sprintf(`{"platform":%q,"messages":[{"role":"user","content":"hello"}]}`, tc.source)
 				if format == "jsonl" {
 					name = tc.id + ".jsonl"
-					body = fmt.Sprintf("{\"role\":\"session_meta\",\"platform\":%q,\"parent_session_id\":\"cron_job-1_20261007_120000\"}\n{\"role\":\"user\",\"content\":\"hello\"}\n", tc.source)
+					body = fmt.Sprintf("{\"role\":\"session_meta\",\"platform\":%q}\n{\"role\":\"user\",\"content\":\"hello\"}\n", tc.source)
 				}
 				sess, _, err := parseHermesTestSession(t, createTestFile(t, name, body), "", "local")
 				require.NoError(t, err)
 				require.NotNil(t, sess)
 				assert.Equal(t, tc.project, sess.Project)
 				assert.Equal(t, tc.group, sess.GroupKey)
-				if tc.group == "" || format == "jsonl" {
-					assert.Empty(t, sess.GroupLabel)
-				} else {
-					assert.Equal(t, "Daily digest", sess.GroupLabel)
-				}
-				assert.Equal(t, "hermes:cron_job-1_20261007_120000", sess.ParentSessionID)
-			})
-		}
-	}
-}
-
-func TestHermesCronTranscriptParents(t *testing.T) {
-	for _, format := range []string{"json", "jsonl"} {
-		for _, tc := range []struct {
-			name, parent, group string
-		}{
-			{"sibling chain", "ancestor", "job-1"},
-			{"missing parent", "missing", ""},
-			{"cycle", "cycle", ""},
-			{"outside directory", "../outside", ""},
-			{"walk limit", "hop-0", ""},
-		} {
-			t.Run(format+"/"+tc.name, func(t *testing.T) {
-				dir := t.TempDir()
-				write := func(id, parent string) string {
-					name := "session_" + id + ".json"
-					body := fmt.Sprintf(`{"platform":"cron","parent_session_id":%q,"messages":[{"role":"user","content":"hello"}]}`, parent)
-					if format == "jsonl" {
-						name = id + ".jsonl"
-						body = fmt.Sprintf("{\"role\":\"session_meta\",\"platform\":\"cron\",\"parent_session_id\":%q}\n{\"role\":\"user\",\"content\":\"hello\"}\n", parent)
-					}
-					path := filepath.Join(dir, name)
-					require.NoError(t, os.WriteFile(path, []byte(body), 0600))
-					return path
-				}
-				write("ancestor", "cron_job-1_20261007_120000")
-				write("cycle", "child")
-				if tc.name == "walk limit" {
-					for i := range 128 {
-						parent := fmt.Sprintf("hop-%d", i+1)
-						if i == 127 {
-							parent = "cron_job-1_20261007_120000"
-						}
-						write(fmt.Sprintf("hop-%d", i), parent)
-					}
-				}
-				sess, _, err := parseHermesTestSession(t, write("child", tc.parent), "", "local")
-				require.NoError(t, err)
-				require.NotNil(t, sess)
-				assert.Equal(t, tc.group, sess.GroupKey)
-				assert.Equal(t, "hermes:"+tc.parent, sess.ParentSessionID)
+				assert.Empty(t, sess.GroupLabel)
+				assert.Empty(t, sess.ParentSessionID)
 			})
 		}
 	}

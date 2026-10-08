@@ -153,8 +153,8 @@ sessions for the selected date range. Hermes cron jobs show their latest
 recorded name in that range and their ID on hover. Matching names get a short
 ID suffix. **All projects** returns to the project view. **Hide project** or
 the Projects picker excludes a project. Usage outside the top 100 tiles appears
-under **Other**. Usage-only archives show job IDs. Page totals and charts keep
-their current scope.
+under **Other**. Archives without `state.db` titles show job IDs. Page totals and
+charts keep their current scope.
 
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,

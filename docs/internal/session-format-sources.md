@@ -2944,19 +2944,11 @@ schemas keep their existing ordering behavior.
   and the run timestamp. Agentsview keeps the stable job ID in `group_key`
   and the recorded name in `group_label`. Reverified both producer files
   for state parent walks and transcript run IDs on 2026-10-08.
-- **Transcript title check (2026-10-08):**
-  [session_export.py](https://github.com/NousResearch/hermes-agent/blob/302c5d9f679333ae957c256d76a3dff35120f4e0/hermes_cli/session_export.py)
-  writes JSON snapshots from `export_session`, which retains the session title in
-  [hermes_state_portability.py](https://github.com/NousResearch/hermes-agent/blob/302c5d9f679333ae957c256d76a3dff35120f4e0/hermes_state_portability.py).
-  Agentsview reads JSON titles. JSONL `session_meta` titles lack producer evidence
-  and are ignored.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized. Transcript projects use `platform`. Cron continuations follow
-  `parent_session_id` through state rows or sibling transcript headers, with a
-  128-session limit and cycle detection. A parent cron ID identifies the job
-  without reading its transcript. Missing parents leave continuations ungrouped.
-  All cron runs retain the `hermes-cron` project.
+  `state.db` parent links with cycle detection; transcript runs group by their run
+  ID only. All cron runs retain the `hermes-cron` project.
 
 ## Forge (`forge`)
 

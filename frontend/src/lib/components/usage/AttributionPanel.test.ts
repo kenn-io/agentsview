@@ -499,7 +499,6 @@ describe("AttributionPanel job groups", () => {
     const group = (key: string, cost: number): DbTopSessionEntry => ({
       group_key: key,
       group_label: "Daily digest",
-      session_count: 2,
       sessionId: key,
       displayName: "Daily digest",
       project: "hermes-cron",

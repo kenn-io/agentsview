@@ -202,7 +202,6 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		realUserCount   int
 		firstMsg        string
 		sessionPlatform string
-		parentSessionID string
 	)
 
 	// Extract session ID from filename: 20260403_153620_5a3e2ff1.jsonl -> 20260403_153620_5a3e2ff1
@@ -233,7 +232,6 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		case "session_meta":
 			// Extract model and platform from session header.
 			sessionPlatform = gjson.Get(line, "platform").Str
-			parentSessionID = gjson.Get(line, "parent_session_id").Str
 			continue
 
 		case "user":
@@ -358,7 +356,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	// Derive project from the session platform or default.
 	job := ""
 	if sessionPlatform == "cron" {
-		job = hermesTranscriptCronJob(path, sessionID, parentSessionID)
+		job = hermesCronRunJob(sessionID)
 	}
 	projectSynthesized := false
 	if project == "" {
@@ -389,9 +387,6 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		},
 	}
 
-	if parentSessionID != "" {
-		sess.ParentSessionID = "hermes:" + parentSessionID
-	}
 	return sess, messages, nil
 }
 
@@ -414,8 +409,6 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 
 	sessionID := HermesSessionID(filepath.Base(path))
 	sessionPlatform := root.Get("platform").Str
-	parentSessionID := root.Get("parent_session_id").Str
-	sessionTitle := root.Get("title").Str
 	startedAt := parseHermesTimestamp(root.Get("session_start").Str)
 	endedAt := parseHermesTimestamp(root.Get("last_updated").Str)
 
@@ -558,7 +551,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 
 	job := ""
 	if sessionPlatform == "cron" {
-		job = hermesTranscriptCronJob(path, sessionID, parentSessionID)
+		job = hermesCronRunJob(sessionID)
 	}
 	projectSynthesized := false
 	if project == "" {
@@ -574,7 +567,6 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 		ID:                         fullID,
 		Project:                    project,
 		GroupKey:                   job,
-		GroupLabel:                 hermesCronRecordedName(job, sessionTitle),
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
@@ -590,9 +582,6 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 		},
 	}
 
-	if parentSessionID != "" {
-		sess.ParentSessionID = "hermes:" + parentSessionID
-	}
 	return sess, messages, nil
 }
 
@@ -1518,42 +1507,21 @@ func stripHermesSkillPrefix(s string) string {
 // hermesCronJobID follows parents until a cron run identifies its job.
 func hermesCronJobID(id string, parent func(string) string) string {
 	seen := make(map[string]bool)
-	for id != "" && !seen[id] && len(seen) < 128 {
+	for id != "" && !seen[id] {
 		seen[id] = true
-		if match := hermesCronSessionID.FindStringSubmatch(id); match != nil {
-			return match[1]
-		}
-		if parent == nil {
-			break
+		if job := hermesCronRunJob(id); job != "" {
+			return job
 		}
 		id = parent(id)
 	}
 	return ""
 }
 
-func hermesTranscriptCronJob(path, sessionID, parentSessionID string) string {
-	return hermesCronJobID(sessionID, func(id string) string {
-		if id == sessionID {
-			return parentSessionID
-		}
-		parentPath := findHermesSourceFile(filepath.Dir(path), id)
-		f, err := os.Open(parentPath)
-		if err != nil {
-			return ""
-		}
-		defer f.Close()
-		if strings.HasSuffix(parentPath, ".json") {
-			data, err := io.ReadAll(io.LimitReader(f, maxLineSize))
-			if err != nil {
-				return ""
-			}
-			return gjson.GetBytes(data, "parent_session_id").Str
-		}
-		lr := newLineReader(f, maxLineSize)
-		defer releaseLineReader(lr)
-		line, _ := lr.next()
-		return gjson.Get(line, "parent_session_id").Str
-	})
+func hermesCronRunJob(id string) string {
+	if match := hermesCronSessionID.FindStringSubmatch(id); match != nil {
+		return match[1]
+	}
+	return ""
 }
 
 func resolveHermesStateCronJob(ss *hermesStateSession, parent func(string) (string, error)) error {
@@ -1567,6 +1535,9 @@ func resolveHermesStateCronJob(ss *hermesStateSession, parent func(string) (stri
 		}
 		var next string
 		next, lookupErr = parent(id)
+		if lookupErr != nil {
+			return ""
+		}
 		return next
 	})
 	return lookupErr
