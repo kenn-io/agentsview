@@ -2806,14 +2806,23 @@ schemas keep their existing ordering behavior.
   remain refused. Pins follow source UUIDs, or role, content, and occurrence
   rank when the replacement has no UUIDs. Full resync preserves import markers.
 - **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
-  responses count as skipped; other detail failures allow later chats to sync.
+  responses count as skipped; 401 and 403 stop Sync with a sign-in error.
+  Other detail failures allow later chats to sync.
   Organization and list failures, cancellation, and an empty page with
   `has_more: true` stop Sync. Null list leaves skip detail fetches.
+- **Observed 2026-10-07:** Authenticated Team and personal account checks
+  found `current_leaf_message_uuid` on list items and byte-identical list and
+  detail `updated_at` values with microseconds. Branch switches changed the
+  leaf without changing that timestamp. `archived=false` returned active chats,
+  `archived=true` returned archived chats, and omitting it returned both.
+  [Sanitized list fixtures](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_all.json),
+  [active pass](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_active.json),
+  [archived pass](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/list_archived.json),
+  and [detail](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_live/detail.json)
+  reconstruct the observed fields with synthetic identities and content.
 - **Evidence limits:** Existing selected-path and Sync fixtures cover these
-  shapes. Authenticated producer verification has no recorded reproducible
-  client asset or response fixture. Multiple chat organizations, web-search
-  blocks, unanswered final prompts, and tree fields in official exports still
-  need live verification.
+  shapes. Multiple chat organizations, web-search blocks, unanswered final
+  prompts, and tree fields in official exports still need live verification.
 
 ## ChatGPT Export (`chatgpt`)
 

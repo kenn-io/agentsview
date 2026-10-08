@@ -28,8 +28,10 @@ type SessionBatchWrite struct {
 	// persistence for bounded ingestion callers that do not consume it.
 	SkipSignalUpdates bool
 	TouchModified     bool
-	DataVersion       int
-	ReplaceMessages   bool
+	// FillSourceUUIDs fills empty identities at verified unchanged ordinals.
+	FillSourceUUIDs bool
+	DataVersion     int
+	ReplaceMessages bool
 	// CompleteStoredRows lets an append write complete stored rows at stored ordinals: it sets results on stored calls that are still empty and replaces stored text with longer text that starts with it (IsTextExtension). Rows keep their IDs; other stored rows are untouched.
 	// Results come from ToolCall.ResultContent and ResultContentLength; result events are not written.
 	CompleteStoredRows bool
@@ -562,6 +564,7 @@ func writeOneSessionBatchTx(
 	msgs := write.Messages
 	var pins []savedPin
 	filled, extended := 0, 0
+	var sourceFilled int64
 	if replaceMessages && sessionExists {
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
@@ -574,6 +577,22 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	} else {
+		if write.FillSourceUUIDs {
+			for _, msg := range msgs {
+				if msg.SourceUUID == "" {
+					continue
+				}
+				result, err := queries.Exec(`UPDATE messages SET source_uuid = ? WHERE session_id = ? AND ordinal = ? AND COALESCE(source_uuid, '') = ''`, msg.SourceUUID, write.Session.ID, msg.Ordinal)
+				if err != nil {
+					return 0, err
+				}
+				count, err := result.RowsAffected()
+				if err != nil {
+					return 0, err
+				}
+				sourceFilled += count
+			}
+		}
 		maxOrd, err := maxOrdinalTx(queries, write.Session.ID)
 		if err != nil {
 			return 0, err
@@ -616,7 +635,7 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if extended > 0 {
+	if extended > 0 || sourceFilled > 0 {
 		active, err := conversationExportActiveTx(queries)
 		if err != nil {
 			return 0, err
