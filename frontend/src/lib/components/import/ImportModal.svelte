@@ -6,7 +6,7 @@
   import {
     importClaudeAI,
     importChatGPT,
-    syncClaudeAI,
+    connectClaudeAI, syncClaudeAI,
   } from "../../api/client.js";
   import { getBrowserHost } from "../../api/browserHost.js";
   import { sync as syncState } from "../../stores/sync.svelte.js";
@@ -49,7 +49,7 @@
   const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection() && !syncState.readOnly);
 
   async function connect() {
-    try { await host?.connect(); }
+    try { if (host) await connectClaudeAI(host); }
     catch (e) { error = String(e); }
   }
 

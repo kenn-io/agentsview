@@ -52,7 +52,9 @@ struct ClaudeAuthState {
 struct ClaudeBrowserResponse {
     status: u16,
     body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     retry_after: Option<String>,
 }
 
@@ -6631,6 +6633,11 @@ agentsview running at http://127.0.0.1:18082
 
 #[cfg(test)]
 mod claude_sync_tests {
+    #[test]
+    fn claude_browser_response_omits_absent_fields() {
+        let response = super::ClaudeBrowserResponse { status: 200, body: String::new(), error: None, retry_after: None };
+        assert_eq!(serde_json::to_string(&response).unwrap(), r#"{"status":200,"body":""}"#);
+    }
 
     #[test]
     fn claude_fetch_bounds_browser_response() {

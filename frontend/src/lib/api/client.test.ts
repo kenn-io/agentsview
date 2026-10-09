@@ -6,6 +6,7 @@ import {
   WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS,
   watchSession,
   syncClaudeAI,
+  connectClaudeAI,
   WATCH_SESSION_MAX_CONSECUTIVE_ERRORS,
 } from "./client.js";
 import type { SyncHandle } from "./client.js";
@@ -56,6 +57,22 @@ describe("syncClaudeAI browser relay", () => {
     await expect(syncClaudeAI(host)).resolves.toEqual({ imported: 1, updated: 0, skipped: 0, errors: 0 });
     expect(host.close).toHaveBeenCalledOnce();
     close();
+  });
+
+  it("signs in only after the previous browser close finishes", async () => {
+    let close!: () => void;
+    const host = { connect: vi.fn().mockResolvedValue(undefined), close: vi.fn(() => new Promise<void>((resolve) => { close = resolve; })) } as unknown as BrowserHost;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      'event: done\ndata: {"imported":0,"updated":0,"skipped":0,"errors":0}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    )));
+    await syncClaudeAI(host);
+    const connecting = connectClaudeAI(host);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.connect).not.toHaveBeenCalled();
+    close();
+    await connecting;
+    expect(host.connect).toHaveBeenCalledOnce();
   });
 
   it("starts a new sync only after the previous browser close finishes", async () => {
