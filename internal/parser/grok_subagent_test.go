@@ -78,15 +78,16 @@ func TestGrokSubagentMissingMetadataStaysTopLevel(t *testing.T) {
 
 func TestGrokSubagentKindsWithoutMetadata(t *testing.T) {
 	for _, tc := range []struct {
-		kind string
-		want RelationshipType
+		kind       string
+		want       RelationshipType
+		wantParent string
 	}{
-		{"subagent", RelSubagent},
-		{"subagent_resume", RelSubagent},
-		{"subagent_fork", RelSubagent},
-		{"subagent_unknown", RelFork},
-		{"fork", RelFork},
-		{"restore", RelFork},
+		{"subagent", RelSubagent, ""},
+		{"subagent_resume", RelSubagent, ""},
+		{"subagent_fork", RelSubagent, "grok:source-session"},
+		{"subagent_unknown", RelFork, "grok:source-session"},
+		{"fork", RelFork, "grok:source-session"},
+		{"restore", RelFork, "grok:source-session"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			path := grokSummaryPath(t.TempDir(), "cwd-key", "child-session")
@@ -94,11 +95,7 @@ func TestGrokSubagentKindsWithoutMetadata(t *testing.T) {
 			result, err := ParseGrokSummary(path, "project", "test-machine")
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, result.Session.RelationshipType)
-			if tc.want == RelSubagent {
-				assert.Empty(t, result.Session.ParentSessionID)
-			} else {
-				assert.Equal(t, "grok:source-session", result.Session.ParentSessionID)
-			}
+			assert.Equal(t, tc.wantParent, result.Session.ParentSessionID)
 		})
 	}
 }

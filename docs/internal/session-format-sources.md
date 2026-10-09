@@ -1198,7 +1198,11 @@ fixtures retain this field; missing identities remain source-local.
   rather than the spawning parent. Agentsview parents a child from the parent's
   `meta.json` as `relationship_type = 'subagent'` with parent id
   `grok:<parent-id>`. The three native child kinds retain `subagent` without
-  that metadata, with no inferred spawning parent. Ordinary fork or restore
+  that metadata; only exact `subagent_fork` retains an explicit summary parent
+  as `grok:<parent-id>`, since the pinned
+  [live-fork caller](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1276-L1283)
+  and [copied-fork path](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1287-L1306)
+  both use `ctx.parent_session_id` as source and spawner. Ordinary fork or restore
   sessions with only `parent_session_id` remain `fork`. Spawn tool results that
   include `subagent_id` attach that child on the parent's `spawn_subagent` call.
   Reverified against the pinned session guide (`17-sessions.md`), the
