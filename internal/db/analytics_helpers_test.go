@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestQueryChunkedSizeSplitsAtMirrorLimit(t *testing.T) {
+func TestQueryChunkedSizeSplitsAtSize(t *testing.T) {
 	const size = 900
 	ids := make([]string, size+1)
 	for i := range ids {

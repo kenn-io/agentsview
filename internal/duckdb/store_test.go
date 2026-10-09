@@ -892,8 +892,6 @@ func TestStoreCurationMethods(t *testing.T) {
 func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	ctx := t.Context()
 	store, fixture := newSyncedStore(t)
-	_, err := store.duck.ExecContext(ctx, "UPDATE sessions SET display_name = ? WHERE id = ?", "Alpha session", fixture.alphaID)
-	require.NoError(t, err)
 	filter := db.AnalyticsFilter{
 		From: "2026-01-01",
 		To:   "2026-01-31",
@@ -939,8 +937,6 @@ func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, top.Sessions)
 	assert.Equal(t, fixture.alphaID, top.Sessions[0].ID)
-	// Preserve the SQL-ranked omission even when the stored session has a name.
-	assert.Nil(t, top.Sessions[0].DisplayName)
 
 	signals, err := store.GetAnalyticsSignals(ctx, filter)
 	require.NoError(t, err)
@@ -1374,7 +1370,8 @@ func TestAnalyticsTopSessionsFiltersMetricEligibility(t *testing.T) {
 
 	_, err = syncer.DB().ExecContext(ctx, `
 		UPDATE sessions
-		SET total_output_tokens = 25, has_total_output_tokens = TRUE
+		SET total_output_tokens = 25, has_total_output_tokens = TRUE,
+			display_name = 'Saved output title'
 		WHERE id = 'duck-top-valid-output'`)
 	require.NoError(t, err)
 	_, err = syncer.DB().ExecContext(ctx, `
@@ -1400,6 +1397,9 @@ func TestAnalyticsTopSessionsFiltersMetricEligibility(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "output_tokens", output.Metric)
 	require.NotEmpty(t, output.Sessions)
+	assert.Equal(t, "duck-top-valid-output", output.Sessions[0].ID)
+	// Preserve the SQL-ranked omission even when the stored session has a name.
+	assert.Nil(t, output.Sessions[0].DisplayName)
 	assert.NotEqual(t, "duck-top-untracked-output", output.Sessions[0].ID)
 	for _, session := range output.Sessions {
 		assert.NotEqual(t, "duck-top-untracked-output", session.ID)
