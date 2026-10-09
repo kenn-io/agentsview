@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"maps"
 	"os"
 	"path/filepath"
@@ -21,12 +20,6 @@ type ImportConfig struct {
 	Type    string
 	Path    string
 	Replace []string
-}
-
-func runImport(cfg ImportConfig) {
-	if err := importSessions(cfg); err != nil {
-		log.Fatal(err)
-	}
 }
 
 func importSessions(cfg ImportConfig) error {

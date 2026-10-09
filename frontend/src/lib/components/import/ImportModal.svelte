@@ -356,7 +356,7 @@
         {#if host}
           <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing} onclick={connect} />
         {:else}
-          <a href="https://claude.ai/login?return_url=%2Fnew" target="_blank" rel="noopener noreferrer">{m.import_claude_connect()}</a>
+          <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing} onclick={() => window.open("https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer")} />
         {/if}
         <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing} onclick={sync} />
         <p class="hint">{host ? m.import_claude_help() : m.import_claude_help_chrome()}</p>

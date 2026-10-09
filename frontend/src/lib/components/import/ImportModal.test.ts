@@ -30,10 +30,12 @@ afterEach(() => { vi.resetAllMocks(); vi.restoreAllMocks(); syncState.serverVers
 
 it("shows Chrome Sync without a page host or version flag", async () => {
   getBrowserHost.mockReturnValue(undefined);
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
   syncClaudeAI.mockResolvedValue({ imported: 1, updated: 0, skipped: 0, errors: 0 });
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
   expect(screen.getByText(m.import_claude_help_chrome())).toBeTruthy();
-  expect(screen.getByRole("link", { name: m.import_claude_connect() }).getAttribute("href")).toBe("https://claude.ai/login?return_url=%2Fnew");
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
+  expect(open).toHaveBeenCalledExactlyOnceWith("https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
   expect(syncClaudeAI).toHaveBeenCalledWith(undefined, expect.objectContaining({ onProgress: expect.any(Function) }), expect.any(AbortSignal));
 });
