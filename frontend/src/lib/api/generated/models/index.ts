@@ -336,6 +336,8 @@ export * from "./postApiV1ImportChatgptBody.ts";
 export * from "./postApiV1ImportChatgptParams.ts";
 export * from "./postApiV1ImportClaudeAiBody.ts";
 export * from "./postApiV1ImportClaudeAiParams.ts";
+export * from "./postApiV1ImportClaudeAiSyncBrowser.ts";
+export * from "./postApiV1ImportClaudeAiSyncParams.ts";
 export * from "./postApiV1ImportClaudeAiSyncResultsByIdPathParameters.ts";
 export * from "./postApiV1InsightsByIdPublishParams.ts";
 export * from "./postApiV1InsightsByIdPublishPathParameters.ts";

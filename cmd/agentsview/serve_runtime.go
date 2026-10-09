@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -98,6 +100,11 @@ func startServerWithOptionalCaddy(
 	srv *server.Server,
 	opts serveRuntimeOptions,
 ) (*serveRuntime, error) {
+	if opts.Mode == "serve" {
+		if err := srv.ServeChromeHost(ctx, filepath.Join(cfg.DataDir, "chrome", "host.sock")); err != nil {
+			log.Printf("Chrome host unavailable: %v", err)
+		}
+	}
 	serveErrCh := make(chan error, 1)
 	go func() {
 		serveErrCh <- srv.ListenAndServe()

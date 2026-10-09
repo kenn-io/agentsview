@@ -2466,8 +2466,7 @@
   "import_claude_connect": "Iniciar sesión",
   "import_claude_sync": "Sincronizar",
   "import_claude_help": "Inicia sesión con un código de correo, cierra la ventana y pulsa Sincronizar. Para iniciar sesión con Google, usa AgentsView en Chrome con la extensión.",
-  "import_claude_help_chrome": "Haz clic en el botón de AgentsView en la barra de herramientas de esta pestaña y luego en Sincronizar. La sincronización usa tu sesión de Claude.ai en Chrome.",
-  "import_claude_chrome_setup": "Descomprime la descarga, abre chrome://extensions, activa el modo de desarrollador, haz clic en Cargar descomprimida y selecciona la carpeta descomprimida. Recarga esta pestaña.",
-  "import_claude_chrome_download": "Descargar extensión de Chrome",
+  "import_claude_help_chrome": "Mantén Chrome abierto durante la sincronización. Se usa tu sesión de Claude.ai, incluido Google.",
+  "import_claude_chrome_setup": "Ejecuta agentsview chrome setup y carga la carpeta indicada con Cargar descomprimida en chrome://extensions.",
   "import_claude_auth_required": "Inicia sesión en Claude.ai y vuelve a sincronizar."
 }

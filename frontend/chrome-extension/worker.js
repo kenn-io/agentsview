@@ -1,14 +1,5 @@
 import { allowedPath } from "./paths.js";
 
-chrome.action.onClicked.addListener(async (tab) => {
-  const url = new URL(tab.url);
-  if (url.protocol !== "http:" || !["localhost", "127.0.0.1"].includes(url.hostname)) return;
-  const [document] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => {} });
-  if (document.documentId) await chrome.storage.session.set({ [String(tab.id)]: document.documentId });
-});
-
-chrome.tabs.onRemoved.addListener((id) => chrome.storage.session.remove(String(id)));
-
 async function loadedTab(id) {
   await new Promise((resolve, reject) => {
     const updated = (tabId, change) => {
@@ -32,24 +23,12 @@ async function loadedTab(id) {
   });
 }
 
-async function request({ method, path }, sender) {
-  const key = String(sender.tab?.id);
-  const consent = await chrome.storage.session.get(key);
-  if (method === "revoke") {
-    if (sender.documentId && consent[key] === sender.documentId) await chrome.storage.session.remove(key);
-    return null;
-  }
-  if (!sender.documentId || consent[key] !== sender.documentId) {
-    throw new Error("Click the AgentsView toolbar button on this tab to allow Claude.ai Sync.");
-  }
-  if (method === "connect") {
-    await chrome.tabs.create({ url: "https://claude.ai/login?return_url=%2Fnew" });
-  } else if (method === "fetch") {
-    if (!allowedPath(path)) throw new Error("Unsupported Claude fetch path");
+async function request({ id, path }, port) {
+  let result;
+  try {
+    if (!await allowedPath(path)) throw new Error("Unsupported Claude fetch path");
     let [tab] = await chrome.tabs.query({ url: "https://claude.ai/*", discarded: false });
-    if (!tab) {
-      tab = await chrome.tabs.create({ url: "https://claude.ai/new", active: false });
-    }
+    if (!tab) tab = await chrome.tabs.create({ url: "https://claude.ai/new", active: false });
     await loadedTab(tab.id);
     const target = { tabId: tab.id };
     await chrome.scripting.executeScript({ target, files: ["claude_fetch.js"], world: "ISOLATED" });
@@ -59,14 +38,26 @@ async function request({ method, path }, sender) {
       func: (url) => claudeFetch(url),
       args: [`https://claude.ai${path}`],
     });
-    return reply.result;
-  } else {
-    throw new Error("Unsupported Claude host method");
+    result = { ...reply.result, id };
+  } catch (error) {
+    result = { id, status: 0, error: error.message };
   }
-  return null;
+  if (new TextEncoder().encode(JSON.stringify(result)).byteLength > 64 * 1024 * 1024) result = { id, status: 413 };
+  try { port.postMessage(result); } catch { /* Disconnect fails the server's pending request. */ }
 }
 
-chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  request(message, sender).then((result) => respond({ result }), (error) => respond({ error: error.message }));
-  return true;
-});
+let connection;
+function connect() {
+  if (connection) return;
+  const port = chrome.runtime.connectNative("io.kenn.agentsview");
+  connection = port;
+  port.onMessage.addListener((message) => { void request(message, port); });
+  port.onDisconnect.addListener(() => {
+    void chrome.runtime.lastError;
+    connection = undefined;
+    setTimeout(connect, 5000);
+  });
+}
+chrome.runtime.onStartup.addListener(connect);
+chrome.runtime.onInstalled.addListener(connect);
+connect();

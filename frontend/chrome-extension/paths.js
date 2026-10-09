@@ -1,11 +1,12 @@
-export const shapes = [
-  "/api/organizations",
-  "/api/organizations/{organization}/chat_conversations_v2?limit=50&offset={offset}",
-  "/api/organizations/{organization}/chat_conversations/{conversation}?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true",
-];
+let requestShapes;
 
-export function allowedPath(path) {
+export async function allowedPath(path) {
   if (typeof path !== "string") return false;
+  requestShapes ??= fetch(chrome.runtime.getURL("claude_ai_requests.txt")).then(async (response) => {
+    if (!response.ok) throw new Error("Claude request shapes unavailable");
+    return (await response.text()).trim().split(/\r?\n/);
+  });
+  const shapes = await requestShapes;
   if (path === shapes[0]) return true;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const [prefix, list] = shapes[1].split("{organization}");

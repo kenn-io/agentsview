@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/db"
@@ -55,7 +54,9 @@ func (s *Server) registerImportRoutes() {
 	)
 }
 
-type claudeAISyncInput struct{}
+type claudeAISyncInput struct {
+	Browser string `query:"browser" enum:"chrome"`
+}
 
 type claudeAISyncResultInput struct {
 	ID   string `path:"id"`
@@ -85,6 +86,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
 	}
+	if in.Browser == "chrome" && !s.chrome.Connected() {
+		return nil, apiError(http.StatusConflict, "Chrome host not connected")
+	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
@@ -101,14 +105,10 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				cancel()
 				return importer.ClaudeAIResponse{}, ctx.Err()
 			}
-			select {
-			case <-ctx.Done():
-				return importer.ClaudeAIResponse{}, ctx.Err()
-			case <-time.After(2 * time.Minute):
-				return importer.ClaudeAIResponse{}, errors.New("claude browser fetch timed out")
-			case response := <-answer:
-				return importer.ClaudeAIResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, response.err
-			}
+			return awaitClaudeAIResponse(ctx, answer)
+		}
+		if in.Browser == "chrome" {
+			fetch = s.chrome.fetch
 		}
 		stats, err := importer.SyncClaudeAI(ctx, store, fetch, &importer.ImportCallbacks{
 			SerializeWrite: func(write func() error) error {

@@ -389,7 +389,7 @@ export async function connectClaudeAI(host: BrowserHost): Promise<void> {
 }
 
 export async function syncClaudeAI(
-  host: BrowserHost,
+  host: BrowserHost | undefined,
   cb?: ImportCallbacks,
   signal?: AbortSignal,
 ): Promise<ImportStats> {
@@ -399,7 +399,7 @@ export async function syncClaudeAI(
   if (signal?.aborted) abort();
   try {
     await claudeAIClosing;
-    const response = await ImportService.postApiV1ImportClaudeAiSync({ signal: controller.signal });
+    const response = await ImportService.postApiV1ImportClaudeAiSync(host ? undefined : { browser: "chrome" }, { signal: controller.signal });
     let fail: (error: unknown) => void = () => {};
     const failed = new Promise<never>((_, reject) => {
       fail = reject;
@@ -408,6 +408,7 @@ export async function syncClaudeAI(
       response,
       cb,
       (id, path) => {
+        if (!host) throw new Error("Chrome Sync unexpectedly requested a page relay");
         void (async () => {
           let fetched;
           try {
@@ -430,7 +431,7 @@ export async function syncClaudeAI(
   } finally {
     signal?.removeEventListener("abort", abort);
     abort();
-    claudeAIClosing = host.close().catch(() => {}); // Cleanup failure must preserve the sync outcome.
+    if (host) claudeAIClosing = host.close().catch(() => {}); // Cleanup failure must preserve the sync outcome.
   }
 }
 

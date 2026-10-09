@@ -2452,8 +2452,7 @@
   "import_claude_connect": "サインイン",
   "import_claude_sync": "同期",
   "import_claude_help": "メールコードでサインインしてウィンドウを閉じ、同期をクリックしてください。Google でサインインするには、拡張機能を入れた Chrome で AgentsView を使用してください。",
-  "import_claude_help_chrome": "このタブでツールバーの AgentsView ボタンをクリックしてから、同期をクリックしてください。同期には Chrome の Claude.ai ログインを使用します。",
-  "import_claude_chrome_setup": "ダウンロードしたファイルを解凍し、chrome://extensions を開き、デベロッパー モードを有効にして「パッケージ化されていない拡張機能を読み込む」をクリックし、解凍したフォルダを選択してください。このタブを再読み込みしてください。",
-  "import_claude_chrome_download": "Chrome 拡張機能をダウンロード",
+  "import_claude_help_chrome": "同期中は Chrome を開いたままにしてください。Google を含む Claude.ai のログインを使用します。",
+  "import_claude_chrome_setup": "agentsview chrome setup を実行し、chrome://extensions の「パッケージ化されていない拡張機能を読み込む」で表示されたフォルダーを選択してください。",
   "import_claude_auth_required": "Claude.ai にサインインしてから、もう一度同期してください。"
 }

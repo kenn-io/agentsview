@@ -2,15 +2,17 @@
   "manifest_version": 3,
   "name": "AgentsView Claude.ai Sync",
   "version": "0.1.0",
-  "minimum_chrome_version": "106",
-  "host_permissions": ["https://claude.ai/*"],
-  "permissions": ["scripting", "storage", "activeTab"],
-  "background": { "service_worker": "worker.js", "type": "module" },
-  "action": { "default_title": "Allow Claude.ai Sync on this AgentsView tab" },
-  "content_scripts": [{
-    "matches": ["http://127.0.0.1/*", "http://localhost/*"],
-    "js": ["bridge.js"],
-    "run_at": "document_start",
-    "all_frames": false
-  }]
+  "minimum_chrome_version": "105",
+  "host_permissions": [
+    "https://claude.ai/*"
+  ],
+  "permissions": [
+    "scripting",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "worker.js",
+    "type": "module"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4t44WdbFFscacjG6z4B+UfLy0DJiPeBG7DTECQ69Npg804XLcebDoz6kEVgTiauyF58DrD2y+7LCiyzDlKOsvBZExE+2uW77oMltarnPeLJgpTwKQ8XFsbRuwTXt24DnADbbLJxLtpDjjS2b8UUR31e4QLI+sHRhOMgUrcI2papzWRu+DQLoMJsFfgA04HoirUNz4L3bQwT4w47gS9p5VZ4Qrst39eMyMr6L1KwUr3KTiKqbFxeqXuAOTgFPzIcesHQey86+Qp3zF5V7Lmc4i63mC0Yg2GE21AEHU3cpywFu82xRoY3xtUy9f7lxihEF9r5tJBcg7YWpIqyGNeJJuQIDAQAB"
 }

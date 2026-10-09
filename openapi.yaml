@@ -7793,6 +7793,8 @@ components:
           type: integer
         build_date:
           type: string
+        claude_ai_chrome_host:
+          type: boolean
         commit:
           type: string
         data_version:
@@ -13089,6 +13091,14 @@ paths:
   /api/v1/import/claude-ai/sync:
     post:
       operationId: post-api-v1-import-claude-ai-sync
+      parameters:
+        - explode: false
+          in: query
+          name: browser
+          schema:
+            enum:
+              - chrome
+            type: string
       responses:
         "200":
           content:
@@ -13127,6 +13137,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
         "500":
           content:
             application/json:

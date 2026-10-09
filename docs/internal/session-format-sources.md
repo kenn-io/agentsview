@@ -2732,9 +2732,9 @@ schemas keep their existing ordering behavior.
   not authoritative token, cache, reasoning, credit, or USD accounting.
 - **Agentsview:** `internal/parser/claude_ai.go` parses exports;
   `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
-- **Desktop sync:** The browser reads organizations, paginated conversation
+- **Browser sync:** The browser reads organizations, paginated conversation
   summaries, and selected conversation trees from Claude.ai's private API.
-  Request shapes are shared by Go and Rust in
+  Request shapes are shared by Go, Rust, and the Chrome extension in
   `internal/importer/claude_ai_requests.txt`. Lists use `data` and `has_more`
   and include active, archived, and starred chats.
   Details select `current_leaf_message_uuid` and follow string
@@ -2743,6 +2743,7 @@ schemas keep their existing ordering behavior.
   `content[].text` and thinking blocks.
   Malformed selected paths and mismatched conversation UUIDs fail before writes.
   Exports preserve their original message order.
+- **Chrome transport:** Reverified 2026-10-09 against the canonical request file and reconstructed fixtures in `TestChromeHostSyncPrivateReplies`. Native messaging sends replies through a private Unix socket to the server; the HTTP stream contains only progress, done, and error events. Setup pins the extension's public-key-derived ID. Native frames are capped at 64 MiB; oversized serialized replies become status 413.
 - **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible leaf, stored message count, and transcript revision in `provider_freshness`, keyed by `claude-ai` and session ID. Resync and `ResetAllMtimes` clear it. A zip re-import that changes stored text or count triggers a detail fetch. Sync stores messages in the same shape as zip import, without source UUIDs. Pins match by role, text, and occurrence rank. Reverified 2026-10-08 against the reconstructed list and detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and `TestSyncClaudeAIBranchSwitch`. Shorter zip exports remain refused. See [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats) for branch updates and Trash copies.
 - **Limits:** Browser reads and decoded relay responses are capped at 32 MiB. The JSON relay body allows twice that size plus 64 KiB for escaping and metadata. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
