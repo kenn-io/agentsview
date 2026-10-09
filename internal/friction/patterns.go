@@ -38,7 +38,7 @@ func DetectPatterns(
 	}
 
 	for _, r := range signals.RetryRuns(in.Calls) {
-		tool := SanitizeDisplay(r.ToolName)
+		tool := r.ToolName
 		if tool == "" {
 			tool = "unknown"
 		}
@@ -56,7 +56,7 @@ func DetectPatterns(
 			new(first.MessageOrdinal), at)
 	}
 	for _, c := range signals.EditChurnFiles(in.Calls) {
-		file := SanitizeDisplay(baseName(c.FilePath))
+		file := baseName(c.FilePath)
 		rng, at := span(c.First, c.Last)
 		add(PatternEditChurn,
 			fmt.Sprintf("edit churn: `%s` edited %d times within 10 messages", file, c.Count),

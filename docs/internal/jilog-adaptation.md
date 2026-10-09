@@ -1,6 +1,3 @@
----
-last_edited: 2026-09-29
----
 # jilog adaptation provenance
 
 AgentsView's Friction Log adapts the session review from
@@ -37,7 +34,7 @@ approved mapping, not current behavior.
   Go equivalents. A source-specific title exception was dropped.
 - `internal/serdejson` reproduces the relevant serde_json 1.x output: sorted
   keys, no HTML escaping, and float layout. The planned event ledger must
-  match jilog's format byte for byte, and the planned digest JSON uses the
+  match jilog's format byte for byte, and the digest JSON uses the
   same encoder, within the documented parity limits.
 
 ## Planned replacements
@@ -89,7 +86,7 @@ approved mapping, not current behavior.
 
 ## Deliberate differences
 
-- Titles use `[friction/<kind>]`, labels use `friction`, and the planned digest
+- Titles use `[friction/<kind>]`, labels use `friction`, and the digest
   heading is `# Friction Log — <date>`.
 - Coding corrections require the chat marker patterns too. jilog counts every
   15-200 byte user turn between two assistant turns, so instructions such as
@@ -156,8 +153,7 @@ Additions beyond jilog:
   them exactly, so those values print differently.
 - `friction.ParseUSD` accepts plain decimals only. rust_decimal also accepts
   exponents and underscores, which AgentsView does not produce.
-- An empty tool name becomes `unknown`; jilog does this only for a missing
-  name.
+- An empty tool name becomes `unknown`; jilog does this only for a missing name.
 
 ## Digest goldens
 
@@ -168,9 +164,9 @@ The digest follows jilog's `learning-digest.md` layout with these differences:
   Interruptions group by session in first-appearance order.
 - Personas, spend, issue links and recurrence costs await the slices that supply
   them. Timezone handling belongs to daily digest scheduling.
-- Archived names and error text flatten to one line. Corrections, workarounds
-  and frustration text use `PythonRepr`. Pattern detectors sanitize names before
-  adding their Markdown code spans.
+- Archived text renders inside code spans, with control characters replaced by
+  spaces and backticks by apostrophes. Markdown and HTML render literally.
+- Pattern detectors and their fingerprints remain unchanged.
 - The JSON summary uses AgentsView schema 1 with `schema_version`,
   `sessions_scanned`, seven kind counts and `p0_alerts`.
 
