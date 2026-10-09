@@ -197,39 +197,20 @@ func (s analyticsSQL) ModelsSQL(ids []string) (string, []any) {
 	return readbase.AnalyticsModelsSQL(ids)
 }
 
-func (s analyticsSQL) VisitModelTimes(ctx context.Context, sessionIDs []string, emit func(model, timestamp string)) error {
-	return chQueryChunked(sessionIDs, func(chunk []string) error {
-		query, args := readbase.AnalyticsModelTimesSQL(chunk)
-		rows, err := s.QueryContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("querying clickhouse filtered analytics models: %w", err)
-		}
-		defer rows.Close()
-		return readbase.ScanAnalyticsModelTimes(rows, "clickhouse", formatDBTime, emit)
-	})
+func (s analyticsSQL) ModelTimesSQL(ids []string) (string, []any) {
+	return readbase.AnalyticsModelTimesSQL(ids)
 }
 
-func (s analyticsSQL) VisitToolCounts(ctx context.Context, sessionIDs []string, emit func(sessionID, model, timestamp string, count int)) error {
-	return chQueryChunked(sessionIDs, func(chunk []string) error {
-		ph, args := db.InPlaceholders(chunk)
-		rows, err := s.QueryContext(ctx, `
+func (s analyticsSQL) ToolCountsSQL(ids []string) (string, []any) {
+	ph, args := db.InPlaceholders(ids)
+	return `
 			SELECT tc.session_id, m.model, m.timestamp, toInt64(COUNT(*))
 			FROM tool_calls tc
 			JOIN messages m
 				ON m.session_id = tc.session_id
 				AND m.ordinal = tc.message_ordinal
-			WHERE tc.session_id IN `+ph+`
-			GROUP BY tc.session_id, m.model, m.timestamp`, args...)
-		if err != nil {
-			return fmt.Errorf(
-				"querying clickhouse filtered analytics tool calls: %w",
-				err,
-			)
-		}
-		defer rows.Close()
-
-		return readbase.ScanAnalyticsToolCounts(rows, "clickhouse", formatDBTime, emit)
-	})
+			WHERE tc.session_id IN ` + ph + `
+			GROUP BY tc.session_id, m.model, m.timestamp`, args
 }
 
 func chAnalyticsBucketExpr(dateExpr, granularity string) string {
@@ -293,10 +274,6 @@ func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.An
 	return readbase.ScanAnalyticsAutonomy(rows, "clickhouse")
 }
 
-// chMaxSQLVars bounds the IN-list size per query to stay well under
-// driver bind-variable limits; larger ID sets are split into chunks.
-const chMaxSQLVars = readbase.AnalyticsMaxSQLVars
-
 // chSessionSet is a relation of session IDs that a query embeds as
 // `col IN (...)`. clickhouse-go inlines every bound argument into the
 // statement text and the server rejects statements over max_query_size
@@ -337,16 +314,6 @@ func chAnalyticsSessionSet(f db.AnalyticsFilter) chSessionSet {
 	where, args := chBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
 	return chSessionSetFromWhere(where, args)
-}
-
-func chQueryChunked(ids []string, fn func(chunk []string) error) error {
-	for i := 0; i < len(ids); i += chMaxSQLVars {
-		end := min(i+chMaxSQLVars, len(ids))
-		if err := fn(ids[i:end]); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // chAnalyticsToolCallMessagesSQL selects the message columns tool call
@@ -478,7 +445,7 @@ func (s *Store) chPopulateFrustrationMarkers(
 	if len(ids) == 0 {
 		return nil
 	}
-	err := chQueryChunked(ids, func(chunk []string) error {
+	err := readbase.AnalyticsQueryChunked(ids, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
 		q := `SELECT session_id, content, is_system
 			FROM messages
@@ -522,14 +489,13 @@ func (s *Store) chPopulateFrustrationMarkers(
 	return nil
 }
 
-func (s analyticsSQL) VisitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error {
-	query, args := readbase.AnalyticsSignalMessagesSQL(ids)
-	msgRows, err := s.QueryContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("querying clickhouse signal messages: %w", err)
-	}
-	defer msgRows.Close()
-	return readbase.ScanAnalyticsSignalMessages(msgRows, "clickhouse", formatDBTime, emit)
+func (s analyticsSQL) SignalMessagesSQL(ids []string) (string, []any) {
+	return readbase.AnalyticsSignalMessagesSQL(ids)
+}
+
+func (s analyticsSQL) CandidateMessagesSQL(ids []string, includeContent bool) (string, []any) {
+	ph, args := db.InPlaceholders(ids)
+	return readbase.AnalyticsCandidateMessagesSQL(ph, includeContent), args
 }
 
 func chAnalyticsMessageWindowPred(col, from, to string) (string, []any) {

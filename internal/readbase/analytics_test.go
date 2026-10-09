@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
 	"slices"
 	"testing"
 
@@ -19,6 +20,7 @@ type analyticsFixtureBackend struct {
 	sessions []AnalyticsSession
 	scope    db.MessageScope
 	err      error
+	pool     *sql.DB
 }
 
 func (b analyticsFixtureBackend) Sessions(context.Context, db.AnalyticsFilter, bool, bool, string, []any) ([]AnalyticsSession, error) {
@@ -29,21 +31,27 @@ func (b analyticsFixtureBackend) MessageScope(context.Context, []string, db.Anal
 	return b.scope, b.err
 }
 
-func (b analyticsFixtureBackend) VisitModelTimes(ctx context.Context, ids []string, emit func(model, timestamp string)) error {
-	emit("selected", "2026-01-05T10:00:00Z")
-	return nil
+func (b analyticsFixtureBackend) ModelTimesSQL([]string) (string, []any) {
+	return "model times", nil
 }
+func (b analyticsFixtureBackend) FormatTime(value any) string { return value.(string) }
 
 func (b analyticsFixtureBackend) HeatmapSQL(db.AnalyticsFilter, string) (string, []any) {
 	return "heatmap", nil
 }
 
-func (b analyticsFixtureBackend) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
-	return nil, b.err
+func (b analyticsFixtureBackend) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	return b.pool.QueryContext(ctx, query, args...)
 }
 
 func TestAnalyticsModelSummaryUsesScopedCounts(t *testing.T) {
+	pool := sql.OpenDB(topSessionsDriver{})
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
 	backend := analyticsFixtureBackend{
+		pool: pool,
 		sessions: []AnalyticsSession{
 			{ID: "selected", Project: "project", Agent: "claude", StartedAt: "2026-01-05T10:00:00Z", MessageCount: 20, TotalOutputTokens: 100, HasTotalOutputTokens: true},
 			{ID: "outside-hour", MessageCount: 40},
@@ -97,7 +105,10 @@ func (topSessionsDriver) Prepare(string) (driver.Stmt, error) {
 
 func (topSessionsDriver) Begin() (driver.Tx, error) { return nil, errors.New("unexpected transaction") }
 func (topSessionsDriver) Close() error              { return nil }
-func (topSessionsDriver) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+func (topSessionsDriver) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if query == "model times" {
+		return &modelTimesRows{}, nil
+	}
 	return &topSessionsRows{}, nil
 }
 
@@ -140,4 +151,17 @@ func TestAnalyticsTopSessionsReturnsTerminalErrorAfterTenRows(t *testing.T) {
 	_, err := analytics.GetAnalyticsTopSessions(t.Context(), db.AnalyticsFilter{}, "messages")
 	require.ErrorIs(t, err, errTopSessionsTerminal)
 	assert.EqualError(t, err, "iterating fixture analytics top sessions: terminal read failure")
+}
+
+type modelTimesRows struct{ done bool }
+
+func (*modelTimesRows) Columns() []string { return []string{"model", "timestamp"} }
+func (*modelTimesRows) Close() error      { return nil }
+func (r *modelTimesRows) Next(values []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	values[0], values[1] = "selected", "2026-01-05T10:00:00Z"
+	return nil
 }

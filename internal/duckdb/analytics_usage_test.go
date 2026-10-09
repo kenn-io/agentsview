@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"go.kenn.io/agentsview/internal/readbase"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -609,7 +609,7 @@ func TestDuckSignalMessagesFormatsTimestampValues(t *testing.T) {
 	require.NoError(t, err)
 
 	var got []db.SignalMessage
-	err = (analyticsSQL{store}).VisitSignalMessages(ctx, []string{"signal-time"}, func(row db.SignalMessage) {
+	err = store.analytics().VisitSignalMessages(ctx, []string{"signal-time"}, func(row db.SignalMessage) {
 		got = append(got, row)
 	})
 	require.NoError(t, err)

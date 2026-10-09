@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 func (s *Store) ListArchiveWorktreeCandidates(ctx context.Context, request db.ArchiveWorktreeCandidateRequest) ([]db.WorktreeReclassificationCandidate, error) {
@@ -16,7 +17,7 @@ func (s *Store) loadWorktreeCandidateSessions(
 	ctx context.Context, ids []string,
 ) ([]db.WorktreeCandidateSession, error) {
 	byID := make(map[string]db.WorktreeCandidateSession, len(ids))
-	err := duckQueryChunked(ids, func(chunk []string) error {
+	err := readbase.AnalyticsQueryChunked(ids, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
 		query := `
 			WITH ranked_snapshots AS (

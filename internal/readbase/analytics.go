@@ -35,12 +35,13 @@ type AnalyticsBackend interface {
 	FormatTime(any) string
 	MessageScope(ctx context.Context, ids []string, f db.AnalyticsFilter, includeContent bool) (db.MessageScope, error)
 	ModelsSQL(ids []string) (string, []any)
-	VisitModelTimes(ctx context.Context, ids []string, emit func(model, timestamp string)) error
+	ModelTimesSQL(ids []string) (string, []any)
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
 	VelocityMessages(ctx context.Context, ids []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error)
 	VelocityToolCounts(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
-	VisitToolCounts(ctx context.Context, ids []string, emit func(sessionID, model, timestamp string, count int)) error
-	VisitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error
+	ToolCountsSQL(ids []string) (string, []any)
+	SignalMessagesSQL(ids []string) (string, []any)
+	CandidateMessagesSQL(ids []string, includeContent bool) (string, []any)
 	// Session metadata supplies ClickHouse cache versions; DuckDB uses only rows.
 	PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []AnalyticsSession) error
 }
@@ -1013,18 +1014,14 @@ func AnalyticsLocation(tz string) *time.Location {
 }
 
 func ParseAnalyticsTime(ts string) (time.Time, bool) {
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.000Z", "2006-01-02 15:04:05"} {
-		if t, err := time.Parse(layout, strings.TrimSpace(ts)); err == nil {
-			return t.UTC(), true
-		}
-	}
-	layouts := []string{
-		"2006-01-02 15:04:05.999999-07",
-		"2006-01-02 15:04:05.999999",
-		"2006-01-02 15:04:05",
-	}
-	for _, layout := range layouts {
-		if t, err := time.Parse(layout, ts); err == nil {
+	trimmed := strings.TrimSpace(ts)
+	for _, candidate := range []struct{ layout, value string }{
+		{time.RFC3339Nano, trimmed},
+		{"2006-01-02 15:04:05", trimmed},
+		// The space-separated offset format historically rejects surrounding whitespace.
+		{"2006-01-02 15:04:05.999999-07", ts},
+	} {
+		if t, err := time.Parse(candidate.layout, candidate.value); err == nil {
 			return t.UTC(), true
 		}
 	}

@@ -653,7 +653,7 @@ func (s *Store) GetSessionUsageRows(
 	// snapshot and dedup passes below need the complete row set, the same
 	// way the SQLite and PostgreSQL stores chunk this load.
 	var rowsAcc []clickSessionUsageOrderedRow
-	err = chQueryChunked(ids, func(chunk []string) error {
+	err = readbase.AnalyticsQueryChunked(ids, func(chunk []string) error {
 		inList, inArgs := db.InPlaceholders(chunk)
 		query := clickUsageNormalizedQuery(
 			chUsageStoredMessageEligibility+" AND s.id IN "+inList,
