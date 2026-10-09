@@ -267,12 +267,11 @@ func (e *Engine) processS3Session(
 			}
 		}
 	default:
-		rawID := p.S3SessionID(file.Path)
-		if rawID != "" {
-			fullID := applyIDPrefixToID(idPrefix, rawID)
+		fullID := e.s3StoredSessionID(ctx, file, p)
+		if fullID != "" {
 			if !e.forceParseRequested(file) && !sourceChanged &&
 				e.shouldSkipFileWithPrefix(ctx,
-					idPrefix, rawID, sourceInfo, sourceFingerprint,
+					"", fullID, sourceInfo, sourceFingerprint,
 				) &&
 				e.db.GetSessionFilePath(ctx, fullID) == file.Path {
 				sess, _ := e.db.GetSession(ctx, fullID)
@@ -508,7 +507,7 @@ func (e *Engine) parseMaterializedS3Source(
 	// still carry ExcludedSessionIDs (a Claude /usage probe parses to no live
 	// session but excludes its ID), and the caller needs those IDs to drop the
 	// previously-archived row on resync. ForceReplace must survive too.
-	return processResult{
+	res := processResult{
 		results:                  parseOutcomeResults(outcome.Results),
 		excludedSessionIDs:       append([]string(nil), outcome.ExcludedSessionIDs...),
 		forceReplace:             outcome.ForceReplace,
@@ -518,5 +517,12 @@ func (e *Engine) parseMaterializedS3Source(
 		providerWideFailureCount: providerWideFailureCount,
 		noCacheSkip:              !providerOutcomeAllowsCleanSkipCache(outcome),
 		deferredCount:            deferredCount,
-	}, nil
+	}
+	if collisionPolicyApplies(provider) {
+		for i := range res.results {
+			res.results[i].Session.File.Path = file.Path
+		}
+		e.applyProviderFilePathPolicies(ctx, provider, file.Agent, file.Path, &res, s3SessionIDPrefix(file.Machine))
+	}
+	return res, nil
 }

@@ -85,7 +85,18 @@ func cursorS3TranscriptName(name string) bool {
 	return IsValidSessionID(stem)
 }
 
-// preferCursorS3Transcripts keeps one object per machine and session stem
+// CursorS3SourceKey groups format and layout aliases by machine, raw project and stem.
+func CursorS3SourceKey(uri string) string {
+	segs := strings.Split(strings.TrimPrefix(uri, "s3://"), "/")
+	for i := len(segs) - 4; i > 0; i-- {
+		if segs[i] == "raw" && segs[i+1] == "cursor" && keepCursorS3Session("", segs[i+2:]) {
+			return segs[i-1] + "/" + segs[i+2] + "/" + strings.TrimSuffix(path.Base(uri), path.Ext(uri))
+		}
+	}
+	return ""
+}
+
+// preferCursorS3Transcripts keeps one object per machine, project and session stem
 // across all configured S3 roots. Precedence matches local Cursor discovery: a
 // session's own nested <id>/<id>.ext or flat <id>.ext over a copy in another
 // session's subagents/<id>.ext, then .jsonl over .txt, then nested over flat,
@@ -93,18 +104,11 @@ func cursorS3TranscriptName(name string) bool {
 func preferCursorS3Transcripts(
 	transcripts []cursorS3Transcript,
 ) []cursorS3Transcript {
-	type key struct {
-		machine string
-		stem    string
-	}
-	best := make(map[key]cursorS3Transcript, len(transcripts))
-	order := make([]key, 0, len(transcripts))
+	best := make(map[string]cursorS3Transcript, len(transcripts))
+	order := make([]string, 0, len(transcripts))
 	for _, transcript := range transcripts {
 		file := transcript.file
-		k := key{
-			machine: file.Machine,
-			stem:    strings.TrimSuffix(path.Base(file.Path), path.Ext(file.Path)),
-		}
+		k := CursorS3SourceKey(file.Path)
 		prev, ok := best[k]
 		if !ok {
 			best[k] = transcript

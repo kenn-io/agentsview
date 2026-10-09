@@ -140,7 +140,7 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 	assert.ElementsMatch(t, []string{jsonlURI, otherURI}, streamed)
 }
 
-func TestCursorS3DiscoverDeduplicatesSameStemAcrossProjectsDeterministically(t *testing.T) {
+func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
 
@@ -157,8 +157,8 @@ func TestCursorS3DiscoverDeduplicatesSameStemAcrossProjectsDeterministically(t *
 
 	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, firstURI, sources[0].DisplayPath)
+	require.Len(t, sources, 2)
+	assert.ElementsMatch(t, []string{firstURI, secondURI}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
 }
 
 func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) {
@@ -170,7 +170,7 @@ func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) 
 	laptopJSONLRoot := "s3://bucket-b/archive/laptop/raw/cursor"
 	desktopRoot := "s3://bucket-c/archive/desktop/raw/cursor"
 	laptopTxtURI := laptopTxtRoot + "/project-a/" + stem + ".txt"
-	laptopJSONLURI := laptopJSONLRoot + "/project-b/" + stem + ".jsonl"
+	laptopJSONLURI := laptopJSONLRoot + "/project-a/" + stem + ".jsonl"
 	desktopURI := desktopRoot + "/project-c/" + stem + ".jsonl"
 	objectsByRoot := map[string][]S3Object{
 		laptopTxtRoot: {
@@ -219,6 +219,7 @@ func TestCursorS3DiscoverDecodesAgentTranscriptsProject(t *testing.T) {
 	encoded := "Users-fiona-Documents-demo"
 	harvestURI := root + "/my-cool-project/11111111-1111-4111-8111-111111111111.jsonl"
 	localURI := root + "/" + encoded + "/agent-transcripts/sess.jsonl"
+	otherProjectURI := root + "/home-user-a-Documents-demo/agent-transcripts/sess.jsonl"
 	subagentURI := root + "/" + encoded + "/agent-transcripts/sess/subagents/child.jsonl"
 	mtime := time.Unix(100, 0)
 	listS3Objects = func(got string) ([]S3Object, error) {
@@ -226,22 +227,25 @@ func TestCursorS3DiscoverDecodesAgentTranscriptsProject(t *testing.T) {
 		return []S3Object{
 			{URI: harvestURI, Size: 11, LastModified: mtime},
 			{URI: localURI, Size: 7, LastModified: mtime},
+			{URI: otherProjectURI, Size: 7, LastModified: mtime},
 			{URI: subagentURI, Size: 5, LastModified: mtime},
 		}, nil
 	}
 
 	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
-	require.Len(t, sources, 3)
+	require.Len(t, sources, 4)
 	byPath := make(map[string]SourceRef, len(sources))
 	for _, src := range sources {
 		byPath[src.DisplayPath] = src
 	}
 	require.Contains(t, byPath, harvestURI)
 	require.Contains(t, byPath, localURI)
+	require.Contains(t, byPath, otherProjectURI)
 	require.Contains(t, byPath, subagentURI)
 	assert.Equal(t, "my-cool-project", byPath[harvestURI].ProjectHint)
 	assert.Equal(t, "demo", byPath[localURI].ProjectHint)
+	assert.Equal(t, "demo", byPath[otherProjectURI].ProjectHint)
 	assert.Equal(t, "demo", byPath[subagentURI].ProjectHint)
 }
 

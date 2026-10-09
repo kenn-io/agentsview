@@ -114,9 +114,9 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(ctx context.Context,
 	file parser.DiscoveredFile, p parser.S3Provider,
 	size, mtime int64, sourceFingerprint string,
 ) bool {
-	sessionID := s3DiscoveredSessionIDWithProvider(file, p)
+	sessionID := e.s3StoredSessionID(ctx, file, p)
 	if sessionID == "" {
-		return false
+		return p.S3SessionID(file.Path) != ""
 	}
 	storedPath := e.db.GetSessionFilePath(ctx, sessionID)
 	if storedPath == "" || storedPath != file.Path {
@@ -136,6 +136,18 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(ctx context.Context,
 		}
 	}
 	return false
+}
+
+// Shared-ID sources must compare metadata with the row owned by this object.
+func (e *Engine) s3StoredSessionID(ctx context.Context, file parser.DiscoveredFile, p parser.S3Provider) string {
+	if parser.SharesSessionIDs(file.Agent) {
+		ids, err := e.db.ListSessionIDsByFilePath(ctx, file.Path, string(file.Agent))
+		if err != nil || len(ids) == 0 {
+			return ""
+		}
+		return ids[0]
+	}
+	return s3DiscoveredSessionIDWithProvider(file, p)
 }
 
 type s3CodexIndexSnapshot struct {

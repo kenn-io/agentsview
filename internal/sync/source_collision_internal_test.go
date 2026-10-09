@@ -42,7 +42,7 @@ func TestSourceCollisionKeepsRetryFlag(t *testing.T) {
 		}}},
 		retrySessionIDs: map[string]bool{id: true},
 	}
-	e.applyProviderFilePathPolicies(t.Context(), provider, parser.AgentGemini, other, &res)
+	e.applyProviderFilePathPolicies(t.Context(), provider, parser.AgentGemini, other, &res, e.idPrefix)
 
 	require.Len(t, res.results, 1)
 	altID := parser.AltSessionID(id, other)
@@ -71,7 +71,7 @@ func TestSourceCollisionLookupErrorSkipsSource(t *testing.T) {
 	res := processResult{results: []parser.ParseResult{{Session: parser.ParsedSession{
 		ID: "gemini:shared", Agent: parser.AgentGemini, File: parser.FileInfo{Path: path},
 	}}}}
-	e.applyProviderFilePathPolicies(ctx, provider, parser.AgentGemini, path, &res)
+	e.applyProviderFilePathPolicies(ctx, provider, parser.AgentGemini, path, &res, e.idPrefix)
 
 	require.Error(t, res.err)
 	assert.Contains(t, res.err.Error(), "session path records")

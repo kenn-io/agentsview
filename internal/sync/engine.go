@@ -12816,7 +12816,7 @@ func (e *Engine) processProviderFile(
 			})
 		}
 	}
-	e.applyProviderFilePathPolicies(ctx, provider, file.Agent, file.Path, &res)
+	e.applyProviderFilePathPolicies(ctx, provider, file.Agent, file.Path, &res, e.idPrefix)
 	if file.Agent == parser.AgentClaude && cleanCache &&
 		!e.forceParseRequested(file) {
 		res.claudeRowlessFreshnessKey = e.claudeRowlessFreshnessCacheKey(file.Path, fingerprint.Hash)
@@ -13700,6 +13700,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 	agent parser.AgentType,
 	filePath string,
 	res *processResult,
+	idPrefix string,
 ) {
 	if len(res.results) == 0 {
 		return
@@ -13713,7 +13714,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 	}
 
 	excluded := make(map[string]struct{}, len(res.excludedSessionIDs))
-	for _, id := range e.applyIDPrefixToSessionIDs(res.excludedSessionIDs) {
+	for _, id := range applyIDPrefixToIDs(idPrefix, res.excludedSessionIDs) {
 		excluded[id] = struct{}{}
 	}
 	// Source-missing ownership takes precedence over parser-exclusion cleanup
@@ -13723,7 +13724,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 	sourceMissing := make(map[string]struct{})
 	if agent == parser.AgentCline {
 		for _, member := range res.sourceMissingMembers {
-			if id := applyIDPrefixToID(e.idPrefix, member.sessionID); id != "" {
+			if id := applyIDPrefixToID(idPrefix, member.sessionID); id != "" {
 				sourceMissing[id] = struct{}{}
 			}
 		}
@@ -13759,7 +13760,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 			storedCwd:  res.sourceCwdStored,
 			storedOK:   res.sourceCwdStoredOK,
 		}))
-		currentID, moved, err := e.sourceCollisionID(ctx, provider, lookupPath, &result.Session, admitted)
+		currentID, moved, err := e.sourceCollisionID(ctx, provider, lookupPath, &result.Session, admitted, idPrefix)
 		if err != nil {
 			// Ownership is unknown, so skip the source this pass and retry it.
 			res.err = err
@@ -13771,7 +13772,7 @@ func (e *Engine) applyProviderFilePathPolicies(
 		if currentID != originalID && res.retrySessionIDs[originalID] {
 			res.retrySessionIDs[currentID] = true
 		}
-		currentPrefixedID := e.idPrefix + currentID
+		currentPrefixedID := applyIDPrefixToID(idPrefix, currentID)
 
 		agentsToQuery := []string{string(agent)}
 		var existingIDs []string
