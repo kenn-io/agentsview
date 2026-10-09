@@ -1,13 +1,9 @@
 package clickhouse
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"math"
 	"slices"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,68 +12,16 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/signals"
 )
 
-type chAnalyticsSession struct {
-	id                          string
-	project                     string
-	machine                     string
-	agent                       string
-	firstMessage                *string
-	displayName                 *string
-	startedAt                   string
-	endedAt                     string
-	createdAt                   string
-	messageCount                int
-	userMessageCount            int
-	totalOutputTokens           int
-	hasTotalOutputTokens        bool
-	isAutomated                 bool
-	terminationStatus           *string
-	healthScore                 *int
-	healthGrade                 *string
-	outcome                     string
-	outcomeConfidence           string
-	toolFailures                int
-	toolRetries                 int
-	editChurn                   int
-	compactions                 int
-	midTaskCompactions          int
-	contextPressureMax          *float64
-	qualitySignalVersion        int
-	shortPromptCount            int
-	unstructuredStart           bool
-	missingSuccessCriteriaCount int
-	missingVerificationCount    int
-	duplicatePromptCount        int
-	noCodeContextCount          int
-	runawayToolLoopCount        int
-	frustrationMarkerCount      int
-	pushVersion                 uint64
-}
-
-func (s *Store) analyticsSessions(
-	ctx context.Context, f db.AnalyticsFilter,
-) ([]chAnalyticsSession, error) {
-	return s.analyticsSessionsFiltered(ctx, f, true, true, "", nil)
-}
-
-// analyticsSessionsFiltered loads candidate sessions, optionally applying
-// the date and hour/day-of-week predicates at the session level. Skill
-// analytics passes false for both so those filters can be applied to each
-// call's own message timestamp instead. With a model filter and an active
-// hour/dow filter it pairs through the shared scope reducer (see
-// analyticsSessionsModelTimeFiltered) so an empty-model user turn at the
-// selected hour keeps its session, matching how the model-scoped panels count.
-func (s *Store) analyticsSessionsFiltered(
+// loadAnalyticsSessions leaves paired model/time filtering to the shared base.
+func (s *Store) loadAnalyticsSessions(
 	ctx context.Context, f db.AnalyticsFilter,
 	includeDate, includeTime bool,
 	extraPred string, extraArgs []any,
-) ([]chAnalyticsSession, error) {
-	if includeTime && f.HasTimeFilter() && strings.TrimSpace(f.Model) != "" {
-		return s.analyticsSessionsModelTimeFiltered(ctx, f, includeDate)
-	}
+) ([]readbase.AnalyticsSession, error) {
 	where, args := chBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.",
 		includeDate, includeTime)
@@ -112,11 +56,11 @@ func (s *Store) analyticsSessionsFiltered(
 		if result.Err != nil {
 			return nil, result.Err
 		}
-		return slices.Clone(result.Val.([]chAnalyticsSession)), nil
+		return slices.Clone(result.Val.([]readbase.AnalyticsSession)), nil
 	}
 }
 
-func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []any) ([]chAnalyticsSession, error) {
+func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []any) ([]readbase.AnalyticsSession, error) {
 	rows, err := s.queryContext(ctx, `
 		SELECT id, project, machine, agent, first_message,
 			COALESCE(display_name, session_name) AS display_name,
@@ -138,31 +82,31 @@ func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []
 	}
 	defer rows.Close()
 
-	var out []chAnalyticsSession
+	var out []readbase.AnalyticsSession
 	for rows.Next() {
-		var r chAnalyticsSession
+		var r readbase.AnalyticsSession
 		var startedAt, endedAt, createdAt any
 		if err := rows.Scan(
-			&r.id, &r.project, &r.machine, &r.agent,
-			&r.firstMessage, &r.displayName,
+			&r.ID, &r.Project, &r.Machine, &r.Agent,
+			&r.FirstMessage, &r.DisplayName,
 			&startedAt, &endedAt, &createdAt,
-			&r.messageCount, &r.userMessageCount,
-			&r.totalOutputTokens, &r.hasTotalOutputTokens,
-			&r.isAutomated, &r.terminationStatus,
-			&r.healthScore, &r.healthGrade, &r.outcome,
-			&r.outcomeConfidence, &r.toolFailures, &r.toolRetries,
-			&r.editChurn, &r.compactions, &r.midTaskCompactions,
-			&r.contextPressureMax, &r.qualitySignalVersion,
-			&r.shortPromptCount, &r.unstructuredStart,
-			&r.missingSuccessCriteriaCount, &r.missingVerificationCount,
-			&r.duplicatePromptCount, &r.noCodeContextCount,
-			&r.runawayToolLoopCount, &r.pushVersion,
+			&r.MessageCount, &r.UserMessageCount,
+			&r.TotalOutputTokens, &r.HasTotalOutputTokens,
+			&r.IsAutomated, &r.TerminationStatus,
+			&r.HealthScore, &r.HealthGrade, &r.Outcome,
+			&r.OutcomeConfidence, &r.ToolFailures, &r.ToolRetries,
+			&r.EditChurn, &r.Compactions, &r.MidTaskCompactions,
+			&r.ContextPressureMax, &r.QualitySignalVersion,
+			&r.ShortPromptCount, &r.UnstructuredStart,
+			&r.MissingSuccessCriteriaCount, &r.MissingVerificationCount,
+			&r.DuplicatePromptCount, &r.NoCodeContextCount,
+			&r.RunawayToolLoopCount, &r.PushVersion,
 		); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse analytics session: %w", err)
 		}
-		r.startedAt = formatDBTime(startedAt)
-		r.endedAt = formatDBTime(endedAt)
-		r.createdAt = formatDBTime(createdAt)
+		r.StartedAt = formatDBTime(startedAt)
+		r.EndedAt = formatDBTime(endedAt)
+		r.CreatedAt = formatDBTime(createdAt)
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -176,39 +120,6 @@ func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []
 // types survive: ["a b", "c"] and ["a", "b c"] are different keys.
 func analyticsSessionMemoKey(where string, args []any) string {
 	return fmt.Sprintf("%s|%#v", where, args)
-}
-
-// analyticsSessionsModelTimeFiltered loads the date- and model-scoped sessions
-// (without the in-SQL day/hour predicate) and keeps only those with at least
-// one scoped message matching the hour/dow filter. Running the shared reducer
-// instead of the direct m.model time predicate keeps sessions whose matching
-// message is an empty-model user turn paired with the selected-model assistant.
-func (s *Store) analyticsSessionsModelTimeFiltered(
-	ctx context.Context, f db.AnalyticsFilter, includeDate bool,
-) ([]chAnalyticsSession, error) {
-	sessions, err := s.analyticsSessionsFiltered(ctx, f, includeDate, false, "", nil)
-	if err != nil {
-		return nil, err
-	}
-	candidateIDs := make([]string, 0, len(sessions))
-	for _, session := range sessions {
-		candidateIDs = append(candidateIDs, session.id)
-	}
-	scope, err := s.resolveAnalyticsMessageScope(ctx, candidateIDs, f, false)
-	if err != nil {
-		return nil, err
-	}
-	matched := make(map[string]struct{})
-	for id := range scope {
-		matched[id] = struct{}{}
-	}
-	out := make([]chAnalyticsSession, 0, len(sessions))
-	for _, session := range sessions {
-		if _, ok := matched[session.id]; ok {
-			out = append(out, session)
-		}
-	}
-	return out, nil
 }
 
 func chBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -319,11 +230,11 @@ func chAnalyticsTimeMatches(t time.Time, f db.AnalyticsFilter) bool {
 	return true
 }
 
-func analyticsDateTime(r chAnalyticsSession) string {
-	if r.startedAt != "" {
-		return r.startedAt
+func analyticsDateTime(r readbase.AnalyticsSession) string {
+	if r.StartedAt != "" {
+		return r.StartedAt
 	}
-	return r.createdAt
+	return r.CreatedAt
 }
 
 func analyticsLocalDate(ts, tz string) string {
@@ -355,16 +266,14 @@ func parseAnalyticsTime(ts string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func (s *Store) getAnalyticsModelsForSessionIDs(
-	ctx context.Context, sessionIDs []string,
-) ([]string, error) {
+func (s analyticsSQL) Models(ctx context.Context, sessionIDs []string) ([]string, error) {
 	if len(sessionIDs) == 0 {
 		return []string{}, nil
 	}
 	models := map[string]bool{}
 	err := chQueryChunked(sessionIDs, func(chunk []string) error {
 		ph, args := chInPlaceholders(chunk)
-		rows, err := s.queryContext(ctx, `
+		rows, err := s.QueryContext(ctx, `
 			SELECT DISTINCT model
 			FROM messages
 			WHERE session_id IN `+ph+`
@@ -389,11 +298,7 @@ func (s *Store) getAnalyticsModelsForSessionIDs(
 	return db.SortedKeys(models), nil
 }
 
-func (s *Store) getAnalyticsModelsForSessionIDsFiltered(
-	ctx context.Context,
-	sessionIDs []string,
-	f db.AnalyticsFilter,
-) ([]string, error) {
+func (s analyticsSQL) FilteredModels(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) ([]string, error) {
 	if len(sessionIDs) == 0 {
 		return []string{}, nil
 	}
@@ -416,7 +321,7 @@ func (s *Store) getAnalyticsModelsForSessionIDsFiltered(
 	models := map[string]bool{}
 	err := chQueryChunked(unique, func(chunk []string) error {
 		ph, args := chInPlaceholders(chunk)
-		rows, err := s.queryContext(ctx, `
+		rows, err := s.QueryContext(ctx, `
 			SELECT model, timestamp
 			FROM messages
 			WHERE session_id IN `+ph+`
@@ -452,292 +357,7 @@ func (s *Store) getAnalyticsModelsForSessionIDsFiltered(
 	return db.SortedKeys(models), nil
 }
 
-func (s *Store) getAnalyticsFilteredMessageStats(
-	ctx context.Context,
-	sessionIDs []string,
-	f db.AnalyticsFilter,
-) (map[string]db.MessageStats, error) {
-	scope, err := s.resolveAnalyticsMessageScope(ctx, sessionIDs, f, false)
-	if err != nil {
-		return nil, err
-	}
-	if scope == nil {
-		return map[string]db.MessageStats{}, nil
-	}
-	return scope.StatsBySession(), nil
-}
-
-func (s *Store) analyticsSessionsWithModelMessageCounts(
-	ctx context.Context, f db.AnalyticsFilter,
-) ([]chAnalyticsSession, error) {
-	sessions, err := s.analyticsSessions(ctx, f)
-	if err != nil || strings.TrimSpace(f.Model) == "" || len(sessions) == 0 {
-		return sessions, err
-	}
-
-	sessionIDs := make([]string, 0, len(sessions))
-	for _, session := range sessions {
-		sessionIDs = append(sessionIDs, session.id)
-	}
-	stats, err := s.getAnalyticsFilteredMessageStats(
-		ctx, sessionIDs, f,
-	)
-	if err != nil {
-		return nil, err
-	}
-	for i := range sessions {
-		stat := stats[sessions[i].id]
-		sessions[i].messageCount = stat.Messages
-		sessions[i].totalOutputTokens = stat.OutputTokens
-		sessions[i].hasTotalOutputTokens = stat.HasOutputTokens
-	}
-	return sessions, nil
-}
-
-func (s *Store) getAnalyticsSummaryWithModelCounts(
-	ctx context.Context, f db.AnalyticsFilter,
-) (db.AnalyticsSummary, error) {
-	sessions, err := s.analyticsSessionsWithModelMessageCounts(ctx, f)
-	if err != nil {
-		return db.AnalyticsSummary{}, err
-	}
-
-	resp := db.AnalyticsSummary{
-		Agents: map[string]*db.AgentSummary{},
-		Models: []string{},
-	}
-	if len(sessions) == 0 {
-		return resp, nil
-	}
-
-	days := map[string]bool{}
-	projects := map[string]int{}
-	msgCounts := make([]int, 0, len(sessions))
-	sessionIDs := make([]string, 0, len(sessions))
-
-	for _, session := range sessions {
-		date := analyticsLocalDate(analyticsDateTime(session), f.Timezone)
-		resp.TotalSessions++
-		resp.TotalMessages += session.messageCount
-		if session.hasTotalOutputTokens {
-			resp.TotalOutputTokens += session.totalOutputTokens
-			resp.TokenReportingSessions++
-		}
-		days[date] = true
-		projects[session.project] += session.messageCount
-		msgCounts = append(msgCounts, session.messageCount)
-		sessionIDs = append(sessionIDs, session.id)
-
-		if resp.Agents[session.agent] == nil {
-			resp.Agents[session.agent] = &db.AgentSummary{}
-		}
-		resp.Agents[session.agent].Sessions++
-		resp.Agents[session.agent].Messages += session.messageCount
-	}
-
-	var models []string
-	if strings.TrimSpace(f.Model) != "" {
-		models, err = s.getAnalyticsModelsForSessionIDsFiltered(
-			ctx, sessionIDs, f,
-		)
-	} else {
-		models, err = s.getAnalyticsModelsForSessionIDs(ctx, sessionIDs)
-	}
-	if err != nil {
-		return db.AnalyticsSummary{}, err
-	}
-	resp.Models = models
-	resp.ActiveProjects = len(projects)
-	resp.ActiveDays = len(days)
-	resp.AvgMessages = db.Round1(float64(resp.TotalMessages) / float64(resp.TotalSessions))
-
-	sort.Ints(msgCounts)
-	resp.MedianMessages = db.MedianInt(msgCounts, len(msgCounts))
-	if n := len(msgCounts); n > 0 {
-		resp.P90Messages = msgCounts[min(int(math.Floor(float64(n)*0.9))+1, n)-1]
-	}
-
-	maxMsgs := -1
-	for _, name := range db.SortedKeys(projects) {
-		if projects[name] > maxMsgs {
-			maxMsgs = projects[name]
-			resp.MostActive = name
-		}
-	}
-
-	if resp.TotalMessages > 0 {
-		counts := make([]int, 0, len(projects))
-		for _, count := range projects {
-			counts = append(counts, count)
-		}
-		sort.Sort(sort.Reverse(sort.IntSlice(counts)))
-		topSum := 0
-		for _, count := range counts[:min(3, len(counts))] {
-			topSum += count
-		}
-		resp.Concentration = math.Round(
-			float64(topSum)/float64(resp.TotalMessages)*1000,
-		) / 1000
-	}
-	return resp, nil
-}
-
-func (s *Store) GetAnalyticsSummary(
-	ctx context.Context, f db.AnalyticsFilter,
-) (db.AnalyticsSummary, error) {
-	// Sum/count aggregate: count subagent sessions (mirrors SQLite).
-	f.IncludeSubagents = true
-	if strings.TrimSpace(f.Model) != "" {
-		return s.getAnalyticsSummaryWithModelCounts(ctx, f)
-	}
-	where, args := chBuildAnalyticsWhere(
-		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
-	localDate, localDateArgs := chAnalyticsLocalDateExpr(
-		"COALESCE(s.started_at, s.created_at)", f)
-	queryArgs := append([]any{}, localDateArgs...)
-	queryArgs = append(queryArgs, args...)
-	query := `
-		WITH filtered AS (
-			SELECT s.id, s.project, s.agent, s.message_count,
-				s.total_output_tokens, s.has_total_output_tokens,
-				` + localDate + ` AS local_date
-			FROM sessions s
-			WHERE ` + where + `
-		),
-		ranked AS (
-			SELECT message_count,
-				toInt64(row_number() OVER (ORDER BY message_count ASC)) AS rn,
-				toInt64(COUNT(*) OVER ()) AS n
-			FROM filtered
-		),
-		project_totals AS (
-			SELECT project, toInt64(SUM(message_count)) AS messages
-			FROM filtered
-			GROUP BY project
-		)
-		SELECT
-			toInt64(COUNT(*)) AS total_sessions,
-			toInt64(COALESCE(SUM(message_count), 0)) AS total_messages,
-			toInt64(COALESCE(sumIf(total_output_tokens, has_total_output_tokens = true), 0)) AS total_output_tokens,
-			toInt64(countIf(has_total_output_tokens = true)) AS token_reporting_sessions,
-			toInt64(COUNT(DISTINCT project)) AS active_projects,
-			toInt64(COUNT(DISTINCT local_date)) AS active_days,
-			ifNotFinite(round(avg(message_count), 1), 0) AS avg_messages,
-			COALESCE((
-				SELECT toInt64(ifNotFinite(floor(avg(message_count)), 0))
-				FROM ranked
-				WHERE rn = toInt64(floor((n + 1) / 2.0))
-					OR rn = toInt64(floor((n + 2) / 2.0))
-			), 0) AS median_messages,
-			COALESCE((
-				SELECT message_count
-				FROM ranked
-				WHERE rn = least(toInt64(floor(n * 0.9)) + 1, n)
-				LIMIT 1
-			), 0) AS p90_messages,
-			COALESCE((
-				SELECT project
-				FROM project_totals
-				ORDER BY messages DESC, project ASC
-				LIMIT 1
-			), '') AS most_active,
-			ifNotFinite(round(CAST((
-				SELECT SUM(messages)
-				FROM (
-					SELECT messages
-					FROM project_totals
-					ORDER BY messages DESC
-					LIMIT 3
-				)
-			) AS Float64) / NULLIF(SUM(message_count), 0), 3), 0) AS concentration
-		FROM filtered`
-	rows, err := s.queryContext(ctx, query, queryArgs...)
-	if err != nil {
-		return db.AnalyticsSummary{}, fmt.Errorf("querying clickhouse analytics summary: %w", err)
-	}
-	defer rows.Close()
-	resp := db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}
-	if !rows.Next() {
-		return resp, rows.Err()
-	}
-	if err := rows.Scan(
-		&resp.TotalSessions,
-		&resp.TotalMessages,
-		&resp.TotalOutputTokens,
-		&resp.TokenReportingSessions,
-		&resp.ActiveProjects,
-		&resp.ActiveDays,
-		&resp.AvgMessages,
-		&resp.MedianMessages,
-		&resp.P90Messages,
-		&resp.MostActive,
-		&resp.Concentration,
-	); err != nil {
-		return db.AnalyticsSummary{}, fmt.Errorf("scanning clickhouse analytics summary: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		return db.AnalyticsSummary{}, fmt.Errorf("iterating clickhouse analytics summary: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return db.AnalyticsSummary{}, fmt.Errorf("closing clickhouse analytics summary rows: %w", err)
-	}
-
-	agentRows, err := s.queryContext(ctx, `
-		WITH filtered AS (
-			SELECT s.agent, s.message_count
-			FROM sessions s
-			WHERE `+where+`
-		)
-		SELECT agent, toInt64(COUNT(*)), toInt64(COALESCE(SUM(message_count), 0))
-		FROM filtered
-		GROUP BY agent`,
-		args...,
-	)
-	if err != nil {
-		return db.AnalyticsSummary{}, fmt.Errorf("querying clickhouse analytics summary agents: %w", err)
-	}
-	defer agentRows.Close()
-	for agentRows.Next() {
-		var agent string
-		var summary db.AgentSummary
-		if err := agentRows.Scan(&agent, &summary.Sessions, &summary.Messages); err != nil {
-			return db.AnalyticsSummary{}, fmt.Errorf("scanning clickhouse analytics summary agent: %w", err)
-		}
-		resp.Agents[agent] = &summary
-	}
-	if err := agentRows.Err(); err != nil {
-		return db.AnalyticsSummary{}, fmt.Errorf("iterating clickhouse analytics summary agents: %w", err)
-	}
-	sessions, err := s.analyticsSessions(ctx, f)
-	if err != nil {
-		return db.AnalyticsSummary{}, err
-	}
-	sessionIDs := make([]string, 0, len(sessions))
-	for _, sess := range sessions {
-		sessionIDs = append(sessionIDs, sess.id)
-	}
-	var models []string
-	if f.HasTimeFilter() {
-		models, err = s.getAnalyticsModelsForSessionIDsFiltered(
-			ctx, sessionIDs, f,
-		)
-	} else {
-		models, err = s.getAnalyticsModelsForSessionIDs(
-			ctx, sessionIDs,
-		)
-	}
-	if err != nil {
-		return db.AnalyticsSummary{}, err
-	}
-	resp.Models = models
-	return resp, nil
-}
-
-func (s *Store) getAnalyticsFilteredToolCallCounts(
-	ctx context.Context,
-	sessionIDs []string,
-	f db.AnalyticsFilter,
-) (map[string]int, error) {
+func (s analyticsSQL) FilteredToolCounts(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
 	counts := make(map[string]int, len(sessionIDs))
 	if len(sessionIDs) == 0 || strings.TrimSpace(f.Model) == "" {
 		return counts, nil
@@ -750,7 +370,7 @@ func (s *Store) getAnalyticsFilteredToolCallCounts(
 	loc := analyticsLocation(f.Timezone)
 	err := chQueryChunked(sessionIDs, func(chunk []string) error {
 		ph, args := chInPlaceholders(chunk)
-		rows, err := s.queryContext(ctx, `
+		rows, err := s.QueryContext(ctx, `
 			SELECT tc.session_id, m.model, m.timestamp, toInt64(COUNT(*))
 			FROM tool_calls tc
 			JOIN messages m
@@ -796,242 +416,6 @@ func (s *Store) getAnalyticsFilteredToolCallCounts(
 	return counts, nil
 }
 
-func (s *Store) getAnalyticsActivityFilteredByModelTime(
-	ctx context.Context, f db.AnalyticsFilter, granularity string,
-) (db.ActivityResponse, error) {
-	sessions, err := s.analyticsSessions(ctx, f)
-	if err != nil {
-		return db.ActivityResponse{}, err
-	}
-	sessionIDs := make([]string, 0, len(sessions))
-	for _, session := range sessions {
-		sessionIDs = append(sessionIDs, session.id)
-	}
-	messageStats, err := s.getAnalyticsFilteredMessageStats(
-		ctx, sessionIDs, f,
-	)
-	if err != nil {
-		return db.ActivityResponse{}, err
-	}
-	toolCounts, err := s.getAnalyticsFilteredToolCallCounts(
-		ctx, sessionIDs, f,
-	)
-	if err != nil {
-		return db.ActivityResponse{}, err
-	}
-
-	out := db.ActivityResponse{Granularity: granularity}
-	buckets := map[string]*db.ActivityEntry{}
-	for _, session := range sessions {
-		date := db.BucketDate(
-			analyticsLocalDate(analyticsDateTime(session), f.Timezone),
-			granularity,
-		)
-		entry := buckets[date]
-		if entry == nil {
-			entry = &db.ActivityEntry{
-				Date:    date,
-				ByAgent: map[string]int{},
-			}
-			buckets[date] = entry
-		}
-		entry.Sessions++
-		stat := messageStats[session.id]
-		entry.Messages += stat.Messages
-		entry.UserMessages += stat.UserMessages
-		entry.AssistantMessages += stat.AssistantMessages
-		entry.ThinkingMessages += stat.ThinkingMessages
-		entry.ToolCalls += toolCounts[session.id]
-		entry.ByAgent[session.agent] += stat.Messages
-	}
-
-	for _, key := range db.SortedKeys(buckets) {
-		entry := buckets[key]
-		if entry == nil {
-			continue
-		}
-		out.Series = append(out.Series, *entry)
-	}
-	return out, nil
-}
-
-func (s *Store) GetAnalyticsActivity(
-	ctx context.Context, f db.AnalyticsFilter, granularity string,
-) (db.ActivityResponse, error) {
-	if granularity == "" {
-		granularity = "day"
-	}
-	if strings.TrimSpace(f.Model) != "" {
-		return s.getAnalyticsActivityFilteredByModelTime(
-			ctx, f, granularity,
-		)
-	}
-	buckets, err := s.queryActivityBuckets(ctx, f, granularity)
-	if err != nil {
-		return db.ActivityResponse{}, err
-	}
-	if err := s.addActivityAgentCounts(ctx, f, granularity, buckets); err != nil {
-		return db.ActivityResponse{}, err
-	}
-	out := db.ActivityResponse{Granularity: granularity}
-	keys := db.SortedKeys(buckets)
-	for _, key := range keys {
-		entry, ok := buckets[key]
-		if !ok || entry == nil {
-			continue
-		}
-		out.Series = append(out.Series, *entry)
-	}
-	return out, nil
-}
-
-func (s *Store) queryActivityBuckets(
-	ctx context.Context, f db.AnalyticsFilter, granularity string,
-) (map[string]*db.ActivityEntry, error) {
-	where, args := chBuildAnalyticsWhere(
-		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
-	localDate, localDateArgs := chAnalyticsLocalDateExpr(
-		"COALESCE(s.started_at, s.created_at)", f)
-	bucketExpr := chAnalyticsBucketExpr("local_date", granularity)
-	queryArgs := append([]any{}, localDateArgs...)
-	queryArgs = append(queryArgs, args...)
-	if _, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model); len(modelArgs) > 0 {
-		queryArgs = append(queryArgs, modelArgs...)
-		queryArgs = append(queryArgs, modelArgs...)
-	}
-	rows, err := s.queryContext(ctx, `
-		WITH filtered_sessions AS (
-			SELECT s.id, s.message_count, `+localDate+` AS local_date
-			FROM sessions s
-			WHERE `+where+`
-		),
-		session_rows AS (
-			SELECT `+bucketExpr+` AS bucket,
-				toInt64(COUNT(*)) AS sessions
-			FROM filtered_sessions
-			GROUP BY bucket
-		),
-		message_rows AS (
-			SELECT `+bucketExpr+` AS bucket,
-				toInt64(COUNT(*)) AS messages,
-				toInt64(countIf(m.role = 'user' AND m.is_system = false
-					AND COALESCE(m.source_subtype, '') != 'tool_result')) AS user_messages,
-				toInt64(countIf(m.role = 'assistant')) AS assistant_messages,
-				toInt64(countIf(m.has_thinking = true)) AS thinking_messages
-			FROM filtered_sessions fs
-			JOIN messages m ON m.session_id = fs.id
-			`+chAnalyticsMessageFilterClause("m.model", f.Model)+`
-			GROUP BY bucket
-		),
-		tool_rows AS (
-			SELECT `+bucketExpr+` AS bucket, toInt64(COUNT(*)) AS tool_calls
-			FROM filtered_sessions fs
-			JOIN tool_calls tc ON tc.session_id = fs.id
-			`+chAnalyticsToolMessageJoin("tc", f.Model)+`
-			`+chAnalyticsMessageFilterClause("m.model", f.Model)+`
-			GROUP BY bucket
-		)
-		SELECT bucket,
-			toInt64(sum(sessions)) AS sessions,
-			toInt64(sum(messages)) AS messages,
-			toInt64(sum(user_messages)) AS user_messages,
-			toInt64(sum(assistant_messages)) AS assistant_messages,
-			toInt64(sum(thinking_messages)) AS thinking_messages,
-			toInt64(sum(tool_calls)) AS tool_calls
-		FROM (
-			SELECT bucket, sessions,
-				toInt64(0) AS messages, toInt64(0) AS user_messages,
-				toInt64(0) AS assistant_messages, toInt64(0) AS thinking_messages,
-				toInt64(0) AS tool_calls
-			FROM session_rows
-			UNION ALL
-			SELECT bucket, toInt64(0) AS sessions, messages, user_messages,
-				assistant_messages, thinking_messages, toInt64(0) AS tool_calls
-			FROM message_rows
-			UNION ALL
-			SELECT bucket, toInt64(0) AS sessions, toInt64(0) AS messages,
-				toInt64(0) AS user_messages, toInt64(0) AS assistant_messages,
-				toInt64(0) AS thinking_messages, tool_calls
-			FROM tool_rows
-		) combined
-		GROUP BY bucket
-		ORDER BY bucket`,
-		queryArgs...,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying clickhouse analytics activity buckets: %w", err)
-	}
-	defer rows.Close()
-	buckets := map[string]*db.ActivityEntry{}
-	for rows.Next() {
-		entry := db.ActivityEntry{ByAgent: map[string]int{}}
-		if err := rows.Scan(
-			&entry.Date,
-			&entry.Sessions,
-			&entry.Messages,
-			&entry.UserMessages,
-			&entry.AssistantMessages,
-			&entry.ThinkingMessages,
-			&entry.ToolCalls,
-		); err != nil {
-			return nil, fmt.Errorf("scanning clickhouse analytics activity bucket: %w", err)
-		}
-		buckets[entry.Date] = &entry
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating clickhouse analytics activity buckets: %w", err)
-	}
-	return buckets, nil
-}
-
-func (s *Store) addActivityAgentCounts(
-	ctx context.Context, f db.AnalyticsFilter, granularity string,
-	buckets map[string]*db.ActivityEntry,
-) error {
-	where, args := chBuildAnalyticsWhere(
-		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
-	localDate, localDateArgs := chAnalyticsLocalDateExpr(
-		"COALESCE(s.started_at, s.created_at)", f)
-	bucketExpr := chAnalyticsBucketExpr("local_date", granularity)
-	queryArgs := append([]any{}, localDateArgs...)
-	queryArgs = append(queryArgs, args...)
-	if _, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model); len(modelArgs) > 0 {
-		queryArgs = append(queryArgs, modelArgs...)
-	}
-	rows, err := s.queryContext(ctx, `
-		WITH filtered_sessions AS (
-			SELECT s.id, s.agent, `+localDate+` AS local_date
-			FROM sessions s
-			WHERE `+where+`
-		)
-		SELECT `+bucketExpr+` AS bucket, fs.agent, toInt64(COUNT(*)) AS messages
-		FROM filtered_sessions fs
-		JOIN messages m ON m.session_id = fs.id
-		`+chAnalyticsMessageFilterClause("m.model", f.Model)+`
-		GROUP BY bucket, fs.agent
-		ORDER BY bucket, fs.agent`,
-		queryArgs...,
-	)
-	if err != nil {
-		return fmt.Errorf("querying clickhouse analytics activity agents: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var bucket, agent string
-		var count int
-		if err := rows.Scan(&bucket, &agent, &count); err != nil {
-			return fmt.Errorf("scanning clickhouse analytics activity agent: %w", err)
-		}
-		if entry, ok := buckets[bucket]; ok {
-			entry.ByAgent[agent] = count
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating clickhouse analytics activity agents: %w", err)
-	}
-	return nil
-}
-
 func chAnalyticsBucketExpr(dateExpr, granularity string) string {
 	switch granularity {
 	case "week":
@@ -1072,295 +456,12 @@ func chAnalyticsToolMessageJoin(
 				AND m.ordinal = ` + toolAlias + `.message_ordinal`
 }
 
-func (s *Store) GetAnalyticsHeatmap(
-	ctx context.Context, f db.AnalyticsFilter, metric string,
-) (db.HeatmapResponse, error) {
-	if metric == "" {
-		metric = "messages"
-	}
-	if strings.TrimSpace(f.Model) != "" &&
-		(metric == "messages" || metric == "output_tokens" ||
-			metric == "sessions") {
-		sessions, err := s.analyticsSessionsWithModelMessageCounts(ctx, f)
-		if err != nil {
-			return db.HeatmapResponse{}, err
-		}
-		counts := map[string]int{}
-		for _, session := range sessions {
-			date := analyticsLocalDate(analyticsDateTime(session), f.Timezone)
-			switch metric {
-			case "sessions":
-				counts[date]++
-			case "output_tokens":
-				if session.hasTotalOutputTokens {
-					counts[date] += session.totalOutputTokens
-				}
-			default:
-				counts[date] += session.messageCount
-			}
-		}
-		return db.BuildHeatmapResponse(f.From, f.To, metric, counts), nil
-	}
-	where, args := chBuildAnalyticsWhere(
-		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
-	localDate, localDateArgs := chAnalyticsLocalDateExpr(
-		"COALESCE(s.started_at, s.created_at)", f)
-	valueExpr := "toInt64(COALESCE(SUM(s.message_count), 0))"
-	switch metric {
-	case "sessions":
-		valueExpr = "toInt64(COUNT(*))"
-	case "output_tokens":
-		where += " AND s.has_total_output_tokens = true"
-		valueExpr = "toInt64(COALESCE(SUM(s.total_output_tokens), 0))"
-	}
-	queryArgs := append([]any{}, localDateArgs...)
-	queryArgs = append(queryArgs, args...)
-	rows, err := s.queryContext(ctx, `
-		SELECT `+localDate+` AS local_date, `+valueExpr+` AS value
-		FROM sessions s
-		WHERE `+where+`
-		GROUP BY local_date
-		ORDER BY local_date`,
-		queryArgs...,
-	)
-	if err != nil {
-		return db.HeatmapResponse{}, fmt.Errorf("querying clickhouse analytics heatmap: %w", err)
-	}
-	defer rows.Close()
-	counts := map[string]int{}
-	for rows.Next() {
-		var date string
-		var value int
-		if err := rows.Scan(&date, &value); err != nil {
-			return db.HeatmapResponse{}, fmt.Errorf("scanning clickhouse analytics heatmap: %w", err)
-		}
-		counts[date] = value
-	}
-	if err := rows.Err(); err != nil {
-		return db.HeatmapResponse{}, fmt.Errorf("iterating clickhouse analytics heatmap: %w", err)
-	}
-	return db.BuildHeatmapResponse(f.From, f.To, metric, counts), nil
-}
+func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
+	sessions := chAnalyticsSessionSet(f)
 
-func (s *Store) GetAnalyticsProjects(
-	ctx context.Context, f db.AnalyticsFilter,
-) (db.ProjectsAnalyticsResponse, error) {
-	// Per-project aggregate: count subagent sessions (mirrors SQLite).
-	f.IncludeSubagents = true
-	sessions, err := s.analyticsSessionsWithModelMessageCounts(ctx, f)
-	if err != nil {
-		return db.ProjectsAnalyticsResponse{}, err
-	}
-	type acc struct {
-		row    db.ProjectAnalytics
-		counts []int
-		days   map[string]int
-	}
-	byProject := map[string]*acc{}
-	for _, r := range sessions {
-		a := byProject[r.project]
-		if a == nil {
-			a = &acc{
-				row:  db.ProjectAnalytics{Name: r.project, Agents: map[string]int{}},
-				days: map[string]int{},
-			}
-			byProject[r.project] = a
-		}
-		date := analyticsLocalDate(analyticsDateTime(r), f.Timezone)
-		if a.row.FirstSession == "" || date < a.row.FirstSession {
-			a.row.FirstSession = date
-		}
-		if date > a.row.LastSession {
-			a.row.LastSession = date
-		}
-		a.row.Sessions++
-		a.row.Messages += r.messageCount
-		a.row.Agents[r.agent]++
-		a.counts = append(a.counts, r.messageCount)
-		a.days[date] += r.messageCount
-	}
-	resp := db.ProjectsAnalyticsResponse{}
-	for _, name := range db.SortedKeys(byProject) {
-		a, ok := byProject[name]
-		if !ok || a == nil {
-			continue
-		}
-		sort.Ints(a.counts)
-		a.row.AvgMessages = db.Round1(float64(a.row.Messages) / float64(a.row.Sessions))
-		a.row.MedianMessages = db.MedianInt(a.counts, len(a.counts))
-		if len(a.days) > 0 {
-			a.row.DailyTrend = db.Round1(float64(a.row.Messages) / float64(len(a.days)))
-		}
-		resp.Projects = append(resp.Projects, a.row)
-	}
-	sort.Slice(resp.Projects, func(i, j int) bool {
-		if resp.Projects[i].Messages != resp.Projects[j].Messages {
-			return resp.Projects[i].Messages > resp.Projects[j].Messages
-		}
-		return resp.Projects[i].Name < resp.Projects[j].Name
-	})
-	return resp, nil
-}
-
-func (s *Store) GetAnalyticsHourOfWeek(
-	ctx context.Context, f db.AnalyticsFilter,
-) (db.HourOfWeekResponse, error) {
-	if strings.TrimSpace(f.Model) != "" {
-		return s.getAnalyticsHourOfWeekFilteredByModel(ctx, f)
-	}
-	sessionFilter := f
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
-	where, args := chBuildAnalyticsWhere(
-		sessionFilter, "COALESCE(s.started_at, s.created_at)", "s.", true, false)
-	dowExpr, dowArgs := chAnalyticsDayOfWeekExpr("m.timestamp", f)
-	hourExpr, hourArgs := chAnalyticsHourExpr("m.timestamp", f)
-	queryArgs := append([]any{}, args...)
-	queryArgs = append(queryArgs, dowArgs...)
-	queryArgs = append(queryArgs, hourArgs...)
-	rows, err := s.queryContext(ctx, `
-		WITH filtered_sessions AS (
-			SELECT s.id
-			FROM sessions s
-			WHERE `+where+`
-		),
-		message_buckets AS (
-			SELECT toInt64(`+dowExpr+`) AS day_of_week,
-				toInt64(`+hourExpr+`) AS hour
-			FROM messages m
-			JOIN filtered_sessions fs ON fs.id = m.session_id
-			WHERE m.timestamp IS NOT NULL
-		)
-		SELECT day_of_week, hour, toInt64(COUNT(*))
-		FROM message_buckets
-		GROUP BY day_of_week, hour
-		ORDER BY day_of_week, hour`,
-		queryArgs...,
-	)
-	if err != nil {
-		return db.HourOfWeekResponse{}, fmt.Errorf("querying clickhouse analytics hour-of-week: %w", err)
-	}
-	defer rows.Close()
-	var grid [7][24]int
-	for rows.Next() {
-		var day, hour, messages int
-		if err := rows.Scan(&day, &hour, &messages); err != nil {
-			return db.HourOfWeekResponse{}, fmt.Errorf("scanning clickhouse analytics hour-of-week: %w", err)
-		}
-		if day < 0 || day > 6 || hour < 0 || hour > 23 {
-			continue
-		}
-		grid[day][hour] = messages
-	}
-	if err := rows.Err(); err != nil {
-		return db.HourOfWeekResponse{}, fmt.Errorf("iterating clickhouse analytics hour-of-week: %w", err)
-	}
-	return db.HourOfWeekResponseFromGrid(grid), nil
-}
-
-// getAnalyticsHourOfWeekFilteredByModel buckets model-scoped messages by
-// day-of-week and hour. It pairs empty-model user turns with their
-// selected-model assistant via the shared scope reducer, so those turns appear
-// in the heatmap consistently with the summary, activity, velocity, and trends
-// panels. The heatmap is the control that sets the day/hour filter, so it
-// clears DayOfWeek/Hour before scoping to keep showing the full grid, matching
-// the no-model path.
-func (s *Store) getAnalyticsHourOfWeekFilteredByModel(
-	ctx context.Context, f db.AnalyticsFilter,
-) (db.HourOfWeekResponse, error) {
-	sessions, err := s.analyticsSessionsFiltered(ctx, f, true, false, "", nil)
-	if err != nil {
-		return db.HourOfWeekResponse{}, err
-	}
-	sessionIDs := make([]string, 0, len(sessions))
-	for _, session := range sessions {
-		sessionIDs = append(sessionIDs, session.id)
-	}
-
-	scopeFilter := f
-	scopeFilter.DayOfWeek = nil
-	scopeFilter.Hour = nil
-	scope, err := s.resolveAnalyticsMessageScope(
-		ctx, sessionIDs, scopeFilter, false,
-	)
-	if err != nil {
-		return db.HourOfWeekResponse{}, err
-	}
-
-	var grid [7][24]int
-	for _, msgs := range scope {
-		for _, m := range msgs {
-			if !m.HasLocalTime {
-				continue
-			}
-			dow := (int(m.LocalTime.Weekday()) + 6) % 7
-			grid[dow][m.LocalTime.Hour()]++
-		}
-	}
-
-	return db.HourOfWeekResponseFromGrid(grid), nil
-}
-
-func (s *Store) GetAnalyticsSessionShape(
-	ctx context.Context, f db.AnalyticsFilter,
-) (db.SessionShapeResponse, error) {
-	sessions, err := s.analyticsSessions(ctx, f)
-	if err != nil {
-		return db.SessionShapeResponse{}, err
-	}
-	modelFilter := strings.TrimSpace(f.Model) != ""
-	lengths := map[string]int{}
-	durations := map[string]int{}
-	ids := []string{}
-	for _, r := range sessions {
-		ids = append(ids, r.id)
-		if !modelFilter {
-			lengths[db.LengthBucket(r.messageCount)]++
-		}
-		if start, okS := parseAnalyticsTime(r.startedAt); okS {
-			if end, okE := parseAnalyticsTime(r.endedAt); okE && !end.Before(start) {
-				durations[db.DurationBucket(end.Sub(start).Minutes())]++
-			}
-		}
-	}
-	autonomy := map[string]int{}
-	switch {
-	case len(ids) == 0:
-	case modelFilter:
-		stats, err := s.getAnalyticsFilteredMessageStats(ctx, ids, f)
-		if err != nil {
-			return db.SessionShapeResponse{}, err
-		}
-		lengths = map[string]int{}
-		for _, r := range sessions {
-			stat := stats[r.id]
-			lengths[db.LengthBucket(stat.Messages)]++
-			if stat.UserMessages > 0 {
-				ratio := float64(stat.ToolUseMessages) /
-					float64(stat.UserMessages)
-				autonomy[db.AutonomyBucket(ratio)]++
-			}
-		}
-	default:
-		autonomy, err = s.analyticsAutonomyBuckets(ctx, chAnalyticsSessionSet(f))
-		if err != nil {
-			return db.SessionShapeResponse{}, err
-		}
-	}
-	return db.SessionShapeResponse{
-		Count:                len(sessions),
-		LengthDistribution:   db.LengthDistributionBuckets(lengths),
-		DurationDistribution: db.DurationDistributionBuckets(durations),
-		AutonomyDistribution: db.AutonomyDistributionBuckets(autonomy),
-	}, nil
-}
-
-func (s *Store) analyticsAutonomyBuckets(
-	ctx context.Context, sessions chSessionSet,
-) (map[string]int, error) {
 	counts := map[string]int{}
 	sessionIn, args := sessions.in("session_id")
-	rows, err := s.queryContext(ctx, `
+	rows, err := s.QueryContext(ctx, `
 		SELECT session_id,
 			toInt64(countIf(role = 'user' AND is_system = false
 				AND COALESCE(source_subtype, '') != 'tool_result')) AS user_count,
@@ -1477,321 +578,12 @@ func analyticsSessionIDsContext(ctx context.Context, ids []string) (context.Cont
 	return chdriver.Context(ctx, chdriver.WithExternalTable(table)), "(SELECT id FROM analytics_session_ids)", nil
 }
 
-func (s *Store) GetAnalyticsTools(
-	ctx context.Context, f db.AnalyticsFilter,
-) (db.ToolsAnalyticsResponse, error) {
-	sessionPred, sessionArgs := chAnalyticsToolSessionWindow(f)
-	sessions, err := s.analyticsSessionsFiltered(
-		ctx, f, false, false, sessionPred, sessionArgs,
-	)
-	if err != nil {
-		return db.ToolsAnalyticsResponse{}, err
-	}
-	meta := map[string]chAnalyticsSession{}
-	var ids []string
-	for _, r := range sessions {
-		meta[r.id] = r
-		ids = append(ids, r.id)
-	}
-	if len(ids) == 0 {
-		return db.BuildToolsAnalytics(nil), nil
-	}
-	var toolRows []db.ToolAnalyticsRow
-	ctx, ph, err := analyticsSessionIDsContext(ctx, ids)
-	if err != nil {
-		return db.ToolsAnalyticsResponse{}, err
-	}
-	modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
-	from, to := chAnalyticsWindowBounds(f)
-	windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
-	args := slices.Concat(modelArgs, windowArgs)
-	query := `SELECT tc.session_id, tc.category,
-			trim(COALESCE(tc.tool_name, '')), toInt64(COUNT(*)),
-			MAX(m.timestamp)
-			FROM tool_calls tc
-			LEFT JOIN (` + chAnalyticsToolCallMessagesSQL + ph + `) m
-				ON m.session_id = tc.session_id
-				AND m.ordinal = tc.message_ordinal
-			WHERE tc.session_id IN ` + ph
-	if modelPred != "" {
-		query += `
-			AND ` + modelPred
-	}
-	query += chAnalyticsAndClause(windowPred)
-	query += `
-			GROUP BY tc.session_id, tc.category,
-				trim(COALESCE(tc.tool_name, '')), toStartOfMinute(m.timestamp)`
-	rows, qErr := s.queryContext(ctx, query, args...)
-	if qErr != nil {
-		return db.ToolsAnalyticsResponse{}, qErr
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var sid, cat, toolName string
-		var ts any
-		var count int
-		if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
-			return db.ToolsAnalyticsResponse{}, err
-		}
-		r, ok := meta[sid]
-		if !ok {
-			continue
-		}
-		_, date, keep := f.ResolveSkillRowTime(
-			formatDBTime(ts), analyticsDateTime(r),
-		)
-		if !keep {
-			continue
-		}
-		toolRows = append(toolRows, db.ToolAnalyticsRow{
-			SessionID: sid,
-			Category:  cat,
-			ToolName:  toolName,
-			Agent:     r.agent,
-			Count:     count,
-			Date:      date,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return db.ToolsAnalyticsResponse{}, err
-	}
-	return db.BuildToolsAnalytics(toolRows), nil
-}
+func (s analyticsSQL) VelocityMessages(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
+	sessions := chAnalyticsSessionSet(f)
 
-// GetAnalyticsSkills returns skill usage analytics. granularity picks
-// the trend bucket size (day, week, or month); empty defaults to week.
-func (s *Store) GetAnalyticsSkills(
-	ctx context.Context, f db.AnalyticsFilter, granularity string,
-) (db.SkillsAnalyticsResponse, error) {
-	sessionPred, sessionArgs := chAnalyticsToolSessionWindow(f)
-	sessions, err := s.analyticsSessionsFiltered(ctx, f, false, false, sessionPred, sessionArgs)
-	if err != nil {
-		return db.SkillsAnalyticsResponse{}, err
-	}
-	meta := map[string]chAnalyticsSession{}
-	var ids []string
-	for _, r := range sessions {
-		meta[r.id] = r
-		ids = append(ids, r.id)
-	}
-	if len(ids) == 0 {
-		return db.BuildSkillsAnalytics(
-			nil, f.From, f.To, granularity,
-		), nil
-	}
-
-	var skillRows []db.SkillAnalyticsRow
-	ctx, ph, err := analyticsSessionIDsContext(ctx, ids)
-	if err != nil {
-		return db.SkillsAnalyticsResponse{}, err
-	}
-	modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
-	from, to := chAnalyticsWindowBounds(f)
-	windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
-	args := slices.Concat(modelArgs, windowArgs)
-	rows, qErr := s.queryContext(ctx,
-		`SELECT tc.session_id, trim(COALESCE(tc.skill_name, '')),
-			toInt64(COUNT(*)), MAX(m.timestamp)
-			FROM tool_calls tc
-			LEFT JOIN (`+chAnalyticsToolCallMessagesSQL+ph+`) m
-				ON m.session_id = tc.session_id
-				AND m.ordinal = tc.message_ordinal
-			WHERE tc.session_id IN `+ph+`
-				AND trim(COALESCE(tc.skill_name, '')) != ''
-				`+chAnalyticsAndClause(modelPred)+chAnalyticsAndClause(windowPred)+`
-			GROUP BY tc.session_id, trim(COALESCE(tc.skill_name, '')),
-				toStartOfMinute(m.timestamp)`, args...)
-	if qErr != nil {
-		return db.SkillsAnalyticsResponse{}, qErr
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var sid, skill string
-		var count int
-		var msgTS any
-		if err := rows.Scan(&sid, &skill, &count, &msgTS); err != nil {
-			return db.SkillsAnalyticsResponse{}, err
-		}
-		r, ok := meta[sid]
-		if !ok {
-			continue
-		}
-		usedTS, date, keep := f.ResolveSkillRowTime(
-			formatDBTime(msgTS), analyticsDateTime(r),
-		)
-		if !keep {
-			continue
-		}
-		skillRows = append(skillRows, db.SkillAnalyticsRow{
-			SessionID:  sid,
-			SkillName:  skill,
-			Agent:      r.agent,
-			Project:    r.project,
-			Date:       date,
-			LastUsedAt: usedTS,
-			Count:      count,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return db.SkillsAnalyticsResponse{}, err
-	}
-	return db.BuildSkillsAnalytics(
-		skillRows, f.From, f.To, granularity,
-	), nil
-}
-
-func (s *Store) GetAnalyticsVelocity(
-	ctx context.Context, f db.AnalyticsFilter,
-) (db.VelocityResponse, error) {
-	sessions, err := s.analyticsSessions(ctx, f)
-	if err != nil {
-		return db.VelocityResponse{}, err
-	}
-	if len(sessions) == 0 {
-		return db.VelocityResponse{
-			ByAgent:      []db.VelocityBreakdown{},
-			ByComplexity: []db.VelocityBreakdown{},
-		}, nil
-	}
-
-	sessionIDs := make([]string, 0, len(sessions))
-	sessionInfo := make(map[string]chVelocitySession, len(sessions))
-	for _, sess := range sessions {
-		sessionIDs = append(sessionIDs, sess.id)
-		sessionInfo[sess.id] = chVelocitySession{
-			agent: sess.agent,
-			mc:    sess.messageCount,
-		}
-	}
-	if strings.TrimSpace(f.Model) != "" {
-		stats, err := s.getAnalyticsFilteredMessageStats(
-			ctx, sessionIDs, f,
-		)
-		if err != nil {
-			return db.VelocityResponse{}, err
-		}
-		for _, sid := range sessionIDs {
-			info := sessionInfo[sid]
-			info.mc = stats[sid].Messages
-			sessionInfo[sid] = info
-		}
-	}
-
-	var sessionMsgs map[string][]chVelocityMsg
-	if strings.TrimSpace(f.Model) != "" {
-		sessionMsgs, err = s.filteredVelocityMessages(
-			ctx, sessionIDs, f,
-		)
-	} else {
-		sessionMsgs, err = s.velocityMessages(
-			ctx, chAnalyticsSessionSet(f), analyticsLocation(f.Timezone),
-		)
-	}
-	if err != nil {
-		return db.VelocityResponse{}, err
-	}
-	var toolCounts map[string]int
-	if strings.TrimSpace(f.Model) != "" {
-		toolCounts, err = s.getAnalyticsFilteredToolCallCounts(
-			ctx, sessionIDs, f,
-		)
-	} else {
-		toolCounts, err = s.velocityToolCounts(ctx, chAnalyticsSessionSet(f))
-	}
-	if err != nil {
-		return db.VelocityResponse{}, err
-	}
-
-	overall := &chVelocityAccumulator{}
-	byAgent := make(map[string]*chVelocityAccumulator)
-	byComplexity := make(map[string]*chVelocityAccumulator)
-	for _, sid := range sessionIDs {
-		msgs := sessionMsgs[sid]
-		if len(msgs) < 2 {
-			continue
-		}
-		info := sessionInfo[sid]
-		agentKey := info.agent
-		compKey := db.ComplexityBucket(info.mc)
-		if byAgent[agentKey] == nil {
-			byAgent[agentKey] = &chVelocityAccumulator{}
-		}
-		if byComplexity[compKey] == nil {
-			byComplexity[compKey] = &chVelocityAccumulator{}
-		}
-		processChSessionVelocity(
-			[]*chVelocityAccumulator{overall, byAgent[agentKey], byComplexity[compKey]},
-			msgs,
-			toolCounts[sid],
-		)
-	}
-
-	resp := db.VelocityResponse{
-		Overall:      overall.computeOverview(),
-		ByAgent:      []db.VelocityBreakdown{},
-		ByComplexity: []db.VelocityBreakdown{},
-	}
-	for _, key := range db.SortedKeys(byAgent) {
-		acc := byAgent[key]
-		if acc == nil {
-			continue
-		}
-		resp.ByAgent = append(resp.ByAgent, db.VelocityBreakdown{
-			Label:    key,
-			Sessions: acc.sessions,
-			Overview: acc.computeOverview(),
-		})
-	}
-
-	compOrder := map[string]int{"1-15": 0, "16-60": 1, "61+": 2}
-	compKeys := db.SortedKeys(byComplexity)
-	sort.Slice(compKeys, func(i, j int) bool {
-		return compOrder[compKeys[i]] < compOrder[compKeys[j]]
-	})
-	for _, key := range compKeys {
-		acc := byComplexity[key]
-		if acc == nil {
-			continue
-		}
-		resp.ByComplexity = append(resp.ByComplexity, db.VelocityBreakdown{
-			Label:    key,
-			Sessions: acc.sessions,
-			Overview: acc.computeOverview(),
-		})
-	}
-	return resp, nil
-}
-
-type chVelocitySession struct {
-	agent string
-	mc    int
-}
-
-type chVelocityMsg struct {
-	role          string
-	ts            time.Time
-	valid         bool
-	contentLength int
-}
-
-type chVelocityAccumulator struct {
-	turnCycles     []float64
-	firstResponses []float64
-	totalMsgs      int
-	totalChars     int
-	totalToolCalls int
-	activeMinutes  float64
-	sessions       int
-}
-
-func (s *Store) velocityMessages(
-	ctx context.Context,
-	sessions chSessionSet,
-	loc *time.Location,
-) (map[string][]chVelocityMsg, error) {
-	out := make(map[string][]chVelocityMsg)
+	out := make(map[string][]db.TimingMessage)
 	sessionIn, args := sessions.in("session_id")
-	rows, err := s.queryContext(ctx, `
+	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
 		WHERE `+sessionIn+`
@@ -1811,53 +603,22 @@ func (s *Store) velocityMessages(
 			return nil, fmt.Errorf("scanning clickhouse velocity message: %w", err)
 		}
 		parsed, ok := chLocalTime(formatDBTime(ts), loc)
-		out[sid] = append(out[sid], chVelocityMsg{
-			role:          role,
-			ts:            parsed,
-			valid:         ok,
-			contentLength: contentLength,
+		out[sid] = append(out[sid], db.TimingMessage{
+			Role:          role,
+			Time:          parsed,
+			Valid:         ok,
+			ContentLength: contentLength,
 		})
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) filteredVelocityMessages(
-	ctx context.Context,
-	sessionIDs []string,
-	f db.AnalyticsFilter,
-) (map[string][]chVelocityMsg, error) {
-	out := make(map[string][]chVelocityMsg, len(sessionIDs))
-	if len(sessionIDs) == 0 {
-		return out, nil
-	}
+func (s analyticsSQL) VelocityToolCounts(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
+	sessions := chAnalyticsSessionSet(f)
 
-	scope, err := s.resolveAnalyticsMessageScope(ctx, sessionIDs, f, false)
-	if err != nil {
-		return nil, err
-	}
-	if scope == nil {
-		return out, nil
-	}
-	for sessionID, rows := range scope.TimingBySession() {
-		for _, row := range rows {
-			out[sessionID] = append(out[sessionID], chVelocityMsg{
-				role:          row.Role,
-				ts:            row.Time,
-				valid:         row.Valid,
-				contentLength: row.ContentLength,
-			})
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) velocityToolCounts(
-	ctx context.Context,
-	sessions chSessionSet,
-) (map[string]int, error) {
 	out := make(map[string]int)
 	sessionIn, args := sessions.in("session_id")
-	rows, err := s.queryContext(ctx, `
+	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, toInt64(COUNT(*))
 		FROM tool_calls
 		WHERE `+sessionIn+`
@@ -1887,378 +648,10 @@ func chLocalTime(ts string, loc *time.Location) (time.Time, bool) {
 	return t.In(loc), true
 }
 
-func processChSessionVelocity(
-	accums []*chVelocityAccumulator,
-	msgs []chVelocityMsg,
-	toolCount int,
-) {
-	const maxCycleSec = 1800.0
-	// Shared with the Top Sessions "active duration" SQL so the two
-	// "active" definitions stay in lockstep.
-	const maxGapSec = db.ActiveGapCapSec
-
-	for _, acc := range accums {
-		acc.sessions++
-	}
-	for i := 1; i < len(msgs); i++ {
-		prev := msgs[i-1]
-		cur := msgs[i]
-		if !prev.valid || !cur.valid {
-			continue
-		}
-		if prev.role == "user" && cur.role == "assistant" {
-			delta := cur.ts.Sub(prev.ts).Seconds()
-			if delta > 0 && delta <= maxCycleSec {
-				for _, acc := range accums {
-					acc.turnCycles = append(acc.turnCycles, delta)
-				}
-			}
-		}
-	}
-
-	var firstUser, firstAsst *chVelocityMsg
-	firstUserIdx := -1
-	for i := range msgs {
-		if msgs[i].role == "user" && msgs[i].valid {
-			firstUser = &msgs[i]
-			firstUserIdx = i
-			break
-		}
-	}
-	if firstUserIdx >= 0 {
-		for i := firstUserIdx + 1; i < len(msgs); i++ {
-			if msgs[i].role == "assistant" && msgs[i].valid {
-				firstAsst = &msgs[i]
-				break
-			}
-		}
-	}
-	if firstUser != nil && firstAsst != nil {
-		delta := firstAsst.ts.Sub(firstUser.ts).Seconds()
-		if delta < 0 {
-			delta = 0
-		}
-		for _, acc := range accums {
-			acc.firstResponses = append(acc.firstResponses, delta)
-		}
-	}
-
-	activeSec := 0.0
-	assistantChars := 0
-	for i, msg := range msgs {
-		if msg.role == "assistant" {
-			assistantChars += msg.contentLength
-		}
-		if i > 0 && msgs[i-1].valid && msg.valid {
-			gap := msg.ts.Sub(msgs[i-1].ts).Seconds()
-			if gap > 0 {
-				if gap > maxGapSec {
-					gap = maxGapSec
-				}
-				activeSec += gap
-			}
-		}
-	}
-	activeMinutes := activeSec / 60
-	if activeMinutes > 0 {
-		for _, acc := range accums {
-			acc.totalMsgs += len(msgs)
-			acc.totalChars += assistantChars
-			acc.totalToolCalls += toolCount
-			acc.activeMinutes += activeMinutes
-		}
-	}
-}
-
-func (a *chVelocityAccumulator) computeOverview() db.VelocityOverview {
-	sort.Float64s(a.turnCycles)
-	sort.Float64s(a.firstResponses)
-
-	out := db.VelocityOverview{}
-	out.TurnCycleSec = db.Percentiles{
-		P50: db.Round1(db.PercentileFloat(a.turnCycles, 0.5)),
-		P90: db.Round1(db.PercentileFloat(a.turnCycles, 0.9)),
-	}
-	out.FirstResponseSec = db.Percentiles{
-		P50: db.Round1(db.PercentileFloat(a.firstResponses, 0.5)),
-		P90: db.Round1(db.PercentileFloat(a.firstResponses, 0.9)),
-	}
-	if a.activeMinutes > 0 {
-		out.MsgsPerActiveMin = db.Round1(float64(a.totalMsgs) / a.activeMinutes)
-		out.CharsPerActiveMin = db.Round1(float64(a.totalChars) / a.activeMinutes)
-		out.ToolCallsPerActiveMin = db.Round1(float64(a.totalToolCalls) / a.activeMinutes)
-	}
-	return out
-}
-
-func (s *Store) GetAnalyticsTopSessions(
-	ctx context.Context, f db.AnalyticsFilter, metric string,
-) (db.TopSessionsResponse, error) {
-	switch metric {
-	case "", "messages":
-		metric = "messages"
-	case "duration", "output_tokens":
-	default:
-		metric = "messages"
-	}
-
-	if strings.TrimSpace(f.Model) != "" &&
-		(metric == "messages" || metric == "output_tokens") {
-		sessions, err := s.analyticsSessionsWithModelMessageCounts(ctx, f)
-		if err != nil {
-			return db.TopSessionsResponse{}, err
-		}
-		sort.SliceStable(sessions, func(i, j int) bool {
-			if metric == "output_tokens" {
-				if sessions[i].totalOutputTokens != sessions[j].totalOutputTokens {
-					return sessions[i].totalOutputTokens >
-						sessions[j].totalOutputTokens
-				}
-			} else if sessions[i].messageCount != sessions[j].messageCount {
-				return sessions[i].messageCount >
-					sessions[j].messageCount
-			}
-			return sessions[i].id < sessions[j].id
-		})
-
-		out := db.TopSessionsResponse{Metric: metric}
-		for i := range sessions {
-			if metric == "output_tokens" &&
-				!sessions[i].hasTotalOutputTokens {
-				continue
-			}
-			if len(out.Sessions) >= 10 {
-				break
-			}
-			startedAt := sessions[i].startedAt
-			endedAt := sessions[i].endedAt
-			out.Sessions = append(out.Sessions, db.TopSession{
-				ID:                sessions[i].id,
-				Project:           sessions[i].project,
-				FirstMessage:      sessions[i].firstMessage,
-				DisplayName:       sessions[i].displayName,
-				MessageCount:      sessions[i].messageCount,
-				OutputTokens:      sessions[i].totalOutputTokens,
-				DurationMin:       chSessionDurationMinutes(sessions[i]),
-				StartedAt:         &startedAt,
-				EndedAt:           &endedAt,
-				TerminationStatus: sessions[i].terminationStatus,
-			})
-		}
-		return out, nil
-	}
-
-	includeTime := true
-	var pairedSet map[string]bool
-	if f.HasTimeFilter() && strings.TrimSpace(f.Model) != "" {
-		// Filter the scoped session set in Go rather than binding every
-		// paired ID into one IN (...) predicate, which would exceed the
-		// driver bind-variable cap for large result sets. Mirrors the
-		// SQLite/PostgreSQL top-sessions Go path under a model filter: load
-		// the model+date candidates, then keep only the paired sessions and
-		// limit in Go. The in-SQL ORDER BY still ranks them by the metric.
-		paired, err := s.analyticsSessionsModelTimeFiltered(ctx, f, true)
-		if err != nil {
-			return db.TopSessionsResponse{}, err
-		}
-		if len(paired) == 0 {
-			return db.TopSessionsResponse{Metric: metric}, nil
-		}
-		pairedSet = make(map[string]bool, len(paired))
-		for _, session := range paired {
-			pairedSet[session.id] = true
-		}
-		includeTime = false
-	}
-	where, args := chBuildAnalyticsWhere(
-		f, "COALESCE(s.started_at, s.created_at)", "s.", true, includeTime)
-	durationSelectExpr := `COALESCE(toFloat64(toUnixTimestamp64Micro(s.ended_at) - toUnixTimestamp64Micro(s.started_at)) / 60000000.0, 0)`
-	activeDurationSelectExpr := "COALESCE(ad.active_duration_min, 0)"
-	orderExpr := "s.message_count DESC, s.id ASC"
-	switch metric {
-	case "duration":
-		where += " AND s.started_at IS NOT NULL AND s.ended_at IS NOT NULL AND s.ended_at >= s.started_at"
-		orderExpr = activeDurationSelectExpr + " DESC, s.id ASC"
-	case "output_tokens":
-		where += " AND s.has_total_output_tokens = true"
-		orderExpr = "s.total_output_tokens DESC, s.id ASC"
-	}
-	// When filtering the scoped set in Go (model+time), drop the SQL LIMIT so
-	// the paired sessions aren't truncated before the Go filter; the in-SQL
-	// ORDER BY keeps them ranked and the top 10 is taken after filtering.
-	limitClause := "\n\t\tLIMIT 10"
-	if pairedSet != nil {
-		limitClause = ""
-	}
-	query := `
-		SELECT s.id, s.project, s.first_message,
-			COALESCE(s.display_name, s.session_name) AS display_name,
-			s.message_count,
-			s.total_output_tokens, ` + durationSelectExpr + ` AS duration_min,
-			` + activeDurationSelectExpr + ` AS active_duration_min,
-			s.started_at, s.ended_at, s.termination_status
-		FROM sessions s
-		LEFT JOIN (
-			SELECT session_id,
-				COALESCE(sum(
-					CASE
-						WHEN delta_ms <= 0 THEN 0
-						WHEN delta_ms > ` + strconv.Itoa(db.ActiveGapCapMs) + ` THEN ` + strconv.Itoa(db.ActiveGapCapMs) + `
-						ELSE delta_ms
-					END
-				), 0) / 60000.0 AS active_duration_min
-			FROM (
-				SELECT session_id,
-					toInt64(round(
-						(toUnixTimestamp64Micro(leadInFrame(timestamp) OVER (
-							PARTITION BY session_id ORDER BY ordinal
-							ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-						)) - toUnixTimestamp64Micro(timestamp)) / 1000.0
-					)) AS delta_ms
-				FROM messages
-			)
-			GROUP BY session_id
-		) ad ON ad.session_id = s.id
-		WHERE ` + where + `
-		ORDER BY ` + orderExpr + limitClause
-	rows, err := s.queryContext(ctx, query, args...)
-	if err != nil {
-		return db.TopSessionsResponse{}, fmt.Errorf("querying clickhouse analytics top sessions: %w", err)
-	}
-	defer rows.Close()
-
-	out := db.TopSessionsResponse{Metric: metric}
-	for rows.Next() {
-		var row db.TopSession
-		var startedRaw, endedRaw any
-		if err := rows.Scan(
-			&row.ID, &row.Project, &row.FirstMessage, &row.DisplayName,
-			&row.MessageCount,
-			&row.OutputTokens, &row.DurationMin, &row.ActiveDurationMin,
-			&startedRaw, &endedRaw,
-			&row.TerminationStatus,
-		); err != nil {
-			return db.TopSessionsResponse{}, fmt.Errorf("scanning clickhouse analytics top session: %w", err)
-		}
-		if pairedSet != nil && !pairedSet[row.ID] {
-			continue
-		}
-		startedAt := formatDBTime(startedRaw)
-		endedAt := formatDBTime(endedRaw)
-		row.StartedAt = &startedAt
-		row.EndedAt = &endedAt
-		row.DurationMin = db.Round1(row.DurationMin)
-		row.ActiveDurationMin = db.Round1(row.ActiveDurationMin)
-		out.Sessions = append(out.Sessions, row)
-		if pairedSet != nil && len(out.Sessions) >= 10 {
-			break
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return db.TopSessionsResponse{}, fmt.Errorf("iterating clickhouse analytics top sessions: %w", err)
-	}
-	return out, nil
-}
-
-func chSessionDurationMinutes(session chAnalyticsSession) float64 {
-	startedAt, okStart := parseAnalyticsTime(session.startedAt)
-	endedAt, okEnd := parseAnalyticsTime(session.endedAt)
-	if !okStart || !okEnd || endedAt.Before(startedAt) {
-		return 0
-	}
-	return db.Round1(endedAt.Sub(startedAt).Minutes())
-}
-
-// GetAnalyticsSignals returns aggregated session signal data. Signals stay
-// session-scoped under a model filter (totals are session-level aggregates
-// over sessions that used the model, not re-attributed per model); see the
-// SQLite GetAnalyticsSignals for the rationale.
-func (s *Store) GetAnalyticsSignals(
-	ctx context.Context, f db.AnalyticsFilter,
-) (db.SignalsAnalyticsResponse, error) {
-	sessions, err := s.analyticsSessions(ctx, f)
-	if err != nil {
-		return db.SignalsAnalyticsResponse{}, err
-	}
-	rows := chSignalRowsFromSessions(sessions, f)
-	if err := s.chPopulateFrustrationMarkers(ctx, rows, chSessionPushVersions(sessions)); err != nil {
-		return db.SignalsAnalyticsResponse{}, err
-	}
-	return db.AggregateSignals(rows), nil
-}
-
-func (s *Store) GetAnalyticsSignalSessions(
-	ctx context.Context,
-	f db.AnalyticsFilter,
-	signal string,
-	limit int,
-) (db.SignalSessionsResponse, error) {
-	if !db.IsSupportedAnalyticsSignal(signal) {
-		return db.SignalSessionsResponse{}, db.ErrUnsupportedAnalyticsSignal
-	}
-	if limit <= 0 || limit > 20 {
-		limit = 10
-	}
-	sessions, err := s.analyticsSessions(ctx, f)
-	if err != nil {
-		return db.SignalSessionsResponse{}, err
-	}
-	rows := chSignalRowsFromSessions(sessions, f)
-	if err := s.chPopulateFrustrationMarkers(ctx, rows, chSessionPushVersions(sessions)); err != nil {
-		return db.SignalSessionsResponse{}, err
-	}
-	candidates := db.SignalCandidates(rows, signal, limit)
-	messages, err := s.chSignalMessages(ctx, candidates, f)
-	if err != nil {
-		return db.SignalSessionsResponse{}, err
-	}
-	return db.SignalSessionsResponse{
-		Signal:   signal,
-		Sessions: db.BuildSignalExamples(candidates, messages, signal),
-	}, nil
-}
-
-func chSignalRowsFromSessions(
-	sessions []chAnalyticsSession,
-	f db.AnalyticsFilter,
-) []db.SignalRow {
-	rows := make([]db.SignalRow, 0, len(sessions))
-	for _, r := range sessions {
-		rows = append(rows, db.SignalRow{
-			ID:                          r.id,
-			Agent:                       r.agent,
-			Project:                     r.project,
-			FirstMessage:                r.firstMessage,
-			IsAutomated:                 r.isAutomated,
-			Date:                        analyticsLocalDate(analyticsDateTime(r), f.Timezone),
-			HealthScore:                 r.healthScore,
-			HealthGrade:                 r.healthGrade,
-			Outcome:                     r.outcome,
-			OutcomeConfidence:           r.outcomeConfidence,
-			ToolFailureSignalCount:      r.toolFailures,
-			ToolRetryCount:              r.toolRetries,
-			EditChurnCount:              r.editChurn,
-			CompactionCount:             r.compactions,
-			MidTaskCompactionCount:      r.midTaskCompactions,
-			ContextPressureMax:          r.contextPressureMax,
-			QualitySignalVersion:        r.qualitySignalVersion,
-			ShortPromptCount:            r.shortPromptCount,
-			UnstructuredStart:           r.unstructuredStart,
-			MissingSuccessCriteriaCount: r.missingSuccessCriteriaCount,
-			MissingVerificationCount:    r.missingVerificationCount,
-			DuplicatePromptCount:        r.duplicatePromptCount,
-			NoCodeContextCount:          r.noCodeContextCount,
-			RunawayToolLoopCount:        r.runawayToolLoopCount,
-			FrustrationMarkerCount:      r.frustrationMarkerCount,
-		})
-	}
-	return rows
-}
-
-func chSessionPushVersions(sessions []chAnalyticsSession) map[string]uint64 {
+func chSessionPushVersions(sessions []readbase.AnalyticsSession) map[string]uint64 {
 	versions := make(map[string]uint64, len(sessions))
 	for _, session := range sessions {
-		versions[session.id] = session.pushVersion
+		versions[session.ID] = session.PushVersion
 	}
 	return versions
 }
@@ -2446,112 +839,6 @@ func (s *Store) chSignalMessages(
 		return nil, fmt.Errorf("iterating clickhouse signal messages: %w", err)
 	}
 	return out, nil
-}
-
-func (s *Store) GetTrendsTerms(
-	ctx context.Context, f db.AnalyticsFilter,
-	terms []db.TrendTermInput, granularity string,
-) (db.TrendsTermsResponse, error) {
-	if granularity == "" {
-		granularity = "week"
-	}
-	acc := db.NewTrendAccumulator(f.From, f.To, granularity, terms)
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.Model = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
-	sessions, err := s.analyticsSessions(ctx, sessionFilter)
-	if err != nil {
-		return db.TrendsTermsResponse{}, err
-	}
-	allowedSessions := make(map[string]bool, len(sessions))
-	for _, sess := range sessions {
-		allowedSessions[sess.id] = true
-	}
-	if len(allowedSessions) == 0 {
-		return acc.Response(), nil
-	}
-	loc := analyticsLocation(f.Timezone)
-	flt := f.MessageScopeFilter()
-	modelFiltering := len(flt.Models) > 0
-	trendLocal := func(msgTS, startedAt, createdAt any) (time.Time, bool) {
-		ts := cmp.Or(formatDBTime(msgTS), formatDBTime(startedAt), formatDBTime(createdAt))
-		t, ok := parseAnalyticsTime(ts)
-		if !ok {
-			return time.Time{}, false
-		}
-		return t.In(loc), true
-	}
-	rows, err := s.queryContext(ctx, `
-		SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), m.content, m.timestamp,
-			s.started_at, s.created_at
-		FROM messages m
-		JOIN sessions s ON s.id = m.session_id
-		WHERE s.deleted_at IS NULL
-			AND m.role IN ('user', 'assistant')
-			AND m.is_system = false
-			AND `+db.ClickHouseSystemPrefixSQL("m.content", "m.role")+`
-		ORDER BY m.session_id, m.ordinal`)
-	if err != nil {
-		return db.TrendsTermsResponse{}, err
-	}
-	defer rows.Close()
-	type trendRow struct {
-		sessionID string
-		role      string
-		isSystem  bool
-		model     string
-		content   string
-		msgTS     any
-		startedAt any
-		createdAt any
-	}
-	processRow := func(sessionID, content string, local time.Time) {
-		if !allowedSessions[sessionID] {
-			return
-		}
-		acc.Add(content, local)
-	}
-	emit := func(m db.ScopedMessage) {
-		if !m.HasLocalTime {
-			return
-		}
-		processRow(m.SessionID, m.Content, m.LocalTime)
-	}
-	reducer := db.NewScopeReducer(flt, emit)
-	for rows.Next() {
-		var row trendRow
-		var ordinal int
-		if err := rows.Scan(&row.sessionID, &ordinal, &row.role, &row.isSystem, &row.model, &row.content, &row.msgTS, &row.startedAt, &row.createdAt); err != nil {
-			return db.TrendsTermsResponse{}, err
-		}
-		local, has := trendLocal(row.msgTS, row.startedAt, row.createdAt)
-		if !modelFiltering {
-			if has && flt.MatchesDayHour(local, true) {
-				processRow(row.sessionID, row.content, local)
-			}
-			continue
-		}
-		if err := reducer.Push(db.MessageInput{
-			SessionID:    row.sessionID,
-			Ordinal:      ordinal,
-			Role:         row.role,
-			Model:        row.model,
-			IsSystem:     row.isSystem,
-			LocalTime:    local,
-			HasLocalTime: has,
-			Content:      row.content,
-		}); err != nil {
-			return db.TrendsTermsResponse{}, err
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return db.TrendsTermsResponse{}, err
-	}
-	return acc.Response(), nil
 }
 
 func chAnalyticsWindowBounds(f db.AnalyticsFilter) (string, string) {

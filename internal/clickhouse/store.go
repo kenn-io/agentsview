@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/readbase"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -62,7 +63,7 @@ type Store struct {
 	// topSessionTotals keeps each session's totals per top-sessions read.
 	topSessionTotals usageRowMemo[db.TopSessionEntry]
 	// analyticsSessionRows keeps recent analytics session listings.
-	analyticsSessionRows usageRowMemo[chAnalyticsSession]
+	analyticsSessionRows usageRowMemo[readbase.AnalyticsSession]
 	// analyticsListings shares one listing read among concurrent requests.
 	analyticsListings singleflight.Group
 	// background runs the kept reports' sweep until Close.

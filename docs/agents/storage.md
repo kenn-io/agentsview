@@ -325,6 +325,8 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   `internal/readbase.Catalog`. Shared query builders own SQL that differs only
   in syntax. Each backend explicitly supplies every required SQL operation and
   its typed timestamp, observation and snapshot loaders.
+- DuckDB and ClickHouse share report orchestration in `internal/readbase.Analytics`.
+  Backends supply every required SQL operation and retain typed loaders and caches.
 
 ### Usage cache divergence
 

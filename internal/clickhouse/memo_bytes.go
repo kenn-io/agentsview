@@ -5,6 +5,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // Byte caps of the memos whose entries can be large. The two report memos
@@ -58,11 +59,11 @@ func topSessionBytes(e db.TopSessionEntry) int64 {
 	return int64(unsafe.Sizeof(e)) + stringBytes(e.SessionID, e.DisplayName, e.Agent, e.Project, e.StartedAt)
 }
 
-func analyticsSessionBytes(r chAnalyticsSession) int64 {
+func analyticsSessionBytes(r readbase.AnalyticsSession) int64 {
 	return int64(unsafe.Sizeof(r)) +
-		stringBytes(r.id, r.project, r.machine, r.agent, r.startedAt, r.endedAt, r.createdAt,
-			r.outcome, r.outcomeConfidence) +
-		optionalStringBytes(r.firstMessage, r.displayName, r.terminationStatus, r.healthGrade)
+		stringBytes(r.ID, r.Project, r.Machine, r.Agent, r.StartedAt, r.EndedAt, r.CreatedAt,
+			r.Outcome, r.OutcomeConfidence) +
+		optionalStringBytes(r.FirstMessage, r.DisplayName, r.TerminationStatus, r.HealthGrade)
 }
 
 func sessionListingBytes(l activitySessionListing) int64 {

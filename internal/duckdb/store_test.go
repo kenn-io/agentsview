@@ -937,6 +937,7 @@ func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, top.Sessions)
 	assert.Equal(t, fixture.alphaID, top.Sessions[0].ID)
+	assert.Nil(t, top.Sessions[0].DisplayName)
 
 	signals, err := store.GetAnalyticsSignals(ctx, filter)
 	require.NoError(t, err)
