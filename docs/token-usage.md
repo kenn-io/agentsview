@@ -160,15 +160,15 @@ opened project view.
 Double click a project or select it and use **Open** beside **Clear selection**
 to see its groups and
 individual sessions for the selected date range. On touch screens, use **Open**.
+Usage outside the opened project's top 100 tiles appears under **Other**.
 Enter and Space select any item.
 Hermes cron jobs show their latest recorded name in
 that range and their ID on hover. **All projects**, Escape, and Backspace
 return to project tiles with the current dates, filters, and selection.
 Opening a project stays in the panel; browser Back and Forward follow page
 history.
-The **Projects** picker excludes a project. Usage outside the top 100 tiles
-appears under **Other**. Usage-only and discarded-evidence archives omit titles
-and show job IDs, as do archives without `state.db` titles.
+The **Projects** picker excludes a project. Usage-only and discarded-evidence
+archives omit titles and show job IDs, as do archives without `state.db` titles.
 Orphaned Hermes sessions synced before the upgrade can't be reparsed and appear
 as individual sessions.
 
@@ -220,7 +220,8 @@ A stacked chart shows cost per day across the range, grouped by project, model,
 or agent — toggle the grouping with the segment buttons in the panel header.
 Each series is colored consistently with the attribution panel below so you can
 cross-reference them.
-Filter changes keep the range selected with the chart's brush.
+Attribution selections and sidebar session-filter changes keep the range
+selected with the chart's brush.
 
 Choose **Smooth**, **Lines**, or **Bars** in the chart header. The page
 remembers the style in your browser. Days without spend remain visible as zero,
