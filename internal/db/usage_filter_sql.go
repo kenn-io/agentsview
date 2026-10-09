@@ -2,16 +2,6 @@ package db
 
 import "strings"
 
-func (b *QueryBuilder) usageCSV(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	if !b.dialect.trimUsageCSV {
-		return strings.Split(raw, ",")
-	}
-	return CSVFilterValues(raw)
-}
-
 // BuildUsageSourceFilter renders model filters before session predicates.
 func BuildUsageSourceFilter(f UsageFilter, b *QueryBuilder, modelCol string) []string {
 	var preds []string
@@ -19,7 +9,7 @@ func BuildUsageSourceFilter(f UsageFilter, b *QueryBuilder, modelCol string) []s
 		raw     string
 		include bool
 	}{{f.Model, true}, {f.ExcludeModel, false}} {
-		if pred := b.ValuesPredicate(modelCol, b.usageCSV(item.raw), item.include); pred != "" {
+		if pred := b.ValuesPredicate(modelCol, CSVFilterValues(item.raw), item.include); pred != "" {
 			preds = append(preds, pred)
 		}
 	}
@@ -32,7 +22,7 @@ func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) [
 	for _, item := range []struct {
 		col    string
 		values []string
-	}{{"s.agent", b.usageCSV(f.Agent)}, {"s.project", f.ProjectFilterLabels()}, {"s.machine", b.usageCSV(f.Machine)}} {
+	}{{"s.agent", CSVFilterValues(f.Agent)}, {"s.project", f.ProjectFilterLabels()}, {"s.machine", CSVFilterValues(f.Machine)}} {
 		if pred := b.ValuesPredicate(item.col, item.values, true); pred != "" {
 			preds = append(preds, pred)
 		}
@@ -43,7 +33,7 @@ func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) [
 	for _, item := range []struct {
 		col    string
 		values []string
-	}{{"s.project", f.ExcludedProjectFilterLabels()}, {"s.agent", b.usageCSV(f.ExcludeAgent)}} {
+	}{{"s.project", f.ExcludedProjectFilterLabels()}, {"s.agent", CSVFilterValues(f.ExcludeAgent)}} {
 		if pred := b.ValuesPredicate(item.col, item.values, false); pred != "" {
 			preds = append(preds, pred)
 		}

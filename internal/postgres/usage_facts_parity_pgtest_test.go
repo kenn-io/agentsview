@@ -177,6 +177,49 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 		"cross-backend daily breakdown result")
 }
 
+func TestUsageCSVFiltersParity(t *testing.T) {
+	const schema = "agentsview_usage_csv_test"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	local := testDB(t)
+	seedUsageParityFixture(t, local)
+	syncer, err := New(pgURL, schema, local, "host-a", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	remote, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remote.Close()) })
+
+	for _, c := range []struct {
+		name   string
+		filter db.UsageFilter
+		tokens int
+		cost   int64
+	}{
+		{"models", db.UsageFilter{Model: " model-priced, model-reported, "}, 50, 260040},
+		{"exclude-models", db.UsageFilter{ExcludeModel: "model-unpriced, model-reported, "}, 20, 10040},
+		{"blank-models", db.UsageFilter{Model: " , ", ExcludeModel: " , "}, 57, 260040},
+		{"agents", db.UsageFilter{Agent: "missing, hermes"}, 30, 250000},
+		{"exclude-agents", db.UsageFilter{ExcludeAgent: "missing, hermes"}, 27, 10040},
+		{"projects", db.UsageFilter{Project: "missing, project-c"}, 30, 250000},
+		{"exclude-projects", db.UsageFilter{ExcludeProject: "missing, project-c"}, 27, 10040},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			c.filter.From, c.filter.To, c.filter.Timezone = "2026-08-12", "2026-08-12", "UTC"
+			for _, store := range []db.Store{local, remote} {
+				daily, err := store.GetDailyUsage(t.Context(), c.filter)
+				require.NoError(t, err)
+				require.Equal(t, c.tokens, daily.Totals.InputTokens)
+				require.Equal(t, c.cost, daily.Totals.TotalCost.Microdollars)
+			}
+			requireCompleteUsageParity(t, local, remote, c.filter)
+		})
+	}
+}
+
 func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 	const schema = "agentsview_usage_fractional_rounding_test"
 	pgURL := testPGURL(t)

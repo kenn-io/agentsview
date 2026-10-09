@@ -50,7 +50,6 @@ type QueryDialect struct {
 	emptyStringIsNull           bool
 	terminationExpr             string
 	terminationKind             timestampKind
-	trimUsageCSV                bool
 	messageMembership           func(string, string) string
 	signedWindowCounts          bool
 	recentEditTimestamp         func(string) string
@@ -199,7 +198,6 @@ func ClickHouseQueryDialect() QueryDialect {
 		placeholderStyle: placeholderQuestion,
 		trueLiteral:      "true",
 		falseLiteral:     "false",
-		trimUsageCSV:     true,
 		messageMembership: func(sessionID, pred string) string {
 			return sessionID + " IN (SELECT m.session_id FROM messages m WHERE " + pred + ")"
 		},
@@ -265,7 +263,6 @@ func DuckDBQueryDialect() QueryDialect {
 		placeholderStyle: placeholderQuestion,
 		trueLiteral:      "TRUE",
 		falseLiteral:     "FALSE",
-		trimUsageCSV:     true,
 		dateStartExpr: func(q func(string) string) string {
 			return "CAST(COALESCE(" + q("started_at") + ", " +
 				q("created_at") + ") AS TIMESTAMP)"

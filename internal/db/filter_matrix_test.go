@@ -88,7 +88,7 @@ func TestFilterMatrixUsage(t *testing.T) {
 			assert.Empty(t, BuildUsageSourceFilter(UsageFilter{}, b, "ue.model"))
 			assert.Empty(t, BuildUsageSessionFilter(UsageFilter{}, b, ""))
 			assert.Empty(t, b.Args())
-			f := UsageFilter{Model: "a,b", ExcludeModel: "c", Agent: "codex,claude", ProjectLabels: []string{"team,tools", "other"}, Machine: "laptop", GitBranch: EncodeBranchFilterToken("team,tools", "topic"), ExcludeProjectLabels: []string{"excluded,tools"}, ExcludeAgent: "cursor", MinUserMessages: 2, ExcludeOneShot: true, AutomatedScope: "human", ActiveSince: "2026-06-01T00:00:00Z", Termination: "clean,awaiting_user"}
+			f := UsageFilter{Model: " a, b, ", ExcludeModel: " c, ", Agent: " codex, claude, ", ProjectLabels: []string{"team,tools", "other"}, Machine: " laptop, ", GitBranch: EncodeBranchFilterToken("team,tools", "topic"), ExcludeProjectLabels: []string{"excluded,tools"}, ExcludeAgent: " cursor, ", MinUserMessages: 2, ExcludeOneShot: true, AutomatedScope: "human", ActiveSince: "2026-06-01T00:00:00Z", Termination: "clean,awaiting_user"}
 			source := BuildUsageSourceFilter(f, b, "ue.model")
 			assert.Equal(t, matrixSQL(d, "ue.model IN (?,?) AND ue.model != ?", 3), strings.Join(source, " AND "))
 			session := BuildUsageSessionFilter(f, b, "session-1")
@@ -99,21 +99,20 @@ func TestFilterMatrixUsage(t *testing.T) {
 				t.Run(raw, func(t *testing.T) {
 					b := NewQueryBuilder(d.dialect, 0)
 					preds := BuildUsageSourceFilter(UsageFilter{Model: raw}, b, "m.model")
-					values := []any{" a", " b", " "}
-					sql := "m.model IN (?,?,?)"
+					values, sql := []any{"a", "b"}, "m.model IN (?,?)"
 					if raw == " , " {
-						values, sql = []any{" ", " "}, "m.model IN (?,?)"
-					}
-					if d.name == "duckdb" || d.name == "clickhouse" {
-						values, sql = []any{"a", "b"}, "m.model IN (?,?)"
-						if raw == " , " {
-							values, sql = []any{}, ""
-						}
+						values, sql = []any{}, ""
 					}
 					assert.Equal(t, matrixSQL(d, sql, 0), strings.Join(preds, " AND "))
 					assert.Equal(t, values, b.Args())
 				})
 			}
+			b = NewQueryBuilder(d.dialect, 0)
+			assert.Empty(t, BuildUsageSessionFilter(UsageFilter{Agent: " , ", ExcludeAgent: " , ", Machine: " , ", Project: " , ", ExcludeProject: " , "}, b, ""))
+			assert.Empty(t, b.Args())
+			b = NewQueryBuilder(d.dialect, 2)
+			assert.Equal(t, matrixSQL(d, "s.project IN (?,?) AND s.project NOT IN (?,?)", 2), strings.Join(BuildUsageSessionFilter(UsageFilter{Project: " a, b, ", ExcludeProject: " c, d, "}, b, ""), " AND "))
+			assert.Equal(t, []any{"a", "b", "c", "d"}, b.Args())
 			b = NewQueryBuilder(d.dialect, 0)
 			preds := BuildUsageSessionFilter(UsageFilter{ExcludeOneShot: true, AutomatedScope: "automated"}, b, "")
 			automated := "COALESCE(s.is_automated, " + d.falseSQL + ")"
@@ -138,35 +137,49 @@ func TestFilterMatrixTermination(t *testing.T) {
 			active := activity + " > " + ph
 			stale := "(" + activity + " > " + ph + " AND " + activity + " <= " + ph + " AND " + flagged + ")"
 			unclean := "(" + activity + " <= " + ph + " AND " + flagged + ")"
-			for _, c := range []struct{ status, sql string }{{"active", active}, {"stale", stale}, {"unclean", unclean}, {"active,stale,unclean", "(" + active + " OR " + stale + " OR " + unclean + ")"}} {
-				before := time.Now().UTC()
-				b := NewQueryBuilder(d.dialect, 4)
-				want := c.sql
-				assert.Equal(t, []string{matrixSQL(d, want, 4)}, BuildUsageSessionFilter(UsageFilter{Termination: c.status}, b, ""))
-				if c.status != "active,stale,unclean" {
-					continue
-				}
-				args := b.Args()
-				require.Len(t, args, 4)
-				for i, delta := range []time.Duration{10 * time.Minute, 60 * time.Minute, 10 * time.Minute, 60 * time.Minute} {
-					var cutoff time.Time
-					switch d.name {
-					case "sqlite":
-						v, ok := args[i].(int64)
-						require.True(t, ok)
-						cutoff = time.Unix(v, 0)
-					case "postgres":
-						v, ok := args[i].(time.Time)
-						require.True(t, ok)
-						cutoff = v
-					default:
-						v, ok := args[i].(string)
-						require.True(t, ok)
-						var err error
-						cutoff, err = time.Parse(time.RFC3339, v)
-						require.NoError(t, err)
-					}
-					assert.WithinDuration(t, before.Add(-delta), cutoff, 2*time.Second)
+			for _, c := range []struct {
+				status, sql string
+				cutoffs     []time.Duration
+			}{
+				{"active", active, []time.Duration{10 * time.Minute}},
+				{"stale", stale, []time.Duration{60 * time.Minute, 10 * time.Minute}},
+				{"unclean", unclean, []time.Duration{60 * time.Minute}},
+				{"active,stale,unclean", "(" + active + " OR " + stale + " OR " + unclean + ")", []time.Duration{10 * time.Minute, 60 * time.Minute, 10 * time.Minute, 60 * time.Minute}},
+			} {
+				for _, report := range []string{"usage", "analytics"} {
+					t.Run(report+"/"+c.status, func(t *testing.T) {
+						before := time.Now().UTC()
+						b := NewQueryBuilder(d.dialect, 4)
+						want := matrixSQL(d, c.sql, 4)
+						if report == "usage" {
+							assert.Equal(t, []string{want}, BuildUsageSessionFilter(UsageFilter{Termination: c.status}, b, ""))
+						} else {
+							base := "s.message_count > 0 AND s.relationship_type NOT IN ('subagent', 'fork') AND s.deleted_at IS NULL"
+							assert.Equal(t, base+" AND "+want, BuildAnalyticsWhere(AnalyticsFilter{Termination: c.status}, b, "s.", "", nil))
+						}
+						args := b.Args()
+						require.Len(t, args, len(c.cutoffs))
+						for i, delta := range c.cutoffs {
+							var cutoff time.Time
+							switch d.name {
+							case "sqlite":
+								v, ok := args[i].(int64)
+								require.True(t, ok)
+								cutoff = time.Unix(v, 0)
+							case "postgres":
+								v, ok := args[i].(time.Time)
+								require.True(t, ok)
+								cutoff = v
+							default:
+								v, ok := args[i].(string)
+								require.True(t, ok)
+								var err error
+								cutoff, err = time.Parse(time.RFC3339, v)
+								require.NoError(t, err)
+							}
+							assert.WithinDuration(t, before.Add(-delta), cutoff, 2*time.Second)
+						}
+					})
 				}
 			}
 		})
