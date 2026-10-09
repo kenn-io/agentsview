@@ -12,6 +12,7 @@ import { ApiError, isAbortError, responseTimingOf } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
+import { mergeUsageColorSummary, type UsageColorSummary } from "../utils/usageChartColors.js";
 import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
@@ -361,7 +362,7 @@ class UsageStore {
   attributionSummary = $state<UsageSummaryResponse | null>(null);
   selectedProjectKey = $state("");
   selectedModel = $state("");
-  colorSummary = $state<UsageSummaryResponse | null>(null);
+  colorSummary = $state<UsageColorSummary | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
@@ -1077,8 +1078,10 @@ class UsageStore {
       if (this.versions.summary === v) {
         this.summary = data;
         this.attributionSummary = attributionData;
-        if (!attributionData) this.colorSummary = contextData ?? this.timeSeriesContextSummary ?? data;
-        else if (!this.selectedTimeRange) this.colorSummary = attributionData;
+        this.colorSummary = mergeUsageColorSummary(
+          this.selectedTimeRange ? this.colorSummary : null,
+          [contextData ?? this.timeSeriesContextSummary ?? attributionData ?? data, data, attributionData].filter((summary): summary is UsageSummaryResponse => summary !== null),
+        );
         // Both responses are applied together, so each request's apply
         // phase starts once the later body has arrived; the earlier one
         // shows a gap while it waited for its sibling.
@@ -1168,6 +1171,19 @@ class UsageStore {
           this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
+          this.attributionSummary = null;
+          const restoredAttributionParams = this.attributionParams();
+          if (restoredAttributionParams) {
+            try {
+              const restoredAttribution = await UsageService.getApiV1UsageSummary(restoredAttributionParams, { signal });
+              if (this.versions.summary === v) {
+                this.attributionSummary = restoredAttribution;
+                this.colorSummary = mergeUsageColorSummary(this.colorSummary, [restoredAttribution]);
+              }
+            } catch (attributionError) {
+              if (!isAbortError(attributionError)) console.warn("usage attribution restore failed:", attributionError);
+            }
+          }
         } else if (this.summary === null) {
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {

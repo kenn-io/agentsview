@@ -1,6 +1,10 @@
 import type { UsageSummaryResponse } from "../api/generated/index";
 import { orderedChartSeriesColorMap, type ChartPalette } from "./chartPalette.js";
 
+export type UsageColorSummary = UsageSummaryResponse & {
+  colors?: Record<ChartPalette, UsageChartColorMaps>;
+};
+
 export interface UsageChartColorMaps {
   project: ReadonlyMap<string, string>;
   model: ReadonlyMap<string, string>;
@@ -21,9 +25,10 @@ function addCost(costs: Map<string, number>, id: string, microdollars: number) {
 }
 
 export function usageChartColorMaps(
-  summary: UsageSummaryResponse | null,
+  summary: UsageColorSummary | null,
   palette: ChartPalette,
 ): UsageChartColorMaps {
+  if (summary?.colors) return summary.colors[palette];
   const projects = new Map<string, number>();
   const models = new Map<string, number>();
   const agents = new Map<string, number>();
@@ -62,4 +67,24 @@ export function usageChartColorMaps(
     model: orderedChartSeriesColorMap(rankedIds(models), palette),
     agent: orderedChartSeriesColorMap(rankedIds(agents), palette),
   };
+}
+
+export function mergeUsageColorSummary(
+  previous: UsageColorSummary | null,
+  summaries: UsageSummaryResponse[],
+): UsageColorSummary {
+  const colors = {} as Record<ChartPalette, UsageChartColorMaps>;
+  for (const palette of ["agentsview", "matplotlib"] as const) {
+    const maps = { ...usageChartColorMaps(previous, palette) };
+    for (const summary of summaries) {
+      const incoming = usageChartColorMaps(summary, palette);
+      for (const by of ["project", "model", "agent"] as const) {
+        const ids = [...new Set([...maps[by].keys(), ...incoming[by].keys()])];
+        const assigned = orderedChartSeriesColorMap(ids, palette);
+        maps[by] = new Map(ids.map((id) => [id, maps[by].get(id) ?? assigned.get(id)!]));
+      }
+    }
+    colors[palette] = maps;
+  }
+  return { ...summaries[0]!, colors };
 }

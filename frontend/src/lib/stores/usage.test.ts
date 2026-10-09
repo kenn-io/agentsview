@@ -2188,6 +2188,88 @@ describe("UsageStore attribution focus", () => {
     usage.cancelInFlightReads();
   });
 
+  it.each(["project", "agent"] as const)("keeps every %s colored through brush and grouping changes", async (by) => {
+    const { usage } = await loadStore();
+    const { usageChartColorMaps } = await import("../utils/usageChartColors.js");
+    const { sessions } = await import("./sessions.svelte.js");
+    const full = usageSummary(12);
+    full.projectTotals[0]!.cost = testMoney(8);
+    full.projectTotals[1]!.cost = testMoney(4);
+    full.agentTotals = [
+      { agent: "claude", cost: testMoney(4), inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 },
+      { agent: "codex", cost: testMoney(8), inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 },
+    ];
+    const brushed = structuredClone(full);
+    brushed.projectTotals[0]!.cost = testMoney(1);
+    brushed.agentTotals[0]!.cost = testMoney(1);
+    usage.applyDateRange("2024-01-01", "2024-01-31");
+    if (by === "agent") sessions.filters.agent = "claude";
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      const response = structuredClone(params.from === "2024-01-08" ? brushed : full);
+      if (params.project_key) response.projectTotals = response.projectTotals.filter((entry) => entry.project_key === params.project_key);
+      if (params.agent) response.agentTotals = response.agentTotals.filter((entry) => entry.agent === params.agent);
+      return response;
+    });
+    await usage.fetchAll();
+    const colors = {
+      agentsview: usageChartColorMaps(usage.colorSummary, "agentsview")[by],
+      matplotlib: usageChartColorMaps(usage.colorSummary, "matplotlib")[by],
+    };
+    usage.setTimeRange("2024-01-08", "2024-01-14");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    if (by === "project") {
+      usage.toggleSelection("project", "pl1:sha256:beta");
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      usage.setAttributionGroupBy("model");
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    }
+    usage.setAttributionGroupBy(by);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
+    expect(by === "project" ? usage.attributionSummary?.projectTotals.length : usage.attributionSummary?.agentTotals.length).toBe(2);
+    for (const palette of ["agentsview", "matplotlib"] as const) {
+      const result = usageChartColorMaps(usage.colorSummary, palette)[by];
+      for (const [id, color] of colors[palette]) expect(result.get(id)).toBe(color);
+      expect(result.size).toBe(2);
+      expect(new Set(result.values()).size).toBe(2);
+    }
+    usage.cancelInFlightReads();
+  });
+
+  it("restores full-window attribution after a successful selected brush followed by a failed brush", async () => {
+    const { usage } = await loadStore();
+    const full = usageSummary(12);
+    full.projectTotals[0]!.cost = testMoney(8);
+    full.projectTotals[1]!.cost = testMoney(4);
+    const brushed = structuredClone(full);
+    brushed.totals.totalCost = testMoney(3);
+    brushed.projectTotals[0]!.cost = testMoney(1);
+    brushed.projectTotals[1]!.cost = testMoney(2);
+    usage.applyDateRange("2024-01-01", "2024-01-31");
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      if (params.from === "2024-01-15") throw new Error("range request failed");
+      const response = structuredClone(params.from === "2024-01-08" ? brushed : full);
+      if (params.project_key) response.projectTotals = response.projectTotals.filter((entry) => entry.project_key === params.project_key);
+      return response;
+    });
+    await usage.fetchAll();
+    usage.toggleSelection("project", "pl1:sha256:beta");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    usage.setTimeRange("2024-01-08", "2024-01-14");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.attributionSummary?.projectTotals).toEqual(brushed.projectTotals);
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    usage.setTimeRange("2024-01-15", "2024-01-21");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.errors.summary).toBe("range request failed");
+    expect(usage.selectedTimeRange).toBeNull();
+    expect(usage.summary?.projectTotals).toEqual([full.projectTotals[1]]);
+    expect(usage.attributionSummary?.projectTotals).toEqual(full.projectTotals);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].project_key).toBeUndefined();
+    usage.cancelInFlightReads();
+  });
+
   it.each([
     ["project", "pl1:sha256:alpha", "project_key"],
     ["model", "gpt-4o", "model"],
