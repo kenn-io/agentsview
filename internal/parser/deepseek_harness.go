@@ -221,7 +221,7 @@ func parseDeepSeekHarnessSession(
 				return nil
 			}
 			appendCandidate(event.Seq, message)
-		case "system/message":
+		case "system/message", "developer/message":
 			message, err := deepSeekHarnessSystemMessage(event)
 			if err != nil {
 				return eventError(event, err)
@@ -519,7 +519,7 @@ func validateDeepSeekHarnessSemanticEvent(event deepSeekHarnessEvent) error {
 	case "user/message":
 		_, err := deepSeekHarnessUserMessage(event)
 		return err
-	case "system/message":
+	case "system/message", "developer/message":
 		_, err := deepSeekHarnessSystemMessage(event)
 		return err
 	case "assistant/chunk":
@@ -654,7 +654,7 @@ func (state *deepSeekHarnessLifecycle) validate(event deepSeekHarnessEvent) erro
 		clear(state.PendingCalls)
 		state.HasOpenStep = false
 		state.NextStep++
-	case "assistant/chunk", "assistant/message":
+	case "assistant/chunk", "assistant/message", "developer/message":
 		key, err := deepSeekHarnessEventTurnStep(event.Data)
 		if err != nil {
 			return err
@@ -992,9 +992,39 @@ func deepSeekHarnessSystemMessage(event deepSeekHarnessEvent) (ParsedMessage, er
 	if !ok {
 		return ParsedMessage{}, errors.New("system message data has no message")
 	}
-	content, source, _, err := deepSeekHarnessMessageEnvelope(rawMessage, "system")
+	role := "system"
+	if event.Type == "developer/message" {
+		role = "developer"
+	}
+	content, source, _, err := deepSeekHarnessMessageEnvelope(rawMessage, role)
 	if err != nil {
 		return ParsedMessage{}, err
+	}
+	if role == "developer" {
+		var blocks []jsontext.Value
+		if err := json.Unmarshal(content, &blocks); err != nil {
+			return ParsedMessage{}, errors.New("developer content is not an array")
+		}
+		for index, block := range blocks {
+			fields, err := decodeDeepSeekHarnessObject(block)
+			if err != nil {
+				return ParsedMessage{}, err
+			}
+			kind, _ := deepSeekHarnessRequiredString(fields, "type")
+			if kind != "tool-addition" && kind != "tool-removal" {
+				continue
+			}
+			name, err := deepSeekHarnessRequiredString(fields, "toolName")
+			if err != nil || name == "" {
+				return ParsedMessage{}, errors.New("developer tool change has invalid toolName")
+			}
+			text := "Tool added: " + name
+			if kind == "tool-removal" {
+				text = "Tool removed: " + name
+			}
+			blocks[index], _ = json.Marshal(map[string]any{"type": "text", "text": text})
+		}
+		content, _ = json.Marshal(blocks)
 	}
 	parsed, err := parseDeepSeekHarnessContent(content, event.Time)
 	if err != nil {
@@ -1219,7 +1249,15 @@ func deepSeekHarnessToolResultData(
 		return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "",
 			errors.New("tool result data has no message")
 	}
-	content, source, _, err := deepSeekHarnessMessageEnvelope(rawMessage, "user")
+	messageFields, err := decodeDeepSeekHarnessObject(rawMessage)
+	if err != nil {
+		return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "", err
+	}
+	role := "user"
+	if string(messageFields["role"]) == `"tool"` {
+		role = "tool"
+	}
+	content, source, _, err := deepSeekHarnessMessageEnvelope(rawMessage, role)
 	if err != nil {
 		return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "", err
 	}
@@ -1227,7 +1265,6 @@ func deepSeekHarnessToolResultData(
 		return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "",
 			errors.New("tool result message source is not tool")
 	}
-	messageFields, _ := decodeDeepSeekHarnessObject(rawMessage)
 	sourceFields, err := decodeDeepSeekHarnessObject(messageFields["source"])
 	if err != nil {
 		return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "",
@@ -1237,6 +1274,18 @@ func deepSeekHarnessToolResultData(
 	if err != nil || sourceCallID == "" {
 		return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "",
 			errors.New("tool result source has invalid callId")
+	}
+	if role == "tool" {
+		callID, err := deepSeekHarnessRequiredString(messageFields, "toolCallId")
+		if err != nil || callID == "" || callID != sourceCallID {
+			return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "",
+				errors.New("tool result call id does not match its source")
+		}
+		block := map[string]any{"type": "tool-result", "toolCallId": callID, "content": content}
+		if rawIsError, ok := messageFields["isError"]; ok {
+			block["isError"] = rawIsError
+		}
+		content, _ = json.Marshal([]any{block})
 	}
 	var rawBlocks []jsontext.Value
 	if err := json.Unmarshal(content, &rawBlocks); err != nil || len(rawBlocks) != 1 {
@@ -1250,7 +1299,7 @@ func deepSeekHarnessToolResultData(
 	}
 	isError := false
 	if rawIsError, ok := blockFields["isError"]; ok {
-		if err := json.Unmarshal(rawIsError, &isError); err != nil {
+		if err := json.Unmarshal(rawIsError, &isError); err != nil || string(rawIsError) == "null" {
 			return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "",
 				errors.New("tool result isError is not a boolean")
 		}

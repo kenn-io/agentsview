@@ -2510,7 +2510,7 @@ schemas keep their existing ordering behavior.
 
 ## DeepSeek Harness (`deepseek-harness`)
 
-- **Format:** Released session generations `0` through `3` are stored as JSONL
+- **Format:** Released session generations `0` through `4` are stored as JSONL
   under `<sessions-root>/<project>/<encoded-session-id>/`. Generation zero
   uses the suffix-only `session.jsonl` (or the default checksummed multi-frame
   zstd encoding at `session.jsonl.zstd`); generation `N > 0` carries a
@@ -2529,7 +2529,10 @@ schemas keep their existing ordering behavior.
   records settled non-surface attempts as `assistant/attempt`; generation 3
   additionally promotes the system prompt to a `system/message` surface event,
   renames the PTC dispatch tags to `tool/ptc-dispatch[-start]`, and spells
-  replacement coordinates as `startSeq`/`endSeq`. Session IDs are arbitrary
+  replacement coordinates as `startSeq`/`endSeq`. Generation 4 promotes tool
+  results to `role: tool` messages with direct content, `toolCallId`, and
+  optional `isError`, and adds `developer/message` for incremental instructions
+  and named tool additions/removals. Session IDs are arbitrary
   non-empty strings and are injectively encoded before use as a directory
   name. A sessions root belongs to one physical encoding; the upstream backend
   rejects an opposite-suffix artifact rather than providing mixed-root
@@ -2573,6 +2576,17 @@ schemas keep their existing ordering behavior.
     plus the
     [usage schema](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/llm/llm/src/types.ts).
 
+    Generation 4 was reverified 2026-10-09 against release `dsh-v0.2.0-rc.2`,
+    commit `639ed015397290b3745d163aafe02ffee4aa3f84`: the
+    [v4 migration](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/session/session-format-v3-to-v4/README.md),
+    [tool-role conversion](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/session/session-format-v3-to-v4/src/tool-role.ts),
+    and [event schema](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/core/session/src/types.ts).
+    Dense sequences and physical framing remain unchanged. `workspace/changes`
+    and `image/offload` are metadata. Release `dsh-v0.2.1-alpha.2`, commit
+    `d743267388641bc76f17c45ce8b4c231aed1d32c`, retains generation 4 and adds
+    [working-directory changes](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/core/session/src/types.ts),
+    also metadata; the producer separately emits readable directory-change text.
+
 - **Usage and cost:** Each model response and summarizing compaction can persist
   disjoint input, output, cache-read, cache-write, and reasoning token counts.
   Assistant provenance, request headers, and compaction summaries carry model
@@ -2582,7 +2596,7 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/deepseek_harness.go`,
   `internal/parser/deepseek_harness_format.go`, and
   `internal/parser/deepseek_harness_provider.go`. Released generations 0
-  through 3 are accepted, and discovery prefers the newest canonical
+  through 4 are accepted, and discovery prefers the newest canonical
   generation in a session directory. Only events at or after a child's
   inherited cut contribute transcript rows and usage, while the full log
   validates event and turn/step structure and folds the latest title and agent
@@ -2591,7 +2605,8 @@ schemas keep their existing ordering behavior.
   first assistant chunk and reconstructed until a final assistant message
   replaces it on the next authoritative parse. Generation-2 and later messages
   read embedded stream usage and finish reasons when the outer data omits
-  them, and generation-3 system messages join the transcript as system rows.
+  them, and system and developer messages join the transcript as system rows.
+  Developer tool changes retain their recorded names without rebuilding schemas.
   Agentsview reversibly escapes `%` and the reserved remote-host separator `~`
   in canonical session IDs. Explicit raw-ID lookups remain literal; canonical
   escaping is decoded only when lookup starts from a full session ID.
@@ -2608,7 +2623,7 @@ schemas keep their existing ordering behavior.
   imported. The optional Harness SQLite persistence backend is not supported.
 
 - **Later formats:** Agentsview reads the on-disk generations directly and does
-  not run upstream's v0-to-v3 migrations. Generation-1 rows keep the version-0
+  not run upstream's v0-to-v4 migrations. Generation-1 rows keep the version-0
   packed assistant chunks. Generation-2 rows carry the embedded assistant
   stream and `assistant/attempt`; Agentsview imports final stream usage and
   finish reasons but does not reconstruct an assistant message from a failed

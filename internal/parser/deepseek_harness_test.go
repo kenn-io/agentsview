@@ -776,7 +776,7 @@ func TestDeepSeekHarnessSourceEventSeqs(t *testing.T) {
 func TestDeepSeekHarnessFormatErrorsAndCrashTails(t *testing.T) {
 	t.Run("foreign version", func(t *testing.T) {
 		records := deepSeekHarnessCompleteFixture("foreign", nil)
-		records[0].(map[string]any)["version"] = 4
+		records[0].(map[string]any)["version"] = deepSeekHarnessNewestFormatVersion + 1
 		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "foreign", deepSeekHarnessFixtureCwd, "plain", records)
 		_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
 		require.Error(t, err)
@@ -1097,8 +1097,8 @@ func TestDeepSeekHarnessFormatErrorsAndCrashTails(t *testing.T) {
 
 func TestDeepSeekHarnessProviderDiscoversAndMapsOneChangedPath(t *testing.T) {
 	root := t.TempDir()
-	records := deepSeekHarnessCompleteFixture("watch-id", nil)
-	path := writeDeepSeekHarnessFixture(t, root, "watch-id", deepSeekHarnessFixtureCwd, "plain", records)
+	records := deepSeekHarnessV4Fixture("watch-id")
+	path := writeDeepSeekHarnessVersionedFixture(t, root, "watch-id", deepSeekHarnessFixtureCwd, "plain", 4, records)
 	writeDeepSeekHarnessFixture(t, root, "other-id", deepSeekHarnessFixtureCwd, "plain", deepSeekHarnessCompleteFixture("other-id", nil))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "unrelated.jsonl"), []byte("{}\n"), 0o600))
 
@@ -1525,15 +1525,15 @@ func TestDeepSeekHarnessV3SessionParses(t *testing.T) {
 	assert.Equal(t, 2, *usage.MessageOrdinal)
 }
 
-func TestDeepSeekHarnessProviderPrefersNewestGeneration(t *testing.T) {
+func TestDeepSeekHarnessProviderDiscoversV4OnlySession(t *testing.T) {
 	root := t.TempDir()
-	v0Path := writeDeepSeekHarnessFixture(
-		t, root, "generation-pick", deepSeekHarnessFixtureCwd, "zstd",
-		deepSeekHarnessCompleteFixture("generation-pick", nil),
-	)
-	v3Path := writeDeepSeekHarnessVersionedFixture(
-		t, root, "generation-pick", deepSeekHarnessFixtureCwd, "zstd", 3,
-		deepSeekHarnessV3Fixture("generation-pick"),
+	const id = "session-00000000-0000-4000-8000-000000000001"
+	// Synthetic values preserve the reporter's v4 filename and header structure.
+	header := deepSeekHarnessV3Header(id, deepSeekHarnessFixtureCwd)
+	header["version"] = 4
+	header["createdAt"] = int64(1791501756261)
+	path := writeDeepSeekHarnessVersionedFixture(
+		t, root, id, deepSeekHarnessFixtureCwd, "zstd", 4, []any{header},
 	)
 	provider, ok := NewProvider(
 		AgentDeepSeekHarness,
@@ -1544,14 +1544,45 @@ func TestDeepSeekHarnessProviderPrefersNewestGeneration(t *testing.T) {
 	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
-	assert.Equal(t, v3Path, discovered[0].DisplayPath)
+	assert.Equal(t, path, discovered[0].DisplayPath)
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, path, found.DisplayPath)
+}
+
+func TestDeepSeekHarnessProviderPrefersNewestGeneration(t *testing.T) {
+	root := t.TempDir()
+	v0Path := writeDeepSeekHarnessFixture(
+		t, root, "generation-pick", deepSeekHarnessFixtureCwd, "zstd",
+		deepSeekHarnessCompleteFixture("generation-pick", nil),
+	)
+	v3Path := writeDeepSeekHarnessVersionedFixture(
+		t, root, "generation-pick", deepSeekHarnessFixtureCwd, "zstd", 3,
+		deepSeekHarnessV3Fixture("generation-pick"),
+	)
+	v4Path := writeDeepSeekHarnessVersionedFixture(
+		t, root, "generation-pick", deepSeekHarnessFixtureCwd, "zstd", 4,
+		deepSeekHarnessV4Fixture("generation-pick"),
+	)
+	provider, ok := NewProvider(
+		AgentDeepSeekHarness,
+		ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, v4Path, discovered[0].DisplayPath)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "deepseek-harness:generation-pick", outcome.Results[0].Result.Session.ID)
-	assert.Equal(t, "3", outcome.Results[0].Result.Session.SourceVersion)
+	assert.Equal(t, "4", outcome.Results[0].Result.Session.SourceVersion)
 	assert.NotEqual(t, v0Path, discovered[0].DisplayPath)
+	assert.NotEqual(t, v3Path, discovered[0].DisplayPath)
 }
 
 func TestDeepSeekHarnessProviderIgnoresUnsupportedGeneration(t *testing.T) {
@@ -1637,45 +1668,153 @@ func TestDeepSeekHarnessV3AllowsLegacyTurnRestart(t *testing.T) {
 }
 
 func TestDeepSeekHarnessV3SeedCutExcludesInheritedTranscript(t *testing.T) {
-	header := deepSeekHarnessV3Header("v3-seed", deepSeekHarnessFixtureCwd)
-	header["isSeeded"] = true
-	header["parentSession"] = "parent"
-	header["delegationDepth"] = 1
-	records := []any{
-		header,
-		deepSeekHarnessFixtureEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
-		deepSeekHarnessFixtureEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
-		deepSeekHarnessFixtureEvent(2, "user/message", deepSeekHarnessUser("parent prompt", "user"), "append"),
-		deepSeekHarnessFixtureEvent(3, "assistant/message", deepSeekHarnessAssistantDataMap(1, 1, "parent answer", nil), "append"),
-		deepSeekHarnessFixtureEvent(4, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
-		deepSeekHarnessFixtureEvent(5, "session/end-seed", map[string]any{"inherited": true}, nil),
-		deepSeekHarnessFixtureEvent(6, "agent/inbox/spliced", map[string]any{
-			"target": "next-turn", "start": 0,
-			"inserted": []any{map[string]any{
-				"role": "user", "id": "inbox-child",
-				"source":  map[string]any{"kind": "user"},
-				"content": []any{map[string]any{"type": "text", "text": "child context"}},
-			}},
-		}, nil),
-		deepSeekHarnessFixtureEvent(7, "turn/start", map[string]any{"turn": 2}, nil),
-		deepSeekHarnessFixtureEvent(8, "step/start", map[string]any{"turn": 2, "step": 1}, nil),
-		deepSeekHarnessFixtureEvent(9, "user/message", deepSeekHarnessUser("child prompt", "user"), "append"),
-		deepSeekHarnessFixtureEvent(10, "assistant/message", deepSeekHarnessAssistantDataMap(2, 1, "child answer", nil), "append"),
-		deepSeekHarnessFixtureEvent(11, "step/end", map[string]any{"turn": 2, "step": 1}, nil),
-		deepSeekHarnessFixtureEvent(12, "turn/end", deepSeekHarnessTurnEnd(2, "completed"), nil),
+	for _, version := range []int64{3, 4} {
+		t.Run(strconv.FormatInt(version, 10), func(t *testing.T) {
+			header := deepSeekHarnessV3Header("v3-seed", deepSeekHarnessFixtureCwd)
+			header["version"] = version
+			header["isSeeded"] = true
+			header["parentSession"] = "parent"
+			header["delegationDepth"] = 1
+			records := []any{
+				header,
+				deepSeekHarnessFixtureEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
+				deepSeekHarnessFixtureEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
+				deepSeekHarnessFixtureEvent(2, "user/message", deepSeekHarnessUser("parent prompt", "user"), "append"),
+				deepSeekHarnessFixtureEvent(3, "assistant/message", deepSeekHarnessAssistantDataMap(1, 1, "parent answer", nil), "append"),
+				deepSeekHarnessFixtureEvent(4, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
+				deepSeekHarnessFixtureEvent(5, "session/end-seed", map[string]any{"inherited": true}, nil),
+				deepSeekHarnessFixtureEvent(6, "agent/inbox/spliced", map[string]any{
+					"target": "next-turn", "start": 0,
+					"inserted": []any{map[string]any{
+						"role": "user", "id": "inbox-child",
+						"source":  map[string]any{"kind": "user"},
+						"content": []any{map[string]any{"type": "text", "text": "child context"}},
+					}},
+				}, nil),
+				deepSeekHarnessFixtureEvent(7, "turn/start", map[string]any{"turn": 2}, nil),
+				deepSeekHarnessFixtureEvent(8, "step/start", map[string]any{"turn": 2, "step": 1}, nil),
+				deepSeekHarnessFixtureEvent(9, "user/message", deepSeekHarnessUser("child prompt", "user"), "append"),
+				deepSeekHarnessFixtureEvent(10, "assistant/message", deepSeekHarnessAssistantDataMap(2, 1, "child answer", nil), "append"),
+				deepSeekHarnessFixtureEvent(11, "step/end", map[string]any{"turn": 2, "step": 1}, nil),
+				deepSeekHarnessFixtureEvent(12, "turn/end", deepSeekHarnessTurnEnd(2, "completed"), nil),
+			}
+			path := writeDeepSeekHarnessVersionedFixture(
+				t, t.TempDir(), "v3-seed", deepSeekHarnessFixtureCwd, "plain", version, records,
+			)
+			result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+			require.NoError(t, err)
+			assert.Equal(t, "deepseek-harness:parent", result.Session.ParentSessionID)
+			assert.Equal(t, strconv.FormatInt(version, 10), result.Session.SourceVersion)
+			require.Len(t, result.Messages, 2)
+			assert.Equal(t, "child prompt", result.Messages[0].Content)
+			assert.Equal(t, "child answer", result.Messages[1].Content)
+			assert.Empty(t, result.UsageEvents)
+			assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
+		})
 	}
-	path := writeDeepSeekHarnessVersionedFixture(
-		t, t.TempDir(), "v3-seed", deepSeekHarnessFixtureCwd, "plain", 3, records,
-	)
-	result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-	require.NoError(t, err)
-	assert.Equal(t, "deepseek-harness:parent", result.Session.ParentSessionID)
-	assert.Equal(t, "3", result.Session.SourceVersion)
-	require.Len(t, result.Messages, 2)
-	assert.Equal(t, "child prompt", result.Messages[0].Content)
-	assert.Equal(t, "child answer", result.Messages[1].Content)
-	assert.Empty(t, result.UsageEvents)
-	assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
+}
+
+func TestDeepSeekHarnessV4SessionParses(t *testing.T) {
+	for _, compression := range []string{"plain", "zstd"} {
+		t.Run(compression, func(t *testing.T) {
+			path := writeDeepSeekHarnessVersionedFixture(
+				t, t.TempDir(), "v4-session", deepSeekHarnessFixtureCwd, compression, 4,
+				deepSeekHarnessV4Fixture("v4-session"),
+			)
+			result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+			require.NoError(t, err)
+			assert.Equal(t, "4", result.Session.SourceVersion)
+			assert.False(t, result.Session.IsTruncated)
+			require.Len(t, result.Messages, 5)
+			assert.Equal(t, "answer", result.Messages[2].Content)
+			require.Len(t, result.Messages[3].ToolResults, 1)
+			assert.Equal(t, "call-1", result.Messages[3].ToolResults[0].ToolUseID)
+			assert.Contains(t, result.Messages[3].ToolResults[0].ContentRaw, "output")
+			developer := result.Messages[4]
+			assert.Equal(t, RoleSystem, developer.Role)
+			assert.True(t, developer.IsSystem)
+			assert.Equal(t, "agent-loop", developer.SourceType)
+			assert.Equal(t, "Use the read-only connection\nTool added: read\nTool removed: write", developer.Content)
+			require.Len(t, result.UsageEvents, 1)
+			assert.Equal(t, 10, result.UsageEvents[0].InputTokens)
+			assert.Equal(t, 5, result.UsageEvents[0].OutputTokens)
+		})
+	}
+}
+
+func TestDeepSeekHarnessV4ToolResultValidation(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		change    func(map[string]any)
+		wantError string
+	}{
+		{"empty output", func(m map[string]any) { m["content"] = []any{} }, ""},
+		{"error output", func(m map[string]any) { m["isError"] = true }, ""},
+		{"omitted error flag", func(m map[string]any) { delete(m, "isError") }, ""},
+		{"image output", func(m map[string]any) {
+			m["content"] = []any{map[string]any{"type": "image", "attachment": map[string]any{"id": "image-1"}}}
+		}, ""},
+		{"mismatched call", func(m map[string]any) { m["toolCallId"] = "other-call" }, "call id does not match"},
+		{"empty call", func(m map[string]any) { m["toolCallId"] = "" }, "call id does not match"},
+		{"invalid error flag", func(m map[string]any) { m["isError"] = "true" }, "isError is not a boolean"},
+		{"null error flag", func(m map[string]any) { m["isError"] = nil }, "isError is not a boolean"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			records := deepSeekHarnessV4Fixture("v4-result")
+			message := records[13].(map[string]any)["data"].(map[string]any)["message"].(map[string]any)
+			test.change(message)
+			path := writeDeepSeekHarnessVersionedFixture(t, t.TempDir(), "v4-result", deepSeekHarnessFixtureCwd, "plain", 4, records)
+			result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+			if test.wantError != "" {
+				require.ErrorContains(t, err, test.wantError)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, result.Messages[3].ToolResults, 1)
+			assert.Equal(t, "call-1", result.Messages[3].ToolResults[0].ToolUseID)
+		})
+	}
+}
+
+func TestDeepSeekHarnessV4DeveloperRequiresOpenStep(t *testing.T) {
+	records := deepSeekHarnessV4Fixture("v4-developer")
+	for _, record := range records[1:] {
+		event := record.(map[string]any)
+		if event["type"] == "developer/message" {
+			event["data"].(map[string]any)["step"] = 2
+		}
+	}
+	path := writeDeepSeekHarnessVersionedFixture(t, t.TempDir(), "v4-developer", deepSeekHarnessFixtureCwd, "plain", 4, records)
+	_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+	require.ErrorContains(t, err, "names turn 1/step 2")
+}
+
+func deepSeekHarnessV4Fixture(id string) []any {
+	records := deepSeekHarnessV3Fixture(id)
+	records[0].(map[string]any)["version"] = 4
+	message := records[13].(map[string]any)["data"].(map[string]any)["message"].(map[string]any)
+	message["role"] = "tool"
+	block := message["content"].([]any)[0].(map[string]any)
+	message["toolCallId"], message["isError"], message["content"] = block["toolCallId"], block["isError"], block["content"]
+	developer := deepSeekHarnessFixtureEvent(13, "developer/message", map[string]any{
+		"turn": 1, "step": 1,
+		"message": map[string]any{
+			"id": "dev-1", "role": "developer", "source": map[string]any{"kind": "agent-loop"},
+			"content": []any{
+				map[string]any{"type": "text", "text": "Use the read-only connection"},
+				map[string]any{"type": "tool-addition", "toolName": "read"},
+				map[string]any{"type": "tool-removal", "toolName": "write"},
+			},
+		},
+	}, "append")
+	records = append(records[:14], append([]any{developer}, records[14:]...)...)
+	for _, kind := range []string{"workspace/changes", "image/offload", "working-directory/change"} {
+		records = append(records, deepSeekHarnessFixtureEvent(0, kind, map[string]any{}, nil))
+	}
+	for index, record := range records[1:] {
+		record.(map[string]any)["seq"] = index
+	}
+	return records
 }
 
 func deepSeekHarnessV3Header(id, cwd string) map[string]any {
