@@ -72,13 +72,12 @@ pickers exclude Subagents. Automation and one-shot filters still apply.
 Readable sources reparse once to recover classification evidence. Stored
 parentless non-interactive runs gain the Subagent relationship during each
 classification audit, including rows imported after initialization, even when
-their sources are unreadable. Deleted
-Claude transcripts can prevent historical worker repair because archived rows
-lack the SDK origin needed to distinguish workers from human SDK conversations.
-Older-client Claude rows in replicas also lack this origin evidence when their
-transcript is unavailable. Ambiguous rows keep their relationship. Classification
-audits preserve stored automation flags in usage-only archives. New writes
-classify current evidence.
+their sources are unreadable. Historical worker repair can fail when sources are
+unreadable or deleted and archived rows, including replicas, lack worker
+evidence such as Claude SDK origin needed to distinguish workers from human SDK
+conversations or native Grok child-kind evidence omitted by older clients.
+Ambiguous rows keep their relationship. Classification audits preserve stored
+automation flags in usage-only archives. New writes classify current evidence.
 
 The session count separates subagents from interactive and automated
 conversations. Every known subagent counts as Subagents, including scripted
