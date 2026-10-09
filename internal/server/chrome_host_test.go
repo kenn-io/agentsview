@@ -26,7 +26,7 @@ func testChromeConnection(t *testing.T, srv *Server) (string, net.Conn) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	require.NoError(t, srv.ServeChromeHost(ctx, socket))
-	conn, err := net.Dial("unix", socket)
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 	require.Eventually(t, func() bool { return srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
@@ -83,7 +83,7 @@ func TestChromeHostSyncPrivateReplies(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("Sync did not finish")
+		require.FailNow(t, "Sync did not finish")
 	}
 	require.Equal(t, http.StatusOK, response.Code)
 	assert.NotContains(t, response.Body.String(), "event: fetch")
@@ -131,7 +131,7 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 			select {
 			case <-done:
 			case <-time.After(5 * time.Second):
-				t.Fatal("incompatible host did not stop Sync")
+				require.FailNow(t, "incompatible host did not stop Sync")
 			}
 			assert.Contains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
 			assert.NotContains(t, response.Body.String(), "event: done")
@@ -160,7 +160,7 @@ func TestChromeHostIncompatiblePendingRequests(t *testing.T) {
 		case err := <-finished:
 			require.ErrorIs(t, err, chromehost.ErrCompatibility)
 		case <-time.After(5 * time.Second):
-			t.Fatal("incompatible host left a pending fetch")
+			require.FailNow(t, "incompatible host left a pending fetch")
 		}
 	}
 }
@@ -190,12 +190,12 @@ func TestChromeHostDisconnect(t *testing.T) {
 			select {
 			case err := <-finished:
 				if mode == "negative status" || mode == "status above 599" {
-					require.EqualError(t, err, "Invalid Chrome reply status")
+					require.EqualError(t, err, "invalid Chrome reply status")
 				} else {
 					require.ErrorContains(t, err, "disconnected")
 				}
 			case <-time.After(5 * time.Second):
-				t.Fatal("pending fetch did not fail")
+				require.FailNow(t, "pending fetch did not fail")
 			}
 			require.Eventually(t, func() bool { return !srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
 		})
@@ -215,7 +215,7 @@ func TestChromeHostFrameReply(t *testing.T) {
 		assert.Equal(t, 413, reply.Status)
 		assert.Empty(t, strings.TrimSpace(string(reply.Body)))
 	case <-time.After(5 * time.Second):
-		t.Fatal("fetch did not finish")
+		require.FailNow(t, "fetch did not finish")
 	}
 }
 
@@ -231,14 +231,13 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 		finished <- err
 	}()
 	id, _ := readChromeRequest(t, conn)
-	second, err := net.Dial("unix", socket)
+	second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
 	require.NoError(t, err)
 	defer second.Close()
 	require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
 	_, err = chromehost.ReadFrame(second)
 	require.Error(t, err)
-	var networkErr net.Error
-	if errors.As(err, &networkErr) {
+	if networkErr, ok := errors.AsType[net.Error](err); ok {
 		assert.False(t, networkErr.Timeout(), "the extra connection must close")
 	}
 	writeChromeReply(t, conn, id, 200, "[]")
@@ -246,7 +245,7 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 	case err := <-finished:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("first fetch did not finish")
+		require.FailNow(t, "first fetch did not finish")
 	}
 	assert.True(t, srv.chrome.Connected())
 }

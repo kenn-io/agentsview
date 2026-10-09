@@ -5,7 +5,9 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"time"
 
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
@@ -22,9 +24,13 @@ func syncClaudeAIChrome(ctx context.Context) error {
 		return err
 	}
 	if transport.Mode != transportHTTP {
-		return errors.New("Claude.ai Sync requires a running server")
+		return errors.New("claude.ai Sync requires a running server")
 	}
-	api, err := apiclient.NewHTTPClient(transport.URL, cfg.AuthToken, http.DefaultClient)
+	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
+	httpTransport.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	httpTransport.ResponseHeaderTimeout = 30 * time.Second
+	defer httpTransport.CloseIdleConnections()
+	api, err := apiclient.NewHTTPClient(transport.URL, cfg.AuthToken, &http.Client{Transport: httpTransport})
 	if err != nil {
 		return err
 	}
@@ -55,7 +61,7 @@ func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (import
 		if json.Unmarshal(body, &failure) == nil && failure.Code == "claude_ai_chrome_host_required" {
 			return importer.ImportStats{}, errors.New(failure.Error)
 		}
-		return importer.ImportStats{}, fmt.Errorf("Claude.ai Sync: HTTP %d: %s", response.StatusCode, body)
+		return importer.ImportStats{}, fmt.Errorf("claude.ai Sync: HTTP %d: %s", response.StatusCode, body)
 	}
 	stream := response.Stream200
 	defer stream.Close()
@@ -81,11 +87,11 @@ func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (import
 			}
 			return stats, errors.New(failure.Error)
 		case "fetch":
-			return stats, errors.New("Chrome Sync unexpectedly requested a page relay")
+			return stats, errors.New("chrome Sync unexpectedly requested a page relay")
 		}
 	}
 	if err := stream.Err(); err != nil {
 		return stats, err
 	}
-	return stats, errors.New("Claude.ai Sync stream ended without a result")
+	return stats, errors.New("claude.ai Sync stream ended without a result")
 }

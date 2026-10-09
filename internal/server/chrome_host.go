@@ -82,7 +82,7 @@ func (h *chromeHost) Connected() bool {
 }
 
 func (h *chromeHost) read(conn *chromeConnection) {
-	disconnectErr := errors.New("Chrome host disconnected")
+	disconnectErr := errors.New("chrome host disconnected")
 	defer func() {
 		_ = conn.Close()
 		h.mu.Lock()
@@ -118,7 +118,7 @@ func (h *chromeHost) read(conn *chromeConnection) {
 			return
 		}
 		if reply.Status < 0 || reply.Status > 599 {
-			disconnectErr = errors.New("Invalid Chrome reply status")
+			disconnectErr = errors.New("invalid Chrome reply status")
 			return
 		}
 		response := claudeAISyncResult{status: reply.Status, body: []byte(reply.Body), retryAfter: reply.RetryAfter}
@@ -139,7 +139,7 @@ func (h *chromeHost) fetch(ctx context.Context, path string) (importer.ClaudeAIR
 	conn := h.connection
 	h.mu.Unlock()
 	if conn == nil {
-		return importer.ClaudeAIResponse{}, errors.New("Chrome host not connected")
+		return importer.ClaudeAIResponse{}, errors.New("chrome host not connected")
 	}
 	id := rand.Text()
 	answer := make(chan claudeAISyncResult, 1)
