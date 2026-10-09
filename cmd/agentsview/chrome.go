@@ -135,6 +135,26 @@ func relayChromeHost(ctx context.Context, socket string, input io.Reader, output
 }
 
 func setupChrome(dataDir, home, executable string, assets fs.FS, register func(string) error) (string, error) {
+	manifest, err := fs.ReadFile(assets, "chrome-extension/manifest.json")
+	if err != nil {
+		return "", fmt.Errorf("extension assets: %w; build the frontend first", err)
+	}
+	var extension struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(manifest, &extension); err != nil {
+		return "", err
+	}
+	key, err := base64.StdEncoding.DecodeString(extension.Key)
+	if err != nil || len(key) == 0 {
+		return "", errors.New("extension public key missing or invalid")
+	}
+	digest := sha256.Sum256(key)
+	var id strings.Builder
+	for _, b := range digest[:16] {
+		id.WriteByte('a' + (b >> 4))
+		id.WriteByte('a' + (b & 15))
+	}
 	dir, err := filepath.Abs(filepath.Join(dataDir, "chrome"))
 	if err != nil {
 		return "", err
@@ -143,9 +163,6 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		return "", err
 	}
 	folder := filepath.Join(dir, "extension")
-	if err := os.RemoveAll(folder); err != nil {
-		return "", err
-	}
 	if err := fs.WalkDir(assets, "chrome-extension", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -165,26 +182,6 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		return os.WriteFile(target, data, 0600)
 	}); err != nil {
 		return "", fmt.Errorf("extension assets: %w; build the frontend first", err)
-	}
-	manifest, err := fs.ReadFile(assets, "chrome-extension/manifest.json")
-	if err != nil {
-		return "", err
-	}
-	var extension struct {
-		Key string `json:"key"`
-	}
-	if err := json.Unmarshal(manifest, &extension); err != nil {
-		return "", err
-	}
-	key, err := base64.StdEncoding.DecodeString(extension.Key)
-	if err != nil || len(key) == 0 {
-		return "", errors.New("extension public key missing or invalid")
-	}
-	digest := sha256.Sum256(key)
-	var id strings.Builder
-	for _, b := range digest[:16] {
-		id.WriteByte('a' + (b >> 4))
-		id.WriteByte('a' + (b & 15))
 	}
 	executable, err = filepath.Abs(executable)
 	if err != nil {
@@ -245,9 +242,6 @@ func chromeSocketPath(dataDir string) (string, error) {
 		if len(socket) >= 104 {
 			return "", errors.New("Chrome socket path exceeds the Unix socket path limit")
 		}
-	}
-	if err := safefileio.EnsurePrivateDir(filepath.Dir(socket)); err != nil {
-		return "", err
 	}
 	return socket, nil
 }

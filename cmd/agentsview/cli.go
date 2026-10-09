@@ -497,7 +497,7 @@ func newImportCommand() *cobra.Command {
 	var replace []string
 	var syncBrowser bool
 	cmd := &cobra.Command{
-		Use:          "import --type <type> <path>",
+		Use:          "import --type <type> <path> | import --type claude-ai --sync",
 		Short:        "Import conversations",
 		GroupID:      groupData,
 		SilenceUsage: true,

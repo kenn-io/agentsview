@@ -2463,8 +2463,8 @@
   "tool_sequences_retry": "Try again",
   "import_claude_connect": "Sign in",
   "import_claude_sync": "Sync",
-  "import_claude_help": "Sign in with an email code, close the window, then Sync. For Google sign-in, use AgentsView in Chrome with the extension.",
-  "import_claude_help_chrome": "Keep Chrome open during Sync. Sync uses your Claude.ai sign-in, including Google.",
-  "import_claude_chrome_setup": "Run agentsview chrome setup, then load the printed folder with Load unpacked in chrome://extensions.",
+  "import_claude_help": "Sign in with an email code, close the window, then Sync. For Google sign-in, run agentsview chrome setup and Sync from the web UI.",
+  "import_claude_help_chrome": "Uses your Claude.ai sign-in in Chrome, Google included. Once: run agentsview chrome setup, then Load unpacked the printed folder. Keep Chrome open during Sync.",
+  "import_claude_chrome_setup": "Run agentsview chrome setup and keep Chrome open, then Sync again.",
   "import_claude_auth_required": "Sign in to Claude.ai, then Sync again"
 }

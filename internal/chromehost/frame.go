@@ -7,8 +7,6 @@ import (
 )
 
 const FrameLimit = 64 << 20
-const Version = 1
-const VersionError = "Chrome host protocol version mismatch; re-run agentsview chrome setup and reload the extension"
 
 func ReadFrame(reader io.Reader) ([]byte, error) {
 	var header [4]byte

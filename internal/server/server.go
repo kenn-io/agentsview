@@ -45,7 +45,6 @@ type VersionInfo struct {
 	ReadOnly                   bool   `json:"read_only,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`
-	ClaudeAIChromeHost         bool   `json:"claude_ai_chrome_host,omitempty"`
 	APIVersion                 int    `json:"api_version"`
 	DataVersion                int    `json:"data_version"`
 }

@@ -56,6 +56,13 @@ func readChromeSync(response *http.Response) (importer.ImportStats, error) {
 		if err != nil {
 			return importer.ImportStats{}, err
 		}
+		var failure struct {
+			Code  string `json:"code"`
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(body, &failure) == nil && failure.Code == "claude_ai_chrome_host_required" {
+			return importer.ImportStats{}, errors.New(failure.Error)
+		}
 		return importer.ImportStats{}, fmt.Errorf("Claude.ai Sync: HTTP %d: %s", response.StatusCode, body)
 	}
 	stream := runtime.NewEventStream[[]byte](response)

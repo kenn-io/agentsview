@@ -1318,11 +1318,11 @@ See [Chat Import](/docs/chat-import/) for full documentation.
 agentsview import --type <type> <path>
 ```
 
-| Flag        | Default | Description                                                                                |
-| ----------- | ------- | ------------------------------------------------------------------------------------------ |
-| `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required)                           |
-| `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)  |
-| `--sync` | `false` | Sync Claude.ai through Chrome; requires a running server and Chrome host, with no path or `--replace` |
+| Flag        | Default | Description                                                                                           |
+| ----------- | ------- | ----------------------------------------------------------------------------------------------------- |
+| `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required)                                      |
+| `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)             |
+| `--sync`    | `false` | Sync Claude.ai through Chrome; requires a running server and Chrome host, with no path or `--replace` |
 
 Run `agentsview chrome setup` once, then use **Load unpacked** in `chrome://extensions` to load the folder it prints. Keep Chrome open for `agentsview import --type claude-ai --sync`. Re-run setup and reload the extension after upgrading AgentsView or moving its binary.
 

@@ -46,14 +46,7 @@
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
   let syncController = $state<AbortController>();
-  const canSync = $derived(open && provider === "claude-ai" && (!!host || !!syncState.serverVersion?.claude_ai_chrome_host) && !isRemoteConnection() && !syncState.readOnly);
-  const showChromeSetup = $derived(open && provider === "claude-ai" && !canSync && !isRemoteConnection() && !syncState.readOnly);
-
-  $effect(() => {
-    if (open && provider === "claude-ai" && !host && !isRemoteConnection()) {
-      untrack(() => { void syncState.loadVersion(); });
-    }
-  });
+  const canSync = $derived(open && provider === "claude-ai" && !isRemoteConnection() && !syncState.readOnly);
 
   async function connect() {
     try { if (host) await connectClaudeAI(host); }
@@ -75,8 +68,8 @@
     } catch (e) {
       if (controller.signal.aborted) return;
       error = e instanceof Error ? e.message : m.import_failed();
-      if (e instanceof ApiError && e.status === 409 && e.message.includes("Chrome host not connected")) {
-        await syncState.loadVersion();
+      if (e instanceof ApiError && e.code === "claude_ai_chrome_host_required") {
+        error = m.import_claude_chrome_setup();
       }
       if (e instanceof ApiError && e.code === "claude_ai_auth_required") {
         error = m.import_claude_auth_required();
@@ -364,10 +357,6 @@
         {/if}
         <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing} onclick={sync} />
         <p class="hint">{host ? m.import_claude_help() : m.import_claude_help_chrome()}</p>
-      {:else if showChromeSetup}
-        <p class="hint">
-          {m.import_claude_chrome_setup()}
-        </p>
       {/if}
 
       <!-- ── Drop zone ── -->

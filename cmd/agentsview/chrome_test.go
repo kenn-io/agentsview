@@ -47,16 +47,12 @@ func TestChromeSetup(t *testing.T) {
 		"chrome-extension/worker.js":     {Data: []byte("worker")},
 	}
 	var registered string
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "chrome", "extension"), 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "chrome", "extension", "stale.js"), []byte("old"), 0600))
 	folder, err := setupChrome(dir, home, executable, assets, func(path string) error { registered = path; return nil })
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(dir, "chrome", "extension"), folder)
 	worker, err := os.ReadFile(filepath.Join(folder, "worker.js"))
 	require.NoError(t, err)
 	assert.Equal(t, "worker", string(worker))
-	_, err = os.Stat(filepath.Join(folder, "stale.js"))
-	assert.ErrorIs(t, err, os.ErrNotExist)
 	body, err := os.ReadFile(registered)
 	require.NoError(t, err)
 	var manifest struct {
@@ -88,6 +84,23 @@ func TestChromeSetup(t *testing.T) {
 	}
 }
 
+func TestChromeSetupPreservesInstalledExtension(t *testing.T) {
+	dir := t.TempDir()
+	assets := fstest.MapFS{
+		"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)},
+		"chrome-extension/worker.js":     {Data: []byte("worker")},
+	}
+	executable := chromeTestExecutable(t)
+	register := func(string) error { return nil }
+	folder, err := setupChrome(dir, dir, executable, assets, register)
+	require.NoError(t, err)
+	_, err = setupChrome(dir, dir, executable, fstest.MapFS{}, register)
+	require.Error(t, err)
+	worker, err := os.ReadFile(filepath.Join(folder, "worker.js"))
+	require.NoError(t, err)
+	assert.Equal(t, "worker", string(worker))
+}
+
 func TestChromeHostRelay(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, safefileio.EnsurePrivateDir(dir))
@@ -109,12 +122,12 @@ func TestChromeHostRelay(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
-	request := []byte(`{"version":1,"id":"a","path":"/api/organizations"}`)
+	request := []byte(`{"id":"a","path":"/api/organizations"}`)
 	require.NoError(t, chromehost.WriteFrame(conn, request))
 	got, err := chromehost.ReadFrame(readOutput)
 	require.NoError(t, err)
 	assert.Equal(t, request, got)
-	answer := []byte(`{"version":1,"id":"a","status":200,"body":"[]"}`)
+	answer := []byte(`{"id":"a","status":200,"body":"[]"}`)
 	require.NoError(t, chromehost.WriteFrame(writeInput, answer))
 	got, err = chromehost.ReadFrame(conn)
 	require.NoError(t, err)
@@ -166,10 +179,10 @@ func TestChromeHostRelayRetriesRefusedConnection(t *testing.T) {
 		t.Fatal("refused relay did not reconnect")
 	}
 	defer second.Close()
-	require.NoError(t, chromehost.WriteFrame(second, []byte(`{"version":1,"id":"b","path":"/api/organizations"}`)))
+	require.NoError(t, chromehost.WriteFrame(second, []byte(`{"id":"b","path":"/api/organizations"}`)))
 	frame, err := chromehost.ReadFrame(readOutput)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"version":1,"id":"b","path":"/api/organizations"}`, string(frame))
+	assert.JSONEq(t, `{"id":"b","path":"/api/organizations"}`, string(frame))
 	require.NoError(t, writeInput.Close())
 	select {
 	case err := <-finished:
@@ -249,7 +262,7 @@ func TestChromeSyncResults(t *testing.T) {
 		imported              int
 	}{
 		{"done", "event: progress\ndata: {}\n\nevent: done\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":0}\n\n", "", 200, 2},
-		{"absent host", `{"error":"Chrome host not connected"}`, "Chrome host not connected", 409, 0},
+		{"absent host", `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, "Run agentsview chrome setup and keep Chrome open, then Sync again", 409, 0},
 		{"error", "event: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 0},
 		{"fetch", "event: fetch\ndata: {\"id\":\"a\",\"path\":\"/api/organizations\"}\n\n", "page relay", 200, 0},
 		{"partial failure", "event:progress\ndata:{\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent:error\ndata:{\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 2},
@@ -260,7 +273,11 @@ func TestChromeSyncResults(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stats, err := readChromeSync(&http.Response{StatusCode: tt.status, Body: io.NopCloser(strings.NewReader(tt.body))})
 			if tt.wantError != "" {
-				require.ErrorContains(t, err, tt.wantError)
+				if tt.name == "absent host" {
+					require.EqualError(t, err, tt.wantError)
+				} else {
+					require.ErrorContains(t, err, tt.wantError)
+				}
 			} else {
 				require.NoError(t, err)
 			}

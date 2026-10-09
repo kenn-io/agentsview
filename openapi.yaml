@@ -7793,8 +7793,6 @@ components:
           type: integer
         build_date:
           type: string
-        claude_ai_chrome_host:
-          type: boolean
         commit:
           type: string
         data_version:
@@ -13104,7 +13102,7 @@ paths:
           content:
             text/event-stream:
               schema:
-                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required."
+                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required or claude_ai_chrome_host_required."
                 type: string
           description: OK
         "400":

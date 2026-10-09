@@ -178,7 +178,6 @@ func (s *Server) humaGetVersion(
 	_ *emptyInput,
 ) (*jsonOutput[VersionInfo], error) {
 	version := s.version
-	version.ClaudeAIChromeHost = s.chrome.Connected()
 	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
 	_, version.SessionStatsAvailable = s.db.(*db.DB)
 	return &jsonOutput[VersionInfo]{Body: version}, nil
