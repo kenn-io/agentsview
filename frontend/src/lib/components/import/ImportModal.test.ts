@@ -6,7 +6,6 @@ import { m } from "../../i18n/index.js";
 import { setLocale } from "../../paraglide/runtime.js";
 import { ApiError } from "../../api/runtime.js";
 import { sync as syncState } from "../../stores/sync.svelte.js";
-import { MetadataService } from "../../api/generated/index.js";
 
 const host = vi.hoisted(() => ({ connect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
 const getBrowserHost = vi.hoisted(() => vi.fn());
@@ -24,15 +23,13 @@ vi.mock("../../api/client.js", () => ({
 }));
 beforeEach(() => {
   vi.spyOn(syncState, "readOnly", "get").mockReturnValue(false);
-  vi.spyOn(syncState, "loadVersion").mockResolvedValue(undefined);
-  syncState.serverVersion = { claude_ai_chrome_host: false } as typeof syncState.serverVersion;
+  syncState.serverVersion = null;
   getBrowserHost.mockReturnValue(host);
 });
 afterEach(() => { vi.resetAllMocks(); vi.restoreAllMocks(); syncState.serverVersion = null; setLocale("en", { reload: false }); });
 
-it("shows Chrome Sync from the server flag without a page host", async () => {
+it("shows Chrome Sync without a page host or version flag", async () => {
   getBrowserHost.mockReturnValue(undefined);
-  syncState.serverVersion = { claude_ai_chrome_host: true } as typeof syncState.serverVersion;
   syncClaudeAI.mockResolvedValue({ imported: 1, updated: 0, skipped: 0, errors: 0 });
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
   expect(screen.getByText(m.import_claude_help_chrome())).toBeTruthy();
@@ -43,7 +40,7 @@ it("shows Chrome Sync from the server flag without a page host", async () => {
 
 it("shows desktop email-code instructions with a Chrome route for Google sign-in", () => {
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  expect(screen.getByText("Sign in with an email code, close the window, then Sync. For Google sign-in, use AgentsView in Chrome with the extension.")).toBeTruthy();
+  expect(screen.getByText("Sign in with an email code, close the window, then Sync. For Google sign-in, run agentsview chrome setup and Sync from the web UI.")).toBeTruthy();
   expect(screen.queryByText(/browser host/)).toBeNull();
 });
 
@@ -59,16 +56,6 @@ it("shows a desktop sign-in error rejected as a string", async () => {
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
   await waitFor(() => expect(screen.getByText("Could not open the Claude.ai sign-in window.")).toBeTruthy());
-});
-
-it.each([false, true])("shows setup when the Chrome host is absent, readOnly=%s", (readOnly) => {
-  getBrowserHost.mockReturnValue(undefined);
-  vi.spyOn(syncState, "readOnly", "get").mockReturnValue(readOnly);
-  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  const hint = screen.queryByText(m.import_claude_chrome_setup());
-  if (readOnly) expect(hint).toBeNull();
-  else expect(hint?.textContent).toContain("agentsview chrome setup");
-  expect(screen.queryByRole("button", { name: m.import_claude_sync() })).toBeNull();
 });
 
 it.each([
@@ -138,31 +125,17 @@ it("hides browser sync controls for a read-only archive", () => {
   expect(screen.queryByRole("button", { name: m.import_claude_connect() })).toBeNull();
 });
 
-it("refreshes Chrome capability when the Claude.ai panel opens after page load", async () => {
+it("recovers from an absent Chrome host without a reload", async () => {
   getBrowserHost.mockReturnValue(undefined);
-  vi.mocked(syncState.loadVersion).mockRestore();
-  const getVersion = vi.spyOn(MetadataService, "getApiV1Version").mockResolvedValue({ claude_ai_chrome_host: true } as NonNullable<typeof syncState.serverVersion>);
-  const { rerender } = render(ImportModal, { open: false, onclose: vi.fn(), onimported: vi.fn() });
-  expect(getVersion).not.toHaveBeenCalled();
-  await rerender({ open: true });
-  await waitFor(() => expect(screen.getByRole("button", { name: m.import_claude_sync() })).toBeTruthy());
-  expect(getVersion).toHaveBeenCalledOnce();
-  await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
-  await fireEvent.click(screen.getByRole("button", { name: "Claude.ai" }));
-  await waitFor(() => expect(getVersion).toHaveBeenCalledTimes(2));
-});
-
-it("refreshes Chrome capability after Sync reports a disconnected host", async () => {
-  getBrowserHost.mockReturnValue(undefined);
-  vi.mocked(syncState.loadVersion).mockRestore();
-  const getVersion = vi.spyOn(MetadataService, "getApiV1Version")
-    .mockResolvedValueOnce({ claude_ai_chrome_host: true } as NonNullable<typeof syncState.serverVersion>)
-    .mockResolvedValueOnce({ claude_ai_chrome_host: false } as NonNullable<typeof syncState.serverVersion>);
-  syncClaudeAI.mockRejectedValue(new ApiError(409, "Chrome host not connected"));
-  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  await waitFor(() => expect(screen.getByRole("button", { name: m.import_claude_sync() })).toBeTruthy());
+  setLocale("fr", { reload: false });
+  syncClaudeAI.mockRejectedValueOnce(new ApiError(409, "Run agentsview chrome setup and keep Chrome open, then Sync again", "claude_ai_chrome_host_required"))
+    .mockResolvedValueOnce({ imported: 1, updated: 0, skipped: 0, errors: 0 });
+  const onimported = vi.fn();
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported });
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
-  await waitFor(() => expect(screen.queryByRole("button", { name: m.import_claude_sync() })).toBeNull());
-  expect(getVersion).toHaveBeenCalledTimes(2);
-  expect(screen.getByText("Chrome host not connected")).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("Exécutez agentsview chrome setup et gardez Chrome ouvert, puis relancez la synchronisation.")).toBeTruthy());
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
+  await waitFor(() => expect(screen.getByText(m.import_processed({ count: 1 }))).toBeTruthy());
+  expect(syncClaudeAI).toHaveBeenCalledTimes(2);
+  expect(onimported).toHaveBeenCalledTimes(2);
 });

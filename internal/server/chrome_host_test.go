@@ -21,16 +21,6 @@ import (
 	"go.kenn.io/agentsview/internal/importer"
 )
 
-func chromeHostVersion(t *testing.T, srv *Server) bool {
-	t.Helper()
-	response := httptest.NewRecorder()
-	srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/version", nil))
-	require.Equal(t, http.StatusOK, response.Code)
-	var version VersionInfo
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &version))
-	return version.ClaudeAIChromeHost
-}
-
 func testChromeConnection(t *testing.T, srv *Server) (string, net.Conn) {
 	t.Helper()
 	socket := filepath.Join(t.TempDir(), "chrome", "host.sock")
@@ -40,7 +30,7 @@ func testChromeConnection(t *testing.T, srv *Server) (string, net.Conn) {
 	conn, err := net.Dial("unix", socket)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	require.Eventually(t, func() bool { return chromeHostVersion(t, srv) }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
 	return socket, conn
 }
 
@@ -54,19 +44,17 @@ func readChromeRequest(t *testing.T, conn net.Conn) (string, string) {
 	_, err = io.ReadFull(conn, body)
 	require.NoError(t, err)
 	var request struct {
-		Version int    `json:"version"`
-		ID      string `json:"id"`
-		Path    string `json:"path"`
+		ID   string `json:"id"`
+		Path string `json:"path"`
 	}
 	require.NoError(t, json.Unmarshal(body, &request))
-	assert.Equal(t, 1, request.Version)
 	require.NotEmpty(t, request.ID)
 	return request.ID, request.Path
 }
 
 func writeChromeReply(t *testing.T, conn net.Conn, id string, status int, body string) {
 	t.Helper()
-	payload, err := json.Marshal(map[string]any{"version": 1, "id": id, "status": status, "body": body})
+	payload, err := json.Marshal(map[string]any{"id": id, "status": status, "body": body})
 	require.NoError(t, err)
 	var header [4]byte
 	binary.NativeEndian.PutUint32(header[:], uint32(len(payload)))
@@ -123,15 +111,14 @@ func TestChromeHostSyncPrivateReplies(t *testing.T) {
 
 func TestChromeHostAbsent(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
-	assert.False(t, chromeHostVersion(t, srv))
 	response := httptest.NewRecorder()
 	srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil))
 	assert.Equal(t, http.StatusConflict, response.Code)
-	assert.Contains(t, response.Body.String(), "Chrome host not connected")
+	assert.JSONEq(t, `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, response.Body.String())
 }
 
 func TestChromeHostDisconnect(t *testing.T) {
-	for _, mode := range []string{"oversized frame", "unknown version", "EOF"} {
+	for _, mode := range []string{"oversized frame", "negative status", "status above 599", "EOF"} {
 		t.Run(mode, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			_, conn := testChromeConnection(t, srv)
@@ -145,23 +132,24 @@ func TestChromeHostDisconnect(t *testing.T) {
 				binary.NativeEndian.PutUint32(header[:], chromehost.FrameLimit+1)
 				_, err := conn.Write(header[:])
 				require.NoError(t, err)
-			case "unknown version":
-				payload := []byte(`{"version":99,"id":"ignored","status":200,"body":"[]"}`)
-				require.NoError(t, chromehost.WriteFrame(conn, payload))
+			case "negative status":
+				writeChromeReply(t, conn, "ignored", -1, "[]")
+			case "status above 599":
+				writeChromeReply(t, conn, "ignored", 600, "[]")
 			case "EOF":
 				require.NoError(t, conn.Close())
 			}
 			select {
 			case err := <-finished:
-				if mode == "unknown version" {
-					require.EqualError(t, err, "Chrome host protocol version mismatch; re-run agentsview chrome setup and reload the extension")
+				if mode == "negative status" || mode == "status above 599" {
+					require.EqualError(t, err, "Invalid Chrome reply status")
 				} else {
 					require.ErrorContains(t, err, "disconnected")
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("pending fetch did not fail")
 			}
-			require.Eventually(t, func() bool { return !chromeHostVersion(t, srv) }, 5*time.Second, 10*time.Millisecond)
+			require.Eventually(t, func() bool { return !srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
 		})
 	}
 }
@@ -212,5 +200,5 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("first fetch did not finish")
 	}
-	assert.True(t, chromeHostVersion(t, srv))
+	assert.True(t, srv.chrome.Connected())
 }

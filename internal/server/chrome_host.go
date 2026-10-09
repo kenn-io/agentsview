@@ -103,7 +103,6 @@ func (h *chromeHost) read(conn *chromeConnection) {
 			return
 		}
 		var reply struct {
-			Version    int    `json:"version"`
 			ID         string `json:"id"`
 			Status     int    `json:"status"`
 			Body       string `json:"body"`
@@ -113,8 +112,8 @@ func (h *chromeHost) read(conn *chromeConnection) {
 		if err := json.Unmarshal(body, &reply); err != nil {
 			return
 		}
-		if reply.Version != chromehost.Version {
-			disconnectErr = errors.New(chromehost.VersionError)
+		if reply.Status < 0 || reply.Status > 599 {
+			disconnectErr = errors.New("Invalid Chrome reply status")
 			return
 		}
 		response := claudeAISyncResult{status: reply.Status, body: []byte(reply.Body), retryAfter: reply.RetryAfter}
@@ -139,7 +138,7 @@ func (h *chromeHost) fetch(ctx context.Context, path string) (importer.ClaudeAIR
 	}
 	id := rand.Text()
 	answer := make(chan claudeAISyncResult, 1)
-	body, err := json.Marshal(map[string]any{"version": chromehost.Version, "id": id, "path": path})
+	body, err := json.Marshal(map[string]any{"id": id, "path": path})
 	if err != nil {
 		return importer.ClaudeAIResponse{}, err
 	}
