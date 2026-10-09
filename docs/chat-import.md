@@ -70,7 +70,7 @@ list refreshes automatically.
 
 ## Sync in the desktop app
 
-With the desktop app connected to its local archive, open **Import conversations**, select **Claude.ai**, and click **Sign in**. Sign in to Claude.ai, close the window, then click **Sync** to download your chats.
+With the desktop app connected to its local archive, open **Import conversations**, select **Claude.ai**, and click **Sign in**. Sign in to Claude.ai with an email code, close the window, then click **Sync** to download your chats. Google sign-in needs a browser host, which a later release can add beside the desktop window.
 
 Sync checks every chat, including archived chats. It fetches new chats and chats whose `updated_at`, visible leaf, or stored message count changed. A zip re-import that changes the count triggers another fetch. Resync clears freshness, so the next Sync fetches each chat once. Search stays available during Sync.
 
