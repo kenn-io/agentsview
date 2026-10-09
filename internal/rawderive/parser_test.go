@@ -1761,3 +1761,43 @@ func TestProviderParserHostedCodexSkillNameStaysLexical(t *testing.T) {
 	require.Len(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls, 1)
 	assert.Empty(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
 }
+
+// A reverted Codex rollout has no plain thread UUID suffix, so its capture
+// records the rollout's client path as its source key. Hosted parsing must
+// accept that manifest and attribute it to the thread.
+func TestProviderParserAcceptsPathKeyedRevertedCodexManifest(t *testing.T) {
+	t.Parallel()
+	clientRoot := t.TempDir()
+	const threadID = "11111111-1111-4111-8111-111111111111"
+	const rolloutID = "33333333-3333-4333-8333-333333333333"
+	sourcePath := filepath.Join(clientRoot,
+		"rollout-2026-09-09T11-00-00-"+threadID+"_"+rolloutID+".jsonl")
+	contents := []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(threadID, "/work/project", "codex_cli_rs", "2026-09-09T11:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "after revert", "2026-09-09T11:00:01Z"),
+	))
+	require.NoError(t, os.WriteFile(sourcePath, contents, 0o600))
+	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
+		Roots: []string{clientRoot},
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, sources[0])
+	require.Equal(t, sourcePath, manifest.Manifest.SourceKey)
+	materialized, err := (Materializer{
+		Store:   &materializerStore{objects: objects},
+		BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
+	}).Materialize(t.Context(), manifest)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
+	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
+	require.NoError(t, err)
+
+	result, err := dispatch.Parse(t.Context(), manifest, materialized)
+
+	require.NoError(t, err)
+	require.Len(t, result.Outcome.Results, 1)
+	assert.Equal(t, "codex:"+threadID, result.Outcome.Results[0].Result.Session.ID)
+}

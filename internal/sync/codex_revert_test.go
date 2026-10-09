@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -424,4 +426,45 @@ func TestSyncAllSinceCodexKeepsChangedArchivedRevertedCopy(t *testing.T) {
 			assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), derivedID))
 		})
 	}
+}
+
+// A stored rollout whose file went missing and came back is still the copy
+// its session tracks. An index rename that arrives before the restored file
+// syncs must refresh that copy, not a shorter duplicate in the other root.
+func TestCodexIndexRenameKeepsRestoredDerivedRolloutCopy(t *testing.T) {
+	env, liveDir, archivedDir := codexRootEnv(t)
+	sessionID := "codex:" + codexThreadID
+	day := filepath.Join("2026", "07", "28")
+	initial := time.Now().Add(-2 * time.Hour)
+	writeCodexThreadName(t, liveDir, "First", initial)
+
+	env.writeCodexSession(t, day, codexRevertedName, codexRollout(codexThreadID, 1))
+	env.engine.SyncAll(t.Context(), nil)
+	archivedPath := env.writeSession(t, archivedDir, codexOrdinaryName, codexRollout(codexThreadID, 3))
+	require.NoError(t, os.Chtimes(archivedPath, initial, initial))
+	env.engine.SyncAll(t.Context(), nil)
+	derivedID := parser.AltSessionID(sessionID, archivedPath)
+	assertSessionMessageCount(t, env.db, derivedID, 3)
+
+	require.NoError(t, os.Remove(archivedPath))
+	require.NoError(t, env.engine.ReconcileWatchRoots(
+		t.Context(), []string{liveDir, archivedDir}, false,
+	))
+	missing, err := env.db.ListSessionPathRecords(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.True(t, slices.ContainsFunc(missing, func(r db.SessionPathRecord) bool {
+		return r.ID == derivedID && r.SourceMissing
+	}), "the derived rollout must be marked missing: %+v", missing)
+
+	env.writeSession(t, archivedDir, codexOrdinaryName, codexRollout(codexThreadID, 3))
+	require.NoError(t, os.Chtimes(archivedPath, initial, initial))
+	livePath := env.writeCodexSession(t, day, codexOrdinaryName, codexRollout(codexThreadID, 1))
+	require.NoError(t, os.Chtimes(livePath, initial, initial))
+	writeCodexThreadName(t, liveDir, "Renamed", time.Now().Add(-30*time.Minute))
+	env.engine.SyncPaths([]string{
+		filepath.Join(filepath.Dir(liveDir), parser.CodexSessionIndexFilename),
+	})
+
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), derivedID))
+	assertSessionMessageCount(t, env.db, derivedID, 3)
 }

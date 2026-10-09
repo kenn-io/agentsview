@@ -892,11 +892,12 @@ func (s codexSourceSet) discover(
 			if !ok {
 				continue
 			}
-			if current, ok := byKey[source.Key]; ok &&
+			key := s.codexDiscoveryKey(source)
+			if current, ok := byKey[key]; ok &&
 				!preferCodexSource(source, current) {
 				continue
 			}
-			byKey[source.Key] = source
+			byKey[key] = source
 		}
 	}
 	for _, source := range byKey {
@@ -1244,15 +1245,24 @@ func (s codexSourceSet) directPathSource(
 			Path: path,
 		},
 	}
-	// A reverted rollout's copies in the live and archived roots are one
-	// source, preferred like the thread's ordinary rollout copies.
-	if id := CodexRevertedRolloutID(filepath.Base(path)); id != "" {
+	// Discovery prefers a reverted rollout's dated copy over its archived
+	// one, like the thread's ordinary rollout copies.
+	if CodexRevertedRolloutID(filepath.Base(path)) != "" {
 		if layout, _, ok := CodexSessionPathInfo(root, path); ok {
-			source.Key = codexSourceKey(s.agent, id)
 			source.Opaque = codexSource{Root: root, Path: path, Layout: layout}
 		}
 	}
 	return source, true
+}
+
+// codexDiscoveryKey groups every copy of one rollout during discovery. A
+// reverted rollout keeps its path as its source key, which raw-capture
+// manifests record, so its copies group by the rollout's ID instead.
+func (s codexSourceSet) codexDiscoveryKey(source SourceRef) string {
+	if id := CodexRevertedRolloutID(filepath.Base(source.DisplayPath)); id != "" {
+		return codexSourceKey(s.agent, id)
+	}
+	return source.Key
 }
 
 func (s codexSourceSet) canonicalSource(

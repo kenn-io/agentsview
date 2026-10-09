@@ -6884,11 +6884,11 @@ func reconciliationReplacementIdentity(
 	}
 	switch agent {
 	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode:
-		id := parser.CodexRolloutDiscoveryID(filepath.Base(storedPath))
-		if id == "" {
+		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(storedPath))
+		if uuid == "" {
 			return ""
 		}
-		return parser.CodexSourceKey(agent, id)
+		return parser.CodexSourceKey(agent, uuid)
 	default:
 		return ""
 	}
@@ -16670,6 +16670,11 @@ func (e *Engine) codexIndexSessionNameState(
 		// rewrite preserves the title, so the loop could never converge.
 		return false, true
 	}
+	if e.db.ArchiveContent().UsageOnly() {
+		// Usage-only archives store no titles, so a rename has nothing to
+		// refresh and the empty stored title must not read as stale.
+		return false, true
+	}
 	ctx := context.Background()
 	storedName, found, err := e.db.GetSessionName(
 		ctx, e.codexStoredSessionIDForPath(ctx, path, threadID),
@@ -16851,9 +16856,7 @@ func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
 	candidates []parser.DiscoveredFile,
 ) parser.DiscoveredFile {
 	for _, candidate := range candidates {
-		if _, _, ok := e.db.GetFileInfoByAgentPath(ctx,
-			e.effectiveSourcePath(candidate.Path), string(candidate.Agent),
-		); ok {
+		if codexCandidateTracked(ctx, e.db, e.effectiveSourcePath(candidate.Path), candidate) {
 			return candidate
 		}
 	}
@@ -16931,6 +16934,9 @@ func (e *Engine) codexStoredNameDiffersBySessionID(
 	sessionID, indexTitle string,
 	missingDiffers bool,
 ) bool {
+	if e.db.ArchiveContent().UsageOnly() {
+		return false
+	}
 	storedName, found, err := e.db.GetSessionName(
 		context.Background(), sessionID,
 	)
@@ -16944,6 +16950,19 @@ func codexSessionNameDiffers(storedName, indexTitle string) bool {
 	return strings.TrimSpace(indexTitle) != strings.TrimSpace(storedName)
 }
 
+// codexCandidateTracked reports whether a stored session owns the candidate's
+// stored path, including one whose source is marked missing. A failed lookup
+// counts as untracked, so the caller falls back to its layout preference.
+func codexCandidateTracked(ctx context.Context,
+	database *db.DB, storedPath string, candidate parser.DiscoveredFile,
+) bool {
+	tracked, err := database.HasSessionAtFilePath(ctx, storedPath, string(candidate.Agent))
+	if err != nil {
+		log.Printf("codex duplicate selection: %v; using layout preference", err)
+	}
+	return tracked
+}
+
 func pickPreferredCodexDiscoveredFile(ctx context.Context,
 	database *db.DB, candidates []parser.DiscoveredFile,
 ) parser.DiscoveredFile {
@@ -16953,9 +16972,7 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 	// Prefer the copy a stored session tracks. Match by path: the rollout's
 	// row can hold the thread's id or, after a revert, a derived one.
 	for _, candidate := range candidates {
-		if _, _, ok := database.GetFileInfoByAgentPath(ctx,
-			candidate.Path, string(candidate.Agent),
-		); ok {
+		if codexCandidateTracked(ctx, database, candidate.Path, candidate) {
 			return candidate
 		}
 	}
