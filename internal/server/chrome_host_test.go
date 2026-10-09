@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/chromehost"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
 )
 
@@ -110,6 +112,91 @@ func TestChromeHostAbsent(t *testing.T) {
 	assert.JSONEq(t, `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, response.Body.String())
 }
 
+func TestClaudeAIChromeStatus(t *testing.T) {
+	for _, tt := range []struct {
+		name                               string
+		installed, connected, otherProfile bool
+		want                               string
+	}{
+		{"not set up", false, false, false, `{"installed":false,"connected":false,"other_profile":false}`},
+		{"disconnected", true, false, false, `{"installed":true,"connected":false,"other_profile":false}`},
+		{"connected", true, true, false, `{"installed":true,"connected":true,"other_profile":false}`},
+		{"other profile", true, true, true, `{"installed":true,"connected":true,"other_profile":true}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			if tt.installed {
+				dir := filepath.Join(srv.cfg.DataDir, "chrome", "extension")
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
+			}
+			if tt.connected {
+				socket, _ := testChromeConnection(t, srv)
+				if tt.otherProfile {
+					second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
+					require.NoError(t, err)
+					defer second.Close()
+					require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
+					_, err = chromehost.ReadFrame(second)
+					require.ErrorIs(t, err, io.EOF)
+				}
+			}
+			response := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/import/claude-ai/chrome", nil)
+			req.RemoteAddr = "127.0.0.1:1234"
+			srv.mux.ServeHTTP(response, req)
+			assert.Equal(t, http.StatusOK, response.Code)
+			assert.JSONEq(t, tt.want, response.Body.String())
+		})
+	}
+}
+
+type chromeStatusStore struct {
+	db.Store
+	readOnly bool
+}
+
+func (s chromeStatusStore) ReadOnly() bool { return s.readOnly }
+
+func TestClaudeAIChromeStatusArchiveChecks(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		readOnly bool
+		want     string
+	}{
+		{"read only", true, "import not available in read-only mode"},
+		{"non local archive", false, "sync requires a local archive"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			srv.db = chromeStatusStore{Store: srv.db, readOnly: tt.readOnly}
+			response := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/import/claude-ai/chrome", nil)
+			req.RemoteAddr = "127.0.0.1:1234"
+			srv.mux.ServeHTTP(response, req)
+			assert.Equal(t, http.StatusNotImplemented, response.Code)
+			assert.Contains(t, response.Body.String(), tt.want)
+		})
+	}
+}
+
+func TestClaudeAIChromeStatusLocalOnly(t *testing.T) {
+	for _, tt := range []struct{ name, remote, forwarded string }{
+		{"remote", "192.0.2.10:1234", ""},
+		{"forwarded", "127.0.0.1:1234", "for=192.0.2.10"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			response := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/import/claude-ai/chrome", nil)
+			req.RemoteAddr = tt.remote
+			req.Header.Set("Forwarded", tt.forwarded)
+			srv.mux.ServeHTTP(response, req)
+			assert.Equal(t, http.StatusForbidden, response.Code)
+		})
+	}
+}
+
 func TestChromeHostLocalOnly(t *testing.T) {
 	for _, tt := range []struct {
 		name, remote, forwarded string
@@ -147,9 +234,9 @@ func TestChromeHostLocalOnly(t *testing.T) {
 }
 
 func TestChromeHostIncompatibleReply(t *testing.T) {
-	for _, reply := range []struct{ name, body, message string }{
-		{"stale extension", `{"status":0,"error":"Unsupported Claude fetch path"}`, "run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again"},
-		{"newer extension", `{"version":2,"status":600,"body":"private"}`, "upgrade AgentsView, then Sync again"},
+	for _, reply := range []struct{ name, body, message, code string }{
+		{"stale extension", `{"status":0,"error":"Unsupported Claude fetch path"}`, "run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again", "claude_ai_chrome_host_update_required"},
+		{"newer extension", `{"version":2,"status":600,"body":"private"}`, "upgrade AgentsView, then Sync again", "claude_ai_agentsview_update_required"},
 	} {
 		t.Run(reply.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -171,11 +258,7 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 				require.FailNow(t, "incompatible host did not stop Sync")
 			}
 			assert.Contains(t, response.Body.String(), reply.message)
-			if reply.name == "stale extension" {
-				assert.Contains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
-			} else {
-				assert.NotContains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
-			}
+			assert.Contains(t, response.Body.String(), `"code":"`+reply.code+`"`)
 			assert.NotContains(t, response.Body.String(), "event: done")
 			assert.NotContains(t, response.Body.String(), "private")
 			stats, err := srv.db.GetStats(t.Context(), false, false)
