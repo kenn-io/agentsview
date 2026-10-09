@@ -899,7 +899,7 @@ func TestHermesProfileChangedPathAllocationsStayBounded(t *testing.T) {
 }
 
 func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
-	measure := func(t *testing.T, sessionCount int) int64 {
+	measure := func(t *testing.T, source string, sessionCount int) int64 {
 		t.Helper()
 
 		root := t.TempDir()
@@ -914,9 +914,20 @@ func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
 		require.NoError(t, err)
 		for i := range sessionCount {
 			id := fmt.Sprintf("member-%06d", i)
+			parent := ""
+			if i%3 == 0 && source == "cron" {
+				id = fmt.Sprintf("cron_job-%06d_20261009_120000", i)
+			} else if i%3 == 1 {
+				parent = fmt.Sprintf("member-%06d", i-1)
+				if source == "cron" {
+					parent = fmt.Sprintf("cron_job-%06d_20261009_120000", i-1)
+				}
+			} else if i%3 == 2 {
+				parent = fmt.Sprintf("member-%06d", i-1)
+			}
 			_, err = tx.ExecContext(t.Context(), `INSERT INTO sessions
-				(id, source, started_at, estimated_cost_usd, actual_cost_usd)
-				VALUES (?, 'cli', ?, 0, 0)`, id, i)
+				(id, source, parent_session_id, started_at, estimated_cost_usd, actual_cost_usd)
+				VALUES (?, ?, ?, ?, 0, 0)`, id, source, parent, i)
 			require.NoError(t, err)
 			_, err = tx.ExecContext(t.Context(), `INSERT INTO messages
 				(session_id, role, content, timestamp)
@@ -940,11 +951,15 @@ func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
 		return peak
 	}
 
-	small := measure(t, 3)
-	large := measure(t, 300)
-	assert.Positive(t, small, "the retained-ID allocation boundary must be observed")
-	assert.LessOrEqual(t, large, small*2,
-		"peak retained ID bytes must not scale with Hermes archive cardinality")
+	for _, source := range []string{"cli", "cron"} {
+		t.Run(source, func(t *testing.T) {
+			small := measure(t, source, 3)
+			large := measure(t, source, 300)
+			assert.Positive(t, small, "the retained-ID allocation boundary must be observed")
+			assert.LessOrEqual(t, large, small*2,
+				"peak retained ID bytes must not scale with Hermes archive cardinality")
+		})
+	}
 }
 
 func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {

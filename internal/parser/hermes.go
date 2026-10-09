@@ -1554,7 +1554,7 @@ func hermesCronParent(ctx context.Context, conn *sql.DB, id string) (string, err
 // HermesCronJobName strips the run timestamp from a recorded job title.
 func HermesCronJobName(job, title string) string {
 	i := strings.LastIndex(title, " · ")
-	if job == "" || i < 0 || strings.TrimSpace(title[i+len(" · "):]) == "" {
+	if i < 0 || strings.TrimSpace(title[i+len(" · "):]) == "" {
 		return ""
 	}
 	name := strings.TrimSpace(title[:i])

@@ -1687,30 +1687,6 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 	}
 	defer memberConn.Close()
 	observeSharedContainerScan(ctx)
-	parentRows, err := idsConn.QueryContext(ctx, "SELECT id, parent_session_id FROM sessions WHERE parent_session_id <> ''")
-	if err != nil {
-		return fmt.Errorf("query hermes parents: %w", err)
-	}
-	defer parentRows.Close()
-	parents := make(map[string]string)
-	var parentBytes int64
-	defer func() { observeStreamingRetainedBytes(ctx, -parentBytes) }()
-	for parentRows.Next() {
-		var id, parent string
-		if err := parentRows.Scan(&id, &parent); err != nil {
-			return fmt.Errorf("scan hermes parent: %w", err)
-		}
-		parents[id] = parent
-		retained := int64(len(id) + len(parent))
-		parentBytes += retained
-		observeStreamingRetainedBytes(ctx, retained)
-	}
-	if err := parentRows.Err(); err != nil {
-		return err
-	}
-	if err := parentRows.Close(); err != nil {
-		return err
-	}
 	rows, err := idsConn.QueryContext(ctx, "SELECT id FROM sessions ORDER BY id")
 	if err != nil {
 		return fmt.Errorf("query hermes sessions: %w", err)
@@ -1727,7 +1703,7 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 		retainedIDBytes := int64(len(id))
 		observeStreamingRetainedBytes(ctx, retainedIDBytes)
 		if err := cacheHermesMemberCore(
-			ctx, memberConn, stateDB, id, VirtualSourcePath(stateDB, id), parents,
+			ctx, memberConn, stateDB, id, VirtualSourcePath(stateDB, id),
 		); err != nil {
 			observeStreamingRetainedBytes(ctx, -retainedIDBytes)
 			return err
@@ -1742,7 +1718,7 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 // left for the fingerprint path to surface through its established error
 // handling; only cache-write failures propagate.
 func cacheHermesMemberCore(
-	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey string, parents map[string]string,
+	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey string,
 ) error {
 	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(ctx,
 		conn, stateDB, id,
@@ -1750,7 +1726,7 @@ func cacheHermesMemberCore(
 	if err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
-	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return parents[id], nil }); err != nil {
+	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) }); err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	h := sha256.New()
