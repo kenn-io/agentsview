@@ -47,6 +47,14 @@ it("shows the sign-in error message", async () => {
   await waitFor(() => expect(screen.getByText("Click the AgentsView toolbar button on this tab to allow Claude.ai Sync.")).toBeTruthy());
 });
 
+it("shows a desktop sign-in error rejected as a string", async () => {
+  syncState.isDesktop = true;
+  host.connect.mockRejectedValue("Could not open the Claude.ai sign-in window.");
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
+  await waitFor(() => expect(screen.getByText("Could not open the Claude.ai sign-in window.")).toBeTruthy());
+});
+
 it.each([false, true])("offers the extension download in writable Chrome only, readOnly=%s", (readOnly) => {
   getBrowserHost.mockReturnValue(undefined);
   syncState.readOnly = readOnly;

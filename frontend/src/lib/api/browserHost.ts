@@ -25,11 +25,16 @@ export function getBrowserHost(): BrowserHost | undefined {
     return new Promise((resolve, reject) => {
       const reply = (event: MessageEvent) => {
         if (event.source !== window || event.data?.type !== "agentsview-claude-reply" || event.data.id !== id) return;
+        clearTimeout(timer);
         window.removeEventListener("message", reply);
         if (event.data.error) reject(new Error(event.data.error));
         else if (event.data.result === undefined) reject(new Error("Claude host returned no result"));
         else resolve(event.data.result);
       };
+      const timer = setTimeout(() => {
+        window.removeEventListener("message", reply);
+        reject(new Error("Claude host request timed out"));
+      }, 100_000);
       window.addEventListener("message", reply);
       window.postMessage({ type: "agentsview-claude-request", id, method, path }, location.origin);
     });
