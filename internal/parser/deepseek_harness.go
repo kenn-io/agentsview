@@ -1254,7 +1254,11 @@ func deepSeekHarnessToolResultData(
 		return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "", err
 	}
 	role := "user"
-	if string(messageFields["role"]) == `"tool"` {
+	messageRole, err := deepSeekHarnessRequiredString(messageFields, "role")
+	if err != nil {
+		return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "", err
+	}
+	if messageRole == "tool" {
 		role = "tool"
 	}
 	content, source, _, err := deepSeekHarnessMessageEnvelope(rawMessage, role)
@@ -1276,12 +1280,7 @@ func deepSeekHarnessToolResultData(
 			errors.New("tool result source has invalid callId")
 	}
 	if role == "tool" {
-		callID, err := deepSeekHarnessRequiredString(messageFields, "toolCallId")
-		if err != nil || callID == "" || callID != sourceCallID {
-			return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "",
-				errors.New("tool result call id does not match its source")
-		}
-		block := map[string]any{"type": "tool-result", "toolCallId": callID, "content": content}
+		block := map[string]any{"type": "tool-result", "toolCallId": messageFields["toolCallId"], "content": content}
 		if rawIsError, ok := messageFields["isError"]; ok {
 			block["isError"] = rawIsError
 		}
@@ -1299,7 +1298,7 @@ func deepSeekHarnessToolResultData(
 	}
 	isError := false
 	if rawIsError, ok := blockFields["isError"]; ok {
-		if err := json.Unmarshal(rawIsError, &isError); err != nil || string(rawIsError) == "null" {
+		if err := json.Unmarshal(rawIsError, &isError); err != nil || (role == "tool" && string(rawIsError) == "null") {
 			return deepSeekHarnessTurnStep{}, ParsedMessage{}, false, "",
 				errors.New("tool result isError is not a boolean")
 		}

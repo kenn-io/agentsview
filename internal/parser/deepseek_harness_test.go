@@ -1733,7 +1733,7 @@ func TestDeepSeekHarnessV4SessionParses(t *testing.T) {
 			developer := result.Messages[4]
 			assert.Equal(t, RoleSystem, developer.Role)
 			assert.True(t, developer.IsSystem)
-			assert.Equal(t, "agent-loop", developer.SourceType)
+			assert.Equal(t, "tool-registry", developer.SourceType)
 			assert.Equal(t, "Use the read-only connection\nTool added: read\nTool removed: write", developer.Content)
 			require.Len(t, result.UsageEvents, 1)
 			assert.Equal(t, 10, result.UsageEvents[0].InputTokens)
@@ -1751,11 +1751,12 @@ func TestDeepSeekHarnessV4ToolResultValidation(t *testing.T) {
 		{"empty output", func(m map[string]any) { m["content"] = []any{} }, ""},
 		{"error output", func(m map[string]any) { m["isError"] = true }, ""},
 		{"omitted error flag", func(m map[string]any) { delete(m, "isError") }, ""},
+		{"escaped tool role", func(m map[string]any) { m["role"] = jsontext.Value(`"t\u006fol"`) }, ""},
 		{"image output", func(m map[string]any) {
 			m["content"] = []any{map[string]any{"type": "image", "attachment": map[string]any{"id": "image-1"}}}
 		}, ""},
 		{"mismatched call", func(m map[string]any) { m["toolCallId"] = "other-call" }, "call id does not match"},
-		{"empty call", func(m map[string]any) { m["toolCallId"] = "" }, "call id does not match"},
+		{"empty call", func(m map[string]any) { m["toolCallId"] = "" }, "invalid toolCallId"},
 		{"invalid error flag", func(m map[string]any) { m["isError"] = "true" }, "isError is not a boolean"},
 		{"null error flag", func(m map[string]any) { m["isError"] = nil }, "isError is not a boolean"},
 	} {
@@ -1776,30 +1777,64 @@ func TestDeepSeekHarnessV4ToolResultValidation(t *testing.T) {
 	}
 }
 
-func TestDeepSeekHarnessV4DeveloperRequiresOpenStep(t *testing.T) {
-	records := deepSeekHarnessV4Fixture("v4-developer")
-	for _, record := range records[1:] {
-		event := record.(map[string]any)
-		if event["type"] == "developer/message" {
-			event["data"].(map[string]any)["step"] = 2
-		}
+func TestDeepSeekHarnessV4DeveloperValidation(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		change    func(map[string]any)
+		wantError string
+	}{
+		{"closed step", func(data map[string]any) { data["step"] = 2 }, "names turn 1/step 2"},
+		{"missing tool name", func(data map[string]any) {
+			delete(data["message"].(map[string]any)["content"].([]any)[1].(map[string]any), "toolName")
+		}, "invalid toolName"},
+		{"empty tool name", func(data map[string]any) {
+			data["message"].(map[string]any)["content"].([]any)[2].(map[string]any)["toolName"] = ""
+		}, "invalid toolName"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			records := deepSeekHarnessV4Fixture("v4-developer")
+			for _, record := range records[1:] {
+				event := record.(map[string]any)
+				if event["type"] == "developer/message" {
+					test.change(event["data"].(map[string]any))
+				}
+			}
+			path := writeDeepSeekHarnessVersionedFixture(t, t.TempDir(), "v4-developer", deepSeekHarnessFixtureCwd, "plain", 4, records)
+			_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+			require.ErrorContains(t, err, test.wantError)
+		})
 	}
-	path := writeDeepSeekHarnessVersionedFixture(t, t.TempDir(), "v4-developer", deepSeekHarnessFixtureCwd, "plain", 4, records)
+}
+
+func TestDeepSeekHarnessV3ToolResultAllowsNullErrorFlag(t *testing.T) {
+	records := deepSeekHarnessV3Fixture("v3-null-error")
+	message := records[13].(map[string]any)["data"].(map[string]any)["message"].(map[string]any)
+	message["content"].([]any)[0].(map[string]any)["isError"] = nil
+	path := writeDeepSeekHarnessVersionedFixture(t, t.TempDir(), "v3-null-error", deepSeekHarnessFixtureCwd, "plain", 3, records)
 	_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-	require.ErrorContains(t, err, "names turn 1/step 2")
+	require.NoError(t, err)
 }
 
 func deepSeekHarnessV4Fixture(id string) []any {
 	records := deepSeekHarnessV3Fixture(id)
 	records[0].(map[string]any)["version"] = 4
+	for _, record := range records[1:] {
+		event := record.(map[string]any)
+		if event["type"] == "system/message" {
+			event["data"].(map[string]any)["message"].(map[string]any)["source"] = map[string]any{"kind": "system-prompt"}
+		}
+	}
+	records[6].(map[string]any)["data"].(map[string]any)["header"].(map[string]any)["tools"] = []any{
+		map[string]any{"name": "read", "description": "Read a file", "parameters": map[string]any{"type": "object"}},
+	}
 	message := records[13].(map[string]any)["data"].(map[string]any)["message"].(map[string]any)
 	message["role"] = "tool"
 	block := message["content"].([]any)[0].(map[string]any)
 	message["toolCallId"], message["isError"], message["content"] = block["toolCallId"], block["isError"], block["content"]
 	developer := deepSeekHarnessFixtureEvent(13, "developer/message", map[string]any{
-		"turn": 1, "step": 1,
+		"turn": 1, "step": 1, "headerSeq": 5,
 		"message": map[string]any{
-			"id": "dev-1", "role": "developer", "source": map[string]any{"kind": "agent-loop"},
+			"id": "dev-1", "role": "developer", "source": map[string]any{"kind": "tool-registry"},
 			"content": []any{
 				map[string]any{"type": "text", "text": "Use the read-only connection"},
 				map[string]any{"type": "tool-addition", "toolName": "read"},
@@ -1807,12 +1842,15 @@ func deepSeekHarnessV4Fixture(id string) []any {
 			},
 		},
 	}, "append")
-	records = append(records[:14], append([]any{developer}, records[14:]...)...)
+	replacement := records[len(records)-1]
+	records = records[:len(records)-1]
+	records = append(records[:14], append([]any{developer, replacement}, records[14:]...)...)
 	for _, kind := range []string{"workspace/changes", "image/offload", "working-directory/change"} {
 		records = append(records, deepSeekHarnessFixtureEvent(0, kind, map[string]any{}, nil))
 	}
 	for index, record := range records[1:] {
 		record.(map[string]any)["seq"] = index
+		record.(map[string]any)["time"] = 1700000000001 + index
 	}
 	return records
 }
