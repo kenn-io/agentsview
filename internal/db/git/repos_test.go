@@ -423,9 +423,11 @@ func TestFindRepoRoot_WindowsRootedPointers(t *testing.T) {
 					if filepath.VolumeName(cache) == filepath.VolumeName(repo) {
 						t.Skip("a second drive is unavailable")
 					}
-					t.Setenv("GOTMPDIR", cache)
 					original := gitdir
-					gitdir = t.TempDir()
+					gitdir, err = os.MkdirTemp(cache, "agentsview-gitdir-")
+					require.NoError(t, err)
+					t.Cleanup(func() { _ = os.RemoveAll(gitdir) })
+					require.NotEqual(t, strings.ToLower(filepath.VolumeName(repo)), strings.ToLower(filepath.VolumeName(gitdir)))
 					require.NoError(t, os.WriteFile(original, []byte("gitdir: "+filepath.ToSlash(gitdir)+"\n"), 0o600))
 				} else {
 					require.NoError(t, os.Mkdir(gitdir, 0o700))
