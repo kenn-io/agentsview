@@ -156,7 +156,10 @@ evidence; they do not establish whether a tool helped the task.
   against parser fixtures, user-line entrypoints in sync fixtures, and
   context-first appends in usage-only archives.
   The first real prompt reparses an `sdk-cli` session with zero stored user
-  messages; assistant appends stay incremental. The original evidence came
+  messages and no explicit provider kind; assistant appends stay incremental.
+  Reverified 2026-10-08 against first-prompt incremental fixtures. Deleted
+  transcripts prevent historical origin repair; stored entrypoints alone do
+  not distinguish workers from human SDK conversations. The original evidence came
   from the installed producer and local transcripts.
   Public source is unavailable. Queued fixtures follow the bundled ingress and
   persistence path; no native queued-origin transcript has been captured.

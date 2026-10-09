@@ -230,9 +230,9 @@ The latest published release is
 **Bug fixes**
 
 - Oversized telemetry requests return HTTP 413.
-- Activity counts headless Claude, Codex, and Grok workers as Subagents unless
-  they have script evidence; `codex exec` runs are no longer automated by launch
-  mode alone, changing the rule from
+- Activity counts headless Claude, Codex, and Grok workers as Subagents,
+  including scripted workers whose parent disappears. `codex exec` runs are no
+  longer automated by launch mode alone, changing the rule from
   [agentsview#1855](https://github.com/kenn-io/agentsview/issues/1855).
   Plain `codex exec` and Grok non-interactive runs are now included by default
   in usage and embeddings scopes.

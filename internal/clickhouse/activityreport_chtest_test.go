@@ -63,8 +63,8 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 	require.NoError(t, err)
 	report, err := store.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true}, q)
 	require.NoError(t, err)
-	assert.Equal(t, 3, report.Totals.SubagentSessions)
-	assert.Equal(t, 1, report.Totals.AutomatedSessions)
+	assert.Equal(t, 4, report.Totals.SubagentSessions)
+	assert.Zero(t, report.Totals.AutomatedSessions)
 	assert.Zero(t, report.Totals.InteractiveSessions)
 }
 

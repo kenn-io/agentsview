@@ -31,12 +31,6 @@ func TestArtifactImportParentlessWorkerAfterRepair(t *testing.T) {
 	_, err = ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
 	require.NoError(t, err)
 	destination := testDB(t)
-	raw, err = sql.Open("sqlite3", destination.Path())
-	require.NoError(t, err)
-	var repaired int
-	require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT value FROM stats WHERE key = 'parentless_worker_relationship_v1'`).Scan(&repaired))
-	require.NoError(t, raw.Close())
-	require.Equal(t, 1, repaired)
 	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
 	recordAllImportEntries(t, coordinator, store, contractOrigin)
 	result, err := coordinator.Finalize(t.Context())

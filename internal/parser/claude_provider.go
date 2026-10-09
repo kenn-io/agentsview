@@ -404,7 +404,7 @@ func (p *claudeProvider) ParseIncremental(
 		}
 		return IncrementalOutcome{}, IncrementalNoNewData, nil
 	}
-	if req.StoredUserMessageCount == 0 && req.StoredEntrypoint == "sdk-cli" && slices.ContainsFunc(newMsgs, isRealClaudeUserMessage) {
+	if req.StoredUserMessageCount == 0 && req.StoredSessionKind == "" && req.StoredEntrypoint == "sdk-cli" && slices.ContainsFunc(newMsgs, isRealClaudeUserMessage) {
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, nil
 	}
 	totalOut, peakCtx, hasTotalOut, hasPeakCtx := claudeProviderTokenTotals(newMsgs)

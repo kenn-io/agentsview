@@ -1200,7 +1200,7 @@ func TestGrokProviderPromptContextClassifiesNonInteractive(t *testing.T) {
 	require.Len(t, outcome.Results, 1)
 
 	assert.Equal(t, "non-interactive", outcome.Results[0].Result.Session.SessionKind)
-	assert.Equal(t, RelSubagent, outcome.Results[0].Result.Session.RelationshipType)
+	assert.Equal(t, RelNone, outcome.Results[0].Result.Session.RelationshipType)
 	assert.Empty(t, outcome.Results[0].Result.Session.ParentSessionID)
 }
 

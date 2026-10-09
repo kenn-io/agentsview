@@ -507,7 +507,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // because the source bytes are unchanged, so existing sessions need
 // re-parsing.)
 // (112: Codex `originator=codex_exec` is persisted as session_kind
-// non-interactive so every exec session classifies as automated.
+// non-interactive so write-time normalization can identify delegated workers.
 // `thread_source=roborev` is persisted as session_kind roborev so roborev
 // reviews stay identifiable as code review. Existing Codex-format rows
 // need re-parsing.)

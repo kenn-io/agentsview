@@ -321,7 +321,7 @@ func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6; the
 	// fork's duplicate row contributes nothing.
 	assert.Equal(t, money.MustParseDollars("0.027"), r.Totals.Cost)
-	_, err = store.DB().ExecContext(ctx, `UPDATE sessions SET parent_session_id = NULL, is_automated = true WHERE id = 'agent-sub'`)
+	_, err = store.DB().ExecContext(ctx, `UPDATE sessions SET entrypoint = 'sdk-cli', parent_session_id = NULL, is_automated = true WHERE id = 'agent-sub'`)
 	require.NoError(t, err)
 	r, err = store.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC"}, duckDayQuery(t, "2026-06-14", "UTC"))
 	require.NoError(t, err)

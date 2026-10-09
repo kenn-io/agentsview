@@ -88,10 +88,10 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 			report, err := database.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, query)
 			require.NoError(t, err)
 			assert.Equal(t, 1, report.Totals.InteractiveSessions)
-			assert.Equal(t, 2, report.Totals.SubagentSessions)
-			assert.Equal(t, 1, report.Totals.AutomatedSessions)
+			assert.Equal(t, 3, report.Totals.SubagentSessions)
+			assert.Zero(t, report.Totals.AutomatedSessions)
 			assert.Equal(t, 1, report.InteractivePeak.Agents)
-			assert.Equal(t, 2, report.SubagentPeak.Agents)
+			assert.Equal(t, 3, report.SubagentPeak.Agents)
 			assert.Equal(t, 4, report.Peak.Agents)
 		}
 	}
@@ -113,8 +113,8 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	report, err := reopened.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, query)
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Totals.InteractiveSessions)
-	assert.Equal(t, 2, report.Totals.SubagentSessions)
-	assert.Equal(t, 1, report.Totals.AutomatedSessions)
+	assert.Equal(t, 3, report.Totals.SubagentSessions)
+	assert.Zero(t, report.Totals.AutomatedSessions)
 	worker, err := reopened.GetSession(t.Context(), "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker)
@@ -134,6 +134,6 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	report, err = reclassified.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, query)
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Totals.InteractiveSessions)
-	assert.Equal(t, 1, report.Totals.SubagentSessions)
-	assert.Equal(t, 2, report.Totals.AutomatedSessions)
+	assert.Equal(t, 3, report.Totals.SubagentSessions)
+	assert.Zero(t, report.Totals.AutomatedSessions)
 }

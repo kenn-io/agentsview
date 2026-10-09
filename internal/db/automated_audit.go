@@ -8,25 +8,15 @@ import (
 
 const automationAuditPrefixBytes = AutomationEvidencePrefixBytes
 
+// ParentlessWorkerSQL repairs known workers without overriding recorded relationships.
+const ParentlessWorkerSQL = `session_kind = 'non-interactive'
+ AND COALESCE(parent_session_id, '') = '' AND COALESCE(relationship_type, '') = ''`
+
 func repairParentlessWorkers(ctx context.Context, w *writerHandle) error {
-	const key = "parentless_worker_relationship_v1"
-	var done int
-	if err := w.QueryRow(ctx, `SELECT count(*) FROM stats WHERE key = ? AND value != 0`, key).Scan(&done); err != nil {
-		return fmt.Errorf("probing parentless worker repair: %w", err)
-	}
-	if done != 0 {
-		return nil
-	}
-	// Apply parser.PromoteParentlessWorker to stored rows that won't be rewritten.
 	if _, err := w.Exec(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE session_kind = 'non-interactive'
-		  AND COALESCE(parent_session_id, '') = '' AND COALESCE(relationship_type, '') = ''`); err != nil {
+		WHERE `+ParentlessWorkerSQL); err != nil {
 		return fmt.Errorf("repairing parentless workers: %w", err)
-	}
-	if _, err := w.Exec(ctx, `INSERT INTO stats (key, value) VALUES (?, 1)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key); err != nil {
-		return fmt.Errorf("marking parentless worker repair: %w", err)
 	}
 	return nil
 }

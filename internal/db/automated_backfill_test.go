@@ -36,8 +36,6 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 1, local_modified_at = '2000-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM stats WHERE key = 'parentless_worker_relationship_v1'`)
-	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
 	require.NoError(t, err)
 	path := d.Path()
@@ -74,7 +72,7 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 	stored, err := reopened.GetSession(t.Context(), "plain")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Empty(t, stored.RelationshipType, "the relationship repair runs once")
+	assert.Equal(t, "subagent", stored.RelationshipType, "matching-hash audits repair late arrivals")
 }
 
 func TestIncrementalAppendPreservesRoborevTag(t *testing.T) {

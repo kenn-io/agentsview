@@ -140,11 +140,6 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 			tc.id, tc.prompt, tc.kind, tc.relationship, tc.parent)
 		require.NoError(t, err)
 	}
-	_, err = ps.DB().ExecContext(ctx, `DELETE FROM sync_metadata WHERE key = 'parentless_worker_relationship_v1'`)
-	require.NoError(t, err)
-	_, err = ps.DB().ExecContext(ctx, `UPDATE sync_metadata SET value = 'old-classifier' WHERE key = $1`, db.ClassifierHashKey)
-	require.NoError(t, err)
-	require.NoError(t, repairParentlessWorkersPG(ctx, ps.DB()))
 	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
 	for _, tc := range []struct {
 		id, relationship string
@@ -168,10 +163,10 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 	}
 	_, err = ps.DB().ExecContext(ctx, `UPDATE sessions SET relationship_type = '' WHERE id = 'plain'`)
 	require.NoError(t, err)
-	require.NoError(t, repairParentlessWorkersPG(ctx, ps.DB()))
+	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
 	var relationship string
 	require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT relationship_type FROM sessions WHERE id = 'plain'`).Scan(&relationship))
-	assert.Empty(t, relationship, "the relationship repair runs once")
+	assert.Equal(t, "subagent", relationship, "matching-hash audits repair late arrivals")
 	tx, err := ps.DB().BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer tx.Rollback()

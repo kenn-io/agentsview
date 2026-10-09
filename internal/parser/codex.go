@@ -1883,8 +1883,6 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		mtime = p.sources.metadata.EffectiveMtime(path, mtime)
 	}
 
-	b.relationshipType = PromoteParentlessWorker(b.parentSessionID, b.relationshipType, b.sessionKind == SessionKindNonInteractive)
-
 	sessionName := ""
 	sessionNamePresent := false
 	if p.spec.agent == AgentCodex {

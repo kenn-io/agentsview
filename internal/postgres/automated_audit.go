@@ -100,24 +100,10 @@ func backfillIsAutomatedPGWithProgress(
 }
 
 func repairParentlessWorkersPG(ctx context.Context, pg *sql.DB) error {
-	const key = "parentless_worker_relationship_v1"
-	var done bool
-	if err := pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key = $1)`, key).Scan(&done); err != nil {
-		return fmt.Errorf("probing PG parentless worker repair: %w", err)
-	}
-	if done {
-		return nil
-	}
-	// Apply parser.PromoteParentlessWorker to stored rows that won't be rewritten.
 	if _, err := pg.ExecContext(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', updated_at = NOW()
-		WHERE session_kind = 'non-interactive'
-		  AND COALESCE(parent_session_id, '') = '' AND COALESCE(relationship_type, '') = ''`); err != nil {
+		WHERE `+db.ParentlessWorkerSQL); err != nil {
 		return fmt.Errorf("repairing PG parentless workers: %w", err)
-	}
-	if _, err := pg.ExecContext(ctx, `INSERT INTO sync_metadata (key, value) VALUES ($1, '1')
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, key); err != nil {
-		return fmt.Errorf("marking PG parentless worker repair: %w", err)
 	}
 	return nil
 }

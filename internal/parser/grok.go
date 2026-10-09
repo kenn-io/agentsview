@@ -96,8 +96,6 @@ func ParseGrokSummary(
 		relationshipType = RelFork
 	}
 
-	relationshipType = PromoteParentlessWorker(parentSessionID, relationshipType, sessionKind == SessionKindNonInteractive)
-
 	messages, malformed, transcriptErr := parseGrokChatHistory(
 		filepath.Join(sessionDir, "chat_history.jsonl"),
 	)

@@ -31,10 +31,7 @@ type Params struct {
 }
 
 // SubagentSQL selects the activity subagent category from a sessions alias s.
-const SubagentSQL = `s.relationship_type = 'subagent'
-	AND (COALESCE(s.parent_session_id, '') <> '' OR NOT COALESCE(s.is_automated, false)
-		OR NOT (COALESCE(s.session_kind, '') = 'non-interactive'
-			OR (s.agent = 'claude' AND COALESCE(s.entrypoint, '') = 'sdk-cli')))`
+const SubagentSQL = `s.relationship_type = 'subagent'`
 
 // SessionMeta is one candidate session whose window intersects the day.
 type SessionMeta struct {
@@ -47,7 +44,7 @@ type SessionMeta struct {
 	StartedAt   string // RFC3339 or ""
 	EndedAt     string // RFC3339 or ""
 	IsAutomated bool   // automation flag, independent of delegation
-	IsSubagent  bool   // counts as a subagent; parentless automated workers are excluded
+	IsSubagent  bool   // delegation takes precedence over automation
 }
 
 // ActivityEvent is one timestamped message (backends send only timestamped rows).

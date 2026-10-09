@@ -43,6 +43,7 @@ func dayQuery(t *testing.T, date, tz string) activity.Query {
 func TestGetActivityReportAutomatedSubagentPrecedence(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "root", "project-a")
+	insertSession(t, d, "deleted-root", "project-a")
 	for _, tc := range []struct {
 		id     string
 		parent *string
@@ -54,6 +55,9 @@ func TestGetActivityReportAutomatedSubagentPrecedence(t *testing.T) {
 		insertSession(t, d, tc.id, "project-a", func(s *Session) {
 			s.ParentSessionID = tc.parent
 			s.RelationshipType = "subagent"
+			if tc.id == "dangling-task" {
+				s.Entrypoint = "sdk-cli"
+			}
 			if tc.id == "worker" {
 				s.SessionKind = "non-interactive"
 			}
@@ -64,6 +68,7 @@ func TestGetActivityReportAutomatedSubagentPrecedence(t *testing.T) {
 		})
 		seedMessage(t, d, tc.id, 0, "assistant", "2026-06-14T10:00:00Z", "")
 	}
+	require.NoError(t, d.DeleteSession(t.Context(), "deleted-root"))
 	_, err := d.getWriter().Exec(t.Context(), clearDanglingSubagentParentQuery("(?)"), "dangling-task")
 	require.NoError(t, err)
 	dangling, err := d.GetSession(t.Context(), "dangling-task")
@@ -74,9 +79,16 @@ func TestGetActivityReportAutomatedSubagentPrecedence(t *testing.T) {
 	require.True(t, dangling.IsAutomated)
 	report, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-06-14", "UTC"))
 	require.NoError(t, err)
-	assert.Equal(t, 2, report.Totals.SubagentSessions)
-	assert.Equal(t, 1, report.Totals.AutomatedSessions)
+	assert.Equal(t, 3, report.Totals.SubagentSessions)
+	assert.Zero(t, report.Totals.AutomatedSessions)
 	assert.Zero(t, report.Totals.InteractiveSessions)
+	day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
+		Date: time.Date(2026, time.June, 14, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, time.June, 15, 0, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, day.Hours[10].Activity.Totals.NewSubagentSessions)
+	assert.Zero(t, day.Hours[10].Activity.Totals.NewAutomatedSessions)
 }
 
 func TestActivityReportMessageCounts(t *testing.T) {

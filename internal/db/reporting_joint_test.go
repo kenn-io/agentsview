@@ -94,6 +94,10 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 			s.IsAutomated = session.automated
 			if session.subagent {
 				s.ParentSessionID = new("root")
+				if session.id == "automated-child" {
+					s.ParentSessionID = nil
+					s.Entrypoint = "sdk-cli"
+				}
 				s.RelationshipType = "subagent"
 			}
 		})
