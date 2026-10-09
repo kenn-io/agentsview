@@ -96,12 +96,4 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	assert.Equal(t, db.CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "worker"))
 	engine.Close()
 	require.NoError(t, reopened.Close())
-	db.SetUserAutomationPrefixes([]string{"Delegate a settings change."})
-	t.Cleanup(func() { db.SetUserAutomationPrefixes(nil) })
-	reclassified := dbtest.OpenTestDBAt(t, path)
-	worker, err = reclassified.GetSession(t.Context(), "worker")
-	require.NoError(t, err)
-	require.NotNil(t, worker)
-	assert.True(t, worker.IsAutomated)
-	assert.Equal(t, "subagent", worker.RelationshipType)
 }

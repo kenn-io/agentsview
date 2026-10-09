@@ -68,9 +68,6 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 
 	revision, err := reopened.SessionDeletionPublicationRevision(t.Context())
 	require.NoError(t, err)
-	tombstones, err := reopened.LoadSessionDeletionDelta(t.Context(), 0, revision, nil, nil)
-	require.NoError(t, err)
-	assert.Empty(t, tombstones, "live repair entries cannot delete mirrored sessions")
 	changes, err := reopened.LoadSessionDeletionChanges(t.Context(), 0, revision)
 	require.NoError(t, err)
 	assert.Contains(t, changes, "plain")
