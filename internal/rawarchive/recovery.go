@@ -267,7 +267,23 @@ func Restore(ctx context.Context, source, snapshot, target string, progress func
 		return report, err
 	}
 	report.RepositoryID, report.SnapshotID, report.ReaderBuild = repository.ID(), snapshot, inventory.ReaderBuild
-	return report, nil
+	report.MinReaderVersion, err = snapshotReaderVersion(repository, snapshot)
+	return report, err
+}
+
+// snapshotReaderVersion reports the selected recovery point's reader
+// requirement so a restore report matches the backup report.
+func snapshotReaderVersion(repository *docbank.BackupRepository, id string) (int, error) {
+	snapshots, err := repository.Snapshots()
+	if err != nil {
+		return 0, err
+	}
+	for _, snapshot := range snapshots {
+		if snapshot.ID == id {
+			return snapshot.MinReaderVersion, nil
+		}
+	}
+	return 0, fmt.Errorf("restored snapshot %s is not listed in the repository", id)
 }
 
 func loadRecovery(path string) (recoveryInventory, RecoverySettings, error) {

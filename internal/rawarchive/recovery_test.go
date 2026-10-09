@@ -73,6 +73,7 @@ func TestRecoveryLargeApplicationExtra(t *testing.T) {
 	assert.Equal(t, recovery.RepositoryID, report.RepositoryID)
 	assert.Equal(t, recovery.SnapshotID, report.SnapshotID)
 	assert.Equal(t, recovery.ReaderBuild, report.ReaderBuild)
+	assert.Equal(t, recovery.MinReaderVersion, report.MinReaderVersion)
 	f, err = os.Open(filepath.Join(restored, "assets", "large.bin"))
 	require.NoError(t, err)
 	defer f.Close()
