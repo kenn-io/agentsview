@@ -117,16 +117,7 @@ func ParseClaudeAIDetail(data []byte) (ParseResult, error) {
 		return ParseResult{}, err
 	}
 	conv.Messages = messages
-	result, err := convertClaudeAIConversation(*conv)
-	if err != nil {
-		return ParseResult{}, err
-	}
-	leaf := messages[len(messages)-1].UUID
-	result.Session.LastEntryUUID = &leaf
-	for i, m := range messages {
-		result.Messages[i].SourceUUID = m.UUID
-	}
-	return result, nil
+	return convertClaudeAIConversation(*conv)
 }
 
 // assembleClaudeAIContent builds message content from content

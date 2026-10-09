@@ -8,8 +8,6 @@ import (
 	"log"
 	"strings"
 	"time"
-
-	"go.kenn.io/agentsview/internal/config"
 )
 
 type sqlContextExecer interface {
@@ -207,7 +205,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		return nil, fmt.Errorf("reconciling conversation identities: %w", err)
 	}
 	if count > 0 {
-		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids", d.ArchiveContent()); err != nil {
+		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 			return nil, fmt.Errorf("copying orphaned data: %w", err)
 		}
 		sourceVersion := copiedSourceDataVersion(ctx, tx)
@@ -320,7 +318,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 		return nil, nil
 	}
 
-	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids", d.ArchiveContent()); err != nil {
+	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
 		return nil, fmt.Errorf("copying trashed data: %w", err)
 	}
 	sourceVersion := copiedSourceDataVersion(ctx, tx)
@@ -1923,27 +1921,16 @@ func copySessionDataForIDs(
 	ctx context.Context,
 	tx *sql.Tx,
 	tempIDsTable string,
-	policy config.ArchiveContent,
 ) error {
 	// Copy session rows. Build column list dynamically so
 	// older source DBs missing display_name/deleted_at don't
 	// abort the migration.
 	orphanCols := orphanSessionCols(ctx, tx)
-	sourceCols := orphanCols
-	var markerArgs []any
-	if oldDBHasColumn(ctx, tx, "sessions", "last_entry_uuid") {
-		orphanCols += ", last_entry_uuid"
-		sourceCols += ", CASE WHEN agent = 'claude-ai' AND COALESCE(file_path, '') = '' THEN " +
-			"CASE WHEN last_entry_uuid GLOB ? AND last_entry_uuid NOT GLOB ? THEN NULL " +
-			"ELSE last_entry_uuid END ELSE NULL END"
-		markerArgs = []any{claudeAIMarkerPrefix() + "*", ClaudeAIMarker(policy, "*")}
-	}
 
 	if _, err := tx.ExecContext(ctx,
 		"INSERT OR IGNORE INTO sessions ("+orphanCols+") "+
-			"SELECT "+sourceCols+" FROM old_db.sessions "+
+			"SELECT "+orphanCols+" FROM old_db.sessions "+
 			"WHERE id IN (SELECT id FROM "+tempIDsTable+")",
-		markerArgs...,
 	); err != nil {
 		return fmt.Errorf("copying sessions: %w", err)
 	}

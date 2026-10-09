@@ -565,10 +565,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // rows with source_subtype peer_message instead of user prompts. Re-parse
 // unchanged Claude sources so user-message counts and first messages drop
 // them.)
-// (127: Claude.ai Sync stores message source UUIDs whose pin restore requires
-// the UUID-less fallback when re-importing a zip export. Older builds must
-// refuse these archives to preserve pins and notes.)
-const dataVersion = 127
+const dataVersion = 126
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

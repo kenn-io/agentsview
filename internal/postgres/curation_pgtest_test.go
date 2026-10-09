@@ -3,100 +3,16 @@
 package postgres
 
 import (
-	"archive/zip"
 	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/agentsview/internal/storage"
 )
-
-func TestPushClaudeAISyncZipPreservesPGPin(t *testing.T) {
-	pgURL := testPGURL(t)
-	for _, duplicate := range []bool{false, true} {
-		t.Run(map[bool]string{false: "unique prompt", true: "duplicate prompt"}[duplicate], func(t *testing.T) {
-			cleanPGSchema(t, pgURL)
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
-			local := testDB(t)
-			ps, err := New(pgURL, "agentsview", local, "curation-machine", true, storage.PusherOptions{})
-			require.NoError(t, err)
-			defer ps.Close()
-			require.NoError(t, ps.EnsureSchema(t.Context()))
-			raw, err := os.ReadFile("../importer/testdata/claude_ai_sync/detail.json")
-			require.NoError(t, err)
-			detail := strings.TrimSpace(string(raw))
-			ordinal := 0
-			if duplicate {
-				detail = strings.TrimSuffix(strings.Replace(detail, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"reply2"`, 1), "]}") + `,{"uuid":"root2","parent_message_uuid":"reply","sender":"human","text":"Hello"},{"uuid":"reply2","parent_message_uuid":"root2","sender":"assistant","text":"Later reply"}]}`
-				ordinal = 2
-			}
-			const id = "claude-ai:22222222-2222-4222-8222-222222222222"
-			_, err = importer.SyncClaudeAI(t.Context(), local, func(_ context.Context, path string) (importer.ClaudeAIResponse, error) {
-				body := detail
-				if path == "/api/organizations" {
-					body = `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`
-				} else if strings.Contains(path, "/chat_conversations_v2?") {
-					leaf := "reply"
-					if duplicate {
-						leaf = "reply2"
-					}
-					body = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222222","updated_at":"2026-03-01T10:05:00.123456Z","current_leaf_message_uuid":"` + leaf + `"}],"has_more":false}`
-				} else {
-					require.Contains(t, path, "/chat_conversations/22222222-2222-4222-8222-222222222222?")
-				}
-				return importer.ClaudeAIResponse{Status: 200, Body: []byte(body)}, nil
-			}, nil)
-			require.NoError(t, err)
-			_, err = ps.Push(t.Context(), false, nil)
-			require.NoError(t, err)
-			store, err := NewStore(pgURL, "agentsview", true)
-			require.NoError(t, err)
-			defer store.Close()
-			note := "Keep this prompt"
-			_, err = store.PinMessage(t.Context(), id, int64(ordinal), &note)
-			require.NoError(t, err)
-			file, err := os.Create(filepath.Join(t.TempDir(), "export.zip"))
-			require.NoError(t, err)
-			archive := zip.NewWriter(file)
-			entry, err := archive.Create("conversations.json")
-			require.NoError(t, err)
-			_, err = entry.Write([]byte("[" + strings.Replace(detail, "Chosen reply", "Export reply", 1) + "]"))
-			require.NoError(t, err)
-			require.NoError(t, archive.Close())
-			require.NoError(t, file.Close())
-			dir, cleanup, err := importer.ExtractZip(file.Name())
-			require.NoError(t, err)
-			defer cleanup()
-			reader, err := os.Open(filepath.Join(dir, "conversations.json"))
-			require.NoError(t, err)
-			defer reader.Close()
-			stats, err := importer.ImportClaudeAI(t.Context(), local, reader, nil)
-			require.NoError(t, err)
-			require.Equal(t, 1, stats.Updated)
-			messages, err := local.GetAllMessages(t.Context(), id)
-			require.NoError(t, err)
-			assert.Empty(t, messages[ordinal].SourceUUID)
-			_, err = ps.Push(t.Context(), false, nil)
-			require.NoError(t, err)
-			pins, err := store.ListPinnedMessages(t.Context(), "", "claude.ai")
-			require.NoError(t, err)
-			require.Len(t, pins, 1)
-			assert.Equal(t, ordinal, pins[0].Ordinal)
-			assert.Equal(t, id, pins[0].SessionID)
-			assert.Equal(t, &note, pins[0].Note)
-			require.NotNil(t, pins[0].Content)
-			assert.Equal(t, "Hello", *pins[0].Content)
-		})
-	}
-}
 
 func reconcilePinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessionID string,
