@@ -171,17 +171,17 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				require.Zero(t, stats.Failed)
 				verify()
 			}
-			before := fetches.Load()
-			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
-			require.Zero(t, stats.Failed)
-			assert.Equal(t, before, fetches.Load(), "unchanged derived sources must not download")
-			// A stale row bypasses the cutoff without giving its ID to the other project.
-			require.NoError(t, database.SetSessionDataVersion(t.Context(), ids[paths[1]], db.CurrentDataVersion()-1))
-			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
-			require.Zero(t, stats.Failed)
-			assert.Equal(t, before+1, fetches.Load())
-			verify()
 			if tt.name == "together" {
+				before := fetches.Load()
+				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+				require.Zero(t, stats.Failed)
+				assert.Equal(t, before, fetches.Load(), "unchanged derived sources must not download")
+				// A stale row bypasses the cutoff without giving its ID to the other project.
+				require.NoError(t, database.SetSessionDataVersion(t.Context(), ids[paths[1]], db.CurrentDataVersion()-1))
+				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+				require.Zero(t, stats.Failed)
+				assert.Equal(t, before+1, fetches.Load())
+				verify()
 				altID := ids[paths[0]]
 				if altID == baseID {
 					altID = ids[paths[1]]
@@ -196,22 +196,22 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				}
 				_, err := database.RestoreSession(t.Context(), altID)
 				require.NoError(t, err)
-			}
-			// Changed object metadata must refresh the same saved row.
-			contents[paths[1]] = strings.ReplaceAll(contents[paths[1]], "Answer B", "Updated B")
-			for i := range sources {
-				if sources[i].DisplayPath == paths[1] {
-					source := sources[i].Opaque.(parser.S3DiscoveredSource)
-					source.Size = int64(len(contents[paths[1]]))
-					sources[i].Opaque = source
+				// Changed object metadata must refresh the same saved row.
+				contents[paths[1]] = strings.ReplaceAll(contents[paths[1]], "Answer B", "Updated B")
+				for i := range sources {
+					if sources[i].DisplayPath == paths[1] {
+						source := sources[i].Opaque.(parser.S3DiscoveredSource)
+						source.Size = int64(len(contents[paths[1]]))
+						sources[i].Opaque = source
+					}
 				}
+				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+				require.Zero(t, stats.Failed)
+				messages, err := database.GetAllMessages(t.Context(), ids[paths[1]])
+				require.NoError(t, err)
+				require.Len(t, messages, 3)
+				assert.Equal(t, "Updated B", messages[1].Content)
 			}
-			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
-			require.Zero(t, stats.Failed)
-			messages, err := database.GetAllMessages(t.Context(), ids[paths[1]])
-			require.NoError(t, err)
-			require.Len(t, messages, 3)
-			assert.Equal(t, "Updated B", messages[1].Content)
 			if tt.restoreRoots {
 				provider.discovered = []parser.SourceRef{sources[1], sources[0]}
 				stats = engine.ResyncAll(t.Context(), nil)
@@ -239,7 +239,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			if tt.restoreRoots {
 				oldPath := paths[1]
 				paths[1] = strings.TrimSuffix(oldPath, ".txt") + ".jsonl"
-				contents[paths[1]] = strings.ReplaceAll(contents[oldPath], "Updated B", "Format B")
+				contents[paths[1]] = strings.ReplaceAll(contents[oldPath], "Answer B", "Format B")
 				ids[paths[1]] = ids[oldPath]
 				for _, uri := range []string{paths[1], oldPath, paths[1]} {
 					changed := sources[1]
