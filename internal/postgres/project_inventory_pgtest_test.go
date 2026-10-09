@@ -212,3 +212,29 @@ func TestPGProjectInventoryMatchesSQLite(t *testing.T) {
 	assert.Equal(t, 0, pgInv.Projects[3].EnabledRulesTargeting,
 		"misc has no rule targeting it by raw label, only gamma is resolved to")
 }
+
+func TestPGProjectInventoryCrossArchiveIsolation(t *testing.T) {
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_inventory_isolation_test")
+	seedInventorySession(t, local, "a-session", "proj-a", func(s *db.Session) { s.Machine = "host.example"; s.Cwd = "/repos/shared" })
+	_, err := local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{Machine: "host.example", PathPrefix: "/repos/decoy", Layout: db.WorktreeMappingLayoutExplicit, Project: "proj-a-unused", Enabled: true})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(ctx, `INSERT INTO source_worktree_project_mappings (source_archive_id, machine, path_prefix, layout, project, original_project, enabled, updated_at) VALUES ('archive-b', 'host.example', '/repos/shared', 'explicit', 'proj-b', '', TRUE, '')`)
+	require.NoError(t, err)
+	for _, row := range []struct{ id, archive string }{{"b", "archive-b"}, {"c", "archive-c"}, {"unattributed", ""}} {
+		_, err = pg.ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, cwd, source_archive_id) VALUES ($1, 'host.example', $2, 'codex', '/repos/shared', $3)`, row.id, "proj-"+row.id, row.archive)
+		require.NoError(t, err)
+	}
+	inventory, err := (&Store{pg: pg}).GetProjectInventory(ctx, db.ProjectDateFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 4, inventory.TotalSessions)
+	assert.Equal(t, 1, inventory.GovernedSessions)
+	for _, row := range inventory.Projects {
+		if row.Label == "proj-b" {
+			assert.Equal(t, 1, row.EnabledRulesTargeting)
+		} else {
+			assert.Zero(t, row.EnabledRulesTargeting)
+		}
+	}
+}
