@@ -44,7 +44,19 @@ test.describe("Usage attribution selection", () => {
     test(`selecting keeps ${view} geometry and double click opens the clicked project`, async ({ page }) => {
       // Summary cards wrap at this width, so a card dropping out on select would shift the panel.
       await page.setViewportSize({ width: 700, height: 900 });
+      // A refresh includes both summaries and the comparison requests they start afterward.
+      const refresh = (selected: boolean) => Promise.all(
+        ["summary", "top-sessions", "comparison", "pairwise-comparison"].map(async (endpoint) => {
+          const response = await page.waitForResponse((response) => {
+            const url = new URL(response.url());
+            return url.pathname === `/api/v1/usage/${endpoint}` && url.searchParams.has("project_key") === selected && response.ok();
+          });
+          await response.finished();
+        }),
+      );
+      const loaded = refresh(false);
       await page.goto("/usage");
+      await loaded;
       const panel = page.locator(".attribution-panel");
       await expect(panel.locator(".tile").first()).toBeVisible();
       if (view === "list") await panel.getByRole("button", { name: "List", exact: true }).click();
@@ -60,7 +72,7 @@ test.describe("Usage attribution selection", () => {
         });
       });
       const before = await geometry();
-      const narrowed = page.waitForResponse((response) => new URL(response.url()).searchParams.has("project_key"));
+      const narrowed = refresh(true);
       await items.nth(1).click();
       await narrowed;
       await expect(items.nth(1)).toHaveAttribute("aria-pressed", "true");
