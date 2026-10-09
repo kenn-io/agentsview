@@ -7025,6 +7025,35 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 	assert.Equal(t, 1, starCount, "stars after")
 }
 
+func TestCopySessionMetadataFromHermesCronGroups(t *testing.T) {
+	source := testDB(t)
+	destination := testDB(t)
+	cases := []struct {
+		id, agent, project, freshGroup, want string
+	}{
+		{"orphan", "hermes", "hermes-cron", "", "job-a"},
+		{"resolved", "hermes", "hermes-cron", "job-b", "job-b"},
+		{"other-agent", "claude", "hermes-cron", "", ""},
+		{"other-project", "hermes", "hermes-discord", "", ""},
+	}
+	for _, tc := range cases {
+		session := Session{
+			ID: tc.id, Agent: tc.agent, Project: tc.project,
+			Machine: "local", GroupKey: "job-a",
+		}
+		require.NoError(t, source.UpsertSession(t.Context(), session))
+		session.GroupKey = tc.freshGroup
+		require.NoError(t, destination.UpsertSession(t.Context(), session))
+	}
+	require.NoError(t, destination.CopySessionMetadataFrom(source.Path()))
+	for _, tc := range cases {
+		stored, err := destination.GetSession(t.Context(), tc.id)
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		assert.Equal(t, tc.want, stored.GroupKey, tc.id)
+	}
+}
+
 func TestCopySessionMetadataFrom_IdenticalDuplicatePins(t *testing.T) {
 	dir := t.TempDir()
 	ctx := t.Context()

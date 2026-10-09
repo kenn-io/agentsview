@@ -2951,6 +2951,12 @@ schemas keep their existing ordering behavior.
   recognized. Transcript projects use `platform`. Cron continuations follow
   `state.db` parent links with cycle detection; transcript runs group by their run
   ID only. All cron runs retain the `hermes-cron` project.
+  Reverified on 2026-10-09: `delete_session` in
+  [hermes_state_sessions.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_sessions.py)
+  and `prune_sessions` in
+  [hermes_state_maintenance.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_maintenance.py)
+  clear surviving children's parent links. Full resync preserves a stored cron
+  job key when reparsing can no longer resolve it.
 
 ## Forge (`forge`)
 

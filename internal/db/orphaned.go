@@ -1077,6 +1077,7 @@ func (d *DB) CopyExcludedSessionsFrom(
 // and explicit session project assignments across full DB rebuilds. Immutable
 // project snapshots are restored only from source versions that recorded
 // parser-source labels reliably.
+// Hermes cron group keys survive lost ancestry when parsing yields no job.
 func (d *DB) CopySessionMetadataFrom(
 	sourcePath string,
 ) error {
@@ -1166,6 +1167,23 @@ func (d *DB) CopySessionMetadataFrom(
 			WHERE main.sessions.id = old_s.id
 			  AND old_s.display_name IS NOT NULL`); err != nil {
 			return fmt.Errorf("copying user display_name: %w", err)
+		}
+	}
+
+	// Pruned Hermes ancestors can erase the only source evidence of a continuation's job.
+	if oldDBHasColumn(ctx, tx, "sessions", "group_key") {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET group_key = old_s.group_key
+			FROM old_db.sessions old_s
+			WHERE main.sessions.id = old_s.id
+			  AND main.sessions.agent = 'hermes'
+			  AND main.sessions.project = 'hermes-cron'
+			  AND main.sessions.group_key = ''
+			  AND old_s.agent = 'hermes'
+			  AND old_s.project = 'hermes-cron'
+			  AND old_s.group_key != ''`); err != nil {
+			return fmt.Errorf("copying Hermes cron group keys: %w", err)
 		}
 	}
 

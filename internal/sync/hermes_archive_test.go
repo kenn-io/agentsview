@@ -146,6 +146,56 @@ func TestHermesArchiveStoresCronGroups(t *testing.T) {
 	assert.Equal(t, "job-a", stored.GroupKey)
 }
 
+func TestHermesCronContinuationKeepsGroupAfterRootPrunedAndResync(t *testing.T) {
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `
+		DELETE FROM messages;
+		DELETE FROM sessions;
+		INSERT INTO sessions (id, source, parent_session_id, started_at, ended_at, message_count)
+		VALUES ('cron_job-a_20261008_120000', 'cron', NULL, 1791460800, 1791460860, 1),
+		       ('middle', 'cron', 'cron_job-a_20261008_120000', 1791460860, 1791460920, 1),
+		       ('tip', 'cron', 'middle', 1791460920, 1791460980, 1);
+		INSERT INTO messages (session_id, role, content, timestamp)
+		VALUES ('cron_job-a_20261008_120000', 'user', 'Generate digest', 1791460801),
+		       ('middle', 'user', 'Continue digest', 1791460861),
+		       ('tip', 'user', 'Finish digest', 1791460921);
+	`)
+	require.NoError(t, err)
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
+	checkTip := func() {
+		t.Helper()
+		stored, err := database.GetSession(t.Context(), "hermes:tip")
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		assert.Equal(t, "job-a", stored.GroupKey)
+	}
+	checkTip()
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+
+	_, err = conn.ExecContext(t.Context(), `
+		UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = 'cron_job-a_20261008_120000';
+		DELETE FROM messages WHERE session_id = 'cron_job-a_20261008_120000';
+		DELETE FROM sessions WHERE id = 'cron_job-a_20261008_120000';
+	`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+	checkTip()
+
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "%v", stats.Warnings)
+	checkTip()
+}
+
 func TestHermesProfileCreatedAfterEngineInitializationIsDiscovered(t *testing.T) {
 	profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
 	require.NoError(t, os.MkdirAll(profilesRoot, 0o755))
