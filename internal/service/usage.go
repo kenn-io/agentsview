@@ -77,6 +77,7 @@ func ResolveUsageProjectKeys(
 		if ok {
 			req.ProjectLabels = labels
 		} else {
+			// Equal include and exclude lists intentionally match nothing.
 			req.ProjectLabels = resolved
 			req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
 		}

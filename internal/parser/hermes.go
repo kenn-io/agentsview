@@ -354,10 +354,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	fullID := "hermes:" + sessionID
 
 	// Derive project from the session platform or default.
-	job := ""
-	if sessionPlatform == "cron" {
-		job = hermesCronRunJob(sessionID)
-	}
+	job := hermesTranscriptCronJob(sessionPlatform, sessionID)
 	projectSynthesized := false
 	if project == "" {
 		if sessionPlatform != "" {
@@ -549,10 +546,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 
 	fullID := "hermes:" + sessionID
 
-	job := ""
-	if sessionPlatform == "cron" {
-		job = hermesCronRunJob(sessionID)
-	}
+	job := hermesTranscriptCronJob(sessionPlatform, sessionID)
 	projectSynthesized := false
 	if project == "" {
 		if sessionPlatform != "" {
@@ -1512,6 +1506,13 @@ func hermesCronJobID(id string, parent func(string) string) string {
 			return job
 		}
 		id = parent(id)
+	}
+	return ""
+}
+
+func hermesTranscriptCronJob(platform, sessionID string) string {
+	if platform == "cron" {
+		return hermesCronRunJob(sessionID)
 	}
 	return ""
 }
