@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,14 @@ func (s *Server) registerImportRoutes() {
 						writeHumaJSON(ctx, http.StatusNotFound, apiResponseError{Message: "fetch request expired or already answered"})
 					}
 					return
+				}
+				// Huma always requires a RawBody, so answer status-only replies here.
+				if status, convErr := strconv.Atoi(ctx.Query("status")); convErr == nil && len(body) == 0 && status >= 0 && status <= 599 {
+					if value, ok := results.LoadAndDelete(ctx.Param("id")); ok {
+						value.(chan claudeAISyncResult) <- claudeAISyncResult{status: status, retryAfter: ctx.Header("Retry-After")}
+						ctx.SetStatus(http.StatusNoContent)
+						return
+					}
 				}
 				req, _ := humago.Unwrap(ctx)
 				req.Body = io.NopCloser(bytes.NewReader(body))

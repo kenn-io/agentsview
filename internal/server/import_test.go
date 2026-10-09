@@ -113,8 +113,16 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		assert.Equal(t, "Archived relay message", messages[0].Content)
 	})
 
-	for _, oversizedStatus := range []int{200, 413} {
-		t.Run("oversize "+strconv.Itoa(oversizedStatus), func(t *testing.T) {
+	for _, oversized := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"200", 200, strings.Repeat("x", importer.ClaudeAIResponseLimit+2)},
+		{"413", 413, strings.Repeat("x", importer.ClaudeAIResponseLimit+2)},
+		{"413 empty body", 413, ""},
+	} {
+		t.Run("oversize "+oversized.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			httpServer := httptest.NewServer(srv.mux)
 			defer httpServer.Close()
@@ -142,8 +150,8 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
 						body = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222226","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
 					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222226?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-						status = oversizedStatus
-						body = strings.Repeat("x", importer.ClaudeAIResponseLimit+2)
+						status = oversized.status
+						body = oversized.body
 					default:
 						require.FailNowf(t, "unexpected path", "%s", request.Path)
 					}
