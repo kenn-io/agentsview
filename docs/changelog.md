@@ -12,9 +12,11 @@ The latest release is
 **New features**
 
 - Select a Usage attribution tile or row to narrow totals and charts while
-  every item stays visible in its own color. Double click, double tap, or press
-  Enter on a project to open its groups and sessions. Back keeps current dates,
-  filters, and selection. The Projects picker hides projects.
+  every item stays visible in its own color. Enter and Space select a project.
+  Double click or select it and use **Open** to see its groups and sessions.
+  On touch screens, use **Open**. **All projects**, Escape, and Backspace
+  return with current dates, filters, and selection. The Projects picker hides
+  projects.
   Hermes cron jobs keep renamed runs and continuations together through
   recorded parent links. Each job shows its latest recorded name in the
   selected range, including on hosted PostgreSQL archives.

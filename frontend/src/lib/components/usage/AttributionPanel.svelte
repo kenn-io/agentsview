@@ -12,6 +12,7 @@
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { formatTokenCount } from "../../utils/format.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
+  import type { DbTopSessionEntry } from "../../api/generated/index.js";
 
   interface Props {
     colorMap: ReadonlyMap<string, string>;
@@ -45,6 +46,21 @@
     return row.groupKey ? `group:${JSON.stringify([row.groupKey, row.machine ?? ""])}` : row.sessionId ? `session:${row.sessionId}` : "remainder";
   }
 
+  function zoomRowText(row: DbTopSessionEntry, rows: DbTopSessionEntry[]): { label: string; title: string } {
+    const name = (item: DbTopSessionEntry) => item.groupKey ? item.groupLabel || item.groupKey : item.sessionId ? item.displayName : m.shared_other();
+    const id = row.groupKey || row.sessionId;
+    const peers = rows.filter((other) => name(other) === name(row));
+    const ids = peers.map((other) => other.groupKey || other.sessionId);
+    const machines = peers.filter((other) => (other.groupKey || other.sessionId) === id).map((other) => other.machine ?? "");
+    const label = [name(row)];
+    if (ids.some((other) => other !== id)) label.push(shortenId(id, ids));
+    if (machines.length > 1) label.push(shortenId(row.machine ?? "", machines));
+    return {
+      label: label.join(" · "),
+      title: [name(row), id === name(row) ? "" : id, row.machine].filter(Boolean).join(" · "),
+    };
+  }
+
   function handleBackKey(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
     if (!zoomedProject || !panel.contains(document.activeElement) || target.closest("input, textarea, select, [contenteditable]")) return;
@@ -66,18 +82,11 @@
 
     if (zoomedProject && groupBy === "project") {
       const zoomRows = usage.zoomRows ?? [];
-      const names = zoomRows.map((row) => row.groupKey ? row.groupLabel || row.groupKey : row.sessionId ? row.displayName : m.shared_other());
-      items = zoomRows.map((row, index) => {
+      items = zoomRows.map((row) => {
         const id = zoomRowId(row);
-        const duplicates = zoomRows.filter((other, otherIndex) => other !== row && (other.groupKey || other.sessionId) && names[otherIndex] === names[index]);
-        const sessionSuffix = row.sessionId.replace(/^[^:]+:/, "");
-        const keepProvider = !row.groupKey && duplicates.some((other) => !other.groupKey && other.sessionId.replace(/^[^:]+:/, "") === sessionSuffix);
-        const sameJob = row.groupKey && duplicates.some((other) => other.groupKey === row.groupKey);
-        const suffixID = (sameJob ? row.machine : row.groupKey) || (keepProvider ? row.sessionId : sessionSuffix) || row.sessionId;
-        const peers = duplicates.map((other) => (sameJob ? other.machine : other.groupKey) || (keepProvider ? other.sessionId : other.sessionId.replace(/^[^:]+:/, "")));
         return {
           id,
-          label: (row.groupKey || row.sessionId) && duplicates.length ? `${names[index]} · ${shortenId(suffixID, peers)}` : names[index]!,
+          label: zoomRowText(row, zoomRows).label,
           value: isTokenMode ? sumSelectedTokens(row, usage.selectedTokenTypes) : row.cost.microdollars,
         };
       });
@@ -144,9 +153,7 @@
   function rowTitle(id: string, label: string): string {
     if (zoomedProject) {
       const row = usage.zoomRows?.find((row) => zoomRowId(row) === id);
-      const name = row?.groupKey ? row.groupLabel || row.groupKey : row?.displayName || label;
-      if (row?.groupKey) return [name === row.groupKey ? "" : name, row.groupKey, row.machine].filter(Boolean).join(" · ");
-      return row?.sessionId && name !== row.sessionId ? `${name} · ${row.sessionId}` : name;
+      return row ? zoomRowText(row, usage.zoomRows!).title : label;
     }
     return groupBy === "project" ? m.usage_click_project({ label }) : m.usage_click_to_focus({ label });
   }
@@ -264,18 +271,18 @@
         </div>
         <div class="side-rail">
           {#each rows as row, i (row.id)}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
             <div
               class="rail-row"
               class:selected={usage.isFocused(groupBy, row.id)}
               class:dimmed={!zoomedProject && hasSelection && !usage.isFocused(groupBy, row.id)}
-              role="button"
-              tabindex={zoomedProject ? -1 : 0}
-              aria-pressed={usage.isFocused(groupBy, row.id)}
+              role={zoomedProject ? undefined : "button"}
+              tabindex={zoomedProject ? undefined : 0}
+              aria-pressed={zoomedProject ? undefined : usage.isFocused(groupBy, row.id)}
               title={rowTitle(row.id, row.label)}
-              aria-disabled={!!zoomedProject}
-              onclick={(event) => handleClick(event, row.id)}
-              ondblclick={() => handleOpen(row.id)}
-              onkeydown={(event) => handleKey(event, row.id)}
+              onclick={zoomedProject ? undefined : (event) => handleClick(event, row.id)}
+              ondblclick={!zoomedProject && groupBy === "project" ? () => handleOpen(row.id) : undefined}
+              onkeydown={zoomedProject ? undefined : (event) => handleKey(event, row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
               <span
@@ -295,18 +302,18 @@
     {:else}
       <div class="list-view">
         {#each rows as row, i (row.id)}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
           <div
             class="list-row"
             class:selected={usage.isFocused(groupBy, row.id)}
             class:dimmed={!zoomedProject && hasSelection && !usage.isFocused(groupBy, row.id)}
-            role="button"
-            tabindex={zoomedProject ? -1 : 0}
-            aria-pressed={usage.isFocused(groupBy, row.id)}
+            role={zoomedProject ? undefined : "button"}
+            tabindex={zoomedProject ? undefined : 0}
+            aria-pressed={zoomedProject ? undefined : usage.isFocused(groupBy, row.id)}
             title={rowTitle(row.id, row.label)}
-            aria-disabled={!!zoomedProject}
-            onclick={(event) => handleClick(event, row.id)}
-            ondblclick={() => handleOpen(row.id)}
-            onkeydown={(event) => handleKey(event, row.id)}
+            onclick={zoomedProject ? undefined : (event) => handleClick(event, row.id)}
+            ondblclick={!zoomedProject && groupBy === "project" ? () => handleOpen(row.id) : undefined}
+            onkeydown={zoomedProject ? undefined : (event) => handleKey(event, row.id)}
           >
             <span class="list-rank">{i + 1}</span>
             <span
@@ -418,11 +425,10 @@
     gap: 6px;
     padding: 3px 4px;
     border-radius: var(--radius-sm);
-    cursor: pointer;
     transition: background 0.1s;
   }
 
-  .rail-row:hover:not([aria-disabled="true"]) {
+  .rail-row[role="button"]:hover {
     background: var(--bg-surface-hover);
   }
 
@@ -438,8 +444,8 @@
     background: var(--bg-surface-hover);
   }
 
-  .rail-row[aria-disabled="true"], .list-row[aria-disabled="true"] {
-    cursor: default;
+  .rail-row[role="button"], .list-row[role="button"] {
+    cursor: pointer;
   }
 
   .rail-rank {
@@ -487,11 +493,10 @@
     gap: 8px;
     padding: 4px 6px;
     border-radius: var(--radius-sm);
-    cursor: pointer;
     transition: background 0.1s;
   }
 
-  .list-row:hover:not([aria-disabled="true"]) {
+  .list-row[role="button"]:hover {
     background: var(--bg-surface-hover);
   }
 

@@ -6140,14 +6140,44 @@ func TestGroupTopSessions(t *testing.T) {
 			name: "latest recorded label", limit: 100, sort: TopSessionsSortCost,
 			input: []TopSessionEntry{
 				{SessionID: "z", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Earlier", StartedAt: "2026-10-08T13:00:00+02:00"},
-				{SessionID: "a", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Newer", StartedAt: "2026-10-08T12:00:00Z"},
 				{SessionID: "b", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", StartedAt: "2026-10-08T12:00:00Z"},
 				{SessionID: "c", Project: "hermes-cron", GroupKey: "job-a", StartedAt: "2026-10-09T12:00:00Z"},
+				{SessionID: "a", Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Newer", StartedAt: "2026-10-08T12:00:00Z"},
 				{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
 			},
 			want: []TopSessionEntry{
-				{Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", DisplayName: "Tie winner", StartedAt: "2026-10-08T12:00:00Z"},
+				{Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", DisplayName: "Tie winner", StartedAt: "2026-10-09T12:00:00Z"},
 				{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
+			},
+		},
+		{
+			name: "newest unlabeled run keeps older label", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{SessionID: "new", GroupKey: "job-a", StartedAt: "2026-10-09T12:00:00Z"},
+				{SessionID: "old", GroupKey: "job-a", GroupLabel: "Digest", StartedAt: "2026-10-08T12:00:00Z"},
+			},
+			want: []TopSessionEntry{
+				{GroupKey: "job-a", GroupLabel: "Digest", DisplayName: "Digest", StartedAt: "2026-10-09T12:00:00Z"},
+			},
+		},
+		{
+			name: "unlabeled timestamp ties break by session ID", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{SessionID: "z", GroupKey: "job-a", StartedAt: "2026-10-08T14:00:00+02:00"},
+				{SessionID: "a", GroupKey: "job-a", StartedAt: "2026-10-08T12:00:00Z"},
+			},
+			want: []TopSessionEntry{
+				{GroupKey: "job-a", DisplayName: "job-a", StartedAt: "2026-10-08T14:00:00+02:00"},
+			},
+		},
+		{
+			name: "missing and invalid timestamps tie at zero", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{SessionID: "z", GroupKey: "job-a"},
+				{SessionID: "a", GroupKey: "job-a", StartedAt: "invalid"},
+			},
+			want: []TopSessionEntry{
+				{GroupKey: "job-a", DisplayName: "job-a"},
 			},
 		},
 		{

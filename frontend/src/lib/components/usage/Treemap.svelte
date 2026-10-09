@@ -70,18 +70,18 @@
             <clipPath id={clipId}>
               <rect x={node.x0} y={node.y0} width={tileWidth} height={tileHeight} />
             </clipPath>
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable tiles receive a button role and tab stop.) -->
             <g
               class="tile"
               class:dimmed={tile.dimmed}
               clip-path={`url(#${clipId})`}
-              tabindex={onSelect ? 0 : -1}
-              role="button"
-              aria-disabled={!onSelect}
-              aria-pressed={tile.selected ?? false}
+              tabindex={onSelect ? 0 : undefined}
+              role={onSelect ? "button" : undefined}
+              aria-pressed={onSelect ? tile.selected ?? false : undefined}
               aria-label={tile.title ?? m.usage_click_to_focus({ label: tile.label })}
-              onclick={(event) => { if (event.detail < 2) onSelect?.(tile.id); }}
-              ondblclick={() => onOpen?.(tile.id)}
-              onkeydown={(event) => handleKey(event, tile.id)}
+              onclick={onSelect ? (event) => { if (event.detail < 2) onSelect(tile.id); } : undefined}
+              ondblclick={onOpen ? () => onOpen(tile.id) : undefined}
+              onkeydown={onSelect ? (event) => handleKey(event, tile.id) : undefined}
             >
               <title>{tile.title ?? m.usage_click_to_focus({ label: tile.label })}</title>
               <Group x={node.x0} y={node.y0}>
@@ -120,7 +120,6 @@
   }
 
   .treemap-container :global(.tile) {
-    cursor: pointer;
     touch-action: manipulation;
   }
 
@@ -128,11 +127,11 @@
     opacity: 0.35;
   }
 
-  .treemap-container :global(.tile[aria-disabled="true"]) {
-    cursor: default;
+  .treemap-container :global(.tile[role="button"]) {
+    cursor: pointer;
   }
 
-  .treemap-container :global(.tile:hover:not([aria-disabled="true"]) rect) {
+  .treemap-container :global(.tile[role="button"]:hover rect) {
     opacity: 0.92;
   }
 

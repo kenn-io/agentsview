@@ -155,7 +155,8 @@ the selection is highlighted and the others dimmed. Click the selection again
 or use **Clear filters** to clear it. The selection stays active when dates
 widen.
 Double click a project or select it and use **Open** to see its groups and
-individual sessions for the selected date range. Enter and Space select any item.
+individual sessions for the selected date range. On touch screens, use **Open**.
+Enter and Space select any item.
 Hermes cron jobs show their latest recorded name in
 that range and their ID on hover. **All projects**, Escape, and Backspace
 return to project tiles with the current dates, filters, and selection.

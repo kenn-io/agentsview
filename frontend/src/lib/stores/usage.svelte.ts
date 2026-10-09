@@ -688,13 +688,6 @@ class UsageStore {
     void this.fetchAll({ preserveTimeRange: true });
   }
 
-  clearFocus(): void {
-    if (!this.focus) return;
-    if (this.zoomed) this.backToProjects();
-    const { by, id } = this.focus;
-    this.toggleFocus(by, id);
-  }
-
   // Toggle an item's exclusion. Clicking an included item
   // excludes it; clicking an excluded item re-includes it.
   toggleProject(name: string): void {

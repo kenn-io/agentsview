@@ -2671,17 +2671,27 @@ type TopSessionEntry struct {
 // GroupTopSessions merges grouped runs and preserves individual sessions.
 func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, tokenTypes UsageTokenTypes) ([]TopSessionEntry, error) {
 	type key struct{ project, machine, group string }
-	grouped := make(map[key]*TopSessionEntry)
+	type group struct {
+		TopSessionEntry
+		started, labelStarted     time.Time
+		sessionID, labelSessionID string
+	}
+	grouped := make(map[key]*group)
 	out := make([]TopSessionEntry, 0, len(entries))
 	for _, entry := range entries {
 		if entry.GroupKey == "" {
 			out = append(out, entry)
 			continue
 		}
+		// Unparseable timestamps count as zero time.
+		started, _ := time.Parse(time.RFC3339Nano, entry.StartedAt)
 		k := key{entry.Project, entry.Machine, entry.GroupKey}
 		row := grouped[k]
 		if row == nil {
-			row = &TopSessionEntry{Machine: entry.Machine, Project: entry.Project, GroupKey: entry.GroupKey, Agent: entry.Agent}
+			row = &group{
+				TopSessionEntry: TopSessionEntry{Machine: entry.Machine, Project: entry.Project, GroupKey: entry.GroupKey, Agent: entry.Agent, StartedAt: entry.StartedAt},
+				started:         started, sessionID: entry.SessionID,
+			}
 			grouped[k] = row
 		}
 		row.InputTokens += entry.InputTokens
@@ -2694,23 +2704,21 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 		if err != nil {
 			return nil, err
 		}
-		// Unparseable timestamps count as zero time.
-		started, _ := time.Parse(time.RFC3339Nano, entry.StartedAt)
-		previousStarted, _ := time.Parse(time.RFC3339Nano, row.StartedAt)
-		newer, same := started.After(previousStarted), started.Equal(previousStarted)
-		if entry.GroupLabel != "" && (row.GroupLabel == "" || newer || same && entry.SessionID > row.SessionID) {
-			row.GroupLabel = entry.GroupLabel
+		if started.After(row.started) || started.Equal(row.started) && entry.SessionID > row.sessionID {
 			row.StartedAt = entry.StartedAt
-			row.SessionID = entry.SessionID
+			row.started, row.sessionID = started, entry.SessionID
+		}
+		if entry.GroupLabel != "" && (row.GroupLabel == "" || started.After(row.labelStarted) || started.Equal(row.labelStarted) && entry.SessionID > row.labelSessionID) {
+			row.GroupLabel = entry.GroupLabel
+			row.labelStarted, row.labelSessionID = started, entry.SessionID
 		}
 	}
 	for _, row := range grouped {
-		row.SessionID = ""
 		row.DisplayName = row.GroupLabel
 		if row.DisplayName == "" {
 			row.DisplayName = row.GroupKey
 		}
-		out = append(out, *row)
+		out = append(out, row.TopSessionEntry)
 	}
 	sortTopSessions(out, sortBy, tokenTypes)
 	limit = min(len(out), normalizeTopSessionsLimit(limit))

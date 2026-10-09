@@ -455,11 +455,11 @@ describe("AttributionPanel job groups", () => {
     expect(rows.map((row) => row.querySelector(".list-label")!.textContent)).toEqual([
       "Daily digest · abcdef-j",
       "Daily digest · abcdef-o",
-      "Other",
+      "Other · ?",
       "Ungrouped run",
-      "Other",
+      "Other · remainde",
       "Repeated run · hermes:",
-      "Repeated run · run-b",
+      "Repeated run · hermes:r",
     ]);
     expect(rows.map((row) => row.querySelector(".list-cost")!.textContent?.trim())).toEqual([
       "$3.00",
@@ -473,6 +473,11 @@ describe("AttributionPanel job groups", () => {
     expect(rows[0]!.title).toBe("Daily digest · abcdef-job");
     expect(rows[4]!.title).toBe("Other · remainder");
     expect(rows[2]!.title).toBe("Other");
+    for (const row of rows) {
+      expect(row.hasAttribute("role")).toBe(false);
+      expect(row.hasAttribute("tabindex")).toBe(false);
+      expect(row.hasAttribute("aria-pressed")).toBe(false);
+    }
     expect(
       new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size,
     ).toBe(1);
@@ -558,7 +563,40 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
-  it("keeps providers when ungrouped session IDs collide", async () => {
+  it.each(["list", "treemap"] as const)("distinguishes two same-named jobs on two machines in %s", async (view) => {
+    usage.setOpenProject("pl1:sha256:first");
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    usage.toggles.attribution.view = view;
+    usage.zoomRows = ["a1b2c3d4-job", "e5f6a7b8-job"].flatMap((groupKey) => ["host-a", "host-b"].map((machine) => ({
+      ...topSessionForRemainder(), groupKey, machine, groupLabel: "Digest",
+    })));
+    const component = mountPanel();
+    await tick();
+    const rows = document.querySelectorAll<HTMLElement>(view === "list" ? ".list-row" : ".rail-row");
+    expect(Array.from(rows, (row) => row.querySelector(".list-label, .rail-label")!.textContent)).toEqual([
+      "Digest · a1b2c3d4 · host-a",
+      "Digest · a1b2c3d4 · host-b",
+      "Digest · e5f6a7b8 · host-a",
+      "Digest · e5f6a7b8 · host-b",
+    ]);
+    expect(Array.from(rows, (row) => row.title)).toEqual([
+      "Digest · a1b2c3d4-job · host-a",
+      "Digest · a1b2c3d4-job · host-b",
+      "Digest · e5f6a7b8-job · host-a",
+      "Digest · e5f6a7b8-job · host-b",
+    ]);
+    for (const row of document.querySelectorAll(".list-row, .rail-row, .tile")) {
+      expect(row.hasAttribute("role")).toBe(false);
+      expect(row.hasAttribute("tabindex")).toBe(false);
+      expect(row.hasAttribute("aria-pressed")).toBe(false);
+    }
+    rows[0]!.click();
+    expect(usage.zoomedProject?.key).toBe("pl1:sha256:first");
+    expect(usage.focus).toEqual({ by: "project", id: "pl1:sha256:first" });
+    await unmount(component);
+  });
+
+  it("shortens full IDs for same-named ungrouped sessions", async () => {
     usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usage.zoomRows = ["hermes:run-a", "augure-desktop:run-a"].map((sessionId) => ({

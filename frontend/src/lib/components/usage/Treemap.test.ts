@@ -30,6 +30,9 @@ describe("Treemap", () => {
 
     expect(document.querySelector(".tile title")?.textContent).toBe("Click to focus Alpha");
     const tile = document.querySelector<SVGGElement>(".tile");
+    expect(tile?.hasAttribute("role")).toBe(false);
+    expect(tile?.hasAttribute("tabindex")).toBe(false);
+    expect(tile?.hasAttribute("aria-pressed")).toBe(false);
     const clipPath = tile?.getAttribute("clip-path");
     expect(typeof clipPath).toBe("string");
     if (typeof clipPath !== "string") {
