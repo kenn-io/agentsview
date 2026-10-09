@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -548,6 +549,21 @@ func TestSyncClaudeAIZipSameCountFreshness(t *testing.T) {
 	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, 2, calls)
+}
+
+func TestSyncClaudeAIDetailNewerThanListNotCached(t *testing.T) {
+	d := testDB(t)
+	changed := regexp.MustCompile(`"updated_at":\s*"[^"]*"`).ReplaceAllString(syncDetail, `"updated_at":"2099-01-01T00:00:00Z"`)
+	calls := 0
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		calls++
+		return ClaudeAIResponse{Status: 200, Body: []byte(changed)}, nil
+	})
+	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
 	assert.Equal(t, 2, calls)
 }
 
