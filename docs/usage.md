@@ -186,24 +186,30 @@ Three histograms showing the distribution of:
 
 Total tool call count with breakdowns by category (Read, Edit, Write, Bash,
 Search, Web, Task) and by agent. Includes a trend chart showing tool usage over
-time. Each tool also shows empty, repeat and recovery rates. Click a rate to
-open sessions with matching empty calls, repeats or recovered sequence starts.
-Each link jumps to the first matching call and shows the matching count.
+time. Each tool also shows empty, repeat and recovery rates. Click a nonzero
+rate to list the sessions behind it, with the number of matching calls in each.
+Each link opens the session at the first matching call, or at its message when
+the call has no tool ID.
 
-Empty rate divides empty results by calls with known outcomes. Repeat rate
-divides adjacent identical or near-identical calls in later messages by analyzed
-calls, regardless of the previous outcome. Recovery rate
-divides recovered sequences by recovered plus abandoned sequences. A sequence
-starts with an empty result or error; recovery means a later call returned
-content. The starting tool owns the sequence. Open and unknown endings stay
-outside the recovery denominator. A missing denominator shows Unavailable.
+- **Empty rate** divides empty results by calls with a known outcome.
+- **Repeat rate** divides calls that repeat the previous call's tool and input,
+  exactly or after normalizing the JSON, by analyzed calls. The previous call's
+  outcome does not matter, and calls in the same message do not count.
+- **Recovery rate** divides recovered sequences by recovered plus abandoned
+  sequences. A sequence starts with an empty result or an error. It recovers
+  when a call in a later message returns content. The tool that started the
+  sequence owns it. Sequences still open, or with an unknown ending, stay out of
+  the denominator.
 
-Project, date and model filters select individual calls. Coverage shows
-analyzed calls divided by all calls. Sessions gain coverage when changed or during
-`agentsview sync --full`, including archived copies whose source files are gone. Pending
-refreshes have missing coverage until the recompute commits. PostgreSQL,
-DuckDB and ClickHouse receive these observations through their normal pushes.
-Archives that omit tool content report missing coverage. Evidence dates show the latest matching call date.
+A rate with no denominator shows Unavailable. Rates follow the same filters as
+the rest of the Analytics page and count individual calls, so a date or model
+filter selects the calls made in that window or by that model.
+
+The Analyzed column shows analyzed calls out of all calls. After an upgrade,
+AgentsView recomputes older sessions in the background. Until a session's
+recompute finishes, its calls count as not analyzed. Archives that store no tool
+results never analyze calls. PostgreSQL, DuckDB, and ClickHouse mirrors receive
+the results through their normal pushes.
 
 ![Tool usage](/docs/assets/generated/screenshots/tool-usage.png)
 

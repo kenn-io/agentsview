@@ -396,9 +396,9 @@ AgentsView data directory. `agentsview raw-sync status` prints path-free JSON
 describing the local checkpoint, pending work, retry time, failures, and
 coverage.
 
-When a complete audit finds that a previously captured file is gone, the
-watcher uploads a tombstone for it. The server keeps the sessions already
-derived from that file; see
+When a complete audit finds that a previously captured file is gone, the watcher
+uploads a tombstone for it. The server keeps the sessions already derived from
+that file; see
 [Isolation and processing limits](#isolation-and-processing-limits).
 
 The normal writable `agentsview serve` daemon has its own parser watcher. Run
@@ -442,8 +442,21 @@ missing, startup logs `raw-sync routes disabled; missing requirements:` followed
 by the exact missing table privileges, sequence access, or read-only transaction
 setting.
 
-Tool effectiveness refreshes also require the three `tool_calls` column UPDATE
-grants shown above. Existing table-wide UPDATE grants satisfy this requirement.
+Explicit hosted mode also requires `UPDATE` on the `tool_calls` columns
+`observed_outcome`, `observed_repeat`, and `sequence_ending`, which hold the
+facts behind tool effectiveness rates. The grant appears in the provisioning
+example above; a table-wide `UPDATE` grant also satisfies it. Without it, or
+before owner provisioning adds the columns, hosted startup fails with
+`owner provisioning required`. Apply the grant as the schema owner before
+upgrading:
+
+```sql
+GRANT UPDATE (observed_outcome, observed_repeat, sequence_ending)
+  ON hosted_sessions.tool_calls TO hosted_runtime;
+```
+
+Hosted sessions projected before the upgrade show as not analyzed in tool rate
+coverage. They gain rates when their source is uploaded and parsed again.
 
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.
