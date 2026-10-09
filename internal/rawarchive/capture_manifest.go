@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/capture"
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -87,7 +87,7 @@ func readCaptureJSON(ctx context.Context, root *os.Root, name string, limit int6
 		return nil, err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(&capture.ContextReader{Context: ctx, Reader: f}, limit+1))
+	b, err := io.ReadAll(io.LimitReader(ctxio.Reader{Context: ctx, Reader: f}, limit+1))
 	if err != nil {
 		return nil, err
 	}

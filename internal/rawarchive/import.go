@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/capture"
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
@@ -158,7 +158,7 @@ func (a *Archive) Import(ctx context.Context, spec ImportSpec) (Report, error) {
 			ref := rawsync.ObjectRef{SHA256: want.SHA256, Length: want.Size}
 			// Create verifies the declared digest even on a retry; custody is only
 			// recorded after the complete stream has been consumed and checked.
-			if _, err = a.objects.PutObject(ctx, a.tenant, ref, &capture.ContextReader{Context: ctx, Reader: f}); err != nil {
+			if _, err = a.objects.PutObject(ctx, a.tenant, ref, ctxio.Reader{Context: ctx, Reader: f}); err != nil {
 				return err
 			}
 			final, err := f.Stat()
