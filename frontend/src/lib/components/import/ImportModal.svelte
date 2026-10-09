@@ -88,6 +88,8 @@
         error = m.import_claude_auth_required();
       } else if (e instanceof ApiError && e.code === "claude_ai_sign_in_pending") {
         error = m.import_claude_sign_in_pending();
+      } else if (e instanceof ApiError && e.code === "claude_ai_archive_upgrade_required") {
+        error = m.import_claude_archive_upgrade_required();
       }
     }
     finally {

@@ -31,7 +31,7 @@ func (s *Server) registerImportRoutes() {
 		func(ctx context.Context, in *claudeAISyncInput) (*huma.StreamResponse, error) {
 			return s.humaSyncClaudeAI(ctx, in, &results)
 		}, func(op *huma.Operation) {
-			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required or claude_ai_sign_in_pending."
+			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_sign_in_pending, or claude_ai_archive_upgrade_required."
 		})
 	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
 		func(ctx context.Context, in *claudeAISyncResultInput) (*struct{}, error) {
@@ -93,6 +93,7 @@ type claudeAISyncResult struct {
 }
 
 var errClaudeAISignInPending = errors.New("claude sign-in is still pending")
+var errClaudeAIArchiveUpgradeRequired = errors.New("Let the archive finish upgrading, then Sync again.")
 
 func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
 	if s.db.ReadOnly() {
@@ -138,7 +139,14 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			}
 		}
 		stats, err := importer.SyncClaudeAI(ctx, store, fetch, &importer.ImportCallbacks{
-			SerializeWrite: func(write func() error) error { return s.serializeArchiveWrite(ctx, write) },
+			SerializeWrite: func(write func() error) error {
+				return s.serializeArchiveWrite(ctx, func() error {
+					if store.NeedsResync() {
+						return errClaudeAIArchiveUpgradeRequired
+					}
+					return write()
+				})
+			},
 			OnProgress: func(stats importer.ImportStats) {
 				if !stream.SendJSON("progress", stats) {
 					cancel()
@@ -159,6 +167,8 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				payload["code"] = "claude_ai_auth_required"
 			} else if errors.Is(err, errClaudeAISignInPending) {
 				payload["code"] = "claude_ai_sign_in_pending"
+			} else if errors.Is(err, errClaudeAIArchiveUpgradeRequired) {
+				payload["code"] = "claude_ai_archive_upgrade_required"
 			}
 			stream.SendJSON("error", payload)
 			return
