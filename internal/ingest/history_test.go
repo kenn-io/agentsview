@@ -36,6 +36,41 @@ func TestReconcileProviderHistoryPreservesEmptyRooArchive(t *testing.T) {
 	assert.Equal(t, "keep this", result.Candidate.Messages[0].Content)
 }
 
+func TestReconcileProviderHistoryHermesGroupKey(t *testing.T) {
+	tests := []struct {
+		name          string
+		keepStored    bool
+		noPrior       bool
+		fresh, stored string
+		want          string
+	}{
+		{name: "pruned ancestry", keepStored: true, stored: "job-a", want: "job-a"},
+		{name: "no preservation intent", stored: "job-a"},
+		{name: "resolved job", fresh: "job-b", stored: "job-a", want: "job-b"},
+		{name: "first seen after prune", keepStored: true, noPrior: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := ingest.Candidate{
+				Session: db.Session{ID: "hermes:middle", Agent: "hermes", Project: "ops", GroupKey: tt.fresh},
+				Parsed: parser.ParseResult{Session: parser.ParsedSession{
+					Agent: parser.AgentHermes, KeepStoredGroupKey: tt.keepStored,
+				}},
+			}
+			prior := &ingest.PriorSession{Session: db.Session{GroupKey: tt.stored}}
+			if tt.noPrior {
+				prior = nil
+			}
+			result, err := ingest.ReconcileProviderHistory(t.Context(), candidate, prior, ingest.ContentOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, result.Candidate.Session.GroupKey)
+			assert.Equal(t, "ops", result.Candidate.Session.Project)
+			assert.Equal(t, ingest.HistoryReplace, result.Action)
+			assert.Equal(t, tt.keepStored && !tt.noPrior, result.PriorContributed)
+		})
+	}
+}
+
 func TestReconcileProviderHistoryOpenCodeFingerprintAndContent(t *testing.T) {
 	const storedFingerprint = `opencode-storage:v1:{"messages":[{"id":"message-1","time":1,"hash":"old"}]}`
 	const currentFingerprint = `opencode-storage:v1:{"messages":[{"id":"message-1","time":1,"hash":"new"}]}`

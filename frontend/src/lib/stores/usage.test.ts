@@ -1118,6 +1118,36 @@ describe("UsageStore session filter params", () => {
     );
   });
 
+  it("keeps every project in attribution when retrying a selected project's summary", async () => {
+    const { usage } = await loadStore();
+    usage.selectedProjectKey = "pl1:sha256:alpha";
+    usage.toggles.attribution.groupBy = "project";
+    usage.applyDateRange("2024-01-08", "2024-01-14");
+    usage.excludedModels = "hidden-model";
+    const allProjects = usageSummary(9);
+    const selectedProject = usageSummary(4);
+    selectedProject.projectTotals = [selectedProject.projectTotals[0]!];
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) =>
+      params.project_key ? selectedProject : allProjects,
+    );
+
+    await usage.fetchSummary();
+
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
+    const calls = usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params);
+    expect(calls[0]).toEqual(expect.objectContaining({
+      project_key: "pl1:sha256:alpha", from: "2024-01-08", to: "2024-01-14", exclude_model: "hidden-model",
+    }));
+    expect(calls[1]).toEqual(expect.objectContaining({
+      from: "2024-01-08", to: "2024-01-14", exclude_model: "hidden-model",
+    }));
+    expect(calls[1]!.project_key).toBeUndefined();
+    expect(usage.summary?.projectTotals).toEqual(selectedProject.projectTotals);
+    expect(usage.attributionSummary?.projectTotals).toEqual(allProjects.projectTotals);
+    expect(usage.selectedProjectKey).toBe("pl1:sha256:alpha");
+    usage.cancelInFlightReads();
+  });
+
   it("aborts visible panel requests on teardown", async () => {
     usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
     const { usage } = await loadStore();

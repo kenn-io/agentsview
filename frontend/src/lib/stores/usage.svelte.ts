@@ -957,7 +957,6 @@ class UsageStore {
       loadComparison: false,
       params,
       contextParams,
-      attributionParams: this.attributionParams(),
     });
     const topSessionsPromise = this.fetchTopSessions(params);
     const zoomPromise = this.fetchZoom(params);
@@ -1037,6 +1036,7 @@ class UsageStore {
   ): Promise<LoadedUsageSummary | null> {
     const loadComparison = options.loadComparison ?? true;
     const recoverProjectScope = options.recoverProjectScope ?? true;
+    const attributionParams = options.attributionParams ?? this.attributionParams();
     const v = ++this.versions.summary;
     this.abortPanel("comparison");
     this.abortPanel("pairwise");
@@ -1054,7 +1054,7 @@ class UsageStore {
     const liveContextStep = options.contextParams
       ? this.liveQuery.start("contextSummary", started)
       : 0;
-    const liveAttributionStep = options.attributionParams ? this.liveQuery.start("attributionSummary", started) : 0;
+    const liveAttributionStep = attributionParams ? this.liveQuery.start("attributionSummary", started) : 0;
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const params = options.params ?? this.baseParams();
@@ -1062,13 +1062,13 @@ class UsageStore {
       let data: UsageSummaryResponse;
       let contextData: UsageSummaryResponse | null = null;
       let attributionData: UsageSummaryResponse | null = null;
-      if (!contextParams && !options.attributionParams) {
+      if (!contextParams && !attributionParams) {
         data = await UsageService.getApiV1UsageSummary(params, { signal });
       } else {
         [data, contextData, attributionData] = await Promise.all([
           UsageService.getApiV1UsageSummary(params, { signal }),
           contextParams ? UsageService.getApiV1UsageSummary(contextParams, { signal }) : null,
-          options.attributionParams ? UsageService.getApiV1UsageSummary(options.attributionParams, { signal }) : null,
+          attributionParams ? UsageService.getApiV1UsageSummary(attributionParams, { signal }) : null,
         ]);
       }
       if (this.versions.summary === v) {
@@ -1146,7 +1146,6 @@ class UsageStore {
                 to: options.contextParams.to,
               }
             : undefined,
-          attributionParams: this.attributionParams(),
           recoverProjectScope: false,
         });
         return loaded === null ? null : { ...loaded, projectScopeRecovered: true };

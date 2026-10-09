@@ -171,14 +171,16 @@ func TestHermesCronContinuationKeepsGroupAfterRootPrunedAndResync(t *testing.T) 
 	})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
-	checkTip := func() {
+	checkGroups := func() {
 		t.Helper()
-		stored, err := database.GetSession(t.Context(), "hermes:tip")
-		require.NoError(t, err)
-		require.NotNil(t, stored)
-		assert.Equal(t, "job-a", stored.GroupKey)
+		for _, id := range []string{"hermes:middle", "hermes:tip"} {
+			stored, err := database.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Equal(t, "job-a", stored.GroupKey, id)
+		}
 	}
-	checkTip()
+	checkGroups()
 	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
 
 	_, err = conn.ExecContext(t.Context(), `
@@ -187,13 +189,34 @@ func TestHermesCronContinuationKeepsGroupAfterRootPrunedAndResync(t *testing.T) 
 		DELETE FROM sessions WHERE id = 'cron_job-a_20261008_120000';
 	`)
 	require.NoError(t, err)
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+	checkGroups()
+	stored, err := database.GetSession(t.Context(), "hermes:middle")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Empty(t, stored.ParentSessionID)
+
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET title = 'Updated digest' WHERE id = 'tip'`)
+	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
-	checkTip()
+	checkGroups()
+	stored, err = database.GetSessionFull(t.Context(), "hermes:tip")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, new("Updated digest"), stored.SessionName)
 
-	stats := engine.ResyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "%v", stats.Warnings)
-	checkTip()
+	_, err = database.AssignSessionProject(t.Context(), "hermes:middle", "ops")
+	require.NoError(t, err)
+	for range 2 {
+		stats := engine.ResyncAll(t.Context(), nil)
+		require.False(t, stats.Aborted, "%v", stats.Warnings)
+		checkGroups()
+		stored, err := database.GetSession(t.Context(), "hermes:middle")
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		assert.Equal(t, "ops", stored.Project)
+	}
 }
 
 func TestHermesProfileCreatedAfterEngineInitializationIsDiscovered(t *testing.T) {

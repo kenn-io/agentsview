@@ -2955,8 +2955,8 @@ schemas keep their existing ordering behavior.
   [hermes_state_sessions.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_sessions.py)
   and `prune_sessions` in
   [hermes_state_maintenance.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_maintenance.py)
-  clear surviving children's parent links. Full resync preserves a stored cron
-  job key when reparsing can no longer resolve it.
+  clear surviving children's parent links. A cron continuation whose ancestors
+  were pruned keeps its stored job.
 
 ## Forge (`forge`)
 

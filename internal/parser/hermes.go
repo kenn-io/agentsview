@@ -1050,6 +1050,7 @@ func applyHermesStateMetadata(
 		sess.RelationshipType = RelContinuation
 	}
 	sess.GroupKey = ss.cronJob
+	sess.KeepStoredGroupKey = ss.source == "cron" && ss.cronJob == ""
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
 	sess.SessionName = ss.title
