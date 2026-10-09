@@ -16,6 +16,7 @@ const syncState = vi.hoisted(() => ({ readOnly: false }));
 vi.mock("../../stores/sync.svelte.js", () => ({ sync: syncState }));
 const syncClaudeAI = vi.hoisted(() => vi.fn());
 vi.mock("../../api/client.js", () => ({
+  connectClaudeAI: (browser: typeof host) => browser.connect(),
   syncClaudeAI,
   importClaudeAI: vi.fn(),
   importChatGPT: vi.fn(),

@@ -380,8 +380,13 @@ async function readImportResponse(
   );
 }
 
-// The browser window is shared, so a new Sync waits for the previous run's close.
+// The browser window is shared, so Sign in and a new Sync wait for the previous run's close.
 let claudeAIClosing: Promise<void> = Promise.resolve();
+
+export async function connectClaudeAI(host: BrowserHost): Promise<void> {
+  await claudeAIClosing;
+  await host.connect();
+}
 
 export async function syncClaudeAI(
   host: BrowserHost,
