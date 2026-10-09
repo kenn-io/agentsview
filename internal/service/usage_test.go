@@ -828,9 +828,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	res, err := svc.UsagePairwiseComparison(
 		t.Context(),
 		service.UsagePairwiseComparisonRequest{
-			UsageRequest: service.UsageRequest{
-				ProjectKey: "pl1:sha256:alpha", GitBranch: "alpha/main", ExcludeProjectKey: "pl1:sha256:hidden",
-			},
+			ProjectKey: "pl1:sha256:alpha", GitBranch: "alpha/main", ExcludeProjectKey: "pl1:sha256:hidden",
 			LeftDimension:  "project",
 			LeftValue:      "alpha",
 			RightDimension: "model",

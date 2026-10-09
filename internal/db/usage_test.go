@@ -2619,6 +2619,8 @@ func TestGetTopSessionsByCost(t *testing.T) {
 	// Expensive session
 	insertSession(t, d, "sBig", "proj-a", func(s *Session) {
 		s.Agent = "claude"
+		s.Machine = "test-machine"
+		s.GroupKey = "test-group"
 		s.SessionName = new("Big Session")
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})
@@ -2659,6 +2661,9 @@ func TestGetTopSessionsByCost(t *testing.T) {
 	// Ordered cost desc — sBig first
 	assert.Equal(t, "sBig", top[0].SessionID, "top[0].SessionID")
 	assert.Equal(t, "Big Session", top[0].DisplayName, "top[0].DisplayName")
+	assert.Equal(t, "test-machine", top[0].Machine)
+	assert.Equal(t, "test-group", top[0].GroupKey)
+	assert.Equal(t, "Big Session", top[0].SessionName)
 	assert.Equal(t, "proj-a", top[0].Project, "top[0].Project")
 	assert.Equal(t, "claude", top[0].Agent, "top[0].Agent")
 	// TotalTokens = 5000 + 2000 + 1000 + 3000 = 11000

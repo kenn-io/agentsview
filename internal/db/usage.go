@@ -2690,8 +2690,8 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 		row := grouped[k]
 		if row == nil {
 			row = &group{
-				TopSessionEntry: TopSessionEntry{Machine: entry.Machine, Project: entry.Project, GroupKey: entry.GroupKey, Agent: entry.Agent, StartedAt: entry.StartedAt},
-				started:         started, sessionID: entry.SessionID,
+				Machine: entry.Machine, Project: entry.Project, GroupKey: entry.GroupKey, Agent: entry.Agent, StartedAt: entry.StartedAt,
+				started: started, sessionID: entry.SessionID,
 			}
 			grouped[k] = row
 		}
