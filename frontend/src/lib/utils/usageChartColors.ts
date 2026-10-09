@@ -1,10 +1,6 @@
 import type { UsageSummaryResponse } from "../api/generated/index";
 import { orderedChartSeriesColorMap, type ChartPalette } from "./chartPalette.js";
 
-export type UsageColorSummary = UsageSummaryResponse & {
-  colors?: Record<ChartPalette, UsageChartColorMaps>;
-};
-
 export interface UsageChartColorMaps {
   project: ReadonlyMap<string, string>;
   model: ReadonlyMap<string, string>;
@@ -25,10 +21,9 @@ function addCost(costs: Map<string, number>, id: string, microdollars: number) {
 }
 
 export function usageChartColorMaps(
-  summary: UsageColorSummary | null,
+  summary: UsageSummaryResponse | null,
   palette: ChartPalette,
 ): UsageChartColorMaps {
-  if (summary?.colors) return summary.colors[palette];
   const projects = new Map<string, number>();
   const models = new Map<string, number>();
   const agents = new Map<string, number>();
@@ -67,28 +62,4 @@ export function usageChartColorMaps(
     model: orderedChartSeriesColorMap(rankedIds(models), palette),
     agent: orderedChartSeriesColorMap(rankedIds(agents), palette),
   };
-}
-
-export function mergeUsageColorSummary(
-  previous: UsageColorSummary | null,
-  summaries: UsageSummaryResponse[],
-): UsageColorSummary {
-  const colors = {} as Record<ChartPalette, UsageChartColorMaps>;
-  for (const palette of ["agentsview", "matplotlib"] as const) {
-    const maps = { ...usageChartColorMaps(previous, palette) };
-    for (const summary of summaries) {
-      const incoming = usageChartColorMaps(summary, palette);
-      for (const by of ["project", "model", "agent"] as const) {
-        const preserved = maps[by];
-        const ids = [...new Set([...preserved.keys(), ...incoming[by].keys()])];
-        const assigned = orderedChartSeriesColorMap(ids, palette);
-        // New IDs take colors no preserved ID holds, so a palette family switch cannot duplicate one.
-        const held = new Set(preserved.values());
-        const free = [...new Set([...assigned].filter(([id]) => id !== "" && id !== "__other__").map(([, color]) => color))].filter((color) => !held.has(color));
-        maps[by] = new Map(ids.map((id) => [id, preserved.get(id) ?? (id === "" || id === "__other__" ? undefined : free.shift()) ?? assigned.get(id)!]));
-      }
-    }
-    colors[palette] = maps;
-  }
-  return { ...summaries[0]!, colors };
 }

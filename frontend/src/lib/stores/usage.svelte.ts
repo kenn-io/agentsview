@@ -12,7 +12,6 @@ import { ApiError, isAbortError, responseTimingOf } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
-import { mergeUsageColorSummary, type UsageColorSummary } from "../utils/usageChartColors.js";
 import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
@@ -362,7 +361,8 @@ class UsageStore {
   attributionSummary = $state<UsageSummaryResponse | null>(null);
   selectedProjectKey = $state("");
   selectedModel = $state("");
-  colorSummary = $state<UsageColorSummary | null>(null);
+  // The selected-dimension-free summary over the full unbrushed window.
+  referenceSummary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
@@ -485,6 +485,11 @@ class UsageStore {
 
   get timeSeriesSummary(): UsageSummaryResponse | null {
     return this.timeSeriesContextSummary ?? this.summary;
+  }
+
+  // Chart colors and legend rank from this, so selecting never recolors or reorders series.
+  get colorSummary(): UsageSummaryResponse | null {
+    return (this.hasSelection(this.toggles.attribution.groupBy) && this.referenceSummary) || this.timeSeriesSummary;
   }
 
   get pairwiseModelOptions(): string[] {
@@ -1066,22 +1071,24 @@ class UsageStore {
       let data: UsageSummaryResponse;
       let contextData: UsageSummaryResponse | null = null;
       let attributionData: UsageSummaryResponse | null = null;
+      let referenceData: UsageSummaryResponse | null = null;
+      // Unbrushed, the attribution request already covers the full window.
+      const referenceParams = attributionParams && contextParams ? { ...attributionParams, from: contextParams.from, to: contextParams.to } : undefined;
       if (!contextParams && !attributionParams) {
         data = await UsageService.getApiV1UsageSummary(params, { signal });
       } else {
-        [data, contextData, attributionData] = await Promise.all([
+        [data, contextData, attributionData, referenceData] = await Promise.all([
           UsageService.getApiV1UsageSummary(params, { signal }),
           contextParams ? UsageService.getApiV1UsageSummary(contextParams, { signal }) : null,
           attributionParams ? UsageService.getApiV1UsageSummary(attributionParams, { signal }) : null,
+          referenceParams ? UsageService.getApiV1UsageSummary(referenceParams, { signal }) : null,
         ]);
       }
       if (this.versions.summary === v) {
         this.summary = data;
         this.attributionSummary = attributionData;
-        this.colorSummary = mergeUsageColorSummary(
-          this.selectedTimeRange ? this.colorSummary : null,
-          [contextData ?? this.timeSeriesContextSummary ?? attributionData ?? data, data, attributionData].filter((summary): summary is UsageSummaryResponse => summary !== null),
-        );
+        if (!attributionParams) this.referenceSummary = null;
+        else if (referenceData || !this.selectedTimeRange) this.referenceSummary = referenceData ?? attributionData;
         // Both responses are applied together, so each request's apply
         // phase starts once the later body has arrived; the earlier one
         // shows a gap while it waited for its sibling.
@@ -1178,7 +1185,7 @@ class UsageStore {
               const restoredAttribution = await UsageService.getApiV1UsageSummary(restoredAttributionParams, { signal });
               if (this.versions.summary === v) {
                 this.attributionSummary = restoredAttribution;
-                this.colorSummary = mergeUsageColorSummary(this.colorSummary, [restoredAttribution]);
+                this.referenceSummary = restoredAttribution;
               }
             } catch (attributionError) {
               if (!isAbortError(attributionError)) console.warn("usage attribution restore failed:", attributionError);

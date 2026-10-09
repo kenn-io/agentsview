@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UsageSummaryResponse } from "../api/generated/index";
 import { testMoney } from "../test/money.js";
-import { mergeUsageColorSummary, usageChartColorMaps } from "./usageChartColors.js";
+import { usageChartColorMaps } from "./usageChartColors.js";
 
 function tenModelSummary(models = [
   "model-alpha",
@@ -82,14 +82,10 @@ describe("usageChartColorMaps", () => {
     expect(colors.get("model-alpha")).toBe("#c5b0d5");
   });
 
-  it("keeps merged Matplotlib colors distinct when new models switch the palette family", () => {
+  it("keeps Matplotlib colors distinct when a filter exposes more models", () => {
     const models = Array.from({ length: 11 }, (_, index) => `model-${index}`);
-    const nine = mergeUsageColorSummary(null, [tenModelSummary(models.slice(0, 9))]);
-    const eleven = mergeUsageColorSummary(nine, [tenModelSummary(models)]);
-    const before = nine.colors!.matplotlib.model;
-    const after = eleven.colors!.matplotlib.model;
+    const colors = usageChartColorMaps(tenModelSummary(models), "matplotlib").model;
 
-    expect(models.slice(0, 9).map((model) => after.get(model))).toEqual(models.slice(0, 9).map((model) => before.get(model)));
-    expect(new Set(after.values()).size).toBe(11);
+    expect(new Set(colors.values()).size).toBe(11);
   });
 });

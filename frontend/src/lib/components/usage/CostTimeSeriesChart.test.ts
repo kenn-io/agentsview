@@ -154,6 +154,7 @@ describe("CostTimeSeriesChart", () => {
     usage.summary = usageSummary();
     usage.selectedTimeRange = null;
     usage.toggles.timeSeries.groupBy = "project";
+    usage.toggles.attribution.groupBy = "project";
     usage.toggles.timeSeries.view = "smooth";
     settings.chartPalette = "agentsview";
     setLocale("en");
@@ -163,6 +164,8 @@ describe("CostTimeSeriesChart", () => {
     vi.restoreAllMocks();
     usage.summary = null;
     usage.attributionSummary = null;
+    usage.referenceSummary = null;
+    usage.selectedModel = "";
     usage.selectedTimeRange = null;
     usage.excludedProjectKeys = "";
     usage.excludedAgents = "";
@@ -492,11 +495,13 @@ describe("CostTimeSeriesChart", () => {
 
   it("assigns the first usage color to a single rendered model series", async () => {
     usage.toggles.timeSeries.groupBy = "model";
+    usage.toggles.attribution.groupBy = "model";
     usage.summary = usageSummary([
       modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
       modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
     ]);
-    usage.attributionSummary = usageSummary([
+    usage.selectedModel = "single-model";
+    usage.referenceSummary = usageSummary([
       modelDailyEntry(0, [
         { modelName: "single-model", cost: testMoney(6) },
         { modelName: "total", cost: testMoney(4) },
@@ -521,9 +526,11 @@ describe("CostTimeSeriesChart", () => {
       modelName: `model-${index}`,
       cost: testMoney(12 - index),
     }));
-    usage.attributionSummary = usageSummary([modelDailyEntry(0, models)]);
+    usage.toggles.attribution.groupBy = "model";
+    usage.selectedModel = "model-11";
+    usage.referenceSummary = usageSummary([modelDailyEntry(0, models)]);
     usage.summary = usageSummary([modelDailyEntry(0, [models[11]!])]);
-    const colorMap = usageChartColorMaps(usage.attributionSummary, settings.chartPalette).model;
+    const colorMap = usageChartColorMaps(usage.colorSummary, settings.chartPalette).model;
 
     const component = mount(CostTimeSeriesChart, { target: document.body, props: { colorMap } });
     await tick();

@@ -2203,6 +2203,7 @@ describe("UsageStore attribution focus", () => {
     brushed.projectTotals[0]!.cost = testMoney(1);
     brushed.agentTotals[0]!.cost = testMoney(1);
     usage.applyDateRange("2024-01-01", "2024-01-31");
+    usage.toggles.attribution.groupBy = by;
     if (by === "agent") sessions.filters.agent = "claude";
     usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
       const response = structuredClone(params.from === "2024-01-08" ? brushed : full);
@@ -2372,8 +2373,8 @@ describe("UsageStore project scope recovery", () => {
     expect(usage.summary?.totals.totalCost).toEqual(testMoney(9));
     expect(usage.errors.summary).toBeNull();
     expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
-    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(5);
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[4]![0]).toEqual(
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(6);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[5]![0]).toEqual(
       expect.objectContaining({ from: usage.from, to: usage.to }),
     );
     expect(back).not.toHaveBeenCalled();

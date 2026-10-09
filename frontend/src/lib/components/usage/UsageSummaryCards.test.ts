@@ -98,7 +98,8 @@ afterEach(() => {
   }
   usage.cancelInFlightReads();
   usage.summary = null;
-  usage.colorSummary = null;
+  usage.referenceSummary = null;
+  usage.selectedProjectKey = "";
   usage.errors.summary = null;
   usage.mode = "cost";
   usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
@@ -153,7 +154,8 @@ describe("UsageSummaryCards", () => {
     const parent = summary();
     parent.totals.copilotAICredits = 5;
     usage.summary = parent;
-    usage.colorSummary = parent;
+    usage.selectedProjectKey = "pl1:sha256:selected";
+    usage.referenceSummary = parent;
     component = mount(UsageSummaryCards, { target: document.body });
     await tick();
     const cardCount = document.querySelectorAll(".summary-cards .card").length;

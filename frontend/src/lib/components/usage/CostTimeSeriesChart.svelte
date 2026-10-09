@@ -253,14 +253,12 @@
   const seriesData = $derived(buildSeries(usage.timeSeriesSummary));
   // The legend lists the unselected view's series so selecting never changes its line count.
   const legendData = $derived(
-    usage.attributionSummary ? buildSeries(usage.attributionSummary) : seriesData,
+    usage.colorSummary === usage.timeSeriesSummary ? seriesData : buildSeries(usage.colorSummary),
   );
+  // A selected series outside the unselected top ten takes Other's slot.
   const legendKeys = $derived.by(() => {
-    const missing = seriesData.keys.filter((key) => key !== "__other__" && !legendData.keys.includes(key));
-    const other = seriesData.keys.includes("__other__") ? ["__other__"] : [];
-    if (missing.length === 0 && (other.length === 0 || legendData.keys.includes("__other__"))) return legendData.keys;
-    // A selected series outside the unselected top ten takes Other's slot.
-    return [...legendData.keys.filter((key) => key !== "__other__"), ...missing, ...other];
+    const extra = seriesData.keys.filter((key) => key !== "__other__" && !legendData.keys.includes(key));
+    return extra.length === 0 ? legendData.keys : [...legendData.keys.filter((key) => key !== "__other__"), ...extra];
   });
 
   const view = $derived(usage.toggles.timeSeries.view);
