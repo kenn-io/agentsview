@@ -17,7 +17,7 @@ func repairParentlessWorkers(ctx context.Context, w *writerHandle) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := publishLiveSessionChangesTx(ctx, tx, ParentlessWorkerSQL); err != nil {
 		return err
 	}

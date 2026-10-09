@@ -3983,7 +3983,7 @@ func batchUpdateAutomated(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	const batchSize = 500
 	for i := 0; i < len(ids); i += batchSize {
 		end := min(i+batchSize, len(ids))
