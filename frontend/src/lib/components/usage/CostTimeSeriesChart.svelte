@@ -256,10 +256,10 @@
     usage.attributionSummary ? buildSeries(usage.attributionSummary) : seriesData,
   );
   const legendKeys = $derived.by(() => {
-    const missing = seriesData.keys.filter((key) => !legendData.keys.includes(key));
-    if (missing.length === 0) return legendData.keys;
-    // A selected series outside the unselected top ten takes Other's slot.
+    const missing = seriesData.keys.filter((key) => key !== "__other__" && !legendData.keys.includes(key));
     const other = seriesData.keys.includes("__other__") ? ["__other__"] : [];
+    if (missing.length === 0 && (other.length === 0 || legendData.keys.includes("__other__"))) return legendData.keys;
+    // A selected series outside the unselected top ten takes Other's slot.
     return [...legendData.keys.filter((key) => key !== "__other__"), ...missing, ...other];
   });
 

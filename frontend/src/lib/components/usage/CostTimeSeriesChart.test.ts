@@ -535,6 +535,22 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  it("lists Other once when the full window has more series than the brushed range", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    const models = Array.from({ length: 11 }, (_, index) => ({
+      modelName: `model-${index}`,
+      cost: testMoney(11 - index),
+    }));
+    usage.summary = usageSummary([modelDailyEntry(0, models)]);
+    usage.attributionSummary = usageSummary([modelDailyEntry(0, models.slice(0, 10))]);
+
+    const component = mountChart();
+    await tick();
+
+    expect(Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim())).toEqual(models.slice(0, 10).map((model) => model.modelName).concat("Other"));
+    unmount(component);
+  });
+
   it("renders ten named series before rolling the rest into Other", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     const models = Array.from({ length: 11 }, (_, index) => ({
