@@ -18,6 +18,7 @@ The latest published release is
   Visits that span a server change are discarded.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off.
 
+- Mistral Vibe sessions sync again with transcripts, tool outcomes, and token usage.
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.

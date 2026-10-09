@@ -91,7 +91,102 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 	result.Session.ID = "vibe:" + filepath.Base(dir)
 	result.Session.Project = "vibe"
 
-	// Try to parse meta.json for additional metadata
+	sessionModel, sessionStats, hasMetaData, err := applyVibeMetadata(&result, dir)
+	if err != nil {
+		return result, err
+	}
+	if sessionStats.ContextTokens > 0 {
+		result.Session.HasPeakContextTokens = true
+		result.Session.PeakContextTokens = sessionStats.ContextTokens
+	} else if sessionStats.SessionPromptTokens > 0 {
+		result.Session.HasPeakContextTokens = true
+		result.Session.PeakContextTokens = sessionStats.SessionPromptTokens
+	}
+
+	// Parse messages.jsonl
+	file, err := os.Open(path)
+	if err != nil {
+		return result, fmt.Errorf("failed to open Vibe session file: %w", err)
+	}
+	defer file.Close()
+
+	lr := newLineReader(file, maxLineSize)
+	defer releaseLineReader(lr)
+	messageOrdinal := 0
+
+	for {
+		line, ok := lr.next()
+		if !ok {
+			break
+		}
+
+		var vibeMsg VibeMessage
+		if err := json.Unmarshal([]byte(line), &vibeMsg); err != nil {
+			result.Session.MalformedLines++
+			continue
+		}
+
+		// Try to extract session model from first assistant message if not set yet
+		if sessionModel == "" && vibeMsg.Role == "assistant" && vibeMsg.Model != "" {
+			sessionModel = vibeMsg.Model
+		}
+
+		// Tool results are separate "tool" records linked back to the
+		// assistant's tool call via tool_call_id. Emit them as an empty
+		// RoleUser carrier message (matching the Hermes/QClaw/OpenClaw
+		// convention) so the sync engine's pairToolResults can attach the
+		// result to the originating tool call by ID; the carrier message
+		// itself is filtered out of the visible transcript afterward.
+		if vibeMsg.Role == "tool" {
+			if vibeMsg.ToolCallID == "" {
+				continue
+			}
+			quoted, err := json.Marshal(vibeMsg.Content)
+			if err != nil {
+				continue
+			}
+			result.Messages = append(result.Messages, ParsedMessage{
+				Ordinal:       messageOrdinal,
+				Role:          RoleUser,
+				Content:       "",
+				ContentLength: len(vibeMsg.Content),
+				ToolResults: []ParsedToolResult{{
+					ToolUseID:     vibeMsg.ToolCallID,
+					ContentRaw:    string(quoted),
+					ContentLength: len(vibeMsg.Content),
+				}},
+			})
+			messageOrdinal++
+			continue
+		}
+
+		// Convert Vibe message to AgentsView ParsedMessage
+		msg, _ := convertVibeMessage(vibeMsg, messageOrdinal, sessionModel)
+		result.Messages = append(result.Messages, msg)
+
+		messageOrdinal++
+	}
+
+	if err := lr.Err(); err != nil {
+		return result, fmt.Errorf("failed to read Vibe session file: %w", err)
+	}
+
+	setVibeMessageMetadata(&result)
+
+	// Create usage events from session stats if we have stats, a model, and any token data
+	if hasMetaData && sessionModel != "" {
+		if usageEvents := vibeUsageEvents(
+			sessionStats, sessionModel, result.Session.ID,
+			result.Session.StartedAt, result.Session.EndedAt,
+		); len(usageEvents) > 0 {
+			result.UsageEvents = usageEvents
+		}
+	}
+
+	return result, nil
+}
+
+func applyVibeMetadata(result *ParseResult, dir string) (string, VibeStats, bool, error) {
 	var sessionModel string
 	var sessionStats VibeStats
 	var hasMetaData bool
@@ -110,7 +205,7 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 		// leaves the existing row untouched.
 		identity, identityErr := parseVibeIdentityMetadata(metaPath)
 		if identityErr != nil {
-			return result, fmt.Errorf(
+			return "", VibeStats{}, false, fmt.Errorf(
 				"parsing Vibe meta.json %s: %w", metaPath, metaErr,
 			)
 		}
@@ -172,13 +267,6 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 			result.Session.HasTotalOutputTokens = true
 			result.Session.TotalOutputTokens = metaData.Stats.SessionCompletionTokens
 		}
-		if metaData.Stats.ContextTokens > 0 {
-			result.Session.HasPeakContextTokens = true
-			result.Session.PeakContextTokens = metaData.Stats.ContextTokens
-		} else if metaData.Stats.SessionPromptTokens > 0 {
-			result.Session.HasPeakContextTokens = true
-			result.Session.PeakContextTokens = metaData.Stats.SessionPromptTokens
-		}
 
 		// Handle parent session relationship. The parent reference is a
 		// bare session_id, so prefix it to match the canonical ID scheme.
@@ -188,109 +276,19 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 		}
 	}
 
-	// Parse messages.jsonl
-	file, err := os.Open(path)
-	if err != nil {
-		return result, fmt.Errorf("failed to open Vibe session file: %w", err)
-	}
-	defer file.Close()
+	return sessionModel, sessionStats, hasMetaData, nil
+}
 
-	lr := newLineReader(file, maxLineSize)
-	defer releaseLineReader(lr)
-	messageOrdinal := 0
-	var firstUserContent string
-
-	for {
-		line, ok := lr.next()
-		if !ok {
-			break
-		}
-
-		var vibeMsg VibeMessage
-		if err := json.Unmarshal([]byte(line), &vibeMsg); err != nil {
-			result.Session.MalformedLines++
-			continue
-		}
-
-		// Try to extract session model from first assistant message if not set yet
-		if sessionModel == "" && vibeMsg.Role == "assistant" && vibeMsg.Model != "" {
-			sessionModel = vibeMsg.Model
-		}
-
-		// Tool results are separate "tool" records linked back to the
-		// assistant's tool call via tool_call_id. Emit them as an empty
-		// RoleUser carrier message (matching the Hermes/QClaw/OpenClaw
-		// convention) so the sync engine's pairToolResults can attach the
-		// result to the originating tool call by ID; the carrier message
-		// itself is filtered out of the visible transcript afterward.
-		if vibeMsg.Role == "tool" {
-			if vibeMsg.ToolCallID == "" {
-				continue
-			}
-			quoted, err := json.Marshal(vibeMsg.Content)
-			if err != nil {
-				continue
-			}
-			result.Messages = append(result.Messages, ParsedMessage{
-				Ordinal:       messageOrdinal,
-				Role:          RoleUser,
-				Content:       "",
-				ContentLength: len(vibeMsg.Content),
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     vibeMsg.ToolCallID,
-					ContentRaw:    string(quoted),
-					ContentLength: len(vibeMsg.Content),
-				}},
-			})
-			messageOrdinal++
-			continue
-		}
-
-		// Convert Vibe message to AgentsView ParsedMessage
-		msg, _ := convertVibeMessage(vibeMsg, messageOrdinal, sessionModel)
-		result.Messages = append(result.Messages, msg)
-
-		// Track first user message content for session metadata. Skip
-		// system/injected context so it never becomes the session's first
-		// message.
-		if firstUserContent == "" && msg.Role == RoleUser &&
-			!msg.IsSystem && msg.Content != "" {
-			firstUserContent = msg.Content
-		}
-
-		messageOrdinal++
-	}
-
-	if err := lr.Err(); err != nil {
-		return result, fmt.Errorf("failed to read Vibe session file: %w", err)
-	}
-
-	// Set session metadata from messages
-	if len(result.Messages) > 0 {
-		result.Session.MessageCount = len(result.Messages)
-		result.Session.FirstMessage = firstUserContent
-	}
-
-	// Count real user messages, excluding system/injected context and the
-	// empty tool-result carrier messages emitted for "tool" records (which
-	// carry RoleUser to satisfy pairToolResults).
+func setVibeMessageMetadata(result *ParseResult) {
+	result.Session.MessageCount = len(result.Messages)
 	for _, msg := range result.Messages {
 		if msg.Role == RoleUser && !msg.IsSystem && len(msg.ToolResults) == 0 {
 			result.Session.UserMessageCount++
+			if result.Session.FirstMessage == "" && msg.Content != "" {
+				result.Session.FirstMessage = msg.Content
+			}
 		}
 	}
-
-	// Create usage events from session stats if we have stats, a model, and any token data
-	if hasMetaData && sessionModel != "" {
-		if usageEvents := vibeUsageEvents(
-			sessionStats, sessionModel, result.Session.ID,
-			result.Session.StartedAt, result.Session.EndedAt,
-		); len(usageEvents) > 0 {
-			result.UsageEvents = usageEvents
-		}
-	}
-
-	return result, nil
 }
 
 // parseVibeMetadata parses the meta.json file for session-level metadata
@@ -412,7 +410,7 @@ func vibeToolArguments(args jsontext.Value) string {
 	return string(args)
 }
 
-// parseSession parses a Vibe session at path and returns the session, messages,
+// parseVibeSession parses a Vibe session at path and returns the session, messages,
 // and usage events in the shape the provider consumes: (*ParsedSession,
 // []ParsedMessage, []ParsedUsageEvent, error). It stats the file to build
 // FileInfo and optionally overrides the project and machine.
@@ -428,7 +426,12 @@ func parseVibeSession(path, project, machine string) (*ParsedSession, []ParsedMe
 		Mtime: info.ModTime().UnixNano(),
 	}
 
-	result, err := parseVibeResultFile(path, fileInfo)
+	var result ParseResult
+	if vibeIsUnifiedAnchor(path) {
+		result, err = parseVibeUnifiedResultFile(path, fileInfo)
+	} else {
+		result, err = parseVibeResultFile(path, fileInfo)
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -452,10 +455,6 @@ func parseVibeSession(path, project, machine string) (*ParsedSession, []ParsedMe
 func vibeUsageEvents(
 	stats VibeStats, model, sessionID string, startedAt, endedAt time.Time,
 ) []ParsedUsageEvent {
-	// Only emit an event if we have a model and at least some token usage data
-	if model == "" {
-		return nil
-	}
 	if stats.SessionPromptTokens == 0 && stats.SessionCompletionTokens == 0 &&
 		stats.ContextTokens == 0 && stats.SessionTotalLLMTokens == 0 {
 		return nil

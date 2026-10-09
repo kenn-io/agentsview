@@ -93,6 +93,69 @@ func TestSyncAllSinceVibeMetaUpdateTriggersResync(t *testing.T) {
 	})
 }
 
+func TestSyncAllSinceVibeUnifiedGenerationTriggersResync(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentVibe: {root}},
+		Machine:   "local",
+	})
+	dir := filepath.Join(root, "unified", "session-a")
+	anchor := filepath.Join(dir, "CURRENT")
+	baseTime := time.Unix(1_791_000_000, 0)
+	childDir := filepath.Join(root, "unified", "session-child")
+	childGenDir := filepath.Join(childDir, "generations", "1")
+	childAnchor := filepath.Join(childDir, "CURRENT")
+	require.NoError(t, os.MkdirAll(childGenDir, 0o755))
+	for path, content := range map[string]string{
+		childAnchor: `{"generation":"1"}`,
+		filepath.Join(childGenDir, "manifest.json"):         `{}`,
+		filepath.Join(childGenDir, "runtime-state.json"):    `{"identity":{"kind":"subagent","parent_session_id":"session-a"}}`,
+		filepath.Join(childGenDir, "projection-state.json"): `{"snapshot":{"session":{"tokenUsage":{"inputTokens":10,"outputTokens":5}},"history":{"entries":[{"type":"message","role":"assistant","content":[{"text":"child answer"}]}]}}}`,
+	} {
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+		require.NoError(t, os.Chtimes(path, baseTime, baseTime))
+	}
+	for _, tc := range []struct {
+		generation, entries, usage, model string
+		wantMessages                      int
+	}{
+		{"1", `{"type":"message","role":"user","content":[{"text":"question"}]}`, `{"inputTokens":100,"outputTokens":20,"cachedInputTokens":10}`, "mistral-medium-3.5", 1},
+		{"2", `{"type":"message","role":"user","content":[{"text":"question"}]},{"type":"message","role":"assistant","content":[{"text":"answer"}]}`, `{"inputTokens":150,"outputTokens":40,"cachedInputTokens":30}`, "mistral-small-latest", 2},
+	} {
+		genDir := filepath.Join(dir, "generations", tc.generation)
+		require.NoError(t, os.MkdirAll(genDir, 0o755))
+		for path, content := range map[string]string{
+			filepath.Join(genDir, "manifest.json"):         `{}`,
+			filepath.Join(genDir, "runtime-state.json"):    `{"session_metadata":{"active_model":"` + tc.model + `"}}`,
+			filepath.Join(genDir, "projection-state.json"): `{"snapshot":{"session":{"createdAt":1791000000000,"updatedAt":1791000002000,"tokenUsage":` + tc.usage + `},"history":{"entries":[` + tc.entries + `]}}}`,
+		} {
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+		}
+		require.NoError(t, os.WriteFile(anchor, []byte(`{"generation":"`+tc.generation+`"}`), 0o644))
+		mtime := baseTime.Add(time.Duration(tc.wantMessages) * time.Second)
+		require.NoError(t, os.Chtimes(anchor, mtime, mtime))
+		if tc.generation == "1" {
+			engine.SyncPaths([]string{anchor, childAnchor})
+		} else {
+			stats := engine.SyncAllSince(t.Context(), baseTime.Add(1500*time.Millisecond), nil)
+			assert.Equal(t, 2, stats.Synced)
+		}
+		assertSessionState(t, database, "vibe:session-a", func(sess *db.Session) {
+			assert.Equal(t, tc.wantMessages, sess.MessageCount)
+		})
+		usage, err := database.GetUsageEvents(t.Context(), "vibe:session-child")
+		require.NoError(t, err)
+		require.Len(t, usage, 1)
+		assert.Equal(t, tc.model, usage[0].Model)
+	}
+	stats := engine.SyncAllSince(t.Context(), baseTime.Add(1500*time.Millisecond), nil)
+	assert.Zero(t, stats.Synced)
+}
+
 func TestSourceMtimeVibeIncludesMetaMtime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")

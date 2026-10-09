@@ -38,6 +38,7 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"write_file", "Write"},
 		{"edit_file", "Edit"},
 		{"replace", "Edit"},
+		{"search_replace", "Edit"},
 		{"list_directory", "Read"},
 		{"run_command", "Bash"},
 		{"execute_command", "Bash"},

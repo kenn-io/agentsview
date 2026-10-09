@@ -12,8 +12,7 @@ import (
 // messages.jsonl transcript and a sibling meta.json. It is a single-file
 // provider: one transcript parses into one session, with a composite fingerprint
 // folding in meta.json and a fallback-ID exclusion when meta.json later supplies
-// a different session_id. All behavior is wired into the shared single-file base
-// via options.
+// a different session_id.
 func newVibeProviderFactory(def AgentDef) ProviderFactory {
 	return NewSingleFileProviderFactory(
 		def,
@@ -36,7 +35,7 @@ func newVibeProviderFactory(def AgentDef) ProviderFactory {
 func vibeDiscoverEach(
 	ctx context.Context, root string, yield func(singleFileMatch) error,
 ) error {
-	return streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
+	if err := streamDirectoryEntries(ctx, root, func(entry os.DirEntry) error {
 		if !isVibeSessionDirName(entry.Name()) {
 			return nil
 		}
@@ -54,6 +53,26 @@ func vibeDiscoverEach(
 			return yield(match)
 		}
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	unifiedDir := filepath.Join(root, "unified")
+	return streamDirectoryEntries(ctx, unifiedDir, func(entry os.DirEntry) error {
+		isSessionDir, dirErr := streamingDirCandidateOrIncomplete(
+			AgentVibe, "Vibe unified session directory", entry, unifiedDir,
+		)
+		if dirErr != nil {
+			return dirErr
+		}
+		if !isSessionDir {
+			return nil
+		}
+		anchor := filepath.Join(unifiedDir, entry.Name(), "CURRENT")
+		if !isVibeMessagesFile(anchor) {
+			return nil
+		}
+		return yield(singleFileMatch{Path: anchor, ProjectHint: entry.Name()})
 	})
 }
 
@@ -61,10 +80,12 @@ func vibeWatchRoots(roots []string) []WatchRoot {
 	out := make([]WatchRoot, 0, len(roots))
 	for _, root := range roots {
 		out = append(out, WatchRoot{
-			Path:         root,
-			Recursive:    true,
-			IncludeGlobs: []string{"messages.jsonl", "meta.json"},
-			DebounceKey:  string(AgentVibe) + ":sessions:" + root,
+			Path:      root,
+			Recursive: true,
+			IncludeGlobs: []string{
+				"messages.jsonl", "meta.json", "CURRENT",
+			},
+			DebounceKey: string(AgentVibe) + ":sessions:" + root,
 		})
 	}
 	return out
@@ -80,6 +101,15 @@ func vibeClassifyPath(
 	rel, ok := vibeRelPath(root, path)
 	if !ok {
 		return singleFileMatch{}, false
+	}
+	if sessionDir, ok := vibeUnifiedSessionDirFromRel(rel, root); ok {
+		anchor := filepath.Join(sessionDir, "CURRENT")
+		if !isVibeMessagesFile(anchor) && !allowMissing {
+			return singleFileMatch{}, false
+		}
+		return singleFileMatch{
+			Path: anchor, ProjectHint: filepath.Base(sessionDir),
+		}, true
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
 	if len(parts) != 2 || !isVibeSessionDirName(parts[0]) {
@@ -134,14 +164,20 @@ func vibeFindFile(root, rawID string) (singleFileMatch, bool) {
 	if path == "" {
 		return singleFileMatch{}, false
 	}
-	return vibeStrictMatch(root, path)
+	return vibeClassifyPath(root, path, false)
 }
 
-// findVibeSourceFile locates a Vibe session by ID under root. The ID is the
-// session_id from meta.json (a uuid), which usually differs from the session
-// directory name, so a direct directory-name path is tried before scanning
-// meta.json files.
+// findVibeSourceFile locates a Vibe session by ID under root. Unified session
+// directories are named by their session ID, so a direct anchor path is tried
+// first. Legacy sessions are resolved through meta.json.
 func findVibeSourceFile(root, sessionID string) string {
+	if !isSafeSinglePathComponent(sessionID) {
+		return ""
+	}
+	anchor := filepath.Join(root, "unified", sessionID, "CURRENT")
+	if isVibeMessagesFile(anchor) {
+		return anchor
+	}
 	if messagesPath := filepath.Join(
 		root, sessionID, "messages.jsonl",
 	); isVibeMessagesFile(messagesPath) {
@@ -179,6 +215,9 @@ func isVibeMessagesFile(path string) bool {
 }
 
 func vibeFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
+	if vibeIsUnifiedAnchor(src.Path) {
+		return vibeUnifiedFingerprint(filepath.Dir(src.Path))
+	}
 	info, err := os.Stat(src.Path)
 	if err != nil {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.Path, err)
@@ -287,10 +326,17 @@ func vibeProviderCapabilities() Capabilities {
 			Cwd:                  CapabilitySupported,
 			GitBranch:            CapabilitySupported,
 			Relationships:        CapabilitySupported,
+			Thinking:             CapabilitySupported,
+			Subagents:            CapabilitySupported,
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,
+			ToolResultEvents:     CapabilitySupported,
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
+		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
 		},
 	}
 }

@@ -41,7 +41,7 @@ func NormalizeToolCategory(rawName string) string {
 		return "Read"
 	case "write_file":
 		return "Write"
-	case "edit_file", "replace":
+	case "edit_file", "replace", "search_replace":
 		return "Edit"
 	case "run_command", "run_commands", "execute_command", "run_shell_command":
 		return "Bash"

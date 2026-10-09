@@ -33,7 +33,9 @@ func TestVibeProviderSourceMethods(t *testing.T) {
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"messages.jsonl", "meta.json"}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, []string{
+		"messages.jsonl", "meta.json", "CURRENT",
+	}, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
