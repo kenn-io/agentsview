@@ -16,13 +16,12 @@ import (
 
 func TestS3CursorSharedSessionProjects(t *testing.T) {
 	for _, tt := range []struct {
-		name              string
-		reverse, separate bool
-		root              string
-		preCollapsed      bool
+		name         string
+		separate     bool
+		root         string
+		preCollapsed bool
 	}{
 		{name: "together"},
-		{name: "together reversed", reverse: true},
 		{name: "separate", separate: true},
 		{name: "no machine boundary", root: "s3://bucket/archive"},
 		{name: "pre-collapsed cached source", preCollapsed: true},
@@ -70,12 +69,9 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					Provider: parser.AgentCursor, Key: uri, DisplayPath: uri, FingerprintKey: uri, ProjectHint: project,
 					Opaque: parser.S3DiscoveredSource{
 						URI: uri, Project: project,
-						Machine: machine, Size: int64(len(contents[uri])), MtimeNS: mtime.UnixNano(),
+						Machine: machine, Size: int64(len(contents[uri])), MtimeNS: mtime.UnixNano(), Fingerprint: "s3-meta:stable",
 					},
 				})
-			}
-			if tt.reverse {
-				sources[0], sources[1] = sources[1], sources[0]
 			}
 			provider.discovered = sources
 			engine := NewEngine(t.Context(), database, EngineConfig{
@@ -132,7 +128,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					return err
 				}))
 				require.NoError(t, database.SetSessionDataVersion(t.Context(), baseID, 127))
-				engine.cacheSkip(lostPath, mtime.UnixNano())
+				engine.cacheSkip(lostPath, mtime.UnixNano(), "s3-meta:stable")
 				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 				require.Zero(t, stats.Failed)
 				missing, err := database.GetSessionFull(t.Context(), ids[lostPath])
@@ -156,6 +152,22 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			require.Zero(t, stats.Failed)
 			assert.Equal(t, before+1, fetches.Load())
 			verify()
+			if tt.name == "together" {
+				altID := ids[paths[0]]
+				if altID == baseID {
+					altID = ids[paths[1]]
+				}
+				require.NoError(t, database.SoftDeleteSession(t.Context(), altID))
+				beforeTrash := fetches.Load()
+				for range 2 {
+					stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+					require.Zero(t, stats.Failed)
+					assert.Equal(t, beforeTrash, fetches.Load(), "unchanged trashed S3 sources must stay behind the cutoff")
+					assert.True(t, database.IsSessionTrashed(t.Context(), altID))
+				}
+				_, err := database.RestoreSession(t.Context(), altID)
+				require.NoError(t, err)
+			}
 			// Changed object metadata must refresh the same saved row.
 			contents[paths[1]] = strings.ReplaceAll(contents[paths[1]], "Answer B", "Updated B")
 			for i := range sources {

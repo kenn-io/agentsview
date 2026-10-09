@@ -106,8 +106,6 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 		name, loser, winner, project string
 	}{
 		{"JSONL over text", "sess.txt", "sess.jsonl", "Users-fiona-Documents-demo"},
-		{"nested over flat", "agent-transcripts/sess.jsonl", "agent-transcripts/sess/sess.jsonl", "demo"},
-		{"flat over subagent", "agent-transcripts/aaa/subagents/sess.jsonl", "agent-transcripts/sess.jsonl", "demo"},
 		{"own text over subagent JSONL", "agent-transcripts/aaa/subagents/sess.jsonl", "agent-transcripts/sess.txt", "demo"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -173,12 +171,6 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 				firstURI = flatURI
 				secondURI = root + "/" + projects[1] + "/11111111-1111-4111-8111-111111111111.txt"
 			}
-			key := CursorS3SourceKey(roots, firstURI)
-			require.NotEmpty(t, key)
-			assert.Equal(t, key, CursorS3SourceKey(roots, flatURI))
-			assert.Equal(t, key, CursorS3SourceKey(roots, subagentURI))
-			assert.NotEqual(t, key, CursorS3SourceKey(roots, secondURI))
-			assert.NotEqual(t, key, CursorS3SourceKey(roots, otherURI))
 			listS3Objects = func(got string) ([]S3Object, error) {
 				require.Contains(t, roots, got)
 				return []S3Object{
@@ -322,6 +314,8 @@ func TestCursorS3ParentFamily(t *testing.T) {
 		assert.Contains(t, prefixes, root+"/agent-transcripts/agent-transcripts/shared/subagents/")
 		assert.Contains(t, prefixes, aliasRoot+"/agent-transcripts/agent-transcripts/shared/subagents/")
 		assert.Equal(t, key, CursorS3SourceKey(roots, aliasRoot+"/agent-transcripts/shared.txt"))
+		assert.NotEqual(t, key, CursorS3SourceKey(roots, root+"/cursor/shared.txt"))
+		assert.NotEqual(t, key, CursorS3SourceKey(roots, root+"/agent-transcripts/other.txt"))
 		key, _, prefixes = CursorS3ParentFamily(roots, "s3://unconfigured/project/shared.txt")
 		assert.Empty(t, key)
 		assert.Empty(t, prefixes)

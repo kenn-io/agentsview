@@ -571,12 +571,7 @@ func TestSyncAllSinceReparsesCursorS3ToolResultsFromVersion101(t *testing.T) {
 	database := openTestDB(t)
 	const root = "s3://bucket/laptop/raw/cursor"
 	const uri = root + "/demo-proj/11111111-2222-4333-8444-555555555555.txt"
-	const baseID = "laptop~cursor:11111111-2222-4333-8444-555555555555"
-	sessionID := parser.AltSessionID(baseID, uri)
-	ownerPath := strings.Replace(uri, "/demo-proj/", "/other-proj/", 1)
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: baseID, Project: "other-proj", Machine: "laptop", Agent: "cursor", FilePath: &ownerPath,
-	}))
+	const sessionID = "laptop~cursor:11111111-2222-4333-8444-555555555555"
 	const content = "assistant:\n[Tool call] Shell\n  command=ls\n[Tool result]\n  file1.go\n"
 	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
 	oldFetch, oldStat := fetchS3Object, statS3Object
@@ -597,14 +592,14 @@ func TestSyncAllSinceReparsesCursorS3ToolResultsFromVersion101(t *testing.T) {
 	// Stub remote discovery and transport; parsing and archive writes are real.
 	factory := processFixtureFactory{provider: &processFixtureProvider{
 		Def: def, Caps: parser.Capabilities{
-			Source: parser.SourceCapabilities{DiscoverSources: parser.CapabilitySupported, SharedSessionIDs: parser.CapabilitySupported},
+			Source: parser.SourceCapabilities{DiscoverSources: parser.CapabilitySupported},
 		},
 		discovered: []parser.SourceRef{{
 			Provider: parser.AgentCursor, Key: uri, DisplayPath: uri,
 			FingerprintKey: uri, ProjectHint: "demo-proj",
 			Opaque: parser.S3DiscoveredSource{
 				URI: uri, Project: "demo-proj",
-				Machine: "laptop", Size: int64(len(content)), MtimeNS: mtime.UnixNano(), Fingerprint: "s3-meta:stable",
+				Machine: "laptop", Size: int64(len(content)), MtimeNS: mtime.UnixNano(),
 			},
 		}},
 	}}
@@ -645,13 +640,6 @@ func TestSyncAllSinceReparsesCursorS3ToolResultsFromVersion101(t *testing.T) {
 	assert.Zero(t, stats.Failed)
 	assert.Zero(t, stats.Synced)
 	assert.EqualValues(t, 1, fetches.Load(), "current unchanged sources must not be fetched again")
-	require.NoError(t, database.SoftDeleteSession(t.Context(), sessionID))
-	for range 2 {
-		stats = engine.SyncAllSince(t.Context(), cutoff, nil)
-		require.Zero(t, stats.Failed)
-		assert.EqualValues(t, 1, fetches.Load(), "unchanged trashed S3 sources must stay behind the cutoff")
-		assert.True(t, database.IsSessionTrashed(t.Context(), sessionID))
-	}
 }
 
 func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
