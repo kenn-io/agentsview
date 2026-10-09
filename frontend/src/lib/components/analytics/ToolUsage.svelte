@@ -47,7 +47,7 @@
   let evidenceLoading = $state(false);
   let evidenceError = $state<string | null>(null);
   const evidenceRead = new LatestRead();
-  const evidenceParams = $derived(analytics.filterParams());
+  const evidenceParams = $derived(analytics.toolsFilterParams ?? analytics.filterParams());
   const evidenceInputs = $derived({ params: evidenceParams, rows: toolRows });
   let loadedEvidenceKey: string | null = null;
   let loadedEvidenceRows: ToolUsageAnalysis[] | null = null;

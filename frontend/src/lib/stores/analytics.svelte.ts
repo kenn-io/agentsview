@@ -94,6 +94,7 @@ class AnalyticsStore {
   sessionShape = $state<SessionShapeResponse | null>(null);
   velocity = $state<VelocityResponse | null>(null);
   tools = $state<ToolsAnalyticsResponse | null>(null);
+  toolsFilterParams = $state<AnalyticsParams | null>(null);
   skills = $state<SkillsAnalyticsResponse | null>(null);
   topSessions = $state<DbTopSessionsResponse | null>(null);
   signals = $state<SignalsAnalyticsResponse | null>(null);
@@ -740,11 +741,13 @@ class AnalyticsStore {
   }
 
   async fetchTools(): Promise<FetchResult> {
+    const params = this.filterParams();
     return await this.executeFetch(
       "tools",
-      (options) => AnalyticsService.getApiV1AnalyticsTools(this.filterParams(), options),
+      (options) => AnalyticsService.getApiV1AnalyticsTools(params, options),
       (data) => {
         this.tools = data;
+        this.toolsFilterParams = params;
       },
       () => this.tools !== null,
     );
@@ -962,6 +965,7 @@ class AnalyticsStore {
     this.sessionShape = null;
     this.velocity = null;
     this.tools = null;
+    this.toolsFilterParams = null;
     this.skills = null;
     this.topSessions = null;
     this.signals = null;
