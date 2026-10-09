@@ -2463,6 +2463,6 @@
   "tool_sequences_retry": "Try again",
   "import_claude_connect": "Sign in",
   "import_claude_sync": "Sync",
-  "import_claude_help": "Sign in, close the window, then Sync.",
+  "import_claude_help": "Sign in with an email code, close the window, then Sync. Google sign-in needs a browser host.",
   "import_claude_auth_required": "Sign in to Claude.ai, then Sync again"
 }
