@@ -76,7 +76,7 @@ In Chrome, open **Import conversations** and select **Claude.ai**:
 2. Open `chrome://extensions` and turn on **Developer mode**.
 3. Click **Load unpacked** and select the unzipped folder.
 4. Reload the AgentsView tab on `http://localhost` or `http://127.0.0.1`, at the port your server uses.
-5. Click the AgentsView toolbar button to allow Sync for that tab's current page. Click again after navigating or reloading.
+5. Click the AgentsView toolbar button to allow Sync for that tab's current page. Click again after navigating, reloading, or using Back or Forward. After restarting agentsview, reload the tab and click the toolbar button again.
 
 Open **Import conversations**, select **Claude.ai**, and click **Sync**. Chrome uses your existing Claude.ai session, including Google sign-in. If you need to sign in, click **Sign in**, finish in the new tab, then return to AgentsView and click **Sync**.
 

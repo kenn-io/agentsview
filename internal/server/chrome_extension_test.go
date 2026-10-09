@@ -16,10 +16,9 @@ import (
 func TestChromeExtensionDownload(t *testing.T) {
 	s := newSPATestServer(t, WithBasePath("/viewer"))
 	s.spaFS = fstest.MapFS{
-		"chrome-extension/manifest.json":  {Data: []byte(`{"manifest_version":3}`)},
-		"chrome-extension/worker.js":      {Data: []byte("chrome.action.onClicked.addListener(() => {});")},
-		"chrome-extension/worker.test.ts": {Data: []byte("test code")},
-		"index.html":                      {Data: []byte(testSPAIndex)},
+		"chrome-extension/manifest.json": {Data: []byte(`{"manifest_version":3}`)},
+		"chrome-extension/worker.js":     {Data: []byte("chrome.action.onClicked.addListener(() => {});")},
+		"index.html":                     {Data: []byte(testSPAIndex)},
 	}
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/viewer/chrome-extension.zip", nil))

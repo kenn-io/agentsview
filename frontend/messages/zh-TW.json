@@ -2380,7 +2380,7 @@
   "tool_sequences_retry": "重試",
   "import_claude_connect": "登入",
   "import_claude_sync": "同步",
-  "import_claude_help": "使用電子郵件驗證碼登入後關閉視窗，然後點擊同步。Google 登入需要瀏覽器主機。",
+  "import_claude_help": "使用電子郵件驗證碼登入後關閉視窗，然後點擊同步。如需使用 Google 登入，請在 Chrome 中透過擴充功能使用 AgentsView。",
   "import_claude_help_chrome": "點擊此分頁工具列中的 AgentsView 按鈕，然後點擊同步。同步使用 Chrome 中的 Claude.ai 登入狀態。",
   "import_claude_chrome_setup": "解壓縮下載的檔案，開啟 chrome://extensions，啟用開發人員模式，點擊載入未封裝項目，然後選擇解壓縮後的資料夾。重新載入此分頁。",
   "import_claude_chrome_download": "下載 Chrome 擴充功能",

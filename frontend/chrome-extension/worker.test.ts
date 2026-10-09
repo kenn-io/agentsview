@@ -71,9 +71,19 @@ describe("Chrome host worker", () => {
     expect(chrome.storage.session.set).not.toHaveBeenCalled();
   });
 
-  it.each(["navigation", "reload"])("refuses the new document after %s", async () => {
-    expect(await request("fetch", "/api/organizations", { ...sender, documentId: "document-new" })).toEqual({ error: expect.stringContaining("toolbar button") });
+  it("revokes the clicked document's consent after a cache restore", async () => {
+    consent = {};
+    chrome.scripting.executeScript.mockResolvedValueOnce([{ documentId: "document-a" }]);
+    await click({ id: 1, url: origin });
+    chrome.scripting.executeScript.mockClear();
+    expect(await request("revoke")).toEqual({ result: null });
+    expect(await request("fetch", "/api/organizations")).toEqual({ error: expect.stringContaining("toolbar button") });
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+  });
+
+  it("keeps the clicked document's consent when another document revokes", async () => {
+    expect(await request("revoke", undefined, { ...sender, documentId: "document-b" })).toEqual({ result: null });
+    expect(await request("fetch", "/api/organizations")).toEqual({ result: { status: 200, body: "chats" } });
   });
 
   it("revokes consent on tab close", async () => {

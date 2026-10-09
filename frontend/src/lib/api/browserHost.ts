@@ -1,7 +1,4 @@
-import { m } from "../i18n/index.js";
-
 export interface BrowserHost {
-  help(): string;
   connect(): Promise<void>;
   fetch(
     path: string,
@@ -18,7 +15,6 @@ export function getBrowserHost(): BrowserHost | undefined {
     }
   ).__TAURI__;
   if (tauri) return {
-    help: () => m.import_claude_help(),
     connect: () => tauri.core.invoke("claude_auth_connect"),
     fetch: (path) => tauri.core.invoke("claude_auth_fetch", { path }),
     close: () => tauri.core.invoke("claude_auth_close"),
@@ -39,7 +35,6 @@ export function getBrowserHost(): BrowserHost | undefined {
     });
   }
   return {
-    help: () => m.import_claude_help_chrome(),
     connect: () => request("connect"),
     fetch: (path) => request("fetch", path),
     close: async () => {},

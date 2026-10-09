@@ -6,14 +6,14 @@ import { m } from "../../i18n/index.js";
 import { setLocale } from "../../paraglide/runtime.js";
 import { ApiError } from "../../api/runtime.js";
 
-const host = vi.hoisted(() => ({ help: vi.fn(), connect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
+const host = vi.hoisted(() => ({ connect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
 const getBrowserHost = vi.hoisted(() => vi.fn());
 vi.mock("../../api/browserHost.js", () => ({ getBrowserHost }));
 vi.mock("../../api/runtime.js", async (original) => ({
   ...(await original<typeof import("../../api/runtime.js")>()),
   isRemoteConnection: () => false,
 }));
-const syncState = vi.hoisted(() => ({ readOnly: false }));
+const syncState = vi.hoisted(() => ({ readOnly: false, isDesktop: false }));
 vi.mock("../../stores/sync.svelte.js", () => ({ sync: syncState }));
 const syncClaudeAI = vi.hoisted(() => vi.fn());
 vi.mock("../../api/client.js", () => ({
@@ -24,15 +24,27 @@ vi.mock("../../api/client.js", () => ({
 }));
 beforeEach(() => {
   getBrowserHost.mockReturnValue(host);
-  host.help.mockImplementation(() => m.import_claude_help());
 });
-afterEach(() => { vi.resetAllMocks(); vi.restoreAllMocks(); syncState.readOnly = false; setLocale("en", { reload: false }); });
+afterEach(() => { vi.resetAllMocks(); vi.restoreAllMocks(); syncState.readOnly = false; syncState.isDesktop = false; setLocale("en", { reload: false }); });
 
 it("shows Chrome toolbar instructions with Sync", () => {
-  host.help.mockImplementation(() => m.import_claude_help_chrome());
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
   expect(screen.getByText("Click the AgentsView toolbar button on this tab, then Sync. Sync uses Chrome's Claude.ai sign-in.")).toBeTruthy();
   expect(screen.getByRole("button", { name: m.import_claude_sync() })).toBeTruthy();
+});
+
+it("shows desktop email-code instructions with a Chrome route for Google sign-in", () => {
+  syncState.isDesktop = true;
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  expect(screen.getByText("Sign in with an email code, close the window, then Sync. For Google sign-in, use AgentsView in Chrome with the extension.")).toBeTruthy();
+  expect(screen.queryByText(/browser host/)).toBeNull();
+});
+
+it("shows the sign-in error message", async () => {
+  host.connect.mockRejectedValue(new Error("Click the AgentsView toolbar button on this tab to allow Claude.ai Sync."));
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
+  await waitFor(() => expect(screen.getByText("Click the AgentsView toolbar button on this tab to allow Claude.ai Sync.")).toBeTruthy());
 });
 
 it.each([false, true])("offers the extension download in writable Chrome only, readOnly=%s", (readOnly) => {
@@ -60,6 +72,7 @@ it.each([
 });
 
 it("offers sign in and sync without a sign-in probe", async () => {
+  syncState.isDesktop = true;
   host.connect.mockResolvedValue(undefined);
   syncClaudeAI.mockImplementation(async (_host, callbacks) => {
     const stats = { imported: 1, updated: 0, skipped: 0, errors: 0 };
