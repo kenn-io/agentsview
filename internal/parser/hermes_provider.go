@@ -1595,13 +1595,21 @@ func hermesStateMemberFingerprint(
 		}
 	}
 	observeSharedContainerScan(ctx)
-	ss, messages, selectedPath, err := readHermesStateSessionSource(ctx,
-		src.StateDB, src.SessionID,
+	conn, err := openSQLiteReadOnly(src.StateDB, sqliteReadOptions{})
+	if err != nil {
+		return SourceFingerprint{}, hermesStateLookupError{err: fmt.Errorf("open hermes state db: %w", err)}
+	}
+	defer conn.Close()
+	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(ctx,
+		conn, src.StateDB, src.SessionID,
 	)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return SourceFingerprint{Key: source.FingerprintKey}, nil
 		}
+		return SourceFingerprint{}, err
+	}
+	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) }); err != nil {
 		return SourceFingerprint{}, err
 	}
 	h := sha256.New()
@@ -1679,6 +1687,30 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 	}
 	defer memberConn.Close()
 	observeSharedContainerScan(ctx)
+	parentRows, err := idsConn.QueryContext(ctx, "SELECT id, parent_session_id FROM sessions WHERE parent_session_id <> ''")
+	if err != nil {
+		return fmt.Errorf("query hermes parents: %w", err)
+	}
+	defer parentRows.Close()
+	parents := make(map[string]string)
+	var parentBytes int64
+	defer func() { observeStreamingRetainedBytes(ctx, -parentBytes) }()
+	for parentRows.Next() {
+		var id, parent string
+		if err := parentRows.Scan(&id, &parent); err != nil {
+			return fmt.Errorf("scan hermes parent: %w", err)
+		}
+		parents[id] = parent
+		retained := int64(len(id) + len(parent))
+		parentBytes += retained
+		observeStreamingRetainedBytes(ctx, retained)
+	}
+	if err := parentRows.Err(); err != nil {
+		return err
+	}
+	if err := parentRows.Close(); err != nil {
+		return err
+	}
 	rows, err := idsConn.QueryContext(ctx, "SELECT id FROM sessions ORDER BY id")
 	if err != nil {
 		return fmt.Errorf("query hermes sessions: %w", err)
@@ -1695,7 +1727,7 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 		retainedIDBytes := int64(len(id))
 		observeStreamingRetainedBytes(ctx, retainedIDBytes)
 		if err := cacheHermesMemberCore(
-			ctx, memberConn, stateDB, id, VirtualSourcePath(stateDB, id),
+			ctx, memberConn, stateDB, id, VirtualSourcePath(stateDB, id), parents,
 		); err != nil {
 			observeStreamingRetainedBytes(ctx, -retainedIDBytes)
 			return err
@@ -1710,12 +1742,15 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 // left for the fingerprint path to surface through its established error
 // handling; only cache-write failures propagate.
 func cacheHermesMemberCore(
-	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey string,
+	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey string, parents map[string]string,
 ) error {
 	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(ctx,
 		conn, stateDB, id,
 	)
 	if err != nil {
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
+	}
+	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return parents[id], nil }); err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	h := sha256.New()
@@ -1768,6 +1803,11 @@ func cachedHermesMemberCore(
 func addHermesStateSessionFingerprint(
 	h hash.Hash, ss hermesStateSession, messages []hermesStateMessage,
 ) error {
+	if ss.source == "cron" {
+		if _, err := fmt.Fprintf(h, "cron-job\x00%q\x00", ss.cronJob); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(
 		h,
 		"state-member\x00%q\x00%q\x00%q\x00%q\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%t\x00%g\x00%t\x00%g\x00%q\x00%q\x00%q\x00%d\x00",

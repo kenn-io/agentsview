@@ -2958,6 +2958,9 @@ schemas keep their existing ordering behavior.
   clear surviving children's parent links. A cron continuation whose ancestors
   were pruned keeps its stored job, including transcript-only parses and Augure
   Desktop. Reverified on 2026-10-09 with parser and sync fixtures for both formats.
+  Cron member fingerprints include the resolved job ID in direct and cached
+  reads for both providers. Parser fixtures reverified on 2026-10-09 cover
+  ancestor restoration and parent-link changes with unchanged continuation rows.
 
 ## Forge (`forge`)
 

@@ -697,6 +697,66 @@ func TestHermesStateMemberFingerprintIncludesStateMetadataWhenTranscriptWins(t *
 		"state metadata used by parsing must participate even when transcript messages win")
 }
 
+func TestHermesStateMemberFingerprintIncludesCronAncestry(t *testing.T) {
+	for _, agent := range []AgentType{AgentHermes, AgentAugureDesktop} {
+		for _, seeded := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/seeded=%t", agent, seeded), func(t *testing.T) {
+				root := t.TempDir()
+				createHermesStateDB(t, root)
+				conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, conn.Close()) })
+				_, err = conn.ExecContext(t.Context(), `
+					UPDATE sessions SET source = 'cron' WHERE id = 'child';
+					INSERT INTO sessions (id, source, parent_session_id, started_at)
+					VALUES ('parent', 'cron', 'middle', 1), ('ordinary', 'cli', 'parent', 1);
+					INSERT INTO messages (session_id, role, content, timestamp)
+					VALUES ('ordinary', 'user', 'hello', 1)`)
+				require.NoError(t, err)
+				provider, ok := NewProvider(agent, ProviderConfig{Roots: []string{root}})
+				require.True(t, ok)
+				child, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "child"})
+				require.NoError(t, err)
+				require.True(t, found)
+				ordinary, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "ordinary"})
+				require.NoError(t, err)
+				require.True(t, found)
+				fingerprint := func(source SourceRef) string {
+					t.Helper()
+					ctx := t.Context()
+					if seeded {
+						var cleanup func() error
+						ctx, cleanup, err = WithReconciliationCache(ctx)
+						require.NoError(t, err)
+						defer func() { require.NoError(t, cleanup()) }()
+					}
+					fp, err := provider.Fingerprint(ctx, source)
+					require.NoError(t, err)
+					require.NotEmpty(t, fp.Hash)
+					if seeded {
+						direct, err := provider.Fingerprint(t.Context(), source)
+						require.NoError(t, err)
+						assert.Equal(t, direct.Hash, fp.Hash)
+					}
+					return fp.Hash
+				}
+				before := fingerprint(child)
+				ordinaryBefore := fingerprint(ordinary)
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, parent_session_id, started_at)
+					VALUES ('middle', 'cron', 'cron_job-a_20261009_120000', 1)`)
+				require.NoError(t, err)
+				restored := fingerprint(child)
+				assert.NotEqual(t, before, restored, "restoring an intermediate ancestor must invalidate the unchanged child")
+				assert.Equal(t, ordinaryBefore, fingerprint(ordinary))
+				_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET parent_session_id = 'cron_job-b_20261009_120000' WHERE id = 'middle'`)
+				require.NoError(t, err)
+				assert.NotEqual(t, restored, fingerprint(child), "changing an ancestor's parent must invalidate the unchanged child")
+				assert.Equal(t, ordinaryBefore, fingerprint(ordinary))
+			})
+		}
+	}
+}
+
 func TestHermesProviderArchiveWatchRoots(t *testing.T) {
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")
