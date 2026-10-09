@@ -70,44 +70,17 @@ list refreshes automatically.
 
 ## Sync in the desktop app
 
-With the desktop app connected to its local archive, open **Import
-conversations**, select **Claude.ai**, and click **Sign in**. Sign in to
-Claude.ai, close the window, then click **Sync** to download your chats.
-The dialog shows progress and counts new, updated, skipped, and failed chats.
-Sync skips trashed chats; file imports report them as refusals.
+With the desktop app connected to its local archive, open **Import conversations**, select **Claude.ai**, and click **Sign in**. Sign in to Claude.ai, close the window, then click **Sync** to download your chats.
 
-Each sync includes archived chats, checks all conversation summaries, and
-downloads only new or changed chats. Search stays available during the import.
-Trashed or permanently deleted chats stay deleted. Changed chats update in
-place to show the branch Claude.ai shows. If an edit or branch switch would
-drop a pin or note, Sync keeps the previous version in Trash with its pins and
-notes, in the same transaction as the update. Each such replacement makes a
-fresh copy. Replacements that keep every pin and note make no copy.
-Switching back on Claude.ai and syncing restores those turns. Dropped pins and
-notes stay in the Trash copy and don't return to the live chat. A chat first
-imported from a zip needs one detail fetch to verify its visible branch. It
-keeps its stored turns when Sync finds no change; turns Sync adds or replaces
-carry claude.ai's message identities.
-Re-importing a zip clears that verification, so the next Sync fetches it once
-again. Each chat has a 32 MiB response limit; larger chats count as failed while
-Sync continues.
+Sync checks every chat, including archived chats. It fetches new chats and chats whose `updated_at`, visible leaf, or stored message count changed. A zip re-import that changes the count triggers another fetch. Resync clears freshness, so the next Sync fetches each chat once. Search stays available during Sync.
 
-A chat that fails counts as failed while Sync continues. An expired sign-in,
-or two chats failing in a row, ends the Sync.
+Changed chats show Claude.ai's visible branch, even when it has fewer turns. If a replacement loses a pin or note, Sync keeps the previous version in Trash with its pins and notes. Replacements that preserve every pin and note make no copy. Switching back on Claude.ai restores those turns, but dropped pins and notes stay in the Trash copy. Trashed and permanently deleted chats stay deleted.
 
-Sync runs while the dialog is open. Closing it cancels the sync. A cancelled
-or failed Sync leaves each chat as either its old or its new version. Completed
-chats appear in the sidebar, and the next Sync picks up any unfinished chats.
+Each chat has a 32 MiB response limit. Larger chats count as failed while Sync continues. An expired sign-in or two chat failures in a row ends Sync. Closing the dialog cancels it. Completed chats stay imported, and the next Sync fetches unfinished chats.
 
-Sign-in persists in the browser's cookie store across app restarts. **Disconnect**
-deletes cookies for `https://claude.ai/`, cancels pending browser requests,
-and closes the sign-in window. Other sites' cookies, browser local storage,
-and imported chats remain. Credentials stay
-inside that window's browser host. Sync requires the desktop app and a local
-connection; file imports remain available in the web UI.
+Sign-in persists across app restarts. To sign out, open **Sign in** and use Claude.ai's own log-out menu. Credentials stay inside that window's browser. Sync requires the desktop app and a local connection; file imports remain available in the web UI.
 
-These private Claude.ai endpoints can change without notice. Sign in again if Sync
-reports that your sign-in expired.
+Claude.ai's private endpoints can change without notice. Sign in again if Sync reports that your sign-in expired.
 
 ## Importing via the CLI
 
@@ -210,8 +183,6 @@ with the provider prefix) and a reason:
 - `shorter_export`: the export has fewer messages than the archive.
 - `trashed`: a Claude.ai or Gemini Apps session is in the trash. Restore it
   first. A trashed ChatGPT conversation stays a skip.
-- `newer_marker`: a Claude.ai chat was synced by a newer marker version. Use
-  an AgentsView version that supports it.
 - `transient`: anything else. Importing again may work.
 
 For `diverged` or `shorter_export`, you can explicitly

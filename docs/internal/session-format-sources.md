@@ -2743,23 +2743,8 @@ schemas keep their existing ordering behavior.
   `content[].text` and thinking blocks.
   Malformed selected paths and mismatched conversation UUIDs fail before writes.
   Exports preserve their original message order.
-- **Freshness:** Sync compares `updated_at` with archived `ended_at` and stores
-  a versioned leaf marker with effective content retention in `last_entry_uuid`.
-  Full and transcripts retain identical output and share a marker. Switching
-  usage retention or importing a zip requires one new detail fetch. Sync commits
-  metadata, messages, and the marker together. Unchanged transcripts and appends
-  keep existing row IDs; branch replacements assign new row IDs. Sync writes
-  message identities only when it adds or replaces turns. Unchanged zip imports
-  keep their stored turns and derived state.
-  Sync checks for a pending archive resync under the serialized write lock
-  before writing UUIDs. `TestClaudeAISyncNeedsResync` verifies that a v126
-  archive receives the upgrade error and retains no new sessions or messages.
-  See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for branch
-  updates and Trash copies.
-  Shorter zip exports remain refused. Pins follow source UUIDs, or role, content,
-  and occurrence rank when the replacement has no UUIDs. Full resync preserves
-  import markers only when their retention matches the target archive.
-- **Limits:** Browser reads and relay bodies are capped at 32 MiB. Detail 404
+- **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible leaf, and stored message count in `provider_freshness`, keyed by `claude-ai` and session ID. Resync and `ResetAllMtimes` clear it. A zip re-import that changes the count triggers a detail fetch. Sync stores messages in the same shape as zip import, without source UUIDs. Pins match by role, text, and occurrence rank. Reverified 2026-10-08 against the reconstructed list and detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`, and `TestSyncClaudeAIBranchSwitch`. Shorter zip exports remain refused. See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for branch updates and Trash copies.
+- **Limits:** Browser reads and decoded relay responses are capped at 32 MiB. The JSON relay body allows twice that size plus 64 KiB for escaping and metadata. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
   `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
   Other detail failures stop Sync after two chats fail in a row. Unchanged and
@@ -2769,10 +2754,7 @@ schemas keep their existing ordering behavior.
   Organization responses must decode to an array; null and other shapes fail.
   Organization and list failures, cancellation, and an empty page with
   `has_more: true` stop Sync. Null and root-sentinel list leaves skip detail
-  fetches; absent or malformed leaves and newer stored marker versions count
-  as errors. The `claude-ai:vN:` prefix rejects
-  N greater than 1 regardless of payload layout, with a `newer_marker` refusal.
-  File import and explicit replacement enforce the same boundary.
+  fetches; absent or malformed leaves count as errors.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks
   found `current_leaf_message_uuid` on list items and byte-identical list and
   detail `updated_at` values with microseconds. Branch switches changed the

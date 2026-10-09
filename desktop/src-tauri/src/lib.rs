@@ -322,7 +322,6 @@ pub fn run() {
             claude_auth_connect,
             claude_auth_fetch,
             claude_auth_close,
-            claude_auth_disconnect,
             claude_auth_fetch_result
         ]);
 
@@ -4029,137 +4028,6 @@ async fn claude_auth_close(handle: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn claude_auth_disconnect(handle: AppHandle) -> Result<(), String> {
-    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
-        Some(window) => window,
-        None => create_claude_auth_window(&handle, false)?.0,
-    };
-    delete_claude_auth_cookies(&window).await?;
-    handle
-        .state::<ClaudeAuthState>()
-        .pending_browser_requests
-        .lock()
-        .map_err(|_| "Claude request lock failed")?
-        .clear();
-    window.close().map_err(|e| e.to_string())
-}
-
-#[cfg(windows)]
-async fn delete_claude_auth_cookies(window: &WebviewWindow) -> Result<(), String> {
-    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_2;
-    use windows::core::Interface;
-
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    window.with_webview(move |webview| {
-        let result = (|| {
-            let manager = unsafe {
-                webview.controller().CoreWebView2()
-                    .and_then(|view| view.cast::<ICoreWebView2_2>())
-                    .and_then(|view| view.CookieManager())
-            };
-            delete_claude_native_cookies(manager.map_err(|e| e.to_string())?)
-        })();
-        let _ = sender.send(result);
-    }).map_err(|e| e.to_string())?;
-    tokio::time::timeout(Duration::from_secs(30), receiver).await
-        .map_err(|_| "Claude cookie deletion timed out")?
-        .map_err(|_| "Claude cookie deletion disconnected")?
-}
-
-#[cfg(windows)]
-fn delete_claude_native_cookies(manager: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2CookieManager) -> Result<(), String> {
-    use webview2_com::GetCookiesCompletedHandler;
-    use windows::core::{PCWSTR, PWSTR};
-
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let callback_manager = manager.clone();
-    unsafe {
-        manager.GetCookies(PCWSTR::null(), &GetCookiesCompletedHandler::create(Box::new(move |status, cookies| {
-            let result = (|| -> windows::core::Result<()> {
-                status?;
-                if let Some(cookies) = cookies {
-                    let mut count = 0;
-                    cookies.Count(&mut count)?;
-                    for index in 0..count {
-                        let cookie = cookies.GetValueAtIndex(index)?;
-                        let mut domain = PWSTR::null();
-                        cookie.Domain(&mut domain)?;
-                        let domain = webview2_com::CoTaskMemPWSTR::from(domain).to_string();
-                        if domain == "claude.ai" || domain.ends_with(".claude.ai") {
-                            // Wry strips the domain dot when it rebuilds a cookie for deletion.
-                            callback_manager.DeleteCookie(&cookie)?;
-                        }
-                    }
-                }
-                Ok(())
-            })();
-            let _ = sender.send(result.map_err(|e| e.to_string()));
-            Ok(())
-        }))).map_err(|e| e.to_string())?;
-    }
-    webview2_com::wait_with_pump(receiver).map_err(|e| e.to_string())?
-}
-
-#[cfg(target_os = "macos")]
-async fn delete_claude_auth_cookies(window: &WebviewWindow) -> Result<(), String> {
-    use block2::RcBlock;
-    use objc2_foundation::{NSArray, NSHTTPCookie};
-    use objc2_web_kit::WKWebView;
-    use std::{cell::{Cell, RefCell}, ptr::NonNull, rc::Rc};
-
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    window.with_webview(move |webview| unsafe {
-        let view = &*webview.inner().cast::<WKWebView>();
-        let store = view.configuration().websiteDataStore().httpCookieStore();
-        let callback_store = store.clone();
-        let sender = Rc::new(RefCell::new(Some(sender)));
-        store.getAllCookies(&RcBlock::new(move |cookies: NonNull<NSArray<NSHTTPCookie>>| {
-            let cookies: Vec<_> = cookies.as_ref().to_vec().into_iter().filter(|cookie| {
-                let domain = cookie.domain().to_string();
-                domain == "claude.ai" || domain.ends_with(".claude.ai")
-            }).collect();
-            let remaining = Rc::new(Cell::new(cookies.len()));
-            if cookies.is_empty() {
-                let _ = sender.borrow_mut().take().unwrap().send(Ok(()));
-            }
-            for cookie in cookies {
-                let remaining = remaining.clone();
-                let sender = sender.clone();
-                callback_store.deleteCookie_completionHandler(&cookie, Some(&RcBlock::new(move || {
-                    remaining.set(remaining.get() - 1);
-                    if remaining.get() == 0 {
-                        let _ = sender.borrow_mut().take().unwrap().send(Ok(()));
-                    }
-                })));
-            }
-        }));
-    }).map_err(|e| e.to_string())?;
-    tokio::time::timeout(Duration::from_secs(30), receiver).await
-        .map_err(|_| "Claude cookie deletion timed out")?
-        .map_err(|_| "Claude cookie deletion disconnected")?
-}
-
-#[cfg(target_os = "linux")]
-mod claude_cookies_linux;
-
-#[cfg(target_os = "linux")]
-async fn delete_claude_auth_cookies(window: &WebviewWindow) -> Result<(), String> {
-    use webkit2gtk::{WebViewExt, WebsiteDataManagerExt};
-
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    window.with_webview(move |webview| {
-        if let Some(manager) = webview.inner().website_data_manager().and_then(|store| store.cookie_manager()) {
-            claude_cookies_linux::delete_cookies(manager, sender);
-        } else {
-            let _ = sender.send(Err("Claude cookie manager unavailable".into()));
-        }
-    }).map_err(|e| e.to_string())?;
-    tokio::time::timeout(Duration::from_secs(30), receiver).await
-        .map_err(|_| "Claude cookie deletion timed out")?
-        .map_err(|_| "Claude cookie deletion disconnected")?
-}
-
-#[tauri::command]
 async fn claude_auth_fetch(
     handle: AppHandle,
     path: String,
@@ -4178,7 +4046,12 @@ async fn claude_auth_fetch(
     };
     let origin = window.url().map_err(|e| e.to_string())?;
     if origin.origin().ascii_serialization() != "https://claude.ai" {
-        return Err("claude_ai_sign_in_pending".into());
+        return Ok(ClaudeBrowserResponse {
+            status: 401,
+            body: String::new(),
+            error: None,
+            retry_after: None,
+        });
     }
     let state = handle.state::<ClaudeAuthState>();
     let (request_id, receiver) = state.start_browser_request()?;
@@ -6758,87 +6631,6 @@ agentsview running at http://127.0.0.1:18082
 
 #[cfg(test)]
 mod claude_sync_tests {
-
-    #[cfg(windows)]
-    #[test]
-    fn claude_disconnect_removes_native_domain_cookies() {
-        use webview2_com::{Microsoft::Web::WebView2::Win32::*, *};
-        use windows::core::{w, HSTRING, Interface, PCWSTR, PWSTR};
-        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
-        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_OVERLAPPED};
-
-        fn cookies(manager: &ICoreWebView2CookieManager) -> Vec<(String, String, String)> {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            unsafe {
-                manager.GetCookies(PCWSTR::null(), &GetCookiesCompletedHandler::create(Box::new(move |status, cookies| {
-                    status?;
-                    let cookies = cookies.unwrap();
-                    let mut count = 0;
-                    cookies.Count(&mut count)?;
-                    let mut identities = Vec::new();
-                    for index in 0..count {
-                        let cookie = cookies.GetValueAtIndex(index)?;
-                        let mut name = PWSTR::null();
-                        let mut domain = PWSTR::null();
-                        let mut path = PWSTR::null();
-                        cookie.Name(&mut name)?;
-                        cookie.Domain(&mut domain)?;
-                        cookie.Path(&mut path)?;
-                        identities.push((CoTaskMemPWSTR::from(name).to_string(), CoTaskMemPWSTR::from(domain).to_string(), CoTaskMemPWSTR::from(path).to_string()));
-                    }
-                    sender.send(identities).unwrap();
-                    Ok(())
-                }))).unwrap();
-            }
-            wait_with_pump(receiver).unwrap()
-        }
-
-        let profile = tempfile::tempdir().unwrap();
-        unsafe {
-            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap();
-            let hwnd = CreateWindowExW(WINDOW_EX_STYLE::default(), w!("STATIC"), w!("Cookie test"), WS_OVERLAPPED, 0, 0, 100, 100, None, None, None, None).unwrap();
-            let (sender, receiver) = std::sync::mpsc::channel();
-            CreateCoreWebView2EnvironmentWithOptions(PCWSTR::null(), &HSTRING::from(profile.path().to_str().unwrap()), None, &CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(move |status, environment| {
-                status?;
-                sender.send(environment.unwrap()).unwrap();
-                Ok(())
-            }))).unwrap();
-            let environment = wait_with_pump(receiver).unwrap();
-            let (sender, receiver) = std::sync::mpsc::channel();
-            environment.CreateCoreWebView2Controller(hwnd, &CreateCoreWebView2ControllerCompletedHandler::create(Box::new(move |status, controller| {
-                status?;
-                sender.send(controller.unwrap()).unwrap();
-                Ok(())
-            }))).unwrap();
-            let controller = wait_with_pump(receiver).unwrap();
-            let manager = controller.CoreWebView2().unwrap().cast::<ICoreWebView2_2>().unwrap().CookieManager().unwrap();
-            for (name, domain, path) in [("session", ".claude.ai", "/"), ("scoped", ".claude.ai", "/api"), ("host", "claude.ai", "/"), ("other", ".example.com", "/")] {
-                let cookie = manager.CreateCookie(&HSTRING::from(name), &HSTRING::from("test"), &HSTRING::from(domain), &HSTRING::from(path)).unwrap();
-                manager.AddOrUpdateCookie(&cookie).unwrap();
-            }
-            let before = cookies(&manager);
-            assert_eq!(before.len(), 4);
-            assert!(before.contains(&("session".into(), ".claude.ai".into(), "/".into())));
-            assert!(before.contains(&("scoped".into(), ".claude.ai".into(), "/api".into())));
-            super::delete_claude_native_cookies(manager.clone()).unwrap();
-            // WebView2 applies cookie deletions asynchronously.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            let after = loop {
-                let after = cookies(&manager);
-                if after.len() == 1 || std::time::Instant::now() >= deadline {
-                    break after;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            };
-            assert_eq!(after, vec![("other".into(), ".example.com".into(), "/".into())]);
-            controller.Close().unwrap();
-            drop(manager);
-            drop(controller);
-            drop(environment);
-            DestroyWindow(hwnd).unwrap();
-            CoUninitialize();
-        }
-    }
 
     #[test]
     fn claude_fetch_bounds_browser_response() {

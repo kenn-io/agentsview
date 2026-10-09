@@ -2465,10 +2465,6 @@
   "tool_sequences_retry": "Yenidən cəhd et",
   "import_claude_connect": "Daxil ol",
   "import_claude_sync": "Sinxronlaşdır",
-  "import_claude_disconnect": "Bağlantını kəs",
   "import_claude_help": "Daxil olun, pəncərəni bağlayın, sonra Sinxronlaşdır düyməsini basın.",
-  "import_claude_auth_required": "Claude.ai hesabınıza daxil olun, sonra yenidən sinxronlaşdırın.",
-  "import_claude_sign_in_pending": "Claude.ai hesabınıza daxil olmağı tamamlayın, pəncərəni bağlayın, sonra yenidən sinxronlaşdırın.",
-  "import_claude_archive_upgrade_required": "Arxivin yenilənməsi tamamlanana qədər gözləyin, sonra yenidən sinxronlaşdırın.",
-  "import_newer_marker": "Arxivdəki {session} sessiyası AgentsView tətbiqinin daha yeni versiyasını tələb edir. AgentsView tətbiqini yeniləyin, sonra yenidən sinxronlaşdırın."
+  "import_claude_auth_required": "Claude.ai hesabınıza daxil olun, sonra yenidən sinxronlaşdırın."
 }
