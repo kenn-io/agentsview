@@ -174,6 +174,21 @@ func TestScreenViewClaimsAcrossDaemonRestarts(t *testing.T) {
 	assert.Equal(t, "web", sent[0]["surface"])
 }
 
+func TestScreenViewRecoversUnreadableClaimsAtStartup(t *testing.T) {
+	t.Setenv(EnabledEnv, "1")
+	t.Setenv(GenericEnabledEnv, "1")
+	endpoint, captured := captureCollector(t)
+	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-id"}
+	require.NoError(t, os.WriteFile(cfg.TelemetryScreenClaimsPath(), []byte(`{"version":2,"claims":[]}`), 0o600))
+	require.NoError(t, cfg.MigrateTelemetryScreenClaims())
+	reporter := captureReporter(t, endpoint, Options{ScreenClaimsPath: cfg.TelemetryScreenClaimsPath()})
+	postCapture(t, reporter.CaptureHandler(), `{"event":"screen_viewed","properties":{"screen":"sessions"}}`, http.StatusAccepted)
+	require.NoError(t, reporter.Close())
+	sent := captured()
+	require.Len(t, sent, 1)
+	assert.Equal(t, "sessions", sent[0]["screen"])
+}
+
 func captureCollector(t *testing.T) (string, func() []map[string]any) {
 	t.Helper()
 	var mu sync.Mutex
