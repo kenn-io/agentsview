@@ -272,15 +272,12 @@ describe("ToolUsage", () => {
     await unmount(component);
   });
 
-  it("jumps to the matching call when the evidence names one", async () => {
+  it("opens the session at the message holding the first matching call", async () => {
     seedRates();
     vi.spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions").mockResolvedValue({
       signal: "tool_empty_rate",
-      total: 2,
-      sessions: [
-        { ...example, session_id: "with-call", call_index: 1, tool_use_id: "toolu-1" },
-        { ...example, session_id: "message-only" },
-      ],
+      total: 1,
+      sessions: [example],
     });
     const navigate = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
     const component = mount(ToolUsage, { target: document.body });
@@ -288,17 +285,30 @@ describe("ToolUsage", () => {
     rateButton("Grep Empty rate: 70.0%")!.click();
     await tick();
     await tick();
-    const rows = document.querySelectorAll<HTMLAnchorElement>("a.evidence-row");
-    expect(rows[0]!.getAttribute("href")).toContain("call=1");
-    expect(rows[0]!.getAttribute("href")).toContain("tool_use_id=toolu-1");
-    rows[0]!.click();
-    expect(navigate).toHaveBeenLastCalledWith("with-call", {
-      msg: "2",
-      call: "1",
-      tool_use_id: "toolu-1",
+    const row = document.querySelector<HTMLAnchorElement>("a.evidence-row")!;
+    expect(row.getAttribute("href")).toContain("msg=2");
+    row.click();
+    expect(navigate).toHaveBeenLastCalledWith("recovered", { msg: "2" });
+    await unmount(component);
+  });
+
+  it("explains an unavailable rate on focus", async () => {
+    seedRates();
+    const tool = analytics.tools!.by_tool[0]!;
+    Object.assign(tool, {
+      recovery_rate: null,
+      recovered_sequences: 0,
+      abandoned_sequences: 0,
+      open_sequences: 2,
+      unknown_sequences: 1,
     });
-    rows[1]!.click();
-    expect(navigate).toHaveBeenLastCalledWith("message-only", { msg: "2" });
+    const component = mount(ToolUsage, { target: document.body });
+    await tick();
+    const cell = [...document.querySelectorAll(".tool-rate")][2]!;
+    expect(cell.textContent?.trim()).toBe("Unavailable");
+    expect(await tooltipFor(cell.querySelector(".kit-tooltip-trigger")!)).toBe(
+      "0/0 recovered sequences. Open: 2. Unknown: 1.",
+    );
     await unmount(component);
   });
 

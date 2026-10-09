@@ -6,7 +6,7 @@
   import { LatestRead } from "../../utils/latest-read.js";
   import { isAbortError } from "../../api/runtime.js";
   import { router } from "../../stores/router.svelte.js";
-  import { scrollCallParams, ui, type ScrollCall } from "../../stores/ui.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { DbToolCategoryCount as ToolCategoryCount } from "../../api/generated/index.js";
   import { getLocale, m } from "../../i18n/index.js";
@@ -107,23 +107,15 @@
     }
   }
 
-  // Evidence names the matching call when it has a tool ID, so the jump lands on
-  // that call rather than the top of a message that holds several calls.
-  function evidenceCall(example: SignalSessionExample): ScrollCall | undefined {
-    return example.call_index != null && example.tool_use_id ? { index: example.call_index, toolUseId: example.tool_use_id } : undefined;
-  }
-
   function evidenceParamsFor(example: SignalSessionExample): Record<string, string> {
-    if (example.message_ordinal == null) return {};
-    const call = evidenceCall(example);
-    return { msg: String(example.message_ordinal), ...(call ? scrollCallParams(call) : {}) };
+    return example.message_ordinal == null ? {} : { msg: String(example.message_ordinal) };
   }
 
   function openSession(event: MouseEvent, example: SignalSessionExample) {
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     router.navigateToSession(example.session_id, evidenceParamsFor(example));
-    if (example.message_ordinal != null) ui.scrollToOrdinal(example.message_ordinal, example.session_id, evidenceCall(example));
+    if (example.message_ordinal != null) ui.scrollToOrdinal(example.message_ordinal, example.session_id);
   }
 
   function formatCount(value: number): string {
@@ -293,7 +285,7 @@
                 {#each rateColumns as column}
                   <span class="tool-rate" data-label={column.label}>
                     {#if tool[column.field] == null}
-                      {m.analytics_tool_unavailable()}
+                      <Tooltip text={rateTitle(tool, column.metric)} focusable>{m.analytics_tool_unavailable()}</Tooltip>
                     {:else}
                       {@const value = formatRate(tool[column.field]!)}
                       <Tooltip text={rateTitle(tool, column.metric)} focusable={tool[column.field] === 0}>

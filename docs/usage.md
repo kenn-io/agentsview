@@ -188,8 +188,7 @@ Total tool call count with breakdowns by category (Read, Edit, Write, Bash,
 Search, Web, Task) and by agent. Includes a trend chart showing tool usage over
 time. Each tool also shows empty, repeat and recovery rates. Click a nonzero
 rate to list the sessions behind it, with the number of matching calls in each.
-Each link opens the session at the first matching call, or at its message when
-the call has no tool ID.
+Each link opens the session at the message that holds the first matching call.
 
 - **Empty rate** divides empty results by calls with a known outcome.
 - **Repeat rate** divides calls that repeat the previous call's tool and input,

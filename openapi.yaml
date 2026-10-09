@@ -2931,10 +2931,6 @@ components:
       properties:
         agent:
           type: string
-        call_index:
-          description: Position of the first matching call in its message, for tool rates
-          format: int64
-          type: integer
         date:
           type: string
         edit_churn:
@@ -2973,9 +2969,6 @@ components:
         signal_total:
           format: int64
           type: integer
-        tool_use_id:
-          description: Tool ID of the first matching call, for tool rates
-          type: string
       required:
         - session_id
         - project

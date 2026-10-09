@@ -3939,8 +3939,6 @@ type SignalSessionExample struct {
 	ReasonCode     string  `json:"reason_code"`
 	Excerpt        string  `json:"excerpt"`
 	MessageOrdinal *int    `json:"message_ordinal,omitempty"`
-	CallIndex      *int    `json:"call_index,omitempty" doc:"Position of the first matching call in its message, for tool rates"`
-	ToolUseID      string  `json:"tool_use_id,omitempty" doc:"Tool ID of the first matching call, for tool rates"`
 	FailureSignals *int    `json:"failure_signals,omitempty"`
 	Retries        *int    `json:"retries,omitempty"`
 	EditChurn      *int    `json:"edit_churn,omitempty"`

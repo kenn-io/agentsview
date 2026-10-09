@@ -1512,7 +1512,7 @@ func (s *Store) analyticsToolRows(
 	args := slices.Clone(modelArgs)
 	query := `SELECT tc.session_id, tc.category,
 			trim(COALESCE(tc.tool_name, '')), toInt64(COUNT(*)),
-			MAX(m.timestamp), MIN(tc.message_ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
+			MAX(m.timestamp), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
 			FROM tool_calls tc
 			JOIN (SELECT id, quality_signal_version FROM sessions WHERE id IN ` + ph + `) s ON s.id = tc.session_id
 			LEFT JOIN (` + chAnalyticsToolCallMessagesSQL + ph + `) m

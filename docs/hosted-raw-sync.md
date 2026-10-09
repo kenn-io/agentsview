@@ -456,7 +456,9 @@ GRANT UPDATE (observed_outcome, observed_repeat, sequence_ending)
 ```
 
 Hosted sessions projected before the upgrade show as not analyzed in tool rate
-coverage. They gain rates when their source is uploaded and parsed again.
+coverage. They gain rates when their source changes and the new transcript
+replaces the stored one. Uploading an unchanged transcript keeps the stored row
+and its older signal version, so its calls stay not analyzed.
 
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.

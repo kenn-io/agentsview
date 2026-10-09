@@ -481,8 +481,10 @@ func TestAnalyticsToolEvidenceOptionalCategory(t *testing.T) {
 		for _, key := range []string{"failure_signals", "retries", "edit_churn", "is_automated"} {
 			assert.NotContains(t, row.(map[string]any), key)
 		}
-		assert.Equal(t, "", row.(map[string]any)["outcome"])
-		assert.Equal(t, "", row.(map[string]any)["excerpt"])
+		for _, key := range []string{"outcome", "excerpt"} {
+			require.Contains(t, row.(map[string]any), key)
+			assert.Empty(t, row.(map[string]any)[key])
+		}
 	}
 	path := "/api/v1/analytics/signal-sessions?signal=unstructured_start&from=2026-04-26&to=2026-04-26"
 	w = te.get(t, path+"&offset=0")
@@ -503,33 +505,6 @@ func TestAnalyticsToolEvidenceOptionalCategory(t *testing.T) {
 	for _, query := range []string{"&offset=1", "&tool_name=readFile", "&tool_category=Read"} {
 		assertStatus(t, te.get(t, path+query), http.StatusBadRequest)
 	}
-}
-
-func TestAnalyticsToolEvidenceTargetsMatchingCall(t *testing.T) {
-	te := setup(t)
-	seed := func(id string, calls []db.ToolCall, observations []db.ToolObservation) {
-		dbtest.SeedSession(t, te.db, id, "fixture", func(s *db.Session) { s.StartedAt = new("2026-04-26T10:00:00Z"); s.UserMessageCount = 2 })
-		require.NoError(t, te.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 1, Role: "assistant", Timestamp: "2026-04-26T10:00:00Z", ToolCalls: calls}}))
-		require.NoError(t, te.db.UpdateSessionSignals(t.Context(), id, db.SessionSignalUpdate{ToolObservations: observations, QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
-	}
-	// The empty Grep call is the second call in its message, after a Read and a Grep with content.
-	seed("with-id", []db.ToolCall{{ToolName: "Read", Category: "Read", ToolUseID: "read-0"}, {ToolName: "Grep", Category: "Grep", ToolUseID: "grep-1"}, {ToolName: "Grep", Category: "Grep", ToolUseID: "grep-2"}},
-		[]db.ToolObservation{{MessageOrdinal: 1, CallIndex: 0, Outcome: "empty", Repeat: "none"}, {MessageOrdinal: 1, CallIndex: 1, Outcome: "content", Repeat: "none"}, {MessageOrdinal: 1, CallIndex: 2, Outcome: "empty", Repeat: "none"}})
-	seed("without-id", []db.ToolCall{{ToolName: "Grep", Category: "Grep"}},
-		[]db.ToolObservation{{MessageOrdinal: 1, Outcome: "empty", Repeat: "none"}})
-	w := te.get(t, "/api/v1/analytics/signal-sessions?signal=tool_empty_rate&from=2026-04-26&to=2026-04-26&tool_name=Grep&tool_category=Grep")
-	assertStatus(t, w, http.StatusOK)
-	got := decode[db.SignalSessionsResponse](t, w)
-	require.Len(t, got.Sessions, 2)
-	bySession := map[string]db.SignalSessionExample{}
-	for _, example := range got.Sessions {
-		bySession[example.SessionID] = example
-	}
-	assert.Equal(t, new(2), bySession["with-id"].CallIndex)
-	assert.Equal(t, "grep-2", bySession["with-id"].ToolUseID)
-	assert.Equal(t, new(1), bySession["without-id"].MessageOrdinal)
-	assert.Nil(t, bySession["without-id"].CallIndex)
-	assert.Empty(t, bySession["without-id"].ToolUseID)
 }
 
 func TestAnalyticsEndpoints_DefaultParams(t *testing.T) {
