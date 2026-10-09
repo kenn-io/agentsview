@@ -125,10 +125,10 @@ it.each([false, true])("offers browser sign-in after auth failure, other_profile
   render(ImportModal, props());
   await clickSync();
   await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
-  expect(screen.getByText("Sign in to claude.ai in the Chrome profile that has the extension.")).toBeTruthy();
+  expect(screen.getByText("Sign in to claude.ai in the Chrome profile with the AgentsView extension.")).toBeTruthy();
   expect(!!screen.queryByText("Another Chrome profile also has the extension. AgentsView uses the profile that connected first.")).toBe(other_profile);
   expect(screen.queryByText("Server auth text")).toBeNull();
-  await fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Sign in to claude.ai in the Chrome profile with the AgentsView extension." }));
   expect(open).toHaveBeenCalledExactlyOnceWith("https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
   await clickSync();
   await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
@@ -248,13 +248,42 @@ it("retries transient status failures", async () => {
   expect(chromeStatus).toHaveBeenCalledTimes(2);
 });
 
+it.each([new ApiError(503, "Temporarily unavailable"), new Error("Network interrupted")])("shows a Notice after three consecutive status failures and keeps polling for %s", async (error) => {
+  vi.useFakeTimers();
+  chromeStatus.mockRejectedValue(error);
+  const p = props();
+  const { rerender } = render(ImportModal, p);
+  await tick(); await vi.advanceTimersByTimeAsync(0);
+  expect(screen.queryByRole("alert")).toBeNull();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(screen.queryByRole("alert")).toBeNull();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(screen.getByRole("alert").textContent).toContain("Can't read the connection status.");
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(chromeStatus).toHaveBeenCalledTimes(4);
+  chromeStatus.mockResolvedValueOnce(ready);
+  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await tick(); await vi.advanceTimersByTimeAsync(0);
+  expect(chromeStatus).toHaveBeenCalledTimes(5);
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByText("Connected")).toBeTruthy();
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(screen.queryByRole("alert")).toBeNull();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(screen.getByRole("alert")).toBeTruthy();
+  await rerender({ ...p, open: false });
+  await rerender(p);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 it("localizes auth state from its code", async () => {
   setLocale("fr", { reload: false });
   syncClaudeAI.mockRejectedValueOnce(new ApiError(0, "English auth message", "claude_ai_auth_required"));
   render(ImportModal, props());
   await clickSync();
   await waitFor(() => expect(screen.getByText("Déconnecté")).toBeTruthy());
-  expect(screen.getByText("Connectez-vous à claude.ai dans le profil Chrome qui contient l’extension.")).toBeTruthy();
+  expect(screen.getByText("Connectez-vous à claude.ai dans le profil Chrome avec l'extension AgentsView.")).toBeTruthy();
   expect(screen.queryByText("English auth message")).toBeNull();
 });
 

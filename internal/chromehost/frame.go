@@ -11,10 +11,6 @@ const FrameLimit = 64 << 20
 // Version covers message encoding and supported request shapes; bump both peers together.
 const Version = 1
 
-var requestShapeHashes = map[int]string{
-	1: "bf9fef06ae889f9b35ec5f7712b0c7fd226fb6ea4b1909fd9202570a9892ecd3",
-}
-
 var ErrCompatibility = errors.New("run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again")
 
 type VersionError struct {

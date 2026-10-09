@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -129,6 +130,16 @@ func TestClaudeAIChromeStatus(t *testing.T) {
 				dir := filepath.Join(srv.cfg.DataDir, "chrome", "extension")
 				require.NoError(t, os.MkdirAll(dir, 0o700))
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
+				executable := filepath.Join(t.TempDir(), "bin with spaces' and %", "agentsview")
+				require.NoError(t, os.MkdirAll(filepath.Dir(executable), 0o700))
+				require.NoError(t, os.WriteFile(executable, []byte("program"), 0o700))
+				launcher := filepath.Join(srv.cfg.DataDir, "chrome", "host")
+				command := "#!/bin/sh\nexec '" + strings.ReplaceAll(executable, "'", "'\"'\"'") + "' chrome-host --socket 'socket'\n"
+				if runtime.GOOS == "windows" {
+					launcher += ".cmd"
+					command = "@echo off\r\n\"" + strings.ReplaceAll(executable, "%", "%%") + "\" chrome-host --socket \"socket\"\r\n"
+				}
+				require.NoError(t, os.WriteFile(launcher, []byte(command), 0o700))
 			}
 			if tt.connected {
 				socket, _ := testChromeConnection(t, srv)
@@ -147,6 +158,44 @@ func TestClaudeAIChromeStatus(t *testing.T) {
 			srv.mux.ServeHTTP(response, req)
 			assert.Equal(t, http.StatusOK, response.Code)
 			assert.JSONEq(t, tt.want, response.Body.String())
+		})
+	}
+}
+
+func TestClaudeAIChromeStatusIncompleteInstall(t *testing.T) {
+	for _, state := range []string{"missing launcher", "malformed launcher", "missing executable", "executable is directory", "missing extension"} {
+		t.Run(state, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			dir := filepath.Join(srv.cfg.DataDir, "chrome", "extension")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			if state != "missing extension" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
+			}
+			executable := filepath.Join(t.TempDir(), "agentsview")
+			switch state {
+			case "executable is directory":
+				require.NoError(t, os.Mkdir(executable, 0o700))
+			case "missing extension":
+				require.NoError(t, os.WriteFile(executable, []byte("program"), 0o700))
+			}
+			launcher := filepath.Join(srv.cfg.DataDir, "chrome", "host")
+			command := "#!/bin/sh\nexec '" + executable + "' chrome-host --socket 'socket'\n"
+			if runtime.GOOS == "windows" {
+				launcher += ".cmd"
+				command = "@echo off\r\n\"" + executable + "\" chrome-host --socket \"socket\"\r\n"
+			}
+			if state == "malformed launcher" {
+				command = "invalid"
+			}
+			if state != "missing launcher" {
+				require.NoError(t, os.WriteFile(launcher, []byte(command), 0o700))
+			}
+			response := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/import/claude-ai/chrome", nil)
+			req.RemoteAddr = "127.0.0.1:1234"
+			srv.mux.ServeHTTP(response, req)
+			assert.Equal(t, http.StatusOK, response.Code)
+			assert.JSONEq(t, `{"installed":false,"connected":false,"other_profile":false}`, response.Body.String())
 		})
 	}
 }

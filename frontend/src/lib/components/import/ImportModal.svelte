@@ -50,6 +50,7 @@
   let chromeRefused = $state(false);
   const canSync = $derived(open && provider === "claude-ai" && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
   let chromeStatus = $state<ClaudeAIChromeOutputBody | null>(null);
+  let chromeStatusFailures = $state(0);
   let syncFlag = $state<string | null>(null);
   let syncError = $state<string | null>(null);
   let signInError = $state<string | null>(null);
@@ -70,9 +71,15 @@
     const signal = chromeRead.begin();
     try {
       const status = await ImportService.getApiV1ImportClaudeAiChrome({ signal });
-      if (chromeRead.isCurrent(signal)) chromeStatus = status;
+      if (chromeRead.isCurrent(signal)) {
+        chromeStatus = status;
+        chromeStatusFailures = 0;
+      }
     } catch (e) {
-      if (chromeRead.isCurrent(signal) && e instanceof ApiError && [403, 501].includes(e.status)) chromeRefused = true;
+      if (chromeRead.isCurrent(signal)) {
+        if (e instanceof ApiError && [403, 501].includes(e.status)) chromeRefused = true;
+        else chromeStatusFailures++;
+      }
     } finally {
       chromeRead.finish(signal);
     }
@@ -102,6 +109,7 @@
   $effect(() => {
     if (open) return;
     chromeStatus = null;
+    chromeStatusFailures = 0;
     chromeRefused = false;
     syncFlag = null;
     syncError = null;
@@ -435,7 +443,7 @@
                 <Button size="sm" label={m.import_claude_setup_steps()} tone="neutral" surface="outline" ariaExpanded={setupExpanded} onclick={() => setupExpanded = !setupExpanded} />
               {/if}
               {#if host || chromeState === "signed-out"}
-                <Button size="sm" label={m.import_claude_connect()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={importing} onclick={connect} />
+                <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={importing} onclick={connect} />
               {/if}
               <Button size="sm" label={m.import_claude_sync()} tone={chromeState === "signed-out" ? "neutral" : "info"} surface={chromeState === "signed-out" ? "outline" : "soft"} disabled={syncDisabled} onclick={sync} />
             {/if}
@@ -469,6 +477,9 @@
             {/if}
           </div>
         </Card>
+        {#if chromeStatusFailures >= 3}
+          <Notice tone="error" message={m.import_claude_status_failed()} actionLabel={m.shared_retry()} onaction={() => refreshChrome()} />
+        {/if}
       {/if}
 
       {#if !syncController}
