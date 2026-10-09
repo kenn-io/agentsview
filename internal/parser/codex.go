@@ -605,7 +605,12 @@ func (b *codexSessionBuilder) handleTokenUsageRecord(
 	if !usage.IsObject() {
 		return
 	}
-	b.applyTokenUsage(usage.Raw, payload.Get("response_id").Str)
+	for _, counter := range []string{"input_tokens", "cached_input_tokens", "output_tokens", "cache_write_input_tokens"} {
+		if usage.Get(counter).Type == gjson.Number {
+			b.applyTokenUsage(usage.Raw, payload.Get("response_id").Str)
+			return
+		}
+	}
 }
 
 func (b *codexSessionBuilder) markFirstUserReplayPossible() {
