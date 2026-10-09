@@ -826,7 +826,7 @@ class UsageStore {
     this.fetchAll();
   }
 
-  clearFilters(): void {
+  clearFilters(refresh = true): void {
     this.selectedProjectKey = "";
     this.selectedModel = "";
     this.backToProjects();
@@ -834,7 +834,7 @@ class UsageStore {
     this.excludedProjectKeys = "";
     this.excludedAgents = "";
     this.excludedModels = "";
-    this.fetchAll();
+    if (refresh) this.fetchAll();
   }
 
   get hasActiveFilters(): boolean {

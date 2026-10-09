@@ -531,11 +531,8 @@
     </div>
   </div>
 
-  <SessionActiveFilters
-    onClearProjects={() => usage.clearFilters()}
-    onClearAgents={() => usage.selectAllAgents()}
-    onClearModels={() => usage.selectAllModels()}
-  />
+  <!-- Clear all also resets session filters, whose change effect does the one refresh. -->
+  <SessionActiveFilters onClearProjects={() => usage.clearFilters(false)} />
 
   <div
     class="usage-content"

@@ -188,6 +188,24 @@ describe("UsagePage refresh behavior", () => {
     expect(usage.hasActiveFilters).toBe(true);
   });
 
+  it("refreshes once when Clear all clears shared and usage filters", async () => {
+    const fetchAll = vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = { exclude_model: "model-alpha", exclude_agent: "hidden-agent", machine: "box" };
+    usage.summary = usageSummaryWithUnsupported();
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    fetchAll.mockClear();
+    document.querySelector<HTMLButtonElement>(".clear-all")!.click();
+    await flushEffects();
+
+    expect(usage.hasActiveFilters).toBe(false);
+    expect(fetchAll).toHaveBeenCalledTimes(1);
+    expect(fetchAll).toHaveBeenCalledWith({ preserveTimeRange: true });
+  });
+
   it("uses stable project keys in the Project filter", async () => {
     vi.stubGlobal(
       "ResizeObserver",
