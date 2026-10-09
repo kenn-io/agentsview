@@ -100,6 +100,7 @@ func TestClassificationJournalCommitsChangesAndIgnoresNoOps(t *testing.T) {
 	}{
 		{"normal", testDB},
 		{"fresh", func(tb testing.TB) *DB {
+			tb.Helper()
 			path := filepath.Join(tb.TempDir(), "fresh.db")
 			require.NoError(tb, os.WriteFile(path, nil, 0o600))
 			d, err := OpenFreshIsolatedContext(tb.Context(), path)
