@@ -1185,7 +1185,7 @@ fixtures retain this field; missing identities remain source-local.
   2026-10-08 against the prompt-context parser and sync fixtures; automation
   requires script evidence rather than non-interactive launch mode.
 
-- **Subagent attribution (reverified 2026-09-18):** Grok Build stores each
+- **Subagent attribution (reverified 2026-10-09):** Grok Build stores each
   `spawn_subagent` child as a sibling session directory in the normal sessions
   tree. The parent also writes `subagents/<id>/meta.json` with
   `parent_session_id`, `child_session_id` (equal to `subagent_id`), and
@@ -1197,11 +1197,14 @@ fixtures retain this field; missing identities remain source-local.
   restore, including resume-from copies that point at the previous child
   rather than the spawning parent. Agentsview parents a child from the parent's
   `meta.json` as `relationship_type = 'subagent'` with parent id
-  `grok:<parent-id>`, and keeps fork or restore sessions that only have
-  `parent_session_id` as `fork`. Spawn tool results that include `subagent_id`
-  attach that child on the parent's `spawn_subagent` call. Reverified against
-  the pinned session guide (`17-sessions.md`) and the `SubagentMeta` writer in
-  `xai-grok-shell` at the commit above.
+  `grok:<parent-id>`. The three native child kinds retain `subagent` without
+  that metadata, with no inferred spawning parent. Ordinary fork or restore
+  sessions with only `parent_session_id` remain `fork`. Spawn tool results that
+  include `subagent_id` attach that child on the parent's `spawn_subagent` call.
+  Reverified against the pinned session guide (`17-sessions.md`), the
+  `SubagentMeta` writer, and
+  [`attempt_runner.rs`](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/attempt_runner.rs)
+  resume/fork summary writes at the commit above.
 
 - **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
   colocated tests, and the sanitized upstream-generated fixtures in

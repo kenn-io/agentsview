@@ -8,7 +8,7 @@ import (
 
 const automationAuditPrefixBytes = AutomationEvidencePrefixBytes
 
-// ParentlessWorkerSQL repairs known workers without overriding recorded relationships.
+// ParentlessWorkerSQL is the stored-row equivalent of parser.PromoteParentlessWorker.
 const ParentlessWorkerSQL = `session_kind = 'non-interactive'
  AND COALESCE(parent_session_id, '') = '' AND COALESCE(relationship_type, '') = ''`
 

@@ -66,12 +66,13 @@ relationship count as Automated when they carry a roborev tag or a matching
 first prompt.
 Prompt matching requires one or fewer real user messages.
 
-Parentless workers appear as sidebar roots. Flat lists, search, CLI, stats, and
-pickers include them only when children are included, like other parentless
-subagents. Automation and one-shot filters still apply. Readable sources reparse
-once to recover classification evidence. Stored parentless non-interactive runs
-gain the Subagent relationship during each classification audit, including rows
-imported after initialization, even when their sources are unreadable. Deleted
+Parentless workers appear as sidebar roots. Flat lists, search, and CLI include
+them when children are requested. General stats and project, agent, and branch
+pickers exclude Subagents. Automation and one-shot filters still apply.
+Readable sources reparse once to recover classification evidence. Stored
+parentless non-interactive runs gain the Subagent relationship during each
+classification audit, including rows imported after initialization, even when
+their sources are unreadable. Deleted
 Claude transcripts can prevent historical worker repair because archived rows
 lack the SDK origin needed to distinguish workers from human SDK conversations.
 Older-client Claude rows in replicas also lack this origin evidence when their

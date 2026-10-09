@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,6 +76,33 @@ func TestGrokSubagentMissingMetadataStaysTopLevel(t *testing.T) {
 	assert.Empty(t, orphan.Session.ParentSessionID)
 }
 
+func TestGrokSubagentKindsWithoutMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		kind string
+		want RelationshipType
+	}{
+		{"subagent", RelSubagent},
+		{"subagent_resume", RelSubagent},
+		{"subagent_fork", RelSubagent},
+		{"subagent_unknown", RelFork},
+		{"fork", RelFork},
+		{"restore", RelFork},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			path := grokSummaryPath(t.TempDir(), "cwd-key", "child-session")
+			writeGrokFixtureFile(t, path, fmt.Sprintf(`{"session_kind":%q,"parent_session_id":"source-session"}`, tc.kind))
+			result, err := ParseGrokSummary(path, "project", "test-machine")
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, result.Session.RelationshipType)
+			if tc.want == RelSubagent {
+				assert.Empty(t, result.Session.ParentSessionID)
+			} else {
+				assert.Equal(t, "grok:source-session", result.Session.ParentSessionID)
+			}
+		})
+	}
+}
+
 func TestGrokSubagentWorktreeChildFindsParentInOtherCWD(t *testing.T) {
 	results := parseGrokSubagentFixture(t)
 	child, ok := results[grokSubagentWorktreeID]
@@ -138,7 +166,7 @@ func TestGrokMalformedSubagentMetaDoesNotParent(t *testing.T) {
 		grokSummaryPath(root, "cwd-key", childID), "project", "test-machine",
 	)
 	require.NoError(t, err)
-	assert.Equal(t, RelNone, result.Session.RelationshipType)
+	assert.Equal(t, RelSubagent, result.Session.RelationshipType)
 	assert.Empty(t, result.Session.ParentSessionID)
 }
 
@@ -165,7 +193,7 @@ func TestGrokSubagentMetaWithoutParentIDDoesNotParent(t *testing.T) {
 		grokSummaryPath(root, "cwd-key", childID), "project", "test-machine",
 	)
 	require.NoError(t, err)
-	assert.Equal(t, RelNone, result.Session.RelationshipType)
+	assert.Equal(t, RelSubagent, result.Session.RelationshipType)
 	assert.Empty(t, result.Session.ParentSessionID)
 }
 
@@ -187,7 +215,8 @@ func TestGrokChangedPathReparentsFromSubagentMeta(t *testing.T) {
 
 	before, err := ParseGrokSummary(childSummary, "project", "test-machine")
 	require.NoError(t, err)
-	assert.Equal(t, RelNone, before.Session.RelationshipType)
+	assert.Equal(t, RelSubagent, before.Session.RelationshipType)
+	assert.Empty(t, before.Session.ParentSessionID)
 
 	metaPath := filepath.Join(
 		root, "cwd-key", parentID, "subagents", childID, "meta.json",
