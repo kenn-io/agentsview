@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/apiclient"
+	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -100,7 +101,7 @@ func startServerWithOptionalCaddy(
 	opts serveRuntimeOptions,
 ) (*serveRuntime, error) {
 	if opts.Mode == "serve" {
-		socket, err := chromeSocketPath(cfg.DataDir)
+		socket, err := chromehost.SocketPath(cfg.DataDir)
 		if err == nil {
 			err = srv.ServeChromeHost(ctx, socket)
 		}
