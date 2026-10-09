@@ -14,34 +14,10 @@ export function getBrowserHost(): BrowserHost | undefined {
       };
     }
   ).__TAURI__;
-  if (tauri) return {
+  if (!tauri) return;
+  return {
     connect: () => tauri.core.invoke("claude_auth_connect"),
     fetch: (path) => tauri.core.invoke("claude_auth_fetch", { path }),
     close: () => tauri.core.invoke("claude_auth_close"),
-  };
-  if (document.documentElement.dataset.agentsviewClaudeHost !== "chrome") return;
-  function request<T>(method: string, path?: string): Promise<T> {
-    const id = crypto.randomUUID();
-    return new Promise((resolve, reject) => {
-      const reply = (event: MessageEvent) => {
-        if (event.source !== window || event.data?.type !== "agentsview-claude-reply" || event.data.id !== id) return;
-        clearTimeout(timer);
-        window.removeEventListener("message", reply);
-        if (event.data.error) reject(new Error(event.data.error));
-        else if (event.data.result === undefined) reject(new Error("Claude host returned no result"));
-        else resolve(event.data.result);
-      };
-      const timer = setTimeout(() => {
-        window.removeEventListener("message", reply);
-        reject(new Error("Claude host request timed out"));
-      }, 100_000);
-      window.addEventListener("message", reply);
-      window.postMessage({ type: "agentsview-claude-request", id, method, path }, location.origin);
-    });
-  }
-  return {
-    connect: () => request("connect"),
-    fetch: (path) => request("fetch", path),
-    close: async () => {},
   };
 }

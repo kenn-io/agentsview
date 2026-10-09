@@ -46,6 +46,7 @@ type VersionInfo struct {
 	ArchiveOnly                bool   `json:"archive_only,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`
+	ClaudeAIChromeHost         bool   `json:"claude_ai_chrome_host,omitempty"`
 	APIVersion                 int    `json:"api_version"`
 	DataVersion                int    `json:"data_version"`
 }
@@ -100,6 +101,7 @@ type Server struct {
 	httpSrv               *http.Server
 	startupProbeKey       []byte
 	version               VersionInfo
+	chrome                chromeHost
 	dataDir               string
 
 	httpRemoteCleanupRegistry *remotesync.CleanupRegistry
@@ -733,7 +735,6 @@ func (s *Server) routes() {
 	}
 
 	s.registerEvalIngestRoutes()
-	s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/chrome-extension.zip", Hidden: true}, s.handleChromeExtension)
 
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.

@@ -6,6 +6,7 @@ export interface VersionInfo {
   api_version: number;
   archive_only?: boolean;
   build_date: string;
+  claude_ai_chrome_host?: boolean;
   commit: string;
   data_version: number;
   insight_generation_available: boolean;

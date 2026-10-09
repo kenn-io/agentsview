@@ -13,7 +13,7 @@ vi.mock("../../api/runtime.js", async (original) => ({
   ...(await original<typeof import("../../api/runtime.js")>()),
   isRemoteConnection: () => false,
 }));
-const syncState = vi.hoisted(() => ({ readOnly: false, isDesktop: false }));
+const syncState = vi.hoisted(() => ({ readOnly: false, isDesktop: false, serverVersion: { claude_ai_chrome_host: false } }));
 vi.mock("../../stores/sync.svelte.js", () => ({ sync: syncState }));
 const syncClaudeAI = vi.hoisted(() => vi.fn());
 vi.mock("../../api/client.js", () => ({
@@ -25,12 +25,17 @@ vi.mock("../../api/client.js", () => ({
 beforeEach(() => {
   getBrowserHost.mockReturnValue(host);
 });
-afterEach(() => { vi.resetAllMocks(); vi.restoreAllMocks(); syncState.readOnly = false; syncState.isDesktop = false; setLocale("en", { reload: false }); });
+afterEach(() => { vi.resetAllMocks(); vi.restoreAllMocks(); syncState.readOnly = false; syncState.isDesktop = false; syncState.serverVersion.claude_ai_chrome_host = false; setLocale("en", { reload: false }); });
 
-it("shows Chrome toolbar instructions with Sync", () => {
+it("shows Chrome Sync from the server flag without a page host", async () => {
+  getBrowserHost.mockReturnValue(undefined);
+  syncState.serverVersion.claude_ai_chrome_host = true;
+  syncClaudeAI.mockResolvedValue({ imported: 1, updated: 0, skipped: 0, errors: 0 });
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  expect(screen.getByText("Click the AgentsView toolbar button on this tab, then Sync. Sync uses Chrome's Claude.ai sign-in.")).toBeTruthy();
-  expect(screen.getByRole("button", { name: m.import_claude_sync() })).toBeTruthy();
+  expect(screen.getByText(m.import_claude_help_chrome())).toBeTruthy();
+  expect(screen.getByRole("link", { name: m.import_claude_connect() }).getAttribute("href")).toBe("https://claude.ai/login?return_url=%2Fnew");
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
+  expect(syncClaudeAI).toHaveBeenCalledWith(undefined, expect.objectContaining({ onProgress: expect.any(Function) }), expect.any(AbortSignal));
 });
 
 it("shows desktop email-code instructions with a Chrome route for Google sign-in", () => {
@@ -41,10 +46,10 @@ it("shows desktop email-code instructions with a Chrome route for Google sign-in
 });
 
 it("shows the sign-in error message", async () => {
-  host.connect.mockRejectedValue(new Error("Click the AgentsView toolbar button on this tab to allow Claude.ai Sync."));
+  host.connect.mockRejectedValue(new Error("Could not open the Claude.ai sign-in window."));
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
-  await waitFor(() => expect(screen.getByText("Click the AgentsView toolbar button on this tab to allow Claude.ai Sync.")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Could not open the Claude.ai sign-in window.")).toBeTruthy());
 });
 
 it("shows a desktop sign-in error rejected as a string", async () => {
@@ -55,17 +60,14 @@ it("shows a desktop sign-in error rejected as a string", async () => {
   await waitFor(() => expect(screen.getByText("Could not open the Claude.ai sign-in window.")).toBeTruthy());
 });
 
-it.each([false, true])("offers the extension download in writable Chrome only, readOnly=%s", (readOnly) => {
+it.each([false, true])("shows setup when the Chrome host is absent, readOnly=%s", (readOnly) => {
   getBrowserHost.mockReturnValue(undefined);
   syncState.readOnly = readOnly;
-  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 Chrome/140.0.0.0");
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  const link = screen.queryByRole("link", { name: "Download Chrome extension" });
-  if (readOnly) expect(link).toBeNull();
-  else {
-    expect(link?.getAttribute("href")).toBe("/chrome-extension.zip");
-    expect(screen.getByText(/Unzip the download, open chrome:\/\/extensions/)).toBeTruthy();
-  }
+  const hint = screen.queryByText(m.import_claude_chrome_setup());
+  if (readOnly) expect(hint).toBeNull();
+  else expect(hint?.textContent).toContain("agentsview chrome setup");
+  expect(screen.queryByRole("button", { name: m.import_claude_sync() })).toBeNull();
 });
 
 it.each([

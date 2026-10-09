@@ -10,7 +10,7 @@
   } from "../../api/client.js";
   import { getBrowserHost } from "../../api/browserHost.js";
   import { sync as syncState } from "../../stores/sync.svelte.js";
-  import { ApiError, getGeneratedBase, isRemoteConnection } from "../../api/runtime.js";
+  import { ApiError, isRemoteConnection } from "../../api/runtime.js";
   import {
     FileCheckIcon,
     FileIcon,
@@ -46,8 +46,8 @@
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
   let syncController = $state<AbortController>();
-  const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection() && !syncState.readOnly);
-  const canSetupChrome = $derived(open && provider === "claude-ai" && !host && !isRemoteConnection() && !syncState.readOnly && /Chrome\//.test(navigator.userAgent));
+  const canSync = $derived(open && provider === "claude-ai" && (!!host || !!syncState.serverVersion?.claude_ai_chrome_host) && !isRemoteConnection() && !syncState.readOnly);
+  const showChromeSetup = $derived(open && provider === "claude-ai" && !canSync && !isRemoteConnection() && !syncState.readOnly);
 
   async function connect() {
     try { if (host) await connectClaudeAI(host); }
@@ -55,7 +55,7 @@
   }
 
   async function sync() {
-    if (!host || importing) return;
+    if (!canSync || importing) return;
     importing = true;
     error = null;
     result = null;
@@ -348,12 +348,15 @@
       </p>
 
       {#if canSync}
-        <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing} onclick={connect} />
+        {#if host}
+          <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing} onclick={connect} />
+        {:else}
+          <a href="https://claude.ai/login?return_url=%2Fnew" target="_blank" rel="noopener noreferrer">{m.import_claude_connect()}</a>
+        {/if}
         <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing} onclick={sync} />
-        <p class="hint">{syncState.isDesktop ? m.import_claude_help() : m.import_claude_help_chrome()}</p>
-      {:else if canSetupChrome}
+        <p class="hint">{host ? m.import_claude_help() : m.import_claude_help_chrome()}</p>
+      {:else if showChromeSetup}
         <p class="hint">
-          <a href={`${getGeneratedBase()}/chrome-extension.zip`} download>{m.import_claude_chrome_download()}</a>
           {m.import_claude_chrome_setup()}
         </p>
       {/if}

@@ -20,6 +20,26 @@ vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 describe("syncClaudeAI browser relay", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("uses the native host query and receives only counts without posting results", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(
+      'event: progress\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\nevent: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+    await expect(syncClaudeAI(undefined)).resolves.toMatchObject({ imported: 1 });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/v1/import/claude-ai/sync?browser=chrome", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("rejects a page fetch event during Chrome Sync", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(
+      'event: fetch\ndata: {"id":"a","path":"/api/organizations"}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+    await expect(syncClaudeAI(undefined)).rejects.toThrow("Chrome Sync unexpectedly requested a page relay");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it.each(["claude_ai_auth_required"])("preserves recovery code %s", async (code) => {
     const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(

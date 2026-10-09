@@ -78,6 +78,7 @@ export default defineConfig(({ command }) => {
             recursive: true,
             filter: (source) => !source.endsWith(".test.ts"),
           });
+          cpSync(fileURLToPath(new URL("../internal/importer/claude_ai_requests.txt", import.meta.url)), fileURLToPath(new URL("./dist/chrome-extension/claude_ai_requests.txt", import.meta.url)));
         },
       },
       svelte(),

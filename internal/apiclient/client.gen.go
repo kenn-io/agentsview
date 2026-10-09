@@ -21828,6 +21828,7 @@ type VersionInfo struct {
 	APIVersion                 int64  `json:"api_version"`
 	ArchiveOnly                *bool  `json:"archive_only,omitempty"`
 	BuildDate                  string `json:"build_date" validate:"required"`
+	ClaudeAiChromeHost         *bool  `json:"claude_ai_chrome_host,omitempty"`
 	Commit                     string `json:"commit" validate:"required"`
 	DataVersion                int64  `json:"data_version"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
