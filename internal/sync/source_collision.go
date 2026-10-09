@@ -48,13 +48,29 @@ func (e *Engine) sourceCollisionID(
 	}
 	// A permanently deleted id stays with the file it was deleted for; a
 	// deletion recorded without its file covers every file with the id.
-	if deletedAnyFile || e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) {
+	if deletedAnyFile {
 		return s.ID, false, nil
 	}
-	if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {
-		return s.ID, stored != lookupPath, nil
+	var altID string
+	var moved bool
+	for _, record := range records {
+		if lookupPath != "" && record.FilePath == lookupPath {
+			if record.ID == fullID {
+				return s.ID, false, nil
+			}
+			altID = s.ID + record.ID[len(fullID):]
+			break
+		}
 	}
-	altID, moved := e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath, idPrefix)
+	if altID == "" {
+		if e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) {
+			return s.ID, false, nil
+		}
+		if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {
+			return s.ID, stored != lookupPath, nil
+		}
+		altID, moved = e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath, idPrefix)
+	}
 	if altID == "" && !admitted {
 		return s.ID, false, nil
 	}

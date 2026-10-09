@@ -20,9 +20,11 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 		separate     bool
 		root         string
 		preCollapsed bool
+		restoreRoots bool
 	}{
 		{name: "together"},
 		{name: "separate", separate: true},
+		{name: "roots restored", separate: true, restoreRoots: true},
 		{name: "no machine boundary", root: "s3://bucket/archive"},
 		{name: "pre-collapsed cached source", preCollapsed: true},
 	} {
@@ -34,6 +36,10 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			const stem = "11111111-1111-4111-8111-111111111111"
 			baseID := s3SessionIDPrefix(machine) + "cursor:" + stem
 			paths := []string{root + "/agent-transcripts/" + stem + ".txt", root + "/cursor/" + stem + ".txt"}
+			otherRoot := "s3://other-bucket/host-a/raw/cursor"
+			if tt.restoreRoots {
+				paths[1] = otherRoot + "/agent-transcripts/" + stem + ".txt"
+			}
 			contents := map[string]string{
 				paths[0]: "user:\nProject A\nassistant:\nAnswer A\n",
 				paths[1]: "user:\nProject B\nassistant:\nAnswer B\nuser:\nFollow up B\n",
@@ -86,6 +92,10 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			require.Zero(t, stats.Failed)
 			if tt.separate {
 				provider.discovered = sources
+				if tt.restoreRoots {
+					engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {otherRoot}}})
+					provider.discovered = sources[1:]
+				}
 				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 				require.Zero(t, stats.Failed)
 				require.Equal(t, 1, stats.Synced, "an unstored project must import despite the cutoff")
@@ -100,7 +110,26 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					assert.Equal(t, parser.AltSessionID(baseID, uri), stored[0])
 				}
 			}
+			if tt.restoreRoots {
+				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root, otherRoot}}})
+				provider.discovered = sources
+				starred, err := database.StarSession(t.Context(), ids[paths[1]])
+				require.NoError(t, err)
+				require.True(t, starred)
+				messages, err := database.GetAllMessages(t.Context(), ids[paths[1]])
+				require.NoError(t, err)
+				_, err = database.PinMessage(t.Context(), ids[paths[1]], messages[0].ID, nil)
+				require.NoError(t, err)
+			}
 			verify := func() {
+				if tt.restoreRoots {
+					stars, err := database.ListStarredSessionIDs(t.Context())
+					require.NoError(t, err)
+					assert.Equal(t, []string{ids[paths[1]]}, stars)
+					pins, err := database.ListPinnedMessages(t.Context(), ids[paths[1]], "")
+					require.NoError(t, err)
+					require.Len(t, pins, 1)
+				}
 				for i, uri := range paths {
 					session := storedSession(ids[uri])
 					assert.Equal(t, uri, derefString(session.FilePath))
@@ -124,10 +153,10 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					if _, err := tx.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = ?", ids[lostPath]); err != nil {
 						return err
 					}
-					_, err := tx.ExecContext(t.Context(), "PRAGMA user_version = 127")
+					_, err := tx.ExecContext(t.Context(), "PRAGMA user_version = 128")
 					return err
 				}))
-				require.NoError(t, database.SetSessionDataVersion(t.Context(), baseID, 127))
+				require.NoError(t, database.SetSessionDataVersion(t.Context(), baseID, 128))
 				engine.cacheSkip(lostPath, mtime.UnixNano(), "s3-meta:stable")
 				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 				require.Zero(t, stats.Failed)
@@ -270,6 +299,23 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 
 				}
 			}
+			if tt.restoreRoots {
+				require.NoError(t, database.DeleteSession(t.Context(), ids[paths[1]]))
+				provider.discovered = sources[1:]
+				_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
+					Agent: parser.AgentCursor, Path: paths[1], Machine: machine, SourceSize: int64(len(contents[paths[1]])), SourceMtime: mtime.UnixNano(), ForceParse: true,
+				}, ids[paths[1]])
+				require.NoError(t, err)
+				assert.True(t, database.IsSessionExcluded(t.Context(), ids[paths[1]]))
+				missing, err := database.GetSessionFull(t.Context(), ids[paths[1]])
+				require.NoError(t, err)
+				assert.Nil(t, missing)
+				assert.Equal(t, paths[0], derefString(storedSession(baseID).FilePath))
+				messages, err := database.GetAllMessages(t.Context(), baseID)
+				require.NoError(t, err)
+				require.Len(t, messages, 2)
+				assert.Equal(t, "Project A", messages[0].Content)
+			}
 		})
 	}
 }
@@ -296,6 +342,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 		{"own parent late", [][]int{{0}, {2}, {1}}, false},
 		{"own parent missing", [][]int{{0}, {2}}, false},
 		{"parent root removed", [][]int{{0}, {1}, {2}}, false},
+		{"new child after parent root removed", [][]int{{0}, {1}, {2}}, false},
 		{"children collide", [][]int{{0}, {1}, {3}, {2}}, true},
 		{"children collide reversed", [][]int{{1}, {0}, {2}, {3}}, true},
 	} {
@@ -307,7 +354,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 			if tt.childrenCollide {
 				paths = []string{root + "/project-a/agent-transcripts/parent-a.txt", root + "/project-b/agent-transcripts/parent-b.txt", root + "/project-b/agent-transcripts/parent-b/subagents/child.txt", root + "/project-a/agent-transcripts/parent-a/subagents/child.txt"}
 			}
-			if tt.name == "parent root removed" {
+			if tt.name == "parent root removed" || tt.name == "new child after parent root removed" {
 				paths[2] = strings.Replace(paths[2], root, aliasRoot, 1)
 			}
 			oldFetch := fetchS3Object
@@ -340,6 +387,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 					Opaque: parser.S3DiscoveredSource{URI: uri, Machine: "host-a", Size: int64(len(content)), MtimeNS: time.Unix(100, 0).UnixNano()},
 				}
 			}
+			parentEvidenceRestored := false
 			childIDs := make(map[string]string)
 			verify := func() {
 				t.Helper()
@@ -364,7 +412,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 					parentIndex := 1 - i
 					parents, err := database.ListSessionIDsByFilePath(t.Context(), paths[parentIndex], "cursor")
 					require.NoError(t, err)
-					if len(parents) == 0 {
+					if len(parents) == 0 || (tt.name == "new child after parent root removed" && !parentEvidenceRestored) {
 						assert.Nil(t, child.ParentSessionID, "a different project's parent cannot own this child")
 					} else {
 						require.Len(t, parents, 1)
@@ -383,6 +431,9 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				for _, i := range pass {
 					if tt.name == "own parent late" && i == 1 {
 						paths[1] = aliasRoot + "/project-b/agent-transcripts/shared.txt"
+					}
+					if tt.name == "new child after parent root removed" && i == 2 {
+						engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {aliasRoot}}})
 					}
 					provider.discovered = append(provider.discovered, source(paths[i]))
 				}
@@ -403,6 +454,15 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
 					Agent: parser.AgentCursor, Path: uri, Machine: "host-a", SourceSize: int64(len(content)), SourceMtime: time.Unix(100, 0).UnixNano(), ForceParse: true,
 				}, childIDs[uri])
+				require.NoError(t, err)
+				verify()
+			}
+			if tt.name == "new child after parent root removed" {
+				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root, aliasRoot}}})
+				parentEvidenceRestored = true
+				_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
+					Agent: parser.AgentCursor, Path: paths[2], Machine: "host-a", SourceSize: int64(len(content)), SourceMtime: time.Unix(200, 0).UnixNano(), ForceParse: true,
+				}, childIDs[paths[2]])
 				require.NoError(t, err)
 				verify()
 			}

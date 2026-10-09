@@ -18343,8 +18343,7 @@ func (e *Engine) reconcileProviderHistoryContext(
 		if !isS3SourcePath(path) || candidate.Session.RelationshipType != string(parser.RelSubagent) {
 			break
 		}
-		roots := e.sources().agentDirs[agent]
-		family, _, _ := parser.CursorS3ParentFamily(roots, path)
+		candidate.Session.ParentSessionID = nil
 		store := e.archiveStore
 		if store == nil {
 			store = e.db
@@ -18355,18 +18354,7 @@ func (e *Engine) reconcileProviderHistoryContext(
 		}
 		if stored != nil && stored.Agent == string(agent) && stored.RelationshipType == string(parser.RelSubagent) &&
 			stored.FilePath != nil && *stored.FilePath == path {
-			preserve := family == ""
-			if !preserve && stored.ParentSessionID != nil {
-				parent, err := store.GetSessionFull(ctx, *stored.ParentSessionID)
-				if err != nil {
-					return ingest.HistoryResult{}, err
-				}
-				preserve = parent != nil && parent.Agent == string(agent) && parent.FilePath != nil &&
-					isS3SourcePath(*parent.FilePath) && parser.CursorS3SourceKey(roots, *parent.FilePath) == ""
-			}
-			if preserve {
-				candidate.Session.ParentSessionID = stored.ParentSessionID
-			}
+			candidate.Session.ParentSessionID = stored.ParentSessionID
 		}
 	case parser.AgentOpenClaw:
 		path := candidate.Parsed.Session.File.Path
