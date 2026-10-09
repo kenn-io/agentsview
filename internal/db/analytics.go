@@ -2930,7 +2930,7 @@ func analyticsToolsQuery(
 	query := `SELECT tc.session_id, tc.category,
 			TRIM(COALESCE(tc.tool_name, '')), COUNT(*)`
 	if includeMessageMeta {
-		query += `, MAX(COALESCE(m.timestamp, '')), MIN(m.ordinal)` + ToolEffectivenessSQL("tc", "s.quality_signal_version")
+		query += `, MAX(COALESCE(m.timestamp, '')), COALESCE(MIN(m.ordinal), 0)` + ToolEffectivenessSQL("tc", "s.quality_signal_version")
 	}
 	query += `
 		FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id`
@@ -3932,12 +3932,12 @@ type SignalSessionExample struct {
 	Agent          string  `json:"agent"`
 	Date           string  `json:"date"`
 	IsAutomated    *bool   `json:"is_automated,omitempty"`
-	Outcome        string  `json:"outcome,omitempty"`
+	Outcome        string  `json:"outcome"`
 	HealthScore    *int    `json:"health_score"`
 	HealthGrade    *string `json:"health_grade"`
 	SignalTotal    int     `json:"signal_total"`
 	ReasonCode     string  `json:"reason_code"`
-	Excerpt        string  `json:"excerpt,omitempty"`
+	Excerpt        string  `json:"excerpt"`
 	MessageOrdinal *int    `json:"message_ordinal,omitempty"`
 	FailureSignals *int    `json:"failure_signals,omitempty"`
 	Retries        *int    `json:"retries,omitempty"`

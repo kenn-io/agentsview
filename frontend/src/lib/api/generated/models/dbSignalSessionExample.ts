@@ -6,7 +6,7 @@ export interface DbSignalSessionExample {
   agent: string;
   date: string;
   edit_churn?: number;
-  excerpt?: string;
+  excerpt: string;
   failure_signals?: number;
   /** @nullable */
   health_grade: string | null;
@@ -14,7 +14,7 @@ export interface DbSignalSessionExample {
   health_score: number | null;
   is_automated?: boolean;
   message_ordinal?: number;
-  outcome?: string;
+  outcome: string;
   project: string;
   reason_code: string;
   retries?: number;

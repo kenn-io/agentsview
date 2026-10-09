@@ -478,9 +478,11 @@ func TestAnalyticsToolEvidenceOptionalCategory(t *testing.T) {
 	require.Len(t, got.Sessions, 1)
 	document := decode[map[string]any](t, w)
 	for _, row := range document["sessions"].([]any) {
-		for _, key := range []string{"failure_signals", "retries", "edit_churn", "is_automated", "outcome", "excerpt"} {
+		for _, key := range []string{"failure_signals", "retries", "edit_churn", "is_automated"} {
 			assert.NotContains(t, row.(map[string]any), key)
 		}
+		assert.Equal(t, "", row.(map[string]any)["outcome"])
+		assert.Equal(t, "", row.(map[string]any)["excerpt"])
 	}
 	path := "/api/v1/analytics/signal-sessions?signal=unstructured_start&from=2026-04-26&to=2026-04-26"
 	w = te.get(t, path+"&offset=0")
@@ -491,6 +493,9 @@ func TestAnalyticsToolEvidenceOptionalCategory(t *testing.T) {
 	require.Len(t, quality["sessions"], 3)
 	for _, row := range quality["sessions"].([]any) {
 		assert.Equal(t, false, row.(map[string]any)["is_automated"])
+		// Clients read these fields on every quality signal row, even when empty.
+		assert.Contains(t, row.(map[string]any), "outcome")
+		assert.Contains(t, row.(map[string]any), "excerpt")
 		for _, key := range []string{"failure_signals", "retries", "edit_churn"} {
 			assert.InDelta(t, 0, row.(map[string]any)[key], 0)
 		}

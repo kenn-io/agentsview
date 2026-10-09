@@ -2974,10 +2974,12 @@ components:
         - project
         - agent
         - date
+        - outcome
         - health_score
         - health_grade
         - signal_total
         - reason_code
+        - excerpt
       type: object
     DbSignalSessionsResponse:
       additionalProperties: false

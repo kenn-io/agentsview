@@ -1791,7 +1791,7 @@ func (s *Store) analyticsToolRows(
 		`, tc.category,
 			TRIM(COALESCE(tc.tool_name, '')) AS tool_name, s.agent, s.project, m.ordinal, s.quality_signal_version, tc.observed_outcome, tc.observed_repeat, tc.sequence_ending`, predicates...) + `
 	SELECT session_id, category, tool_name, agent,
-		local_at::date AS local_date, COUNT(*), project, MIN(ordinal)` + db.ToolEffectivenessSQL("analytics_calls", "quality_signal_version") + `
+		local_at::date AS local_date, COUNT(*), project, COALESCE(MIN(ordinal), 0)` + db.ToolEffectivenessSQL("analytics_calls", "quality_signal_version") + `
 	FROM analytics_calls
 	WHERE ` + pgAnalyticsCallLocalWhere(f, pb) + `
 	GROUP BY session_id, category, tool_name, agent, project, local_at::date`

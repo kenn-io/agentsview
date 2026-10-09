@@ -1405,7 +1405,7 @@ func (s *Store) analyticsToolRows(
 
 		query := `SELECT tc.session_id, tc.category,
 				TRIM(COALESCE(tc.tool_name, '')), COUNT(*),
-				MAX(m.timestamp), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
+				MAX(m.timestamp), COALESCE(MIN(m.ordinal), 0)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
 				FROM tool_calls tc
 			JOIN sessions s ON s.id = tc.session_id
 				LEFT JOIN messages m

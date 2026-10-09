@@ -402,19 +402,25 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 	store, err := duckdb.NewStore(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26", ToolName: "Grep"}
+	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26"}
 	wantRates, err := te.db.GetAnalyticsTools(t.Context(), filter)
 	require.NoError(t, err)
 	gotRates, err := store.GetAnalyticsTools(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, wantRates, gotRates)
-	wantEvidence, err := te.db.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
-	require.NoError(t, err)
-	require.NotNil(t, wantEvidence.Total)
-	require.Positive(t, *wantEvidence.Total)
-	gotEvidence, err := store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
-	require.NoError(t, err)
-	assert.Equal(t, wantEvidence, gotEvidence)
+	evidenceFilter := filter
+	evidenceFilter.ToolName, evidenceFilter.ToolCategory = "Grep", "Grep"
+	for _, signal := range []string{"tool_empty_rate", "tool_repeat_rate", "tool_recovery_rate"} {
+		wantEvidence, err := te.db.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
+		require.NoError(t, err)
+		require.NotNil(t, wantEvidence.Total)
+		if signal == "tool_empty_rate" {
+			require.Positive(t, *wantEvidence.Total)
+		}
+		gotEvidence, err := store.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
+		require.NoError(t, err)
+		assert.Equal(t, wantEvidence, gotEvidence, signal)
+	}
 	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
 	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
 	for sessionID, sqlite := range source {

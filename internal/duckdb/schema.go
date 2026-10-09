@@ -19,7 +19,8 @@ import (
 // reasoning effort to messages. v15 adds explicit session-project
 // assignment state. v16 rebuilds after SQLite data version 111 rewrote
 // stored Devin source identities; pre-111 mirrors would otherwise keep
-// serving bare ids that deduplicate across sessions.
+// serving bare ids that deduplicate across sessions. v17 adds per-call
+// tool observations for effectiveness rates.
 const SchemaVersion = 17
 
 const schemaVersionMetadataKey = "agentsview_schema_version"

@@ -299,7 +299,7 @@ func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
 	}
 	_, err := f.admin.Exec(`GRANT UPDATE(observed_outcome,observed_repeat) ON tool_calls TO "` + f.role + `"`)
 	require.NoError(t, err)
-	require.ErrorContains(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull), "tool_calls")
+	require.ErrorContains(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull), "owner provisioning required")
 	_, err = f.admin.Exec(`GRANT UPDATE(sequence_ending) ON tool_calls TO "` + f.role + `"`)
 	require.NoError(t, err)
 	for _, table := range []string{"tool_calls", "tool_result_events", "usage_events", "pinned_messages"} {
@@ -356,4 +356,14 @@ func TestHostedRuntimeUsagePolicyRequiresVectorRemovalPrivileges(t *testing.T) {
 	var content string
 	require.NoError(t, f.runtime.QueryRow(`SELECT content FROM messages ORDER BY ordinal LIMIT 1`).Scan(&content))
 	assert.Empty(t, content)
+}
+
+func TestHostedRuntimeRequiresProvisionedObservationColumns(t *testing.T) {
+	f := newProjectionFixture(t)
+	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
+	// A schema that owner provisioning has not upgraded lacks the columns.
+	_, err := f.admin.Exec(`ALTER TABLE tool_calls DROP COLUMN sequence_ending`)
+	require.NoError(t, err)
+	err = CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull)
+	require.ErrorContains(t, err, "owner provisioning required")
 }

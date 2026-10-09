@@ -67,19 +67,25 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	store, err := clickhouse.NewStore(t.Context(), target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26", ToolName: "Grep"}
+	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26"}
 	wantRates, err := local.GetAnalyticsTools(t.Context(), filter)
 	require.NoError(t, err)
 	gotRates, err := store.GetAnalyticsTools(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, wantRates, gotRates)
-	wantEvidence, err := local.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
-	require.NoError(t, err)
-	require.NotNil(t, wantEvidence.Total)
-	require.Positive(t, *wantEvidence.Total)
-	gotEvidence, err := store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
-	require.NoError(t, err)
-	assert.Equal(t, wantEvidence, gotEvidence)
+	evidenceFilter := filter
+	evidenceFilter.ToolName, evidenceFilter.ToolCategory = "Grep", "Grep"
+	for _, signal := range []string{"tool_empty_rate", "tool_repeat_rate", "tool_recovery_rate"} {
+		wantEvidence, err := local.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
+		require.NoError(t, err)
+		require.NotNil(t, wantEvidence.Total)
+		if signal == "tool_empty_rate" {
+			require.Positive(t, *wantEvidence.Total)
+		}
+		gotEvidence, err := store.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
+		require.NoError(t, err)
+		assert.Equal(t, wantEvidence, gotEvidence, signal)
+	}
 	remoteHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "remote"}, store, nil).Handler()
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	_, err = duckdb.Push(t.Context(), path, local, "tool-sequences-boundary", storage.MirrorPushOptions{}, true, nil)
