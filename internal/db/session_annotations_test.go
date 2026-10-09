@@ -99,9 +99,9 @@ func TestSessionLabelsLifecycle(t *testing.T) {
 
 	// Parser writes never touch labels.
 	insertSession(t, d, "worker", "proj")
-	stored, err := d.GetSessionLabels(ctx, "worker")
+	stored, err := querySessionLabels(ctx, d.getReader(), "worker")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"nightly", "ticket=ABC-123"}, stored.Labels)
+	assert.Equal(t, []string{"nightly", "ticket=ABC-123"}, stored)
 
 	assert.Equal(t, []string{"worker"},
 		listSortedIDs(t, d, SessionFilter{Labels: []string{"nightly", "ticket=ABC-123"}}))
@@ -341,9 +341,9 @@ func TestCopySessionMetadataFromPreservesLabelsAndExternalParents(t *testing.T) 
 	assert.Equal(t, []string{"role=reviewer"}, worker.Labels)
 	require.NotNil(t, worker.ParentSessionID)
 	assert.Equal(t, "manager", *worker.ParentSessionID)
-	pending, err := destination.GetSessionLabels(ctx, "not-synced-yet")
+	pending, err := querySessionLabels(ctx, destination.getReader(), "not-synced-yet")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"queued"}, pending.Labels)
+	assert.Equal(t, []string{"queued"}, pending)
 }
 
 func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {

@@ -95,55 +95,6 @@ func normalizeLabelSessionID(sessionID string) (string, error) {
 	return sessionID, nil
 }
 
-// GetSessionLabels returns a session's labels, including labels stored for
-// a session that has not synced yet.
-func (db *DB) GetSessionLabels(
-	ctx context.Context, sessionID string,
-) (SessionLabels, error) {
-	sessionID, err := normalizeLabelSessionID(sessionID)
-	if err != nil {
-		return SessionLabels{}, err
-	}
-	labels, err := querySessionLabels(ctx, db.getReader(), sessionID)
-	if err != nil {
-		return SessionLabels{}, err
-	}
-	var found int
-	if err := db.getReader().QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)", sessionID,
-	).Scan(&found); err != nil {
-		return SessionLabels{}, fmt.Errorf("checking session %s: %w", sessionID, err)
-	}
-	return SessionLabels{
-		SessionID: sessionID, Labels: labels, SessionFound: found != 0,
-	}, nil
-}
-
-// ReadSessionLabels returns a session's labels from any store. The local
-// archive also reports labels stored for a session that has not synced;
-// mirrors carry labels on the session row.
-func ReadSessionLabels(
-	ctx context.Context, store Store, sessionID string,
-) (SessionLabels, error) {
-	if local, ok := store.(*DB); ok && local != nil {
-		return local.GetSessionLabels(ctx, sessionID)
-	}
-	sessionID, err := normalizeLabelSessionID(sessionID)
-	if err != nil {
-		return SessionLabels{}, err
-	}
-	sess, err := store.GetSession(ctx, sessionID)
-	if err != nil {
-		return SessionLabels{}, err
-	}
-	result := SessionLabels{SessionID: sessionID}
-	if sess != nil {
-		result.SessionFound = true
-		result.Labels = sess.Labels
-	}
-	return result, nil
-}
-
 // SetSessionLabels replaces a session's labels.
 func (db *DB) SetSessionLabels(
 	ctx context.Context, sessionID string, labels []string,

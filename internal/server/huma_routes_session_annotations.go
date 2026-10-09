@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -19,25 +20,15 @@ func (s *Server) registerSessionAnnotationRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1")
 	configureRouteGroup(group, "Sessions")
 
-	s.get(group, "/sessions/{id}/labels", "Get session labels", s.humaGetSessionLabels)
-	s.put(group, "/sessions/{id}/labels", "Replace session labels", s.humaSetSessionLabels)
-	s.patch(group, "/sessions/{id}/labels", "Add or remove session labels", s.humaUpdateSessionLabels)
-	s.get(group, "/sessions/{id}/parent", "Get session parent link", s.humaGetSessionParent)
-	s.put(group, "/sessions/{id}/parent", "Set session parent link", s.humaSetSessionParent)
-	s.deleteRoute(group, "/sessions/{id}/parent", "Remove session parent link", s.humaClearSessionParent)
-}
-
-type setSessionLabelsInput struct {
-	ID   string `path:"id" required:"true" doc:"Session ID"`
-	Body struct {
-		Labels []string `json:"labels" required:"true" doc:"The complete label set; an empty list removes every label. Labels are free text, often key=value."`
-	}
+	s.patch(group, "/sessions/{id}/labels", "Change session labels", s.humaUpdateSessionLabels)
+	s.put(group, "/sessions/{id}/parent", "Set or remove session parent link", s.humaSetSessionParent)
 }
 
 type updateSessionLabelsInput struct {
 	ID   string `path:"id" required:"true" doc:"Session ID"`
 	Body struct {
-		Add    []string `json:"add,omitempty" doc:"Labels to add"`
+		Clear  bool     `json:"clear,omitempty" doc:"Remove every existing label before adding; with add, replaces the set"`
+		Add    []string `json:"add,omitempty" doc:"Labels to add. Labels are free text, often key=value."`
 		Remove []string `json:"remove,omitempty" doc:"Labels to remove; absent labels are ignored"`
 	}
 }
@@ -45,34 +36,8 @@ type updateSessionLabelsInput struct {
 type setSessionParentInput struct {
 	ID   string `path:"id" required:"true" doc:"Session ID"`
 	Body struct {
-		ParentSessionID string `json:"parent_session_id" required:"true" doc:"ID of the session that launched this one"`
+		ParentSessionID string `json:"parent_session_id,omitempty" doc:"ID of the session that launched this one; empty or omitted removes the link"`
 	}
-}
-
-func (s *Server) humaGetSessionLabels(
-	ctx context.Context, in *idPathInput,
-) (*jsonOutput[db.SessionLabels], error) {
-	labels, err := db.ReadSessionLabels(ctx, s.db, in.ID)
-	if err != nil {
-		return nil, sessionAnnotationError("get session labels", err)
-	}
-	return &jsonOutput[db.SessionLabels]{Body: labels}, nil
-}
-
-func (s *Server) humaSetSessionLabels(
-	ctx context.Context, in *setSessionLabelsInput,
-) (*jsonOutput[db.SessionLabels], error) {
-	localDB, _, err := s.localWorktreeMappingHumaDB()
-	if err != nil {
-		return nil, err
-	}
-	labels, err := s.syncEngineForLocal(ctx, localDB).SetSessionLabels(
-		ctx, in.ID, in.Body.Labels,
-	)
-	if err != nil {
-		return nil, sessionAnnotationError("set session labels", err)
-	}
-	return &jsonOutput[db.SessionLabels]{Body: labels}, nil
 }
 
 func (s *Server) humaUpdateSessionLabels(
@@ -82,27 +47,17 @@ func (s *Server) humaUpdateSessionLabels(
 	if err != nil {
 		return nil, err
 	}
-	labels, err := s.syncEngineForLocal(ctx, localDB).UpdateSessionLabels(
-		ctx, in.ID, in.Body.Add, in.Body.Remove,
-	)
+	engine := s.syncEngineForLocal(ctx, localDB)
+	var labels db.SessionLabels
+	if in.Body.Clear {
+		labels, err = engine.SetSessionLabels(ctx, in.ID, in.Body.Add)
+	} else {
+		labels, err = engine.UpdateSessionLabels(ctx, in.ID, in.Body.Add, in.Body.Remove)
+	}
 	if err != nil {
 		return nil, sessionAnnotationError("update session labels", err)
 	}
 	return &jsonOutput[db.SessionLabels]{Body: labels}, nil
-}
-
-func (s *Server) humaGetSessionParent(
-	ctx context.Context, in *idPathInput,
-) (*jsonOutput[db.SessionExternalParent], error) {
-	localDB, _, err := s.localWorktreeMappingHumaDB()
-	if err != nil {
-		return nil, err
-	}
-	link, err := localDB.GetSessionExternalParent(ctx, in.ID)
-	if err != nil {
-		return nil, sessionAnnotationError("get session parent", err)
-	}
-	return &jsonOutput[db.SessionExternalParent]{Body: link}, nil
 }
 
 func (s *Server) humaSetSessionParent(
@@ -112,27 +67,15 @@ func (s *Server) humaSetSessionParent(
 	if err != nil {
 		return nil, err
 	}
-	link, err := s.syncEngineForLocal(ctx, localDB).SetSessionExternalParent(
-		ctx, in.ID, in.Body.ParentSessionID,
-	)
+	engine := s.syncEngineForLocal(ctx, localDB)
+	var link db.SessionExternalParent
+	if strings.TrimSpace(in.Body.ParentSessionID) == "" {
+		link, err = engine.ClearSessionExternalParent(ctx, in.ID)
+	} else {
+		link, err = engine.SetSessionExternalParent(ctx, in.ID, in.Body.ParentSessionID)
+	}
 	if err != nil {
 		return nil, sessionAnnotationError("set session parent", err)
-	}
-	return &jsonOutput[db.SessionExternalParent]{Body: link}, nil
-}
-
-func (s *Server) humaClearSessionParent(
-	ctx context.Context, in *idPathInput,
-) (*jsonOutput[db.SessionExternalParent], error) {
-	localDB, _, err := s.localWorktreeMappingHumaDB()
-	if err != nil {
-		return nil, err
-	}
-	link, err := s.syncEngineForLocal(ctx, localDB).ClearSessionExternalParent(
-		ctx, in.ID,
-	)
-	if err != nil {
-		return nil, sessionAnnotationError("clear session parent", err)
 	}
 	return &jsonOutput[db.SessionExternalParent]{Body: link}, nil
 }

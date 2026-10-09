@@ -3,6 +3,6 @@
  */
 
 export interface SetSessionParentInputBody {
-  /** ID of the session that launched this one */
-  parent_session_id: string;
+  /** ID of the session that launched this one; empty or omitted removes the link */
+  parent_session_id?: string;
 }

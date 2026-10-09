@@ -649,12 +649,12 @@ ______________________________________________________________________
 
 Annotation commands use the ID exactly as given, with no prefix lookup, so pass the archive session ID, e.g. `codex:<uuid>` for Codex.
 
-Show, add, or remove free-form labels on a session. Use labels to find every
-session for one ticket, role, or kind of run. A `key=value` form such as
-`ticket=ABC-123` is a convention, not a requirement.
+Add or remove free-form labels on a session. Use labels to find every session
+for one ticket, role, or kind of run. A `key=value` form such as
+`ticket=ABC-123` is a convention, not a requirement. `session get` and the
+session JSON show a session's labels.
 
 ```bash
-agentsview session label <id>                            # show labels
 agentsview session label <id> ticket=ABC-123 role=reviewer
 agentsview session label <id> --remove role=reviewer
 agentsview session label <id> --replace nightly          # replace every label
@@ -662,15 +662,11 @@ agentsview session label <id> --clear
 agentsview session list --label ticket=ABC-123 --label role=reviewer
 ```
 
-| Method  | Path                           | Body                                    |
-| ------- | ------------------------------ | --------------------------------------- |
-| `GET`   | `/api/v1/sessions/{id}/labels` | —                                       |
-| `PUT`   | `/api/v1/sessions/{id}/labels` | `{"labels": ["ticket=ABC-123"]}`        |
-| `PATCH` | `/api/v1/sessions/{id}/labels` | `{"add": ["nightly"], "remove": ["x"]}` |
-
-Every call returns `{"session_id", "labels", "session_found"}`. `PUT` replaces
-the whole set; an empty list removes every label. `PATCH` ignores removals of
-labels the session does not carry.
+The API is `PATCH /api/v1/sessions/{id}/labels` with
+`{"add": ["nightly"], "remove": ["x"], "clear": false}`. `clear` removes every
+existing label first, so `{"clear": true, "add": [...]}` replaces the set and
+`{"clear": true}` empties it. Removing a label the session does not carry is
+not an error. The response is `{"session_id", "labels", "session_found"}`.
 
 - Labels are trimmed. A label may not be empty, start with `=`, contain control
   characters, or exceed 200 bytes. A session holds at most 64 labels. Invalid
@@ -691,21 +687,18 @@ ______________________________________________________________________
 
 Record which session launched this one. Use it when an orchestrator starts
 worker sessions as separate processes, so the session tree shows them under the
-session that started them.
+session that started them. `session get` and the session JSON show the
+resulting parent.
 
 ```bash
 agentsview session parent <worker-id> <manager-id>
-agentsview session parent <worker-id>                    # show the link
 agentsview session parent <worker-id> --clear
 ```
 
-| Method   | Path                           | Body                            |
-| -------- | ------------------------------ | ------------------------------- |
-| `GET`    | `/api/v1/sessions/{id}/parent` | —                               |
-| `PUT`    | `/api/v1/sessions/{id}/parent` | `{"parent_session_id": "<id>"}` |
-| `DELETE` | `/api/v1/sessions/{id}/parent` | —                               |
-
-The body accepts only `parent_session_id`; `relationship_type` is rejected, and links always record `subagent`.
+The API is `PUT /api/v1/sessions/{id}/parent` with
+`{"parent_session_id": "<id>"}`. An empty or omitted `parent_session_id`
+removes the link. The body accepts only `parent_session_id`;
+`relationship_type` is rejected, and links always record `subagent`.
 
 A launched worker is delegated work, so the link always makes it a subagent of
 the launching session, and the response reports `relationship_type` as
@@ -724,8 +717,8 @@ reports `session_found` and `applied`.
 - The link is stored apart from the transcript and survives reparses and full
   resyncs. Mirrors receive the resulting parent on push.
 - A session cannot be its own parent, and a link that would make a session its
-  own ancestor returns HTTP 400. `GET` and `DELETE` return 404 when no link is
-  recorded.
+  own ancestor returns HTTP 400. Removing a link that is not recorded returns
+  404.
 
 ______________________________________________________________________
 

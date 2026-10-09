@@ -9,7 +9,6 @@ import type {
   DbSessionLabels,
   DbSessionTiming,
   DbSidebarSessionIndex,
-  DeleteApiV1SessionsByIdParentPathParameters,
   DeleteApiV1SessionsByIdPathParameters,
   DeleteApiV1SessionsByIdPermanentPathParameters,
   EmptyTrashResponse,
@@ -18,12 +17,10 @@ import type {
   GetApiV1SessionsByIdChildrenPathParameters,
   GetApiV1SessionsByIdDirectoryPathParameters,
   GetApiV1SessionsByIdExportPathParameters,
-  GetApiV1SessionsByIdLabelsPathParameters,
   GetApiV1SessionsByIdMdParams,
   GetApiV1SessionsByIdMdPathParameters,
   GetApiV1SessionsByIdMessagesParams,
   GetApiV1SessionsByIdMessagesPathParameters,
-  GetApiV1SessionsByIdParentPathParameters,
   GetApiV1SessionsByIdPathParameters,
   GetApiV1SessionsByIdSearchParams,
   GetApiV1SessionsByIdSearchPathParameters,
@@ -48,7 +45,6 @@ import type {
   PostApiV1SessionsUploadBody,
   PostApiV1SessionsUploadParams,
   PublishResponse,
-  PutApiV1SessionsByIdLabelsPathParameters,
   PutApiV1SessionsByIdParentPathParameters,
   RenameRequest,
   ResolveSessionIDsResponse,
@@ -61,7 +57,6 @@ import type {
   SessionDirectoryResponse,
   SessionToolSequencesResponse,
   SessionUsageResponse,
-  SetSessionLabelsInputBody,
   SetSessionParentInputBody,
   TrashResponse,
   UpdateSessionLabelsInputBody,
@@ -376,25 +371,6 @@ export const getApiV1SessionsByIdExport = async (
   });
 };
 
-export const getGetApiV1SessionsByIdLabelsUrl = ({
-  id,
-}: GetApiV1SessionsByIdLabelsPathParameters) => {
-  return `/api/v1/sessions/${encodeURIComponent(String(id))}/labels`;
-};
-
-/**
- * @summary Get session labels
- */
-export const getApiV1SessionsByIdLabels = async (
-  { id }: GetApiV1SessionsByIdLabelsPathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<DbSessionLabels> => {
-  return orvalFetch<DbSessionLabels>(getGetApiV1SessionsByIdLabelsUrl({ id }), {
-    ...options,
-    method: "GET",
-  });
-};
-
 export const getPatchApiV1SessionsByIdLabelsUrl = ({
   id,
 }: PatchApiV1SessionsByIdLabelsPathParameters) => {
@@ -402,7 +378,7 @@ export const getPatchApiV1SessionsByIdLabelsUrl = ({
 };
 
 /**
- * @summary Add or remove session labels
+ * @summary Change session labels
  */
 export const patchApiV1SessionsByIdLabels = async (
   { id }: PatchApiV1SessionsByIdLabelsPathParameters,
@@ -433,47 +409,6 @@ export const patchApiV1SessionsByIdLabels = async (
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
     body: JSON.stringify(updateSessionLabelsInputBody),
-  });
-};
-
-export const getPutApiV1SessionsByIdLabelsUrl = ({
-  id,
-}: PutApiV1SessionsByIdLabelsPathParameters) => {
-  return `/api/v1/sessions/${encodeURIComponent(String(id))}/labels`;
-};
-
-/**
- * @summary Replace session labels
- */
-export const putApiV1SessionsByIdLabels = async (
-  { id }: PutApiV1SessionsByIdLabelsPathParameters,
-  setSessionLabelsInputBody: SetSessionLabelsInputBody,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<DbSessionLabels> => {
-  const getHeaders = (
-    h?: NonNullable<RequestInit["headers"]>,
-  ): Record<string, string | readonly string[]> => {
-    if (!h) return {};
-    if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Symbol.iterator in h) {
-      return Object.fromEntries(
-        Array.from(
-          h as Iterable<Iterable<string>>,
-          (entry) => Array.from(entry) as [string, string],
-        ),
-      );
-    }
-    const headers: Record<string, string | readonly string[]> = {};
-    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
-      if (value !== undefined) headers[name] = value;
-    }
-    return headers;
-  };
-  return orvalFetch<DbSessionLabels>(getPutApiV1SessionsByIdLabelsUrl({ id }), {
-    ...options,
-    method: "PUT",
-    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
-    body: JSON.stringify(setSessionLabelsInputBody),
   });
 };
 
@@ -584,44 +519,6 @@ export const postApiV1SessionsByIdOpen = async (
   });
 };
 
-export const getDeleteApiV1SessionsByIdParentUrl = ({
-  id,
-}: DeleteApiV1SessionsByIdParentPathParameters) => {
-  return `/api/v1/sessions/${encodeURIComponent(String(id))}/parent`;
-};
-
-/**
- * @summary Remove session parent link
- */
-export const deleteApiV1SessionsByIdParent = async (
-  { id }: DeleteApiV1SessionsByIdParentPathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<DbSessionExternalParent> => {
-  return orvalFetch<DbSessionExternalParent>(getDeleteApiV1SessionsByIdParentUrl({ id }), {
-    ...options,
-    method: "DELETE",
-  });
-};
-
-export const getGetApiV1SessionsByIdParentUrl = ({
-  id,
-}: GetApiV1SessionsByIdParentPathParameters) => {
-  return `/api/v1/sessions/${encodeURIComponent(String(id))}/parent`;
-};
-
-/**
- * @summary Get session parent link
- */
-export const getApiV1SessionsByIdParent = async (
-  { id }: GetApiV1SessionsByIdParentPathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<DbSessionExternalParent> => {
-  return orvalFetch<DbSessionExternalParent>(getGetApiV1SessionsByIdParentUrl({ id }), {
-    ...options,
-    method: "GET",
-  });
-};
-
 export const getPutApiV1SessionsByIdParentUrl = ({
   id,
 }: PutApiV1SessionsByIdParentPathParameters) => {
@@ -629,7 +526,7 @@ export const getPutApiV1SessionsByIdParentUrl = ({
 };
 
 /**
- * @summary Set session parent link
+ * @summary Set or remove session parent link
  */
 export const putApiV1SessionsByIdParent = async (
   { id }: PutApiV1SessionsByIdParentPathParameters,

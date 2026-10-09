@@ -23,11 +23,10 @@ func newSessionLabelCommand() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "label <session-id> [label...]",
-		Short: "Show, add, or remove session labels",
+		Short: "Add or remove session labels",
 		Long: "Labels are free-form tags such as ticket=ABC-123 or role=reviewer.\n" +
-			"With no labels and no flags, prints the session's labels. Labels\n" +
-			"may be recorded before the session has synced; they appear once it\n" +
-			"does. Filter with `session list --label`.",
+			"They may be recorded before the session has synced and appear once\n" +
+			"it does. `session get` shows them; filter with `session list --label`.",
 		Example: "  agentsview session label <id> ticket=ABC-123 role=reviewer\n" +
 			"  agentsview session label <id> --remove role=reviewer\n" +
 			"  agentsview session label <id> --replace nightly\n" +
@@ -36,30 +35,22 @@ func newSessionLabelCommand() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, labels := args[0], args[1:]
-			if clearAll && (replace || len(labels) > 0 || len(remove) > 0) {
+			switch {
+			case clearAll && (replace || len(labels) > 0 || len(remove) > 0):
 				return errors.New("--clear cannot be combined with labels, --replace, or --remove")
-			}
-			if replace && len(remove) > 0 {
+			case replace && len(remove) > 0:
 				return errors.New("--replace cannot be combined with --remove")
+			case !clearAll && !replace && len(labels) == 0 && len(remove) == 0:
+				return errors.New("give labels to add, --remove, --replace, or --clear")
 			}
-			write := clearAll || replace || len(labels) > 0 || len(remove) > 0
-			annotator, cleanup, err := resolveSessionAnnotator(cmd, write)
+			annotator, cleanup, err := resolveSessionAnnotator(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-
-			var result *db.SessionLabels
-			switch {
-			case clearAll:
-				result, err = annotator.SetSessionLabels(cmd.Context(), id, []string{})
-			case replace:
-				result, err = annotator.SetSessionLabels(cmd.Context(), id, labels)
-			case write:
-				result, err = annotator.UpdateSessionLabels(cmd.Context(), id, labels, remove)
-			default:
-				result, err = annotator.SessionLabels(cmd.Context(), id)
-			}
+			result, err := annotator.UpdateSessionLabels(
+				cmd.Context(), id, labels, remove, clearAll || replace,
+			)
 			if err != nil {
 				return err
 			}
@@ -84,13 +75,13 @@ func newSessionParentCommand() *cobra.Command {
 	var clearAll bool
 	cmd := &cobra.Command{
 		Use:   "parent <session-id> [parent-session-id]",
-		Short: "Show, set, or remove a launcher-supplied parent session",
+		Short: "Set or remove a launcher-supplied parent session",
 		Long: "Records which session launched this one, for example an orchestrator\n" +
 			"that starts worker sessions as separate processes. The link appears\n" +
 			"in the session tree only while the transcript itself names no\n" +
 			"parent: parser-derived subagent, fork, and continuation links win.\n" +
 			"The link makes the session a subagent of its launcher. It may be\n" +
-			"recorded before the session has synced.",
+			"recorded before the session has synced. `session get` shows it.",
 		Example: "  agentsview session parent <worker-id> <manager-id>\n" +
 			"  agentsview session parent <worker-id> --clear",
 		Args:         cobra.RangeArgs(1, 2),
@@ -101,24 +92,15 @@ func newSessionParentCommand() *cobra.Command {
 			if len(args) == 2 {
 				parentID = args[1]
 			}
-			if clearAll && parentID != "" {
-				return errors.New("--clear cannot be combined with a parent session id")
+			if clearAll == (parentID != "") {
+				return errors.New("give either a parent session id or --clear")
 			}
-			annotator, cleanup, err := resolveSessionAnnotator(cmd, clearAll || parentID != "")
+			annotator, cleanup, err := resolveSessionAnnotator(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-
-			var link *db.SessionExternalParent
-			switch {
-			case clearAll:
-				link, err = annotator.ClearSessionParent(cmd.Context(), id)
-			case parentID != "":
-				link, err = annotator.SetSessionParent(cmd.Context(), id, parentID)
-			default:
-				link, err = annotator.SessionParent(cmd.Context(), id)
-			}
+			link, err := annotator.SetSessionParent(cmd.Context(), id, parentID)
 			if err != nil {
 				return err
 			}
@@ -135,13 +117,9 @@ func newSessionParentCommand() *cobra.Command {
 }
 
 func resolveSessionAnnotator(
-	cmd *cobra.Command, write bool,
+	cmd *cobra.Command,
 ) (service.SessionAnnotator, func(), error) {
-	resolve := resolveService
-	if write {
-		resolve = resolveWritableService
-	}
-	svc, cleanup, err := resolve(cmd)
+	svc, cleanup, err := resolveWritableService(cmd)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -169,11 +147,7 @@ func printSessionLabelsHuman(w io.Writer, labels *db.SessionLabels) {
 func printSessionParentHuman(
 	w io.Writer, id string, link *db.SessionExternalParent, cleared bool,
 ) {
-	switch {
-	case link == nil:
-		fmt.Fprintf(w, "%s: no launcher-supplied parent\n", sanitizeTerminal(id))
-		return
-	case cleared:
+	if cleared {
 		fmt.Fprintf(w, "%s: removed parent %s\n", sanitizeTerminal(id),
 			sanitizeTerminal(link.ParentSessionID))
 		return

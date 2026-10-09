@@ -17,19 +17,11 @@ func TestSetSessionLabelsMapsRemoteReadOnly(t *testing.T) {
 		call         func(*httpBackend) error
 	}{
 		{http.MethodPatch, "/api/v1/sessions/worker/labels", func(b *httpBackend) error {
-			_, err := b.UpdateSessionLabels(t.Context(), "worker", []string{"nightly"}, nil)
-			return err
-		}},
-		{http.MethodPut, "/api/v1/sessions/worker/labels", func(b *httpBackend) error {
-			_, err := b.SetSessionLabels(t.Context(), "worker", nil)
+			_, err := b.UpdateSessionLabels(t.Context(), "worker", []string{"nightly"}, nil, false)
 			return err
 		}},
 		{http.MethodPut, "/api/v1/sessions/worker/parent", func(b *httpBackend) error {
 			_, err := b.SetSessionParent(t.Context(), "worker", "manager")
-			return err
-		}},
-		{http.MethodDelete, "/api/v1/sessions/worker/parent", func(b *httpBackend) error {
-			_, err := b.ClearSessionParent(t.Context(), "worker")
 			return err
 		}},
 	} {
@@ -63,16 +55,12 @@ func TestSessionAnnotationsRefuseOlderServer(t *testing.T) {
 				_, err := b.List(t.Context(), service.ListFilter{PR: "owner/repo"})
 				return err
 			}},
-			{"get parent", func(b *httpBackend) error {
-				_, err := b.SessionParent(t.Context(), "worker")
-				return err
-			}},
 			{"set parent", func(b *httpBackend) error {
 				_, err := b.SetSessionParent(t.Context(), "worker", "manager")
 				return err
 			}},
 			{"update labels", func(b *httpBackend) error {
-				_, err := b.UpdateSessionLabels(t.Context(), "worker", []string{"nightly"}, nil)
+				_, err := b.UpdateSessionLabels(t.Context(), "worker", []string{"nightly"}, nil, false)
 				return err
 			}},
 			{"plain list", func(b *httpBackend) error {
