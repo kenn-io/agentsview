@@ -65,13 +65,11 @@ func queryChunked(
 	ids []string,
 	fn func(chunk []string) error,
 ) error {
-	return queryChunkedSize(ids, maxSQLVars, fn)
+	return QueryChunkedSize(ids, maxSQLVars, fn)
 }
 
-// queryChunkedSize is queryChunked with an explicit per-chunk size, for
-// queries that bind each ID more than once (and so need a smaller chunk to
-// keep the total bind count within SQLite's variable limit).
-func queryChunkedSize(
+// QueryChunkedSize executes ID batches in order, stopping on the first error.
+func QueryChunkedSize(
 	ids []string,
 	size int,
 	fn func(chunk []string) error,

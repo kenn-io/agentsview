@@ -17,7 +17,7 @@ func (s *Store) loadWorktreeCandidateSessions(
 	ctx context.Context, ids []string,
 ) ([]db.WorktreeCandidateSession, error) {
 	byID := make(map[string]db.WorktreeCandidateSession, len(ids))
-	err := readbase.AnalyticsQueryChunked(ids, func(chunk []string) error {
+	err := db.QueryChunkedSize(ids, readbase.AnalyticsMaxSQLVars, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
 		query := `
 			WITH ranked_snapshots AS (

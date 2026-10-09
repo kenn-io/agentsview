@@ -12,15 +12,6 @@ import (
 // AnalyticsMaxSQLVars bounds mirror ID batches below driver parameter limits.
 const AnalyticsMaxSQLVars = 900
 
-func AnalyticsQueryChunked(ids []string, fn func(chunk []string) error) error {
-	for start := 0; start < len(ids); start += AnalyticsMaxSQLVars {
-		if err := fn(ids[start:min(start+AnalyticsMaxSQLVars, len(ids))]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func AnalyticsLocalTime(ts string, loc *time.Location) (time.Time, bool) {
 	t, ok := ParseAnalyticsTime(ts)
 	if !ok {
@@ -64,7 +55,7 @@ func (s *Analytics) models(ctx context.Context, ids []string) ([]string, error) 
 		return []string{}, nil
 	}
 	models := map[string]bool{}
-	err := AnalyticsQueryChunked(ids, func(chunk []string) error {
+	err := db.QueryChunkedSize(ids, AnalyticsMaxSQLVars, func(chunk []string) error {
 		query, args := s.backend.ModelsSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -104,7 +95,7 @@ func (s *Analytics) filteredModels(ctx context.Context, ids []string, f db.Analy
 			models[model] = true
 		}
 	}
-	err := AnalyticsQueryChunked(unique, func(chunk []string) error {
+	err := db.QueryChunkedSize(unique, AnalyticsMaxSQLVars, func(chunk []string) error {
 		query, args := s.backend.ModelTimesSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -134,7 +125,7 @@ func (s *Analytics) filteredToolCounts(ctx context.Context, ids []string, f db.A
 			counts[id] += count
 		}
 	}
-	err := AnalyticsQueryChunked(ids, func(chunk []string) error {
+	err := db.QueryChunkedSize(ids, AnalyticsMaxSQLVars, func(chunk []string) error {
 		query, args := s.backend.ToolCountsSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {

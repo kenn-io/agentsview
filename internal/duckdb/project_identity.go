@@ -40,7 +40,7 @@ func (s *Store) ListProjectIdentityObservations(
 		return s.listProjectIdentityObservationsChunk(ctx, sorted)
 	}
 	var out []export.ProjectIdentityObservation
-	err := readbase.AnalyticsQueryChunked(sorted, func(chunk []string) error {
+	err := db.QueryChunkedSize(sorted, readbase.AnalyticsMaxSQLVars, func(chunk []string) error {
 		part, err := s.listProjectIdentityObservationsChunk(ctx, chunk)
 		if err != nil {
 			return err

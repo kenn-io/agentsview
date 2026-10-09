@@ -213,19 +213,14 @@ func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.An
 	if len(sessionIDs) == 0 {
 		return map[string]int{}, nil
 	}
-	args := make([]any, len(sessionIDs))
-	placeholders := make([]string, len(sessionIDs))
-	for i, id := range sessionIDs {
-		args[i] = id
-		placeholders[i] = "?"
-	}
+	ph, args := db.InPlaceholders(sessionIDs)
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id,
 			SUM(CASE WHEN role = 'user' AND is_system = FALSE
 				AND COALESCE(source_subtype, '') != 'tool_result' THEN 1 ELSE 0 END) AS user_count,
 			SUM(CASE WHEN role = 'assistant' AND has_tool_use = TRUE THEN 1 ELSE 0 END) AS tool_count
 		FROM messages
-		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
+		WHERE session_id IN `+ph+`
 		GROUP BY session_id`,
 		args...,
 	)
@@ -241,11 +236,11 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, sessionIDs []string,
 	if len(sessionIDs) == 0 {
 		return out, nil
 	}
-	args, placeholders := stringInArgs(sessionIDs)
+	ph, args := db.InPlaceholders(sessionIDs)
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
-		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
+		WHERE session_id IN `+ph+`
 		ORDER BY session_id, ordinal`,
 		args...,
 	)
@@ -261,11 +256,11 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, sessionIDs []strin
 	if len(sessionIDs) == 0 {
 		return out, nil
 	}
-	args, placeholders := stringInArgs(sessionIDs)
+	ph, args := db.InPlaceholders(sessionIDs)
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, COUNT(*)
 		FROM tool_calls
-		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
+		WHERE session_id IN `+ph+`
 		GROUP BY session_id`,
 		args...,
 	)
@@ -274,16 +269,6 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, sessionIDs []strin
 	}
 	defer rows.Close()
 	return readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
-}
-
-func stringInArgs(values []string) ([]any, []string) {
-	args := make([]any, len(values))
-	placeholders := make([]string, len(values))
-	for i, value := range values {
-		args[i] = value
-		placeholders[i] = "?"
-	}
-	return args, placeholders
 }
 
 func (s *Store) duckPopulateFrustrationMarkers(

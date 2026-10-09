@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -18,7 +19,7 @@ func TestAnalyticsQueryChunkedSplitsAtLimit(t *testing.T) {
 
 	var sizes []int
 	var firstIDs []string
-	err := readbase.AnalyticsQueryChunked(ids, func(chunk []string) error {
+	err := db.QueryChunkedSize(ids, readbase.AnalyticsMaxSQLVars, func(chunk []string) error {
 		sizes = append(sizes, len(chunk))
 		firstIDs = append(firstIDs, chunk[0])
 		return nil

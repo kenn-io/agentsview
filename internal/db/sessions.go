@@ -2070,7 +2070,7 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 
 	// Each id binds twice (once per UNION branch), so halve the chunk to
 	// stay within SQLite's bind-variable limit.
-	err = queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
+	err = QueryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		allArgs := append(append([]any{}, args...), args...)
 		res, err := tx.ExecContext(ctx,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -176,8 +175,7 @@ func (s *Store) GetSessionUsageRows(
 	for i, id := range ids {
 		sessionOrder[id] = i
 	}
-	args, placeholders := stringInArgs(ids)
-	inClause := strings.Join(placeholders, ",")
+	inClause, args := db.InPlaceholders(ids)
 	rawSQL := fmt.Sprintf(`
 		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 			'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
@@ -199,7 +197,7 @@ func (s *Store) GetSessionUsageRows(
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		WHERE %s
-			AND s.id IN (%s)
+			AND s.id IN %s
 		UNION ALL
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 			ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
@@ -225,7 +223,7 @@ func (s *Store) GetSessionUsageRows(
 		FROM usage_events ue
 		JOIN sessions s ON s.id = ue.session_id
 		WHERE %s
-			AND s.id IN (%s)`,
+			AND s.id IN %s`,
 		duckUsageMessageEligibility, inClause,
 		duckUsageEventEligibility, inClause,
 	)

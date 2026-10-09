@@ -445,7 +445,7 @@ func (s *Store) chPopulateFrustrationMarkers(
 	if len(ids) == 0 {
 		return nil
 	}
-	err := readbase.AnalyticsQueryChunked(ids, func(chunk []string) error {
+	err := db.QueryChunkedSize(ids, readbase.AnalyticsMaxSQLVars, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
 		q := `SELECT session_id, content, is_system
 			FROM messages
