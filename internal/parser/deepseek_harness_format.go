@@ -18,6 +18,8 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"go.kenn.io/agentsview/internal/ctxio"
+
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -158,7 +160,7 @@ func scanDeepSeekHarnessLog(
 		source = decoder
 	}
 
-	reader := newDeepSeekHarnessLineReader(&contextReader{ctx: ctx, r: source})
+	reader := newDeepSeekHarnessLineReader(ctxio.Reader{Context: ctx, Reader: source})
 	headerLine, complete, lineErr := reader.next()
 	if lineErr != nil {
 		return deepSeekHarnessScan{}, classifyDeepSeekHarnessPhysicalError(path, lineErr)
@@ -438,7 +440,7 @@ func validateDeepSeekHarnessZstdHeaderFrame(
 		return fmt.Errorf("open DeepSeek Harness zstd header frame: %w", err)
 	}
 	defer decoder.Close()
-	reader := newDeepSeekHarnessLineReader(&contextReader{ctx: ctx, r: decoder})
+	reader := newDeepSeekHarnessLineReader(ctxio.Reader{Context: ctx, Reader: decoder})
 	line, complete, readErr := reader.next()
 	if readErr != nil || !complete || len(line) == 0 {
 		return errors.New("corrupt DeepSeek Harness zstd log: first frame has no complete header line")
@@ -448,18 +450,6 @@ func validateDeepSeekHarnessZstdHeaderFrame(
 		return errors.New("corrupt DeepSeek Harness zstd log: first frame is not exactly one header line")
 	}
 	return nil
-}
-
-type contextReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (r *contextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.r.Read(p)
 }
 
 type deepSeekHarnessLineReader struct {
