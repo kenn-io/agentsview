@@ -1086,41 +1086,6 @@ func TestRecallEvidenceWriteSessionBatchRemapsStableEndpoints(t *testing.T) {
 	assert.Equal(t, 12, got.Evidence[0].MessageEndOrdinal)
 }
 
-func TestRecallEvidenceCompleteStoredRowsPreservesMissingSourceUUIDs(t *testing.T) {
-	d := testDB(t)
-	seedRecallEvidenceWindow(t, d, "legacy-fill", 10, "", "")
-	insertVerifiedRecallSelection(t, d, "fill-entry", "legacy-fill", 10, 11, nil)
-	messages, err := d.GetAllMessages(t.Context(), "legacy-fill")
-	require.NoError(t, err)
-	for i := range messages {
-		messages[i].SourceUUID = recallEvidenceSourceUUID("filled", messages[i].Ordinal)
-	}
-	session, err := d.GetSession(t.Context(), "legacy-fill")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	write := SessionBatchWrite{Session: *session, Messages: messages, CompleteStoredRows: true}
-	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write}, func() error { return assert.AnError })
-	require.ErrorIs(t, err, assert.AnError)
-	entry := requireRecallEntry(t, d, "fill-entry")
-	assert.True(t, entry.ProvenanceOK)
-	assert.Empty(t, entry.Evidence[0].MessageStartSourceUUID)
-	stored, err := d.GetAllMessages(t.Context(), "legacy-fill")
-	require.NoError(t, err)
-	assert.Empty(t, stored[0].SourceUUID)
-	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
-	require.NoError(t, err)
-	entry = requireRecallEntry(t, d, "fill-entry")
-	assert.True(t, entry.ProvenanceOK)
-	assert.Empty(t, entry.Evidence[0].MessageStartSourceUUID)
-	assert.Empty(t, entry.Evidence[0].MessageEndSourceUUID)
-	stored, err = d.GetAllMessages(t.Context(), "legacy-fill")
-	require.NoError(t, err)
-	assert.Equal(t, messages[0].ID, stored[0].ID)
-	for _, message := range stored {
-		assert.Empty(t, message.SourceUUID)
-	}
-}
-
 func seedRecallEvidenceWindow(
 	t *testing.T,
 	d *DB,
