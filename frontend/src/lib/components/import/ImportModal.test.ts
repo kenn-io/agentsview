@@ -125,15 +125,18 @@ it("hides browser sync controls for a read-only archive", () => {
   expect(screen.queryByRole("button", { name: m.import_claude_connect() })).toBeNull();
 });
 
-it("recovers from an absent Chrome host without a reload", async () => {
+it.each([
+  ["claude_ai_chrome_host_required", 409, "Run agentsview chrome setup and keep Chrome open, then Sync again", "Exécutez agentsview chrome setup et gardez Chrome ouvert, puis relancez la synchronisation."],
+  ["claude_ai_chrome_host_update_required", 0, "Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again", "Exécutez agentsview chrome setup, rechargez l’extension dans chrome://extensions, puis relancez la synchronisation."],
+])("recovers from %s without a reload", async (code, status, message, expected) => {
   getBrowserHost.mockReturnValue(undefined);
   setLocale("fr", { reload: false });
-  syncClaudeAI.mockRejectedValueOnce(new ApiError(409, "Run agentsview chrome setup and keep Chrome open, then Sync again", "claude_ai_chrome_host_required"))
+  syncClaudeAI.mockRejectedValueOnce(new ApiError(status, message, code))
     .mockResolvedValueOnce({ imported: 1, updated: 0, skipped: 0, errors: 0 });
   const onimported = vi.fn();
   render(ImportModal, { open: true, onclose: vi.fn(), onimported });
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
-  await waitFor(() => expect(screen.getByText("Exécutez agentsview chrome setup et gardez Chrome ouvert, puis relancez la synchronisation.")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(expected)).toBeTruthy());
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
   await waitFor(() => expect(screen.getByText(m.import_processed({ count: 1 }))).toBeTruthy());
   expect(syncClaudeAI).toHaveBeenCalledTimes(2);

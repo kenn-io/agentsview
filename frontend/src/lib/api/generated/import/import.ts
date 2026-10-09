@@ -113,6 +113,7 @@ export const getPostApiV1ImportClaudeAiSyncUrl = (params?: PostApiV1ImportClaude
 };
 
 /**
+ * Before streaming, HTTP 409 with code claude_ai_chrome_host_required reports that the Chrome host is disconnected.
  * @summary Sync Claude.ai conversations
  */
 export const postApiV1ImportClaudeAiSync = async (

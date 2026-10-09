@@ -71,6 +71,9 @@
       if (e instanceof ApiError && e.code === "claude_ai_chrome_host_required") {
         error = m.import_claude_chrome_setup();
       }
+      if (e instanceof ApiError && e.code === "claude_ai_chrome_host_update_required") {
+        error = m.import_claude_chrome_update();
+      }
       if (e instanceof ApiError && e.code === "claude_ai_auth_required") {
         error = m.import_claude_auth_required();
       }

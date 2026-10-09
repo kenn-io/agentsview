@@ -2468,5 +2468,6 @@
   "import_claude_help": "E-poçt kodu ilə daxil olun, pəncərəni bağlayın, sonra Sinxronlaşdır düyməsini basın. Google ilə giriş üçün agentsview chrome setup əmrini işə salın və veb interfeysdən sinxronlaşdırın.",
   "import_claude_help_chrome": "Google daxil olmaqla Chrome-dakı Claude.ai girişinizdən istifadə edir. Bir dəfə: agentsview chrome setup əmrini işə salın, sonra Load unpacked ilə göstərilən qovluğu yükləyin. Sinxronizasiya zamanı Chrome-u açıq saxlayın.",
   "import_claude_chrome_setup": "agentsview chrome setup əmrini işə salın və Chrome-u açıq saxlayın, sonra yenidən sinxronlaşdırın.",
+  "import_claude_chrome_update": "agentsview chrome setup əmrini işə salın, chrome://extensions səhifəsində genişlənməni yenidən yükləyin, sonra yenidən sinxronlaşdırın.",
   "import_claude_auth_required": "Claude.ai hesabınıza daxil olun, sonra yenidən sinxronlaşdırın."
 }

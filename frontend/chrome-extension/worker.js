@@ -1,5 +1,8 @@
 import { allowedPath } from "./paths.js";
 
+// Covers message encoding and request shapes; bump both peers together.
+const version = 1;
+
 async function loadedTab(id) {
   await new Promise((resolve, reject) => {
     const updated = (tabId, change) => {
@@ -23,9 +26,10 @@ async function loadedTab(id) {
   });
 }
 
-async function request({ id, path }, port) {
+async function request({ id, path, version: peerVersion }, port) {
   let result;
   try {
+    if (peerVersion !== version) throw new Error("Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again");
     if (!await allowedPath(path)) throw new Error("Unsupported Claude fetch path");
     let [tab] = await chrome.tabs.query({ url: "https://claude.ai/*", discarded: false });
     if (!tab) tab = await chrome.tabs.create({ url: "https://claude.ai/new", active: false });
@@ -38,11 +42,11 @@ async function request({ id, path }, port) {
       func: (url) => claudeFetch(url),
       args: [`https://claude.ai${path}`],
     });
-    result = { ...reply.result, id };
+    result = { ...reply.result, id, version };
   } catch (error) {
-    result = { id, status: 0, error: error.message };
+    result = { id, version, status: 0, error: error.message };
   }
-  if (new TextEncoder().encode(JSON.stringify(result)).byteLength > 64 * 1024 * 1024) result = { id, status: 413 };
+  if (new TextEncoder().encode(JSON.stringify(result)).byteLength > 64 * 1024 * 1024) result = { id, version, status: 413 };
   try { port.postMessage(result); } catch { /* Disconnect fails the server's pending request. */ }
 }
 

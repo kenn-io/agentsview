@@ -45,6 +45,7 @@ filter:
       - get-api-v1-activity-report-report-id-sessions
       - get-api-v1-usage-summary-stream
       - post-api-v1-sync
+      - post-api-v1-import-claude-ai-sync
       - post-api-v1-resync
       - post-api-v1-sync-remotes
       - post-api-v1-push-pg

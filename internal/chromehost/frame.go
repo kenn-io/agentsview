@@ -8,6 +8,11 @@ import (
 
 const FrameLimit = 64 << 20
 
+// Version covers message encoding and supported request shapes; bump both peers together.
+const Version = 1
+
+var ErrCompatibility = errors.New("Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again")
+
 func ReadFrame(reader io.Reader) ([]byte, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {

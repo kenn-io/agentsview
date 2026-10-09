@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/json/v2"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -37,29 +36,24 @@ func testChromeConnection(t *testing.T, srv *Server) (string, net.Conn) {
 func readChromeRequest(t *testing.T, conn net.Conn) (string, string) {
 	t.Helper()
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
-	var header [4]byte
-	_, err := io.ReadFull(conn, header[:])
-	require.NoError(t, err)
-	body := make([]byte, binary.NativeEndian.Uint32(header[:]))
-	_, err = io.ReadFull(conn, body)
+	body, err := chromehost.ReadFrame(conn)
 	require.NoError(t, err)
 	var request struct {
-		ID   string `json:"id"`
-		Path string `json:"path"`
+		Version int    `json:"version"`
+		ID      string `json:"id"`
+		Path    string `json:"path"`
 	}
 	require.NoError(t, json.Unmarshal(body, &request))
 	require.NotEmpty(t, request.ID)
+	require.Equal(t, 1, request.Version)
 	return request.ID, request.Path
 }
 
 func writeChromeReply(t *testing.T, conn net.Conn, id string, status int, body string) {
 	t.Helper()
-	payload, err := json.Marshal(map[string]any{"id": id, "status": status, "body": body})
+	payload, err := json.Marshal(map[string]any{"version": 1, "id": id, "status": status, "body": body})
 	require.NoError(t, err)
-	var header [4]byte
-	binary.NativeEndian.PutUint32(header[:], uint32(len(payload)))
-	_, err = conn.Write(append(header[:], payload...))
-	require.NoError(t, err)
+	require.NoError(t, chromehost.WriteFrame(conn, payload))
 }
 
 func TestChromeHostSyncPrivateReplies(t *testing.T) {
@@ -115,6 +109,60 @@ func TestChromeHostAbsent(t *testing.T) {
 	srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil))
 	assert.Equal(t, http.StatusConflict, response.Code)
 	assert.JSONEq(t, `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, response.Body.String())
+}
+
+func TestChromeHostIncompatibleReply(t *testing.T) {
+	for _, reply := range []struct{ name, body string }{
+		{"stale extension", `{"status":0,"error":"Unsupported Claude fetch path"}`},
+		{"unknown revision", `{"version":2,"status":600,"body":"private"}`},
+	} {
+		t.Run(reply.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			_, conn := testChromeConnection(t, srv)
+			response := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil))
+			}()
+			id, _ := readChromeRequest(t, conn)
+			payload := `{"id":"` + id + `",` + reply.body[1:]
+			require.NoError(t, chromehost.WriteFrame(conn, []byte(payload)))
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("incompatible host did not stop Sync")
+			}
+			assert.Contains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
+			assert.NotContains(t, response.Body.String(), "event: done")
+			assert.NotContains(t, response.Body.String(), "private")
+			stats, err := srv.db.GetStats(t.Context(), false, false)
+			require.NoError(t, err)
+			assert.Zero(t, stats.SessionCount)
+		})
+	}
+}
+
+func TestChromeHostIncompatiblePendingRequests(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	_, conn := testChromeConnection(t, srv)
+	finished := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := srv.chrome.fetch(t.Context(), "/api/organizations")
+			finished <- err
+		}()
+		readChromeRequest(t, conn)
+	}
+	require.NoError(t, chromehost.WriteFrame(conn, []byte(`{"version":2}`)))
+	for range 2 {
+		select {
+		case err := <-finished:
+			require.ErrorIs(t, err, chromehost.ErrCompatibility)
+		case <-time.After(5 * time.Second):
+			t.Fatal("incompatible host left a pending fetch")
+		}
+	}
 }
 
 func TestChromeHostDisconnect(t *testing.T) {

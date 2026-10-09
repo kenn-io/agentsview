@@ -2465,5 +2465,6 @@
   "import_claude_help": "Connectez-vous avec un code par e-mail, fermez la fenêtre, puis cliquez sur Synchroniser. Pour vous connecter avec Google, exécutez agentsview chrome setup et synchronisez depuis l'interface web.",
   "import_claude_help_chrome": "Utilise votre connexion Claude.ai dans Chrome, y compris Google. Une seule fois : exécutez agentsview chrome setup, puis chargez le dossier indiqué avec Charger l'extension non empaquetée. Gardez Chrome ouvert pendant la synchronisation.",
   "import_claude_chrome_setup": "Exécutez agentsview chrome setup et gardez Chrome ouvert, puis relancez la synchronisation.",
+  "import_claude_chrome_update": "Exécutez agentsview chrome setup, rechargez l’extension dans chrome://extensions, puis relancez la synchronisation.",
   "import_claude_auth_required": "Connectez-vous à Claude.ai, puis relancez la synchronisation."
 }

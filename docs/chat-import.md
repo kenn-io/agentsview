@@ -76,8 +76,10 @@ Set up Chrome once:
 2. Open `chrome://extensions` and turn on **Developer mode**.
 3. Click **Load unpacked** and select the folder printed by the command.
 
-Keep Chrome open during Sync. Re-run setup and reload the extension after upgrading AgentsView or moving its binary.
+Keep Chrome open during Sync. Re-run setup and reload the extension at `chrome://extensions` after upgrading AgentsView, moving its executable, or changing its data directory. Then click **Sync** again.
 The extension reconnects when AgentsView restarts.
+
+If Sync reports a disconnected host after setup, open Chrome and enable the extension at `chrome://extensions`. If it still fails, check the server startup error log for a Chrome host endpoint bind failure.
 
 Open **Import conversations**, select **Claude.ai**, and click **Sync**. Chrome uses your existing Claude.ai session, including Google sign-in. If you need to sign in, click **Sign in**, finish in the new tab, then return to AgentsView and click **Sync**.
 

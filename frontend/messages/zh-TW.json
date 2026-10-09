@@ -2383,5 +2383,6 @@
   "import_claude_help": "使用電子郵件驗證碼登入後關閉視窗，然後點擊同步。如需使用 Google 登入，請執行 agentsview chrome setup 並從網頁介面同步。",
   "import_claude_help_chrome": "使用你在 Chrome 中的 Claude.ai 登入狀態，包括 Google 登入。首次使用時執行 agentsview chrome setup，然後透過「載入未封裝項目」選擇輸出的資料夾。同步期間請保持 Chrome 開啟。",
   "import_claude_chrome_setup": "執行 agentsview chrome setup 並保持 Chrome 開啟，然後再次同步。",
+  "import_claude_chrome_update": "執行 agentsview chrome setup，在 chrome://extensions 重新載入擴充功能，然後再次同步。",
   "import_claude_auth_required": "請登入 Claude.ai，然後再次同步。"
 }
