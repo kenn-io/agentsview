@@ -11,7 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -202,4 +204,25 @@ func TestDuckWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 	assert.Equal(t, 1, duckCandidates[0].ContributingSessions)
 	require.Len(t, duckCandidates[0].Examples, 1)
 	assert.Equal(t, "primary-session", duckCandidates[0].Examples[0].SessionID)
+}
+
+func TestDuckWorktreeCandidatesReloadPreservesSelection(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	seedDuckCandidateSession(t, local, "moving", "alpha", "/repo/alpha", "2025-06-02T10:00:00Z")
+	seedDuckCandidateSession(t, local, "retimed", "alpha", "/repo/alpha", "2025-06-02T10:00:00Z")
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	pushDataReadMirror(t, ctx, syncer)
+	store := NewStoreFromDB(syncer.DB())
+	projects, err := store.BuildProjectIdentityMap(ctx, []string{"alpha"})
+	require.NoError(t, err)
+	catalog := readbase.NewCatalog(dbtest.PublishingCatalog{CatalogBackend: catalogSQL{store}, Publish: func() {
+		_, err := local.AssignSessionProject(ctx, "moving", "beta")
+		require.NoError(t, err)
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "retimed", Project: "alpha", Machine: "host.example", Agent: "codex", Cwd: "/repo/alpha", MessageCount: 1, StartedAt: new("2025-07-02T10:00:00Z"), EndedAt: new("2025-07-02T10:00:00Z")}))
+		pushDataReadMirror(t, ctx, syncer)
+	}}, "duckdb")
+	candidates, err := catalog.ListArchiveWorktreeCandidates(ctx, db.ArchiveWorktreeCandidateRequest{ProjectLabel: "alpha", ProjectKey: projects["alpha"].ProjectKey, ProjectDateFilter: db.ProjectDateFilter{DateFrom: "2025-06-01", DateTo: "2025-06-30"}})
+	require.NoError(t, err)
+	assert.Empty(t, candidates)
 }

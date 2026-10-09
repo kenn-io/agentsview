@@ -24,7 +24,7 @@ type CatalogBackend interface {
 	ListProjectIdentityObservations(context.Context, []string) ([]export.ProjectIdentityObservation, error)
 	// Inventory and candidates use the backend identity map so ClickHouse retains its cache.
 	BuildProjectIdentityMap(context.Context, []string) (map[string]export.ProjectMapEntry, error)
-	WorktreeCandidateSessions(context.Context, []string) ([]db.WorktreeCandidateSession, error)
+	WorktreeCandidateSessions(context.Context, []string, db.SessionFilter) ([]db.WorktreeCandidateSession, error)
 }
 
 // Catalog owns multi-archive catalog reads; each backend supplies every SQL operation.
@@ -314,7 +314,7 @@ func (s *Catalog) ListArchiveWorktreeCandidates(
 		}
 		selectedIDs = append(selectedIDs, session.id)
 	}
-	return s.worktreeCandidatesFromSelection(ctx, selectedIDs, selectedProjects)
+	return s.worktreeCandidatesFromSelection(ctx, selectedIDs, selectedProjects, request.ProjectDateFilter)
 }
 
 func (s *Catalog) archiveWorktreeCandidateSessions(
@@ -345,8 +345,11 @@ func (s *Catalog) worktreeCandidatesFromSelection(
 	ctx context.Context,
 	selectedIDs []string,
 	selectedProjects map[string]struct{},
+	dateFilter db.ProjectDateFilter,
 ) ([]db.WorktreeReclassificationCandidate, error) {
-	sessions, err := s.backend.WorktreeCandidateSessions(ctx, selectedIDs)
+	filter := dateFilter.SessionFilter()
+	filter.ProjectLabels = db.SortedKeys(selectedProjects)
+	sessions, err := s.backend.WorktreeCandidateSessions(ctx, selectedIDs, filter)
 	if err != nil {
 		return nil, err
 	}
