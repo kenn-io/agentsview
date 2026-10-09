@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "AgentsView Claude.ai Sync",
+  "version": "0.1.0",
+  "host_permissions": ["https://claude.ai/*"],
+  "permissions": ["scripting", "storage", "tabs"],
+  "background": { "service_worker": "worker.js", "type": "module" },
+  "action": { "default_title": "Allow Claude.ai Sync on this AgentsView tab" },
+  "content_scripts": [{
+    "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+    "js": ["bridge.js"],
+    "run_at": "document_start",
+    "all_frames": false
+  }]
+}

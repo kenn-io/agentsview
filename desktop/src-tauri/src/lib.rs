@@ -4077,40 +4077,12 @@ async fn claude_auth_fetch(
 }
 
 fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
+    let reader = include_str!("../../../frontend/chrome-extension/claude_fetch.js");
     format!(
         r#"(async () => {{
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 45000);
-        try {{
-            const response = await fetch({url}, {{ method: "GET", credentials: "include", redirect: "error", signal: controller.signal }});
-            const limit = 32 * 1024 * 1024; // Matches importer.ClaudeAIResponseLimit in internal/importer/claude_ai_sync.go.
-            const oversized = () => window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 413, body: "" }} }});
-            const reader = response.body?.getReader();
-            const decoder = new TextDecoder();
-            let size = 0;
-            let body = "";
-            if (reader) {{
-                for (;;) {{
-                    const {{ done, value }} = await reader.read();
-                    if (done) break;
-                    size += value.byteLength;
-                    if (size > limit) {{
-                        controller.abort();
-                        try {{ await reader.cancel(); }} catch {{}}
-                        await oversized();
-                        return;
-                    }}
-                    body += decoder.decode(value, {{ stream: true }});
-                }}
-                body += decoder.decode();
-            }}
-            const retryAfter = response.headers.get("retry-after") ?? undefined;
-            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: response.status, body, retryAfter }} }});
-        }} catch (error) {{
-            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 0, body: "", error: String(error) }} }});
-        }} finally {{
-            clearTimeout(timer);
-        }}
+        {reader}
+        const result = await claudeFetch({url});
+        await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, ...result }} }});
     }})()"#
     )
 }

@@ -2380,6 +2380,6 @@
   "tool_sequences_retry": "重试",
   "import_claude_connect": "登录",
   "import_claude_sync": "同步",
-  "import_claude_help": "使用邮箱验证码登录后关闭窗口，然后点击同步。Google 登录需要浏览器宿主。",
+  "import_claude_help": "Chrome 使用现有的 Claude.ai 登录状态并支持 Google 登录。桌面应用的登录窗口需要邮箱验证码。",
   "import_claude_auth_required": "请登录 Claude.ai，然后再次同步。"
 }

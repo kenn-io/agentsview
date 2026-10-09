@@ -2465,6 +2465,6 @@
   "tool_sequences_retry": "Yenidən cəhd et",
   "import_claude_connect": "Daxil ol",
   "import_claude_sync": "Sinxronlaşdır",
-  "import_claude_help": "E-poçt kodu ilə daxil olun, pəncərəni bağlayın, sonra Sinxronlaşdır düyməsini basın. Google ilə giriş brauzer hostu tələb edir.",
+  "import_claude_help": "Chrome mövcud Claude.ai girişinizdən istifadə edir və Google ilə girişi dəstəkləyir. Masaüstü giriş pəncərəsi e-poçt kodu tələb edir.",
   "import_claude_auth_required": "Claude.ai hesabınıza daxil olun, sonra yenidən sinxronlaşdırın."
 }

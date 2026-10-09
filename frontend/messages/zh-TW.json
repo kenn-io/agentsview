@@ -2380,6 +2380,6 @@
   "tool_sequences_retry": "重試",
   "import_claude_connect": "登入",
   "import_claude_sync": "同步",
-  "import_claude_help": "使用電子郵件驗證碼登入後關閉視窗，然後點擊同步。Google 登入需要瀏覽器主機。",
+  "import_claude_help": "Chrome 使用現有的 Claude.ai 登入狀態並支援 Google 登入。桌面應用程式的登入視窗需要電子郵件驗證碼。",
   "import_claude_auth_required": "請登入 Claude.ai，然後再次同步。"
 }

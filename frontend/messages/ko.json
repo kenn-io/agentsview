@@ -2380,6 +2380,6 @@
   "tool_sequences_retry": "다시 시도",
   "import_claude_connect": "로그인",
   "import_claude_sync": "동기화",
-  "import_claude_help": "이메일 코드로 로그인한 후 창을 닫고 동기화를 누르세요. Google 로그인에는 브라우저 호스트가 필요합니다.",
+  "import_claude_help": "Chrome은 기존 Claude.ai 로그인 상태를 사용하며 Google 로그인을 지원합니다. 데스크톱 로그인 창에서는 이메일 코드가 필요합니다.",
   "import_claude_auth_required": "Claude.ai에 로그인한 후 다시 동기화하세요."
 }

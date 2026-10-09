@@ -11,9 +11,10 @@ The latest published release is
 
 **New features**
 
-- Sync Claude.ai chats from the desktop Import dialog without downloading an
+- Sync Claude.ai chats from the desktop or Chrome Import dialog without downloading an
   export. Later runs fetch new or changed chats, including branch switches.
-  See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for branch
+  Load the Chrome extension from a checkout and allow it on your AgentsView tab.
+  See [Claude.ai Sync](https://agentsview.io/docs/chat-import/#sync-claudeai-chats) for setup, branch
   updates, Trash copies, and failure handling.
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
