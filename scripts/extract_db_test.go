@@ -95,6 +95,15 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 	insertMessage(5, "s_skill", "clean message body")
 	insertToolCall("s_skill", "/tmp/clean.go", "blocklist-demo-service-deploy", `{"b":2}`)
 
+	_, err = conn.ExecContext(t.Context(), `
+		INSERT INTO local_session_source_baselines
+			(session_id, machine, agent, file_path)
+		VALUES
+			('s_keep', 'source-host', 'claude', '/workspace/keep.jsonl'),
+			('s_msg', 'source-host', 'claude', '/workspace/drop.jsonl')
+	`)
+	require.NoError(t, err)
+
 	// Flush the WAL so the sqlite3 CLI sees every committed row.
 	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
 	require.NoError(t, err)
@@ -132,6 +141,16 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 		"only the clean session should survive; sessions hiding the term in "+
 			"message content, git_branch, tool file_path, and skill_name must "+
 			"all be dropped")
+
+	var baselines, brokenReferences int
+	require.NoError(t, outConn.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM local_session_source_baselines",
+	).Scan(&baselines))
+	assert.Zero(t, baselines, "source ownership is not part of the capture corpus")
+	require.NoError(t, outConn.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM pragma_foreign_key_check",
+	).Scan(&brokenReferences))
+	assert.Zero(t, brokenReferences, "the filtered archive must remain openable")
 }
 
 // TestExtractDBUsesPrivateTermsFileByDefault protects the default screenshot

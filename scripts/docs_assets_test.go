@@ -603,6 +603,12 @@ func writeGeneratedAssets(t *testing.T, dir, content string) {
 	t.Helper()
 	files := []string{
 		"screenshots/about-dialog.png",
+		"screenshots/activity-message-frequency.png",
+		"screenshots/analytics-message-roles.png",
+		"screenshots/cost-chart-bars.png",
+		"screenshots/tool-sequences.png",
+		"screenshots/recall-review.png",
+		"screenshots/settings-spanish.png",
 		"screenshots/activity-breakdowns.png",
 		"screenshots/activity-concurrency.png",
 		"screenshots/activity-insight.png",
@@ -618,6 +624,7 @@ func writeGeneratedAssets(t *testing.T, dir, content string) {
 		"screenshots/data-inventory.png",
 		"screenshots/data-workspace.png",
 		"screenshots/dashboard.png",
+		"screenshots/dashboard-outcomes.png",
 		"screenshots/date-range.png",
 		"screenshots/focused-transcript.png",
 		"screenshots/follow-latest-toggle.png",

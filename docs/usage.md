@@ -68,6 +68,8 @@ opened and merged totals. This requests GitHub data for each repository and can
 take minutes. A **Not counted** list identifies repository operations that
 failed, so partial totals are visible.
 
+![Git and pull-request totals on the dashboard](/docs/assets/generated/screenshots/dashboard-outcomes.png)
+
 The panel reports when the backend or selected filters cannot provide outcome
 totals. Clear machine, model, termination, minimum-message, recent-activity, and
 time-of-day filters to use it. The CLI exposes the same metrics through

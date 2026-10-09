@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Automated documentation visits should not count as product usage.
+export AGENTSVIEW_TELEMETRY_ENABLED=0
+
 PORT=8090
 PG_PORT=8091
 DATA_DIR=$(mktemp -d)
