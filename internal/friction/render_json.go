@@ -13,6 +13,7 @@ const SummarySchemaVersion = 1
 func RenderSummaryJSON(s DigestSnapshot) []byte {
 	groups := groupByKind(s.Signals)
 	value := map[string]any{
+		"date":             s.Date,
 		"schema_version":   SummarySchemaVersion,
 		"sessions_scanned": s.SessionsScanned,
 		"corrections":      len(groups[KindCorrection]),
