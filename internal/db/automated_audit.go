@@ -41,7 +41,6 @@ func auditAutomatedFull(ctx context.Context,
 	rows, err := w.Query(ctx,
 		`SELECT
 			s.id,
-			s.agent,
 			s.session_kind,
 			s.first_message,
 			s.user_message_count,
@@ -80,7 +79,6 @@ func auditAutomatedMatchingHash(ctx context.Context,
 	rows, err := w.Query(ctx,
 		`SELECT
 			s.id,
-			s.agent,
 			s.session_kind,
 			s.user_message_count,
 			s.is_automated,
@@ -124,7 +122,6 @@ func auditAutomatedMatchingHash(ctx context.Context,
 	for rows.Next() {
 		var (
 			id               string
-			agent            string
 			sessionKind      string
 			userMessageCount int
 			rowAutomated     bool
@@ -133,7 +130,6 @@ func auditAutomatedMatchingHash(ctx context.Context,
 		)
 		if err := rows.Scan(
 			&id,
-			&agent,
 			&sessionKind,
 			&userMessageCount,
 			&rowAutomated,
@@ -178,7 +174,6 @@ func auditAutomatedMatchingHash(ctx context.Context,
 		fullRows, err := w.Query(ctx,
 			`SELECT
 				s.id,
-				s.agent,
 				s.session_kind,
 				s.first_message,
 				s.user_message_count,
@@ -230,7 +225,6 @@ func scanFullAutomationCandidates(
 	for rows.Next() {
 		var (
 			id           string
-			agent        string
 			sessionKind  string
 			firstMessage sql.NullString
 			firstUser    sql.NullString
@@ -238,7 +232,7 @@ func scanFullAutomationCandidates(
 			rowAutomated bool
 		)
 		if err := rows.Scan(
-			&id, &agent, &sessionKind,
+			&id, &sessionKind,
 			&firstMessage, &userCount, &rowAutomated, &firstUser,
 		); err != nil {
 			return nil, nil, fmt.Errorf(

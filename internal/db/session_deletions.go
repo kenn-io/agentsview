@@ -13,7 +13,8 @@ const archiveMetadataSessionDeletionRevisionKey = "session_deletion_publication_
 
 // Install after column migrations so older archives gain the referenced columns first.
 const sessionClassificationJournalTriggerSQL = `
-CREATE TRIGGER IF NOT EXISTS trg_sessions_classification_journal_update
+DROP TRIGGER IF EXISTS trg_sessions_classification_journal_update;
+CREATE TRIGGER trg_sessions_classification_journal_update
 AFTER UPDATE OF relationship_type, is_automated ON sessions
 WHEN OLD.relationship_type IS NOT NEW.relationship_type OR OLD.is_automated IS NOT NEW.is_automated
 BEGIN

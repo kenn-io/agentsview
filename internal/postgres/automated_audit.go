@@ -18,7 +18,6 @@ type automatedAuditPGProgress struct {
 
 const fullAutomationCandidatesPG = `SELECT
 	s.id,
-	s.agent,
 	s.session_kind,
 	s.first_message,
 	s.user_message_count,
@@ -143,7 +142,6 @@ func auditAutomatedMatchingHashPG(
 	rows, err := pg.QueryContext(ctx,
 		`SELECT
 			s.id,
-			s.agent,
 			s.session_kind,
 			s.user_message_count,
 			s.is_automated,
@@ -193,7 +191,6 @@ func auditAutomatedMatchingHashPG(
 	for rows.Next() {
 		var (
 			id                      string
-			agent                   string
 			sessionKind             string
 			userMessageCount        int
 			rowAutomated            bool
@@ -205,7 +202,6 @@ func auditAutomatedMatchingHashPG(
 		)
 		if err := rows.Scan(
 			&id,
-			&agent,
 			&sessionKind,
 			&userMessageCount,
 			&rowAutomated,
@@ -301,7 +297,6 @@ func scanFullAutomationCandidatesPG(
 	for rows.Next() {
 		var (
 			id                      string
-			agent                   string
 			sessionKind             string
 			firstMessage            sql.NullString
 			firstUser               sql.NullString
@@ -310,7 +305,7 @@ func scanFullAutomationCandidatesPG(
 			promptEvidenceDiscarded bool
 		)
 		if err := rows.Scan(
-			&id, &agent, &sessionKind,
+			&id, &sessionKind,
 			&firstMessage, &userCount, &rowAutomated, &promptEvidenceDiscarded, &firstUser,
 		); err != nil {
 			return nil, nil, count, fmt.Errorf(

@@ -54,8 +54,8 @@ sessions, so **Total Cost** lines up with `agentsview usage daily` for the same
 day and timezone. Usage rows that recur across related sessions are deduplicated
 before totaling, the same rule the Usage page applies.
 
-Subagents include sessions another agent launched, in-process or as separate
-`claude -p`, `codex exec`, or Grok headless runs. Claude Code `sdk-cli` workers
+Subagents include native child sessions and eligible `claude -p`, `codex exec`,
+or Grok headless runs. Claude Code `sdk-cli` workers
 qualify when their first real normalized prompt records `turnOrigin=sdk`.
 Human origin wins conflicting markers. A queued first prompt, missing or unknown
 origin, SDK library entrypoints, or an explicit provider kind blocks this
