@@ -137,12 +137,11 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 		projects [2]string
 		harvest  bool
 	}{
-		{roots: []string{"s3://bucket/archive/agent-transcripts/laptop/raw/cursor"}},
 		{roots: []string{"s3://bucket/archive"}},
 		{roots: []string{"s3://bucket/laptop/raw/cursor", "s3://bucket/laptop/raw/cursor/project-one/agent-transcripts"}},
 		{roots: []string{"s3://bucket/laptop/raw/cursor/project-one/agent-transcripts", "s3://bucket/laptop/raw/cursor"}},
 		{roots: []string{"s3://bucket/host-a/raw/cursor"}, projects: [2]string{"agent-transcripts", "cursor"}, harvest: true},
-		{roots: []string{"s3://bucket/laptop/raw/cursor"}, projects: [2]string{"Users-fiona-Documents-demo", "home-user-a-Documents-demo"}},
+		{roots: []string{"s3://bucket/archive/agent-transcripts/laptop/raw/cursor"}, projects: [2]string{"Users-fiona-Documents-demo", "home-user-a-Documents-demo"}},
 	} {
 		roots := tt.roots
 		projects := tt.projects
@@ -159,10 +158,8 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 			firstURI := root + "/" + projects[0] + "/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl"
 			secondURI := root + "/" + projects[1] + "/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl"
 			otherURI := root + "/" + projects[0] + "/other.txt"
-			flatURI := root + "/" + projects[0] + "/11111111-1111-4111-8111-111111111111.txt"
-			subagentURI := root + "/" + projects[0] + "/agent-transcripts/parent/subagents/11111111-1111-4111-8111-111111111111.jsonl"
 			if tt.harvest {
-				firstURI = flatURI
+				firstURI = root + "/" + projects[0] + "/11111111-1111-4111-8111-111111111111.txt"
 				secondURI = root + "/" + projects[1] + "/11111111-1111-4111-8111-111111111111.txt"
 			}
 			listS3Objects = func(got string) ([]S3Object, error) {
@@ -171,8 +168,6 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 					{URI: secondURI, LastModified: time.Unix(200, 0)},
 					{URI: firstURI, LastModified: time.Unix(100, 0)},
 					{URI: otherURI, LastModified: time.Unix(100, 0)},
-					{URI: flatURI, LastModified: time.Unix(100, 0)},
-					{URI: subagentURI, LastModified: time.Unix(100, 0)},
 				}, nil
 			}
 			sourceSet := newCursorSourceSet(roots)

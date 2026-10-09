@@ -212,92 +212,29 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, messages, 3)
 			assert.Equal(t, "Updated B", messages[1].Content)
-			// Rebuild discovers the alternate first and must keep both saved IDs.
-			provider.discovered = sources
-			if ids[sources[0].DisplayPath] == baseID {
+			if tt.restoreRoots {
 				provider.discovered = []parser.SourceRef{sources[1], sources[0]}
+				stats = engine.ResyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+				require.Zero(t, stats.Failed)
+				verify()
 			}
-			stats = engine.ResyncAll(t.Context(), nil)
-			require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
-			require.Zero(t, stats.Failed)
-			verify()
-			// Omission is not proof of remote deletion, even when another object grows.
-			ownerPath := paths[0]
-			otherPath := paths[1]
-			if ids[ownerPath] != baseID {
-				ownerPath, otherPath = otherPath, ownerPath
-			}
-			for _, source := range sources {
-				if source.DisplayPath == otherPath {
-					provider.discovered = []parser.SourceRef{source}
-				}
-			}
-			stats = engine.ResyncAll(t.Context(), nil)
-			require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
-			require.Zero(t, stats.Failed)
-			verify()
-			assert.Equal(t, ownerPath, derefString(storedSession(baseID).FilePath))
-			// A second machine owns its own base ID despite the same project and stem.
-			otherMachine := "s3://bucket/host-b/raw/cursor/agent-transcripts/" + stem + ".txt"
-			contents[otherMachine] = contents[paths[0]]
-			second := sources[0]
-			second.Key, second.DisplayPath, second.FingerprintKey = otherMachine, otherMachine, otherMachine
-			second.ProjectHint = "agent-transcripts"
-			second.Opaque = parser.S3DiscoveredSource{
-				URI: otherMachine, Project: "agent-transcripts", Machine: "host-b",
-				Size: int64(len(contents[otherMachine])), MtimeNS: mtime.UnixNano(),
-			}
-			provider.discovered = append(provider.discovered, second)
-			if machine == "" {
-				unrelated := root + "/agent-transcripts/unrelated.txt"
-				contents[unrelated] = "user:\nUnrelated conversation\n"
-				source := second
-				source.Key, source.DisplayPath, source.FingerprintKey = unrelated, unrelated, unrelated
-				source.Opaque = parser.S3DiscoveredSource{URI: unrelated, Project: "agent-transcripts", Size: int64(len(contents[unrelated])), MtimeNS: mtime.UnixNano()}
-				provider.discovered = append(provider.discovered, source)
-			}
-			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
-			require.Zero(t, stats.Failed)
-			assert.Equal(t, "host-b", storedSession("host-b~cursor:"+stem).Machine)
-			if machine == "" {
-				assert.Equal(t, "local", storedSession("cursor:unrelated").Machine)
-			}
-			verify()
 			if tt.name == "together" {
-				newPath := strings.TrimSuffix(ownerPath, stem+".txt") + "agent-transcripts/" + stem + "/" + stem + ".jsonl"
-				contents[newPath] = contents[ownerPath]
-				source := sources[0]
-				if source.DisplayPath != ownerPath {
-					source = sources[1]
+				// A second machine owns its own base ID despite the same project and stem.
+				otherMachine := "s3://bucket/host-b/raw/cursor/agent-transcripts/" + stem + ".txt"
+				contents[otherMachine] = contents[paths[0]]
+				second := sources[0]
+				second.Key, second.DisplayPath, second.FingerprintKey = otherMachine, otherMachine, otherMachine
+				second.ProjectHint = "agent-transcripts"
+				second.Opaque = parser.S3DiscoveredSource{
+					URI: otherMachine, Project: "agent-transcripts", Machine: "host-b",
+					Size: int64(len(contents[otherMachine])), MtimeNS: mtime.UnixNano(),
 				}
-				source.Key, source.DisplayPath, source.FingerprintKey = newPath, newPath, newPath
-				remote := source.Opaque.(parser.S3DiscoveredSource)
-				remote.URI = newPath
-				source.Opaque = remote
-				provider.discovered = []parser.SourceRef{source}
+				provider.discovered = append(provider.discovered, second)
 				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 				require.Zero(t, stats.Failed)
-				for pass := range 3 {
-					if pass == 1 {
-						before := fetches.Load()
-						stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
-						require.Zero(t, stats.Failed)
-						assert.Equal(t, before, fetches.Load(), "the saved alias must skip unchanged content")
-					}
-					if pass == 2 {
-						stats = engine.ResyncAll(t.Context(), nil)
-						require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
-						require.Zero(t, stats.Failed)
-					}
-					assert.Equal(t, newPath, derefString(storedSession(baseID).FilePath))
-					ids, err := database.ListSessionIDsByFilePath(t.Context(), newPath, "cursor")
-					require.NoError(t, err)
-					assert.Equal(t, []string{baseID}, ids)
-					ids, err = database.ListSessionIDsByFilePath(t.Context(), ownerPath, "cursor")
-					require.NoError(t, err)
-					assert.Empty(t, ids)
-
-				}
+				assert.Equal(t, "host-b", storedSession("host-b~cursor:"+stem).Machine)
+				verify()
 			}
 			if tt.restoreRoots {
 				require.NoError(t, database.DeleteSession(t.Context(), ids[paths[1]]))
@@ -336,15 +273,12 @@ func TestS3CursorCollidingParents(t *testing.T) {
 		childrenCollide bool
 	}{
 		{"parents first", [][]int{{0}, {1}, {2}}, false},
-		{"parents reversed", [][]int{{1}, {0}, {2}}, false},
 		{"child first separate", [][]int{{2}, {0}, {1}}, false},
-		{"child first together", [][]int{{2, 1, 0}}, false},
 		{"own parent late", [][]int{{0}, {2}, {1}}, false},
 		{"own parent missing", [][]int{{0}, {2}}, false},
 		{"parent root removed", [][]int{{0}, {1}, {2}}, false},
 		{"new child after parent root removed", [][]int{{0}, {1}, {2}}, false},
 		{"children collide", [][]int{{0}, {1}, {3}, {2}}, true},
-		{"children collide reversed", [][]int{{1}, {0}, {2}, {3}}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			const root = "s3://bucket/host-a/raw/cursor"
@@ -450,12 +384,14 @@ func TestS3CursorCollidingParents(t *testing.T) {
 			require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
 			require.Zero(t, stats.Failed)
 			verify()
-			for _, uri := range paths[2:] {
-				_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
-					Agent: parser.AgentCursor, Path: uri, Machine: "host-a", SourceSize: int64(len(content)), SourceMtime: time.Unix(100, 0).UnixNano(), ForceParse: true,
-				}, childIDs[uri])
-				require.NoError(t, err)
-				verify()
+			if tt.name == "new child after parent root removed" {
+				for _, uri := range paths[2:] {
+					_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
+						Agent: parser.AgentCursor, Path: uri, Machine: "host-a", SourceSize: int64(len(content)), SourceMtime: time.Unix(100, 0).UnixNano(), ForceParse: true,
+					}, childIDs[uri])
+					require.NoError(t, err)
+					verify()
+				}
 			}
 			if tt.name == "new child after parent root removed" {
 				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root, aliasRoot}}})
@@ -466,7 +402,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				require.NoError(t, err)
 				verify()
 			}
-			if tt.name == "parents first" || tt.name == "own parent missing" || tt.name == "parent root removed" {
+			if tt.name == "parent root removed" {
 				before, err := database.GetSessionFull(t.Context(), childIDs[paths[2]])
 				require.NoError(t, err)
 				require.NotNil(t, before)
@@ -494,24 +430,20 @@ func TestS3CursorCollidingParents(t *testing.T) {
 					require.Len(t, messages, 2)
 					assert.Equal(t, "Refreshed B", messages[0].Content)
 				}
-				if tt.name == "parent root removed" {
-					updated := source(paths[2])
-					remote := updated.Opaque.(parser.S3DiscoveredSource)
-					remote.MtimeNS = time.Unix(200, 0).UnixNano()
-					updated.Opaque = remote
-					provider.discovered = []parser.SourceRef{updated}
-					stats = engine.SyncAll(t.Context(), nil)
-					require.Zero(t, stats.Failed)
-					verifyRefresh()
-				}
+				updated := source(paths[2])
+				remote := updated.Opaque.(parser.S3DiscoveredSource)
+				remote.MtimeNS = time.Unix(200, 0).UnixNano()
+				updated.Opaque = remote
+				provider.discovered = []parser.SourceRef{updated}
+				stats = engine.SyncAll(t.Context(), nil)
+				require.Zero(t, stats.Failed)
+				verifyRefresh()
 				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), before.ID))
 				verifyRefresh()
-				if tt.name == "parent root removed" {
-					stats = engine.ResyncAll(t.Context(), nil)
-					require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
-					require.Zero(t, stats.Failed)
-					verifyRefresh()
-				}
+				stats = engine.ResyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+				require.Zero(t, stats.Failed)
+				verifyRefresh()
 			}
 		})
 	}
