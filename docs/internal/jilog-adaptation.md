@@ -170,7 +170,7 @@ The digest follows jilog's `learning-digest.md` layout with these differences:
 - Pattern evidence is plain text, unlike jilog's backticked names; the digest
   wraps it in a code span. This output change bumps the detector rule set to
   `friction-v2`. Fingerprints remain unchanged.
-- The JSON summary uses AgentsView schema 1 with `schema_version`,
+- The JSON summary uses AgentsView schema 1 with `date`, `schema_version`,
   `sessions_scanned`, seven kind counts and `p0_alerts`.
 
 `friction-log.md` and `summary.json` share one archive-shaped fixture with
