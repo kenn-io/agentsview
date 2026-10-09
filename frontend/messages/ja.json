@@ -2449,7 +2449,6 @@
   "usage_all_projects": "すべてのプロジェクト",
   "usage_click_project": "クリックして {label} に絞り込み、ダブルクリックでグループとセッションを開く",
   "usage_click_project_hint": "クリックで選択、ダブルクリックまたは開くボタンで開きます。EnterとSpaceで選択。",
-  "usage_open_project": "{label} を開く",
   "usage_zoom_loading": "読み込み中...",
   "usage_click_to_focus": "クリックして {label} に絞り込む",
   "usage_click_to_focus_hint": "クリックして絞り込み、再クリックで解除"

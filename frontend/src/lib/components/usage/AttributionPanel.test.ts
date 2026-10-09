@@ -122,7 +122,8 @@ function mountPanel(colorMap?: ReadonlyMap<string, string>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  usage.focus = null;
+  usage.selectedProjectKey = "";
+  usage.selectedModel = "";
   usage.knownProjects = [];
   usage.attributionSummary = null;
   usage.backToProjects();
@@ -134,12 +135,48 @@ beforeEach(() => {
 
 afterEach(() => {
   usage.backToProjects();
-  usage.focus = null;
+  usage.selectedProjectKey = "";
+  usage.selectedModel = "";
   usage.attributionSummary = null;
   sessions.filters.agent = "";
 });
 
 describe("AttributionPanel selection", () => {
+  it("reveals Clear selection in the actions and clears only the current dimension", async () => {
+    const full = summaryWithModels();
+    usage.summary = full;
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(full);
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "list";
+    usage.selectedProjectKey = "pl1:sha256:first";
+    const component = mountPanel();
+    await tick();
+    const actions = document.querySelector<HTMLElement>(".selection-actions")!;
+    expect(actions.classList.contains("inactive")).toBe(true);
+    document.querySelector<HTMLElement>(".list-row")!.click();
+    await tick();
+    expect(actions.classList.contains("inactive")).toBe(false);
+    [...actions.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Clear selection")!.click();
+    await tick();
+    expect(actions.classList.contains("inactive")).toBe(true);
+    expect(document.querySelector('.list-row[aria-pressed="true"]')).toBeNull();
+    expect(usage.selectedProjectKey).toBe("pl1:sha256:first");
+    await unmount(component);
+    usage.cancelInFlightReads();
+  });
+
+  it("highlights both agents picked in the header", async () => {
+    usage.summary = summaryWithAgents(["claude", "codex"]);
+    sessions.filters.agent = "claude,codex";
+    usage.toggles.attribution.groupBy = "agent";
+    usage.toggles.attribution.view = "list";
+    const component = mountPanel();
+    await tick();
+    expect(document.querySelectorAll('.list-row[aria-pressed="true"]')).toHaveLength(2);
+    expect(document.querySelectorAll(".dimmed")).toHaveLength(0);
+    await unmount(component);
+  });
+
   it.each([
     ["treemap", ".tile"],
     ["treemap", ".rail-row"],
@@ -192,7 +229,7 @@ describe("AttributionPanel selection", () => {
     expect(document.querySelector(".list-row.dimmed")).not.toBeNull();
     expect(document.querySelectorAll(".list-row")).toHaveLength(2);
     expect(usage.zoomedProject).toBeNull();
-    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.trim().startsWith("Open "))).toBe(false);
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Open")).toBe(false);
     row.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     await tick();
     expect(row.getAttribute("aria-pressed")).toBe("false");
@@ -203,7 +240,7 @@ describe("AttributionPanel selection", () => {
     const full = summaryWithDuplicateProjectLabels();
     const narrowed = structuredClone(full);
     narrowed.projectTotals = [narrowed.projectTotals[0]!];
-    usage.focus = { by: "project", id: "pl1:sha256:first" };
+    usage.selectedProjectKey = "pl1:sha256:first";
     usage.summary = narrowed;
     usage.attributionSummary = full;
     usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
@@ -229,7 +266,7 @@ describe("AttributionPanel selection", () => {
     usage.toggles.attribution.view = "list";
     const component = mountPanel();
     await tick();
-    const openButton = () => [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Open Project B");
+    const openButton = () => [...document.querySelectorAll<HTMLButtonElement>(".selection-actions:not(.inactive) span:not(.inactive) button")].find((button) => button.textContent?.trim() === "Open");
     expect(openButton()).toBeUndefined();
     const row = document.querySelectorAll(".list-row")[1]!;
     row.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
@@ -592,7 +629,7 @@ describe("AttributionPanel job groups", () => {
     }
     rows[0]!.click();
     expect(usage.zoomedProject?.key).toBe("pl1:sha256:first");
-    expect(usage.focus).toEqual({ by: "project", id: "pl1:sha256:first" });
+    expect(usage.selectedProjectKey).toBe("pl1:sha256:first");
     await unmount(component);
   });
 

@@ -205,7 +205,7 @@
   // apply params that are actually present in the URL.
   const USAGE_FILTER_KEYS = new Set([
     "from", "to", "window_days",
-    "exclude_model", "exclude_agent",
+    "model", "exclude_model", "exclude_agent",
   ]);
   const SESSION_FILTER_KEYS = new Set([
     "project", "machine", "agent",
@@ -377,6 +377,11 @@
         usage.excludedModels = newExModel;
         changed = true;
       }
+      const newModel = params["model"] ?? "";
+      if (newModel !== usage.selectedModel) {
+        usage.selectedModel = newModel;
+        changed = true;
+      }
       if ((changed || sessionChanged) && urlInitRan) {
         usage.fetchAll();
       }
@@ -394,6 +399,7 @@
       excludedProjectKeys: usage.excludedProjectKeys,
       excludedAgents: usage.excludedAgents,
       excludedModels: usage.excludedModels,
+      selectedModel: usage.selectedModel,
     };
     return withSelectedTokenTypes(
       withUsageMode(
@@ -488,6 +494,7 @@
 
       <FilterDropdown
         label={m.analytics_col_project()}
+        selectedLabel={usage.selectedProjectKey ? usage.focusLabel : ""}
         items={projectItems}
         excludedCsv={usage.excludedProjectKeys}
         unlistedExcludedCount={legacyExcludedProjectCount}
@@ -509,6 +516,7 @@
 
       <FilterDropdown
         label={m.usage_model()}
+        selectedLabel={usage.selectedModel}
         items={modelItems}
         excludedCsv={usage.excludedModels}
         onToggle={(name) => usage.toggleModel(name)}

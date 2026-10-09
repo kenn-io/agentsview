@@ -2306,7 +2306,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			source_session_id = EXCLUDED.source_session_id,
 			source_version = EXCLUDED.source_version,
 			group_key = EXCLUDED.group_key,
-			group_label = EXCLUDED.group_label,
+			group_label = CASE WHEN EXCLUDED.prompt_evidence_discarded THEN NULL ELSE EXCLUDED.group_label END,
 			transcript_fidelity = EXCLUDED.transcript_fidelity,
 			transcript_revision = EXCLUDED.transcript_revision,
 			parser_malformed_lines = EXCLUDED.parser_malformed_lines,
@@ -2373,7 +2373,8 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR (EXCLUDED.prompt_evidence_discarded AND (
 				sessions.display_name IS NOT NULL OR
 				sessions.source_display_name IS NOT NULL OR
-				sessions.session_name IS NOT NULL))
+				sessions.session_name IS NOT NULL OR
+				sessions.group_label IS NOT NULL))
 			OR sessions.source_display_name IS DISTINCT FROM EXCLUDED.display_name
 			OR sessions.session_name IS DISTINCT FROM EXCLUDED.session_name
 			OR sessions.created_at IS DISTINCT FROM EXCLUDED.created_at

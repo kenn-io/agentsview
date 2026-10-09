@@ -2461,7 +2461,6 @@
   "usage_all_projects": "All projects",
   "usage_click_project": "Click to focus {label}; double-click to open its groups and sessions",
   "usage_click_project_hint": "Click to select, double-click or Open to open. Enter and Space select.",
-  "usage_open_project": "Open {label}",
   "usage_zoom_loading": "Loading...",
   "usage_click_to_focus": "Click to focus {label}",
   "usage_click_to_focus_hint": "Click to focus; click again to clear"

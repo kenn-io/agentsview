@@ -849,13 +849,6 @@
     gap: 12px;
   }
 
-  .chart-actions :global(.kit-button.kit-button--sm) {
-    height: 22px;
-    min-height: 22px;
-    padding: 0 8px;
-    font-size: 10px;
-  }
-
   .legend {
     display: flex;
     align-items: center;

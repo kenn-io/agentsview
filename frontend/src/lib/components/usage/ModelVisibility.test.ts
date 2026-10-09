@@ -121,7 +121,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   api.getApiV1UsageSummary.mockImplementation(async (params) => summary(params.exclude_model));
-  usage.focus = null;
+  usage.selectedProjectKey = "";
+  usage.selectedModel = "";
   usage.attributionSummary = null;
   usage.excludedModels = "";
   usage.toggles.attribution.groupBy = "model";
@@ -134,7 +135,8 @@ afterEach(async () => {
   await unmount(component);
   usage.cancelInFlightReads();
   usage.summary = null;
-  usage.focus = null;
+  usage.selectedProjectKey = "";
+  usage.selectedModel = "";
   usage.attributionSummary = null;
   usage.excludedModels = "";
   usage.toggles.attribution.groupBy = "project";
@@ -184,9 +186,9 @@ describe("Usage model visibility", () => {
     expect(document.querySelectorAll(".tile")).toHaveLength(3);
     expect(document.querySelectorAll(".tile.dimmed")).toHaveLength(2);
     expect(document.querySelector('.tile[aria-pressed="true"]')).not.toBeNull();
-    expect(modelPicker().textContent).toContain("All");
+    expect(modelPicker().textContent).toContain("Model: model-alpha");
     document.querySelector(".tile")!.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    await vi.waitFor(() => expect(usage.focus).toBeNull());
+    await vi.waitFor(() => expect(usage.selectedModel).toBe(""));
     modelPicker().click();
     await tick();
     modelOption("model-bravo").click();

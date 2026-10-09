@@ -308,7 +308,7 @@ func schemaColumnMigrations() []columnMigration {
 		},
 		{
 			"sessions", "group_label",
-			`group_label TEXT NOT NULL DEFAULT ''`,
+			`group_label TEXT DEFAULT ''`,
 			"adding sessions.group_label",
 		},
 		{

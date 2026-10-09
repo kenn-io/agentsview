@@ -7,6 +7,7 @@ import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { UsageSummaryResponse } from "../../api/generated/index";
+import { UsageService } from "../../api/generated/index";
 import source from "./UsagePage.svelte?raw";
 import UsagePage from "./UsagePage.svelte";
 
@@ -125,7 +126,8 @@ afterEach(() => {
   router.sessionId = null;
   window.history.replaceState(null, "", "/");
   usage.backToProjects();
-  usage.focus = null;
+  usage.selectedProjectKey = "";
+  usage.selectedModel = "";
   usage.attributionSummary = null;
   usage.summary = null;
   usage.colorSummary = null;
@@ -152,6 +154,28 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("hydrates a model URL into requests and shows it in the picker until cleared", async () => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    const summary = tenModelUsageSummary();
+    const requests = vi.spyOn(UsageService, "getApiV1UsageSummary").mockResolvedValue(summary);
+    vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
+    vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({ priorFrom: "2026-06-01", priorTo: "2026-06-30", priorTotalCost: testMoney(0), deltaPct: 0 });
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = { model: "model-alpha" };
+    usage.toggles.attribution.groupBy = "model";
+    component = mount(UsagePage, { target: document.body });
+    await vi.waitFor(() => expect(requests.mock.calls.some(([params]) => params?.model === "model-alpha")).toBe(true));
+    await flushEffects();
+    expect(document.querySelector('button[aria-label="Model: model-alpha"]')).not.toBeNull();
+    const clear = [...document.querySelectorAll<HTMLButtonElement>(".attribution-panel button")].find((button) => button.textContent?.trim() === "Clear selection")!;
+    clear.click();
+    await vi.waitFor(() => expect(router.params.model).toBeUndefined());
+    expect(usage.selectedModel).toBe("");
+    expect(document.querySelector('button[aria-label="Model: All"]')).not.toBeNull();
+    usage.cancelInFlightReads();
+  });
+
   it("restores hidden models from a shared URL", async () => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -851,13 +875,13 @@ describe("Usage attribution navigation", () => {
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
     usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
-    usage.focus = { by: "project", id: "pl1:sha256:alpha" };
+    usage.selectedProjectKey = "pl1:sha256:alpha";
     refresh.mockClear();
-    usage.toggleFocus("agent", "codex");
+    usage.toggleSelection("agent", "codex");
     await flushEffects();
     expect(refresh).toHaveBeenCalledExactlyOnceWith({ preserveTimeRange: true });
-    expect(usage.isFocused("agent", "codex")).toBe(true);
-    expect(usage.isFocused("project", "pl1:sha256:alpha")).toBe(true);
+    expect(usage.isSelected("agent", "codex")).toBe(true);
+    expect(usage.isSelected("project", "pl1:sha256:alpha")).toBe(true);
     expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
     sessions.filters.agent = "";
     usage.selectedTimeRange = null;
@@ -874,7 +898,7 @@ describe("Usage attribution navigation", () => {
     usage.summary = usageSummaryWithUnsupported();
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
-    usage.toggleFocus("project", "pl1:sha256:alpha");
+    usage.toggleSelection("project", "pl1:sha256:alpha");
     usage.setOpenProject("pl1:sha256:alpha");
     await flushEffects();
     usage.applyDateRange("2024-01-01", "2024-03-31");
@@ -891,7 +915,7 @@ describe("Usage attribution navigation", () => {
     }
     await flushEffects();
     expect(usage.zoomedProject).toBeNull();
-    expect(usage.isFocused("project", "pl1:sha256:alpha")).toBe(true);
+    expect(usage.isSelected("project", "pl1:sha256:alpha")).toBe(true);
     expect(router.params).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-03-31", exclude_model: "model-hidden" }));
     expect(usage.to).toBe("2024-03-31");
     expect(window.location.search).toContain("to=2024-03-31");

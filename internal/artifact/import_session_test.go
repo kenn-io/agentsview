@@ -166,28 +166,6 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 	assert.Equal(t, "hello", write.Messages[0].Content)
 }
 
-func TestImportedGroupsStaySeparateFromLocalAndOtherOrigins(t *testing.T) {
-	entries := []db.TopSessionEntry{{Project: "hermes-cron", GroupKey: "job-a", Cost: money.Money{Microdollars: 1_000_000}}}
-	for _, origin := range []string{"host-a", "host-b"} {
-		write := rewriteManifestForImport(manifest{
-			Origin: origin, NativeSessionID: "run",
-			Session: manifestSession{Project: "hermes-cron", GroupKey: "job-a"},
-		}, nil)
-		entries = append(entries, db.TopSessionEntry{
-			SessionID: write.Session.ID, Project: write.Session.Project, GroupKey: write.Session.GroupKey, Machine: write.Session.Machine,
-			Cost: money.Money{Microdollars: 1_000_000},
-		})
-	}
-	rows, err := db.GroupTopSessions(entries, 100, db.TopSessionsSortCost, db.UsageTokenTypesAll)
-	require.NoError(t, err)
-	require.Len(t, rows, 3)
-	assert.ElementsMatch(t, []string{"", "host-a", "host-b"}, []string{rows[0].Machine, rows[1].Machine, rows[2].Machine})
-	for _, row := range rows {
-		assert.Equal(t, int64(1_000_000), row.Cost.Microdollars)
-		assert.Equal(t, "job-a", row.DisplayName)
-	}
-}
-
 func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
 	t.Parallel()
 

@@ -138,6 +138,7 @@ const MAX_WINDOW_DAYS = 36500;
 const USAGE_FILTERS_KEY = "usage-filters";
 
 export interface UsageFilterState {
+  selectedModel?: string;
   excludedProjects: string;
   excludedProjectKeys?: string;
   excludedAgents: string;
@@ -154,6 +155,7 @@ function loadUsageFilters(): UsageFilterState {
         excludedProjectKeys: "",
         excludedAgents: saved.excludedAgents ?? "",
         excludedModels: saved.excludedModels ?? "",
+        selectedModel: saved.selectedModel ?? "",
       };
     }
   } catch {
@@ -164,6 +166,7 @@ function loadUsageFilters(): UsageFilterState {
     excludedProjectKeys: "",
     excludedAgents: "",
     excludedModels: "",
+    selectedModel: "",
   };
 }
 
@@ -173,6 +176,7 @@ function saveUsageFilters(f: UsageFilterState): void {
       excludedProjects: f.excludedProjects,
       excludedAgents: f.excludedAgents,
       excludedModels: f.excludedModels,
+      selectedModel: f.selectedModel,
     };
     localStorage.setItem(USAGE_FILTERS_KEY, JSON.stringify(data));
   } catch {
@@ -355,11 +359,13 @@ class UsageStore {
     this.excludedProjectKeys = saved.excludedProjectKeys ?? "";
     this.excludedAgents = saved.excludedAgents;
     this.excludedModels = saved.excludedModels;
+    this.selectedModel = saved.selectedModel ?? "";
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
   attributionSummary = $state<UsageSummaryResponse | null>(null);
-  focus = $state<{ by: "project" | "model"; id: string } | null>(null);
+  selectedProjectKey = $state("");
+  selectedModel = $state("");
   colorSummary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
   isTimeRangeSummaryProvisional = $state(false);
@@ -368,14 +374,10 @@ class UsageStore {
   private zoomed = $state(false);
 
   get zoomedProject(): { key: string; label: string } | null {
-    return this.zoomed && this.focus?.by === "project" ? { key: this.focus.id, label: this.focusLabel } : null;
+    return this.zoomed && this.selectedProjectKey ? { key: this.selectedProjectKey, label: this.focusLabel } : null;
   }
   get focusLabel(): string {
-    const focus = this.focus;
-    if (!focus) return "";
-    return focus.by === "project"
-      ? this.knownProjects.find((project) => project.id === focus.id)?.name ?? focus.id
-      : focus.id;
+    return this.knownProjects.find((project) => project.id === this.selectedProjectKey)?.name ?? this.selectedProjectKey;
   }
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
   topSessions = $state<DbTopSessionEntry[] | null>(null);
@@ -470,14 +472,14 @@ class UsageStore {
     if (this.excludedModels) {
       p.exclude_model = this.excludedModels;
     }
-    if (this.focus?.by === "project") p.project_key = this.focus.id;
-    else if (this.focus?.by === "model") p.model = this.focus.id;
+    if (this.selectedProjectKey) p.project_key = this.selectedProjectKey;
+    if (this.selectedModel) p.model = this.selectedModel;
     return p;
   }
 
   private attributionParams(): UsageParams | undefined {
     const by = this.toggles.attribution.groupBy;
-    if (by === "agent" ? !sessions.filters.agent : this.focus?.by !== by) return undefined;
+    if (!this.hasSelection(by)) return undefined;
     const params = this.baseParams();
     if (by === "project") delete params.project_key;
     else if (by === "model") delete params.model;
@@ -672,20 +674,47 @@ class UsageStore {
     }
   }
 
-  isFocused(by: GroupBy, id: string): boolean {
+  isSelected(by: GroupBy, id: string): boolean {
     return by === "agent"
-      ? sessions.filters.agent === id
-      : this.focus?.by === by && this.focus.id === id;
+      ? sessions.isAgentSelected(id)
+      : (by === "project" ? this.selectedProjectKey : this.selectedModel) === id;
   }
 
-  toggleFocus(by: GroupBy, id: string): void {
-    const clear = this.isFocused(by, id);
+  hasSelection(by: GroupBy): boolean {
+    return (by === "agent" ? sessions.filters.agent : by === "project" ? this.selectedProjectKey : this.selectedModel) !== "";
+  }
+
+  clearSelection(by: GroupBy): void {
+    if (by === "agent") {
+      sessions.filters.agent = "";
+      return;
+    }
+    if (by === "project") {
+      this.selectedProjectKey = "";
+      this.backToProjects();
+    } else this.selectedModel = "";
+    void this.fetchAll({ preserveTimeRange: true });
+  }
+
+  toggleSelection(by: GroupBy, id: string): void {
+    const clear = by === "agent" ? sessions.filters.agent === id : this.isSelected(by, id);
     if (by === "agent") {
       sessions.filters.agent = clear ? "" : id;
       return;
     }
-    this.focus = clear ? null : { by, id };
+    if (by === "project") {
+      this.selectedProjectKey = clear ? "" : id;
+      if (clear) this.backToProjects();
+    } else this.selectedModel = clear ? "" : id;
     void this.fetchAll({ preserveTimeRange: true });
+  }
+
+  private dropExcludedSelection(): void {
+    if (this.selectedProjectKey && this.isProjectKeyExcluded(this.selectedProjectKey)) {
+      this.selectedProjectKey = "";
+      this.backToProjects();
+    }
+    if (this.selectedModel && this.isModelExcluded(this.selectedModel)) this.selectedModel = "";
   }
 
   // Toggle an item's exclusion. Clicking an included item
@@ -699,7 +728,6 @@ class UsageStore {
     const previous = this.excludedProjectKeys;
     const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
     this.excludedProjectKeys = this.toggleCsv(this.excludedProjectKeys, key);
-    if (this.zoomedProject?.key === key && this.isProjectKeyExcluded(key)) this.backToProjects();
     const changed = this.excludedProjectKeys;
     void this.fetchAllWithResult(options).then((result) => {
       if (result !== "error" || !hadSelectedTimeRange || this.excludedProjectKeys !== changed)
@@ -778,7 +806,6 @@ class UsageStore {
     );
     for (const key of all) excluded.add(key);
     this.excludedProjectKeys = [...excluded].join(",");
-    if (this.zoomedProject && excluded.has(this.zoomedProject.key)) this.backToProjects();
     this.fetchAll();
   }
 
@@ -803,7 +830,8 @@ class UsageStore {
   }
 
   clearFilters(): void {
-    this.focus = null;
+    this.selectedProjectKey = "";
+    this.selectedModel = "";
     this.backToProjects();
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
@@ -814,7 +842,8 @@ class UsageStore {
 
   get hasActiveFilters(): boolean {
     return (
-      this.focus !== null ||
+      this.selectedProjectKey !== "" ||
+      this.selectedModel !== "" ||
       this.excludedProjects !== "" ||
       this.excludedProjectKeys !== "" ||
       this.excludedAgents !== "" ||
@@ -893,6 +922,7 @@ class UsageStore {
   }
 
   private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
+    this.dropExcludedSelection();
     const startedAt = performance.now();
     this.stepTimings.clear();
     this.refreshStartedAt = startedAt;
@@ -1100,12 +1130,12 @@ class UsageStore {
       if (
         recoverProjectScope &&
         this.versions.summary === v &&
-        (this.excludedProjectKeys !== "" || this.focus?.by === "project") &&
+        (this.excludedProjectKeys !== "" || this.selectedProjectKey !== "") &&
         isUnknownProjectKeyError(e)
       ) {
         this.excludedProjectKeys = "";
-        if (this.focus?.by === "project") {
-          this.focus = null;
+        if (this.selectedProjectKey) {
+          this.selectedProjectKey = "";
           this.backToProjects();
         }
         this.abortPanel("topSessions");
@@ -1277,8 +1307,8 @@ class UsageStore {
       this.backToProjects();
       return;
     }
-    const needsFocus = !this.isFocused("project", key);
-    this.focus = { by: "project", id: key };
+    const needsFocus = !this.isSelected("project", key);
+    this.selectedProjectKey = key;
     this.zoomed = true;
     if (needsFocus) void this.fetchAll({ preserveTimeRange: true });
     else void this.fetchZoom();
@@ -1439,6 +1469,7 @@ class UsageStore {
 export const usage = new UsageStore();
 
 export interface UsageUrlState {
+  selectedModel?: string;
   from: string;
   to: string;
   isPinned: boolean;
@@ -1462,6 +1493,7 @@ export function parseWindowDays(raw: string | undefined): number | null {
 
 export function buildUsageUrlParams(state: UsageUrlState): Record<string, string> {
   const params: Record<string, string> = {};
+  if (state.selectedModel) params["model"] = state.selectedModel;
   if (state.isPinned) {
     if (state.from) params["from"] = state.from;
     if (state.to) params["to"] = state.to;

@@ -13,6 +13,9 @@ The latest release is
 
 - Select a Usage attribution tile or row to narrow totals and charts while
   every item stays visible in its own color. Enter and Space select a project.
+  The Project and Model picker labels show the selected item. **Clear selection**
+  clears the displayed dimension, and **Open** sits beside it in the panel header.
+  Unchecking the selected item in a picker clears the selection.
   Double click or select it and use **Open** to see its groups and sessions.
   On touch screens, use **Open**. **All projects**, Escape, and Backspace
   return with current dates, filters, and selection. The Projects picker hides
@@ -21,6 +24,8 @@ The latest release is
   recorded parent links. Each job shows its latest recorded name in the
   selected range, including on hosted PostgreSQL archives.
   The first sync after upgrading rebuilds the archive once to populate groups.
+  Changed push fingerprints re-push every session once to PostgreSQL and
+  ClickHouse after upgrade.
   Orphaned Hermes sessions synced before the upgrade can't be reparsed and
   appear as individual sessions. For DuckDB mirrors, run
   `agentsview duckdb push --full` once.

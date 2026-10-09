@@ -2022,6 +2022,89 @@ describe("UsageStore attribution focus", () => {
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
   });
 
+  it.each(["project", "model"] as const)("drops selected %s before picker exclusions reach the API", async (by) => {
+    const { usage } = await loadStore();
+    const id = by === "project" ? "pl1:sha256:alpha" : "gpt-4o";
+    usage.toggleSelection(by, id);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    if (by === "project") usage.setOpenProject(id);
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    if (by === "project") usage.toggleProjectKey(id);
+    else usage.toggleModel(id);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.hasSelection(by)).toBe(false);
+    expect(usage.zoomedProject).toBeNull();
+    const include = by === "project" ? "project_key" : "model";
+    const exclude = by === "project" ? "exclude_project_key" : "exclude_model";
+    for (const [params] of usageServiceMocks.getApiV1UsageSummary.mock.calls) {
+      expect(params[include]).toBeUndefined();
+      expect(params[exclude]).toBe(id);
+    }
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalled();
+    usage.cancelInFlightReads();
+  });
+
+  it.each(["project", "model"] as const)("drops selected %s through Deselect all", async (by) => {
+    const { usage } = await loadStore();
+    const id = by === "project" ? "pl1:sha256:alpha" : "gpt-4o";
+    usage.toggleSelection(by, id);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    if (by === "project") usage.deselectAllProjectKeys([id]);
+    else usage.deselectAllModels([id]);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.hasSelection(by)).toBe(false);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0][by === "project" ? "project_key" : "model"]).toBeUndefined();
+    usage.cancelInFlightReads();
+  });
+
+  it("round-trips model selection while project keys stay live-only", async () => {
+    const { usage, buildUsageUrlParams } = await loadStore();
+    usage.toggleSelection("model", "gpt-4o");
+    usage.toggleSelection("project", "pl1:sha256:alpha");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(buildUsageUrlParams(usage)).toEqual({ model: "gpt-4o" });
+    const restored = (await loadStore()).usage;
+    expect(restored.selectedModel).toBe("gpt-4o");
+    expect(restored.selectedProjectKey).toBe("");
+    await restored.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls).toContainEqual([
+      expect.objectContaining({ model: "gpt-4o" }), expect.anything(),
+    ]);
+    restored.cancelInFlightReads();
+  });
+
+  it("highlights both header agents, narrows to one, then clears the sole selection", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    sessions.filters.agent = "claude,codex";
+    expect(usage.isSelected("agent", "claude")).toBe(true);
+    expect(usage.isSelected("agent", "codex")).toBe(true);
+    usage.toggleSelection("agent", "claude");
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].agent).toBe("claude");
+    usage.toggleSelection("agent", "claude");
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].agent).toBeUndefined();
+    expect(usage.hasSelection("agent")).toBe(false);
+    usage.cancelInFlightReads();
+  });
+
+  it("clears only the displayed dimension and preserves the brush and exclusions", async () => {
+    const { usage } = await loadStore();
+    usage.toggles.attribution.groupBy = "model";
+    usage.selectedProjectKey = "pl1:sha256:alpha";
+    usage.selectedModel = "gpt-4o";
+    usage.excludedModels = "hidden";
+    usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+    usage.clearSelection("model");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      project_key: "pl1:sha256:alpha", exclude_model: "hidden", from: "2024-01-08", to: "2024-01-14",
+    }));
+    expect(usage.selectedModel).toBe("");
+    usage.cancelInFlightReads();
+  });
+
   it("keeps full-window colors when brushing reverses the project ranking and then selecting", async () => {
     const { usage } = await loadStore();
     const { usageChartColorMaps } = await import("../utils/usageChartColors.js");
@@ -2043,7 +2126,7 @@ describe("UsageStore attribution focus", () => {
     usage.setTimeRange("2024-01-08", "2024-01-14");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usageChartColorMaps(usage.colorSummary, "matplotlib").project).toEqual(colors);
-    usage.toggleFocus("project", "pl1:sha256:beta");
+    usage.toggleSelection("project", "pl1:sha256:beta");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usage.summary?.projectTotals).toEqual(selected.projectTotals);
     expect(usage.attributionSummary?.projectTotals).toEqual(brushed.projectTotals);
@@ -2060,7 +2143,7 @@ describe("UsageStore attribution focus", () => {
     usage.summary = usageSummary();
     usage.applyDateRange("2024-01-08", "2024-01-14");
     usage.toggles.attribution.groupBy = by;
-    usage.toggleFocus(by, id);
+    usage.toggleSelection(by, id);
     if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
     await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
     expect(
@@ -2077,11 +2160,11 @@ describe("UsageStore attribution focus", () => {
     expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]![0]).toEqual(
       expect.objectContaining({ [param]: id, from: "2024-01-01", to: "2024-02-29" }),
     );
-    expect(usage.isFocused(by, id)).toBe(true);
+    expect(usage.isSelected(by, id)).toBe(true);
     expect(usage.zoomedProject).toBeNull();
     usageServiceMocks.getApiV1UsageSummary.mockClear();
     usage.toggles.attribution.groupBy = by;
-    usage.toggleFocus(by, id);
+    usage.toggleSelection(by, id);
     if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledOnce();
@@ -2094,7 +2177,7 @@ describe("UsageStore attribution focus", () => {
     const { usage } = await loadStore();
     usage.summary = usageSummary();
     usage.applyDateRange("2024-01-01", "2024-01-31");
-    usage.toggleFocus("project", "pl1:sha256:alpha");
+    usage.toggleSelection("project", "pl1:sha256:alpha");
     await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
     usage.setTimeRange("2024-01-08", "2024-01-14");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
@@ -2114,12 +2197,12 @@ describe("UsageStore attribution focus", () => {
     usage.cancelInFlightReads();
   });
 
-  it("replaces focus and clears it with Clear filters", async () => {
+  it("combines project and model selection and clears both with Clear filters", async () => {
     const { usage } = await loadStore();
-    usage.toggleFocus("project", "pl1:sha256:alpha");
-    usage.toggleFocus("model", "gpt-4o");
-    expect(usage.isFocused("project", "pl1:sha256:alpha")).toBe(false);
-    expect(usage.isFocused("model", "gpt-4o")).toBe(true);
+    usage.toggleSelection("project", "pl1:sha256:alpha");
+    usage.toggleSelection("model", "gpt-4o");
+    expect(usage.isSelected("project", "pl1:sha256:alpha")).toBe(true);
+    expect(usage.isSelected("model", "gpt-4o")).toBe(true);
     usage.clearFilters();
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].model).toBeUndefined();
@@ -2135,8 +2218,8 @@ describe("UsageStore project scope recovery", () => {
 
   it.each([false, true])("recovers a vanished project, zoomed=%s", async (zoomed) => {
     const { usage } = await loadStore();
-    usage.focus = { by: "project", id: "pl1:sha256:gone" };
-    if (zoomed) usage.setOpenProject(usage.focus.id);
+    usage.selectedProjectKey = "pl1:sha256:gone";
+    if (zoomed) usage.setOpenProject(usage.selectedProjectKey);
     const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
     usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
     usageServiceMocks.getApiV1UsageSummary.mockImplementation((params) =>
@@ -2147,7 +2230,7 @@ describe("UsageStore project scope recovery", () => {
         : Promise.resolve(usageSummary(9)),
     );
     await usage.fetchAll({ preserveTimeRange: true });
-    expect(usage.focus).toBeNull();
+    expect(usage.selectedProjectKey).toBe("");
     expect(usage.zoomedProject).toBeNull();
     expect(usage.excludedProjectKeys).toBe("");
     expect(usage.summary?.totals.totalCost).toEqual(testMoney(9));

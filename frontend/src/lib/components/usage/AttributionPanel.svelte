@@ -4,7 +4,6 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
-  import { sessions } from "../../stores/sessions.svelte.js";
   import { Button } from "@kenn-io/kit-ui";
   import { shortenId } from "../../utils/shortId.js";
   import Treemap from "./Treemap.svelte";
@@ -26,7 +25,7 @@
   }
 
   const groupBy = $derived(usage.toggles.attribution.groupBy);
-  const hasSelection = $derived(groupBy === "agent" ? sessions.filters.agent !== "" : usage.focus?.by === groupBy);
+  const hasSelection = $derived(usage.hasSelection(groupBy));
   const view = $derived(usage.toggles.attribution.view);
   const isTokenMode = $derived(usage.mode === "token");
 
@@ -142,8 +141,8 @@
       value: r.value,
       color: r.color,
       title: rowTitle(r.id, r.label),
-      selected: usage.isFocused(groupBy, r.id),
-      dimmed: !zoomedProject && hasSelection && !usage.isFocused(groupBy, r.id),
+      selected: usage.isSelected(groupBy, r.id),
+      dimmed: !zoomedProject && hasSelection && !usage.isSelected(groupBy, r.id),
       meta: fmtPct(r.value, rows.reduce(
         (sum, item) => sum + item.value, 0,
       )),
@@ -160,7 +159,7 @@
 
   function handleSelect(id: string) {
     if (zoomedProject) return;
-    if (rows.some((row) => row.id === id)) usage.toggleFocus(groupBy, id);
+    if (rows.some((row) => row.id === id)) usage.toggleSelection(groupBy, id);
   }
 
   function handleOpen(id: string) {
@@ -204,11 +203,16 @@
           ? m.usage_tokens_attribution_title()
           : m.usage_cost_attribution_title()}
       </h3>
-      {#if groupBy === "project" && usage.focus?.by === "project"}
-        <Button size="sm" surface="soft" label={m.usage_open_project({ label: usage.focusLabel })} onclick={() => handleOpen(usage.focus!.id)} />
-      {/if}
     {/if}
     <div class="toggles">
+      <div class="selection-actions" class:inactive={!hasSelection}>
+        <Button size="sm" surface="soft" label={m.sidebar_clear_selection()} onclick={() => usage.clearSelection(groupBy)} />
+        {#if groupBy === "project"}
+          <span class:inactive={!usage.selectedProjectKey || !!zoomedProject}>
+            <Button size="sm" surface="soft" label={m.breadcrumb_open()} title={usage.focusLabel} onclick={() => handleOpen(usage.selectedProjectKey)} />
+          </span>
+        {/if}
+      </div>
       <div class="segment-toggle">
         <button
           class="toggle-btn"
@@ -274,11 +278,11 @@
             <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
             <div
               class="rail-row"
-              class:selected={usage.isFocused(groupBy, row.id)}
-              class:dimmed={!zoomedProject && hasSelection && !usage.isFocused(groupBy, row.id)}
+              class:selected={usage.isSelected(groupBy, row.id)}
+              class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
               role={zoomedProject ? undefined : "button"}
               tabindex={zoomedProject ? undefined : 0}
-              aria-pressed={zoomedProject ? undefined : usage.isFocused(groupBy, row.id)}
+              aria-pressed={zoomedProject ? undefined : usage.isSelected(groupBy, row.id)}
               title={rowTitle(row.id, row.label)}
               onclick={zoomedProject ? undefined : (event) => handleClick(event, row.id)}
               ondblclick={!zoomedProject && groupBy === "project" ? () => handleOpen(row.id) : undefined}
@@ -305,11 +309,11 @@
           <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
           <div
             class="list-row"
-            class:selected={usage.isFocused(groupBy, row.id)}
-            class:dimmed={!zoomedProject && hasSelection && !usage.isFocused(groupBy, row.id)}
+            class:selected={usage.isSelected(groupBy, row.id)}
+            class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
             role={zoomedProject ? undefined : "button"}
             tabindex={zoomedProject ? undefined : 0}
-            aria-pressed={zoomedProject ? undefined : usage.isFocused(groupBy, row.id)}
+            aria-pressed={zoomedProject ? undefined : usage.isSelected(groupBy, row.id)}
             title={rowTitle(row.id, row.label)}
             onclick={zoomedProject ? undefined : (event) => handleClick(event, row.id)}
             ondblclick={!zoomedProject && groupBy === "project" ? () => handleOpen(row.id) : undefined}
@@ -356,11 +360,13 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: 12px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-height: 32px;
     gap: 8px;
   }
 
   .chart-title {
+    min-width: 0;
     font-size: 12px;
     font-weight: 600;
     color: var(--text-primary);
@@ -368,7 +374,19 @@
 
   .toggles {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 8px;
+  }
+
+  .selection-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .inactive {
+    visibility: hidden;
   }
 
   .segment-toggle {

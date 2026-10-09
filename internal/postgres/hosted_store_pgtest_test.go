@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,6 +13,47 @@ import (
 	"testing"
 	"time"
 )
+
+func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
+	f := newHostedFixture(t, "tenant-group-label")
+	sess := db.Session{
+		ID: "group-label-discard", Machine: "device-a", Agent: "hermes", Project: "scheduled",
+		CreatedAt: "2026-01-01T00:00:00Z", GroupKey: "job-a", GroupLabel: "Private job title",
+	}
+	options := pgSessionWriteOptions{Machine: "device-a", SkipAliases: true}
+	write := func() {
+		tx, err := f.runtime.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		require.NoError(t, writePGSession(t.Context(), tx, sess, "", nil, options))
+		require.NoError(t, tx.Commit())
+	}
+	read := func(wantLabel sql.NullString) {
+		var key string
+		var label sql.NullString
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key, group_label FROM sessions WHERE id=$1`, sess.ID).Scan(&key, &label))
+		assert.Equal(t, "job-a", key)
+		assert.Equal(t, wantLabel, label)
+	}
+	write()
+	read(sql.NullString{String: "Private job title", Valid: true})
+	options.UsageOnly = true
+	write()
+	read(sql.NullString{})
+	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	defer store.Close()
+	stored, err := store.physical.GetSession(t.Context(), sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "job-a", stored.GroupKey)
+	assert.Empty(t, stored.GroupLabel)
+	sess.GroupLabel = "stale title"
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET group_label='stale title' WHERE id=$1`, sess.ID)
+	require.NoError(t, err)
+	write()
+	read(sql.NullString{})
+}
 
 // A physical Store passed through the hosted constructor cannot resolve the
 // provider alias and leaks storage identities in its list and transcript.

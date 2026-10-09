@@ -135,18 +135,21 @@
     opacity: 0.92;
   }
 
+  .treemap-container :global(.tile rect) {
+    stroke: transparent;
+    stroke-width: 2;
+  }
+
   .treemap-container :global(.tile:focus-visible) {
     outline: none;
   }
 
   .treemap-container :global(.tile:focus-visible rect) {
     stroke: white;
-    stroke-width: 2;
   }
 
   .treemap-container :global(.tile[aria-pressed="true"] rect) {
     stroke: white;
-    stroke-width: 2;
   }
 
   .treemap-container :global(.tile-label) {

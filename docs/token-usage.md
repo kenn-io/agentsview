@@ -152,9 +152,13 @@ when anything is active.
 Click a tile or row in Usage attribution to select a project, model, or agent
 and narrow the page's stats. Every tile and row stays visible at its own color;
 the selection is highlighted and the others dimmed. Click the selection again
-or use **Clear filters** to clear it. The selection stays active when dates
-widen.
-Double click a project or select it and use **Open** to see its groups and
+or use **Clear selection** in the panel header to clear that dimension while
+keeping dates and other filters. The Project and Model pickers show the
+selected item. Selections combine across dimensions and stay active when dates
+widen. Unchecking the selected item in a picker clears its selection and any
+opened project view.
+Double click a project or select it and use **Open** beside **Clear selection**
+to see its groups and
 individual sessions for the selected date range. On touch screens, use **Open**.
 Enter and Space select any item.
 Hermes cron jobs show their latest recorded name in
@@ -176,7 +180,8 @@ session ranking can be shared directly.
 
 Project-key exclusions are the exception. Shared-store project keys are scoped
 to the current aggregate archive set, so the page keeps those exclusions in
-memory and does not write or restore them through the URL.
+memory and does not write or restore them through the URL. Project selections
+also stay in memory. Model and agent selections survive reload.
 
 ![Usage toolbar with filters](/docs/assets/generated/screenshots/usage-toolbar.png)
 
@@ -185,13 +190,12 @@ Deselect all shortcuts, and a colored dot for agents so you can tell them apart
 at a glance.
 
 In the Model picker, checked models are visible and unchecked models are
-hidden. Attribution selections leave the picker unchanged. Hidden models
+hidden. Attribution selections show in the picker label. Hidden models
 remain in the picker after a reload or when opening a shared URL.
 
-Usage saves model visibility with `exclude_model`. The previous Usage-only
-`model` URL parameter and saved inclusion selections no longer restrict the
-view; choose hidden models in the picker instead. The Analytics model filter
-and API model filters are unchanged.
+Usage saves model visibility with `exclude_model` and the selected model with
+`model`. Unchecking the selected model clears its selection and shows the
+remaining models.
 
 ![Model filter dropdown](/docs/assets/generated/screenshots/usage-filter-dropdown.png)
 
