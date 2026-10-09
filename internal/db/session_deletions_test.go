@@ -99,12 +99,12 @@ func TestClassificationJournalCommitsChangesAndIgnoresNoOps(t *testing.T) {
 		open func(testing.TB) *DB
 	}{
 		{"normal", testDB},
-		{"fresh", func(t testing.TB) *DB {
-			path := filepath.Join(t.TempDir(), "fresh.db")
-			require.NoError(t, os.WriteFile(path, nil, 0o600))
-			d, err := OpenFreshIsolatedContext(t.Context(), path)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, d.Close()) })
+		{"fresh", func(tb testing.TB) *DB {
+			path := filepath.Join(tb.TempDir(), "fresh.db")
+			require.NoError(tb, os.WriteFile(path, nil, 0o600))
+			d, err := OpenFreshIsolatedContext(tb.Context(), path)
+			require.NoError(tb, err)
+			tb.Cleanup(func() { require.NoError(tb, d.Close()) })
 			return d
 		}},
 	} {
