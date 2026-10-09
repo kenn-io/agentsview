@@ -22,7 +22,7 @@ type ImportStats struct {
 	Updated  int `json:"updated"`
 	Skipped  int `json:"skipped"`
 	Errors   int `json:"errors"`
-	// Refusals names each refused conversation (each also counted in Errors); Gemini Apps parse errors are counted without an entry, and progress callbacks get counts only.
+	// Refusals names each conversation a per-conversation write refused (each also counted in Errors); Gemini Apps parse errors are counted without an entry, and progress callbacks get counts only.
 	Refusals []ImportRefusal `json:"refusals,omitempty"`
 }
 
@@ -33,14 +33,13 @@ const (
 	RefusalDiverged      RefusalReason = "diverged"       // export rewrites archived messages
 	RefusalShorterExport RefusalReason = "shorter_export" // export has fewer messages than the archive
 	RefusalTrashed       RefusalReason = "trashed"        // session is in the trash
-	RefusalNewerMarker   RefusalReason = "newer_marker"   // archive marker requires a newer importer
 	RefusalTransient     RefusalReason = "transient"      // anything else; a later import may succeed
 )
 
 // ImportRefusal identifies one conversation the import did not write.
 type ImportRefusal struct {
 	SessionID string        `json:"session_id"`
-	Reason    RefusalReason `json:"reason" enum:"diverged,shorter_export,trashed,newer_marker,transient"`
+	Reason    RefusalReason `json:"reason" enum:"diverged,shorter_export,trashed,transient"`
 }
 
 // ImportCallbacks provides optional progress reporting.
@@ -237,103 +236,81 @@ func upsertConversation(
 
 	msgs := claudeAIMessages(s.ID, result.Messages)
 
-	existing, err := store.GetSessionFull(ctx, s.ID)
+	existing, err := store.GetSession(ctx, s.ID)
 	if err != nil {
 		return importNew, fmt.Errorf("checking session: %w", err)
-	}
-	if err := checkClaudeAIMarker(existing); err != nil {
-		return importNew, err
-	}
-	if existing != nil && existing.DeletedAt != nil {
-		existing = nil
 	}
 	isNew := existing == nil
 	// A shorter export (for example an older archive or one with deleted
 	// turns) would make the replacement below drop stored messages.
 	// Refuse it before touching the session row.
-	if s.LastEntryUUID == nil && existing != nil && len(msgs) < existing.MessageCount {
+	if existing != nil && len(msgs) < existing.MessageCount {
 		return importNew, refuse(RefusalShorterExport, fmt.Errorf(
 			"export has %d messages, archive has %d",
 			len(msgs), existing.MessageCount,
 		))
 	}
 
-	sess := chatGPTSession(s)
-	live := s.LastEntryUUID != nil
-	if live {
-		sess.LastEntryUUID = strPtr(claudeAIMarker(store, *s.LastEntryUUID))
-	} else {
-		if err := store.UpsertSession(ctx, sess); err != nil {
-			if errors.Is(err, db.ErrSessionExcluded) {
-				return importSkipped, nil
-			}
-			return importNew, fmt.Errorf("upserting session: %w", err)
-		}
-		if localDB, ok := store.(*db.DB); ok {
-			if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
-				log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
-			}
-		}
+	sess := db.Session{
+		ID:               s.ID,
+		Project:          s.Project,
+		Machine:          s.Machine,
+		FirstMessage:     strPtr(s.FirstMessage),
+		SessionName:      db.ParsedSessionName(s),
+		StartedAt:        timeStr(s.StartedAt),
+		EndedAt:          timeStr(s.EndedAt),
+		MessageCount:     s.MessageCount,
+		UserMessageCount: s.UserMessageCount,
 	}
-	replaceMessages := true
-	unchanged := false
-	if existing != nil && (live || existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt)) {
-		archived, err := store.GetAllMessages(ctx, s.ID)
-		if err != nil {
-			return importNew, fmt.Errorf("loading existing messages: %w", err)
-		}
-		canonical := storedFormMessages(store, msgs)
-		unchanged = sameMessages(archived, canonical)
-		if unchanged && !live {
+	db.ApplyParsedSessionIdentity(&sess, s)
+
+	if err := store.UpsertSession(ctx, sess); err != nil {
+		if errors.Is(err, db.ErrSessionExcluded) {
 			return importSkipped, nil
 		}
-		if live {
-			// Claude branch appends need exact prefixes; compareChatGPTPrefix also accepts text completion.
-			replaceMessages = !unchanged && (canonical == nil || len(canonical) < len(archived) || !sameMessages(archived, canonical[:len(archived)]))
+		return importNew, fmt.Errorf("upserting session: %w", err)
+	}
+
+	// Bump local_modified_at so incremental PG push picks up session_name
+	// changes even when the skip path below returns importSkipped (message
+	// count unchanged) and ReplaceSessionMessages is never called.
+	if localDB, ok := store.(*db.DB); ok {
+		if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
+			log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
 		}
 	}
 
-	if !unchanged {
-		fts.suspend(ctx)
-	}
-	if !live {
-		if err := store.ReplaceSessionMessages(ctx, s.ID, msgs); err != nil {
-			return importNew, fmt.Errorf("replacing messages: %w", err)
+	// Skip expensive message replacement when the conversation
+	// has not changed since the last import. Compare both
+	// message count and ended_at (source updated_at) to detect
+	// content/metadata changes even when count is unchanged.
+	if !isNew && existing != nil && existing.MessageCount == s.MessageCount {
+		newEnd := timeStr(s.EndedAt)
+		if ptrEqual(existing.EndedAt, newEnd) {
+			existingMsgs, err := store.GetAllMessages(ctx, s.ID)
+			if err != nil {
+				return importNew,
+					fmt.Errorf("loading existing messages: %w", err)
+			}
+			// Compare in stored form: the write path sanitizes and
+			// projects rows, so raw parser output can differ from an
+			// unchanged archived copy.
+			if sameMessages(existingMsgs, storedFormMessages(store, msgs)) {
+				return importSkipped, nil
+			}
 		}
-		if isNew {
-			return importNew, nil
-		}
-		return importUpdated, nil
 	}
-	write := db.SessionBatchWrite{
-		Session:           sess,
-		Messages:          msgs,
-		ReplaceMessages:   replaceMessages,
-		SkipSignalUpdates: unchanged,
-		TouchModified:     true,
-	}
-	if replaceMessages && !isNew {
-		r, ok := store.(sessionReplacer)
-		if !ok {
-			return importNew, errors.New("store cannot preserve replaced chats")
-		}
-		write.KeepTrashedCopyOnlyOnPinLoss = true
-		_, err = r.ReplaceSessionKeepingTrashedCopy(ctx, write)
-	} else {
-		_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
-	}
-	if errors.Is(err, db.ErrSessionExcluded) {
-		return importSkipped, nil
-	}
-	if err != nil {
-		return importNew, err
+
+	// Suspend FTS before first message-changing operation to
+	// avoid per-row trigger overhead during bulk work.
+	fts.suspend(ctx)
+
+	if err := store.ReplaceSessionMessages(ctx, s.ID, msgs); err != nil {
+		return importNew, fmt.Errorf("replacing messages: %w", err)
 	}
 
 	if isNew {
 		return importNew, nil
-	}
-	if unchanged && existing != nil && existing.MessageCount == s.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) {
-		return importSkipped, nil
 	}
 	return importUpdated, nil
 }
@@ -538,7 +515,6 @@ func chatGPTSession(s parser.ParsedSession) db.Session {
 		EndedAt:          timeStr(s.EndedAt),
 		MessageCount:     s.MessageCount,
 		UserMessageCount: s.UserMessageCount,
-		LastEntryUUID:    s.LastEntryUUID,
 	}
 	db.ApplyParsedSessionIdentity(&sess, s)
 	return sess
@@ -707,8 +683,7 @@ func sameMessages(existing, incoming []db.Message) bool {
 	for i := range existing {
 		if !sameTurn(existing[i], incoming[i]) ||
 			existing[i].Content != incoming[i].Content ||
-			existing[i].ContentLength != incoming[i].ContentLength ||
-			existing[i].SourceUUID != "" && incoming[i].SourceUUID != "" && existing[i].SourceUUID != incoming[i].SourceUUID {
+			existing[i].ContentLength != incoming[i].ContentLength {
 			return false
 		}
 	}

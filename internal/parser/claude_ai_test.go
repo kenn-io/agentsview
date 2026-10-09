@@ -413,8 +413,6 @@ func TestParseClaudeAIDetail_SelectedPath(t *testing.T) {
 			input := `{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"` + tt.leaf + `","chat_messages":[` + edit + "," + more + "," + retry + "," + first + "," + question + `,{"uuid":"orphan","parent_message_uuid":"missing"},{"uuid":"invalid","parent_message_uuid":null}]}`
 			result, err := ParseClaudeAIDetail([]byte(input))
 			require.NoError(t, err)
-			require.NotNil(t, result.Session.LastEntryUUID)
-			assert.Equal(t, tt.leaf, *result.Session.LastEntryUUID)
 			var contents []string
 			for i, m := range result.Messages {
 				contents = append(contents, m.Content)

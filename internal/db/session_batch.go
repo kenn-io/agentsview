@@ -27,10 +27,8 @@ type SessionBatchWrite struct {
 	// SkipSignalUpdates omits automatic quality-signal and secret-finding
 	// persistence for bounded ingestion callers that do not consume it.
 	SkipSignalUpdates bool
-	// TouchModified publishes metadata-only writes to incremental mirrors in the same transaction.
-	TouchModified   bool
-	DataVersion     int
-	ReplaceMessages bool
+	DataVersion       int
+	ReplaceMessages   bool
 	// KeepTrashedCopyOnlyOnPinLoss limits ReplaceSessionKeepingTrashedCopy to replacements that lose a pin or note.
 	KeepTrashedCopyOnlyOnPinLoss bool
 	// CompleteStoredRows lets an append write complete stored rows at stored ordinals: it sets results on stored calls that are still empty and replaces stored text with longer text that starts with it (IsTextExtension). Rows keep their IDs; other stored rows are untouched.
@@ -695,11 +693,6 @@ func writeOneSessionBatchTx(
 				"setting data_version for %s: %w",
 				write.Session.ID, err,
 			)
-		}
-	}
-	if write.TouchModified && !transcriptChanged && write.DataVersion == 0 {
-		if err := bumpLocalModifiedAt(ctx, tx, write.Session.ID); err != nil {
-			return 0, fmt.Errorf("touching session %s: %w", write.Session.ID, err)
 		}
 	}
 

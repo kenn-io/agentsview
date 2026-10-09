@@ -7,6 +7,8 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"log"
 	"net/url"
 	"slices"
 	"strconv"
@@ -41,17 +43,10 @@ func claudeAIRequest(shape int, organization, conversation string, offset int) s
 	return strings.NewReplacer("{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset)).Replace(strings.Split(claudeAIRequests, "\n")[shape])
 }
 
-func claudeAIMarker(store db.Store, leaf string) string {
-	return db.ClaudeAIMarker(storeArchiveContent(store), leaf)
-}
-
-func checkClaudeAIMarker(existing *db.Session) error {
-	if existing != nil && existing.LastEntryUUID != nil {
-		if version := db.ParseClaudeAIMarkerVersion(*existing.LastEntryUUID); version > db.ClaudeAIMarkerVersion {
-			return refuse(RefusalNewerMarker, fmt.Errorf("stored claude.ai marker version %d is newer than supported version %d", version, db.ClaudeAIMarkerVersion))
-		}
-	}
-	return nil
+func claudeAIFreshness(updatedAt, leaf string, count int) uint64 {
+	hash := fnv.New64a()
+	fmt.Fprintf(hash, "%s\x00%s\x00%d", updatedAt, leaf, count)
+	return hash.Sum64()
 }
 
 type claudeAIHTTPError struct{ status int }
@@ -75,6 +70,8 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	db.Store
 	IsSessionTrashed(context.Context, string) bool
 	IsSessionExcluded(context.Context, string) bool
+	GetProviderStatHash(context.Context, parser.AgentType, string) (uint64, bool, error)
+	UpsertProviderStatHash(context.Context, parser.AgentType, string, uint64) error
 }, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks, machine ...string,
 ) (stats ImportStats, retErr error) {
 	raw, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(claudeAIOrganizationsRequest, "", "", 0))
@@ -162,13 +159,11 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err != nil {
 					return stats, err
 				}
-				if err := checkClaudeAIMarker(existing); err != nil {
-					stats.record(id, importSkipped, err)
-					cb.progress(stats)
-					continue
+				storedHash, fresh, err := store.GetProviderStatHash(ctx, parser.AgentClaudeAI, id)
+				if err != nil {
+					return stats, err
 				}
-				updatedAt, parseErr := time.Parse(time.RFC3339Nano, marker.UpdatedAt)
-				if existing != nil && parseErr == nil && ptrEqual(existing.EndedAt, timeStr(updatedAt)) && existing.LastEntryUUID != nil && *existing.LastEntryUUID == claudeAIMarker(store, leaf) {
+				if existing != nil && fresh && storedHash == claudeAIFreshness(marker.UpdatedAt, leaf, existing.MessageCount) {
 					failedLast = false
 					stats.Skipped++
 					cb.progress(stats)
@@ -213,9 +208,15 @@ func SyncClaudeAI(ctx context.Context, store interface {
 						return nil
 					}
 					result.Session.Machine = resolvedImportMachine(result.Session.Machine, machine)
-					status, err := claudeAIImport.importConversation(ctx, store, result, nil, ImportOptions{})
+					status, err := syncConversation(ctx, store, result)
 					if errors.Is(err, db.ErrSessionTrashed) {
 						status, err = importSkipped, nil
+					} else if err == nil {
+						stored, readErr := store.GetSessionFull(ctx, id)
+						err = readErr
+						if err == nil && stored != nil {
+							err = store.UpsertProviderStatHash(ctx, parser.AgentClaudeAI, id, claudeAIFreshness(marker.UpdatedAt, leaf, stored.MessageCount))
+						}
 					}
 					stats.record(id, status, err)
 					detailErr = err
@@ -247,12 +248,58 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	return stats, nil
 }
 
+func syncConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
+	id := result.Session.ID
+	existing, err := store.GetSession(ctx, id)
+	if err != nil {
+		return importNew, err
+	}
+	if existing == nil {
+		return upsertConversation(ctx, store, result, nil)
+	}
+	msgs := claudeAIMessages(id, result.Messages)
+	archived, err := store.GetAllMessages(ctx, id)
+	if err != nil {
+		return importUpdated, err
+	}
+	if sameMessages(archived, storedFormMessages(store, msgs)) {
+		sess := chatGPTSession(result.Session)
+		if err := store.UpsertSession(ctx, sess); err != nil {
+			if errors.Is(err, db.ErrSessionExcluded) {
+				return importSkipped, nil
+			}
+			return importUpdated, err
+		}
+		if localDB, ok := store.(*db.DB); ok {
+			if err := localDB.BumpLocalModifiedAt(ctx, id); err != nil {
+				log.Printf("import: bumping local_modified_at for %s: %v", id, err)
+			}
+		}
+		if existing.MessageCount == sess.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) {
+			return importSkipped, nil
+		}
+		return importUpdated, nil
+	}
+	replacer, ok := store.(sessionReplacer)
+	if !ok {
+		return importUpdated, errors.New("store cannot preserve replaced chats")
+	}
+	_, err = replacer.ReplaceSessionKeepingTrashedCopy(ctx, db.SessionBatchWrite{
+		Session: chatGPTSession(result.Session), Messages: msgs,
+		KeepTrashedCopyOnlyOnPinLoss: true,
+	})
+	return importUpdated, err
+}
+
 func fetchClaudeAI(ctx context.Context, fetch func(context.Context, string) (ClaudeAIResponse, error), path string) ([]byte, error) {
 	attempt := 0
 	body, err := backoff.Retry(ctx, func() ([]byte, error) {
 		response, err := fetch(ctx, path)
 		if err != nil {
 			return nil, backoff.Permanent(err)
+		}
+		if len(response.Body) > ClaudeAIResponseLimit {
+			return nil, backoff.Permanent(ErrClaudeAIResponseTooLarge)
 		}
 		status := response.Status
 		if status >= 200 && status < 300 {
