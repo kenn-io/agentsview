@@ -289,6 +289,16 @@ func modelCost(t *testing.T, result db.DailyUsageResult, model string) money.Mon
 func TestDailyUsagePersistedPricesMatchSQLite(t *testing.T) {
 	store, _, local := newUsagePriceStore(t)
 	assertDailyUsageParity(t, local, store)
+	for _, filter := range []db.UsageFilter{{}, {Model: " , "}, {ExcludeModel: " , "}, {Model: " , ", ExcludeModel: " , "}} {
+		filter.Agent, filter.Timezone = "copilot", "UTC"
+		daily, err := store.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, money.MustParseDollars("0.5"), daily.Totals.TotalCost)
+		top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
+		require.NoError(t, err)
+		require.Len(t, top, 1)
+		assert.Equal(t, money.MustParseDollars("0.5"), top[0].Cost)
+	}
 
 	// Only the Copilot authoritative cost stays an explicit row; every other
 	// event arrives summed.

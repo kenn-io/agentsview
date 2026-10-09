@@ -110,6 +110,11 @@ type UsageFilter struct {
 	Progress func(string) `json:"-"`
 }
 
+// HasModelFilter reports whether normalized include or exclude values restrict models.
+func (f UsageFilter) HasModelFilter() bool {
+	return len(CSVFilterValues(f.Model)) > 0 || len(CSVFilterValues(f.ExcludeModel)) > 0
+}
+
 // ProjectFilterLabels returns exact include labels when present, otherwise it
 // decodes the legacy comma-separated project filter.
 func (f UsageFilter) ProjectFilterLabels() []string {
@@ -2083,7 +2088,7 @@ func (db *DB) getDailyUsageLegacy(
 
 	accum := make(map[usageCostAllocationKey]*bucket)
 	sessionCosts := make(map[string]sessionCost)
-	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
+	useAuthoritativeCost := !f.HasModelFilter()
 
 	seen := make(map[UsageDedupToken]struct{})
 	var seenSessions map[string]UsageSessionInfo
@@ -2792,7 +2797,7 @@ func (db *DB) getTopSessionsByCostLegacy(
 		if priceErr != nil {
 			return nil, fmt.Errorf("summing top-session cost: %w", priceErr)
 		}
-		if f.Model == "" && f.ExcludeModel == "" &&
+		if !f.HasModelFilter() &&
 			r.costSource == CopilotReportedCostSource && r.cost.Valid {
 			v := money.Money{Microdollars: r.cost.Int64}
 			sa.authoritativeCost = &v

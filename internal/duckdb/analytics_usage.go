@@ -3520,7 +3520,7 @@ func (s *Store) GetDailyUsage(
 		authoritative *money.Money
 	}
 	sessionCosts := map[string]sessionCost{}
-	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
+	useAuthoritativeCost := !f.HasModelFilter()
 	projectLabels := map[string]bool{}
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
@@ -4011,7 +4011,7 @@ func (s *Store) GetTopSessionsByCost(
 			if priceErr != nil {
 				return fmt.Errorf("summing duckdb top-session cost: %w", priceErr)
 			}
-			if f.Model == "" && f.ExcludeModel == "" && r.authoritativeCostRows > 0 {
+			if !f.HasModelFilter() && r.authoritativeCostRows > 0 {
 				v := money.Money{Microdollars: r.authoritativeCost}
 				a.authoritativeCost = &v
 			}

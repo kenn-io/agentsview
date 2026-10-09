@@ -130,14 +130,20 @@ func TestUsageRollupDailyMatchesLastCopilotReportedCost(t *testing.T) {
 			},
 		},
 	))
-	filter := UsageFilter{
-		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+	for _, filter := range []UsageFilter{{}, {Model: " , "}, {ExcludeModel: " , "}, {Model: " , ", ExcludeModel: " , "}} {
+		filter.From, filter.To, filter.Timezone = "2026-08-10", "2026-08-10", "UTC"
+		legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
+		rollup := getDailyUsageRollupForTest(t, database, filter)
+		assert.Equal(t, money.MustParseDollars("3.00"), legacy.Totals.TotalCost)
+		assert.Equal(t, legacy, rollup)
+		legacyTop, err := database.getTopSessionsByCostLegacy(t.Context(), filter, 10)
+		require.NoError(t, err)
+		top, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
+		require.NoError(t, err)
+		require.Len(t, top, 1)
+		assert.Equal(t, money.MustParseDollars("3.00"), top[0].Cost)
+		assert.Equal(t, legacyTop, top)
 	}
-
-	legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
-	rollup := getDailyUsageRollupForTest(t, database, filter)
-	assert.Equal(t, money.MustParseDollars("3.00"), legacy.Totals.TotalCost)
-	assert.Equal(t, legacy, rollup)
 }
 
 func countUsageRollupExceptionRows(t *testing.T, database *DB) int {

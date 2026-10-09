@@ -715,6 +715,17 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, rollup.HasCost)
 	assert.Equal(t, money.MustParseDollars("0.05"), rollup.Cost)
+	for _, filter := range []db.UsageFilter{{}, {Model: " , "}, {ExcludeModel: " , "}, {Model: " , ", ExcludeModel: " , "}} {
+		filter.From, filter.To, filter.Timezone = "2026-03-12", "2026-03-12", "UTC"
+		daily, err := store.GetDailyUsage(ctx, filter)
+		require.NoError(t, err)
+		assert.Equal(t, money.MustParseDollars("0.05"), daily.Totals.TotalCost)
+		top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+		require.NoError(t, err)
+		require.Len(t, top, 2)
+		assert.Equal(t, money.MustParseDollars("0.03"), top[0].Cost)
+		assert.Equal(t, money.MustParseDollars("0.02"), top[1].Cost)
+	}
 }
 
 func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {

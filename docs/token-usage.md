@@ -521,6 +521,9 @@ catalog estimates because the later session total is outside the selected data.
 Model-filtered reports also remain catalog estimates because applying the whole
 session total to one selected model would overstate that model.
 
+Comma-separated usage filters trim spaces and ignore blank entries. Blank model
+filters keep the reported session total.
+
 ### Copilot AI Credits
 
 Usage reports compute **Copilot AI Credits** for Copilot-family agents
