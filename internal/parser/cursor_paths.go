@@ -606,7 +606,10 @@ func cursorTranscriptLocationInRoot(root, path string) (cursorTranscriptLocation
 // agent-transcripts component is tried from the end, so a session directory
 // that happens to carry that name does not mask the real layout marker.
 func cursorTranscriptLocationFromPath(path string) (cursorTranscriptLocation, bool) {
-	parts := splitCleanPath(path)
+	return cursorTranscriptLocationFromParts(splitCleanPath(path))
+}
+
+func cursorTranscriptLocationFromParts(parts []string) (cursorTranscriptLocation, bool) {
 	if len(parts) == 0 {
 		return cursorTranscriptLocation{}, false
 	}

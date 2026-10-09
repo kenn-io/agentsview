@@ -66,7 +66,7 @@ capability.
 - If `.jsonl` and `.txt` (or any other pair) share a source, keep one. Prefer the
   format the local parser prefers.
 - Cursor groups format and layout aliases by machine, raw project directory
-  relative to the configured root, and session stem. Roots without a machine
+  in the object path, and session stem. Roots without a machine
   boundary use the local machine label. Distinct projects keep separate
   conversations even when their decoded display names match.
 - Validate IDs with the same rules the local provider already uses.

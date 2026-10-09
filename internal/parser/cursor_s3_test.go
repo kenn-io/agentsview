@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -146,20 +147,26 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 		{"s3://bucket/archive"},
 		{"s3://bucket/raw/cursor"},
 		{"s3://bucket/laptop/raw/cursor", "s3://bucket/laptop/raw/cursor/project-one/agent-transcripts"},
+		{"s3://bucket/laptop/raw/cursor/project-one/agent-transcripts", "s3://bucket/laptop/raw/cursor"},
 	} {
 		root := roots[0]
+		if strings.HasSuffix(root, "/agent-transcripts") {
+			root = roots[1]
+		}
 		t.Run(root, func(t *testing.T) {
 			oldList := listS3Objects
 			t.Cleanup(func() { listS3Objects = oldList })
 			firstURI := root + "/project-one/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl"
 			secondURI := root + "/project-two/11111111-1111-4111-8111-111111111111.jsonl"
 			otherURI := root + "/project-one/other.txt"
+			flatURI := root + "/project-one/11111111-1111-4111-8111-111111111111.txt"
 			listS3Objects = func(got string) ([]S3Object, error) {
 				require.Contains(t, roots, got)
 				return []S3Object{
 					{URI: secondURI, LastModified: time.Unix(200, 0)},
 					{URI: firstURI, LastModified: time.Unix(100, 0)},
 					{URI: otherURI, LastModified: time.Unix(100, 0)},
+					{URI: flatURI, LastModified: time.Unix(100, 0)},
 				}, nil
 			}
 			sourceSet := newCursorSourceSet(roots)
@@ -167,7 +174,11 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sources, 3)
 			for _, source := range sources {
-				assert.Equal(t, root, source.ConfiguredRoot)
+				if source.DisplayPath == firstURI {
+					assert.Equal(t, roots[0], source.ConfiguredRoot)
+				} else {
+					assert.Equal(t, root, source.ConfiguredRoot)
+				}
 			}
 			assert.ElementsMatch(t, []string{firstURI, secondURI, otherURI}, []string{sources[0].DisplayPath, sources[1].DisplayPath, sources[2].DisplayPath})
 			var streamed []string

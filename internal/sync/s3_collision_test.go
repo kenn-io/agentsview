@@ -83,6 +83,9 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			roots := []string{root}
 			if tt.overlapping {
 				roots = append(roots, root+"/project-b/agent-transcripts")
+				if tt.reverse {
+					roots[0], roots[1] = roots[1], roots[0]
+				}
 			}
 			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: roots}, Machine: "local",
@@ -260,6 +263,33 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			}
 			verify()
 			altID := ids[otherPath]
+			for i := range provider.discovered {
+				if provider.discovered[i].DisplayPath == otherPath {
+					source := provider.discovered[i].Opaque.(parser.S3DiscoveredSource)
+					source.Fingerprint = "s3-meta:stable"
+					provider.discovered[i].Opaque = source
+				}
+			}
+			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+			require.Zero(t, stats.Failed)
+			marked, err := database.MarkSessionSourceMissing(t.Context(), storedMachine, "cursor", altID, otherPath)
+			require.NoError(t, err)
+			require.True(t, marked)
+			beforeRestore := fetches.Load()
+			for range 2 {
+				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+				require.Zero(t, stats.Failed)
+				assert.Equal(t, beforeRestore+1, fetches.Load(), "a source-missing row must restore once")
+				assert.Nil(t, storedSession(altID).SourceMissingAt)
+			}
+			require.NoError(t, database.SoftDeleteSession(t.Context(), altID))
+			beforeTrashSync := fetches.Load()
+			for range 2 {
+				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+				require.Zero(t, stats.Failed)
+				assert.Equal(t, beforeTrashSync, fetches.Load(), "unchanged trashed sources must stay behind the cutoff")
+				assert.True(t, database.IsSessionTrashed(t.Context(), altID))
+			}
 			require.NoError(t, database.DeleteSession(t.Context(), altID))
 			stats = engine.ResyncAll(t.Context(), nil)
 			require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)

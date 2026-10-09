@@ -57,7 +57,7 @@ func discoverCursorS3ByRoot(
 	}
 
 	byRoot := make(map[string][]DiscoveredFile)
-	for _, transcript := range preferCursorS3Transcripts(roots, candidates) {
+	for _, transcript := range preferCursorS3Transcripts(candidates) {
 		byRoot[transcript.root] = append(
 			byRoot[transcript.root], transcript.file,
 		)
@@ -85,19 +85,12 @@ func cursorS3TranscriptName(name string) bool {
 	return IsValidSessionID(stem)
 }
 
-// CursorS3SourceKey groups aliases by machine, raw project and stem under the first accepted root.
-func CursorS3SourceKey(roots []string, uri string) string {
-	for _, root := range roots {
-		rel, ok := s3RelativePath(root, uri)
-		if !ok {
-			continue
-		}
-		segs := strings.Split(rel, "/")
-		if keepCursorS3Session(rel, segs) {
-			return s3MachineFromRoot(root, "cursor") + "/" + segs[0] + "/" + strings.TrimSuffix(path.Base(uri), path.Ext(uri))
-		}
+// CursorS3SourceKey groups format and layout aliases by raw project and stem.
+func CursorS3SourceKey(uri string) string {
+	if loc, ok := cursorTranscriptLocationFromParts(strings.Split(uri, "/")); ok {
+		return loc.ProjectDir + "/" + loc.RawID
 	}
-	return ""
+	return path.Base(path.Dir(uri)) + "/" + strings.TrimSuffix(path.Base(uri), path.Ext(uri))
 }
 
 // preferCursorS3Transcripts keeps one object per machine, project and session stem
@@ -106,14 +99,13 @@ func CursorS3SourceKey(roots []string, uri string) string {
 // session's subagents/<id>.ext, then .jsonl over .txt, then nested over flat,
 // then lexical path.
 func preferCursorS3Transcripts(
-	roots []string,
 	transcripts []cursorS3Transcript,
 ) []cursorS3Transcript {
 	best := make(map[string]cursorS3Transcript, len(transcripts))
 	order := make([]string, 0, len(transcripts))
 	for _, transcript := range transcripts {
 		file := transcript.file
-		k := CursorS3SourceKey(roots, file.Path)
+		k := file.Machine + "/" + CursorS3SourceKey(file.Path)
 		prev, ok := best[k]
 		if !ok {
 			best[k] = transcript
