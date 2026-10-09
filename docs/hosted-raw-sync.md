@@ -25,6 +25,8 @@ The server can now parse accepted generations directly into PostgreSQL. Enable
 `raw_derivation` on an explicitly provisioned hosted tenant to make uploaded
 sessions browsable. Hosted processing uses no SQLite archive intermediary;
 SQLite databases captured from providers remain valid source artifacts.
+Hosted raw sync carries no archive labels or launcher parent links. Label
+filters on hosted sessions match nothing.
 Embedding work is durably queued, but its consumer is not implemented.
 
 Device enrollment and revocation remain operator-managed. The operator supplies

@@ -83,7 +83,9 @@ type httpBackend struct {
 	longRunningClient *http.Client
 	readOnly          bool
 	recallQueries     bool
-	token             string
+	// apiVersion is the probed server API version, or 0 when unknown.
+	apiVersion int
+	token      string
 }
 
 const recallNonRecordingAPIVersion = 4
@@ -115,13 +117,15 @@ func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) ser
 func NewHTTPBackendForServer(
 	baseURL, token string, capabilities HTTPServerCapabilities,
 ) service.SessionService {
-	return newHTTPBackend(
+	b := newHTTPBackend(
 		baseURL,
 		token,
 		capabilities.ReadOnly,
 		!capabilities.ReadOnly &&
 			capabilities.APIVersion >= recallNonRecordingAPIVersion,
 	)
+	b.apiVersion = capabilities.APIVersion
+	return b
 }
 
 func newHTTPBackend(
@@ -275,9 +279,34 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	return response.JSON200.Ids, nil
 }
 
+// Probe only when the backend has no version so unfiltered lists need no extra request.
+func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
+	version := b.apiVersion
+	if version == 0 {
+		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+		if err != nil {
+			return err
+		}
+		version = capabilities.APIVersion
+	}
+	if version < service.SessionAnnotationsAPIVersion {
+		return fmt.Errorf(
+			"server API version %d does not support session labels, parent links, or their filters; "+
+				"restart or upgrade the server",
+			version,
+		)
+	}
+	return nil
+}
+
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
+	if len(f.Labels) > 0 || f.PR != "" {
+		if err := b.requireSessionAnnotations(ctx); err != nil {
+			return nil, err
+		}
+	}
 	q, err := filterToQuery(f)
 	if err != nil {
 		return nil, err
@@ -402,6 +431,12 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	}
 	if f.Starred {
 		q.Starred = new(true)
+	}
+	if len(f.Labels) > 0 {
+		q.Label = f.Labels
+	}
+	if f.PR != "" {
+		q.Pr = new(f.PR)
 	}
 	if f.Cursor != "" {
 		q.Cursor = new(f.Cursor)

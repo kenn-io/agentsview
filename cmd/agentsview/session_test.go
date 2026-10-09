@@ -671,6 +671,52 @@ func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
 	assert.Equal(t, "remote-session", got.Sessions[0]["id"])
 }
 
+func TestSessionAnnotationsKeepExactIDs(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	const worker = "11111111-1111-4111-8111-111111111111"
+	const manager = "22222222-2222-4222-8222-222222222222"
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "codex:" + worker, project: "proj"},
+		sessionSeed{id: "codex:" + manager, project: "proj"},
+	)
+	out, err := executeCommand(newRootCommand(), "session", "label", worker, "role=reviewer", "--json")
+	require.NoError(t, err)
+	labels := decodeCLIJSON[db.SessionLabels](t, out)
+	assert.Equal(t, worker, labels.SessionID)
+	assert.False(t, labels.SessionFound)
+	assert.Equal(t, []string{"role=reviewer"}, labels.Labels)
+	out, err = executeCommand(newRootCommand(), "session", "parent", worker, manager, "--json")
+	require.NoError(t, err)
+	link := decodeCLIJSON[db.SessionExternalParent](t, out)
+	assert.Equal(t, worker, link.SessionID)
+	assert.Equal(t, manager, link.ParentSessionID)
+	assert.False(t, link.Applied)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: worker, project: "proj"},
+		sessionSeed{id: manager, project: "proj"},
+	)
+	out, err = executeCommand(newRootCommand(), "session", "get", worker, "--json")
+	require.NoError(t, err)
+	detail := decodeCLIJSON[service.SessionDetail](t, out)
+	assert.Equal(t, []string{"role=reviewer"}, detail.Labels)
+	require.NotNil(t, detail.ParentSessionID)
+	assert.Equal(t, manager, *detail.ParentSessionID)
+	out, err = executeCommand(newRootCommand(), "session", "get", "codex:"+worker, "--json")
+	require.NoError(t, err)
+	detail = decodeCLIJSON[service.SessionDetail](t, out)
+	assert.Nil(t, detail.ParentSessionID)
+	assert.Empty(t, detail.Labels)
+}
+
+func TestPrintSessionParentHumanUnapplied(t *testing.T) {
+	var out bytes.Buffer
+	printSessionParentHuman(&out, "worker", &db.SessionExternalParent{
+		ParentSessionID: "manager", RelationshipType: "subagent", SessionFound: true,
+	}, false)
+	assert.Contains(t, out.String(), "note: link stored but not applied; a transcript parent or spawning session outranks it, or it would form a loop")
+	assert.NotContains(t, out.String(), "transcript names")
+}
+
 func TestSessionList_ServerFlagDoesNotSendConfigAuthToken(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "")

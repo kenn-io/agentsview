@@ -88,6 +88,8 @@ func rawContentRevision(p ingest.PreparedSession) (string, error) {
 	s.DataVersion = 0
 	s.SecretsRulesVersion = ""
 	s.QualitySignalVersion = 0
+	// Labels belong to the SQLite archive owner, never to a transcript.
+	s.Labels = nil
 	// Recency-derived state is published separately from immutable content.
 	s.SignalsPendingSince, s.HealthScore, s.HealthGrade = nil, nil, nil
 	s.Outcome, s.OutcomeConfidence = "", ""
@@ -144,6 +146,11 @@ func rawContentRevision(p ingest.PreparedSession) (string, error) {
 	return rawDigest("normalized-content-v1", string(encoded)), nil
 }
 
+var (
+	rawSessionType         = reflect.TypeFor[db.Session]()
+	rawPostV1SessionFields = map[string]bool{"PRLinks": true, "Labels": true}
+)
+
 func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 	if !v.IsValid() {
 		return nil, nil
@@ -187,6 +194,13 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 			// This transient projection marker adds no content to the existing
 			// normalized-content-v1 representation.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" {
+				continue
+			}
+			// Session fields added after normalized-content-v1 was recorded
+			// stay out of the representation while empty, so sessions without
+			// them keep their existing content identity.
+			if v.Type() == rawSessionType && rawPostV1SessionFields[f.Name] &&
+				v.Field(i).Len() == 0 {
 				continue
 			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)

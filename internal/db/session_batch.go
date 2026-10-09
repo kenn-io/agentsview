@@ -293,6 +293,10 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		writtenUsageIDs = append(writtenUsageIDs, write.Session.ID)
 	}
 
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, writtenUsageIDs); err != nil {
+		return result, err
+	}
+
 	if len(beforeCommit) > 0 && beforeCommit[0] != nil {
 		if err := beforeCommit[0](); err != nil {
 			result.WrittenSessions = 0

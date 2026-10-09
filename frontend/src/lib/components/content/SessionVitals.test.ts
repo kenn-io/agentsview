@@ -340,6 +340,48 @@ describe("SessionVitals", () => {
     expect(document.querySelector('[title="agentsview"]')).not.toBeNull();
   });
 
+  it("links pull requests in a new tab", async () => {
+    const session: Session = {
+      ...traceSession,
+      pr_links: [
+        {
+          url: "https://github.com/acme/widgets/pull/42",
+          host: "github.com",
+          repository: "acme/widgets",
+          number: 42,
+        },
+      ],
+    };
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: session.id, session },
+    });
+    await tick();
+
+    const link = screen.getByRole("link", { name: "acme/widgets#42" });
+    expect(link.getAttribute("href")).toBe("https://github.com/acme/widgets/pull/42");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it.each([true, false])("renders labels with a filter handler %s", async (interactive) => {
+    const onFilterLabel = interactive ? vi.fn() : undefined;
+    const session: Session = { ...traceSession, labels: ["ticket=ABC-123"] };
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: session.id, session, onFilterLabel },
+    });
+    await tick();
+
+    expect(document.body.textContent).toContain("ticket=ABC-123");
+    if (onFilterLabel) {
+      await fireEvent.click(screen.getByRole("button", { name: "ticket=ABC-123" }));
+      expect(onFilterLabel).toHaveBeenCalledWith("ticket=ABC-123");
+    } else {
+      expect(screen.queryByRole("button", { name: "ticket=ABC-123" })).toBeNull();
+    }
+  });
+
   it("reveals the full worktree path in a tooltip", async () => {
     component = mount(SessionVitals, {
       target: document.body,

@@ -40,9 +40,11 @@
       : [],
   );
 
+  // Label and pull request filters narrow only the session list, so this
+  // bar (shown on the usage page) neither lists nor counts them.
   const hasFilters = $derived(
     !!sessions.filters.project ||
-      sessions.hasActiveFilters ||
+      sessions.hasSharedFilters ||
       projectFilters.length > 0 ||
     modelFilters.length > 0,
   );

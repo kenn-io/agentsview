@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     data_version INTEGER NOT NULL DEFAULT 0,
     cwd TEXT NOT NULL DEFAULT '',
     git_branch TEXT NOT NULL DEFAULT '',
+    -- JSON array of parser-derived pull request links; '' when none.
+    pr_links TEXT NOT NULL DEFAULT '',
     source_session_id TEXT NOT NULL DEFAULT '',
     source_version TEXT NOT NULL DEFAULT '',
     transcript_fidelity TEXT NOT NULL DEFAULT '',
@@ -731,6 +733,30 @@ CREATE TABLE IF NOT EXISTS starred_sessions (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- Session labels: user- or tool-supplied tags. Like project assignments,
+-- rows are keyed by session id without a foreign key so a launcher can
+-- label a session before sync imports it, and parser writes never touch
+-- them.
+CREATE TABLE IF NOT EXISTS session_labels (
+    session_id TEXT NOT NULL,
+    label      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (session_id, label)
+);
+
+-- Launcher-supplied parent links. Linking passes recompute them from current
+-- evidence: a link is the session's parent only while the transcript gives
+-- none, no tool-call spawn edge claims the session, and the link's chain
+-- does not lead back to the session.
+CREATE TABLE IF NOT EXISTS session_external_parents (
+    session_id        TEXT PRIMARY KEY,
+    parent_session_id TEXT NOT NULL,
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_session_external_parents_parent
+    ON session_external_parents(parent_session_id);
 
 -- Excluded sessions: tracks session IDs that were permanently
 -- deleted by the user so the sync engine does not re-import them.

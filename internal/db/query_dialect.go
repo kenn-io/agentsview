@@ -67,6 +67,15 @@ type QueryDialect struct {
 	// expression. Nil renders the correlated EXISTS the row stores use;
 	// ClickHouse needs an uncorrelated IN subquery.
 	starredPredicate func(idExpr string) string
+	// labelPredicate renders "the session carries this label". Nil reads
+	// the SQLite session_labels table; mirrors store labels as an array
+	// column on the session row.
+	labelPredicate func(q func(string) string, ph string) string
+	// prLinkPredicate renders "a stored pull request link matches this
+	// repository, and number when numPh is
+	// non-empty" over the JSON text column col. Nil renders the SQLite
+	// json_each form.
+	prLinkPredicate func(col, repoPh, numPh string) string
 	// orphanPredicate renders the "parent row is missing" test used by
 	// BuildCanonicalRootWhere. Nil uses the configured parent relation.
 	orphanPredicate func(sessionAlias, parentAlias string) string
@@ -85,6 +94,28 @@ func (d QueryDialect) starredPredicateSQL(idExpr string) string {
 	}
 	return "EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = " +
 		idExpr + ")"
+}
+
+func (d QueryDialect) labelPredicateSQL(
+	q func(string) string, ph string,
+) string {
+	if d.labelPredicate != nil {
+		return d.labelPredicate(q, ph)
+	}
+	return "EXISTS (SELECT 1 FROM session_labels sl WHERE sl.session_id = " +
+		q("id") + " AND sl.label = " + ph + ")"
+}
+
+func (d QueryDialect) prLinkPredicateSQL(col, repoPh, numPh string) string {
+	if d.prLinkPredicate != nil {
+		return d.prLinkPredicate(col, repoPh, numPh)
+	}
+	pred := "EXISTS (SELECT 1 FROM json_each(NULLIF(" + col + ", '')) pl" +
+		" WHERE lower(json_extract(pl.value, '$.repository')) = " + repoPh
+	if numPh != "" {
+		pred += " AND json_extract(pl.value, '$.number') = " + numPh
+	}
+	return pred + ")"
 }
 
 func (d QueryDialect) orphanPredicateSQL(sessionAlias, parentAlias string) string {
@@ -181,6 +212,19 @@ func PostgresQueryDialect() QueryDialect {
 		sidebarChildRelationships:   []string{"subagent", "fork"},
 		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
 		nullsLast:                   true,
+		labelPredicate: func(q func(string) string, ph string) string {
+			// Containment can use the GIN index on labels.
+			return q("labels") + " @> ARRAY[" + ph + "::text]"
+		},
+		prLinkPredicate: func(col, repoPh, numPh string) string {
+			pred := "EXISTS (SELECT 1 FROM jsonb_array_elements(NULLIF(" +
+				col + ", '')::jsonb) pl WHERE lower(pl->>'repository') = " +
+				repoPh
+			if numPh != "" {
+				pred += " AND (pl->>'number')::bigint = " + numPh
+			}
+			return pred + ")"
+		},
 	}
 }
 
@@ -227,6 +271,17 @@ func ClickHouseQueryDialect() QueryDialect {
 		recursiveUnion:              "UNION ALL",
 		starredPredicate: func(idExpr string) string {
 			return idExpr + " IN (SELECT session_id FROM starred_sessions)"
+		},
+		labelPredicate: func(q func(string) string, ph string) string {
+			return "has(" + q("labels") + ", " + ph + ")"
+		},
+		prLinkPredicate: func(col, repoPh, numPh string) string {
+			cond := "lower(JSONExtractString(pl, 'repository')) = " + repoPh
+			if numPh != "" {
+				cond += " AND JSONExtractInt(pl, 'number') = " + numPh
+			}
+			return "arrayExists(pl -> " + cond +
+				", JSONExtractArrayRaw(" + col + "))"
 		},
 		orphanPredicate: func(sessionAlias, _ string) string {
 			// NULL NOT IN (...) is unknown in SQL, so a child whose parent
@@ -293,6 +348,17 @@ func DuckDBQueryDialect() QueryDialect {
 		sidebarChildRelationships:   []string{"subagent", "fork"},
 		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
 		nullsLast:                   true,
+		labelPredicate: func(q func(string) string, ph string) string {
+			return "list_contains(" + q("labels") + ", " + ph + ")"
+		},
+		prLinkPredicate: func(col, repoPh, numPh string) string {
+			cond := "lower(pl->>'repository') = " + repoPh
+			if numPh != "" {
+				cond += " AND CAST(pl->>'number' AS BIGINT) = " + numPh
+			}
+			return "len(list_filter(CAST(json_extract(NULLIF(" + col +
+				", ''), '$[*]') AS JSON[]), pl -> " + cond + ")) > 0"
+		},
 	}
 }
 
@@ -543,6 +609,7 @@ func BuildSessionFilterSQL(
 func BuildSessionBaseFilterSQL(
 	f SessionFilter, dialect QueryDialect,
 ) (string, []any) {
+	f = f.withAnnotationSelection()
 	b := NewQueryBuilder(dialect, 0)
 	preds := []string{
 		"message_count > 0",
@@ -555,6 +622,11 @@ func BuildSessionBaseFilterSQL(
 	preds = append(preds, filterPreds...)
 	if oneShotPred != "" {
 		preds = append(preds, oneShotPred)
+	}
+	// Callers select roots themselves, so label and pull request filters
+	// keep a root whose tree holds a match.
+	if pred := annotationTreePredicate(f, b, "id"); pred != "" {
+		preds = append(preds, pred)
 	}
 	return strings.Join(preds, " AND "), b.Args()
 }
@@ -618,6 +690,7 @@ func buildSessionFilterWithBuilder(
 		}
 		return qualifier + "." + col
 	}
+	f = f.withAnnotationSelection()
 
 	if f.IDs != nil {
 		// Explicit hydration selects the requested rows rather than sidebar
@@ -628,6 +701,7 @@ func buildSessionFilterWithBuilder(
 		if oneShot != "" {
 			preds = append(preds, oneShot)
 		}
+		preds = append(preds, annotationPredicates(f, b, q)...)
 		return strings.Join(append([]string{q("deleted_at") + " IS NULL"}, preds...), " AND ")
 	}
 
@@ -648,9 +722,12 @@ func buildSessionFilterWithBuilder(
 		if oneShotPred != "" {
 			allPreds = append(allPreds, oneShotPred)
 		}
+		allPreds = append(allPreds, annotationPredicates(f, b, q)...)
 		return strings.Join(allPreds, " AND ")
 	}
-	if !f.IncludeChildren {
+	// A flat list filtered by label or pull request matches each session
+	// directly, so a launched worker appears even though it is a child.
+	if !f.IncludeChildren && !f.HasAnnotationFilter() {
 		basePreds = append(basePreds,
 			q("relationship_type")+" NOT IN ("+b.dialect.SidebarChildRelationshipsSQL()+")")
 	}
@@ -661,6 +738,7 @@ func buildSessionFilterWithBuilder(
 		if oneShotPred != "" {
 			allPreds = append(allPreds, oneShotPred)
 		}
+		allPreds = append(allPreds, annotationPredicates(f, b, q)...)
 		return strings.Join(allPreds, " AND ")
 	}
 
@@ -672,14 +750,12 @@ func buildSessionFilterWithBuilder(
 	if oneShotPred != "" {
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
+	if pred := annotationTreePredicate(f, b, "root_session.id"); pred != "" {
+		rootMatchParts = append(rootMatchParts, pred)
+	}
 	rootMatchParts = append(rootMatchParts,
 		BuildCanonicalRootWhere(b.dialect, "root_session", f.IncludeOrphans))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
-	childAutomationPred := b.dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), "s.is_automated")
-	childAutomationWhere := ""
-	if childAutomationPred != "" {
-		childAutomationWhere = " AND " + childAutomationPred
-	}
 
 	cte := "WITH RECURSIVE tree(id) AS (" +
 		"SELECT root_session.id FROM sessions root_session" +
@@ -689,11 +765,25 @@ func buildSessionFilterWithBuilder(
 		" " + b.dialect.recursiveUnionSQL() + " " +
 		"SELECT s.id FROM sessions s" +
 		" JOIN tree t ON " + b.dialect.ParentRelation("s", "t") +
-		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
-		childAutomationWhere +
+		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "s") +
 		") SELECT id FROM tree"
 
 	return baseWhere + " AND " + q("id") + " IN (" + cte + ")"
+}
+
+// SessionTreeMemberPredicate is the visibility every descendant in a session
+// tree view must pass: not trashed, not empty, and inside the automation
+// scope. The tree CTEs and the label and pull request ancestor walk share it
+// so both reach the same sessions.
+func SessionTreeMemberPredicate(
+	f SessionFilter, dialect QueryDialect, sessionAlias string,
+) string {
+	f = f.withAnnotationSelection()
+	pred := sessionAlias + ".message_count > 0 AND " + sessionAlias + ".deleted_at IS NULL"
+	if scope := dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), sessionAlias+".is_automated"); scope != "" {
+		pred += " AND " + scope
+	}
+	return pred
 }
 
 // AutomatedScopePredicate renders a normalized scope against a boolean column.
@@ -805,6 +895,74 @@ func sessionFilterPredicates(
 		preds = append(preds, b.dialect.starredPredicateSQL(q("id")))
 	}
 	return preds, oneShotPred
+}
+
+// HasAnnotationFilter reports whether the filter selects sessions by label
+// or pull request link.
+func (f SessionFilter) HasAnnotationFilter() bool {
+	return len(f.Labels) > 0 || !f.PR.IsZero()
+}
+
+// withAnnotationSelection lifts the default one-shot and automated
+// exclusions when the filter selects by label or pull request link. Those
+// filters name the sessions the caller wants, the way explicit IDs do, and
+// sessions started by a launcher are usually headless single-prompt runs
+// that the defaults would hide. An explicit AutomatedScope still applies.
+func (f SessionFilter) withAnnotationSelection() SessionFilter {
+	if f.HasAnnotationFilter() {
+		f.ExcludeOneShot = false
+		f.ExcludeAutomated = false
+	}
+	return f
+}
+
+// annotationPredicates renders the label and pull request filters against
+// one session row.
+func annotationPredicates(
+	f SessionFilter, b *QueryBuilder, q func(string) string,
+) []string {
+	var preds []string
+	for _, label := range f.Labels {
+		preds = append(preds, b.dialect.labelPredicateSQL(q, b.Add(label)))
+	}
+	if !f.PR.IsZero() {
+		repoPh := b.Add(strings.ToLower(f.PR.Repository))
+		numPh := ""
+		if f.PR.Number > 0 {
+			numPh = b.Add(f.PR.Number)
+		}
+		preds = append(preds,
+			b.dialect.prLinkPredicateSQL(q("pr_links"), repoPh, numPh))
+	}
+	return preds
+}
+
+// annotationTreePredicate keeps idExpr when it names a session that matches
+// the label and pull request filters or an ancestor of one. Tree views use
+// it on their roots, so a launcher's tree appears when only one of its
+// workers carries the label or pull request. The walk passes only sessions
+// the tree views would show, so a match hidden behind a trashed, empty, or
+// out-of-scope session keeps no root.
+func annotationTreePredicate(
+	f SessionFilter, b *QueryBuilder, idExpr string,
+) string {
+	preds := annotationPredicates(f, b, func(col string) string {
+		return "annotated_session." + col
+	})
+	if len(preds) == 0 {
+		return ""
+	}
+	return idExpr + " IN (WITH RECURSIVE annotated(id) AS (" +
+		"SELECT annotated_session.id FROM sessions annotated_session" +
+		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "annotated_session") +
+		" AND " + strings.Join(preds, " AND ") +
+		" " + b.dialect.recursiveUnionSQL() + " " +
+		"SELECT annotated_parent.id FROM sessions annotated_parent" +
+		" JOIN sessions annotated_child ON " +
+		b.dialect.ParentRelation("annotated_child", "annotated_parent") +
+		" JOIN annotated ON annotated_child.id = annotated.id" +
+		" WHERE " + SessionTreeMemberPredicate(f, b.dialect, "annotated_parent") +
+		") SELECT id FROM annotated)"
 }
 
 func appendSessionVisibilityPredicates(

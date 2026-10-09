@@ -336,6 +336,11 @@ func SanitizeSession(s *Session) ValidationStats {
 	sanitizeStringField(&s.SessionKind, &stats)
 	sanitizeStringField(&s.Cwd, &stats)
 	sanitizeStringField(&s.GitBranch, &stats)
+	for i := range s.PRLinks {
+		sanitizeStringField(&s.PRLinks[i].URL, &stats)
+		sanitizeStringField(&s.PRLinks[i].Host, &stats)
+		sanitizeStringField(&s.PRLinks[i].Repository, &stats)
+	}
 	sanitizeStringField(&s.SourceSessionID, &stats)
 	sanitizeStringField(&s.SourceVersion, &stats)
 	sanitizeStringField(&s.TranscriptFidelity, &stats)

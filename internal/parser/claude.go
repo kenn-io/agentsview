@@ -136,6 +136,7 @@ func claudeParseFile(
 		agentLabel       string
 		entrypoint       string
 		sessionKind      string
+		prLinks          prLinkCollector
 		foundParentSID   bool
 		uploadSessionID  string
 		uploadRoot       bool
@@ -283,6 +284,13 @@ func claudeParseFile(
 			if qc, ok := extractQueuedCommand(string(lineBytes)); ok {
 				qc.prompt = strings.Clone(qc.prompt)
 				queuedCommands = append(queuedCommands, qc)
+			}
+			continue
+		}
+
+		if entryType == "pr-link" {
+			if link, ok := claudePRLink(lineBytes); ok {
+				prLinks.add(link)
 			}
 			continue
 		}
@@ -446,6 +454,7 @@ func claudeParseFile(
 		agentLabel:      agentLabel,
 		entrypoint:      entrypoint,
 		sessionKind:     sessionKind,
+		prLinks:         prLinks.result(),
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
 	}
@@ -810,6 +819,8 @@ type claudeIncrementalScan struct {
 	// only when it differs from that name, so repeated title records stay on
 	// the incremental path. nil keeps the append incremental.
 	storedSessionName *string
+	// storedPRLinks contains the normalized pull request URLs already persisted.
+	storedPRLinks map[string]struct{}
 }
 
 func claudeParseSessionFrom(
@@ -833,6 +844,7 @@ func claudeParseSessionFrom(
 		sawAITitle             bool
 		sawSessionIdentityEdit bool
 		appendedCustomTitle    string
+		sawNewPRLink           bool
 	)
 
 	consumed, err := readJSONLFrom(
@@ -868,6 +880,14 @@ func claudeParseSessionFrom(
 				return
 			}
 			if entryType == "agent-setting" {
+				return
+			}
+			if entryType == "pr-link" {
+				if link, ok := claudePRLink([]byte(line)); ok {
+					if _, stored := scan.storedPRLinks[link.URL]; !stored {
+						sawNewPRLink = true
+					}
+				}
 				return
 			}
 			if entryType == "attachment" {
@@ -967,6 +987,9 @@ func claudeParseSessionFrom(
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 	if sawSessionIdentityEdit {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
+	if sawNewPRLink {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
@@ -1455,6 +1478,7 @@ type claudeSessionMeta struct {
 	agentLabel      string
 	entrypoint      string
 	sessionKind     string
+	prLinks         []PRLink
 	malformedLines  int
 	isTruncated     bool
 }
@@ -1469,6 +1493,7 @@ func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
 	sess.AgentLabel = m.agentLabel
 	sess.Entrypoint = m.entrypoint
 	sess.SessionKind = m.sessionKind
+	sess.PRLinks = slices.Clone(m.prLinks)
 	sess.MalformedLines = m.malformedLines
 	sess.IsTruncated = m.isTruncated
 }
@@ -2943,6 +2968,19 @@ func ExtractCwdFromSession(path string) string {
 
 func truncate(s string, maxLen int) string {
 	return stringutil.TruncateRunes(strings.TrimSpace(s), maxLen, "...")
+}
+
+// claudePRLink decodes a Claude Code pr-link record:
+//
+//	{"type":"pr-link","prNumber":123,
+//	 "prUrl":"https://github.com/owner/repo/pull/123",
+//	 "prRepository":"owner/repo","timestamp":"..."}
+func claudePRLink(line []byte) (PRLink, bool) {
+	return NewPRLink(
+		gjson.GetBytes(line, "prUrl").Str,
+		gjson.GetBytes(line, "prRepository").Str,
+		int(gjson.GetBytes(line, "prNumber").Int()),
+	)
 }
 
 // extractRenameName returns the argument of a Claude Code /rename

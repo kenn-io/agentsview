@@ -1361,6 +1361,24 @@ func perturbSessionField(base db.Session, i int) (db.Session, bool) {
 		target.SetBool(!target.Bool())
 	case reflect.Float64:
 		target.SetFloat(target.Float() + 1.5)
+	case reflect.Slice:
+		// One element whose string fields are set covers []string (Labels)
+		// and slices of structs with string fields (PRLinks).
+		elem := reflect.New(target.Type().Elem()).Elem()
+		name := "perturbed-" + reflect.TypeFor[db.Session]().Field(i).Name
+		switch elem.Kind() {
+		case reflect.String:
+			elem.SetString(name)
+		case reflect.Struct:
+			for _, f := range elem.Fields() {
+				if f.Kind() == reflect.String && f.CanSet() {
+					f.SetString(name)
+				}
+			}
+		default:
+			return base, false
+		}
+		target.Set(reflect.Append(target, elem))
 	default:
 		return base, false
 	}

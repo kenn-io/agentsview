@@ -103,6 +103,9 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 	); err != nil {
 		return "", err
 	}
+	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{id, copyID}); err != nil {
+		return "", err
+	}
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("committing session replace: %w", err)
 	}

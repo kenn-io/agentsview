@@ -1448,11 +1448,14 @@ type ParsedSession struct {
 	// current releases may omit session_index.jsonl entirely, while an older
 	// index entry with a blank thread_name explicitly clears a stored title.
 	SessionNamePresent bool
-	StartedAt          time.Time
-	EndedAt            time.Time
-	MessageCount       int
-	UserMessageCount   int
-	File               FileInfo
+	// PRLinks lists the pull or merge requests the source associated with
+	// this session, deduplicated by URL in first-appearance order.
+	PRLinks          []PRLink
+	StartedAt        time.Time
+	EndedAt          time.Time
+	MessageCount     int
+	UserMessageCount int
+	File             FileInfo
 
 	// TerminationStatus describes how the session appears to have
 	// ended. Empty string = unknown (parser did not classify, or

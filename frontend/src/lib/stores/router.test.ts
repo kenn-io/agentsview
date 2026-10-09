@@ -434,6 +434,22 @@ describe("RouterStore", () => {
     expect(result).toBe(false);
   });
 
+  it("writes label filters as repeated query keys and reads them back", () => {
+    setURL("/");
+    store = new RouterStore();
+    store.navigate("sessions", {
+      label: "ticket=ABC-123\nrole=reviewer, lead",
+      pr: "acme/widgets#42",
+    });
+
+    expect(
+      store.navigate("sessions", {
+        label: "ticket=ABC-123\nrole=reviewer, lead",
+        pr: "acme/widgets#42",
+      }),
+    ).toBe(false);
+  });
+
   it("navigate with params builds query string", () => {
     setURL("/");
     store = new RouterStore();

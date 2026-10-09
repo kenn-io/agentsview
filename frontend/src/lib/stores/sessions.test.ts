@@ -1445,6 +1445,13 @@ describe("SessionsStore", () => {
       expect(f.hideUnknownProject).toBe(true);
     });
 
+    it("should trim pull request filters and default labels and pull request to empty", () => {
+      const f = parseFiltersFromParams({});
+      expect(f.labels).toEqual([]);
+      expect(f.pr).toBe("");
+      expect(parseFiltersFromParams({ pr: "  acme/widgets#42 " }).pr).toBe("acme/widgets#42");
+    });
+
     it("should handle non-numeric min_messages", () => {
       const f = parseFiltersFromParams({ min_messages: "abc" });
       expect(f.minMessages).toBe(0);
@@ -1473,6 +1480,8 @@ describe("SessionsStore", () => {
         minUserMessages: 3,
         includeOneShot: false,
         includeAutomated: true,
+        labels: ["ticket=ABC-123", "role=reviewer, lead"],
+        pr: "acme/widgets#42",
       };
       expect(filtersToParams(f)).toEqual({
         project: "myproj",
@@ -1489,6 +1498,8 @@ describe("SessionsStore", () => {
         min_user_messages: "3",
         include_one_shot: "false",
         include_automated: "true",
+        label: "ticket=ABC-123\nrole=reviewer, lead",
+        pr: "acme/widgets#42",
       });
     });
 
@@ -1519,6 +1530,8 @@ describe("SessionsStore", () => {
         minUserMessages: 3,
         includeOneShot: false,
         includeAutomated: true,
+        labels: ["ticket=ABC-123", "role=reviewer, lead"],
+        pr: "acme/widgets#42",
       };
       const params = filtersToParams(original);
       const parsed = parseFiltersFromParams(params);
@@ -2194,6 +2207,135 @@ describe("SessionsStore", () => {
       expect(sessions.filters.machine).toBe("");
       expect(sessions.selectedMachines).toEqual([]);
       expectSidebarIndexCalledWith({ machine: undefined });
+    });
+  });
+
+  describe("label and pull request filters", () => {
+    it("sends every selected label to the sidebar index", async () => {
+      sessions.addLabelFilter(" ticket=ABC-123 ");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      });
+      sessions.addLabelFilter("role=reviewer");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      });
+
+      expect(sessions.filters.labels).toEqual(["ticket=ABC-123", "role=reviewer"]);
+      expect(sessions.isLabelSelected("role=reviewer")).toBe(true);
+      expectSidebarIndexCalledWith({ label: ["ticket=ABC-123", "role=reviewer"] });
+    });
+
+    it("ignores a label that is already selected or blank", async () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+
+      sessions.addLabelFilter("ticket=ABC-123");
+      sessions.addLabelFilter("   ");
+
+      expect(sessions.filters.labels).toEqual(["ticket=ABC-123"]);
+      expect(api.getSidebarSessionIndex).not.toHaveBeenCalled();
+    });
+
+    it("omits the label param once the last label is removed", async () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+
+      sessions.removeLabelFilter("ticket=ABC-123");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalled();
+      });
+
+      expect(sessions.filters.labels).toEqual([]);
+      expectSidebarIndexCalledWith({ label: undefined });
+    });
+
+    it("sends and clears the pull request filter", async () => {
+      sessions.setPRFilter(" acme/widgets#42 ");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      });
+      expectSidebarIndexCalledWith({ pr: "acme/widgets#42" });
+
+      sessions.setPRFilter("");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      });
+      expectSidebarIndexCalledWith({ pr: undefined });
+    });
+
+    it("shows a rejected pull request filter instead of the previous rows", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "before-filter" })]);
+      await sessions.load();
+      expect(sessions.sessions).toHaveLength(1);
+
+      const rejected =
+        'pr filter "acme/widgets#zero": invalid pull request number';
+      vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(new ApiError(400, rejected));
+      sessions.setPRFilter("acme/widgets#zero");
+      await vi.waitFor(() => {
+        expect(sessions.sidebarLoadError).toBe(rejected);
+      });
+      expect(sessions.sessions).toEqual([]);
+      expect(sessions.total).toBe(0);
+
+      mockSidebarIndex([makeSkinnyRow({ id: "after-fix" })]);
+      sessions.setPRFilter("");
+      await vi.waitFor(() => {
+        expect(sessions.sidebarLoadError).toBeNull();
+      });
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["after-fix"]);
+    });
+
+    it("passes label and pull request filters to later pages", async () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+      sessions.filters.pr = "acme/widgets";
+      sessions.nextCursor = "page-2";
+
+      await sessions.loadMore();
+
+      expectPaginatedSidebarIndexCalledWith({
+        cursor: "page-2",
+        label: ["ticket=ABC-123"],
+        pr: "acme/widgets",
+      });
+    });
+
+    it("counts as session-list filters but not shared filters", () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+      expect(sessions.hasActiveFilters).toBe(true);
+      expect(sessions.hasSharedFilters).toBe(false);
+
+      sessions.filters.labels = [];
+      sessions.filters.pr = "acme/widgets";
+      expect(sessions.hasActiveFilters).toBe(true);
+      expect(sessions.hasSharedFilters).toBe(false);
+    });
+
+    it("clears label and pull request filters with the other filters", async () => {
+      sessions.filters.labels = ["ticket=ABC-123"];
+      sessions.filters.pr = "acme/widgets";
+
+      sessions.clearSessionFilters();
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalled();
+      });
+
+      expect(sessions.filters.labels).toEqual([]);
+      expect(sessions.filters.pr).toBe("");
+      expectSidebarIndexCalledWith({ label: undefined, pr: undefined });
+    });
+
+    it("restores saved label filters and drops malformed ones", () => {
+      storageData.set(
+        "session-filters",
+        JSON.stringify({ labels: ["ticket=ABC-123", 7, " "], pr: " acme/widgets ", version: 2 }),
+      );
+      expect(createSessionsStore().filters.labels).toEqual(["ticket=ABC-123"]);
+      expect(createSessionsStore().filters.pr).toBe("acme/widgets");
+
+      storageData.set("session-filters", JSON.stringify({ labels: "oops", pr: 3, version: 2 }));
+      const restored = createSessionsStore().filters;
+      expect(restored.labels).toEqual([]);
+      expect(restored.pr).toBe("");
     });
   });
 
@@ -3539,6 +3681,45 @@ describe("SessionsStore live refresh", () => {
     detach();
     spy.mockRestore();
     vi.useRealTimers();
+  });
+
+  it("sessions events refresh active session labels", async () => {
+    const { events } = await import("./events.svelte.js");
+    let registered: ((e: { scope: string }) => void) | null = null;
+    const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
+      registered = fn as (e: { scope: string }) => void;
+      return () => {};
+    });
+
+    const sessions = createSessionsStore();
+    const detach = sessions.attachSidebar();
+    sessions.activeSessionId = "worker";
+    sessions.sessions = [
+      makeSession({
+        id: "worker",
+        labels: ["role=reviewer"],
+        parent_session_id: "manager",
+        parent_session_ids: ["manager"],
+        relationship_type: "subagent",
+      }),
+    ];
+    vi.mocked(api.getSession).mockResolvedValue(makeSession({ id: "worker", labels: [] }));
+    expect(sessions.activeSession?.labels).toEqual(["role=reviewer"]);
+
+    registered!({ scope: "sessions" });
+    await vi.waitFor(() => {
+      expect(sessions.activeSession?.labels).toEqual([]);
+      expect(sessions.activeSession?.parent_session_id).toBeUndefined();
+      expect(sessions.activeSession?.parent_session_ids).toBeUndefined();
+      expect(sessions.activeSession?.relationship_type).toBeUndefined();
+    });
+    expect(SessionsService.getApiV1SessionsById).toHaveBeenCalledWith(
+      { id: "worker" },
+      expect.any(Object),
+    );
+
+    detach();
+    spy.mockRestore();
   });
 
   it("sessions events replace cached project filter options", async () => {

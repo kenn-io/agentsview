@@ -446,5 +446,15 @@ func schemaColumnMigrations() []columnMigration {
 			`file_path TEXT`,
 			"adding sessions.file_path",
 		},
+		{
+			"sessions", "pr_links",
+			`pr_links TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.pr_links",
+		},
+		{
+			"sessions", "labels",
+			`labels TEXT[] NOT NULL DEFAULT '{}'`,
+			"adding sessions.labels",
+		},
 	}
 }

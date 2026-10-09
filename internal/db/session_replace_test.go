@@ -103,6 +103,26 @@ func TestReplaceSessionKeepingTrashedCopy(t *testing.T) {
 	assert.Equal(t, int64(1), restored)
 }
 
+func TestReplaceSessionKeepingTrashedCopyPreservesLauncherParent(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedReplaceSession(t, d)
+	insertSession(t, d, "manager", "proj")
+	link, err := d.SetSessionExternalParent(ctx, "replace", "manager")
+	require.NoError(t, err)
+	require.True(t, link.Applied)
+
+	copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, replaceWrite("new transcript"))
+	require.NoError(t, err)
+	for _, id := range []string{"replace", copyID} {
+		session, err := d.GetSessionFull(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, Ptr("manager"), session.ParentSessionID, id)
+		assert.Equal(t, "subagent", session.RelationshipType, id)
+	}
+}
+
 func TestReplaceSessionKeepingTrashedCopyRollsBack(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

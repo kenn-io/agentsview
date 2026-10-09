@@ -11,7 +11,15 @@ import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
-import { SESSION_ANALYTICS_WINDOW_PARAM, parseWindowDaysParam } from "./sessionRouteParams.js";
+import {
+  SESSION_ANALYTICS_WINDOW_PARAM,
+  SESSION_LABEL_PARAM,
+  SESSION_PR_PARAM,
+  joinLabelFilterParam,
+  normalizeLabelFilters,
+  parseWindowDaysParam,
+  splitLabelFilterParam,
+} from "./sessionRouteParams.js";
 import { rollingRange } from "../utils/dates.js";
 import { LatestRead } from "../utils/latest-read.js";
 
@@ -92,6 +100,10 @@ export interface Filters {
   minUserMessages: number;
   includeOneShot: boolean;
   includeAutomated: boolean;
+  /** Exact labels a session must carry; every label must match. */
+  labels: string[];
+  /** Pull request reference: owner/repo or owner/repo#123. */
+  pr: string;
 }
 
 function defaultFilters(): Filters {
@@ -110,6 +122,8 @@ function defaultFilters(): Filters {
     minUserMessages: 0,
     includeOneShot: true,
     includeAutomated: false,
+    labels: [],
+    pr: "",
   };
 }
 
@@ -138,6 +152,8 @@ function loadSavedFilters(): SavedFilters {
         windowDays?: unknown;
       };
       const filters = { ...defaultFilters(), ...saved };
+      filters.labels = normalizeLabelFilters(filters.labels);
+      filters.pr = typeof filters.pr === "string" ? filters.pr.trim() : "";
       // Deliberately `!==`, not `<`: an entry written by a newer (or older)
       // format is not trusted either way — dropping date bounds is the
       // fail-safe direction in both.
@@ -204,6 +220,10 @@ export function filtersToParams(f: Filters): Record<string, string> {
   }
   if (!f.includeOneShot) p["include_one_shot"] = "false";
   if (f.includeAutomated) p["include_automated"] = "true";
+  const labels = joinLabelFilterParam(f.labels);
+  if (labels) p[SESSION_LABEL_PARAM] = labels;
+  const pr = f.pr.trim();
+  if (pr) p[SESSION_PR_PARAM] = pr;
   return p;
 }
 
@@ -266,6 +286,8 @@ export function parseFiltersFromParams(params: Record<string, string>): Filters 
     minUserMessages: Number.isFinite(minUserMsgs) ? minUserMsgs : 0,
     includeOneShot,
     includeAutomated: params["include_automated"] === "true",
+    labels: splitLabelFilterParam(params[SESSION_LABEL_PARAM]),
+    pr: (params[SESSION_PR_PARAM] ?? "").trim(),
   };
 }
 
@@ -288,6 +310,8 @@ class SessionsStore {
   nextCursor: string | null = $state(null);
   total: number = $state(0);
   loading: boolean = $state(false);
+  /** Why the server rejected the current sidebar filters, or null. */
+  sidebarLoadError: string | null = $state(null);
   #savedFilters = loadSavedFilters();
   private filterPersistenceHeld = false;
   filters: Filters = $state(this.#savedFilters.filters);
@@ -368,6 +392,8 @@ class SessionsStore {
       include_one_shot: f.includeOneShot || undefined,
       include_automated: f.includeAutomated || undefined,
       starred: starred.filterOnly || undefined,
+      label: f.labels.length > 0 ? [...f.labels] : undefined,
+      pr: f.pr || undefined,
     };
   }
 
@@ -551,14 +577,24 @@ class SessionsStore {
       }
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
-    } catch {
+      this.sidebarLoadError = null;
+    } catch (error) {
+      if (this.loadVersion !== version) return;
+      // A rejected filter has no matching rows; showing the previous
+      // filter's rows under it would mislabel them.
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+        this.sessions = [];
+        this.sidebarIndexIds = new Set();
+        this.nextCursor = null;
+        this.total = 0;
+        this.sidebarLoadError = error.message;
+        return;
+      }
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list.
-      if (this.loadVersion === version) {
-        this.sessions = prev.sessions;
-        this.nextCursor = prev.nextCursor;
-        this.total = prev.total;
-      }
+      this.sessions = prev.sessions;
+      this.nextCursor = prev.nextCursor;
+      this.total = prev.total;
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;
@@ -665,6 +701,9 @@ class SessionsStore {
     this.sessions[idx] = {
       ...current,
       ...hydrated,
+      parent_session_id: hydrated.parent_session_id,
+      parent_session_ids: hydrated.parent_session_ids,
+      relationship_type: hydrated.relationship_type,
       display_name: hydrated.display_name ?? current.display_name,
       is_teammate: hydrated.is_teammate ?? current.is_teammate,
       is_index_only: false,
@@ -1228,7 +1267,48 @@ class SessionsStore {
     return this.filters.termination.split(",").includes(status);
   }
 
+  /** Adds an exact-match label filter. Sessions must carry every label. */
+  addLabelFilter(label: string) {
+    const next = normalizeLabelFilters([...this.filters.labels, label]);
+    if (next.length === this.filters.labels.length) return;
+    this.filters.labels = next;
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  removeLabelFilter(label: string) {
+    const next = this.filters.labels.filter((l) => l !== label);
+    if (next.length === this.filters.labels.length) return;
+    this.filters.labels = next;
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  isLabelSelected(label: string): boolean {
+    return this.filters.labels.includes(label.trim());
+  }
+
+  /** Sets the pull request filter; an empty value clears it. */
+  setPRFilter(pr: string) {
+    const next = pr.trim();
+    if (next === this.filters.pr) return;
+    this.filters.pr = next;
+    this.setActiveSession(null);
+    void this.load();
+  }
+
+  /** Label and pull request filters narrow only the session list; the
+   *  usage and analytics pages do not apply them. */
+  get hasSessionListOnlyFilters(): boolean {
+    return this.filters.labels.length > 0 || !!this.filters.pr;
+  }
+
   get hasActiveFilters(): boolean {
+    return this.hasSharedFilters || this.hasSessionListOnlyFilters;
+  }
+
+  /** Filters the session list shares with the usage and analytics pages. */
+  get hasSharedFilters(): boolean {
     const f = this.filters;
     return !!(
       f.machine ||
@@ -1498,6 +1578,7 @@ class SessionsStore {
       return;
     }
     if (event.scope === "sessions" || event.scope === "sync") {
+      if (event.scope === "sessions") void this.refreshActiveSession();
       this.invalidateProjectCache();
       this.scheduleIndexRefresh();
       this.bumpActiveSessionUsageVersion();

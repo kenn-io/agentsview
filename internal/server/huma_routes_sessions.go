@@ -99,6 +99,8 @@ type sessionFilterInput struct {
 	MinToolFailures  optionalIntParam  `query:"min_tool_failures" minimum:"0" doc:"Minimum tool failure count"`
 	HasSecret        bool              `query:"has_secret" doc:"Filter sessions with secret findings"`
 	Starred          bool              `query:"starred" doc:"Filter sessions by starred status"`
+	Label            []string          `query:"label,explode" doc:"Keep sessions carrying this exact label; repeat to require several"`
+	PR               string            `query:"pr" doc:"Keep sessions linked to a pull request: owner/repo or owner/repo#123"`
 	OrderBy          string            `query:"order_by" default:"recent" doc:"Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id."`
 	Descending       optionalBoolParam `query:"descending" doc:"Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix"`
 }
@@ -218,6 +220,8 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 		Termination:      in.Termination,
 		HasSecret:        in.HasSecret,
 		Starred:          in.Starred,
+		Labels:           in.Label,
+		PR:               in.PR,
 		OrderBy:          in.OrderBy,
 		Descending:       optionalBoolValue(in.Descending),
 	}
@@ -245,6 +249,14 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 	if in.Limit > 0 {
 		limit = clampLimit(in.Limit, db.DefaultSessionLimit, db.MaxSessionLimit)
 	}
+	pr, err := db.ParsePRFilter(in.PR)
+	if err != nil {
+		return db.SessionFilter{}, apiError(http.StatusBadRequest, err.Error())
+	}
+	labels, err := db.LabelFilterValues(in.Label)
+	if err != nil {
+		return db.SessionFilter{}, apiError(http.StatusBadRequest, err.Error())
+	}
 	return db.SessionFilter{
 		Project:          in.Project,
 		ExcludeProject:   in.ExcludeProject,
@@ -266,6 +278,8 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 		Limit:            limit,
 		Termination:      in.Termination,
 		Starred:          in.Starred,
+		Labels:           labels,
+		PR:               pr,
 	}, nil
 }
 
@@ -287,6 +301,9 @@ func (s *Server) humaListSessions(
 	if err != nil {
 		if errors.Is(err, db.ErrInvalidCursor) {
 			return nil, apiError(http.StatusBadRequest, "invalid cursor")
+		}
+		if errors.Is(err, db.ErrInvalidPRFilter) || errors.Is(err, db.ErrSessionLabelsInvalid) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		return nil, serverError(err)
 	}

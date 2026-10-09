@@ -815,6 +815,7 @@ func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) 
 		nullTime(sess.DeletedAt), nullString(sess.DeletionCause), timeValue(sess.CreatedAt),
 		nullString(sess.TerminationStatus),
 		int64(sess.SecretLeakCount), sess.SecretsRulesVersion,
+		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
 		lastMessageAt(p.messages), fingerprint, s.archiveID,
 		int64(len(p.messages)), version,
 	}

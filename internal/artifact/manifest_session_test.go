@@ -53,6 +53,9 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 			return nil, err
 		}
 		delete(fields, "project_assigned")
+		// Labels are user-owned archive metadata, like stars; they stay with
+		// the archive that recorded them.
+		delete(fields, "labels")
 		return canonicalJSON(fields)
 	}
 

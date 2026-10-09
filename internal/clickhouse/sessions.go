@@ -34,7 +34,8 @@ const sessionCols = `id, project, project_assigned, machine, agent,
 	cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision`
+	deleted_at, deletion_cause, termination_status, transcript_revision,
+	pr_links, labels`
 
 // sessionFullCols retains the detail route's path-only source projection.
 const sessionFullCols = sessionCols + `, file_path`
@@ -57,6 +58,8 @@ func scanSessionProjection(
 ) (db.Session, error) {
 	var s db.Session
 	var createdAt, startedAt, endedAt, deletedAt, localModifiedAt any
+	var prLinks string
+	var labels []string
 	targets := []any{
 		&s.ID, &s.Project, &s.ProjectAssigned, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
@@ -86,6 +89,7 @@ func scanSessionProjection(
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
+		&prLinks, &labels,
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath)
@@ -95,6 +99,12 @@ func scanSessionProjection(
 	}
 	if err := rs.Scan(targets...); err != nil {
 		return s, err
+	}
+	s.PRLinks = db.DecodePRLinks(prLinks)
+	// SQLite reports an unlabeled session as nil; match it so API output
+	// does not depend on the backend.
+	if len(labels) > 0 {
+		s.Labels = labels
 	}
 	s.CreatedAt = formatDBTime(createdAt)
 	if v := formatDBTime(localModifiedAt); v != "" {

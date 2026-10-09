@@ -256,32 +256,43 @@ func (t *toolset) queryRecall(
 // --- list_sessions ---
 
 type listSessionsIn struct {
-	Project          string `json:"project,omitempty" jsonschema:"Filter by project name."`
-	Agent            string `json:"agent,omitempty" jsonschema:"Filter by agent (e.g. claude, codex, gemini, antigravity)."`
-	Machine          string `json:"machine,omitempty" jsonschema:"Filter by machine name."`
-	DateFrom         string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
-	DateTo           string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	ActiveSince      string `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
-	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns."`
-	Limit            int    `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
-	Cursor           string `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
+	Project          string   `json:"project,omitempty" jsonschema:"Filter by project name."`
+	Agent            string   `json:"agent,omitempty" jsonschema:"Filter by agent (e.g. claude, codex, gemini, antigravity)."`
+	Machine          string   `json:"machine,omitempty" jsonschema:"Filter by machine name."`
+	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
+	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
+	ActiveSince      string   `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
+	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns."`
+	Labels           []string `json:"labels,omitempty" jsonschema:"Only sessions carrying every one of these exact labels, such as ticket=ABC-123."`
+	PR               string   `json:"pr,omitempty" jsonschema:"Only sessions linked to a pull request: owner/repo or owner/repo#123."`
+	Limit            int      `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
+	Cursor           string   `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 }
 
 type sessionRow struct {
-	WebURL           string `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
-	SessionID        string `json:"session_id"`
-	Project          string `json:"project,omitempty"`
-	Machine          string `json:"machine,omitempty"`
-	Agent            string `json:"agent"`
-	Name             string `json:"name"`
-	StartedAt        string `json:"started_at"`
-	EndedAt          string `json:"ended_at"`
-	MessageCount     int    `json:"message_count" jsonschema:"Total stored messages for the session across all roles, including system messages. get_messages always drops system messages, so no roles filter makes its returned count match this; reconcile instead via message_count = returned + filtered summed over a full get_messages pagination sweep."`
-	UserMessageCount int    `json:"user_message_count" jsonschema:"Stored user-role messages, excluding those flagged as system-injected."`
-	OutputTokens     int64  `json:"output_tokens,omitempty"`
-	Outcome          string `json:"outcome,omitempty"`
-	HealthGrade      string `json:"health_grade,omitempty"`
-	GitBranch        string `json:"git_branch,omitempty"`
+	WebURL           string           `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
+	SessionID        string           `json:"session_id"`
+	Project          string           `json:"project,omitempty"`
+	Machine          string           `json:"machine,omitempty"`
+	Agent            string           `json:"agent"`
+	Name             string           `json:"name"`
+	StartedAt        string           `json:"started_at"`
+	EndedAt          string           `json:"ended_at"`
+	MessageCount     int              `json:"message_count" jsonschema:"Total stored messages for the session across all roles, including system messages. get_messages always drops system messages, so no roles filter makes its returned count match this; reconcile instead via message_count = returned + filtered summed over a full get_messages pagination sweep."`
+	UserMessageCount int              `json:"user_message_count" jsonschema:"Stored user-role messages, excluding those flagged as system-injected."`
+	OutputTokens     int64            `json:"output_tokens,omitempty"`
+	Outcome          string           `json:"outcome,omitempty"`
+	HealthGrade      string           `json:"health_grade,omitempty"`
+	GitBranch        string           `json:"git_branch,omitempty"`
+	ParentSessionID  string           `json:"parent_session_id,omitempty"`
+	Labels           []string         `json:"labels,omitempty"`
+	PullRequests     []pullRequestRow `json:"pull_requests,omitempty" jsonschema:"Pull or merge requests the session's transcript linked to."`
+}
+
+type pullRequestRow struct {
+	URL        string `json:"url"`
+	Repository string `json:"repository"`
+	Number     int    `json:"number"`
 }
 
 type listSessionsOut struct {
@@ -301,6 +312,8 @@ func (t *toolset) listSessions(
 		DateTo:           in.DateTo,
 		ActiveSince:      in.ActiveSince,
 		IncludeAutomated: in.IncludeAutomated,
+		Labels:           in.Labels,
+		PR:               in.PR,
 		Cursor:           in.Cursor,
 		Limit:            clampLimit(in.Limit, defaultListLimit, maxListLimit),
 	})
@@ -339,7 +352,23 @@ func toSessionRow(s db.Session) sessionRow {
 		Outcome:          s.Outcome,
 		HealthGrade:      strval(s.HealthGrade),
 		GitBranch:        s.GitBranch,
+		ParentSessionID:  strval(s.ParentSessionID),
+		Labels:           s.Labels,
+		PullRequests:     pullRequestRows(s.PRLinks),
 	}
+}
+
+func pullRequestRows(links []db.PRLink) []pullRequestRow {
+	if len(links) == 0 {
+		return nil
+	}
+	rows := make([]pullRequestRow, 0, len(links))
+	for _, link := range links {
+		rows = append(rows, pullRequestRow{
+			URL: link.URL, Repository: link.Repository, Number: link.Number,
+		})
+	}
+	return rows
 }
 
 // --- get_session_overview ---

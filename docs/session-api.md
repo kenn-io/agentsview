@@ -194,7 +194,9 @@ agentsview session get host~freebuff:myproject:1704067200 --server http://remote
   "health_score_basis": ["..."],
   "health_penalties": {"tool_retries": 5},
   "parser_malformed_lines": 3,
-  "secret_leak_count": 0
+  "secret_leak_count": 0,
+  "labels": [],
+  "pr_links": []
 }
 ```
 
@@ -208,6 +210,11 @@ while still recovering the session and is omitted when zero. Antigravity detail
 responses may also include `decode_confidence`; the value `low` means the
 session came from an unrecognized Antigravity schema fingerprint and was decoded
 heuristically.
+
+`labels` lists the session's [labels](#agentsview-session-label) and
+`pr_links` its [pull request links](#pull-request-links). Both are always
+present and are `[]` when empty. Human output prints them, plus the parent
+session when there is one.
 
 `secret_leak_count` (added in 0.30.0) counts definite-tier findings from
 [secret scanning](#secret-scanning) and is stamped inline during sync.
@@ -283,7 +290,9 @@ Compare `cwd`, `is_truncated`, `message_count`, `file_size`,
 `local_modified_at`, and the session timestamps when choosing a copy. Source
 metadata and timestamps help compare copies; they do not guarantee a complete
 transcript. `local_modified_at` records changes to the archived session row,
-including later metadata edits. It is not the source file's modification time.
+including custom names and later metadata edits. Labels and launcher parent links
+advance only the mirror sync marker. It is not the source file's modification
+time.
 
 Date filters match a session when its activity window overlaps the selected date
 or range. Sessions that start before midnight and remain active after it
@@ -314,6 +323,8 @@ therefore appear on both dates.
 | `--health-grade`      | `health_grade`      | comma-separated                                                                                                                                                                   |
 | `--min-tool-failures` | `min_tool_failures` | int; `0` is a meaningful filter                                                                                                                                                   |
 | `--has-secret`        | `has_secret`        | bool — only sessions with at least one definite [secret finding](#secret-scanning)                                                                                                |
+| `--label`             | `label`             | repeatable; exact label match, every listed label required                                                                                                                        |
+| `--pr`                | `pr`                | `owner/repo` or `owner/repo#123`; see [Pull request links](#pull-request-links)                                                                              |
 | `--sort`              | `order_by`          | comma-separated keys; optional `:asc` / `:desc` suffix per key                                                                                                                    |
 | `--reverse`, `-r`     | `descending`        | flips the default direction for unsuffixed sort keys                                                                                                                              |
 | `--cursor`            | `cursor`            | opaque string from prior response                                                                                                                                                 |
@@ -586,6 +597,128 @@ sessions already present there.
   (read-only), sync refuses with a clear error.
 - If `AGENTSVIEW_NO_DAEMON=1` is set, the CLI runs the sync in-process only
   after acquiring the local write-owner lock.
+
+______________________________________________________________________
+
+### Pull request links
+
+Sessions list the pull requests their agent recorded in the transcript, in
+`pr_links`:
+
+```json
+"pr_links": [
+  {
+    "url": "https://github.com/owner/repo/pull/123",
+    "host": "github.com",
+    "repository": "owner/repo",
+    "number": 123
+  }
+]
+```
+
+Claude Code is the only agent that records these today, as `pr-link` entries
+in its transcripts. AgentsView keeps one link per URL. The link says the session was associated with the pull request. It
+does not say whether the session opened it.
+Claude Code records these links for the whole transcript, so every session
+split from one transcript, such as a rewind's fork, carries them, like its name
+and git branch.
+
+Filter by pull request with `session list --pr` or the `pr` query parameter.
+The value is `owner/repo` for any pull request in that repository,
+`owner/repo#123` for one pull request. Repository matching ignores case and
+matches any host.
+
+#### Filtering by label or pull request
+
+Label and pull request filters name the sessions you want, the way `ids` does.
+Hosted raw sync carries no archive labels or launcher parent links. Its label
+filter matches nothing.
+
+- In a flat list (`session list`, `GET /api/v1/sessions`, MCP `list_sessions`)
+  they match each session directly. Child sessions, automated sessions, and
+  one-shot sessions are included, so a headless worker that an orchestrator
+  launched appears even though it is a child of the launching session.
+- In tree views (the web UI sidebar and `include_children=true`) they keep a
+  top-level session when it or any session below it matches, and show its
+  whole tree. Filtering by a worker's pull request shows the orchestrator
+  session with that worker inside it.
+
+______________________________________________________________________
+
+### `agentsview session label`
+
+Annotation commands use the ID exactly as given, with no prefix lookup, so pass the archive session ID, e.g. `codex:<uuid>` for Codex.
+
+Add or remove free-form labels on a session. Use labels to find every session
+for one ticket, role, or kind of run. A `key=value` form such as
+`ticket=ABC-123` is a convention, not a requirement. `session get` and the
+session JSON show a session's labels.
+
+```bash
+agentsview session label <id> ticket=ABC-123 role=reviewer
+agentsview session label <id> --remove role=reviewer
+agentsview session label <id> --replace nightly          # replace every label
+agentsview session label <id> --clear
+agentsview session list --label ticket=ABC-123 --label role=reviewer
+```
+
+The API is `PATCH /api/v1/sessions/{id}/labels` with
+`{"add": ["nightly"], "remove": ["x"], "clear": false}`. `clear` removes every
+existing label first, so `{"clear": true, "add": [...]}` replaces the set and
+`{"clear": true}` empties it. Removing a label the session does not carry is
+not an error. The response is `{"session_id", "labels", "session_found"}`.
+
+- Labels are trimmed. A label may not be empty, start with `=`, contain control
+  characters, or exceed 200 bytes. A session holds at most 64 labels. Invalid
+  input returns HTTP 400.
+- The session does not have to exist yet. A launcher can label a session as soon
+  as it knows the ID; the labels appear when sync imports the session.
+  `session_found: false` reports that case, which also exposes a mistyped ID.
+- Labels are stored apart from the transcript, so a reparse or full resync never
+  changes them. PostgreSQL, DuckDB, and ClickHouse receive them on push and
+  serve the `label` filter, but labels are written only through the local
+  archive. Read-only daemons return HTTP 501.
+- See [Filtering by label or pull request](#filtering-by-label-or-pull-request)
+  for which sessions the filters return.
+
+______________________________________________________________________
+
+### `agentsview session parent`
+
+Record which session launched this one. Use it when an orchestrator starts
+worker sessions as separate processes, so the session tree shows them under the
+session that started them. `session get` and the session JSON show the
+resulting parent.
+
+```bash
+agentsview session parent <worker-id> <manager-id>
+agentsview session parent <worker-id> --clear
+```
+
+The API is `PUT /api/v1/sessions/{id}/parent` with
+`{"parent_session_id": "<id>"}`. An empty or omitted `parent_session_id`
+removes the link. The body accepts only `parent_session_id`;
+`relationship_type` is rejected, and links always record `subagent`.
+
+A launched worker is delegated work, so the link always makes it a subagent of
+the launching session, and the response reports `relationship_type` as
+`subagent`. The worker nests under that session in the sidebar, and
+`session usage` includes its cost in the launcher's total. The response also
+reports `session_found` and `applied`.
+
+- The link applies only while the transcript names no parent of its own.
+  Subagent, fork, and continuation links that AgentsView derives from the
+  transcript win, and `applied` is `false` in that case.
+- AgentsView recomputes the link when writing sessions, linking spawn edges,
+  and setting or clearing launcher links.
+  When the transcript parent or loop that blocked it goes away, the session
+  goes back under the linked parent.
+- The session does not have to exist yet; the link applies when sync imports it.
+- The link is stored apart from the transcript and survives reparses and full
+  resyncs. Mirrors receive the resulting parent on push.
+- A session cannot be its own parent, and a link that would make a session its
+  own ancestor returns HTTP 400. Removing a link that is not recorded returns
+  404.
 
 ______________________________________________________________________
 

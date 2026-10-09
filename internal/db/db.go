@@ -566,7 +566,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // unchanged Claude sources so user-message counts and first messages drop
 // them.)
 // (127: reparse readable sources to classify headless workers as subagents.)
-const dataVersion = 127
+// (128: Claude pr-link records populate the new sessions.pr_links column.
+// Re-parse unchanged Claude sources so existing sessions gain their pull
+// request links.)
+const dataVersion = 128
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1831,6 +1834,8 @@ var readOnlyRequiredTables = []string{
 	"excluded_sessions",
 	"worktree_project_mappings",
 	"session_project_assignments",
+	"session_labels",
+	"session_external_parents",
 	"archive_metadata",
 	"background_migrations",
 	"project_identity_observations",
@@ -2180,6 +2185,10 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
+		{
+			"sessions", "pr_links",
+			"ALTER TABLE sessions ADD COLUMN pr_links TEXT NOT NULL DEFAULT ''",
+		},
 		{"excluded_sessions", "file_path", "ALTER TABLE excluded_sessions ADD COLUMN file_path TEXT"},
 		{
 			"session_project_assignments", "original_project",
@@ -2883,6 +2892,7 @@ WHEN (
     OLD.data_version IS NOT NEW.data_version OR
     OLD.cwd IS NOT NEW.cwd OR
     OLD.git_branch IS NOT NEW.git_branch OR
+    OLD.pr_links IS NOT NEW.pr_links OR
     OLD.source_session_id IS NOT NEW.source_session_id OR
     OLD.source_version IS NOT NEW.source_version OR
     OLD.transcript_fidelity IS NOT NEW.transcript_fidelity OR
@@ -3436,6 +3446,7 @@ func (db *DB) RequeueAllArtifactExports(ctx context.Context) error {
 // semantics; a full rebuild still covers it.
 // AFTER UPDATE OF only fires on the five source columns, and the trigger
 // body writes only sync_marker, so it cannot recurse.
+// Annotation writes advance sync_marker directly and leave these signals alone.
 //
 // This lives here rather than in schema.sql because schema.sql runs
 // unconditionally on every Open() (via db.init) before

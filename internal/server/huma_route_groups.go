@@ -7,6 +7,7 @@ func (s *Server) registerTypedAPIRoutes() {
 
 	s.registerHealthRoutes()
 	s.registerSessionRoutes()
+	s.registerSessionAnnotationRoutes()
 	s.registerOpenersRoutes()
 	s.registerAnalyticsRoutes()
 	s.registerActivityRoutes()

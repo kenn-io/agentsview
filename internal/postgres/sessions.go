@@ -72,7 +72,8 @@ const pgSessionBaseCols = `id, project, project_assigned, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity, parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, deletion_cause, termination_status, transcript_revision`
+	deleted_at, deletion_cause, termination_status, transcript_revision,
+	pr_links, array_to_json(labels)::text AS labels`
 
 // pgSessionCols is the column list for full PG session queries.
 // PostgreSQL retains the source file path used by read-side session
@@ -127,6 +128,7 @@ func scanPGSessionWithSource(
 	var s db.Session
 	var createdAt *time.Time
 	var startedAt, endedAt, deletedAt *time.Time
+	var prLinks string
 	targets := []any{
 		&s.ID, &s.Project, &s.ProjectAssigned, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
@@ -157,6 +159,7 @@ func scanPGSessionWithSource(
 		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
+		&prLinks, db.LabelsScanner(&s.Labels),
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath)
@@ -165,6 +168,7 @@ func scanPGSessionWithSource(
 	if err != nil {
 		return s, err
 	}
+	s.PRLinks = db.DecodePRLinks(prLinks)
 	if createdAt != nil {
 		s.CreatedAt = FormatISO8601(*createdAt)
 	}
@@ -436,7 +440,7 @@ func (s *Store) GetSidebarSessionIndex(
 	f.Cursor = ""
 	rootFilter := f
 	rootFilter.IncludeChildren = false
-	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
+	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, s.sessionDialect())
 	canonicalRootWhere := db.BuildCanonicalRootWhere(
 		s.sessionDialect(), "sessions", f.IncludeOrphans,
 	)
@@ -507,16 +511,9 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
-	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
+	rootWhere, rootArgs := db.BuildSessionBaseFilterSQL(rootFilter, s.sessionDialect())
 	canonicalRootWhere := db.BuildCanonicalRootWhere(s.sessionDialect(), "sessions", f.IncludeOrphans)
-	childAutomationPred := db.PostgresQueryDialect().AutomatedScopePredicate(
-		db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated),
-		"s.is_automated",
-	)
-	childAutomationWhere := ""
-	if childAutomationPred != "" {
-		childAutomationWhere = " AND " + childAutomationPred
-	}
+	treeMemberWhere := db.SessionTreeMemberPredicate(f, s.sessionDialect(), "s")
 
 	var total int
 	var cur db.SessionCursor
@@ -543,9 +540,7 @@ func (s *Store) getSidebarSessionIndexPage(
 					SELECT t.root_id, s.id
 					FROM sessions s
 					JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
-					WHERE s.message_count > 0
-					  AND s.deleted_at IS NULL
-					  ` + childAutomationWhere + `
+					WHERE ` + treeMemberWhere + `
 				),
 				eligible_roots(id) AS (
 					SELECT DISTINCT t.root_id
@@ -593,9 +588,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			SELECT t.root_id, s.id
 			FROM sessions s
 			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
+			WHERE ` + treeMemberWhere + `
 		)
 		` + pgSidebarStarredRootCTE(f.Starred) + `,
 		root_activity(id, activity) AS (
@@ -682,9 +675,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			SELECT s.id, t.ord
 			FROM sessions s
 			JOIN tree t ON ` + s.sessionDialect().ParentRelation("s", "t") + `
-			WHERE s.message_count > 0
-			  AND s.deleted_at IS NULL
-			  ` + childAutomationWhere + `
+			WHERE ` + treeMemberWhere + `
 		),
 		ranked_tree(id, ord) AS (
 			SELECT id, MIN(ord) AS ord

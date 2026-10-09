@@ -1164,6 +1164,36 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	// Labels and launcher-supplied parents are user-owned and may name a
+	// session that has not synced yet, so every row is kept.
+	if oldDBHasTable(ctx, tx, "session_labels") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO main.session_labels
+				(session_id, label, created_at)
+			SELECT session_id, label, created_at
+			FROM old_db.session_labels`); err != nil {
+			return fmt.Errorf("copying session labels: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "session_external_parents") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.session_external_parents (
+				session_id, parent_session_id, created_at, updated_at
+			)
+			SELECT session_id, parent_session_id, created_at, updated_at
+			FROM old_db.session_external_parents
+			WHERE true
+			ON CONFLICT(session_id) DO UPDATE SET
+				parent_session_id = excluded.parent_session_id,
+				created_at = excluded.created_at,
+				updated_at = excluded.updated_at`); err != nil {
+			return fmt.Errorf("copying session parents: %w", err)
+		}
+		if _, err := applySessionExternalParents(ctx, tx); err != nil {
+			return err
+		}
+	}
+
 	// Copy pinned messages (table may not exist in older DBs).
 	// Auto-increment message IDs differ between DBs, so old
 	// message_id must be re-resolved against the fresh rows.
@@ -1760,7 +1790,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"missing_verification_count",
 		"duplicate_prompt_count", "no_code_context_count",
 		"runaway_tool_loop_count",
-		"cwd", "git_branch", "source_session_id",
+		"cwd", "git_branch", "pr_links", "source_session_id",
 		"source_version", "transcript_fidelity", "parser_malformed_lines",
 		"is_truncated", "last_write_incremental",
 		"transcript_revision",
