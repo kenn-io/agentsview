@@ -227,7 +227,7 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 
 func chromeConfigRoot(home string) string {
 	if root := os.Getenv("CHROME_CONFIG_HOME"); root != "" {
-		return root
+		return filepath.Join(root, "google-chrome")
 	}
 	if root := os.Getenv("XDG_CONFIG_HOME"); root != "" {
 		return filepath.Join(root, "google-chrome")

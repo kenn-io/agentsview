@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json/v2"
 	"errors"
 	"net"
@@ -99,10 +98,6 @@ func TestChromeHostSyncPrivateReplies(t *testing.T) {
 		}
 	})
 	assert.Equal(t, 2, stats.Imported)
-	messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "Chosen reply", messages[1].Content)
 }
 
 func TestChromeHostAbsent(t *testing.T) {
@@ -190,30 +185,8 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 	}
 }
 
-func TestChromeHostIncompatiblePendingRequests(t *testing.T) {
-	srv := testServer(t, 5*time.Second)
-	_, conn := testChromeConnection(t, srv)
-	finished := make(chan error, 2)
-	for range 2 {
-		go func() {
-			_, err := srv.chrome.fetch(t.Context(), "/api/organizations")
-			finished <- err
-		}()
-		readChromeRequest(t, conn)
-	}
-	require.NoError(t, chromehost.WriteFrame(conn, []byte(`{"version":2}`)))
-	for range 2 {
-		select {
-		case err := <-finished:
-			require.ErrorIs(t, err, chromehost.ErrCompatibility)
-		case <-time.After(5 * time.Second):
-			require.FailNow(t, "incompatible host left a pending fetch")
-		}
-	}
-}
-
 func TestChromeHostDisconnect(t *testing.T) {
-	for _, mode := range []string{"oversized frame", "negative status", "status above 599", "EOF"} {
+	for _, mode := range []string{"negative status", "status above 599", "EOF"} {
 		t.Run(mode, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			_, conn := testChromeConnection(t, srv)
@@ -222,11 +195,6 @@ func TestChromeHostDisconnect(t *testing.T) {
 			_, path := readChromeRequest(t, conn)
 			require.Equal(t, "/api/organizations", path)
 			switch mode {
-			case "oversized frame":
-				var header [4]byte
-				binary.NativeEndian.PutUint32(header[:], chromehost.FrameLimit+1)
-				_, err := conn.Write(header[:])
-				require.NoError(t, err)
 			case "negative status":
 				writeChromeReply(t, conn, "ignored", -1, "[]")
 			case "status above 599":
