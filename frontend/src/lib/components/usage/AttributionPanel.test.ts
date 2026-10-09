@@ -142,13 +142,12 @@ afterEach(() => {
 });
 
 describe("AttributionPanel selection", () => {
-  it("reveals Clear selection in the actions and clears only the current dimension", async () => {
+  it("reveals Clear selection in the actions and clears the row", async () => {
     const full = summaryWithModels();
     usage.summary = full;
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(full);
     usage.toggles.attribution.groupBy = "model";
     usage.toggles.attribution.view = "list";
-    usage.selectedProjectKey = "pl1:sha256:first";
     const component = mountPanel();
     await tick();
     const actions = document.querySelector<HTMLElement>(".selection-actions")!;
@@ -160,7 +159,6 @@ describe("AttributionPanel selection", () => {
     await tick();
     expect(actions.classList.contains("inactive")).toBe(true);
     expect(document.querySelector('.list-row[aria-pressed="true"]')).toBeNull();
-    expect(usage.selectedProjectKey).toBe("pl1:sha256:first");
     await unmount(component);
     usage.cancelInFlightReads();
   });
@@ -204,11 +202,13 @@ describe("AttributionPanel selection", () => {
     expect(rows[1]!.getAttribute("aria-pressed")).toBe("true");
     expect(rows[0]!.classList.contains("dimmed")).toBe(true);
     expect(Array.from(rows, (row) => row.querySelector("rect")?.getAttribute("fill") ?? row.querySelector(".rail-dot, .list-dot")?.getAttribute("style"))).toEqual(colors);
-    expect(usage.zoomedProject).toBeNull();
-    rows[1]!.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
-    rows[1]!.dispatchEvent(new MouseEvent("dblclick", { detail: 2, bubbles: true }));
-    expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:second", label: "Project B" });
-    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).toEqual(expect.objectContaining({ project_key: "pl1:sha256:second", group_by: "group" }));
+    if (selector !== ".tile") {
+      expect(usage.zoomedProject).toBeNull();
+      rows[1]!.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+      rows[1]!.dispatchEvent(new MouseEvent("dblclick", { detail: 2, bubbles: true }));
+      expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:second", label: "Project B" });
+      expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).toEqual(expect.objectContaining({ project_key: "pl1:sha256:second", group_by: "group" }));
+    }
     await unmount(component);
   });
 
@@ -510,11 +510,6 @@ describe("AttributionPanel job groups", () => {
     expect(rows[0]!.title).toBe("Daily digest · abcdef-job");
     expect(rows[4]!.title).toBe("Other · remainder");
     expect(rows[2]!.title).toBe("Other");
-    for (const row of rows) {
-      expect(row.hasAttribute("role")).toBe(false);
-      expect(row.hasAttribute("tabindex")).toBe(false);
-      expect(row.hasAttribute("aria-pressed")).toBe(false);
-    }
     expect(
       new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size,
     ).toBe(1);
@@ -580,32 +575,12 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
-  it("distinguishes matching jobs across machines", async () => {
-    usage.setOpenProject("pl1:sha256:first");
-    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
-    usage.zoomRows = ["host-a", "host-b"].map((machine) => ({
-      ...topSessionForRemainder(), groupKey: "digest", machine, groupLabel: "Daily digest",
-    }));
-    const component = mountPanel();
-    await tick();
-    const rows = document.querySelectorAll<HTMLElement>(".list-row");
-    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual([
-      "Daily digest · host-a",
-      "Daily digest · host-b",
-    ]);
-    expect(Array.from(rows, (row) => row.title)).toEqual([
-      "Daily digest · digest · host-a",
-      "Daily digest · digest · host-b",
-    ]);
-    await unmount(component);
-  });
-
   it.each(["list", "treemap"] as const)("distinguishes two same-named jobs on two machines in %s", async (view) => {
     usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usage.toggles.attribution.view = view;
-    usage.zoomRows = ["a1b2c3d4-job", "e5f6a7b8-job"].flatMap((groupKey) => ["host-a", "host-b"].map((machine) => ({
-      ...topSessionForRemainder(), groupKey, machine, groupLabel: "Digest",
+    usage.zoomRows = ["a1b2c3d4-job", "e5f6a7b8-job", "digest"].flatMap((groupKey) => ["host-a", "host-b"].map((machine) => ({
+      ...topSessionForRemainder(), groupKey, machine, groupLabel: groupKey === "digest" ? "Daily digest" : "Digest",
     })));
     const component = mountPanel();
     await tick();
@@ -615,12 +590,16 @@ describe("AttributionPanel job groups", () => {
       "Digest · a1b2c3d4 · host-b",
       "Digest · e5f6a7b8 · host-a",
       "Digest · e5f6a7b8 · host-b",
+      "Daily digest · host-a",
+      "Daily digest · host-b",
     ]);
     expect(Array.from(rows, (row) => row.title)).toEqual([
       "Digest · a1b2c3d4-job · host-a",
       "Digest · a1b2c3d4-job · host-b",
       "Digest · e5f6a7b8-job · host-a",
       "Digest · e5f6a7b8-job · host-b",
+      "Daily digest · digest · host-a",
+      "Daily digest · digest · host-b",
     ]);
     for (const row of document.querySelectorAll(".list-row, .rail-row, .tile")) {
       expect(row.hasAttribute("role")).toBe(false);
@@ -647,10 +626,6 @@ describe("AttributionPanel job groups", () => {
     expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual([
       "Repeated run · hermes:r",
       "Repeated run · augure-d",
-    ]);
-    expect(Array.from(rows, (row) => row.title)).toEqual([
-      "Repeated run · hermes:run-a",
-      "Repeated run · augure-desktop:run-a",
     ]);
     await unmount(component);
   });

@@ -61,6 +61,24 @@ func TestResolveUsageProjectKeysSharesCatalog(t *testing.T) {
 	assert.Empty(t, resolved.Project)
 	assert.Equal(t, []string{"project-a"}, resolved.ProjectLabels)
 	assert.Empty(t, resolved.ExcludeProjectLabels)
+	for _, keys := range []string{"", " ", ",", " ,  ", "unknown-key"} {
+		for _, exclude := range []bool{false, true} {
+			req := service.UsageRequest{ProjectKey: keys}
+			if exclude {
+				req = service.UsageRequest{ExcludeProjectKey: keys}
+			}
+			resolved, err := service.ResolveUsageProjectKeys(t.Context(), store, req)
+			if keys == "unknown-key" || (!exclude && keys != "") {
+				var inputErr *service.UsageInputError
+				require.ErrorAs(t, err, &inputErr)
+				assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, inputErr.Code)
+				continue
+			}
+			require.NoError(t, err)
+			assert.Empty(t, resolved.ProjectLabels)
+			assert.Empty(t, resolved.ExcludeProjectLabels)
+		}
+	}
 }
 
 func seedPairwiseUsageFixture(t *testing.T, d *db.DB) {
@@ -275,24 +293,6 @@ func TestDirectBackend_UsageSummary_UnknownProjectKeyHasStableCode(t *testing.T)
 	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, inputErr.Code)
 }
 
-func TestUsageSummary_WhitespaceProjectKeys(t *testing.T) {
-	env := newHTTPBackendEnv(t)
-	for _, tc := range []struct {
-		param  string
-		status int
-	}{
-		{param: "exclude_project_key", status: http.StatusOK},
-		{param: "project_key", status: http.StatusBadRequest},
-	} {
-		t.Run(tc.param, func(t *testing.T) {
-			resp, err := http.Get(env.BaseURL + "/api/v1/usage/summary?" + tc.param + "=%20")
-			require.NoError(t, err)
-			defer resp.Body.Close()
-			assert.Equal(t, tc.status, resp.StatusCode)
-		})
-	}
-}
-
 func TestDirectBackend_UsageSummary_EmptyRange(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
@@ -337,10 +337,12 @@ func TestHTTPBackend_UsageSummary_SendsExplicitIncludeOneShot(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			var got string
+			var got, projectKey string
 			srv := httptest.NewServer(http.HandlerFunc(
 				func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, "/api/v1/usage/summary", r.URL.Path)
 					got = r.URL.Query().Get("include_one_shot")
+					projectKey = r.URL.Query().Get("project_key")
 					w.Header().Set("Content-Type", "application/json")
 					_, _ = w.Write([]byte(`{"from":"x","to":"y"}`))
 				}))
@@ -349,10 +351,11 @@ func TestHTTPBackend_UsageSummary_SendsExplicitIncludeOneShot(t *testing.T) {
 
 			_, err := svc.UsageSummary(t.Context(), service.UsageRequest{
 				From: "2024-06-01", To: "2024-06-02",
-				IncludeOneShot: tc.includeOneShot,
+				IncludeOneShot: tc.includeOneShot, ProjectKey: "pl1:sha256:alpha",
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
+			assert.Equal(t, "pl1:sha256:alpha", projectKey)
 		})
 	}
 }
@@ -806,11 +809,13 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			queryValues = map[string]string{
+				"path":                r.URL.Path,
 				"left_dimension":      r.URL.Query().Get("left_dimension"),
 				"left_value":          r.URL.Query().Get("left_value"),
 				"right_dimension":     r.URL.Query().Get("right_dimension"),
 				"right_value":         r.URL.Query().Get("right_value"),
 				"git_branch":          r.URL.Query().Get("git_branch"),
+				"project_key":         r.URL.Query().Get("project_key"),
 				"exclude_project_key": r.URL.Query().Get("exclude_project_key"),
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -823,21 +828,24 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	res, err := svc.UsagePairwiseComparison(
 		t.Context(),
 		service.UsagePairwiseComparisonRequest{
-			GitBranch:         "alpha/main",
-			ExcludeProjectKey: "pl1:sha256:hidden",
-			LeftDimension:     "project",
-			LeftValue:         "alpha",
-			RightDimension:    "model",
-			RightValue:        "gpt-4o",
+			UsageRequest: service.UsageRequest{
+				ProjectKey: "pl1:sha256:alpha", GitBranch: "alpha/main", ExcludeProjectKey: "pl1:sha256:hidden",
+			},
+			LeftDimension:  "project",
+			LeftValue:      "alpha",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
 		},
 	)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Equal(t, "project", queryValues["left_dimension"])
+	assert.Equal(t, "/api/v1/usage/pairwise-comparison", queryValues["path"])
 	assert.Equal(t, "alpha", queryValues["left_value"])
 	assert.Equal(t, "model", queryValues["right_dimension"])
 	assert.Equal(t, "gpt-4o", queryValues["right_value"])
 	assert.Equal(t, "alpha/main", queryValues["git_branch"])
+	assert.Equal(t, "pl1:sha256:alpha", queryValues["project_key"])
 	assert.Equal(t, "pl1:sha256:hidden", queryValues["exclude_project_key"])
 	assert.Equal(t, 22, res.Deltas.TotalTokensDelta)
 }

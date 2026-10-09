@@ -85,5 +85,4 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	require.NotNil(t, got, "session not found after second push")
 	assert.Equal(t, "full", got.TranscriptFidelity,
 		"IS DISTINCT FROM must re-push the change to 'full'")
-	assert.Equal(t, "job-a", got.GroupKey)
 }

@@ -2022,20 +2022,21 @@ describe("UsageStore attribution focus", () => {
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
   });
 
-  it.each(["project", "model"] as const)("drops selected %s before picker exclusions reach the API", async (by) => {
+  it.each(["project", "model", "agent"] as const)("drops selected %s before picker exclusions reach the API", async (by) => {
     const { usage } = await loadStore();
-    const id = by === "project" ? "pl1:sha256:alpha" : "gpt-4o";
+    const id = by === "project" ? "pl1:sha256:alpha" : by === "model" ? "gpt-4o" : "claude";
     usage.toggleSelection(by, id);
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     if (by === "project") usage.setOpenProject(id);
     usageServiceMocks.getApiV1UsageSummary.mockClear();
     if (by === "project") usage.toggleProjectKey(id);
-    else usage.toggleModel(id);
+    else if (by === "model") usage.toggleModel(id);
+    else usage.toggleAgent(id);
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usage.hasSelection(by)).toBe(false);
     expect(usage.zoomedProject).toBeNull();
-    const include = by === "project" ? "project_key" : "model";
-    const exclude = by === "project" ? "exclude_project_key" : "exclude_model";
+    const include = by === "project" ? "project_key" : by;
+    const exclude = by === "project" ? "exclude_project_key" : `exclude_${by}`;
     for (const [params] of usageServiceMocks.getApiV1UsageSummary.mock.calls) {
       expect(params[include]).toBeUndefined();
       expect(params[exclude]).toBe(id);

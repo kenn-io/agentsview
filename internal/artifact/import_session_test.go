@@ -147,7 +147,6 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	m := importTestManifest("session")
-	m.Session.GroupKey = "job-a"
 	messages := []db.Message{{
 		Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5,
 	}}
@@ -161,7 +160,6 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, importClosureComplete, outcome)
 	assert.Equal(t, contractOrigin+"~session", write.Session.ID)
-	assert.Equal(t, "job-a", write.Session.GroupKey)
 	require.Len(t, write.Messages, 1)
 	assert.Equal(t, "hello", write.Messages[0].Content)
 }

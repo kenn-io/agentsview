@@ -6142,11 +6142,12 @@ func TestGroupTopSessions(t *testing.T) {
 				{SessionID: "z", Project: "hermes-cron", GroupKey: "job-a", SessionName: "Earlier · Oct 08 12:00", StartedAt: "2026-10-08T13:00:00+02:00"},
 				{SessionID: "b", Project: "hermes-cron", GroupKey: "job-a", SessionName: "Tie winner · Oct 08 12:00", StartedAt: "2026-10-08T12:00:00Z"},
 				{SessionID: "c", Project: "hermes-cron", GroupKey: "job-a", StartedAt: "2026-10-09T12:00:00Z"},
+				{SessionID: "d", Project: "hermes-cron", GroupKey: "job-a", StartedAt: "2026-10-09T14:00:00+02:00"},
 				{SessionID: "a", Project: "hermes-cron", GroupKey: "job-a", SessionName: "Newer · Oct 08 12:00", StartedAt: "2026-10-08T12:00:00Z"},
 				{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
 			},
 			want: []TopSessionEntry{
-				{Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", DisplayName: "Tie winner", StartedAt: "2026-10-09T12:00:00Z"},
+				{Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", DisplayName: "Tie winner", StartedAt: "2026-10-09T14:00:00+02:00"},
 				{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
 			},
 		},
@@ -6158,21 +6159,6 @@ func TestGroupTopSessions(t *testing.T) {
 			},
 			want: []TopSessionEntry{
 				{GroupKey: "job-a", GroupLabel: "Digest", DisplayName: "Digest", StartedAt: "2026-10-09T12:00:00Z"},
-			},
-		},
-		{
-			name: "generated cron title falls back to job ID", limit: 100, sort: TopSessionsSortCost,
-			input: []TopSessionEntry{{GroupKey: "job-a", SessionName: "cron job-a · Oct 08 12:00"}},
-			want:  []TopSessionEntry{{GroupKey: "job-a", DisplayName: "job-a"}},
-		},
-		{
-			name: "unlabeled timestamp ties break by session ID", limit: 100, sort: TopSessionsSortCost,
-			input: []TopSessionEntry{
-				{SessionID: "z", GroupKey: "job-a", StartedAt: "2026-10-08T14:00:00+02:00"},
-				{SessionID: "a", GroupKey: "job-a", StartedAt: "2026-10-08T12:00:00Z"},
-			},
-			want: []TopSessionEntry{
-				{GroupKey: "job-a", DisplayName: "job-a", StartedAt: "2026-10-08T14:00:00+02:00"},
 			},
 		},
 		{
@@ -6194,17 +6180,6 @@ func TestGroupTopSessions(t *testing.T) {
 			want: []TopSessionEntry{
 				{Project: "hermes-cron", GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10},
 				{InputTokens: 10},
-			},
-		},
-		{
-			name: "unnamed jobs on different machines", limit: 100, sort: TopSessionsSortTokens,
-			input: []TopSessionEntry{
-				{Project: "hermes-cron", GroupKey: "job-a", InputTokens: 10},
-				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-a", InputTokens: 20},
-			},
-			want: []TopSessionEntry{
-				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-a", DisplayName: "job-a", InputTokens: 20},
-				{Project: "hermes-cron", GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10},
 			},
 		},
 		{

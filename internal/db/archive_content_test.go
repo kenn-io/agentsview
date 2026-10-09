@@ -1201,6 +1201,7 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 		assert.Empty(t, findings, "the write settles findings the row carried: %s", id)
 	}
 
+	assertUsageOnlyGroup(t, database, "project", "upsert", "replace", "incremental", "metadata-update", "batch", "identity", "rename", "display-rename")
 	for _, id := range []string{
 		"upsert", "replace", "incremental", "metadata-update", "batch", "identity", "rename", "display-rename",
 	} {
@@ -1210,17 +1211,6 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 		assert.Nil(t, stored.FirstMessage, id)
 		assert.Nil(t, stored.DisplayName, id)
 		assert.Nil(t, stored.SessionName, id)
-		rows, err := database.GetTopSessionsByCost(t.Context(), UsageFilter{TopSessionsByGroup: true}, 100)
-		require.NoError(t, err)
-		var found bool
-		for _, row := range rows {
-			if row.GroupKey == id {
-				found = true
-				assert.Empty(t, row.GroupLabel, id)
-				assert.Equal(t, id, row.DisplayName)
-			}
-		}
-		assert.True(t, found, id)
 		_, hasCheckpoint, err := database.GetParserCheckpointBlobs(t.Context(), id)
 		require.NoError(t, err)
 		assert.False(t, hasCheckpoint, id)
@@ -1392,12 +1382,18 @@ func TestArchiveProjectionOfLateToolResults(t *testing.T) {
 	}
 }
 
-func assertUsageOnlyGroup(t *testing.T, database *DB, project, key string) {
+func assertUsageOnlyGroup(t *testing.T, database *DB, project string, keys ...string) {
 	t.Helper()
 	rows, err := database.GetTopSessionsByCost(t.Context(), UsageFilter{ProjectLabels: []string{project}, TopSessionsByGroup: true}, 100)
 	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, key, rows[0].GroupKey)
-	assert.Empty(t, rows[0].GroupLabel)
-	assert.Equal(t, key, rows[0].DisplayName)
+	require.Len(t, rows, len(keys))
+	byKey := make(map[string]TopSessionEntry, len(rows))
+	for _, row := range rows {
+		byKey[row.GroupKey] = row
+	}
+	for _, key := range keys {
+		require.Contains(t, byKey, key)
+		assert.Empty(t, byKey[key].GroupLabel)
+		assert.Equal(t, key, byKey[key].DisplayName)
+	}
 }

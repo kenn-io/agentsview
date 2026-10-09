@@ -705,6 +705,7 @@ class UsageStore {
   }
 
   private dropExcludedSelection(): void {
+    sessions.filters.agent = sessions.filters.agent.split(",").filter((agent) => !this.isAgentExcluded(agent)).join(",");
     if (this.selectedProjectKey && this.isProjectKeyExcluded(this.selectedProjectKey)) {
       this.selectedProjectKey = "";
       this.backToProjects();

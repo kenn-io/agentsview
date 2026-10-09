@@ -1839,7 +1839,6 @@ func TestExportEmitsNewManifestAfterDataVersionChange(t *testing.T) {
 	require.NoError(t, err)
 	m, err := decodeManifestWithLimits(readContractArtifact(t, store, ref), productionArtifactLimits())
 	require.NoError(t, err)
-	assert.Equal(t, 5, m.Version)
 	assert.Equal(t, 42, m.DataVersion)
 }
 

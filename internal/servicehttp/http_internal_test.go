@@ -310,26 +310,3 @@ func TestListEmptySessionSelectionReturnsEmptyWithoutRequest(t *testing.T) {
 	assert.Zero(t, page.Total)
 	assert.Zero(t, requests.Load())
 }
-
-func TestUsageForwardsProjectKey(t *testing.T) {
-	for _, endpoint := range []string{"summary", "pairwise-comparison"} {
-		t.Run(endpoint, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(t, "/api/v1/usage/"+endpoint, r.URL.Path)
-				assert.Equal(t, "pl1:sha256:alpha", r.URL.Query().Get("project_key"))
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{}`))
-			}))
-			t.Cleanup(srv.Close)
-			backend := NewHTTPBackend(srv.URL, "", false, "")
-			req := service.UsageRequest{ProjectKey: "pl1:sha256:alpha"}
-			if endpoint == "summary" {
-				_, err := backend.UsageSummary(t.Context(), req)
-				require.NoError(t, err)
-			} else {
-				_, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: req})
-				require.NoError(t, err)
-			}
-		})
-	}
-}

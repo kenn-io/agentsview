@@ -531,15 +531,4 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &summary))
 	require.Len(t, summary.ProjectTotals, 1)
 	assert.Equal(t, "hermes-cron", summary.ProjectTotals[0].Project)
-	params["project_key"] = ""
-	w = te.get(t, buildPathURL("/api/v1/usage/summary", params))
-	assertStatus(t, w, http.StatusOK)
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &summary))
-	assert.Greater(t, len(summary.ProjectTotals), 1)
-	for _, key := range []string{"unknown-key", ",", " ,  "} {
-		params["project_key"] = key
-		w = te.get(t, buildPathURL("/api/v1/usage/top-sessions", params))
-		assertStatus(t, w, http.StatusBadRequest)
-		assert.Contains(t, w.Body.String(), "unknown_project_key")
-	}
 }

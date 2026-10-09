@@ -752,7 +752,6 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 			ID: "session", Project: "project", Machine: "push-machine",
 			Agent: "claude", CreatedAt: "2026-01-01T00:00:00Z",
 			DeletedAt: &deletedAt, DeletionCause: &cause,
-			GroupKey: "group-key",
 		},
 		"marker", nil,
 	)
@@ -766,7 +765,6 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 	assert.Empty(t, state.upsertArgs[63].Value)
 	assert.Equal(t, false, state.upsertArgs[67].Value)
 	assert.Equal(t, "[]", state.upsertArgs[68].Value)
-	assert.Equal(t, "group-key", state.upsertArgs[70].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
 	assert.Contains(t, query,

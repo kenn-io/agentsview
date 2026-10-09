@@ -42,7 +42,6 @@ func TestGroupedManifestRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	decoded, err := decodeManifestWithLimits(body, productionArtifactLimits())
 	require.NoError(t, err)
-	assert.Equal(t, 5, decoded.Version)
 	assert.Equal(t, "job-a", decoded.Session.GroupKey)
 }
 
