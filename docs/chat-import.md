@@ -77,38 +77,85 @@ Set up Chrome once:
 2. Open `chrome://extensions` and turn on **Developer mode**.
 3. Click **Load unpacked** and select the folder printed by the command.
 
-Keep Chrome open during Sync. Re-run setup and reload the extension at `chrome://extensions` when the executable path or data directory changes, or when Sync asks for it after an upgrade. If the extension is newer than the server, upgrade AgentsView. Then click **Sync** again.
-The extension reconnects when AgentsView restarts. Only one Chrome profile connects at a time. The first profile to connect keeps the connection; other profiles wait until it disconnects.
+Keep Chrome open during Sync. Re-run setup and reload the extension at
+`chrome://extensions` when the executable path or data directory changes, or
+when Sync asks for it after an upgrade. If the extension is newer than the
+server, upgrade AgentsView. Then click **Sync** again. The extension reconnects
+when AgentsView restarts. Only one Chrome profile connects at a time. The first
+profile to connect keeps the connection; other profiles wait until it
+disconnects.
 
 There's no removal command. Remove the extension at `chrome://extensions`, then
-delete `<dataDir>/chrome/extension/` and the launcher, `<dataDir>/chrome/host.cmd`
-on Windows or `<dataDir>/chrome/host` on macOS and Linux. Also delete the native
-host registration for your platform:
+delete `<dataDir>/chrome/extension/` and the launcher,
+`<dataDir>/chrome/host.cmd` on Windows or `<dataDir>/chrome/host` on macOS and
+Linux. On macOS and Linux, delete `~/av-chrome-<hash>/` too if setup used that
+socket fallback directory. Also delete the native host registration for your
+platform:
 
 - Windows: `<dataDir>/chrome/io.kenn.agentsview.json` and the registry key
   `HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\io.kenn.agentsview`.
-- macOS: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/io.kenn.agentsview.json`.
-- Linux: `<configRoot>/NativeMessagingHosts/io.kenn.agentsview.json`. Chrome uses `$CHROME_CONFIG_HOME/google-chrome` first, then `$XDG_CONFIG_HOME/google-chrome`, then `~/.config/google-chrome`.
+- macOS:
+  `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/io.kenn.agentsview.json`.
+- Linux: `<configRoot>/NativeMessagingHosts/io.kenn.agentsview.json`. Chrome
+  uses `$CHROME_CONFIG_HOME/google-chrome` first, then
+  `$XDG_CONFIG_HOME/google-chrome`, then `~/.config/google-chrome`.
 
-If Sync reports a disconnected host after setup, open Chrome and enable the extension at `chrome://extensions`. If it still fails, check the server startup error log for a Chrome host endpoint bind failure.
+If Sync reports a disconnected host after setup, open Chrome and enable the
+extension at `chrome://extensions`. If it still fails, check the server startup
+error log for a Chrome host endpoint bind failure.
 
-**Sync** appears in every local web UI connected to a writable archive. A disconnected Chrome host is reported when you click **Sync**. Open **Import conversations**, select **Claude.ai**, and click **Sync**. Chrome uses your existing Claude.ai session, including Google sign-in. If you need to sign in, click **Sign in**, finish in the new tab, then return to AgentsView and click **Sync**.
+Open **Import conversations** and select **Claude.ai**. Local web UIs connected
+to a writable archive show a Chrome card; other connections show file upload
+alone. The card checks the connection automatically. **Sync** stays disabled
+until Chrome connects. **Not set up** shows the setup command; **Not connected**
+asks you to open Chrome and offers **Setup steps**. **Connected** enables
+**Sync**, which uses your existing Claude.ai session, including Google sign-in.
 
-You can also run `agentsview import --type claude-ai --sync` while the server and Chrome are running, with no AgentsView tab open.
+**Signed out** appears after Sync needs authentication. Click **Sign in**,
+finish in the new tab, then return and click **Sync**. If another Chrome profile
+has the extension, the card identifies that AgentsView uses the first connected
+profile. **Update needed** shows setup and reload instructions for an older
+extension, or asks you to update AgentsView and disables Sync for a newer one.
+During Sync, **Stop** cancels the run and progress replaces file upload. Results
+show the imported, updated, unchanged, and failed counts. Other failures show
+**Sync failed** with **Retry**.
 
-Sync reuses an open Claude.ai tab. When none is available, it opens a background Claude.ai tab and leaves it open.
+You can also run `agentsview import --type claude-ai --sync` while the server
+and Chrome are running, with no AgentsView tab open.
 
-In the desktop app connected to its local archive, click **Sign in**, use an email code, close the sign-in window, then click **Sync**. The desktop sign-in window supports email codes only.
+Sync reuses an open Claude.ai tab. When none is available, it opens a background
+Claude.ai tab and leaves it open.
 
-Sync checks every chat, including archived chats. It fetches new chats and chats whose `updated_at`, visible leaf, or stored transcript changed. A zip re-import that changes text or message count triggers another fetch. Resync clears freshness, so the next Sync fetches each chat once. Search stays available during Sync.
+In the desktop app connected to its local archive, click **Sign in**, use an
+email code, close the sign-in window, then click **Sync**. The desktop sign-in
+window supports email codes only.
 
-Changed chats show Claude.ai's visible branch, even when it has fewer turns. If a replacement loses a pin or note, Sync keeps the previous version in Trash with its pins and notes. Replacements that preserve every pin and note make no copy. Switching back on Claude.ai restores those turns, but dropped pins and notes stay in the Trash copy. Trashed and permanently deleted chats stay deleted.
+Sync checks every chat, including archived chats. It fetches new chats and chats
+whose `updated_at`, visible leaf, or stored transcript changed. A zip re-import
+that changes text or message count triggers another fetch. Resync clears
+freshness, so the next Sync fetches each chat once. Search stays available
+during Sync.
 
-Each chat has a 32 MiB response limit. Larger chats count as failed while Sync continues. An expired sign-in or two chat failures in a row ends Sync. Closing the dialog cancels it. Completed chats stay imported, and the next Sync fetches unfinished chats.
+Changed chats show Claude.ai's visible branch, even when it has fewer turns. If
+a replacement loses a pin or note, Sync keeps the previous version in Trash with
+its pins and notes. Replacements that preserve every pin and note make no copy.
+Switching back on Claude.ai restores those turns, but dropped pins and notes
+stay in the Trash copy. Trashed and permanently deleted chats stay deleted.
 
-Sign-in persists in the browser that holds it. To sign out, open **Sign in** and use Claude.ai's own log-out menu. Credentials stay in Chrome or the desktop sign-in window. Sync requires a local connection and either the Chrome native host or the desktop app; file imports remain available in the web UI.
+Each chat has a 32 MiB response limit. Larger chats count as failed while Sync
+continues. An expired sign-in or two chat failures in a row ends Sync. Closing
+the dialog cancels it. Completed chats stay imported, and the next Sync fetches
+unfinished chats.
 
-Claude.ai's private endpoints can change without notice. Sign in again if Sync reports that your sign-in expired.
+Sign-in persists in the browser that holds it. To sign out of Chrome, open
+Claude.ai itself in Chrome and use its log-out menu. In the desktop app, open
+**Sign in** and use Claude.ai's log-out menu there. Credentials stay in Chrome
+or the desktop sign-in window. Sync requires a local connection and either the
+Chrome native host or the desktop app; file imports remain available in the web
+UI.
+
+Claude.ai's private endpoints can change without notice. Sign in again if Sync
+reports that your sign-in expired.
 
 ## Importing via the CLI
 

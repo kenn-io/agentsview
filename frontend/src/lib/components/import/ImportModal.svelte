@@ -47,7 +47,8 @@
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
   let syncController = $state<AbortController>();
-  const canSync = $derived(open && provider === "claude-ai" && !isRemoteConnection() && !syncState.readOnly);
+  let chromeRefused = $state(false);
+  const canSync = $derived(open && provider === "claude-ai" && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
   let chromeStatus = $state<ClaudeAIChromeOutputBody | null>(null);
   let syncFlag = $state<string | null>(null);
   let syncError = $state<string | null>(null);
@@ -70,8 +71,8 @@
     try {
       const status = await ImportService.getApiV1ImportClaudeAiChrome({ signal });
       if (chromeRead.isCurrent(signal)) chromeStatus = status;
-    } catch {
-      // The next poll retries transient status failures.
+    } catch (e) {
+      if (chromeRead.isCurrent(signal) && e instanceof ApiError && [403, 501].includes(e.status)) chromeRefused = true;
     } finally {
       chromeRead.finish(signal);
     }
@@ -101,6 +102,7 @@
   $effect(() => {
     if (open) return;
     chromeStatus = null;
+    chromeRefused = false;
     syncFlag = null;
     syncError = null;
     signInError = null;
@@ -456,9 +458,7 @@
             {#if !host && (chromeState === "not-set-up" || chromeState === "extension-update" || (chromeState === "disconnected" && setupExpanded))}
               <CodeBlock code="agentsview chrome setup" title={m.import_claude_terminal()} wrapToggle={false} copyLabel={m.import_claude_copy_command()} />
               <p class="hint">
-                {#each (chromeState === "extension-update" ? m.import_claude_reload_extension({ url: "\u0000" }) : m.import_claude_setup_load({ url: "\u0000" })).split("\u0000") as part, i}
-                  {#if i > 0}<code>chrome://extensions</code>{/if}{part}
-                {/each}
+                {chromeState === "extension-update" ? m.import_claude_reload_extension({ url: "chrome://extensions" }) : m.import_claude_setup_load({ url: "chrome://extensions" })}
               </p>
             {/if}
             {#if syncError}

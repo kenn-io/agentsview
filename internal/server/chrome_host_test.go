@@ -348,6 +348,30 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 	assert.True(t, srv.chrome.Connected())
 }
 
+func TestChromeHostDisconnectClearsOtherProfile(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	socket, conn := testChromeConnection(t, srv)
+	second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
+	require.NoError(t, err)
+	defer second.Close()
+	require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, err = chromehost.ReadFrame(second)
+	require.ErrorIs(t, err, io.EOF)
+	status := func() string {
+		response := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/import/claude-ai/chrome", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		srv.mux.ServeHTTP(response, req)
+		require.Equal(t, http.StatusOK, response.Code)
+		return response.Body.String()
+	}
+	assert.JSONEq(t, `{"installed":false,"connected":true,"other_profile":true}`, status())
+	require.NoError(t, conn.Close())
+	require.Eventually(t, func() bool { return !srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
+	assert.JSONEq(t, `{"installed":false,"connected":false,"other_profile":false}`, status())
+	assert.Equal(t, "Sign in to Claude.ai, then Sync again", srv.chrome.signInError())
+}
+
 func TestChromeHostSignInProfiles(t *testing.T) {
 	for _, tt := range []struct {
 		name               string
