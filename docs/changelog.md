@@ -11,6 +11,8 @@ The latest release is
 
 **Bug fixes**
 
+- DeepSeek Harness v4 sessions now appear after sync, with tool results and
+  recorded token usage.
 - Keep both Cursor conversations when S3 objects in different projects share
   a session ID. A one-time archive rebuild recovers overwritten Cursor S3
   conversations while preserving archived sessions and stars.

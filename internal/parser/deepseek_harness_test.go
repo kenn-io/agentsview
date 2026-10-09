@@ -959,17 +959,21 @@ func TestDeepSeekHarnessFormatErrorsAndCrashTails(t *testing.T) {
 	})
 
 	t.Run("unsupported content block", func(t *testing.T) {
-		records := []any{
-			deepSeekHarnessFixtureHeader("unknown-block", deepSeekHarnessFixtureCwd, nil),
-			deepSeekHarnessFixtureEvent(0, "user/message", map[string]any{
-				"id": "u", "role": "user", "source": map[string]any{"kind": "user"},
-				"content": []any{map[string]any{"type": "future-block"}},
-			}, "append"),
+		for _, blockType := range []string{"future-block", "tool-addition", "tool-removal"} {
+			t.Run(blockType, func(t *testing.T) {
+				records := []any{
+					deepSeekHarnessFixtureHeader("unknown-block", deepSeekHarnessFixtureCwd, nil),
+					deepSeekHarnessFixtureEvent(0, "user/message", map[string]any{
+						"id": "u", "role": "user", "source": map[string]any{"kind": "user"},
+						"content": []any{map[string]any{"type": blockType, "toolName": "read"}},
+					}, "append"),
+				}
+				path := writeDeepSeekHarnessFixture(t, t.TempDir(), "unknown-block", deepSeekHarnessFixtureCwd, "plain", records)
+				_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "unsupported content block")
+			})
 		}
-		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "unknown-block", deepSeekHarnessFixtureCwd, "plain", records)
-		_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported content block")
 	})
 
 	t.Run("raw torn line", func(t *testing.T) {
@@ -1757,6 +1761,7 @@ func TestDeepSeekHarnessV4ToolResultValidation(t *testing.T) {
 		}, ""},
 		{"mismatched call", func(m map[string]any) { m["toolCallId"] = "other-call" }, "call id does not match"},
 		{"empty call", func(m map[string]any) { m["toolCallId"] = "" }, "invalid toolCallId"},
+		{"missing call", func(m map[string]any) { delete(m, "toolCallId") }, "invalid toolCallId"},
 		{"invalid error flag", func(m map[string]any) { m["isError"] = "true" }, "isError is not a boolean"},
 		{"null error flag", func(m map[string]any) { m["isError"] = nil }, "isError is not a boolean"},
 	} {
