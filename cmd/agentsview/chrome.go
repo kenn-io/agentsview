@@ -85,7 +85,17 @@ func relayChromeHost(ctx context.Context, socket string, input io.Reader, output
 		}
 	}()
 	for ctx.Err() == nil {
-		conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		var conn net.Conn
+		err := safefileio.ValidatePrivateDir(filepath.Dir(socket))
+		if errors.Is(err, os.ErrNotExist) {
+			goto retry
+		}
+		if err != nil {
+			err = fmt.Errorf("refusing chrome host socket: %w", err)
+			fmt.Fprintln(os.Stderr, err)
+			return err
+		}
+		conn, err = (&net.Dialer{}).DialContext(ctx, "unix", socket)
 		if err == nil {
 			disconnected := make(chan error, 1)
 			go func() {
@@ -243,9 +253,9 @@ func chromeSocketPath(dataDir string) (string, error) {
 	socket := filepath.Join(dir, "chrome", "host.sock")
 	// macOS has the smallest supported sockaddr_un path, at 104 bytes including NUL.
 	if len(socket) >= 104 {
-		root := "/tmp"
-		if runtime.GOOS == "windows" {
-			root = os.TempDir()
+		root, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
 		}
 		digest := sha256.Sum256([]byte(dir))
 		socket = filepath.Join(root, fmt.Sprintf("av-chrome-%x", digest[:8]), "host.sock")
