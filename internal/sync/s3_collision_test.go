@@ -274,6 +274,15 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 	}
 }
 
+type cursorParentStatProvider struct {
+	parser.S3Provider
+	stat func(string) (parser.S3Object, error)
+}
+
+func (p cursorParentStatProvider) S3StatSession(uri string) (parser.S3Object, error) {
+	return p.stat(uri)
+}
+
 func TestS3CursorCollidingParents(t *testing.T) {
 	for _, tt := range []struct {
 		name            string
@@ -285,6 +294,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 		{"child first separate", [][]int{{2}, {0}, {1}}, false},
 		{"child first together", [][]int{{2, 1, 0}}, false},
 		{"own parent late", [][]int{{0}, {2}, {1}}, false},
+		{"own parent missing", [][]int{{0}, {2}}, false},
 		{"children collide", [][]int{{0}, {1}, {3}, {2}}, true},
 		{"children collide reversed", [][]int{{1}, {0}, {2}, {3}}, true},
 	} {
@@ -297,11 +307,15 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				paths = []string{root + "/project-a/agent-transcripts/parent-a.txt", root + "/project-b/agent-transcripts/parent-b.txt", root + "/project-b/agent-transcripts/parent-b/subagents/child.txt", root + "/project-a/agent-transcripts/parent-a/subagents/child.txt"}
 			}
 			oldFetch := fetchS3Object
+			refreshed := false
 			t.Cleanup(func() { fetchS3Object = oldFetch })
 			fetchS3Object = func(uri string) (io.ReadCloser, error) {
 				body := content
 				if strings.Contains(uri, "/project-b/") {
 					body = strings.ReplaceAll(body, " A", " B")
+				}
+				if refreshed {
+					body = strings.ReplaceAll(body, "Hello", "Refreshed")
 				}
 				return io.NopCloser(strings.NewReader(body)), nil
 			}
@@ -400,6 +414,33 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				}, childIDs[uri])
 				require.NoError(t, err)
 				verify()
+			}
+			if tt.name == "parents first" || tt.name == "own parent missing" {
+				before, err := database.GetSessionFull(t.Context(), childIDs[paths[2]])
+				require.NoError(t, err)
+				require.NotNil(t, before)
+				oldLookup := lookupS3Provider
+				t.Cleanup(func() { lookupS3Provider = oldLookup })
+				lookupS3Provider = func(agent parser.AgentType) (parser.S3Provider, bool) {
+					p, ok := parser.S3ProviderFor(agent)
+					return cursorParentStatProvider{S3Provider: p, stat: func(uri string) (parser.S3Object, error) {
+						return parser.S3Object{URI: uri, Size: int64(len(content)), LastModified: time.Unix(200, 0)}, nil
+					}}, ok
+				}
+				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {aliasRoot}}})
+				refreshed = true
+				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), before.ID))
+				after, err := database.GetSessionFull(t.Context(), before.ID)
+				require.NoError(t, err)
+				require.NotNil(t, after)
+				assert.Equal(t, before.ParentSessionID, after.ParentSessionID)
+				assert.Equal(t, before.ParserParentSessionID, after.ParserParentSessionID)
+				assert.Equal(t, "subagent", after.RelationshipType)
+				assert.Equal(t, paths[2], derefString(after.FilePath))
+				messages, err := database.GetAllMessages(t.Context(), before.ID)
+				require.NoError(t, err)
+				require.Len(t, messages, 2)
+				assert.Equal(t, "Refreshed B", messages[0].Content)
 			}
 		})
 	}
