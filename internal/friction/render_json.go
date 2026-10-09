@@ -12,10 +12,6 @@ const SummarySchemaVersion = 1
 // RenderSummaryJSON renders counts and P0 alerts with sorted keys.
 func RenderSummaryJSON(s DigestSnapshot) []byte {
 	groups := groupByKind(s.Signals)
-	p0 := s.P0Alerts
-	if p0 == nil {
-		p0 = map[string][]string{}
-	}
 	value := map[string]any{
 		"schema_version":   SummarySchemaVersion,
 		"sessions_scanned": s.SessionsScanned,
@@ -26,7 +22,7 @@ func RenderSummaryJSON(s DigestSnapshot) []byte {
 		"patterns":         len(groups[KindPattern]),
 		"frustrations":     len(groups[KindFrustration]),
 		"interruptions":    len(groups[KindInterruption]),
-		"p0_alerts":        p0,
+		"p0_alerts":        s.P0Alerts,
 	}
 	out, err := serdejson.Pretty(value)
 	if err != nil {

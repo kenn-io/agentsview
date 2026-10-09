@@ -36,7 +36,6 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 	fmt.Fprintf(&b, "workarounds: %d\n", len(workarounds))
 	fmt.Fprintf(&b, "deferrals: %d\n", len(deferrals))
 	fmt.Fprintf(&b, "patterns: %d\n", len(patterns))
-	// D36: always present, after jilog's keys.
 	fmt.Fprintf(&b, "frustrations: %d\n", len(frustrations))
 	fmt.Fprintf(&b, "interruptions: %d\n", len(interruptions))
 	b.WriteString("---\n\n")
@@ -49,7 +48,7 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 		for _, tool := range slices.Sorted(maps.Keys(s.P0Alerts)) {
 			sessions := make([]string, 0, len(s.P0Alerts[tool]))
 			for _, id := range s.P0Alerts[tool] {
-				sessions = append(sessions, SanitizeDisplay(id))
+				sessions = append(sessions, code(id))
 			}
 			fmt.Fprintf(&b, "- **P0 ALERT**: %s failed in %d distinct sessions: %s\n",
 				code(tool), len(sessions), strings.Join(sessions, ", "))
@@ -59,27 +58,27 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 
 	section(&b, "Corrections", "_No corrections detected._", corrections, func(sig Signal) string {
 		return fmt.Sprintf("- %s%s — %s\n",
-			dimsPrefix(sig.Dims), code(sig.SubjectID), PythonRepr(sig.Text))
+			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.Text))
 	})
 	section(&b, "Errors", "_No errors detected._", errs, func(sig Signal) string {
 		return fmt.Sprintf("- %s%s / %s: %s\n",
 			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.ToolName),
-			SanitizeDisplay(TruncateWithMarker(sig.Text, MaxErrorMessageLength)))
+			code(TruncateWithMarker(sig.Text, MaxErrorMessageLength)))
 	})
 	section(&b, "Workarounds", "_No workarounds detected._", workarounds, func(sig Signal) string {
 		return fmt.Sprintf("- %s%s pattern=%s: %s\n",
-			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.Label), PythonRepr(sig.Text))
+			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.Label), code(sig.Text))
 	})
 	section(&b, "Deferrals", "_No deferrals detected._", deferrals, func(sig Signal) string {
 		return fmt.Sprintf("- %s%s pattern=%s\n", dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.Label))
 	})
 	section(&b, "Patterns", "_No patterns detected._", patterns, func(sig Signal) string {
 		return fmt.Sprintf("- %s%s kind=%s: %s\n",
-			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.Label), sig.Evidence)
+			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.Label), code(sig.Evidence))
 	})
 	section(&b, "Frustration", "_No frustration detected._", frustrations, func(sig Signal) string {
 		return fmt.Sprintf("- %s%s — %s\n",
-			dimsPrefix(sig.Dims), code(sig.SubjectID), PythonRepr(sig.Text))
+			dimsPrefix(sig.Dims), code(sig.SubjectID), code(sig.Text))
 	})
 	b.WriteString("## Interruptions\n\n")
 	if groups := groupInterruptions(interruptions); len(groups) == 0 {
@@ -132,13 +131,13 @@ func groupInterruptions(sigs []Signal) []interruptionGroup {
 func dimsPrefix(d Dims) string {
 	var b strings.Builder
 	if d.Seat != "" {
-		b.WriteString("`seat:" + SanitizeDisplay(d.Seat) + "` ")
+		b.WriteString(code("seat:"+d.Seat) + " ")
 	}
 	if d.Agent != "" {
-		b.WriteString("`agent:" + SanitizeDisplay(d.Agent) + "` ")
+		b.WriteString(code("agent:"+d.Agent) + " ")
 	}
 	if d.Machine != "" {
-		b.WriteString("`machine:" + SanitizeDisplay(d.Machine) + "` ")
+		b.WriteString(code("machine:"+d.Machine) + " ")
 	}
 	return b.String()
 }
