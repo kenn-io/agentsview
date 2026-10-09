@@ -876,6 +876,26 @@ search at startup when three conditions hold on the serving host:
    query text is embedded at search time with the same encoder the index was
    built with.
 
+Only a machine with `[vector]` configured publishes the recipe (model,
+dimension, chunking, affixes and `request_dimensions`) next to its generation,
+but only when the configured recipe reproduces that generation's fingerprint.
+Published recipes stay unchanged. An adopting host pushes vectors without
+publishing the adopted recipe.
+
+A serving host without `[vector]` can adopt a published recipe instead. Under
+[`AGENTSVIEW_MODE`](/docs/configuration/#container-deployment), set
+`AGENTSVIEW_EMBEDDINGS_ENDPOINT` (and `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE` if
+the endpoint needs a key) to an embeddings server that serves the published
+model. `pg serve` and `--pg` reads then use the single published recipe whose
+parameters rebuild its fingerprint. A `[vector]` section in `config.toml` can't
+be combined with the `AGENTSVIEW_EMBEDDINGS_*` variables; startup stops. If
+PostgreSQL holds several published recipes, adoption refuses to guess and
+semantic search reports the count; stop the hub's `pg push --watch --embed`,
+remove obsolete generations with `agentsview pg vectors drop <id>`, then start
+the watcher and restart `pg serve`. Generations pushed before recipe
+publication have no recipe until a configured machine pushes them again.
+If `pg serve` starts before a workstation pushes its first generation, restart `pg serve` after that push to enable semantic search.
+
 If no generation matches, `pg serve` starts normally but semantic and hybrid
 search return the 501 "not available" error carrying the mismatch reason, which
 lists the fingerprints PostgreSQL does have so an operator can tell a "wrong

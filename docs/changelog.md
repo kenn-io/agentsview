@@ -9,6 +9,19 @@ The latest published release is
 
 ## Unreleased
 
+**Upgrade notes**
+
+- The container image now requires a bearer token. Read `auth_token` from
+  `/data/config.toml` or set `AGENTSVIEW_AUTH_TOKEN_FILE` to a mounted token file.
+  The image keeps its defaults when you pass flags:
+  `docker run ghcr.io/kenn-io/agentsview --port 9000` still listens on every
+  interface without opening a browser. The image runs the binary directly;
+  `AGENTSVIEW_MODE=pg-serve` (or the older `PG_SERVE=1`) selects `pg serve`.
+  A PostgreSQL hub can adopt the embedding recipe a workstation pushed, given
+  `AGENTSVIEW_EMBEDDINGS_ENDPOINT`, and `pg push --embed` builds and pushes
+  embeddings in one process. See
+  [container deployment](/docs/configuration/#container-deployment).
+
 **New features**
 
 - The web UI reports an anonymous `app_opened` event through the server when it

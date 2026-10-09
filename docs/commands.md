@@ -993,6 +993,7 @@ agentsview pg push [target] [flags]
 | -------------------- | ------- | -------------------------------------------------------------- |
 | `--full`             | `false` | Force full local resync and re-push                            |
 | `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run             |
+| `--embed`            | `false` | Push sessions first, then build and push vectors; watch builds after syncs and pushes vectors on the next interval |
 | `--projects`         |         | Comma-separated projects to push (inclusive)                   |
 | `--exclude-projects` |         | Comma-separated projects to exclude from push                  |
 | `--all-projects`     | `false` | Ignore configured project filters for this run                 |
@@ -1003,6 +1004,15 @@ agentsview pg push [target] [flags]
 
 See [PostgreSQL Sync — Project Filtering](/docs/pg-sync/#project-filtering) for
 details on how filtering interacts with the push watermark.
+
+`--embed` pushes sessions first, then builds and pushes embeddings in the same
+push, using `[vector]` or a recipe published to PostgreSQL. `--full --embed`
+repairs vector rows too. Watch mode builds in the background after each sync
+that commits changes and pushes built vectors
+on the next interval. It never starts a daemon and refuses to run while one owns
+the archive. It cannot be combined with
+`--no-vectors`, `--all`, or a target with `push_vectors = false`. See
+[Build and push embeddings in a container](/docs/pg-sync/#build-and-push-embeddings-in-a-container).
 
 ______________________________________________________________________
 
@@ -1920,11 +1930,20 @@ agentsview help
 | `ZENCODER_DIR`                        | `~/.zencoder/sessions`                               | Zencoder sessions directory                                                                         |
 | `AGENTSVIEW_DATA_DIR`                 | `~/.agentsview`                                      | Data directory (database, config)                                                                   |
 | `AGENTSVIEW_AUTH_TOKEN`               |                                                      | Bearer token for `require_auth`; overrides `auth_token` in `config.toml`                            |
+| `AGENTSVIEW_MODE`                     |                                                      | `serve` or `pg-serve`; turns on the [container deployment](/docs/configuration/#container-deployment) variables |
+| `AGENTSVIEW_HOST`                     |                                                      | Listener address under `AGENTSVIEW_MODE`; non-loopback needs authentication                         |
+| `AGENTSVIEW_REQUIRE_AUTH`             |                                                      | Require bearer authentication under `AGENTSVIEW_MODE`                                               |
+| `AGENTSVIEW_NO_BROWSER`               |                                                      | Do not open a browser under `AGENTSVIEW_MODE`                                                       |
+| `AGENTSVIEW_AUTH_TOKEN_FILE`          |                                                      | Bearer token file under `AGENTSVIEW_MODE`; overrides `auth_token` in `config.toml`                  |
 | `AGENTSVIEW_SKILLS_SERVER`            |                                                      | Remote daemon URL baked into `skills install` examples; not a default for `session` commands        |
 | `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE` |                                                      | Token file path baked into `skills install` examples with `AGENTSVIEW_SKILLS_SERVER`                |
 | `AGENTSVIEW_PG_URL`                   |                                                      | PostgreSQL connection URL                                                                           |
 | `AGENTSVIEW_PG_MACHINE`               |                                                      | Machine name for PG push sync                                                                       |
 | `AGENTSVIEW_PG_SCHEMA`                | `agentsview`                                         | PostgreSQL schema name                                                                              |
+| `AGENTSVIEW_PG_ALLOW_INSECURE`        |                                                      | Allow a plaintext default PostgreSQL target under `AGENTSVIEW_MODE`                                 |
+| `AGENTSVIEW_EMBEDDINGS_ENDPOINT`      |                                                      | Embeddings endpoint for adopting a recipe published to PostgreSQL, under `AGENTSVIEW_MODE`          |
+| `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE`  |                                                      | API key file for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                   |
+| `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`    | `32`                                                 | Positive number of inputs per embeddings request when adopting a published PostgreSQL recipe       |
 | `AGENTSVIEW_DUCKDB_PATH`              | `~/.agentsview/sessions.duckdb`                      | DuckDB mirror file path                                                                             |
 | `AGENTSVIEW_DUCKDB_URL`               |                                                      | Remote Quack endpoint URL for `duckdb status` and `duckdb serve` (read side only)                   |
 | `AGENTSVIEW_DUCKDB_TOKEN`             |                                                      | Quack authentication token                                                                          |

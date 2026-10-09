@@ -70,6 +70,15 @@ func wireReplicaVectorSearch(
 			"vector search is unavailable for usage-only archives")
 		return nil
 	}
+	if !appCfg.Vector.Enabled && appCfg.DeploymentEmbeddings != nil {
+		adopted, err := adoptReplicaVectorConfig(ctx, appCfg, backend, store)
+		if err != nil {
+			vectorStore.SetSemanticUnavailableReason(err.Error())
+			log.Printf("%s: %v", label, err)
+			return nil
+		}
+		appCfg = adopted
+	}
 	if !appCfg.Vector.Enabled {
 		vectorStore.SetSemanticUnavailableReason(fmt.Sprintf(
 			"semantic search: %s requires [vector] enabled with a matching "+

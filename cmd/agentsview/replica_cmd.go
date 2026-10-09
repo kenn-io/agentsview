@@ -46,6 +46,14 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 			if len(args) == 1 {
 				targetName = args[0]
 			}
+			if cfg.Embed && cfg.NoVectors {
+				return fmt.Errorf("%s push: %w", name,
+					errors.New("--embed cannot be combined with --no-vectors"))
+			}
+			if cfg.Embed && cfg.AllTargets {
+				return fmt.Errorf("%s push: %w", name,
+					errors.New("--embed cannot be combined with --all"))
+			}
 			if cfg.AllTargets && cfg.Watch {
 				return fmt.Errorf(
 					"%s push --watch: %w", name,
@@ -78,6 +86,10 @@ func newReplicaPushCommand(backend storage.Replica) *cobra.Command {
 	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
 	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
 	cmd.Flags().BoolVar(&cfg.NoVectors, "no-vectors", false, "Skip pushing semantic-search vectors")
+	if name == "pg" {
+		cmd.Flags().BoolVar(&cfg.Embed, "embed", false,
+			"Push sessions, then build and push embeddings in the same push; --full repairs vectors too; with --watch, build after syncs in the background and push vectors on the next interval (uses [vector] or a published PostgreSQL recipe)")
+	}
 	return cmd
 }
 

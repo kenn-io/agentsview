@@ -1154,6 +1154,19 @@ func TestVectorPushFullRepairsSilentCorruption(t *testing.T) {
 	assert.Equal(t, 1,
 		countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)),
 		"full push restores the missing chunk")
+
+	_, err = pg.Exec(`DELETE FROM ` + vectorChunkTable(genID))
+	require.NoError(t, err)
+	repair, err := sync.PushWithOptions(ctx, storage.PushOptions{
+		FullVectors: true, ScopeVectorsToChangedSessions: true,
+	}, nil)
+	require.NoError(t, err)
+	assert.False(t, repair.Full)
+	assert.Zero(t, repair.SessionsPushed, "vector repair keeps unchanged sessions incremental")
+	assert.Zero(t, repair.MessagesPushed)
+	assert.Equal(t, 1, repair.Vectors.SessionsPushed)
+	assert.Zero(t, repair.Vectors.SessionsUnchanged)
+	assert.Equal(t, 1, countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(genID)), "FullVectors restores unchanged chunks even with no changed sessions")
 }
 
 // TestVectorPushDeferredOnSessionError pins that a changed session named in

@@ -164,16 +164,17 @@ func rewriteConfiguredPublicURLPort(
 }
 
 func validateServeConfig(cfg config.Config) error {
-	// A persistent non-loopback bind from config.toml exposes the
-	// API on every restart, so it must not silently ship without
-	// authentication. An explicit --host flag stays exempt: it is
-	// a deliberate, per-invocation choice and existing behavior.
+	// A persistent non-loopback bind from config.toml or the environment
+	// exposes the API on every restart, so it must not silently ship without
+	// authentication. An explicit --host flag stays exempt: it is a deliberate,
+	// per-invocation choice and existing behavior.
 	if !cfg.HostExplicit && !isLoopbackHost(cfg.Host) &&
 		!cfg.RequireAuth {
 		return fmt.Errorf(
-			"host = %q in config.toml exposes the API beyond this "+
-				"machine; set require_auth = true in config.toml to "+
-				"serve it with bearer-token authentication, or use "+
+			"host = %q exposes the API beyond this machine; set "+
+				"require_auth = true in config.toml or "+
+				"AGENTSVIEW_REQUIRE_AUTH=true to serve it with bearer-token "+
+				"authentication, or use "+
 				"the --host flag for a one-off unauthenticated bind",
 			cfg.Host,
 		)

@@ -329,3 +329,55 @@ func TestCloseVectorPushSource(t *testing.T) {
 	require.NoError(t, export.Close())
 	closePushSource(t, src)
 }
+
+func TestVectorPushExportPublishesMatchingRecipe(t *testing.T) {
+	ctx := t.Context()
+	t.Run("matching generation publishes the configured recipe", func(t *testing.T) {
+		cfg := enabledVectorConfig(t)
+		cfg.Vector.Embeddings.QueryPrefix = "query: "
+		want := vectorGeneration(cfg.Vector.Embeddings)
+		ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
+			cfg.Vector.Embeddings.MaxInputChars)
+		require.NoError(t, err)
+		result, err := ix.Build(ctx, testPushUnitSource(), fakePushEncoder(), want,
+			vector.BuildOptions{})
+		require.NoError(t, err)
+		require.True(t, result.Activated)
+		require.NoError(t, ix.Close())
+
+		src := newVectorPushSource(cfg)
+		closePushSource(t, src)
+		export, ok, err := src.BeginExport(ctx, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		defer export.Close()
+		got := export.Generation()
+		assert.Equal(t, want.Fingerprint(), got.Fingerprint)
+		assert.Equal(t, want.Params, got.Params)
+		got.Params["query_prefix"] = "mutated"
+		assert.Equal(t, "query: ", want.Params["query_prefix"],
+			"published params are a copy of the recipe")
+		require.NoError(t, export.Close())
+		src.(*vectorPushSource).adopted = true
+		adoptedExport, ok, err := src.BeginExport(ctx, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		defer adoptedExport.Close()
+		assert.Equal(t, want.Fingerprint(), adoptedExport.Generation().Fingerprint)
+		assert.Nil(t, adoptedExport.Generation().Params)
+	})
+
+	t.Run("other generation publishes nothing", func(t *testing.T) {
+		cfg := enabledVectorConfig(t)
+		buildTestVectorsDB(t, cfg)
+		src := newVectorPushSource(cfg)
+		closePushSource(t, src)
+		export, ok, err := src.BeginExport(ctx, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		defer export.Close()
+		got := export.Generation()
+		require.NotEqual(t, vectorGeneration(cfg.Vector.Embeddings).Fingerprint(), got.Fingerprint)
+		assert.Nil(t, got.Params)
+	})
+}

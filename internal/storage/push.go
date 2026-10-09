@@ -14,10 +14,13 @@ type PushOptions struct {
 	// Full bypasses unchanged-fingerprint and unchanged-hash skips so
 	// every session is resent.
 	Full bool
+	// FullVectors bypasses unchanged-hash skips in the vector phase while
+	// sessions stay incremental.
+	FullVectors bool
 	// ScopeVectorsToChangedSessions limits the vector phase's local
 	// hash read and replica state read to this push's changed relational
 	// sessions, instead of reconciling the whole generation. Ignored
-	// when the push runs (or is internally promoted to run) full, so
+	// when FullVectors is set or the push runs (or is promoted to run) full, so
 	// reset recovery and backfills keep generation-wide reconciliation.
 	ScopeVectorsToChangedSessions bool
 	// LastReconciledVectorGeneration is the replica generation id the

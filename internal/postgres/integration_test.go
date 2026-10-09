@@ -4,6 +4,9 @@ package postgres
 
 import (
 	"context"
+	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -232,6 +235,52 @@ func TestPGConnectivity(t *testing.T) {
 	require.NoError(t, err, "get status")
 
 	t.Logf("PG Sync Status: %+v", status)
+}
+
+// TestPGPassfileConnects pins the documented way to keep the PostgreSQL
+// password in a mounted file: pgx reads PGPASSFILE or a passfile URL
+// parameter, and the parameter survives the connection settings Open adds.
+func TestPGPassfileConnects(t *testing.T) {
+	pgURL := testPGURL(t)
+	u, err := url.Parse(pgURL)
+	require.NoError(t, err)
+	password, ok := u.User.Password()
+	if !ok || password == "" {
+		t.Skip("TEST_PG_URL carries no password to move into a passfile")
+	}
+	u.User = url.User(u.User.Username())
+	withoutPassword := u.String()
+	t.Setenv("PGPASSWORD", "")
+	passfile := filepath.Join(t.TempDir(), "pgpass")
+	require.NoError(t, os.WriteFile(passfile,
+		[]byte("*:*:*:*:"+password+"\n"), 0o600))
+
+	connect := func(t *testing.T, dsn string) error {
+		t.Helper()
+		pg, err := Open(dsn, "agentsview", true)
+		if err == nil {
+			assert.NoError(t, pg.Close())
+		}
+		return err
+	}
+
+	t.Run("PGPASSFILE", func(t *testing.T) {
+		t.Setenv("PGPASSFILE", passfile)
+		require.NoError(t, connect(t, withoutPassword))
+	})
+	t.Run("passfile parameter", func(t *testing.T) {
+		t.Setenv("PGPASSFILE", "")
+		q := u.Query()
+		q.Set("passfile", passfile)
+		withParam := *u
+		withParam.RawQuery = q.Encode()
+		require.NoError(t, connect(t, withParam.String()))
+	})
+	t.Run("missing passfile", func(t *testing.T) {
+		t.Setenv("PGPASSFILE", filepath.Join(t.TempDir(), "absent"))
+		require.Error(t, connect(t, withoutPassword),
+			"pgx ignores a missing passfile, so the server rejects the login")
+	})
 }
 
 func TestPGPushCycle(t *testing.T) {
