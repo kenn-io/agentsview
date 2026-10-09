@@ -2945,7 +2945,10 @@ schemas keep their existing ordering behavior.
   `cron {job_id}` for a blank job name. Agentsview treats that generated title
   as unnamed and stores `group_key` as the job ID. Usage
   groups by project, machine and job ID. Names derive from the recorded `session_name` at read time; usage-only
-  archives show job IDs because their titles are discarded.
+    archives show job IDs because their titles are discarded. Reverified the
+    pinned ID recognizer on 2026-10-09: resync copies recover missing job IDs
+    from archived Hermes and Augure Desktop run IDs with the shared parser
+    recognizer. Continuations without stored job IDs remain ungrouped.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized. Transcript projects use `platform`. Cron continuations follow

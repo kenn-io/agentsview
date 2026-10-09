@@ -169,8 +169,9 @@ Opening a project stays in the panel; browser Back and Forward follow page
 history.
 The **Projects** picker excludes a project. Usage-only and discarded-evidence
 archives omit titles and show job IDs, as do archives without `state.db` titles.
-Orphaned Hermes sessions synced before the upgrade can't be reparsed and appear
-as individual sessions.
+During the upgrade rebuild, archived Hermes and Augure Desktop cron runs recover
+their job IDs from session IDs even when their sources are gone. Continuations
+without a stored job ID appear as individual sessions.
 
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,
