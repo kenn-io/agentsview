@@ -70,14 +70,25 @@ list refreshes automatically.
 
 ## Sync Claude.ai chats
 
+Setup registers Google Chrome only. Chromium, Edge, and Brave aren't supported.
 Set up Chrome once:
 
 1. Run `agentsview chrome setup`.
 2. Open `chrome://extensions` and turn on **Developer mode**.
 3. Click **Load unpacked** and select the folder printed by the command.
 
-Keep Chrome open during Sync. Re-run setup and reload the extension at `chrome://extensions` after upgrading AgentsView, moving its executable, or changing its data directory. Then click **Sync** again.
+Keep Chrome open during Sync. Re-run setup and reload the extension at `chrome://extensions` when the executable path or data directory changes, or when Sync asks for it after an upgrade. Then click **Sync** again.
 The extension reconnects when AgentsView restarts.
+
+There's no removal command. Remove the extension at `chrome://extensions`, then
+delete `<dataDir>/chrome/extension/` and the launcher, `<dataDir>/chrome/host.cmd`
+on Windows or `<dataDir>/chrome/host` on macOS and Linux. Also delete the native
+host registration for your platform:
+
+- Windows: `<dataDir>/chrome/io.kenn.agentsview.json` and the registry key
+  `HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\io.kenn.agentsview`.
+- macOS: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/io.kenn.agentsview.json`.
+- Linux: `~/.config/google-chrome/NativeMessagingHosts/io.kenn.agentsview.json`.
 
 If Sync reports a disconnected host after setup, open Chrome and enable the extension at `chrome://extensions`. If it still fails, check the server startup error log for a Chrome host endpoint bind failure.
 
