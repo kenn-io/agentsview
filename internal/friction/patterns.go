@@ -45,7 +45,7 @@ func DetectPatterns(
 		rng, at := span(r.First, r.Last)
 		add(PatternRetryLoop,
 			fmt.Sprintf("retry loop: `%s` called %d times with identical arguments", tool, r.Count),
-			fmt.Sprintf("`%s` x%d identical arguments%s", tool, r.Count, rng),
+			fmt.Sprintf("%s x%d identical arguments%s", tool, r.Count, rng),
 			new(r.First.MessageOrdinal), at)
 	}
 	if first, last, n, ok := signals.RunawayToolLoopSpan(in.Calls); ok {
@@ -60,7 +60,7 @@ func DetectPatterns(
 		rng, at := span(c.First, c.Last)
 		add(PatternEditChurn,
 			fmt.Sprintf("edit churn: `%s` edited %d times within 10 messages", file, c.Count),
-			fmt.Sprintf("`%s` x%d edits%s", file, c.Count, rng),
+			fmt.Sprintf("%s x%d edits%s", file, c.Count, rng),
 			new(c.First.MessageOrdinal), at)
 	}
 	if n := in.MidTaskCompactions; n > 0 && len(in.CompactBoundaries) > 0 {
