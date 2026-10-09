@@ -7,12 +7,28 @@ import (
 	"encoding/hex"
 	"io"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var requestShapeHashes = map[int]string{
+	1: "bf9fef06ae889f9b35ec5f7712b0c7fd226fb6ea4b1909fd9202570a9892ecd3",
+}
+
+func TestWorkerProtocolVersion(t *testing.T) {
+	body, err := os.ReadFile("../../frontend/chrome-extension/worker.js")
+	require.NoError(t, err)
+	match := regexp.MustCompile(`(?m)^const version = (\d+);$`).FindSubmatch(bytes.ReplaceAll(body, []byte("\r\n"), []byte("\n")))
+	require.Len(t, match, 2)
+	version, err := strconv.Atoi(string(match[1]))
+	require.NoError(t, err)
+	assert.Equal(t, Version, version, "bump the protocol Version in both peers together")
+}
 
 func TestRequestShapesVersion(t *testing.T) {
 	body, err := os.ReadFile("../importer/claude_ai_requests.txt")

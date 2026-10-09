@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -92,12 +93,43 @@ func (s *Server) humaClaudeAIChrome(_ context.Context, _ *struct{}) (*claudeAICh
 	}
 	out := &claudeAIChromeOutput{}
 	_, err := os.Stat(filepath.Join(s.cfg.DataDir, "chrome", "extension", "manifest.json"))
-	out.Body.Installed = err == nil
+	out.Body.Installed = err == nil && chromeLauncherInstalled(s.cfg.DataDir)
 	out.Body.Connected = s.chrome.Connected()
 	s.chrome.mu.Lock()
 	out.Body.OtherProfile = s.chrome.refusedProfile
 	s.chrome.mu.Unlock()
 	return out, nil
+}
+
+func chromeLauncherInstalled(dataDir string) bool {
+	launcher := filepath.Join(dataDir, "chrome", "host")
+	if runtime.GOOS == "windows" {
+		launcher += ".cmd"
+	}
+	body, err := os.ReadFile(launcher)
+	if err != nil {
+		return false
+	}
+	var executable string
+	var ok bool
+	if runtime.GOOS == "windows" {
+		executable, ok = strings.CutPrefix(string(body), "@echo off\r\n\"")
+		if ok {
+			executable, _, ok = strings.Cut(executable, "\" chrome-host --socket \"")
+			executable = strings.ReplaceAll(executable, "%%", "%")
+		}
+	} else {
+		executable, ok = strings.CutPrefix(string(body), "#!/bin/sh\nexec '")
+		if ok {
+			executable, _, ok = strings.Cut(executable, "' chrome-host --socket '")
+			executable = strings.ReplaceAll(executable, "'\"'\"'", "'")
+		}
+	}
+	if !ok || executable == "" {
+		return false
+	}
+	info, err := os.Stat(executable)
+	return err == nil && info.Mode().IsRegular()
 }
 
 type claudeAISyncInput struct {
