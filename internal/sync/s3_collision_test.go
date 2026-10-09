@@ -20,7 +20,6 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 		reverse, separate bool
 		root              string
 		preCollapsed      bool
-		overlapping       bool
 	}{
 		{name: "together"}, {name: "together reversed", reverse: true},
 		{name: "separate", separate: true}, {name: "separate reversed", reverse: true, separate: true},
@@ -28,8 +27,6 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 		{name: "no machine boundary separate", root: "s3://bucket/archive", separate: true},
 		{name: "bucket is not a machine", root: "s3://bucket/raw/cursor"},
 		{name: "pre-collapsed cached source", preCollapsed: true},
-		{name: "overlapping roots", overlapping: true, separate: true},
-		{name: "overlapping roots reversed", overlapping: true, separate: true, reverse: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root, machine, storedMachine := tt.root, "", "local"
@@ -38,7 +35,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			}
 			const stem = "11111111-1111-4111-8111-111111111111"
 			baseID := s3SessionIDPrefix(machine) + "cursor:" + stem
-			paths := []string{root + "/project-a/" + stem + ".txt", root + "/project-b/" + stem + ".txt"}
+			paths := []string{root + "/agent-transcripts/" + stem + ".txt", root + "/cursor/" + stem + ".txt"}
 			contents := map[string]string{
 				paths[0]: "user:\nProject A\nassistant:\nAnswer A\n",
 				paths[1]: "user:\nProject B\nassistant:\nAnswer B\nuser:\nFollow up B\n",
@@ -69,7 +66,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			}}
 			sources := make([]parser.SourceRef, 0, 2)
 			for i, uri := range paths {
-				project := []string{"project-a", "project-b"}[i]
+				project := []string{"agent-transcripts", "cursor"}[i]
 				sources = append(sources, parser.SourceRef{
 					Provider: parser.AgentCursor, Key: uri, DisplayPath: uri, FingerprintKey: uri, ProjectHint: project,
 					Opaque: parser.S3DiscoveredSource{URI: uri, Project: project,
@@ -80,15 +77,8 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				sources[0], sources[1] = sources[1], sources[0]
 			}
 			provider.discovered = sources
-			roots := []string{root}
-			if tt.overlapping {
-				roots = append(roots, root+"/project-b/agent-transcripts")
-				if tt.reverse {
-					roots[0], roots[1] = roots[1], roots[0]
-				}
-			}
 			engine := NewEngine(t.Context(), database, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: roots}, Machine: "local",
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}}, Machine: "local",
 				DisableFilesystemProjectDiscovery: true, ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
 			})
 			t.Cleanup(engine.Close)
@@ -156,7 +146,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				verify()
 			}
 			forced := parser.DiscoveredFile{Agent: parser.AgentCursor, Path: paths[1],
-				Project: "project-b", Machine: machine, SourceSize: int64(len(contents[paths[1]])),
+				Project: "cursor", Machine: machine, SourceSize: int64(len(contents[paths[1]])),
 				SourceMtime: mtime.UnixNano(), ForceParse: true}
 			_, _, err := engine.processAndWriteSessionFile(t.Context(), forced, ids[paths[1]])
 			require.NoError(t, err)
@@ -187,29 +177,6 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, messages, 3)
 			assert.Equal(t, "Updated B", messages[1].Content)
-			// A layout and format move within one project retains curation and identity.
-			oldPath := paths[1]
-			newPath := root + "/project-b/agent-transcripts/" + stem + "/" + stem + ".jsonl"
-			contents[newPath] = contents[oldPath]
-			for i := range sources {
-				if sources[i].DisplayPath == oldPath {
-					sources[i].Key, sources[i].DisplayPath, sources[i].FingerprintKey = newPath, newPath, newPath
-					source := sources[i].Opaque.(parser.S3DiscoveredSource)
-					source.URI = newPath
-					sources[i].Opaque = source
-				}
-			}
-			paths[1] = newPath
-			ids[newPath] = ids[oldPath]
-			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
-			require.Zero(t, stats.Failed)
-			verify()
-			page, err := database.ListSessions(t.Context(), db.SessionFilter{})
-			require.NoError(t, err)
-			assert.Len(t, page.Sessions, 2, "a layout move must preserve exactly two conversations")
-			movedStars, err := database.ListStarredSessionIDs(t.Context())
-			require.NoError(t, err)
-			assert.ElementsMatch(t, []string{ids[paths[0]], ids[paths[1]]}, movedStars)
 			// Rebuild discovers the alternate first and must keep both saved IDs.
 			provider.discovered = sources
 			if ids[sources[0].DisplayPath] == baseID {
@@ -239,20 +206,20 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			verify()
 			assert.Equal(t, ownerPath, derefString(storedSession(baseID).FilePath))
 			// A second machine owns its own base ID despite the same project and stem.
-			otherMachine := "s3://bucket/host-b/raw/cursor/project-a/" + stem + ".txt"
+			otherMachine := "s3://bucket/host-b/raw/cursor/agent-transcripts/" + stem + ".txt"
 			contents[otherMachine] = contents[paths[0]]
 			second := sources[0]
 			second.Key, second.DisplayPath, second.FingerprintKey = otherMachine, otherMachine, otherMachine
-			second.ProjectHint = "project-a"
-			second.Opaque = parser.S3DiscoveredSource{URI: otherMachine, Project: "project-a", Machine: "host-b",
+			second.ProjectHint = "agent-transcripts"
+			second.Opaque = parser.S3DiscoveredSource{URI: otherMachine, Project: "agent-transcripts", Machine: "host-b",
 				Size: int64(len(contents[otherMachine])), MtimeNS: mtime.UnixNano()}
 			provider.discovered = append(provider.discovered, second)
 			if machine == "" {
-				unrelated := root + "/project-a/unrelated.txt"
+				unrelated := root + "/agent-transcripts/unrelated.txt"
 				contents[unrelated] = "user:\nUnrelated conversation\n"
 				source := second
 				source.Key, source.DisplayPath, source.FingerprintKey = unrelated, unrelated, unrelated
-				source.Opaque = parser.S3DiscoveredSource{URI: unrelated, Project: "project-a", Size: int64(len(contents[unrelated])), MtimeNS: mtime.UnixNano()}
+				source.Opaque = parser.S3DiscoveredSource{URI: unrelated, Project: "agent-transcripts", Size: int64(len(contents[unrelated])), MtimeNS: mtime.UnixNano()}
 				provider.discovered = append(provider.discovered, source)
 			}
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
@@ -299,6 +266,46 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			require.NoError(t, err)
 			assert.Nil(t, session)
 			assert.Equal(t, ownerPath, derefString(storedSession(baseID).FilePath))
+			if tt.name == "together" {
+				oldMessages, err := database.GetAllMessages(t.Context(), baseID)
+				require.NoError(t, err)
+				for i := range oldMessages {
+					oldMessages[i].ID = 0
+				}
+				newPath := strings.TrimSuffix(ownerPath, stem+".txt") + "agent-transcripts/" + stem + "/" + stem + ".jsonl"
+				contents[newPath] = contents[ownerPath]
+				source := sources[0]
+				if source.DisplayPath != ownerPath {
+					source = sources[1]
+				}
+				source.Key, source.DisplayPath, source.FingerprintKey = newPath, newPath, newPath
+				remote := source.Opaque.(parser.S3DiscoveredSource)
+				remote.URI = newPath
+				source.Opaque = remote
+				provider.discovered = []parser.SourceRef{source}
+				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+				require.Zero(t, stats.Failed)
+				newID := parser.AltSessionID(baseID, newPath)
+				for pass := range 2 {
+					if pass > 0 {
+						stats = engine.ResyncAll(t.Context(), nil)
+						require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+						require.Zero(t, stats.Failed)
+					}
+					assert.Equal(t, ownerPath, derefString(storedSession(baseID).FilePath))
+					assert.Equal(t, newPath, derefString(storedSession(newID).FilePath))
+					stars, err := database.ListStarredSessionIDs(t.Context())
+					require.NoError(t, err)
+					assert.Contains(t, stars, baseID)
+					assert.NotContains(t, stars, newID)
+					messages, err := database.GetAllMessages(t.Context(), baseID)
+					require.NoError(t, err)
+					for i := range messages {
+						messages[i].ID = 0
+					}
+					assert.Equal(t, oldMessages, messages)
+				}
+			}
 		})
 	}
 }

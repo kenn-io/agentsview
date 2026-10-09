@@ -160,6 +160,7 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 			secondURI := root + "/project-two/11111111-1111-4111-8111-111111111111.jsonl"
 			otherURI := root + "/project-one/other.txt"
 			flatURI := root + "/project-one/11111111-1111-4111-8111-111111111111.txt"
+			subagentURI := root + "/project-one/agent-transcripts/parent/subagents/11111111-1111-4111-8111-111111111111.jsonl"
 			listS3Objects = func(got string) ([]S3Object, error) {
 				require.Contains(t, roots, got)
 				return []S3Object{
@@ -167,6 +168,7 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 					{URI: firstURI, LastModified: time.Unix(100, 0)},
 					{URI: otherURI, LastModified: time.Unix(100, 0)},
 					{URI: flatURI, LastModified: time.Unix(100, 0)},
+					{URI: subagentURI, LastModified: time.Unix(100, 0)},
 				}, nil
 			}
 			sourceSet := newCursorSourceSet(roots)
@@ -189,6 +191,28 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 			assert.ElementsMatch(t, []string{firstURI, secondURI, otherURI}, streamed)
 		})
 	}
+}
+
+func TestCursorS3DiscoverKeepsHarvestProjectNames(t *testing.T) {
+	const root = "s3://bucket/host-a/raw/cursor"
+	paths := []string{root + "/agent-transcripts/shared.txt", root + "/cursor/shared.txt"}
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+	listS3Objects = func(got string) ([]S3Object, error) {
+		require.Equal(t, root, got)
+		return []S3Object{{URI: paths[0]}, {URI: paths[1]}}, nil
+	}
+	sourceSet := newCursorSourceSet([]string{root})
+	sources, err := sourceSet.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	assert.ElementsMatch(t, paths, []string{sources[0].DisplayPath, sources[1].DisplayPath})
+	var streamed []string
+	require.NoError(t, sourceSet.DiscoverEach(t.Context(), func(source SourceRef) error {
+		streamed = append(streamed, source.DisplayPath)
+		return nil
+	}))
+	assert.ElementsMatch(t, paths, streamed)
 }
 
 func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) {

@@ -65,10 +65,11 @@ capability.
 - Keep only paths that are real transcripts for that agent.
 - If `.jsonl` and `.txt` (or any other pair) share a source, keep one. Prefer the
   format the local parser prefers.
-- Cursor groups format and layout aliases by machine, raw project directory
-  in the object path, and session stem. Roots without a machine
-  boundary use the local machine label. Distinct projects keep separate
-  conversations even when their decoded display names match.
+- Cursor selects current format and layout alternatives by machine, session
+  stem, and raw project relative to the broadest configured root that accepts
+  the object. Roots without a machine boundary use the local machine label.
+- Archive ownership uses the exact object URI. A different URI gets its own ID
+  and preserves the previous conversation and its stars.
 - Validate IDs with the same rules the local provider already uses.
 - Do not invent a second discover wrapper that bypasses the scanner. Extra
   post-processing (prefer `.jsonl`, fold sidecars) belongs next to the
