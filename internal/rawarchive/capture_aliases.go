@@ -11,8 +11,8 @@ import (
 
 // recordRootAliases adds every other spelling of a provider root that the
 // captured database uses for its transcripts. A spelling counts only when the
-// stored path resolves into the same canonical root while the source files
-// still exist, such as a path through a symlinked ancestor.
+// spelled root directory itself resolves to the same canonical root while the
+// source files still exist, such as a path through a symlinked ancestor.
 func recordRootAliases(ctx context.Context, databasePath string, roots []RootSpec, canonical map[string]string) error {
 	conn, err := sql.Open("sqlite3", "file:"+(&url.URL{Path: databasePath}).EscapedPath()+"?mode=ro&immutable=1")
 	if err != nil {
@@ -45,7 +45,12 @@ func recordRootAliases(ctx context.Context, databasePath string, roots []RootSpe
 				continue
 			}
 			alias, found := strings.CutSuffix(stored, string(filepath.Separator)+rel)
-			if found && alias != root.OriginalPath && !slices.Contains(root.Aliases, alias) {
+			if !found || alias == root.OriginalPath || slices.Contains(root.Aliases, alias) {
+				continue
+			}
+			// One linked transcript does not make its directory equivalent;
+			// the alias itself must resolve to the root.
+			if resolvedAlias, err := filepath.EvalSymlinks(alias); err == nil && resolvedAlias == base {
 				root.Aliases = append(root.Aliases, alias)
 			}
 		}

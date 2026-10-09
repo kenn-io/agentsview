@@ -122,3 +122,43 @@ func TestSeededReparseRejectsUnrelatedSpelling(t *testing.T) {
 	_, err = archive.Reparse(ctx, ReparseOptions{All: true, ScratchBytes: 1 << 20})
 	require.Error(t, err, "a different source must not be merged into the seeded session")
 }
+
+// One transcript linked into the captured root does not make its parent
+// directory an alias of the root. Another transcript under that directory is
+// still a different source.
+func TestCaptureRejectsAliasInferredFromDescendantLink(t *testing.T) {
+	ctx := t.Context()
+	const owner = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const linked = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	const unrelated = "019eb791-cf7d-75c1-8439-9ed74c122e03"
+	home := t.TempDir()
+	other := t.TempDir()
+	write := func(dir, id, text string) string {
+		path := filepath.Join(dir, "projects", "project-a", id+".jsonl")
+		dbtest.WriteTestFile(t, path, []byte(testjsonl.NewSessionBuilder().
+			AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", text, id).String()))
+		return path
+	}
+	captured := write(home, linked, "captured history")
+	write(home, unrelated, "captured history")
+	linkedPath := filepath.Join(other, "projects", "project-a", linked+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(linkedPath), 0o700))
+	require.NoError(t, os.Symlink(captured, linkedPath))
+	unrelatedPath := write(other, unrelated, "different history")
+
+	opts := newImportCapture(t, owner, "source", RootSpec{Provider: "claude", Path: home})
+	source, err := db.OpenIsolatedContext(ctx, filepath.Join(opts.DataDir, "sessions.db"))
+	require.NoError(t, err)
+	for id, path := range map[string]string{linked: linkedPath, unrelated: unrelatedPath} {
+		require.NoError(t, source.UpsertSession(ctx, db.Session{
+			ID: id, Agent: "claude", Project: "project-a", Machine: owner, FilePath: new(path),
+		}))
+	}
+	require.NoError(t, source.Close())
+	opts.Destination = filepath.Join(t.TempDir(), "capture")
+	descriptor, err := Capture(ctx, opts)
+	require.NoError(t, err)
+	for _, root := range descriptor.Source.Roots {
+		assert.NotContains(t, root.Aliases, other, "a directory that is not the root is not an alias")
+	}
+}
