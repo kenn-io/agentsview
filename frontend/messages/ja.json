@@ -2461,7 +2461,7 @@
   "analytics_tool_show_less": "表示を減らす",
   "analytics_tool_more_sessions": "さらに表示",
   "analytics_tool_empty_explanation": "既知の結果のうち空の結果は {count}/{total}。",
-  "analytics_tool_repeat_explanation": "分析済み呼び出しのうち同一またはほぼ同一の再試行は {count}/{total}。",
+  "analytics_tool_repeat_explanation": "分析済み呼び出しのうち同一またはほぼ同一の後続呼び出しは {count}/{total}。",
   "analytics_tool_recovery_explanation": "回復したシーケンスは {count}/{total}。継続中: {open}。不明: {unknown}。",
   "analytics_tool_coverage_explanation": "分析済み呼び出し / 全呼び出し。再計算待ちや未計算の古いセッションは集計対象外です。",
   "analytics_tool_recovery_note": "回復は後続の呼び出しが内容を返したことを意味します。回復率はシーケンスを開始したツールに属します。",
@@ -2481,7 +2481,8 @@
       }
     }
   ],
-  "analytics_tool_history_note": "過去のセッションは未分析の場合があります。agentsview sync --full を実行すると過去の率を計算できます。",
+  "analytics_tool_history_note": "再計算中のセッションや、ツール結果を保存していないセッションの呼び出しは率に含まれません。",
+  "analytics_tool_rate_button_label": "{tool} {rate}: {value}",
   "analytics_tool_latest_matching_call": "最後に一致した呼び出し: {date}",
   "analytics_tool_matching_calls": "該当する呼び出し: {count}"
 }

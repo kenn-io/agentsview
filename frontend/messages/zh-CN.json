@@ -2409,7 +2409,8 @@
       }
     }
   ],
-  "analytics_tool_history_note": "较早的会话可能尚未分析。运行 agentsview sync --full 可补全历史比率。",
+  "analytics_tool_history_note": "比率不包括仍在重新计算或未保存工具结果的会话中的调用。",
+  "analytics_tool_rate_button_label": "{tool} {rate}：{value}",
   "analytics_tool_latest_matching_call": "最近匹配调用：{date}",
   "analytics_tool_matching_calls": "匹配调用：{count}"
 }

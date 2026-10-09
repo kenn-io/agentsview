@@ -1,15 +1,15 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
-  import { Button } from "@kenn-io/kit-ui";
+  import { Button, Tooltip } from "@kenn-io/kit-ui";
   import { AnalyticsService, type DbToolUsageAnalysis as ToolUsageAnalysis, type DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
   import { agentLabel } from "../../utils/agents.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import { isAbortError } from "../../api/runtime.js";
   import { router } from "../../stores/router.svelte.js";
-  import { ui } from "../../stores/ui.svelte.js";
+  import { scrollCallParams, ui, type ScrollCall } from "../../stores/ui.svelte.js";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { DbToolCategoryCount as ToolCategoryCount } from "../../api/generated/index.js";
-  import { m } from "../../i18n/index.js";
+  import { getLocale, m } from "../../i18n/index.js";
 
   const CATEGORY_COLORS: Record<string, string> = {
     Read: "#3b82f6",
@@ -48,12 +48,39 @@
   let evidenceError = $state<string | null>(null);
   const evidenceRead = new LatestRead();
   const evidenceParams = $derived(analytics.filterParams());
-  const evidenceKey = $derived(JSON.stringify({ params: evidenceParams, tools: analytics.tools }));
+  const evidenceInputs = $derived({ params: evidenceParams, rows: toolRows });
+  // Identifies what the loaded evidence pages describe. A refresh that leaves the
+  // filters and the selected rate's count unchanged keeps the pages already loaded.
+  let loadedEvidenceKey: string | null = null;
+
+  function metricCount(tool: ToolUsageAnalysis, metric: string): number {
+    switch (metric) {
+      case "tool_empty_rate": return tool.empty_calls ?? 0;
+      case "tool_repeat_rate": return tool.repeated_calls ?? 0;
+      default: return tool.recovered_sequences ?? 0;
+    }
+  }
+
+  function evidenceKeyFor(selection: { tool: string; category: string; metric: string }, inputs: typeof evidenceInputs): string | null {
+    const row = inputs.rows.find((tool) => tool.tool_name === selection.tool && tool.category === selection.category);
+    return row ? JSON.stringify({ params: inputs.params, count: metricCount(row, selection.metric) }) : null;
+  }
 
   $effect(() => {
-    const key = evidenceKey;
-    const selection = untrack(() => selectedRate);
-    if (selection) untrack(() => loadEvidence(selection.tool, selection.category, selection.metric));
+    const inputs = evidenceInputs;
+    untrack(() => {
+      const selection = selectedRate;
+      if (!selection) return;
+      const key = evidenceKeyFor(selection, inputs);
+      if (key === null) {
+        evidenceRead.cancel();
+        selectedRate = null;
+        evidenceLoading = false;
+        loadedEvidenceKey = null;
+      } else if (key !== loadedEvidenceKey) {
+        void loadEvidence(selection.tool, selection.category, selection.metric);
+      }
+    });
   });
   onDestroy(() => evidenceRead.cancel());
 
@@ -62,7 +89,10 @@
     selectedRate = { tool, category, metric };
     evidenceLoading = true;
     evidenceError = null;
-    if (offset === 0) { evidence = []; evidenceTotal = undefined; nextOffset = null; }
+    if (offset === 0) {
+      evidence = []; evidenceTotal = undefined; nextOffset = null;
+      loadedEvidenceKey = evidenceKeyFor(selectedRate, evidenceInputs);
+    }
     try {
       const response = await AnalyticsService.getApiV1AnalyticsSignalSessions({ ...evidenceParams, signal: metric, tool_name: tool, tool_category: category, limit: 10, offset }, { signal });
       if (!evidenceRead.isCurrent(signal)) return;
@@ -77,18 +107,42 @@
     }
   }
 
+  // Evidence names the matching call when it has a tool ID, so the jump lands on
+  // that call rather than the top of a message that holds several calls.
+  function evidenceCall(example: SignalSessionExample): ScrollCall | undefined {
+    return example.call_index != null && example.tool_use_id ? { index: example.call_index, toolUseId: example.tool_use_id } : undefined;
+  }
+
+  function evidenceParamsFor(example: SignalSessionExample): Record<string, string> {
+    if (example.message_ordinal == null) return {};
+    const call = evidenceCall(example);
+    return { msg: String(example.message_ordinal), ...(call ? scrollCallParams(call) : {}) };
+  }
+
   function openSession(event: MouseEvent, example: SignalSessionExample) {
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    router.navigateToSession(example.session_id, example.message_ordinal == null ? {} : { msg: String(example.message_ordinal) });
-    if (example.message_ordinal != null) ui.scrollToOrdinal(example.message_ordinal, example.session_id);
+    router.navigateToSession(example.session_id, evidenceParamsFor(example));
+    if (example.message_ordinal != null) ui.scrollToOrdinal(example.message_ordinal, example.session_id, evidenceCall(example));
+  }
+
+  function formatCount(value: number): string {
+    return value.toLocaleString(getLocale());
+  }
+
+  // A nonzero rate below 0.05% keeps one significant digit so it never reads as zero.
+  function formatRate(rate: number): string {
+    const options: Intl.NumberFormatOptions = rate > 0 && rate < 0.0005
+      ? { style: "percent", maximumSignificantDigits: 1 }
+      : { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 };
+    return new Intl.NumberFormat(getLocale(), options).format(rate);
   }
 
   function rateTitle(tool: ToolUsageAnalysis, metric: string): string {
     switch (metric) {
-      case "tool_empty_rate": return m.analytics_tool_empty_explanation({ count: tool.empty_calls ?? 0, total: tool.known_outcome_calls ?? 0 });
-      case "tool_repeat_rate": return m.analytics_tool_repeat_explanation({ count: tool.repeated_calls ?? 0, total: tool.analyzed_calls ?? 0 });
-      default: return m.analytics_tool_recovery_explanation({ count: tool.recovered_sequences ?? 0, total: (tool.recovered_sequences ?? 0) + (tool.abandoned_sequences ?? 0), open: tool.open_sequences ?? 0, unknown: tool.unknown_sequences ?? 0 });
+      case "tool_empty_rate": return m.analytics_tool_empty_explanation({ count: formatCount(tool.empty_calls ?? 0), total: formatCount(tool.known_outcome_calls ?? 0) });
+      case "tool_repeat_rate": return m.analytics_tool_repeat_explanation({ count: formatCount(tool.repeated_calls ?? 0), total: formatCount(tool.analyzed_calls ?? 0) });
+      default: return m.analytics_tool_recovery_explanation({ count: formatCount(tool.recovered_sequences ?? 0), total: formatCount((tool.recovered_sequences ?? 0) + (tool.abandoned_sequences ?? 0)), open: formatCount(tool.open_sequences ?? 0), unknown: formatCount(tool.unknown_sequences ?? 0) });
     }
   }
 
@@ -225,7 +279,7 @@
                 <span class="tool-name" title={tool.tool_name}>
                   {tool.tool_name}<small class="tool-kind">{tool.category}</small>
                 </span>
-                <span class="tool-category" title={m.analytics_tool_coverage_explanation()}>{tool.analyzed_calls ?? 0}/{tool.call_count}</span>
+                <span class="tool-category"><Tooltip text={m.analytics_tool_coverage_explanation()} focusable>{formatCount(tool.analyzed_calls ?? 0)}/{formatCount(tool.call_count)}</Tooltip></span>
                 <span class="tool-count">
                   {tool.call_count.toLocaleString()}
                 </span>
@@ -237,15 +291,20 @@
                 </span>
                 <span class="tool-pct">{tool.pct}%</span>
                 {#each rateColumns as column}
-                  <span class="tool-rate" data-label={column.label} title={rateTitle(tool, column.metric)}>
+                  <span class="tool-rate" data-label={column.label}>
                     {#if tool[column.field] == null}
                       {m.analytics_tool_unavailable()}
-                    {:else if tool[column.field] === 0}
-                      0.0%
                     {:else}
-                      <Button surface="soft" size="sm" onclick={() => loadEvidence(tool.tool_name, tool.category, column.metric)} ariaLabel={`${tool.tool_name} ${column.label}`}>
-                        {(tool[column.field]! * 100).toFixed(1)}%
-                      </Button>
+                      {@const value = formatRate(tool[column.field]!)}
+                      <Tooltip text={rateTitle(tool, column.metric)} focusable={tool[column.field] === 0}>
+                        {#if tool[column.field] === 0}
+                          {value}
+                        {:else}
+                          <Button surface="soft" size="sm" onclick={() => loadEvidence(tool.tool_name, tool.category, column.metric)} ariaLabel={m.analytics_tool_rate_button_label({ tool: tool.tool_name, rate: column.label, value })}>
+                            {value}
+                          </Button>
+                        {/if}
+                      </Tooltip>
                     {/if}
                   </span>
                 {/each}
@@ -258,13 +317,13 @@
           {#if selectedRate}
             <section class="tool-evidence" aria-live="polite">
               <h4 class="section-title">{selectedRate.tool} ({selectedRate.category}) · {rateColumns.find((c) => c.metric === selectedRate?.metric)?.label}</h4>
-              {#if evidenceTotal != null}<p class="rate-note">{m.analytics_tool_evidence_count({ count: evidenceTotal, countLabel: evidenceTotal.toLocaleString() })}</p>{/if}
+              {#if evidenceTotal != null}<p class="rate-note">{m.analytics_tool_evidence_count({ count: evidenceTotal, countLabel: formatCount(evidenceTotal) })}</p>{/if}
               {#if evidenceLoading}<p class="rate-note">{m.insights_page_loading_examples()}</p>{/if}
               {#if evidenceError}<p class="error">{evidenceError}</p><Button surface="soft" size="sm" onclick={() => loadEvidence(selectedRate!.tool, selectedRate!.category, selectedRate!.metric)}>{m.shared_retry()}</Button>{/if}
               <div class="evidence-list">
                 {#each evidence as example}
                   {@const project = example.project || m.insights_page_unassigned_project()}
-                  <a class="evidence-row" href={router.buildSessionHref(example.session_id, example.message_ordinal == null ? {} : { msg: String(example.message_ordinal) })} onclick={(event) => openSession(event, example)}>
+                  <a class="evidence-row" href={router.buildSessionHref(example.session_id, evidenceParamsFor(example))} onclick={(event) => openSession(event, example)}>
                     <span class="evidence-main">
                       <span class="evidence-project" title={project}>{project}</span>
                       <span class="evidence-meta">{agentLabel(example.agent)} · {m.analytics_tool_latest_matching_call({ date: example.date })}</span>

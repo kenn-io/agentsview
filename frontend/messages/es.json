@@ -2475,7 +2475,7 @@
   "analytics_tool_show_less": "Mostrar menos",
   "analytics_tool_more_sessions": "Más sesiones",
   "analytics_tool_empty_explanation": "{count}/{total} resultados vacíos entre los resultados conocidos.",
-  "analytics_tool_repeat_explanation": "{count}/{total} intentos idénticos o casi idénticos entre las llamadas analizadas.",
+  "analytics_tool_repeat_explanation": "{count}/{total} llamadas de seguimiento idénticas o casi idénticas entre las llamadas analizadas.",
   "analytics_tool_recovery_explanation": "{count}/{total} secuencias recuperadas. Abiertas: {open}. Desconocidas: {unknown}.",
   "analytics_tool_coverage_explanation": "Llamadas analizadas / todas las llamadas. Los recálculos pendientes y las sesiones antiguas sin calcular carecen de cobertura.",
   "analytics_tool_recovery_note": "Recuperación significa que una llamada posterior devolvió contenido. La tasa corresponde a la herramienta que inició la secuencia.",
@@ -2495,7 +2495,8 @@
       }
     }
   ],
-  "analytics_tool_history_note": "Las sesiones anteriores pueden estar sin analizar. Ejecuta agentsview sync --full para completar las tasas históricas.",
+  "analytics_tool_history_note": "Las tasas excluyen las llamadas de sesiones que aún se están recalculando o que se guardaron sin resultados de herramientas.",
+  "analytics_tool_rate_button_label": "{tool} {rate}: {value}",
   "analytics_tool_latest_matching_call": "Última llamada coincidente: {date}",
   "analytics_tool_matching_calls": "Llamadas coincidentes: {count}"
 }

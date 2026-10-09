@@ -2472,7 +2472,7 @@
   "analytics_tool_show_less": "Moins d’outils",
   "analytics_tool_more_sessions": "Plus de sessions",
   "analytics_tool_empty_explanation": "{count}/{total} résultats vides parmi les résultats connus.",
-  "analytics_tool_repeat_explanation": "{count}/{total} tentatives identiques ou presque parmi les appels analysés.",
+  "analytics_tool_repeat_explanation": "{count}/{total} appels de suivi identiques ou presque parmi les appels analysés.",
   "analytics_tool_recovery_explanation": "{count}/{total} séquences récupérées. Ouvertes : {open}. Inconnues : {unknown}.",
   "analytics_tool_coverage_explanation": "Appels analysés / tous les appels. Les recalculs en attente et les anciennes sessions sans calcul ont une couverture incomplète.",
   "analytics_tool_recovery_note": "La récupération signifie qu’un appel ultérieur a renvoyé du contenu. Le taux appartient à l’outil qui a commencé la séquence.",
@@ -2492,7 +2492,8 @@
       }
     }
   ],
-  "analytics_tool_history_note": "Les anciennes sessions peuvent ne pas être analysées. Exécutez agentsview sync --full pour calculer les taux historiques.",
+  "analytics_tool_history_note": "Les taux excluent les appels des sessions en cours de recalcul ou enregistrées sans résultats d'outils.",
+  "analytics_tool_rate_button_label": "{tool} – {rate} : {value}",
   "analytics_tool_latest_matching_call": "Dernier appel correspondant : {date}",
   "analytics_tool_matching_calls": "Appels correspondants : {count}"
 }

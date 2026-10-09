@@ -1,11 +1,17 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import ToolUsage from "./ToolUsage.svelte";
 import { AnalyticsService, type DbSignalSessionsResponse } from "../../api/generated/index.js";
 import { router } from "../../stores/router.svelte.js";
 import { analytics } from "../../stores/analytics.svelte.js";
+import { getLocale } from "../../i18n/index.js";
+
+vi.mock("../../i18n/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../i18n/index.js")>();
+  return { ...actual, getLocale: vi.fn(() => "en") };
+});
 
 const missingRates = {
   analyzed_calls: 0,
@@ -32,6 +38,9 @@ describe("ToolUsage", () => {
     };
     document.body.innerHTML = "";
     vi.restoreAllMocks();
+    vi.mocked(getLocale).mockImplementation(() => "en");
+    analytics.project = "";
+    analytics.model = "";
   });
 
   it("renders ranked per-tool analysis rows", async () => {
@@ -89,7 +98,7 @@ describe("ToolUsage", () => {
     expect(document.body.textContent).toContain("By Category");
     expect(document.body.textContent).toContain("Weekly Trend");
 
-    unmount(component);
+    await unmount(component);
   });
 
   it("renders loading state while the first fetch is in flight", async () => {
@@ -103,7 +112,7 @@ describe("ToolUsage", () => {
     expect(document.body.textContent).not.toContain("No tool usage data");
 
     analytics.loading = { ...analytics.loading, tools: false };
-    unmount(component);
+    await unmount(component);
   });
 
   it("renders empty state without tool rows", async () => {
@@ -120,7 +129,7 @@ describe("ToolUsage", () => {
 
     expect(document.body.textContent).toContain("No tool usage data");
 
-    unmount(component);
+    await unmount(component);
   });
   function seedRates() {
     analytics.loading = { ...analytics.loading, tools: false };
@@ -154,28 +163,72 @@ describe("ToolUsage", () => {
     };
   }
 
-  it("shows partial coverage and each rate's denominator", async () => {
+  function rateButton(label: string): HTMLButtonElement | null {
+    return document.querySelector(`[aria-label="${label}"]`);
+  }
+
+  async function tooltipFor(element: Element): Promise<string | undefined> {
+    element.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    await tick();
+    const text = document.querySelector('[role="tooltip"]')?.textContent?.trim();
+    element.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await tick();
+    return text;
+  }
+
+  it("names each rate's value and explains its denominator on focus", async () => {
     seedRates();
     const component = mount(ToolUsage, { target: document.body });
     await tick();
     expect(document.body.textContent).toContain("11/12");
-    expect(document.body.textContent).toContain("agentsview sync --full");
-    expect(document.body.textContent).toContain("70.0%");
-    expect(document.body.textContent).toContain("45.5%");
-    expect(document.body.textContent).toContain("66.7%");
-    expect(
-      document.querySelector('[title="7/10 empty results among known outcomes."]'),
-    ).not.toBeNull();
-    expect(
-      document.querySelector('[title="2/3 recovered sequences. Open: 1. Unknown: 1."]'),
-    ).not.toBeNull();
-    analytics.tools!.by_tool![0]!.repeat_rate = 0;
-    await tick();
-    expect(document.body.textContent).toContain("0.0%");
-    expect(document.querySelector('[aria-label="Grep Repeat rate"]')).toBeNull();
-    expect(document.querySelector('[aria-label="Grep Empty rate"]')).not.toBeNull();
-    unmount(component);
+    expect(document.body.textContent).toContain("Rates leave out calls");
+    const empty = rateButton("Grep Empty rate: 70.0%");
+    expect(empty?.textContent?.trim()).toBe("70.0%");
+    expect(rateButton("Grep Repeat rate: 45.5%")).not.toBeNull();
+    const recovery = rateButton("Grep Recovery rate: 66.7%");
+    expect(await tooltipFor(empty!)).toBe("7/10 empty results among known outcomes.");
+    expect(await tooltipFor(recovery!)).toBe("2/3 recovered sequences. Open: 1. Unknown: 1.");
+    await unmount(component);
   });
+
+  it("keeps an exact zero inert and a tiny nonzero rate clickable", async () => {
+    seedRates();
+    analytics.tools!.by_tool[0]!.repeat_rate = 0;
+    analytics.tools!.by_tool[0]!.empty_rate = 0.0003;
+    const component = mount(ToolUsage, { target: document.body });
+    await tick();
+    expect(document.querySelector('[aria-label^="Grep Repeat rate"]')).toBeNull();
+    const zero = [...document.querySelectorAll(".tool-rate")][1]!;
+    expect(zero.textContent?.trim()).toBe("0.0%");
+    expect(rateButton("Grep Empty rate: 0.03%")).not.toBeNull();
+    await unmount(component);
+  });
+
+  it("formats rates and counts for the active locale", async () => {
+    vi.mocked(getLocale).mockImplementation(() => "fr");
+    seedRates();
+    analytics.tools!.by_tool[0]!.call_count = 1200;
+    analytics.tools!.by_tool[0]!.analyzed_calls = 1100;
+    const component = mount(ToolUsage, { target: document.body });
+    await tick();
+    expect(document.querySelector(".tool-rate")?.textContent).toMatch(/70,0\s%/u);
+    expect(document.body.textContent).toMatch(/1\s100\/1\s200/u);
+    await unmount(component);
+  });
+
+  const example = {
+    session_id: "recovered",
+    project: "project-a",
+    agent: "claude",
+    date: "2025-06-02",
+    outcome: "",
+    health_score: null,
+    health_grade: null,
+    signal_total: 1,
+    reason_code: "tool_recovery_rate",
+    excerpt: "",
+    message_ordinal: 2,
+  };
 
   it("opens contributing sessions with the active filters and ignores an older response", async () => {
     seedRates();
@@ -183,33 +236,15 @@ describe("ToolUsage", () => {
     analytics.model = "model-b";
     let resolveOlder!: (value: DbSignalSessionsResponse) => void;
     const older = new Promise<DbSignalSessionsResponse>((resolve) => (resolveOlder = resolve));
-    const example = {
-      session_id: "recovered",
-      project: "project-a",
-      agent: "claude",
-      date: "2025-06-02",
-      is_automated: false,
-      outcome: "",
-      health_score: null,
-      health_grade: null,
-      signal_total: 1,
-      reason_code: "tool_recovery_rate",
-      excerpt: "",
-      message_ordinal: 2,
-      failure_signals: 0,
-      retries: 0,
-      edit_churn: 0,
-    };
     const fetch = vi
       .spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions")
       .mockReturnValueOnce(older)
       .mockResolvedValue({ signal: "tool_recovery_rate", total: 1, sessions: [example] });
-    const navigate = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
     const component = mount(ToolUsage, { target: document.body });
     await tick();
-    (document.querySelector('[aria-label="Grep Empty rate"]') as HTMLButtonElement).click();
+    rateButton("Grep Empty rate: 70.0%")!.click();
     await tick();
-    (document.querySelector('[aria-label="Grep Recovery rate"]') as HTMLButtonElement).click();
+    rateButton("Grep Recovery rate: 66.7%")!.click();
     await tick();
     await tick();
     expect(fetch).toHaveBeenLastCalledWith(
@@ -217,7 +252,9 @@ describe("ToolUsage", () => {
         project: "project-a",
         model: "model-b",
         tool_name: "Grep",
+        tool_category: "Grep",
         signal: "tool_recovery_rate",
+        offset: 0,
       }),
       expect.anything(),
     );
@@ -232,16 +269,55 @@ describe("ToolUsage", () => {
     expect(document.body.textContent).not.toContain("stale-project");
     expect(document.body.textContent).toContain("Matching calls: 1");
     expect(document.body.textContent).toContain("Latest matching call: 2025-06-02");
-    (document.querySelector("a.evidence-row") as HTMLAnchorElement).click();
-    expect(navigate).toHaveBeenCalledWith("recovered", { msg: "2" });
+    await unmount(component);
+  });
+
+  it("jumps to the matching call when the evidence names one", async () => {
+    seedRates();
+    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions").mockResolvedValue({
+      signal: "tool_empty_rate",
+      total: 2,
+      sessions: [
+        { ...example, session_id: "with-call", call_index: 1, tool_use_id: "toolu-1" },
+        { ...example, session_id: "message-only" },
+      ],
+    });
+    const navigate = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
+    const component = mount(ToolUsage, { target: document.body });
+    await tick();
+    rateButton("Grep Empty rate: 70.0%")!.click();
+    await tick();
+    await tick();
+    const rows = document.querySelectorAll<HTMLAnchorElement>("a.evidence-row");
+    expect(rows[0]!.getAttribute("href")).toContain("call=1");
+    expect(rows[0]!.getAttribute("href")).toContain("tool_use_id=toolu-1");
+    rows[0]!.click();
+    expect(navigate).toHaveBeenLastCalledWith("with-call", {
+      msg: "2",
+      call: "1",
+      tool_use_id: "toolu-1",
+    });
+    rows[1]!.click();
+    expect(navigate).toHaveBeenLastCalledWith("message-only", { msg: "2" });
+    await unmount(component);
+  });
+
+  it("keeps same-named tools in different categories apart and pages through sessions", async () => {
+    seedRates();
     const row = analytics.tools!.by_tool[0]!;
     analytics.tools!.by_tool = [
       { ...row, tool_name: "readFile", category: "Read" },
       { ...row, tool_name: "readFile", category: "MCP" },
     ];
-    fetch.mockResolvedValue({ signal: "tool_empty_rate", total: 2, next_offset: 1, sessions: [] });
+    const fetch = vi.spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions").mockResolvedValue({
+      signal: "tool_empty_rate",
+      total: 2,
+      next_offset: 1,
+      sessions: [example],
+    });
+    const component = mount(ToolUsage, { target: document.body });
     await tick();
-    const buttons = document.querySelectorAll('[aria-label="readFile Empty rate"]');
+    const buttons = document.querySelectorAll('[aria-label="readFile Empty rate: 70.0%"]');
     (buttons[0] as HTMLButtonElement).click();
     await tick();
     await tick();
@@ -252,6 +328,11 @@ describe("ToolUsage", () => {
     const more = [...document.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("More sessions"),
     )!;
+    fetch.mockResolvedValue({
+      signal: "tool_empty_rate",
+      total: 2,
+      sessions: [{ ...example, session_id: "second" }],
+    });
     more.click();
     await tick();
     await tick();
@@ -259,22 +340,66 @@ describe("ToolUsage", () => {
       expect.objectContaining({ tool_category: "Read", offset: 1 }),
       expect.anything(),
     );
-    fetch.mockResolvedValueOnce({ signal: "tool_empty_rate", total: 0, sessions: [] })
-      .mockResolvedValue({ signal: "tool_empty_rate", sessions: [] });
+    expect(document.querySelectorAll("a.evidence-row")).toHaveLength(2);
+    fetch.mockResolvedValue({ signal: "tool_empty_rate", total: 0, sessions: [] });
     (buttons[1] as HTMLButtonElement).click();
-    await tick();
-    await tick();
-    expect(document.querySelector(".tool-evidence")?.textContent).toContain("0 sessions");
-    analytics.project = "project-b";
     await tick();
     await tick();
     expect(fetch).toHaveBeenLastCalledWith(
       expect.objectContaining({ tool_category: "MCP", offset: 0 }),
       expect.anything(),
     );
-    expect(document.querySelector(".tool-evidence")?.textContent).not.toContain("0 sessions");
-    unmount(component);
-    analytics.project = "";
-    analytics.model = "";
+    expect(document.querySelector(".tool-evidence")?.textContent).toContain("0 sessions");
+    await unmount(component);
+  });
+
+  it("keeps loaded pages across an unchanged refresh and reloads when a filter changes", async () => {
+    seedRates();
+    const fetch = vi
+      .spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions")
+      .mockResolvedValueOnce({
+        signal: "tool_empty_rate",
+        total: 2,
+        next_offset: 1,
+        sessions: [example],
+      })
+      .mockResolvedValueOnce({
+        signal: "tool_empty_rate",
+        total: 2,
+        sessions: [{ ...example, session_id: "second" }],
+      })
+      .mockResolvedValue({ signal: "tool_empty_rate", total: 1, sessions: [example] });
+    const component = mount(ToolUsage, { target: document.body });
+    await tick();
+    rateButton("Grep Empty rate: 70.0%")!.click();
+    await tick();
+    await tick();
+    [...document.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("More sessions"))!
+      .click();
+    await tick();
+    await tick();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(document.querySelectorAll("a.evidence-row")).toHaveLength(2);
+    // A live refresh replaces the tool data with equal counts.
+    analytics.tools = JSON.parse(JSON.stringify(analytics.tools));
+    await tick();
+    await tick();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(document.querySelectorAll("a.evidence-row")).toHaveLength(2);
+    analytics.project = "project-b";
+    await tick();
+    await tick();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenLastCalledWith(
+      expect.objectContaining({ project: "project-b", offset: 0 }),
+      expect.anything(),
+    );
+    expect(document.querySelectorAll("a.evidence-row")).toHaveLength(1);
+    // The selected tool leaves the results, so its evidence closes.
+    analytics.tools = { ...analytics.tools!, by_tool: [] };
+    await tick();
+    expect(document.querySelector(".tool-evidence")).toBeNull();
+    await unmount(component);
   });
 });

@@ -79,6 +79,37 @@ func ToolMetricPredicate(alias, signal string) string {
 	}
 }
 
+// ToolMetricCall returns the index of the first call in message that counts
+// toward signal for the selected tool, so evidence links can target the call
+// rather than only its message.
+func ToolMetricCall(message Message, signal, toolName, category string) (int, bool) {
+	for i, call := range message.ToolCalls {
+		if toolName != "" && normalizeToolName(call.ToolName) != normalizeToolName(toolName) {
+			continue
+		}
+		if category != "" && call.Category != category {
+			continue
+		}
+		if toolMetricMatches(call, signal) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func toolMetricMatches(call ToolCall, signal string) bool {
+	switch signal {
+	case "tool_empty_rate":
+		return call.ObservedOutcome != nil && *call.ObservedOutcome == "empty"
+	case "tool_repeat_rate":
+		return call.ObservedRepeat != nil && (*call.ObservedRepeat == "identical" || *call.ObservedRepeat == "near_identical")
+	case "tool_recovery_rate":
+		return call.SequenceEnding != nil && *call.SequenceEnding == "recovered"
+	default:
+		return false
+	}
+}
+
 // ToolSelectionPredicates shares row identity and freshness while each store binds values.
 func ToolSelectionPredicates(alias, versionColumn string, f AnalyticsFilter, bind func(string) string) []string {
 	predicates := []string{}

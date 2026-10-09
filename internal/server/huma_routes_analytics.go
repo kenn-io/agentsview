@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -313,5 +314,39 @@ func (s *Server) humaAnalyticsSignalSessions(
 		}
 		return nil, internalError("analytics signal sessions error", err)
 	}
+	if db.IsToolMetric(in.Signal) {
+		if err := s.attachToolEvidenceCalls(ctx, result.Sessions, in.Signal, f); err != nil {
+			return nil, internalError("analytics signal sessions error", err)
+		}
+	}
 	return &jsonOutput[db.SignalSessionsResponse]{Body: result}, nil
+}
+
+// attachToolEvidenceCalls names the first matching call in each example's
+// message, so the transcript jump lands on that call when a message holds
+// several. Calls without a tool ID keep the message-level jump.
+func (s *Server) attachToolEvidenceCalls(ctx context.Context, examples []db.SignalSessionExample, signal string, f db.AnalyticsFilter) error {
+	for i := range examples {
+		ordinal := examples[i].MessageOrdinal
+		if ordinal == nil {
+			continue
+		}
+		messages, err := s.db.GetMessages(ctx, examples[i].SessionID, *ordinal, 1, true)
+		if err != nil {
+			return fmt.Errorf("reading evidence message %s/%d: %w", examples[i].SessionID, *ordinal, err)
+		}
+		if len(messages) == 0 || messages[0].Ordinal != *ordinal {
+			continue
+		}
+		index, ok := db.ToolMetricCall(messages[0], signal, f.ToolName, f.ToolCategory)
+		if !ok {
+			continue
+		}
+		toolUseID := messages[0].ToolCalls[index].ToolUseID
+		if toolUseID == "" {
+			continue
+		}
+		examples[i].CallIndex, examples[i].ToolUseID = &index, toolUseID
+	}
+	return nil
 }

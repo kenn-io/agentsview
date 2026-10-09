@@ -4,6 +4,8 @@
 
 export interface DbSignalSessionExample {
   agent: string;
+  /** Position of the first matching call in its message, for tool rates */
+  call_index?: number;
   date: string;
   edit_churn?: number;
   excerpt: string;
@@ -20,4 +22,6 @@ export interface DbSignalSessionExample {
   retries?: number;
   session_id: string;
   signal_total: number;
+  /** Tool ID of the first matching call, for tool rates */
+  tool_use_id?: string;
 }
