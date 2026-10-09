@@ -45,8 +45,11 @@ func claudeAIRequest(shape int, organization, conversation string, offset int) s
 func claudeAIFreshness(updatedAt, leaf string, session *db.Session) uint64 {
 	hash := fnv.New64a()
 	fmt.Fprintf(hash, "%s\x00%s\x00%d", updatedAt, leaf, session.MessageCount)
-	if session.TranscriptRevision != nil {
-		fmt.Fprintf(hash, "\x00%s", *session.TranscriptRevision)
+	for _, field := range []*string{session.TranscriptRevision, session.SessionName, session.EndedAt} {
+		fmt.Fprint(hash, "\x00")
+		if field != nil {
+			fmt.Fprint(hash, *field)
+		}
 	}
 	return hash.Sum64()
 }
@@ -282,7 +285,12 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		return importUpdated, err
 	}
 	if sameMessages(archived, storedFormMessages(store, msgs)) {
-		return upsertConversation(ctx, store, result, nil)
+		status, err := upsertConversation(ctx, store, result, nil)
+		// A usage-only archive can't tell a shorter branch from a shorter export, so it keeps the longer copy.
+		if refusalReason(err) == RefusalShorterExport {
+			return importSkipped, nil
+		}
+		return status, err
 	}
 	replacer, ok := store.(sessionReplacer)
 	if !ok {
