@@ -85,6 +85,7 @@ type codexSessionBuilder struct {
 	committedUsageBlockedByUser bool
 	messageUsageUpdates         []ParsedMessageTokenUsageUpdate
 	checkpointUnsafe            bool
+	displayCompletionIDs        map[string]struct{}
 	// Calls beyond the persisted cursor's capacity remain parse-local until
 	// enough results arrive to fit the bounded checkpoint again.
 	overflowPendingCalls map[string]codexPendingToolCall
@@ -580,31 +581,52 @@ func (b *codexSessionBuilder) handleHistoryMutation(
 		return fmt.Errorf("unsupported TraeX history mutation operation %q", operation)
 	}
 	items := payload.Get("items").Array()
-	hasUserMessage := false
-	for _, item := range items {
-		if item.Get("type").Str == "message" && item.Get("role").Str == "user" {
-			hasUserMessage = true
-			break
+	var prompts []gjson.Result
+	for _, completion := range payload.Get("display_completions").Array() {
+		prompt := completion.Get("item")
+		if prompt.Get("type").Str != "UserMessage" {
+			continue
 		}
-	}
-	if !hasUserMessage {
-		var prompts []gjson.Result
-		for _, completion := range payload.Get("display_completions").Array() {
-			if completion.Get("item.type").Str != "UserMessage" {
+		if turn, mutationTurn := completion.Get("turn_id").Str, payload.Get("turn_id").Str; turn != "" && mutationTurn != "" && turn != mutationTurn {
+			continue
+		}
+		content := prompt.Get("content")
+		if !content.Exists() {
+			continue
+		}
+		id := prompt.Get("id").Str
+		if id != "" {
+			if _, seen := b.displayCompletionIDs[id]; seen {
 				continue
 			}
-			if thread := completion.Get("thread_id").Str; thread != "" && thread != b.sessionID {
+			if b.displayCompletionIDs == nil {
+				b.displayCompletionIDs = make(map[string]struct{})
+			}
+			b.displayCompletionIDs[id] = struct{}{}
+		}
+		mirrored := false
+		for _, item := range items {
+			if item.Get("type").Str != "message" || item.Get("role").Str != "user" {
 				continue
 			}
-			if turn, mutationTurn := completion.Get("turn_id").Str, payload.Get("turn_id").Str; turn != "" && mutationTurn != "" && turn != mutationTurn {
-				continue
+			mirrored = id != "" && id == item.Get("id").Str
+			if !mirrored {
+				mirrored = extractCodexContent(prompt) == extractCodexContent(item)
 			}
-			if content := completion.Get("item.content"); content.Exists() {
-				prompts = append(prompts, gjson.Parse(`{"type":"message","role":"user","content":`+content.Raw+`}`))
+			if mirrored {
+				break
 			}
 		}
-		items = append(prompts, items...)
+		if mirrored {
+			continue
+		}
+		// The persisted cursor does not track display IDs imported from the prefix.
+		if b.incremental {
+			return errCodexIncrementalNeedsFullParse
+		}
+		prompts = append(prompts, gjson.Parse(`{"type":"message","role":"user","content":`+content.Raw+`}`))
 	}
+	items = append(prompts, items...)
 	for _, item := range items {
 		if b.incremental && b.codexResponseItemNeedsFullParse(item) {
 			return errCodexIncrementalNeedsFullParse
@@ -624,11 +646,7 @@ func (b *codexSessionBuilder) handleTokenUsageRecord(
 	if !usage.IsObject() {
 		return
 	}
-	raw := usage.Raw
-	if creation := usage.Get("cache_creation_input_tokens"); creation.Exists() && !usage.Get("cache_write_input_tokens").Exists() {
-		raw = `{"cache_write_input_tokens":` + creation.Raw + `,` + raw[1:]
-	}
-	b.applyTokenUsage(raw, payload.Get("response_id").Str)
+	b.applyTokenUsage(usage.Raw, payload.Get("response_id").Str)
 }
 
 func (b *codexSessionBuilder) markFirstUserReplayPossible() {

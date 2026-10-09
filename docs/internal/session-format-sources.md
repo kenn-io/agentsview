@@ -874,15 +874,15 @@ fixtures retain this field; missing identities remain source-local.
   The independent
   [botmux reader](https://github.com/deepcoldy/botmux/blob/9308dbc90595d329eb7dcb18a87e06b9bc8bcbe9/src/services/traex-transcript.ts#L663-L690)
   reads display-only prompts from `history_mutation.payload.display_completions`;
-  this is independent-reader evidence, not a producer capture.
+  this is independent-reader evidence, not a producer capture. Reverified
+  2026-10-09 against the pinned reader and the mutation fixture, whose
+  `cache_creation_input_tokens` value is zero and provides no evidence of units.
 - **Usage and cost:** `token_count` records carry the Codex fields. Newer
   rollouts can instead write the same per-response usage shape at
   `token_usage_record.payload.usage`. Both paths use Codex normalization and
   catalog pricing, including the same reasoning-output omission. Deduplication
   includes `response_id` when present, so equal counts for different responses
-  remain distinct. In `token_usage_record`, `cache_creation_input_tokens`
-  supplies cache writes when `cache_write_input_tokens` is absent; writes are
-  included in input totals.
+  remain distinct.
 - **Agentsview:** `internal/parser/traex.go` relabels the shared Codex parser
   (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
   `traex:` ID namespace, and `internal/sync` gates the format-shaped branches

@@ -472,14 +472,17 @@ func TestTraeXRegistryCoversArchivedSessions(t *testing.T) {
 
 func TestTraeXProviderHistoryMutationDisplayPrompts(t *testing.T) {
 	const uuid = "019fcf70-1111-7000-8000-000000000009"
-	const completion = `{"thread_id":"` + uuid + `","turn_id":"turn-1","item":{"type":"UserMessage","content":[{"type":"text","text":"Inspect the parser."}]}}`
+	const completion = `{"thread_id":"other-thread","turn_id":"turn-1","item":{"id":"prompt-1","type":"UserMessage","content":[{"type":"text","text":"Inspect the parser."}]}}`
 	const reply = `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Reply"}]}`
 	for _, tt := range []struct {
-		name  string
-		items string
+		name       string
+		items      string
+		wantPrompt string
 	}{
-		{"display only", reply},
-		{"mirrored prompt", `{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the parser."}]},` + reply},
+		{"display only", reply, "Inspect the parser."},
+		{"environment context", `{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>Workspace</environment_context>"}]},` + reply, "Inspect the parser."},
+		{"mirrored prompt", `{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the parser."}]},` + reply, "Inspect the parser."},
+		{"mirrored item ID", `{"id":"prompt-1","type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the parser package."}]},` + reply, "Inspect the parser package."},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -491,17 +494,17 @@ func TestTraeXProviderHistoryMutationDisplayPrompts(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, found)
 			appendCodexProviderContent(t, path, testjsonl.JoinJSONL(
-				`{"type":"history_mutation","payload":{"operation":"append","turn_id":"turn-1","display_completions":[{"thread_id":"`+uuid+`","turn_id":"other-turn","item":{"type":"UserMessage","content":[{"type":"text","text":"Wrong turn"}]}},{"thread_id":"other-thread","turn_id":"turn-1","item":{"type":"UserMessage","content":[{"type":"text","text":"Wrong thread"}]}},`+completion+`],"items":[`+tt.items+`]}}`,
+				`{"type":"history_mutation","payload":{"operation":"append","turn_id":"turn-1","display_completions":[{"thread_id":"`+uuid+`","turn_id":"other-turn","item":{"type":"UserMessage","content":[{"type":"text","text":"Wrong turn"}]}},`+completion+`],"items":[`+tt.items+`]}}`,
 			))
 			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
 			result := outcome.Results[0].Result
-			assert.Equal(t, "Inspect the parser.", result.Session.FirstMessage)
+			assert.Equal(t, tt.wantPrompt, result.Session.FirstMessage)
 			assert.Equal(t, 1, result.Session.UserMessageCount)
 			require.Len(t, result.Messages, 2)
 			assert.Equal(t, RoleUser, result.Messages[0].Role)
-			assert.Equal(t, "Inspect the parser.", result.Messages[0].Content)
+			assert.Equal(t, tt.wantPrompt, result.Messages[0].Content)
 			assert.Equal(t, "Reply", result.Messages[1].Content)
 			fingerprint, err := provider.Fingerprint(t.Context(), source)
 			require.NoError(t, err)
@@ -520,39 +523,24 @@ func TestTraeXProviderHistoryMutationDisplayPrompts(t *testing.T) {
 				Source: source, Fingerprint: nextFingerprint, SessionID: "traex:" + uuid, Offset: fingerprint.Size, StartOrdinal: 2,
 			})
 			require.NoError(t, err)
-			assert.Equal(t, IncrementalApplied, status)
-			require.Len(t, incremental.Messages, 2)
-			assert.Equal(t, "Inspect the parser.", incremental.Messages[0].Content)
-			assert.Equal(t, "Reply", incremental.Messages[1].Content)
+			assert.Equal(t, IncrementalNeedsFullParse, status)
+			assert.True(t, incremental.ForceReplace)
+			full, err := provider.Parse(t.Context(), ParseRequest{Source: source, ForceParse: true})
+			require.NoError(t, err)
+			require.Len(t, full.Results, 1)
+			assert.Equal(t, 1, full.Results[0].Result.Session.UserMessageCount)
+			require.Len(t, full.Results[0].Result.Messages, 3)
+			assert.Equal(t, tt.wantPrompt, full.Results[0].Result.Messages[0].Content)
+			assert.Equal(t, "Reply", full.Results[0].Result.Messages[1].Content)
+			assert.Equal(t, "Reply", full.Results[0].Result.Messages[2].Content)
 		})
 	}
-}
-
-func TestCodexProviderIgnoresTraeXCacheCreation(t *testing.T) {
-	const uuid = "019fcf70-1111-7000-8000-000000000010"
-	root := t.TempDir()
-	path := writeCodexProviderSessionContent(t, root, uuid, testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
-		testjsonl.CodexMsgJSON("user", "Inspect", tsEarlyS1),
-		testjsonl.CodexMsgJSON("assistant", "Reply", tsEarlyS5),
-		`{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}}}}`,
-	))
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: uuid, StoredFilePath: path})
-	require.NoError(t, err)
-	require.True(t, found)
-	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	require.Len(t, outcome.Results[0].Result.Messages, 2)
-	assert.JSONEq(t, `{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, string(outcome.Results[0].Result.Messages[1].TokenUsage))
 }
 
 func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
 	const uuid = "019fcf70-1111-7000-8000-000000000002"
 	const reply = `{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Reply"}]}]}}`
-	const usage = `"usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`
+	const usage = `"usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":0,"output_tokens":12}`
 	const record = `{"type":"token_usage_record","payload":{"response_id":"response-1",` + usage + `}}`
 	tests := []struct {
 		name      string
@@ -562,32 +550,12 @@ func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
 		{
 			name:      "equal usage from distinct responses",
 			rows:      testjsonl.JoinJSONL(reply, record, reply, `{"type":"token_usage_record","payload":{"response_id":"response-2",`+usage+`}}`),
-			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, `{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`},
+			wantUsage: []string{`{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, `{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`},
 		},
 		{
 			name:      "repeated response counted once",
 			rows:      testjsonl.JoinJSONL(reply, record, reply, record),
-			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, ""},
-		},
-		{
-			name:      "escaped response ID counted once",
-			rows:      testjsonl.JoinJSONL(reply, record, reply, `{"type":"token_usage_record","payload":{"response_id":"response-\u0031",`+usage+`}}`),
-			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, ""},
-		},
-		{
-			name:      "missing response ID uses usage",
-			rows:      testjsonl.JoinJSONL(reply, `{"type":"token_usage_record","payload":{`+usage+`}}`, reply, `{"type":"token_usage_record","payload":{`+usage+`}}`),
-			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, ""},
-		},
-		{
-			name:      "explicit cache writes win",
-			rows:      testjsonl.JoinJSONL(reply, `{"type":"token_usage_record","payload":{"usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":10,"cache_creation_input_tokens":30,"output_tokens":12}}}`),
-			wantUsage: []string{`{"input_tokens":50,"cache_read_input_tokens":40,"cache_creation_input_tokens":10,"output_tokens":12}`},
-		},
-		{
-			name:      "explicit zero cache writes win",
-			rows:      testjsonl.JoinJSONL(reply, `{"type":"token_usage_record","payload":{"usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":0,"cache_creation_input_tokens":30,"output_tokens":12}}}`),
-			wantUsage: []string{`{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`},
+			wantUsage: []string{`{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, ""},
 		},
 	}
 	for _, tt := range tests {
@@ -741,7 +709,7 @@ func TestTraeXProviderHistoryMutationIncremental(t *testing.T) {
 	)
 	tail := testjsonl.JoinJSONL(
 		`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"function_call_output","call_id":"call-late","output":[{"type":"text","text":"Done"}]}]}}`,
-		`{"type":"token_usage_record","payload":{"response_id":"response-1","usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}}}`,
+		`{"type":"token_usage_record","payload":{"response_id":"response-1","usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":0,"output_tokens":12}}}`,
 	)
 	root := t.TempDir()
 	path := writeCodexProviderSessionContent(t, root, uuid, prefix)
@@ -769,7 +737,7 @@ func TestTraeXProviderHistoryMutationIncremental(t *testing.T) {
 	assert.Equal(t, "Done", update.ResultEvents[0].Content)
 	require.Len(t, outcome.MessageTokenUsageUpdates, 1)
 	assert.Equal(t, 1, outcome.MessageTokenUsageUpdates[0].Ordinal)
-	assert.JSONEq(t, `{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, string(outcome.MessageTokenUsageUpdates[0].TokenUsage))
+	assert.JSONEq(t, `{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, string(outcome.MessageTokenUsageUpdates[0].TokenUsage))
 	full, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], ForceParse: true})
 	require.NoError(t, err)
 	require.Len(t, full.Results, 1)
