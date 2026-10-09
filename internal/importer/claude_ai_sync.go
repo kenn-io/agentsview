@@ -219,7 +219,12 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					if err == nil {
 						stored, readErr := store.GetSessionFull(ctx, id)
 						err = readErr
-						if err == nil && stored != nil {
+						var current struct {
+							UpdatedAt string `json:"updated_at"`
+							Leaf      string `json:"current_leaf_message_uuid"`
+						}
+						// The chat can change between list and detail; cache only what was imported.
+						if err == nil && stored != nil && json.Unmarshal(detail, &current) == nil && current.UpdatedAt == marker.UpdatedAt && current.Leaf == leaf {
 							err = store.UpsertProviderStatHash(ctx, parser.AgentClaudeAI, id, claudeAIFreshness(marker.UpdatedAt, leaf, stored))
 						}
 						if err != nil {
