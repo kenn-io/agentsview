@@ -461,3 +461,58 @@ func requireActivityBucketMembership(
 		return row.SessionID == sessionID
 	}), "activity bucket page should include the refreshed session")
 }
+
+// After a revert, Codex appends to the thread's reverted rollout, which is
+// stored under a derived id when the original rollout synced first. A
+// history hint names only the thread, so it must still refresh the reverted
+// rollout, even when no recent-session polling covers that session.
+func TestLiveActivityHintRefreshesRevertedCodexRollout(t *testing.T) {
+	base := t.TempDir()
+	sessions := filepath.Join(base, "sessions")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	env := setupSingleAgentTestEnvWithDirs(t, parser.AgentCodex, []string{sessions})
+	sessionID := "codex:" + codexThreadID
+	day := filepath.Join("2026", "07", "28")
+	idle := time.Now().Add(-48 * time.Hour)
+
+	ordinary := env.writeCodexSession(t, day, codexOrdinaryName, codexRollout(codexThreadID, 3))
+	require.NoError(t, os.Chtimes(ordinary, idle, idle))
+	env.engine.SyncAll(t.Context(), nil)
+	reverted := env.writeCodexSession(t, day, codexRevertedName, codexRollout(codexThreadID, 1))
+	require.NoError(t, os.Chtimes(reverted, idle, idle))
+	env.engine.SyncAll(t.Context(), nil)
+	revertedID := parser.AltSessionID(sessionID, reverted)
+	assertSessionMessageCount(t, env.db, revertedID, 1)
+
+	now := time.Now()
+	revertedFile, err := os.OpenFile(reverted, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = revertedFile.WriteString(testjsonl.NewSessionBuilder().
+		AddCodexMessage(now.Add(-2*time.Minute).UTC().Format(time.RFC3339), "assistant", "resumed").
+		AddCodexMessage(now.Add(-time.Minute).UTC().Format(time.RFC3339), "user", "again").
+		String())
+	require.NoError(t, err)
+	require.NoError(t, revertedFile.Close())
+	require.NoError(t, os.WriteFile(filepath.Join(base, "history.jsonl"), fmt.Appendf(nil,
+		`{"session_id":"%s","ts":%d,"text":"again"}`+"\n", codexThreadID, now.Unix(),
+	), 0o644))
+
+	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
+		Roots: []string{sessions}, Machine: "local",
+	})
+	require.True(t, ok)
+	hints, supported, err := parser.ResolveActivityHintProvider(provider)
+	require.NoError(t, err)
+	require.True(t, supported)
+	hintSources, err := hints.ActivityHintSources(t.Context())
+	require.NoError(t, err)
+	poller := agentsync.NewLiveActivityPoller(
+		[]agentsync.LiveActivityTarget{{Provider: provider, Hints: hints, Sources: hintSources}},
+		agentsync.DBLiveActivityLookup(env.db), env.engine.SyncPathsContext, nil,
+	)
+	_, err = poller.PollOnce(t.Context(), now)
+	require.NoError(t, err)
+
+	assertSessionMessageCount(t, env.db, revertedID, 3)
+	assertSessionMessageCount(t, env.db, sessionID, 3)
+}
