@@ -11674,6 +11674,9 @@ func sourceParseFailureCacheable(err error, paths ...string) bool {
 	if _, ok := errors.AsType[*json.SemanticError](err); ok {
 		return true
 	}
+	if errors.Is(err, parser.ErrTraeXHistoryMutationUnsupported) {
+		return true
+	}
 	message := err.Error()
 	// Parser wrappers include source paths. Directory names must not classify
 	// an otherwise transient error as malformed (or vice versa).

@@ -35,6 +35,9 @@ var errCodexIncrementalNeedsFullParse = errors.New(
 	"codex incremental event requires full parse",
 )
 
+// ErrTraeXHistoryMutationUnsupported marks refusals cacheable until the source changes.
+var ErrTraeXHistoryMutationUnsupported = errors.New("unsupported TraeX history mutation")
+
 const codexGoalContextSourceAttr = `source="goal"`
 
 var codexGoalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
@@ -574,10 +577,10 @@ func (b *codexSessionBuilder) handleHistoryMutation(
 		return nil
 	}
 	if version := payload.Get("version"); version.Exists() && (version.Type != gjson.Number || version.Num != 1) {
-		return fmt.Errorf("unsupported TraeX history mutation version %s", version.Raw)
+		return fmt.Errorf("%w version %s", ErrTraeXHistoryMutationUnsupported, version.Raw)
 	}
 	if operation := payload.Get("operation").Str; operation != "append" {
-		return fmt.Errorf("unsupported TraeX history mutation operation %q", operation)
+		return fmt.Errorf("%w operation %q", ErrTraeXHistoryMutationUnsupported, operation)
 	}
 	for _, item := range payload.Get("items").Array() {
 		if b.incremental && b.codexResponseItemNeedsFullParse(item) {
@@ -598,7 +601,13 @@ func (b *codexSessionBuilder) handleTokenUsageRecord(
 	if !usage.IsObject() {
 		return
 	}
-	b.applyTokenUsage(usage.Raw, payload.Get("response_id").Str)
+	raw := usage.Raw
+	if !usage.Get("cache_write_input_tokens").Exists() {
+		if creation := usage.Get("cache_creation_input_tokens"); creation.Exists() {
+			raw = fmt.Sprintf("%s,\"cache_write_input_tokens\":%d}", strings.TrimSuffix(raw, "}"), creation.Int())
+		}
+	}
+	b.applyTokenUsage(raw, payload.Get("response_id").Str)
 }
 
 func (b *codexSessionBuilder) markFirstUserReplayPossible() {
@@ -1384,18 +1393,22 @@ func parseCodexFunctionOutput(
 		return gjson.Result{}, ""
 	}
 
+	// Codex keeps raw JSON for array outputs.
 	if agent == AgentTraeX && out.IsArray() && len(out.Array()) > 0 {
 		allText := true
+		var texts []string
 		for _, block := range out.Array() {
 			switch block.Get("type").Str {
 			case "input_text", "output_text", "text":
-				allText = allText && block.Get("text").Type == gjson.String
+				text := block.Get("text")
+				allText = allText && text.Type == gjson.String
+				texts = append(texts, text.Str)
 			default:
 				allText = false
 			}
 		}
 		if allText {
-			out = gjson.Result{Type: gjson.String, Str: strings.Join(extractCodexTextBlocksFromResult(out), "")}
+			out = gjson.Result{Type: gjson.String, Str: strings.Join(texts, "")}
 		}
 	}
 
@@ -2663,6 +2676,9 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 				return
 			}
 			_, fallbackErr = b.processLine(ctx, line)
+			if fallbackErr != nil {
+				return
+			}
 			if b.unattachedTokenUsage {
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return

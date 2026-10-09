@@ -490,6 +490,11 @@ func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
 			rows:      testjsonl.JoinJSONL(reply, record, reply, record),
 			wantUsage: []string{`{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, ""},
 		},
+		{
+			name:      "cache creation inside input",
+			rows:      testjsonl.JoinJSONL(reply, `{"type":"token_usage_record","payload":{"usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}}}`),
+			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -529,12 +534,15 @@ func TestTraeXProviderHistoryMutationRefusal(t *testing.T) {
 		name    string
 		payload string
 		wantErr string
+		path    string
 	}{
-		{"missing version", `{"operation":"append","items":[]}`, ""},
-		{"version one", `{"version":1,"operation":"append","items":[]}`, ""},
-		{"replace", `{"operation":"replace","items":[]}`, "operation"},
-		{"missing operation", `{"items":[]}`, "operation"},
-		{"newer version", `{"version":2,"operation":"append","items":[]}`, "version"},
+		{"missing version", `{"operation":"append","items":[]}`, "", "full"},
+		{"version one", `{"version":1,"operation":"append","items":[]}`, "", "full"},
+		{"replace", `{"operation":"replace","items":[]}`, "operation", "full"},
+		{"missing operation", `{"items":[]}`, "operation", "full"},
+		{"newer version", `{"version":2,"operation":"append","items":[]}`, "version", "full"},
+		{"seed refusal", `{"operation":"replace","items":[]}`, "operation", "seed"},
+		{"incremental refusal", `{"operation":"replace","items":[]}`, "operation", "incremental"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -550,29 +558,30 @@ func TestTraeXProviderHistoryMutationRefusal(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 			appendCodexProviderContent(t, path, `{"type":"history_mutation","payload":`+tt.payload+"}\n")
-			_, err = provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			if tt.path == "full" {
+				_, err = provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			} else {
+				offset := int64(len(prefix))
+				if tt.path == "seed" {
+					info, statErr := os.Stat(path)
+					require.NoError(t, statErr)
+					offset = info.Size()
+					appendCodexProviderContent(t, path, testjsonl.CodexMsgJSON("assistant", "Reply", tsEarlyS5)+"\n")
+				}
+				fingerprint, fingerprintErr := provider.Fingerprint(t.Context(), sources[0])
+				require.NoError(t, fingerprintErr)
+				_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
+					Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
+					Offset: offset, StartOrdinal: 1,
+				})
+			}
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 				return
 			}
 			wantErr := "unsupported TraeX history mutation " + tt.wantErr
 			require.ErrorContains(t, err, wantErr)
-			fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-			require.NoError(t, err)
-			_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
-				Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
-				Offset: int64(len(prefix)), StartOrdinal: 1,
-			})
-			require.ErrorContains(t, err, wantErr)
-			invalidPrefixSize := fingerprint.Size
-			appendCodexProviderContent(t, path, testjsonl.CodexMsgJSON("assistant", "Reply", tsEarlyS5)+"\n")
-			fingerprint, err = provider.Fingerprint(t.Context(), sources[0])
-			require.NoError(t, err)
-			_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
-				Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
-				Offset: invalidPrefixSize, StartOrdinal: 1,
-			})
-			require.ErrorContains(t, err, wantErr)
+			assert.ErrorIs(t, err, ErrTraeXHistoryMutationUnsupported)
 		})
 	}
 }

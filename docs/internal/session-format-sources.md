@@ -877,6 +877,7 @@ fixtures retain this field; missing identities remain source-local.
   catalog pricing, including the same reasoning-output omission. Consecutive
   repeats are suppressed using a single usage digest keyed by `response_id`
   when present, so equal counts for different responses remain distinct.
+  For `token_usage_record`, we assume input includes cache reads and writes; `cache_creation_input_tokens` supplies writes when `cache_write_input_tokens` is absent.
   Reverified 2026-10-09 against the mutation fixture and usage tests.
 - **Agentsview:** `internal/parser/traex.go` relabels the shared Codex parser
   (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
