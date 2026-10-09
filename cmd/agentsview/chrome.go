@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/web"
+	"go.kenn.io/kit/atomicfile"
 	"go.kenn.io/kit/safefileio"
 )
 
@@ -56,7 +57,7 @@ func newChromeCommand() *cobra.Command {
 
 func newChromeHostCommand() *cobra.Command {
 	var socket string
-	cmd := &cobra.Command{Use: "chrome-host", Hidden: true, Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "chrome-host", Hidden: true, RunE: func(cmd *cobra.Command, _ []string) error {
 		return relayChromeHost(cmd.Context(), socket, os.Stdin, os.Stdout)
 	}}
 	cmd.Flags().StringVar(&socket, "socket", "", "Private server socket")
@@ -145,6 +146,10 @@ func relayChromeHost(ctx context.Context, socket string, input io.Reader, output
 }
 
 func setupChrome(dataDir, home, executable string, assets fs.FS, register func(string) error) (string, error) {
+	return setupChromeWithWriter(dataDir, home, executable, assets, register, (*os.File).Write)
+}
+
+func setupChromeWithWriter(dataDir, home, executable string, assets fs.FS, register func(string) error, write func(*os.File, []byte) (int, error)) (string, error) {
 	manifest, err := fs.ReadFile(assets, "chrome-extension/manifest.json")
 	if err != nil {
 		return "", fmt.Errorf("extension assets: %w; build the frontend first", err)
@@ -169,9 +174,12 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 	if err != nil {
 		return "", err
 	}
-	if err := safefileio.EnsurePrivateDir(dir); err != nil {
-		return "", err
+	type installFile struct {
+		path string
+		data []byte
+		mode fs.FileMode
 	}
+	var files []installFile
 	folder := filepath.Join(dir, "extension")
 	if err := fs.WalkDir(assets, "chrome-extension", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -183,13 +191,14 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		}
 		target := filepath.Join(folder, relative)
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0o700)
+			return nil
 		}
 		data, err := fs.ReadFile(assets, path)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, 0o600)
+		files = append(files, installFile{target, data, 0o600})
+		return nil
 	}); err != nil {
 		return "", fmt.Errorf("extension assets: %w; build the frontend first", err)
 	}
@@ -208,9 +217,7 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		launcher += ".cmd"
 		command = "@echo off\r\n\"" + strings.ReplaceAll(executable, "%", "%%") + "\" chrome-host --socket \"" + strings.ReplaceAll(socket, "%", "%%") + "\"\r\n"
 	}
-	if err := os.WriteFile(launcher, []byte(command), 0o700); err != nil {
-		return "", err
-	}
+	files = append(files, installFile{launcher, []byte(command), 0o700})
 	manifestDir := dir
 	if runtime.GOOS == "darwin" {
 		manifestDir = filepath.Join(home, "Library", "Application Support", "Google", "Chrome", "NativeMessagingHosts")
@@ -218,16 +225,47 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 	if runtime.GOOS == "linux" {
 		manifestDir = filepath.Join(chromeConfigRoot(home), "NativeMessagingHosts")
 	}
-	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
-		return "", err
-	}
 	body, err := json.Marshal(map[string]any{"name": chromeNativeHost, "description": "AgentsView Claude.ai Sync", "path": launcher, "type": "stdio", "allowed_origins": []string{"chrome-extension://" + id.String() + "/"}})
 	if err != nil {
 		return "", err
 	}
 	path := filepath.Join(manifestDir, chromeNativeHost+".json")
-	if err := os.WriteFile(path, body, 0o600); err != nil {
+	files = append(files, installFile{path, body, 0o600})
+	if err := safefileio.EnsurePrivateDir(dir); err != nil {
 		return "", err
+	}
+	var staged []string
+	defer func() {
+		for _, path := range staged {
+			_ = os.Remove(path)
+		}
+	}()
+	// Finish every write before replacing any part of the registered install.
+	for _, file := range files {
+		if err := os.MkdirAll(filepath.Dir(file.path), 0o700); err != nil {
+			return "", err
+		}
+		temp, err := os.CreateTemp(filepath.Dir(file.path), ".chrome-*")
+		if err != nil {
+			return "", err
+		}
+		staged = append(staged, temp.Name())
+		err = temp.Chmod(file.mode)
+		if err == nil {
+			var n int
+			n, err = write(temp, file.data)
+			if err == nil && n != len(file.data) {
+				err = io.ErrShortWrite
+			}
+		}
+		if err := errors.Join(err, temp.Close()); err != nil {
+			return "", err
+		}
+	}
+	for i, file := range files {
+		if err := atomicfile.Replace(staged[i], file.path); err != nil {
+			return "", err
+		}
 	}
 	if err := register(path); err != nil {
 		return "", err

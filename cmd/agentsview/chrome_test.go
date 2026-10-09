@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -117,6 +119,61 @@ func TestChromeSetupPreservesInstalledExtension(t *testing.T) {
 	worker, err := os.ReadFile(filepath.Join(folder, "worker.js"))
 	require.NoError(t, err)
 	assert.Equal(t, "worker", string(worker))
+}
+
+func TestChromeSetupWriteFailurePreservesInstall(t *testing.T) {
+	for failAt := range 4 {
+		t.Run(fmt.Sprintf("write %d", failAt), func(t *testing.T) {
+			t.Setenv("CHROME_CONFIG_HOME", "")
+			t.Setenv("XDG_CONFIG_HOME", "")
+			dir := t.TempDir()
+			assets := fstest.MapFS{
+				"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)},
+				"chrome-extension/worker.js":     {Data: []byte("old worker")},
+			}
+			var manifestPath string
+			folder, err := setupChrome(dir, dir, chromeTestExecutable(t), assets, func(path string) error { manifestPath = path; return nil })
+			require.NoError(t, err)
+			manifest, err := os.ReadFile(manifestPath)
+			require.NoError(t, err)
+			var host struct {
+				Path string `json:"path"`
+			}
+			require.NoError(t, json.Unmarshal(manifest, &host))
+			paths := []string{filepath.Join(folder, "manifest.json"), filepath.Join(folder, "worker.js"), host.Path, manifestPath}
+			previous := make(map[string][]byte)
+			for _, path := range paths {
+				previous[path], err = os.ReadFile(path)
+				require.NoError(t, err)
+			}
+			assets["chrome-extension/manifest.json"].Data = []byte(`{"key":"bmV3"}`)
+			assets["chrome-extension/worker.js"].Data = []byte("new worker")
+			writeErr := errors.New("disk full")
+			writes := 0
+			registered := false
+			_, err = setupChromeWithWriter(dir, dir, "new-executable", assets, func(string) error { registered = true; return nil }, func(file *os.File, data []byte) (int, error) {
+				defer func() { writes++ }()
+				if writes == failAt {
+					n, err := file.Write(data[:1])
+					require.NoError(t, err)
+					return n, writeErr
+				}
+				return file.Write(data)
+			})
+			require.ErrorIs(t, err, writeErr)
+			assert.False(t, registered)
+			for _, path := range paths {
+				body, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, previous[path], body, "%s", path)
+			}
+			for _, path := range []string{folder, filepath.Dir(host.Path), filepath.Dir(manifestPath)} {
+				staged, err := filepath.Glob(filepath.Join(path, ".chrome-*"))
+				require.NoError(t, err)
+				assert.Empty(t, staged)
+			}
+		})
+	}
 }
 
 func TestChromeHostRelay(t *testing.T) {
@@ -254,9 +311,9 @@ func TestChromeSyncResults(t *testing.T) {
 		{"absent host", `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, "Run agentsview chrome setup and keep Chrome open, then Sync again", 409, 0},
 		{"error", "event: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 0},
 		{"partial failure", "event:progress\ndata:{\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent:error\ndata:{\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 2},
-		{"partial EOF", "event: progress\ndata: {\"imported\":2}\n\n", "without a result", 200, 2},
+		{"partial EOF", "event: progress\ndata: {\"imported\":2}\n\n", "missing done event", 200, 2},
 		{"multiline", ": keepalive\r\nevent:done\r\ndata:{\"imported\":2,\r\ndata:\"updated\":1}\r\n\r\n", "", 200, 2},
-		{"EOF", "event: progress\ndata: {}\n\n", "without a result", 200, 0},
+		{"EOF", "event: progress\ndata: {}\n\n", "missing done event", 200, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

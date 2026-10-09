@@ -35,7 +35,6 @@ async function request({ id, path, version: peerVersion }, port) {
     if (!tab) tab = await chrome.tabs.create({ url: "https://claude.ai/new", active: false });
     await loadedTab(tab.id);
     const target = { tabId: tab.id };
-    await chrome.scripting.executeScript({ target, files: ["claude_fetch.js"], world: "ISOLATED" });
     let reply;
     for (let attempt = 0; attempt < 2; attempt++) {
       [reply] = await chrome.scripting.executeScript({

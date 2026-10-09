@@ -63,33 +63,12 @@ func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (import
 		}
 		return importer.ImportStats{}, fmt.Errorf("claude.ai Sync: HTTP %d: %s", response.StatusCode, body)
 	}
-	stream := response.Stream200
-	defer stream.Close()
 	var stats importer.ImportStats
-	for stream.Next() {
-		frame := stream.Event()
-		switch frame.Type {
-		case "progress", "done":
-			var next importer.ImportStats
-			if err := json.Unmarshal(frame.Data, &next); err != nil {
-				return stats, err
-			}
-			stats = next
-			if frame.Type == "done" {
-				return stats, nil
-			}
-		case "error":
-			var failure struct {
-				Error string `json:"error"`
-			}
-			if err := json.Unmarshal(frame.Data, &failure); err != nil {
-				return stats, err
-			}
-			return stats, errors.New(failure.Error)
-		}
-	}
-	if err := stream.Err(); err != nil {
+	result, err := consumeDaemonPushEvents[importer.ImportStats](response.Stream200, func(progress importer.ImportStats) {
+		stats = progress
+	})
+	if err != nil {
 		return stats, err
 	}
-	return stats, errors.New("claude.ai Sync stream ended without a result")
+	return result, nil
 }

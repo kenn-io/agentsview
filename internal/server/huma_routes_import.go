@@ -142,6 +142,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			payload := map[string]string{"error": err.Error()}
 			if errors.Is(err, importer.ErrClaudeAIAuthRequired) {
 				payload["error"] = "Sign in to Claude.ai, then Sync again"
+				if in.Browser == "chrome" {
+					payload["error"] = s.chrome.signInError()
+				}
 				payload["code"] = "claude_ai_auth_required"
 			}
 			if errors.Is(err, chromehost.ErrCompatibility) {

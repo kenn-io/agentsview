@@ -264,3 +264,64 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 	}
 	assert.True(t, srv.chrome.Connected())
 }
+
+func TestChromeHostSignInProfiles(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		refused, reconnect bool
+		status             int
+		want               string
+	}{
+		{"single profile", false, false, 401, "Sign in to Claude.ai, then Sync again"},
+		{"other profile", true, false, 401, "Another Chrome profile also has the extension. Only the first connected profile is used. Sign in to Claude.ai there or disable the extension in the other profile, then Sync again"},
+		{"new connection", true, true, 401, "Sign in to Claude.ai, then Sync again"},
+		{"other error", true, false, 403, "403"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			socket, conn := testChromeConnection(t, srv)
+			if tt.refused {
+				second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
+				require.NoError(t, err)
+				defer second.Close()
+				require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
+				_, err = chromehost.ReadFrame(second)
+				require.Error(t, err)
+				if networkErr, ok := errors.AsType[net.Error](err); ok {
+					require.False(t, networkErr.Timeout(), "the extra connection must close")
+				}
+			}
+			if tt.reconnect {
+				require.NoError(t, conn.Close())
+				require.Eventually(t, func() bool { return !srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
+				var err error
+				conn, err = (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
+				require.NoError(t, err)
+				defer conn.Close()
+				require.Eventually(t, func() bool { return srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
+			}
+			response := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
+				req.RemoteAddr = "127.0.0.1:1234"
+				srv.mux.ServeHTTP(response, req)
+			}()
+			id, path := readChromeRequest(t, conn)
+			require.Equal(t, "/api/organizations", path)
+			writeChromeReply(t, conn, id, tt.status, "{}")
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "Sync did not finish")
+			}
+			assert.Contains(t, response.Body.String(), tt.want)
+			if tt.status == 401 {
+				assert.Contains(t, response.Body.String(), `"code":"claude_ai_auth_required"`)
+			} else {
+				assert.NotContains(t, response.Body.String(), "Another Chrome profile")
+			}
+		})
+	}
+}

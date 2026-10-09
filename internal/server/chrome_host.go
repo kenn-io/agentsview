@@ -24,8 +24,9 @@ type chromeConnection struct {
 }
 
 type chromeHost struct {
-	mu         sync.Mutex
-	connection *chromeConnection
+	mu             sync.Mutex
+	connection     *chromeConnection
+	refusedProfile bool
 }
 
 // ServeChromeHost binds the private endpoint before starting its accept loop.
@@ -63,11 +64,13 @@ func (s *Server) ServeChromeHost(ctx context.Context, socketPath string) error {
 				return
 			}
 			if s.chrome.connection != nil {
+				s.chrome.refusedProfile = true
 				s.chrome.mu.Unlock()
 				_ = conn.Close()
 				continue
 			}
 			s.chrome.connection = current
+			s.chrome.refusedProfile = false
 			s.chrome.mu.Unlock()
 			go s.chrome.read(current)
 		}
@@ -79,6 +82,15 @@ func (h *chromeHost) Connected() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.connection != nil
+}
+
+func (h *chromeHost) signInError() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.refusedProfile {
+		return "Another Chrome profile also has the extension. Only the first connected profile is used. Sign in to Claude.ai there or disable the extension in the other profile, then Sync again"
+	}
+	return "Sign in to Claude.ai, then Sync again"
 }
 
 func (h *chromeHost) read(conn *chromeConnection) {
