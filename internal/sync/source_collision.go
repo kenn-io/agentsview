@@ -71,7 +71,7 @@ func (e *Engine) sourceCollisionID(
 		if rank > bestRank {
 			bestRank = rank
 			altID = s.ID + record.ID[len(fullID):]
-			moved = record.FilePath != "" && record.FilePath != lookupPath
+			moved = !record.Excluded && record.FilePath != "" && record.FilePath != lookupPath
 		}
 	}
 	if altID == s.ID {
