@@ -13,12 +13,20 @@ const ParentlessWorkerSQL = `session_kind = 'non-interactive'
  AND COALESCE(parent_session_id, '') = '' AND COALESCE(relationship_type, '') = ''`
 
 func repairParentlessWorkers(ctx context.Context, w *writerHandle) error {
-	if _, err := w.Exec(ctx, `UPDATE sessions
+	tx, err := w.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := publishLiveSessionChangesTx(ctx, tx, ParentlessWorkerSQL); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE `+ParentlessWorkerSQL); err != nil {
 		return fmt.Errorf("repairing parentless workers: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 type boundedAutomationText struct {
@@ -147,7 +155,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 				"scanning bounded automated audit candidate: %w", err,
 			)
 		}
-		if IsAutomatedSessionMetadata(agent, sessionKind) {
+		if IsAutomatedSessionMetadata(sessionKind) {
 			setIDs, clearIDs = AppendAutomationFlagChange(
 				setIDs, clearIDs, id, rowAutomated, true,
 			)
@@ -245,7 +253,7 @@ func scanFullAutomationCandidates(
 				"scanning automated audit candidate: %w", err,
 			)
 		}
-		want := IsAutomatedSessionMetadata(agent, sessionKind) ||
+		want := IsAutomatedSessionMetadata(sessionKind) ||
 			patterns.matchesTextCandidates(
 				userCount, firstUser, firstMessage,
 			)

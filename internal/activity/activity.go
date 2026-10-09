@@ -509,7 +509,7 @@ func (s SessionMeta) kind() sessionKind {
 }
 
 // ActivityCategory names the session's disjoint activity category for exports.
-// Subagents take precedence; backends exclude parentless automated headless workers.
+// Subagents take precedence over automation, including workers without parents.
 func (s SessionMeta) ActivityCategory() string {
 	switch s.kind() {
 	case subagentSession:

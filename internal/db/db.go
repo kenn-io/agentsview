@@ -3976,6 +3976,14 @@ func (db *DB) ForceBackfillIsAutomated(ctx context.Context) error {
 func batchUpdateAutomated(ctx context.Context,
 	w *writerHandle, ids []string, val int,
 ) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := w.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	const batchSize = 500
 	for i := 0; i < len(ids); i += batchSize {
 		end := min(i+batchSize, len(ids))
@@ -3987,7 +3995,10 @@ func batchUpdateAutomated(ctx context.Context,
 			args[j+1] = id
 			phs[j] = "?"
 		}
-		_, err := w.Exec(ctx,
+		if err := publishLiveSessionChangesTx(ctx, tx, "id IN ("+strings.Join(phs, ",")+")", args[1:]...); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx,
 			"UPDATE sessions"+
 				" SET is_automated = ?,"+
 				"     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"+
@@ -4002,7 +4013,7 @@ func batchUpdateAutomated(ctx context.Context,
 			)
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (db *DB) shouldRunTokenCoverageRepairLocked(ctx context.Context,

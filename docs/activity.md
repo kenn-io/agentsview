@@ -73,8 +73,9 @@ the Subagent relationship during each classification audit, including rows
 imported after initialization, even when their sources are unreadable. Deleted
 Claude transcripts can prevent historical worker repair because archived rows
 lack the SDK origin needed to distinguish workers from human SDK conversations.
-Ambiguous rows keep their relationship. Usage-only archives retain their stored
-automation flag because they discard prompt text.
+Older-client Claude rows in replicas also lack this origin evidence when their
+transcript is unavailable. Ambiguous rows keep their relationship. Usage-only
+archives retain their stored automation flag because they discard prompt text.
 
 The session count separates subagents from interactive and automated
 conversations. Every known subagent counts as Subagents, including scripted

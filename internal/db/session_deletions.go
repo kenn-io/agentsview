@@ -11,8 +11,24 @@ import (
 
 const archiveMetadataSessionDeletionRevisionKey = "session_deletion_publication_revision"
 
+// publishLiveSessionChangesTx queues repaired sessions for existing mirror rescans.
+func publishLiveSessionChangesTx(ctx context.Context, tx *sql.Tx, where string, args ...any) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata (key, value)
+ SELECT 'session_deletion_publication_revision', '1' WHERE EXISTS (SELECT 1 FROM sessions WHERE `+where+`)
+ ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, args...); err != nil {
+		return fmt.Errorf("advancing repaired session publication: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
+ SELECT id, project, (SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key = 'session_deletion_publication_revision'), 0
+ FROM sessions WHERE `+where+`
+ ON CONFLICT(session_id) DO UPDATE SET project = excluded.project, revision = excluded.revision, deleted = 0`, args...); err != nil {
+		return fmt.Errorf("publishing repaired sessions: %w", err)
+	}
+	return nil
+}
+
 // SessionDeletionPublicationRevision is an O(1) change token for hard
-// session deletions, advanced by SQLite triggers.
+// session deletions and repairs, advanced by triggers and classification audits.
 func (db *DB) SessionDeletionPublicationRevision(ctx context.Context) (int64, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -90,7 +106,7 @@ func (db *DB) LoadSessionDeletionDelta(
 }
 
 // LoadSessionDeletionChanges returns the IDs of every session journaled in
-// (afterRevision, throughRevision], whether it was deleted or reinserted.
+// (afterRevision, throughRevision], whether it was deleted, reinserted, or repaired.
 func (db *DB) LoadSessionDeletionChanges(
 	ctx context.Context, afterRevision, throughRevision int64,
 ) ([]string, error) {

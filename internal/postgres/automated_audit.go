@@ -225,7 +225,7 @@ func auditAutomatedMatchingHashPG(
 		if promptEvidenceDiscarded {
 			continue
 		}
-		if db.IsAutomatedSessionMetadata(agent, sessionKind) {
+		if db.IsAutomatedSessionMetadata(sessionKind) {
 			setIDs, clearIDs = db.AppendAutomationFlagChange(
 				setIDs, clearIDs, id, rowAutomated, true,
 			)
@@ -322,7 +322,7 @@ func scanFullAutomationCandidatesPG(
 		if promptEvidenceDiscarded {
 			continue
 		}
-		want := db.IsAutomatedSessionMetadata(agent, sessionKind)
+		want := db.IsAutomatedSessionMetadata(sessionKind)
 		want = want || classifier.IsAutomatedFromTextCandidates(
 			userCount, firstUser, firstMessage,
 		)

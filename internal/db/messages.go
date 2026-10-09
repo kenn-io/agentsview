@@ -2623,7 +2623,7 @@ func sessionAutomationStateTx(
 		)
 	}
 
-	want = IsAutomatedSessionMetadata("", sessionKind) ||
+	want = IsAutomatedSessionMetadata(sessionKind) ||
 		isAutomatedFromTextCandidates(userMsgCount, firstUserMessage, firstMessage)
 	return want, rowAutomated, true, nil
 }

@@ -2,7 +2,9 @@ package vector
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -433,6 +435,55 @@ func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t 
 	assert.Equal(t, 1, result.Fill.Documents, "only the newly in-scope automated doc is embedded")
 	assert.ElementsMatch(t, []string{"u:s1:human", "u:s2:auto"}, mirrorDocKeys(t, ix),
 		"the older automated doc must be picked up despite predating the stored refresh watermark")
+}
+
+func TestBuildMatchingClassifierAuditEmbedsLateWorker(t *testing.T) {
+	for _, automated := range []bool{true, false} {
+		t.Run(fmt.Sprintf("automation=%t", automated), func(t *testing.T) {
+			ctx := t.Context()
+			archive := dbtest.OpenTestDB(t)
+			seedEndedSession(t, archive, "human", "hello", "2024-01-02T00:00:00Z")
+			ix := openTestIndex(t)
+			gen := fakeGeneration("fake-model")
+			_, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+			require.NoError(t, err)
+			hash, err := archive.AppliedClassifierHash(ctx)
+			require.NoError(t, err)
+			raw, err := sql.Open("sqlite3", archive.Path())
+			require.NoError(t, err)
+			defer raw.Close()
+			_, err = raw.ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, session_kind, ended_at, user_message_count, is_automated)
+ VALUES ('late-worker', 'local', 'project', 'codex', 'non-interactive', '2024-01-01T00:00:00Z', 1, ?)`, automated)
+			require.NoError(t, err)
+			_, err = raw.ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES ('late-worker', 0, 'user', 'older worker content')`)
+			require.NoError(t, err)
+			require.NoError(t, archive.Close())
+			repaired, err := db.Open(ctx, archive.Path())
+			require.NoError(t, err)
+			defer repaired.Close()
+			repairedHash, err := repaired.AppliedClassifierHash(ctx)
+			require.NoError(t, err)
+			require.Equal(t, hash, repairedHash, "late repair keeps the configured classifier unchanged")
+			revision, err := repaired.SessionDeletionPublicationRevision(ctx)
+			require.NoError(t, err)
+			tombstones, err := repaired.LoadSessionDeletionDelta(ctx, 0, revision, nil, nil)
+			require.NoError(t, err)
+			assert.Empty(t, tombstones, "live repair entries cannot delete mirrored sessions")
+			result, err := ix.Build(ctx, repaired, fakeBuildEncoder(), gen, BuildOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Fill.Documents)
+			hits, err := ix.Search(ctx, fakeBuildEncoder(), "older worker content", 10)
+			require.NoError(t, err)
+			var found bool
+			for _, hit := range hits {
+				if hit.SessionID == "late-worker" {
+					found = true
+					assert.True(t, hit.Subordinate)
+				}
+			}
+			assert.True(t, found, "a repaired worker below the watermark becomes searchable")
+		})
+	}
 }
 
 func TestBuildClassifierChangeEmbedsOlderReclassifiedSession(t *testing.T) {

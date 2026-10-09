@@ -454,7 +454,7 @@ func updateUsageOnlyAutomationTx(
 	if err != nil {
 		return err
 	}
-	if IsAutomatedSessionMetadata(agent, sessionKind) {
+	if IsAutomatedSessionMetadata(sessionKind) {
 		if automated {
 			return nil
 		}
