@@ -446,6 +446,10 @@ type EngineConfig struct {
 	// before any content is published. False preserves source deletion policy.
 	// Used only by the local archive's scratch-database reparse.
 	ArchiveSessionPolicy func(context.Context, *db.Session, string) (bool, error)
+	// ParserExclusionObserver receives session IDs a parser intentionally
+	// excluded, such as content-free usage probes, after sync accepts them.
+	// Used only by the local archive's scratch-database reparse.
+	ParserExclusionObserver func([]string)
 
 	AgentDirs      map[parser.AgentType][]string
 	SourceMachines map[parser.AgentType]map[string]string
@@ -646,6 +650,7 @@ type Engine struct {
 	disableProjectDiscovery bool
 	stableSourceSnapshots   bool
 	archiveSessionPolicy    func(context.Context, *db.Session, string) (bool, error)
+	parserExclusionObserver func([]string)
 	idPrefix                string
 	pathRewriter            func(string) string
 	storedPathResolver      func(string) (string, bool)
@@ -1017,6 +1022,7 @@ func NewEngine(ctx context.Context,
 		stableSourceSnapshots:   cfg.StableSourceSnapshots,
 		idPrefix:                cfg.IDPrefix,
 		archiveSessionPolicy:    cfg.ArchiveSessionPolicy,
+		parserExclusionObserver: cfg.ParserExclusionObserver,
 		pathRewriter:            cfg.PathRewriter,
 		storedPathResolver:      cfg.StoredPathResolver,
 		completeSourceMirror:    cfg.CompleteSourceMirror,
@@ -14017,6 +14023,9 @@ func (e *Engine) deleteParserExcludedSessions(ctx context.Context,
 	if len(excluded) > 0 {
 		if _, err := e.db.DeleteParserExcludedSessions(ctx, excluded); err != nil {
 			return nil, err
+		}
+		if e.parserExclusionObserver != nil {
+			e.parserExclusionObserver(excluded)
 		}
 	}
 	return excluded, nil

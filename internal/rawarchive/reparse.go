@@ -247,6 +247,14 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 		}
 		return true, nil
 	}
+	// The parser can intentionally drop a source's only session, such as a
+	// content-free usage probe. Sync accepts that, so reparse does too.
+	excluded := make(map[string]bool)
+	prepared.Config.ParserExclusionObserver = func(ids []string) {
+		for _, id := range ids {
+			excluded[id] = true
+		}
+	}
 	engine := syncer.NewEngine(ctx, scratch, prepared.Config)
 	defer engine.Close()
 	if err := engine.ReparsePathsContext(ctx, []string{prepared.Path}); err != nil || policyError != nil {
@@ -261,6 +269,12 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 	}
 	for id, machine := range trashed {
 		if ownedBy(machine) {
+			suppressed[id] = true
+			seen[id] = true
+		}
+	}
+	for id := range excluded {
+		if !seen[id] {
 			suppressed[id] = true
 			seen[id] = true
 		}
