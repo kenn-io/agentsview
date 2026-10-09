@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"slices"
 	"strconv"
 	"strings"
@@ -120,11 +121,14 @@ type ToolEffectivenessCitedCall struct {
 	Ordinal   int `json:"ordinal"`
 	CallIndex int `json:"call_index"`
 	// ToolUseID lets a jump check that the message still holds this call.
-	ToolUseID    string `json:"tool_use_id,omitempty"`
-	ToolName     string `json:"tool_name"`
-	InputPreview string `json:"input_preview"`
-	Outcome      string `json:"outcome"`
-	ResultBytes  *int   `json:"result_bytes,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// CallFingerprint lets a jump check the call's tool name and input as
+	// well, since some agents derive tool IDs from the message position.
+	CallFingerprint string `json:"call_fingerprint"`
+	ToolName        string `json:"tool_name"`
+	InputPreview    string `json:"input_preview"`
+	Outcome         string `json:"outcome"`
+	ResultBytes     *int   `json:"result_bytes,omitempty"`
 	// ResultKeptBytes is how much of the result the model saw when the
 	// budget cut it.
 	ResultKeptBytes *int `json:"result_kept_bytes,omitempty"`
@@ -347,8 +351,9 @@ func recordToolCalls(
 		}
 		detail := ToolEffectivenessCitedCall{
 			Ordinal: row.MessageOrdinal, CallIndex: row.CallIndex, ToolUseID: row.ToolUseID, ToolName: row.ToolName,
-			InputPreview: strings.Clone(stringutil.SafeTruncate(row.InputJSON, toolCitationPreviewBytes)),
-			Outcome:      string(outcome),
+			InputPreview:    strings.Clone(stringutil.SafeTruncate(row.InputJSON, toolCitationPreviewBytes)),
+			Outcome:         string(outcome),
+			CallFingerprint: toolCallFingerprint(row.ToolName, row.InputJSON),
 		}
 		if states[i] == resultSent || row.ResultContentLength > 0 {
 			detail.ResultBytes = new(max(row.ResultContentLength, len(row.ResultContent)))
@@ -358,6 +363,16 @@ func recordToolCalls(
 		ev.callDetails[key] = detail
 	}
 	return states
+}
+
+// toolCallFingerprint hashes a call's tool name and input with 32-bit FNV-1a
+// over their UTF-8 bytes. The frontend's toolCallFingerprint must match it.
+func toolCallFingerprint(toolName, input string) string {
+	h := fnv.New32a()
+	h.Write([]byte(toolName))
+	h.Write([]byte{0})
+	h.Write([]byte(input))
+	return fmt.Sprintf("%08x", h.Sum32())
 }
 
 // keptText is the part of one input or result the prompt sends.

@@ -183,6 +183,28 @@ describe("UIStore", () => {
       });
     });
 
+    it("carries the call's fingerprint and reads it back", () => {
+      const params = scrollCallParams({
+        index: 1,
+        toolUseId: "roocode:read_file:4",
+        fingerprint: "7805cd6e",
+      });
+      expect(params).toEqual({ call: "1", tool_use_id: "roocode:read_file:4", fp: "7805cd6e" });
+      expect(
+        parseScrollCall(params["call"], params["tool_use_id"], params["rev"], params["fp"]),
+      ).toEqual({ index: 1, toolUseId: "roocode:read_file:4", fingerprint: "7805cd6e" });
+    });
+
+    it("drops a fingerprint from a link to a whole message", () => {
+      expect(scrollCallParams({ toolUseId: "", revision: "r7", fingerprint: "7805cd6e" })).toEqual({
+        rev: "r7",
+      });
+      expect(parseScrollCall(undefined, "", "r7", "7805cd6e")).toEqual({
+        toolUseId: "",
+        revision: "r7",
+      });
+    });
+
     it("ignores a revision when the link names the call's tool ID", () => {
       expect(parseScrollCall("2", "toolu_1", "r7")).toEqual({ index: 2, toolUseId: "toolu_1" });
     });

@@ -674,6 +674,7 @@
       router.params["call"],
       router.params["tool_use_id"],
       router.params["rev"],
+      router.params["fp"],
     );
     untrack(() => {
       if (!sid || !msgParam) return;

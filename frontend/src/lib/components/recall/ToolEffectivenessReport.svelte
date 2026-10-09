@@ -271,14 +271,17 @@
   }
 
   // A saved report can outlive the transcript it cites. A call with a tool ID is checked by that ID;
-  // anything else is checked against the revision the report was built from.
+  // anything else is checked against the revision the report was built from. Some agents derive tool IDs
+  // from position, so a cited call also carries its fingerprint.
   function citationTarget(citation: Citation): ScrollCall | undefined {
-    const toolUseId = citation.kind === "call" ? citation.detail?.tool_use_id : undefined;
-    if (citation.kind === "call" && citation.detail && toolUseId) return { index: citation.callIndex, toolUseId };
+    const detail = citation.kind === "call" ? citation.detail : undefined;
+    if (citation.kind === "call" && detail?.tool_use_id) {
+      return { index: citation.callIndex, toolUseId: detail.tool_use_id, fingerprint: detail.call_fingerprint };
+    }
     const revision = report?.transcript_revision;
     if (!revision) return undefined;
-    return citation.kind === "call" && citation.detail
-      ? { index: citation.callIndex, toolUseId: "", revision }
+    return citation.kind === "call" && detail
+      ? { index: citation.callIndex, toolUseId: "", revision, fingerprint: detail.call_fingerprint }
       : { toolUseId: "", revision };
   }
 

@@ -41,6 +41,8 @@ export interface ScrollCall {
   toolUseId: string;
   /** Without a tool ID, the transcript revision the link was made from, since position alone can't tell calls apart. */
   revision?: string;
+  /** The call's tool name and input fingerprint, since some agents derive tool IDs from the call's position. */
+  fingerprint?: string;
 }
 
 /** URL parameters that carry a ScrollCall in a message link. */
@@ -49,6 +51,7 @@ export function scrollCallParams(call: ScrollCall): Record<string, string> {
   if (call.index !== undefined) params["call"] = String(call.index);
   if (call.toolUseId) params["tool_use_id"] = call.toolUseId;
   else if (call.revision) params["rev"] = call.revision;
+  if (call.index !== undefined && call.fingerprint) params["fp"] = call.fingerprint;
   return params;
 }
 
@@ -57,13 +60,16 @@ export function parseScrollCall(
   index?: string,
   toolUseId?: string,
   revision?: string,
+  fingerprint?: string,
 ): ScrollCall | undefined {
   const position = index !== undefined && /^\d+$/.test(index) ? Number(index) : undefined;
   if (position === undefined) return revision ? { toolUseId: "", revision } : undefined;
-  if (toolUseId) return { index: position, toolUseId };
-  return revision
-    ? { index: position, toolUseId: "", revision }
-    : { index: position, toolUseId: "" };
+  let call: ScrollCall;
+  if (toolUseId) call = { index: position, toolUseId };
+  else if (revision) call = { index: position, toolUseId: "", revision };
+  else call = { index: position, toolUseId: "" };
+  if (fingerprint) call.fingerprint = fingerprint;
+  return call;
 }
 
 /** Block types that can be toggled visible/hidden. */

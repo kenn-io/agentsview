@@ -477,8 +477,8 @@ func TestToolEffectivenessStructured_CitedCalls(t *testing.T) {
 	var saved ToolEffectivenessStructured
 	require.NoError(t, json.Unmarshal(raw, &saved))
 	assert.Equal(t, []ToolEffectivenessCitedCall{
-		{Ordinal: 1, CallIndex: 0, ToolUseID: "g1", ToolName: "Grep", InputPreview: `{"pattern":"retryLimit"}`, Outcome: "empty", ResultBytes: new(16), MessageCalls: 1},
-		{Ordinal: 2, CallIndex: 0, ToolUseID: "g2", ToolName: "Grep", InputPreview: `{"pattern":"retryLimit"}`, Outcome: "empty", ResultBytes: new(16), MessageCalls: 1},
+		{Ordinal: 1, CallIndex: 0, ToolUseID: "g1", CallFingerprint: "7805cd6e", ToolName: "Grep", InputPreview: `{"pattern":"retryLimit"}`, Outcome: "empty", ResultBytes: new(16), MessageCalls: 1},
+		{Ordinal: 2, CallIndex: 0, ToolUseID: "g2", CallFingerprint: "7805cd6e", ToolName: "Grep", InputPreview: `{"pattern":"retryLimit"}`, Outcome: "empty", ResultBytes: new(16), MessageCalls: 1},
 	}, saved.CitedCalls)
 
 	md := RenderToolEffectivenessMarkdown(r, ev)
@@ -491,4 +491,18 @@ func TestParseToolEffectivenessReport_DropsRepeatedCitations(t *testing.T) {
 	require.Len(t, r.Conclusions, 1)
 	assert.Equal(t, []int{2, 3}, r.Conclusions[0].Ordinals)
 	assert.Equal(t, []ToolEffectivenessCallRef{{Ordinal: 3, CallIndex: 1}, {Ordinal: 3, CallIndex: 0}}, r.Conclusions[0].Calls)
+}
+
+// The frontend's toolCallFingerprint tests pin the same vectors, so the two
+// sides agree on what a saved fingerprint means.
+func TestToolCallFingerprint(t *testing.T) {
+	for _, tc := range []struct{ tool, input, want string }{
+		{"Grep", `{"pattern":"retryLimit"}`, "7805cd6e"},
+		{"Read", `{"file_path":"界.go"}`, "eee0ae21"},
+		{"", "", "050c5d1f"},
+	} {
+		assert.Equal(t, tc.want, toolCallFingerprint(tc.tool, tc.input), tc.tool)
+	}
+	assert.NotEqual(t, toolCallFingerprint("Grep", `{"pattern":"a"}`), toolCallFingerprint("Grep", `{"pattern":"b"}`))
+	assert.NotEqual(t, toolCallFingerprint("Grep", "x"), toolCallFingerprint("Read", "x"))
 }

@@ -101,6 +101,7 @@ function makeInsight(overrides: Partial<DbInsight> = {}): DbInsight {
         {
           ordinal: 2,
           call_index: 0,
+          call_fingerprint: "0000aaaa",
           tool_name: "Grep",
           input_preview: '{"pattern":"loadConfig","path":"/src"}',
           outcome: "empty",
@@ -111,6 +112,7 @@ function makeInsight(overrides: Partial<DbInsight> = {}): DbInsight {
           ordinal: 3,
           call_index: 0,
           tool_use_id: "r1",
+          call_fingerprint: "0000bbbb",
           tool_name: "Read",
           input_preview: '{"file_path":"config.ts"}',
           outcome: "content",
@@ -299,11 +301,22 @@ describe("ToolEffectivenessReport", () => {
     expect(link.getAttribute("href")).toContain("msg=3");
     // The cited call rides along, so a transcript that no longer holds it at that message drops the jump.
     expect(link.getAttribute("href")).toContain("tool_use_id=r1");
+    // Its fingerprint too, since some agents derive tool IDs from position and a rewrite can reuse one.
+    expect(link.getAttribute("href")).toContain("fp=0000bbbb");
     const event = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
     link.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
-    expect(scroll).toHaveBeenCalledWith(3, "s1", { index: 0, toolUseId: "r1" });
-    expect(navigate).toHaveBeenCalledWith("s1", { msg: "3", call: "0", tool_use_id: "r1" });
+    expect(scroll).toHaveBeenCalledWith(3, "s1", {
+      index: 0,
+      toolUseId: "r1",
+      fingerprint: "0000bbbb",
+    });
+    expect(navigate).toHaveBeenCalledWith("s1", {
+      msg: "3",
+      call: "0",
+      tool_use_id: "r1",
+      fp: "0000bbbb",
+    });
 
     // Without a tool ID, a cited call and a cited message are checked against the report's revision.
     const params = (text: string) =>
@@ -314,13 +327,20 @@ describe("ToolEffectivenessReport", () => {
     const blankCall = params("Message 2 ↗");
     expect(blankCall.get("call")).toBe("0");
     expect(blankCall.get("rev")).toBe("rev-1");
+    expect(blankCall.get("fp")).toBe("0000aaaa");
     expect(blankCall.has("tool_use_id")).toBe(false);
     const message = params("Message 1 ↗");
     expect(message.get("rev")).toBe("rev-1");
     expect(message.has("call")).toBe(false);
+    expect(message.has("fp")).toBe(false);
     scroll.mockClear();
     jumps.find((a) => a.textContent?.trim() === "Message 2 ↗")!.click();
-    expect(scroll).toHaveBeenCalledWith(2, "s1", { index: 0, toolUseId: "", revision: "rev-1" });
+    expect(scroll).toHaveBeenCalledWith(2, "s1", {
+      index: 0,
+      toolUseId: "",
+      revision: "rev-1",
+      fingerprint: "0000aaaa",
+    });
 
     scroll.mockRestore();
     navigate.mockRestore();
@@ -461,6 +481,7 @@ describe("ToolEffectivenessReport", () => {
     const raw = JSON.parse(insight.structured_json!);
     const call = {
       ordinal: 2,
+      call_fingerprint: "0000cccc",
       tool_name: "Grep",
       input_preview: "",
       outcome: "empty",
