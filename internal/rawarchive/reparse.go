@@ -187,6 +187,12 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 	if err != nil {
 		return err
 	}
+	// The owner may have stored a session under an older machine key that
+	// now resolves to this installation.
+	ownedBy := func(machine string) bool {
+		return machine == root.DeviceID ||
+			(root.DeviceID == owner && (machine == "" || machine == "local" || aliases[machine] == owner))
+	}
 	seen := make(map[string]bool)
 	var policyError error
 	prepared.Config.ArchiveSessionPolicy = func(ctx context.Context, s *db.Session, native string) (keep bool, retErr error) {
@@ -208,9 +214,7 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 			if root.DeviceID == owner && existing.FilePath != nil && slices.Contains(prepared.SourcePaths, *existing.FilePath) {
 				s.FilePath = existing.FilePath
 			}
-			machineMatches := existing.Machine == root.DeviceID ||
-				(root.DeviceID == owner && (existing.Machine == "" || existing.Machine == "local" || aliases[existing.Machine] == owner))
-			if (!known && root.DeviceID != owner) || existing.Agent != root.Provider || !machineMatches || existing.FilePath == nil || s.FilePath == nil || *existing.FilePath != *s.FilePath {
+			if (!known && root.DeviceID != owner) || existing.Agent != root.Provider || !ownedBy(existing.Machine) || existing.FilePath == nil || s.FilePath == nil || *existing.FilePath != *s.FilePath {
 				return false, fmt.Errorf("session identity conflicts with a different source: %s", s.ID)
 			}
 		}
@@ -237,6 +241,19 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 	defer engine.Close()
 	if err := engine.ReparsePathsContext(ctx, []string{prepared.Path}); err != nil || policyError != nil {
 		return errors.Join(err, policyError)
+	}
+	// Sync keeps a trashed row in trash without parsing it again, so the
+	// policy above never sees it. Count trash that this source owns as an
+	// intentional suppression instead of a missing result.
+	trashed, err := scratch.TrashedSessionsByFilePath(ctx, root.Provider, prepared.SourcePaths)
+	if err != nil {
+		return err
+	}
+	for id, machine := range trashed {
+		if ownedBy(machine) {
+			suppressed[id] = true
+			seen[id] = true
+		}
 	}
 	if len(seen) == 0 {
 		return errors.New("provider produced no archived sessions")

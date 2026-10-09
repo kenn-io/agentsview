@@ -352,3 +352,30 @@ func (d *DB) BindRawArchiveSession(ctx context.Context, root RawArchiveRoot, sou
 	})
 	return known, err
 }
+
+// TrashedSessionsByFilePath maps each trashed session stored for one of the
+// given source paths to its machine key. Sync leaves these rows in trash
+// without parsing them again, so archive reparse counts them as suppressed.
+func (d *DB) TrashedSessionsByFilePath(ctx context.Context, agent string, paths []string) (map[string]string, error) {
+	out := make(map[string]string)
+	for _, path := range paths {
+		rows, err := d.getReader().QueryContext(ctx, `SELECT id, machine FROM sessions INDEXED BY idx_sessions_file_path
+			WHERE file_path = ? AND agent = ? AND deleted_at IS NOT NULL`, path, agent)
+		if err != nil {
+			return nil, fmt.Errorf("listing trashed sessions for a source: %w", err)
+		}
+		for rows.Next() {
+			var id, machine string
+			if err := rows.Scan(&id, &machine); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = machine
+		}
+		err = errors.Join(rows.Err(), rows.Close())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
