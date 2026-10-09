@@ -2449,10 +2449,8 @@
   "tool_sequences_full_input_in_message": "完全な入力はメッセージ {ordinal} にあります。",
   "tool_sequences_full_result_in_message": "完全な結果はメッセージ {ordinal} にあります。",
   "tool_sequences_retry": "再試行",
-  "usage_all_projects": "すべてのプロジェクト",
   "usage_click_project": "クリックして {label} に絞り込み、ダブルクリックでグループとセッションを開く",
   "usage_click_project_hint": "クリックで選択、ダブルクリックまたは開くボタンで開きます。EnterとSpaceで選択。",
-  "usage_zoom_loading": "読み込み中...",
   "usage_click_to_focus": "クリックして {label} に絞り込む",
   "usage_click_to_focus_hint": "クリックして絞り込み、再クリックで解除"
 }

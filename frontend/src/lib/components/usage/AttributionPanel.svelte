@@ -171,7 +171,8 @@
   }
 
   function handleClick(event: MouseEvent, id: string) {
-    if (event.detail < 2) handleSelect(id);
+    // A second click opens a project instead of toggling it back.
+    if (event.detail < 2 || groupBy !== "project") handleSelect(id);
   }
 
   function handleKey(event: KeyboardEvent, id: string) {
@@ -195,7 +196,7 @@
 <section class="attribution-panel" aria-label={isTokenMode ? m.usage_tokens_attribution_title() : m.usage_cost_attribution_title()} tabindex="-1" bind:this={panel}>
   <div class="panel-header">
     {#if zoomedProject}
-      <Button surface="soft" label={`← ${m.usage_all_projects()}`} onclick={() => usage.setOpenProject(null)} />
+      <Button surface="soft" label={`← ${m.data_workspace_all_projects()}`} onclick={() => usage.setOpenProject(null)} />
       <h3 class="chart-title">{zoomedProject.label}</h3>
     {:else}
       <h3 class="chart-title">
@@ -257,7 +258,7 @@
   {#if zoomedProject && usage.errors.zoom}
     <div class="empty">{usage.errors.zoom}</div>
   {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
-    <div class="empty">{m.usage_zoom_loading()}</div>
+    <div class="empty">{m.subagent_inline_loading()}</div>
   {:else if rows.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}

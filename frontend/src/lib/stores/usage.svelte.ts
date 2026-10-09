@@ -699,9 +699,9 @@ class UsageStore {
   }
 
   toggleSelection(by: GroupBy, id: string): void {
-    const clear = by === "agent" ? sessions.filters.agent === id : this.isSelected(by, id);
+    const clear = this.isSelected(by, id);
     if (by === "agent") {
-      sessions.filters.agent = clear ? "" : id;
+      sessions.filters.agent = clear ? sessions.filters.agent.split(",").filter((agent) => agent !== id).join(",") : id;
       return;
     }
     if (by === "project") {
@@ -1040,13 +1040,12 @@ class UsageStore {
       loadComparison?: boolean;
       params?: UsageParams;
       contextParams?: UsageParams;
-      attributionParams?: UsageParams;
       recoverProjectScope?: boolean;
     } = {},
   ): Promise<LoadedUsageSummary | null> {
     const loadComparison = options.loadComparison ?? true;
     const recoverProjectScope = options.recoverProjectScope ?? true;
-    const attributionParams = options.attributionParams ?? this.attributionParams();
+    const attributionParams = this.attributionParams();
     const v = ++this.versions.summary;
     this.abortPanel("comparison");
     this.abortPanel("pairwise");
@@ -1181,8 +1180,9 @@ class UsageStore {
           this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
-          this.attributionSummary = null;
-          const restoredAttributionParams = this.attributionParams();
+          // The reference already holds this scope's full-window attribution.
+          this.attributionSummary = this.referenceSummary;
+          const restoredAttributionParams = this.attributionSummary ? undefined : this.attributionParams();
           if (restoredAttributionParams) {
             try {
               const restoredAttribution = await UsageService.getApiV1UsageSummary(restoredAttributionParams, { signal });

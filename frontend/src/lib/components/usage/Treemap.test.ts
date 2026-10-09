@@ -61,6 +61,7 @@ describe("Treemap", () => {
     expect(tiles[1]!.querySelector("rect")!.getAttribute("fill")).toBe("#ff7f0e");
     tiles[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     expect(onSelect).toHaveBeenCalledWith("beta");
+    tiles[0]!.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
     await unmount(component);
     const project = mount(Treemap, { target: document.body, props: { items, onSelect, onOpen } });
     await tick();
@@ -70,7 +71,7 @@ describe("Treemap", () => {
     tile.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
     tile.dispatchEvent(new MouseEvent("dblclick", { detail: 2, bubbles: true }));
     expect(onOpen).toHaveBeenCalledWith("alpha");
-    expect(onSelect.mock.calls).toEqual([["beta"], ["alpha"]]);
+    expect(onSelect.mock.calls).toEqual([["beta"], ["alpha"], ["alpha"]]);
     await unmount(project);
   });
 

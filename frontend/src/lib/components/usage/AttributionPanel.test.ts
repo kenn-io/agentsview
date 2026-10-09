@@ -212,7 +212,7 @@ describe("AttributionPanel selection", () => {
     await unmount(component);
   });
 
-  it.each(["model", "agent"] as const)("Enter selects a %s row and another click clears it", async (by) => {
+  it.each(["model", "agent"] as const)("Enter selects a %s row and a quick second click clears it", async (by) => {
     const full = by === "model" ? summaryWithModels() : summaryWithAgents(["claude", "codex"]);
     usage.summary = full;
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(full);
@@ -230,7 +230,7 @@ describe("AttributionPanel selection", () => {
     expect(document.querySelectorAll(".list-row")).toHaveLength(2);
     expect(usage.zoomedProject).toBeNull();
     expect([...document.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Open")).toBe(false);
-    row.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    row.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
     await tick();
     expect(row.getAttribute("aria-pressed")).toBe("false");
     await unmount(component);

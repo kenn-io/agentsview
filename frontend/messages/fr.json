@@ -2460,10 +2460,8 @@
   "tool_sequences_full_input_in_message": "L’entrée complète se trouve dans le message {ordinal}.",
   "tool_sequences_full_result_in_message": "Le résultat complet se trouve dans le message {ordinal}.",
   "tool_sequences_retry": "Réessayer",
-  "usage_all_projects": "Tous les projets",
   "usage_click_project": "Cliquer pour cibler {label}, double-cliquer pour ouvrir ses groupes et sessions",
   "usage_click_project_hint": "Cliquer pour sélectionner, double-cliquer ou Ouvrir pour ouvrir. Entrée et Espace sélectionnent.",
-  "usage_zoom_loading": "Chargement...",
   "usage_click_to_focus": "Cliquer pour cibler {label}",
   "usage_click_to_focus_hint": "Cliquer pour cibler, recliquer pour effacer"
 }

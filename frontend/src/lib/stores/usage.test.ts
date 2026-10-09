@@ -2166,7 +2166,7 @@ describe("UsageStore attribution focus", () => {
     restored.cancelInFlightReads();
   });
 
-  it("highlights both header agents, narrows to one, then clears the sole selection", async () => {
+  it("highlights both header agents, removes one, then clears the sole selection", async () => {
     const { usage } = await loadStore();
     const { sessions } = await import("./sessions.svelte.js");
     sessions.filters.agent = "claude,codex";
@@ -2174,8 +2174,8 @@ describe("UsageStore attribution focus", () => {
     expect(usage.isSelected("agent", "codex")).toBe(true);
     usage.toggleSelection("agent", "claude");
     await usage.fetchAll();
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].agent).toBe("claude");
-    usage.toggleSelection("agent", "claude");
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].agent).toBe("codex");
+    usage.toggleSelection("agent", "codex");
     await usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].agent).toBeUndefined();
     expect(usage.hasSelection("agent")).toBe(false);
@@ -2276,7 +2276,7 @@ describe("UsageStore attribution focus", () => {
     usage.cancelInFlightReads();
   });
 
-  it("restores full-window attribution after a successful selected brush followed by a failed brush", async () => {
+  it("restores full-window attribution offline after a successful selected brush followed by a failed brush", async () => {
     const { usage } = await loadStore();
     const full = usageSummary(12);
     full.projectTotals[0]!.cost = testMoney(8);
@@ -2286,8 +2286,9 @@ describe("UsageStore attribution focus", () => {
     brushed.projectTotals[0]!.cost = testMoney(1);
     brushed.projectTotals[1]!.cost = testMoney(2);
     usage.applyDateRange("2024-01-01", "2024-01-31");
+    let offline = false;
     usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
-      if (params.from === "2024-01-15") throw new Error("range request failed");
+      if (offline) throw new Error("range request failed");
       const response = structuredClone(params.from === "2024-01-08" ? brushed : full);
       if (params.project_key) response.projectTotals = response.projectTotals.filter((entry) => entry.project_key === params.project_key);
       return response;
@@ -2299,14 +2300,13 @@ describe("UsageStore attribution focus", () => {
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usage.attributionSummary?.projectTotals).toEqual(brushed.projectTotals);
     usageServiceMocks.getApiV1UsageSummary.mockClear();
+    offline = true;
     usage.setTimeRange("2024-01-15", "2024-01-21");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usage.errors.summary).toBe("range request failed");
     expect(usage.selectedTimeRange).toBeNull();
     expect(usage.summary?.projectTotals).toEqual([full.projectTotals[1]]);
     expect(usage.attributionSummary?.projectTotals).toEqual(full.projectTotals);
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0]).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }));
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].project_key).toBeUndefined();
     usage.cancelInFlightReads();
   });
 

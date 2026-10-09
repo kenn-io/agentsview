@@ -2378,10 +2378,8 @@
   "tool_sequences_full_input_in_message": "完整輸入在訊息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整結果在訊息 {ordinal} 中。",
   "tool_sequences_retry": "重試",
-  "usage_all_projects": "所有專案",
   "usage_click_project": "點擊聚焦 {label}，雙擊開啟其群組和工作階段",
   "usage_click_project_hint": "點擊選取，雙擊或使用開啟按鈕展開。Enter 和空白鍵選取。",
-  "usage_zoom_loading": "正在載入...",
   "usage_click_to_focus": "點擊聚焦 {label}",
   "usage_click_to_focus_hint": "點擊聚焦，再次點擊清除"
 }
