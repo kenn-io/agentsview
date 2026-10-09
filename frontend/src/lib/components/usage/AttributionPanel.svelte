@@ -55,7 +55,7 @@
     if (ids.some((other) => other !== id)) label.push(shortenId(id, ids));
     if (machines.length > 1) label.push(shortenId(row.machine ?? "", machines));
     return {
-      label: label.join(" · "),
+      label: label.filter(Boolean).join(" · "),
       title: [name(row), id === name(row) ? "" : id, row.machine].filter(Boolean).join(" · "),
     };
   }

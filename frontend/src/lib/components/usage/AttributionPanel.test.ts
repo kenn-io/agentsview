@@ -502,7 +502,7 @@ describe("AttributionPanel job groups", () => {
     expect(rows.map((row) => row.querySelector(".list-label")!.textContent)).toEqual([
       "Daily digest · abcdef-j",
       "Daily digest · abcdef-o",
-      "Other · ?",
+      "Other",
       "Ungrouped run",
       "Other · remainde",
       "Repeated run · hermes:",
