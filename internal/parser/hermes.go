@@ -382,7 +382,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		},
 	}
 
-	setHermesCronGroup(sess, sessionPlatform, HermesCronRunJob(sessionID))
+	setHermesCronGroup(sess, sessionPlatform, hermesCronRunJob(sessionID))
 	return sess, messages, nil
 }
 
@@ -573,7 +573,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 		},
 	}
 
-	setHermesCronGroup(sess, sessionPlatform, HermesCronRunJob(sessionID))
+	setHermesCronGroup(sess, sessionPlatform, hermesCronRunJob(sessionID))
 	return sess, messages, nil
 }
 
@@ -1047,7 +1047,9 @@ func applyHermesStateMetadata(
 		sess.ParentSessionID = "hermes:" + ss.parentSessionID
 		sess.RelationshipType = RelContinuation
 	}
-	setHermesCronGroup(sess, ss.source, ss.cronJob)
+	if ss.source != "" {
+		setHermesCronGroup(sess, ss.source, ss.cronJob)
+	}
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
 	sess.SessionName = ss.title
@@ -1500,7 +1502,7 @@ func hermesCronJobID(id string, parent func(string) string) string {
 	seen := make(map[string]bool)
 	for id != "" && !seen[id] {
 		seen[id] = true
-		if job := HermesCronRunJob(id); job != "" {
+		if job := hermesCronRunJob(id); job != "" {
 			return job
 		}
 		id = parent(id)
@@ -1509,15 +1511,20 @@ func hermesCronJobID(id string, parent func(string) string) string {
 }
 
 func setHermesCronGroup(sess *ParsedSession, platform, job string) {
+	if platform == "" {
+		return
+	}
 	if platform != "cron" {
+		sess.GroupKey = ""
+		sess.KeepStoredGroupKey = false
 		return
 	}
 	sess.GroupKey = job
 	sess.KeepStoredGroupKey = job == ""
 }
 
-// HermesCronRunJob returns the job ID from a native cron run ID, or empty for other sessions.
-func HermesCronRunJob(id string) string {
+// hermesCronRunJob returns the job ID from a native cron run ID, or empty for other sessions.
+func hermesCronRunJob(id string) string {
 	if match := hermesCronSessionID.FindStringSubmatch(id); match != nil {
 		return match[1]
 	}

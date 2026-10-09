@@ -8,8 +8,6 @@ import (
 	"log"
 	"strings"
 	"time"
-
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 type sqlContextExecer interface {
@@ -1945,39 +1943,6 @@ func reconcileTranscriptRevisionsTx(
 	return err
 }
 
-// backfillCopiedHermesCronGroups recovers jobs whose source is unavailable during resync.
-func backfillCopiedHermesCronGroups(ctx context.Context, tx *sql.Tx, tempIDsTable string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id, agent FROM main.sessions
-		WHERE group_key = '' AND agent IN (?, ?)
-		AND id IN (SELECT id FROM `+tempIDsTable+`)`, parser.AgentHermes, parser.AgentAugureDesktop)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	groups := make(map[string]string)
-	for rows.Next() {
-		var id, agent string
-		if err := rows.Scan(&id, &agent); err != nil {
-			return err
-		}
-		if job := parser.HermesCronRunJob(strings.TrimPrefix(id, agent+":")); job != "" {
-			groups[id] = job
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for id, job := range groups {
-		if _, err := tx.ExecContext(ctx, `UPDATE main.sessions SET group_key = ? WHERE id = ?`, job, id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func copySessionDataForIDs(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -1994,9 +1959,6 @@ func copySessionDataForIDs(
 			"WHERE id IN (SELECT id FROM "+tempIDsTable+")",
 	); err != nil {
 		return fmt.Errorf("copying sessions: %w", err)
-	}
-	if err := backfillCopiedHermesCronGroups(ctx, tx, tempIDsTable); err != nil {
-		return fmt.Errorf("backfilling copied Hermes cron groups: %w", err)
 	}
 
 	if oldDBHasTable(ctx, tx, "claude_subagent_sources") {

@@ -2946,14 +2946,19 @@ schemas keep their existing ordering behavior.
   as unnamed and stores `group_key` as the job ID. Usage groups by project,
   machine and job ID. Names derive from the recorded `session_name` at read
   time; usage-only archives show job IDs because their titles are discarded.
-  Resync copies recover missing job IDs from archived Hermes and Augure Desktop
-  run IDs with the shared parser recognizer. Continuations without stored job
-  IDs remain ungrouped.
+  Resync copies preserve stored job IDs, including imported sessions. Archived
+  runs whose sources were gone before upgrading stay individual sessions unless
+  they already have a stored job ID.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
-  recognized. Transcript projects use `platform`. Cron continuations follow
-  `state.db` parent links with cycle detection; transcript runs group by their run
-  ID only. All cron runs retain the `hermes-cron` project.
+  recognized. Transcript projects use `platform`. A non-empty `state.db` source
+  takes precedence over transcript platform for grouping as well as project.
+  Explicit non-cron sources clear the job and its retention flag; absent sources
+  keep transcript evidence. Parser and sync fixtures reverified on 2026-10-09
+  cover cron JSON and JSONL transcripts with CLI state rows for Hermes and Augure
+  Desktop. Cron continuations follow `state.db` parent links with cycle detection;
+  transcript runs group by their run ID only. All cron runs retain the
+  `hermes-cron` project.
   Reverified on 2026-10-09: `delete_session` in
   [hermes_state_sessions.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_sessions.py)
   and `prune_sessions` in

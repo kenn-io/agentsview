@@ -969,6 +969,51 @@ func TestHermesCronTranscriptProjects(t *testing.T) {
 				assert.Equal(t, tc.group, sess.GroupKey)
 				assert.Equal(t, tc.keepStored, sess.KeepStoredGroupKey)
 				assert.Empty(t, sess.ParentSessionID)
+				for _, agent := range []AgentType{AgentHermes, AgentAugureDesktop} {
+					for _, source := range []string{"cron", "cli", ""} {
+						t.Run(string(agent)+"/state="+source, func(t *testing.T) {
+							root := t.TempDir()
+							createHermesStateDB(t, root)
+							conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+							require.NoError(t, err)
+							_, err = conn.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions`)
+							require.NoError(t, err)
+							_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, started_at) VALUES (?, ?, 1791374400)`, tc.id, source)
+							require.NoError(t, err)
+							require.NoError(t, conn.Close())
+							sessionsDir := filepath.Join(root, "sessions")
+							require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+							require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, name), []byte(body), 0o644))
+							provider, ok := NewProvider(agent, ProviderConfig{Roots: []string{root}, Machine: "local"})
+							require.True(t, ok)
+							sources, err := provider.Discover(t.Context())
+							require.NoError(t, err)
+							require.Len(t, sources, 1)
+							outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+							require.NoError(t, err)
+							require.Len(t, outcome.Results, 1)
+							parsed := outcome.Results[0].Result
+							assert.Equal(t, string(agent)+":"+tc.id, parsed.Session.ID)
+							require.Len(t, parsed.Messages, 1)
+							assert.Equal(t, "hello", parsed.Messages[0].Content)
+							wantGroup, wantKeep := tc.group, tc.keepStored
+							if source == "cli" {
+								wantGroup, wantKeep = "", false
+								assert.Equal(t, string(agent)+"-cli", parsed.Session.Project)
+							} else if source == "cron" {
+								wantGroup, wantKeep = "job-1", false
+								assert.Equal(t, string(agent)+"-cron", parsed.Session.Project)
+								if tc.id == "child" {
+									wantGroup, wantKeep = "", true
+								}
+							} else {
+								assert.Equal(t, string(agent)+"-"+tc.source, parsed.Session.Project)
+							}
+							assert.Equal(t, wantGroup, parsed.Session.GroupKey)
+							assert.Equal(t, wantKeep, parsed.Session.KeepStoredGroupKey)
+						})
+					}
+				}
 			})
 		}
 	}

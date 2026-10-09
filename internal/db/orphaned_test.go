@@ -458,29 +458,26 @@ func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 	require.NoError(t, err, "recreate temp table after cleanup")
 }
 
-func TestCopyOrphanedDataBackfillsHermesCronGroups(t *testing.T) {
+func TestCopyOrphanedDataPreservesHermesCronGroups(t *testing.T) {
 	for _, legacySchema := range []bool{false, true} {
 		t.Run(fmt.Sprintf("legacy schema=%t", legacySchema), func(t *testing.T) {
 			ctx := t.Context()
 			srcPath := filepath.Join(t.TempDir(), "old.db")
 			src := testDBAtPath(t, srcPath, "src")
 			cases := []struct {
-				id, agent, stored, want string
+				id, agent, stored string
 			}{
-				{"hermes:cron_job-a_20261009_120000", "hermes", "", "job-a"},
-				{"hermes:cron_job-a_20261009_130000", "hermes", "", "job-a"},
-				{"augure-desktop:cron_job.b-c_20261009_120000", "augure-desktop", "", "job.b-c"},
-				{"hermes:20261009_120000_abcdef", "hermes", "", ""},
-				{"augure-desktop:20261009_120000_abcdef", "augure-desktop", "", ""},
-				{"hermes:cron_job-a_20261009_120000_continuation", "hermes", "", ""},
-				{"hermes:cron_job-a_20261009_12000", "hermes", "", ""},
-				{"claude:cron_job-a_20261009_120000", "claude", "", ""},
+				{"hermes:cron_job-a_20261009_120000", "hermes", ""},
+				{"augure-desktop:cron_job.b-c_20261009_120000", "augure-desktop", ""},
+				{"imported:hermes:cron_job-a_20261009_120000", "hermes", ""},
 			}
 			if !legacySchema {
-				cases = append(cases, struct{ id, agent, stored, want string }{
-					"hermes:cron_job-a_20261009_140000", "hermes", "retained-job", "retained-job",
-				}, struct{ id, agent, stored, want string }{
-					"hermes:20261009_140000_abcdef", "hermes", "retained-job", "retained-job",
+				cases = append(cases, struct{ id, agent, stored string }{
+					"hermes:cron_job-a_20261009_140000", "hermes", "retained-job",
+				}, struct{ id, agent, stored string }{
+					"hermes:20261009_140000_abcdef", "hermes", "retained-job",
+				}, struct{ id, agent, stored string }{
+					"imported:augure-desktop:cron_job-a_20261009_140000", "augure-desktop", "retained-job",
 				})
 			}
 			for _, tc := range cases {
@@ -502,7 +499,7 @@ func TestCopyOrphanedDataBackfillsHermesCronGroups(t *testing.T) {
 				session, err := dst.GetSession(ctx, tc.id)
 				require.NoError(t, err)
 				require.NotNil(t, session)
-				assert.Equal(t, tc.want, session.GroupKey, tc.id)
+				assert.Equal(t, tc.stored, session.GroupKey, tc.id)
 			}
 		})
 	}

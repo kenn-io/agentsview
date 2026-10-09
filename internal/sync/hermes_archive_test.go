@@ -120,30 +120,54 @@ func TestHermesProviderFingerprintChangesWhenTranscriptRemoved(t *testing.T) {
 }
 
 func TestHermesArchiveStoresCronGroups(t *testing.T) {
-	root := t.TempDir()
-	stateDB := writeHermesArchiveStateDB(t, root)
-	conn, err := sql.Open("sqlite3", stateDB)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `
-		INSERT INTO sessions (id, source, title, started_at, ended_at, message_count)
-		VALUES ('cron_job-a_20261008_120000', 'cron', 'Daily digest · 2026-10-08 12:00:00', 1791460800, 1791460860, 1);
-		DELETE FROM sessions WHERE id = 'child';
-		INSERT INTO messages (session_id, role, content, timestamp)
-		VALUES ('cron_job-a_20261008_120000', 'user', 'Generate digest', 1791460801);
-	`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}},
-		Machine:   "local",
-	})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	stored, err := database.GetSession(t.Context(), "hermes:cron_job-a_20261008_120000")
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Equal(t, "job-a", stored.GroupKey)
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, format := range []string{"json", "jsonl"} {
+			for _, id := range []string{"cron_job-a_20261008_120000", "child"} {
+				t.Run(string(agent)+"/"+format+"/"+id, func(t *testing.T) {
+					root := t.TempDir()
+					stateDB := writeHermesArchiveStateDB(t, root)
+					conn, err := sql.Open("sqlite3", stateDB)
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, conn.Close()) })
+					_, err = conn.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions`)
+					require.NoError(t, err)
+					_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, title, started_at, ended_at, message_count)
+						VALUES (?, 'cron', 'Daily digest · 2026-10-08 12:00:00', 1791460800, 1791460860, 1)`, id)
+					require.NoError(t, err)
+					name := "session_" + id + ".json"
+					body := `{"platform":"cron","messages":[{"role":"user","content":"Generate digest"}]}`
+					if format == "jsonl" {
+						name = id + ".jsonl"
+						body = "{\"role\":\"session_meta\",\"platform\":\"cron\"}\n{\"role\":\"user\",\"content\":\"Generate digest\"}\n"
+					}
+					sessionsDir := filepath.Join(root, "sessions")
+					require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+					require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, name), []byte(body), 0o644))
+					database := dbtest.OpenTestDB(t)
+					sessionID := string(agent) + ":" + id
+					require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: sessionID, Agent: string(agent), Project: "hermes-cron", GroupKey: "job-a"}))
+					engine := NewEngine(t.Context(), database, EngineConfig{
+						AgentDirs: map[parser.AgentType][]string{agent: {root}},
+						Machine:   "local",
+					})
+					t.Cleanup(engine.Close)
+					require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+					stored, err := database.GetSession(t.Context(), sessionID)
+					require.NoError(t, err)
+					require.NotNil(t, stored)
+					assert.Equal(t, "job-a", stored.GroupKey)
+					_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET source = 'cli' WHERE id = ?`, id)
+					require.NoError(t, err)
+					require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, true))
+					stored, err = database.GetSession(t.Context(), sessionID)
+					require.NoError(t, err)
+					require.NotNil(t, stored)
+					assert.Empty(t, stored.GroupKey)
+					assert.Equal(t, string(agent)+"-cli", stored.Project)
+				})
+			}
+		}
+	}
 }
 
 func TestHermesCronContinuationKeepsGroupAfterRootPrunedAndResync(t *testing.T) {

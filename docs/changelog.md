@@ -15,9 +15,10 @@ The latest release is
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on
   hosted PostgreSQL archives. Usage-only archives show job IDs because their
-  titles are discarded. Archived Hermes and Augure Desktop cron runs recover
-  job IDs from session IDs when their sources are gone. Continuations without
-  a stored job ID appear as individual sessions.
+  titles are discarded. Archived Hermes and Augure Desktop cron runs whose
+  sources were gone before upgrading stay individual sessions unless they
+  already have a stored job ID. A non-empty source in `state.db` takes precedence
+  over the transcript's platform when grouping runs.
   The first sync after upgrading rebuilds the archive once to populate groups.
   Allow for a one-time re-push of every session to PostgreSQL and ClickHouse
   after upgrading. For DuckDB mirrors, run `agentsview duckdb push --full` once.
