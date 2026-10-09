@@ -1,4 +1,5 @@
 export const SERVER_URL_KEY = "agentsview-server-url";
+export const SERVER_URL_REVISION_KEY = "agentsview-server-url-revision";
 /** Dispatched on window when this tab changes the selected server. */
 export const SERVER_URL_CHANGE_EVENT = "agentsview:server-url-change";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
@@ -24,7 +25,10 @@ export function setServerUrl(url: string): void {
   } else {
     localStorage.removeItem(SERVER_URL_KEY);
   }
-  if (url !== previous) window.dispatchEvent(new Event(SERVER_URL_CHANGE_EVENT));
+  if (url !== previous) {
+    localStorage.setItem(SERVER_URL_REVISION_KEY, `${Date.now()}:${Math.random()}`);
+    window.dispatchEvent(new Event(SERVER_URL_CHANGE_EVENT));
+  }
 }
 
 function authTokenKey(): string {

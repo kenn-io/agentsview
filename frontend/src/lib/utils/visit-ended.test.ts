@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { SERVER_URL_KEY, setAuthToken, setServerUrl } from "../api/runtime.js";
+import {
+  SERVER_URL_KEY,
+  SERVER_URL_REVISION_KEY,
+  setAuthToken,
+  setServerUrl,
+} from "../api/runtime.js";
 import { setupVisitEndedReporting } from "./visit-ended.js";
 
 const REMOTE = "https://example.com/remote";
@@ -13,6 +18,7 @@ function eventsUrl(server: string): string {
 function storeServer(server: string): void {
   if (server) localStorage.setItem(SERVER_URL_KEY, server);
   else localStorage.removeItem(SERVER_URL_KEY);
+  localStorage.setItem(SERVER_URL_REVISION_KEY, String(Math.random()));
 }
 
 function storageEventFromOtherTab(key: string | null, newValue: string | null): void {
@@ -71,7 +77,6 @@ describe("visit ended reporting", () => {
     [1_799_999, "5_to_30m"],
     [1_800_000, "over_30m"],
   ])("reports %i visible milliseconds as %s once on close", (ms, bucket) => {
-    const timeout = vi.spyOn(AbortSignal, "timeout");
     stop = setupVisitEndedReporting();
     advance(ms);
     close();
@@ -81,14 +86,39 @@ describe("visit ended reporting", () => {
       LOCAL_EVENTS_URL,
       expect.objectContaining({
         keepalive: true,
-        signal: expect.any(AbortSignal),
         body: JSON.stringify({
           event: "visit_ended",
           properties: { surface: "web", duration_bucket: bucket },
         }),
       }),
     );
-    expect(timeout).toHaveBeenCalledWith(10_000);
+  });
+
+  it("delivers and resets visits when AbortSignal.timeout is unavailable", () => {
+    vi.stubGlobal("AbortSignal", { timeout: undefined });
+    stop = setupVisitEndedReporting();
+    advance(120_000);
+    close();
+    close();
+    reopen();
+    advance(30_000);
+    close();
+    expect(buckets()).toEqual(["1_to_5m", "under_1m"]);
+    expect(fetch.mock.calls.every(([, init]) => init?.keepalive)).toBe(true);
+  });
+
+  it("keeps the replacement visit after queued server changes from a cached page", () => {
+    stop = setupVisitEndedReporting();
+    advance(120_000);
+    close();
+    storeServer(REMOTE);
+    storeServer("");
+    reopen();
+    storageEventFromOtherTab(SERVER_URL_KEY, REMOTE);
+    storageEventFromOtherTab(SERVER_URL_KEY, null);
+    advance(30_000);
+    close();
+    expect(buckets()).toEqual(["1_to_5m", "under_1m"]);
   });
 
   it("sums twenty visible minutes across short tab switches", () => {
@@ -139,6 +169,8 @@ describe("visit ended reporting", () => {
       from: REMOTE,
       to: REMOTE,
       run: () => {
+        storeServer("");
+        storeServer(REMOTE);
         storageEventFromOtherTab(SERVER_URL_KEY, null);
         storageEventFromOtherTab(SERVER_URL_KEY, REMOTE);
       },
@@ -148,6 +180,8 @@ describe("visit ended reporting", () => {
       from: REMOTE,
       to: REMOTE,
       run: () => {
+        localStorage.clear();
+        storeServer(REMOTE);
         storageEventFromOtherTab(null, null);
         storageEventFromOtherTab(SERVER_URL_KEY, REMOTE);
       },
@@ -271,7 +305,6 @@ describe("visit ended reporting", () => {
     advance(30_000);
     close();
     expect(buckets()).toEqual(["1_to_5m", "under_1m"]);
-    expect(fetch.mock.calls[0]![1]?.signal).not.toBe(fetch.mock.calls[1]![1]?.signal);
   });
 
   it("sends nothing for hidden-only pages", () => {

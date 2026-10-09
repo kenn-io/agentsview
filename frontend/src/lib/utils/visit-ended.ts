@@ -1,8 +1,8 @@
 import {
   getGeneratedBase,
-  getServerUrl,
   SERVER_URL_CHANGE_EVENT,
   SERVER_URL_KEY,
+  SERVER_URL_REVISION_KEY,
 } from "../api/runtime.js";
 import { reportTelemetry } from "./telemetry.js";
 
@@ -20,7 +20,7 @@ export function setupVisitEndedReporting(): () => void {
   let visibleMs = 0;
   let started = document.hidden ? undefined : performance.now();
   let destination = started === undefined ? undefined : getGeneratedBase();
-  let selection = getServerUrl();
+  let revision = localStorage.getItem(SERVER_URL_REVISION_KEY);
   let invalid = false;
   let hiddenTimer: ReturnType<typeof setTimeout> | undefined;
   let hiddenAt: number | undefined;
@@ -34,11 +34,16 @@ export function setupVisitEndedReporting(): () => void {
     clearTimeout(hiddenTimer);
     hiddenAt = undefined;
     pause();
-    if (visibleMs > 0 && !invalid && destination === getGeneratedBase()) {
+    if (
+      visibleMs > 0 &&
+      !invalid &&
+      destination === getGeneratedBase() &&
+      revision === localStorage.getItem(SERVER_URL_REVISION_KEY)
+    ) {
       reportTelemetry(
         "visit_ended",
         { surface: "web", duration_bucket: durationBucket(visibleMs) },
-        { keepalive: true, signal: AbortSignal.timeout(10_000) },
+        { keepalive: true },
       );
     }
     visibleMs = 0;
@@ -53,21 +58,27 @@ export function setupVisitEndedReporting(): () => void {
     if (started === undefined) {
       if (destination === undefined) {
         destination = getGeneratedBase();
-        selection = getServerUrl();
+        revision = localStorage.getItem(SERVER_URL_REVISION_KEY);
       }
       started = performance.now();
     }
   };
-  const serverChanged = (server: string) => {
-    if (destination !== undefined && server !== selection) invalid = true;
+  const serverChanged = () => {
+    // Queued storage events can predate this visit's shared revision.
+    if (
+      destination !== undefined &&
+      (destination !== getGeneratedBase() ||
+        revision !== localStorage.getItem(SERVER_URL_REVISION_KEY))
+    ) {
+      invalid = true;
+    }
   };
-  const localServerChange = () => serverChanged(getServerUrl());
   const storage = (event: StorageEvent) => {
     if (
       event.storageArea === localStorage &&
       (event.key === SERVER_URL_KEY || event.key === null)
     ) {
-      serverChanged(event.newValue ?? "");
+      serverChanged();
     }
   };
   const visibility = () => {
@@ -84,13 +95,13 @@ export function setupVisitEndedReporting(): () => void {
   window.addEventListener("pagehide", end);
   window.addEventListener("pageshow", resume);
   window.addEventListener("storage", storage);
-  window.addEventListener(SERVER_URL_CHANGE_EVENT, localServerChange);
+  window.addEventListener(SERVER_URL_CHANGE_EVENT, serverChanged);
   return () => {
     clearTimeout(hiddenTimer);
     document.removeEventListener("visibilitychange", visibility);
     window.removeEventListener("pagehide", end);
     window.removeEventListener("pageshow", resume);
     window.removeEventListener("storage", storage);
-    window.removeEventListener(SERVER_URL_CHANGE_EVENT, localServerChange);
+    window.removeEventListener(SERVER_URL_CHANGE_EVENT, serverChanged);
   };
 }
