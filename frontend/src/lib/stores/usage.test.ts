@@ -999,6 +999,45 @@ describe("UsageStore session filter params", () => {
     }
   });
 
+  it("times the full-window attribution request with the other summary steps", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      const { usage } = await loadStore();
+      usage.applyDateRange("2026-06-04", "2026-06-18");
+      usage.summary = usageSummary(15);
+      usage.toggles.attribution.groupBy = "project";
+      usage.selectedProjectKey = "pl1:sha256:alpha";
+      usage.selectedTimeRange = { from: "2026-06-07", to: "2026-06-10" };
+      // The unselected full-window response lands last.
+      const timedSummary = async (params: { from?: string; project_key?: string }) => {
+        const sentAt = performance.now();
+        const data = usageSummary(3);
+        await Promise.resolve();
+        vi.advanceTimersByTime(params.from === "2026-06-04" && !params.project_key ? 90 : 20);
+        const at = performance.now();
+        attachResponseTiming(data, { sentAt, headersAt: at, bodyAt: at });
+        return data;
+      };
+      for (let i = 0; i < 4; i++) usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(timedSummary);
+
+      await usage.fetchAll({ preserveTimeRange: true });
+
+      expect(usage.lastQuerySteps.map((step) => step.name).slice(0, 4)).toEqual([
+        "summary",
+        "contextSummary",
+        "attributionSummary",
+        "referenceSummary",
+      ]);
+      const step = (name: string) => usage.lastQuerySteps.find((entry) => entry.name === name)!;
+      const referenceBody = step("referenceSummary").segments!.find((segment) => segment.phase === "download")!;
+      expect(step("summary").segments!.find((segment) => segment.phase === "apply")!.startMs).toBe(
+        referenceBody.startMs + referenceBody.durationMs,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not mark cached partial refresh failures as current", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

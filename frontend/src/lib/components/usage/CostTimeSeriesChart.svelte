@@ -107,12 +107,11 @@
     keys: string[];
     maxY: number;
     labels: Record<string, string>;
-    grouped: boolean;
   }
 
   function buildSeries(summary: UsageSummaryResponse | null): SeriesData {
     if (!summary || summary.daily.length === 0) {
-      return { points: [], keys: [], maxY: 0, labels: {}, grouped: false };
+      return { points: [], keys: [], maxY: 0, labels: {} };
     }
     const daily = fillMissingDailyEntries(summary);
 
@@ -166,7 +165,7 @@
     // If only one key or few keys, no need for "Other".
     if (totals.size === 0) {
       if (hasBreakdownData) {
-        return { points: [], keys: [], maxY: 0, labels, grouped: true };
+        return { points: [], keys: [], maxY: 0, labels };
       }
       const points = daily.map((d) => ({
         date: d.date,
@@ -181,7 +180,7 @@
       for (const pt of points) {
         if (pt.values.total > maxY) maxY = pt.values.total;
       }
-      return { points, keys: ["total"], maxY: maxY || 1, labels, grouped: false };
+      return { points, keys: ["total"], maxY: maxY || 1, labels };
     }
 
     // Pick top N by total value, group the rest as "Other".
@@ -247,7 +246,7 @@
       if (stack > maxY) maxY = stack;
     }
 
-    return { points, keys, maxY: maxY || 1, labels, grouped: true };
+    return { points, keys, maxY: maxY || 1, labels };
   }
 
   const seriesData = $derived(buildSeries(usage.timeSeriesSummary));
@@ -677,7 +676,7 @@
   {#if seriesData.points.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    {#if legendData.grouped}
+    {#if legendData.keys.length > 1}
       <div class="legend">
         {#each legendKeys as key (key)}
           <span

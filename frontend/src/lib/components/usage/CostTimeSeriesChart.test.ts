@@ -520,6 +520,21 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  it("hides the legend for a single unselected series", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary = usageSummary([
+      modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
+      modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
+    ]);
+
+    const component = mountChart();
+    await tick();
+
+    expect(document.querySelectorAll("path.lc-area-path")).toHaveLength(1);
+    expect(document.querySelector(".legend")).toBeNull();
+    unmount(component);
+  });
+
   it("shows a selected series outside the unselected top ten in Other's slot", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     const models = Array.from({ length: 12 }, (_, index) => ({

@@ -20,11 +20,12 @@ type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions" | "zoom"
 // Steps of a full refresh in execution order; the breakdown follows it. The
 // window summary is the second summary request made while a time range is
 // selected on the chart.
-type UsageStep = UsagePanel | "contextSummary" | "attributionSummary";
+type UsageStep = UsagePanel | "contextSummary" | "attributionSummary" | "referenceSummary";
 const USAGE_STEP_ORDER: readonly UsageStep[] = [
   "summary",
   "contextSummary",
   "attributionSummary",
+  "referenceSummary",
   "topSessions",
   "zoom",
   "comparison",
@@ -1064,6 +1065,9 @@ class UsageStore {
       ? this.liveQuery.start("contextSummary", started)
       : 0;
     const liveAttributionStep = attributionParams ? this.liveQuery.start("attributionSummary", started) : 0;
+    // Unbrushed, the attribution request already covers the full window.
+    const referenceParams = attributionParams && options.contextParams ? { ...attributionParams, from: options.contextParams.from, to: options.contextParams.to } : undefined;
+    const liveReferenceStep = referenceParams ? this.liveQuery.start("referenceSummary", started) : 0;
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const params = options.params ?? this.baseParams();
@@ -1072,8 +1076,6 @@ class UsageStore {
       let contextData: UsageSummaryResponse | null = null;
       let attributionData: UsageSummaryResponse | null = null;
       let referenceData: UsageSummaryResponse | null = null;
-      // Unbrushed, the attribution request already covers the full window.
-      const referenceParams = attributionParams && contextParams ? { ...attributionParams, from: contextParams.from, to: contextParams.to } : undefined;
       if (!contextParams && !attributionParams) {
         data = await UsageService.getApiV1UsageSummary(params, { signal });
       } else {
@@ -1092,7 +1094,7 @@ class UsageStore {
         // Both responses are applied together, so each request's apply
         // phase starts once the later body has arrived; the earlier one
         // shows a gap while it waited for its sibling.
-        const bodies = [data, contextData, attributionData]
+        const bodies = [data, contextData, attributionData, referenceData]
           .map((body) => responseTimingOf(body)?.bodyAt)
           .filter((at): at is number => at !== undefined);
         const applyStartedAt = bodies.length > 0 ? Math.max(...bodies) : undefined;
@@ -1108,6 +1110,7 @@ class UsageStore {
             attributionData,
             applyStartedAt,
           );
+        if (referenceData) this.noteStep("referenceSummary", liveReferenceStep, started, referenceData, applyStartedAt);
         this.isTimeRangeSummaryProvisional = false;
         if (contextData !== null) {
           this.timeSeriesContextSummary = contextData;
@@ -1202,6 +1205,7 @@ class UsageStore {
       this.liveQuery.abandon(liveStep);
       this.liveQuery.abandon(liveContextStep);
       this.liveQuery.abandon(liveAttributionStep);
+      this.liveQuery.abandon(liveReferenceStep);
       this.clearAbortSignal("summary", signal);
       if (this.versions.summary === v) {
         this.loading.summary = false;
