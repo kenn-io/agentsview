@@ -20,7 +20,7 @@ func (s *Server) handleChromeExtension(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() || strings.HasSuffix(path, ".test.ts") {
+		if entry.IsDir() {
 			return nil
 		}
 		data, err := fs.ReadFile(s.spaFS, path)

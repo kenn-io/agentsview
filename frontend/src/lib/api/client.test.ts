@@ -106,7 +106,6 @@ describe("syncClaudeAI browser relay", () => {
       { headers: { "Content-Type": "text/event-stream" } },
     );
     const host: BrowserHost = {
-      help: () => "",
       connect: vi.fn(),
       close: vi.fn().mockResolvedValue(undefined),
       fetch: vi.fn().mockResolvedValue({ status, body: "browser response", retryAfter: "12" }),

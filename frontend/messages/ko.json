@@ -2380,7 +2380,7 @@
   "tool_sequences_retry": "다시 시도",
   "import_claude_connect": "로그인",
   "import_claude_sync": "동기화",
-  "import_claude_help": "이메일 코드로 로그인한 후 창을 닫고 동기화를 누르세요. Google 로그인에는 브라우저 호스트가 필요합니다.",
+  "import_claude_help": "이메일 코드로 로그인한 후 창을 닫고 동기화를 누르세요. Google로 로그인하려면 확장 프로그램이 설치된 Chrome에서 AgentsView를 사용하세요.",
   "import_claude_help_chrome": "이 탭에서 도구 모음의 AgentsView 버튼을 클릭한 다음 동기화를 클릭하세요. 동기화는 Chrome의 Claude.ai 로그인을 사용합니다.",
   "import_claude_chrome_setup": "다운로드한 파일의 압축을 풀고 chrome://extensions를 열어 개발자 모드를 켠 다음 압축해제된 확장 프로그램을 로드합니다를 클릭하고 압축을 푼 폴더를 선택하세요. 이 탭을 새로고침하세요.",
   "import_claude_chrome_download": "Chrome 확장 프로그램 다운로드",

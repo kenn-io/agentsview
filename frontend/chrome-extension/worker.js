@@ -35,6 +35,10 @@ async function loadedTab(id) {
 async function request({ method, path }, sender) {
   const key = String(sender.tab?.id);
   const consent = await chrome.storage.session.get(key);
+  if (method === "revoke") {
+    if (sender.documentId && consent[key] === sender.documentId) await chrome.storage.session.remove(key);
+    return null;
+  }
   if (!sender.documentId || consent[key] !== sender.documentId) {
     throw new Error("Click the AgentsView toolbar button on this tab to allow Claude.ai Sync.");
   }

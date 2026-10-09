@@ -51,7 +51,7 @@
 
   async function connect() {
     try { if (host) await connectClaudeAI(host); }
-    catch (e) { error = String(e); }
+    catch (e) { error = e instanceof Error ? e.message : m.import_failed(); }
   }
 
   async function sync() {
@@ -350,7 +350,7 @@
       {#if canSync}
         <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing} onclick={connect} />
         <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing} onclick={sync} />
-        <p class="hint">{host?.help()}</p>
+        <p class="hint">{syncState.isDesktop ? m.import_claude_help() : m.import_claude_help_chrome()}</p>
       {:else if canSetupChrome}
         <p class="hint">
           <a href={`${getGeneratedBase()}/chrome-extension.zip`} download>{m.import_claude_chrome_download()}</a>

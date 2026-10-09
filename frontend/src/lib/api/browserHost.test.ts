@@ -57,17 +57,11 @@ describe("browser host discovery", () => {
     await expect(getBrowserHost()!.connect()).resolves.toBeNull();
   });
 
-  it("gives Chrome toolbar instructions and closes locally", async () => {
+  it("closes locally in Chrome", async () => {
     document.documentElement.dataset.agentsviewClaudeHost = "chrome";
     const post = vi.spyOn(window, "postMessage");
     const host = getBrowserHost()!;
-    expect(host.help()).toBe("Click the AgentsView toolbar button on this tab, then Sync. Sync uses Chrome's Claude.ai sign-in.");
     await expect(host.close()).resolves.toBeUndefined();
     expect(post).not.toHaveBeenCalled();
-  });
-
-  it("gives desktop email-code instructions", () => {
-    vi.stubGlobal("__TAURI__", { core: { invoke: vi.fn() } });
-    expect(getBrowserHost()!.help()).toContain("email code");
   });
 });
