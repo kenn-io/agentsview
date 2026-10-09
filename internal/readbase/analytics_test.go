@@ -28,8 +28,9 @@ func (b analyticsFixtureBackend) MessageScope(context.Context, []string, db.Anal
 	return b.scope, b.err
 }
 
-func (b analyticsFixtureBackend) FilteredModels(context.Context, []string, db.AnalyticsFilter) ([]string, error) {
-	return []string{"selected"}, nil
+func (b analyticsFixtureBackend) VisitModelTimes(ctx context.Context, ids []string, emit func(model, timestamp string)) error {
+	emit("selected", "2026-01-05T10:00:00Z")
+	return nil
 }
 
 func (b analyticsFixtureBackend) HeatmapSQL(db.AnalyticsFilter, string) (string, []any) {

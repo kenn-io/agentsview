@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"database/sql"
+	"go.kenn.io/agentsview/internal/readbase"
 	"slices"
 	"testing"
 
@@ -47,7 +48,7 @@ func TestKeptActivityUsageRoundTrip(t *testing.T) {
 }
 
 func keptTestRow(session, source, ts string, ordinal int64, message, request string, output int) clickSessionUsageOrderedRow {
-	parsed, ok := parseAnalyticsTime(ts)
+	parsed, ok := readbase.ParseAnalyticsTime(ts)
 	return clickSessionUsageOrderedRow{
 		scan: clickActivityReportUsageRow{
 			sessionID: session, source: source, model: "model-a", ts: ts, pricingTS: ts,

@@ -108,7 +108,7 @@ func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, 
 
 	b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
 	if f.ActiveSince != "" {
-		if parsed, ok := parseAnalyticsTime(f.ActiveSince); ok {
+		if parsed, ok := readbase.ParseAnalyticsTime(f.ActiveSince); ok {
 			f.ActiveSince = parsed.Format(time.RFC3339)
 		}
 	}
@@ -175,68 +175,8 @@ func duckAnalyticsMessageTimeExists(
 		strings.Join(preds, " AND ") + ")", args
 }
 
-func duckAnalyticsTimeMatches(t time.Time, f db.AnalyticsFilter) bool {
-	if f.DayOfWeek != nil {
-		dow := (int(t.Weekday()) + 6) % 7
-		if dow != *f.DayOfWeek {
-			return false
-		}
-	}
-	if f.Hour != nil && t.Hour() != *f.Hour {
-		return false
-	}
-	return true
-}
-
-func analyticsDateTime(r readbase.AnalyticsSession) string {
-	if r.StartedAt != "" {
-		return r.StartedAt
-	}
-	return r.CreatedAt
-}
-
-func analyticsLocalDate(ts, tz string) string {
-	t, ok := parseAnalyticsTime(ts)
-	if !ok {
-		return ""
-	}
-	return t.In(analyticsLocation(tz)).Format("2006-01-02")
-}
-
-func analyticsLocation(tz string) *time.Location {
-	if tz == "" {
-		return time.UTC
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return time.UTC
-	}
-	return loc
-}
-
-func parseAnalyticsTime(ts string) (time.Time, bool) {
-	if t, ok := parseTimestamp(ts); ok {
-		return t, true
-	}
-	layouts := []string{
-		"2006-01-02 15:04:05.999999-07",
-		"2006-01-02 15:04:05.999999",
-		"2006-01-02 15:04:05",
-	}
-	for _, layout := range layouts {
-		if t, err := time.Parse(layout, ts); err == nil {
-			return t.UTC(), true
-		}
-	}
-	return time.Time{}, false
-}
-
-func (s analyticsSQL) Models(ctx context.Context, sessionIDs []string) ([]string, error) {
-	if len(sessionIDs) == 0 {
-		return []string{}, nil
-	}
-	models := map[string]bool{}
-	err := duckQueryChunked(sessionIDs, func(chunk []string) error {
+func (s analyticsSQL) VisitModels(ctx context.Context, sessionIDs []string, emit func(string)) error {
+	return duckQueryChunked(sessionIDs, func(chunk []string) error {
 		ph, args := duckInPlaceholders(chunk)
 		rows, err := s.QueryContext(ctx, `
 			SELECT DISTINCT model
@@ -253,38 +193,14 @@ func (s analyticsSQL) Models(ctx context.Context, sessionIDs []string) ([]string
 			if err := rows.Scan(&model); err != nil {
 				return fmt.Errorf("scanning duckdb analytics model: %w", err)
 			}
-			models[model] = true
+			emit(model)
 		}
 		return rows.Err()
 	})
-	if err != nil {
-		return nil, err
-	}
-	return db.SortedKeys(models), nil
 }
 
-func (s analyticsSQL) FilteredModels(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) ([]string, error) {
-	if len(sessionIDs) == 0 {
-		return []string{}, nil
-	}
-	seen := make(map[string]struct{}, len(sessionIDs))
-	unique := make([]string, 0, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		if _, ok := seen[sessionID]; ok {
-			continue
-		}
-		seen[sessionID] = struct{}{}
-		unique = append(unique, sessionID)
-	}
-
-	filterModels := db.CSVFilterValues(f.Model)
-	allowedModels := make(map[string]struct{}, len(filterModels))
-	for _, model := range filterModels {
-		allowedModels[model] = struct{}{}
-	}
-	loc := analyticsLocation(f.Timezone)
-	models := map[string]bool{}
-	err := duckQueryChunked(unique, func(chunk []string) error {
+func (s analyticsSQL) VisitModelTimes(ctx context.Context, sessionIDs []string, emit func(model, timestamp string)) error {
+	return duckQueryChunked(sessionIDs, func(chunk []string) error {
 		ph, args := duckInPlaceholders(chunk)
 		rows, err := s.QueryContext(ctx, `
 			SELECT model, timestamp
@@ -301,39 +217,14 @@ func (s analyticsSQL) FilteredModels(ctx context.Context, sessionIDs []string, f
 			if err := rows.Scan(&model, &ts); err != nil {
 				return fmt.Errorf("scanning duckdb filtered analytics model: %w", err)
 			}
-			if len(allowedModels) > 0 {
-				if _, ok := allowedModels[model]; !ok {
-					continue
-				}
-			}
-			if f.HasTimeFilter() {
-				t, ok := parseAnalyticsTime(formatDBTime(ts))
-				if !ok || !duckAnalyticsTimeMatches(t.In(loc), f) {
-					continue
-				}
-			}
-			models[model] = true
+			emit(model, formatDBTime(ts))
 		}
 		return rows.Err()
 	})
-	if err != nil {
-		return nil, err
-	}
-	return db.SortedKeys(models), nil
 }
 
-func (s analyticsSQL) FilteredToolCounts(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
-	counts := make(map[string]int, len(sessionIDs))
-	if len(sessionIDs) == 0 || strings.TrimSpace(f.Model) == "" {
-		return counts, nil
-	}
-
-	allowedModels := make(map[string]struct{})
-	for _, model := range db.CSVFilterValues(f.Model) {
-		allowedModels[model] = struct{}{}
-	}
-	loc := analyticsLocation(f.Timezone)
-	err := duckQueryChunked(sessionIDs, func(chunk []string) error {
+func (s analyticsSQL) VisitToolCounts(ctx context.Context, sessionIDs []string, emit func(sessionID, model, timestamp string, count int)) error {
+	return duckQueryChunked(sessionIDs, func(chunk []string) error {
 		ph, args := duckInPlaceholders(chunk)
 		rows, err := s.QueryContext(ctx, `
 			SELECT tc.session_id, m.model, m.timestamp, COUNT(*)
@@ -361,24 +252,10 @@ func (s analyticsSQL) FilteredToolCounts(ctx context.Context, sessionIDs []strin
 					err,
 				)
 			}
-			if _, ok := allowedModels[model]; !ok {
-				continue
-			}
-			if f.HasTimeFilter() {
-				t, ok := parseAnalyticsTime(formatDBTime(ts))
-				if !ok || !duckAnalyticsTimeMatches(t.In(loc), f) {
-					continue
-				}
-			}
-			counts[sessionID] += count
+			emit(sessionID, model, formatDBTime(ts), count)
 		}
 		return rows.Err()
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	return counts, nil
 }
 
 func duckAnalyticsBucketExpr(dateExpr, granularity string) string {
@@ -506,7 +383,7 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, sessionIDs []string,
 		if err := rows.Scan(&sid, &ordinal, &role, &ts, &contentLength); err != nil {
 			return nil, fmt.Errorf("scanning duckdb velocity message: %w", err)
 		}
-		parsed, ok := duckLocalTime(formatDBTime(ts), loc)
+		parsed, ok := readbase.AnalyticsLocalTime(formatDBTime(ts), loc)
 		out[sid] = append(out[sid], db.TimingMessage{
 			Role:          role,
 			Time:          parsed,
@@ -555,14 +432,6 @@ func stringInArgs(values []string) ([]any, []string) {
 	return args, placeholders
 }
 
-func duckLocalTime(ts string, loc *time.Location) (time.Time, bool) {
-	t, ok := parseAnalyticsTime(ts)
-	if !ok {
-		return time.Time{}, false
-	}
-	return t.In(loc), true
-}
-
 func (s *Store) duckPopulateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
@@ -609,67 +478,23 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	return nil
 }
 
-func (s *Store) duckSignalMessages(
-	ctx context.Context,
-	rows []db.SignalRow,
-	f db.AnalyticsFilter,
-) (map[string][]db.SignalMessage, error) {
-	out := make(map[string][]db.SignalMessage, len(rows))
-	if len(rows) == 0 {
-		return out, nil
-	}
-	if strings.TrimSpace(f.Model) != "" {
-		ids := make([]string, 0, len(rows))
-		for _, r := range rows {
-			ids = append(ids, r.ID)
-		}
-		scope, err := s.resolveAnalyticsMessageScope(ctx, ids, f, true)
-		if err != nil {
-			return nil, err
-		}
-		for sessionID, scopedRows := range scope {
-			for _, row := range scopedRows {
-				out[sessionID] = append(out[sessionID], db.SignalMessage{
-					SessionID:     row.SessionID,
-					Ordinal:       row.Ordinal,
-					Role:          row.Role,
-					SourceSubtype: row.SourceSubtype,
-					Content:       row.Content,
-					Timestamp:     row.Timestamp,
-					IsSystem:      row.IsSystem,
-					HasToolUse:    row.HasToolUse,
-				})
-			}
-		}
-		return out, nil
-	}
-	placeholders := make([]string, len(rows))
-	args := make([]any, 0, len(rows))
-	for i, r := range rows {
+func (s analyticsSQL) VisitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error {
+	placeholders := make([]string, len(ids))
+	args := make([]any, 0, len(ids))
+	for i, id := range ids {
 		placeholders[i] = "?"
-		args = append(args, r.ID)
+		args = append(args, id)
 	}
-	filterModels := db.CSVFilterValues(f.Model)
 	q := `SELECT session_id, ordinal, role, content,
 			timestamp, is_system, has_tool_use, COALESCE(source_subtype, '')
 		FROM messages
 		WHERE session_id IN (` + strings.Join(placeholders, ",") + `)`
-	if len(filterModels) == 1 {
-		q += ` AND model = ?`
-		args = append(args, filterModels[0])
-	} else if len(filterModels) > 1 {
-		modelPlaceholders := make([]string, len(filterModels))
-		for i, model := range filterModels {
-			modelPlaceholders[i] = "?"
-			args = append(args, model)
-		}
-		q += ` AND model IN (` + strings.Join(modelPlaceholders, ",") + `)`
-	}
+
 	q += `
 		ORDER BY session_id, ordinal`
-	msgRows, err := s.queryContext(ctx, q, args...)
+	msgRows, err := s.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying duckdb signal messages: %w", err)
+		return fmt.Errorf("querying duckdb signal messages: %w", err)
 	}
 	defer msgRows.Close()
 	for msgRows.Next() {
@@ -680,15 +505,15 @@ func (s *Store) duckSignalMessages(
 			&m.Content, &ts,
 			&m.IsSystem, &m.HasToolUse, &m.SourceSubtype,
 		); err != nil {
-			return nil, fmt.Errorf("scanning duckdb signal message: %w", err)
+			return fmt.Errorf("scanning duckdb signal message: %w", err)
 		}
 		m.Timestamp = formatDBTime(ts)
-		out[m.SessionID] = append(out[m.SessionID], m)
+		emit(m)
 	}
 	if err := msgRows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating duckdb signal messages: %w", err)
+		return fmt.Errorf("iterating duckdb signal messages: %w", err)
 	}
-	return out, nil
+	return nil
 }
 
 func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, error) {
@@ -833,20 +658,6 @@ func duckUsagePaddedUTCBound(ts string, hours int) string {
 	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
 }
 
-func duckAnalyticsWindowBounds(f db.AnalyticsFilter) (string, string) {
-	var from, to string
-	if f.From != "" {
-		from = duckUsagePaddedUTCBound(f.From+"T00:00:00Z", -14)
-	}
-	if f.To != "" {
-		to = duckUsagePaddedUTCBound(f.To+"T23:59:59Z", 14)
-		if t, err := time.Parse(time.RFC3339, to); err == nil {
-			to = t.Add(time.Second).Format(time.RFC3339)
-		}
-	}
-	return from, to
-}
-
 func duckAnalyticsMessageWindowPred(col, from, to string) (string, []any) {
 	var preds []string
 	var args []any
@@ -873,7 +684,7 @@ func observeAnalyticsQuery(query string) {
 }
 
 func duckAnalyticsToolSessionWindow(f db.AnalyticsFilter) (string, []any) {
-	from, to := duckAnalyticsWindowBounds(f)
+	from, to := readbase.AnalyticsWindowBounds(f)
 	sessionPred, args := duckAnalyticsMessageWindowPred("COALESCE(s.started_at, s.created_at)", from, to)
 	if sessionPred == "" {
 		return "", nil
@@ -1483,7 +1294,7 @@ type duckSessionUsageRow struct {
 }
 
 func duckUsageLookupModel(model, ts string) string {
-	timestamp, _ := parseAnalyticsTime(ts)
+	timestamp, _ := readbase.ParseAnalyticsTime(ts)
 	if canonical := pricingpkg.CanonicalModelForDate(model, timestamp); canonical != "" {
 		return canonical
 	}
@@ -1491,7 +1302,7 @@ func duckUsageLookupModel(model, ts string) string {
 }
 
 func duckUsagePricingTimestamp(ts string) time.Time {
-	timestamp, _ := parseAnalyticsTime(ts)
+	timestamp, _ := readbase.ParseAnalyticsTime(ts)
 	return timestamp
 }
 
@@ -2435,7 +2246,7 @@ func (s *Store) GetUsageMatchingSessionCount(
 		if err := rows.Scan(&id, &ts); err != nil {
 			return 0, fmt.Errorf("scanning matching usage session: %w", err)
 		}
-		date := analyticsLocalDate(formatDBTime(ts), f.Timezone)
+		date := readbase.AnalyticsLocalDate(formatDBTime(ts), f.Timezone)
 		if date == "" {
 			continue
 		}

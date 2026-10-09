@@ -17,27 +17,27 @@ import (
 type AnalyticsBackend interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	Sessions(ctx context.Context, f db.AnalyticsFilter, includeDate, includeTime bool, extraPred string, extraArgs []any) ([]AnalyticsSession, error)
-	SummarySQL(f db.AnalyticsFilter) (string, []any)
+	Summary(ctx context.Context, f db.AnalyticsFilter) (db.AnalyticsSummary, bool, error)
 	ActivityBucketsSQL(f db.AnalyticsFilter, granularity string) (string, []any)
 	ActivityAgentsSQL(f db.AnalyticsFilter, granularity string) (string, []any)
 	HeatmapSQL(f db.AnalyticsFilter, metric string) (string, []any)
 	HourOfWeekSQL(f db.AnalyticsFilter) (string, []any)
 	SummaryAgentsSQL(f db.AnalyticsFilter) (string, []any)
-	ToolRows(ctx context.Context, f db.AnalyticsFilter, sessions []AnalyticsSession) ([]db.ToolAnalyticsRow, error)
-	SkillRows(ctx context.Context, f db.AnalyticsFilter, sessions []AnalyticsSession) ([]db.SkillAnalyticsRow, error)
+	VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, category, name, timestamp string, count int)) error
+	VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error
 	ToolSessionWindow(db.AnalyticsFilter) (string, []any)
 	TopSessionsSQL(f db.AnalyticsFilter, metric string, includeTime, unlimited bool) (string, []any)
 	ScanTopSession(*sql.Rows) (db.TopSession, error)
 	TrendsSQL() string
 	FormatTime(any) string
 	MessageScope(ctx context.Context, ids []string, f db.AnalyticsFilter, includeContent bool) (db.MessageScope, error)
-	Models(ctx context.Context, ids []string) ([]string, error)
-	FilteredModels(ctx context.Context, ids []string, f db.AnalyticsFilter) ([]string, error)
+	VisitModels(ctx context.Context, ids []string, emit func(string)) error
+	VisitModelTimes(ctx context.Context, ids []string, emit func(model, timestamp string)) error
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
 	VelocityMessages(ctx context.Context, ids []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error)
 	VelocityToolCounts(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
-	FilteredToolCounts(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
-	SignalMessages(ctx context.Context, candidates []db.SignalRow, f db.AnalyticsFilter) (map[string][]db.SignalMessage, error)
+	VisitToolCounts(ctx context.Context, ids []string, emit func(sessionID, model, timestamp string, count int)) error
+	VisitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error
 	PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []AnalyticsSession) error
 }
 
@@ -182,7 +182,7 @@ func (s *Analytics) getAnalyticsSummaryWithModelCounts(
 	sessionIDs := make([]string, 0, len(sessions))
 
 	for _, session := range sessions {
-		date := analyticsLocalDate(analyticsDateTime(session), f.Timezone)
+		date := AnalyticsLocalDate(AnalyticsDateTime(session), f.Timezone)
 		resp.TotalSessions++
 		resp.TotalMessages += session.MessageCount
 		if session.HasTotalOutputTokens {
@@ -203,11 +203,11 @@ func (s *Analytics) getAnalyticsSummaryWithModelCounts(
 
 	var models []string
 	if strings.TrimSpace(f.Model) != "" {
-		models, err = s.backend.FilteredModels(
+		models, err = s.filteredModels(
 			ctx, sessionIDs, f,
 		)
 	} else {
-		models, err = s.backend.Models(ctx, sessionIDs)
+		models, err = s.models(ctx, sessionIDs)
 	}
 	if err != nil {
 		return db.AnalyticsSummary{}, err
@@ -265,7 +265,7 @@ func (s *Analytics) getAnalyticsActivityFilteredByModelTime(
 	if err != nil {
 		return db.ActivityResponse{}, err
 	}
-	toolCounts, err := s.backend.FilteredToolCounts(
+	toolCounts, err := s.filteredToolCounts(
 		ctx, sessionIDs, f,
 	)
 	if err != nil {
@@ -276,7 +276,7 @@ func (s *Analytics) getAnalyticsActivityFilteredByModelTime(
 	buckets := map[string]*db.ActivityEntry{}
 	for _, session := range sessions {
 		date := db.BucketDate(
-			analyticsLocalDate(analyticsDateTime(session), f.Timezone),
+			AnalyticsLocalDate(AnalyticsDateTime(session), f.Timezone),
 			granularity,
 		)
 		entry := buckets[date]
@@ -361,7 +361,7 @@ func (s *Analytics) GetAnalyticsProjects(
 			}
 			byProject[r.Project] = a
 		}
-		date := analyticsLocalDate(analyticsDateTime(r), f.Timezone)
+		date := AnalyticsLocalDate(AnalyticsDateTime(r), f.Timezone)
 		if a.row.FirstSession == "" || date < a.row.FirstSession {
 			a.row.FirstSession = date
 		}
@@ -449,8 +449,8 @@ func (s *Analytics) GetAnalyticsSessionShape(
 		if !modelFilter {
 			lengths[db.LengthBucket(r.MessageCount)]++
 		}
-		if start, okS := parseAnalyticsTime(r.StartedAt); okS {
-			if end, okE := parseAnalyticsTime(r.EndedAt); okE && !end.Before(start) {
+		if start, okS := ParseAnalyticsTime(r.StartedAt); okS {
+			if end, okE := ParseAnalyticsTime(r.EndedAt); okE && !end.Before(start) {
 				durations[db.DurationBucket(end.Sub(start).Minutes())]++
 			}
 		}
@@ -520,7 +520,7 @@ func (s *Analytics) GetAnalyticsSignalSessions(
 		return db.SignalSessionsResponse{}, err
 	}
 	candidates := db.SignalCandidates(rows, signal, limit)
-	messages, err := s.backend.SignalMessages(ctx, candidates, f)
+	messages, err := s.signalMessages(ctx, candidates, f)
 	if err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
@@ -548,39 +548,9 @@ func (s *Analytics) GetAnalyticsSummary(
 	if strings.TrimSpace(f.Model) != "" {
 		return s.getAnalyticsSummaryWithModelCounts(ctx, f)
 	}
-	query, queryArgs := s.backend.SummarySQL(f)
-	rows, err := s.backend.QueryContext(ctx, query, queryArgs...)
-	if err != nil {
-		return db.AnalyticsSummary{}, fmt.Errorf("querying %s analytics summary: %w", s.name, err)
-	}
-	defer rows.Close()
-	resp := db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}
-	if !rows.Next() {
-		rows.Close()
-		return resp, rows.Err()
-	}
-	if err := rows.Scan(
-		&resp.TotalSessions,
-		&resp.TotalMessages,
-		&resp.TotalOutputTokens,
-		&resp.TokenReportingSessions,
-		&resp.ActiveProjects,
-		&resp.ActiveDays,
-		&resp.AvgMessages,
-		&resp.MedianMessages,
-		&resp.P90Messages,
-		&resp.MostActive,
-		&resp.Concentration,
-	); err != nil {
-		rows.Close()
-		return db.AnalyticsSummary{}, fmt.Errorf("scanning %s analytics summary: %w", s.name, err)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return db.AnalyticsSummary{}, fmt.Errorf("iterating %s analytics summary: %w", s.name, err)
-	}
-	if err := rows.Close(); err != nil {
-		return db.AnalyticsSummary{}, fmt.Errorf("closing %s analytics summary rows: %w", s.name, err)
+	resp, found, err := s.backend.Summary(ctx, f)
+	if err != nil || !found {
+		return resp, err
 	}
 
 	agentQuery, agentArgs := s.backend.SummaryAgentsSQL(f)
@@ -610,11 +580,11 @@ func (s *Analytics) GetAnalyticsSummary(
 	}
 	var models []string
 	if f.HasTimeFilter() {
-		models, err = s.backend.FilteredModels(
+		models, err = s.filteredModels(
 			ctx, sessionIDs, f,
 		)
 	} else {
-		models, err = s.backend.Models(
+		models, err = s.models(
 			ctx, sessionIDs,
 		)
 	}
@@ -697,7 +667,7 @@ func (s *Analytics) GetAnalyticsHeatmap(
 		}
 		counts := map[string]int{}
 		for _, session := range sessions {
-			date := analyticsLocalDate(analyticsDateTime(session), f.Timezone)
+			date := AnalyticsLocalDate(AnalyticsDateTime(session), f.Timezone)
 			switch metric {
 			case "sessions":
 				counts[date]++
@@ -750,6 +720,9 @@ func (s *Analytics) GetAnalyticsHourOfWeek(
 		if err := rows.Scan(&day, &hour, &messages); err != nil {
 			return db.HourOfWeekResponse{}, fmt.Errorf("scanning %s analytics hour-of-week: %w", s.name, err)
 		}
+		if day < 0 || day > 6 || hour < 0 || hour > 23 {
+			continue
+		}
 		grid[day][hour] = messages
 	}
 	if err := rows.Err(); err != nil {
@@ -759,14 +732,25 @@ func (s *Analytics) GetAnalyticsHourOfWeek(
 }
 
 func (s *Analytics) GetAnalyticsTools(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
-	sessions, err := s.toolSessions(ctx, f)
+	ids, meta, err := s.toolSessions(ctx, f)
 	if err != nil {
 		return db.ToolsAnalyticsResponse{}, err
 	}
-	if len(sessions) == 0 {
+	if len(ids) == 0 {
 		return db.BuildToolsAnalytics(nil), nil
 	}
-	rows, err := s.backend.ToolRows(ctx, f, sessions)
+	var rows []db.ToolAnalyticsRow
+	err = s.backend.VisitTools(ctx, f, ids, func(id, category, name, timestamp string, count int) {
+		session, ok := meta[id]
+		if !ok {
+			return
+		}
+		_, date, keep := f.ResolveSkillRowTime(timestamp, AnalyticsDateTime(session))
+		if !keep {
+			return
+		}
+		rows = append(rows, db.ToolAnalyticsRow{SessionID: id, Category: category, ToolName: name, Agent: session.Agent, Count: count, Date: date})
+	})
 	if err != nil {
 		return db.ToolsAnalyticsResponse{}, err
 	}
@@ -774,23 +758,44 @@ func (s *Analytics) GetAnalyticsTools(ctx context.Context, f db.AnalyticsFilter)
 }
 
 func (s *Analytics) GetAnalyticsSkills(ctx context.Context, f db.AnalyticsFilter, granularity string) (db.SkillsAnalyticsResponse, error) {
-	sessions, err := s.toolSessions(ctx, f)
+	ids, meta, err := s.toolSessions(ctx, f)
 	if err != nil {
 		return db.SkillsAnalyticsResponse{}, err
 	}
-	if len(sessions) == 0 {
+	if len(ids) == 0 {
 		return db.BuildSkillsAnalytics(nil, f.From, f.To, granularity), nil
 	}
-	rows, err := s.backend.SkillRows(ctx, f, sessions)
+	var rows []db.SkillAnalyticsRow
+	err = s.backend.VisitSkills(ctx, f, ids, func(id, name, timestamp string, count int) {
+		session, ok := meta[id]
+		if !ok {
+			return
+		}
+		usedTS, date, keep := f.ResolveSkillRowTime(timestamp, AnalyticsDateTime(session))
+		if !keep {
+			return
+		}
+		rows = append(rows, db.SkillAnalyticsRow{SessionID: id, SkillName: name, Agent: session.Agent, Project: session.Project, Date: date, LastUsedAt: usedTS, Count: count})
+	})
 	if err != nil {
 		return db.SkillsAnalyticsResponse{}, err
 	}
 	return db.BuildSkillsAnalytics(rows, f.From, f.To, granularity), nil
 }
 
-func (s *Analytics) toolSessions(ctx context.Context, f db.AnalyticsFilter) ([]AnalyticsSession, error) {
+func (s *Analytics) toolSessions(ctx context.Context, f db.AnalyticsFilter) ([]string, map[string]AnalyticsSession, error) {
 	pred, args := s.backend.ToolSessionWindow(f)
-	return s.analyticsSessionsFiltered(ctx, f, false, false, pred, args)
+	sessions, err := s.analyticsSessionsFiltered(ctx, f, false, false, pred, args)
+	if err != nil {
+		return nil, nil, err
+	}
+	ids := make([]string, 0, len(sessions))
+	meta := make(map[string]AnalyticsSession, len(sessions))
+	for _, session := range sessions {
+		ids = append(ids, session.ID)
+		meta[session.ID] = session
+	}
+	return ids, meta, nil
 }
 
 func (s *Analytics) GetAnalyticsTopSessions(
@@ -920,12 +925,12 @@ func (s *Analytics) GetTrendsTerms(
 	if len(allowedSessions) == 0 {
 		return acc.Response(), nil
 	}
-	loc := analyticsLocation(f.Timezone)
+	loc := AnalyticsLocation(f.Timezone)
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
 	trendLocal := func(msgTS, startedAt, createdAt any) (time.Time, bool) {
 		ts := cmp.Or(s.backend.FormatTime(msgTS), s.backend.FormatTime(startedAt), s.backend.FormatTime(createdAt))
-		t, ok := parseAnalyticsTime(ts)
+		t, ok := ParseAnalyticsTime(ts)
 		if !ok {
 			return time.Time{}, false
 		}
@@ -991,27 +996,27 @@ func (s *Analytics) GetTrendsTerms(
 	return acc.Response(), nil
 }
 
-func analyticsDateTime(r AnalyticsSession) string {
+func AnalyticsDateTime(r AnalyticsSession) string {
 	if r.StartedAt != "" {
 		return r.StartedAt
 	}
 	return r.CreatedAt
 }
 
-func analyticsLocalDate(ts, tz string) string {
-	t, ok := parseAnalyticsTime(ts)
+func AnalyticsLocalDate(ts, tz string) string {
+	t, ok := ParseAnalyticsTime(ts)
 	if !ok {
 		return ""
 	}
-	return t.In(analyticsLocation(tz)).Format("2006-01-02")
+	return t.In(AnalyticsLocation(tz)).Format("2006-01-02")
 }
 
-func analyticsLocation(tz string) *time.Location {
+func AnalyticsLocation(tz string) *time.Location {
 	return db.LoadLocationOr(tz, time.UTC)
 }
 
-func parseAnalyticsTime(ts string) (time.Time, bool) {
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.000Z", "2006-01-02 15:04:05", "2006-01-02 15:04:05.999999"} {
+func ParseAnalyticsTime(ts string) (time.Time, bool) {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.000Z", "2006-01-02 15:04:05"} {
 		if t, err := time.Parse(layout, strings.TrimSpace(ts)); err == nil {
 			return t.UTC(), true
 		}
@@ -1030,8 +1035,8 @@ func parseAnalyticsTime(ts string) (time.Time, bool) {
 }
 
 func sessionDurationMinutes(session AnalyticsSession) float64 {
-	startedAt, okStart := parseAnalyticsTime(session.StartedAt)
-	endedAt, okEnd := parseAnalyticsTime(session.EndedAt)
+	startedAt, okStart := ParseAnalyticsTime(session.StartedAt)
+	endedAt, okEnd := ParseAnalyticsTime(session.EndedAt)
 	if !okStart || !okEnd || endedAt.Before(startedAt) {
 		return 0
 	}
@@ -1050,7 +1055,7 @@ func signalRowsFromSessions(
 			Project:                     r.Project,
 			FirstMessage:                r.FirstMessage,
 			IsAutomated:                 r.IsAutomated,
-			Date:                        analyticsLocalDate(analyticsDateTime(r), f.Timezone),
+			Date:                        AnalyticsLocalDate(AnalyticsDateTime(r), f.Timezone),
 			HealthScore:                 r.HealthScore,
 			HealthGrade:                 r.HealthGrade,
 			Outcome:                     r.Outcome,

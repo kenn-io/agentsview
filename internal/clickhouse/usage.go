@@ -9,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"go.kenn.io/agentsview/internal/readbase"
 	"maps"
 	"slices"
 	"sort"
@@ -1009,7 +1010,7 @@ type chSessionUsageRow struct {
 }
 
 func chUsageLookupModel(model, ts string) string {
-	timestamp, _ := parseAnalyticsTime(ts)
+	timestamp, _ := readbase.ParseAnalyticsTime(ts)
 	if canonical := pricingpkg.CanonicalModelForDate(model, timestamp); canonical != "" {
 		return canonical
 	}
@@ -1017,7 +1018,7 @@ func chUsageLookupModel(model, ts string) string {
 }
 
 func chUsagePricingTimestamp(ts string) time.Time {
-	timestamp, _ := parseAnalyticsTime(ts)
+	timestamp, _ := readbase.ParseAnalyticsTime(ts)
 	return timestamp
 }
 
@@ -2478,7 +2479,7 @@ func (s *Store) GetUsageMatchingSessionCount(
 		if err := rows.Scan(&id, &ts); err != nil {
 			return 0, fmt.Errorf("scanning matching usage session: %w", err)
 		}
-		date := analyticsLocalDate(formatDBTime(ts), f.Timezone)
+		date := readbase.AnalyticsLocalDate(formatDBTime(ts), f.Timezone)
 		if date == "" {
 			continue
 		}

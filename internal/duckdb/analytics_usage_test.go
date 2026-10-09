@@ -5,6 +5,7 @@ package duckdb
 import (
 	"context"
 	"fmt"
+	"go.kenn.io/agentsview/internal/readbase"
 	"strings"
 	"testing"
 	"time"
@@ -606,15 +607,14 @@ func TestDuckSignalMessagesFormatsTimestampValues(t *testing.T) {
 			 NULL, FALSE, FALSE)`)
 	require.NoError(t, err)
 
-	got, err := store.duckSignalMessages(
-		ctx,
-		[]db.SignalRow{{ID: "signal-time"}},
-		db.AnalyticsFilter{},
-	)
+	var got []db.SignalMessage
+	err = (analyticsSQL{store}).VisitSignalMessages(ctx, []string{"signal-time"}, func(row db.SignalMessage) {
+		got = append(got, row)
+	})
 	require.NoError(t, err)
-	require.Len(t, got["signal-time"], 2)
-	assert.Equal(t, "2026-01-20T12:34:56Z", got["signal-time"][0].Timestamp)
-	assert.Empty(t, got["signal-time"][1].Timestamp)
+	require.Len(t, got, 2)
+	assert.Equal(t, "2026-01-20T12:34:56Z", got[0].Timestamp)
+	assert.Empty(t, got[1].Timestamp)
 }
 
 func TestDuckAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
@@ -2039,7 +2039,7 @@ func TestDuckAnalyticsToolsWindowsMessagesInSQL(t *testing.T) {
 	resp, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	assert.Equal(t, 3, resp.TotalCalls)
-	from, to := duckAnalyticsWindowBounds(f)
+	from, to := readbase.AnalyticsWindowBounds(f)
 	pred, _ := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
 	require.NotEmpty(t, observedQuery, "production tool query was not observed")
 	assert.Contains(t, observedQuery, pred,

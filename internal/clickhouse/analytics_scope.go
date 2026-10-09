@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"fmt"
+	"go.kenn.io/agentsview/internal/readbase"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -32,7 +33,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 	}
 
 	flt := f.MessageScopeFilter()
-	loc := analyticsLocation(f.Timezone)
+	loc := readbase.AnalyticsLocation(f.Timezone)
 	bySession := make(db.MessageScope, len(unique))
 	emit := func(m db.ScopedMessage) {
 		bySession[m.SessionID] = append(bySession[m.SessionID], m)
@@ -75,7 +76,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 				return fmt.Errorf("scanning clickhouse analytics candidate message: %w", err)
 			}
 			tsStr := formatDBTime(ts)
-			parsed, has := chLocalTime(tsStr, loc)
+			parsed, has := readbase.AnalyticsLocalTime(tsStr, loc)
 			if err := reducer.Push(db.MessageInput{
 				SessionID:       sessionID,
 				Ordinal:         ordinal,

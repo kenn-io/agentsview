@@ -170,7 +170,7 @@ func (s *Analytics) GetAnalyticsVelocity(
 		)
 	} else {
 		sessionMsgs, err = s.backend.VelocityMessages(
-			ctx, sessionIDs, f, analyticsLocation(f.Timezone),
+			ctx, sessionIDs, f, AnalyticsLocation(f.Timezone),
 		)
 	}
 	if err != nil {
@@ -178,7 +178,7 @@ func (s *Analytics) GetAnalyticsVelocity(
 	}
 	var toolCounts map[string]int
 	if strings.TrimSpace(f.Model) != "" {
-		toolCounts, err = s.backend.FilteredToolCounts(
+		toolCounts, err = s.filteredToolCounts(
 			ctx, sessionIDs, f,
 		)
 	} else {

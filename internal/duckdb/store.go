@@ -9,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"go.kenn.io/agentsview/internal/readbase"
 	"io"
 	"os"
 	"regexp"
@@ -1589,7 +1590,7 @@ func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error
 		}
 		candidate.match.Timestamp = formatDBTime(ts)
 		candidate.sortTS = formatDBTime(sortTS)
-		candidate.sortTime, candidate.hasSort = parseAnalyticsTime(candidate.sortTS)
+		candidate.sortTime, candidate.hasSort = readbase.ParseAnalyticsTime(candidate.sortTS)
 		candidate.match.Snippet = candidate.body
 		out = append(out, candidate)
 	}

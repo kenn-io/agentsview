@@ -21,6 +21,45 @@ func (s analyticsSQL) Sessions(ctx context.Context, f db.AnalyticsFilter, includ
 	return s.store.loadAnalyticsSessions(ctx, f, includeDate, includeTime, extraPred, extraArgs)
 }
 
+func (s analyticsSQL) Summary(ctx context.Context, f db.AnalyticsFilter) (db.AnalyticsSummary, bool, error) {
+	query, queryArgs := s.SummarySQL(f)
+	rows, err := s.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return db.AnalyticsSummary{}, false, fmt.Errorf("querying duckdb analytics summary: %w", err)
+	}
+	defer rows.Close()
+	resp := db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}
+	if !rows.Next() {
+		rows.Close()
+		return resp, false, nil
+	}
+	if err := rows.Scan(
+		&resp.TotalSessions,
+		&resp.TotalMessages,
+		&resp.TotalOutputTokens,
+		&resp.TokenReportingSessions,
+		&resp.ActiveProjects,
+		&resp.ActiveDays,
+		&resp.AvgMessages,
+		&resp.MedianMessages,
+		&resp.P90Messages,
+		&resp.MostActive,
+		&resp.Concentration,
+	); err != nil {
+		rows.Close()
+		return db.AnalyticsSummary{}, false, fmt.Errorf("scanning duckdb analytics summary: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return db.AnalyticsSummary{}, false, fmt.Errorf("iterating duckdb analytics summary: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return db.AnalyticsSummary{}, false, fmt.Errorf("closing duckdb analytics summary rows: %w", err)
+	}
+
+	return resp, true, nil
+}
+
 func (s analyticsSQL) SummarySQL(f db.AnalyticsFilter) (string, []any) {
 	where, args := duckBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
@@ -220,20 +259,12 @@ func (s analyticsSQL) HourOfWeekSQL(f db.AnalyticsFilter) (string, []any) {
 		queryArgs
 }
 
-func (s analyticsSQL) ToolRows(ctx context.Context, f db.AnalyticsFilter, sessions []readbase.AnalyticsSession) ([]db.ToolAnalyticsRow, error) {
-	meta := map[string]readbase.AnalyticsSession{}
-	var ids []string
-	for _, r := range sessions {
-		meta[r.ID] = r
-		ids = append(ids, r.ID)
-	}
-
-	var toolRows []db.ToolAnalyticsRow
+func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, category, name, timestamp string, count int)) error {
 	err := duckQueryChunked(ids, func(chunk []string) error {
 		ph, args := duckInPlaceholders(chunk)
 		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
-		from, to := duckAnalyticsWindowBounds(f)
+		from, to := readbase.AnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
 		args = append(args, windowArgs...)
 		query := `SELECT tc.session_id, tc.category,
@@ -265,47 +296,22 @@ func (s analyticsSQL) ToolRows(ctx context.Context, f db.AnalyticsFilter, sessio
 			if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
 				return err
 			}
-			r, ok := meta[sid]
-			if !ok {
-				continue
-			}
-			_, date, keep := f.ResolveSkillRowTime(
-				formatDBTime(ts), analyticsDateTime(r),
-			)
-			if !keep {
-				continue
-			}
-			toolRows = append(toolRows, db.ToolAnalyticsRow{
-				SessionID: sid,
-				Category:  cat,
-				ToolName:  toolName,
-				Agent:     r.Agent,
-				Count:     count,
-				Date:      date,
-			})
+			emit(sid, cat, toolName, formatDBTime(ts), count)
 		}
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return toolRows, nil
+	return nil
 }
 
-func (s analyticsSQL) SkillRows(ctx context.Context, f db.AnalyticsFilter, sessions []readbase.AnalyticsSession) ([]db.SkillAnalyticsRow, error) {
-	meta := map[string]readbase.AnalyticsSession{}
-	var ids []string
-	for _, r := range sessions {
-		meta[r.ID] = r
-		ids = append(ids, r.ID)
-	}
-
-	var skillRows []db.SkillAnalyticsRow
+func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error {
 	err := duckQueryChunked(ids, func(chunk []string) error {
 		ph, args := duckInPlaceholders(chunk)
 		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
-		from, to := duckAnalyticsWindowBounds(f)
+		from, to := readbase.AnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
 		args = append(args, windowArgs...)
 		rows, qErr := s.store.queryContext(ctx,
@@ -331,32 +337,14 @@ func (s analyticsSQL) SkillRows(ctx context.Context, f db.AnalyticsFilter, sessi
 			if err := rows.Scan(&sid, &skill, &count, &msgTS); err != nil {
 				return err
 			}
-			r, ok := meta[sid]
-			if !ok {
-				continue
-			}
-			usedTS, date, keep := f.ResolveSkillRowTime(
-				formatDBTime(msgTS), analyticsDateTime(r),
-			)
-			if !keep {
-				continue
-			}
-			skillRows = append(skillRows, db.SkillAnalyticsRow{
-				SessionID:  sid,
-				SkillName:  skill,
-				Agent:      r.Agent,
-				Project:    r.Project,
-				Date:       date,
-				LastUsedAt: usedTS,
-				Count:      count,
-			})
+			emit(sid, skill, formatDBTime(msgTS), count)
 		}
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return skillRows, nil
+	return nil
 }
 
 func (s analyticsSQL) ToolSessionWindow(f db.AnalyticsFilter) (string, []any) {
@@ -449,10 +437,6 @@ func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
 
 func (s analyticsSQL) MessageScope(ctx context.Context, ids []string, f db.AnalyticsFilter, includeContent bool) (db.MessageScope, error) {
 	return s.store.resolveAnalyticsMessageScope(ctx, ids, f, includeContent)
-}
-
-func (s analyticsSQL) SignalMessages(ctx context.Context, candidates []db.SignalRow, f db.AnalyticsFilter) (map[string][]db.SignalMessage, error) {
-	return s.store.duckSignalMessages(ctx, candidates, f)
 }
 
 func (s analyticsSQL) PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []readbase.AnalyticsSession) error {

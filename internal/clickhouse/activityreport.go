@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go.kenn.io/agentsview/internal/readbase"
 	"iter"
 	"maps"
 	"slices"
@@ -1281,7 +1282,7 @@ func (s *Store) scanActivityUsageRows(
 		if r.messageOrdinal.Valid {
 			ordinal = r.messageOrdinal.Int64
 		}
-		parsedTS, ok := parseAnalyticsTime(r.ts)
+		parsedTS, ok := readbase.ParseAnalyticsTime(r.ts)
 		if len(chunk) == chunkRows {
 			chunks = append(chunks, chunk)
 			chunk = make([]clickSessionUsageOrderedRow, 0, chunkRows)
