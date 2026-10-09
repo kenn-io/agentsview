@@ -2342,6 +2342,7 @@ func repairCursorS3Parents(ctx context.Context, tx *sql.Tx, ids, roots []string)
 	if err != nil {
 		return 0, err
 	}
+	defer rows.Close()
 	type family struct {
 		baseID   string
 		prefixes []string
