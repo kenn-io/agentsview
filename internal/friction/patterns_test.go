@@ -42,6 +42,18 @@ func TestDetectPatterns(t *testing.T) {
 		}, got[0])
 	})
 
+	t.Run("retry loop sanitizes archived tool names", func(t *testing.T) {
+		calls := []signals.ToolCallRow{
+			{ToolName: "Ba`\nsh", InputJSON: "{}", MessageOrdinal: 1},
+			{ToolName: "Ba`\nsh", InputJSON: "{}", MessageOrdinal: 2},
+			{ToolName: "Ba`\nsh", InputJSON: "{}", MessageOrdinal: 3},
+		}
+		got := DetectPatterns("s1", false, patternInput(calls, base))
+		require.Len(t, got, 1)
+		assert.Equal(t, "`Ba' sh` x3 identical arguments 09:00-09:02", got[0].Evidence)
+		assert.Equal(t, "retry loop: `Ba' sh` called 3 times with identical arguments", got[0].Text)
+	})
+
 	t.Run("retry loop with empty tool name says unknown", func(t *testing.T) {
 		calls := []signals.ToolCallRow{{InputJSON: "{}"}, {InputJSON: "{}"}, {InputJSON: "{}"}}
 		got := DetectPatterns("s1", false, patternInput(calls, base))
