@@ -61,8 +61,7 @@ describe("Chrome native host worker", () => {
     expect(await request()).toEqual({ id: "a", version: 1, status: 200, body: "chats" });
     expect(chrome.runtime.connectNative).toHaveBeenCalledExactlyOnceWith("io.kenn.agentsview");
     expect(chrome.tabs.query).toHaveBeenCalledWith({ url: "https://claude.ai/*", discarded: false });
-    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, { target: { tabId: 7 }, files: ["claude_fetch.js"], world: "ISOLATED" });
-    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(2, { target: { tabId: 7 }, world: "ISOLATED", func: expect.any(Function), args: ["https://claude.ai/api/organizations"] });
+    expect(chrome.scripting.executeScript).toHaveBeenCalledExactlyOnceWith({ target: { tabId: 7 }, world: "ISOLATED", func: expect.any(Function), args: ["https://claude.ai/api/organizations"] });
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
   });
 
@@ -83,8 +82,8 @@ describe("Chrome native host worker", () => {
     expect(await request()).toEqual(stillMissing
       ? { id: "a", version: 1, status: 0, error: "Claude.ai page changed during Sync; try Sync again" }
       : { id: "a", version: 1, status: 200, body: "retried chats" });
-    expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(4);
-    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(3, { target: { tabId: 7 }, files: ["claude_fetch.js"], world: "ISOLATED" });
+    expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(3);
+    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(2, { target: { tabId: 7 }, files: ["claude_fetch.js"], world: "ISOLATED" });
   });
 
   it("leaves its inactive tab open after fetch", async () => {

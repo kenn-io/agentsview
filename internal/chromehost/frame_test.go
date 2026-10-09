@@ -2,13 +2,26 @@ package chromehost
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"io"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRequestShapesVersion(t *testing.T) {
+	body, err := os.ReadFile("../importer/claude_ai_requests.txt")
+	require.NoError(t, err)
+	hash, ok := requestShapeHashes[Version]
+	require.True(t, ok, "record the request shape hash for the new protocol Version")
+	digest := sha256.Sum256([]byte(strings.ReplaceAll(string(body), "\r\n", "\n")))
+	assert.Equal(t, hash, hex.EncodeToString(digest[:]), "request shapes changed; bump the protocol Version in both peers and record its hash")
+}
 
 type shortWriter struct{ bytes.Buffer }
 
