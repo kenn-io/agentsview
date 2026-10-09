@@ -100,6 +100,7 @@ func (h *chromeHost) read(conn *chromeConnection) {
 		h.mu.Lock()
 		if h.connection == conn {
 			h.connection = nil
+			h.refusedProfile = false
 		}
 		h.mu.Unlock()
 		conn.mu.Lock()

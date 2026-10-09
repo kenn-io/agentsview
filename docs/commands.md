@@ -1311,9 +1311,16 @@ ______________________________________________________________________
 
 ### `agentsview chrome setup`
 
-Install the native host and unpacked extension for Claude.ai Sync through Google Chrome. The command prints the extension folder. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select that folder. Keep Chrome open during Sync. Re-run setup and reload the extension when the executable path or data directory changes, or when Sync asks for it after an upgrade.
+Install the native host and unpacked extension for Claude.ai Sync through Google
+Chrome. The command prints the extension folder. Open `chrome://extensions`,
+enable **Developer mode**, choose **Load unpacked**, and select that folder.
+Keep Chrome open during Sync. Re-run setup and reload the extension when the
+executable path or data directory changes, or when Sync asks for it after an
+upgrade.
 
-See [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats) for connection and removal instructions.
+See
+[Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
+for connection and removal instructions.
 
 ______________________________________________________________________
 
@@ -1332,7 +1339,9 @@ agentsview import --type <type> <path>
 | `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)             |
 | `--sync`    | `false` | Sync Claude.ai through Chrome; requires a running server and Chrome host, with no path or `--replace` |
 
-Set up the [Chrome host](https://agentsview.io/docs/commands/#agentsview-chrome-setup) once and keep Chrome open for `agentsview import --type claude-ai --sync`.
+Set up the
+[Chrome host](https://agentsview.io/docs/commands/#agentsview-chrome-setup) once
+and keep Chrome open for `agentsview import --type claude-ai --sync`.
 
 The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a
 Gemini Apps `MyActivity.html` file, or a directory containing the extracted

@@ -74,7 +74,7 @@ it.each([false, true])("shows setup instructions for installed=%s", async (insta
   expect(screen.getByText("Terminal")).toBeTruthy();
   expect(screen.getByText("agentsview chrome setup")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
-  expect(screen.getByText("chrome://extensions").tagName).toBe("CODE");
+  expect(screen.getByText(m.import_claude_setup_load({ url: "chrome://extensions" }))).toBeTruthy();
   if (installed) {
     await fireEvent.click(screen.getByRole("button", { name: "Setup steps" }));
     expect(screen.queryByText("agentsview chrome setup")).toBeNull();
@@ -215,6 +215,37 @@ it.each(["read-only", "remote"])("keeps zip import alone for %s", (mode) => {
   expect(screen.queryByRole("button", { name: "Sync" })).toBeNull();
   expect(screen.getByText(m.import_drop_here())).toBeTruthy();
   expect(chromeStatus).not.toHaveBeenCalled();
+});
+
+it.each([403, 501])("keeps upload alone and stops polling after status refusal %s", async (status) => {
+  vi.useFakeTimers();
+  chromeStatus.mockRejectedValueOnce(new ApiError(status, "Chrome Sync unavailable"));
+  const p = props();
+  const { rerender } = render(ImportModal, p);
+  await tick(); await vi.advanceTimersByTimeAsync(0);
+  expect(screen.queryByText("Chrome")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Sync" })).toBeNull();
+  expect(screen.getByText(m.import_drop_here())).toBeTruthy();
+  await vi.advanceTimersByTimeAsync(6000);
+  await fireEvent.focus(window);
+  expect(chromeStatus).toHaveBeenCalledOnce();
+  await rerender({ ...p, open: false });
+  await rerender(p);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(screen.getByText("Connected")).toBeTruthy();
+  expect(chromeStatus).toHaveBeenCalledTimes(2);
+});
+
+it("retries transient status failures", async () => {
+  vi.useFakeTimers();
+  chromeStatus.mockRejectedValueOnce(new ApiError(503, "Temporarily unavailable"));
+  render(ImportModal, props());
+  await tick(); await vi.advanceTimersByTimeAsync(0);
+  expect(syncButton().disabled).toBe(true);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(screen.getByText("Connected")).toBeTruthy();
+  expect(syncButton().disabled).toBe(false);
+  expect(chromeStatus).toHaveBeenCalledTimes(2);
 });
 
 it("localizes auth state from its code", async () => {

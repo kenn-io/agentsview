@@ -2784,19 +2784,55 @@ schemas keep their existing ordering behavior.
   `content[].text` and thinking blocks.
   Malformed selected paths and mismatched conversation UUIDs fail before writes.
   Exports preserve their original message order.
-- **Chrome transport:** Reverified 2026-10-09 against the canonical request file and reconstructed fixtures in `TestChromeHostSyncPrivateReplies`. Native messaging sends replies through a private Unix socket to the server; Chrome Sync's HTTP stream contains only progress, done, and error events. Setup pins the extension's public-key-derived ID. Native frames are capped at 64 MiB; oversized serialized replies become status 413. Both peers require protocol revision 1 in each message, covering encoding and request shapes. `TestRequestShapesVersion` pins the canonical request hash to that revision. `TestChromeHostSignInProfiles` checks sign-in guidance after another profile is refused. `TestChromeSetupWriteFailurePreservesInstall` checks that staged write failures preserve the installed files. `TestChromeHostLocalOnly` refuses remote-auth, bind-all, and forwarded requests before Chrome fetches. `TestChromeHostIncompatibleReply` checks stale unversioned and newer replies before status or body consumption without imports. Stale replies return the SSE code `claude_ai_chrome_host_update_required`; newer replies return `claude_ai_agentsview_update_required` and ask users to upgrade AgentsView. `TestClaudeAIChromeStatus` verifies installation, connection, and refused-profile status through the local-only GET route. The worker test `refuses incompatible revision %s before touching tabs` checks absent and unknown request revisions before tab access or fetch. `TestChromeSyncResults` checks the generated CLI operation with a base path, Origin, bearer token, partial summaries, and the pre-stream 409 code `claude_ai_chrome_host_required`.
-- **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible leaf, stored message count, and transcript revision in `provider_freshness`, keyed by `claude-ai` and session ID. Resync and `ResetAllMtimes` clear it. A zip re-import that changes stored text or count triggers a detail fetch. Sync stores messages in the same shape as zip import, without source UUIDs. Pins match by role, text, and occurrence rank. Reverified 2026-10-08 against the reconstructed list and detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and `TestSyncClaudeAIBranchSwitch`. Shorter zip exports remain refused. See [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats) for branch updates and Trash copies.
-- **Limits:** Browser reads and decoded relay responses are capped at 32 MiB. The JSON relay body allows twice that size plus 64 KiB for escaping and metadata. Detail 404
-  responses count as skipped; 401 or `error.details.error_code` equal to
-  `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
-  Other detail failures stop Sync after two chats fail in a row. Unchanged and
-  skipped chats, successful writes, 404s, and oversized responses reset the
-  streak. See
-  [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats) for failure handling.
-  Organization responses must decode to an array; null and other shapes fail.
-  Organization and list failures, cancellation, and an empty page with
-  `has_more: true` stop Sync. Null and root-sentinel list leaves skip detail
-  fetches; absent or malformed leaves count as errors.
+- **Chrome transport:** Reverified 2026-10-09 against the canonical request file
+  and reconstructed fixtures in `TestChromeHostSyncPrivateReplies`. Native
+  messaging sends replies through a private Unix socket to the server; Chrome
+  Sync's HTTP stream contains only progress, done, and error events. Setup pins
+  the extension's public-key-derived ID. Native frames are capped at 64 MiB;
+  oversized serialized replies become status 413. Both peers require protocol
+  revision 1 in each message, covering encoding and request shapes.
+  `TestRequestShapesVersion` pins the canonical request hash to that revision.
+  `TestChromeHostSignInProfiles` checks sign-in guidance after another profile
+  is refused. `TestChromeSetupWriteFailurePreservesInstall` checks that staged
+  write failures preserve the installed files. `TestChromeHostLocalOnly` refuses
+  remote-auth, bind-all, and forwarded requests before Chrome fetches.
+  `TestChromeHostIncompatibleReply` checks stale unversioned and newer replies
+  before status or body consumption without imports. Stale replies return the
+  SSE code `claude_ai_chrome_host_update_required`; newer replies return
+  `claude_ai_agentsview_update_required` and ask users to upgrade AgentsView.
+  `TestClaudeAIChromeStatus` verifies installation, connection, and
+  refused-profile status through the local-only GET route.
+  `TestChromeHostDisconnectClearsOtherProfile` verifies that disconnecting the
+  active host clears refused-profile status before another host connects. The
+  worker test `refuses incompatible revision %s before touching tabs` checks
+  absent and unknown request revisions before tab access or fetch.
+  `TestChromeSyncResults` checks the generated CLI operation with a base path,
+  Origin, bearer token, partial summaries, and the pre-stream 409 code
+  `claude_ai_chrome_host_required`.
+- **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`,
+  visible leaf, stored message count, and transcript revision in
+  `provider_freshness`, keyed by `claude-ai` and session ID. Resync and
+  `ResetAllMtimes` clear it. A zip re-import that changes stored text or count
+  triggers a detail fetch. Sync stores messages in the same shape as zip import,
+  without source UUIDs. Pins match by role, text, and occurrence rank.
+  Reverified 2026-10-08 against the reconstructed list and detail fixtures and
+  `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`,
+  `TestSyncClaudeAIZipSameCountFreshness`, and `TestSyncClaudeAIBranchSwitch`.
+  Shorter zip exports remain refused. See
+  [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
+  for branch updates and Trash copies.
+- **Limits:** Browser reads and decoded relay responses are capped at 32 MiB.
+  The JSON relay body allows twice that size plus 64 KiB for escaping and
+  metadata. Detail 404 responses count as skipped; 401 or
+  `error.details.error_code` equal to `account_session_invalid` in a non-2xx
+  response stop Sync with a sign-in error. Other detail failures stop Sync after
+  two chats fail in a row. Unchanged and skipped chats, successful writes, 404s,
+  and oversized responses reset the streak. See
+  [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
+  for failure handling. Organization responses must decode to an array; null and
+  other shapes fail. Organization and list failures, cancellation, and an empty
+  page with `has_more: true` stop Sync. Null and root-sentinel list leaves skip
+  detail fetches; absent or malformed leaves count as errors.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks
   found `current_leaf_message_uuid` on list items and byte-identical list and
   detail `updated_at` values with microseconds. Branch switches changed the
