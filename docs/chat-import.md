@@ -68,9 +68,17 @@ The dialog shows a summary when finished — for example,
 "5 conversations processed (4 new, 1 updated)". The session
 list refreshes automatically.
 
-## Sync in the desktop app
+## Sync Claude.ai chats
 
-With the desktop app connected to its local archive, open **Import conversations**, select **Claude.ai**, and click **Sign in**. Sign in to Claude.ai with an email code, close the window, then click **Sync** to download your chats. Google sign-in needs a browser host, which a later release can add beside the desktop window.
+In Chrome, load the extension from a checkout:
+
+1. Open `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and select `frontend/chrome-extension`.
+3. Open AgentsView on `http://localhost` or `http://127.0.0.1`, at the port your server uses, and click the extension's toolbar button once to allow Sync for that origin.
+
+Open **Import conversations**, select **Claude.ai**, and click **Sync**. Chrome uses your existing Claude.ai session, including Google sign-in. If you need to sign in, click **Sign in**, finish in the new tab, then return to AgentsView and click **Sync**.
+
+In the desktop app connected to its local archive, click **Sign in**, use an email code, close the sign-in window, then click **Sync**. The desktop sign-in window supports email codes only.
 
 Sync checks every chat, including archived chats. It fetches new chats and chats whose `updated_at`, visible leaf, or stored transcript changed. A zip re-import that changes text or message count triggers another fetch. Resync clears freshness, so the next Sync fetches each chat once. Search stays available during Sync.
 
@@ -78,7 +86,7 @@ Changed chats show Claude.ai's visible branch, even when it has fewer turns. If 
 
 Each chat has a 32 MiB response limit. Larger chats count as failed while Sync continues. An expired sign-in or two chat failures in a row ends Sync. Closing the dialog cancels it. Completed chats stay imported, and the next Sync fetches unfinished chats.
 
-Sign-in persists across app restarts. To sign out, open **Sign in** and use Claude.ai's own log-out menu. Credentials stay inside that window's browser. Sync requires the desktop app and a local connection; file imports remain available in the web UI.
+Sign-in persists in the browser that holds it. To sign out, open **Sign in** and use Claude.ai's own log-out menu. Credentials stay in Chrome or the desktop sign-in window. Sync requires a local connection and either the Chrome extension or the desktop app; file imports remain available in the web UI.
 
 Claude.ai's private endpoints can change without notice. Sign in again if Sync reports that your sign-in expired.
 
