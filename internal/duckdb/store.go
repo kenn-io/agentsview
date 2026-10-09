@@ -18,10 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/readbase"
-
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // Compile-time check: *Store satisfies db.Store.
