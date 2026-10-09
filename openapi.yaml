@@ -582,6 +582,24 @@ components:
         timezone:
           type: string
       type: object
+    ClaudeAISyncResultInputBody:
+      additionalProperties: false
+      properties:
+        body:
+          type: string
+        error:
+          type: string
+        retry_after:
+          type: string
+        status:
+          format: int64
+          maximum: 599
+          minimum: 0
+          type: integer
+      required:
+        - status
+        - body
+      type: object
     Comparison:
       additionalProperties: false
       properties:
@@ -4745,7 +4763,6 @@ components:
             - diverged
             - shorter_export
             - trashed
-            - newer_marker
             - transient
           type: string
         session_id:
@@ -13077,7 +13094,7 @@ paths:
           content:
             text/event-stream:
               schema:
-                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_sign_in_pending, or claude_ai_archive_upgrade_required."
+                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required."
                 type: string
           description: OK
         "400":
@@ -13152,26 +13169,11 @@ paths:
           required: true
           schema:
             type: string
-        - explode: false
-          in: query
-          name: status
-          required: true
-          schema:
-            format: int64
-            maximum: 599
-            minimum: 0
-            type: integer
-        - in: header
-          name: Retry-After
-          schema:
-            type: string
       requestBody:
         content:
-          application/octet-stream:
+          application/json:
             schema:
-              contentMediaType: application/octet-stream
-              format: binary
-              type: string
+              $ref: "#/components/schemas/ClaudeAISyncResultInputBody"
         required: true
       responses:
         "204":

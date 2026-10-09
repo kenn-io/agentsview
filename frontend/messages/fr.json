@@ -2462,10 +2462,6 @@
   "tool_sequences_retry": "Réessayer",
   "import_claude_connect": "Se connecter",
   "import_claude_sync": "Synchroniser",
-  "import_claude_disconnect": "Déconnecter",
   "import_claude_help": "Connectez-vous, fermez la fenêtre, puis cliquez sur Synchroniser.",
-  "import_claude_auth_required": "Connectez-vous à Claude.ai, puis relancez la synchronisation.",
-  "import_claude_sign_in_pending": "Terminez la connexion à Claude.ai, fermez la fenêtre, puis relancez la synchronisation.",
-  "import_claude_archive_upgrade_required": "Attendez la fin de la mise à niveau de l'archive, puis relancez la synchronisation.",
-  "import_newer_marker": "La session archivée {session} nécessite une version plus récente d'AgentsView. Mettez AgentsView à jour, puis relancez la synchronisation."
+  "import_claude_auth_required": "Connectez-vous à Claude.ai, puis relancez la synchronisation."
 }

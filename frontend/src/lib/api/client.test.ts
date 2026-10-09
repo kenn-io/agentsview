@@ -19,7 +19,7 @@ vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 describe("syncClaudeAI browser relay", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(["claude_ai_auth_required", "claude_ai_sign_in_pending"])("preserves recovery code %s", async (code) => {
+  it.each(["claude_ai_auth_required"])("preserves recovery code %s", async (code) => {
     const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
       `event: error\ndata: ${JSON.stringify({ error: "English recovery instruction", code })}\n\n`,
@@ -46,6 +46,18 @@ describe("syncClaudeAI browser relay", () => {
     expect(host.close).toHaveBeenCalledOnce();
   });
 
+  it("returns completed sync while browser cleanup is pending", async () => {
+    let close!: () => void;
+    const host = { close: vi.fn(() => new Promise<void>((resolve) => { close = resolve; })) } as unknown as BrowserHost;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      'event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    )));
+    await expect(syncClaudeAI(host)).resolves.toEqual({ imported: 1, updated: 0, skipped: 0, errors: 0 });
+    expect(host.close).toHaveBeenCalledOnce();
+    close();
+  });
+
   it("answers fetch events with browser status", async () => {
     const status = 429;
     let stream: ReadableStreamDefaultController<Uint8Array>;
@@ -60,7 +72,6 @@ describe("syncClaudeAI browser relay", () => {
     );
     const host: BrowserHost = {
       connect: vi.fn(),
-      disconnect: vi.fn(),
       close: vi.fn().mockResolvedValue(undefined),
       fetch: vi.fn().mockResolvedValue({ status, body: "browser response", retryAfter: "12" }),
     };
@@ -74,9 +85,9 @@ describe("syncClaudeAI browser relay", () => {
         );
         return response;
       }
-      expect(url).toBe(`/api/v1/import/claude-ai/sync/results/request-1?status=${status}`);
-      expect(await (options.body as Blob).text()).toBe("browser response");
-      expect(new Headers(options.headers).get("Retry-After")).toBe("12");
+      expect(url).toBe("/api/v1/import/claude-ai/sync/results/request-1");
+      expect(JSON.parse(options.body as string)).toEqual({ status: 429, body: "browser response", retry_after: "12" });
+      expect(new Headers(options.headers).get("Content-Type")).toBe("application/json");
       stream.enqueue(
         encoder.encode(
           'event: progress\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\nevent: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
@@ -99,7 +110,6 @@ describe("syncClaudeAI browser relay", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(progress).toHaveBeenCalledWith({ imported: 1, updated: 0, skipped: 0, errors: 0 });
     expect(host.close).toHaveBeenCalledOnce();
-    expect(host.disconnect).not.toHaveBeenCalled();
   });
 
   it.each(["returned", "thrown"])("relays %s browser errors to the user", async (kind) => {
@@ -132,8 +142,8 @@ describe("syncClaudeAI browser relay", () => {
             { headers: { "Content-Type": "text/event-stream" } },
           );
         }
-        expect(url).toBe("/api/v1/import/claude-ai/sync/results/failed?status=0");
-        expect(await (options.body as Blob).text()).toBe(expected);
+        expect(url).toBe("/api/v1/import/claude-ai/sync/results/failed");
+        expect(JSON.parse(options.body as string)).toEqual({ status: 0, body: "", error: expected });
         stream.enqueue(
           encoder.encode(`event: error\ndata: ${JSON.stringify({ error: expected })}\n\n`),
         );

@@ -4,7 +4,6 @@ fn main() {
             "claude_auth_connect",
             "claude_auth_fetch",
             "claude_auth_close",
-            "claude_auth_disconnect",
             "claude_auth_fetch_result",
         ]),
     ))

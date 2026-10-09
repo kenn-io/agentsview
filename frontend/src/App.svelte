@@ -179,7 +179,6 @@
           id,
           () => {
             messages.reload();
-            pins.loadForSession(id);
             sessions.refreshActiveSession();
             sessions.loadChildSessions(id);
             if (ui.vitalsOpen) {

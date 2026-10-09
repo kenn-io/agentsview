@@ -2451,10 +2451,6 @@
   "tool_sequences_retry": "再試行",
   "import_claude_connect": "サインイン",
   "import_claude_sync": "同期",
-  "import_claude_disconnect": "切断",
   "import_claude_help": "サインインしてウィンドウを閉じ、同期をクリックしてください。",
-  "import_claude_auth_required": "Claude.ai にサインインしてから、もう一度同期してください。",
-  "import_claude_sign_in_pending": "Claude.ai へのサインインを完了してウィンドウを閉じ、もう一度同期してください。",
-  "import_claude_archive_upgrade_required": "アーカイブのアップグレードが完了してから、もう一度同期してください。",
-  "import_newer_marker": "アーカイブ済みのセッション {session} には新しいバージョンの AgentsView が必要です。AgentsView を更新してから、もう一度同期してください。"
+  "import_claude_auth_required": "Claude.ai にサインインしてから、もう一度同期してください。"
 }

@@ -12,7 +12,6 @@
     "allow-claude-auth-connect",
     "allow-claude-auth-fetch",
     "allow-claude-auth-close",
-    "allow-claude-auth-disconnect",
     "core:default",
     "core:webview:allow-set-webview-zoom"
   ]
