@@ -684,7 +684,9 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 	scanBytesBefore := SecretScanBytes()
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
-	// Delta gates: the maintained append must not load session history,
+	engine.FlushSignals()
+
+	// Delta gates: the maintained append must not load unbounded session history,
 	// and the secret scan must stay within the delta's own content.
 	assert.Equal(t, loadsBefore, database.MessagesLoadCount(),
 		"maintained delta must not call GetAllMessages")

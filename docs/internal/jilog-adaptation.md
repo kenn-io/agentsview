@@ -7,16 +7,16 @@ behavioral reference. This page records the source, the changes, and the MIT
 notice. Source paths below are relative to that jilog commit.
 
 The pure detection, signal, formatting, JSON, archived-row adapter, and session
-review packages are built. Persistence, digest rendering, scheduling, NanoClaw
-integration, and Kata filing remain planned. Sections marked planned record the
-approved mapping, not current behavior.
+review packages are built, and sync stores each session's findings. Digest
+rendering, scheduling, NanoClaw integration, and Kata filing remain planned.
+Sections marked planned record the approved mapping, not current behavior.
 
 ## Kept
 
 - The correction, error, workaround, deferral, and pattern signal model
   (`crates/jilog-review/src/signal.rs:6-219`) maps to `friction.Signal`.
-- Coding and chat correction detection keeps the window, length limits and
-  ten chat marker patterns (`crates/jilog-review/src/detectors.rs:89-176`).
+- Coding and chat correction detection keeps the window, length limits and ten
+  chat marker patterns (`crates/jilog-review/src/detectors.rs:89-176`).
 - Error detection keeps one signal per failed tool result and the content-free
   `bash` rule (`detectors.rs:205-488`): a failure whose text is blank or only
   the timeout sentence is expected noise. The caller marks failed calls and

@@ -549,6 +549,7 @@ func clearCopiedSelfParents(
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE main.sessions
 		SET parent_session_id = NULLIF(parser_parent_session_id, id),
+		friction_rules_version = '',
 		local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE id IN (SELECT id FROM `+tempIDsTable+`)
 		  AND parent_session_id IS id`); err != nil {
@@ -1765,6 +1766,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"is_truncated", "last_write_incremental",
 		"transcript_revision",
 		"secret_leak_count", "secrets_rules_version",
+		"friction_count", "friction_rules_version", "friction_hash",
 	} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
 			cols = append(cols, c)
@@ -2104,6 +2106,24 @@ func copySessionDataForIDs(
 			)`,
 		); err != nil {
 			return fmt.Errorf("copying secret_findings: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "friction_findings") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO friction_findings
+				(session_id, kind, detector, message_ordinal, call_index,
+				 tool_name, label, text, evidence, title, fingerprint,
+				 occurred_at, seq, rules_version, created_at)
+			SELECT
+				session_id, kind, detector, message_ordinal, call_index,
+				tool_name, label, text, evidence, title, fingerprint,
+				occurred_at, seq, rules_version, created_at
+			FROM old_db.friction_findings
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying friction_findings: %w", err)
 		}
 	}
 

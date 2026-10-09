@@ -177,6 +177,17 @@ The latest published release is
   New sessions in a newly enabled provider or home are picked up as they are
   written, and sessions already on disk arrive with the next sync. Separate
   `push --watch` processes still need a restart.
+- Sync now stores Friction Log findings for each session in SQLite and sends
+  them to PostgreSQL mirrors, ready for upcoming digest, API, and UI work.
+  Findings come from the messages sync already has in memory, and appended
+  sessions are rescored when their signals are. Background reconciliation
+  catches up upgraded archives, parent changes, and large Codex imports for up
+  to 10 seconds per tick and once at daemon startup. A PostgreSQL push finishes
+  that catch-up first. Hosted raw sync adds findings to existing sessions
+  through a `pg raw-reparse` rollout. Sessions above 2,000 message, tool-call,
+  and result-event rows or 4 MiB of stored text are marked skipped rather than
+  reviewed. Usage-only archives mark empty findings current without reading
+  transcripts.
 - Syncing uses less CPU to check transcript text for invalid characters. Clean
   text is now checked in one pass and stored unchanged. In a full sync of a
   950 MB local test corpus, total CPU time fell about 4%. Wall-clock time did

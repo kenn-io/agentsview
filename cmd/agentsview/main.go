@@ -2923,6 +2923,8 @@ func startPeriodicSync(
 	// scheduled reconcile below (Task 5) untouched.
 	go startArchiveAudit(ctx, cfg, engine, database, lock, idleTracker, emitter)
 
+	// Sessions that went stale before a restart need not wait a full tick.
+	idleTracker.Do(func() { recomputeStaleFriction(ctx, engine) })
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
 	for {
@@ -2940,6 +2942,7 @@ func startPeriodicSync(
 			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
 			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
 			recomputePendingSessions(engine, database)
+			recomputeStaleFriction(ctx, engine)
 		})
 	}
 }
@@ -3294,5 +3297,13 @@ func recomputePendingSessions(
 		// deferred-recompute loop is best-effort, the next
 		// pass will retry any that failed.
 		_ = engine.RecomputeSignals(context.Background(), id)
+	}
+}
+
+// recomputeStaleFriction retries the guarded friction backfill on the
+// scheduled reconcile tick. A current archive is a cheap no-op.
+func recomputeStaleFriction(ctx context.Context, engine *sync.Engine) {
+	if _, err := engine.BackfillFriction(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("friction backfill: %v", err)
 	}
 }

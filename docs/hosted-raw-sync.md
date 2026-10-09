@@ -130,6 +130,7 @@ GRANT INSERT, UPDATE, DELETE ON hosted_sessions.raw_upload_sessions,
   hosted_sessions.raw_pins TO hosted_runtime;
 GRANT INSERT, DELETE ON hosted_sessions.starred_sessions,
   hosted_sessions.raw_session_links TO hosted_runtime;
+GRANT INSERT, DELETE ON hosted_sessions.friction_findings TO hosted_runtime;
 
 GRANT USAGE ON SEQUENCE hosted_sessions.raw_ingest_jobs_id_seq,
   hosted_sessions.tool_calls_id_seq, hosted_sessions.tool_result_events_id_seq,
@@ -255,8 +256,8 @@ and PostgreSQL.
 
 ## Reparse and rollback
 
-After an executable upgrade changes the parser data version, schedule current
-heads explicitly in bounded batches:
+After an executable upgrade changes the parser data version or the Friction Log
+rules, schedule current heads explicitly in bounded batches:
 
 ```bash
 agentsview pg raw-reparse hosted --run-id parser-rollout-1 --batch-size 64
@@ -393,9 +394,9 @@ AgentsView data directory. `agentsview raw-sync status` prints path-free JSON
 describing the local checkpoint, pending work, retry time, failures, and
 coverage.
 
-When a complete audit finds that a previously captured file is gone, the
-watcher uploads a tombstone for it. The server keeps the sessions already
-derived from that file; see
+When a complete audit finds that a previously captured file is gone, the watcher
+uploads a tombstone for it. The server keeps the sessions already derived from
+that file; see
 [Isolation and processing limits](#isolation-and-processing-limits).
 
 The normal writable `agentsview serve` daemon has its own parser watcher. Run
@@ -447,6 +448,17 @@ schema owner, grant the additional privileges and restart `pg serve`:
 ```sql
 GRANT SELECT, UPDATE ON agentsview.raw_ingest_jobs TO raw_sync_runtime;
 ```
+
+Upgrading also adds the `friction_findings` table, which the runtime role
+rewrites when it projects a session. Grant it as the schema owner before
+restarting `pg serve`:
+
+```sql
+GRANT SELECT, INSERT, DELETE ON agentsview.friction_findings TO raw_sync_runtime;
+```
+
+Then run the rollout in [Reparse and rollback](#reparse-and-rollback) so
+sessions projected before the upgrade get findings.
 
 Replace `agentsview` and `raw_sync_runtime` with your schema and runtime role.
 Until these grants are applied, the normal session UI continues to work, but

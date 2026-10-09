@@ -128,6 +128,13 @@ type SyncStateStore interface {
 	GetOrCreateSyncState(ctx context.Context, key, defaultValue string) (string, error)
 }
 
+// StoresFriction reports whether a replica stores Friction Log findings, so
+// pushes to it must first bring stale findings current.
+func StoresFriction(r Replica) bool {
+	f, ok := r.(interface{ StoresFriction() bool })
+	return ok && f.StoresFriction()
+}
+
 // Replica is a remote database the archive pushes into and that serves the
 // web UI read-only. Implementations must be safe to use as zero values; the
 // CLI and server hold one value per compiled-in backend.

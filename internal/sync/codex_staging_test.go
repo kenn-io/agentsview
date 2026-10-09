@@ -15,7 +15,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -348,7 +350,7 @@ func writeCodexTranscriptRoot(t *testing.T, uuid, transcript string) string {
 // given staged threshold and runs one cold sync.
 func syncCodexParityEngine(
 	t *testing.T, database *db.DB, root string, stagedMin int64,
-) {
+) *Engine {
 	t.Helper()
 	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
@@ -361,6 +363,8 @@ func syncCodexParityEngine(
 	stats := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, stats.Failed)
 	require.Equal(t, 1, stats.Synced)
+	engine.FlushSignals()
+	return engine
 }
 
 func codexParityTranscript(uuid string) string {
@@ -422,10 +426,15 @@ func TestCodexEngineStagedSyncParity(t *testing.T) {
 	syncCodexParityEngine(
 		t, legacyDB, writeCodexParityRoot(t, uuid), 0,
 	)
-	syncCodexParityEngine(
+	stagedEngine := syncCodexParityEngine(
 		t, stagedDB, writeCodexParityRoot(t, uuid), 1,
 	)
 	sessionID := "codex:" + uuid
+
+	assert.Zero(t, stagedDB.MessagesLoadCount(),
+		"staged sync leaves friction to backfill instead of reloading history")
+	_, err := stagedEngine.BackfillFriction(t.Context())
+	require.NoError(t, err)
 
 	msgsL, err := legacyDB.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
@@ -462,6 +471,36 @@ func TestCodexEngineStagedSyncParity(t *testing.T) {
 			findingsS[i].MessageOrdinal)
 		require.Equal(t, findingsL[i].EventIndex, findingsS[i].EventIndex)
 	}
+
+	var callCOrdinal, callCCallIndex int
+	callCFound := false
+	for _, message := range msgsL {
+		for callIndex, call := range message.ToolCalls {
+			if call.ToolUseID == "call_c" {
+				callCOrdinal, callCCallIndex, callCFound = message.Ordinal, callIndex, true
+			}
+		}
+	}
+	require.True(t, callCFound, "fixture contains the status-less failure call")
+
+	frictionL, err := legacyDB.SessionFrictionFindings(t.Context(), sessionID)
+	require.NoError(t, err)
+	frictionS, err := stagedDB.SessionFrictionFindings(t.Context(), sessionID)
+	require.NoError(t, err)
+	hasErrorForCallC := func(findings []db.FrictionFinding) bool {
+		for _, finding := range findings {
+			if finding.Kind == string(friction.KindError) &&
+				finding.MessageOrdinal != nil && *finding.MessageOrdinal == callCOrdinal &&
+				finding.CallIndex != nil && *finding.CallIndex == callCCallIndex {
+				return true
+			}
+		}
+		return false
+	}
+	require.True(t, hasErrorForCallC(frictionL),
+		"collecting sync persists the content-only failure as a friction error")
+	assert.True(t, hasErrorForCallC(frictionS),
+		"staged sync must persist the same status-less failure call as a friction error")
 }
 
 // Staged imports must preserve the archive's single-event summary dedup rule,
@@ -1000,6 +1039,84 @@ func TestCodexStagedBlockedCategorySignalParity(t *testing.T) {
 		"blocked-category failure signals must match the legacy path")
 	assert.Zero(t, legacyUpdate.ToolFailureSignalCount,
 		"a blocked output with a failure marker must never be a content failure")
+}
+
+func TestCodexFrictionRespectsArchivePolicyAfterAppend(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		policy     config.ArchiveContent
+		wantErrors int
+	}{
+		{"transcript content failure", config.ArchiveContentTranscripts, 0},
+		{"full content failure", config.ArchiveContentFull, 1},
+	} {
+		for _, stagedMin := range []int64{0, 1} {
+			t.Run(fmt.Sprintf("%s/staged=%t", tc.name, stagedMin == 1), func(t *testing.T) {
+				const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b10"
+				const sessionID = "codex:" + uuid
+				const failureText = "command not found"
+				output := testjsonl.CodexFunctionCallOutputJSON("call_a", failureText, "2024-01-01T10:00:03Z")
+				content := testjsonl.JoinJSONL(
+					testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project-a", "codex_cli_rs", "2024-01-01T10:00:00Z"),
+					testjsonl.CodexMsgJSON("user", "run it", "2024-01-01T10:00:01Z"),
+					testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call_a", nil, "2024-01-01T10:00:02Z"),
+					output,
+				)
+				root := writeCodexTranscriptRoot(t, uuid, content)
+				path := filepath.Join(root, "2024", "01", "01", "rollout-2024-01-01T10-00-00-"+uuid+".jsonl")
+				database := openTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+					Machine:   "local", ArchiveContent: tc.policy, StagedCodexParseMinBytes: stagedMin,
+					DisableFilesystemProjectDiscovery: true,
+				})
+				t.Cleanup(engine.Close)
+				require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+				_, err := engine.BackfillFriction(t.Context())
+				require.NoError(t, err)
+				before, err := database.SessionFrictionFindings(t.Context(), sessionID)
+				require.NoError(t, err)
+				assert.Len(t, before, tc.wantErrors)
+				for _, finding := range before {
+					assert.Equal(t, string(friction.KindError), finding.Kind)
+					if tc.policy == config.ArchiveContentTranscripts {
+						assert.Empty(t, finding.Text)
+						assert.NotContains(t, finding.Title, failureText)
+					} else {
+						assert.Equal(t, failureText, finding.Text)
+					}
+				}
+
+				file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+				require.NoError(t, err)
+				_, err = file.WriteString(testjsonl.CodexMsgJSON("assistant", "Done for today.", "2024-01-01T10:00:04Z") + "\n")
+				require.NoError(t, err)
+				require.NoError(t, file.Close())
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path}))
+				_, err = engine.BackfillFriction(t.Context())
+				require.NoError(t, err)
+				after, err := database.SessionFrictionFindings(t.Context(), sessionID)
+				require.NoError(t, err)
+				assert.Len(t, after, tc.wantErrors)
+				assert.Equal(t, before, after, "an unrelated append must not change retained failure evidence")
+				messages, err := database.GetAllMessages(t.Context(), sessionID)
+				require.NoError(t, err)
+				require.NotEmpty(t, messages)
+				assert.Equal(t, "Done for today.", messages[len(messages)-1].Content,
+					"the append must be stored before checking recomputed findings")
+				var calls []db.ToolCall
+				for _, message := range messages {
+					calls = append(calls, message.ToolCalls...)
+				}
+				require.Len(t, calls, 1, "the original call survives the append")
+				require.Len(t, calls[0].ResultEvents, 1)
+				if tc.policy == config.ArchiveContentTranscripts {
+					assert.Empty(t, calls[0].ResultContent)
+					assert.Empty(t, calls[0].ResultEvents[0].Content)
+				}
+			})
+		}
+	}
 }
 
 func sortFindings(findings []db.SecretFinding) {

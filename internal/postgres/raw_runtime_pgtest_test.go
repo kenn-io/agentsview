@@ -167,6 +167,30 @@ func TestHostedRuntimeRefusesLegacyReaderAndPush(t *testing.T) {
 	require.ErrorContains(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull), "privileges")
 }
 
+func TestHostedRuntimeRequiresFrictionProjectionPrivileges(t *testing.T) {
+	f := newProjectionFixture(t)
+	for _, table := range []string{"friction_findings"} {
+		_, err := f.admin.Exec(`REVOKE DELETE ON "` + table + `" FROM "` + f.role + `"`)
+		require.NoError(t, err)
+		require.ErrorContains(t,
+			CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull),
+			table,
+		)
+		_, err = f.admin.Exec(`GRANT DELETE ON "` + table + `" TO "` + f.role + `"`)
+		require.NoError(t, err)
+
+		_, err = f.admin.Exec(`REVOKE SELECT,INSERT ON "` + table + `" FROM "` + f.role + `"`)
+		require.NoError(t, err)
+		require.ErrorContains(t,
+			CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull),
+			table,
+		)
+		_, err = f.admin.Exec(`GRANT SELECT,INSERT ON "` + table + `" TO "` + f.role + `"`)
+		require.NoError(t, err)
+	}
+	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
+}
+
 func TestHostedRuntimeSettlingRechecksConcurrentVisibility(t *testing.T) {
 	for _, mode := range []string{"removal", "exclusion", "replacement", "curation"} {
 		t.Run(mode, func(t *testing.T) {
@@ -291,10 +315,14 @@ func TestHostedRuntimeSubprocessTombstoneRetainsPublicSession(t *testing.T) {
 
 func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
 	f := newProjectionFixture(t)
-	// These immutable payload/metadata tables require insertion and reads, not
-	// arbitrary update/delete grants. Child removal follows the sessions FK.
+	// Friction rows are replaced on a rule-version refresh. Other child removal
+	// follows the sessions FK, so those immutable tables need no DELETE grant.
 	for _, table := range []string{"raw_projection_generations", "raw_source_contributions", "raw_session_public_aliases", "raw_embedding_outbox", "messages", "tool_calls", "tool_result_events", "usage_events", "secret_findings"} {
 		_, err := f.admin.Exec(`REVOKE UPDATE,DELETE ON "` + table + `" FROM "` + f.role + `"`)
+		require.NoError(t, err)
+	}
+	for _, table := range []string{"friction_findings"} {
+		_, err := f.admin.Exec(`REVOKE UPDATE ON "` + table + `" FROM "` + f.role + `"`)
 		require.NoError(t, err)
 	}
 	for _, table := range []string{"tool_calls", "tool_result_events", "usage_events", "pinned_messages"} {
@@ -307,9 +335,9 @@ func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
 	m, receipt := f.accept(t, "device-a", "first", "")
 	out := projectionOutcome("first")
 	out.Outcome.Results[0].Result.Messages[1].ToolCalls[0].InputJSON = `{"token":"AKIA7QHWN2DKR4FYPLJM"}`
-	out.Outcome.Results[0].Result.Messages[1].ToolCalls[0].ResultEvents = []parser.ParsedToolResultEvent{{ToolUseID: "call-1", Source: "tool_result", Status: "completed", Content: "result"}}
+	out.Outcome.Results[0].Result.Messages[1].ToolCalls[0].ResultEvents = []parser.ParsedToolResultEvent{{ToolUseID: "call-1", Source: "tool_result", Status: "errored", Content: "Error: synthetic hosted failure"}}
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, out))
-	for _, table := range []string{"tool_result_events", "usage_events", "secret_findings"} {
+	for _, table := range []string{"tool_result_events", "usage_events", "secret_findings", "friction_findings"} {
 		var count int
 		require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM `+table).Scan(&count))
 		assert.Positive(t, count, table)

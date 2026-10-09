@@ -81,6 +81,11 @@ func normalizeSession(s db.Session) db.Session {
 	// The hosted public adapter deliberately clears the internal parser parent
 	// cache; the resolved public ParentSessionID(s) remain fully compared.
 	s.ParserParentSessionID = nil
+	// PostgreSQL session reads leave out friction summaries until a reader
+	// needs them; EqualFriction compares the stored columns directly.
+	s.FrictionCount = 0
+	s.FrictionRulesVersion = ""
+	s.FrictionHash = ""
 	s.CreatedAt = ""
 	s.LocalModifiedAt = nil
 	s.TranscriptRevision = nil
@@ -129,6 +134,19 @@ func normalizeTime(s string) string {
 
 // EqualUsageEvents preserves the complete normalized accounting rows, including
 // nullable money/message links, provider/source keys and deduplication identity.
+// EqualFriction compares the friction summary, whose hash covers every
+// finding, between the local oracle and the hosted session row.
+func EqualFriction(t *testing.T, ctx context.Context, oracle *db.DB, pg *sql.DB, publicID, physicalID string) {
+	t.Helper()
+	want, err := oracle.GetSessionFull(ctx, publicID)
+	require.NoError(t, err)
+	require.NotNil(t, want, publicID)
+	var count int
+	var version, hash string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT friction_count,friction_rules_version,friction_hash FROM sessions WHERE id=$1`, physicalID).Scan(&count, &version, &hash))
+	assert.Equal(t, []any{want.FrictionCount, want.FrictionRulesVersion, want.FrictionHash}, []any{count, version, hash}, "friction %s", publicID)
+}
+
 func EqualUsageEvents(t *testing.T, ctx context.Context, oracle *db.DB, pg *sql.DB, publicID, physicalID string) {
 	t.Helper()
 	want, err := oracle.GetUsageEvents(ctx, publicID)

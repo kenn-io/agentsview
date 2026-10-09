@@ -187,6 +187,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     no_code_context_count     INT NOT NULL DEFAULT 0,
     runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
+    friction_count            INT NOT NULL DEFAULT 0,
+    friction_rules_version    TEXT NOT NULL DEFAULT '',
+    friction_hash             TEXT NOT NULL DEFAULT '',
     transcript_revision       TEXT NOT NULL DEFAULT '0',
     source_archive_id          TEXT NOT NULL DEFAULT '',
     source_database_generation TEXT NOT NULL DEFAULT '',
@@ -950,6 +953,9 @@ func EnsureSchema(
 	step = time.Now()
 	if _, err := db.ExecContext(ctx, coreDDL); err != nil {
 		return fmt.Errorf("creating pg tables: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, frictionDDL); err != nil {
+		return fmt.Errorf("creating pg friction tables: %w", err)
 	}
 	if err := ensureRawIngestSchemaPG(ctx, db); err != nil {
 		return err
@@ -2321,7 +2327,7 @@ func CheckSchemaCompat(
 	return nil
 }
 
-// checkPushSchemaCompat verifies session ownership columns used only by push.
+// checkPushSchemaCompat verifies session columns written only by push.
 // CheckSchemaCompat also checks sync_metadata because PG serve reads machine
 // display labels from it.
 func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
@@ -2331,6 +2337,12 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf(
 			"sessions table missing push ownership columns: %w", err)
 	}
+	_, err = db.ExecContext(ctx,
+		`SELECT friction_count, friction_rules_version, friction_hash FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing friction columns: %w", err)
+	}
 	return nil
 }
 
@@ -2339,7 +2351,8 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 // not require push-only sessions.owner_marker (verified by
 // checkPushSchemaCompat), model_pricing (always queried by syncModelPricing)
 // or cursor_usage_events (written by syncCursorUsageEvents), so probe those
-// explicitly. It also requires the cursor dedup index, which the cursor usage
+// explicitly. Friction findings are also written by push-only paths.
+// It also requires the cursor dedup index, which the cursor usage
 // insert relies on for ON CONFLICT dedup. When any of these is missing the
 // caller must run EnsureSchema so push migrates the schema instead of failing
 // or duplicating rows.
@@ -2360,7 +2373,8 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "source_session_project_identity_snapshot_scopes") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mapping_scopes") ||
-		!pgHasTable(ctx, db, "cursor_usage_events") {
+		!pgHasTable(ctx, db, "cursor_usage_events") ||
+		!pgHasTable(ctx, db, "friction_findings") {
 		return false
 	}
 	// bulkInsertCursorUsageEvents dedups via a targetless ON CONFLICT

@@ -32,6 +32,16 @@ func (s Signal) Title() string {
 
 // Fingerprint is the full SHA-256 hash of the deterministic title.
 func (s Signal) Fingerprint() string {
-	sum := sha256.Sum256([]byte(s.Title()))
-	return "fl1:" + hex.EncodeToString(sum[:])
+	return FingerprintTitle(s.Title())
+}
+
+// FingerprintTitle hashes an already-rendered title so persistence can reuse it.
+func FingerprintTitle(title string) string {
+	// Most titles fit on the stack; append still accepts longer subject IDs.
+	var input [512]byte
+	sum := sha256.Sum256(append(input[:0], title...))
+	var encoded [4 + sha256.Size*2]byte
+	copy(encoded[:], "fl1:")
+	hex.Encode(encoded[4:], sum[:])
+	return string(encoded[:])
 }

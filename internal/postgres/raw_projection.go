@@ -257,12 +257,25 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			changed = true
 		}
 	}
+	staleFrictionGroups := make(map[string]bool)
+	for _, group := range ordered {
+		stale, staleErr := rawGroupHasStaleFriction(ctx, tx, group)
+		if staleErr != nil {
+			return staleErr
+		}
+		if stale {
+			staleFrictionGroups[group] = true
+		}
+	}
 	// Materialization is serialized per group by the group locks taken above.
 	// The corpus row is shared with manifest acceptance and every other
 	// projection, so it is locked only after every row write.
 	var embeddings []rawEmbeddingChange
-	if changed {
+	if changed || len(staleFrictionGroups) > 0 {
 		for _, group := range ordered {
+			if !changed && !staleFrictionGroups[group] {
+				continue
+			}
 			changes, err := s.materializeGroup(ctx, tx, group)
 			if err != nil {
 				return err
@@ -287,7 +300,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	if err != nil {
 		return err
 	}
-	if changed || derivedChanged {
+	if changed || derivedChanged || len(staleFrictionGroups) > 0 {
 		if err = publishRawRevision(ctx, tx, changed, embeddings); err != nil {
 			return err
 		}

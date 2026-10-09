@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
@@ -731,7 +732,10 @@ type Engine struct {
 	// recompute triggered by incremental writes, so streaming
 	// sessions don't rescan their whole history on every appended
 	// line. Close flushes and stops it.
-	signalSched *signalScheduler
+	signalSched        *signalScheduler
+	frictionBackfillMu gosync.Mutex
+	// frictionReviewHook replaces friction.Review in tests.
+	frictionReviewHook func(friction.SessionInput) []friction.Signal
 
 	// containerMu guards the OpenCode-family shared-SQLite freshness
 	// gate (see opencode_container_gate.go). trustedSQLiteContainers

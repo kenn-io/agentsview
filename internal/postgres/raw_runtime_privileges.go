@@ -10,9 +10,10 @@ import (
 )
 
 // These are the grants used by Project, SettlePendingSignals, generation
-// selection/rollout and supported raw/legacy curation. Cascading session deletes
-// do not require DELETE on child payload tables. Row locks on raw_session_groups
-// require UPDATE even though its immutable group identity is never rewritten.
+// selection/rollout and supported raw/legacy curation. Friction rows are replaced
+// when their rule version is stale; other child payload deletes follow the
+// sessions foreign key. Row locks on raw_session_groups require UPDATE even
+// though its immutable group identity is never rewritten.
 var hostedProjectionPrivileges = []struct{ table, privileges string }{
 	{"sessions", "SELECT,INSERT,UPDATE,DELETE"},
 	{"messages", "SELECT,INSERT"},
@@ -20,6 +21,7 @@ var hostedProjectionPrivileges = []struct{ table, privileges string }{
 	{"tool_result_events", "SELECT,INSERT"},
 	{"usage_events", "SELECT,INSERT"},
 	{"secret_findings", "SELECT,INSERT"},
+	{"friction_findings", "SELECT,INSERT,DELETE"},
 	{"excluded_sessions", "SELECT,INSERT"},
 	{"session_aliases", "SELECT"},
 	{"starred_sessions", "SELECT,INSERT,DELETE"},
