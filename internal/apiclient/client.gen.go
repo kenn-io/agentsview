@@ -19976,6 +19976,7 @@ type DBSession struct {
 	FinalFailureStreak     int64             `json:"final_failure_streak"`
 	FirstMessage           *string           `json:"first_message,omitempty" validate:"required"`
 	GitBranch              *string           `json:"git_branch,omitempty"`
+	GroupKey               *string           `json:"group_key,omitempty"`
 	HasPeakContextTokens   bool              `json:"has_peak_context_tokens"`
 	HasTotalOutputTokens   bool              `json:"has_total_output_tokens"`
 	HealthGrade            *string           `json:"health_grade,omitempty"`

@@ -280,7 +280,7 @@ describe("AttributionPanel selection", () => {
     usage.attributionSummary = narrowed;
     await tick();
     expect(usage.selectedProjectKey).toBe("pl1:sha256:second");
-    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Open")).toBe(false);
+    expect(openButton()).toBeUndefined();
     usage.attributionSummary = full;
     await tick();
     expect(openButton()).toBeDefined();

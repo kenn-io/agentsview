@@ -207,8 +207,8 @@
     <div class="toggles">
       <div class="selection-actions" class:inactive={!hasSelection}>
         <Button size="sm" surface="soft" label={m.sidebar_clear_selection()} onclick={() => usage.clearSelection(groupBy)} />
-        {#if groupBy === "project" && rows.some((row) => row.id === usage.selectedProjectKey)}
-          <span class:inactive={!usage.selectedProjectKey || !!zoomedProject}>
+        {#if groupBy === "project"}
+          <span class:inactive={!usage.selectedProjectKey || !!zoomedProject || !rows.some((row) => row.id === usage.selectedProjectKey)}>
             <Button size="sm" surface="soft" label={m.breadcrumb_open()} title={usage.focusLabel} onclick={() => handleOpen(usage.selectedProjectKey)} />
           </span>
         {/if}
