@@ -85,7 +85,6 @@ type codexSessionBuilder struct {
 	committedUsageBlockedByUser bool
 	messageUsageUpdates         []ParsedMessageTokenUsageUpdate
 	checkpointUnsafe            bool
-	displayCompletionIDs        map[string]struct{}
 	// Calls beyond the persisted cursor's capacity remain parse-local until
 	// enough results arrive to fit the bounded checkpoint again.
 	overflowPendingCalls map[string]codexPendingToolCall
@@ -580,54 +579,7 @@ func (b *codexSessionBuilder) handleHistoryMutation(
 	if operation := payload.Get("operation").Str; operation != "append" {
 		return fmt.Errorf("unsupported TraeX history mutation operation %q", operation)
 	}
-	items := payload.Get("items").Array()
-	var prompts []gjson.Result
-	for _, completion := range payload.Get("display_completions").Array() {
-		prompt := completion.Get("item")
-		if prompt.Get("type").Str != "UserMessage" {
-			continue
-		}
-		if turn, mutationTurn := completion.Get("turn_id").Str, payload.Get("turn_id").Str; turn != "" && mutationTurn != "" && turn != mutationTurn {
-			continue
-		}
-		content := prompt.Get("content")
-		if !content.Exists() {
-			continue
-		}
-		id := prompt.Get("id").Str
-		if id != "" {
-			if _, seen := b.displayCompletionIDs[id]; seen {
-				continue
-			}
-			if b.displayCompletionIDs == nil {
-				b.displayCompletionIDs = make(map[string]struct{})
-			}
-			b.displayCompletionIDs[id] = struct{}{}
-		}
-		mirrored := false
-		for _, item := range items {
-			if item.Get("type").Str != "message" || item.Get("role").Str != "user" {
-				continue
-			}
-			mirrored = id != "" && id == item.Get("id").Str
-			if !mirrored {
-				mirrored = extractCodexContent(prompt) == extractCodexContent(item)
-			}
-			if mirrored {
-				break
-			}
-		}
-		if mirrored {
-			continue
-		}
-		// The persisted cursor does not track display IDs imported from the prefix.
-		if b.incremental {
-			return errCodexIncrementalNeedsFullParse
-		}
-		prompts = append(prompts, gjson.Parse(`{"type":"message","role":"user","content":`+content.Raw+`}`))
-	}
-	items = append(prompts, items...)
-	for _, item := range items {
+	for _, item := range payload.Get("items").Array() {
 		if b.incremental && b.codexResponseItemNeedsFullParse(item) {
 			return errCodexIncrementalNeedsFullParse
 		}
@@ -2685,7 +2637,6 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 		NewCodexCollectingSink(startOrdinal),
 	)
 	b.incremental = true
-	b.sessionID = extractUUIDFromRollout(filepath.Base(path))
 	b.codexCursorState = seed.codexCursorState
 	b.overflowPendingCalls = seed.overflowPendingCalls
 	if committedUsageTarget != nil {
