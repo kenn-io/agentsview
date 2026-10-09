@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"log"
 	"net/url"
 	"slices"
 	"strconv"
@@ -43,9 +42,12 @@ func claudeAIRequest(shape int, organization, conversation string, offset int) s
 	return strings.NewReplacer("{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset)).Replace(strings.Split(claudeAIRequests, "\n")[shape])
 }
 
-func claudeAIFreshness(updatedAt, leaf string, count int) uint64 {
+func claudeAIFreshness(updatedAt, leaf string, session *db.Session) uint64 {
 	hash := fnv.New64a()
-	fmt.Fprintf(hash, "%s\x00%s\x00%d", updatedAt, leaf, count)
+	fmt.Fprintf(hash, "%s\x00%s\x00%d", updatedAt, leaf, session.MessageCount)
+	if session.TranscriptRevision != nil {
+		fmt.Fprintf(hash, "\x00%s", *session.TranscriptRevision)
+	}
 	return hash.Sum64()
 }
 
@@ -163,7 +165,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err != nil {
 					return stats, err
 				}
-				if existing != nil && fresh && storedHash == claudeAIFreshness(marker.UpdatedAt, leaf, existing.MessageCount) {
+				if existing != nil && fresh && storedHash == claudeAIFreshness(marker.UpdatedAt, leaf, existing) {
 					failedLast = false
 					stats.Skipped++
 					cb.progress(stats)
@@ -210,15 +212,20 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					result.Session.Machine = resolvedImportMachine(result.Session.Machine, machine)
 					status, err := syncConversation(ctx, store, result)
 					if errors.Is(err, db.ErrSessionTrashed) {
-						status, err = importSkipped, nil
-					} else if err == nil {
+						stats.record(id, importSkipped, nil)
+						return nil
+					}
+					stats.record(id, status, err)
+					if err == nil {
 						stored, readErr := store.GetSessionFull(ctx, id)
 						err = readErr
 						if err == nil && stored != nil {
-							err = store.UpsertProviderStatHash(ctx, parser.AgentClaudeAI, id, claudeAIFreshness(marker.UpdatedAt, leaf, stored.MessageCount))
+							err = store.UpsertProviderStatHash(ctx, parser.AgentClaudeAI, id, claudeAIFreshness(marker.UpdatedAt, leaf, stored))
+						}
+						if err != nil {
+							stats.record(id, importSkipped, err)
 						}
 					}
-					stats.record(id, status, err)
 					detailErr = err
 					return nil
 				}
@@ -255,7 +262,14 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		return importNew, err
 	}
 	if existing == nil {
-		return upsertConversation(ctx, store, result, nil)
+		_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: chatGPTSession(result.Session), Messages: claudeAIMessages(id, result.Messages),
+			SkipSignalUpdates: true,
+		}})
+		if errors.Is(err, db.ErrSessionExcluded) {
+			return importSkipped, nil
+		}
+		return importNew, err
 	}
 	msgs := claudeAIMessages(id, result.Messages)
 	archived, err := store.GetAllMessages(ctx, id)
@@ -263,22 +277,7 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		return importUpdated, err
 	}
 	if sameMessages(archived, storedFormMessages(store, msgs)) {
-		sess := chatGPTSession(result.Session)
-		if err := store.UpsertSession(ctx, sess); err != nil {
-			if errors.Is(err, db.ErrSessionExcluded) {
-				return importSkipped, nil
-			}
-			return importUpdated, err
-		}
-		if localDB, ok := store.(*db.DB); ok {
-			if err := localDB.BumpLocalModifiedAt(ctx, id); err != nil {
-				log.Printf("import: bumping local_modified_at for %s: %v", id, err)
-			}
-		}
-		if existing.MessageCount == sess.MessageCount && ptrEqual(existing.EndedAt, sess.EndedAt) {
-			return importSkipped, nil
-		}
-		return importUpdated, nil
+		return upsertConversation(ctx, store, result, nil)
 	}
 	replacer, ok := store.(sessionReplacer)
 	if !ok {

@@ -389,6 +389,10 @@ func (s failedSyncStore) UpsertSession(context.Context, db.Session) error {
 	return errors.New("write failed")
 }
 
+func (s failedSyncStore) WriteSessionBatchAtomic(context.Context, []db.SessionBatchWrite, ...func() error) (db.SessionBatchResult, error) {
+	return db.SessionBatchResult{}, errors.New("write failed")
+}
+
 func TestSyncClaudeAIDetailProcessingFailureStreak(t *testing.T) {
 	for _, tt := range []struct {
 		name        string
@@ -515,6 +519,127 @@ func TestSyncClaudeAIMalformedRetries(t *testing.T) {
 			assert.Nil(t, session)
 		}
 		assert.Equal(t, 2, calls)
+	}
+}
+
+func TestSyncClaudeAIZipSameCountFreshness(t *testing.T) {
+	d := testDB(t)
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	calls := 0
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		calls++
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	})
+	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	exported := strings.Replace(syncDetail, "Chosen reply", "Zip reply", 1)
+	stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Updated)
+	messages, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Hello", "Zip reply"}, messageContents(messages))
+	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	messages, err = d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, 2, calls)
+}
+
+type cancelNewSyncStore struct {
+	*db.DB
+	cancel context.CancelFunc
+}
+
+func (s cancelNewSyncStore) UpsertSession(ctx context.Context, session db.Session) error {
+	err := s.DB.UpsertSession(ctx, session)
+	s.cancel()
+	return err
+}
+
+func (s cancelNewSyncStore) WriteSessionBatchAtomic(ctx context.Context, writes []db.SessionBatchWrite, _ ...func() error) (db.SessionBatchResult, error) {
+	return s.DB.WriteSessionBatchAtomic(ctx, writes, func() error {
+		s.cancel()
+		return ctx.Err()
+	})
+}
+
+func TestSyncClaudeAINewChatCancellationIsAtomic(t *testing.T) {
+	d := testDB(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stats, err := SyncClaudeAI(ctx, cancelNewSyncStore{d, cancel}, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	}), nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, stats.Imported+stats.Updated)
+	session, err := d.GetSession(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+	require.NoError(t, err)
+	assert.Nil(t, session)
+	messages, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+	require.NoError(t, err)
+	assert.Empty(t, messages)
+}
+
+type failSyncFreshnessStore struct {
+	*db.DB
+	cancel context.CancelFunc
+}
+
+func (s failSyncFreshnessStore) UpsertProviderStatHash(ctx context.Context, _ parser.AgentType, _ string, _ uint64) error {
+	if s.cancel != nil {
+		s.cancel()
+		return ctx.Err()
+	}
+	return errors.New("freshness write failed")
+}
+
+func TestSyncClaudeAICommittedContentCountsOnFreshnessFailure(t *testing.T) {
+	for _, updated := range []bool{false, true} {
+		for _, canceled := range []bool{false, true} {
+			t.Run("updated="+strconv.FormatBool(updated)+"/canceled="+strconv.FormatBool(canceled), func(t *testing.T) {
+				d := testDB(t)
+				if updated {
+					seed := strings.Replace(syncDetail, "Chosen reply", "Old reply", 1)
+					_, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+seed+"]"), nil)
+					require.NoError(t, err)
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				store := failSyncFreshnessStore{DB: d}
+				if canceled {
+					store.cancel = cancel
+				}
+				var progress ImportStats
+				stats, err := SyncClaudeAI(ctx, store, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+					return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+				}), &ImportCallbacks{OnProgress: func(stats ImportStats) { progress = stats }})
+				if canceled {
+					require.ErrorIs(t, err, context.Canceled)
+				} else {
+					require.NoError(t, err)
+				}
+				if updated {
+					assert.Equal(t, 1, stats.Updated)
+					assert.Zero(t, stats.Imported)
+				} else {
+					assert.Equal(t, 1, stats.Imported)
+					assert.Zero(t, stats.Updated)
+				}
+				assert.Equal(t, 1, stats.Errors)
+				assert.Equal(t, stats.Imported, progress.Imported)
+				assert.Equal(t, stats.Updated, progress.Updated)
+				assert.Equal(t, 1, progress.Errors)
+				messages, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+				require.NoError(t, err)
+				assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+			})
+		}
 	}
 }
 
@@ -684,7 +809,6 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 			assert.Equal(t, []string{"Hello", "Chosen reply", "More", "Answer"}, messageContents(copied))
 		})
 	}
-
 }
 
 func TestSyncClaudeAIShorterZipStillRefused(t *testing.T) {
