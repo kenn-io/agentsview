@@ -17,7 +17,7 @@ func (s *Store) loadWorktreeCandidateSessions(
 ) ([]db.WorktreeCandidateSession, error) {
 	byID := make(map[string]db.WorktreeCandidateSession, len(ids))
 	err := duckQueryChunked(ids, func(chunk []string) error {
-		ph, args := duckInPlaceholders(chunk)
+		ph, args := db.InPlaceholders(chunk)
 		query := `
 			WITH ranked_snapshots AS (
 				SELECT source_archive_id, source_session_id, project, machine,

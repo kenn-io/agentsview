@@ -193,23 +193,8 @@ func chAnalyticsMessageTimeExists(
 		strings.Join(preds, " AND ") + ")", args
 }
 
-func (s analyticsSQL) VisitModels(ctx context.Context, sessionIDs []string, emit func(string)) error {
-	return chQueryChunked(sessionIDs, func(chunk []string) error {
-		query, args := readbase.AnalyticsModelsSQL(chunk)
-		rows, err := s.QueryContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("querying clickhouse analytics models: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var model string
-			if err := rows.Scan(&model); err != nil {
-				return fmt.Errorf("scanning clickhouse analytics model: %w", err)
-			}
-			emit(model)
-		}
-		return rows.Err()
-	})
+func (s analyticsSQL) ModelsSQL(ids []string) (string, []any) {
+	return readbase.AnalyticsModelsSQL(ids)
 }
 
 func (s analyticsSQL) VisitModelTimes(ctx context.Context, sessionIDs []string, emit func(model, timestamp string)) error {
@@ -220,21 +205,13 @@ func (s analyticsSQL) VisitModelTimes(ctx context.Context, sessionIDs []string, 
 			return fmt.Errorf("querying clickhouse filtered analytics models: %w", err)
 		}
 		defer rows.Close()
-		for rows.Next() {
-			var model string
-			var ts any
-			if err := rows.Scan(&model, &ts); err != nil {
-				return fmt.Errorf("scanning clickhouse filtered analytics model: %w", err)
-			}
-			emit(model, formatDBTime(ts))
-		}
-		return rows.Err()
+		return readbase.ScanAnalyticsModelTimes(rows, "clickhouse", formatDBTime, emit)
 	})
 }
 
 func (s analyticsSQL) VisitToolCounts(ctx context.Context, sessionIDs []string, emit func(sessionID, model, timestamp string, count int)) error {
 	return chQueryChunked(sessionIDs, func(chunk []string) error {
-		ph, args := chInPlaceholders(chunk)
+		ph, args := db.InPlaceholders(chunk)
 		rows, err := s.QueryContext(ctx, `
 			SELECT tc.session_id, m.model, m.timestamp, toInt64(COUNT(*))
 			FROM tool_calls tc
@@ -251,19 +228,7 @@ func (s analyticsSQL) VisitToolCounts(ctx context.Context, sessionIDs []string, 
 		}
 		defer rows.Close()
 
-		for rows.Next() {
-			var sessionID, model string
-			var ts any
-			var count int
-			if err := rows.Scan(&sessionID, &model, &ts, &count); err != nil {
-				return fmt.Errorf(
-					"scanning clickhouse filtered analytics tool calls: %w",
-					err,
-				)
-			}
-			emit(sessionID, model, formatDBTime(ts), count)
-		}
-		return rows.Err()
+		return readbase.ScanAnalyticsToolCounts(rows, "clickhouse", formatDBTime, emit)
 	})
 }
 
@@ -310,7 +275,6 @@ func chAnalyticsToolMessageJoin(
 func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
 	sessions := chAnalyticsSessionSet(f)
 
-	counts := map[string]int{}
 	sessionIn, args := sessions.in("session_id")
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id,
@@ -326,26 +290,12 @@ func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.An
 		return nil, fmt.Errorf("querying clickhouse autonomy: %w", err)
 	}
 	defer rows.Close()
-	for rows.Next() {
-		var sessionID string
-		var userCount, toolCount int
-		if err := rows.Scan(&sessionID, &userCount, &toolCount); err != nil {
-			return nil, fmt.Errorf("scanning clickhouse autonomy: %w", err)
-		}
-		if userCount > 0 {
-			counts[db.AutonomyBucket(float64(toolCount)/float64(userCount))]++
-		}
-	}
-	return counts, rows.Err()
+	return readbase.ScanAnalyticsAutonomy(rows, "clickhouse")
 }
 
 // chMaxSQLVars bounds the IN-list size per query to stay well under
 // driver bind-variable limits; larger ID sets are split into chunks.
-const chMaxSQLVars = 900
-
-func chInPlaceholders(ids []string) (string, []any) {
-	return db.InPlaceholders(ids)
-}
+const chMaxSQLVars = readbase.AnalyticsMaxSQLVars
 
 // chSessionSet is a relation of session IDs that a query embeds as
 // `col IN (...)`. clickhouse-go inlines every bound argument into the
@@ -370,7 +320,7 @@ func chSessionSetFromWhere(where string, args []any) chSessionSet {
 // that pin exact sessions, such as contract tests; the list still grows the
 // statement, so production paths derive the set in SQL instead.
 func chSessionSetFromIDs(ids []string) chSessionSet {
-	ph, args := chInPlaceholders(ids)
+	ph, args := db.InPlaceholders(ids)
 	return chSessionSet{body: "SELECT arrayJoin([" + strings.Trim(ph, "()") + "]) AS id", args: args}
 }
 
@@ -439,23 +389,7 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, sessionIDs []string,
 		return nil, fmt.Errorf("querying clickhouse velocity messages: %w", err)
 	}
 	defer rows.Close()
-	for rows.Next() {
-		var sid, role string
-		var ordinal int
-		var ts any
-		var contentLength int
-		if err := rows.Scan(&sid, &ordinal, &role, &ts, &contentLength); err != nil {
-			return nil, fmt.Errorf("scanning clickhouse velocity message: %w", err)
-		}
-		parsed, ok := readbase.AnalyticsLocalTime(formatDBTime(ts), loc)
-		out[sid] = append(out[sid], db.TimingMessage{
-			Role:          role,
-			Time:          parsed,
-			Valid:         ok,
-			ContentLength: contentLength,
-		})
-	}
-	return out, rows.Err()
+	return readbase.ScanAnalyticsVelocityMessages(rows, "clickhouse", formatDBTime, loc, out)
 }
 
 func (s analyticsSQL) VelocityToolCounts(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
@@ -474,15 +408,7 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, sessionIDs []strin
 		return nil, fmt.Errorf("querying clickhouse velocity tool calls: %w", err)
 	}
 	defer rows.Close()
-	for rows.Next() {
-		var sid string
-		var count int
-		if err := rows.Scan(&sid, &count); err != nil {
-			return nil, fmt.Errorf("scanning clickhouse velocity tool call count: %w", err)
-		}
-		out[sid] = count
-	}
-	return out, rows.Err()
+	return readbase.ScanAnalyticsVelocityToolCounts(rows, "clickhouse", out)
 }
 
 func chSessionPushVersions(sessions []readbase.AnalyticsSession) map[string]uint64 {
@@ -553,7 +479,7 @@ func (s *Store) chPopulateFrustrationMarkers(
 		return nil
 	}
 	err := chQueryChunked(ids, func(chunk []string) error {
-		ph, args := chInPlaceholders(chunk)
+		ph, args := db.InPlaceholders(chunk)
 		q := `SELECT session_id, content, is_system
 			FROM messages
 			WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN ` + ph
@@ -603,23 +529,7 @@ func (s analyticsSQL) VisitSignalMessages(ctx context.Context, ids []string, emi
 		return fmt.Errorf("querying clickhouse signal messages: %w", err)
 	}
 	defer msgRows.Close()
-	for msgRows.Next() {
-		var m db.SignalMessage
-		var ts any
-		if err := msgRows.Scan(
-			&m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &ts,
-			&m.IsSystem, &m.HasToolUse, &m.SourceSubtype,
-		); err != nil {
-			return fmt.Errorf("scanning clickhouse signal message: %w", err)
-		}
-		m.Timestamp = formatDBTime(ts)
-		emit(m)
-	}
-	if err := msgRows.Err(); err != nil {
-		return fmt.Errorf("iterating clickhouse signal messages: %w", err)
-	}
-	return nil
+	return readbase.ScanAnalyticsSignalMessages(msgRows, "clickhouse", formatDBTime, emit)
 }
 
 func chAnalyticsMessageWindowPred(col, from, to string) (string, []any) {

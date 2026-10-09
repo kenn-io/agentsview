@@ -48,12 +48,6 @@ func IsSupportedAnalyticsSignal(signal string) bool {
 	return ok
 }
 
-// inPlaceholders returns a "(?,?,...)" string and []any args for
-// a slice of string IDs.
-func inPlaceholders(ids []string) (string, []any) {
-	return InPlaceholders(ids)
-}
-
 // InPlaceholders binds string IDs with question-mark placeholders.
 func InPlaceholders(ids []string) (string, []any) {
 	ph := make([]string, len(ids))
@@ -459,7 +453,7 @@ func (db *DB) getAnalyticsModelsForSessionIDs(
 	modelSet := make(map[string]struct{})
 	models := make([]string, 0)
 	if err := queryChunked(unique, func(chunk []string) error {
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		found, err := db.queryAnalyticsModels(ctx, `
 			SELECT DISTINCT model
 			FROM messages
@@ -513,7 +507,7 @@ func (db *DB) getAnalyticsModelsForSessionIDsFiltered(
 	modelSet := make(map[string]struct{})
 	models := make([]string, 0)
 	if err := queryChunked(unique, func(chunk []string) error {
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT model, COALESCE(timestamp, '')
 			FROM messages
@@ -1276,7 +1270,7 @@ func (db *DB) getModelScopedToolCallCounts(
 	flt := f.MessageScopeFilter()
 	loc := f.location()
 	if err := queryChunked(sessionIDs, func(chunk []string) error {
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT tc.session_id, m.model, COALESCE(m.timestamp, ''), COUNT(*)
 			FROM tool_calls tc
@@ -1561,7 +1555,7 @@ func (db *DB) mergeActivityToolCalls(
 	buckets map[string]*ActivityEntry,
 	model string,
 ) error {
-	ph, args := inPlaceholders(chunk)
+	ph, args := InPlaceholders(chunk)
 	q := `SELECT tc.session_id, COUNT(*)
 		FROM tool_calls tc`
 	if model != "" {
@@ -2449,7 +2443,7 @@ func (db *DB) queryAutonomyChunk(
 	chunk []string,
 	counts map[string]int,
 ) error {
-	ph, args := inPlaceholders(chunk)
+	ph, args := InPlaceholders(chunk)
 	q := `SELECT session_id,
 		SUM(CASE WHEN role='user' AND is_system=0
 			AND COALESCE(source_subtype, '') <> 'tool_result'
@@ -3031,7 +3025,7 @@ func (db *DB) GetAnalyticsTools(
 
 	err = queryChunked(sessionIDs,
 		func(chunk []string) error {
-			ph, chunkArgs := inPlaceholders(chunk)
+			ph, chunkArgs := InPlaceholders(chunk)
 			modelPred, modelArgs := sqliteAnalyticsCSVPredicate(
 				"m.model", f.Model,
 			)
@@ -3180,7 +3174,7 @@ func (db *DB) GetAnalyticsSkills(
 	var skillRows []SkillAnalyticsRow
 	err = queryChunked(sessionIDs,
 		func(chunk []string) error {
-			ph, chunkArgs := inPlaceholders(chunk)
+			ph, chunkArgs := InPlaceholders(chunk)
 			modelPred, modelArgs := sqliteAnalyticsCSVPredicate(
 				"m.model", f.Model,
 			)
@@ -3247,7 +3241,7 @@ func (db *DB) queryVelocityMsgs(
 	loc *time.Location,
 	sessionMsgs map[string][]TimingMessage,
 ) error {
-	ph, args := inPlaceholders(chunk)
+	ph, args := InPlaceholders(chunk)
 	// COALESCE the nullable timestamp column to '' so a NULL (only present
 	// on imported/migrated archives) does not fail rows.Scan with
 	// "converting NULL to string is unsupported". LocalTime treats "" as
@@ -3400,7 +3394,7 @@ func populateVelocityAccumulator(
 	toolCountMap := make(map[string]int)
 	err := queryChunked(sessionIDs,
 		func(chunk []string) error {
-			ph, chunkArgs := inPlaceholders(chunk)
+			ph, chunkArgs := InPlaceholders(chunk)
 			q := `SELECT session_id, COUNT(*)
 				FROM tool_calls
 				WHERE session_id IN ` + ph + `
@@ -3690,7 +3684,7 @@ func (db *DB) GetAnalyticsVelocity(
 		toolCountMap = make(map[string]int)
 		err = queryChunked(sessionIDs,
 			func(chunk []string) error {
-				ph, chunkArgs := inPlaceholders(chunk)
+				ph, chunkArgs := InPlaceholders(chunk)
 				q := `SELECT session_id, COUNT(*)
 					FROM tool_calls
 					WHERE session_id IN ` + ph + `
@@ -4194,7 +4188,7 @@ func (db *DB) populateFrustrationMarkers(
 		ids = append(ids, rows[i].ID)
 	}
 	return queryChunked(ids, func(chunk []string) error {
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		q := `SELECT session_id, ordinal, content, is_system
 			FROM messages
 			WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN ` + ph
@@ -4332,7 +4326,7 @@ func (db *DB) signalMessages(
 	}
 	filterModels := CSVFilterValues(f.Model)
 	err := queryChunked(ids, func(chunk []string) error {
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		q := `SELECT session_id, ordinal, role, content,
 					COALESCE(timestamp, ''), is_system, has_tool_use, COALESCE(source_subtype, '')
 				FROM messages
@@ -4341,7 +4335,7 @@ func (db *DB) signalMessages(
 			q += ` AND model = ?`
 			args = append(args, filterModels[0])
 		} else if len(filterModels) > 1 {
-			modelPH, modelArgs := inPlaceholders(filterModels)
+			modelPH, modelArgs := InPlaceholders(filterModels)
 			q += ` AND model IN ` + modelPH
 			args = append(args, modelArgs...)
 		}

@@ -42,7 +42,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 
 	if err := duckQueryChunked(unique, func(chunk []string) error {
 		reducer := db.NewScopeReducer(flt, emit)
-		ph, args := duckInPlaceholders(chunk)
+		ph, args := db.InPlaceholders(chunk)
 		rows, err := s.queryContext(ctx, readbase.AnalyticsCandidateMessagesSQL(ph, includeContent),
 			args...,
 		)
@@ -51,46 +51,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 		}
 		defer rows.Close()
 
-		for rows.Next() {
-			var (
-				sessionID, role, sourceSubtype, model, content     string
-				ordinal, outputTokens, contentLength               int
-				isSystem, hasThinking, hasToolUse, hasOutputTokens bool
-				ts                                                 any
-			)
-			if err := rows.Scan(
-				&sessionID, &ordinal, &role, &sourceSubtype, &isSystem, &model,
-				&hasThinking, &hasToolUse, &ts, &outputTokens,
-				&hasOutputTokens, &contentLength, &content,
-			); err != nil {
-				return fmt.Errorf("scanning duckdb analytics candidate message: %w", err)
-			}
-			tsStr := formatDBTime(ts)
-			parsed, has := readbase.AnalyticsLocalTime(tsStr, loc)
-			if err := reducer.Push(db.MessageInput{
-				SessionID:       sessionID,
-				Ordinal:         ordinal,
-				Role:            role,
-				SourceSubtype:   sourceSubtype,
-				Model:           model,
-				IsSystem:        isSystem,
-				Timestamp:       tsStr,
-				LocalTime:       parsed,
-				HasLocalTime:    has,
-				HasThinking:     hasThinking,
-				HasToolUse:      hasToolUse,
-				OutputTokens:    outputTokens,
-				HasOutputTokens: hasOutputTokens,
-				ContentLength:   contentLength,
-				Content:         content,
-			}); err != nil {
-				return err
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterating duckdb analytics candidate messages: %w", err)
-		}
-		return nil
+		return readbase.ScanAnalyticsMessageScope(rows, "duckdb", formatDBTime, loc, reducer)
 	}); err != nil {
 		return nil, err
 	}

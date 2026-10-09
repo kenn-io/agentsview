@@ -259,19 +259,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		return qErr
 	}
 	defer rows.Close()
-	for rows.Next() {
-		var sid, cat, toolName string
-		var ts any
-		var count int
-		if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
-			return err
-		}
-		emit(sid, cat, toolName, formatDBTime(ts), count)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return nil
+	return readbase.ScanAnalyticsTools(rows, formatDBTime, emit)
 }
 
 func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error {
@@ -299,19 +287,7 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 		return qErr
 	}
 	defer rows.Close()
-	for rows.Next() {
-		var sid, skill string
-		var count int
-		var msgTS any
-		if err := rows.Scan(&sid, &skill, &count, &msgTS); err != nil {
-			return err
-		}
-		emit(sid, skill, formatDBTime(msgTS), count)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return nil
+	return readbase.ScanAnalyticsSkills(rows, formatDBTime, emit)
 }
 
 func (s analyticsSQL) ToolSessionWindow(f db.AnalyticsFilter) (string, []any) {

@@ -32,7 +32,6 @@ func (s analyticsSQL) Summary(ctx context.Context, f db.AnalyticsFilter) (db.Ana
 	defer rows.Close()
 	resp := db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}
 	if !rows.Next() {
-		rows.Close()
 		return resp, false, nil
 	}
 	resp, err = readbase.ScanAnalyticsSummary(rows, resp, "duckdb")
@@ -224,7 +223,7 @@ func (s analyticsSQL) HourOfWeekSQL(f db.AnalyticsFilter) (string, []any) {
 
 func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, category, name, timestamp string, count int)) error {
 	err := duckQueryChunked(ids, func(chunk []string) error {
-		ph, args := duckInPlaceholders(chunk)
+		ph, args := db.InPlaceholders(chunk)
 		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
 		from, to := readbase.AnalyticsWindowBounds(f)
@@ -252,16 +251,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 			return qErr
 		}
 		defer rows.Close()
-		for rows.Next() {
-			var sid, cat, toolName string
-			var ts any
-			var count int
-			if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
-				return err
-			}
-			emit(sid, cat, toolName, formatDBTime(ts), count)
-		}
-		return rows.Err()
+		return readbase.ScanAnalyticsTools(rows, formatDBTime, emit)
 	})
 	if err != nil {
 		return err
@@ -271,7 +261,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 
 func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error {
 	err := duckQueryChunked(ids, func(chunk []string) error {
-		ph, args := duckInPlaceholders(chunk)
+		ph, args := db.InPlaceholders(chunk)
 		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
 		from, to := readbase.AnalyticsWindowBounds(f)
@@ -293,16 +283,7 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 			return qErr
 		}
 		defer rows.Close()
-		for rows.Next() {
-			var sid, skill string
-			var count int
-			var msgTS any
-			if err := rows.Scan(&sid, &skill, &count, &msgTS); err != nil {
-				return err
-			}
-			emit(sid, skill, formatDBTime(msgTS), count)
-		}
-		return rows.Err()
+		return readbase.ScanAnalyticsSkills(rows, formatDBTime, emit)
 	})
 	if err != nil {
 		return err
@@ -348,6 +329,7 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 		where += " AND s.has_total_output_tokens = TRUE"
 		orderExpr = "s.total_output_tokens DESC, s.id ASC"
 	}
+	// SQL-ranked responses omit display names for compatibility; model-scoped rows include them.
 	query := `
 		SELECT s.id, s.project, s.first_message, s.message_count,
 			s.total_output_tokens, ` + durationSelectExpr + ` AS duration_min,

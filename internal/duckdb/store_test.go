@@ -939,6 +939,7 @@ func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, top.Sessions)
 	assert.Equal(t, fixture.alphaID, top.Sessions[0].ID)
+	// Preserve the SQL-ranked omission even when the stored session has a name.
 	assert.Nil(t, top.Sessions[0].DisplayName)
 
 	signals, err := store.GetAnalyticsSignals(ctx, filter)

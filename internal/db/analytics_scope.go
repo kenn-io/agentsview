@@ -60,7 +60,7 @@ func (db *DB) resolveAnalyticsMessageScope(
 
 	if err := queryChunked(unique, func(chunk []string) error {
 		reducer := NewScopeReducer(flt, emit)
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system, COALESCE(model, ''),
 				has_thinking, has_tool_use, COALESCE(timestamp, ''),

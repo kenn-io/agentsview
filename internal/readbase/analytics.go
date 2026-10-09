@@ -34,13 +34,14 @@ type AnalyticsBackend interface {
 	TrendsSQL() string
 	FormatTime(any) string
 	MessageScope(ctx context.Context, ids []string, f db.AnalyticsFilter, includeContent bool) (db.MessageScope, error)
-	VisitModels(ctx context.Context, ids []string, emit func(string)) error
+	ModelsSQL(ids []string) (string, []any)
 	VisitModelTimes(ctx context.Context, ids []string, emit func(model, timestamp string)) error
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
 	VelocityMessages(ctx context.Context, ids []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error)
 	VelocityToolCounts(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
 	VisitToolCounts(ctx context.Context, ids []string, emit func(sessionID, model, timestamp string, count int)) error
 	VisitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error
+	// Session metadata supplies ClickHouse cache versions; DuckDB uses only rows.
 	PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []AnalyticsSession) error
 }
 
@@ -90,7 +91,7 @@ type AnalyticsSession struct {
 	NoCodeContextCount          int
 	RunawayToolLoopCount        int
 	FrustrationMarkerCount      int
-	PushVersion                 uint64
+	PushVersion                 uint64 // ClickHouse cache version; zero for DuckDB.
 }
 
 func (s *Analytics) analyticsSessionsModelTimeFiltered(

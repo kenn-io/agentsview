@@ -5277,7 +5277,7 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	f := AnalyticsFilter{From: "2025-06-01", To: "2025-06-01", Timezone: "UTC", Model: "model-a"}
 	resp, err := d.GetAnalyticsTools(t.Context(), f)
 	require.NoError(t, err)
-	ph, args := inPlaceholders(ids)
+	ph, args := InPlaceholders(ids)
 	modelPred, modelArgs := sqliteAnalyticsCSVPredicate("m.model", f.Model)
 	from, to := f.messageWindowBoundsUTC()
 	pred, windowArgs := analyticsMessageWindowPred("m.timestamp", from, to)

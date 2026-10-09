@@ -654,7 +654,7 @@ func (s *Store) GetSessionUsageRows(
 	// way the SQLite and PostgreSQL stores chunk this load.
 	var rowsAcc []clickSessionUsageOrderedRow
 	err = chQueryChunked(ids, func(chunk []string) error {
-		inList, inArgs := chInPlaceholders(chunk)
+		inList, inArgs := db.InPlaceholders(chunk)
 		query := clickUsageNormalizedQuery(
 			chUsageStoredMessageEligibility+" AND s.id IN "+inList,
 			chUsageEventEligibility+" AND s.id IN "+inList,

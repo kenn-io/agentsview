@@ -151,23 +151,8 @@ func duckAnalyticsMessageTimeExists(
 		strings.Join(preds, " AND ") + ")", args
 }
 
-func (s analyticsSQL) VisitModels(ctx context.Context, sessionIDs []string, emit func(string)) error {
-	return duckQueryChunked(sessionIDs, func(chunk []string) error {
-		query, args := readbase.AnalyticsModelsSQL(chunk)
-		rows, err := s.QueryContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("querying duckdb analytics models: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var model string
-			if err := rows.Scan(&model); err != nil {
-				return fmt.Errorf("scanning duckdb analytics model: %w", err)
-			}
-			emit(model)
-		}
-		return rows.Err()
-	})
+func (s analyticsSQL) ModelsSQL(ids []string) (string, []any) {
+	return readbase.AnalyticsModelsSQL(ids)
 }
 
 func (s analyticsSQL) VisitModelTimes(ctx context.Context, sessionIDs []string, emit func(model, timestamp string)) error {
@@ -178,21 +163,13 @@ func (s analyticsSQL) VisitModelTimes(ctx context.Context, sessionIDs []string, 
 			return fmt.Errorf("querying duckdb filtered analytics models: %w", err)
 		}
 		defer rows.Close()
-		for rows.Next() {
-			var model string
-			var ts any
-			if err := rows.Scan(&model, &ts); err != nil {
-				return fmt.Errorf("scanning duckdb filtered analytics model: %w", err)
-			}
-			emit(model, formatDBTime(ts))
-		}
-		return rows.Err()
+		return readbase.ScanAnalyticsModelTimes(rows, "duckdb", formatDBTime, emit)
 	})
 }
 
 func (s analyticsSQL) VisitToolCounts(ctx context.Context, sessionIDs []string, emit func(sessionID, model, timestamp string, count int)) error {
 	return duckQueryChunked(sessionIDs, func(chunk []string) error {
-		ph, args := duckInPlaceholders(chunk)
+		ph, args := db.InPlaceholders(chunk)
 		rows, err := s.QueryContext(ctx, `
 			SELECT tc.session_id, m.model, m.timestamp, COUNT(*)
 			FROM tool_calls tc
@@ -209,19 +186,7 @@ func (s analyticsSQL) VisitToolCounts(ctx context.Context, sessionIDs []string, 
 		}
 		defer rows.Close()
 
-		for rows.Next() {
-			var sessionID, model string
-			var ts any
-			var count int
-			if err := rows.Scan(&sessionID, &model, &ts, &count); err != nil {
-				return fmt.Errorf(
-					"scanning duckdb filtered analytics tool calls: %w",
-					err,
-				)
-			}
-			emit(sessionID, model, formatDBTime(ts), count)
-		}
-		return rows.Err()
+		return readbase.ScanAnalyticsToolCounts(rows, "duckdb", formatDBTime, emit)
 	})
 }
 
@@ -264,9 +229,8 @@ func duckAnalyticsToolMessageJoin(
 }
 
 func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
-	counts := map[string]int{}
 	if len(sessionIDs) == 0 {
-		return counts, nil
+		return map[string]int{}, nil
 	}
 	args := make([]any, len(sessionIDs))
 	placeholders := make([]string, len(sessionIDs))
@@ -288,26 +252,12 @@ func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.An
 		return nil, fmt.Errorf("querying duckdb autonomy: %w", err)
 	}
 	defer rows.Close()
-	for rows.Next() {
-		var sessionID string
-		var userCount, toolCount int
-		if err := rows.Scan(&sessionID, &userCount, &toolCount); err != nil {
-			return nil, fmt.Errorf("scanning duckdb autonomy: %w", err)
-		}
-		if userCount > 0 {
-			counts[db.AutonomyBucket(float64(toolCount)/float64(userCount))]++
-		}
-	}
-	return counts, rows.Err()
+	return readbase.ScanAnalyticsAutonomy(rows, "duckdb")
 }
 
 // duckMaxSQLVars bounds the IN-list size per query to stay well under
 // driver bind-variable limits; larger ID sets are split into chunks.
-const duckMaxSQLVars = 900
-
-func duckInPlaceholders(ids []string) (string, []any) {
-	return db.InPlaceholders(ids)
-}
+const duckMaxSQLVars = readbase.AnalyticsMaxSQLVars
 
 func duckQueryChunked(ids []string, fn func(chunk []string) error) error {
 	for i := 0; i < len(ids); i += duckMaxSQLVars {
@@ -336,23 +286,7 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, sessionIDs []string,
 		return nil, fmt.Errorf("querying duckdb velocity messages: %w", err)
 	}
 	defer rows.Close()
-	for rows.Next() {
-		var sid, role string
-		var ordinal int
-		var ts any
-		var contentLength int
-		if err := rows.Scan(&sid, &ordinal, &role, &ts, &contentLength); err != nil {
-			return nil, fmt.Errorf("scanning duckdb velocity message: %w", err)
-		}
-		parsed, ok := readbase.AnalyticsLocalTime(formatDBTime(ts), loc)
-		out[sid] = append(out[sid], db.TimingMessage{
-			Role:          role,
-			Time:          parsed,
-			Valid:         ok,
-			ContentLength: contentLength,
-		})
-	}
-	return out, rows.Err()
+	return readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
 }
 
 func (s analyticsSQL) VelocityToolCounts(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
@@ -372,15 +306,7 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, sessionIDs []strin
 		return nil, fmt.Errorf("querying duckdb velocity tool calls: %w", err)
 	}
 	defer rows.Close()
-	for rows.Next() {
-		var sid string
-		var count int
-		if err := rows.Scan(&sid, &count); err != nil {
-			return nil, fmt.Errorf("scanning duckdb velocity tool call count: %w", err)
-		}
-		out[sid] = count
-	}
-	return out, rows.Err()
+	return readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
 }
 
 func stringInArgs(values []string) ([]any, []string) {
@@ -446,23 +372,7 @@ func (s analyticsSQL) VisitSignalMessages(ctx context.Context, ids []string, emi
 		return fmt.Errorf("querying duckdb signal messages: %w", err)
 	}
 	defer msgRows.Close()
-	for msgRows.Next() {
-		var m db.SignalMessage
-		var ts any
-		if err := msgRows.Scan(
-			&m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &ts,
-			&m.IsSystem, &m.HasToolUse, &m.SourceSubtype,
-		); err != nil {
-			return fmt.Errorf("scanning duckdb signal message: %w", err)
-		}
-		m.Timestamp = formatDBTime(ts)
-		emit(m)
-	}
-	if err := msgRows.Err(); err != nil {
-		return fmt.Errorf("iterating duckdb signal messages: %w", err)
-	}
-	return nil
+	return readbase.ScanAnalyticsSignalMessages(msgRows, "duckdb", formatDBTime, emit)
 }
 
 func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, error) {

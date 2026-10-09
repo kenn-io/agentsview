@@ -209,7 +209,7 @@ func AppendExcludeSessionIDs(
 	if len(ids) == 0 {
 		return where, args
 	}
-	ph, extra := inPlaceholders(ids)
+	ph, extra := InPlaceholders(ids)
 	out := make([]any, 0, len(args)+len(extra))
 	out = append(out, args...)
 	out = append(out, extra...)
@@ -1481,7 +1481,7 @@ func (db *DB) semanticAllowedSessionIDs(
 
 	allowed := make(map[string]bool, len(ids))
 	err := queryChunked(ids, func(chunk []string) error {
-		placeholders, chunkArgs := inPlaceholders(chunk)
+		placeholders, chunkArgs := InPlaceholders(chunk)
 		args := make([]any, 0, len(filterArgs)+len(chunkArgs))
 		args = append(args, filterArgs...)
 		args = append(args, chunkArgs...)

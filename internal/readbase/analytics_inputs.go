@@ -2,11 +2,15 @@ package readbase
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 )
+
+// AnalyticsMaxSQLVars bounds mirror ID batches below driver parameter limits.
+const AnalyticsMaxSQLVars = 900
 
 func AnalyticsLocalTime(ts string, loc *time.Location) (time.Time, bool) {
 	t, ok := ParseAnalyticsTime(ts)
@@ -51,8 +55,26 @@ func (s *Analytics) models(ctx context.Context, ids []string) ([]string, error) 
 		return []string{}, nil
 	}
 	models := map[string]bool{}
-	if err := s.backend.VisitModels(ctx, ids, func(model string) { models[model] = true }); err != nil {
-		return nil, err
+	for start := 0; start < len(ids); start += AnalyticsMaxSQLVars {
+		err := func() error {
+			query, args := s.backend.ModelsSQL(ids[start:min(start+AnalyticsMaxSQLVars, len(ids))])
+			rows, err := s.backend.QueryContext(ctx, query, args...)
+			if err != nil {
+				return fmt.Errorf("querying %s analytics models: %w", s.name, err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var model string
+				if err := rows.Scan(&model); err != nil {
+					return fmt.Errorf("scanning %s analytics model: %w", s.name, err)
+				}
+				models[model] = true
+			}
+			return rows.Err()
+		}()
+		if err != nil {
+			return nil, err
+		}
 	}
 	return db.SortedKeys(models), nil
 }
