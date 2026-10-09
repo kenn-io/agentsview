@@ -13,20 +13,12 @@ const ParentlessWorkerSQL = `session_kind = 'non-interactive'
  AND COALESCE(parent_session_id, '') = '' AND COALESCE(relationship_type, '') = ''`
 
 func repairParentlessWorkers(ctx context.Context, w *writerHandle) error {
-	tx, err := w.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := publishLiveSessionChangesTx(ctx, tx, ParentlessWorkerSQL); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE sessions
+	if _, err := w.Exec(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE `+ParentlessWorkerSQL); err != nil {
 		return fmt.Errorf("repairing parentless workers: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 type boundedAutomationText struct {

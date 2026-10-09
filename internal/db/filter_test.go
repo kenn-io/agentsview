@@ -1762,3 +1762,31 @@ func TestIncrementalUpdateClearsAutomated(t *testing.T) {
 	assert.False(t, s.IsAutomated,
 		"should no longer be automated after second user turn")
 }
+
+func TestListSessionsParentlessChildrenRespectFilters(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"worker", "dangling", "deleted", "other"} {
+		insertSession(t, d, id, "proj", func(s *Session) {
+			s.RelationshipType = "subagent"
+			s.MessageCount, s.UserMessageCount = 2, 1
+			if id == "dangling" {
+				s.ParentSessionID = new("missing")
+			}
+			if id == "other" {
+				s.Project = "other"
+			}
+		})
+	}
+	insertSession(t, d, "nested", "proj", func(s *Session) {
+		s.RelationshipType = "subagent"
+		s.ParentSessionID = new("worker")
+		s.MessageCount, s.UserMessageCount = 2, 1
+	})
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "deleted"))
+	f := SessionFilter{IncludeChildren: true, Project: "proj"}
+	requireSessions(t, d, f, []string{"worker", "nested"})
+	f.IncludeOrphans = true
+	requireSessions(t, d, f, []string{"worker", "nested", "dangling"})
+	f.IncludeChildren, f.IncludeOrphans = false, false
+	requireSessions(t, d, f, nil)
+}

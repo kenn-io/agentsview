@@ -136,7 +136,14 @@ func (ix *Index) Build(
 	if err != nil {
 		return BuildResult{}, err
 	}
-	// Missing scope metadata also requires one full reconciliation for older indexes.
+	// A mirror refreshed before the scope key existed (a refresh watermark
+	// is stamped, but scope_include_automated is not) predates this scope
+	// feature entirely. Treat that the same as a genuine scope change: force
+	// one full reconciliation now so any automated rows that were never
+	// meant to be in scope (or, if the config default is true, newly
+	// in-scope automated sessions older than the watermark) get resolved,
+	// then setIncludeAutomatedScope below stamps the key so every later
+	// build compares against a real stored scope again.
 	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
 	corpusFingerprint := gen.Params[CorpusFingerprintParam]
 	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(

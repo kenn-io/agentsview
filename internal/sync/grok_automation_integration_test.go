@@ -66,4 +66,13 @@ func TestGrokPromptContextSubagentSurvivesResyncAndAudit(t *testing.T) {
 	require.NotNil(t, afterAudit)
 	assert.False(t, afterAudit.IsAutomated)
 	assert.Equal(t, "subagent", afterAudit.RelationshipType)
+	require.False(t, engine.ResyncAll(t.Context(), nil).Aborted)
+	diff := sync.NewDiffEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}}, Machine: "local",
+	})
+	t.Cleanup(diff.Close)
+	report, err := diff.ParseDiff(t.Context(), sync.ParseDiffOptions{Agents: []parser.AgentType{parser.AgentGrok}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, report.Totals.Identical)
+	assert.False(t, report.HasFailures())
 }

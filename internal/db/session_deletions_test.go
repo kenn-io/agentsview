@@ -3,6 +3,8 @@
 package db
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -89,4 +91,56 @@ func TestSessionDeletionJournalIgnoresSoftDeleteAndClearsOnReinsert(t *testing.T
 	delta, err = database.LoadSessionDeletionDelta(ctx, before, final, nil, nil)
 	require.NoError(t, err)
 	assert.Empty(t, delta)
+}
+
+func TestClassificationJournalCommitsChangesAndIgnoresNoOps(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	s := Session{ID: "worker", Project: "p", Machine: "m", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(ctx, s))
+	before, err := d.SessionDeletionPublicationRevision(ctx)
+	require.NoError(t, err)
+	tx, err := d.getWriter().Begin(ctx)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET relationship_type = 'subagent', is_automated = 1 WHERE id = 'worker'`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Rollback())
+	after, err := d.SessionDeletionPublicationRevision(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	s.RelationshipType = "subagent"
+	require.NoError(t, d.UpsertSession(ctx, s))
+	after, err = d.SessionDeletionPublicationRevision(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, before+1, after)
+	ids, err := d.LoadSessionDeletionChanges(ctx, before, after)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"worker"}, ids)
+	deleted, err := d.LoadSessionDeletionDelta(ctx, before, after, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, deleted)
+	require.NoError(t, d.UpsertSession(ctx, s))
+	same, err := d.SessionDeletionPublicationRevision(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, after, same)
+	_, err = d.getWriter().Exec(ctx, `UPDATE sessions SET is_automated = 1 WHERE id = 'worker'`)
+	require.NoError(t, err)
+	changed, err := d.SessionDeletionPublicationRevision(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, after+1, changed)
+}
+
+func TestFreshSchemaClassificationJournal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fresh.db")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	d, err := OpenFreshIsolatedContext(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	s := Session{ID: "worker", Project: "p", Machine: "m", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	s.RelationshipType = "subagent"
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	revision, err := d.SessionDeletionPublicationRevision(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), revision)
 }

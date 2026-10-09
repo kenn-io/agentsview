@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,6 +22,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/sync"
 )
 
 // fakeBuildEncoder returns a deterministic 3-dimensional encoder that never
@@ -1141,4 +1144,46 @@ func TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration(t *
 	_, ok, err := ix.BuildingFingerprint(ctx)
 	require.NoError(t, err)
 	assert.False(t, ok, "no generation should remain in state building")
+}
+
+func TestBuildIngestReclassifiesIndexedClaudeWorkerBelowWatermark(t *testing.T) {
+	archive := dbtest.OpenTestDB(t)
+	seedEndedSession(t, archive, "worker", "older worker content", "2024-01-01T00:00:00Z")
+	seedEndedSession(t, archive, "human", "hello", "2024-01-02T00:00:00Z")
+	ix := openTestIndex(t)
+	gen := fakeGeneration("fake-model")
+	result, err := ix.Build(t.Context(), archive, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Fill.Documents)
+	require.ElementsMatch(t, []string{"worker", "human"}, mirrorSessionIDs(t, ix))
+	worker, err := archive.GetSession(t.Context(), "worker")
+	require.NoError(t, err)
+	require.NotNil(t, worker)
+	require.Empty(t, worker.RelationshipType)
+	root := t.TempDir()
+	path := filepath.Join(root, "project", "worker.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(`{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"sdk","timestamp":"2024-01-01T00:00:00Z","message":{"content":"older worker content"}}`+"\n"), 0o600))
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	worker, err = archive.GetSession(t.Context(), "worker")
+	require.NoError(t, err)
+	require.NotNil(t, worker)
+	require.Equal(t, "subagent", worker.RelationshipType)
+	require.False(t, worker.IsAutomated)
+	_, err = ix.Build(t.Context(), archive, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	hits, err := ix.Search(t.Context(), fakeBuildEncoder(), "older worker content", 10)
+	require.NoError(t, err)
+	var found bool
+	for _, hit := range hits {
+		if hit.SessionID == "worker" {
+			found = true
+			assert.True(t, hit.Subordinate)
+		}
+	}
+	assert.True(t, found)
 }

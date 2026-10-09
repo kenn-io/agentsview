@@ -1612,3 +1612,38 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
+
+func TestStoreListSessionsParentlessChildrenRespectFilters(t *testing.T) {
+	store := ensureSidebarIndexStoreSchema(t, testPGURL(t))
+	defer store.Close()
+	for _, id := range []string{"worker", "dangling", "deleted", "other", "nested"} {
+		insertSidebarIndexSession(t, store, id)
+	}
+	_, err := store.DB().Exec(`UPDATE sessions SET relationship_type = 'subagent';
+  UPDATE sessions SET parent_session_id = 'missing' WHERE id = 'dangling';
+  UPDATE sessions SET parent_session_id = 'worker' WHERE id = 'nested';
+  UPDATE sessions SET deleted_at = NOW() WHERE id = 'deleted';
+  UPDATE sessions SET project = 'other' WHERE id = 'other'`)
+	require.NoError(t, err)
+	worker, err := store.GetSession(t.Context(), "worker")
+	require.NoError(t, err)
+	require.NotNil(t, worker)
+	f := db.SessionFilter{IncludeChildren: true, Project: worker.Project}
+	for _, tc := range []struct {
+		children, orphans bool
+		want              []string
+	}{
+		{true, false, []string{"worker", "nested"}},
+		{true, true, []string{"worker", "nested", "dangling"}},
+		{false, false, nil},
+	} {
+		f.IncludeChildren, f.IncludeOrphans = tc.children, tc.orphans
+		page, err := store.ListSessions(t.Context(), f)
+		require.NoError(t, err)
+		var ids []string
+		for _, s := range page.Sessions {
+			ids = append(ids, s.ID)
+		}
+		assert.ElementsMatch(t, tc.want, ids)
+	}
+}

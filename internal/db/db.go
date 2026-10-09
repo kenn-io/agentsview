@@ -1250,10 +1250,13 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 		return nil, errors.Join(err, d.CloseContext(ctx))
 	}
 	d.mu.Lock()
-	err = ensureConversationSchemaLocked(ctx, d.getWriter())
+	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
+	if err == nil {
+		err = ensureConversationSchemaLocked(ctx, d.getWriter())
+	}
 	d.mu.Unlock()
 	if err != nil {
-		return closeOnError(fmt.Errorf("initializing conversation export state: %w", err))
+		return closeOnError(fmt.Errorf("initializing fresh archive triggers and export state: %w", err))
 	}
 	if _, err := d.GetOrCreateDatabaseID(ctx); err != nil {
 		return closeOnError(fmt.Errorf("initializing database id: %w", err))
@@ -2678,6 +2681,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL); err != nil {
+		return fmt.Errorf("installing classification journal trigger: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing column migrations: %w", err)
 	}
@@ -3979,11 +3985,6 @@ func batchUpdateAutomated(ctx context.Context,
 	if len(ids) == 0 {
 		return nil
 	}
-	tx, err := w.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
 	const batchSize = 500
 	for i := 0; i < len(ids); i += batchSize {
 		end := min(i+batchSize, len(ids))
@@ -3995,10 +3996,7 @@ func batchUpdateAutomated(ctx context.Context,
 			args[j+1] = id
 			phs[j] = "?"
 		}
-		if err := publishLiveSessionChangesTx(ctx, tx, "id IN ("+strings.Join(phs, ",")+")", args[1:]...); err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx,
+		_, err := w.Exec(ctx,
 			"UPDATE sessions"+
 				" SET is_automated = ?,"+
 				"     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"+
@@ -4013,7 +4011,7 @@ func batchUpdateAutomated(ctx context.Context,
 			)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (db *DB) shouldRunTokenCoverageRepairLocked(ctx context.Context,

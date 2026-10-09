@@ -852,6 +852,7 @@ func TestClaudeProviderFirstPromptReparseEligibleKinds(t *testing.T) {
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, status)
+			assert.Equal(t, tc.want == IncrementalNeedsFullParse, outcome.ForceReplace)
 			if tc.want == IncrementalApplied {
 				require.Len(t, outcome.Messages, 1)
 				assert.Equal(t, "Review the change.", outcome.Messages[0].Content)

@@ -11,24 +11,26 @@ import (
 
 const archiveMetadataSessionDeletionRevisionKey = "session_deletion_publication_revision"
 
-// publishLiveSessionChangesTx queues repaired sessions for existing mirror rescans.
-func publishLiveSessionChangesTx(ctx context.Context, tx *sql.Tx, where string, args ...any) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata (key, value)
- SELECT 'session_deletion_publication_revision', '1' WHERE EXISTS (SELECT 1 FROM sessions WHERE `+where+`)
- ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, args...); err != nil {
-		return fmt.Errorf("advancing repaired session publication: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
- SELECT id, project, (SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key = 'session_deletion_publication_revision'), 0
- FROM sessions WHERE `+where+`
- ON CONFLICT(session_id) DO UPDATE SET project = excluded.project, revision = excluded.revision, deleted = 0`, args...); err != nil {
-		return fmt.Errorf("publishing repaired sessions: %w", err)
-	}
-	return nil
-}
+// Install after column migrations so older archives gain the referenced columns first.
+const sessionClassificationJournalTriggerSQL = `
+CREATE TRIGGER IF NOT EXISTS trg_sessions_classification_journal_update
+AFTER UPDATE OF relationship_type, is_automated ON sessions
+WHEN OLD.relationship_type IS NOT NEW.relationship_type OR OLD.is_automated IS NOT NEW.is_automated
+BEGIN
+ INSERT INTO archive_metadata (key, value)
+  VALUES ('session_deletion_publication_revision', '1')
+ ON CONFLICT(key) DO UPDATE SET
+  value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+ INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
+  SELECT NEW.id, NEW.project, CAST(value AS INTEGER), 0
+  FROM archive_metadata WHERE key = 'session_deletion_publication_revision'
+ ON CONFLICT(session_id) DO UPDATE SET
+  project = excluded.project, revision = excluded.revision, deleted = 0;
+END;`
 
 // SessionDeletionPublicationRevision is an O(1) change token for hard
-// session deletions and repairs, advanced by triggers and classification audits.
+// session deletions and repairs, advanced by triggers.
 func (db *DB) SessionDeletionPublicationRevision(ctx context.Context) (int64, error) {
 	if ctx == nil {
 		ctx = context.Background()

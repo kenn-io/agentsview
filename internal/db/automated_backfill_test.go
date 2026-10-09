@@ -32,7 +32,9 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 			s.UserMessageCount = 1
 		})
 	}
-	_, err := d.getWriter().Exec(t.Context(), `UPDATE sessions SET relationship_type = '' WHERE id IN ('plain', 'script')`)
+	_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER trg_sessions_classification_journal_update`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET relationship_type = '' WHERE id IN ('plain', 'script')`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 1, local_modified_at = '2000-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)

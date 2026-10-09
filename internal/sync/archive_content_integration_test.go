@@ -862,3 +862,44 @@ func TestArchivePolicyCortexToolResultsDoNotChangeAutomation(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeFirstPromptReplacesStreamingContinuation(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentUsage} {
+		t.Run(string(policy), func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "project", "stream-first.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+			initial := `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n" +
+				`{"type":"assistant","uuid":"a1","timestamp":"2026-10-01T10:00:00Z","message":{"id":"msg-1","model":"claude-sonnet-4-5","content":[{"type":"text","text":"Reading "}],"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+			database := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", ArchiveContent: policy,
+			})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			continuation := `{"type":"assistant","uuid":"a2","parentUuid":"a1","timestamp":"2026-10-01T10:00:01Z","message":{"id":"msg-1","model":"claude-sonnet-4-5","content":[{"type":"text","text":"context."},{"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":"src/main.go"}}],"usage":{"input_tokens":10,"output_tokens":7}}}` + "\n" +
+				`{"type":"user","uuid":"u1","parentUuid":"a2","turnOrigin":"sdk","timestamp":"2026-10-01T10:00:02Z","message":{"content":"Explain this function."}}` + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(initial+continuation), 0o600))
+			engine.SyncPathsContext(t.Context(), []string{path})
+			stored, err := database.GetSessionFull(t.Context(), "stream-first")
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Equal(t, "subagent", stored.RelationshipType)
+			assert.Equal(t, 7, stored.TotalOutputTokens)
+			assert.Equal(t, 1, stored.UserMessageCount)
+			messages, err := database.GetMessages(t.Context(), "stream-first", 0, 10, true)
+			require.NoError(t, err)
+			require.NotEmpty(t, messages)
+			assert.Equal(t, 7, messages[0].OutputTokens)
+			if policy == config.ArchiveContentFull {
+				require.Len(t, messages, 2)
+				assert.Equal(t, "Reading \ncontext.\n[Read: src/main.go]", messages[0].Content)
+				require.Len(t, messages[0].ToolCalls, 1)
+				assert.Equal(t, "call-1", messages[0].ToolCalls[0].ToolUseID)
+			} else {
+				assert.Len(t, messages, 1)
+			}
+		})
+	}
+}

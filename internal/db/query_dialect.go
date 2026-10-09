@@ -592,7 +592,7 @@ func (d QueryDialect) ParentRelation(child, parent string) string {
 }
 
 func BuildCanonicalRootWhere(dialect QueryDialect, sessionAlias string, includeOrphans bool) string {
-	base := `NOT (` + CanonicalChildRelationshipPredicate(dialect, sessionAlias) + `)`
+	base := `(NOT (` + CanonicalChildRelationshipPredicate(dialect, sessionAlias) + `) OR COALESCE(` + sessionAlias + `.parent_session_id, '') = '')`
 	if !includeOrphans {
 		return base
 	}
