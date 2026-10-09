@@ -147,15 +147,6 @@ func (e *Engine) s3StoredSessionID(ctx context.Context, file parser.DiscoveredFi
 					return record.ID
 				}
 			}
-			if file.Agent == parser.AgentCursor {
-				roots := e.sources().agentDirs[file.Agent]
-				key := parser.CursorS3SourceKey(roots, file.Path)
-				for _, record := range records {
-					if key != "" && key == parser.CursorS3SourceKey(roots, record.FilePath) {
-						return record.ID
-					}
-				}
-			}
 		}
 	}
 	return baseID
