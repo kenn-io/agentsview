@@ -31,10 +31,10 @@ describe("Chrome page bridge", () => {
     expect(document.documentElement.dataset.agentsviewClaudeHost).toBe("chrome");
   });
 
-  it.each(["source", "origin"])("refuses a foreign %s", (field) => {
+  it("refuses a foreign source", () => {
     window.dispatchEvent(new MessageEvent("message", {
-      source: field === "source" ? null : window,
-      origin: field === "origin" ? "https://example.com" : location.origin,
+      source: null,
+      origin: location.origin,
       data: { type: "agentsview-claude-request", id: "a", method: "connect" },
     }));
     expect(sendMessage).not.toHaveBeenCalled();

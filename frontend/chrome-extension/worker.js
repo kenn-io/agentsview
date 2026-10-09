@@ -1,13 +1,16 @@
 import { allowedPath } from "./paths.js";
 
-const ownedTabs = new Map();
-
 chrome.action.onClicked.addListener(async (tab) => {
   const url = new URL(tab.url);
   if (url.protocol !== "http:" || !["localhost", "127.0.0.1"].includes(url.hostname)) return;
-  const { allowedOrigins = [] } = await chrome.storage.local.get("allowedOrigins");
-  await chrome.storage.local.set({ allowedOrigins: [...new Set([...allowedOrigins, url.origin])] });
+  const [document] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => {} });
+  if (document.documentId) await chrome.storage.session.set({ [String(tab.id)]: document.documentId });
 });
+
+chrome.tabs.onUpdated.addListener((id, change) => {
+  if (change.status === "loading") return chrome.storage.session.remove(String(id));
+});
+chrome.tabs.onRemoved.addListener((id) => chrome.storage.session.remove(String(id)));
 
 async function loadedTab(id) {
   await new Promise((resolve, reject) => {
@@ -33,18 +36,18 @@ async function loadedTab(id) {
 }
 
 async function request({ method, path }, sender) {
-  const { allowedOrigins = [] } = await chrome.storage.local.get("allowedOrigins");
-  if (sender.frameId !== 0 || !allowedOrigins.includes(sender.origin)) {
+  const key = String(sender.tab?.id);
+  const consent = await chrome.storage.session.get(key);
+  if (!sender.documentId || consent[key] !== sender.documentId) {
     throw new Error("Click the AgentsView toolbar button on this tab to allow Claude.ai Sync.");
   }
   if (method === "connect") {
     await chrome.tabs.create({ url: "https://claude.ai/login?return_url=%2Fnew" });
   } else if (method === "fetch") {
     if (!allowedPath(path)) throw new Error("Unsupported Claude fetch path");
-    let [tab] = await chrome.tabs.query({ url: "https://claude.ai/*" });
+    let [tab] = await chrome.tabs.query({ url: "https://claude.ai/*", discarded: false });
     if (!tab) {
       tab = await chrome.tabs.create({ url: "https://claude.ai/new", active: false });
-      ownedTabs.set(sender.origin, tab.id);
     }
     await loadedTab(tab.id);
     const target = { tabId: tab.id };
@@ -56,18 +59,13 @@ async function request({ method, path }, sender) {
       args: [`https://claude.ai${path}`],
     });
     return reply.result;
-  } else if (method === "close") {
-    const id = ownedTabs.get(sender.origin);
-    if (id !== undefined) {
-      ownedTabs.delete(sender.origin);
-      await chrome.tabs.remove(id);
-    }
-  } else {
+  } else if (method !== "close") {
     throw new Error("Unsupported Claude host method");
   }
+  return null;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  request(message, sender).then((result) => respond({ result }), (error) => respond({ error: String(error) }));
+  request(message, sender).then((result) => respond({ result }), (error) => respond({ error: error.message }));
   return true;
 });

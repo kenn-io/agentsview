@@ -11,7 +11,7 @@ if (!markHost()) {
 }
 
 window.addEventListener("message", async (event) => {
-  if (event.source !== window || event.origin !== location.origin || event.data?.type !== "agentsview-claude-request") return;
+  if (event.source !== window || event.data?.type !== "agentsview-claude-request") return;
   const { id, method, path } = event.data;
   let reply;
   try {
