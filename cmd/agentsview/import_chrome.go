@@ -30,6 +30,7 @@ func syncClaudeAIChrome(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	request.Header.Set("Origin", daemonOriginURL(transport.URL))
 	if cfg.AuthToken != "" {
 		request.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
 	}

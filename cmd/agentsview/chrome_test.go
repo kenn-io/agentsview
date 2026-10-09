@@ -148,6 +148,29 @@ func TestChromeSyncResults(t *testing.T) {
 }
 
 func TestChromeImportArguments(t *testing.T) {
+	t.Run("sync request", func(t *testing.T) {
+		dataDir := t.TempDir()
+		t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+		t.Setenv("AGENTSVIEW_AUTH_TOKEN", "")
+		ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+			"/api/v1/import/claude-ai/sync": func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
+				if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
+					http.Error(w, "Forbidden", http.StatusForbidden)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, err := io.WriteString(w, "event: done\ndata: {\"imported\":2}\n\n")
+				assert.NoError(t, err)
+			},
+		})
+		registerTestRuntime(t, dataDir, ts.URL, false)
+		cmd := newImportCommand()
+		cmd.SetArgs([]string{"--type", "claude-ai", "--sync"})
+		require.NoError(t, cmd.ExecuteContext(t.Context()))
+	})
+
 	for _, tt := range []struct {
 		name        string
 		flags, args []string
