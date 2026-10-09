@@ -532,9 +532,16 @@ func findRepoRoot(ctx context.Context, start string) string {
 	if start == "" {
 		return ""
 	}
-	start, err := filepath.Abs(start)
-	if err != nil {
-		return ""
+	if !filepath.IsAbs(start) {
+		base, err := filepath.Abs(filepath.VolumeName(start) + ".")
+		if err != nil {
+			return ""
+		}
+		if os.IsPathSeparator(start[0]) {
+			start = filepath.VolumeName(base) + start
+		} else {
+			start = base + string(filepath.Separator) + strings.TrimPrefix(start, filepath.VolumeName(start))
+		}
 	}
 	for ctx.Err() == nil {
 		eligibility := boundedRepoRootEligibility(ctx, start, func(batch context.Context) repoRootEligibility {
@@ -613,19 +620,20 @@ func findRepoRoot(ctx context.Context, start string) string {
 // filesystems or invalid roots).
 func existingAncestor(ctx context.Context, path string) string {
 	dir := path
+	separator := func(r rune) bool { return r == '/' || r == rune(filepath.Separator) }
 	for ctx.Err() == nil {
 		info, err := os.Stat(dir)
 		if ctx.Err() != nil {
 			return ""
 		}
-		if err == nil {
-			if info.IsDir() {
-				return dir
-			}
-			dir = filepath.Dir(dir)
-			continue
+		if err == nil && info.IsDir() {
+			return dir
 		}
-		parent := filepath.Dir(dir)
+		parent, _ := filepath.Split(strings.TrimRightFunc(dir, separator))
+		parent = strings.TrimRightFunc(parent, separator)
+		if len(parent) <= len(filepath.VolumeName(dir)) {
+			parent = filepath.VolumeName(dir) + string(filepath.Separator)
+		}
 		if parent == dir {
 			return ""
 		}
