@@ -3907,7 +3907,7 @@ func TestCodexDuplicateCallIDsAttachOutputsToLatestCall(t *testing.T) {
 }
 
 func TestParseCodexSession_ArrayOutputKeepsRawJSON(t *testing.T) {
-	const output = `[{"type":"text","text":"Result"},{"type":"image","url":"https://example.com/image.png"}]`
+	const output = `[{"type":"text","text":"Result"},{"type":"output_text","text":" text"}]`
 	content := testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON("array-output", "/workspace/project", "codex-tui", tsEarly),
 		testjsonl.CodexMsgJSON("user", "Inspect", tsEarlyS1),

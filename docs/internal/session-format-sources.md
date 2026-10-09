@@ -850,8 +850,10 @@ fixtures retain this field; missing identities remain source-local.
   `traex archive <id>` moves a rollout into. Some observed rollouts keep the
   user-facing transcript in Codex-compatible `response_item` rows. Newer
   observed rollouts keep the same session envelope but carry transcript changes
-  in append-only `history_mutation.payload.items[]`; other operations fail
-  parsing. Token deltas appear in `token_usage_record.payload.usage`.
+  in append-only `history_mutation.payload.items[]`; applied mutations accept
+  version 1 or an absent version and refuse other versions or operations.
+  Replayed parent mutations are suppressed before validation. Token deltas
+  appear in `token_usage_record.payload.usage`.
   The sibling `history.jsonl` carries the
   same `session_id`/Unix-seconds `ts`/prompt `text` records, and agentsview
   consumes it as the same live-activity hint. No `session_index.jsonl` sidecar
@@ -870,6 +872,9 @@ fixtures retain this field; missing identities remain source-local.
   `history_mutation.payload.items[]`. These fixtures identify TraeX as a Codex
   format fork with producer-specific transcript extensions, not a fully
   independent archive format.
+  Reverified 2026-10-09 against `testdata/traex/history_mutation_session.jsonl`:
+  mutations omit `version`; tool outputs use text arrays. Pure text outputs
+  concatenate blocks without adding bytes, then use string-output JSON parsing.
 - **Usage and cost:** `token_count` records carry the Codex fields. Newer
   rollouts can instead write the same per-response usage shape at
   `token_usage_record.payload.usage`. Both paths use Codex normalization and

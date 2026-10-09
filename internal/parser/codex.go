@@ -570,11 +570,14 @@ func (b *codexSessionBuilder) handleHistoryMutation(
 	if b.agent != AgentTraeX {
 		return nil
 	}
-	if operation := payload.Get("operation").Str; operation != "append" {
-		return fmt.Errorf("unsupported TraeX history mutation operation %q", operation)
-	}
 	if b.suppresses(codexTypeHistoryMutation, payload) {
 		return nil
+	}
+	if version := payload.Get("version"); version.Exists() && (version.Type != gjson.Number || version.Num != 1) {
+		return fmt.Errorf("unsupported TraeX history mutation version %s", version.Raw)
+	}
+	if operation := payload.Get("operation").Str; operation != "append" {
+		return fmt.Errorf("unsupported TraeX history mutation operation %q", operation)
 	}
 	for _, item := range payload.Get("items").Array() {
 		if b.incremental && b.codexResponseItemNeedsFullParse(item) {
@@ -595,11 +598,7 @@ func (b *codexSessionBuilder) handleTokenUsageRecord(
 	if raw == "" {
 		return
 	}
-	key := raw
-	if responseID := payload.Get("response_id"); responseID.Str != "" {
-		key = `{"response_id":` + responseID.Raw + `,"usage":` + raw + `}`
-	}
-	b.applyTokenUsage(raw, key)
+	b.applyTokenUsage(raw, payload.Get("response_id").Str)
 }
 
 func (b *codexSessionBuilder) markFirstUserReplayPossible() {
@@ -613,11 +612,11 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 	if raw == "" {
 		return
 	}
-	b.applyTokenUsage(raw, raw)
+	b.applyTokenUsage(raw, "")
 }
 
-func (b *codexSessionBuilder) applyTokenUsage(raw, key string) {
-	if b.observeTokenUsage(key) {
+func (b *codexSessionBuilder) applyTokenUsage(raw, responseID string) {
+	if b.observeTokenUsage(raw, responseID) {
 		return
 	}
 
@@ -1396,7 +1395,7 @@ func parseCodexFunctionOutput(
 			}
 		}
 		if allText {
-			out = gjson.Result{Type: gjson.String, Str: strings.Join(extractCodexTextBlocksFromResult(out), "\n")}
+			out = gjson.Result{Type: gjson.String, Str: strings.Join(extractCodexTextBlocksFromResult(out), "")}
 		}
 	}
 

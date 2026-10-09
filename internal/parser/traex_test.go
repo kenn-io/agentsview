@@ -478,11 +478,8 @@ func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
 	tests := []struct {
 		name      string
 		rows      string
-		wantError bool
 		wantUsage []string
 	}{
-		{name: "replace fails", rows: `{"type":"history_mutation","payload":{"operation":"replace","items":[]}}`, wantError: true},
-		{name: "missing operation fails", rows: `{"type":"history_mutation","payload":{"items":[]}}`, wantError: true},
 		{
 			name:      "equal usage from distinct responses",
 			rows:      testjsonl.JoinJSONL(reply, record, reply, `{"type":"token_usage_record","payload":{"response_id":"response-2",`+usage+`}}`),
@@ -491,6 +488,11 @@ func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
 		{
 			name:      "repeated response counted once",
 			rows:      testjsonl.JoinJSONL(reply, record, reply, record),
+			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, ""},
+		},
+		{
+			name:      "escaped response ID counted once",
+			rows:      testjsonl.JoinJSONL(reply, record, reply, `{"type":"token_usage_record","payload":{"response_id":"response-\u0031",`+usage+`}}`),
 			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, ""},
 		},
 		{
@@ -514,26 +516,6 @@ func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
 			require.Len(t, sources, 1)
 			appendCodexProviderContent(t, path, tt.rows+"\n")
 			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-			if tt.wantError {
-				require.ErrorContains(t, err, "unsupported TraeX history mutation operation")
-				fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-				require.NoError(t, err)
-				_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
-					Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
-					Offset: int64(len(prefix)), StartOrdinal: 1,
-				})
-				require.ErrorContains(t, err, "unsupported TraeX history mutation operation")
-				invalidPrefixSize := fingerprint.Size
-				appendCodexProviderContent(t, path, reply+"\n")
-				fingerprint, err = provider.Fingerprint(t.Context(), sources[0])
-				require.NoError(t, err)
-				_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
-					Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
-					Offset: invalidPrefixSize, StartOrdinal: 1,
-				})
-				require.ErrorContains(t, err, "unsupported TraeX history mutation operation")
-				return
-			}
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
 			msgs := outcome.Results[0].Result.Messages
@@ -549,6 +531,115 @@ func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTraeXProviderHistoryMutationRefusal(t *testing.T) {
+	const uuid = "019fcf70-1111-7000-8000-000000000005"
+	tests := []struct {
+		name    string
+		payload string
+		wantErr string
+	}{
+		{"replace", `{"operation":"replace","items":[]}`, "operation"},
+		{"missing operation", `{"items":[]}`, "operation"},
+		{"newer version", `{"version":2,"operation":"append","items":[]}`, "version"},
+		{"zero version", `{"version":0,"operation":"append","items":[]}`, "version"},
+		{"fractional version", `{"version":1.1,"operation":"append","items":[]}`, "version"},
+		{"string version", `{"version":"1","operation":"append","items":[]}`, "version"},
+		{"null version", `{"version":null,"operation":"append","items":[]}`, "version"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			prefix := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+				testjsonl.CodexMsgJSON("user", "Inspect", tsEarlyS1),
+			)
+			path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+			provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			appendCodexProviderContent(t, path, `{"type":"history_mutation","payload":`+tt.payload+"}\n")
+			_, err = provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			wantErr := "unsupported TraeX history mutation " + tt.wantErr
+			require.ErrorContains(t, err, wantErr)
+			fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+			require.NoError(t, err)
+			_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
+				Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
+				Offset: int64(len(prefix)), StartOrdinal: 1,
+			})
+			require.ErrorContains(t, err, wantErr)
+			invalidPrefixSize := fingerprint.Size
+			appendCodexProviderContent(t, path, testjsonl.CodexMsgJSON("assistant", "Reply", tsEarlyS5)+"\n")
+			fingerprint, err = provider.Fingerprint(t.Context(), sources[0])
+			require.NoError(t, err)
+			_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
+				Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
+				Offset: invalidPrefixSize, StartOrdinal: 1,
+			})
+			require.ErrorContains(t, err, wantErr)
+		})
+	}
+}
+
+func TestTraeXProviderHistoryMutationReplay(t *testing.T) {
+	const parent = "019fcf70-1111-7000-8000-000000000006"
+	const child = "019fcf70-1111-7000-8000-000000000007"
+	for _, tt := range []struct{ name, lineage string }{
+		{"fork", `"forked_from_id":"` + parent + `"`},
+		{"subagent", `"source":{"subagent":{"thread_spawn":{"parent_thread_id":"` + parent + `"}}}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeCodexProviderSessionContent(t, root, parent, testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(parent, "/workspace/project", "codex-tui", tsEarly),
+				`{"type":"turn_context","payload":{"turn_id":"parent-turn"}}`,
+			))
+			path := writeCodexProviderSessionContent(t, root, child, testjsonl.JoinJSONL(
+				`{"type":"session_meta","payload":{"id":"`+child+`","cwd":"/workspace/project",`+tt.lineage+`}}`,
+				testjsonl.CodexSessionMetaJSON(parent, "/workspace/project", "codex-tui", tsEarly),
+				`{"type":"turn_context","payload":{"turn_id":"parent-turn"}}`,
+				`{"type":"history_mutation","payload":{"operation":"replace","items":[]}}`,
+				`{"type":"history_mutation","payload":{"version":2,"operation":"append","items":[]}}`,
+				`{"type":"turn_context","payload":{"turn_id":"child-turn"}}`,
+				`{"type":"history_mutation","payload":{"version":1,"operation":"append","items":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Child prompt"}]}]}}`,
+			))
+			provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: child, StoredFilePath: path})
+			require.NoError(t, err)
+			require.True(t, found)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			require.Len(t, outcome.Results[0].Result.Messages, 1)
+			assert.Equal(t, "Child prompt", outcome.Results[0].Result.Messages[0].Content)
+		})
+	}
+}
+
+func TestCodexProviderIgnoresHistoryMutation(t *testing.T) {
+	const uuid = "019fcf70-1111-7000-8000-000000000008"
+	root := t.TempDir()
+	path := writeCodexProviderSessionContent(t, root, uuid, testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+		testjsonl.CodexMsgJSON("user", "Inspect", tsEarlyS1),
+		`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Ignore"}]}]}}`,
+		`{"type":"history_mutation","payload":{"version":2,"operation":"replace","items":[]}}`,
+	))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: uuid, StoredFilePath: path})
+	require.NoError(t, err)
+	require.True(t, found)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	require.Len(t, outcome.Results[0].Result.Messages, 1)
+	assert.Equal(t, "Inspect", outcome.Results[0].Result.Messages[0].Content)
 }
 
 func TestTraeXProviderHistoryMutationIncremental(t *testing.T) {
@@ -618,6 +709,8 @@ func TestTraeXProviderHistoryMutationToolOutputs(t *testing.T) {
 		wantSubagent string
 	}{
 		{"text JSON", "spawn_agent", `[{"type":"text","text":"{\"agent_id\":\"child\"}"}]`, `{"agent_id":"child"}`, "traex:child"},
+		{"split text JSON", "spawn_agent", `[{"type":"text","text":"{\"agent_id\":\"ch"},{"type":"output_text","text":"ild\"}"}]`, `{"agent_id":"child"}`, "traex:child"},
+		{"split text", "shell", `[{"type":"input_text","text":"Do"},{"type":"text","text":"ne\n"},{"type":"output_text","text":"now"}]`, "Done\nnow", ""},
 		{"mixed image", "shell", `[{"type":"text","text":"Done"},{"type":"image","url":"https://example.com/image.png"}]`, `[{"type":"text","text":"Done"},{"type":"image","url":"https://example.com/image.png"}]`, ""},
 		{"unknown block", "shell", `[{"type":"text","text":"Done"},{"type":"unknown","text":"Keep"}]`, `[{"type":"text","text":"Done"},{"type":"unknown","text":"Keep"}]`, ""},
 	}
