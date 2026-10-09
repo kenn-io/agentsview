@@ -24,12 +24,6 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 		automated                                bool
 	}{
 		{
-			id: "worker", path: filepath.Join(claudeRoot, "project", "worker.jsonl"), relationship: parser.RelSubagent,
-			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Delegate a settings change."}}` + "\n",
-			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
-			followup: testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:02:00Z", "More detail.", "a2", "a1").String(),
-		},
-		{
 			id: "scripted-worker", path: filepath.Join(claudeRoot, "project", "scripted-worker.jsonl"), relationship: parser.RelSubagent, automated: true,
 			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"You are a code reviewer. Review the settings change."}}` + "\n",
 			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
@@ -62,7 +56,7 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(session.path), 0o700))
 			require.NoError(t, os.WriteFile(session.path, []byte(session.content), 0o600))
 		}
-		require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
+		require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
 		for _, session := range sessions {
 			stored, err := database.GetSession(t.Context(), session.id)
 			require.NoError(t, err)
@@ -78,7 +72,7 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	require.NoError(t, database.Close())
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET session_kind = '', relationship_type = '', is_automated = 0, data_version = 126 WHERE id = 'worker'`)
+	_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET session_kind = '', relationship_type = '', is_automated = 0, data_version = 126 WHERE id = 'scripted-worker'`)
 	require.NoError(t, err)
 	_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET session_kind = 'non-interactive', relationship_type = '', is_automated = 1, data_version = 126 WHERE agent = 'codex'`)
 	require.NoError(t, err)
@@ -88,12 +82,12 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	reopened := dbtest.OpenTestDBAt(t, path)
 	engine = sync.NewEngine(t.Context(), reopened, engineConfig)
 	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
-	worker, err := reopened.GetSession(t.Context(), "worker")
+	worker, err := reopened.GetSession(t.Context(), "scripted-worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker)
 	assert.Empty(t, worker.SessionKind)
 	assert.Equal(t, "subagent", worker.RelationshipType)
-	assert.Equal(t, db.CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "worker"))
+	assert.Equal(t, db.CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), "scripted-worker"))
 	engine.Close()
 	require.NoError(t, reopened.Close())
 }

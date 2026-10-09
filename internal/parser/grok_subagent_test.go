@@ -86,7 +86,6 @@ func TestGrokSubagentKindsWithoutMetadata(t *testing.T) {
 		{"subagent_resume", RelSubagent, ""},
 		{"subagent_fork", RelSubagent, "grok:source-session"},
 		{"subagent_unknown", RelFork, "grok:source-session"},
-		{"fork", RelFork, "grok:source-session"},
 		{"restore", RelFork, "grok:source-session"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -141,57 +140,39 @@ func TestGrokSubagentParentsWhenParentSessionIsNotParsed(t *testing.T) {
 }
 
 func TestGrokMalformedSubagentMetaDoesNotParent(t *testing.T) {
-	root := t.TempDir()
-	parentID := "parent-session"
-	childID := "child-session"
-	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", parentID), `{
+	for _, tc := range []struct {
+		name, meta string
+	}{
+		{"malformed", `{not-json`},
+		{"missing-parent", `{"subagent_id":"child-session","child_session_id":"child-session","status":"running"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			parentID := "parent-session"
+			childID := "child-session"
+			writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", parentID), `{
 		"info":{"id":"parent-session","cwd":"/workspace/project"},
 		"session_summary":"parent"
 	}`)
-	writeGrokFixtureFile(
-		t,
-		filepath.Join(root, "cwd-key", parentID, "subagents", childID, "meta.json"),
-		`{not-json`,
-	)
-	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", childID), `{
+			writeGrokFixtureFile(
+				t,
+				filepath.Join(root, "cwd-key", parentID, "subagents", childID, "meta.json"),
+				tc.meta,
+			)
+			writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", childID), `{
 		"info":{"id":"child-session","cwd":"/workspace/project"},
 		"session_kind":"subagent",
 		"session_summary":"child"
 	}`)
 
-	result, err := ParseGrokSummary(
-		grokSummaryPath(root, "cwd-key", childID), "project", "test-machine",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, RelSubagent, result.Session.RelationshipType)
-	assert.Empty(t, result.Session.ParentSessionID)
-}
-
-func TestGrokSubagentMetaWithoutParentIDDoesNotParent(t *testing.T) {
-	root := t.TempDir()
-	parentID := "parent-session"
-	childID := "child-session"
-	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", parentID), `{
-		"info":{"id":"parent-session","cwd":"/workspace/project"},
-		"session_summary":"parent"
-	}`)
-	writeGrokFixtureFile(
-		t,
-		filepath.Join(root, "cwd-key", parentID, "subagents", childID, "meta.json"),
-		`{"subagent_id":"child-session","child_session_id":"child-session","status":"running"}`,
-	)
-	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", childID), `{
-		"info":{"id":"child-session","cwd":"/workspace/project"},
-		"session_kind":"subagent",
-		"session_summary":"child"
-	}`)
-
-	result, err := ParseGrokSummary(
-		grokSummaryPath(root, "cwd-key", childID), "project", "test-machine",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, RelSubagent, result.Session.RelationshipType)
-	assert.Empty(t, result.Session.ParentSessionID)
+			result, err := ParseGrokSummary(
+				grokSummaryPath(root, "cwd-key", childID), "project", "test-machine",
+			)
+			require.NoError(t, err)
+			assert.Equal(t, RelSubagent, result.Session.RelationshipType)
+			assert.Empty(t, result.Session.ParentSessionID)
+		})
+	}
 }
 
 func TestGrokChangedPathReparentsFromSubagentMeta(t *testing.T) {

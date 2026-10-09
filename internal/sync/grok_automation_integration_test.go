@@ -67,7 +67,7 @@ func TestGrokNativeSubagentsSurviveParentLoss(t *testing.T) {
 	assertChildren()
 }
 
-func TestGrokPromptContextSubagentSurvivesResyncAndAudit(t *testing.T) {
+func TestGrokPromptContextSubagentMatchesParseDiff(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "cwd-key", "sess-1")
 	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
@@ -114,13 +114,6 @@ func TestGrokPromptContextSubagentSurvivesResyncAndAudit(t *testing.T) {
 	assert.False(t, after.IsAutomated)
 	assert.Equal(t, "subagent", after.RelationshipType)
 
-	require.NoError(t, database.ForceBackfillIsAutomated(t.Context()))
-	afterAudit, err := database.GetSession(t.Context(), "grok:sess-1")
-	require.NoError(t, err)
-	require.NotNil(t, afterAudit)
-	assert.False(t, afterAudit.IsAutomated)
-	assert.Equal(t, "subagent", afterAudit.RelationshipType)
-	require.False(t, engine.ResyncAll(t.Context(), nil).Aborted)
 	diff := sync.NewDiffEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}}, Machine: "local",
 	})

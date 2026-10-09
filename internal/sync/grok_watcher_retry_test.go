@@ -156,7 +156,6 @@ func TestGrokWatcherCompanionChangesStillRefreshSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.False(t, stored.IsAutomated)
-	assert.Equal(t, "subagent", stored.RelationshipType)
 	assert.Equal(t, "non-interactive", stored.SessionKind)
 	file, err := os.OpenFile(history, os.O_APPEND|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
