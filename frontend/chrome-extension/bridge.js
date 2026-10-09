@@ -1,14 +1,4 @@
-function markHost() {
-  if (!document.documentElement) return false;
-  document.documentElement.dataset.agentsviewClaudeHost = "chrome";
-  return true;
-}
-if (!markHost()) {
-  const observer = new MutationObserver(() => {
-    if (markHost()) observer.disconnect();
-  });
-  observer.observe(document, { childList: true });
-}
+document.documentElement.dataset.agentsviewClaudeHost = "chrome";
 
 window.addEventListener("message", async (event) => {
   if (event.source !== window || event.data?.type !== "agentsview-claude-request") return;

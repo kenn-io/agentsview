@@ -7,9 +7,6 @@ chrome.action.onClicked.addListener(async (tab) => {
   if (document.documentId) await chrome.storage.session.set({ [String(tab.id)]: document.documentId });
 });
 
-chrome.tabs.onUpdated.addListener((id, change) => {
-  if (change.status === "loading") return chrome.storage.session.remove(String(id));
-});
 chrome.tabs.onRemoved.addListener((id) => chrome.storage.session.remove(String(id)));
 
 async function loadedTab(id) {
@@ -59,7 +56,7 @@ async function request({ method, path }, sender) {
       args: [`https://claude.ai${path}`],
     });
     return reply.result;
-  } else if (method !== "close") {
+  } else {
     throw new Error("Unsupported Claude host method");
   }
   return null;

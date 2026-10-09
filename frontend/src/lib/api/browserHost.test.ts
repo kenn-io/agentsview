@@ -39,7 +39,6 @@ describe("browser host discovery", () => {
       window.dispatchEvent(new MessageEvent("message", { source: window, origin: location.origin, data: { type: "agentsview-claude-reply", id: data.id, error: "Allow Sync" } }));
     });
     await expect(getBrowserHost()!.connect()).rejects.toThrow("Allow Sync");
-    await expect(getBrowserHost()!.close()).rejects.toThrow("Allow Sync");
   });
 
   it("rejects a reply without a result or error", async () => {
@@ -50,12 +49,25 @@ describe("browser host discovery", () => {
     await expect(getBrowserHost()!.fetch("/api/organizations")).rejects.toThrow("Claude host returned no result");
   });
 
-  it("accepts null results for connect and close", async () => {
+  it("accepts null results for connect", async () => {
     document.documentElement.dataset.agentsviewClaudeHost = "chrome";
     vi.spyOn(window, "postMessage").mockImplementation((data) => {
       window.dispatchEvent(new MessageEvent("message", { source: window, data: { type: "agentsview-claude-reply", id: data.id, result: null } }));
     });
     await expect(getBrowserHost()!.connect()).resolves.toBeNull();
-    await expect(getBrowserHost()!.close()).resolves.toBeNull();
+  });
+
+  it("gives Chrome toolbar instructions and closes locally", async () => {
+    document.documentElement.dataset.agentsviewClaudeHost = "chrome";
+    const post = vi.spyOn(window, "postMessage");
+    const host = getBrowserHost()!;
+    expect(host.help()).toBe("Click the AgentsView toolbar button on this tab, then Sync. Sync uses Chrome's Claude.ai sign-in.");
+    await expect(host.close()).resolves.toBeUndefined();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("gives desktop email-code instructions", () => {
+    vi.stubGlobal("__TAURI__", { core: { invoke: vi.fn() } });
+    expect(getBrowserHost()!.help()).toContain("email code");
   });
 });

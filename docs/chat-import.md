@@ -70,11 +70,13 @@ list refreshes automatically.
 
 ## Sync Claude.ai chats
 
-In Chrome, load the extension from a checkout:
+In Chrome, open **Import conversations** and select **Claude.ai**:
 
-1. Open `chrome://extensions` and turn on **Developer mode**.
-2. Click **Load unpacked** and select `frontend/chrome-extension`.
-3. Open AgentsView on `http://localhost` or `http://127.0.0.1`, at the port your server uses, and click the extension's toolbar button to allow Sync for that tab's current page. Click again after navigating or reloading.
+1. Click **Download Chrome extension** and unzip the download. A checkout also includes the extension in `frontend/chrome-extension`.
+2. Open `chrome://extensions` and turn on **Developer mode**.
+3. Click **Load unpacked** and select the unzipped folder.
+4. Reload the AgentsView tab on `http://localhost` or `http://127.0.0.1`, at the port your server uses.
+5. Click the AgentsView toolbar button to allow Sync for that tab's current page. Click again after navigating or reloading.
 
 Open **Import conversations**, select **Claude.ai**, and click **Sync**. Chrome uses your existing Claude.ai session, including Google sign-in. If you need to sign in, click **Sign in**, finish in the new tab, then return to AgentsView and click **Sync**.
 
