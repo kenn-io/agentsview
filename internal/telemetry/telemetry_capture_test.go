@@ -2,9 +2,10 @@ package telemetry
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -22,16 +23,9 @@ import (
 func TestCoreActionAllowlist(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")
-
 	endpoint, captured := captureCollector(t)
-	reporter := captureReporter(t, endpoint, Options{
-		AgentTypes: []string{"freebuff"}, InsightKinds: []string{"daily_activity"},
-		ClaimScreenView: func(_ string, send func() error) (string, bool, error) {
-			return time.Now().UTC().Format(time.DateOnly), true, send()
-		},
-	})
-	srv := server.New(config.Config{Host: "127.0.0.1", Port: 8080},
-		dbtest.OpenTestDB(t), nil, server.WithTelemetryCapture(reporter.CaptureHandler()))
+	reporter := captureReporter(t, endpoint, Options{AgentTypes: []string{"freebuff"}, InsightKinds: []string{"daily_activity"}})
+	srv := server.New(config.Config{Host: "127.0.0.1", Port: 8080}, dbtest.OpenTestDB(t), nil, server.WithTelemetryCapture(reporter.CaptureHandler()))
 	cases := []struct {
 		event, key, value string
 		kept              bool
@@ -75,65 +69,20 @@ func TestCoreActionAllowlist(t *testing.T) {
 				properties["surface"] = "web"
 			}
 		}
-		if c.event == EventScreenViewed {
-			// Each row checks filtering independently of daily deduplication.
-			reporter.screenViews = make(map[string]string)
-			if c.key == "surface" {
-				properties["screen"] = "sessions"
-			}
+		if c.event == EventScreenViewed && c.key == "surface" {
+			properties["screen"] = "sessions"
 		}
 		body, err := json.Marshal(map[string]any{"event": c.event, "properties": properties})
 		require.NoError(t, err)
-		postCapture(t, srv.Handler(), string(body), http.StatusAccepted)
+		status := http.StatusAccepted
+		if c.event == EventScreenViewed && c.key == "screen" && !c.kept {
+			status = http.StatusBadRequest
+		}
+		postCapture(t, srv.Handler(), string(body), status)
 	}
-	reporter.screenViews = make(map[string]string)
-	post := func(body string, status int) { postCapture(t, srv.Handler(), body, status) }
-	body := `{"event":"screen_viewed","properties":{"screen":"sessions","surface":"web"}}`
-	post(`{"event":"screen_viewed"}`, 202)
-	reporter.claimScreenView = func(_ string, _ func() error) (string, bool, error) {
-		return "", false, errors.New("claim failed")
-	}
-	post(body, 500)
-	reporter.claimScreenView = func(_ string, send func() error) (string, bool, error) {
-		return time.Now().UTC().Format(time.DateOnly), true, send()
-	}
-	for _, tc := range []struct {
-		body   string
-		status int
-	}{
-		{`{"event":`, 400},
-		{`{"e_vent":"app_opened"}`, 400},
-	} {
-		post(tc.body, tc.status)
-	}
-
-	diskClaims := 0
-	reporter.claimScreenView = func(screen string, _ func() error) (string, bool, error) {
-		assert.Equal(t, "recall", screen)
-		diskClaims++
-		return time.Now().UTC().Format(time.DateOnly), false, nil
-	}
-	post(`{"event":"screen_viewed","properties":{"screen":"recall"}}`, 202)
-	post(`{"event":"screen_viewed","properties":{"screen":"recall"}}`, 202)
-	assert.Equal(t, 1, diskClaims)
-	reporter.claimScreenView = func(_ string, send func() error) (string, bool, error) {
-		return time.Now().UTC().Format(time.DateOnly), true, send()
-	}
-	post(`{"event":" screen_viewed ","properties":{"screen":"sessions","surface":"web"}}`, 202)
-	for _, contentType := range []string{"", "text/plain"} {
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/telemetry/events",
-			strings.NewReader(`{"event":"`+EventScreenViewed+`","properties":{"screen":"usage"}} {}`))
-		req.Header.Set("Content-Type", contentType)
-		rec := httptest.NewRecorder()
-		reporter.CaptureHandler().ServeHTTP(rec, req)
-		assert.Equal(t, http.StatusAccepted, rec.Code, "%s %s", contentType, EventScreenViewed)
-	}
-	reporter.screenViews["sessions"] = time.Now().UTC().Add(-24 * time.Hour).Format(time.DateOnly)
-	post(body, 202)
 	require.NoError(t, reporter.Close())
-
 	sent := captured()
-	require.Len(t, sent, len(cases)-1+3)
+	require.Len(t, sent, len(cases)-1)
 	i := 0
 	for _, c := range cases {
 		if c.event == EventScreenViewed && c.key == "screen" && !c.kept {
@@ -146,68 +95,62 @@ func TestCoreActionAllowlist(t *testing.T) {
 				assert.Equal(t, "web", sent[i]["surface"])
 			}
 		}
-		value, ok := sent[i][c.key]
 		if c.kept {
-			assert.Equal(t, c.value, value, c.event)
+			assert.Equal(t, c.value, sent[i][c.key])
 		} else {
-			assert.False(t, ok, "%s %s=%v should be dropped", c.event, c.key, value)
+			assert.NotContains(t, sent[i], c.key)
 		}
 		i++
 	}
-	flow := sent[len(cases)-1:]
-	assert.Equal(t, "web", flow[0]["surface"])
-	var screens []string
-	for _, item := range flow {
-		if screen, ok := item["screen"].(string); ok {
-			screens = append(screens, screen)
-		}
+}
+
+func TestScreenRequestValidationLeavesValidRetry(t *testing.T) {
+	t.Setenv(EnabledEnv, "1")
+	t.Setenv(GenericEnabledEnv, "1")
+	const valid = `{"event":"screen_viewed","properties":{"screen":"sessions"}}`
+	for _, tc := range []struct {
+		name, contentType, body string
+		status                  int
+	}{
+		{"missing content type", "", valid, http.StatusUnsupportedMediaType},
+		{"plain text", "text/plain", valid, http.StatusUnsupportedMediaType},
+		{"trailing value", "application/json", valid + " {}", http.StatusBadRequest},
+		{"trailing garbage", "application/json", valid + " x", http.StatusBadRequest},
+		{"missing screen", "application/json", `{"event":"screen_viewed"}`, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			endpoint, captured := captureCollector(t)
+			opts := Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens")}
+			reporter := captureReporter(t, endpoint, opts)
+			srv := server.New(config.Config{Host: "127.0.0.1", Port: 8080}, dbtest.OpenTestDB(t), nil, server.WithTelemetryCapture(reporter.CaptureHandler()))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8080/api/v1/telemetry/events", strings.NewReader(tc.body))
+			req.Header.Set("Origin", "http://127.0.0.1:8080")
+			req.Header.Set("Content-Type", tc.contentType)
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			require.Equal(t, tc.status, rec.Code, rec.Body.String())
+			require.NoError(t, reporter.Close())
+			assert.Empty(t, captured())
+			_, err := os.Stat(opts.ScreenClaimsPath)
+			require.ErrorIs(t, err, os.ErrNotExist)
+			retry := captureReporter(t, endpoint, opts)
+			postCapture(t, retry.CaptureHandler(), valid, http.StatusAccepted)
+			require.NoError(t, retry.Close())
+			assert.Len(t, captured(), 1)
+		})
 	}
-	assert.Equal(t, []string{"sessions", "usage", "sessions"}, screens)
 }
 
 func TestScreenViewDisabled(t *testing.T) {
 	t.Setenv(EnabledEnv, "0")
 	t.Setenv(GenericEnabledEnv, "1")
-	reporter, err := NewReporter(Options{
-		ClaimScreenView: func(string, func() error) (string, bool, error) {
-			assert.Fail(t, "disabled reporter claimed a screen view")
-			return "", false, nil
-		},
-	})
+	path := filepath.Join(t.TempDir(), "screens")
+	reporter, err := NewReporter(Options{ScreenClaimsPath: path})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reporter.Close()) })
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
-		"http://127.0.0.1:8080/api/v1/telemetry/events", strings.NewReader(`{"event":"screen_viewed","properties":{"screen":"sessions"}}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	reporter.CaptureHandler().ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusAccepted, rec.Code)
-	assert.JSONEq(t, `{"status":"disabled"}`, rec.Body.String())
-}
-
-func TestScreenViewRemembersClaimedDay(t *testing.T) {
-	t.Setenv(EnabledEnv, "1")
-	t.Setenv(GenericEnabledEnv, "1")
-	endpoint, captured := captureCollector(t)
-	claims := 0
-	reporter := captureReporter(t, endpoint, Options{
-		ClaimScreenView: func(screen string, send func() error) (string, bool, error) {
-			assert.Equal(t, "sessions", screen)
-			claims++
-			require.NoError(t, send())
-			day := time.Now().UTC()
-			if claims == 1 {
-				day = day.Add(-24 * time.Hour)
-			}
-			return day.Format(time.DateOnly), true, errors.New("saving claim failed")
-		},
-	})
-	for range 3 {
-		postCapture(t, reporter.CaptureHandler(), `{"event":"screen_viewed","properties":{"screen":"sessions"}}`, http.StatusAccepted)
-	}
-	require.NoError(t, reporter.Close())
-	assert.Equal(t, 2, claims)
-	assert.Len(t, captured(), 2)
+	postCapture(t, reporter.CaptureHandler(), `{"event":"screen_viewed","properties":{"screen":"sessions"}}`, http.StatusAccepted)
+	_, err = os.Stat(path)
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestScreenViewClaimsAcrossDaemonRestarts(t *testing.T) {
@@ -215,22 +158,21 @@ func TestScreenViewClaimsAcrossDaemonRestarts(t *testing.T) {
 	t.Setenv(GenericEnabledEnv, "1")
 	endpoint, captured := captureCollector(t)
 	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-id"}
+	legacy := "install-id " + time.Now().UTC().Format(time.DateOnly) + " sessions"
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "telemetry-screen-views"), []byte(legacy), 0o600))
 	for range 2 {
-		reporter := captureReporter(t, endpoint, Options{ClaimScreenView: cfg.ClaimScreenView})
-		handler := reporter.CaptureHandler()
-		for _, screen := range []string{"sessions", "usage", "sessions", "unknown"} {
-			postCapture(t, handler, `{"event":"screen_viewed","properties":{"screen":"`+screen+`","surface":"web"}}`, http.StatusAccepted)
+		require.NoError(t, cfg.MigrateTelemetryScreenClaims())
+		reporter := captureReporter(t, endpoint, Options{ScreenClaimsPath: cfg.TelemetryScreenClaimsPath()})
+		for _, screen := range []string{"sessions", "usage", "sessions"} {
+			postCapture(t, reporter.CaptureHandler(), `{"event":"screen_viewed","properties":{"screen":"`+screen+`","surface":"web"}}`, http.StatusAccepted)
 		}
 		require.NoError(t, reporter.Close())
 	}
 	sent := captured()
-	require.Len(t, sent, 2)
-	assert.ElementsMatch(t, []any{"sessions", "usage"}, []any{sent[0]["screen"], sent[1]["screen"]})
-	for _, item := range sent {
-		assert.Equal(t, "web", item["surface"])
-	}
+	require.Len(t, sent, 1)
+	assert.Equal(t, "usage", sent[0]["screen"])
+	assert.Equal(t, "web", sent[0]["surface"])
 }
-
 func captureCollector(t *testing.T) (string, func() []map[string]any) {
 	t.Helper()
 	var mu sync.Mutex
@@ -262,12 +204,15 @@ func captureCollector(t *testing.T) (string, func() []map[string]any) {
 
 func captureReporter(t *testing.T, endpoint string, opts Options) *Reporter {
 	t.Helper()
+	if opts.ScreenClaimsPath == "" {
+		opts.ScreenClaimsPath = filepath.Join(t.TempDir(), "screens")
+	}
 	client, err := kittelemetry.NewReporter(kittelemetry.Options{
 		APIKey: "phc_test", Application: application, EnvPrefix: envPrefix,
 		DistinctID: "install-id", Source: "daemon", Endpoint: endpoint,
 	}, allowedEventOptions(opts)...)
 	require.NoError(t, err)
-	return &Reporter{client: client, claimScreenView: opts.ClaimScreenView}
+	return &Reporter{client: client}
 }
 
 func postCapture(t *testing.T, handler http.Handler, body string, status int) {

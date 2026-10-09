@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -48,7 +49,8 @@ func postTelemetryEvent(
 func TestTelemetryCaptureRoute(t *testing.T) {
 	t.Setenv(telemetry.EnabledEnv, "0")
 	reporter, err := telemetry.NewReporter(telemetry.Options{
-		InstallationID: "anonymous-install-id",
+		InstallationID:   "anonymous-install-id",
+		ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reporter.Close()) })

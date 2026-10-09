@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")
 
-	reporter, err := NewReporter(Options{InstallationID: "anonymous-install-id"})
+	reporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"), InstallationID: "anonymous-install-id"})
 	require.NoError(t, err)
 
 	assert.False(t, reporter.Enabled())
@@ -37,7 +38,7 @@ func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
 func TestNewReporterOptedOutKeepsAllowlist(t *testing.T) {
 	t.Setenv(GenericEnabledEnv, "0")
 
-	reporter, err := NewReporter(Options{})
+	reporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens")})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reporter.Close()) })
 
@@ -52,7 +53,8 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 	t.Setenv(GenericEnabledEnv, "1")
 
 	client, err := newKitReporter(Options{
-		InstallationID: "anonymous-install-id", Version: "v1.2.3", Commit: "abc123",
+		ScreenClaimsPath: filepath.Join(t.TempDir(), "screens"),
+		InstallationID:   "anonymous-install-id", Version: "v1.2.3", Commit: "abc123",
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, client.Close()) })

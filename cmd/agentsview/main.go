@@ -1352,12 +1352,17 @@ func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.Id
 }
 
 func telemetryOptions(cfg config.Config) telemetry.Options {
+	if telemetry.EnabledFromEnv() {
+		if err := cfg.MigrateTelemetryScreenClaims(); err != nil {
+			log.Printf("telemetry screen claims unavailable: %v", err)
+		}
+	}
 	opts := telemetry.Options{
-		InstallationID:  cfg.InstallationID,
-		InstalledAt:     cfg.InstallationCreatedAt,
-		ClaimScreenView: cfg.ClaimScreenView,
-		Version:         version,
-		Commit:          commit,
+		InstallationID:   cfg.InstallationID,
+		InstalledAt:      cfg.InstallationCreatedAt,
+		ScreenClaimsPath: cfg.TelemetryScreenClaimsPath(),
+		Version:          version,
+		Commit:           commit,
 	}
 	for _, def := range parser.Registry {
 		opts.AgentTypes = append(opts.AgentTypes, string(def.Type))

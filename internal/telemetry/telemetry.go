@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -33,22 +32,19 @@ const (
 var ErrUnsupportedEvent = kittelemetry.ErrUnsupportedEvent
 
 type Reporter struct {
-	client          *kittelemetry.Reporter
-	claimScreenView func(string, func() error) (string, bool, error)
-	screenMu        sync.Mutex
-	screenViews     map[string]string
+	client *kittelemetry.Reporter
 }
 
 type Options struct {
 	InstallationID string
 	// InstalledAt is when InstallationID was created. Reports carry its age as
 	// install_age_hours; zero sends them without an age.
-	InstalledAt     time.Time
-	Version         string
-	Commit          string
-	AgentTypes      []string
-	InsightKinds    []string
-	ClaimScreenView func(string, func() error) (string, bool, error)
+	InstalledAt      time.Time
+	Version          string
+	Commit           string
+	AgentTypes       []string
+	InsightKinds     []string
+	ScreenClaimsPath string
 }
 
 func EnabledFromEnv() bool {
@@ -62,7 +58,7 @@ func NewReporter(opts Options) (*Reporter, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &Reporter{client: client, claimScreenView: opts.ClaimScreenView}, nil
+		return &Reporter{client: client}, nil
 	}
 	if runningUnderGoTest() {
 		return DisabledReporter(), nil
@@ -75,7 +71,7 @@ func NewReporter(opts Options) (*Reporter, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Reporter{client: client, claimScreenView: opts.ClaimScreenView}, nil
+	return &Reporter{client: client}, nil
 }
 
 func DisabledReporter() *Reporter {
@@ -118,7 +114,7 @@ func (r *Reporter) CaptureHandler() http.Handler {
 	if r != nil {
 		client = r.client
 	}
-	return r.screenViewHandler(kittelemetry.NewCaptureHandler(client))
+	return kittelemetry.NewCaptureHandler(client)
 }
 
 func (r *Reporter) SanitizeProperties(
@@ -162,8 +158,9 @@ func allowedEventOptions(opts Options) []kittelemetry.Option {
 		kittelemetry.WithAllowedEvent(EventVisitEnded,
 			kittelemetry.AllowProperty("surface", kittelemetry.AllowStringValues("web")),
 			kittelemetry.AllowProperty("duration_bucket", kittelemetry.AllowStringValues("under_1m", "1_to_5m", "5_to_30m", "over_30m"))),
+		kittelemetry.WithDailyEvent(EventScreenViewed, "screen", kittelemetry.NewDailyClaims(opts.ScreenClaimsPath)),
 		kittelemetry.WithAllowedEvent(EventScreenViewed,
-			kittelemetry.AllowProperty("screen", kittelemetry.AllowStringValues("sessions", "usage", "activity", "trends", "recall", "quality", "pinned", "trash", "recent-edits", "data", "settings")),
+			kittelemetry.RequireProperty("screen", kittelemetry.AllowStringValues("sessions", "usage", "activity", "trends", "recall", "quality", "pinned", "trash", "recent-edits", "data", "settings")),
 			kittelemetry.AllowProperty("surface", kittelemetry.AllowStringValues("web"))),
 		oneOf(EventSearchRun, "query_type", "text", "semantic", "hybrid"),
 		oneOf(EventSessionViewed, "agent", opts.AgentTypes...),
