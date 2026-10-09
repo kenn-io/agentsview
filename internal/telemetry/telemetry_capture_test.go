@@ -173,6 +173,7 @@ func TestScreenViewClaimsAcrossDaemonRestarts(t *testing.T) {
 	assert.Equal(t, "usage", sent[0]["screen"])
 	assert.Equal(t, "web", sent[0]["surface"])
 }
+
 func captureCollector(t *testing.T) (string, func() []map[string]any) {
 	t.Helper()
 	var mu sync.Mutex
