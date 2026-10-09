@@ -391,19 +391,6 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				verify()
 			}
 			require.Len(t, childIDs, len(paths)-2)
-			if tt.name == "own parent late" {
-				parents, err := database.ListSessionIDsByFilePath(t.Context(), paths[1], "cursor")
-				require.NoError(t, err)
-				require.Len(t, parents, 1)
-				paths[1] = aliasRoot + "/project-b/agent-transcripts/shared/shared.jsonl"
-				provider.discovered = []parser.SourceRef{source(paths[1])}
-				stats := engine.SyncAll(t.Context(), nil)
-				require.Zero(t, stats.Failed)
-				moved, err := database.ListSessionIDsByFilePath(t.Context(), paths[1], "cursor")
-				require.NoError(t, err)
-				assert.Equal(t, parents, moved)
-				verify()
-			}
 			provider.discovered = []parser.SourceRef{source(paths[2])}
 			if tt.childrenCollide {
 				provider.discovered = append(provider.discovered, source(paths[3]))

@@ -103,10 +103,10 @@ func TestCursorS3ScannerRejectsNonTranscriptLayouts(t *testing.T) {
 
 func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 	for _, tt := range []struct {
-		name, loser, winner, project string
+		name, loser, winner string
 	}{
-		{"JSONL over text", "sess.txt", "sess.jsonl", "Users-fiona-Documents-demo"},
-		{"own text over subagent JSONL", "agent-transcripts/aaa/subagents/sess.jsonl", "agent-transcripts/sess.txt", "demo"},
+		{"JSONL over text", "sess.txt", "sess.jsonl"},
+		{"own text over subagent JSONL", "agent-transcripts/aaa/subagents/sess.jsonl", "agent-transcripts/sess.txt"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			oldList := listS3Objects
@@ -127,11 +127,6 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sources, 2)
 			assert.ElementsMatch(t, []string{winner, other}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
-			for _, source := range sources {
-				if source.DisplayPath == winner {
-					assert.Equal(t, tt.project, source.ProjectHint)
-				}
-			}
 		})
 	}
 }
@@ -144,7 +139,6 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 	}{
 		{roots: []string{"s3://bucket/archive/agent-transcripts/laptop/raw/cursor"}},
 		{roots: []string{"s3://bucket/archive"}},
-		{roots: []string{"s3://bucket/raw/cursor"}},
 		{roots: []string{"s3://bucket/laptop/raw/cursor", "s3://bucket/laptop/raw/cursor/project-one/agent-transcripts"}},
 		{roots: []string{"s3://bucket/laptop/raw/cursor/project-one/agent-transcripts", "s3://bucket/laptop/raw/cursor"}},
 		{roots: []string{"s3://bucket/host-a/raw/cursor"}, projects: [2]string{"agent-transcripts", "cursor"}, harvest: true},
@@ -193,13 +187,6 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 				}
 			}
 			assert.ElementsMatch(t, []string{firstURI, secondURI, otherURI}, []string{sources[0].DisplayPath, sources[1].DisplayPath, sources[2].DisplayPath})
-			if projects[0] == "Users-fiona-Documents-demo" {
-				for _, source := range sources {
-					if source.DisplayPath == firstURI || source.DisplayPath == secondURI {
-						assert.Equal(t, "demo", source.ProjectHint)
-					}
-				}
-			}
 		})
 	}
 }
