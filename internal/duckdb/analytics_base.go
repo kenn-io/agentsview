@@ -178,24 +178,8 @@ func (s analyticsSQL) ActivityAgentsSQL(f db.AnalyticsFilter, granularity string
 	localDate, localDateArgs := duckAnalyticsLocalDateExpr(
 		"COALESCE(s.started_at, s.created_at)", f)
 	bucketExpr := duckAnalyticsBucketExpr("local_date", granularity)
-	queryArgs := append([]any{}, localDateArgs...)
-	queryArgs = append(queryArgs, args...)
-	if _, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model); len(modelArgs) > 0 {
-		queryArgs = append(queryArgs, modelArgs...)
-	}
-	return `
-		WITH filtered_sessions AS (
-			SELECT s.id, s.agent, ` + localDate + ` AS local_date
-			FROM sessions s
-			WHERE ` + where + `
-		)
-		SELECT ` + bucketExpr + ` AS bucket, fs.agent, COUNT(*) AS messages
-		FROM filtered_sessions fs
-		JOIN messages m ON m.session_id = fs.id
-		` + duckAnalyticsMessageFilterClause("m.model", f.Model) + `
-		GROUP BY bucket, fs.agent
-		ORDER BY bucket, fs.agent`,
-		queryArgs
+	_, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
+	return readbase.AnalyticsActivityAgentsSQL(where, args, localDate, localDateArgs, bucketExpr, duckAnalyticsMessageFilterClause("m.model", f.Model), modelArgs, db.DuckDBQueryDialect())
 }
 
 func (s analyticsSQL) HeatmapSQL(f db.AnalyticsFilter, metric string) (string, []any) {

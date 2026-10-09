@@ -32,3 +32,21 @@ func AnalyticsHeatmapSQL(where string, args []any, localDate string, localDateAr
 		GROUP BY local_date
 		ORDER BY local_date`, queryArgs
 }
+
+func AnalyticsActivityAgentsSQL(where string, args []any, localDate string, localDateArgs []any, bucketExpr, messageFilter string, modelArgs []any, dialect db.QueryDialect) (string, []any) {
+	queryArgs := append([]any{}, localDateArgs...)
+	queryArgs = append(queryArgs, args...)
+	queryArgs = append(queryArgs, modelArgs...)
+	return `
+		WITH filtered_sessions AS (
+			SELECT s.id, s.agent, ` + localDate + ` AS local_date
+			FROM sessions s
+			WHERE ` + where + `
+		)
+		SELECT ` + bucketExpr + ` AS bucket, fs.agent, ` + dialect.SignedAggregate("COUNT(*)") + ` AS messages
+		FROM filtered_sessions fs
+		JOIN messages m ON m.session_id = fs.id
+		` + messageFilter + `
+		GROUP BY bucket, fs.agent
+		ORDER BY bucket, fs.agent`, queryArgs
+}

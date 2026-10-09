@@ -928,14 +928,6 @@ func (s *Analytics) GetTrendsTerms(
 	loc := AnalyticsLocation(f.Timezone)
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
-	trendLocal := func(msgTS, startedAt, createdAt any) (time.Time, bool) {
-		ts := cmp.Or(s.backend.FormatTime(msgTS), s.backend.FormatTime(startedAt), s.backend.FormatTime(createdAt))
-		t, ok := ParseAnalyticsTime(ts)
-		if !ok {
-			return time.Time{}, false
-		}
-		return t.In(loc), true
-	}
 	rows, err := s.backend.QueryContext(ctx, s.backend.TrendsSQL())
 	if err != nil {
 		return db.TrendsTermsResponse{}, err
@@ -970,7 +962,8 @@ func (s *Analytics) GetTrendsTerms(
 		if err := rows.Scan(&row.sessionID, &ordinal, &row.role, &row.isSystem, &row.model, &row.content, &row.msgTS, &row.startedAt, &row.createdAt); err != nil {
 			return db.TrendsTermsResponse{}, err
 		}
-		local, has := trendLocal(row.msgTS, row.startedAt, row.createdAt)
+		ts := cmp.Or(s.backend.FormatTime(row.msgTS), s.backend.FormatTime(row.startedAt), s.backend.FormatTime(row.createdAt))
+		local, has := AnalyticsLocalTime(ts, loc)
 		if !modelFiltering {
 			if has && flt.MatchesDayHour(local, true) {
 				processRow(row.sessionID, row.content, local)

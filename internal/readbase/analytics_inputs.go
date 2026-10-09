@@ -17,15 +17,22 @@ func AnalyticsLocalTime(ts string, loc *time.Location) (time.Time, bool) {
 }
 
 func AnalyticsWindowBounds(f db.AnalyticsFilter) (string, string) {
-	var from, to string
-	if f.From != "" {
-		from = PaddedUTCBound(f.From+"T00:00:00Z", -14)
-	}
+	from, to := PaddedDateBounds(f.From, f.To)
 	if f.To != "" {
-		to = PaddedUTCBound(f.To+"T23:59:59Z", 14)
 		if t, err := time.Parse(time.RFC3339, to); err == nil {
 			to = t.Add(time.Second).Format(time.RFC3339)
 		}
+	}
+	return from, to
+}
+
+// PaddedDateBounds expands inclusive UTC dates for timezone filtering.
+func PaddedDateBounds(from, to string) (string, string) {
+	if from != "" {
+		from = PaddedUTCBound(from+"T00:00:00Z", -14)
+	}
+	if to != "" {
+		to = PaddedUTCBound(to+"T23:59:59Z", 14)
 	}
 	return from, to
 }

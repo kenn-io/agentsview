@@ -99,14 +99,8 @@ type chUsageBounds struct {
 }
 
 func chUsageBoundsForFilter(f db.UsageFilter) chUsageBounds {
-	var b chUsageBounds
-	if f.From != "" {
-		b.from = readbase.PaddedUTCBound(f.From+"T00:00:00Z", -14)
-	}
-	if f.To != "" {
-		b.to = readbase.PaddedUTCBound(f.To+"T23:59:59Z", 14)
-	}
-	return b
+	from, to := readbase.PaddedDateBounds(f.From, f.To)
+	return chUsageBounds{from: from, to: to}
 }
 
 func appendChUsageColumnBounds(

@@ -87,13 +87,14 @@ func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, 
 	var dates []string
 	var args []any
 	if includeDate {
+		from, to := readbase.PaddedDateBounds(f.From, f.To)
 		if f.From != "" {
 			dates = append(dates, dateCol+" >= CAST(? AS TIMESTAMP)")
-			args = append(args, readbase.PaddedUTCBound(f.From+"T00:00:00Z", -14))
+			args = append(args, from)
 		}
 		if f.To != "" {
 			dates = append(dates, dateCol+" <= CAST(? AS TIMESTAMP)")
-			args = append(args, readbase.PaddedUTCBound(f.To+"T23:59:59Z", 14))
+			args = append(args, to)
 		}
 		localDate, localDateArgs := duckAnalyticsLocalDateExpr(dateCol, f)
 		if f.From != "" {
@@ -686,14 +687,8 @@ func duckAnalyticsToolSessionWindow(f db.AnalyticsFilter) (string, []any) {
 }
 
 func duckUsageBoundsForFilter(f db.UsageFilter) duckUsageBounds {
-	var b duckUsageBounds
-	if f.From != "" {
-		b.from = readbase.PaddedUTCBound(f.From+"T00:00:00Z", -14)
-	}
-	if f.To != "" {
-		b.to = readbase.PaddedUTCBound(f.To+"T23:59:59Z", 14)
-	}
-	return b
+	from, to := readbase.PaddedDateBounds(f.From, f.To)
+	return duckUsageBounds{from: from, to: to}
 }
 
 func appendDuckUsageColumnBounds(

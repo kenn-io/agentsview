@@ -24,6 +24,10 @@ func TestAnalyticsSQLDialects(t *testing.T) {
 			assert.Contains(t, query, "SELECT agent, "+tc.signed("COUNT(*)")+", "+tc.signed("COALESCE(SUM(message_count), 0)"))
 			assert.Contains(t, query, "WHERE s.project = ? AND s.agent = ?")
 			assert.Equal(t, args, gotArgs)
+			query, gotArgs = AnalyticsActivityAgentsSQL("s.project = ? AND s.agent = ?", args, "local_day(?, started_at)", []any{"UTC"}, "week(local_date)", "WHERE m.model = ?", []any{"selected"}, tc.dialect)
+			assert.Contains(t, query, "SELECT week(local_date) AS bucket, fs.agent, "+tc.signed("COUNT(*)")+" AS messages")
+			assert.Contains(t, query, "WHERE m.model = ?")
+			assert.Equal(t, []any{"UTC", "project", "agent", "selected"}, gotArgs)
 			for _, metric := range []struct{ name, expression string }{
 				{"sessions", "COUNT(*)"},
 				{"messages", "COALESCE(SUM(s.message_count), 0)"},
