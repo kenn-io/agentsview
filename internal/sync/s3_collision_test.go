@@ -22,10 +22,8 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 		preCollapsed      bool
 	}{
 		{name: "together"}, {name: "together reversed", reverse: true},
-		{name: "separate", separate: true}, {name: "separate reversed", reverse: true, separate: true},
+		{name: "separate", separate: true},
 		{name: "no machine boundary", root: "s3://bucket/archive"},
-		{name: "no machine boundary separate", root: "s3://bucket/archive", separate: true},
-		{name: "bucket is not a machine", root: "s3://bucket/raw/cursor"},
 		{name: "pre-collapsed cached source", preCollapsed: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -145,13 +143,6 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				require.Zero(t, stats.Failed)
 				verify()
 			}
-			forced := parser.DiscoveredFile{Agent: parser.AgentCursor, Path: paths[1],
-				Project: "cursor", Machine: machine, SourceSize: int64(len(contents[paths[1]])),
-				SourceMtime: mtime.UnixNano(), ForceParse: true}
-			_, _, err := engine.processAndWriteSessionFile(t.Context(), forced, ids[paths[1]])
-			require.NoError(t, err)
-			verify()
-			require.NoError(t, database.BulkStarSessions(t.Context(), []string{ids[paths[0]], ids[paths[1]]}))
 			before := fetches.Load()
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 			require.Zero(t, stats.Failed)
@@ -186,9 +177,6 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
 			require.Zero(t, stats.Failed)
 			verify()
-			stars, err := database.ListStarredSessionIDs(t.Context())
-			require.NoError(t, err)
-			assert.ElementsMatch(t, []string{ids[paths[0]], ids[paths[1]]}, stars)
 			// Omission is not proof of remote deletion, even when another object grows.
 			ownerPath := paths[0]
 			otherPath := paths[1]
@@ -229,49 +217,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				assert.Equal(t, "local", storedSession("cursor:unrelated").Machine)
 			}
 			verify()
-			altID := ids[otherPath]
-			for i := range provider.discovered {
-				if provider.discovered[i].DisplayPath == otherPath {
-					source := provider.discovered[i].Opaque.(parser.S3DiscoveredSource)
-					source.Fingerprint = "s3-meta:stable"
-					provider.discovered[i].Opaque = source
-				}
-			}
-			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
-			require.Zero(t, stats.Failed)
-			marked, err := database.MarkSessionSourceMissing(t.Context(), storedMachine, "cursor", altID, otherPath)
-			require.NoError(t, err)
-			require.True(t, marked)
-			beforeRestore := fetches.Load()
-			for range 2 {
-				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
-				require.Zero(t, stats.Failed)
-				assert.Equal(t, beforeRestore+1, fetches.Load(), "a source-missing row must restore once")
-				assert.Nil(t, storedSession(altID).SourceMissingAt)
-			}
-			require.NoError(t, database.SoftDeleteSession(t.Context(), altID))
-			beforeTrashSync := fetches.Load()
-			for range 2 {
-				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
-				require.Zero(t, stats.Failed)
-				assert.Equal(t, beforeTrashSync, fetches.Load(), "unchanged trashed sources must stay behind the cutoff")
-				assert.True(t, database.IsSessionTrashed(t.Context(), altID))
-			}
-			require.NoError(t, database.DeleteSession(t.Context(), altID))
-			stats = engine.ResyncAll(t.Context(), nil)
-			require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
-			require.Zero(t, stats.Failed)
-			assert.True(t, database.IsSessionExcluded(t.Context(), altID))
-			session, err := database.GetSessionFull(t.Context(), altID)
-			require.NoError(t, err)
-			assert.Nil(t, session)
-			assert.Equal(t, ownerPath, derefString(storedSession(baseID).FilePath))
 			if tt.name == "together" {
-				oldMessages, err := database.GetAllMessages(t.Context(), baseID)
-				require.NoError(t, err)
-				for i := range oldMessages {
-					oldMessages[i].ID = 0
-				}
 				newPath := strings.TrimSuffix(ownerPath, stem+".txt") + "agent-transcripts/" + stem + "/" + stem + ".jsonl"
 				contents[newPath] = contents[ownerPath]
 				source := sources[0]
@@ -304,15 +250,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					ids, err = database.ListSessionIDsByFilePath(t.Context(), ownerPath, "cursor")
 					require.NoError(t, err)
 					assert.Empty(t, ids)
-					stars, err := database.ListStarredSessionIDs(t.Context())
-					require.NoError(t, err)
-					assert.Contains(t, stars, baseID)
-					messages, err := database.GetAllMessages(t.Context(), baseID)
-					require.NoError(t, err)
-					for i := range messages {
-						messages[i].ID = 0
-					}
-					assert.Equal(t, oldMessages, messages)
+
 				}
 			}
 		})

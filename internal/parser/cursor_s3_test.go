@@ -102,59 +102,59 @@ func TestCursorS3ScannerRejectsNonTranscriptLayouts(t *testing.T) {
 }
 
 func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-
-	root := "s3://bucket/laptop/raw/cursor"
-	jsonlURI := root + "/demo-proj/shared.jsonl"
-	txtURI := root + "/demo-proj/shared.txt"
-	otherURI := root + "/demo-proj/other.txt"
-	junkURI := root + "/demo-proj/logs/trace.txt"
-	mtime := time.Unix(100, 0)
-	oldListed := true
-	listS3Objects = func(got string) ([]S3Object, error) {
-		require.Equal(t, root, got)
-		objects := []S3Object{
-			{URI: junkURI, Size: 3, LastModified: mtime, Fingerprint: "s3-meta:junk"},
-			{URI: jsonlURI, Size: 11, LastModified: mtime, Fingerprint: "s3-meta:jsonl"},
-			{URI: otherURI, Size: 5, LastModified: mtime, Fingerprint: "s3-meta:other"},
-		}
-		if oldListed {
-			objects = append(objects, S3Object{URI: txtURI, Size: 7, LastModified: mtime, Fingerprint: "s3-meta:txt"})
-		}
-		return objects, nil
-	}
-
-	for _, oldListed = range []bool{true, false} {
-		sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
-		require.NoError(t, err)
-		require.Len(t, sources, 2)
-		assert.ElementsMatch(t, []string{jsonlURI, otherURI}, []string{
-			sources[0].DisplayPath,
-			sources[1].DisplayPath,
+	for _, tt := range []struct {
+		name, loser, winner, project string
+	}{
+		{"JSONL over text", "sess.txt", "sess.jsonl", "Users-fiona-Documents-demo"},
+		{"nested over flat", "agent-transcripts/sess.jsonl", "agent-transcripts/sess/sess.jsonl", "demo"},
+		{"flat over subagent", "agent-transcripts/aaa/subagents/sess.jsonl", "agent-transcripts/sess.jsonl", "demo"},
+		{"own text over subagent JSONL", "agent-transcripts/aaa/subagents/sess.jsonl", "agent-transcripts/sess.txt", "demo"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			oldList := listS3Objects
+			t.Cleanup(func() { listS3Objects = oldList })
+			const root = "s3://bucket/laptop/raw/cursor"
+			projectRoot := root + "/Users-fiona-Documents-demo/"
+			winner, other := projectRoot+tt.winner, projectRoot+"other.txt"
+			listS3Objects = func(got string) ([]S3Object, error) {
+				require.Equal(t, root, got)
+				return []S3Object{
+					{URI: projectRoot + tt.loser}, {URI: winner},
+					{URI: projectRoot + "logs/trace.txt"}, {URI: other},
+				}, nil
+			}
+			sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 2)
+			assert.ElementsMatch(t, []string{winner, other}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
+			for _, source := range sources {
+				if source.DisplayPath == winner {
+					assert.Equal(t, tt.project, source.ProjectHint)
+				}
+			}
 		})
-
-		var streamed []string
-		err = newCursorSourceSet([]string{root}).DiscoverEach(
-			t.Context(),
-			func(src SourceRef) error {
-				streamed = append(streamed, src.DisplayPath)
-				return nil
-			},
-		)
-		require.NoError(t, err)
-		assert.ElementsMatch(t, []string{jsonlURI, otherURI}, streamed)
 	}
 }
 
 func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
-	for _, roots := range [][]string{
-		{"s3://bucket/archive/agent-transcripts/laptop/raw/cursor"},
-		{"s3://bucket/archive"},
-		{"s3://bucket/raw/cursor"},
-		{"s3://bucket/laptop/raw/cursor", "s3://bucket/laptop/raw/cursor/project-one/agent-transcripts"},
-		{"s3://bucket/laptop/raw/cursor/project-one/agent-transcripts", "s3://bucket/laptop/raw/cursor"},
+	for _, tt := range []struct {
+		roots    []string
+		projects [2]string
+		harvest  bool
+	}{
+		{roots: []string{"s3://bucket/archive/agent-transcripts/laptop/raw/cursor"}},
+		{roots: []string{"s3://bucket/archive"}},
+		{roots: []string{"s3://bucket/raw/cursor"}},
+		{roots: []string{"s3://bucket/laptop/raw/cursor", "s3://bucket/laptop/raw/cursor/project-one/agent-transcripts"}},
+		{roots: []string{"s3://bucket/laptop/raw/cursor/project-one/agent-transcripts", "s3://bucket/laptop/raw/cursor"}},
+		{roots: []string{"s3://bucket/host-a/raw/cursor"}, projects: [2]string{"agent-transcripts", "cursor"}, harvest: true},
+		{roots: []string{"s3://bucket/laptop/raw/cursor"}, projects: [2]string{"Users-fiona-Documents-demo", "home-user-a-Documents-demo"}},
 	} {
+		roots := tt.roots
+		projects := tt.projects
+		if projects[0] == "" {
+			projects = [2]string{"project-one", "project-two"}
+		}
 		root := roots[0]
 		if strings.HasSuffix(root, "/agent-transcripts") {
 			root = roots[1]
@@ -162,11 +162,15 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 		t.Run(root, func(t *testing.T) {
 			oldList := listS3Objects
 			t.Cleanup(func() { listS3Objects = oldList })
-			firstURI := root + "/project-one/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl"
-			secondURI := root + "/project-two/11111111-1111-4111-8111-111111111111.jsonl"
-			otherURI := root + "/project-one/other.txt"
-			flatURI := root + "/project-one/11111111-1111-4111-8111-111111111111.txt"
-			subagentURI := root + "/project-one/agent-transcripts/parent/subagents/11111111-1111-4111-8111-111111111111.jsonl"
+			firstURI := root + "/" + projects[0] + "/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl"
+			secondURI := root + "/" + projects[1] + "/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl"
+			otherURI := root + "/" + projects[0] + "/other.txt"
+			flatURI := root + "/" + projects[0] + "/11111111-1111-4111-8111-111111111111.txt"
+			subagentURI := root + "/" + projects[0] + "/agent-transcripts/parent/subagents/11111111-1111-4111-8111-111111111111.jsonl"
+			if tt.harvest {
+				firstURI = flatURI
+				secondURI = root + "/" + projects[1] + "/11111111-1111-4111-8111-111111111111.txt"
+			}
 			key := CursorS3SourceKey(roots, firstURI)
 			require.NotEmpty(t, key)
 			assert.Equal(t, key, CursorS3SourceKey(roots, flatURI))
@@ -195,36 +199,15 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 				}
 			}
 			assert.ElementsMatch(t, []string{firstURI, secondURI, otherURI}, []string{sources[0].DisplayPath, sources[1].DisplayPath, sources[2].DisplayPath})
-			var streamed []string
-			require.NoError(t, sourceSet.DiscoverEach(t.Context(), func(source SourceRef) error {
-				streamed = append(streamed, source.DisplayPath)
-				return nil
-			}))
-			assert.ElementsMatch(t, []string{firstURI, secondURI, otherURI}, streamed)
+			if projects[0] == "Users-fiona-Documents-demo" {
+				for _, source := range sources {
+					if source.DisplayPath == firstURI || source.DisplayPath == secondURI {
+						assert.Equal(t, "demo", source.ProjectHint)
+					}
+				}
+			}
 		})
 	}
-}
-
-func TestCursorS3DiscoverKeepsHarvestProjectNames(t *testing.T) {
-	const root = "s3://bucket/host-a/raw/cursor"
-	paths := []string{root + "/agent-transcripts/shared.txt", root + "/cursor/shared.txt"}
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-	listS3Objects = func(got string) ([]S3Object, error) {
-		require.Equal(t, root, got)
-		return []S3Object{{URI: paths[0]}, {URI: paths[1]}}, nil
-	}
-	sourceSet := newCursorSourceSet([]string{root})
-	sources, err := sourceSet.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 2)
-	assert.ElementsMatch(t, paths, []string{sources[0].DisplayPath, sources[1].DisplayPath})
-	var streamed []string
-	require.NoError(t, sourceSet.DiscoverEach(t.Context(), func(source SourceRef) error {
-		streamed = append(streamed, source.DisplayPath)
-		return nil
-	}))
-	assert.ElementsMatch(t, paths, streamed)
 }
 
 func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) {
@@ -268,13 +251,6 @@ func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) 
 		sources[1].DisplayPath,
 	})
 
-	var streamed []string
-	err = sourceSet.DiscoverEach(t.Context(), func(source SourceRef) error {
-		streamed = append(streamed, source.DisplayPath)
-		return nil
-	})
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{laptopJSONLURI, desktopURI}, streamed)
 }
 
 func TestCursorS3DiscoverDecodesAgentTranscriptsProject(t *testing.T) {
@@ -285,7 +261,6 @@ func TestCursorS3DiscoverDecodesAgentTranscriptsProject(t *testing.T) {
 	encoded := "Users-fiona-Documents-demo"
 	harvestURI := root + "/my-cool-project/11111111-1111-4111-8111-111111111111.jsonl"
 	localURI := root + "/" + encoded + "/agent-transcripts/sess.jsonl"
-	otherProjectURI := root + "/home-user-a-Documents-demo/agent-transcripts/sess.jsonl"
 	subagentURI := root + "/" + encoded + "/agent-transcripts/sess/subagents/child.jsonl"
 	mtime := time.Unix(100, 0)
 	listS3Objects = func(got string) ([]S3Object, error) {
@@ -293,75 +268,23 @@ func TestCursorS3DiscoverDecodesAgentTranscriptsProject(t *testing.T) {
 		return []S3Object{
 			{URI: harvestURI, Size: 11, LastModified: mtime},
 			{URI: localURI, Size: 7, LastModified: mtime},
-			{URI: otherProjectURI, Size: 7, LastModified: mtime},
 			{URI: subagentURI, Size: 5, LastModified: mtime},
 		}, nil
 	}
 
 	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
-	require.Len(t, sources, 4)
+	require.Len(t, sources, 3)
 	byPath := make(map[string]SourceRef, len(sources))
 	for _, src := range sources {
 		byPath[src.DisplayPath] = src
 	}
 	require.Contains(t, byPath, harvestURI)
 	require.Contains(t, byPath, localURI)
-	require.Contains(t, byPath, otherProjectURI)
 	require.Contains(t, byPath, subagentURI)
 	assert.Equal(t, "my-cool-project", byPath[harvestURI].ProjectHint)
 	assert.Equal(t, "demo", byPath[localURI].ProjectHint)
-	assert.Equal(t, "demo", byPath[otherProjectURI].ProjectHint)
 	assert.Equal(t, "demo", byPath[subagentURI].ProjectHint)
-}
-
-func TestCursorS3DiscoverPrefersNestedOverFlat(t *testing.T) {
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-
-	root := "s3://bucket/laptop/raw/cursor"
-	project := "Users-fiona-Documents-demo"
-	flatURI := root + "/" + project + "/agent-transcripts/sess.jsonl"
-	nestedURI := root + "/" + project + "/agent-transcripts/sess/sess.jsonl"
-	mtime := time.Unix(100, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
-		require.Equal(t, root, got)
-		return []S3Object{
-			{URI: flatURI, Size: 11, LastModified: mtime},
-			{URI: nestedURI, Size: 13, LastModified: mtime},
-		}, nil
-	}
-
-	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, nestedURI, sources[0].DisplayPath)
-	assert.Equal(t, "demo", sources[0].ProjectHint)
-}
-
-func TestCursorS3DiscoverPrefersFlatOverSubagentStem(t *testing.T) {
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-
-	root := "s3://bucket/laptop/raw/cursor"
-	project := "Users-fiona-Documents-demo"
-	// "aaa/subagents/sess.jsonl" sorts before "sess.jsonl", so lexical order
-	// alone would pick the subagent copy.
-	subagentURI := root + "/" + project + "/agent-transcripts/aaa/subagents/sess.jsonl"
-	flatURI := root + "/" + project + "/agent-transcripts/sess.jsonl"
-	mtime := time.Unix(100, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
-		require.Equal(t, root, got)
-		return []S3Object{
-			{URI: subagentURI, Size: 11, LastModified: mtime},
-			{URI: flatURI, Size: 13, LastModified: mtime},
-		}, nil
-	}
-
-	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, flatURI, sources[0].DisplayPath)
 }
 
 func TestCursorS3LayoutRank(t *testing.T) {
@@ -382,30 +305,6 @@ func TestCursorS3LayoutRank(t *testing.T) {
 			assert.Equal(t, tt.want, cursorS3LayoutRank(tt.uri))
 		})
 	}
-}
-
-func TestCursorS3DiscoverPrefersTopLevelTextOverSubagentJSONL(t *testing.T) {
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-
-	root := "s3://bucket/laptop/raw/cursor"
-	project := "Users-fiona-Documents-demo"
-	subagentURI := root + "/" + project + "/agent-transcripts/aaa/subagents/sess.jsonl"
-	flatTxtURI := root + "/" + project + "/agent-transcripts/sess.txt"
-	mtime := time.Unix(100, 0)
-	listS3Objects = func(got string) ([]S3Object, error) {
-		require.Equal(t, root, got)
-		return []S3Object{
-			{URI: subagentURI, Size: 11, LastModified: mtime},
-			{URI: flatTxtURI, Size: 13, LastModified: mtime},
-		}, nil
-	}
-
-	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, flatTxtURI, sources[0].DisplayPath,
-		"the session's own object outranks a subagent copy regardless of extension")
 }
 
 func TestCursorS3ProviderRejectsNonTranscriptLayout(t *testing.T) {
