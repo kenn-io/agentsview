@@ -40,13 +40,14 @@ async function request({ id, path, version: peerVersion }, port) {
       [reply] = await chrome.scripting.executeScript({
         target,
         world: "ISOLATED",
-        func: (url) => typeof claudeFetch === "function" ? claudeFetch(url) : undefined,
-        args: [`https://claude.ai${path}`],
+        func: () => typeof claudeFetch === "function",
       });
-      if (reply?.result !== undefined) break;
+      if (reply?.result === true) break;
       if (attempt === 1) throw new Error("Claude.ai page changed during Sync; try Sync again");
       await chrome.scripting.executeScript({ target, files: ["claude_fetch.js"], world: "ISOLATED" });
     }
+    [reply] = await chrome.scripting.executeScript({ target, world: "ISOLATED", func: (url) => typeof claudeFetch === "function" ? claudeFetch(url) : undefined, args: [`https://claude.ai${path}`] });
+    if (typeof reply?.result?.status !== "number") throw new Error("Invalid Claude.ai fetch reply; try Sync again");
     result = { ...reply.result, id, version };
   } catch (error) {
     result = { id, version, status: 0, error: error.message };

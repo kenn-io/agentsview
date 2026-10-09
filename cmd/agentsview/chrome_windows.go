@@ -1,9 +1,12 @@
 package main
 
-import "golang.org/x/sys/windows/registry"
+import (
+	"go.kenn.io/agentsview/internal/chromehost"
+	"golang.org/x/sys/windows/registry"
+)
 
 func registerChromeHost(path string) error {
-	return registerChromeHostKey(`Software\Google\Chrome\NativeMessagingHosts\io.kenn.agentsview`, path)
+	return registerChromeHostKey(chromehost.RegistrationKey, path)
 }
 
 func registerChromeHostKey(subkey, path string) error {

@@ -2464,6 +2464,7 @@
   "tool_sequences_full_result_in_message": "Tam nəticə {ordinal} nömrəli mesajdadır.",
   "tool_sequences_retry": "Yenidən cəhd et",
   "import_claude_connect": "Daxil ol",
+  "import_claude_sync_running": "Chrome sinxronizasiyası artıq davam edir.",
   "import_claude_sync": "Sinxronlaşdır",
   "import_claude_chrome_title": "Chrome",
   "import_claude_desktop_title": "Hesab",

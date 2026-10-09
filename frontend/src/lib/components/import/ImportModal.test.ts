@@ -161,6 +161,15 @@ it.each([false, true])("refetches the disappeared host after 409, installed=%s",
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+it("shows an overlapping Chrome Sync refusal", async () => {
+  syncClaudeAI.mockRejectedValueOnce(new ApiError(409, "Server conflict text", "claude_ai_sync_running"));
+  render(ImportModal, props());
+  await clickSync();
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."));
+  expect(screen.queryByText("Server conflict text")).toBeNull();
+  expect(syncButton().disabled).toBe(false);
+});
+
 it("shows a sync failure Notice and retries", async () => {
   syncClaudeAI.mockRejectedValueOnce(new Error("Network interrupted"));
   const p = props();

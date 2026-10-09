@@ -2461,6 +2461,7 @@
   "tool_sequences_full_result_in_message": "Le résultat complet se trouve dans le message {ordinal}.",
   "tool_sequences_retry": "Réessayer",
   "import_claude_connect": "Se connecter",
+  "import_claude_sync_running": "Une synchronisation Chrome est déjà en cours.",
   "import_claude_sync": "Synchroniser",
   "import_claude_chrome_title": "Chrome",
   "import_claude_desktop_title": "Compte",

@@ -30,7 +30,7 @@ beforeEach(async () => {
   chrome.tabs.query.mockResolvedValue([{ id: 7 }]);
   chrome.tabs.get.mockResolvedValue({ id: 7, status: "complete" });
   chrome.tabs.create.mockResolvedValue({ id: 8 });
-  chrome.scripting.executeScript.mockResolvedValue([{ result: { status: 200, body: "chats" } }]);
+  chrome.scripting.executeScript.mockImplementation(async (options) => options.args ? [{ result: { status: 200, body: "chats" } }] : [{ result: true }]);
   await import("./worker.js");
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
@@ -61,36 +61,47 @@ describe("Chrome native host worker", () => {
     expect(await request()).toEqual({ id: "a", version: 1, status: 200, body: "chats" });
     expect(chrome.runtime.connectNative).toHaveBeenCalledExactlyOnceWith("io.kenn.agentsview");
     expect(chrome.tabs.query).toHaveBeenCalledWith({ url: "https://claude.ai/*", discarded: false });
-    expect(chrome.scripting.executeScript).toHaveBeenCalledExactlyOnceWith({ target: { tabId: 7 }, world: "ISOLATED", func: expect.any(Function), args: ["https://claude.ai/api/organizations"] });
+    expect(chrome.scripting.executeScript).toHaveBeenLastCalledWith({ target: { tabId: 7 }, world: "ISOLATED", func: expect.any(Function), args: ["https://claude.ai/api/organizations"] });
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("reinjects once when navigation removes claudeFetch; retry missing %s", async (stillMissing) => {
+    let probes = 0;
     chrome.scripting.executeScript.mockImplementation(async (options) => {
-      if (options.files) return [];
-      const calls = chrome.scripting.executeScript.mock.calls.filter(([call]) => call.func);
-      if (calls.length === 1 || stillMissing) {
-        expect(options.func(options.args[0])).toBeUndefined();
-        return [{ result: undefined }];
+      if (options.files) {
+        if (!stillMissing) vi.stubGlobal("claudeFetch", vi.fn(() => ({ status: 200, body: "retried chats" })));
+        return [];
       }
-      const claudeFetch = vi.fn(() => ({ status: 200, body: "retried chats" }));
-      vi.stubGlobal("claudeFetch", claudeFetch);
-      const result = options.func(options.args[0]);
-      expect(claudeFetch).toHaveBeenCalledExactlyOnceWith("https://claude.ai/api/organizations");
-      return [{ result }];
+      if (!options.args) {
+        probes++;
+        const result = options.func();
+        expect(result).toBe(probes > 1 && !stillMissing);
+        return [{ result }];
+      }
+      return [{ result: await options.func(options.args[0]) ?? null }];
     });
     expect(await request()).toEqual(stillMissing
       ? { id: "a", version: 1, status: 0, error: "Claude.ai page changed during Sync; try Sync again" }
       : { id: "a", version: 1, status: 200, body: "retried chats" });
-    expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(3);
+    expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(stillMissing ? 3 : 4);
     expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(2, { target: { tabId: 7 }, files: ["claude_fetch.js"], world: "ISOLATED" });
   });
 
-  it("leaves its inactive tab open after fetch", async () => {
+  it("injects claudeFetch into a fresh tab and leaves it open", async () => {
+    const claudeFetch = vi.fn(() => ({ status: 200, body: "chats" }));
+    chrome.scripting.executeScript.mockImplementation(async (options) => {
+      if (options.files) {
+        vi.stubGlobal("claudeFetch", claudeFetch);
+        return [];
+      }
+      return [{ result: await options.func(...(options.args ?? [])) ?? null }];
+    });
     chrome.tabs.query.mockResolvedValue([]);
     expect(await request()).toEqual({ id: "a", version: 1, status: 200, body: "chats" });
     expect(chrome.tabs.create).toHaveBeenCalledWith({ url: "https://claude.ai/new", active: false });
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
+    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(2, { target: { tabId: 8 }, files: ["claude_fetch.js"], world: "ISOLATED" });
+    expect(claudeFetch).toHaveBeenCalledExactlyOnceWith("https://claude.ai/api/organizations");
   });
 
   it("waits for the Claude tab to load before injecting the reader", async () => {
@@ -107,8 +118,13 @@ describe("Chrome native host worker", () => {
   });
 
   it("replaces an oversized serialized reply with 413", async () => {
-    chrome.scripting.executeScript.mockResolvedValue([{ result: { status: 200, body: '"'.repeat(32 * 1024 * 1024) } }]);
+    chrome.scripting.executeScript.mockResolvedValueOnce([{ result: true }]).mockResolvedValueOnce([{ result: { status: 200, body: '"'.repeat(32 * 1024 * 1024) } }]);
     expect(await request()).toEqual({ id: "a", version: 1, status: 413 });
+  });
+
+  it.each([null, {}, { status: "200" }])("rejects a fetch reply without numeric status: %s", async (result) => {
+    chrome.scripting.executeScript.mockResolvedValueOnce([{ result: true }]).mockResolvedValueOnce([{ result }]);
+    expect(await request()).toEqual({ id: "a", version: 1, status: 0, error: "Invalid Claude.ai fetch reply; try Sync again" });
   });
 
   it("reconnects five seconds after disconnect without duplicating startup connections", async () => {

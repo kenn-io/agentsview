@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -93,43 +92,18 @@ func (s *Server) humaClaudeAIChrome(_ context.Context, _ *struct{}) (*claudeAICh
 	}
 	out := &claudeAIChromeOutput{}
 	_, err := os.Stat(filepath.Join(s.cfg.DataDir, "chrome", "extension", "manifest.json"))
-	out.Body.Installed = err == nil && chromeLauncherInstalled(s.cfg.DataDir)
+	home, homeErr := os.UserHomeDir()
+	readRegistration := s.chrome.registeredManifest
+	if readRegistration == nil {
+		readRegistration = chromehost.RegisteredManifest
+	}
+	registered, registrationErr := readRegistration(home)
+	out.Body.Installed = err == nil && homeErr == nil && registrationErr == nil && chromehost.Installed(s.cfg.DataDir, home, registered)
 	out.Body.Connected = s.chrome.Connected()
 	s.chrome.mu.Lock()
 	out.Body.OtherProfile = s.chrome.refusedProfile
 	s.chrome.mu.Unlock()
 	return out, nil
-}
-
-func chromeLauncherInstalled(dataDir string) bool {
-	launcher := filepath.Join(dataDir, "chrome", "host")
-	if runtime.GOOS == "windows" {
-		launcher += ".cmd"
-	}
-	body, err := os.ReadFile(launcher)
-	if err != nil {
-		return false
-	}
-	var executable string
-	var ok bool
-	if runtime.GOOS == "windows" {
-		executable, ok = strings.CutPrefix(string(body), "@echo off\r\n\"")
-		if ok {
-			executable, _, ok = strings.Cut(executable, "\" chrome-host --socket \"")
-			executable = strings.ReplaceAll(executable, "%%", "%")
-		}
-	} else {
-		executable, ok = strings.CutPrefix(string(body), "#!/bin/sh\nexec '")
-		if ok {
-			executable, _, ok = strings.Cut(executable, "' chrome-host --socket '")
-			executable = strings.ReplaceAll(executable, "'\"'\"'", "'")
-		}
-	}
-	if !ok || executable == "" {
-		return false
-	}
-	info, err := os.Stat(executable)
-	return err == nil && info.Mode().IsRegular()
 }
 
 type claudeAISyncInput struct {
@@ -167,7 +141,13 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 	if in.Browser == "chrome" && !s.chrome.Connected() {
 		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_chrome_host_required", "Run agentsview chrome setup and keep Chrome open, then Sync again")
 	}
+	if in.Browser == "chrome" && !s.chrome.syncMu.TryLock() {
+		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_sync_running", "Chrome Sync is already running")
+	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
+		if in.Browser == "chrome" {
+			defer s.chrome.syncMu.Unlock()
+		}
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
 			return
