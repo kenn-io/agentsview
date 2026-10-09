@@ -86,6 +86,7 @@ approved mapping, not current behavior.
 
 ## Deliberate differences
 
+- Pattern evidence carries plain text instead of backticks around names.
 - Titles use `[friction/<kind>]`, labels use `friction`, and the digest
   heading is `# Friction Log — <date>`.
 - Coding corrections require the chat marker patterns too. jilog counts every
@@ -166,7 +167,8 @@ The digest follows jilog's `learning-digest.md` layout with these differences:
   them. Timezone handling belongs to daily digest scheduling.
 - Archived text renders inside code spans, with control characters replaced by
   spaces and backticks by apostrophes. Markdown and HTML render literally.
-- Pattern detectors and their fingerprints remain unchanged.
+- Pattern evidence is plain text, unlike jilog's backticked names; the digest
+  wraps it in a code span. Fingerprints remain unchanged.
 - The JSON summary uses AgentsView schema 1 with `schema_version`,
   `sessions_scanned`, seven kind counts and `p0_alerts`.
 

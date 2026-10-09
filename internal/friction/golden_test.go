@@ -30,7 +30,7 @@ func goldenDigestFixture() DigestSnapshot {
 		{Kind: KindError, SubjectID: "s-2", ToolName: "Bash", Text: "command failed"},
 		{Kind: KindWorkaround, SubjectID: "s-1", Label: "for now", Text: "use the fallback for now\nthen retry"},
 		{Kind: KindDeferral, SubjectID: "s-2", Label: "next session"},
-		{Kind: KindPattern, SubjectID: "s-1", Label: "retry_loop", Evidence: "`Bash` x3 identical arguments 09:00-09:02"},
+		{Kind: KindPattern, SubjectID: "s-1", Label: "retry_loop", Evidence: "Bash x3 identical arguments 09:00-09:02"},
 		{Kind: KindPattern, SubjectID: "s-3", Label: "runaway_loop", Evidence: "12 tool calls 09:00-09:11"},
 		{Kind: KindFrustration, SubjectID: "s-1", Text: "why won't it\nload???"},
 		{Kind: KindInterruption, SubjectID: "s-2", Dims: Dims{Agent: "claude"}},

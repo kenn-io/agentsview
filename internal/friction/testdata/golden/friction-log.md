@@ -42,7 +42,7 @@ interruptions: 3
 
 ## Patterns
 
-- `s-1` kind=`retry_loop`: `'Bash' x3 identical arguments 09:00-09:02`
+- `s-1` kind=`retry_loop`: `Bash x3 identical arguments 09:00-09:02`
 - `s-3` kind=`runaway_loop`: `12 tool calls 09:00-09:11`
 
 ## Frustration
