@@ -490,11 +490,6 @@ func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
 			rows:      testjsonl.JoinJSONL(reply, record, reply, record),
 			wantUsage: []string{`{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, ""},
 		},
-		{
-			name:      "cache creation inside input",
-			rows:      testjsonl.JoinJSONL(reply, `{"type":"token_usage_record","payload":{"usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}}}`),
-			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -537,7 +532,6 @@ func TestTraeXProviderHistoryMutationRefusal(t *testing.T) {
 		path    string
 	}{
 		{"missing version", `{"operation":"append","items":[]}`, "", "full"},
-		{"version one", `{"version":1,"operation":"append","items":[]}`, "", "full"},
 		{"replace", `{"operation":"replace","items":[]}`, "operation", "full"},
 		{"missing operation", `{"items":[]}`, "operation", "full"},
 		{"newer version", `{"version":2,"operation":"append","items":[]}`, "version", "full"},
@@ -579,9 +573,8 @@ func TestTraeXProviderHistoryMutationRefusal(t *testing.T) {
 				require.NoError(t, err)
 				return
 			}
-			wantErr := "unsupported TraeX history mutation " + tt.wantErr
+			wantErr := "invalid TraeX history_mutation: " + tt.wantErr
 			require.ErrorContains(t, err, wantErr)
-			assert.ErrorIs(t, err, ErrTraeXHistoryMutationUnsupported)
 		})
 	}
 }

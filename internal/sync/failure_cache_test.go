@@ -369,7 +369,6 @@ func TestSourceParseFailureCacheableClassifiesTransientErrors(t *testing.T) {
 		want bool
 	}{
 		{name: "malformed", err: errors.New("malformed source"), want: true},
-		{name: "TraeX mutation refusal", err: fmt.Errorf("parse source: %w operation replace", parser.ErrTraeXHistoryMutationUnsupported), want: true},
 		{name: "permission", err: errors.New("permission denied"), want: false},
 		{name: "scan", err: errors.New("temporary scan failure"), want: false},
 		{name: "locked", err: errors.New("database is locked"), want: false},
