@@ -3,22 +3,19 @@ package server
 import (
 	"context"
 	"crypto/rand"
-	"encoding/binary"
 	"encoding/json/v2"
 	"errors"
-	"io"
 	"net"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/kit/daemon"
 	"go.kenn.io/kit/safefileio"
 )
-
-const chromeFrameLimit = 64 << 20
 
 type chromeConnection struct {
 	net.Conn
@@ -66,7 +63,9 @@ func (s *Server) ServeChromeHost(ctx context.Context, socketPath string) error {
 				return
 			}
 			if s.chrome.connection != nil {
-				_ = s.chrome.connection.Close()
+				s.chrome.mu.Unlock()
+				_ = conn.Close()
+				continue
 			}
 			s.chrome.connection = current
 			s.chrome.mu.Unlock()
@@ -83,6 +82,7 @@ func (h *chromeHost) Connected() bool {
 }
 
 func (h *chromeHost) read(conn *chromeConnection) {
+	disconnectErr := errors.New("Chrome host disconnected")
 	defer func() {
 		_ = conn.Close()
 		h.mu.Lock()
@@ -93,24 +93,17 @@ func (h *chromeHost) read(conn *chromeConnection) {
 		conn.mu.Lock()
 		defer conn.mu.Unlock()
 		for id, answer := range conn.pending {
-			answer <- claudeAISyncResult{err: errors.New("Chrome host disconnected")}
+			answer <- claudeAISyncResult{err: disconnectErr}
 			delete(conn.pending, id)
 		}
 	}()
 	for {
-		var header [4]byte
-		if _, err := io.ReadFull(conn, header[:]); err != nil {
-			return
-		}
-		size := binary.NativeEndian.Uint32(header[:])
-		if size > chromeFrameLimit {
-			return
-		}
-		body := make([]byte, size)
-		if _, err := io.ReadFull(conn, body); err != nil {
+		body, err := chromehost.ReadFrame(conn)
+		if err != nil {
 			return
 		}
 		var reply struct {
+			Version    int    `json:"version"`
 			ID         string `json:"id"`
 			Status     int    `json:"status"`
 			Body       string `json:"body"`
@@ -118,6 +111,10 @@ func (h *chromeHost) read(conn *chromeConnection) {
 			Error      string `json:"error"`
 		}
 		if err := json.Unmarshal(body, &reply); err != nil {
+			return
+		}
+		if reply.Version != chromehost.Version {
+			disconnectErr = errors.New(chromehost.VersionError)
 			return
 		}
 		response := claudeAISyncResult{status: reply.Status, body: []byte(reply.Body), retryAfter: reply.RetryAfter}
@@ -142,16 +139,14 @@ func (h *chromeHost) fetch(ctx context.Context, path string) (importer.ClaudeAIR
 	}
 	id := rand.Text()
 	answer := make(chan claudeAISyncResult, 1)
-	body, err := json.Marshal(map[string]string{"id": id, "path": path})
+	body, err := json.Marshal(map[string]any{"version": chromehost.Version, "id": id, "path": path})
 	if err != nil {
 		return importer.ClaudeAIResponse{}, err
 	}
-	var header [4]byte
-	binary.NativeEndian.PutUint32(header[:], uint32(len(body)))
 	conn.mu.Lock()
 	conn.pending[id] = answer
 	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Minute))
-	_, err = conn.Write(append(header[:], body...))
+	err = chromehost.WriteFrame(conn, body)
 	conn.mu.Unlock()
 	defer func() { conn.mu.Lock(); delete(conn.pending, id); conn.mu.Unlock() }()
 	if err != nil {

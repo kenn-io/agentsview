@@ -49,6 +49,12 @@
   const canSync = $derived(open && provider === "claude-ai" && (!!host || !!syncState.serverVersion?.claude_ai_chrome_host) && !isRemoteConnection() && !syncState.readOnly);
   const showChromeSetup = $derived(open && provider === "claude-ai" && !canSync && !isRemoteConnection() && !syncState.readOnly);
 
+  $effect(() => {
+    if (open && provider === "claude-ai" && !host && !isRemoteConnection()) {
+      untrack(() => { void syncState.loadVersion(); });
+    }
+  });
+
   async function connect() {
     try { if (host) await connectClaudeAI(host); }
     catch (e) { error = e instanceof Error ? e.message : String(e); }
@@ -69,6 +75,9 @@
     } catch (e) {
       if (controller.signal.aborted) return;
       error = e instanceof Error ? e.message : m.import_failed();
+      if (e instanceof ApiError && e.status === 409 && e.message.includes("Chrome host not connected")) {
+        await syncState.loadVersion();
+      }
       if (e instanceof ApiError && e.code === "claude_ai_auth_required") {
         error = m.import_claude_auth_required();
       }

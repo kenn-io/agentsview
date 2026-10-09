@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/web"
 	"go.kenn.io/kit/safefileio"
@@ -64,21 +64,6 @@ func newChromeHostCommand() *cobra.Command {
 	return cmd
 }
 
-func chromeFrame(reader io.Reader) ([]byte, error) {
-	var header [4]byte
-	if _, err := io.ReadFull(reader, header[:]); err != nil {
-		return nil, err
-	}
-	size := binary.NativeEndian.Uint32(header[:])
-	if size > 64<<20 {
-		return nil, errors.New("Chrome frame exceeds 64 MiB")
-	}
-	frame := make([]byte, 4+int(size))
-	copy(frame, header[:])
-	_, err := io.ReadFull(reader, frame[4:])
-	return frame, err
-}
-
 func relayChromeHost(ctx context.Context, socket string, input io.Reader, output io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -86,7 +71,7 @@ func relayChromeHost(ctx context.Context, socket string, input io.Reader, output
 	inputErr := make(chan error, 1)
 	go func() {
 		for {
-			frame, err := chromeFrame(input)
+			frame, err := chromehost.ReadFrame(input)
 			if err != nil {
 				inputErr <- err
 				cancel()
@@ -105,9 +90,9 @@ func relayChromeHost(ctx context.Context, socket string, input io.Reader, output
 			disconnected := make(chan error, 1)
 			go func() {
 				for {
-					frame, err := chromeFrame(conn)
+					frame, err := chromehost.ReadFrame(conn)
 					if err == nil {
-						_, err = output.Write(frame)
+						err = chromehost.WriteFrame(output, frame)
 					}
 					if err != nil {
 						disconnected <- err
@@ -124,7 +109,7 @@ func relayChromeHost(ctx context.Context, socket string, input io.Reader, output
 					_ = conn.Close()
 					goto retry
 				case frame := <-frames:
-					if _, err := conn.Write(frame); err != nil {
+					if err := chromehost.WriteFrame(conn, frame); err != nil {
 						break connected
 					}
 				}
@@ -158,6 +143,9 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		return "", err
 	}
 	folder := filepath.Join(dir, "extension")
+	if err := os.RemoveAll(folder); err != nil {
+		return "", err
+	}
 	if err := fs.WalkDir(assets, "chrome-extension", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -202,7 +190,10 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 	if err != nil {
 		return "", err
 	}
-	socket := filepath.Join(dir, "host.sock")
+	socket, err := chromeSocketPath(dataDir)
+	if err != nil {
+		return "", err
+	}
 	launcher := filepath.Join(dir, "host")
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 	command := "#!/bin/sh\nexec " + quote(executable) + " chrome-host --socket " + quote(socket) + "\n"
@@ -235,4 +226,28 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		return "", err
 	}
 	return folder, nil
+}
+
+func chromeSocketPath(dataDir string) (string, error) {
+	dir, err := filepath.Abs(dataDir)
+	if err != nil {
+		return "", err
+	}
+	socket := filepath.Join(dir, "chrome", "host.sock")
+	// macOS has the smallest supported sockaddr_un path, at 104 bytes including NUL.
+	if len(socket) >= 104 {
+		root := "/tmp"
+		if runtime.GOOS == "windows" {
+			root = os.TempDir()
+		}
+		digest := sha256.Sum256([]byte(dir))
+		socket = filepath.Join(root, fmt.Sprintf("av-chrome-%x", digest[:8]), "host.sock")
+		if len(socket) >= 104 {
+			return "", errors.New("Chrome socket path exceeds the Unix socket path limit")
+		}
+	}
+	if err := safefileio.EnsurePrivateDir(filepath.Dir(socket)); err != nil {
+		return "", err
+	}
+	return socket, nil
 }

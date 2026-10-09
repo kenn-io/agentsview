@@ -1324,7 +1324,7 @@ agentsview import --type <type> <path>
 | `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)  |
 | `--sync` | `false` | Sync Claude.ai through Chrome; requires a running server and Chrome host, with no path or `--replace` |
 
-Run `agentsview chrome setup` once, then use **Load unpacked** in `chrome://extensions` to load the folder it prints. Keep Chrome open for `agentsview import --type claude-ai --sync`. Re-run setup after moving the binary.
+Run `agentsview chrome setup` once, then use **Load unpacked** in `chrome://extensions` to load the folder it prints. Keep Chrome open for `agentsview import --type claude-ai --sync`. Re-run setup and reload the extension after upgrading AgentsView or moving its binary.
 
 The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a
 Gemini Apps `MyActivity.html` file, or a directory containing the extracted
