@@ -131,7 +131,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 			Description: "List recorded agent sessions with filters (project, agent, machine, date range). " +
 				"Returns compact metadata rows, newest first. For prior-work questions, prefer search_content " +
 				"with mode hybrid or semantic when a vector search index is configured; use search_sessions " +
-				"for keyword search.",
+				"for keyword search. One-shot and automated sessions are excluded by default; " +
+				"set include_one_shot or include_automated to include them.",
 			Annotations: readOnly,
 		}, t.listSessions)
 

@@ -413,14 +413,9 @@ func TestSearchSessions_Pagination(t *testing.T) {
 
 func TestListSessions_ReturnsRows(t *testing.T) {
 	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "a-1", "proj-a", func(s *db.Session) {
-		s.MessageCount = 4
-		s.UserMessageCount = 2
-	})
-	dbtest.SeedSession(t, d, "b-1", "proj-b", func(s *db.Session) {
-		s.MessageCount = 4
-		s.UserMessageCount = 2
-	})
+	dbtest.SeedSession(t, d, "a-1", "proj-a", dbtest.WithMessageCounts(4, 2))
+	dbtest.SeedSession(t, d, "b-1", "proj-b", dbtest.WithMessageCounts(4, 2))
+	dbtest.SeedSession(t, d, "single", "proj-a", dbtest.WithMessageCounts(2, 1))
 
 	_, out, err := ts.listSessions(t.Context(), nil, listSessionsIn{
 		Project: "proj-a",
@@ -429,6 +424,14 @@ func TestListSessions_ReturnsRows(t *testing.T) {
 	require.Len(t, out.Sessions, 1)
 	assert.Equal(t, "a-1", out.Sessions[0].SessionID)
 	assert.Equal(t, "proj-a", out.Sessions[0].Project)
+
+	_, out, err = ts.listSessions(t.Context(), nil, listSessionsIn{
+		Project:        "proj-a",
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Len(t, out.Sessions, 2)
+	assert.Equal(t, 2, out.Total)
 }
 
 func TestQueryRecall_ThreadsVectorModeAndReturnsDistilledEntries(t *testing.T) {
