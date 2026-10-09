@@ -93,7 +93,7 @@ type claudeAISyncResult struct {
 }
 
 var errClaudeAISignInPending = errors.New("claude sign-in is still pending")
-var errClaudeAIArchiveUpgradeRequired = errors.New("Let the archive finish upgrading, then Sync again.")
+var errClaudeAIArchiveUpgradeRequired = errors.New("claude.ai sync must wait for the archive upgrade")
 
 func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
 	if s.db.ReadOnly() {
@@ -168,6 +168,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			} else if errors.Is(err, errClaudeAISignInPending) {
 				payload["code"] = "claude_ai_sign_in_pending"
 			} else if errors.Is(err, errClaudeAIArchiveUpgradeRequired) {
+				payload["error"] = "Let the archive finish upgrading, then Sync again."
 				payload["code"] = "claude_ai_archive_upgrade_required"
 			}
 			stream.SendJSON("error", payload)
