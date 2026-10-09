@@ -126,7 +126,6 @@ when AgentsView cannot derive any repos from the sessions in the selected
 window, and Claude-only sections are omitted when the window has no compatible
 data.
 
-The `Incomplete:` output and `skipped` field described below are unreleased.
 When a repository lookup fails, the outcome section lists its path, operation,
 and reason under `Incomplete:`. Multiline reasons keep their continuation lines
 indented. A `pr` entry means only that repository's pull-request counts are

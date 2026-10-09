@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-11
+last_edited: 2026-10-09
 ---
 
 # agentsview
@@ -8,8 +8,13 @@ Browse, search, and track costs across your AI coding agents. Your session
 archive stays on your machine unless you choose a feature that shares it.
 
 This README and the [documentation](https://agentsview.io/docs/) follow `main`.
-The latest release is **v0.44.0**. Check the
+The latest release is **v0.45.0**. Check the
 [changelog](https://agentsview.io/docs/changelog/) for what it includes.
+
+Version 0.45.0 adds Spanish, Junie/OMO/StepCode sessions, message-frequency
+charts, and conversation-memory plugins for Claude Code and Codex. Review tool
+errors and recovery in the transcript, approve extracted Recall entries, and
+compare prompt volume including cache reads and writes.
 
 <p align="center">
   <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
@@ -326,17 +331,27 @@ agentsview stats --include-git-outcomes
   match cites the conversation unit it came from
   ([docs](https://agentsview.io/semantic-search/))
 - **Token usage and cost dashboard** -- per-session and per-model cost
-  breakdowns, daily spend charts, all in the web UI
+  breakdowns, total and uncached input counts, and daily spend charts with
+  Smooth, Lines, and Bars views
 - **Analytics dashboard** -- activity heatmaps, tool usage, velocity metrics,
-  project breakdowns
+  project breakdowns, message roles, and Git outcome totals
+- **Activity dashboard** -- concurrency, user-message and assistant-message
+  frequency, active time, and cost over the selected dates
+- **Tool sequences** -- follow errors, retries, tool switches, and recovery back
+  to the recorded calls, with no model calls or token charges
 - **Recent Edits feed** -- the files your agents changed most recently across
   every session, grouped by project and path, each linking to the message that
   made the change
 - **Project mapping** -- manage worktree rules from Data. An
   [opt-in workspace](https://agentsview.io/docs/data/#enable-the-project-workspace)
   adds folder suggestions, session previews, and bulk corrections
-- **Recall corpus browser** -- explore experimental distilled knowledge and jump
-  from entries to their supporting transcript evidence
+- **Recall corpus browser** -- approve or archive experimental extracted
+  knowledge and jump from entries to their supporting transcript evidence
+- **Conversation memory** -- native Claude Code and Codex plugins let agents
+  search past decisions and cite source messages; see
+  [MCP memory setup](https://agentsview.io/docs/mcp/#focused-memory-profile)
+- **Eight interface languages** -- Azerbaijani, English, French, Japanese,
+  Korean, Spanish, Simplified Chinese, and Traditional Chinese
 - **Live updates** via SSE as active sessions receive new messages
 - **Keyboard-first** navigation (`j`/`k`/`[`/`]`, `Ctrl/Cmd+K` search,
   `Ctrl/Cmd+G` to open a session by ID or UUID, `?` for all shortcuts)

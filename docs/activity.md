@@ -114,6 +114,8 @@ messages can contain tool calls or thinking; they are transcript messages, not
 completed turns. Messages without timestamps cannot be placed on the chart.
 Hover a bucket in either message view to compare both counts.
 
+![Activity showing assistant-message frequency](/docs/assets/generated/screenshots/activity-message-frequency.png)
+
 ![Weekly Activity concurrency chart](/docs/assets/generated/screenshots/activity-concurrency.png)
 
 Hover a bucket to see its time range, the stacked split at the combined peak,
@@ -144,10 +146,11 @@ Click a session title to open that session in the transcript viewer. Column
 headers for **Project**, **Agent**, **Agent-min**, **Cost**, and **Window** are
 sortable; timing-only sorts keep untimed sessions at the bottom.
 
-The table initially includes at most 200 rows. Sorting, bucket filtering, and
-later pages run on the server, with a maximum page size of 500 rows. A loading
-indicator remains local to the table, so the report summary and chart stay
-visible while a page is fetched.
+The table initially includes at most 200 rows and loads more as you scroll.
+Sorting, bucket filtering, and later pages run on the server, with a maximum
+page size of 500 rows. A failed page load offers a retry. A loading indicator
+remains local to the table, so the report summary and chart stay visible while a
+page is fetched.
 
 Subagent sessions are marked with a **Subagent** badge; other automated sessions
 have an **Auto** badge. Untimed sessions can still carry cost if usage rows

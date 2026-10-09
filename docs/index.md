@@ -15,7 +15,7 @@ New here? The [product overview](/){target=_self} explains what AgentsView is fo
 here explain how to use and maintain each feature.
 
 These guides follow `main` and may include changes newer than the latest
-release, **v0.44.0**. Check the [changelog](/docs/changelog/) for what each
+release, **v0.45.0**. Check the [changelog](/docs/changelog/) for what each
 release includes.
 
 <p class="hero-actions">
@@ -52,7 +52,9 @@ commands can read the archive directly. See
 with full-text indexes. Optional backends extend it:
 [PostgreSQL](/docs/pg-sync/) or [ClickHouse](/docs/clickhouse-sync/) for a
 remote read-only copy and [DuckDB](/docs/duckdb/) for analytical reads. All
-three are mirrors pushed from SQLite, never the source of truth.
+three can receive mirrors pushed from SQLite. Alternatively,
+[hosted raw sync](/docs/hosted-raw-sync/) can retain original provider files and
+parse them into PostgreSQL without a local SQLite archive or a separate push.
 
 <img src="/docs/assets/static/architecture.svg" alt="AgentsView architecture: agent sessions sync into SQLite with FTS5 search, served via REST API, SSE events, and embedded Svelte SPA" style="width: 100%; max-width: 960px; margin: 1.5rem auto; display: block;" />
 

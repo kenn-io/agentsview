@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-21
+last_edited: 2026-10-09
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -95,12 +95,24 @@ same schemas and backend selection as the full profile, over either stdio or
 StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
 complete tool list above.
 
-The repository's `plugins/agentsview-memory` package registers this profile for
-Claude Code and Codex and bundles the generated recall skill. Its MCP process
-reads `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or
-`AGENTSVIEW_MEMORY_PG`; explicit command flags still win. A token-file setting
-without a server fails instead of falling back to the local archive. PostgreSQL
-reads use the configured `default_pg` target.
+The native
+[AgentsView Memory package](https://github.com/kenn-io/agentsview/tree/main/plugins/agentsview-memory)
+registers this profile for Claude Code and Codex and bundles the recall skill,
+Claude's focused search agent, and a session-start hook. Install it through your
+client's native plugin flow and ensure `agentsview` is on the client's `PATH`.
+The package README explains local and hosted setup.
+
+For a standalone skill installation, use `agentsview skills install`; see
+[the CLI reference](/docs/commands/#agentsview-skills) for client and project
+scope. Choose one installation route per client to avoid loading duplicate
+skills. Both routes teach agents to search relevant history, distinguish
+proposals from accepted decisions, and cite transcript evidence.
+
+The native package's MCP process reads `AGENTSVIEW_MEMORY_SERVER`,
+`AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or `AGENTSVIEW_MEMORY_PG`; explicit
+command flags still win. A token-file setting without a server fails instead of
+falling back to the local archive. PostgreSQL reads use the configured
+`default_pg` target.
 
 Run `agentsview doctor memory` to inspect this server status together with the
 local client integration. Pass the native package root with `--plugin-root` to

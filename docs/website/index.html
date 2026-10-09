@@ -106,6 +106,7 @@
               <code>curl -fsSL https://agentsview.io/install.sh | bash</code>
               <button class="button install-copy" type="button" data-install-copy>Copy</button>
             </div>
+            <p><a href="/docs/changelog/#0450">New in v0.45.0</a>: Spanish, Junie/OMO/StepCode sessions, tool sequences, and conversation-memory plugins.</p>
             <p class="install-hint">macOS and Linux · <a href="/docs/quickstart/">Windows, desktop app, pip, and Docker installs</a><span data-install-status aria-live="polite"></span></p>
             <div class="actions">
               <a class="button primary" href="/guide/">See how it works</a>
@@ -236,6 +237,8 @@
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-hermes"/></svg></span><span class="agent-chip-name">Hermes</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-iflow"/></svg></span><span class="agent-chip-name">iFlow</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph">Ju</span><span class="agent-chip-name">Junie</span></a>
+          <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph">Om</span><span class="agent-chip-name">OMO</span></a>
+          <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph">St</span><span class="agent-chip-name">StepCode</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph">Ic</span><span class="agent-chip-name">IcodeMate</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-xiaomi"/></svg></span><span class="agent-chip-name">MiMoCode</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-omp"/></svg></span><span class="agent-chip-name">OhMyPi</span></a>
@@ -269,13 +272,13 @@
             <p class="section-index">02 / Observe</p>
             <h2 id="observe-title">See when your agents are actually working.</h2>
           </div>
-          <p>The Activity dashboard shows peak concurrency and the exact moment it happened, active versus idle time, agent-minutes across parallel sessions, and cost. Scope it to any day, week, month, or custom range, and filter by project, agent, and machine. Live sync streams new messages into the UI as sessions run.</p>
+          <p>The Activity dashboard shows peak concurrency and the exact moment it happened, active versus idle time, agent-minutes across parallel sessions, and cost. Scope it to any day, week, month, or custom range, and filter by project, agent, and machine. Switch from concurrency to user-message or assistant-message frequency to compare prompts and output. The Analytics dashboard adds message-role comparisons and Git outcome totals.</p>
         </div>
         <figure class="capture">
           <a href="/docs/assets/generated/screenshots/activity-page.png" data-lightbox>
             <img src="/docs/assets/generated/screenshots/activity-page.png" alt="AgentsView Activity dashboard showing concurrency timeline, active time, and cost" loading="lazy">
           </a>
-          <figcaption class="caption">The Activity dashboard on real session data. Select the image to inspect it at full size. <a href="/docs/activity/">Activity reference</a>.</figcaption>
+          <figcaption class="caption">The Activity dashboard. Select the image to inspect it at full size. <a href="/docs/activity/">Activity reference</a>.</figcaption>
         </figure>
       </section>
 
@@ -285,7 +288,7 @@
             <p class="section-index">03 / Account</p>
             <h2 id="account-title">Know what every agent costs.</h2>
           </div>
-          <p>Token and cost reports read from the pre-indexed archive instead of reparsing raw session files every time. Pricing tracks LiteLLM and OpenRouter rates with an offline fallback, and cache-aware accounting covers prompt-cache creation and reads.</p>
+          <p>Token and cost reports read from the pre-indexed archive instead of reparsing raw session files every time. Pricing tracks LiteLLM and OpenRouter rates with an offline fallback, and cache-aware accounting covers prompt-cache creation and reads. Compare Total Input with Uncached Input, and choose Smooth, Lines, or Bars for the daily cost chart.</p>
         </div>
         <div class="split-layout">
           <figure class="capture">
@@ -311,7 +314,7 @@
             <p class="section-index">04 / Understand</p>
             <h2 id="understand-title">Search and score every transcript.</h2>
           </div>
-          <p>Find a conversation by project and date in the command palette, or open it by ID with Ctrl/Cmd+G. Full-text search matches words; opt-in semantic and hybrid search match by meaning. Health scores and quality signals link back to the transcript so you can check the evidence.</p>
+          <p>Find a conversation by project and date in the command palette, or open it by ID with Ctrl/Cmd+G. Full-text search matches words; opt-in semantic and hybrid search match by meaning. Health scores and quality signals link back to the transcript so you can check the evidence. Tool sequences follow errors, retries, switches, and recovery through the recorded calls without running a model.</p>
         </div>
         <figure class="capture">
           <a href="/docs/assets/generated/screenshots/search-filters.png" data-lightbox>
@@ -327,7 +330,7 @@
             <p class="section-index">05 / Remember</p>
             <h2 id="remember-title">Turn transcripts into durable knowledge.</h2>
           </div>
-          <p>Recall (experimental) extracts decisions, warnings, and project facts from your archive. Each entry links to the messages that support it. Generated Insights write model-authored reports over an explicit session scope and manage them alongside the corpus.</p>
+          <p>Recall (experimental) extracts decisions, warnings, and project facts from your archive. Each entry links to the messages that support it. Approve useful entries or archive rejected ones; your decisions survive later extraction changes. Generated Insights write model-authored reports over an explicit session scope.</p>
         </div>
         <figure class="capture">
           <a href="/docs/assets/generated/screenshots/recall-corpus.png" data-lightbox>
@@ -342,7 +345,7 @@
           <div>
             <p class="section-index">06 / Feed back</p>
             <h2 id="feedback-title">Your agents can read it too.</h2>
-            <p class="lede">The same archive is available to your agents through a CLI, a REST API, and an MCP server. An agent can check what a previous session already tried, quote its own history, or watch its spend mid-run.</p>
+            <p class="lede">The same archive is available to your agents through a CLI, a REST API, and an MCP server. An agent can check what a previous session already tried, quote its own history, or watch its spend mid-run. Native conversation-memory plugins bundle recall instructions and session-start refresh for Claude Code and Codex. See <a href="/docs/mcp/#focused-memory-profile">memory setup</a>.</p>
             <ul class="interface-list">
               <li><strong>CLI</strong><span>Scriptable reports and session queries.</span></li>
               <li><strong>REST</strong><span>Programmatic session and usage access.</span></li>
@@ -384,7 +387,7 @@
           <article class="proof">
             <p class="proof-tag">DuckDB / ClickHouse</p>
             <h3>Choose a reporting backend.</h3>
-            <p>Mirror into <a href="/docs/duckdb/">DuckDB</a> for local or Quack reads, or push to <a href="/docs/clickhouse-sync/">ClickHouse</a> and serve the dashboard there. Keep session edits in SQLite.</p>
+            <p>Mirror into <a href="/docs/duckdb/">DuckDB</a> for local or Quack reads, or push to <a href="/docs/clickhouse-sync/">ClickHouse</a> and serve the dashboard there, including semantic and hybrid search when embeddings are pushed. Keep session edits in SQLite.</p>
           </article>
           <article class="proof">
             <p class="proof-tag">Filesystem</p>
@@ -394,7 +397,7 @@
           <article class="proof">
             <p class="proof-tag">Hosted raw sync</p>
             <h3>Keep the original files off-device.</h3>
-            <p>Upload original session files to an operator-managed server with device credentials and resumable transfers. Hosted browsing still requires PostgreSQL sync. <a href="/docs/hosted-raw-sync/">Hosted raw sync</a>.</p>
+            <p>Upload original session files to an operator-managed server with device credentials and resumable transfers. Opt-in server parsing makes those sessions browsable in PostgreSQL without a local SQLite archive or a separate <code>pg push</code>. <a href="/docs/hosted-raw-sync/">Hosted raw sync</a>.</p>
           </article>
           <article class="proof">
             <p class="proof-tag">Remote access</p>
