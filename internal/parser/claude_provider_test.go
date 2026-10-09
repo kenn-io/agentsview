@@ -770,6 +770,7 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "inc.jsonl")
 	initial := testjsonl.JoinJSONL(
+		`{"type":"agent-setting","entrypoint":"sdk-cli"}`,
 		testjsonl.ClaudeUserJSON("hello world", tsEarly),
 		testjsonl.ClaudeAssistantJSON("hi there", tsEarlyS1),
 	)
@@ -803,11 +804,13 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 	outcome, status, err := provider.ParseIncremental(
 		t.Context(),
 		IncrementalRequest{
-			Source:       source,
-			Fingerprint:  SourceFingerprint{Key: sourcePath, Size: currentInfo.Size()},
-			SessionID:    "inc",
-			Offset:       info.Size(),
-			StartOrdinal: 2,
+			Source:                 source,
+			Fingerprint:            SourceFingerprint{Key: sourcePath, Size: currentInfo.Size()},
+			SessionID:              "inc",
+			Offset:                 info.Size(),
+			StartOrdinal:           2,
+			StoredEntrypoint:       "sdk-cli",
+			StoredUserMessageCount: 1,
 		},
 	)
 	require.NoError(t, err)
@@ -821,6 +824,41 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 	assert.Equal(t, 3, outcome.Messages[1].Ordinal)
 	assert.Equal(t, RoleAssistant, outcome.Messages[1].Role)
 	assert.Contains(t, outcome.Messages[1].Content, "got it")
+}
+
+func TestClaudeProviderFirstPromptReparseEligibleKinds(t *testing.T) {
+	for _, tc := range []struct {
+		kind string
+		want IncrementalStatus
+	}{
+		{"", IncrementalNeedsFullParse},
+		{SessionKindRoborev, IncrementalApplied},
+		{SessionKindNonInteractive, IncrementalApplied},
+	} {
+		t.Run("kind="+tc.kind, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "project", "first.jsonl")
+			initial := `{"type":"agent-setting","entrypoint":"sdk-cli"}` + "\n"
+			prompt := `{"type":"user","uuid":"first","turnOrigin":"sdk","message":{"content":"Review the change."}}` + "\n"
+			writeSourceFile(t, path, initial+prompt)
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}, Machine: "local"})
+			require.True(t, ok)
+			source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "first"})
+			require.NoError(t, err)
+			require.True(t, found)
+			outcome, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
+				Source: source, Fingerprint: SourceFingerprint{Key: path, Size: int64(len(initial) + len(prompt))},
+				SessionID: "first", Offset: int64(len(initial)), StoredEntrypoint: "sdk-cli", StoredSessionKind: tc.kind,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, status)
+			assert.Equal(t, tc.want == IncrementalNeedsFullParse, outcome.ForceReplace)
+			if tc.want == IncrementalApplied {
+				require.Len(t, outcome.Messages, 1)
+				assert.Equal(t, "Review the change.", outcome.Messages[0].Content)
+			}
+		})
+	}
 }
 
 func TestClaudeProviderParseIncrementalWebSearchResultNeedsFullParse(t *testing.T) {

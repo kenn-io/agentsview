@@ -112,41 +112,71 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 	}
 }
 
-func TestBackfillIsAutomatedPGPreservesDurableClassification(t *testing.T) {
+func TestHeadlessClassificationRepairPG(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
-
 	local := testDB(t)
-	ps, err := New(
-		pgURL, "agentsview", local,
-		"automation-metadata-machine", true,
-		storage.PusherOptions{},
-	)
-	require.NoError(t, err, "creating sync")
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
 	defer ps.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
-
-	_, err = ps.DB().ExecContext(ctx,
-		`INSERT INTO sessions (
-			id, machine, project, agent, session_kind, first_message,
-			user_message_count, is_automated
-		 ) VALUES ($1, 'host', 'proj', 'grok', 'non-interactive', $2, 2, true)`,
-		"grok-headless", "Explain this function",
-	)
-	require.NoError(t, err, "insert durably classified session")
-
-	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()), "backfill automation")
-
-	var got bool
-	require.NoError(t, ps.DB().QueryRowContext(ctx,
-		`SELECT is_automated FROM sessions WHERE id = $1`,
-		"grok-headless",
-	).Scan(&got), "query automation classification")
-	assert.True(t, got)
+	require.NoError(t, ps.EnsureSchema(ctx))
+	for _, tc := range []struct {
+		id, prompt, kind, relationship string
+		parent                         *string
+	}{
+		{"plain", "Explain this function.", "non-interactive", "", nil},
+		{"script", "You are a code reviewer. Review this change.", "non-interactive", "", nil},
+		{"child", "Explain this function.", "non-interactive", "", new("plain")},
+		{"fork", "Explain this function.", "non-interactive", "fork", nil},
+		{"review", "Explain this function.", "roborev", "", nil},
+	} {
+		_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (
+			id, machine, project, agent, first_message, session_kind, relationship_type,
+			parent_session_id, user_message_count, is_automated, updated_at
+		) VALUES ($1, 'host', 'project-a', 'codex', $2, $3, $4, $5, 1, true, '2000-01-01T00:00:00Z')`,
+			tc.id, tc.prompt, tc.kind, tc.relationship, tc.parent)
+		require.NoError(t, err)
+	}
+	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
+	for _, tc := range []struct {
+		id, relationship string
+		automated        bool
+	}{
+		{"plain", "subagent", false},
+		{"script", "subagent", true},
+		{"child", "", false},
+		{"fork", "fork", false},
+		{"review", "", true},
+	} {
+		var relationship string
+		var automated bool
+		var updated time.Time
+		require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT relationship_type, is_automated, updated_at FROM sessions WHERE id = $1`, tc.id).Scan(&relationship, &automated, &updated))
+		assert.Equal(t, tc.relationship, relationship, tc.id)
+		assert.Equal(t, tc.automated, automated, tc.id)
+		if tc.relationship == "subagent" {
+			assert.True(t, updated.After(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)))
+		}
+	}
+	_, err = ps.DB().ExecContext(ctx, `UPDATE sessions SET relationship_type = '' WHERE id = 'plain'`)
+	require.NoError(t, err)
+	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
+	var relationship string
+	require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT relationship_type FROM sessions WHERE id = 'plain'`).Scan(&relationship))
+	assert.Equal(t, "subagent", relationship, "matching-hash audits repair late arrivals")
+	tx, err := ps.DB().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	require.NoError(t, ps.pushSession(ctx, tx, db.Session{
+		ID: "late-worker", Project: "project-a", Agent: "codex", SessionKind: "non-interactive",
+		CreatedAt: "2026-10-01T10:00:00Z",
+	}, "test-marker", nil))
+	require.NoError(t, tx.Commit())
+	require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT relationship_type FROM sessions WHERE id = 'late-worker'`).Scan(&relationship))
+	assert.Equal(t, "subagent", relationship)
 }
 
 // TestPushSessionTrustsLocalIsAutomated verifies that
@@ -318,8 +348,14 @@ func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 			// Full-content rows lacking evidence must still have stale flags corrected.
 			_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, user_message_count, is_automated) VALUES ('empty-full', 'other-machine', 'project', 'claude', 1, true)`)
 			require.NoError(t, err)
-			require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
-			for id, want := range map[string]bool{"automated": true, "interactive": false, "empty-full": false} {
+			// Legacy headless rows predate non-interactive session metadata.
+			_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, session_kind, user_message_count, is_automated, prompt_evidence_discarded) VALUES
+				('codex-headless', 'other-machine', 'project', 'codex', 'headless', 2, true, true),
+				('codex-interactive', 'other-machine', 'project', 'codex', '', 2, false, true),
+				('headless-full', 'other-machine', 'project', 'codex', 'headless', 2, true, false)`)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(ctx, ps.DB(), "agentsview"))
+			for id, want := range map[string]bool{"automated": true, "interactive": false, "empty-full": false, "codex-headless": true, "codex-interactive": false, "headless-full": false} {
 				var got bool
 				require.NoError(t, ps.DB().QueryRowContext(ctx,
 					`SELECT is_automated FROM sessions WHERE id = $1`, id,

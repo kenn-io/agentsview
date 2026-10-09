@@ -92,44 +92,6 @@ func (pb *paramBuilder) add(v any) string {
 	return fmt.Sprintf("$%d", pb.n)
 }
 
-func normalizePGAutomatedScope(
-	scope string,
-	excludeAutomated bool,
-) string {
-	switch strings.TrimSpace(scope) {
-	case "human", "all", "automated":
-		return strings.TrimSpace(scope)
-	}
-	if excludeAutomated {
-		return "human"
-	}
-	return "all"
-}
-
-func pgAutomatedScopePredicate(scope, col string) string {
-	switch scope {
-	case "human":
-		return col + " = FALSE"
-	case "automated":
-		return col + " = TRUE"
-	default:
-		return ""
-	}
-}
-
-// pgActivityWindows holds the cutoff durations used by
-// pgTerminationPred. Kept in sync with the SQLite-side constants
-// in internal/db/sessions.go so both stores classify a session
-// the same way at the same wall-clock time.
-const (
-	pgActiveWindow = 10 * time.Minute
-	pgStaleWindow  = 60 * time.Minute
-)
-
-// pgActivityExpr returns the COALESCEd activity timestamp
-// expression used to compute a session's effective recency.
-const pgActivityExpr = "COALESCE(ended_at, started_at, created_at)"
-
 const pgSidebarActivityExprS = "COALESCE(s.ended_at, s.started_at, s.created_at)"
 
 func pgSidebarStarredRootCTE(enabled bool) string {
@@ -149,56 +111,6 @@ func pgSidebarStarredRootJoin(enabled bool) string {
 		return ""
 	}
 	return "JOIN eligible_roots e ON e.id = t.root_id"
-}
-
-// pgTerminationPred returns a WHERE fragment for the multi-state
-// termination filter (active / stale / unclean). The status value
-// may be comma-separated to OR multiple states. Returns "" when
-// status is empty or "all".
-//
-// Stale and unclean both require a parser red flag — sessions with
-// termination_status NULL or 'clean' never appear under those
-// filters, so a short-lived agent that completes normally never
-// generates a yellow false-positive once it ages past 10 minutes.
-func pgTerminationPred(status string, pb *paramBuilder) string {
-	if status == "" || status == "all" {
-		return ""
-	}
-	now := time.Now().UTC()
-	activeCutoff := now.Add(-pgActiveWindow)
-	staleCutoff := now.Add(-pgStaleWindow)
-	const flagged = "termination_status IN ('tool_call_pending', 'truncated')"
-
-	parts := strings.Split(status, ",")
-	preds := make([]string, 0, len(parts))
-	for _, p := range parts {
-		switch strings.TrimSpace(p) {
-		case "active":
-			preds = append(preds,
-				pgActivityExpr+" > "+pb.add(activeCutoff))
-		case "stale":
-			preds = append(preds, "("+
-				pgActivityExpr+" > "+pb.add(staleCutoff)+
-				" AND "+pgActivityExpr+" <= "+pb.add(activeCutoff)+
-				" AND "+flagged+")")
-		case "unclean":
-			preds = append(preds, "("+
-				pgActivityExpr+" <= "+pb.add(staleCutoff)+
-				" AND "+flagged+")")
-		case "clean":
-			preds = append(preds, "termination_status = 'clean'")
-		case "awaiting_user":
-			preds = append(preds,
-				"termination_status = 'awaiting_user'")
-		}
-	}
-	if len(preds) == 0 {
-		return ""
-	}
-	if len(preds) == 1 {
-		return preds[0]
-	}
-	return "(" + strings.Join(preds, " OR ") + ")"
 }
 
 // scanPGSession scans a row with pgSessionCols into a
@@ -597,8 +509,8 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootFilter.Starred = false
 	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
 	canonicalRootWhere := db.BuildCanonicalRootWhere(s.sessionDialect(), "sessions", f.IncludeOrphans)
-	childAutomationPred := pgAutomatedScopePredicate(
-		normalizePGAutomatedScope(f.AutomatedScope, f.ExcludeAutomated),
+	childAutomationPred := db.PostgresQueryDialect().AutomatedScopePredicate(
+		db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated),
 		"s.is_automated",
 	)
 	childAutomationWhere := ""

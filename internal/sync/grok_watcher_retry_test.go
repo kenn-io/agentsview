@@ -155,7 +155,7 @@ func TestGrokWatcherCompanionChangesStillRefreshSession(t *testing.T) {
 	stored, err := database.GetSession(t.Context(), "grok:"+grokRetryID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.True(t, stored.IsAutomated)
+	assert.False(t, stored.IsAutomated)
 	assert.Equal(t, "non-interactive", stored.SessionKind)
 	file, err := os.OpenFile(history, os.O_APPEND|os.O_WRONLY, 0o600)
 	require.NoError(t, err)

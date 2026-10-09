@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
 )
@@ -628,7 +627,7 @@ func filterUsageRollupOwners(
 }
 
 func usageCursorAutomatedScopePasses(filter UsageFilter, isHeadless bool) bool {
-	switch normalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated) {
+	switch NormalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated) {
 	case "human":
 		return !isHeadless
 	case "automated":
@@ -785,11 +784,10 @@ func compareUsageFactsGroup(left, right usageFactsGroup) int {
 }
 
 func usageRollupModelPasses(filter UsageFilter, model string) bool {
-	if filter.Model != "" && !slices.Contains(strings.Split(filter.Model, ","), model) {
+	if values := CSVFilterValues(filter.Model); len(values) > 0 && !slices.Contains(values, model) {
 		return false
 	}
-	return filter.ExcludeModel == "" ||
-		!slices.Contains(strings.Split(filter.ExcludeModel, ","), model)
+	return !slices.Contains(CSVFilterValues(filter.ExcludeModel), model)
 }
 
 func usageRollupSessionMap(snapshot usageQuerySnapshot) map[string]usageQuerySession {

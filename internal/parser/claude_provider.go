@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -402,6 +403,9 @@ func (p *claudeProvider) ParseIncremental(
 			}, IncrementalApplied, nil
 		}
 		return IncrementalOutcome{}, IncrementalNoNewData, nil
+	}
+	if req.StoredUserMessageCount == 0 && req.StoredSessionKind == "" && req.StoredEntrypoint == "sdk-cli" && slices.ContainsFunc(newMsgs, isRealClaudeUserMessage) {
+		return IncrementalOutcome{ForceReplace: true}, IncrementalNeedsFullParse, nil
 	}
 	totalOut, peakCtx, hasTotalOut, hasPeakCtx := claudeProviderTokenTotals(newMsgs)
 	return IncrementalOutcome{

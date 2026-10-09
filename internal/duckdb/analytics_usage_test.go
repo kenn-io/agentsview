@@ -1936,6 +1936,30 @@ func duckHOWMessages(cells []db.HourOfWeekCell, dow, hour int) int {
 	return -1
 }
 
+func TestDuckUsageBlankModelFiltersPreserveReportedCost(t *testing.T) {
+	session := syncSession("copilot-reported", "project-a", "reported cost", "2026-08-10T08:00:00Z", 2)
+	session.Agent = "copilot"
+	first, last := money.MustParseDollars("5"), money.MustParseDollars("3")
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session: session,
+		UsageEvents: []db.UsageEvent{
+			{Source: "shutdown", Model: "model-a", InputTokens: 10, Cost: &first, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T09:00:00Z", DedupKey: "first"},
+			{Source: "shutdown", Model: "model-a", InputTokens: 20, Cost: &last, CostStatus: "exact", CostSource: db.CopilotReportedCostSource, OccurredAt: "2026-08-10T10:00:00Z", DedupKey: "last"},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	for _, filter := range []db.UsageFilter{{}, {Model: " , "}, {ExcludeModel: " , "}, {Model: " , ", ExcludeModel: " , "}} {
+		filter.From, filter.To, filter.Timezone = "2026-08-10", "2026-08-10", "UTC"
+		daily, err := store.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, last, daily.Totals.TotalCost)
+		top, err := store.GetTopSessionsByCost(t.Context(), filter, 10)
+		require.NoError(t, err)
+		require.Len(t, top, 1)
+		assert.Equal(t, last, top[0].Cost)
+	}
+}
+
 // TestDuckDailyUsageEventModelEligibility pins the DuckDB
 // aggregator's usage-event eligibility contract for Codebuff/
 // Freebuff's parser-attributed agent template name. The Codebuff

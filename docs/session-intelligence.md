@@ -126,6 +126,30 @@ results, and tool-result status events:
 These signals feed both the per-session score and the dashboard's
 tool-health summary metrics.
 
+## Tool Sequences
+
+Open the health badge in the session header to see **Observed tool sequences**.
+Each sequence starts with an error or empty tool result and follows the later
+calls, including repeated inputs, switches to another tool, and recovery. Each
+step links to its call in the transcript.
+
+![Observed tool sequences with transcript evidence](/docs/assets/generated/screenshots/tool-sequences.png)
+
+Expand a step to inspect its recorded input, retained result text, and measured
+duration when available. Missing timing remains **Not measured**. The panel
+derives sequences from recorded calls and results; opening it runs no model and
+adds no token charges.
+
+Sequence endings describe the recorded trace: **Recovered** means a later call
+returned content, **Abandoned** means the session ended after an error or empty
+result, and **Open** or **Unknown** means the trace does not establish a
+resolved ending. A recovered tool sequence does not prove the overall task
+succeeded.
+
+On ClickHouse, run `agentsview clickhouse push` with the new version before
+serving the mirror. The first push refreshes every session once, and tool
+sequences remain unavailable for sessions that push has not reached.
+
 ## Context Signals
 
 AgentsView also tracks context-pressure-related signals:

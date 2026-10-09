@@ -65,7 +65,7 @@ func (db *DB) assembleDailyUsageFacts(
 	accum := make(map[usageCostAllocationKey]*usageDailyFactsBucket)
 	sessionCosts := make(map[string]usageDailyFactsSessionCost)
 	projectLabels := make(map[string]struct{})
-	useAuthoritative := filter.Model == "" && filter.ExcludeModel == ""
+	useAuthoritative := !filter.HasModelFilter()
 	var totalSavings money.Money
 
 	for _, group := range facts.Groups {

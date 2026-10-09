@@ -15,8 +15,8 @@ import (
 )
 
 // registerVecOnce guards the process-wide sqlite-vec extension registration
-// that sqlitevec.Register performs; calling it more than once would attempt
-// to register the same SQL functions twice.
+// that registerVec performs; calling it more than once would attempt to
+// register the same SQL functions twice.
 var registerVecOnce sync.Once
 
 // messageMirrorDDL creates agentsview's mirror of embeddable message content
@@ -282,7 +282,7 @@ func StoreExists(
 func OpenSpec(
 	ctx context.Context, path string, spec IndexSpec, readOnly bool, maxInputChars int,
 ) (*Index, error) {
-	registerVecOnce.Do(sqlitevec.Register)
+	registerVecOnce.Do(registerVec)
 
 	if readOnly {
 		if _, err := os.Stat(path); err != nil {

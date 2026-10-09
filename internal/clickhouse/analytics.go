@@ -211,151 +211,49 @@ func (s *Store) analyticsSessionsModelTimeFiltered(
 	return out, nil
 }
 
-func chBuildAnalyticsWhere(
-	f db.AnalyticsFilter,
-	dateCol string,
-	tablePrefix string,
-	includeDate bool,
-	includeTime bool,
-) (string, []any) {
-	q := func(col string) string { return tablePrefix + col }
-	preds := []string{
-		q("message_count") + " > 0",
-		// Mirror the SQLite analytics filter: subagent and fork rows are
-		// excluded unless the filter opts in (sum/count surfaces for
-		// subagents, the activity report for both). The shared helper
-		// qualifies the column with tablePrefix directly.
-		db.RelationshipExclusionSQL(f.IncludeSubagents, f.IncludeForks, tablePrefix),
-		q("deleted_at") + " IS NULL",
-	}
+func chBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
+	var dates []string
 	var args []any
-
 	if includeDate {
 		if f.From != "" {
-			preds = append(preds, dateCol+" >= "+chTimestampSQL)
+			dates = append(dates, dateCol+" >= "+chTimestampSQL)
 			args = append(args, chUsagePaddedUTCBound(f.From+"T00:00:00Z", -14))
 		}
 		if f.To != "" {
-			preds = append(preds, dateCol+" <= "+chTimestampSQL)
+			dates = append(dates, dateCol+" <= "+chTimestampSQL)
 			args = append(args, chUsagePaddedUTCBound(f.To+"T23:59:59Z", 14))
 		}
 		localDate, localDateArgs := chAnalyticsLocalDateExpr(dateCol, f)
 		if f.From != "" {
-			preds = append(preds, localDate+" >= ?")
+			dates = append(dates, localDate+" >= ?")
 			args = append(args, append(localDateArgs, f.From)...)
 		}
 		if f.To != "" {
-			preds = append(preds, localDate+" <= ?")
+			dates = append(dates, localDate+" <= ?")
 			args = append(args, append(localDateArgs, f.To)...)
 		}
 	}
 
-	if f.Machine != "" {
-		preds, args = appendChAnalyticsCSVFilter(preds, args, q("machine"), f.Machine)
-	}
-	if f.Project != "" {
-		preds = append(preds, q("project")+" = ?")
-		args = append(args, f.Project)
-	}
-	if f.GitBranch != "" {
-		var clause string
-		clause, args = db.BranchPairClauseArgs(q("project"), q("git_branch"), f.GitBranch, args)
-		preds = append(preds, clause)
-	}
-	if f.Agent != "" {
-		preds, args = appendChAnalyticsCSVFilter(preds, args, q("agent"), f.Agent)
-	}
-	if modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model); modelPred != "" {
-		// ClickHouse 25.8 correlated EXISTS is unreliable; an IN subquery
-		// matches sessions that have at least one message with the model.
-		preds = append(preds,
-			q("id")+" IN (SELECT m.session_id FROM messages m WHERE "+modelPred+")")
-		args = append(args, modelArgs...)
-	}
-	if f.MinUserMessages > 0 {
-		preds = append(preds, q("user_message_count")+" >= ?")
-		args = append(args, f.MinUserMessages)
-	}
-	scope := chNormalizeAutomatedScope(
-		f.AutomatedScope, f.ExcludeAutomated)
-	if f.ExcludeOneShot {
-		// Exempt subagents from one-shot exclusion when counting them,
-		// mirroring db.AnalyticsFilter.OneShotExclusionSQL. Workflow
-		// subagents are inherently one-shot but represent real work.
-		oneShot := func(base string) string {
-			if f.IncludeSubagents {
-				return "(" + base + " OR " +
-					q("relationship_type") + " = 'subagent')"
-			}
-			return base
-		}
-		if scope != "human" {
-			preds = append(preds, oneShot("("+q("user_message_count")+" > 1 OR "+q("is_automated")+" = true)"))
-		} else {
-			preds = append(preds, oneShot(q("user_message_count")+" > 1"))
-		}
-	}
-	if pred := chAutomatedScopePredicate(
-		scope, q("is_automated")); pred != "" {
-		preds = append(preds, pred)
-	}
-	if f.ExcludeInteractive {
-		preds = append(preds, q("is_automated")+" = true")
-	}
+	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
 	if f.ActiveSince != "" {
-		activeSince := f.ActiveSince
 		if parsed, ok := parseAnalyticsTime(f.ActiveSince); ok {
-			activeSince = parsed.Format(time.RFC3339)
+			f.ActiveSince = parsed.Format(time.RFC3339)
 		}
-		preds = append(preds,
-			"COALESCE("+q("ended_at")+", "+q("started_at")+", "+q("created_at")+") >= "+chTimestampSQL)
-		args = append(args, activeSince)
 	}
-	if pred, predArgs := chTerminationPred(
-		f.Termination,
-		"COALESCE("+q("ended_at")+", "+q("started_at")+", "+q("created_at")+")",
-		q("termination_status"),
-	); pred != "" {
-		preds = append(preds, pred)
-		args = append(args, predArgs...)
-	}
+	where := db.BuildAnalyticsWhere(f, b, tablePrefix, "", dates)
+	args = append(args, b.Args()...)
 	if includeTime && (f.DayOfWeek != nil || f.Hour != nil) {
-		pred, predArgs := chAnalyticsMessageTimeExists(f, q("id"))
-		preds = append(preds, pred)
-		args = append(args, predArgs...)
+		pred, pargs := chAnalyticsMessageTimeExists(f, tablePrefix+"id")
+		where += " AND " + pred
+		args = append(args, pargs...)
 	}
-
-	return strings.Join(preds, " AND "), args
+	return where, args
 }
 
-func appendChAnalyticsCSVFilter(
-	preds []string, args []any, col string, raw string,
-) ([]string, []any) {
-	pred, predArgs := chAnalyticsCSVPredicate(col, raw)
-	if pred != "" {
-		preds = append(preds, pred)
-		args = append(args, predArgs...)
-	}
-	return preds, args
-}
-
-func chAnalyticsCSVPredicate(
-	col string, raw string,
-) (string, []any) {
-	values := db.CSVFilterValues(raw)
-	if len(values) == 0 {
-		return "", nil
-	}
-	if len(values) == 1 {
-		return col + " = ?", []any{values[0]}
-	}
-	placeholders := make([]string, len(values))
-	args := make([]any, 0, len(values))
-	for i, value := range values {
-		placeholders[i] = "?"
-		args = append(args, value)
-	}
-	return col + " IN (" + strings.Join(placeholders, ",") + ")", args
+func chAnalyticsCSVPredicate(col, raw string) (string, []any) {
+	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+	pred := b.ValuesPredicate(col, db.CSVFilterValues(raw), true)
+	return pred, b.Args()
 }
 
 func chAnalyticsLocalDateExpr(

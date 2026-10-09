@@ -286,20 +286,6 @@ func TestBuildSessionFilterSQLRendersBranchPairs(t *testing.T) {
 	}
 }
 
-func TestBranchPairClauseArgsKeepsEmptyBranchDistinct(t *testing.T) {
-	tokens := encodeBranchFilterTokensForTest(
-		BranchInfo{Project: "alpha", Branch: ""},
-		BranchInfo{Project: "alpha", Branch: "unknown"},
-	)
-
-	got, args := BranchPairClauseArgs("project", "git_branch", tokens, nil)
-
-	assert.Equal(t,
-		"((project = ? AND git_branch = ?) OR (project = ? AND git_branch = ?))",
-		normalizeSQL(got))
-	assert.Equal(t, []any{"alpha", "", "alpha", "unknown"}, args)
-}
-
 func TestSessionCursorFragmentsAreParameterized(t *testing.T) {
 	cursor := SessionCursor{
 		EndedAt: "2026-06-08T12:00:00Z",

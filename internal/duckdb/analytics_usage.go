@@ -20,11 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/signals"
 )
 
-const (
-	duckActiveWindow = 10 * time.Minute
-	duckStaleWindow  = 60 * time.Minute
-)
-
 type duckAnalyticsSession struct {
 	id                          string
 	project                     string
@@ -174,174 +169,49 @@ func (s *Store) analyticsSessionsModelTimeFiltered(
 	return out, nil
 }
 
-func duckBuildAnalyticsWhere(
-	f db.AnalyticsFilter,
-	dateCol string,
-	tablePrefix string,
-	includeDate bool,
-	includeTime bool,
-) (string, []any) {
-	q := func(col string) string { return tablePrefix + col }
-	preds := []string{
-		q("message_count") + " > 0",
-		// Mirror the SQLite analytics filter: subagent and fork rows are
-		// excluded unless the filter opts in (sum/count surfaces for
-		// subagents, the activity report for both). The shared helper
-		// qualifies the column with tablePrefix directly.
-		db.RelationshipExclusionSQL(f.IncludeSubagents, f.IncludeForks, tablePrefix),
-		q("deleted_at") + " IS NULL",
-	}
+func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
+	var dates []string
 	var args []any
-
 	if includeDate {
 		if f.From != "" {
-			preds = append(preds, dateCol+" >= CAST(? AS TIMESTAMP)")
+			dates = append(dates, dateCol+" >= CAST(? AS TIMESTAMP)")
 			args = append(args, duckUsagePaddedUTCBound(f.From+"T00:00:00Z", -14))
 		}
 		if f.To != "" {
-			preds = append(preds, dateCol+" <= CAST(? AS TIMESTAMP)")
+			dates = append(dates, dateCol+" <= CAST(? AS TIMESTAMP)")
 			args = append(args, duckUsagePaddedUTCBound(f.To+"T23:59:59Z", 14))
 		}
 		localDate, localDateArgs := duckAnalyticsLocalDateExpr(dateCol, f)
 		if f.From != "" {
-			preds = append(preds, localDate+" >= ?")
+			dates = append(dates, localDate+" >= ?")
 			args = append(args, append(localDateArgs, f.From)...)
 		}
 		if f.To != "" {
-			preds = append(preds, localDate+" <= ?")
+			dates = append(dates, localDate+" <= ?")
 			args = append(args, append(localDateArgs, f.To)...)
 		}
 	}
 
-	if f.Machine != "" {
-		preds, args = appendDuckAnalyticsCSVFilter(preds, args, q("machine"), f.Machine)
-	}
-	if f.Project != "" {
-		preds = append(preds, q("project")+" = ?")
-		args = append(args, f.Project)
-	}
-	if f.GitBranch != "" {
-		var clause string
-		clause, args = db.BranchPairClauseArgs(q("project"), q("git_branch"), f.GitBranch, args)
-		preds = append(preds, clause)
-	}
-	if f.Agent != "" {
-		preds, args = appendDuckAnalyticsCSVFilter(preds, args, q("agent"), f.Agent)
-	}
-	if modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model); modelPred != "" {
-		preds = append(preds,
-			"EXISTS (SELECT 1 FROM messages m WHERE m.session_id = "+q("id")+" AND "+modelPred+")")
-		args = append(args, modelArgs...)
-	}
-	if f.MinUserMessages > 0 {
-		preds = append(preds, q("user_message_count")+" >= ?")
-		args = append(args, f.MinUserMessages)
-	}
-	scope := duckNormalizeAutomatedScope(
-		f.AutomatedScope, f.ExcludeAutomated)
-	if f.ExcludeOneShot {
-		// Exempt subagents from one-shot exclusion when counting them,
-		// mirroring db.AnalyticsFilter.OneShotExclusionSQL. Workflow
-		// subagents are inherently one-shot but represent real work.
-		oneShot := func(base string) string {
-			if f.IncludeSubagents {
-				return "(" + base + " OR " +
-					q("relationship_type") + " = 'subagent')"
-			}
-			return base
-		}
-		if scope != "human" {
-			preds = append(preds, oneShot("("+q("user_message_count")+" > 1 OR "+q("is_automated")+" = TRUE)"))
-		} else {
-			preds = append(preds, oneShot(q("user_message_count")+" > 1"))
-		}
-	}
-	if pred := duckAutomatedScopePredicate(
-		scope, q("is_automated")); pred != "" {
-		preds = append(preds, pred)
-	}
-	if f.ExcludeInteractive {
-		preds = append(preds, q("is_automated")+" = TRUE")
-	}
+	b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
 	if f.ActiveSince != "" {
-		activeSince := f.ActiveSince
 		if parsed, ok := parseAnalyticsTime(f.ActiveSince); ok {
-			activeSince = parsed.Format(time.RFC3339)
+			f.ActiveSince = parsed.Format(time.RFC3339)
 		}
-		preds = append(preds,
-			"COALESCE("+q("ended_at")+", "+q("started_at")+", "+q("created_at")+") >= CAST(? AS TIMESTAMP)")
-		args = append(args, activeSince)
 	}
-	if pred, predArgs := duckAnalyticsTerminationPred(
-		f.Termination,
-		"COALESCE("+q("ended_at")+", "+q("started_at")+", "+q("created_at")+")",
-		q("termination_status"),
-	); pred != "" {
-		preds = append(preds, pred)
-		args = append(args, predArgs...)
-	}
+	where := db.BuildAnalyticsWhere(f, b, tablePrefix, "", dates)
+	args = append(args, b.Args()...)
 	if includeTime && (f.DayOfWeek != nil || f.Hour != nil) {
-		pred, predArgs := duckAnalyticsMessageTimeExists(f, q("id"))
-		preds = append(preds, pred)
-		args = append(args, predArgs...)
+		pred, pargs := duckAnalyticsMessageTimeExists(f, tablePrefix+"id")
+		where += " AND " + pred
+		args = append(args, pargs...)
 	}
-
-	return strings.Join(preds, " AND "), args
+	return where, args
 }
 
-func duckNormalizeAutomatedScope(
-	scope string,
-	excludeAutomated bool,
-) string {
-	switch strings.TrimSpace(scope) {
-	case "human", "all", "automated":
-		return strings.TrimSpace(scope)
-	}
-	if excludeAutomated {
-		return "human"
-	}
-	return "all"
-}
-
-func duckAutomatedScopePredicate(scope, col string) string {
-	switch scope {
-	case "human":
-		return col + " = FALSE"
-	case "automated":
-		return col + " = TRUE"
-	default:
-		return ""
-	}
-}
-
-func appendDuckAnalyticsCSVFilter(
-	preds []string, args []any, col string, raw string,
-) ([]string, []any) {
-	pred, predArgs := duckAnalyticsCSVPredicate(col, raw)
-	if pred != "" {
-		preds = append(preds, pred)
-		args = append(args, predArgs...)
-	}
-	return preds, args
-}
-
-func duckAnalyticsCSVPredicate(
-	col string, raw string,
-) (string, []any) {
-	values := db.CSVFilterValues(raw)
-	if len(values) == 0 {
-		return "", nil
-	}
-	if len(values) == 1 {
-		return col + " = ?", []any{values[0]}
-	}
-	placeholders := make([]string, len(values))
-	args := make([]any, 0, len(values))
-	for i, value := range values {
-		placeholders[i] = "?"
-		args = append(args, value)
-	}
-	return col + " IN (" + strings.Join(placeholders, ",") + ")", args
+func duckAnalyticsCSVPredicate(col, raw string) (string, []any) {
+	b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+	pred := b.ValuesPredicate(col, db.CSVFilterValues(raw), true)
+	return pred, b.Args()
 }
 
 func duckAnalyticsLocalDateExpr(
@@ -389,49 +259,6 @@ func duckAnalyticsMessageTimeExists(
 	}
 	return "EXISTS (SELECT 1 FROM messages m WHERE " +
 		strings.Join(preds, " AND ") + ")", args
-}
-
-func duckAnalyticsTerminationPred(
-	status string,
-	activityExpr string,
-	statusExpr string,
-) (string, []any) {
-	if status == "" || status == "all" {
-		return "", nil
-	}
-	now := time.Now().UTC()
-	activeCutoff := now.Add(-duckActiveWindow)
-	staleCutoff := now.Add(-duckStaleWindow)
-	flagged := statusExpr + " IN ('tool_call_pending', 'truncated')"
-	var parts []string
-	var args []any
-	for part := range strings.SplitSeq(status, ",") {
-		switch strings.TrimSpace(part) {
-		case "active":
-			parts = append(parts, activityExpr+" > CAST(? AS TIMESTAMP)")
-			args = append(args, activeCutoff.Format(time.RFC3339))
-		case "stale":
-			parts = append(parts, "("+flagged+
-				" AND "+activityExpr+" > CAST(? AS TIMESTAMP)"+
-				" AND "+activityExpr+" <= CAST(? AS TIMESTAMP))")
-			args = append(args,
-				staleCutoff.Format(time.RFC3339),
-				activeCutoff.Format(time.RFC3339),
-			)
-		case "unclean":
-			parts = append(parts, "("+flagged+
-				" AND "+activityExpr+" <= CAST(? AS TIMESTAMP))")
-			args = append(args, staleCutoff.Format(time.RFC3339))
-		case "clean":
-			parts = append(parts, statusExpr+" = 'clean'")
-		case "awaiting_user":
-			parts = append(parts, statusExpr+" = 'awaiting_user'")
-		}
-	}
-	if len(parts) == 0 {
-		return "", nil
-	}
-	return "(" + strings.Join(parts, " OR ") + ")", args
 }
 
 func duckAnalyticsTimeMatches(t time.Time, f db.AnalyticsFilter) bool {
@@ -2787,114 +2614,22 @@ func appendDuckUsageColumnBounds(
 	return where, args
 }
 
-func appendDuckUsageCSVFilter(
-	where string, args []any, col, csv string, include bool,
-) (string, []any) {
-	if csv == "" {
-		return where, args
-	}
-	parts := strings.Split(csv, ",")
-	vals := make([]string, 0, len(parts))
-	for _, value := range parts {
-		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			vals = append(vals, trimmed)
-		}
-	}
-	return appendDuckUsageValuesFilter(where, args, col, vals, include)
-}
-
-func appendDuckUsageValuesFilter(
-	where string, args []any, col string, vals []string, include bool,
-) (string, []any) {
-	if len(vals) == 0 {
-		return where, args
-	}
-	op := "IN"
-	if !include {
-		op = "NOT IN"
-	}
-	if len(vals) == 1 {
-		if include {
-			where += "\n\t\t\tAND " + col + " = ?"
-		} else {
-			where += "\n\t\t\tAND " + col + " != ?"
-		}
-		args = append(args, vals[0])
-		return where, args
-	}
-	ph := make([]string, len(vals))
-	for i, value := range vals {
-		ph[i] = "?"
-		args = append(args, value)
-	}
-	where += "\n\t\t\tAND " + col + " " + op +
-		" (" + strings.Join(ph, ",") + ")"
-	return where, args
-}
-
 func appendDuckUsageSourceFilterClauses(
 	where string, args []any, modelCol string, f db.UsageFilter,
 ) (string, []any) {
-	where, args = appendDuckUsageCSVFilter(where, args, modelCol, f.Model, true)
-	return appendDuckUsageCSVFilter(where, args, modelCol, f.ExcludeModel, false)
+	b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+	preds := db.BuildUsageSourceFilter(f, b, modelCol)
+	where = db.AppendUsagePredicates(where, preds, "\t\t\t")
+	return where, append(args, b.Args()...)
 }
 
 func appendDuckUsageSessionFilterClauses(
 	where string, args []any, f db.UsageFilter, sessionID string,
 ) (string, []any) {
-	where, args = appendDuckUsageCSVFilter(where, args, "s.agent", f.Agent, true)
-	where, args = appendDuckUsageValuesFilter(
-		where, args, "s.project", f.ProjectFilterLabels(), true,
-	)
-	where, args = appendDuckUsageCSVFilter(where, args, "s.machine", f.Machine, true)
-	if f.GitBranch != "" {
-		var clause string
-		clause, args = db.BranchPairClauseArgs("s.project", "s.git_branch", f.GitBranch, args)
-		where += "\n\t\t\tAND " + clause
-	}
-	where, args = appendDuckUsageValuesFilter(
-		where, args, "s.project", f.ExcludedProjectFilterLabels(), false,
-	)
-	where, args = appendDuckUsageCSVFilter(where, args, "s.agent", f.ExcludeAgent, false)
-	if sessionID != "" {
-		where += "\n\t\t\tAND s.id = ?"
-		args = append(args, sessionID)
-	}
-	if f.MinUserMessages > 0 {
-		where += "\n\t\t\tAND s.user_message_count >= ?"
-		args = append(args, f.MinUserMessages)
-	}
-	scope := duckNormalizeAutomatedScope(
-		f.AutomatedScope, f.ExcludeAutomated)
-	if f.ExcludeOneShot {
-		if scope == "human" {
-			where += "\n\t\t\tAND s.user_message_count > 1"
-		} else {
-			where += "\n\t\t\tAND (s.user_message_count > 1 OR COALESCE(s.is_automated, FALSE) = TRUE)"
-		}
-	}
-	if pred := duckAutomatedScopePredicate(
-		scope, "COALESCE(s.is_automated, FALSE)"); pred != "" {
-		where += "\n\t\t\tAND " + pred
-	}
-	if f.ActiveSince != "" {
-		where += "\n\t\t\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)"
-		args = append(args, f.ActiveSince)
-	}
-	if pred, predArgs := duckUsageTerminationPred(f.Termination); pred != "" {
-		where += "\n\t\t\tAND " + pred
-		args = append(args, predArgs...)
-	}
-	return where, args
-}
-
-func duckUsageTerminationPred(status string) (string, []any) {
-	return duckAnalyticsTerminationPred(
-		status,
-		"COALESCE(s.ended_at, s.started_at, s.created_at)",
-		"s.termination_status",
-	)
+	b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+	preds := db.BuildUsageSessionFilter(f, b, sessionID)
+	where = db.AppendUsagePredicates(where, preds, "\t\t\t")
+	return where, append(args, b.Args()...)
 }
 
 const duckDailyCursorUsageRowsSQLTemplate = `
@@ -3077,34 +2812,22 @@ func duckCursorUsageRowsSQLForBounds(
 	// must exclude them entirely rather than let them leak into totals.
 	if len(f.ProjectFilterLabels()) > 0 ||
 		len(f.ExcludedProjectFilterLabels()) > 0 ||
-		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
+		len(db.CSVFilterValues(f.Machine)) > 0 || f.GitBranch != "" || f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || hasTermFilter ||
 		f.ActiveSince != "" {
 		return "", nil, false
 	}
-	if f.Agent != "" {
-		vals := strings.Split(f.Agent, ",")
-		for i := range vals {
-			vals[i] = strings.TrimSpace(vals[i])
-		}
-		if !slices.Contains(vals, "cursor") {
-			return "", nil, false
-		}
+	if vals := db.CSVFilterValues(f.Agent); len(vals) > 0 && !slices.Contains(vals, "cursor") {
+		return "", nil, false
 	}
-	if f.ExcludeAgent != "" {
-		vals := strings.Split(f.ExcludeAgent, ",")
-		for i := range vals {
-			vals[i] = strings.TrimSpace(vals[i])
-		}
-		if slices.Contains(vals, "cursor") {
-			return "", nil, false
-		}
+	if vals := db.CSVFilterValues(f.ExcludeAgent); slices.Contains(vals, "cursor") {
+		return "", nil, false
 	}
 
 	where := "cu.model != ''"
 	var args []any
-	scope := duckNormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
-	if pred := duckAutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
+	scope := db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	if pred := db.DuckDBQueryDialect().AutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
 		where += "\n\tAND " + pred
 	}
 	where, args = appendDuckUsageSourceFilterClauses(
@@ -3797,7 +3520,7 @@ func (s *Store) GetDailyUsage(
 		authoritative *money.Money
 	}
 	sessionCosts := map[string]sessionCost{}
-	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
+	useAuthoritativeCost := !f.HasModelFilter()
 	projectLabels := map[string]bool{}
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
@@ -4288,7 +4011,7 @@ func (s *Store) GetTopSessionsByCost(
 			if priceErr != nil {
 				return fmt.Errorf("summing duckdb top-session cost: %w", priceErr)
 			}
-			if f.Model == "" && f.ExcludeModel == "" && r.authoritativeCostRows > 0 {
+			if !f.HasModelFilter() && r.authoritativeCostRows > 0 {
 				v := money.Money{Microdollars: r.authoritativeCost}
 				a.authoritativeCost = &v
 			}

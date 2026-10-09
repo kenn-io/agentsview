@@ -144,121 +144,27 @@ func buildAnalyticsWhereWithoutDate(
 	)
 }
 
-func buildAnalyticsWhereWithDate(
-	f db.AnalyticsFilter,
-	dateCol string,
-	pb *paramBuilder,
-	includeDate bool,
-	sessionIDExpr string,
-) string {
-	if sessionIDExpr == "" {
-		sessionIDExpr = "id"
-	}
-	preds := []string{
-		"message_count > 0",
-		// Mirror the SQLite analytics filter: count subagents only on
-		// opt-in sum/count surfaces; fork rows stay excluded always.
-		f.RelationshipExclusionSQL(),
-		"deleted_at IS NULL",
-	}
+func buildAnalyticsWhereWithDate(f db.AnalyticsFilter, dateCol string, pb *paramBuilder, includeDate bool, sessionIDExpr string) string {
+	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+	var dates []string
 	if includeDate {
-		utcFrom, utcTo := analyticsUTCRange(f)
-		preds = append(preds,
-			dateCol+" >= "+pb.add(utcFrom)+"::timestamptz")
-		preds = append(preds,
-			dateCol+" <= "+pb.add(utcTo)+"::timestamptz")
+		from, to := analyticsUTCRange(f)
+		dates = append(dates, dateCol+" >= "+b.Add(from)+"::timestamptz", dateCol+" <= "+b.Add(to)+"::timestamptz")
 	}
-	if f.Machine != "" {
-		preds = appendPGAnalyticsCSVFilter(
-			preds, "machine", f.Machine, pb)
-	}
-	if f.Project != "" {
-		preds = append(preds,
-			"project = "+pb.add(f.Project))
-	}
-	if f.GitBranch != "" {
-		preds = append(preds, db.BranchPairPredicate(
-			"project", "git_branch", f.GitBranch,
-			func(s string) string { return pb.add(s) }))
-	}
-	if f.Agent != "" {
-		preds = appendPGAnalyticsCSVFilter(
-			preds, "agent", f.Agent, pb)
-	}
-	if f.Model != "" {
-		models := db.CSVFilterValues(f.Model)
-		if len(models) == 1 {
-			preds = append(preds,
-				"EXISTS (SELECT 1 FROM messages m WHERE "+
-					"m.session_id = "+sessionIDExpr+
-					" AND m.model = "+pb.add(models[0])+")")
-		} else if len(models) > 1 {
-			phs := make([]string, len(models))
-			for i, model := range models {
-				phs[i] = pb.add(model)
-			}
-			preds = append(preds,
-				"EXISTS (SELECT 1 FROM messages m WHERE "+
-					"m.session_id = "+sessionIDExpr+
-					" AND m.model IN ("+
-					strings.Join(phs, ",")+
-					"))")
-		}
-	}
-	if f.MinUserMessages > 0 {
-		preds = append(preds,
-			"user_message_count >= "+
-				pb.add(f.MinUserMessages))
-	}
-	scope := normalizePGAutomatedScope(
-		f.AutomatedScope, f.ExcludeAutomated)
-	if f.ExcludeOneShot {
-		if scope != "human" {
-			preds = append(preds,
-				f.OneShotExclusionSQL(
-					"(user_message_count > 1 OR is_automated = TRUE)"))
-		} else {
-			preds = append(preds,
-				f.OneShotExclusionSQL("user_message_count > 1"))
-		}
-	}
-	if pred := pgAutomatedScopePredicate(scope, "is_automated"); pred != "" {
-		preds = append(preds, pred)
-	}
-	if f.ExcludeInteractive {
-		preds = append(preds, "is_automated = TRUE")
-	}
-	if f.ActiveSince != "" {
-		preds = append(preds,
-			"COALESCE(ended_at, started_at, created_at)"+
-				" >= "+pb.add(f.ActiveSince)+
-				"::timestamptz")
-	}
-	if pred := pgTerminationPred(f.Termination, pb); pred != "" {
-		preds = append(preds, pred)
-	}
-	return strings.Join(preds, " AND ")
+	where := db.BuildAnalyticsWhere(f, b, "", sessionIDExpr, dates)
+	pb.args = append(pb.args, b.Args()...)
+	pb.n += len(b.Args())
+	return where
 }
 
-func appendPGAnalyticsCSVFilter(
-	preds []string,
-	col string,
-	raw string,
-	pb *paramBuilder,
-) []string {
-	values := db.CSVFilterValues(raw)
-	if len(values) == 0 {
-		return preds
+func appendPGAnalyticsCSVFilter(preds []string, col, raw string, pb *paramBuilder) []string {
+	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+	if pred := b.ValuesPredicate(col, db.CSVFilterValues(raw), true); pred != "" {
+		preds = append(preds, pred)
 	}
-	if len(values) == 1 {
-		return append(preds, col+" = "+pb.add(values[0]))
-	}
-	phs := make([]string, len(values))
-	for i, value := range values {
-		phs[i] = pb.add(value)
-	}
-	return append(preds,
-		col+" IN ("+strings.Join(phs, ",")+")")
+	pb.args = append(pb.args, b.Args()...)
+	pb.n += len(b.Args())
+	return preds
 }
 
 func (s *Store) getAnalyticsFilteredMessageCounts(

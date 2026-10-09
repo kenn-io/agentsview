@@ -259,6 +259,7 @@ func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	parent := "root"
 	sub := syncSession("agent-sub", "proj1", "sub first", "2026-06-14T10:02:00.000Z", 1)
 	sub.RelationshipType = "subagent"
+	sub.IsAutomated = true
 	sub.ParentSessionID = &parent
 	subMsg := syncMessage("agent-sub", 0, "assistant", "y", "2026-06-14T10:03:00.000Z")
 	subMsg.Model = "sub-model"
@@ -320,6 +321,12 @@ func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6; the
 	// fork's duplicate row contributes nothing.
 	assert.Equal(t, money.MustParseDollars("0.027"), r.Totals.Cost)
+	_, err = store.DB().ExecContext(ctx, `UPDATE sessions SET entrypoint = 'sdk-cli', parent_session_id = NULL, is_automated = true WHERE id = 'agent-sub'`)
+	require.NoError(t, err)
+	r, err = store.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC"}, duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, r.Totals.SubagentSessions)
+	assert.Zero(t, r.Totals.AutomatedSessions)
 }
 
 func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {

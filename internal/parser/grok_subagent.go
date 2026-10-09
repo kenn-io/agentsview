@@ -8,6 +8,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func grokIsSubagentKind(kind string) bool {
+	return kind == "subagent" || kind == "subagent_resume" || kind == "subagent_fork"
+}
+
 // grokSubagentParentFromDisk returns the spawning parent session id and the
 // on-disk meta.json that recorded the spawn. Grok stores child sessions as
 // siblings (or, for worktree isolation, under another encoded cwd group) and
@@ -24,7 +28,7 @@ func grokSubagentParentFromDisk(
 	if parentID, metaPath, ok = grokFindSubagentParentInCWD(cwdDir, childID); ok {
 		return parentID, metaPath, true
 	}
-	if !strings.HasPrefix(producerSessionKind, "subagent") {
+	if !grokIsSubagentKind(producerSessionKind) {
 		return "", "", false
 	}
 	return grokFindSubagentParentUnderRoot(filepath.Dir(cwdDir), cwdDir, childID)

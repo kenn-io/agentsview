@@ -301,6 +301,9 @@ DELETE FROM session_project_identity_snapshots;
 DELETE FROM project_identity_observation_changes;
 DELETE FROM session_project_identity_snapshot_changes;
 DELETE FROM worktree_project_mappings;
+-- Source ownership also retains machine/path details and otherwise leaves
+-- dangling session references that prevent newer archive migrations.
+DELETE FROM local_session_source_baselines;
 
 -- Keep generated screenshots independent of the source machine's hostname.
 -- The PostgreSQL fixture relabels a subset as work-desktop after push so the

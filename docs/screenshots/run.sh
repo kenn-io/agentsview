@@ -8,11 +8,11 @@ umask 077
 #   ./screenshots/run.sh
 #
 # Environment:
-#   AGENTSVIEW_SRC   Path to agentsview source (default: ~/code/agentsview)
+#   AGENTSVIEW_SRC   Path to agentsview source (default: this checkout)
 #   SOURCE_DB        Path to real sessions database (default: ~/.agentsview/sessions.db)
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-AGENTSVIEW_SRC="${AGENTSVIEW_SRC:-$HOME/code/agentsview}"
+AGENTSVIEW_SRC="${AGENTSVIEW_SRC:-$(cd "$ROOT/.." && pwd)}"
 SOURCE_DB="${SOURCE_DB:-$HOME/.agentsview/sessions.db}"
 OUTPUT_DIR="$ROOT/assets/generated/screenshots"
 IMAGE_NAME="agentsview-screenshots"
@@ -65,6 +65,7 @@ rsync -a \
   --exclude='.cache' \
   --exclude='.git' \
   --exclude='.worktrees' \
+  --exclude='.test-data*' \
   --exclude='.golangci-cache' \
   --exclude='.pytest_cache' \
   --exclude='dist' \
@@ -74,6 +75,10 @@ rsync -a \
   --exclude='sync.test' \
   --exclude='/agentsview' \
   --exclude='desktop/src-tauri/target' \
+  --exclude='docs/.venv' \
+  --exclude='docs/site' \
+  --exclude='docs/assets/generated' \
+  --exclude='docs/assets/static' \
   "$AGENTSVIEW_SRC/" "$CONTEXT/agentsview/"
 
 # Extract the screenshot-safe database before Docker sees the
@@ -82,6 +87,16 @@ rsync -a \
 # the image build can shrink it.
 bash "$ROOT/screenshots/extract-db.sh" \
   "$SOURCE_DB" "$CONTEXT/test-sessions.db"
+
+# Keep relative dates stable when colleagues reuse the same curated archive.
+SCREENSHOT_NOW=$(sqlite3 "$CONTEXT/test-sessions.db" \
+  "SELECT strftime('%Y-%m-%dT12:00:00Z',
+    max(datetime(COALESCE(NULLIF(started_at, ''), created_at))), '+1 day')
+    FROM sessions")
+if [[ -z "$SCREENSHOT_NOW" ]]; then
+  echo "ERROR: screenshot corpus has no dated sessions" >&2
+  exit 1
+fi
 
 # Resolve a session that contains thinking blocks. Such sessions are rare
 # and never recent, so the thinking-blocks screenshot navigates straight to
@@ -177,6 +192,7 @@ mkdir -p "$OUTPUT_DIR"
 echo "Running screenshot capture..."
 docker run --rm \
   -v "$OUTPUT_DIR:/output" \
+  -e SCREENSHOT_NOW="$SCREENSHOT_NOW" \
   -e SCREENSHOT_THINKING_SESSION_ID="$THINKING_SESSION_ID" \
   -e SCREENSHOT_TOOL_OUTPUT_SESSION_ID="$TOOL_OUTPUT_SESSION_ID" \
   -e SCREENSHOT_TOOL_OUTPUT_MESSAGE_ORDINAL="$TOOL_OUTPUT_MESSAGE_ORDINAL" \

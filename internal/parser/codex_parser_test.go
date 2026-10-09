@@ -581,6 +581,8 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:abc", sess.ID)
 		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
+		assert.Equal(t, RelNone, sess.RelationshipType)
+		assert.Empty(t, sess.ParentSessionID)
 		assert.Len(t, msgs, 1)
 	})
 
@@ -589,6 +591,8 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:abc", sess.ID)
 		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
+		assert.Equal(t, RelNone, sess.RelationshipType)
+		assert.Empty(t, sess.ParentSessionID)
 		assert.Len(t, msgs, 1)
 	})
 
@@ -618,6 +622,33 @@ func TestParseCodexSession_RoborevThreadSource(t *testing.T) {
 	assert.Equal(t, SessionKindRoborev, sess.SessionKind)
 	assert.Empty(t, sess.ParentSessionID)
 	assert.Equal(t, RelNone, sess.RelationshipType)
+}
+
+func TestParseCodexSession_RoborevMetadataOrdering(t *testing.T) {
+	untagged := `{"type":"session_meta","payload":{"id":"abc","originator":"codex_exec"}}`
+	tagged := `{"type":"session_meta","payload":{"id":"abc","originator":"codex_exec","thread_source":"roborev"}}`
+	child := `{"type":"session_meta","payload":{"id":"abc","originator":"codex_exec","source":{"subagent":"task"},"parent_thread_id":"parent"}}`
+	taggedChild := `{"type":"session_meta","payload":{"id":"abc","originator":"codex_exec","source":{"subagent":"task"},"parent_thread_id":"parent","thread_source":"roborev"}}`
+	for _, tt := range []struct {
+		name   string
+		meta   []string
+		parent string
+		rel    RelationshipType
+	}{
+		{name: "later roborev tag", meta: []string{untagged, tagged}, rel: RelNone},
+		{name: "earlier roborev tag", meta: []string{tagged, untagged}, rel: RelNone},
+		{name: "roborev tag between exec metadata", meta: []string{untagged, tagged, untagged}, rel: RelNone},
+		{name: "Task child keeps relationship", meta: []string{child, taggedChild}, parent: "codex:parent", rel: RelSubagent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			content := testjsonl.JoinJSONL(append(tt.meta, testjsonl.CodexMsgJSON("user", "Review this change", tsEarlyS1))...)
+			sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
+			require.NotNil(t, sess)
+			assert.Equal(t, SessionKindRoborev, sess.SessionKind)
+			assert.Equal(t, tt.parent, sess.ParentSessionID)
+			assert.Equal(t, tt.rel, sess.RelationshipType)
+		})
+	}
 }
 
 func TestCodexBuilderCanUseLexicalProjectDiscovery(t *testing.T) {

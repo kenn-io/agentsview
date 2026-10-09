@@ -67,65 +67,9 @@ func (db *DB) RecentEdits(
 	ctx context.Context, p RecentEditsParams,
 ) (RecentEditsResult, error) {
 	p = NormalizeRecentEditsParams(p)
-	projectClause := ""
-	if p.Project != "" {
-		projectClause = "AND s.project = ?"
-	}
-	searchClause := ""
-	if p.Search != "" {
-		searchClause = `AND tc.file_path LIKE ? ESCAPE '\'`
-	}
-	query := `
-WITH ranked AS (
-  SELECT s.project AS project, tc.file_path AS file_path,
-         tc.session_id AS session_id, tc.tool_name AS tool_name,
-         tc.category AS category, tc.tool_use_id AS tool_use_id,
-         tc.call_index AS call_index, m.ordinal AS ordinal,
-         m.timestamp AS timestamp,
-         ROW_NUMBER() OVER (
-           PARTITION BY s.project, tc.file_path
-           ORDER BY m.timestamp DESC NULLS LAST, tc.session_id DESC,
-                    m.ordinal DESC, tc.call_index DESC) AS rn,
-         COUNT(*) OVER (PARTITION BY s.project, tc.file_path) AS edit_count
-  FROM tool_calls tc
-  JOIN messages m ON m.id = tc.message_id
-  JOIN sessions s ON s.id = tc.session_id
-  WHERE tc.category IN ('Edit','Write')
-    AND tc.file_path IS NOT NULL AND tc.file_path <> ''
-    AND s.deleted_at IS NULL
-    ` + projectClause + `
-    ` + searchClause + `
-),
-file_page AS (
-  SELECT project, file_path, edit_count,
-         timestamp AS last_edited_at, session_id AS last_session_id,
-         ordinal AS last_ordinal, call_index AS last_call_index
-  FROM ranked
-  WHERE rn = 1
-  ORDER BY last_edited_at DESC NULLS LAST, last_session_id DESC,
-           last_ordinal DESC, last_call_index DESC, file_path DESC
-  LIMIT ? OFFSET ?
-)
-SELECT fp.project, fp.file_path, fp.edit_count, fp.last_edited_at,
-       fp.last_session_id, r.session_id, r.ordinal, r.tool_use_id,
-       r.call_index, r.tool_name, r.category, r.timestamp
-FROM file_page fp
-JOIN ranked r ON r.project = fp.project AND r.file_path = fp.file_path
-WHERE r.rn <= ?
-ORDER BY fp.last_edited_at DESC NULLS LAST, fp.last_session_id DESC,
-         fp.last_ordinal DESC, fp.last_call_index DESC, fp.file_path DESC,
-         r.rn`
-	// Placeholders bind in text order: project (CTE), search (CTE), LIMIT,
-	// OFFSET, then K.
-	qArgs := []any{}
-	if p.Project != "" {
-		qArgs = append(qArgs, p.Project)
-	}
-	if p.Search != "" {
-		qArgs = append(qArgs, "%"+EscapeLikePattern(p.Search)+"%")
-	}
-	qArgs = append(qArgs, p.Limit+1, p.Offset, p.MaxEditsPerFile)
-	rows, err := db.getReader().QueryContext(ctx, query, qArgs...)
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	query := BuildRecentEditsQuery(p, b, "m.id = tc.message_id")
+	rows, err := db.getReader().QueryContext(ctx, query, b.Args()...)
 	if err != nil {
 		return RecentEditsResult{}, fmt.Errorf("querying recent edits: %w", err)
 	}
@@ -195,4 +139,71 @@ func ScanRecentEdits(
 		files = files[:p.Limit]
 	}
 	return RecentEditsResult{Files: files, HasMore: hasMore}, nil
+}
+
+// BuildRecentEditsQuery renders normalized parameters with the backend-owned message join.
+func BuildRecentEditsQuery(p RecentEditsParams, b *QueryBuilder, messageJoin string) string {
+	projectClause, searchClause := "", ""
+	if p.Project != "" {
+		projectClause = "AND s.project = " + b.Add(p.Project)
+	}
+	if p.Search != "" {
+		searchClause = "AND " + strings.TrimSpace(b.ContainsPredicate("tc.file_path", p.Search))
+	}
+	limitPH, offsetPH, capPH := b.Add(p.Limit+1), b.Add(p.Offset), b.Add(p.MaxEditsPerFile)
+	rowNumber, rowSuffix := "ROW_NUMBER()", ""
+	countExpr := "COUNT(*) OVER (PARTITION BY s.project, tc.file_path)"
+	lastEdited, timestamp := "fp.last_edited_at", "r.timestamp"
+	if b.dialect.signedWindowCounts {
+		rowNumber, rowSuffix = "toInt64(row_number()", ")"
+		countExpr = "toInt64(count() OVER (PARTITION BY s.project, tc.file_path))"
+	}
+	if b.dialect.recentEditTimestamp != nil {
+		lastEdited, timestamp = b.dialect.recentEditTimestamp(lastEdited), b.dialect.recentEditTimestamp(timestamp)
+	}
+	query := `
+WITH ranked AS (
+  SELECT s.project AS project, tc.file_path AS file_path,
+         tc.session_id AS session_id, tc.tool_name AS tool_name,
+         tc.category AS category, tc.tool_use_id AS tool_use_id,
+         tc.call_index AS call_index, m.ordinal AS ordinal,
+         m.timestamp AS timestamp,
+         ` + rowNumber + ` OVER (
+           PARTITION BY s.project, tc.file_path
+           ORDER BY m.timestamp DESC NULLS LAST, tc.session_id DESC,
+                    m.ordinal DESC, tc.call_index DESC)` + rowSuffix + ` AS rn,
+         ` + countExpr + ` AS edit_count
+  FROM tool_calls tc
+  JOIN messages m ON ` + messageJoin + `
+  JOIN sessions s ON s.id = tc.session_id
+  WHERE tc.category IN ('Edit','Write')
+    AND tc.file_path IS NOT NULL AND tc.file_path <> ''
+    AND s.deleted_at IS NULL
+    ` + projectClause + `
+    ` + searchClause + `
+),
+file_page AS (
+  SELECT project, file_path, edit_count,
+         timestamp AS last_edited_at, session_id AS last_session_id,
+         ordinal AS last_ordinal, call_index AS last_call_index
+  FROM ranked
+  WHERE rn = 1
+  ORDER BY last_edited_at DESC NULLS LAST, last_session_id DESC,
+           last_ordinal DESC, last_call_index DESC, file_path DESC
+  LIMIT ` + limitPH + ` OFFSET ` + offsetPH + `
+)
+SELECT fp.project, fp.file_path, fp.edit_count, ` + lastEdited + `,
+       fp.last_session_id, r.session_id, r.ordinal, r.tool_use_id,
+       r.call_index, r.tool_name, r.category, ` + timestamp + `
+FROM file_page fp
+JOIN ranked r ON r.project = fp.project AND r.file_path = fp.file_path
+WHERE r.rn <= ` + capPH + `
+ORDER BY fp.last_edited_at DESC NULLS LAST, fp.last_session_id DESC,
+         fp.last_ordinal DESC, fp.last_call_index DESC, fp.file_path DESC,
+         r.rn`
+	return query
+}
+
+func recentEditsRFC3339Expr(col string) string {
+	return "if(" + col + " IS NULL, CAST(NULL AS Nullable(String)), concat(replaceAll(toString(" + col + "), ' ', 'T'), 'Z'))"
 }

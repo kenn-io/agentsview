@@ -156,16 +156,9 @@ func RelationshipExclusionSQL(includeSubagents, includeForks bool, colPrefix str
 	}
 }
 
-// OneShotExclusionSQL wraps the one-shot exclusion predicate so it does
-// not drop subagent rows when subagents are being counted. Workflow
-// subagents are inherently one-shot (a single orchestrator prompt
-// yields one result) but represent real work, so the one-shot filter
-// would otherwise re-hide exactly the sessions IncludeSubagents is
-// meant to surface. Exported so the PostgreSQL and DuckDB builders
-// apply the same rule. base must be a self-contained boolean clause.
-func (f AnalyticsFilter) OneShotExclusionSQL(base string) string {
+func (f AnalyticsFilter) oneShotExclusionSQL(base, colPrefix string) string {
 	if f.IncludeSubagents {
-		return "(" + base + " OR relationship_type = 'subagent')"
+		return "(" + base + " OR " + colPrefix + "relationship_type = 'subagent')"
 	}
 	return base
 }
@@ -303,24 +296,10 @@ func CSVFilterValues(raw string) []string {
 	return out
 }
 
-func sqliteAnalyticsCSVPredicate(
-	col string,
-	raw string,
-) (string, []any) {
-	values := CSVFilterValues(raw)
-	if len(values) == 0 {
-		return "", nil
-	}
-	if len(values) == 1 {
-		return col + " = ?", []any{values[0]}
-	}
-	placeholders := make([]string, len(values))
-	args := make([]any, 0, len(values))
-	for i, value := range values {
-		placeholders[i] = "?"
-		args = append(args, value)
-	}
-	return col + " IN (" + strings.Join(placeholders, ",") + ")", args
+func sqliteAnalyticsCSVPredicate(col, raw string) (string, []any) {
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	pred := b.ValuesPredicate(col, CSVFilterValues(raw), true)
+	return pred, b.Args()
 }
 
 func (db *DB) getAnalyticsFilteredMessageCounts(
@@ -371,163 +350,31 @@ func (db *DB) getAnalyticsFilteredMessageStats(
 	return scope.StatsBySession(), nil
 }
 
-func (f AnalyticsFilter) buildWhereWithDate(
-	dateCol string,
-	includeDate bool,
-	sessionIDExpr string,
-) (string, []any) {
+func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, sessionIDExpr string) (string, []any) {
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	var dates []string
+	if includeDate {
+		from, to := f.utcRange()
+		dates = append(dates, dateCol+" >= "+b.Add(from), dateCol+" <= "+b.Add(to))
+	}
 	if sessionIDExpr == "" {
 		sessionIDExpr = "sessions.id"
 	}
-	preds := []string{
-		"message_count > 0",
-		f.RelationshipExclusionSQL(),
-		"deleted_at IS NULL",
-	}
-	var args []any
-
-	if includeDate {
-		utcFrom, utcTo := f.utcRange()
-		preds = append(preds, dateCol+" >= ?")
-		args = append(args, utcFrom)
-		preds = append(preds, dateCol+" <= ?")
-		args = append(args, utcTo)
-	}
-
-	if f.Machine != "" {
-		machines := CSVFilterValues(f.Machine)
-		if len(machines) == 1 {
-			preds = append(preds, "machine = ?")
-			args = append(args, machines[0])
-		} else if len(machines) > 1 {
-			placeholders := make(
-				[]string, len(machines),
-			)
-			for i, machine := range machines {
-				placeholders[i] = "?"
-				args = append(args, machine)
-			}
-			preds = append(preds,
-				"machine IN ("+
-					strings.Join(placeholders, ",")+
-					")",
-			)
-		}
-	}
-
-	if f.Project != "" {
-		preds = append(preds, "project = ?")
-		args = append(args, f.Project)
-	}
-
-	if f.GitBranch != "" {
-		var clause string
-		clause, args = BranchPairClauseArgs("project", "git_branch", f.GitBranch, args)
-		preds = append(preds, clause)
-	}
-
-	if f.Agent != "" {
-		agents := CSVFilterValues(f.Agent)
-		if len(agents) == 1 {
-			preds = append(preds, "agent = ?")
-			args = append(args, agents[0])
-		} else if len(agents) > 1 {
-			placeholders := make(
-				[]string, len(agents),
-			)
-			for i, a := range agents {
-				placeholders[i] = "?"
-				args = append(args, a)
-			}
-			preds = append(preds,
-				"agent IN ("+
-					strings.Join(placeholders, ",")+
-					")",
-			)
-		}
-	}
-
-	if f.Model != "" {
-		models := CSVFilterValues(f.Model)
-		if len(models) == 1 {
-			preds = append(preds,
-				"EXISTS (SELECT 1 FROM messages m WHERE "+
-					"m.session_id = "+sessionIDExpr+" AND "+
-					"m.model = ?)")
-			args = append(args, models[0])
-		} else if len(models) > 1 {
-			placeholders := make(
-				[]string, len(models),
-			)
-			for i, m := range models {
-				placeholders[i] = "?"
-				args = append(args, m)
-			}
-			preds = append(preds,
-				"EXISTS (SELECT 1 FROM messages m WHERE "+
-					"m.session_id = "+sessionIDExpr+" AND "+
-					"m.model IN ("+
-					strings.Join(placeholders, ",")+
-					"))")
-		}
-	}
-
-	if f.MinUserMessages > 0 {
-		preds = append(preds, "user_message_count >= ?")
-		args = append(args, f.MinUserMessages)
-	}
-	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
-	if f.ExcludeOneShot {
-		if scope != "human" {
-			preds = append(preds,
-				f.OneShotExclusionSQL(
-					"(user_message_count > 1 OR is_automated = 1)"))
-		} else {
-			preds = append(preds,
-				f.OneShotExclusionSQL("user_message_count > 1"))
-		}
-	}
-	if pred := automatedScopePredicate(scope, "is_automated"); pred != "" {
-		preds = append(preds, pred)
-	}
-	if f.ExcludeInteractive {
-		preds = append(preds, "is_automated = 1")
-	}
-
-	if f.ActiveSince != "" {
-		preds = append(preds,
-			"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= ?")
-		args = append(args, f.ActiveSince)
-	}
-
-	if pred, pargs := buildTerminationPredSQLite(f.Termination); pred != "" {
-		preds = append(preds, pred)
-		args = append(args, pargs...)
-	}
-
-	return strings.Join(preds, " AND "), args
+	where := BuildAnalyticsWhere(f, b, "", sessionIDExpr, dates)
+	return where, b.Args()
 }
 
-func normalizeAutomatedScope(scope string, excludeAutomated bool) string {
-	switch strings.TrimSpace(scope) {
+// NormalizeAutomatedScope resolves the explicit scope and legacy exclusion flag.
+func NormalizeAutomatedScope(scope string, excludeAutomated bool) string {
+	scope = strings.TrimSpace(scope)
+	switch scope {
 	case "human", "all", "automated":
-		return strings.TrimSpace(scope)
+		return scope
 	}
 	if excludeAutomated {
 		return "human"
 	}
 	return "all"
-}
-
-func automatedScopePredicate(scope, col string) string {
-	switch scope {
-	case "human":
-		return col + " = 0"
-	case "automated":
-		return col + " = 1"
-	default:
-		return ""
-	}
 }
 
 func (db *DB) queryAnalyticsModels(

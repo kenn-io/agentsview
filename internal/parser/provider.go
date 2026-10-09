@@ -1122,6 +1122,8 @@ type IncrementalRequest struct {
 	StoredAgentLabel  string
 	StoredEntrypoint  string
 	StoredSessionKind string
+	// StoredUserMessageCount bounds first-prompt classification to one reparse.
+	StoredUserMessageCount int
 	// StoredClaudeLinearParse mirrors the session's persisted
 	// claude_linear_parse flag: whether the last full parse fell back
 	// to linear processing. Linearity is monotonic across appends, so

@@ -54,11 +54,36 @@ sessions, so **Total Cost** lines up with `agentsview usage daily` for the same
 day and timezone. Usage rows that recur across related sessions are deduplicated
 before totaling, the same rule the Usage page applies.
 
+Subagents include native child sessions and eligible `claude -p`, `codex exec`,
+or Grok headless runs. Claude Code `sdk-cli` workers
+qualify when their first real normalized prompt records `turnOrigin=sdk`.
+Human origin wins conflicting markers. A queued first prompt, missing or unknown
+origin, SDK library entrypoints, or an explicit provider kind blocks this
+inference. Human SDK conversations stay Interactive unless their prompts match
+an automation pattern. Known subagents keep that category even when their
+prompts match built-in or user `[automated]` patterns. Runs without a subagent
+relationship count as Automated when they carry a roborev tag or a matching
+first prompt.
+Prompt matching requires one or fewer real user messages.
+
+Parentless workers appear as sidebar roots. Flat lists, search, and CLI include
+them when children are requested. General stats and project, agent, and branch
+pickers exclude Subagents. Automation and one-shot filters still apply.
+Readable sources reparse once to recover classification evidence. Stored
+parentless non-interactive runs gain the Subagent relationship during each
+classification audit, including rows imported after initialization, even when
+their sources are unreadable. Historical worker repair can fail when sources are
+unreadable or deleted and archived rows, including replicas, lack worker
+evidence such as Claude SDK origin needed to distinguish workers from human SDK
+conversations or native Grok child-kind evidence omitted by older clients.
+Ambiguous rows keep their relationship. Classification audits preserve stored
+automation flags in usage-only archives. New writes classify current evidence.
+
 The session count separates subagents from interactive and automated
-conversations. A subagent counts only in the subagent category, even if its
-prompt also matches the automation classifier. Forks remain in the interactive
-or automated category. Costs, agent-minutes, and concurrency use the same three
-separate categories. Automation filters still use each session's automation
+conversations. Every known subagent counts as Subagents, including scripted
+workers whose parent disappears. Forks remain in the interactive or automated
+category. Costs, agent-minutes, and concurrency use the same three separate
+categories. Automation filters still use each session's automation
 flag, including subagents.
 
 If the selected range reaches into the future, the page marks it as partial and
@@ -88,6 +113,8 @@ the page filters. Both counts exclude system entries and tool results. Assistant
 messages can contain tool calls or thinking; they are transcript messages, not
 completed turns. Messages without timestamps cannot be placed on the chart.
 Hover a bucket in either message view to compare both counts.
+
+![Activity showing assistant-message frequency](/docs/assets/generated/screenshots/activity-message-frequency.png)
 
 ![Weekly Activity concurrency chart](/docs/assets/generated/screenshots/activity-concurrency.png)
 
@@ -119,10 +146,11 @@ Click a session title to open that session in the transcript viewer. Column
 headers for **Project**, **Agent**, **Agent-min**, **Cost**, and **Window** are
 sortable; timing-only sorts keep untimed sessions at the bottom.
 
-The table initially includes at most 200 rows. Sorting, bucket filtering, and
-later pages run on the server, with a maximum page size of 500 rows. A loading
-indicator remains local to the table, so the report summary and chart stay
-visible while a page is fetched.
+The table initially includes at most 200 rows and loads more as you scroll.
+Sorting, bucket filtering, and later pages run on the server, with a maximum
+page size of 500 rows. A failed page load offers a retry. A loading indicator
+remains local to the table, so the report summary and chart stay visible while a
+page is fetched.
 
 Subagent sessions are marked with a **Subagent** badge; other automated sessions
 have an **Auto** badge. Untimed sessions can still carry cost if usage rows

@@ -173,7 +173,7 @@ func (db *DB) GetTopSessionsByCost(
 		if err != nil {
 			return nil, fmt.Errorf("summing top-session cost: %w", err)
 		}
-		if filter.Model == "" && filter.ExcludeModel == "" &&
+		if !filter.HasModelFilter() &&
 			group.AuthoritativeCostMicrodollars != nil {
 			value := money.Money{Microdollars: *group.AuthoritativeCostMicrodollars}
 			current.authoritative = &value

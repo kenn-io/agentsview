@@ -15870,6 +15870,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredAgentLabel:          inc.AgentLabel,
 				StoredEntrypoint:          inc.Entrypoint,
 				StoredSessionKind:         inc.SessionKind,
+				StoredUserMessageCount:    inc.UserMsgCount,
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
 				StoredSessionName:         storedSessionName,

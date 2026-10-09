@@ -50,6 +50,9 @@ type QueryDialect struct {
 	emptyStringIsNull           bool
 	terminationExpr             string
 	terminationKind             timestampKind
+	messageMembership           func(string, string) string
+	signedWindowCounts          bool
+	recentEditTimestamp         func(string) string
 	caseInsensitiveLike         string
 	caseInsensitiveLikeEsc      string
 	regexPredicate              func(string, string) string
@@ -195,6 +198,11 @@ func ClickHouseQueryDialect() QueryDialect {
 		placeholderStyle: placeholderQuestion,
 		trueLiteral:      "true",
 		falseLiteral:     "false",
+		messageMembership: func(sessionID, pred string) string {
+			return sessionID + " IN (SELECT m.session_id FROM messages m WHERE " + pred + ")"
+		},
+		signedWindowCounts:  true,
+		recentEditTimestamp: recentEditsRFC3339Expr,
 		dateStartExpr: func(q func(string) string) string {
 			return "COALESCE(" + q("started_at") + ", " + q("created_at") + ")"
 		},
@@ -592,7 +600,7 @@ func (d QueryDialect) ParentRelation(child, parent string) string {
 }
 
 func BuildCanonicalRootWhere(dialect QueryDialect, sessionAlias string, includeOrphans bool) string {
-	base := `NOT (` + CanonicalChildRelationshipPredicate(dialect, sessionAlias) + `)`
+	base := `(NOT (` + CanonicalChildRelationshipPredicate(dialect, sessionAlias) + `) OR COALESCE(` + sessionAlias + `.parent_session_id, '') = '')`
 	if !includeOrphans {
 		return base
 	}
@@ -667,7 +675,7 @@ func buildSessionFilterWithBuilder(
 	rootMatchParts = append(rootMatchParts,
 		BuildCanonicalRootWhere(b.dialect, "root_session", f.IncludeOrphans))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
-	childAutomationPred := automationScopePredicate(f, b.dialect, "s")
+	childAutomationPred := b.dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), "s.is_automated")
 	childAutomationWhere := ""
 	if childAutomationPred != "" {
 		childAutomationWhere = " AND " + childAutomationPred
@@ -688,18 +696,13 @@ func buildSessionFilterWithBuilder(
 	return baseWhere + " AND " + q("id") + " IN (" + cte + ")"
 }
 
-func automationScopePredicate(
-	f SessionFilter, dialect QueryDialect, sessionAlias string,
-) string {
-	col := "is_automated"
-	if sessionAlias != "" {
-		col = sessionAlias + "." + col
-	}
-	switch normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated) {
+// AutomatedScopePredicate renders a normalized scope against a boolean column.
+func (d QueryDialect) AutomatedScopePredicate(scope, col string) string {
+	switch scope {
 	case "human":
-		return col + " = " + dialect.falseLiteral
+		return col + " = " + d.falseLiteral
 	case "automated":
-		return col + " = " + dialect.trueLiteral
+		return col + " = " + d.trueLiteral
 	default:
 		return ""
 	}
@@ -810,7 +813,7 @@ func appendSessionVisibilityPredicates(
 	b *QueryBuilder,
 	q func(string) string,
 ) ([]string, string) {
-	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	scope := NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	oneShotPred := ""
 	if f.ExcludeOneShot {
 		pred := oneShotPredicate(f, b, q, scope)
@@ -820,13 +823,8 @@ func appendSessionVisibilityPredicates(
 			preds = append(preds, pred)
 		}
 	}
-	switch scope {
-	case "human":
-		preds = append(preds, q("is_automated")+" = "+
-			b.dialect.falseLiteral)
-	case "automated":
-		preds = append(preds, q("is_automated")+" = "+
-			b.dialect.trueLiteral)
+	if pred := b.dialect.AutomatedScopePredicate(scope, q("is_automated")); pred != "" {
+		preds = append(preds, pred)
 	}
 	return preds, oneShotPred
 }
@@ -872,14 +870,26 @@ func inPredicate(col string, values []string, b *QueryBuilder) string {
 	if len(values) == 0 {
 		return "1 = 0"
 	}
+	return b.ValuesPredicate(col, values, true)
+}
+
+// ValuesPredicate renders membership and ignores empty optional filters.
+func (b *QueryBuilder) ValuesPredicate(col string, values []string, include bool) string {
+	if len(values) == 0 {
+		return ""
+	}
+	equalOp, listOp := " = ", " IN "
+	if !include {
+		equalOp, listOp = " != ", " NOT IN "
+	}
 	if len(values) == 1 {
-		return col + " = " + b.Add(values[0])
+		return col + equalOp + b.Add(values[0])
 	}
 	placeholders := make([]string, len(values))
 	for i, v := range values {
 		placeholders[i] = b.Add(v)
 	}
-	return col + " IN (" + strings.Join(placeholders, ",") + ")"
+	return col + listOp + "(" + strings.Join(placeholders, ",") + ")"
 }
 
 func splitCSV(s string) []string {
@@ -948,20 +958,6 @@ func BranchPairPredicate(
 	return "(" + strings.Join(parts, " OR ") + ")"
 }
 
-// BranchPairClauseArgs is the raw-args ("?" placeholder) form of
-// BranchPairPredicate.
-func BranchPairClauseArgs(
-	projectCol, branchCol, tokens string, args []any,
-) (string, []any) {
-	clause := BranchPairPredicate(
-		projectCol, branchCol, tokens,
-		func(v string) string {
-			args = append(args, v)
-			return "?"
-		})
-	return clause, args
-}
-
 func nonEmpty(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, v := range values {
@@ -975,13 +971,17 @@ func nonEmpty(values []string) []string {
 func terminationPredicate(
 	status string, b *QueryBuilder, q func(string) string,
 ) string {
+	return renderTerminationPredicate(status, b.dialect.terminationExpr, q("termination_status"), b.terminationParam)
+}
+
+func renderTerminationPredicate(status, activityExpr, statusExpr string, param func(time.Time) string) string {
 	if status == "" || status == "all" {
 		return ""
 	}
 	now := time.Now().UTC()
 	activeCutoff := now.Add(-activeWindow)
 	staleCutoff := now.Add(-staleWindow)
-	flagged := q("termination_status") +
+	flagged := statusExpr +
 		" IN ('tool_call_pending', 'truncated')"
 
 	parts := strings.Split(status, ",")
@@ -989,26 +989,19 @@ func terminationPredicate(
 	for _, p := range parts {
 		switch strings.TrimSpace(p) {
 		case "active":
-			preds = append(preds, b.dialect.terminationExpr+" > "+
-				b.terminationParam(activeCutoff))
+			preds = append(preds, activityExpr+" > "+param(activeCutoff))
 		case "stale":
-			preds = append(preds, "("+
-				b.dialect.terminationExpr+" > "+
-				b.terminationParam(staleCutoff)+" AND "+
-				b.dialect.terminationExpr+" <= "+
-				b.terminationParam(activeCutoff)+" AND "+
-				flagged+")")
+			pred := activityExpr + " > " + param(staleCutoff) + " AND " + activityExpr + " <= " + param(activeCutoff)
+			preds = append(preds, "("+pred+" AND "+flagged+")")
 		case "unclean":
-			preds = append(preds, "("+
-				b.dialect.terminationExpr+" <= "+
-				b.terminationParam(staleCutoff)+" AND "+
-				flagged+")")
+			pred := activityExpr + " <= " + param(staleCutoff)
+			preds = append(preds, "("+pred+" AND "+flagged+")")
 		case "clean":
 			preds = append(preds,
-				q("termination_status")+" = 'clean'")
+				statusExpr+" = 'clean'")
 		case "awaiting_user":
 			preds = append(preds,
-				q("termination_status")+" = 'awaiting_user'")
+				statusExpr+" = 'awaiting_user'")
 		}
 	}
 	if len(preds) == 0 {
@@ -1024,6 +1017,8 @@ func (b *QueryBuilder) terminationParam(t time.Time) string {
 	switch b.dialect.terminationKind {
 	case timestampUnixSeconds:
 		return b.Add(t.Unix())
+	case timestampTimestamptz:
+		return b.Add(t)
 	case timestampCast:
 		return b.dialect.activityParam(b.Add(t.Format(time.RFC3339)))
 	default:

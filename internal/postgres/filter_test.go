@@ -86,7 +86,7 @@ func TestPGAutomatedScopePredicates(t *testing.T) {
 		{
 			name:  "usage automated",
 			scope: "automated",
-			want:  "COALESCE(s.is_automated, false) = TRUE",
+			want:  "COALESCE(s.is_automated, FALSE) = TRUE",
 			buildSQL: func(scope string, exclude bool) string {
 				sql := appendPGUsageSessionFilterClauses(
 					"WHERE true",
@@ -136,7 +136,7 @@ func TestPGAutomatedScopeOneShotExemption(t *testing.T) {
 			ExcludeOneShot: true,
 		},
 	)
-	want = "(s.user_message_count > 1 OR COALESCE(s.is_automated, false) = TRUE)"
+	want = "(s.user_message_count > 1 OR COALESCE(s.is_automated, FALSE) = TRUE)"
 	assert.Contains(t, usageSQL, want, "usage SQL missing one-shot exemption")
 }
 

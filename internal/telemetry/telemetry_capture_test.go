@@ -57,9 +57,24 @@ func TestCoreActionAllowlist(t *testing.T) {
 		{EventScreenViewed, "screen", "settings", true},
 		{EventScreenViewed, "screen", "unknown", false},
 		{EventScreenViewed, "surface", "terminal", false},
+		{EventVisitEnded, "duration_bucket", "under_1m", true},
+		{EventVisitEnded, "duration_bucket", "1_to_5m", true},
+		{EventVisitEnded, "duration_bucket", "5_to_30m", true},
+		{EventVisitEnded, "duration_bucket", "over_30m", true},
+		{EventVisitEnded, "duration_bucket", "120s", false},
+		{EventVisitEnded, "surface", "web", true},
+		{EventVisitEnded, "surface", "terminal", false},
+		// A later visit with the same bucket must reach the collector again.
+		{EventVisitEnded, "duration_bucket", "1_to_5m", true},
 	}
 	for _, c := range cases {
 		properties := map[string]any{c.key: c.value, "query": "secret prompt"}
+		if c.event == EventVisitEnded {
+			properties["duration_ms"] = 120000
+			if c.key == "duration_bucket" {
+				properties["surface"] = "web"
+			}
+		}
 		if c.event == EventScreenViewed {
 			// Each row checks filtering independently of daily deduplication.
 			reporter.screenViews = make(map[string]string)
@@ -125,6 +140,12 @@ func TestCoreActionAllowlist(t *testing.T) {
 			continue
 		}
 		assert.NotContains(t, sent[i], "query", c.event)
+		if c.event == EventVisitEnded {
+			assert.NotContains(t, sent[i], "duration_ms")
+			if c.key == "duration_bucket" {
+				assert.Equal(t, "web", sent[i]["surface"])
+			}
+		}
 		value, ok := sent[i][c.key]
 		if c.kept {
 			assert.Equal(t, c.value, value, c.event)

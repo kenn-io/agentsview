@@ -237,6 +237,70 @@ func TestPGSemanticSearchScope(t *testing.T) {
 	assert.True(t, sub.Matches[0].Subordinate)
 }
 
+func TestPGSearchAuditPromotionPreservesCachedSubordination(t *testing.T) {
+	store, genID, table := setupSemanticSearch(t)
+	wireSemanticSearcher(t, store, genID)
+	ctx := context.Background()
+	pg := store.DB()
+	_, err := pg.Exec(`UPDATE sessions SET session_kind = 'non-interactive',
+		is_automated = true WHERE id = 'S2'`)
+	require.NoError(t, err)
+	// A sidechain's cached flag remains true even when its session is top-level.
+	_, err = pg.Exec(`UPDATE sessions SET relationship_type = '',
+		parent_session_id = NULL WHERE id = 'Ssub'`)
+	require.NoError(t, err)
+	_, err = pg.Exec(`UPDATE messages SET is_sidechain = true WHERE session_id = 'Ssub'`)
+	require.NoError(t, err)
+	_, err = backfillIsAutomatedPGWithProgress(ctx, pg)
+	require.NoError(t, err)
+	var relationship string
+	require.NoError(t, pg.QueryRow(`SELECT relationship_type FROM sessions WHERE id = 'S2'`).Scan(&relationship))
+	assert.Equal(t, "subagent", relationship)
+	var cached bool
+	require.NoError(t, pg.QueryRow(`SELECT subordinate FROM vector_documents WHERE doc_key = 'd2'`).Scan(&cached))
+	assert.False(t, cached, "audit leaves the old vector cache untouched")
+
+	for _, mode := range []string{"semantic", "hybrid", "hybrid keyword only"} {
+		t.Run(mode, func(t *testing.T) {
+			searchMode := mode
+			if mode == "hybrid keyword only" {
+				searchMode = "hybrid"
+				_, err := pg.Exec(`DELETE FROM ` + table + ` WHERE doc_key IN ('d2', 'dsub')`)
+				require.NoError(t, err)
+			}
+			for _, scope := range []string{"", "top", "subordinate"} {
+				t.Run("scope="+scope, func(t *testing.T) {
+					page, err := store.SearchContent(ctx, db.ContentSearchFilter{
+						Pattern: "content", Mode: searchMode, Scope: scope, Limit: 50,
+						IncludeAutomated: true,
+					})
+					require.NoError(t, err)
+					byKey := semMatchesByKey(t, page)
+					if scope == "top" {
+						assert.Len(t, byKey, 2)
+						assert.Contains(t, byKey, semKey{"S1", 0})
+						assert.Contains(t, byKey, semKey{"S1", 12})
+						return
+					}
+					wantCount := 4
+					if scope == "subordinate" {
+						wantCount = 2
+					}
+					assert.Len(t, byKey, wantCount)
+					for _, id := range []string{"S2", "Ssub"} {
+						match, ok := byKey[semKey{id, 0}]
+						require.True(t, ok, "subordinate unit %s survives", id)
+						assert.True(t, match.Subordinate, "unit %s stays subordinate", id)
+					}
+					if scope == "" {
+						assert.Equal(t, "S1", page.Matches[0].SessionID, "top-level units rank ahead of subordinate units")
+					}
+				})
+			}
+		})
+	}
+}
+
 // TestPGSemanticSearchSubordinatePenaltyReorders pins the one-leg RRF fusion:
 // the subordinate unit ranks first by cosine score yet lands last after the
 // penalty, while every match keeps the searcher's own score (not the fusion

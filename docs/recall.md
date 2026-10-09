@@ -152,6 +152,8 @@ Both decisions are durable human states and are not reversed by later
 extraction-generation changes. This surface deliberately has no entry editing,
 bulk review, or undo action.
 
+![Review controls on an extracted Recall entry](/docs/assets/generated/screenshots/recall-review.png)
+
 Recall requires SQLite FTS5, which all standard builds include. Writable open
 upgrades the previous review-state schema when present and converts any old FTS4
 Recall search indexes to FTS5 in the same transaction. Index conversion also
@@ -188,8 +190,8 @@ endpoint. It is off by default; manually running the build command is treated as
 one-time consent for that invocation.
 
 Vector and hybrid queries keep working while the Recall index trails the corpus
-by a few entries, which is normal while extraction is writing them. Each
-insert, delete, accept, reject, or text edit of an accepted entry is one corpus
+by a few entries, which is normal while extraction is writing them. Each insert,
+delete, accept, reject, or text edit of an accepted entry is one corpus
 revision, and the index may trail by up to `[vector] recall_max_revision_lag`
 revisions (default 256):
 
@@ -199,12 +201,11 @@ recall_max_revision_lag = 256   # 0 requires the index to match the corpus exact
 ```
 
 Entries newer than the index are missing only from the vector ranking. Hybrid
-search still finds them through its lexical ranking, which runs after the
-query is encoded. Results come from the entries as the query reads them, so one
-deleted or rejected since the last build drops out. Past the bound,
-vector and hybrid queries fail closed until the Recall store is rebuilt, by hand
-or by the automatic refresh when it is enabled; lexical mode keeps working
-meanwhile. See
+search still finds them through its lexical ranking, which runs after the query
+is encoded. Results come from the entries as the query reads them, so one
+deleted or rejected since the last build drops out. Past the bound, vector and
+hybrid queries fail closed until the Recall store is rebuilt, by hand or by the
+automatic refresh when it is enabled; lexical mode keeps working meanwhile. See
 [Semantic Search](/docs/semantic-search/#enabling-vector) for the shared
 embedding configuration and endpoint privacy considerations.
 
@@ -253,17 +254,17 @@ Optional keys: `deployment` (labels which serving instance produced the corpus),
 `backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
 `max_window_chars` (default 50000), `max_tokens`, `candidate_findings`
 (`"block"` default, or `"allow"` — see below), per-server `api_key_env`,
-per-server `concurrency` (default 1 — see below), a
-`[recall.extract.prompts]` table (`profile`, `dir`), and a
-`[recall.extract.request]` table (`temperature`, `extra_body`).
+per-server `concurrency` (default 1 — see below), a `[recall.extract.prompts]`
+table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
+`extra_body`).
 
 `concurrency` sets how many sessions a pass distills at once against that
 server; each session's units are still sent one at a time, in order. Raise it
 for hosted endpoints or servers that batch concurrent requests, where a
 one-session pass leaves the endpoint mostly idle between round trips. Keep the
-default of 1 for a single local model: parallel requests divide the same
-compute instead of adding throughput. Each in-flight session holds its
-transcript in memory, and a hosted endpoint's rate limits still apply.
+default of 1 for a single local model: parallel requests divide the same compute
+instead of adding throughput. Each in-flight session holds its transcript in
+memory, and a hosted endpoint's rate limits still apply.
 
 Non-loopback endpoints must use HTTPS: extraction sends transcript content to
 the endpoint, and plaintext HTTP off the machine could be intercepted. A server
@@ -296,8 +297,22 @@ fingerprinted as a *generation*; changing the configuration builds a new corpus
 rather than mixing outputs, and one generation is active at a time.
 `recall extract status` shows coverage, `run` executes a manual pass,
 `activate`/`retire` manage generations, and `doctor` validates the configuration
-with a single probe call. See `docs/internal/recall-extraction.md` for the
-design contracts.
+with a single probe call.
+
+When no generation is active, you can start serving the first collection before
+the full backlog finishes:
+
+```bash
+agentsview recall extract status
+agentsview recall extract activate
+```
+
+At least one session must be complete and usable entries must exist. Extraction
+works on recent sessions first, and later passes add entries to the active
+collection. Replacing an existing active generation still requires complete
+eligible coverage so the replacement does not remove older knowledge. Automatic
+activation also waits for that coverage. See the
+[extraction commands](/docs/commands/#agentsview-recall) for the controls.
 
 ## Evidence and trust
 

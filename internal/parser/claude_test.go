@@ -117,6 +117,35 @@ func TestClaudeSessionKindAndPromptSourceAbsent(t *testing.T) {
 	}
 }
 
+func TestClaudeWorkerOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		name, entrypoint, origin, prefix string
+		want                             RelationshipType
+	}{
+		{name: "worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, want: RelSubagent},
+		{name: "human relay", entrypoint: "sdk-cli", origin: `"turnOrigin":"human","origin":{"kind":"human"},`},
+		{name: "human conflict", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk","origin":{"kind":"human"},`},
+		{name: "missing origin", entrypoint: "sdk-cli"},
+		{name: "TypeScript SDK", entrypoint: "sdk-ts", origin: `"turnOrigin":"sdk",`},
+		{name: "queued human before worker", entrypoint: "sdk-cli", origin: `"turnOrigin":"sdk",`, prefix: `{"type":"attachment","timestamp":"2026-01-01T00:00:00Z","attachment":{"type":"queued_command","origin":{"kind":"human"},"prompt":"Human question"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := buildMetadataLine(map[string]any{"type": "agent-setting", "entrypoint": tc.entrypoint})
+			content := metadata + "\n" + tc.prefix + "\n" +
+				`{"type":"user",` + tc.origin + `"timestamp":"2026-01-01T00:01:00Z","promptSource":"sdk","message":{"content":"Plan a settings change."}}` + "\n" +
+				`{"type":"user","uuid":"u2","parentUuid":"u1","turnOrigin":"sdk","message":{"content":"Revise the plan."}}` + "\n"
+			path := createTestFile(t, "worker.jsonl", content)
+			results, _, err := claudeParseWithExclusions(path, "project", "local")
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, tc.want, results[0].Session.RelationshipType)
+			assert.Empty(t, results[0].Session.ParentSessionID)
+			assert.Empty(t, results[0].Session.SessionKind)
+			assert.Equal(t, tc.entrypoint, results[0].Session.Entrypoint)
+		})
+	}
+}
+
 func TestClaudeSessionIdentityLineage(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lineage.jsonl")

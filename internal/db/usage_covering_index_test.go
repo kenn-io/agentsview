@@ -157,6 +157,7 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
 		"idx_messages_activity_timestamp",
+		"idx_messages_analytics_metadata",
 		"idx_tool_calls_session_tool_use",
 		"idx_tool_result_events_identity",
 		"idx_tool_result_events_summary",

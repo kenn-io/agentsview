@@ -91,6 +91,13 @@ func ParseGrokSummary(
 	); ok {
 		parentSessionID = "grok:" + subagentParent
 		relationshipType = RelSubagent
+	} else if grokIsSubagentKind(summary.ProducerSessionKind) {
+		if summary.ProducerSessionKind == "subagent_fork" && parentSessionID != "" {
+			parentSessionID = "grok:" + parentSessionID
+		} else {
+			parentSessionID = ""
+		}
+		relationshipType = RelSubagent
 	} else if parentSessionID != "" {
 		parentSessionID = "grok:" + parentSessionID
 		relationshipType = RelFork

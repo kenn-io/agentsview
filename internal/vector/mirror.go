@@ -75,7 +75,7 @@ type UnitSource interface {
 
 // sessionJournalSource is implemented by *db.DB. Incremental refreshes use the
 // archive's session deletion journal to drop permanently deleted sessions and
-// rescan reinserted ones; other sources keep watermark-only refreshes.
+// rescan reinserted or repaired ones; other sources keep watermark-only refreshes.
 type sessionJournalSource interface {
 	GetDatabaseID(context.Context) (string, error)
 	SessionDeletionPublicationRevision(context.Context) (int64, error)

@@ -1,12 +1,35 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
-import { ApiError, orvalFetch, responseTimingOf, setAuthToken } from "./runtime.js";
+import {
+  ApiError,
+  orvalFetch,
+  getServerUrl,
+  responseTimingOf,
+  SERVER_URL_CHANGE_EVENT,
+  setAuthToken,
+  setServerUrl,
+} from "./runtime.js";
 
 describe("orvalFetch", () => {
   afterEach(() => {
     localStorage.clear();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it("notifies this tab only when the selected server changes", () => {
+    const servers: string[] = [];
+    const listener = () => servers.push(getServerUrl());
+    window.addEventListener(SERVER_URL_CHANGE_EVENT, listener);
+    try {
+      setServerUrl("https://example.com/remote");
+      setServerUrl("https://example.com/remote");
+      setServerUrl("");
+      setServerUrl("");
+      expect(servers).toEqual(["https://example.com/remote", ""]);
+    } finally {
+      window.removeEventListener(SERVER_URL_CHANGE_EVENT, listener);
+    }
   });
 
   it("records when a JSON response was sent, answered, and read", async () => {

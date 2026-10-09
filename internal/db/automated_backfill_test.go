@@ -11,6 +11,99 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct {
+		id, prompt, kind, relationship string
+		parent                         *string
+	}{
+		{"plain", "Explain this function.", "non-interactive", "", nil},
+		{"script", "You are a code reviewer. Review this change.", "non-interactive", "", nil},
+		{"child", "Explain this function.", "non-interactive", "", Ptr("plain")},
+		{"fork", "Explain this function.", "non-interactive", "fork", nil},
+		{"review", "Explain this function.", "roborev", "", nil},
+	} {
+		insertSession(t, d, tc.id, "project-a", func(s *Session) {
+			s.Agent = "codex"
+			s.FirstMessage = Ptr(tc.prompt)
+			s.SessionKind = tc.kind
+			s.RelationshipType = tc.relationship
+			s.ParentSessionID = tc.parent
+			s.UserMessageCount = 1
+		})
+	}
+	_, err := d.getWriter().Exec(t.Context(), `DROP TRIGGER trg_sessions_classification_journal_update`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET relationship_type = '' WHERE id IN ('plain', 'script')`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions SET is_automated = 1, local_modified_at = '2000-01-01T00:00:00.000Z'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE stats SET value = 'old-classifier' WHERE key = ?`, ClassifierHashKey)
+	require.NoError(t, err)
+	path := d.Path()
+	require.NoError(t, d.Close())
+	reopened, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+	for _, tc := range []struct {
+		id, relationship string
+		automated        bool
+	}{
+		{"plain", "subagent", false},
+		{"script", "subagent", true},
+		{"child", "", false},
+		{"fork", "fork", false},
+		{"review", "", true},
+	} {
+		stored, err := reopened.GetSessionFull(t.Context(), tc.id)
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		assert.Equal(t, tc.relationship, stored.RelationshipType, tc.id)
+		assert.Equal(t, tc.automated, stored.IsAutomated, tc.id)
+		if tc.relationship == "subagent" {
+			require.NotNil(t, stored.LocalModifiedAt)
+			assert.Greater(t, *stored.LocalModifiedAt, "2000-01-01T00:00:00.000Z")
+		}
+	}
+
+	revision, err := reopened.SessionDeletionPublicationRevision(t.Context())
+	require.NoError(t, err)
+	changes, err := reopened.LoadSessionDeletionChanges(t.Context(), 0, revision)
+	require.NoError(t, err)
+	assert.Contains(t, changes, "plain")
+	assert.Contains(t, changes, "script")
+	_, err = reopened.getWriter().Exec(t.Context(), `UPDATE sessions SET relationship_type = '' WHERE id = 'plain'`)
+	require.NoError(t, err)
+	require.NoError(t, reopened.Close())
+	reopened, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	stored, err := reopened.GetSession(t.Context(), "plain")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "subagent", stored.RelationshipType, "matching-hash audits repair late arrivals")
+}
+
+func TestIncrementalAppendPreservesRoborevTag(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "review", "project-a", func(s *Session) {
+		s.Agent = "codex"
+		s.SessionKind = parser.SessionKindRoborev
+		s.FirstMessage = Ptr("Inspect this change.")
+		s.MessageCount = 1
+		s.UserMessageCount = 1
+	})
+	insertMessages(t, d, Message{SessionID: "review", Ordinal: 0, Role: "user", Content: "Inspect this change."})
+	_, err := d.WriteSessionIncremental(t.Context(), "review", []Message{
+		{SessionID: "review", Ordinal: 1, Role: "user", Content: "Explain the finding."},
+	}, IncrementalSessionUpdate{MsgCount: 2, UserMsgCount: 2, NextOrdinal: 2})
+	require.NoError(t, err)
+	stored, err := d.GetSession(t.Context(), "review")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.True(t, stored.IsAutomated)
+}
+
 func TestAutomationVerdictFromPrefix(t *testing.T) {
 	SetUserAutomationPrefixes([]string{"Custom automation:"})
 	t.Cleanup(func() { SetUserAutomationPrefixes(nil) })

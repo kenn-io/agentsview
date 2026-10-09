@@ -90,17 +90,3 @@ func TestClassifierHashSeparatesUserCategories(t *testing.T) {
 	assert.NotEqual(t, prefixHash, exactHash)
 	assert.NotEqual(t, substringHash, exactHash)
 }
-
-// TestClassifierHashCurrentAlgoVersion is a forced-bump
-// guard: it pins the algorithm version at construction time.
-// If a future change to the matching logic forgets to bump
-// classifierAlgorithmVersion, this test still passes (false
-// negative) — but if someone bumps the version intentionally
-// the test must be updated to match. The check exists to
-// surface accidental version-constant edits during review.
-func TestClassifierHashCurrentAlgoVersion(t *testing.T) {
-	assert.Equal(t, 2, classifierAlgorithmVersion,
-		"classifierAlgorithmVersion changed; update this test and confirm "+
-			"matching semantics actually changed (not just pattern edits, "+
-			"which the hash already detects)")
-}

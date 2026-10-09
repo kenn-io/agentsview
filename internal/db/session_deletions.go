@@ -11,8 +11,27 @@ import (
 
 const archiveMetadataSessionDeletionRevisionKey = "session_deletion_publication_revision"
 
+// Install after column migrations so older archives gain the referenced columns first.
+const sessionClassificationJournalTriggerSQL = `
+DROP TRIGGER IF EXISTS trg_sessions_classification_journal_update;
+CREATE TRIGGER trg_sessions_classification_journal_update
+AFTER UPDATE OF relationship_type, is_automated ON sessions
+WHEN OLD.relationship_type IS NOT NEW.relationship_type OR OLD.is_automated IS NOT NEW.is_automated
+BEGIN
+ INSERT INTO archive_metadata (key, value)
+  VALUES ('session_deletion_publication_revision', '1')
+ ON CONFLICT(key) DO UPDATE SET
+  value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+ INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
+  SELECT NEW.id, NEW.project, CAST(value AS INTEGER), 0
+  FROM archive_metadata WHERE key = 'session_deletion_publication_revision'
+ ON CONFLICT(session_id) DO UPDATE SET
+  project = excluded.project, revision = excluded.revision, deleted = 0;
+END;`
+
 // SessionDeletionPublicationRevision is an O(1) change token for hard
-// session deletions, advanced by SQLite triggers.
+// session deletions and repairs, advanced by triggers.
 func (db *DB) SessionDeletionPublicationRevision(ctx context.Context) (int64, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -90,7 +109,7 @@ func (db *DB) LoadSessionDeletionDelta(
 }
 
 // LoadSessionDeletionChanges returns the IDs of every session journaled in
-// (afterRevision, throughRevision], whether it was deleted or reinserted.
+// (afterRevision, throughRevision], whether it was deleted, reinserted, or repaired.
 func (db *DB) LoadSessionDeletionChanges(
 	ctx context.Context, afterRevision, throughRevision int64,
 ) ([]string, error) {

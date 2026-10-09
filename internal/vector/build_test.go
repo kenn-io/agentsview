@@ -2,7 +2,9 @@ package vector
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -18,6 +20,7 @@ import (
 	"go.kenn.io/kit/vector/sqlitevec"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 // fakeBuildEncoder returns a deterministic 3-dimensional encoder that never
@@ -432,6 +435,130 @@ func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t 
 	assert.Equal(t, 1, result.Fill.Documents, "only the newly in-scope automated doc is embedded")
 	assert.ElementsMatch(t, []string{"u:s1:human", "u:s2:auto"}, mirrorDocKeys(t, ix),
 		"the older automated doc must be picked up despite predating the stored refresh watermark")
+}
+
+func TestBuildMatchingClassifierAuditEmbedsLateWorker(t *testing.T) {
+	for _, automated := range []bool{true, false} {
+		t.Run(fmt.Sprintf("automation=%t", automated), func(t *testing.T) {
+			ctx := t.Context()
+			archive := dbtest.OpenTestDB(t)
+			seedEndedSession(t, archive, "human", "hello", "2024-01-02T00:00:00Z")
+			ix := openTestIndex(t)
+			gen := fakeGeneration("fake-model")
+			_, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+			require.NoError(t, err)
+			raw, err := sql.Open("sqlite3", archive.Path())
+			require.NoError(t, err)
+			defer raw.Close()
+			_, err = raw.ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, session_kind, ended_at, user_message_count, is_automated)
+ VALUES ('late-worker', 'local', 'project', 'codex', 'non-interactive', '2024-01-01T00:00:00Z', 1, ?)`, automated)
+			require.NoError(t, err)
+			_, err = raw.ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES ('late-worker', 0, 'user', 'older worker content')`)
+			require.NoError(t, err)
+			require.NoError(t, archive.Close())
+			repaired, err := db.Open(ctx, archive.Path())
+			require.NoError(t, err)
+			defer repaired.Close()
+			result, err := ix.Build(ctx, repaired, fakeBuildEncoder(), gen, BuildOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Fill.Documents)
+			hits, err := ix.Search(ctx, fakeBuildEncoder(), "older worker content", 10)
+			require.NoError(t, err)
+			var found bool
+			for _, hit := range hits {
+				if hit.SessionID == "late-worker" {
+					found = true
+					assert.True(t, hit.Subordinate)
+				}
+			}
+			assert.True(t, found, "a repaired worker below the watermark becomes searchable")
+		})
+	}
+}
+
+func TestBuildClassifierChangeEmbedsOlderReclassifiedSession(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		includeAutomated bool
+	}{
+		{"audit before build", false},
+		{"build before reclassification", false},
+		{"audit before build", true},
+		{"build before reclassification", true},
+	} {
+		t.Run(fmt.Sprintf("all=%t/%s", tc.includeAutomated, tc.name), func(t *testing.T) {
+			ctx := t.Context()
+			previousMatches := db.UserAutomationExactMatches()
+			t.Cleanup(func() { db.SetUserAutomationExactMatches(previousMatches) })
+			db.SetUserAutomationExactMatches([]string{"older session content"})
+			archive := dbtest.OpenTestDB(t)
+			seedEndedSession(t, archive, "human", "hello", "2024-01-02T00:00:00Z")
+			seedEndedSession(t, archive, "unrelated", "unrelated old content", "2023-01-01T00:00:00Z")
+			seedEndedSession(t, archive, "reclassified", "older session content", "2024-01-01T00:00:00Z")
+			databaseID, err := archive.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			ix := openTestIndex(t)
+			gen := fakeGeneration("fake-model")
+			result, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
+			require.NoError(t, err)
+			wantIDs := []string{"human", "unrelated"}
+			if tc.includeAutomated {
+				wantIDs = append(wantIDs, "reclassified")
+			}
+			require.Equal(t, len(wantIDs), result.Fill.Documents)
+			require.ElementsMatch(t, wantIDs, mirrorSessionIDs(t, ix))
+			watermark, err := ix.refreshWatermark(ctx)
+			require.NoError(t, err)
+			require.Equal(t, "2024-01-02T00:00:00Z", watermark)
+			db.SetUserAutomationExactMatches(nil)
+			if tc.name == "build before reclassification" {
+				readOnlyArchive, err := db.OpenReadOnly(ctx, archive.Path())
+				require.NoError(t, err)
+				defer readOnlyArchive.Close()
+				result, err = ix.Build(ctx, readOnlyArchive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
+				require.NoError(t, err)
+				require.Zero(t, result.Fill.Documents)
+				require.ElementsMatch(t, wantIDs, mirrorSessionIDs(t, ix))
+			}
+			require.NoError(t, archive.ForceBackfillIsAutomated(ctx))
+			currentID, err := archive.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			require.Equal(t, databaseID, currentID)
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
+			require.NoError(t, err)
+			wantEmbedded, wantUnchanged := 1, 1
+			if tc.includeAutomated {
+				wantEmbedded, wantUnchanged = 0, 2
+			}
+			assert.Equal(t, wantEmbedded, result.Fill.Documents)
+			assert.Equal(t, wantUnchanged, result.Refresh.Unchanged, "unrelated old transcripts stay below the watermark")
+			hits, err := ix.Search(ctx, fakeBuildEncoder(), "older session content", 10)
+			require.NoError(t, err)
+			var sessionIDs []string
+			for _, hit := range hits {
+				sessionIDs = append(sessionIDs, hit.SessionID)
+			}
+			assert.ElementsMatch(t, []string{"human", "reclassified", "unrelated"}, sessionIDs)
+
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
+			require.NoError(t, err)
+			assert.Zero(t, result.Fill.Documents)
+			assert.Equal(t, 1, result.Refresh.Unchanged, "unchanged classifier returns to scanning at the watermark")
+			db.SetUserAutomationExactMatches([]string{"older session content"})
+			require.NoError(t, archive.ForceBackfillIsAutomated(ctx))
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
+			require.NoError(t, err)
+			assert.Zero(t, result.Fill.Documents)
+			assert.Equal(t, wantUnchanged, result.Refresh.Unchanged)
+			assert.ElementsMatch(t, wantIDs, mirrorSessionIDs(t, ix), "classification also removes rows leaving default scope")
+			db.SetUserAutomationExactMatches([]string{"older session content", "unmatched prompt"})
+			require.NoError(t, archive.ForceBackfillIsAutomated(ctx))
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
+			require.NoError(t, err)
+			assert.Zero(t, result.Fill.Documents)
+			assert.Equal(t, 1, result.Refresh.Unchanged, "pattern changes without repaired rows keep the incremental scan")
+		})
+	}
 }
 
 // TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow covers the

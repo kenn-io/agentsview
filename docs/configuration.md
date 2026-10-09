@@ -1373,14 +1373,14 @@ record is preserved through the bulk-resync rebuild-and-copy path.
 
 ## Automated Session Detection
 
-AgentsView classifies every `codex exec` run as automated, including runs with
-multiple user messages. Roborev-tagged runs are classified as automated code
-reviews. Other sessions are classified as automated when they have one or fewer
-real user messages and their first user message matches the automation
-classifier. Automated sessions (roborev reviews, title generation, warmup pings,
-changelog generation, and similar scripted runs) are filtered out of session
-lists, counts, and analytics by default — the **Include automated** toggle in
-the session filter dropdown opts them back in.
+Roborev-tagged runs are automated code reviews, including runs with multiple
+user messages. Other sessions are automated when they have one or fewer real
+user messages and their first user message matches the automation classifier.
+Automated sessions, such as roborev reviews, title generation, warmup pings, and
+changelog generation, are filtered out of session lists, counts, and analytics
+by default. The **Include automated** toggle in the session filter dropdown
+opts them back in. See [Activity](https://agentsview.io/docs/activity/) for
+headless worker classification.
 
 A set of built-in patterns covers the roborev family and AgentsView's own
 internal prompts. To teach AgentsView about first-message patterns unique to
@@ -1798,6 +1798,18 @@ not send another ping that day. The web UI also reports an anonymous
 UTC day. The server sends it to PostHog with the same fields and opt-out as the
 ping. The browser never contacts PostHog.
 
+The web UI reports `visit_ended` with `surface: web` and a `duration_bucket`
+of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,
+1 to below 5 minutes, 5 to below 30 minutes, and 30 minutes or more. Visible
+time adds up across tab switches and includes idle visible time; hidden time
+adds nothing. Closing or reloading the page, or leaving it hidden for 30
+minutes, ends a visit. Visits that span a server change are discarded in full.
+The next visit uses the selected server after a reload, reopening, or return
+from 30 minutes hidden. Each visit can send one event, with no daily limit.
+Delivery is best effort: a visit can be lost if the browser crashes, quits, or
+discards the tab before the event is sent. Long-lived tabs are the most exposed
+to this, so `over_30m` can undercount.
+
 The web UI also reports `screen_viewed` with `surface: web`. The server counts
 each screen once per installation per UTC day, across tabs and server restarts.
 It stores the installation ID, date, and that day's screen names in
@@ -1831,6 +1843,7 @@ Every event contains only:
   `~/.agentsview/telemetry-install-id`
 - for the five UI actions, the one listed value above
 - for screen views, the listed screen name and `surface: web`
+- for visits, the duration bucket and `surface: web`, without exact times
 
 It contains no session data, prompts, project names, file paths, account
 information, or hostname, and the events are sent with person-profile processing

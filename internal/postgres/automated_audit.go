@@ -18,7 +18,6 @@ type automatedAuditPGProgress struct {
 
 const fullAutomationCandidatesPG = `SELECT
 	s.id,
-	s.agent,
 	s.session_kind,
 	s.first_message,
 	s.user_message_count,
@@ -41,6 +40,9 @@ func backfillIsAutomatedPGWithProgress(
 	ctx context.Context, pg *sql.DB,
 ) (automatedAuditPGProgress, error) {
 	var progress automatedAuditPGProgress
+	if err := repairParentlessWorkersPG(ctx, pg); err != nil {
+		return progress, err
+	}
 	current := db.ClassifierHash()
 	var stored string
 	err := pg.QueryRowContext(ctx,
@@ -96,6 +98,15 @@ func backfillIsAutomatedPGWithProgress(
 	return progress, nil
 }
 
+func repairParentlessWorkersPG(ctx context.Context, pg *sql.DB) error {
+	if _, err := pg.ExecContext(ctx, `UPDATE sessions
+		SET relationship_type = 'subagent', updated_at = NOW()
+		WHERE `+db.ParentlessWorkerSQL); err != nil {
+		return fmt.Errorf("repairing PG parentless workers: %w", err)
+	}
+	return nil
+}
+
 func auditAutomatedFullPG(
 	ctx context.Context,
 	pg *sql.DB,
@@ -131,7 +142,6 @@ func auditAutomatedMatchingHashPG(
 	rows, err := pg.QueryContext(ctx,
 		`SELECT
 			s.id,
-			s.agent,
 			s.session_kind,
 			s.user_message_count,
 			s.is_automated,
@@ -181,7 +191,6 @@ func auditAutomatedMatchingHashPG(
 	for rows.Next() {
 		var (
 			id                      string
-			agent                   string
 			sessionKind             string
 			userMessageCount        int
 			rowAutomated            bool
@@ -193,7 +202,6 @@ func auditAutomatedMatchingHashPG(
 		)
 		if err := rows.Scan(
 			&id,
-			&agent,
 			&sessionKind,
 			&userMessageCount,
 			&rowAutomated,
@@ -209,16 +217,14 @@ func auditAutomatedMatchingHashPG(
 			)
 		}
 		progress.RowsPrefetched++
-		if db.IsAutomatedSessionMetadata(agent, sessionKind) {
+		// SQLite keeps the stored verdict when usage-only storage discarded prompt evidence.
+		if promptEvidenceDiscarded {
+			continue
+		}
+		if db.IsAutomatedSessionMetadata(sessionKind) {
 			setIDs, clearIDs = db.AppendAutomationFlagChange(
 				setIDs, clearIDs, id, rowAutomated, true,
 			)
-			continue
-		}
-
-		// Usage-only archives discard both text candidates. With at most
-		// one prompt, missing text cannot disprove the stored verdict.
-		if promptEvidenceDiscarded && userMessageCount <= 1 && firstUserLength.Int64 == 0 && firstMessageLength.Int64 == 0 {
 			continue
 		}
 
@@ -291,7 +297,6 @@ func scanFullAutomationCandidatesPG(
 	for rows.Next() {
 		var (
 			id                      string
-			agent                   string
 			sessionKind             string
 			firstMessage            sql.NullString
 			firstUser               sql.NullString
@@ -300,7 +305,7 @@ func scanFullAutomationCandidatesPG(
 			promptEvidenceDiscarded bool
 		)
 		if err := rows.Scan(
-			&id, &agent, &sessionKind,
+			&id, &sessionKind,
 			&firstMessage, &userCount, &rowAutomated, &promptEvidenceDiscarded, &firstUser,
 		); err != nil {
 			return nil, nil, count, fmt.Errorf(
@@ -308,12 +313,11 @@ func scanFullAutomationCandidatesPG(
 			)
 		}
 		count++
-		want := db.IsAutomatedSessionMetadata(agent, sessionKind)
-		// Match the bounded audit: retain the verdict when classification
-		// needs prompt text that the source archive no longer stores.
-		if promptEvidenceDiscarded && !want && userCount <= 1 && firstUser.String == "" && firstMessage.String == "" {
+		// SQLite keeps the stored verdict when usage-only storage discarded prompt evidence.
+		if promptEvidenceDiscarded {
 			continue
 		}
+		want := db.IsAutomatedSessionMetadata(sessionKind)
 		want = want || classifier.IsAutomatedFromTextCandidates(
 			userCount, firstUser, firstMessage,
 		)

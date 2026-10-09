@@ -38,6 +38,28 @@ func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
 	assert.Nil(t, stored.FirstMessage)
 }
 
+func TestUsageOnlyAuditPreservesLegacyHeadlessAutomation(t *testing.T) {
+	for _, hash := range []string{"old-classifier", ClassifierHash()} {
+		t.Run(hash, func(t *testing.T) {
+			database := testDB(t)
+			database.SetArchiveContent(config.ArchiveContentUsage)
+			_, err := database.getWriter().Exec(t.Context(), `INSERT INTO sessions (id, machine, project, agent, session_kind, user_message_count, is_automated) VALUES
+				('codex-headless', 'local', 'project', 'codex', 'headless', 2, 1),
+				('codex-interactive', 'local', 'project', 'codex', '', 2, 0)`)
+			require.NoError(t, err)
+			_, err = database.getWriter().Exec(t.Context(), `UPDATE stats SET value = ? WHERE key = ?`, hash, ClassifierHashKey)
+			require.NoError(t, err)
+			require.NoError(t, database.backfillIsAutomatedLocked(t.Context(), database.getWriter()))
+			for id, want := range map[string]bool{"codex-headless": true, "codex-interactive": false} {
+				stored, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, stored)
+				assert.Equal(t, want, stored.IsAutomated, id)
+			}
+		})
+	}
+}
+
 func TestUsageOnlyUpsertsPreserveAutomationWithoutPreview(t *testing.T) {
 	for _, writeKind := range []string{"direct", "identity", "batch", "prepared"} {
 		t.Run(writeKind, func(t *testing.T) {

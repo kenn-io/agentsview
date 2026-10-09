@@ -12,8 +12,16 @@ const CAPTURE_STYLE = '.session-id { visibility: hidden !important; }';
 // PG serve instance for pg-sync screenshots (machine labels, etc.)
 const PG_BASE_URL = process.env.PG_BASE_URL || '';
 
+test.beforeEach(async ({ page }) => {
+  if (process.env.SCREENSHOT_NOW) {
+    await page.clock.setFixedTime(new Date(process.env.SCREENSHOT_NOW));
+  }
+});
+
 async function snap(page: Page, name: string) {
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
+    animations: 'disabled',
     style: CAPTURE_STYLE,
     path: join(DIR, `${name}.png`),
     type: 'png',
@@ -21,7 +29,9 @@ async function snap(page: Page, name: string) {
 }
 
 async function snapEl(loc: Locator, name: string) {
+  await loc.page().evaluate(() => document.fonts.ready);
   await loc.screenshot({
+    animations: 'disabled',
     style: CAPTURE_STYLE,
     path: join(DIR, `${name}.png`),
     type: 'png',
@@ -34,6 +44,7 @@ async function snapRange(
   last: Locator,
   name: string
 ) {
+  await page.evaluate(() => document.fonts.ready);
   const firstBox = await first.boundingBox();
   const lastBox = await last.boundingBox();
   if (!firstBox || !lastBox) {
@@ -45,6 +56,7 @@ async function snapRange(
     lastBox.x + lastBox.width
   );
   await page.screenshot({
+    animations: 'disabled',
     style: CAPTURE_STYLE,
     path: join(DIR, `${name}.png`),
     type: 'png',
@@ -99,7 +111,13 @@ test.describe('Dashboard', () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize(FULL);
     await waitForApp(page);
-    await setDateRange1Y(page);
+    const rangePicker = page.locator('.analytics-toolbar .kit-date-range-picker__trigger');
+    await rangePicker.click();
+    await page.getByRole('dialog', { name: 'Select date range' })
+      .getByRole('button', { name: '90d', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await expect(rangePicker).toHaveText('Last 90 days');
+    await page.waitForTimeout(3000);
   });
 
   test('full dashboard', async ({ page }) => {
@@ -111,6 +129,55 @@ test.describe('Dashboard', () => {
     if (await el.count() > 0) {
       await snapEl(el, 'summary-cards');
     }
+  });
+
+  test('outcome totals with pull requests', async ({ page }) => {
+    // Illustrative totals: archived checkout paths are absent in the capture
+    // container. Keep GitHub lookup on demand and fulfill it without contacting GitHub.
+    await page.route('**/api/v1/settings', async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        json: { ...await response.json(), github_configured: true },
+      });
+    });
+    let pullRequestLookups = 0;
+    await page.route('**/api/v1/session-stats?*', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('include_git_outcomes') !== 'true') {
+        return route.continue();
+      }
+      const includePullRequests = url.searchParams.get('include_github_outcomes') === 'true';
+      if (includePullRequests) pullRequestLookups++;
+      url.searchParams.delete('include_git_outcomes');
+      url.searchParams.delete('include_github_outcomes');
+      const response = await route.fetch({ url: url.toString() });
+      await route.fulfill({
+        response,
+        json: {
+          ...await response.json(),
+          outcome_stats: {
+            repos_active: 1,
+            commits: 42,
+            loc_added: 3840,
+            loc_removed: 1296,
+            files_changed: 86,
+            ...(includePullRequests ? { prs_opened: 9, prs_merged: 7 } : {}),
+          },
+        },
+      });
+    });
+    await page.reload();
+    const panel = page.locator('.chart-panel:has(.outcome-container)');
+    await panel.scrollIntoViewIfNeeded();
+    await expect(panel.locator('.outcome-card')).toHaveCount(5);
+    expect(pullRequestLookups).toBe(0);
+    await panel.getByRole('button', { name: 'Include pull requests', exact: true }).click();
+    await expect(panel.locator('.outcome-card')).toHaveCount(7);
+    await expect(panel.locator('.outcome-card', { hasText: 'Pull requests opened' })).toContainText('9');
+    await expect(panel.locator('.outcome-card', { hasText: 'Pull requests merged' })).toContainText('7');
+    expect(pullRequestLookups).toBe(1);
+    await snapEl(panel, 'dashboard-outcomes');
   });
 
   test('date range and toolbar', async ({ page }) => {
@@ -165,6 +232,17 @@ test.describe('Dashboard', () => {
       await page.waitForTimeout(500);
       await snapEl(timeline, 'activity-timeline');
     }
+  });
+
+  test('analytics message roles in percent view', async ({ page }) => {
+    const timeline = page.locator('.timeline-container');
+    await timeline.scrollIntoViewIfNeeded();
+    await timeline.getByRole('button', { name: 'Messages', exact: true }).click();
+    await timeline.getByRole('button', { name: 'Percent', exact: true }).click();
+    await expect(timeline.locator('.bar-user:not(.empty)').first()).toBeVisible();
+    await expect(timeline.locator('.bar-assistant:not(.empty)').first()).toBeVisible();
+    await expect(timeline.locator('.scale-toggle .active')).toHaveText('Percent');
+    await snapEl(timeline, 'analytics-message-roles');
   });
 
   test('top sessions', async ({ page }) => {
@@ -394,6 +472,18 @@ test.describe('Activity dashboard', () => {
     await snapEl(panel, 'activity-concurrency');
   });
 
+  test('activity message frequency', async ({ page }) => {
+    await navigateToActivity(page, '/activity?preset=week');
+    const panel = page.locator('.activity-page .chart-panel:has(.timeline)');
+    await panel.scrollIntoViewIfNeeded();
+    await panel.getByRole('radio', { name: 'User messages', exact: true }).click();
+    await expect(panel.locator('.concurrency-seg.user_messages').first()).toBeVisible();
+    await panel.getByRole('radio', { name: 'Assistant messages', exact: true }).click();
+    await expect(panel.locator('.concurrency-seg.assistant_messages').first()).toBeVisible();
+    await expect(panel.getByRole('radio', { name: 'Assistant messages', exact: true })).toBeChecked();
+    await snapEl(panel, 'activity-message-frequency');
+  });
+
   test('activity sessions table', async ({ page }) => {
     await navigateToActivity(page, '/activity?preset=week');
     const panel = page.locator(
@@ -461,6 +551,21 @@ test.describe('Data workspace', () => {
   });
 
   test('selected project workspace', async ({ page }) => {
+    // Match preview paths to the example folders shown by the mapping fixture.
+    await page.route('**/api/v1/data/projects/*/sessions?*', async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          sessions: body.sessions.map((session: { cwd: string }) => ({
+            ...session,
+            cwd: '/workspace/agentsview/main',
+          })),
+        },
+      });
+    });
     await page.route(
       '**/api/v1/data/project-reclassification/candidates?*',
       async (route) => {
@@ -533,6 +638,7 @@ test.describe('Data workspace', () => {
     await expect(
       page.getByText('Finding session folders…', { exact: true })
     ).toBeHidden({ timeout: 10_000 });
+    await expect(page.locator('.project-session-previews .session-folder code')).toHaveText('/workspace/agentsview/main');
     await snap(page, 'data-workspace');
     await page.getByRole('radio', { name: 'All folders', exact: true }).click();
     await expect(
@@ -545,8 +651,9 @@ test.describe('Data workspace', () => {
 // ── Recall corpus browser ───────────────────────────────────
 
 test.describe('Recall corpus browser', () => {
-  test('corpus entries and extraction coverage', async ({ page }) => {
+  test.beforeEach(async ({ page }) => {
     await page.setViewportSize(FULL);
+    // Fixed corpus examples keep review states independent of local extraction jobs.
     await page.route('**/api/v1/recall/entries?*', async (route) => {
       await route.fulfill({
         status: 200,
@@ -639,6 +746,10 @@ test.describe('Recall corpus browser', () => {
     );
 
     await page.goto('/recall');
+    await expect(page.locator('.recall-page')).toContainText('42 done');
+  });
+
+  test('corpus entries and extraction coverage', async ({ page }) => {
     const pageRoot = page.locator('.recall-page');
     await expect(pageRoot).toBeVisible({ timeout: 10_000 });
     await expect(pageRoot).toContainText(
@@ -653,6 +764,18 @@ test.describe('Recall corpus browser', () => {
       'Trace user-facing claims to implementation and tests'
     );
     await snap(page, 'recall-corpus');
+  });
+
+  test('recall pending and approved entries', async ({ page }) => {
+    const pageRoot = page.locator('.recall-page');
+    await page.getByRole('button', {
+      name: 'Expand Keep artifact transport limits visible',
+    }).click();
+    await expect(pageRoot.getByRole('cell', { name: 'Human approved', exact: true })).toBeVisible();
+    await expect(pageRoot.getByRole('cell', { name: 'Unreviewed automatic', exact: true })).toBeVisible();
+    await expect(pageRoot.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled();
+    await expect(pageRoot.getByRole('button', { name: 'Archive', exact: true })).toBeEnabled();
+    await snap(page, 'recall-review');
   });
 });
 
@@ -1342,12 +1465,13 @@ test.describe('Recall and Quality', () => {
   test('generated insights', async ({ page }) => {
     await navigateToGeneratedInsights(page);
 
-    const items = page.locator('.generated-list button');
-    await items.first().waitFor({ state: 'visible', timeout: 10_000 });
-    await items.first().click();
+    const insight = page.locator('.generated-list button', { hasText: 'agentsview' });
+    await insight.waitFor({ state: 'visible', timeout: 10_000 });
+    await insight.click();
     await page.waitForSelector('.generated-detail .markdown-body', {
       timeout: 10_000,
     });
+    await expect(page.locator('.generated-detail')).toContainText('Frontend Improvements');
     await page.waitForTimeout(400);
     await snapEl(
       page.locator('.recall-page'),
@@ -1477,6 +1601,18 @@ test.describe('Settings', () => {
   test('settings page', async ({ page }) => {
     await openSettings(page);
     await snap(page, 'settings');
+  });
+
+  test('settings in Spanish', async ({ page }) => {
+    await openSettings(page);
+    await openSettingsPanel(page, 'Language');
+    await page.locator('button[title="Interface language"]').click();
+    await page.getByRole('option', { name: 'Español', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Configuración', exact: true }).first()).toBeVisible();
+    await page.getByRole('navigation', { name: 'Configuración' })
+      .getByRole('button', { name: /^Idioma\b/ }).click();
+    await expect(page.locator('button[title="Idioma de la interfaz"]')).toHaveText('Español');
+    await snap(page, 'settings-spanish');
   });
 
   test('settings archive image retention', async ({ page }) => {
@@ -2212,6 +2348,33 @@ test.describe('Session intelligence', () => {
     // Toggle off to leave the UI clean for later tests.
     await page.locator('.grade-badge').first().click();
   });
+
+  test('observed tool sequences', async ({ page }) => {
+    const response = await page.request.get('/api/v1/sessions?limit=100');
+    expect(response.ok()).toBeTruthy();
+    const sessions: { id: string }[] = (await response.json()).sessions;
+    let sessionId = '';
+    for (const session of sessions) {
+      const sequences = await page.request.get(
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/tool-sequences`
+      );
+      if (!sequences.ok()) continue;
+      const data = await sequences.json();
+      if (data.sequences[0]?.calls.length >= 2) {
+        sessionId = session.id;
+        break;
+      }
+    }
+    expect(sessionId, 'fixture needs a session with observed tool sequences').not.toBe('');
+    await page.goto(`/sessions/${encodeURIComponent(sessionId)}`);
+    await expect(page.locator('.message').first()).toBeVisible({ timeout: 10_000 });
+    await page.getByTitle('Session health and tool sequences', { exact: true }).click();
+    const panel = page.locator('.tool-sequences-panel');
+    await expect(panel.locator('.sequence-row').first()).toBeVisible();
+    await panel.locator('.sequence-row').first().click();
+    await expect(panel.locator('.call-line').nth(1)).toBeVisible();
+    await snapEl(panel, 'tool-sequences');
+  });
 });
 
 // ── Dashboard session health section ────────────────────
@@ -2274,6 +2437,18 @@ test.describe('Usage dashboard', () => {
     await panel.scrollIntoViewIfNeeded();
     await page.waitForTimeout(500);
     await snapEl(panel, 'usage-cost-trend');
+  });
+
+  test('cost chart in bars view', async ({ page }) => {
+    const panel = page.locator(
+      '.usage-page .chart-panel:has(.chart-title:text("Cost Over Time"))'
+    );
+    await panel.scrollIntoViewIfNeeded();
+    const bars = panel.getByRole('radio', { name: 'Bars', exact: true });
+    await bars.click();
+    await expect(bars).toBeChecked();
+    await expect(panel.locator('.cost-seg').first()).toBeVisible();
+    await snapEl(panel, 'cost-chart-bars');
   });
 
   test('attribution treemap', async ({ page }) => {

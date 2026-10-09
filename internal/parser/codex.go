@@ -419,7 +419,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 		b.parentSessionID = codexSubagentSessionID(b.parentSessionID)
 		b.relationshipType = RelSubagent
 	}
-	if payload.Get("originator").Str == codexOriginatorExec {
+	if payload.Get("originator").Str == codexOriginatorExec && b.sessionKind != SessionKindRoborev {
 		b.sessionKind = SessionKindNonInteractive
 	}
 	if payload.Get("thread_source").Str == SessionKindRoborev {

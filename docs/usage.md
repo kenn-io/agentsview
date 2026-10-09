@@ -56,6 +56,25 @@ range:
 | Messages/Session | Average with median and p90       |
 | Concentration    | Most active project and its share |
 
+### Git and Pull-Request Totals
+
+The **Outcomes** panel shows repositories, commits, lines added and removed, and
+files changed for the selected dates. It reads Git history from the repositories
+associated with matching sessions. Repositories shared by clones or worktrees
+count once, and each commit counts once across their branches.
+
+Configure GitHub in Settings, then choose **Include pull requests** to add
+opened and merged totals. This requests GitHub data for each repository and can
+take minutes. A **Not counted** list identifies repository operations that
+failed, so partial totals are visible.
+
+![Git and pull-request totals on the dashboard](/docs/assets/generated/screenshots/dashboard-outcomes.png)
+
+The panel reports when the backend or selected filters cannot provide outcome
+totals. Clear machine, model, termination, minimum-message, recent-activity, and
+time-of-day filters to use it. The CLI exposes the same metrics through
+[`agentsview stats`](/docs/stats/).
+
 ### Date Range Picker
 
 Quick presets for 7 days, 30 days, 90 days, 1 year, and All, plus custom
@@ -155,7 +174,14 @@ are hours. Color intensity represents message volume.
 Compare message or session counts over time. Switch between Day, Week, and
 Month to change how the chart groups activity.
 
+Message bars separate **User**, **Assistant**, and **Other** entries. Other
+includes system entries and tool results. Choose **Absolute** to compare counts
+or **Percent** to compare each role's share of message volume. Session counts
+remain a separate metric.
+
 ![Activity timeline](/docs/assets/generated/screenshots/activity-timeline.png)
+
+![Analytics timeline comparing message roles](/docs/assets/generated/screenshots/analytics-message-roles.png)
 
 ### Top Sessions
 
@@ -339,8 +365,7 @@ Each session item shows:
 
 - **Status indicator** — small dot on the left whose color and animation reflect
   both how recently the session was active and whether it ended cleanly. See
-  [Session status indicator](#session-status-indicator) for the full state
-  set.
+  [Session status indicator](#session-status-indicator) for the full state set.
 - **Session name** — the name you gave the session in AgentsView, otherwise the
   agent's own title for it, otherwise the first message. As of 0.33.0, labels
   are no longer hard-truncated at 50 characters — the full label is clipped
@@ -359,7 +384,7 @@ Each session item shows:
   name. As of 0.34.0, Codex titles renamed by the agent are imported from
   `session_index.jsonl` for both current and archived sessions. Qwen Code,
   Gemini CLI, Kimi CLI, and OpenClaw titles, current Claude Code `/rename`
-  names, and keeping titles out of the first message are unreleased.
+  names, and keeping titles out of the first message are included in 0.45.0.
 - **Model name** — the AI model used for the session, shown when available
   (including Codex session models).
 - **Star button** — click the star icon or press `s` to star a session. Starred
@@ -367,8 +392,8 @@ Each session item shows:
 - **Agent tag** — agent name on the right side, tinted with the agent's accent
   color.
 - **Machine label** — when using [PostgreSQL sync](/docs/pg-sync/), sessions
-  from other machines show a machine name tag. Only visible in shared
-  multi-host deployments.
+  from other machines show a machine name tag. Only visible in shared multi-host
+  deployments.
 - **Project name** — abbreviated, right-aligned
 - **Relative time** — "2h ago", "Mon", "Dec 1"
 - **User prompt count** — number of user messages in the session
@@ -842,6 +867,12 @@ When a session does not have enough usable data, the panel shows a small empty
 state instead of a score. See
 [Session Intelligence](/docs/session-intelligence/) for the full model.
 
+The same panel includes **Observed tool sequences**. Follow a failed or empty
+tool result through later retries, tool switches, and recovery, and open each
+call in the transcript. See
+[Tool sequences](/docs/session-intelligence/#tool-sequences) for the evidence
+and timing details.
+
 ### Session Vital Signs
 
 Open **Analysis** from the session header to see Session Vitals in the right
@@ -1259,7 +1290,10 @@ organized into sections:
 | GitHub             | Personal access token for Gist publishing                                                                |
 | Remote Access      | Remote connections toggle, auth token, connect to remote server                                          |
 
-Spanish is available in builds from `main` after version 0.44.0.
+Choose **Español** for Spanish. A browser set to Spanish selects it on first
+load; a saved language preference takes precedence.
+
+![Settings with Spanish selected](/docs/assets/generated/screenshots/settings-spanish.png)
 
 ![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)
 

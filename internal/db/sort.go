@@ -364,8 +364,7 @@ func intValue(get func(*Session) int) func(*Session, SessionFilter) (string, boo
 }
 
 func recentExpr(b *QueryBuilder, _ SessionFilter) string {
-	return "COALESCE(" + b.dialect.timestampExpr("ended_at") + ", " +
-		b.dialect.timestampExpr("started_at") + ", created_at)"
+	return b.activityExpr("")
 }
 
 func startedExpr(b *QueryBuilder, _ SessionFilter) string {

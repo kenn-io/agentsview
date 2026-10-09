@@ -140,6 +140,31 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Launch evidence (2026-10-07):** Claude Code 2.1.293's bundled CLI launch
+  initializer records `entrypoint=sdk-cli` for print-mode launches and `cli`
+  for interactive terminal launches; SDK libraries use `sdk-py` or `sdk-ts`.
+  Worker prompts record `turnOrigin=sdk`; relayed human prompts record
+  `turnOrigin=human` and `origin.kind=human`, even when `promptSource=sdk`.
+  AgentsView assigns `relationship_type=subagent` for parentless `sdk-cli`
+  sessions with no existing relationship when the first real normalized prompt
+  has SDK origin, after queued prompts merge.
+  SDK ingress discards queued SDK origin before attachments are persisted.
+  A queued first prompt supplies no SDK evidence and blocks later-turn inference.
+  Human origin wins conflicting markers; missing origin remains ambiguous.
+  Explicit provider kinds remain intact.
+  Data version 127 reparses readable sources once. Reverified 2026-10-08
+  against parser fixtures, user-line entrypoints in sync fixtures, and
+  context-first appends in usage-only archives.
+  The first real prompt reparses an `sdk-cli` session with zero stored user
+  messages and no explicit provider kind, replacing stored streaming messages.
+  Assistant appends stay incremental. Reverified 2026-10-08 against first-prompt
+  streaming fixtures in full and usage-only archives. Deleted
+  transcripts prevent historical origin repair; stored entrypoints alone do
+  not distinguish workers from human SDK conversations. The original evidence came
+  from the installed producer and local transcripts.
+  Public source is unavailable. Queued fixtures follow the bundled ingress and
+  persistence path; no native queued-origin transcript has been captured.
+
 Rechecked 2026-09-11 against the existing provider parser and its metadata
 fixtures: the first nonempty JSONL `sessionId` supplies `SourceSessionID`. A
 filename alone does not supply that provider identity. Hosted multi-device
@@ -551,15 +576,20 @@ fixtures retain this field; missing identities remain source-local.
   pair defines the parent edge. `thread_source` is a legacy fallback, and
   `session_id` identifies the root or tree rather than the parent.
 
-- **Automation (reverified 2026-09-19):** `session_meta.payload.originator` of
-  `codex_exec` is durable producer evidence of a non-interactive `codex exec`
-  invocation. Agentsview persists that as `session_kind = non-interactive` so
-  every exec session is automated, including one-shots whose first message
-  does not match a built-in prefix. When `thread_source` is `roborev` (from
+- **Launch classification (reverified 2026-10-08):**
+  `session_meta.payload.originator=codex_exec` is durable producer evidence
+  of a non-interactive `codex exec` invocation. Agentsview persists that as
+  `session_kind = non-interactive` and assigns parentless runs with no existing
+  relationship to Subagents. Automation requires a roborev tag or a matching
+  built-in or user prompt pattern. Reverified against exec and native child
+  parser fixtures and stored-row classification audits. When `thread_source`
+  is `roborev` (from
   `codex exec --thread-source roborev`), Agentsview stores
   `session_kind = roborev` instead so roborev reviews stay identifiable as
-  code review while remaining automated. Native `spawn_agent` children still
-  use `source.subagent` plus `parent_thread_id` for
+  code review while remaining automated. Reverified metadata ordering against
+  parser fixtures: the roborev tag survives later untagged metadata, and
+  parentless promotion uses the final session kind. Native `spawn_agent`
+  children still use `source.subagent` plus `parent_thread_id` for
   `relationship_type = subagent`; do not pass `--thread-source subagent` from
   roborev. Reverified against an isolated
   `codex-proxy exec --thread-source roborev` rollout.
@@ -1135,7 +1165,7 @@ fixtures retain this field; missing identities remain source-local.
   Agentsview emits one usage event per prompt and model, subtracts cache
   reads from the full input count, and uses reported cost ticks when present.
 
-- **Automation:** The first-party
+- **Launch classification:** The first-party
   [headless guide](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
   defines prompt flags as non-interactive invocation. The producer
   propagates that startup mode into
@@ -1149,11 +1179,13 @@ fixtures retain this field; missing identities remain source-local.
   writes that context to the same session directory as
   `prompt_context.json`, and the
   [spawn call](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs#L1049-L1055)
-  supplies it. Agentsview treats only an explicit true value in a valid,
-  session-associated file as durable automation evidence; file presence, a
-  missing field, or a missing file does not classify a session as automated.
+  supplies it. Agentsview retains an explicit true value in a valid,
+  session-associated file as `session_kind=non-interactive` and assigns
+  parentless runs with no existing relationship to Subagents. Reverified
+  2026-10-08 against the prompt-context parser and sync fixtures; automation
+  requires script evidence rather than non-interactive launch mode.
 
-- **Subagent attribution (reverified 2026-09-18):** Grok Build stores each
+- **Subagent attribution (reverified 2026-10-09):** Grok Build stores each
   `spawn_subagent` child as a sibling session directory in the normal sessions
   tree. The parent also writes `subagents/<id>/meta.json` with
   `parent_session_id`, `child_session_id` (equal to `subagent_id`), and
@@ -1165,11 +1197,20 @@ fixtures retain this field; missing identities remain source-local.
   restore, including resume-from copies that point at the previous child
   rather than the spawning parent. Agentsview parents a child from the parent's
   `meta.json` as `relationship_type = 'subagent'` with parent id
-  `grok:<parent-id>`, and keeps fork or restore sessions that only have
-  `parent_session_id` as `fork`. Spawn tool results that include `subagent_id`
-  attach that child on the parent's `spawn_subagent` call. Reverified against
-  the pinned session guide (`17-sessions.md`) and the `SubagentMeta` writer in
-  `xai-grok-shell` at the commit above.
+  `grok:<parent-id>`. The three native child kinds retain `subagent` without
+  that metadata; only exact `subagent_fork` retains an explicit summary parent
+  as `grok:<parent-id>`, since the pinned
+  [live-fork caller](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1276-L1283)
+  and [copied-fork path](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1287-L1306)
+  both use `ctx.parent_session_id` as source and spawner. Ordinary fork or restore
+  sessions with only `parent_session_id` remain `fork`. Spawn tool results that
+  include `subagent_id` attach that child on the parent's `spawn_subagent` call.
+  Reverified against the pinned session guide (`17-sessions.md`), the
+  `SubagentMeta` writer, and
+  [live-fork](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1136-L1143),
+  [resume](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1180-L1195),
+  and [copied-fork](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1291-L1306)
+  summary writes in `subagent/mod.rs` at the commit above.
 
 - **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
   colocated tests, and the sanitized upstream-generated fixtures in

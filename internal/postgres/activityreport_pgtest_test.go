@@ -281,6 +281,9 @@ func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 			 '2026-06-16T10:05:00Z'::timestamptz,
 			 '2026-06-16T10:06:00Z'::timestamptz, 1, 1, 'root', 'fork')`)
 	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `UPDATE sessions SET is_automated = true WHERE id = 'agent-sub'`)
+	require.NoError(t, err)
+
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp,
@@ -319,6 +322,12 @@ func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6; the
 	// fork's duplicate row contributes nothing.
 	assert.Equal(t, money.MustParseDollars("0.027"), r.Totals.Cost)
+	_, err = store.DB().ExecContext(ctx, `UPDATE sessions SET entrypoint = 'sdk-cli', parent_session_id = NULL WHERE id = 'agent-sub'`)
+	require.NoError(t, err)
+	r, err = store.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC"}, pgDayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, r.Totals.SubagentSessions)
+	assert.Zero(t, r.Totals.AutomatedSessions)
 }
 
 func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T) {

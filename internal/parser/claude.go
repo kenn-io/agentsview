@@ -500,6 +500,10 @@ func claudeParseFile(
 	// "awaiting_user" can be distinguished from a generic clean
 	// termination.
 	for i := range results {
+		results[i].Session.RelationshipType = PromoteParentlessWorker(
+			results[i].Session.ParentSessionID, results[i].Session.RelationshipType,
+			claudeWorkerMessages(results[i].Session.Entrypoint, results[i].Session.SessionKind, results[i].Messages),
+		)
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
@@ -569,6 +573,7 @@ func compactClaudeEntry(line []byte) string {
 		{name: "isMeta"},
 		{name: "requestId"},
 		{name: "promptSource"},
+		{name: "turnOrigin"},
 		{name: "effort"},
 	}
 	messageFields := []claudeCompactField{
@@ -581,6 +586,7 @@ func compactClaudeEntry(line []byte) string {
 	snapshotFields := []claudeCompactField{
 		{name: "timestamp"},
 	}
+	originFields := []claudeCompactField{{name: "kind"}}
 	// searchCount is how many billed server-side web searches a
 	// WebSearch tool result performed; it is the only surviving record
 	// of them in a Claude Code transcript.
@@ -595,7 +601,7 @@ func compactClaudeEntry(line []byte) string {
 	// scan per field made it the dominant per-line parse cost. Only the
 	// first occurrence of a key is kept, matching gjson.Get's
 	// duplicate-key behavior.
-	var seenMessage, seenSnapshot, seenToolResult bool
+	var seenMessage, seenSnapshot, seenToolResult, seenOrigin bool
 	gjson.Parse(string(line)).ForEach(func(key, value gjson.Result) bool {
 		switch key.Str {
 		case "message":
@@ -613,6 +619,11 @@ func compactClaudeEntry(line []byte) string {
 				seenToolResult = true
 				setClaudeCompactFields(toolResultFields, value)
 			}
+		case "origin":
+			if !seenOrigin {
+				seenOrigin = true
+				setClaudeCompactFields(originFields, value)
+			}
 		default:
 			setClaudeCompactField(topFields, key.Str, value)
 		}
@@ -621,7 +632,7 @@ func compactClaudeEntry(line []byte) string {
 
 	var b strings.Builder
 	b.Grow(compactClaudeEntrySize(
-		topFields, snapshotFields, messageFields, toolResultFields,
+		topFields, snapshotFields, messageFields, toolResultFields, originFields,
 	))
 	b.WriteByte('{')
 	first := true
@@ -629,6 +640,7 @@ func compactClaudeEntry(line []byte) string {
 	writeClaudeCompactObject(&b, &first, "snapshot", snapshotFields)
 	writeClaudeCompactObject(&b, &first, "message", messageFields)
 	writeClaudeCompactObject(&b, &first, "toolUseResult", toolResultFields)
+	writeClaudeCompactObject(&b, &first, "origin", originFields)
 	b.WriteByte('}')
 	return b.String()
 }
@@ -1061,6 +1073,23 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 	}
 	return stored.sessionKind == "" &&
 		strings.TrimSpace(gjson.Get(line, "sessionKind").Str) != ""
+}
+
+func claudeSDKPrompt(line string) bool {
+	return gjson.Get(line, "turnOrigin").Str == "sdk" &&
+		gjson.Get(line, "origin.kind").Str != "human"
+}
+
+func claudeWorkerMessages(entrypoint, kind string, messages []ParsedMessage) bool {
+	if entrypoint != "sdk-cli" || kind != "" {
+		return false
+	}
+	for _, message := range messages {
+		if isRealClaudeUserMessage(message) {
+			return message.claudeSDKOrigin
+		}
+	}
+	return false
 }
 
 // collectClaudeUnmatchedToolResults returns result links for appended
@@ -2704,6 +2733,7 @@ func extractMessagesContext(
 			SourceParentUUID:   e.parentUuid,
 			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
 			PromptSource:       gjson.Get(e.line, "promptSource").Str,
+			claudeSDKOrigin:    claudeSDKPrompt(e.line),
 			tokenPresenceKnown: e.entryType == "assistant",
 		}
 
@@ -3073,10 +3103,7 @@ func firstMessageAndUserCountContext(
 		if err := contextErrEvery(ctx, i); err != nil {
 			return "", 0, err
 		}
-		if m.IsSystem {
-			continue
-		}
-		if m.Role != RoleUser || m.Content == "" {
+		if !isRealClaudeUserMessage(m) {
 			continue
 		}
 		userCount++
@@ -3090,6 +3117,10 @@ func firstMessageAndUserCountContext(
 	return firstMsg, userCount, ctx.Err()
 }
 
+func isRealClaudeUserMessage(m ParsedMessage) bool {
+	return !m.IsSystem && m.Role == RoleUser && m.Content != ""
+}
+
 // isUsageProbeSession reports whether a parsed session's only real
 // user turn(s) are the /usage command — a content-free usage probe
 // (for example CodexBar's ClaudeProbe, which runs `claude /usage` to
@@ -3100,7 +3131,7 @@ func firstMessageAndUserCountContext(
 func isUsageProbeSession(messages []ParsedMessage) bool {
 	sawUsage := false
 	for _, m := range messages {
-		if m.IsSystem || m.Role != RoleUser || m.Content == "" {
+		if !isRealClaudeUserMessage(m) {
 			continue
 		}
 		if strings.TrimSpace(m.Content) != "/usage" {

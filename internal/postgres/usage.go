@@ -56,149 +56,23 @@ func appendPGUsageBranchFilterClauses(
 func appendPGUsageSourceFilterClauses(
 	where string, pb *paramBuilder, f db.UsageFilter, modelCol string,
 ) string {
-	appendCSV := func(q, col, csv string, include bool) string {
-		if csv == "" {
-			return q
-		}
-		vals := strings.Split(csv, ",")
-		op := "IN"
-		if !include {
-			op = "NOT IN"
-		}
-		if len(vals) == 1 {
-			if include {
-				return q + "\n\tAND " + col + " = " + pb.add(vals[0])
-			}
-			return q + "\n\tAND " + col + " != " + pb.add(vals[0])
-		}
-		placeholders := make([]string, len(vals))
-		for i, v := range vals {
-			placeholders[i] = pb.add(v)
-		}
-		return q + "\n\tAND " + col + " " + op + " (" +
-			strings.Join(placeholders, ",") + ")"
-	}
-
-	where = appendCSV(where, modelCol, f.Model, true)
-	where = appendCSV(where, modelCol, f.ExcludeModel, false)
-
+	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+	preds := db.BuildUsageSourceFilter(f, b, modelCol)
+	where = db.AppendUsagePredicates(where, preds, "\t")
+	pb.args = append(pb.args, b.Args()...)
+	pb.n += len(b.Args())
 	return where
 }
 
 func appendPGUsageSessionFilterClauses(
 	where string, pb *paramBuilder, f db.UsageFilter,
 ) string {
-	appendValues := func(q, col string, vals []string, include bool) string {
-		if len(vals) == 0 {
-			return q
-		}
-		op := "IN"
-		if !include {
-			op = "NOT IN"
-		}
-		if len(vals) == 1 {
-			if include {
-				return q + "\n\tAND " + col + " = " + pb.add(vals[0])
-			}
-			return q + "\n\tAND " + col + " != " + pb.add(vals[0])
-		}
-		placeholders := make([]string, len(vals))
-		for i, v := range vals {
-			placeholders[i] = pb.add(v)
-		}
-		return q + "\n\tAND " + col + " " + op + " (" +
-			strings.Join(placeholders, ",") + ")"
-	}
-	appendCSV := func(q, col, csv string, include bool) string {
-		if csv == "" {
-			return q
-		}
-		return appendValues(q, col, strings.Split(csv, ","), include)
-	}
-
-	where = appendCSV(where, "s.agent", f.Agent, true)
-	where = appendValues(where, "s.project", f.ProjectFilterLabels(), true)
-	where = appendCSV(where, "s.machine", f.Machine, true)
-	if f.GitBranch != "" {
-		where += "\n\tAND " + db.BranchPairPredicate(
-			"s.project", "s.git_branch", f.GitBranch,
-			func(s string) string { return pb.add(s) })
-	}
-	where = appendValues(
-		where, "s.project", f.ExcludedProjectFilterLabels(), false,
-	)
-	where = appendCSV(where, "s.agent", f.ExcludeAgent, false)
-
-	if f.MinUserMessages > 0 {
-		where += "\n\tAND s.user_message_count >= " +
-			pb.add(f.MinUserMessages)
-	}
-	scope := normalizePGAutomatedScope(
-		f.AutomatedScope, f.ExcludeAutomated)
-	if f.ExcludeOneShot {
-		if scope == "human" {
-			where += "\n\tAND s.user_message_count > 1"
-		} else {
-			where += "\n\tAND (s.user_message_count > 1 OR COALESCE(s.is_automated, false) = TRUE)"
-		}
-	}
-	if pred := pgAutomatedScopePredicate(
-		scope,
-		"COALESCE(s.is_automated, false)",
-	); pred != "" {
-		where += "\n\tAND " + pred
-	}
-	if f.ActiveSince != "" {
-		where += "\n\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= " +
-			pb.add(f.ActiveSince) + "::timestamptz"
-	}
-	if pred := pgUsageTerminationPred(f.Termination, pb); pred != "" {
-		where += "\n\tAND " + pred
-	}
-
+	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+	preds := db.BuildUsageSessionFilter(f, b, "")
+	where = db.AppendUsagePredicates(where, preds, "\t")
+	pb.args = append(pb.args, b.Args()...)
+	pb.n += len(b.Args())
 	return where
-}
-
-func pgUsageTerminationPred(status string, pb *paramBuilder) string {
-	if status == "" || status == "all" {
-		return ""
-	}
-	now := time.Now().UTC()
-	activeCutoff := now.Add(-pgActiveWindow)
-	staleCutoff := now.Add(-pgStaleWindow)
-	const activityExpr = "COALESCE(s.ended_at, s.started_at, s.created_at)"
-	const flagged = "s.termination_status IN ('tool_call_pending', 'truncated')"
-
-	parts := strings.Split(status, ",")
-	preds := make([]string, 0, len(parts))
-	for _, p := range parts {
-		switch strings.TrimSpace(p) {
-		case "active":
-			preds = append(preds,
-				activityExpr+" > "+pb.add(activeCutoff))
-		case "stale":
-			preds = append(preds, "("+
-				activityExpr+" > "+pb.add(staleCutoff)+
-				" AND "+activityExpr+" <= "+pb.add(activeCutoff)+
-				" AND "+flagged+")")
-		case "unclean":
-			preds = append(preds, "("+
-				activityExpr+" <= "+pb.add(staleCutoff)+
-				" AND "+flagged+")")
-		case "clean":
-			preds = append(preds, "s.termination_status = 'clean'")
-		case "awaiting_user":
-			preds = append(preds,
-				"s.termination_status = 'awaiting_user'")
-		}
-	}
-	if len(preds) == 0 {
-		return ""
-	}
-	if len(preds) == 1 {
-		return preds[0]
-	}
-	return "(" + strings.Join(preds, " OR ") + ")"
 }
 
 const pgUsageRowsSQLTemplate = `
@@ -823,32 +697,20 @@ func pgCursorUsageRowsSQLForBounds(
 	// must exclude them entirely rather than let them leak into totals.
 	if len(f.ProjectFilterLabels()) > 0 ||
 		len(f.ExcludedProjectFilterLabels()) > 0 ||
-		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
+		len(db.CSVFilterValues(f.Machine)) > 0 || f.GitBranch != "" || f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || hasTermFilter || f.ActiveSince != "" {
 		return "", false
 	}
-	if f.Agent != "" {
-		vals := strings.Split(f.Agent, ",")
-		for i := range vals {
-			vals[i] = strings.TrimSpace(vals[i])
-		}
-		if !slices.Contains(vals, "cursor") {
-			return "", false
-		}
+	if vals := db.CSVFilterValues(f.Agent); len(vals) > 0 && !slices.Contains(vals, "cursor") {
+		return "", false
 	}
-	if f.ExcludeAgent != "" {
-		vals := strings.Split(f.ExcludeAgent, ",")
-		for i := range vals {
-			vals[i] = strings.TrimSpace(vals[i])
-		}
-		if slices.Contains(vals, "cursor") {
-			return "", false
-		}
+	if vals := db.CSVFilterValues(f.ExcludeAgent); slices.Contains(vals, "cursor") {
+		return "", false
 	}
 
 	where := "cu.model != ''"
-	scope := normalizePGAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
-	if pred := pgAutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
+	scope := db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	if pred := db.PostgresQueryDialect().AutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
 		where += "\n\tAND " + pred
 	}
 	where = appendPGUsageSourceFilterClauses(
@@ -1660,7 +1522,7 @@ func (s *Store) GetDailyUsage(
 	}
 	accum := make(map[accumKey]*bucket)
 	sessionCosts := make(map[string]sessionCost)
-	useAuthoritativeCost := f.Model == "" && f.ExcludeModel == ""
+	useAuthoritativeCost := !f.HasModelFilter()
 	seen := make(map[db.UsageDedupToken]struct{})
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
@@ -2287,7 +2149,7 @@ func (s *Store) GetTopSessionsByCost(
 		if priceErr != nil {
 			return nil, fmt.Errorf("summing pg top-session cost: %w", priceErr)
 		}
-		if f.Model == "" && f.ExcludeModel == "" &&
+		if !f.HasModelFilter() &&
 			r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
 			v := money.Money{Microdollars: r.cost.Int64}
 			sa.authoritativeCost = &v

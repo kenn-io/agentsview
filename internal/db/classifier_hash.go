@@ -19,7 +19,8 @@ import (
 // in ResyncAll prior to the ForceBackfillIsAutomated wiring.
 // Without this bump, those DBs already have the v1 hash stored
 // and would skip the backfill on Open.)
-const classifierAlgorithmVersion = 2
+// Version 3 classifies headless runs from script evidence instead of launch mode.
+const classifierAlgorithmVersion = 3
 
 // ClassifierHash returns a stable hex-encoded SHA-256 over
 // the algorithm version, all built-in pattern slices, and the

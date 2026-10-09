@@ -856,7 +856,7 @@ type UnitOffset struct {
 // scans every session. includeAutomated=false additionally excludes
 // automated sessions (sessions.is_automated = 1) using the exact predicate
 // sessionFilterPredicates' ExcludeAutomated scope applies
-// (automatedScopePredicate("human", ...)), so the embedding index's default
+// (SQLiteQueryDialect().AutomatedScopePredicate("human", ...)), so the embedding index's default
 // scope matches session search's default exclusion of automated sessions.
 // maxEnded returns the maximum sessions.ended_at seen across the scanned
 // rows (as its original raw string), or "" when the scan produced no rows.
@@ -1111,17 +1111,24 @@ func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string
 		SystemPrefixSQL("m.content", "m.role"),
 	}
 	if !includeAutomated {
-		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
+		preds = append(preds, SQLiteQueryDialect().AutomatedScopePredicate("human", "s.is_automated"))
 	}
 	if sessionID != "" {
 		preds = append(preds, "m.session_id = ?")
+	}
+	sessionJoin := "JOIN"
+	if since != "" {
+		// Keep the candidate message lookup outermost and in index order.
+		// Additional metadata indexes can otherwise reorder this join and
+		// introduce a sort of the selected message bodies.
+		sessionJoin = "CROSS JOIN"
 	}
 	return `
 		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
 		       m.is_sidechain, s.relationship_type, s.parent_session_id,
 		       s.ended_at
 		FROM messages m
-		JOIN sessions s ON s.id = m.session_id
+		` + sessionJoin + ` sessions s ON s.id = m.session_id
 		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
 		` + sinceSessionScopeClause(since, includeAutomated) + `
 		ORDER BY m.session_id, m.ordinal`
@@ -1170,7 +1177,7 @@ func sinceSessionScopeClause(since string, includeAutomated bool) string {
 	}
 	preds := []string{"es.deleted_at IS NULL"}
 	if !includeAutomated {
-		preds = append(preds, automatedScopePredicate("human", "es.is_automated"))
+		preds = append(preds, SQLiteQueryDialect().AutomatedScopePredicate("human", "es.is_automated"))
 	}
 	preds = append(preds, "(NULLIF(es.ended_at, '') IS NULL OR "+
 		"datetime(NULLIF(es.ended_at, '')) >= datetime(?))")
@@ -2586,9 +2593,11 @@ func sessionAutomationStateTx(
 		firstMessage     sql.NullString
 		firstUserMessage sql.NullString
 		userMsgCount     int
+		sessionKind      string
 	)
 	err = tx.QueryRow(`
 		SELECT
+			s.session_kind,
 			s.first_message,
 			s.user_message_count,
 			s.is_automated,
@@ -2607,6 +2616,7 @@ func sessionAutomationStateTx(
 		WHERE s.id = ?`,
 		sessionID,
 	).Scan(
+		&sessionKind,
 		&firstMessage, &userMsgCount,
 		&rowAutomated, &firstUserMessage,
 	)
@@ -2620,9 +2630,8 @@ func sessionAutomationStateTx(
 		)
 	}
 
-	want = isAutomatedFromTextCandidates(
-		userMsgCount, firstUserMessage, firstMessage,
-	)
+	want = IsAutomatedSessionMetadata(sessionKind) ||
+		isAutomatedFromTextCandidates(userMsgCount, firstUserMessage, firstMessage)
 	return want, rowAutomated, true, nil
 }
 

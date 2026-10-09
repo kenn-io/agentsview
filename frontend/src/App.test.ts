@@ -1886,6 +1886,24 @@ describe("App telemetry", () => {
     return posted.filter((p) => p.event === event).map((p) => p.properties);
   }
 
+  it("reports visible visit time after mounting and stops on unmount", async () => {
+    setup();
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    now = 120_000;
+    window.dispatchEvent(new Event("pagehide"));
+    expect(postedFor("visit_ended")).toHaveLength(1);
+    window.dispatchEvent(new Event("pageshow"));
+    await unmount(component);
+    component = undefined;
+    now = 240_000;
+    window.dispatchEvent(new Event("pagehide"));
+    expect(postedFor("visit_ended")).toHaveLength(1);
+  });
+
   it("reports authenticated route changes, the usage alias, and focus until unmount", async () => {
     setup();
     router.replace("recall");

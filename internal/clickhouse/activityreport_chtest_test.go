@@ -16,6 +16,52 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
+	store, syncer, local := newPushedStore(t)
+	for _, tc := range []struct {
+		id        string
+		parent    *string
+		automated bool
+	}{
+		{"worker", nil, false},
+		{"script", nil, true},
+		{"child", new("worker"), true},
+	} {
+		prompt := "Explain this function."
+		if tc.automated {
+			prompt = "You are a code reviewer. Review this function."
+		}
+		sess := fixtureSession(tc.id, "project-a", prompt, "2026-10-01T10:00:00Z", 2)
+		sess.EndedAt = new("2026-10-01T10:01:00Z")
+		sess.RelationshipType = "subagent"
+		sess.ParentSessionID = tc.parent
+		sess.IsAutomated = tc.automated
+		if tc.id == "script" {
+			sess.SessionKind = "non-interactive"
+		}
+		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+			Session: sess,
+			Messages: []db.Message{
+				fixtureMessage(tc.id, 0, "user", prompt, "2026-10-01T10:00:00Z"),
+				fixtureMessage(tc.id, 1, "assistant", "The explanation.", "2026-10-01T10:01:00Z"),
+			},
+			DataVersion: db.CurrentDataVersion(), ReplaceMessages: true,
+		}})
+		require.NoError(t, err)
+	}
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: "2026-10-01", Timezone: "UTC",
+	}, time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	report, err := store.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true}, q)
+	require.NoError(t, err)
+	assert.Equal(t, 3, report.Totals.SubagentSessions)
+	assert.Zero(t, report.Totals.AutomatedSessions)
+	assert.Zero(t, report.Totals.InteractiveSessions)
+}
+
 func TestStoreActivityReportAndRecentEdits(t *testing.T) {
 	store, _, _ := newPushedStore(t)
 	ctx := context.Background()

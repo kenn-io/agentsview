@@ -117,7 +117,7 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 			"build against (default: the config's default_server)")
 	cmd.Flags().BoolVar(&opts.IncludeAutomated, "include-automated", false,
 		"Override [vector].include_automated for this build only: bare "+
-			"--include-automated embeds automated (non-interactive) sessions "+
+			"--include-automated embeds roborev-tagged or prompt-pattern matched runs "+
 			"too, and --include-automated=false force-excludes them even if "+
 			"the config default is true. Prefer setting the config key for "+
 			"scheduled builds: mixing this flag with a different config "+
