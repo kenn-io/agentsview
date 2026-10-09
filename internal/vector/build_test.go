@@ -447,8 +447,6 @@ func TestBuildMatchingClassifierAuditEmbedsLateWorker(t *testing.T) {
 			gen := fakeGeneration("fake-model")
 			_, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
 			require.NoError(t, err)
-			hash, err := archive.AppliedClassifierHash(ctx)
-			require.NoError(t, err)
 			raw, err := sql.Open("sqlite3", archive.Path())
 			require.NoError(t, err)
 			defer raw.Close()
@@ -461,9 +459,6 @@ func TestBuildMatchingClassifierAuditEmbedsLateWorker(t *testing.T) {
 			repaired, err := db.Open(ctx, archive.Path())
 			require.NoError(t, err)
 			defer repaired.Close()
-			repairedHash, err := repaired.AppliedClassifierHash(ctx)
-			require.NoError(t, err)
-			require.Equal(t, hash, repairedHash, "late repair keeps the configured classifier unchanged")
 			revision, err := repaired.SessionDeletionPublicationRevision(ctx)
 			require.NoError(t, err)
 			tombstones, err := repaired.LoadSessionDeletionDelta(ctx, 0, revision, nil, nil)
@@ -487,60 +482,86 @@ func TestBuildMatchingClassifierAuditEmbedsLateWorker(t *testing.T) {
 }
 
 func TestBuildClassifierChangeEmbedsOlderReclassifiedSession(t *testing.T) {
-	for _, name := range []string{"changed hash", "missing hash", "build before reclassification"} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		includeAutomated bool
+	}{
+		{"audit before build", false},
+		{"build before reclassification", false},
+		{"audit before build", true},
+		{"build before reclassification", true},
+	} {
+		t.Run(fmt.Sprintf("all=%t/%s", tc.includeAutomated, tc.name), func(t *testing.T) {
 			ctx := t.Context()
 			previousMatches := db.UserAutomationExactMatches()
 			t.Cleanup(func() { db.SetUserAutomationExactMatches(previousMatches) })
 			db.SetUserAutomationExactMatches([]string{"older session content"})
 			archive := dbtest.OpenTestDB(t)
 			seedEndedSession(t, archive, "human", "hello", "2024-01-02T00:00:00Z")
+			seedEndedSession(t, archive, "unrelated", "unrelated old content", "2023-01-01T00:00:00Z")
 			seedEndedSession(t, archive, "reclassified", "older session content", "2024-01-01T00:00:00Z")
 			databaseID, err := archive.GetDatabaseID(ctx)
 			require.NoError(t, err)
 			ix := openTestIndex(t)
 			gen := fakeGeneration("fake-model")
-			result, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+			result, err := ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
 			require.NoError(t, err)
-			require.Equal(t, 1, result.Fill.Documents)
-			require.Equal(t, []string{"human"}, mirrorSessionIDs(t, ix))
+			wantIDs := []string{"human", "unrelated"}
+			if tc.includeAutomated {
+				wantIDs = append(wantIDs, "reclassified")
+			}
+			require.Equal(t, len(wantIDs), result.Fill.Documents)
+			require.ElementsMatch(t, wantIDs, mirrorSessionIDs(t, ix))
 			watermark, err := ix.refreshWatermark(ctx)
 			require.NoError(t, err)
 			require.Equal(t, "2024-01-02T00:00:00Z", watermark)
-			if name == "missing hash" {
-				_, err := ix.db.ExecContext(ctx, `DELETE FROM vector_meta WHERE key = ?`, scopeClassifierHashKey)
-				require.NoError(t, err)
-			}
-
 			db.SetUserAutomationExactMatches(nil)
-			if name == "build before reclassification" {
+			if tc.name == "build before reclassification" {
 				readOnlyArchive, err := db.OpenReadOnly(ctx, archive.Path())
 				require.NoError(t, err)
 				defer readOnlyArchive.Close()
-				result, err = ix.Build(ctx, readOnlyArchive, fakeBuildEncoder(), gen, BuildOptions{})
+				result, err = ix.Build(ctx, readOnlyArchive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
 				require.NoError(t, err)
 				require.Zero(t, result.Fill.Documents)
-				require.Equal(t, []string{"human"}, mirrorSessionIDs(t, ix))
+				require.ElementsMatch(t, wantIDs, mirrorSessionIDs(t, ix))
 			}
 			require.NoError(t, archive.ForceBackfillIsAutomated(ctx))
 			currentID, err := archive.GetDatabaseID(ctx)
 			require.NoError(t, err)
 			require.Equal(t, databaseID, currentID)
-			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
 			require.NoError(t, err)
-			assert.Equal(t, 1, result.Fill.Documents, "only the older reclassified session needs embedding")
+			wantEmbedded, wantUnchanged := 1, 1
+			if tc.includeAutomated {
+				wantEmbedded, wantUnchanged = 0, 2
+			}
+			assert.Equal(t, wantEmbedded, result.Fill.Documents)
+			assert.Equal(t, wantUnchanged, result.Refresh.Unchanged, "unrelated old transcripts stay below the watermark")
 			hits, err := ix.Search(ctx, fakeBuildEncoder(), "older session content", 10)
 			require.NoError(t, err)
 			var sessionIDs []string
 			for _, hit := range hits {
 				sessionIDs = append(sessionIDs, hit.SessionID)
 			}
-			assert.ElementsMatch(t, []string{"human", "reclassified"}, sessionIDs)
+			assert.ElementsMatch(t, []string{"human", "reclassified", "unrelated"}, sessionIDs)
 
-			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{})
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
 			require.NoError(t, err)
 			assert.Zero(t, result.Fill.Documents)
 			assert.Equal(t, 1, result.Refresh.Unchanged, "unchanged classifier returns to scanning at the watermark")
+			db.SetUserAutomationExactMatches([]string{"older session content"})
+			require.NoError(t, archive.ForceBackfillIsAutomated(ctx))
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
+			require.NoError(t, err)
+			assert.Zero(t, result.Fill.Documents)
+			assert.Equal(t, wantUnchanged, result.Refresh.Unchanged)
+			assert.ElementsMatch(t, wantIDs, mirrorSessionIDs(t, ix), "classification also removes rows leaving default scope")
+			db.SetUserAutomationExactMatches([]string{"older session content", "unmatched prompt"})
+			require.NoError(t, archive.ForceBackfillIsAutomated(ctx))
+			result, err = ix.Build(ctx, archive, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: tc.includeAutomated})
+			require.NoError(t, err)
+			assert.Zero(t, result.Fill.Documents)
+			assert.Equal(t, 1, result.Refresh.Unchanged, "pattern changes without repaired rows keep the incremental scan")
 		})
 	}
 }

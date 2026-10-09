@@ -28,9 +28,6 @@ const refreshWatermarkKey = "refresh_watermark"
 // sessions an incremental scan's watermark would skip.
 const scopeIncludeAutomatedKey = "scope_include_automated"
 
-// scopeClassifierHashKey tracks classification changes that move sessions into or out of scope.
-const scopeClassifierHashKey = "scope_classifier_hash"
-
 // activeFullRebuildKey holds the fingerprint of an active generation whose
 // same-fingerprint full rebuild cleared stamps in place and has not completed
 // yet. Scoped PG pushes may ignore out-of-scope missing docs from an ordinary
@@ -74,11 +71,6 @@ func inPlaceholders(keys []string) (string, []any) {
 type UnitSource interface {
 	ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool,
 		fn func(db.EmbeddableUnit) error) (string, error)
-}
-
-// appliedClassifierSource reports the classification used by the source's stored flags.
-type appliedClassifierSource interface {
-	AppliedClassifierHash(context.Context) (string, error)
 }
 
 // sessionJournalSource is implemented by *db.DB. Incremental refreshes use the

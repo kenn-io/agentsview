@@ -230,6 +230,10 @@ The latest published release is
 **Bug fixes**
 
 - Oversized telemetry requests return HTTP 413.
+- Tool calls whose input is a raw script or patch, such as Codex `exec` and
+  `apply_patch` calls, now show that input when expanded. Copy input, Copy
+  message, and in-session search include the complete input, even beyond the
+  preview limit. Existing sessions need no re-import.
 - Activity counts headless Claude, Codex, and Grok workers as Subagents,
   including scripted workers whose parent disappears. `codex exec` runs are no
   longer automated by launch mode alone, changing the rule from
@@ -243,10 +247,6 @@ The latest published release is
   a session yourself still removes it. Sessions already hidden this way stay
   hidden until their file returns; see
   [Hosted Raw Sync](/docs/hosted-raw-sync/#isolation-and-processing-limits).
-- Tool calls whose input is a raw script or patch, such as Codex `exec` and
-  `apply_patch` calls, now show that input when expanded. Copy input, Copy
-  message, and in-session search include the complete input, even beyond the
-  preview limit. Existing sessions need no re-import.
 - `recall query` and `recall brief` in `--mode vector` or `--mode hybrid` no
   longer turn unavailable every time recall extraction writes a new entry. The
   Recall index may now trail the corpus by up to `recall_max_revision_lag`

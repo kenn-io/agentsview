@@ -138,20 +138,6 @@ func (ix *Index) Build(
 	}
 	// Missing scope metadata also requires one full reconciliation for older indexes.
 	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
-	classifierHash := ""
-	classifierSource, tracksClassifier := src.(appliedClassifierSource)
-	tracksClassifier = tracksClassifier && ix.spec.SupportsAutomatedScope
-	if tracksClassifier {
-		classifierHash, err = classifierSource.AppliedClassifierHash(ctx)
-		if err != nil {
-			return BuildResult{}, fmt.Errorf("reading archive classifier hash: %w", err)
-		}
-		storedHash, hasHash, err := ix.metaGet(ctx, scopeClassifierHashKey)
-		if err != nil {
-			return BuildResult{}, fmt.Errorf("reading scope classifier hash: %w", err)
-		}
-		scopeChanged = scopeChanged || !hasHash || storedHash != classifierHash
-	}
 	corpusFingerprint := gen.Params[CorpusFingerprintParam]
 	storedCorpusFingerprint, hasCorpusFingerprint, err := ix.metaGet(
 		ctx, corpusFingerprintMetaKey,
@@ -181,11 +167,6 @@ func (ix *Index) Build(
 	}
 	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
 		return BuildResult{}, err
-	}
-	if tracksClassifier {
-		if err := ix.metaSet(ctx, scopeClassifierHashKey, classifierHash); err != nil {
-			return BuildResult{}, fmt.Errorf("storing scope classifier hash: %w", err)
-		}
 	}
 	if corpusFingerprint != "" {
 		if err := ix.metaSet(ctx, corpusFingerprintMetaKey, corpusFingerprint); err != nil {

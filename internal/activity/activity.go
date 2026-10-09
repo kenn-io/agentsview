@@ -30,9 +30,6 @@ type Params struct {
 	Bucket        BucketSpec
 }
 
-// SubagentSQL selects the activity subagent category from a sessions alias s.
-const SubagentSQL = `s.relationship_type = 'subagent'`
-
 // SessionMeta is one candidate session whose window intersects the day.
 type SessionMeta struct {
 	SessionID   string

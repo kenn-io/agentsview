@@ -61,8 +61,9 @@ Human origin wins conflicting markers. A queued first prompt, missing or unknown
 origin, SDK library entrypoints, or an explicit provider kind blocks this
 inference. Human SDK conversations stay Interactive unless their prompts match
 an automation pattern. Known subagents keep that category even when their
-prompts match built-in or user `[automated]` patterns. Runs without a subagent relationship
-count as Automated when they carry a roborev tag or a matching first prompt.
+prompts match built-in or user `[automated]` patterns. Runs without a subagent
+relationship count as Automated when they carry a roborev tag or a matching
+first prompt.
 Prompt matching requires one or fewer real user messages.
 
 Parentless workers appear as sidebar roots. Flat lists, search, CLI, stats, and

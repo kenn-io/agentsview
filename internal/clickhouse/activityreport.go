@@ -424,7 +424,7 @@ func (s *Store) activityReportSessions(
 		s.started_at,
 		s.ended_at,
 		s.is_automated AS is_automated,
-		` + activity.SubagentSQL + ` AS is_subagent,
+		s.relationship_type = 'subagent' AS is_subagent,
 		s.push_version
 	FROM sessions s
 	WHERE ` + where

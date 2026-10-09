@@ -461,7 +461,7 @@ func (db *DB) reportingUsageSessionsFrom(
 			COALESCE(s.started_at, ''),
 			COALESCE(s.ended_at, ''),
 			COALESCE(s.is_automated, 0),
-			`+activity.SubagentSQL+`
+			s.relationship_type = 'subagent'
 		FROM sessions s
 		JOIN usage_session_ids u ON u.session_id = s.id
 		ORDER BY s.id`,

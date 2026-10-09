@@ -1,27 +1,12 @@
 package db
 
 import (
-	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"hash"
 	"sort"
 )
-
-// AppliedClassifierHash returns the classifier last stamped by the archive backfill.
-func (db *DB) AppliedClassifierHash(ctx context.Context) (string, error) {
-	var value string
-	err := db.getReader().QueryRow(ctx,
-		`SELECT value FROM stats WHERE key = ?`, ClassifierHashKey,
-	).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return value, err
-}
 
 // classifierAlgorithmVersion bumps when the matching *logic*
 // changes (e.g. a future case-insensitivity flag). Pattern

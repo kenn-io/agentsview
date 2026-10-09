@@ -557,7 +557,7 @@ func (db *DB) activityReportSessionsFrom(
 		COALESCE(s.started_at, ''),
 		COALESCE(s.ended_at, ''),
 		COALESCE(s.is_automated, 0),
-		` + activity.SubagentSQL + `
+		s.relationship_type = 'subagent'
 	FROM sessions s
 	WHERE ` + where + `
 		AND (COALESCE(NULLIF(s.ended_at, ''),
