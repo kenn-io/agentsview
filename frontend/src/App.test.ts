@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import { EventSource } from "eventsource";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { activity } from "./lib/stores/activity.svelte.js";
 import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
@@ -15,7 +14,6 @@ import { createSessionsStore, sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
-import { events } from "./lib/stores/events.svelte.js";
 import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
@@ -28,7 +26,6 @@ import { dismissFlash } from "@kenn-io/kit-ui";
 vi.mock("./lib/feature-flags.js", () => ({
   PROJECT_MAPPING_WORKSPACE_ENABLED: true,
 }));
-vi.mock("eventsource", () => ({ EventSource: vi.fn() }));
 // @ts-ignore
 import App, { findUserPromptOrdinal } from "./App.svelte";
 
@@ -91,7 +88,6 @@ afterEach(() => {
     unmount(component);
     component = undefined;
   }
-  events.setAvailable(false);
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -124,56 +120,8 @@ afterEach(() => {
   settings.readOnly = false;
   settings.error = null;
   sync.serverVersion = null;
-  pins.pins = [];
   settings.saveError = null;
   dismissFlash();
-});
-
-it.each([
-  ["claude-ai:chat", 2],
-] as const)("reloads pins for a synced session %s", async (id, loads) => {
-  stubAppDependencies();
-  vi.spyOn(sessions, "load").mockResolvedValue();
-  vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
-  vi.spyOn(messages, "reload").mockResolvedValue();
-  window.history.replaceState(null, "", `/sessions/${id}`);
-  router.route = "sessions";
-  router.sessionId = id;
-  sessions.activeSessionId = id;
-  component = mount(App, { target: document.body });
-  await flushEffects();
-  expect(pins.loadForSession).toHaveBeenCalledExactlyOnceWith(id);
-  expect(sync.watchSession).toHaveBeenCalledOnce();
-  const update = vi.mocked(sync.watchSession).mock.calls[0]![1];
-  update();
-  await flushEffects();
-  expect(messages.reload).toHaveBeenCalledOnce();
-  expect(pins.loadForSession).toHaveBeenCalledTimes(loads);
-  expect(pins.loadForSession).toHaveBeenLastCalledWith(id);
-});
-
-it("reloads pins when a sessions event is followed by messages", async () => {
-  vi.useFakeTimers();
-  stubAppDependencies();
-  vi.spyOn(pins, "loadAll").mockResolvedValue();
-  const source = Object.assign(new EventTarget(), { readyState: 1, close: vi.fn() });
-  vi.mocked(EventSource).mockImplementation(function () {
-    return source as unknown as EventSource;
-  });
-  events.setAvailable(true);
-  window.history.replaceState(null, "", "/pinned");
-  router.route = "pinned";
-  component = mount(App, { target: document.body });
-  await flushEffects();
-  expect(pins.loadAll).toHaveBeenCalledOnce();
-  const update = (data: Record<string, unknown>) => source.dispatchEvent(
-    new MessageEvent("data_changed", { data: JSON.stringify(data) }),
-  );
-  update({ scope: "sessions" });
-  update({ scope: "messages" });
-  await vi.advanceTimersByTimeAsync(400);
-  await flushEffects();
-  expect(pins.loadAll).toHaveBeenCalledTimes(2);
 });
 
 it("shows settings save errors through the app shell", async () => {

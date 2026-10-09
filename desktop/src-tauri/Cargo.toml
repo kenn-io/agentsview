@@ -28,15 +28,6 @@ tokio = { version = "1", features = ["time", "sync"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2", features = ["image-png", "tray-icon"] }
-block2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSHTTPCookie", "NSString"] }
-objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
-soup3 = "=0.5.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
-webview2-com = "0.38.2"
-windows = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }

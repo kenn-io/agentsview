@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json/jsontext"
@@ -12,13 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
 )
@@ -32,7 +29,7 @@ func (s *Server) registerImportRoutes() {
 		func(ctx context.Context, in *claudeAISyncInput) (*huma.StreamResponse, error) {
 			return s.humaSyncClaudeAI(ctx, in, &results)
 		}, func(op *huma.Operation) {
-			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_sign_in_pending, or claude_ai_archive_upgrade_required."
+			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required."
 		})
 	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
 		func(ctx context.Context, in *claudeAISyncResultInput) (*struct{}, error) {
@@ -40,40 +37,13 @@ func (s *Server) registerImportRoutes() {
 			if !ok {
 				return nil, apiError(http.StatusNotFound, "fetch request expired or already answered")
 			}
-			value.(chan claudeAISyncResult) <- claudeAISyncResult{status: in.Status, body: in.RawBody, retryAfter: in.RetryAfter}
+			var fetchErr error
+			if in.Body.Error != "" {
+				fetchErr = errors.New(in.Body.Error)
+			}
+			value.(chan claudeAISyncResult) <- claudeAISyncResult{status: in.Body.Status, body: []byte(in.Body.Body), retryAfter: in.Body.RetryAfter, err: fetchErr}
 			return &struct{}{}, nil
-		}, maxBodyBytes(-1), func(op *huma.Operation) {
-			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
-				if _, ok := results.Load(ctx.Param("id")); !ok {
-					writeHumaJSON(ctx, http.StatusNotFound, apiResponseError{Message: "fetch request expired or already answered"})
-					return
-				}
-				body, err := io.ReadAll(io.LimitReader(ctx.BodyReader(), importer.ClaudeAIResponseLimit+1))
-				if len(body) > importer.ClaudeAIResponseLimit {
-					err = importer.ErrClaudeAIResponseTooLarge
-				}
-				if err != nil {
-					if value, ok := results.LoadAndDelete(ctx.Param("id")); ok {
-						value.(chan claudeAISyncResult) <- claudeAISyncResult{err: err}
-						ctx.SetStatus(http.StatusNoContent)
-					} else {
-						writeHumaJSON(ctx, http.StatusNotFound, apiResponseError{Message: "fetch request expired or already answered"})
-					}
-					return
-				}
-				// Huma always requires a RawBody, so answer status-only replies here.
-				if status, convErr := strconv.Atoi(ctx.Query("status")); convErr == nil && len(body) == 0 && status >= 0 && status <= 599 {
-					if value, ok := results.LoadAndDelete(ctx.Param("id")); ok {
-						value.(chan claudeAISyncResult) <- claudeAISyncResult{status: status, retryAfter: ctx.Header("Retry-After")}
-						ctx.SetStatus(http.StatusNoContent)
-						return
-					}
-				}
-				req, _ := humago.Unwrap(ctx)
-				req.Body = io.NopCloser(bytes.NewReader(body))
-				next(ctx)
-			})
-		})
+		}, maxBodyBytes(2*importer.ClaudeAIResponseLimit+64<<10))
 
 	s.stream(group, http.MethodPost, "/claude-ai",
 		"Import Claude.ai archive", s.humaImportClaudeAI,
@@ -88,10 +58,13 @@ func (s *Server) registerImportRoutes() {
 type claudeAISyncInput struct{}
 
 type claudeAISyncResultInput struct {
-	ID         string `path:"id"`
-	Status     int    `query:"status" minimum:"0" maximum:"599" required:"true"`
-	RetryAfter string `header:"Retry-After"`
-	RawBody    []byte `contentType:"application/octet-stream"`
+	ID   string `path:"id"`
+	Body struct {
+		Status     int    `json:"status" minimum:"0" maximum:"599"`
+		Body       string `json:"body"`
+		RetryAfter string `json:"retry_after,omitempty"`
+		Error      string `json:"error,omitempty"`
+	}
 }
 
 type claudeAISyncResult struct {
@@ -100,9 +73,6 @@ type claudeAISyncResult struct {
 	body       []byte
 	retryAfter string
 }
-
-var errClaudeAISignInPending = errors.New("claude sign-in is still pending")
-var errClaudeAIArchiveUpgradeRequired = errors.New("claude.ai sync must wait for the archive upgrade")
 
 func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
 	if s.db.ReadOnly() {
@@ -137,24 +107,12 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			case <-time.After(2 * time.Minute):
 				return importer.ClaudeAIResponse{}, errors.New("claude browser fetch timed out")
 			case response := <-answer:
-				err := response.err
-				if err == nil && response.status == 0 {
-					err = errors.New(string(response.body))
-					if string(response.body) == "claude_ai_sign_in_pending" {
-						err = errClaudeAISignInPending
-					}
-				}
-				return importer.ClaudeAIResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, err
+				return importer.ClaudeAIResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, response.err
 			}
 		}
 		stats, err := importer.SyncClaudeAI(ctx, store, fetch, &importer.ImportCallbacks{
 			SerializeWrite: func(write func() error) error {
-				return s.serializeArchiveWrite(ctx, func() error {
-					if store.NeedsResync() {
-						return errClaudeAIArchiveUpgradeRequired
-					}
-					return write()
-				})
+				return s.serializeArchiveWrite(ctx, write)
 			},
 			OnProgress: func(stats importer.ImportStats) {
 				if !stream.SendJSON("progress", stats) {
@@ -174,11 +132,6 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			if errors.Is(err, importer.ErrClaudeAIAuthRequired) {
 				payload["error"] = "Sign in to Claude.ai, then Sync again"
 				payload["code"] = "claude_ai_auth_required"
-			} else if errors.Is(err, errClaudeAISignInPending) {
-				payload["code"] = "claude_ai_sign_in_pending"
-			} else if errors.Is(err, errClaudeAIArchiveUpgradeRequired) {
-				payload["error"] = "Let the archive finish upgrading, then Sync again."
-				payload["code"] = "claude_ai_archive_upgrade_required"
 			}
 			stream.SendJSON("error", payload)
 			return

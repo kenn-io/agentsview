@@ -46,30 +46,15 @@
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
   let syncController = $state<AbortController>();
-  let syncTask: Promise<ImportStats> | undefined;
-  let disconnecting = $state(false);
   const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection() && !syncState.readOnly);
 
   async function connect() {
-    if (disconnecting) return;
     try { await host?.connect(); }
     catch (e) { error = String(e); }
   }
 
-  async function disconnect() {
-    if (disconnecting) return;
-    disconnecting = true;
-    syncController?.abort();
-    try {
-      await syncTask?.catch(() => {});
-      await host?.disconnect();
-    }
-    catch (e) { error = String(e); }
-    finally { disconnecting = false; }
-  }
-
   async function sync() {
-    if (!host || importing || disconnecting) return;
+    if (!host || importing) return;
     importing = true;
     error = null;
     result = null;
@@ -78,24 +63,18 @@
     const controller = new AbortController();
     syncController = controller;
     try {
-      syncTask = syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
-      const stats = await syncTask;
+      const stats = await syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
       if (!controller.signal.aborted) result = stats;
     } catch (e) {
       if (controller.signal.aborted) return;
       error = e instanceof Error ? e.message : m.import_failed();
       if (e instanceof ApiError && e.code === "claude_ai_auth_required") {
         error = m.import_claude_auth_required();
-      } else if (e instanceof ApiError && e.code === "claude_ai_sign_in_pending") {
-        error = m.import_claude_sign_in_pending();
-      } else if (e instanceof ApiError && e.code === "claude_ai_archive_upgrade_required") {
-        error = m.import_claude_archive_upgrade_required();
       }
     }
     finally {
       importing = false;
       syncController = undefined;
-      syncTask = undefined;
       onimported();
     }
   }
@@ -335,14 +314,6 @@
             </div>
           {/if}
         </div>
-        {#each result.refusals ?? [] as refusal}
-          {#if refusal.reason === "newer_marker"}
-            <div class="import-error" role="alert">
-              <TriangleAlertIcon size="14" aria-hidden="true" />
-              <span>{m.import_newer_marker({ session: refusal.session_id })}</span>
-            </div>
-          {/if}
-        {/each}
       </div>
     {:else}
       <!-- ── Provider selector ── -->
@@ -376,9 +347,8 @@
       </p>
 
       {#if canSync}
-        <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing || disconnecting} onclick={connect} />
-        <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing || disconnecting} onclick={sync} />
-        <Button label={m.import_claude_disconnect()} tone="neutral" surface="outline" disabled={disconnecting} onclick={disconnect} />
+        <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing} onclick={connect} />
+        <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing} onclick={sync} />
         <p class="hint">{m.import_claude_help()}</p>
       {/if}
 

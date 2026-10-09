@@ -8,7 +8,6 @@
     XIcon,
   } from "../../icons.js";
   import { pins } from "../../stores/pins.svelte.js";
-  import { events } from "../../stores/events.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -22,9 +21,6 @@
   });
 
   onDestroy(() => pins.cancelAllPinsRead());
-  onDestroy(events.subscribeDebounced(() => {
-    pins.loadAll(sessions.filters.project || undefined);
-  }));
 
   /** Set of expanded pin IDs. */
   let expanded: Set<number> = $state(new Set());

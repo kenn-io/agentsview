@@ -264,12 +264,7 @@ reconciled by `source_uuid` — a stable identifier derived from the underlying
 message — so a pin survives a re-parse that shifts message ordinals. Without
 this, pins would silently drift to the wrong message after any session resync.
 
-A pin or note made in a PostgreSQL-served UI lives only in PostgreSQL. After a
-re-parse, zip replacement, or Claude.ai Sync branch switch, a push preserves it
-when its pinned message still matches. A retained unique `source_uuid` keeps
-the pin and note even when the message content changes. If the message can't
-be matched, the push drops the pin and note; SQLite's Trash copy doesn't hold
-them.
+A pin or note made in a PostgreSQL-served UI lives only in PostgreSQL. After a Claude.ai zip replacement or Sync branch switch, a push preserves it when the message's role, text, and occurrence rank still match. If the message can't be matched, the push drops the pin and note. SQLite's Trash copy doesn't hold them.
 
 Curation tables are populated by the same `pg push` run; no separate command or
 flag is required. The [`agentsview secrets`](/docs/commands/#agentsview-secrets)
