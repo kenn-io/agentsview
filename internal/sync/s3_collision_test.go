@@ -295,6 +295,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 		{"child first together", [][]int{{2, 1, 0}}, false},
 		{"own parent late", [][]int{{0}, {2}, {1}}, false},
 		{"own parent missing", [][]int{{0}, {2}}, false},
+		{"parent root removed", [][]int{{0}, {1}, {2}}, false},
 		{"children collide", [][]int{{0}, {1}, {3}, {2}}, true},
 		{"children collide reversed", [][]int{{1}, {0}, {2}, {3}}, true},
 	} {
@@ -305,6 +306,9 @@ func TestS3CursorCollidingParents(t *testing.T) {
 			paths := []string{root + "/project-a/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared/subagents/child.txt"}
 			if tt.childrenCollide {
 				paths = []string{root + "/project-a/agent-transcripts/parent-a.txt", root + "/project-b/agent-transcripts/parent-b.txt", root + "/project-b/agent-transcripts/parent-b/subagents/child.txt", root + "/project-a/agent-transcripts/parent-a/subagents/child.txt"}
+			}
+			if tt.name == "parent root removed" {
+				paths[2] = strings.Replace(paths[2], root, aliasRoot, 1)
 			}
 			oldFetch := fetchS3Object
 			refreshed := false
@@ -415,7 +419,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				require.NoError(t, err)
 				verify()
 			}
-			if tt.name == "parents first" || tt.name == "own parent missing" {
+			if tt.name == "parents first" || tt.name == "own parent missing" || tt.name == "parent root removed" {
 				before, err := database.GetSessionFull(t.Context(), childIDs[paths[2]])
 				require.NoError(t, err)
 				require.NotNil(t, before)
@@ -429,18 +433,38 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				}
 				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {aliasRoot}}})
 				refreshed = true
+				verifyRefresh := func() {
+					t.Helper()
+					after, err := database.GetSessionFull(t.Context(), before.ID)
+					require.NoError(t, err)
+					require.NotNil(t, after)
+					assert.Equal(t, before.ParentSessionID, after.ParentSessionID)
+					assert.Equal(t, before.ParserParentSessionID, after.ParserParentSessionID)
+					assert.Equal(t, "subagent", after.RelationshipType)
+					assert.Equal(t, paths[2], derefString(after.FilePath))
+					messages, err := database.GetAllMessages(t.Context(), before.ID)
+					require.NoError(t, err)
+					require.Len(t, messages, 2)
+					assert.Equal(t, "Refreshed B", messages[0].Content)
+				}
+				if tt.name == "parent root removed" {
+					updated := source(paths[2])
+					remote := updated.Opaque.(parser.S3DiscoveredSource)
+					remote.MtimeNS = time.Unix(200, 0).UnixNano()
+					updated.Opaque = remote
+					provider.discovered = []parser.SourceRef{updated}
+					stats = engine.SyncAll(t.Context(), nil)
+					require.Zero(t, stats.Failed)
+					verifyRefresh()
+				}
 				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), before.ID))
-				after, err := database.GetSessionFull(t.Context(), before.ID)
-				require.NoError(t, err)
-				require.NotNil(t, after)
-				assert.Equal(t, before.ParentSessionID, after.ParentSessionID)
-				assert.Equal(t, before.ParserParentSessionID, after.ParserParentSessionID)
-				assert.Equal(t, "subagent", after.RelationshipType)
-				assert.Equal(t, paths[2], derefString(after.FilePath))
-				messages, err := database.GetAllMessages(t.Context(), before.ID)
-				require.NoError(t, err)
-				require.Len(t, messages, 2)
-				assert.Equal(t, "Refreshed B", messages[0].Content)
+				verifyRefresh()
+				if tt.name == "parent root removed" {
+					stats = engine.ResyncAll(t.Context(), nil)
+					require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+					require.Zero(t, stats.Failed)
+					verifyRefresh()
+				}
 			}
 		})
 	}

@@ -2371,15 +2371,25 @@ func repairCursorS3Parents(ctx context.Context, tx *sql.Tx, ids, roots []string)
 			return 0, err
 		}
 		var parent any
+		query := cursorS3ParentRepairQuery
+		var retainedParents []any
 		for _, record := range records {
-			if !record.Excluded && parser.CursorS3SourceKey(roots, record.FilePath) == key {
+			if record.Excluded {
+				continue
+			}
+			sourceKey := parser.CursorS3SourceKey(roots, record.FilePath)
+			if sourceKey == key && parent == nil {
 				parent = record.ID
-				break
+			}
+			if sourceKey == "" && strings.HasPrefix(record.FilePath, "s3://") {
+				// Removing a root doesn't invalidate an archived relationship.
+				query += " AND parent_session_id IS NOT ?"
+				retainedParents = append(retainedParents, record.ID)
 			}
 		}
 		for _, prefix := range family.prefixes {
-			res, err := tx.ExecContext(ctx, cursorS3ParentRepairQuery,
-				parent, prefix, strings.TrimSuffix(prefix, "/")+"0", parent)
+			args := append([]any{parent, prefix, strings.TrimSuffix(prefix, "/") + "0", parent}, retainedParents...)
+			res, err := tx.ExecContext(ctx, query, args...)
 			if err != nil {
 				return 0, err
 			}
