@@ -17,6 +17,14 @@ const list = `${base}/chat_conversations_v2?limit=50&offset=0`;
 const detail = `${base}/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true`;
 
 describe("Claude request allowlist", () => {
+  it.each(["network", "HTTP"])("retries after a %s shapes load failure", async (failure) => {
+    if (failure === "network") fetchShapes.mockRejectedValueOnce(new Error("Network unavailable"));
+    else fetchShapes.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    await expect(allowedPath("/api/organizations")).rejects.toThrow();
+    expect(await allowedPath("/api/organizations")).toBe(true);
+    expect(await allowedPath("/api/settings")).toBe(false);
+  });
+
   it("loads the packaged request shapes", async () => {
     expect(await allowedPath("/api/organizations")).toBe(true);
     expect(getURL).toHaveBeenCalledExactlyOnceWith("claude_ai_requests.txt");

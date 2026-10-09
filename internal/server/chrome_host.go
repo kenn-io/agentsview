@@ -114,7 +114,7 @@ func (h *chromeHost) read(conn *chromeConnection) {
 			return
 		}
 		if reply.Version != chromehost.Version {
-			disconnectErr = chromehost.ErrCompatibility
+			disconnectErr = chromehost.VersionError{Version: reply.Version}
 			return
 		}
 		if reply.Status < 0 || reply.Status > 599 {

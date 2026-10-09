@@ -86,8 +86,6 @@ func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (import
 				return stats, err
 			}
 			return stats, errors.New(failure.Error)
-		case "fetch":
-			return stats, errors.New("chrome Sync unexpectedly requested a page relay")
 		}
 	}
 	if err := stream.Err(); err != nil {

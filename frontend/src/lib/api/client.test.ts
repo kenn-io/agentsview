@@ -30,16 +30,6 @@ describe("syncClaudeAI browser relay", () => {
     expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/v1/import/claude-ai/sync?browser=chrome", expect.objectContaining({ method: "POST" }));
   });
 
-  it("rejects a page fetch event during Chrome Sync", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(
-      'event: fetch\ndata: {"id":"a","path":"/api/organizations"}\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    ));
-    vi.stubGlobal("fetch", fetch);
-    await expect(syncClaudeAI(undefined)).rejects.toThrow("Chrome Sync unexpectedly requested a page relay");
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-
   it.each(["claude_ai_auth_required"])("preserves recovery code %s", async (code) => {
     const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(

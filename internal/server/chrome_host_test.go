@@ -63,7 +63,9 @@ func TestChromeHostSyncPrivateReplies(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		srv.mux.ServeHTTP(response, req)
 	}()
 	for _, fixture := range []struct{ path, file string }{
 		{"/api/organizations", "organizations.json"},
@@ -106,15 +108,53 @@ func TestChromeHostSyncPrivateReplies(t *testing.T) {
 func TestChromeHostAbsent(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
 	response := httptest.NewRecorder()
-	srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	srv.mux.ServeHTTP(response, req)
 	assert.Equal(t, http.StatusConflict, response.Code)
 	assert.JSONEq(t, `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, response.Body.String())
 }
 
+func TestChromeHostLocalOnly(t *testing.T) {
+	for _, tt := range []struct {
+		name, remote, forwarded string
+		requireAuth             bool
+	}{
+		{"remote auth", "192.0.2.10:1234", "", true},
+		{"bind all", "192.0.2.10:1234", "", false},
+		{"forwarded", "127.0.0.1:1234", "for=192.0.2.10", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			srv.cfg.Host = "0.0.0.0"
+			srv.cfg.RequireAuth = tt.requireAuth
+			srv.cfg.AuthToken = "test-token"
+			_, conn := testChromeConnection(t, srv)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
+			req.RemoteAddr = tt.remote
+			req.Host = "127.0.0.1:0"
+			req.Header.Set("Origin", "http://127.0.0.1:0")
+			req.Header.Set("Authorization", "Bearer test-token")
+			req.Header.Set("Forwarded", tt.forwarded)
+			response := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(response, req)
+			assert.Equal(t, http.StatusForbidden, response.Code)
+			assert.Contains(t, response.Body.String(), "Chrome Sync requires a local connection")
+			assert.True(t, srv.chrome.Connected())
+			require.NoError(t, conn.SetReadDeadline(time.Now()))
+			_, err := chromehost.ReadFrame(conn)
+			require.Error(t, err)
+			networkErr, ok := errors.AsType[net.Error](err)
+			require.True(t, ok)
+			assert.True(t, networkErr.Timeout(), "refused requests must not use Chrome")
+		})
+	}
+}
+
 func TestChromeHostIncompatibleReply(t *testing.T) {
-	for _, reply := range []struct{ name, body string }{
-		{"stale extension", `{"status":0,"error":"Unsupported Claude fetch path"}`},
-		{"unknown revision", `{"version":2,"status":600,"body":"private"}`},
+	for _, reply := range []struct{ name, body, message string }{
+		{"stale extension", `{"status":0,"error":"Unsupported Claude fetch path"}`, "run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again"},
+		{"newer extension", `{"version":2,"status":600,"body":"private"}`, "upgrade AgentsView, then Sync again"},
 	} {
 		t.Run(reply.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -123,7 +163,9 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil))
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
+				req.RemoteAddr = "127.0.0.1:1234"
+				srv.mux.ServeHTTP(response, req)
 			}()
 			id, _ := readChromeRequest(t, conn)
 			payload := `{"id":"` + id + `",` + reply.body[1:]
@@ -133,7 +175,12 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				require.FailNow(t, "incompatible host did not stop Sync")
 			}
-			assert.Contains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
+			assert.Contains(t, response.Body.String(), reply.message)
+			if reply.name == "stale extension" {
+				assert.Contains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
+			} else {
+				assert.NotContains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
+			}
 			assert.NotContains(t, response.Body.String(), "event: done")
 			assert.NotContains(t, response.Body.String(), "private")
 			stats, err := srv.db.GetStats(t.Context(), false, false)

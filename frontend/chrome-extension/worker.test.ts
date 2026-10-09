@@ -42,10 +42,14 @@ async function request(path = "/api/organizations") {
 }
 
 describe("Chrome native host worker", () => {
-  it.each([undefined, 2])("refuses incompatible revision %s before touching tabs", async (version) => {
+  it.each([
+    [undefined, "Upgrade AgentsView, then Sync again"],
+    [0, "Upgrade AgentsView, then Sync again"],
+    [2, "Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again"],
+  ])("refuses incompatible revision %s before touching tabs", async (version, error) => {
     message({ id: "a", path: "/api/settings", version });
     await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
-    expect(port.postMessage).toHaveBeenCalledWith({ id: "a", version: 1, status: 0, error: "Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again" });
+    expect(port.postMessage).toHaveBeenCalledWith({ id: "a", version: 1, status: 0, error });
     expect(chrome.tabs.query).not.toHaveBeenCalled();
     expect(chrome.tabs.create).not.toHaveBeenCalled();
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
@@ -66,6 +70,27 @@ describe("Chrome native host worker", () => {
     expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, { target: { tabId: 7 }, files: ["claude_fetch.js"], world: "ISOLATED" });
     expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(2, { target: { tabId: 7 }, world: "ISOLATED", func: expect.any(Function), args: ["https://claude.ai/api/organizations"] });
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("reinjects once when navigation removes claudeFetch; retry missing %s", async (stillMissing) => {
+    chrome.scripting.executeScript.mockImplementation(async (options) => {
+      if (options.files) return [];
+      const calls = chrome.scripting.executeScript.mock.calls.filter(([call]) => call.func);
+      if (calls.length === 1 || stillMissing) {
+        expect(options.func(options.args[0])).toBeUndefined();
+        return [{ result: undefined }];
+      }
+      const claudeFetch = vi.fn(() => ({ status: 200, body: "retried chats" }));
+      vi.stubGlobal("claudeFetch", claudeFetch);
+      const result = options.func(options.args[0]);
+      expect(claudeFetch).toHaveBeenCalledExactlyOnceWith("https://claude.ai/api/organizations");
+      return [{ result }];
+    });
+    expect(await request()).toEqual(stillMissing
+      ? { id: "a", version: 1, status: 0, error: "Claude.ai page changed during Sync; try Sync again" }
+      : { id: "a", version: 1, status: 200, body: "retried chats" });
+    expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(4);
+    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(3, { target: { tabId: 7 }, files: ["claude_fetch.js"], world: "ISOLATED" });
   });
 
   it("leaves its inactive tab open after fetch", async () => {

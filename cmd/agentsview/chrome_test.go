@@ -41,6 +41,8 @@ func chromeTestExecutable(t *testing.T) string {
 }
 
 func TestChromeSetup(t *testing.T) {
+	t.Setenv("CHROME_CONFIG_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	executable := chromeTestExecutable(t)
@@ -83,6 +85,20 @@ func TestChromeSetup(t *testing.T) {
 	}
 	if runtime.GOOS == "darwin" {
 		assert.Equal(t, filepath.Join(home, "Library/Application Support/Google/Chrome/NativeMessagingHosts/io.kenn.agentsview.json"), registered)
+	}
+}
+
+func TestChromeConfigRoot(t *testing.T) {
+	for _, tt := range []struct{ name, chrome, xdg, want string }{
+		{"Chrome overrides XDG", "chrome-config", "xdg-config", "chrome-config"},
+		{"XDG overrides home", "", "xdg-config", "xdg-config/google-chrome"},
+		{"home fallback", "", "", "home/.config/google-chrome"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CHROME_CONFIG_HOME", tt.chrome)
+			t.Setenv("XDG_CONFIG_HOME", tt.xdg)
+			assert.Equal(t, filepath.FromSlash(tt.want), chromeConfigRoot("home"))
+		})
 	}
 }
 
@@ -267,7 +283,6 @@ func TestChromeSyncResults(t *testing.T) {
 		{"done", "event: progress\ndata: {}\n\nevent: done\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":0}\n\n", "", 200, 2},
 		{"absent host", `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, "Run agentsview chrome setup and keep Chrome open, then Sync again", 409, 0},
 		{"error", "event: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 0},
-		{"fetch", "event: fetch\ndata: {\"id\":\"a\",\"path\":\"/api/organizations\"}\n\n", "page relay", 200, 0},
 		{"partial failure", "event:progress\ndata:{\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent:error\ndata:{\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 2},
 		{"partial EOF", "event: progress\ndata: {\"imported\":2}\n\n", "without a result", 200, 2},
 		{"multiline", ": keepalive\r\nevent:done\r\ndata:{\"imported\":2,\r\ndata:\"updated\":1}\r\n\r\n", "", 200, 2},

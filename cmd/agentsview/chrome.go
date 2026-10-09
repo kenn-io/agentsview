@@ -206,7 +206,7 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		manifestDir = filepath.Join(home, "Library", "Application Support", "Google", "Chrome", "NativeMessagingHosts")
 	}
 	if runtime.GOOS == "linux" {
-		manifestDir = filepath.Join(home, ".config", "google-chrome", "NativeMessagingHosts")
+		manifestDir = filepath.Join(chromeConfigRoot(home), "NativeMessagingHosts")
 	}
 	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
 		return "", err
@@ -223,6 +223,16 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		return "", err
 	}
 	return folder, nil
+}
+
+func chromeConfigRoot(home string) string {
+	if root := os.Getenv("CHROME_CONFIG_HOME"); root != "" {
+		return root
+	}
+	if root := os.Getenv("XDG_CONFIG_HOME"); root != "" {
+		return filepath.Join(root, "google-chrome")
+	}
+	return filepath.Join(home, ".config", "google-chrome")
 }
 
 func chromeSocketPath(dataDir string) (string, error) {
