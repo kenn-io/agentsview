@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import ImportModal from "./ImportModal.svelte";
 import { m } from "../../i18n/index.js";
 import { setLocale } from "../../paraglide/runtime.js";
 import { ApiError } from "../../api/runtime.js";
 
-const host = vi.hoisted(() => ({ connect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
-vi.mock("../../api/browserHost.js", () => ({ getBrowserHost: () => host }));
+const host = vi.hoisted(() => ({ help: vi.fn(), connect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
+const getBrowserHost = vi.hoisted(() => vi.fn());
+vi.mock("../../api/browserHost.js", () => ({ getBrowserHost }));
 vi.mock("../../api/runtime.js", async (original) => ({
   ...(await original<typeof import("../../api/runtime.js")>()),
   isRemoteConnection: () => false,
@@ -21,7 +22,31 @@ vi.mock("../../api/client.js", () => ({
   importClaudeAI: vi.fn(),
   importChatGPT: vi.fn(),
 }));
-afterEach(() => { vi.resetAllMocks(); syncState.readOnly = false; setLocale("en", { reload: false }); });
+beforeEach(() => {
+  getBrowserHost.mockReturnValue(host);
+  host.help.mockImplementation(() => m.import_claude_help());
+});
+afterEach(() => { vi.resetAllMocks(); vi.restoreAllMocks(); syncState.readOnly = false; setLocale("en", { reload: false }); });
+
+it("shows Chrome toolbar instructions with Sync", () => {
+  host.help.mockImplementation(() => m.import_claude_help_chrome());
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  expect(screen.getByText("Click the AgentsView toolbar button on this tab, then Sync. Sync uses Chrome's Claude.ai sign-in.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: m.import_claude_sync() })).toBeTruthy();
+});
+
+it.each([false, true])("offers the extension download in writable Chrome only, readOnly=%s", (readOnly) => {
+  getBrowserHost.mockReturnValue(undefined);
+  syncState.readOnly = readOnly;
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 Chrome/140.0.0.0");
+  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
+  const link = screen.queryByRole("link", { name: "Download Chrome extension" });
+  if (readOnly) expect(link).toBeNull();
+  else {
+    expect(link?.getAttribute("href")).toBe("/chrome-extension.zip");
+    expect(screen.getByText(/Unzip the download, open chrome:\/\/extensions/)).toBeTruthy();
+  }
+});
 
 it.each([
   ["claude_ai_auth_required", "Sign in to Claude.ai, then Sync again", "Connectez-vous à Claude.ai, puis relancez la synchronisation."],
@@ -44,6 +69,7 @@ it("offers sign in and sync without a sign-in probe", async () => {
   const onimported = vi.fn();
   render(ImportModal, { open: true, onclose: vi.fn(), onimported });
   expect(screen.getByText(m.import_claude_help())).toBeTruthy();
+  expect(screen.getByText(/email code/)).toBeTruthy();
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
   expect(host.connect).toHaveBeenCalledOnce();
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));

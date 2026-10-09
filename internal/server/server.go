@@ -732,6 +732,7 @@ func (s *Server) routes() {
 	}
 
 	s.registerEvalIngestRoutes()
+	s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/chrome-extension.zip", Hidden: true}, s.handleChromeExtension)
 
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.

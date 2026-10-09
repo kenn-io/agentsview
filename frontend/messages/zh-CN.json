@@ -2380,6 +2380,9 @@
   "tool_sequences_retry": "重试",
   "import_claude_connect": "登录",
   "import_claude_sync": "同步",
-  "import_claude_help": "同步使用此浏览器的 Claude.ai 登录状态。登录会打开 Claude.ai。",
+  "import_claude_help": "使用邮箱验证码登录后关闭窗口，然后点击同步。Google 登录需要浏览器宿主。",
+  "import_claude_help_chrome": "点击此标签页工具栏中的 AgentsView 按钮，然后点击同步。同步使用 Chrome 中的 Claude.ai 登录状态。",
+  "import_claude_chrome_setup": "解压下载的文件，打开 chrome://extensions，开启开发者模式，点击加载已解压的扩展程序，然后选择解压后的文件夹。重新加载此标签页。",
+  "import_claude_chrome_download": "下载 Chrome 扩展程序",
   "import_claude_auth_required": "请登录 Claude.ai，然后再次同步。"
 }

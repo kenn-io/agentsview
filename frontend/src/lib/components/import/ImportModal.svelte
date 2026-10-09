@@ -10,7 +10,7 @@
   } from "../../api/client.js";
   import { getBrowserHost } from "../../api/browserHost.js";
   import { sync as syncState } from "../../stores/sync.svelte.js";
-  import { ApiError, isRemoteConnection } from "../../api/runtime.js";
+  import { ApiError, getGeneratedBase, isRemoteConnection } from "../../api/runtime.js";
   import {
     FileCheckIcon,
     FileIcon,
@@ -47,6 +47,7 @@
   const host = getBrowserHost();
   let syncController = $state<AbortController>();
   const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection() && !syncState.readOnly);
+  const canSetupChrome = $derived(open && provider === "claude-ai" && !host && !isRemoteConnection() && !syncState.readOnly && /Chrome\//.test(navigator.userAgent));
 
   async function connect() {
     try { if (host) await connectClaudeAI(host); }
@@ -349,7 +350,12 @@
       {#if canSync}
         <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing} onclick={connect} />
         <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing} onclick={sync} />
-        <p class="hint">{m.import_claude_help()}</p>
+        <p class="hint">{host?.help()}</p>
+      {:else if canSetupChrome}
+        <p class="hint">
+          <a href={`${getGeneratedBase()}/chrome-extension.zip`} download>{m.import_claude_chrome_download()}</a>
+          {m.import_claude_chrome_setup()}
+        </p>
       {/if}
 
       <!-- ── Drop zone ── -->

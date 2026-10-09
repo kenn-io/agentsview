@@ -2465,6 +2465,9 @@
   "tool_sequences_retry": "Reintentar",
   "import_claude_connect": "Iniciar sesión",
   "import_claude_sync": "Sincronizar",
-  "import_claude_help": "La sincronización usa la sesión de Claude.ai de este navegador. Iniciar sesión abre Claude.ai.",
+  "import_claude_help": "Inicia sesión con un código de correo, cierra la ventana y pulsa Sincronizar. El inicio de sesión con Google necesita un host de navegador.",
+  "import_claude_help_chrome": "Haz clic en el botón de AgentsView en la barra de herramientas de esta pestaña y luego en Sincronizar. La sincronización usa tu sesión de Claude.ai en Chrome.",
+  "import_claude_chrome_setup": "Descomprime la descarga, abre chrome://extensions, activa el modo de desarrollador, haz clic en Cargar descomprimida y selecciona la carpeta descomprimida. Recarga esta pestaña.",
+  "import_claude_chrome_download": "Descargar extensión de Chrome",
   "import_claude_auth_required": "Inicia sesión en Claude.ai y vuelve a sincronizar."
 }
