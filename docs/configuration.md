@@ -1813,8 +1813,11 @@ to this, so `over_30m` can undercount.
 The web UI also reports `screen_viewed` with `surface: web`. The server counts
 each screen once per installation per UTC day, across tabs and server restarts.
 It stores versioned JSON claims in `telemetry-screen-views` beside the
-installation identity and converts older plain-text claims when telemetry is
-enabled. Malformed plain-text claims reset to an empty state. Requests must use
+installation identity. When telemetry is enabled, startup converts older
+plain-text claims. It also replaces malformed claims, or claims from a newer
+format, with an empty file and logs the reset. A reset can count each screen
+one more time that day. If the file becomes unreadable while the server runs,
+screen reports return 500 until the next startup. Requests must use
 `application/json` with exactly one JSON value; a missing or unknown `screen`
 returns 400. The server reserves each claim before enqueueing its event. If
 reservation storage fails, the request returns 500 without enqueueing; a later
