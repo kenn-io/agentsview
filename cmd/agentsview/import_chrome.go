@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/importer"
 )
@@ -40,10 +40,10 @@ func syncClaudeAIChrome(ctx context.Context) error {
 	}
 	defer response.Body.Close()
 	stats, err := readChromeSync(response)
+	printImportSummary(stats)
 	if err != nil {
 		return err
 	}
-	printImportSummary(stats)
 	if stats.Errors > 0 {
 		return fmt.Errorf("sync completed with %d errors", stats.Errors)
 	}
@@ -58,35 +58,35 @@ func readChromeSync(response *http.Response) (importer.ImportStats, error) {
 		}
 		return importer.ImportStats{}, fmt.Errorf("Claude.ai Sync: HTTP %d: %s", response.StatusCode, body)
 	}
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 4096), 1<<20)
-	event := ""
-	for scanner.Scan() {
-		line := scanner.Text()
-		if value, ok := strings.CutPrefix(line, "event: "); ok {
-			event = value
-		}
-		if data, ok := strings.CutPrefix(line, "data: "); ok {
-			switch event {
-			case "done":
-				var stats importer.ImportStats
-				err := json.Unmarshal([]byte(data), &stats)
+	stream := runtime.NewEventStream[[]byte](response)
+	defer stream.Close()
+	var stats importer.ImportStats
+	for stream.Next() {
+		frame := stream.Event()
+		switch frame.Type {
+		case "progress", "done":
+			var next importer.ImportStats
+			if err := json.Unmarshal(frame.Data, &next); err != nil {
 				return stats, err
-			case "error":
-				var failure struct {
-					Error string `json:"error"`
-				}
-				if err := json.Unmarshal([]byte(data), &failure); err != nil {
-					return importer.ImportStats{}, err
-				}
-				return importer.ImportStats{}, errors.New(failure.Error)
-			case "fetch":
-				return importer.ImportStats{}, errors.New("Chrome Sync unexpectedly requested a page relay")
 			}
+			stats = next
+			if frame.Type == "done" {
+				return stats, nil
+			}
+		case "error":
+			var failure struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(frame.Data, &failure); err != nil {
+				return stats, err
+			}
+			return stats, errors.New(failure.Error)
+		case "fetch":
+			return stats, errors.New("Chrome Sync unexpectedly requested a page relay")
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return importer.ImportStats{}, err
+	if err := stream.Err(); err != nil {
+		return stats, err
 	}
-	return importer.ImportStats{}, errors.New("Claude.ai Sync stream ended without a result")
+	return stats, errors.New("Claude.ai Sync stream ended without a result")
 }

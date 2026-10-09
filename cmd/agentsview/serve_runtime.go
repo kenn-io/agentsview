@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -101,7 +100,11 @@ func startServerWithOptionalCaddy(
 	opts serveRuntimeOptions,
 ) (*serveRuntime, error) {
 	if opts.Mode == "serve" {
-		if err := srv.ServeChromeHost(ctx, filepath.Join(cfg.DataDir, "chrome", "host.sock")); err != nil {
+		socket, err := chromeSocketPath(cfg.DataDir)
+		if err == nil {
+			err = srv.ServeChromeHost(ctx, socket)
+		}
+		if err != nil {
 			log.Printf("Chrome host unavailable: %v", err)
 		}
 	}

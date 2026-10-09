@@ -36,21 +36,28 @@ beforeEach(async () => {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 async function request(path = "/api/organizations") {
-  message({ id: "a", path });
+  message({ version: 1, id: "a", path });
   await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
   return port.postMessage.mock.calls[0]![0];
 }
 
 describe("Chrome native host worker", () => {
+  it("refuses an unknown protocol version before touching tabs", async () => {
+    message({ version: 99, id: "a", path: "/api/organizations" });
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledExactlyOnceWith({ version: 1, id: "a", status: 0, error: "Chrome host protocol version mismatch; re-run agentsview chrome setup and reload the extension" }));
+    expect(chrome.tabs.query).not.toHaveBeenCalled();
+    expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+  });
+
   it("refuses a disallowed path before touching tabs", async () => {
-    expect(await request("/api/settings")).toEqual({ id: "a", status: 0, error: "Unsupported Claude fetch path" });
+    expect(await request("/api/settings")).toEqual({ version: 1, id: "a", status: 0, error: "Unsupported Claude fetch path" });
     expect(chrome.tabs.query).not.toHaveBeenCalled();
     expect(chrome.tabs.create).not.toHaveBeenCalled();
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
   });
 
   it("fetches in an existing Claude tab and replies by id", async () => {
-    expect(await request()).toEqual({ id: "a", status: 200, body: "chats" });
+    expect(await request()).toEqual({ version: 1, id: "a", status: 200, body: "chats" });
     expect(chrome.runtime.connectNative).toHaveBeenCalledExactlyOnceWith("io.kenn.agentsview");
     expect(chrome.tabs.query).toHaveBeenCalledWith({ url: "https://claude.ai/*", discarded: false });
     expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, { target: { tabId: 7 }, files: ["claude_fetch.js"], world: "ISOLATED" });
@@ -60,7 +67,7 @@ describe("Chrome native host worker", () => {
 
   it("leaves its inactive tab open after fetch", async () => {
     chrome.tabs.query.mockResolvedValue([]);
-    expect(await request()).toEqual({ id: "a", status: 200, body: "chats" });
+    expect(await request()).toEqual({ version: 1, id: "a", status: 200, body: "chats" });
     expect(chrome.tabs.create).toHaveBeenCalledWith({ url: "https://claude.ai/new", active: false });
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
   });
@@ -74,13 +81,13 @@ describe("Chrome native host worker", () => {
     updated(9, { status: "complete" });
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
     updated(7, { status: "complete" });
-    expect(await pending).toEqual({ id: "a", status: 200, body: "chats" });
+    expect(await pending).toEqual({ version: 1, id: "a", status: 200, body: "chats" });
     expect(chrome.tabs.onUpdated.removeListener).toHaveBeenCalledWith(updated);
   });
 
   it("replaces an oversized serialized reply with 413", async () => {
     chrome.scripting.executeScript.mockResolvedValue([{ result: { status: 200, body: '"'.repeat(32 * 1024 * 1024) } }]);
-    expect(await request()).toEqual({ id: "a", status: 413 });
+    expect(await request()).toEqual({ version: 1, id: "a", status: 413 });
   });
 
   it("reconnects five seconds after disconnect without duplicating startup connections", async () => {

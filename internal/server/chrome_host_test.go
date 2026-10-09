@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json/v2"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/importer"
 )
 
@@ -52,17 +54,19 @@ func readChromeRequest(t *testing.T, conn net.Conn) (string, string) {
 	_, err = io.ReadFull(conn, body)
 	require.NoError(t, err)
 	var request struct {
-		ID   string `json:"id"`
-		Path string `json:"path"`
+		Version int    `json:"version"`
+		ID      string `json:"id"`
+		Path    string `json:"path"`
 	}
 	require.NoError(t, json.Unmarshal(body, &request))
+	assert.Equal(t, 1, request.Version)
 	require.NotEmpty(t, request.ID)
 	return request.ID, request.Path
 }
 
 func writeChromeReply(t *testing.T, conn net.Conn, id string, status int, body string) {
 	t.Helper()
-	payload, err := json.Marshal(map[string]any{"id": id, "status": status, "body": body})
+	payload, err := json.Marshal(map[string]any{"version": 1, "id": id, "status": status, "body": body})
 	require.NoError(t, err)
 	var header [4]byte
 	binary.NativeEndian.PutUint32(header[:], uint32(len(payload)))
@@ -127,10 +131,10 @@ func TestChromeHostAbsent(t *testing.T) {
 }
 
 func TestChromeHostDisconnect(t *testing.T) {
-	for _, mode := range []string{"oversized frame", "new connection", "EOF"} {
+	for _, mode := range []string{"oversized frame", "unknown version", "EOF"} {
 		t.Run(mode, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
-			socket, conn := testChromeConnection(t, srv)
+			_, conn := testChromeConnection(t, srv)
 			finished := make(chan error, 1)
 			go func() { _, err := srv.chrome.fetch(t.Context(), "/api/organizations"); finished <- err }()
 			_, path := readChromeRequest(t, conn)
@@ -138,37 +142,22 @@ func TestChromeHostDisconnect(t *testing.T) {
 			switch mode {
 			case "oversized frame":
 				var header [4]byte
-				binary.NativeEndian.PutUint32(header[:], chromeFrameLimit+1)
+				binary.NativeEndian.PutUint32(header[:], chromehost.FrameLimit+1)
 				_, err := conn.Write(header[:])
 				require.NoError(t, err)
-			case "new connection":
-				newConn, err := net.Dial("unix", socket)
-				require.NoError(t, err)
-				defer newConn.Close()
-				// Wait for the replaced connection to close before issuing a new fetch.
-				select {
-				case err := <-finished:
-					require.ErrorContains(t, err, "disconnected")
-				case <-time.After(5 * time.Second):
-					t.Fatal("old fetch did not fail")
-				}
-				go func() { _, err := srv.chrome.fetch(t.Context(), "/api/organizations"); finished <- err }()
-				id, _ := readChromeRequest(t, newConn)
-				writeChromeReply(t, newConn, id, 200, "[]")
-				select {
-				case err := <-finished:
-					require.NoError(t, err)
-				case <-time.After(5 * time.Second):
-					t.Fatal("new fetch did not finish")
-				}
-				assert.True(t, chromeHostVersion(t, srv))
-				return
+			case "unknown version":
+				payload := []byte(`{"version":99,"id":"ignored","status":200,"body":"[]"}`)
+				require.NoError(t, chromehost.WriteFrame(conn, payload))
 			case "EOF":
 				require.NoError(t, conn.Close())
 			}
 			select {
 			case err := <-finished:
-				require.ErrorContains(t, err, "disconnected")
+				if mode == "unknown version" {
+					require.EqualError(t, err, "Chrome host protocol version mismatch; re-run agentsview chrome setup and reload the extension")
+				} else {
+					require.ErrorContains(t, err, "disconnected")
+				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("pending fetch did not fail")
 			}
@@ -192,4 +181,36 @@ func TestChromeHostFrameReply(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("fetch did not finish")
 	}
+}
+
+func TestChromeHostKeepsLiveConnection(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	socket, conn := testChromeConnection(t, srv)
+	finished := make(chan error, 1)
+	go func() {
+		response, err := srv.chrome.fetch(t.Context(), "/api/organizations")
+		if err == nil {
+			assert.Equal(t, "[]", string(response.Body))
+		}
+		finished <- err
+	}()
+	id, _ := readChromeRequest(t, conn)
+	second, err := net.Dial("unix", socket)
+	require.NoError(t, err)
+	defer second.Close()
+	require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, err = chromehost.ReadFrame(second)
+	require.Error(t, err)
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		assert.False(t, networkErr.Timeout(), "the extra connection must close")
+	}
+	writeChromeReply(t, conn, id, 200, "[]")
+	select {
+	case err := <-finished:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("first fetch did not finish")
+	}
+	assert.True(t, chromeHostVersion(t, srv))
 }
