@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"database/sql"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -17,14 +18,23 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		reverse, separate bool
+		root              string
+		preCollapsed      bool
 	}{
 		{name: "together"}, {name: "together reversed", reverse: true},
 		{name: "separate", separate: true}, {name: "separate reversed", reverse: true, separate: true},
+		{name: "no machine boundary", root: "s3://bucket/archive"},
+		{name: "no machine boundary separate", root: "s3://bucket/archive", separate: true},
+		{name: "bucket is not a machine", root: "s3://bucket/raw/cursor"},
+		{name: "pre-collapsed cached source", preCollapsed: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			const root = "s3://bucket/host-a/raw/cursor"
+			root, machine, storedMachine := tt.root, "", "local"
+			if root == "" {
+				root, machine, storedMachine = "s3://bucket/host-a/raw/cursor", "host-a", "host-a"
+			}
 			const stem = "11111111-1111-4111-8111-111111111111"
-			const baseID = "host-a~cursor:" + stem
+			baseID := s3SessionIDPrefix(machine) + "cursor:" + stem
 			paths := []string{root + "/project-a/" + stem + ".txt", root + "/project-b/" + stem + ".txt"}
 			contents := map[string]string{
 				paths[0]: "user:\nProject A\nassistant:\nAnswer A\n",
@@ -60,7 +70,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				sources = append(sources, parser.SourceRef{
 					Provider: parser.AgentCursor, Key: uri, DisplayPath: uri, FingerprintKey: uri, ProjectHint: project,
 					Opaque: parser.S3DiscoveredSource{URI: uri, Project: project,
-						Machine: "host-a", Size: int64(len(contents[uri])), MtimeNS: mtime.UnixNano()},
+						Machine: machine, Size: int64(len(contents[uri])), MtimeNS: mtime.UnixNano()},
 				})
 			}
 			if tt.reverse {
@@ -97,7 +107,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				for i, uri := range paths {
 					session := storedSession(ids[uri])
 					assert.Equal(t, uri, derefString(session.FilePath))
-					assert.Equal(t, "host-a", session.Machine)
+					assert.Equal(t, storedMachine, session.Machine)
 					if ids[uri] != baseID {
 						assert.Equal(t, baseID, derefString(session.ParentSessionID))
 					}
@@ -108,8 +118,35 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				}
 			}
 			verify()
+			if tt.preCollapsed {
+				lostPath := paths[0]
+				if ids[lostPath] == baseID {
+					lostPath = paths[1]
+				}
+				require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+					if _, err := tx.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = ?", ids[lostPath]); err != nil {
+						return err
+					}
+					_, err := tx.ExecContext(t.Context(), "PRAGMA user_version = 127")
+					return err
+				}))
+				require.NoError(t, database.SetSessionDataVersion(t.Context(), baseID, 127))
+				engine.cacheSkip(lostPath, mtime.UnixNano())
+				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+				require.Zero(t, stats.Failed)
+				missing, err := database.GetSessionFull(t.Context(), ids[lostPath])
+				require.NoError(t, err)
+				require.Nil(t, missing, "a pre-upgrade cached skip bypasses the missing-row freshness gate")
+				needsResync, err := db.ArchiveNeedsResync(t.Context(), database.Path())
+				require.NoError(t, err)
+				require.True(t, needsResync, "the data-version increase must schedule archive recovery")
+				stats = engine.ResyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+				require.Zero(t, stats.Failed)
+				verify()
+			}
 			forced := parser.DiscoveredFile{Agent: parser.AgentCursor, Path: paths[1],
-				Project: "project-b", Machine: "host-a", SourceSize: int64(len(contents[paths[1]])),
+				Project: "project-b", Machine: machine, SourceSize: int64(len(contents[paths[1]])),
 				SourceMtime: mtime.UnixNano(), ForceParse: true}
 			_, _, err := engine.processAndWriteSessionFile(t.Context(), forced, ids[paths[1]])
 			require.NoError(t, err)
@@ -194,9 +231,20 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			second.Opaque = parser.S3DiscoveredSource{URI: otherMachine, Project: "project-a", Machine: "host-b",
 				Size: int64(len(contents[otherMachine])), MtimeNS: mtime.UnixNano()}
 			provider.discovered = append(provider.discovered, second)
+			if machine == "" {
+				unrelated := root + "/project-a/unrelated.txt"
+				contents[unrelated] = "user:\nUnrelated conversation\n"
+				source := second
+				source.Key, source.DisplayPath, source.FingerprintKey = unrelated, unrelated, unrelated
+				source.Opaque = parser.S3DiscoveredSource{URI: unrelated, Project: "project-a", Size: int64(len(contents[unrelated])), MtimeNS: mtime.UnixNano()}
+				provider.discovered = append(provider.discovered, source)
+			}
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 			require.Zero(t, stats.Failed)
 			assert.Equal(t, "host-b", storedSession("host-b~cursor:"+stem).Machine)
+			if machine == "" {
+				assert.Equal(t, "local", storedSession("cursor:unrelated").Machine)
+			}
 			verify()
 			altID := ids[otherPath]
 			require.NoError(t, database.DeleteSession(t.Context(), altID))

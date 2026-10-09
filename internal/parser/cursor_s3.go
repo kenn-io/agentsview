@@ -86,14 +86,16 @@ func cursorS3TranscriptName(name string) bool {
 }
 
 // CursorS3SourceKey groups format and layout aliases by machine, raw project and stem.
-func CursorS3SourceKey(uri string) string {
-	segs := strings.Split(strings.TrimPrefix(uri, "s3://"), "/")
-	for i := len(segs) - 4; i > 0; i-- {
-		if segs[i] == "raw" && segs[i+1] == "cursor" && keepCursorS3Session("", segs[i+2:]) {
-			return segs[i-1] + "/" + segs[i+2] + "/" + strings.TrimSuffix(path.Base(uri), path.Ext(uri))
-		}
+func CursorS3SourceKey(root, uri string) string {
+	rel, ok := s3RelativePath(root, uri)
+	if !ok {
+		return ""
 	}
-	return ""
+	segs := strings.Split(rel, "/")
+	if !keepCursorS3Session(rel, segs) {
+		return ""
+	}
+	return s3MachineFromRoot(root, "cursor") + "/" + segs[0] + "/" + strings.TrimSuffix(path.Base(uri), path.Ext(uri))
 }
 
 // preferCursorS3Transcripts keeps one object per machine, project and session stem
@@ -108,7 +110,7 @@ func preferCursorS3Transcripts(
 	order := make([]string, 0, len(transcripts))
 	for _, transcript := range transcripts {
 		file := transcript.file
-		k := CursorS3SourceKey(file.Path)
+		k := CursorS3SourceKey(transcript.root, file.Path)
 		prev, ok := best[k]
 		if !ok {
 			best[k] = transcript

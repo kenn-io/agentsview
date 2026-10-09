@@ -141,24 +141,38 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 }
 
 func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-
-	root := "s3://bucket/archive/agent-transcripts/laptop/raw/cursor"
-	firstURI := root + "/project-one/11111111-1111-4111-8111-111111111111.jsonl"
-	secondURI := root + "/project-two/11111111-1111-4111-8111-111111111111.jsonl"
-	listS3Objects = func(got string) ([]S3Object, error) {
-		require.Equal(t, root, got)
-		return []S3Object{
-			{URI: secondURI, LastModified: time.Unix(200, 0)},
-			{URI: firstURI, LastModified: time.Unix(100, 0)},
-		}, nil
+	for _, root := range []string{
+		"s3://bucket/archive/agent-transcripts/laptop/raw/cursor",
+		"s3://bucket/archive",
+		"s3://bucket/raw/cursor",
+	} {
+		t.Run(root, func(t *testing.T) {
+			oldList := listS3Objects
+			t.Cleanup(func() { listS3Objects = oldList })
+			firstURI := root + "/project-one/11111111-1111-4111-8111-111111111111.jsonl"
+			secondURI := root + "/project-two/11111111-1111-4111-8111-111111111111.jsonl"
+			otherURI := root + "/project-one/other.txt"
+			listS3Objects = func(got string) ([]S3Object, error) {
+				require.Equal(t, root, got)
+				return []S3Object{
+					{URI: secondURI, LastModified: time.Unix(200, 0)},
+					{URI: firstURI, LastModified: time.Unix(100, 0)},
+					{URI: otherURI, LastModified: time.Unix(100, 0)},
+				}, nil
+			}
+			sourceSet := newCursorSourceSet([]string{root})
+			sources, err := sourceSet.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 3)
+			assert.ElementsMatch(t, []string{firstURI, secondURI, otherURI}, []string{sources[0].DisplayPath, sources[1].DisplayPath, sources[2].DisplayPath})
+			var streamed []string
+			require.NoError(t, sourceSet.DiscoverEach(t.Context(), func(source SourceRef) error {
+				streamed = append(streamed, source.DisplayPath)
+				return nil
+			}))
+			assert.ElementsMatch(t, []string{firstURI, secondURI, otherURI}, streamed)
+		})
 	}
-
-	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 2)
-	assert.ElementsMatch(t, []string{firstURI, secondURI}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
 }
 
 func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) {
