@@ -567,6 +567,53 @@ func TestSyncClaudeAIDetailNewerThanListNotCached(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
+func TestSyncClaudeAIZipTitleFreshness(t *testing.T) {
+	d := testDB(t)
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	calls := 0
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		calls++
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	})
+	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	exported := strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)
+	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
+	require.NoError(t, err)
+	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls)
+	session, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session.SessionName)
+	assert.Equal(t, "Chat", *session.SessionName)
+}
+
+func TestSyncClaudeAIUsageArchiveShorterBranchKeepsLonger(t *testing.T) {
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	d, err := db.OpenWithArchiveContent(t.Context(), filepath.Join(t.TempDir(), "archive.db"), config.ArchiveContentUsage)
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+	selected := "q2"
+	fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+		detail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
+		return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (ClaudeAIResponse, error) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+		})(ctx, path)
+	}
+	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	selected = "reply"
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Zero(t, stats.Errors)
+	assert.Empty(t, stats.Refusals)
+	session, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, 3, session.MessageCount)
+}
+
 type cancelNewSyncStore struct {
 	*db.DB
 	cancel context.CancelFunc
