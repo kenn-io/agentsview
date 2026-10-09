@@ -310,6 +310,66 @@ func TestTraeXProviderParsesDeidentifiedRollout(t *testing.T) {
 	}
 }
 
+func TestTraeXProviderParsesHistoryMutationRollout(t *testing.T) {
+	root := t.TempDir()
+	const uuid = "019fcf70-1111-7000-8000-000000000001"
+	dst := filepath.Join(
+		root, "2026", "09", "01",
+		"rollout-2026-09-01T10-00-00-"+uuid+".jsonl",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+	fixture, err := os.ReadFile(filepath.Join(
+		"testdata", "traex", "history_mutation_session.jsonl",
+	))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(dst, fixture, 0o644))
+
+	provider, ok := NewProvider(AgentTraeX, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
+		Source:  sources[0],
+		Machine: "devbox",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	sess := outcome.Results[0].Result.Session
+	msgs := outcome.Results[0].Result.Messages
+
+	assert.Equal(t, AgentTraeX, sess.Agent)
+	assert.Equal(t, "traex:"+uuid, sess.ID)
+	assert.Equal(t, 4, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Inspect the parser.", sess.FirstMessage)
+	assert.Equal(t, 12, sess.TotalOutputTokens)
+	require.Len(t, msgs, 4)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Inspect the parser.", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "I will inspect the parser.", msgs[1].Content)
+	require.Len(t, msgs[2].ToolCalls, 1)
+	call := msgs[2].ToolCalls[0]
+	assert.Equal(t, "call_read", call.ToolUseID)
+	assert.Equal(t, "exec", call.ToolName)
+	assert.Equal(t, "Bash", call.Category)
+	assert.Equal(t, `{"cmd":"ls internal/parser"}`, call.InputJSON)
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "codex.go\ntraex.go", call.ResultEvents[0].Content)
+	assert.NotEmpty(t, msgs[2].TokenUsage)
+	assert.Equal(t, RoleAssistant, msgs[3].Role)
+	assert.Equal(t,
+		"The parser files are codex.go and traex.go.",
+		msgs[3].Content,
+	)
+}
+
 // TestTraeXAndCodexProvidersKeepSeparateSourceKeys guards the discovery
 // namespace: the two agents share a UUID shape, so a shared source key would
 // let one agent's session resolve to the other's file.

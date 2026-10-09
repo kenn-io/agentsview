@@ -22,11 +22,13 @@ import (
 
 // Codex JSONL entry types.
 const (
-	codexTypeSessionMeta  = "session_meta"
-	codexTypeResponseItem = "response_item"
-	codexTypeTurnContext  = "turn_context"
-	codexTypeEventMsg     = "event_msg"
-	codexOriginatorExec   = "codex_exec"
+	codexTypeSessionMeta      = "session_meta"
+	codexTypeResponseItem     = "response_item"
+	codexTypeTurnContext      = "turn_context"
+	codexTypeEventMsg         = "event_msg"
+	codexTypeHistoryMutation  = "history_mutation"
+	codexTypeTokenUsageRecord = "token_usage_record"
+	codexOriginatorExec       = "codex_exec"
 )
 
 var errCodexIncrementalNeedsFullParse = errors.New(
@@ -57,6 +59,7 @@ type codexSessionIndexEntry struct {
 // JSONL session file line by line.
 type codexSessionBuilder struct {
 	codexCursorState
+	agent AgentType
 	// sink receives every normalized operation; the collecting
 	// implementation keeps the slice-based behavior, the streaming one
 	// batches into a scratch store.
@@ -220,11 +223,13 @@ type codexPendingEvent struct {
 
 func newCodexSessionBuilder(
 	ctx context.Context,
+	agent AgentType,
 	_ bool,
 	resolveParentTurns codexParentTurnResolver,
 	sink CodexSessionSink,
 ) *codexSessionBuilder {
 	return &codexSessionBuilder{
+		agent:              agent,
 		sink:               sink,
 		projectContext:     ctx,
 		resolveParentTurns: resolveParentTurns,
@@ -400,6 +405,16 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 			return false
 		}
 		b.handleEventMsg(payload)
+	case codexTypeHistoryMutation:
+		if b.suppresses(codexTypeHistoryMutation, payload) {
+			return false
+		}
+		b.handleHistoryMutation(ctx, payload, ts)
+	case codexTypeTokenUsageRecord:
+		if b.suppresses(codexTypeTokenUsageRecord, payload) {
+			return false
+		}
+		b.handleTokenUsageRecord(payload)
 	}
 	return false
 }
@@ -551,6 +566,31 @@ func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
 	}
 }
 
+func (b *codexSessionBuilder) handleHistoryMutation(
+	ctx context.Context, payload gjson.Result, ts time.Time,
+) {
+	if b.agent != AgentTraeX {
+		return
+	}
+	payload.Get("items").ForEach(func(_, item gjson.Result) bool {
+		b.handleResponseItem(ctx, item, ts)
+		return true
+	})
+}
+
+func (b *codexSessionBuilder) handleTokenUsageRecord(
+	payload gjson.Result,
+) {
+	if b.agent != AgentTraeX {
+		return
+	}
+	raw := payload.Get("usage").Raw
+	if raw == "" {
+		return
+	}
+	b.applyTokenUsage(raw)
+}
+
 func (b *codexSessionBuilder) markFirstUserReplayPossible() {
 	b.codexCursorState.markFirstUserReplayPossible()
 }
@@ -559,7 +599,14 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 	payload gjson.Result,
 ) {
 	raw := payload.Get("info.last_token_usage").Raw
-	if raw == "" || b.observeTokenUsage(raw) {
+	if raw == "" {
+		return
+	}
+	b.applyTokenUsage(raw)
+}
+
+func (b *codexSessionBuilder) applyTokenUsage(raw string) {
+	if b.observeTokenUsage(raw) {
 		return
 	}
 
@@ -1342,6 +1389,13 @@ func parseCodexFunctionOutput(
 		if raw == "" {
 			return gjson.Result{}, ""
 		}
+		if out.IsArray() {
+			if text := strings.TrimSpace(
+				strings.Join(extractCodexTextBlocksFromResult(out), "\n"),
+			); text != "" {
+				return out, text
+			}
+		}
 		if gjson.Valid(raw) {
 			return gjson.Parse(raw), raw
 		}
@@ -1449,8 +1503,12 @@ func isCodexSubagentFunctionOutput(output gjson.Result) bool {
 }
 
 func extractCodexTextBlocks(payload gjson.Result) []string {
+	return extractCodexTextBlocksFromResult(payload.Get("content"))
+}
+
+func extractCodexTextBlocksFromResult(blocks gjson.Result) []string {
 	var texts []string
-	payload.Get("content").ForEach(
+	blocks.ForEach(
 		func(_, block gjson.Result) bool {
 			switch block.Get("type").Str {
 			case "input_text", "output_text", "text":
@@ -1791,7 +1849,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	lr := newLineReaderContext(ctx, tee, maxLineSize)
 	defer releaseLineReader(lr)
 	b := newCodexSessionBuilder(
-		ctx, includeExec, p.parentTurnResolver(ctx, path), sink,
+		ctx, p.spec.agent, includeExec, p.parentTurnResolver(ctx, path), sink,
 	)
 	malformedLines := 0
 
@@ -2193,7 +2251,7 @@ func seedCodexIncrementalStateFromReader(ctx context.Context,
 ) (codexIncrementalSeed, error) {
 	sink := newCodexSeedSink()
 	b := newCodexSessionBuilder(
-		ctx, false, resolveParentTurns, sink,
+		ctx, AgentCodex, false, resolveParentTurns, sink,
 	)
 	lr := newLineReader(r, maxLineSize)
 	defer releaseLineReader(lr)
@@ -2550,7 +2608,7 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 	}
 
 	b := newCodexSessionBuilder(
-		ctx, includeExec,
+		ctx, p.spec.agent, includeExec,
 		p.parentTurnResolver(ctx, path),
 		NewCodexCollectingSink(startOrdinal),
 	)
@@ -2572,6 +2630,11 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 			// subagent replay classification. Rebuild the current session
 			// authoritatively instead of appending against stale gate state.
 			if lineType == codexTypeSessionMeta {
+				fallbackErr = errCodexIncrementalNeedsFullParse
+				return
+			}
+			if p.spec.agent == AgentTraeX &&
+				lineType == codexTypeHistoryMutation {
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
@@ -2752,7 +2815,8 @@ func isCodexSubagentNotification(content string) bool {
 
 func codexIncrementalNeedsFullParse(line string) bool {
 	b := newCodexSessionBuilder(
-		context.Background(), false, nil, NewCodexCollectingSink(0),
+		context.Background(), AgentCodex, false, nil,
+		NewCodexCollectingSink(0),
 	)
 	return b.codexIncrementalNeedsFullParse(line)
 }
