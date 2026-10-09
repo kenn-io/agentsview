@@ -38,8 +38,8 @@ func TestSessionLabelsAPI(t *testing.T) {
 		Repository: "owner/repo", Number: 7,
 	}})
 
-	w := te.put(t, "/api/v1/sessions/worker/labels",
-		`{"labels":["ticket=ABC-123","role=reviewer"]}`)
+	w := te.patch(t, "/api/v1/sessions/worker/labels",
+		`{"clear":true,"add":["ticket=ABC-123","role=reviewer"]}`)
 	assertStatus(t, w, http.StatusOK)
 	labels := decode[db.SessionLabels](t, w)
 	assert.True(t, labels.SessionFound)
@@ -78,10 +78,10 @@ func TestSessionLabelsAPI(t *testing.T) {
 		assert.Contains(t, w.Body.String(), "more than 64 labels")
 	}
 
-	w = te.put(t, "/api/v1/sessions/worker/labels", `{"labels":["=missing-key"]}`)
+	w = te.patch(t, "/api/v1/sessions/worker/labels", `{"add":["=missing-key"]}`)
 	assertStatus(t, w, http.StatusBadRequest)
 
-	w = te.put(t, "/api/v1/sessions/worker/labels", `{"labels":[]}`)
+	w = te.patch(t, "/api/v1/sessions/worker/labels", `{"clear":true}`)
 	assertStatus(t, w, http.StatusOK)
 	assert.Equal(t, []string{}, decode[db.SessionLabels](t, w).Labels)
 
@@ -120,28 +120,17 @@ func TestSessionParentAPI(t *testing.T) {
 		`{"parent_session_id":"worker"}`)
 	assertStatus(t, w, http.StatusBadRequest)
 
-	w = te.del(t, "/api/v1/sessions/worker/parent")
+	// An empty parent removes the link; removing a missing link is 404.
+	w = te.put(t, "/api/v1/sessions/worker/parent", `{}`)
 	assertStatus(t, w, http.StatusOK)
-	w = te.get(t, "/api/v1/sessions/worker/parent")
-	assertStatus(t, w, http.StatusNotFound)
-	w = te.del(t, "/api/v1/sessions/worker/parent")
+	w = te.put(t, "/api/v1/sessions/worker/parent", `{"parent_session_id":""}`)
 	assertStatus(t, w, http.StatusNotFound)
 }
 
 func TestSessionAnnotationWritesUnavailableOnReadOnlyStore(t *testing.T) {
 	te := setupPGMode(t)
-	w := te.put(t, "/api/v1/sessions/any/labels", `{"labels":["x"]}`)
+	w := te.patch(t, "/api/v1/sessions/any/labels", `{"add":["x"]}`)
 	assertStatus(t, w, http.StatusNotImplemented)
 	w = te.put(t, "/api/v1/sessions/any/parent", `{"parent_session_id":"p"}`)
 	assertStatus(t, w, http.StatusNotImplemented)
-
-	seedAnnotatedSession(t, te, "worker", nil)
-	_, err := te.db.SetSessionLabels(t.Context(), "worker", []string{"ticket=ABC-123"})
-	require.NoError(t, err)
-
-	w = te.get(t, "/api/v1/sessions/worker/labels")
-	assertStatus(t, w, http.StatusOK)
-	labels := decode[db.SessionLabels](t, w)
-	assert.True(t, labels.SessionFound)
-	assert.Equal(t, []string{"ticket=ABC-123"}, labels.Labels)
 }

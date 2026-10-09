@@ -3,8 +3,10 @@
  */
 
 export interface UpdateSessionLabelsInputBody {
-  /** Labels to add */
+  /** Labels to add. Labels are free text, often key=value. */
   add?: string[];
+  /** Remove every existing label before adding; with add, replaces the set */
+  clear?: boolean;
   /** Labels to remove; absent labels are ignored */
   remove?: string[];
 }

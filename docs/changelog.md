@@ -23,7 +23,7 @@ The latest published release is
   after upgrading re-reads Claude sessions once to pick up existing links.
 - Label sessions by ticket, role, or kind of run with
   `agentsview session label <id> ticket=ABC-123` or
-  `PUT /api/v1/sessions/{id}/labels`, then filter with `--label`, the `label`
+  `PATCH /api/v1/sessions/{id}/labels`, then filter with `--label`, the `label`
   API parameter, the web UI, or the MCP `list_sessions` tool. Labels survive
   reparses and resyncs. Label and pull request filters also find child and
   headless sessions, such as orchestrator workers; the web UI shows the tree
