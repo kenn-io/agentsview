@@ -11,15 +11,18 @@ import (
 func ensureAnalyticsIndexLocked(ctx context.Context, w *writerHandle) error {
 	var exists bool
 	if err := w.QueryRow(ctx, `SELECT EXISTS (
-		SELECT 1 FROM sqlite_master WHERE type = 'index'
-		AND name = 'idx_messages_analytics_metadata'
+		SELECT 1 FROM pragma_index_info('idx_messages_analytics_metadata')
+		WHERE name = 'ordinal'
 	)`).Scan(&exists); err != nil {
 		return fmt.Errorf("checking analytics metadata index: %w", err)
 	}
 	if !exists {
 		log.Print("building SQLite analytics metadata index; startup waits for the message scan to finish")
+		if _, err := w.Exec(ctx, `DROP INDEX IF EXISTS idx_messages_analytics_metadata`); err != nil {
+			return fmt.Errorf("dropping stale analytics metadata index: %w", err)
+		}
 		if _, err := w.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_messages_analytics_metadata
-			ON messages(session_id, id, timestamp, model)`); err != nil {
+			ON messages(session_id, id, timestamp, model, ordinal)`); err != nil {
 			return fmt.Errorf("creating analytics metadata index: %w", err)
 		}
 	}
