@@ -285,10 +285,19 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		return importUpdated, err
 	}
 	if sameMessages(archived, storedFormMessages(store, msgs)) {
+		before, err := store.GetSessionFull(ctx, id)
+		if err != nil {
+			return importUpdated, err
+		}
 		status, err := upsertConversation(ctx, store, result, nil)
 		// A usage-only archive can't tell a shorter branch from a shorter export, so it keeps the longer copy.
 		if refusalReason(err) == RefusalShorterExport {
 			return importSkipped, nil
+		}
+		// Count metadata-only changes as updates so the caller publishes them.
+		s := result.Session
+		if err == nil && status == importSkipped && before != nil && (!ptrEqual(before.SessionName, db.ParsedSessionName(s)) || !ptrEqual(before.FirstMessage, strPtr(s.FirstMessage)) || !ptrEqual(before.StartedAt, timeStr(s.StartedAt)) || !ptrEqual(before.EndedAt, timeStr(s.EndedAt))) {
+			return importUpdated, nil
 		}
 		return status, err
 	}

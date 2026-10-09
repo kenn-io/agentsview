@@ -589,6 +589,28 @@ func TestSyncClaudeAIZipTitleFreshness(t *testing.T) {
 	assert.Equal(t, "Chat", *session.SessionName)
 }
 
+func TestSyncClaudeAITitleOnlyChangeCountsAsUpdate(t *testing.T) {
+	d := testDB(t)
+	renamed := false
+	fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+		summary, detail := syncSummary, syncDetail
+		if renamed {
+			summary = strings.Replace(summary, "2026-03-01T10:05:00.123456Z", "2026-03-02T10:05:00.123456Z", 1)
+			detail = strings.Replace(detail, `"name":"Chat"`, `"name":"Renamed"`, 1)
+		}
+		return syncOneFetch(t, summary, func() (ClaudeAIResponse, error) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+		})(ctx, path)
+	}
+	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	renamed = true
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Zero(t, stats.Skipped)
+}
+
 func TestSyncClaudeAIUsageArchiveShorterBranchKeepsLonger(t *testing.T) {
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 	d, err := db.OpenWithArchiveContent(t.Context(), filepath.Join(t.TempDir(), "archive.db"), config.ArchiveContentUsage)
