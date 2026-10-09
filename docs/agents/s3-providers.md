@@ -71,6 +71,8 @@ capability.
 - Archive ownership uses the exact object URI, with Cursor format and layout
   alternatives sharing the same machine, raw project, and session stem retaining
   their saved ID and stars. Different projects keep separate conversations.
+- Cursor subagents link to their project's archived parent, including when
+  the child arrives first or the parent's object changes format.
 - Validate IDs with the same rules the local provider already uses.
 - Do not invent a second discover wrapper that bypasses the scanner. Extra
   post-processing (prefer `.jsonl`, fold sidecars) belongs next to the

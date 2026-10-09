@@ -88,6 +88,14 @@ func cursorS3TranscriptName(name string) bool {
 
 // CursorS3SourceKey identifies alternatives within the broadest accepted scanner root.
 func CursorS3SourceKey(roots []string, uri string) string {
+	machine, loc, ok := cursorS3Location(roots, uri)
+	if !ok {
+		return ""
+	}
+	return machine + "/" + loc.ProjectDir + "/" + loc.RawID
+}
+
+func cursorS3Location(roots []string, uri string) (string, cursorTranscriptLocation, bool) {
 	roots = slices.DeleteFunc(slices.Clone(roots), func(root string) bool { return !isS3URI(root) })
 	slices.SortFunc(roots, func(a, b string) int { return len(a) - len(b) })
 	for _, root := range roots {
@@ -97,10 +105,38 @@ func CursorS3SourceKey(roots []string, uri string) string {
 		}
 		segs := strings.Split(rel, "/")
 		if keepCursorS3Session(rel, segs) {
-			return s3MachineFromRoot(root, "cursor") + "/" + segs[0] + "/" + strings.TrimSuffix(path.Base(uri), path.Ext(uri))
+			loc, _ := parseCursorTranscriptRelParts(segs)
+			if len(segs) == 2 {
+				loc = cursorTranscriptLocation{ProjectDir: segs[0], RawID: strings.TrimSuffix(path.Base(uri), path.Ext(uri))}
+			}
+			return s3MachineFromRoot(root, "cursor"), loc, true
 		}
 	}
-	return ""
+	return "", cursorTranscriptLocation{}, false
+}
+
+// CursorS3ParentFamily locates archived children and their parent's ownership family.
+func CursorS3ParentFamily(roots []string, uri string) (key, baseID string, prefixes []string) {
+	machine, loc, ok := cursorS3Location(roots, uri)
+	if !ok {
+		return "", "", nil
+	}
+	stem := loc.RawID
+	if loc.ParentRawID != "" {
+		stem = loc.ParentRawID
+	}
+	key = machine + "/" + loc.ProjectDir + "/" + stem
+	baseID = cursorSessionIDPrefix + stem
+	if machine != "" {
+		baseID = machine + "~" + baseID
+	}
+	for _, root := range roots {
+		prefix := strings.TrimSuffix(root, "/") + "/" + loc.ProjectDir + "/agent-transcripts/" + stem + "/"
+		if CursorS3SourceKey(roots, prefix+stem+".jsonl") == key {
+			prefixes = append(prefixes, prefix+"subagents/")
+		}
+	}
+	return key, baseID, prefixes
 }
 
 // preferCursorS3Transcripts keeps one object per machine, project and session stem

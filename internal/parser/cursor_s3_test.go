@@ -119,8 +119,10 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 			listS3Objects = func(got string) ([]S3Object, error) {
 				require.Equal(t, root, got)
 				return []S3Object{
-					{URI: projectRoot + tt.loser}, {URI: winner},
-					{URI: projectRoot + "logs/trace.txt"}, {URI: other},
+					{URI: projectRoot + tt.loser},
+					{URI: winner},
+					{URI: projectRoot + "logs/trace.txt"},
+					{URI: other},
 				}, nil
 			}
 			sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
@@ -250,7 +252,6 @@ func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) 
 		sources[0].DisplayPath,
 		sources[1].DisplayPath,
 	})
-
 }
 
 func TestCursorS3DiscoverDecodesAgentTranscriptsProject(t *testing.T) {
@@ -304,6 +305,26 @@ func TestCursorS3LayoutRank(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, cursorS3LayoutRank(tt.uri))
 		})
+	}
+}
+
+func TestCursorS3ParentFamily(t *testing.T) {
+	for _, root := range []string{"s3://bucket/host-a/raw/cursor", "s3://bucket/archive"} {
+		aliasRoot := strings.Replace(root, "bucket", "other-bucket", 1)
+		roots := []string{root + "/agent-transcripts/agent-transcripts", aliasRoot, root}
+		parent := root + "/agent-transcripts/agent-transcripts/shared/shared.jsonl"
+		child := root + "/agent-transcripts/agent-transcripts/shared/subagents/child.txt"
+		key, id, prefixes := CursorS3ParentFamily(roots, parent)
+		childKey, childID, childPrefixes := CursorS3ParentFamily(roots, child)
+		assert.Equal(t, key, childKey)
+		assert.Equal(t, id, childID)
+		assert.ElementsMatch(t, prefixes, childPrefixes)
+		assert.Contains(t, prefixes, root+"/agent-transcripts/agent-transcripts/shared/subagents/")
+		assert.Contains(t, prefixes, aliasRoot+"/agent-transcripts/agent-transcripts/shared/subagents/")
+		assert.Equal(t, key, CursorS3SourceKey(roots, aliasRoot+"/agent-transcripts/shared.txt"))
+		key, _, prefixes = CursorS3ParentFamily(roots, "s3://unconfigured/project/shared.txt")
+		assert.Empty(t, key)
+		assert.Empty(t, prefixes)
 	}
 }
 

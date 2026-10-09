@@ -2184,6 +2184,7 @@ func (db *DB) RepairQueuedSubagentParents() error {
 // The returned count includes session rows changed by committed linking and cleanup.
 func (db *DB) RepairQueuedSubagentParentsContext(
 	ctx context.Context, onProgress func(done, total int),
+	cursorRoots ...string,
 ) (int, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -2292,6 +2293,11 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 			return 0, fmt.Errorf("counting queued dangling-parent repairs: %w", err)
 		}
 		updated += int(cleared)
+		cursorUpdated, err := repairCursorS3Parents(ctx, tx, chunk, cursorRoots)
+		if err != nil {
+			return 0, fmt.Errorf("repairing Cursor S3 parents: %w", err)
+		}
+		updated += cursorUpdated
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM subagent_parent_cleanup_queue WHERE session_id IN "+ph,
 			args...,
@@ -2317,6 +2323,70 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing queued subagent parent repair: %w", err)
+	}
+	return updated, nil
+}
+
+const cursorS3ParentRepairQuery = `UPDATE sessions INDEXED BY idx_sessions_file_path
+	SET parent_session_id = ?, local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+	WHERE file_path >= ? AND file_path < ? AND agent = 'cursor'
+	AND relationship_type = 'subagent' AND parent_session_id IS NOT ?`
+
+func repairCursorS3Parents(ctx context.Context, tx *sql.Tx, ids, roots []string) (int, error) {
+	if len(roots) == 0 {
+		return 0, nil
+	}
+	ph, args := inPlaceholders(ids)
+	rows, err := tx.QueryContext(ctx, "SELECT file_path FROM sessions WHERE agent = 'cursor' AND id IN "+ph, args...)
+	if err != nil {
+		return 0, err
+	}
+	type family struct {
+		baseID   string
+		prefixes []string
+	}
+	families := make(map[string]family)
+	for rows.Next() {
+		var uri sql.NullString
+		if err := rows.Scan(&uri); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		key, baseID, prefixes := parser.CursorS3ParentFamily(roots, uri.String)
+		if key != "" {
+			families[key] = family{baseID: baseID, prefixes: prefixes}
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return 0, err
+	}
+	updated := 0
+	for key, family := range families {
+		records, err := listSessionPathRecords(ctx, tx, family.baseID)
+		if err != nil {
+			return 0, err
+		}
+		var parent any
+		for _, record := range records {
+			if !record.Excluded && parser.CursorS3SourceKey(roots, record.FilePath) == key {
+				parent = record.ID
+				break
+			}
+		}
+		for _, prefix := range family.prefixes {
+			res, err := tx.ExecContext(ctx, cursorS3ParentRepairQuery,
+				parent, prefix, strings.TrimSuffix(prefix, "/")+"0", parent)
+			if err != nil {
+				return 0, err
+			}
+			count, err := res.RowsAffected()
+			if err != nil {
+				return 0, err
+			}
+			updated += int(count)
+		}
 	}
 	return updated, nil
 }
@@ -3997,9 +4067,16 @@ const sessionPathRecordQuery = "SELECT id, COALESCE(file_path, ''), source_missi
 // ListSessionPathRecords returns the records for baseID and every id
 // parser.AltSessionID derives from it, stored rows first, then deletions.
 func (db *DB) ListSessionPathRecords(ctx context.Context, baseID string) ([]SessionPathRecord, error) {
+	return listSessionPathRecords(ctx, db.getReader(), baseID)
+}
+
+func listSessionPathRecords(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, baseID string,
+) ([]SessionPathRecord, error) {
 	const match = "(id = ? OR (id >= ? AND id < ?))"
 	low, high := baseID+"_alt-", baseID+"_alt."
-	return db.querySessionPathRecords(ctx,
+	return querySessionPathRecords(ctx, q,
 		sessionPathRecordQuery+match+
 			" UNION ALL SELECT id, COALESCE(file_path, ''), 0, 1, 0, 0 FROM excluded_sessions WHERE "+match,
 		baseID, low, high, baseID, low, high,
@@ -4016,13 +4093,16 @@ func (db *DB) ListSessionPathRecordsForAgents(ctx context.Context, agents []stri
 	for i, agent := range agents {
 		args[i] = agent
 	}
-	return db.querySessionPathRecords(ctx,
+	return querySessionPathRecords(ctx, db.getReader(),
 		sessionPathRecordQuery+"agent IN (?"+strings.Repeat(",?", len(agents)-1)+")", args...,
 	)
 }
 
-func (db *DB) querySessionPathRecords(ctx context.Context, query string, args ...any) ([]SessionPathRecord, error) {
-	rows, err := db.getReader().Query(ctx, query, args...)
+func querySessionPathRecords(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, query string, args ...any,
+) ([]SessionPathRecord, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing session path records: %w", err)
 	}

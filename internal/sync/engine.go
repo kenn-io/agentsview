@@ -3672,9 +3672,12 @@ func (e *Engine) resyncBuildLocked(
 	// copied spawn edge is present. A failed repair leaves hierarchy state
 	// uncertain and must abort before the replacement can be installed.
 	if err == nil {
+		err = newDB.QueueSubagentParentRepairs(ctx, orphaned)
+	}
+	if err == nil {
 		repaired, err = newDB.RepairQueuedSubagentParentsContext(ctx, func(done, total int) {
 			e.reportSubagentRepairProgress(reportResyncProgress, done, total)
-		})
+		}, e.sources().agentDirs[parser.AgentCursor]...)
 		pendingLinksUpdated += repaired
 	}
 	if err != nil {
@@ -5092,7 +5095,7 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 			}
 		}
 		if repairEligible {
-			repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
+			repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil, e.sources().agentDirs[parser.AgentCursor]...)
 			if err != nil {
 				errs = append(errs, fmt.Errorf(
 					"repair queued subagent parents after grouped reconciliation: %w", err,
@@ -5594,7 +5597,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	// An empty spool never enters collectAndBatch, so its pending durable
 	// repairs must run here too. This touches queued IDs, not the full archive.
 	if eligibility.repair && !passEpilogueDeferred(ctx) {
-		repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
+		repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil, e.sources().agentDirs[parser.AgentCursor]...)
 		if err != nil {
 			stats.RecordFailed()
 			stats.Aborted = true
@@ -10566,6 +10569,19 @@ func (e *Engine) collectAndBatchWithOptions(
 		// Persist affected IDs before any exclusion or replacement can
 		// cascade their only spawn edge away. The queue is cleared only in
 		// the same transaction that successfully repairs the hierarchy.
+		var cursorIDs []string
+		for i, result := range r.results {
+			if r.agent == parser.AgentCursor && isS3SourcePath(result.Session.File.Path) {
+				cursorIDs = append(cursorIDs, resultIDs[i])
+			}
+		}
+		if err := e.db.QueueSubagentParentRepairs(completionCtx, cursorIDs); err != nil {
+			log.Printf("queue Cursor S3 parent repairs: %v", err)
+			stats.RecordFailed()
+			e.noteSQLiteContainerResult(r.containerResultPath(), false)
+			r.releaseAll()
+			continue
+		}
 		if err := e.db.QueueSubagentParentCleanupRepairs(completionCtx, children); err != nil {
 			log.Printf("queue subagent parent repairs: %v", err)
 			stats.RecordFailed()
@@ -10940,7 +10956,7 @@ flush:
 			e.reportSubagentRepairProgress(onProgress, done, total)
 		}
 	}
-	repaired, err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx, repairProgress)
+	repaired, err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx, repairProgress, e.sources().agentDirs[parser.AgentCursor]...)
 	if err != nil {
 		log.Printf("repair queued subagent parents: %v", err)
 		stats.RecordFailed()
@@ -20836,7 +20852,7 @@ func (e *Engine) processAndWriteSessionFile(
 				"reconcile fresh source baselines: %w", err,
 			)
 		}
-		repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
+		repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil, e.sources().agentDirs[parser.AgentCursor]...)
 		if err != nil {
 			return false, sessionsChanged, fmt.Errorf(
 				"repair queued subagent parents: %w", err,
@@ -20887,7 +20903,7 @@ func (e *Engine) processAndWriteSessionFile(
 	// A prior sync may have removed an edge and then failed before repairing
 	// its child. Retry that durable work after this sync's read-only capture
 	// but before making any new mutations.
-	repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
+	repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil, e.sources().agentDirs[parser.AgentCursor]...)
 	if err != nil {
 		return false, sessionsChanged, fmt.Errorf(
 			"repair queued subagent parents: %w", err,
@@ -20924,7 +20940,7 @@ func (e *Engine) processAndWriteSessionFile(
 		if !repairQueued {
 			return
 		}
-		repaired, repairErr := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
+		repaired, repairErr := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil, e.sources().agentDirs[parser.AgentCursor]...)
 		if repairErr != nil {
 			err = errors.Join(err, fmt.Errorf(
 				"repair queued subagent parents: %w", repairErr,

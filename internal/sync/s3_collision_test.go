@@ -21,7 +21,8 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 		root              string
 		preCollapsed      bool
 	}{
-		{name: "together"}, {name: "together reversed", reverse: true},
+		{name: "together"},
+		{name: "together reversed", reverse: true},
 		{name: "separate", separate: true},
 		{name: "no machine boundary", root: "s3://bucket/archive"},
 		{name: "pre-collapsed cached source", preCollapsed: true},
@@ -67,8 +68,10 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				project := []string{"agent-transcripts", "cursor"}[i]
 				sources = append(sources, parser.SourceRef{
 					Provider: parser.AgentCursor, Key: uri, DisplayPath: uri, FingerprintKey: uri, ProjectHint: project,
-					Opaque: parser.S3DiscoveredSource{URI: uri, Project: project,
-						Machine: machine, Size: int64(len(contents[uri])), MtimeNS: mtime.UnixNano()},
+					Opaque: parser.S3DiscoveredSource{
+						URI: uri, Project: project,
+						Machine: machine, Size: int64(len(contents[uri])), MtimeNS: mtime.UnixNano(),
+					},
 				})
 			}
 			if tt.reverse {
@@ -151,7 +154,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			require.NoError(t, database.SetSessionDataVersion(t.Context(), ids[paths[1]], db.CurrentDataVersion()-1))
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 			require.Zero(t, stats.Failed)
-			assert.EqualValues(t, before+1, fetches.Load())
+			assert.Equal(t, before+1, fetches.Load())
 			verify()
 			// Changed object metadata must refresh the same saved row.
 			contents[paths[1]] = strings.ReplaceAll(contents[paths[1]], "Answer B", "Updated B")
@@ -199,8 +202,10 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			second := sources[0]
 			second.Key, second.DisplayPath, second.FingerprintKey = otherMachine, otherMachine, otherMachine
 			second.ProjectHint = "agent-transcripts"
-			second.Opaque = parser.S3DiscoveredSource{URI: otherMachine, Project: "agent-transcripts", Machine: "host-b",
-				Size: int64(len(contents[otherMachine])), MtimeNS: mtime.UnixNano()}
+			second.Opaque = parser.S3DiscoveredSource{
+				URI: otherMachine, Project: "agent-transcripts", Machine: "host-b",
+				Size: int64(len(contents[otherMachine])), MtimeNS: mtime.UnixNano(),
+			}
 			provider.discovered = append(provider.discovered, second)
 			if machine == "" {
 				unrelated := root + "/agent-transcripts/unrelated.txt"
@@ -253,6 +258,100 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 
 				}
 			}
+		})
+	}
+}
+
+func TestS3CursorCollidingParents(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		passes [][]int
+	}{
+		{"parents first", [][]int{{0}, {1}, {2}}},
+		{"parents reversed", [][]int{{1}, {0}, {2}}},
+		{"child first separate", [][]int{{2}, {0}, {1}}},
+		{"child first together", [][]int{{2, 1, 0}}},
+		{"own parent late", [][]int{{0}, {2}, {1}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const root = "s3://bucket/host-a/raw/cursor"
+			const aliasRoot = "s3://other-bucket/host-a/raw/cursor"
+			const content = "user:\nHello\nassistant:\nReply\n"
+			paths := []string{root + "/project-a/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared/subagents/child.txt"}
+			oldFetch := fetchS3Object
+			t.Cleanup(func() { fetchS3Object = oldFetch })
+			fetchS3Object = func(string) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader(content)), nil
+			}
+			database := openTestDB(t)
+			def, ok := parser.AgentByType(parser.AgentCursor)
+			require.True(t, ok)
+			provider := &processFixtureProvider{Def: def, Caps: parser.Capabilities{
+				Source: parser.SourceCapabilities{DiscoverSources: parser.CapabilitySupported, SharedSessionIDs: parser.CapabilitySupported},
+			}}
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root, aliasRoot}}, Machine: "local",
+				DisableFilesystemProjectDiscovery: true, ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+			})
+			t.Cleanup(engine.Close)
+			source := func(uri string) parser.SourceRef {
+				return parser.SourceRef{
+					Provider: parser.AgentCursor, Key: uri, DisplayPath: uri, FingerprintKey: uri,
+					Opaque: parser.S3DiscoveredSource{URI: uri, Machine: "host-a", Size: int64(len(content)), MtimeNS: time.Unix(100, 0).UnixNano()},
+				}
+			}
+			verify := func() {
+				t.Helper()
+				child, err := database.GetSessionFull(t.Context(), "host-a~cursor:child")
+				require.NoError(t, err)
+				if child == nil {
+					return
+				}
+				parents, err := database.ListSessionIDsByFilePath(t.Context(), paths[1], "cursor")
+				require.NoError(t, err)
+				if len(parents) == 0 {
+					assert.Nil(t, child.ParentSessionID, "a different project's parent cannot own this child")
+				} else {
+					require.Len(t, parents, 1)
+					assert.Equal(t, parents[0], derefString(child.ParentSessionID))
+				}
+				assert.Equal(t, "host-a~cursor:shared", derefString(child.ParserParentSessionID))
+			}
+			for _, pass := range tt.passes {
+				provider.discovered = nil
+				for _, i := range pass {
+					if tt.name == "own parent late" && i == 1 {
+						paths[1] = aliasRoot + "/project-b/agent-transcripts/shared.txt"
+					}
+					provider.discovered = append(provider.discovered, source(paths[i]))
+				}
+				stats := engine.SyncAll(t.Context(), nil)
+				require.Zero(t, stats.Failed)
+				verify()
+			}
+			if tt.name == "own parent late" {
+				parents, err := database.ListSessionIDsByFilePath(t.Context(), paths[1], "cursor")
+				require.NoError(t, err)
+				require.Len(t, parents, 1)
+				paths[1] = aliasRoot + "/project-b/agent-transcripts/shared/shared.jsonl"
+				provider.discovered = []parser.SourceRef{source(paths[1])}
+				stats := engine.SyncAll(t.Context(), nil)
+				require.Zero(t, stats.Failed)
+				moved, err := database.ListSessionIDsByFilePath(t.Context(), paths[1], "cursor")
+				require.NoError(t, err)
+				assert.Equal(t, parents, moved)
+				verify()
+			}
+			provider.discovered = []parser.SourceRef{source(paths[2])}
+			stats := engine.ResyncAll(t.Context(), nil)
+			require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+			require.Zero(t, stats.Failed)
+			verify()
+			_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
+				Agent: parser.AgentCursor, Path: paths[2], Machine: "host-a", SourceSize: int64(len(content)), SourceMtime: time.Unix(100, 0).UnixNano(), ForceParse: true,
+			}, "host-a~cursor:child")
+			require.NoError(t, err)
+			verify()
 		})
 	}
 }
