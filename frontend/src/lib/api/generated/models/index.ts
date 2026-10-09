@@ -22,6 +22,7 @@ export * from "./branchesResponse.ts";
 export * from "./bulkStarInputBody.ts";
 export * from "./cacheStats.ts";
 export * from "./cannedSessionFiltersInput.ts";
+export * from "./claudeAIChromeOutputBody.ts";
 export * from "./claudeAISyncResultInputBody.ts";
 export * from "./comparison.ts";
 export * from "./configDuckDBConfig.ts";

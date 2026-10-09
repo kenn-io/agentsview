@@ -126,6 +126,7 @@ the new props through the app wrappers. Do not work around them with unsupported
 props or forked styles.
 
 - `Modal`'s close-X `aria-label` is hardcoded English; needs a label prop.
+- `CodeBlock` forwards `copyLabel` but keeps CopyButton's English "Copied" label.
 - `TopBar` cannot express "no active tab"; on routes that are not tabs
   (settings), the first tab renders as current.
 
