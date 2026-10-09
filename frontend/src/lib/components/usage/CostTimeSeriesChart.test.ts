@@ -502,7 +502,7 @@ describe("CostTimeSeriesChart", () => {
     const paths = document.querySelectorAll<SVGPathElement>("path.lc-area-path");
     expect(paths).toHaveLength(1);
     expect(paths[0]!.getAttribute("fill")).toBe("var(--accent-blue)");
-    expect(document.querySelectorAll(".legend-item")).toHaveLength(0);
+    expect(Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim())).toEqual(["single-model"]);
     unmount(component);
   });
 

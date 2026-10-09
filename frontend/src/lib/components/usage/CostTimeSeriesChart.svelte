@@ -664,19 +664,18 @@
   {#if seriesData.points.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    {#if seriesData.keys.length > 1}
-      <div class="legend">
-        {#each seriesData.keys as key (key)}
-          <span class="legend-item">
-            <span
-              class="legend-dot"
-              style="background: {seriesColor(key)}"
-            ></span>
-            {seriesLabel(key)}
-          </span>
-        {/each}
-      </div>
-    {/if}
+    <!-- Always rendered at one line so selecting a series never shifts the page. -->
+    <div class="legend">
+      {#each seriesData.keys.filter((key) => key !== "total") as key (key)}
+        <span class="legend-item">
+          <span
+            class="legend-dot"
+            style="background: {seriesColor(key)}"
+          ></span>
+          {seriesLabel(key)}
+        </span>
+      {/each}
+    </div>
 
     <div
       class="chart-body"
@@ -859,13 +858,21 @@
   .legend {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    height: 15px;
+    overflow-x: auto;
+    scrollbar-width: none;
     gap: var(--space-5);
     margin-bottom: 4px;
   }
 
+  .legend::-webkit-scrollbar {
+    display: none;
+  }
+
   .legend-item {
     display: inline-flex;
+    flex-shrink: 0;
+    white-space: nowrap;
     align-items: center;
     gap: 4px;
     font-size: 10px;

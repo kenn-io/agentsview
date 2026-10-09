@@ -40,6 +40,39 @@ test.describe("Usage attribution touch", () => {
 });
 
 test.describe("Usage attribution selection", () => {
+  for (const [view, selector, labels] of [["treemap", ".tile", ".rail-label"], ["list", ".list-row", ".list-label"]] as const) {
+    test(`selecting keeps ${view} geometry and double click opens the clicked project`, async ({ page }) => {
+      // Summary cards wrap at this width, so a card dropping out on select would shift the panel.
+      await page.setViewportSize({ width: 700, height: 900 });
+      await page.goto("/usage");
+      const panel = page.locator(".attribution-panel");
+      await expect(panel.locator(".tile").first()).toBeVisible();
+      if (view === "list") await panel.getByRole("button", { name: "List", exact: true }).click();
+      await expect(page.locator(".usage-content")).toHaveAttribute("aria-busy", "false");
+      const items = panel.locator(selector);
+      // Content coordinates, so clicking's scroll into view and scroll anchoring cannot mask a shift.
+      const geometry = () => items.evaluateAll((nodes) => {
+        const content = document.querySelector(".usage-content")!;
+        const top = content.getBoundingClientRect().top - content.scrollTop;
+        return nodes.map((node) => {
+          const { x, y, width, height } = node.getBoundingClientRect();
+          return [x, y - top, width, height].map(Math.round);
+        });
+      });
+      const before = await geometry();
+      const narrowed = page.waitForResponse((response) => new URL(response.url()).searchParams.has("project_key"));
+      await items.nth(1).click();
+      await narrowed;
+      await expect(items.nth(1)).toHaveAttribute("aria-pressed", "true");
+      await expect(page.locator(".usage-content")).toHaveAttribute("aria-busy", "false");
+      expect(await geometry()).toEqual(before);
+
+      const label = await panel.locator(labels).nth(2).textContent();
+      await items.nth(2).dblclick();
+      await expect(panel.locator("h3")).toHaveText(label!);
+    });
+  }
+
   test("selection clears in the header and double click opens the clicked project", async ({ page }) => {
     await page.goto("/usage");
     const panel = page.locator(".attribution-panel");

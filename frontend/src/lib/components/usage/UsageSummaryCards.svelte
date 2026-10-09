@@ -239,7 +239,7 @@
         sub: () => vsPrior ?? "",
         featured: true,
       },
-      ...(usage.timeSeriesSummary?.totals.copilotAICredits
+      ...((usage.colorSummary ?? usage.timeSeriesSummary)?.totals.copilotAICredits
         ? [
             {
               label: () => m.usage_summary_copilot_ai_credits(),

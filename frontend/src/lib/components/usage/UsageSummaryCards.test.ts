@@ -98,6 +98,7 @@ afterEach(() => {
   }
   usage.cancelInFlightReads();
   usage.summary = null;
+  usage.colorSummary = null;
   usage.errors.summary = null;
   usage.mode = "cost";
   usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
@@ -146,6 +147,21 @@ describe("UsageSummaryCards", () => {
 
     expect(document.querySelectorAll(".summary-cards .card")).toHaveLength(cardCount);
     expect(document.body.textContent).toContain("Copilot AI Credits");
+  });
+
+  it("keeps the Copilot credits card when a selected project has no credits", async () => {
+    const parent = summary();
+    parent.totals.copilotAICredits = 5;
+    usage.summary = parent;
+    usage.colorSummary = parent;
+    component = mount(UsageSummaryCards, { target: document.body });
+    await tick();
+    const cardCount = document.querySelectorAll(".summary-cards .card").length;
+
+    usage.summary = summary();
+    await tick();
+    expect(document.querySelectorAll(".summary-cards .card")).toHaveLength(cardCount);
+    expect(cardValue("Copilot AI Credits")).toBe("0");
   });
 
   it("labels uncached input and adds total input", async () => {
