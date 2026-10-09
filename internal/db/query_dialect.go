@@ -84,6 +84,10 @@ func (d QueryDialect) TrueLiteral() string {
 	return d.trueLiteral
 }
 
+func (d QueryDialect) FalseLiteral() string {
+	return d.falseLiteral
+}
+
 func (d QueryDialect) recursiveUnionSQL() string {
 	if d.recursiveUnion == "" {
 		return "UNION"

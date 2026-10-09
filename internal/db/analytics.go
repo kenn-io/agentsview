@@ -51,6 +51,11 @@ func IsSupportedAnalyticsSignal(signal string) bool {
 // inPlaceholders returns a "(?,?,...)" string and []any args for
 // a slice of string IDs.
 func inPlaceholders(ids []string) (string, []any) {
+	return InPlaceholders(ids)
+}
+
+// InPlaceholders binds string IDs with question-mark placeholders.
+func InPlaceholders(ids []string) (string, []any) {
 	ph := make([]string, len(ids))
 	args := make([]any, len(ids))
 	for i, id := range ids {

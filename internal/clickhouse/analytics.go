@@ -123,37 +123,12 @@ func analyticsSessionMemoKey(where string, args []any) string {
 }
 
 func chBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
-	var dates []string
-	var args []any
+	var localDate string
+	var localDateArgs []any
 	if includeDate {
-		from, to := readbase.PaddedDateBounds(f.From, f.To)
-		if f.From != "" {
-			dates = append(dates, dateCol+" >= "+chTimestampSQL)
-			args = append(args, from)
-		}
-		if f.To != "" {
-			dates = append(dates, dateCol+" <= "+chTimestampSQL)
-			args = append(args, to)
-		}
-		localDate, localDateArgs := chAnalyticsLocalDateExpr(dateCol, f)
-		if f.From != "" {
-			dates = append(dates, localDate+" >= ?")
-			args = append(args, append(localDateArgs, f.From)...)
-		}
-		if f.To != "" {
-			dates = append(dates, localDate+" <= ?")
-			args = append(args, append(localDateArgs, f.To)...)
-		}
+		localDate, localDateArgs = chAnalyticsLocalDateExpr(dateCol, f)
 	}
-
-	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
-	if f.ActiveSince != "" {
-		if parsed, ok := readbase.ParseAnalyticsTime(f.ActiveSince); ok {
-			f.ActiveSince = parsed.Format(time.RFC3339)
-		}
-	}
-	where := db.BuildAnalyticsWhere(f, b, tablePrefix, "", dates)
-	args = append(args, b.Args()...)
+	where, args := readbase.AnalyticsWhere(f, dateCol, tablePrefix, includeDate, chTimestampSQL, localDate, localDateArgs, db.ClickHouseQueryDialect())
 	if includeTime && (f.DayOfWeek != nil || f.Hour != nil) {
 		pred, pargs := chAnalyticsMessageTimeExists(f, tablePrefix+"id")
 		where += " AND " + pred
@@ -220,13 +195,8 @@ func chAnalyticsMessageTimeExists(
 
 func (s analyticsSQL) VisitModels(ctx context.Context, sessionIDs []string, emit func(string)) error {
 	return chQueryChunked(sessionIDs, func(chunk []string) error {
-		ph, args := chInPlaceholders(chunk)
-		rows, err := s.QueryContext(ctx, `
-			SELECT DISTINCT model
-			FROM messages
-			WHERE session_id IN `+ph+`
-				AND COALESCE(model, '') <> ''
-			ORDER BY model`, args...)
+		query, args := readbase.AnalyticsModelsSQL(chunk)
+		rows, err := s.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying clickhouse analytics models: %w", err)
 		}
@@ -244,12 +214,8 @@ func (s analyticsSQL) VisitModels(ctx context.Context, sessionIDs []string, emit
 
 func (s analyticsSQL) VisitModelTimes(ctx context.Context, sessionIDs []string, emit func(model, timestamp string)) error {
 	return chQueryChunked(sessionIDs, func(chunk []string) error {
-		ph, args := chInPlaceholders(chunk)
-		rows, err := s.QueryContext(ctx, `
-			SELECT model, timestamp
-			FROM messages
-			WHERE session_id IN `+ph+`
-				AND COALESCE(model, '') <> ''`, args...)
+		query, args := readbase.AnalyticsModelTimesSQL(chunk)
+		rows, err := s.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying clickhouse filtered analytics models: %w", err)
 		}
@@ -378,13 +344,7 @@ func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.An
 const chMaxSQLVars = 900
 
 func chInPlaceholders(ids []string) (string, []any) {
-	ph := make([]string, len(ids))
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		ph[i] = "?"
-		args[i] = id
-	}
-	return "(" + strings.Join(ph, ",") + ")", args
+	return db.InPlaceholders(ids)
 }
 
 // chSessionSet is a relation of session IDs that a query embeds as
@@ -637,20 +597,8 @@ func (s *Store) chPopulateFrustrationMarkers(
 }
 
 func (s analyticsSQL) VisitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error {
-	placeholders := make([]string, len(ids))
-	args := make([]any, 0, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args = append(args, id)
-	}
-	q := `SELECT session_id, ordinal, role, content,
-			timestamp, is_system, has_tool_use, COALESCE(source_subtype, '')
-		FROM messages
-		WHERE session_id IN (` + strings.Join(placeholders, ",") + `)`
-
-	q += `
-		ORDER BY session_id, ordinal`
-	msgRows, err := s.QueryContext(ctx, q, args...)
+	query, args := readbase.AnalyticsSignalMessagesSQL(ids)
+	msgRows, err := s.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse signal messages: %w", err)
 	}
@@ -675,20 +623,7 @@ func (s analyticsSQL) VisitSignalMessages(ctx context.Context, ids []string, emi
 }
 
 func chAnalyticsMessageWindowPred(col, from, to string) (string, []any) {
-	var preds []string
-	var args []any
-	if from != "" {
-		preds = append(preds, col+" >= "+chTimestampSQL)
-		args = append(args, from)
-	}
-	if to != "" {
-		preds = append(preds, col+" < "+chTimestampSQL)
-		args = append(args, to)
-	}
-	if len(preds) == 0 {
-		return "", nil
-	}
-	return "(" + col + " IS NULL OR (" + strings.Join(preds, " AND ") + "))", args
+	return readbase.AnalyticsMessageWindowPred(col, from, to, chTimestampSQL)
 }
 
 func chAnalyticsToolSessionWindow(f db.AnalyticsFilter) (string, []any) {

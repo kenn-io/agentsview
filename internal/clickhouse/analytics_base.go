@@ -386,17 +386,7 @@ func (s analyticsSQL) ScanTopSession(rows *sql.Rows) (db.TopSession, error) {
 }
 
 func (s analyticsSQL) TrendsSQL() string {
-	return `
-		SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), m.content, m.timestamp,
-			s.started_at, s.created_at
-		FROM messages m
-		JOIN sessions s ON s.id = m.session_id
-		WHERE s.deleted_at IS NULL
-			AND m.role IN ('user', 'assistant')
-			AND m.is_system = false
-			AND ` + db.ClickHouseSystemPrefixSQL("m.content", "m.role") + `
-		ORDER BY m.session_id, m.ordinal`
+	return readbase.AnalyticsTrendsSQL(db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect())
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }

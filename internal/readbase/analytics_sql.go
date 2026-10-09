@@ -1,6 +1,11 @@
 package readbase
 
-import "go.kenn.io/agentsview/internal/db"
+import (
+	"strings"
+	"time"
+
+	"go.kenn.io/agentsview/internal/db"
+)
 
 func AnalyticsSummaryAgentsSQL(where string, args []any, dialect db.QueryDialect) (string, []any) {
 	return `
@@ -49,4 +54,111 @@ func AnalyticsActivityAgentsSQL(where string, args []any, localDate string, loca
 		` + messageFilter + `
 		GROUP BY bucket, fs.agent
 		ORDER BY bucket, fs.agent`, queryArgs
+}
+
+func AnalyticsModelsSQL(ids []string) (string, []any) {
+	ph, args := db.InPlaceholders(ids)
+	return `
+			SELECT DISTINCT model
+			FROM messages
+			WHERE session_id IN ` + ph + `
+				AND COALESCE(model, '') <> ''
+			ORDER BY model`, args
+}
+
+func AnalyticsModelTimesSQL(ids []string) (string, []any) {
+	ph, args := db.InPlaceholders(ids)
+	return `
+			SELECT model, timestamp
+			FROM messages
+			WHERE session_id IN ` + ph + `
+				AND COALESCE(model, '') <> ''`, args
+}
+
+func AnalyticsSignalMessagesSQL(ids []string) (string, []any) {
+	ph, args := db.InPlaceholders(ids)
+	return `SELECT session_id, ordinal, role, content,
+			timestamp, is_system, has_tool_use, COALESCE(source_subtype, '')
+		FROM messages
+		WHERE session_id IN ` + ph + `
+		ORDER BY session_id, ordinal`, args
+}
+
+func AnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate bool, timestampParam, localDate string, localDateArgs []any, dialect db.QueryDialect) (string, []any) {
+	var dates []string
+	var args []any
+	if includeDate {
+		from, to := PaddedDateBounds(f.From, f.To)
+		if f.From != "" {
+			dates = append(dates, dateCol+" >= "+timestampParam)
+			args = append(args, from)
+		}
+		if f.To != "" {
+			dates = append(dates, dateCol+" <= "+timestampParam)
+			args = append(args, to)
+		}
+		if f.From != "" {
+			dates = append(dates, localDate+" >= ?")
+			args = append(args, append(localDateArgs, f.From)...)
+		}
+		if f.To != "" {
+			dates = append(dates, localDate+" <= ?")
+			args = append(args, append(localDateArgs, f.To)...)
+		}
+	}
+
+	b := db.NewQueryBuilder(dialect, 0)
+	if f.ActiveSince != "" {
+		if parsed, ok := ParseAnalyticsTime(f.ActiveSince); ok {
+			f.ActiveSince = parsed.Format(time.RFC3339)
+		}
+	}
+	where := db.BuildAnalyticsWhere(f, b, tablePrefix, "", dates)
+	args = append(args, b.Args()...)
+	return where, args
+}
+
+func AnalyticsMessageWindowPred(col, from, to, timestampParam string) (string, []any) {
+	var preds []string
+	var args []any
+	if from != "" {
+		preds = append(preds, col+" >= "+timestampParam)
+		args = append(args, from)
+	}
+	if to != "" {
+		preds = append(preds, col+" < "+timestampParam)
+		args = append(args, to)
+	}
+	if len(preds) == 0 {
+		return "", nil
+	}
+	return "(" + col + " IS NULL OR (" + strings.Join(preds, " AND ") + "))", args
+}
+
+func AnalyticsCandidateMessagesSQL(ph string, includeContent bool) string {
+	contentExpr := "''"
+	if includeContent {
+		contentExpr = "COALESCE(content, '')"
+	}
+	return `
+			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system, COALESCE(model, ''),
+				has_thinking, has_tool_use, timestamp,
+				output_tokens, has_output_tokens, content_length, ` + contentExpr + `
+			FROM messages
+			WHERE session_id IN ` + ph + `
+			ORDER BY session_id, ordinal`
+}
+
+func AnalyticsTrendsSQL(systemPrefix string, dialect db.QueryDialect) string {
+	return `
+		SELECT m.session_id, m.ordinal, m.role, m.is_system,
+			COALESCE(m.model, ''), m.content, m.timestamp,
+			s.started_at, s.created_at
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		WHERE s.deleted_at IS NULL
+			AND m.role IN ('user', 'assistant')
+			AND m.is_system = ` + dialect.FalseLiteral() + `
+			AND ` + systemPrefix + `
+		ORDER BY m.session_id, m.ordinal`
 }

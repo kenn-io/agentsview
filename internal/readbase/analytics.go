@@ -13,6 +13,8 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+const topSessionsLimit = 10
+
 // AnalyticsBackend supplies every SQL operation and backend-specific typed loader.
 type AnalyticsBackend interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -26,6 +28,7 @@ type AnalyticsBackend interface {
 	VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, category, name, timestamp string, count int)) error
 	VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error
 	ToolSessionWindow(db.AnalyticsFilter) (string, []any)
+	// TopSessionsSQL returns an ordered query without LIMIT or a trailing semicolon.
 	TopSessionsSQL(f db.AnalyticsFilter, metric string, includeTime bool) (string, []any)
 	ScanTopSession(*sql.Rows) (db.TopSession, error)
 	TrendsSQL() string
@@ -831,7 +834,7 @@ func (s *Analytics) GetAnalyticsTopSessions(
 				!sessions[i].HasTotalOutputTokens {
 				continue
 			}
-			if len(out.Sessions) >= 10 {
+			if len(out.Sessions) >= topSessionsLimit {
 				break
 			}
 			startedAt := sessions[i].StartedAt
@@ -871,7 +874,7 @@ func (s *Analytics) GetAnalyticsTopSessions(
 	}
 	query, args := s.backend.TopSessionsSQL(f, metric, includeTime)
 	if pairedSet == nil {
-		query += "\n\t\tLIMIT 10"
+		query += fmt.Sprintf("\n\t\tLIMIT %d", topSessionsLimit)
 	}
 	rows, err := s.backend.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -890,7 +893,7 @@ func (s *Analytics) GetAnalyticsTopSessions(
 		row.DurationMin = db.Round1(row.DurationMin)
 		row.ActiveDurationMin = db.Round1(row.ActiveDurationMin)
 		out.Sessions = append(out.Sessions, row)
-		if pairedSet != nil && len(out.Sessions) >= 10 {
+		if pairedSet != nil && len(out.Sessions) >= topSessionsLimit {
 			break
 		}
 	}

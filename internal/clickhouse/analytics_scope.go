@@ -40,21 +40,10 @@ func (s *Store) resolveAnalyticsMessageScope(
 		bySession[m.SessionID] = append(bySession[m.SessionID], m)
 	}
 
-	contentExpr := "''"
-	if includeContent {
-		contentExpr = "COALESCE(content, '')"
-	}
-
 	if err := chQueryChunked(unique, func(chunk []string) error {
 		reducer := db.NewScopeReducer(flt, emit)
 		ph, args := chInPlaceholders(chunk)
-		rows, err := s.queryContext(ctx, `
-			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system, COALESCE(model, ''),
-				has_thinking, has_tool_use, timestamp,
-				output_tokens, has_output_tokens, content_length, `+contentExpr+`
-			FROM messages
-			WHERE session_id IN `+ph+`
-			ORDER BY session_id, ordinal`,
+		rows, err := s.queryContext(ctx, readbase.AnalyticsCandidateMessagesSQL(ph, includeContent),
 			args...,
 		)
 		if err != nil {
