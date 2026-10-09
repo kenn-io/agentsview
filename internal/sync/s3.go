@@ -185,8 +185,9 @@ func (e *Engine) processS3Session(
 ) processResult {
 	idPrefix := s3SessionIDPrefix(file.Machine)
 	sourceFingerprint := s3SourceFingerprint(file)
+	storedID := e.s3StoredSessionID(ctx, file, p)
 	sourceChanged := e.s3SourceMetadataChangedFromInfo(ctx,
-		file, p,
+		file, storedID,
 		sourceInfo.Size(),
 		sourceInfo.ModTime().UnixNano(),
 		sourceFingerprint,
@@ -267,7 +268,7 @@ func (e *Engine) processS3Session(
 			}
 		}
 	default:
-		fullID := e.s3StoredSessionID(ctx, file, p)
+		fullID := storedID
 		if fullID != "" {
 			if !e.forceParseRequested(file) && !sourceChanged &&
 				e.shouldSkipFileWithPrefix(ctx,

@@ -86,6 +86,23 @@ func cursorS3TranscriptName(name string) bool {
 	return IsValidSessionID(stem)
 }
 
+// CursorS3SourceKey identifies alternatives within the broadest accepted scanner root.
+func CursorS3SourceKey(roots []string, uri string) string {
+	roots = slices.DeleteFunc(slices.Clone(roots), func(root string) bool { return !isS3URI(root) })
+	slices.SortFunc(roots, func(a, b string) int { return len(a) - len(b) })
+	for _, root := range roots {
+		rel, ok := s3RelativePath(root, uri)
+		if !ok {
+			continue
+		}
+		segs := strings.Split(rel, "/")
+		if keepCursorS3Session(rel, segs) {
+			return s3MachineFromRoot(root, "cursor") + "/" + segs[0] + "/" + strings.TrimSuffix(path.Base(uri), path.Ext(uri))
+		}
+	}
+	return ""
+}
+
 // preferCursorS3Transcripts keeps one object per machine, project and session stem
 // across all configured S3 roots. Precedence matches local Cursor discovery: a
 // session's own nested <id>/<id>.ext or flat <id>.ext over a copy in another
@@ -95,24 +112,11 @@ func preferCursorS3Transcripts(
 	roots []string,
 	transcripts []cursorS3Transcript,
 ) []cursorS3Transcript {
-	roots = slices.DeleteFunc(slices.Clone(roots), func(root string) bool { return !isS3URI(root) })
-	slices.SortFunc(roots, func(a, b string) int { return len(a) - len(b) })
 	best := make(map[string]cursorS3Transcript, len(transcripts))
 	order := make([]string, 0, len(transcripts))
 	for _, transcript := range transcripts {
 		file := transcript.file
-		var k string
-		for _, root := range roots {
-			rel, ok := s3RelativePath(root, file.Path)
-			if !ok {
-				continue
-			}
-			segs := strings.Split(rel, "/")
-			if keepCursorS3Session(rel, segs) {
-				k = s3MachineFromRoot(root, "cursor") + "/" + segs[0] + "/" + strings.TrimSuffix(path.Base(file.Path), path.Ext(file.Path))
-				break
-			}
-		}
+		k := CursorS3SourceKey(roots, file.Path)
 		prev, ok := best[k]
 		if !ok {
 			best[k] = transcript

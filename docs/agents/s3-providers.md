@@ -68,8 +68,9 @@ capability.
 - Cursor selects current format and layout alternatives by machine, session
   stem, and raw project relative to the broadest configured root that accepts
   the object. Roots without a machine boundary use the local machine label.
-- Archive ownership uses the exact object URI. A different URI gets its own ID
-  and preserves the previous conversation and its stars.
+- Archive ownership uses the exact object URI, with Cursor format and layout
+  alternatives sharing the same machine, raw project, and session stem retaining
+  their saved ID and stars. Different projects keep separate conversations.
 - Validate IDs with the same rules the local provider already uses.
 - Do not invent a second discover wrapper that bypasses the scanner. Extra
   post-processing (prefer `.jsonl`, fold sidecars) belongs next to the

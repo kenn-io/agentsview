@@ -106,15 +106,14 @@ func (e *Engine) s3SourceMetadataChanged(ctx context.Context, file parser.Discov
 		return false
 	}
 	return e.s3SourceMetadataChangedFromInfo(ctx,
-		file, p, file.SourceSize, file.SourceMtime, file.SourceFingerprint,
+		file, e.s3StoredSessionID(ctx, file, p), file.SourceSize, file.SourceMtime, file.SourceFingerprint,
 	)
 }
 
 func (e *Engine) s3SourceMetadataChangedFromInfo(ctx context.Context,
-	file parser.DiscoveredFile, p parser.S3Provider,
+	file parser.DiscoveredFile, sessionID string,
 	size, mtime int64, sourceFingerprint string,
 ) bool {
-	sessionID := e.s3StoredSessionID(ctx, file, p)
 	if sessionID == "" {
 		return false
 	}
@@ -146,6 +145,15 @@ func (e *Engine) s3StoredSessionID(ctx context.Context, file parser.DiscoveredFi
 			for _, record := range records {
 				if record.FilePath == file.Path {
 					return record.ID
+				}
+			}
+			if file.Agent == parser.AgentCursor {
+				roots := e.sources().agentDirs[file.Agent]
+				key := parser.CursorS3SourceKey(roots, file.Path)
+				for _, record := range records {
+					if key != "" && key == parser.CursorS3SourceKey(roots, record.FilePath) {
+						return record.ID
+					}
 				}
 			}
 		}

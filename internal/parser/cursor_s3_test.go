@@ -111,34 +111,40 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 	otherURI := root + "/demo-proj/other.txt"
 	junkURI := root + "/demo-proj/logs/trace.txt"
 	mtime := time.Unix(100, 0)
+	oldListed := true
 	listS3Objects = func(got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
-		return []S3Object{
-			{URI: txtURI, Size: 7, LastModified: mtime, Fingerprint: "s3-meta:txt"},
+		objects := []S3Object{
 			{URI: junkURI, Size: 3, LastModified: mtime, Fingerprint: "s3-meta:junk"},
 			{URI: jsonlURI, Size: 11, LastModified: mtime, Fingerprint: "s3-meta:jsonl"},
 			{URI: otherURI, Size: 5, LastModified: mtime, Fingerprint: "s3-meta:other"},
-		}, nil
+		}
+		if oldListed {
+			objects = append(objects, S3Object{URI: txtURI, Size: 7, LastModified: mtime, Fingerprint: "s3-meta:txt"})
+		}
+		return objects, nil
 	}
 
-	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 2)
-	assert.ElementsMatch(t, []string{jsonlURI, otherURI}, []string{
-		sources[0].DisplayPath,
-		sources[1].DisplayPath,
-	})
+	for _, oldListed = range []bool{true, false} {
+		sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 2)
+		assert.ElementsMatch(t, []string{jsonlURI, otherURI}, []string{
+			sources[0].DisplayPath,
+			sources[1].DisplayPath,
+		})
 
-	var streamed []string
-	err = newCursorSourceSet([]string{root}).DiscoverEach(
-		t.Context(),
-		func(src SourceRef) error {
-			streamed = append(streamed, src.DisplayPath)
-			return nil
-		},
-	)
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{jsonlURI, otherURI}, streamed)
+		var streamed []string
+		err = newCursorSourceSet([]string{root}).DiscoverEach(
+			t.Context(),
+			func(src SourceRef) error {
+				streamed = append(streamed, src.DisplayPath)
+				return nil
+			},
+		)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{jsonlURI, otherURI}, streamed)
+	}
 }
 
 func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
@@ -161,6 +167,12 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 			otherURI := root + "/project-one/other.txt"
 			flatURI := root + "/project-one/11111111-1111-4111-8111-111111111111.txt"
 			subagentURI := root + "/project-one/agent-transcripts/parent/subagents/11111111-1111-4111-8111-111111111111.jsonl"
+			key := CursorS3SourceKey(roots, firstURI)
+			require.NotEmpty(t, key)
+			assert.Equal(t, key, CursorS3SourceKey(roots, flatURI))
+			assert.Equal(t, key, CursorS3SourceKey(roots, subagentURI))
+			assert.NotEqual(t, key, CursorS3SourceKey(roots, secondURI))
+			assert.NotEqual(t, key, CursorS3SourceKey(roots, otherURI))
 			listS3Objects = func(got string) ([]S3Object, error) {
 				require.Contains(t, roots, got)
 				return []S3Object{

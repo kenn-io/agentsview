@@ -285,19 +285,28 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				provider.discovered = []parser.SourceRef{source}
 				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 				require.Zero(t, stats.Failed)
-				newID := parser.AltSessionID(baseID, newPath)
-				for pass := range 2 {
-					if pass > 0 {
+				for pass := range 3 {
+					if pass == 1 {
+						before := fetches.Load()
+						stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+						require.Zero(t, stats.Failed)
+						assert.Equal(t, before, fetches.Load(), "the saved alias must skip unchanged content")
+					}
+					if pass == 2 {
 						stats = engine.ResyncAll(t.Context(), nil)
 						require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
 						require.Zero(t, stats.Failed)
 					}
-					assert.Equal(t, ownerPath, derefString(storedSession(baseID).FilePath))
-					assert.Equal(t, newPath, derefString(storedSession(newID).FilePath))
+					assert.Equal(t, newPath, derefString(storedSession(baseID).FilePath))
+					ids, err := database.ListSessionIDsByFilePath(t.Context(), newPath, "cursor")
+					require.NoError(t, err)
+					assert.Equal(t, []string{baseID}, ids)
+					ids, err = database.ListSessionIDsByFilePath(t.Context(), ownerPath, "cursor")
+					require.NoError(t, err)
+					assert.Empty(t, ids)
 					stars, err := database.ListStarredSessionIDs(t.Context())
 					require.NoError(t, err)
 					assert.Contains(t, stars, baseID)
-					assert.NotContains(t, stars, newID)
 					messages, err := database.GetAllMessages(t.Context(), baseID)
 					require.NoError(t, err)
 					for i := range messages {
