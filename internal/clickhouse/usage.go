@@ -98,21 +98,13 @@ type chUsageBounds struct {
 	to   string
 }
 
-func chUsagePaddedUTCBound(ts string, hours int) string {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return ts
-	}
-	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
-}
-
 func chUsageBoundsForFilter(f db.UsageFilter) chUsageBounds {
 	var b chUsageBounds
 	if f.From != "" {
-		b.from = chUsagePaddedUTCBound(f.From+"T00:00:00Z", -14)
+		b.from = readbase.PaddedUTCBound(f.From+"T00:00:00Z", -14)
 	}
 	if f.To != "" {
-		b.to = chUsagePaddedUTCBound(f.To+"T23:59:59Z", 14)
+		b.to = readbase.PaddedUTCBound(f.To+"T23:59:59Z", 14)
 	}
 	return b
 }

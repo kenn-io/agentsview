@@ -892,6 +892,8 @@ func TestStoreCurationMethods(t *testing.T) {
 func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	ctx := t.Context()
 	store, fixture := newSyncedStore(t)
+	_, err := store.duck.ExecContext(ctx, "UPDATE sessions SET display_name = ? WHERE id = ?", "Alpha session", fixture.alphaID)
+	require.NoError(t, err)
 	filter := db.AnalyticsFilter{
 		From: "2026-01-01",
 		To:   "2026-01-31",

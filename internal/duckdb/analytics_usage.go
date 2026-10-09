@@ -89,11 +89,11 @@ func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, 
 	if includeDate {
 		if f.From != "" {
 			dates = append(dates, dateCol+" >= CAST(? AS TIMESTAMP)")
-			args = append(args, duckUsagePaddedUTCBound(f.From+"T00:00:00Z", -14))
+			args = append(args, readbase.PaddedUTCBound(f.From+"T00:00:00Z", -14))
 		}
 		if f.To != "" {
 			dates = append(dates, dateCol+" <= CAST(? AS TIMESTAMP)")
-			args = append(args, duckUsagePaddedUTCBound(f.To+"T23:59:59Z", 14))
+			args = append(args, readbase.PaddedUTCBound(f.To+"T23:59:59Z", 14))
 		}
 		localDate, localDateArgs := duckAnalyticsLocalDateExpr(dateCol, f)
 		if f.From != "" {
@@ -650,14 +650,6 @@ type duckUsageBounds struct {
 	to   string
 }
 
-func duckUsagePaddedUTCBound(ts string, hours int) string {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return ts
-	}
-	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
-}
-
 func duckAnalyticsMessageWindowPred(col, from, to string) (string, []any) {
 	var preds []string
 	var args []any
@@ -696,10 +688,10 @@ func duckAnalyticsToolSessionWindow(f db.AnalyticsFilter) (string, []any) {
 func duckUsageBoundsForFilter(f db.UsageFilter) duckUsageBounds {
 	var b duckUsageBounds
 	if f.From != "" {
-		b.from = duckUsagePaddedUTCBound(f.From+"T00:00:00Z", -14)
+		b.from = readbase.PaddedUTCBound(f.From+"T00:00:00Z", -14)
 	}
 	if f.To != "" {
-		b.to = duckUsagePaddedUTCBound(f.To+"T23:59:59Z", 14)
+		b.to = readbase.PaddedUTCBound(f.To+"T23:59:59Z", 14)
 	}
 	return b
 }

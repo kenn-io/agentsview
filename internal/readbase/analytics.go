@@ -26,7 +26,7 @@ type AnalyticsBackend interface {
 	VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, category, name, timestamp string, count int)) error
 	VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error
 	ToolSessionWindow(db.AnalyticsFilter) (string, []any)
-	TopSessionsSQL(f db.AnalyticsFilter, metric string, includeTime, unlimited bool) (string, []any)
+	TopSessionsSQL(f db.AnalyticsFilter, metric string, includeTime bool) (string, []any)
 	ScanTopSession(*sql.Rows) (db.TopSession, error)
 	TrendsSQL() string
 	FormatTime(any) string
@@ -105,13 +105,9 @@ func (s *Analytics) analyticsSessionsModelTimeFiltered(
 	if err != nil {
 		return nil, err
 	}
-	matched := make(map[string]struct{})
-	for id := range scope {
-		matched[id] = struct{}{}
-	}
 	out := make([]AnalyticsSession, 0, len(sessions))
 	for _, session := range sessions {
-		if _, ok := matched[session.ID]; ok {
+		if _, ok := scope[session.ID]; ok {
 			out = append(out, session)
 		}
 	}
@@ -873,7 +869,10 @@ func (s *Analytics) GetAnalyticsTopSessions(
 		}
 		includeTime = false
 	}
-	query, args := s.backend.TopSessionsSQL(f, metric, includeTime, pairedSet != nil)
+	query, args := s.backend.TopSessionsSQL(f, metric, includeTime)
+	if pairedSet == nil {
+		query += "\n\t\tLIMIT 10"
+	}
 	rows, err := s.backend.QueryContext(ctx, query, args...)
 	if err != nil {
 		return db.TopSessionsResponse{}, fmt.Errorf("querying %s analytics top sessions: %w", s.name, err)

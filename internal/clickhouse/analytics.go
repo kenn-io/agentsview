@@ -128,11 +128,11 @@ func chBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, in
 	if includeDate {
 		if f.From != "" {
 			dates = append(dates, dateCol+" >= "+chTimestampSQL)
-			args = append(args, chUsagePaddedUTCBound(f.From+"T00:00:00Z", -14))
+			args = append(args, readbase.PaddedUTCBound(f.From+"T00:00:00Z", -14))
 		}
 		if f.To != "" {
 			dates = append(dates, dateCol+" <= "+chTimestampSQL)
-			args = append(args, chUsagePaddedUTCBound(f.To+"T23:59:59Z", 14))
+			args = append(args, readbase.PaddedUTCBound(f.To+"T23:59:59Z", 14))
 		}
 		localDate, localDateArgs := chAnalyticsLocalDateExpr(dateCol, f)
 		if f.From != "" {

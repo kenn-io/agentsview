@@ -19,10 +19,10 @@ func AnalyticsLocalTime(ts string, loc *time.Location) (time.Time, bool) {
 func AnalyticsWindowBounds(f db.AnalyticsFilter) (string, string) {
 	var from, to string
 	if f.From != "" {
-		from = analyticsPaddedUTCBound(f.From+"T00:00:00Z", -14)
+		from = PaddedUTCBound(f.From+"T00:00:00Z", -14)
 	}
 	if f.To != "" {
-		to = analyticsPaddedUTCBound(f.To+"T23:59:59Z", 14)
+		to = PaddedUTCBound(f.To+"T23:59:59Z", 14)
 		if t, err := time.Parse(time.RFC3339, to); err == nil {
 			to = t.Add(time.Second).Format(time.RFC3339)
 		}
@@ -30,7 +30,8 @@ func AnalyticsWindowBounds(f db.AnalyticsFilter) (string, string) {
 	return from, to
 }
 
-func analyticsPaddedUTCBound(ts string, hours int) string {
+// PaddedUTCBound adds hours to a UTC boundary, preserving invalid input.
+func PaddedUTCBound(ts string, hours int) string {
 	t, err := time.Parse(time.RFC3339, ts)
 	if err != nil {
 		return ts

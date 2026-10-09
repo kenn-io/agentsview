@@ -123,8 +123,8 @@ func (b topSessionsBackend) QueryContext(ctx context.Context, query string, args
 	return b.pool.QueryContext(ctx, query, args...)
 }
 
-func (topSessionsBackend) TopSessionsSQL(db.AnalyticsFilter, string, bool, bool) (string, []any) {
-	return "SELECT id FROM sessions LIMIT 10", nil
+func (topSessionsBackend) TopSessionsSQL(db.AnalyticsFilter, string, bool) (string, []any) {
+	return "SELECT id FROM sessions", nil
 }
 
 func (topSessionsBackend) ScanTopSession(rows *sql.Rows) (db.TopSession, error) {

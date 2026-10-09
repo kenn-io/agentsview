@@ -330,7 +330,7 @@ func (s analyticsSQL) ToolSessionWindow(f db.AnalyticsFilter) (string, []any) {
 	return duckAnalyticsToolSessionWindow(f)
 }
 
-func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includeTime, unlimited bool) (string, []any) {
+func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includeTime bool) (string, []any) {
 	where, args := duckBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, includeTime)
 	durationExpr := "(epoch(s.ended_at) - epoch(s.started_at)) / 60.0"
@@ -364,11 +364,6 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 		where += " AND s.has_total_output_tokens = TRUE"
 		orderExpr = "s.total_output_tokens DESC, s.id ASC"
 	}
-	// The shared base takes ten rows after filtering the paired sessions.
-	limitClause := "\n\t\tLIMIT 10"
-	if unlimited {
-		limitClause = ""
-	}
 	query := `
 		SELECT s.id, s.project, s.first_message, s.message_count,
 			s.total_output_tokens, ` + durationSelectExpr + ` AS duration_min,
@@ -376,7 +371,7 @@ func (s analyticsSQL) TopSessionsSQL(f db.AnalyticsFilter, metric string, includ
 			s.started_at, s.ended_at, s.termination_status
 		FROM sessions s
 		WHERE ` + where + `
-		ORDER BY ` + orderExpr + limitClause
+		ORDER BY ` + orderExpr
 	return query, args
 }
 
