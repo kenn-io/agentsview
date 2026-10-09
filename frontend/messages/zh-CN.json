@@ -2384,5 +2384,6 @@
   "import_claude_help": "登录后关闭窗口，然后点击同步。",
   "import_claude_auth_required": "请登录 Claude.ai，然后再次同步。",
   "import_claude_sign_in_pending": "请完成 Claude.ai 登录，关闭窗口，然后再次同步。",
+  "import_claude_archive_upgrade_required": "请等待存档升级完成，然后再次同步。",
   "import_newer_marker": "已归档的会话 {session} 需要更新版本的 AgentsView。请更新 AgentsView，然后重新同步。"
 }

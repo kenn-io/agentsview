@@ -2751,6 +2751,9 @@ schemas keep their existing ordering behavior.
   keep existing row IDs; branch replacements assign new row IDs. Sync writes
   message identities only when it adds or replaces turns. Unchanged zip imports
   keep their stored turns and derived state.
+  Sync checks for a pending archive resync under the serialized write lock
+  before writing UUIDs. `TestClaudeAISyncNeedsResync` verifies that a v126
+  archive receives the upgrade error and retains no new sessions or messages.
   See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for branch
   updates and Trash copies.
   Shorter zip exports remain refused. Pins follow source UUIDs, or role, content,

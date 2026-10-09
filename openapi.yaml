@@ -13077,7 +13077,7 @@ paths:
           content:
             text/event-stream:
               schema:
-                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required or claude_ai_sign_in_pending."
+                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_sign_in_pending, or claude_ai_archive_upgrade_required."
                 type: string
           description: OK
         "400":
