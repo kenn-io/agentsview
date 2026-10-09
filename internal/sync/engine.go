@@ -2590,7 +2590,7 @@ func dedupeDiscoveredFilesByPreference(
 
 func discoveredFileKey(file parser.DiscoveredFile) string {
 	if isCodexFormatAgent(file.Agent) {
-		if id := codexDiscoveryID(filepath.Base(file.Path)); id != "" {
+		if id := parser.CodexRolloutDiscoveryID(filepath.Base(file.Path)); id != "" {
 			return string(file.Agent) + "\x00" +
 				discoveredFileIDPrefix(file) + "\x00" + id
 		}
@@ -2695,20 +2695,10 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 	return out, nil
 }
 
-// codexDiscoveryID is the identity every copy of a Codex rollout shares: the
-// thread UUID for the thread's ordinary rollout, or "<thread>_<rollout>" for
-// the rollout Codex writes when it reverts the thread.
-func codexDiscoveryID(name string) string {
-	if id := parser.CodexSessionUUIDFromFilename(name); id != "" {
-		return id
-	}
-	return parser.CodexRevertedRolloutID(name)
-}
-
 func codexLayoutForPath(path string) parser.CodexLayout {
 	path = filepath.Clean(path)
 	name := filepath.Base(path)
-	if codexDiscoveryID(name) == "" {
+	if parser.CodexRolloutDiscoveryID(name) == "" {
 		return parser.CodexLayoutUnknown
 	}
 	day := filepath.Base(filepath.Dir(path))
@@ -6894,7 +6884,7 @@ func reconciliationReplacementIdentity(
 	}
 	switch agent {
 	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode:
-		id := codexDiscoveryID(filepath.Base(storedPath))
+		id := parser.CodexRolloutDiscoveryID(filepath.Base(storedPath))
 		if id == "" {
 			return ""
 		}
@@ -8529,8 +8519,9 @@ func (e *Engine) visualStudioCopilotCurrentPollSource(
 // archived copies to the preferred layout at discovery time; this restores the
 // dropped duplicates (scoped to the configured roots) so an mtime cutoff filter
 // can judge each copy on its own mtime, matching the legacy discover-then-filter
-// order. Files of other agents, and Codex-format files without a UUID-shaped
-// name, pass through unchanged. Duplicates are keyed by path so nothing is added
+// order. A reverted thread's rollout is restored the same way. Files of other
+// agents, and Codex-format files without a rollout ID in their name, pass
+// through unchanged. Duplicates are keyed by path so nothing is added
 // twice. Each agent is expanded against its own roots and re-added under its own
 // identity: a fork's UUID must not be resolved through the Codex provider.
 func (e *Engine) expandCodexProviderDuplicates(
@@ -8554,11 +8545,11 @@ func (e *Engine) expandCodexProviderDuplicates(
 		if pather == nil {
 			continue
 		}
-		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
-		if uuid == "" {
+		id := parser.CodexRolloutDiscoveryID(filepath.Base(f.Path))
+		if id == "" {
 			continue
 		}
-		for _, dup := range pather(uuid) {
+		for _, dup := range pather(id) {
 			key := string(f.Agent) + "\x00" + filepath.Clean(dup)
 			if _, ok := seen[key]; ok {
 				continue
@@ -16853,25 +16844,17 @@ func (e *Engine) codexLocalSourcePath(stored string) (string, bool) {
 	return path, true
 }
 
+// pickPreferredCodexIndexDiscoveredFile prefers the copy a stored session
+// tracks, matched by path because the rollout's row can hold the thread's id
+// or, after a revert, a derived one.
 func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
 	candidates []parser.DiscoveredFile,
 ) parser.DiscoveredFile {
-	if len(candidates) > 0 {
-		uuid := ""
-		for _, candidate := range candidates {
-			uuid = parser.CodexSessionUUIDFromFilename(filepath.Base(candidate.Path))
-			if uuid != "" {
-				break
-			}
-		}
-		storedPath := e.db.GetSessionFilePath(ctx, e.idPrefix+"codex:"+uuid)
-		if uuid != "" && storedPath != "" {
-			storedPath = filepath.Clean(storedPath)
-			for _, candidate := range candidates {
-				if filepath.Clean(e.effectiveSourcePath(candidate.Path)) == storedPath {
-					return candidate
-				}
-			}
+	for _, candidate := range candidates {
+		if _, _, ok := e.db.GetFileInfoByAgentPath(ctx,
+			e.effectiveSourcePath(candidate.Path), string(candidate.Agent),
+		); ok {
+			return candidate
 		}
 	}
 	return pickPreferredCodexDiscoveredFile(ctx, e.db, candidates)
@@ -16967,23 +16950,13 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 	if len(candidates) == 0 {
 		return parser.DiscoveredFile{}
 	}
-	if id := parser.CodexSessionUUIDFromFilename(
-		filepath.Base(candidates[0].Path),
-	); id != "" {
-		sessionID := "codex:" + id
-		for _, candidate := range candidates {
-			storedPath := database.GetSessionFilePath(ctx, applyIDPrefixToID(
-				discoveredFileIDPrefix(candidate), sessionID,
-			))
-			if storedPath == "" {
-				continue
-			}
-			storedPath = filepath.Clean(storedPath)
-			for _, candidate := range candidates {
-				if filepath.Clean(candidate.Path) == storedPath {
-					return candidate
-				}
-			}
+	// Prefer the copy a stored session tracks. Match by path: the rollout's
+	// row can hold the thread's id or, after a revert, a derived one.
+	for _, candidate := range candidates {
+		if _, _, ok := database.GetFileInfoByAgentPath(ctx,
+			candidate.Path, string(candidate.Agent),
+		); ok {
+			return candidate
 		}
 	}
 	chosen := candidates[0]

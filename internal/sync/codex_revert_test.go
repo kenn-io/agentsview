@@ -358,3 +358,70 @@ func TestCodexRevertedRolloutCopiesInBothRootsAreOneSession(t *testing.T) {
 		assert.Equal(t, []string{parser.AltSessionID(sessionID, livePath) + " " + livePath}, derived)
 	}
 }
+
+// When the reverted rollout synced first, the thread's ordinary rollout holds
+// a derived id. An index rename must refresh the copy that derived row
+// tracks, not a stale duplicate in the other root.
+func TestCodexIndexRenameKeepsDerivedOrdinaryRolloutCopy(t *testing.T) {
+	env, liveDir, archivedDir := codexRootEnv(t)
+	sessionID := "codex:" + codexThreadID
+	day := filepath.Join("2026", "07", "28")
+	initial := time.Now().Add(-2 * time.Hour)
+	writeCodexThreadName(t, liveDir, "First", initial)
+
+	env.writeCodexSession(t, day, codexRevertedName, codexRollout(codexThreadID, 1))
+	env.engine.SyncAll(t.Context(), nil)
+	archivedPath := env.writeSession(t, archivedDir, codexOrdinaryName, codexRollout(codexThreadID, 3))
+	require.NoError(t, os.Chtimes(archivedPath, initial, initial))
+	env.engine.SyncAll(t.Context(), nil)
+	derivedID := parser.AltSessionID(sessionID, archivedPath)
+	assertSessionMessageCount(t, env.db, derivedID, 3)
+
+	livePath := env.writeCodexSession(t, day, codexOrdinaryName, codexRollout(codexThreadID, 1))
+	require.NoError(t, os.Chtimes(livePath, initial, initial))
+	writeCodexThreadName(t, liveDir, "Renamed", time.Now().Add(-30*time.Minute))
+	env.engine.SyncPaths([]string{
+		filepath.Join(filepath.Dir(liveDir), parser.CodexSessionIndexFilename),
+	})
+
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), derivedID))
+	assertSessionMessageCount(t, env.db, derivedID, 3)
+	requireSessionName(t, env, derivedID, "Renamed")
+}
+
+// SyncAllSince judges each copy of a rollout by its own mtime. A reverted
+// rollout whose archived copy changed after the cutoff must sync even though
+// discovery prefers its unchanged live copy.
+func TestSyncAllSinceCodexKeepsChangedArchivedRevertedCopy(t *testing.T) {
+	for _, importedBefore := range []bool{false, true} {
+		t.Run(fmt.Sprintf("imported before %t", importedBefore), func(t *testing.T) {
+			env, _, archivedDir := codexRootEnv(t)
+			sessionID := "codex:" + codexThreadID
+			day := filepath.Join("2026", "07", "28")
+			oldTime := time.Now().Add(-2 * time.Hour)
+
+			ordinaryPath := env.writeCodexSession(t, day, codexOrdinaryName, codexRollout(codexThreadID, 3))
+			require.NoError(t, os.Chtimes(ordinaryPath, oldTime, oldTime))
+			env.engine.SyncAll(t.Context(), nil)
+			livePath := env.writeCodexSession(t, day, codexRevertedName, codexRollout(codexThreadID, 1))
+			require.NoError(t, os.Chtimes(livePath, oldTime, oldTime))
+			if importedBefore {
+				env.engine.SyncAll(t.Context(), nil)
+				assertSessionMessageCount(t, env.db, parser.AltSessionID(sessionID, livePath), 1)
+			}
+
+			archivedPath := env.writeSession(t, archivedDir, codexRevertedName, codexRollout(codexThreadID, 2))
+			newTime := time.Now().Add(-30 * time.Minute)
+			require.NoError(t, os.Chtimes(archivedPath, newTime, newTime))
+			env.engine.SyncAllSince(t.Context(), time.Now().Add(-time.Hour), nil)
+
+			derivedPath := archivedPath
+			if importedBefore {
+				derivedPath = livePath
+			}
+			derivedID := parser.AltSessionID(sessionID, derivedPath)
+			assertSessionMessageCount(t, env.db, derivedID, 2)
+			assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), derivedID))
+		})
+	}
+}

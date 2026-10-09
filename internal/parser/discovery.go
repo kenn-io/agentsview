@@ -820,6 +820,16 @@ func CodexRevertedRolloutID(name string) string {
 	return ""
 }
 
+// CodexRolloutDiscoveryID is the identity every copy of a Codex rollout
+// shares across the live and archived roots: the thread UUID for the
+// thread's ordinary rollout, or "<thread>_<rollout>" for a reverted one.
+func CodexRolloutDiscoveryID(name string) string {
+	if id := CodexSessionUUIDFromFilename(name); id != "" {
+		return id
+	}
+	return CodexRevertedRolloutID(name)
+}
+
 func codexRevertedRolloutMatch(name string) []string {
 	if !isCodexSessionFilename(name) {
 		return nil

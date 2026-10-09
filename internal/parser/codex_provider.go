@@ -303,19 +303,20 @@ func (p *codexProvider) FindSource(
 }
 
 // AllSourcePathsForUUID returns every on-disk Codex transcript path under the
-// provider's roots whose filename carries the given session UUID, without the
-// live-over-archived deduplication Discover applies. A UUID can exist as both a
-// live dated copy and a flat archived copy under the same root; the sync engine
-// uses the full set so an mtime cutoff can judge each copy independently.
-func (p *codexProvider) AllSourcePathsForUUID(uuid string) []string {
-	if uuid == "" {
+// provider's roots whose filename carries the given rollout discovery ID (see
+// CodexRolloutDiscoveryID), without the live-over-archived deduplication
+// Discover applies. A rollout can exist as both a live dated copy and a flat
+// archived copy; the sync engine uses the full set so an mtime cutoff can
+// judge each copy independently.
+func (p *codexProvider) AllSourcePathsForUUID(id string) []string {
+	if id == "" {
 		return nil
 	}
 	seen := make(map[string]struct{})
 	var paths []string
 	for _, root := range p.sources.roots {
 		for _, path := range p.sources.discoverSessionPaths(root) {
-			if CodexSessionUUIDFromFilename(filepath.Base(path)) != uuid {
+			if CodexRolloutDiscoveryID(filepath.Base(path)) != id {
 				continue
 			}
 			clean := filepath.Clean(path)

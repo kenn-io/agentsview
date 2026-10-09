@@ -593,7 +593,8 @@ fixtures retain this field; missing identities remain source-local.
   Discovery keys a reverted rollout by `<thread_id>_<rollout_id>`, so its live
   and archived copies are one source, and thread-name refresh reads the thread
   ID from the name. S3 imports do not apply this collision policy yet, for
-  Codex or for Cursor.
+  Codex or for Cursor; see
+  [#2170](https://github.com/kenn-io/agentsview/issues/2170).
 
 - **Evidence:** `source`.
 
