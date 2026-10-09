@@ -262,13 +262,19 @@ func Restore(ctx context.Context, source, snapshot, target string, progress func
 	if report, err = verifyRestoredArchive(ctx, assembled, settings, progress); err != nil {
 		return report, err
 	}
+	// Resolve every report field while the restore is still staged, so a
+	// lookup failure cannot leave a published destination behind.
+	readerVersion, err := snapshotReaderVersion(repository, snapshot)
+	if err != nil {
+		return report, err
+	}
 	// Refuse a destination created during the restore, including an empty one.
 	if err := atomicfile.RenameNoReplace(assembled, destination); err != nil {
 		return report, err
 	}
 	report.RepositoryID, report.SnapshotID, report.ReaderBuild = repository.ID(), snapshot, inventory.ReaderBuild
-	report.MinReaderVersion, err = snapshotReaderVersion(repository, snapshot)
-	return report, err
+	report.MinReaderVersion = readerVersion
+	return report, nil
 }
 
 // snapshotReaderVersion reports the selected recovery point's reader
