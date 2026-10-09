@@ -174,7 +174,44 @@ func TestChromeHostRelay(t *testing.T) {
 }
 
 func TestChromeHostRelayEOFWhileServerDown(t *testing.T) {
-	require.NoError(t, relayChromeHost(t.Context(), filepath.Join(t.TempDir(), "missing.sock"), strings.NewReader(""), io.Discard))
+	dir := filepath.Join(t.TempDir(), "missing")
+	require.NoError(t, relayChromeHost(t.Context(), filepath.Join(dir, "host.sock"), strings.NewReader(""), io.Discard))
+}
+
+func TestChromeHostRelayRefusesLoosePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix directory permissions")
+	}
+	for _, mode := range []os.FileMode{0o750, 0o707} {
+		t.Run(mode.String(), func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.Chmod(dir, mode))
+			socket := filepath.Join(dir, "host.sock")
+			listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+			require.NoError(t, err)
+			defer listener.Close()
+			input, writeInput := io.Pipe()
+			defer input.Close()
+			defer writeInput.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			stderr := captureStderr(t, func() {
+				err := relayChromeHost(ctx, socket, input, io.Discard)
+				require.ErrorContains(t, err, "not mode 0700")
+			})
+			assert.Contains(t, stderr, "refusing chrome host socket")
+			assert.Contains(t, stderr, "not mode 0700")
+			require.NoError(t, listener.SetDeadline(time.Now()))
+			conn, err := listener.AcceptUnix()
+			if conn != nil {
+				defer conn.Close()
+			}
+			require.Error(t, err)
+			var netErr net.Error
+			require.ErrorAs(t, err, &netErr)
+			assert.True(t, netErr.Timeout())
+		})
+	}
 }
 
 func TestChromeLongDataDirSetupAndServe(t *testing.T) {
@@ -184,6 +221,9 @@ func TestChromeLongDataDirSetupAndServe(t *testing.T) {
 	defer os.RemoveAll(filepath.Dir(socket))
 	assert.Less(t, len(socket), 104)
 	assert.NotEqual(t, filepath.Join(dir, "chrome", "host.sock"), socket)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	assert.Equal(t, home, filepath.Dir(filepath.Dir(socket)))
 	port, err := server.FindAvailablePort(t.Context(), "127.0.0.1", 0)
 	require.NoError(t, err)
 	cfg := config.Config{Host: "127.0.0.1", Port: port, DataDir: dir}
