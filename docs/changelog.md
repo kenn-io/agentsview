@@ -13,7 +13,7 @@ The latest release is
 
 - Sync Claude.ai chats from the desktop or Chrome Import dialog without downloading an
   export. Later runs fetch new or changed chats, including branch switches.
-  Load the Chrome extension from a checkout and allow it on your AgentsView tab.
+  Download the Chrome extension from the dialog and allow it on your AgentsView tab.
   See [Claude.ai Sync](https://agentsview.io/docs/chat-import/#sync-claudeai-chats) for setup, branch
   updates, Trash copies, and failure handling.
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.

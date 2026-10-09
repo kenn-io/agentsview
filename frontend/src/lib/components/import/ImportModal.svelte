@@ -51,7 +51,7 @@
 
   async function connect() {
     try { if (host) await connectClaudeAI(host); }
-    catch (e) { error = e instanceof Error ? e.message : m.import_failed(); }
+    catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
 
   async function sync() {

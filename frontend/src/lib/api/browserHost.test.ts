@@ -3,11 +3,39 @@ import { getBrowserHost } from "./browserHost.js";
 
 afterEach(() => {
   delete document.documentElement.dataset.agentsviewClaudeHost;
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("browser host discovery", () => {
+  it("times out a silent bridge after 100 seconds and removes its listener", async () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset.agentsviewClaudeHost = "chrome";
+    vi.spyOn(window, "postMessage").mockImplementation(() => {});
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    const request = getBrowserHost()!.fetch("/api/organizations");
+    const rejection = expect(request).rejects.toThrow("Claude host request timed out");
+    await vi.advanceTimersByTimeAsync(99_999);
+    expect(remove).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+    expect(remove).toHaveBeenCalledExactlyOnceWith("message", add.mock.calls[0]![1]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("resolves a reply before the deadline and clears its timer", async () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset.agentsviewClaudeHost = "chrome";
+    const post = vi.spyOn(window, "postMessage").mockImplementation(() => {});
+    const request = getBrowserHost()!.fetch("/api/organizations");
+    await vi.advanceTimersByTimeAsync(99_999);
+    window.dispatchEvent(new MessageEvent("message", { source: window, data: { type: "agentsview-claude-reply", id: post.mock.calls[0]![0].id, result: { status: 200, body: "[]" } } }));
+    await expect(request).resolves.toEqual({ status: 200, body: "[]" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("returns undefined without Tauri or the extension", () => {
     expect(getBrowserHost()).toBeUndefined();
   });
