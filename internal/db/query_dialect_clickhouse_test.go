@@ -7,15 +7,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The dialect hooks added for ClickHouse must leave the row-store dialects
-// rendering exactly what they rendered before the hooks existed. These
-// strings were captured from the pre-hook builder.
-func TestBuildSessionFilterSQLHooksKeepRowStoreDialectsUnchanged(t *testing.T) {
+func TestBuildSessionFilterSQLRowStoreDialectsRenderParentlessRoots(t *testing.T) {
 	filter := SessionFilter{
 		Starred: true, IncludeChildren: true, IncludeOrphans: true, Project: "p",
 	}
-	const sqliteWant = "message_count > 0 AND deleted_at IS NULL AND id IN (WITH RECURSIVE tree(id) AS (SELECT root_session.id FROM sessions root_session WHERE root_session.message_count > 0 AND root_session.deleted_at IS NULL AND root_session.project = ? AND EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = root_session.id) AND (NOT (root_session.relationship_type IN ('subagent', 'fork', 'continuation')) OR (root_session.relationship_type IN ('subagent', 'fork', 'continuation') AND NOT EXISTS ( SELECT 1 FROM sessions parent WHERE parent.id = root_session.parent_session_id ))) UNION SELECT s.id FROM sessions s JOIN tree t ON s.parent_session_id = t.id WHERE s.message_count > 0 AND s.deleted_at IS NULL) SELECT id FROM tree)"
-	const postgresWant = "message_count > 0 AND deleted_at IS NULL AND id IN (WITH RECURSIVE tree(id) AS (SELECT root_session.id FROM sessions root_session WHERE root_session.message_count > 0 AND root_session.deleted_at IS NULL AND root_session.project = $1 AND EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = root_session.id) AND (NOT (root_session.relationship_type IN ('subagent', 'fork', 'continuation')) OR (root_session.relationship_type IN ('subagent', 'fork', 'continuation') AND NOT EXISTS ( SELECT 1 FROM sessions parent WHERE parent.id = root_session.parent_session_id ))) UNION SELECT s.id FROM sessions s JOIN tree t ON s.parent_session_id = t.id WHERE s.message_count > 0 AND s.deleted_at IS NULL) SELECT id FROM tree)"
+	const sqliteWant = "message_count > 0 AND deleted_at IS NULL AND id IN (WITH RECURSIVE tree(id) AS (SELECT root_session.id FROM sessions root_session WHERE root_session.message_count > 0 AND root_session.deleted_at IS NULL AND root_session.project = ? AND EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = root_session.id) AND ((NOT (root_session.relationship_type IN ('subagent', 'fork', 'continuation')) OR COALESCE(root_session.parent_session_id, '') = '') OR (root_session.relationship_type IN ('subagent', 'fork', 'continuation') AND NOT EXISTS ( SELECT 1 FROM sessions parent WHERE parent.id = root_session.parent_session_id ))) UNION SELECT s.id FROM sessions s JOIN tree t ON s.parent_session_id = t.id WHERE s.message_count > 0 AND s.deleted_at IS NULL) SELECT id FROM tree)"
+	const postgresWant = "message_count > 0 AND deleted_at IS NULL AND id IN (WITH RECURSIVE tree(id) AS (SELECT root_session.id FROM sessions root_session WHERE root_session.message_count > 0 AND root_session.deleted_at IS NULL AND root_session.project = $1 AND EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = root_session.id) AND ((NOT (root_session.relationship_type IN ('subagent', 'fork', 'continuation')) OR COALESCE(root_session.parent_session_id, '') = '') OR (root_session.relationship_type IN ('subagent', 'fork', 'continuation') AND NOT EXISTS ( SELECT 1 FROM sessions parent WHERE parent.id = root_session.parent_session_id ))) UNION SELECT s.id FROM sessions s JOIN tree t ON s.parent_session_id = t.id WHERE s.message_count > 0 AND s.deleted_at IS NULL) SELECT id FROM tree)"
 
 	tests := []struct {
 		name    string

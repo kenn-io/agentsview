@@ -68,15 +68,16 @@ Prompt matching requires one or fewer real user messages.
 
 Parentless workers appear as sidebar roots. Flat lists, search, CLI, stats, and
 pickers include them only when children are included, like other parentless
-subagents. Automation filters still apply. Readable sources reparse once to
-recover classification evidence. Stored parentless non-interactive runs gain
-the Subagent relationship during each classification audit, including rows
+subagents. Automation and one-shot filters still apply. Readable sources reparse
+once to recover classification evidence. Stored parentless non-interactive runs
+gain the Subagent relationship during each classification audit, including rows
 imported after initialization, even when their sources are unreadable. Deleted
 Claude transcripts can prevent historical worker repair because archived rows
 lack the SDK origin needed to distinguish workers from human SDK conversations.
 Older-client Claude rows in replicas also lack this origin evidence when their
-transcript is unavailable. Ambiguous rows keep their relationship. Usage-only
-archives retain their stored automation flag because they discard prompt text.
+transcript is unavailable. Ambiguous rows keep their relationship. Classification
+audits preserve stored automation flags in usage-only archives. New writes
+classify current evidence.
 
 The session count separates subagents from interactive and automated
 conversations. Every known subagent counts as Subagents, including scripted
