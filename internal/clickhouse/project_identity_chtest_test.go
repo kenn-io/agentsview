@@ -7,13 +7,13 @@ import (
 	"database/sql"
 	"testing"
 
-	"go.kenn.io/agentsview/internal/dbtest"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 func TestProjectInventoryRulesAndCandidates(t *testing.T) {
@@ -73,4 +73,30 @@ func TestCHUsageGroups(t *testing.T) {
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
 	dbtest.AssertUsageGroups(t, store)
+}
+
+func TestProjectWorktreeCandidatesReloadPreservesSelection(t *testing.T) {
+	store, syncer, local := newPushedStore(t)
+	ctx := t.Context()
+	projects, err := store.BuildProjectIdentityMap(ctx, []string{"alpha"})
+	require.NoError(t, err)
+	request := db.ArchiveWorktreeCandidateRequest{ProjectLabel: "alpha", ProjectKey: projects["alpha"].ProjectKey, ProjectDateFilter: db.ProjectDateFilter{DateFrom: "2026-01-01", DateTo: "2026-01-31", Timezone: "UTC"}}
+	before, err := store.ListArchiveWorktreeCandidates(ctx, request)
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+	require.Equal(t, 2, before[0].ContributingSessions)
+	catalog := readbase.NewCatalog(dbtest.PublishingCatalog{CatalogBackend: catalogSQL{store}, Publish: func() {
+		_, err := local.AssignSessionProject(ctx, fixtureAlphaID, "beta")
+		require.NoError(t, err)
+		child, err := local.GetSession(ctx, fixtureChildID)
+		require.NoError(t, err)
+		require.NotNil(t, child)
+		child.StartedAt, child.EndedAt = new("2026-02-01T00:00:00Z"), new("2026-02-01T01:00:00Z")
+		require.NoError(t, local.UpsertSession(ctx, *child))
+		_, err = syncer.Push(ctx, true, nil)
+		require.NoError(t, err)
+	}}, "clickhouse")
+	candidates, err := catalog.ListArchiveWorktreeCandidates(ctx, request)
+	require.NoError(t, err)
+	assert.Empty(t, candidates)
 }

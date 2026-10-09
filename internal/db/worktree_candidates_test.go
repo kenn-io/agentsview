@@ -413,3 +413,18 @@ func setCandidateSnapshot(
 		id, project, machine, root, worktreeRoot, "2025-06-02T10:00:00Z")
 	require.NoError(t, err)
 }
+
+func TestWorktreeCandidatesReloadPreservesSelection(t *testing.T) {
+	d := testDB(t)
+	seedCandidateSession(t, d, "moving", "alpha", "host.example", "/repo/alpha", "2025-06-02T10:00:00Z")
+	seedCandidateSession(t, d, "retimed", "alpha", "host.example", "/repo/alpha", "2025-06-02T10:00:00Z")
+	refs, err := d.archiveWorktreeCandidateSessions(t.Context(), ProjectDateFilter{DateFrom: "2025-06-01", DateTo: "2025-06-30"})
+	require.NoError(t, err)
+	require.Len(t, refs, 2)
+	_, err = d.AssignSessionProject(t.Context(), "moving", "beta")
+	require.NoError(t, err)
+	seedCandidateSession(t, d, "retimed", "alpha", "host.example", "/repo/alpha", "2025-07-02T10:00:00Z")
+	candidates, err := d.worktreeCandidatesFromSelection(t.Context(), []string{refs[0].id, refs[1].id}, map[string]struct{}{"alpha": {}}, ProjectDateFilter{DateFrom: "2025-06-01", DateTo: "2025-06-30"})
+	require.NoError(t, err)
+	assert.Empty(t, candidates)
+}

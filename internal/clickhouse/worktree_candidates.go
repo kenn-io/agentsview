@@ -13,11 +13,14 @@ func (s *Store) ListArchiveWorktreeCandidates(ctx context.Context, request db.Ar
 
 // Snapshots use the latest observation for each source archive and session.
 func (s *Store) loadWorktreeCandidateSessions(
-	ctx context.Context, ids []string,
+	ctx context.Context, ids []string, filter db.SessionFilter,
 ) ([]db.WorktreeCandidateSession, error) {
 	byID := make(map[string]db.WorktreeCandidateSession, len(ids))
 	for batch := range idBatches(ids) {
 		placeholders, args := inArgs(batch)
+		filter.IDs = batch
+		filter.IDsExact = true
+		where, filterArgs := db.BuildSessionBaseFilterSQL(filter, db.ClickHouseQueryDialect())
 		query := `
 			WITH ranked_snapshots AS (
 				SELECT source_archive_id, source_session_id, project, machine,
@@ -38,11 +41,11 @@ func (s *Store) loadWorktreeCandidateSessions(
 			  ON snap.source_archive_id = s.source_archive_id
 			 AND snap.source_session_id = s.id
 			 AND snap.rn = 1
-			WHERE s.id IN (` + placeholders + `) AND s.deleted_at IS NULL
+			WHERE s.id IN (SELECT id FROM sessions WHERE ` + where + `)
 			ORDER BY s.id`
 		queryArgs := make([]any, 0, len(args)*2)
 		queryArgs = append(queryArgs, args...)
-		queryArgs = append(queryArgs, args...)
+		queryArgs = append(queryArgs, filterArgs...)
 		if err := func() error {
 			rows, err := s.queryContext(ctx, query, queryArgs...)
 			if err != nil {
