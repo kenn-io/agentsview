@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
 import { usage } from "../../stores/usage.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { settings } from "../../stores/settings.svelte.js";
@@ -162,6 +163,7 @@ describe("CostTimeSeriesChart", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    sessions.filters.agent = "";
     usage.summary = null;
     usage.attributionSummary = null;
     usage.referenceSummary = null;
@@ -535,7 +537,7 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("shows a selected series outside the unselected top ten in Other's slot", async () => {
+  it("lists a selected series outside the unselected top ten before Other", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     const models = Array.from({ length: 12 }, (_, index) => ({
       modelName: `model-${index}`,
@@ -551,9 +553,37 @@ describe("CostTimeSeriesChart", () => {
     await tick();
 
     const items = Array.from(document.querySelectorAll<HTMLElement>(".legend-item"));
-    expect(items.map((item) => item.textContent?.trim())).toEqual(models.slice(0, 10).map((model) => model.modelName).concat("model-11"));
+    expect(items.map((item) => item.textContent?.trim())).toEqual(models.slice(0, 10).map((model) => model.modelName).concat("model-11", "Other"));
     expect(items.filter((item) => !item.classList.contains("dimmed")).map((item) => item.textContent?.trim())).toEqual(["model-11"]);
-    expect(items.at(-1)!.querySelector<HTMLElement>(".legend-dot")!.style.background).toBe(colorMap.get("model-11"));
+    expect(items.at(-2)!.querySelector<HTMLElement>(".legend-dot")!.style.background).toBe(colorMap.get("model-11"));
+    unmount(component);
+  });
+
+  it("keeps Other in the legend when eleven selected agents draw it", async () => {
+    usage.toggles.timeSeries.groupBy = "agent";
+    usage.toggles.attribution.groupBy = "agent";
+    const agents = Array.from({ length: 12 }, (_, index) => ({ agent: `agent-${index}`, cost: testMoney(12 - index), inputTokens: 60, outputTokens: 30, cacheCreationTokens: 0, cacheReadTokens: 0 }));
+    const agentSummary = (rows: typeof agents) => {
+      return usageSummary([0, 1].map((index) => {
+        const entry = dailyEntry(index);
+        entry.projectBreakdowns = [];
+        entry.agentBreakdowns = rows;
+        return entry;
+      }));
+    };
+    sessions.filters.agent = agents.slice(1).map((row) => row.agent).join(",");
+    usage.referenceSummary = agentSummary(agents);
+    usage.summary = agentSummary(agents.slice(1));
+
+    const component = mountChart();
+    await tick();
+
+    expect(document.querySelectorAll("path.lc-area-path")).toHaveLength(11);
+    expect(document.querySelectorAll("path.lc-area-path[fill='var(--text-muted)']")).toHaveLength(1);
+    const items = Array.from(document.querySelectorAll<HTMLElement>(".legend-item"));
+    expect(items.map((item) => item.textContent?.trim())).toEqual(agents.slice(0, 11).map((row) => row.agent).concat("Other"));
+    expect(items.filter((item) => item.textContent?.trim() === "Other" && !item.classList.contains("dimmed"))).toHaveLength(1);
+    expect(items[0]!.classList.contains("dimmed")).toBe(true);
     unmount(component);
   });
 

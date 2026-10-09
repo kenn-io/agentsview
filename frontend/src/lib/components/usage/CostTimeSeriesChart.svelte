@@ -254,10 +254,10 @@
   const legendData = $derived(
     usage.colorSummary === usage.timeSeriesSummary ? seriesData : buildSeries(usage.colorSummary),
   );
-  // A selected series outside the unselected top ten takes Other's slot.
+  // Plotted series outside the unselected top ten follow it, then Other once.
   const legendKeys = $derived.by(() => {
-    const extra = seriesData.keys.filter((key) => key !== "__other__" && !legendData.keys.includes(key));
-    return extra.length === 0 ? legendData.keys : [...legendData.keys.filter((key) => key !== "__other__"), ...extra];
+    const named = [...new Set([...legendData.keys, ...seriesData.keys])].filter((key) => key !== "__other__");
+    return legendData.keys.includes("__other__") || seriesData.keys.includes("__other__") ? [...named, "__other__"] : named;
   });
 
   const view = $derived(usage.toggles.timeSeries.view);
@@ -676,7 +676,7 @@
   {#if seriesData.points.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    {#if legendData.keys.length > 1}
+    {#if legendKeys.length > 1}
       <div class="legend">
         {#each legendKeys as key (key)}
           <span
