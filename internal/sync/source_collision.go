@@ -46,12 +46,23 @@ func (e *Engine) sourceCollisionID(
 		}
 	}
 	// A permanently deleted id stays with the file it was deleted for; a
-	// deletion recorded without its file covers every file with the id.
-	if deletedAnyFile || e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) {
+	// deletion recorded without its file covers every file with the id. A move
+	// between Codex roots keeps the discovered key, so FindSource cannot see
+	// the deleted path and the key comparison keeps the session deleted.
+	if deletedAnyFile || e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) ||
+		(deleted != "" && sameDiscoveredSource(provider.Definition().Type, deleted, lookupPath)) {
 		return s.ID, false, nil
 	}
 	if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {
 		return s.ID, stored != lookupPath, nil
+	}
+	// Two paths that resolve to the same discovered source are one logical
+	// session, not a second file sharing the id. Codex keeps a rollout in both
+	// a live and an archived root; discovery already picked the preferred copy,
+	// so its write replaces the stored path instead of becoming a continuation.
+	if hasStored && stored != "" &&
+		sameDiscoveredSource(provider.Definition().Type, stored, lookupPath) {
+		return s.ID, true, nil
 	}
 	altID, moved := e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath)
 	if altID == "" && !admitted {
@@ -59,7 +70,12 @@ func (e *Engine) sourceCollisionID(
 	}
 	if altID == "" {
 		available := !hasStored
+		// A Codex rollout moves only between roots, which the same-source
+		// checks above already recognize. Any other Codex file with the id is
+		// a separate rollout, so it never takes over a vanished one's id and
+		// archived messages.
 		if hasStored && !owner.Trashed && stored != "" &&
+			!isCodexFormatAgent(provider.Definition().Type) &&
 			s.MessageCount >= owner.MessageCount {
 			available = e.storedSourceGone(ctx, provider, stored)
 		}
@@ -102,6 +118,14 @@ func (e *Engine) storedSourceGone(ctx context.Context, provider parser.Provider,
 // rules, including planned moves between its files.
 func collisionPolicyApplies(provider parser.Provider) bool {
 	return provider.Capabilities().Source.SharedSessionIDs == parser.CapabilitySupported
+}
+
+// sameDiscoveredSource reports whether two paths are the same discovered
+// source. Every copy of a Codex rollout, ordinary or reverted, resolves to one
+// key even across a live and an archived root.
+func sameDiscoveredSource(agent parser.AgentType, a, b string) bool {
+	return discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: a}) ==
+		discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: b})
 }
 
 // collisionPolicyAgents lists shared-id providers with roots participating in
@@ -166,9 +190,12 @@ func (e *Engine) existingAltID(
 	ctx context.Context, provider parser.Provider, records []db.SessionPathRecord,
 	fullID, rawID, lookupPath string,
 ) (string, bool) {
+	agent := provider.Definition().Type
 	minted := applyIDPrefixToID(e.idPrefix, parser.AltSessionID(rawID, lookupPath))
 	for _, r := range records {
-		if r.ID != fullID && (r.ID == minted || e.storedSourceLivesAt(ctx, provider, r.FilePath, lookupPath)) {
+		if r.ID != fullID && (r.ID == minted ||
+			e.storedSourceLivesAt(ctx, provider, r.FilePath, lookupPath) ||
+			(r.FilePath != "" && sameDiscoveredSource(agent, r.FilePath, lookupPath))) {
 			return rawID + r.ID[len(fullID):], r.FilePath != "" && r.FilePath != lookupPath
 		}
 	}

@@ -132,6 +132,13 @@ func TestHTTPMirrorCodexIndexRemoval(t *testing.T) {
 							`{"timestamp":"2026-09-03T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Original prompt"}]}}`+"\n",
 					), 0o600))
 				}
+				// A reverted thread has a second rollout carrying the same thread
+				// id, stored as a separate session that shares the thread's title.
+				reverted := filepath.Join(root, "rollout-2026-09-03T11-00-00-"+id+"_019f0000-0000-7000-8002-000000000001.jsonl")
+				require.NoError(t, os.WriteFile(reverted, []byte(
+					`{"timestamp":"2026-09-03T11:00:00Z","type":"session_meta","payload":{"id":"`+id+`","cwd":"/work"}}`+"\n"+
+						`{"timestamp":"2026-09-03T11:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"After revert"}]}}`+"\n",
+				), 0o600))
 				primaryIndex := filepath.Join(primary, parser.CodexSessionIndexFilename)
 				alternateIndex := filepath.Join(alternate, parser.CodexSessionIndexFilename)
 				require.NoError(t, os.WriteFile(primaryIndex, []byte(`{"id":"`+id+`","thread_name":"Primary title"}`+"\n"), 0o600))
@@ -149,19 +156,13 @@ func TestHTTPMirrorCodexIndexRemoval(t *testing.T) {
 				database, hs := newMirrorSync(t, remote, t.TempDir())
 				_, err = hs.Run(t.Context())
 				require.NoError(t, err)
-				session, err := database.GetSessionFull(t.Context(), "devbox~codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, session.SessionName)
-				require.Equal(t, "Alternate title", *session.SessionName)
+				requireThreadTitles(t, database, "devbox~codex:"+id, "Alternate title")
 
 				require.NoError(t, os.WriteFile(alternateIndex, []byte(`{"id":"`+id+`","thread_name":"Renamed alternate title"}`+"\n"), 0o600))
 				stats, err := hs.Run(t.Context())
 				require.NoError(t, err)
-				assert.Equal(t, 1, stats.SessionsSynced)
-				session, err = database.GetSessionFull(t.Context(), "devbox~codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, session.SessionName)
-				require.Equal(t, "Renamed alternate title", *session.SessionName)
+				assert.Equal(t, 2, stats.SessionsSynced)
+				requireThreadTitles(t, database, "devbox~codex:"+id, "Renamed alternate title")
 
 				switch removal {
 				case "delete":
@@ -180,13 +181,10 @@ func TestHTTPMirrorCodexIndexRemoval(t *testing.T) {
 				require.NoError(t, prepared.Close())
 				stats, err = hs.Run(t.Context())
 				require.NoError(t, err)
-				assert.Equal(t, 1, stats.ExactSources, "index changes must not schedule unrelated sessions")
+				assert.Equal(t, 2, stats.ExactSources, "index changes must not schedule unrelated sessions")
 				assert.Zero(t, stats.FallbackProviders)
-				assert.Equal(t, 1, stats.SessionsSynced)
-				session, err = database.GetSessionFull(t.Context(), "devbox~codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, session.SessionName)
-				assert.Equal(t, "Primary title", *session.SessionName)
+				assert.Equal(t, 2, stats.SessionsSynced)
+				requireThreadTitles(t, database, "devbox~codex:"+id, "Primary title")
 				stats, err = hs.Run(t.Context())
 				require.NoError(t, err)
 				assert.Zero(t, stats.SessionsSynced, "the completed change must not repeat")
@@ -197,11 +195,24 @@ func TestHTTPMirrorCodexIndexRemoval(t *testing.T) {
 				require.NoError(t, err)
 				_, err = hs.Run(t.Context())
 				require.NoError(t, err)
-				session, err = database.GetSessionFull(t.Context(), "devbox~codex:"+id)
-				require.NoError(t, err)
-				require.NotNil(t, session.SessionName)
-				assert.Equal(t, "Primary title", *session.SessionName, "absence of every title is not a rename to empty")
+				requireThreadTitles(t, database, "devbox~codex:"+id, "Primary title")
 			})
 		}
+	}
+}
+
+// requireThreadTitles asserts that both stored sessions of a reverted Codex
+// thread, the thread's id and its derived id, carry want as their title.
+func requireThreadTitles(t *testing.T, database *db.DB, threadID, want string) {
+	t.Helper()
+	records, err := database.ListSessionPathRecords(t.Context(), threadID)
+	require.NoError(t, err)
+	require.Len(t, records, 2, "the thread's ordinary and reverted rollouts")
+	for _, r := range records {
+		session, err := database.GetSessionFull(t.Context(), r.ID)
+		require.NoError(t, err)
+		require.NotNil(t, session, r.ID)
+		require.NotNilf(t, session.SessionName, "session %s title", r.ID)
+		assert.Equalf(t, want, *session.SessionName, "session %s title", r.ID)
 	}
 }

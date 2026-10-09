@@ -479,6 +479,36 @@ func TestExtractUUIDFromRollout(t *testing.T) {
 	}
 }
 
+func TestCodexThreadIDFromFilename(t *testing.T) {
+	const thread = "019faa49-a61a-7282-8376-12dd025a5f0c"
+	const rollout = "019faa50-0000-7000-8000-000000000001"
+	tests := []struct {
+		name       string
+		filename   string
+		wantThread string
+		wantRevert string
+	}{
+		{"ordinary rollout", "rollout-2026-07-28T14-53-01-" + thread + ".jsonl", thread, ""},
+		{
+			"reverted rollout", "rollout-2026-07-28T15-00-00-" + thread + "_" + rollout + ".jsonl",
+			thread, thread + "_" + rollout,
+		},
+		{"non-uuid suffix", "rollout-2026-07-28T15-00-00-" + thread + "_abcdef.jsonl", "", ""},
+		{"missing rollout prefix", thread + "_" + rollout + ".jsonl", "", ""},
+		{"wrong extension", "rollout-2026-07-28T15-00-00-" + thread + "_" + rollout + ".json", "", ""},
+		{"empty", "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantThread, CodexThreadIDFromFilename(tt.filename))
+			assert.Equal(t, tt.wantRevert, CodexRevertedRolloutID(tt.filename))
+		})
+	}
+	assert.Empty(t, CodexSessionUUIDFromFilename(
+		"rollout-2026-07-28T15-00-00-"+thread+"_"+rollout+".jsonl"),
+		"a reverted rollout must stay its own discovery source")
+}
+
 func TestIsValidSessionID(t *testing.T) {
 	tests := []struct {
 		id   string

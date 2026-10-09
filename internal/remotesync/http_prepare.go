@@ -889,16 +889,27 @@ func (hs HTTPSync) prepareMirror(
 		}
 		parser.EvictCodexSessionIndex(indexPath)
 		for uuid := range parser.CodexSessionIndexTitles(indexPath) {
-			storedPath := hs.DB.GetSessionFilePath(ctx, hs.Host+"~codex:"+uuid)
-			remotePath, ok := strings.CutPrefix(storedPath, hs.Host+":")
-			if !ok {
-				continue
-			}
-			path, err := mirrorRelativeRemoteChangePath(mirrorRoot, remotePath)
+			// A reverted thread stores each of its rollouts as its own session,
+			// one under the thread's id and others under derived ids; journal
+			// every one so each takes the remaining title.
+			records, err := hs.DB.ListSessionPathRecords(ctx, hs.Host+"~codex:"+uuid)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("listing stored rollouts of codex thread %s: %w", uuid, err)
 			}
-			observed = append(observed, path)
+			for _, record := range records {
+				if record.Excluded {
+					continue
+				}
+				remotePath, ok := strings.CutPrefix(record.FilePath, hs.Host+":")
+				if !ok {
+					continue
+				}
+				path, err := mirrorRelativeRemoteChangePath(mirrorRoot, remotePath)
+				if err != nil {
+					return nil, err
+				}
+				observed = append(observed, path)
+			}
 		}
 	}
 	journal, mergeStats, err := mergeMirrorChangesWithForce(

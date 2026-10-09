@@ -2590,7 +2590,7 @@ func dedupeDiscoveredFilesByPreference(
 
 func discoveredFileKey(file parser.DiscoveredFile) string {
 	if isCodexFormatAgent(file.Agent) {
-		if id := parser.CodexSessionUUIDFromFilename(filepath.Base(file.Path)); id != "" {
+		if id := parser.CodexRolloutDiscoveryID(filepath.Base(file.Path)); id != "" {
 			return string(file.Agent) + "\x00" +
 				discoveredFileIDPrefix(file) + "\x00" + id
 		}
@@ -2698,7 +2698,7 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 func codexLayoutForPath(path string) parser.CodexLayout {
 	path = filepath.Clean(path)
 	name := filepath.Base(path)
-	if parser.CodexSessionUUIDFromFilename(name) == "" {
+	if parser.CodexRolloutDiscoveryID(name) == "" {
 		return parser.CodexLayoutUnknown
 	}
 	day := filepath.Base(filepath.Dir(path))
@@ -8519,8 +8519,9 @@ func (e *Engine) visualStudioCopilotCurrentPollSource(
 // archived copies to the preferred layout at discovery time; this restores the
 // dropped duplicates (scoped to the configured roots) so an mtime cutoff filter
 // can judge each copy on its own mtime, matching the legacy discover-then-filter
-// order. Files of other agents, and Codex-format files without a UUID-shaped
-// name, pass through unchanged. Duplicates are keyed by path so nothing is added
+// order. A reverted thread's rollout is restored the same way. Files of other
+// agents, and Codex-format files without a rollout ID in their name, pass
+// through unchanged. Duplicates are keyed by path so nothing is added
 // twice. Each agent is expanded against its own roots and re-added under its own
 // identity: a fork's UUID must not be resolved through the Codex provider.
 func (e *Engine) expandCodexProviderDuplicates(
@@ -8544,11 +8545,11 @@ func (e *Engine) expandCodexProviderDuplicates(
 		if pather == nil {
 			continue
 		}
-		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
-		if uuid == "" {
+		id := parser.CodexRolloutDiscoveryID(filepath.Base(f.Path))
+		if id == "" {
 			continue
 		}
-		for _, dup := range pather(uuid) {
+		for _, dup := range pather(id) {
 			key := string(f.Agent) + "\x00" + filepath.Clean(dup)
 			if _, ok := seen[key]; ok {
 				continue
@@ -16653,11 +16654,11 @@ func (e *Engine) codexIndexSessionNameChanged(path string) bool {
 func (e *Engine) codexIndexSessionNameState(
 	path string,
 ) (changed, verified bool) {
-	uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(path))
-	if uuid == "" {
+	threadID := parser.CodexThreadIDFromFilename(filepath.Base(path))
+	if threadID == "" {
 		return false, false
 	}
-	currentName, ok, err := e.codexMetadata().ReadThreadName(path, uuid)
+	currentName, ok, err := e.codexMetadata().ReadThreadName(path, threadID)
 	if err != nil {
 		return false, false
 	}
@@ -16669,13 +16670,42 @@ func (e *Engine) codexIndexSessionNameState(
 		// rewrite preserves the title, so the loop could never converge.
 		return false, true
 	}
+	if e.db.ArchiveContent().UsageOnly() {
+		// Usage-only archives store no titles, so a rename has nothing to
+		// refresh and the empty stored title must not read as stale.
+		return false, true
+	}
+	ctx := context.Background()
 	storedName, found, err := e.db.GetSessionName(
-		context.Background(), e.idPrefix+"codex:"+uuid,
+		ctx, e.codexStoredSessionIDForPath(ctx, path, threadID),
 	)
 	if err != nil || !found {
 		return true, true
 	}
 	return codexSessionNameDiffers(storedName, currentName), true
+}
+
+// codexStoredSessionIDForPath returns the stored session id for a Codex
+// rollout. A thread's rollouts share its id, so a reverted rollout, or the
+// ordinary rollout when the reverted one synced first, is stored under a
+// derived id; the path finds that row. A live or archived copy of the thread's
+// stored rollout has no row of its own and falls back to the thread's id.
+func (e *Engine) codexStoredSessionIDForPath(
+	ctx context.Context, path, threadID string,
+) string {
+	threadSessionID := e.idPrefix + "codex:" + threadID
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	if e.db.GetSessionFilePath(ctx, threadSessionID) == lookupPath {
+		return threadSessionID
+	}
+	ids, err := e.db.ListSessionIDsByFilePath(ctx, lookupPath, string(parser.AgentCodex))
+	if err != nil || len(ids) != 1 {
+		return threadSessionID
+	}
+	return ids[0]
 }
 
 // codexCachedIndexSessionNameState limits title-based cache invalidation to
@@ -16727,7 +16757,9 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 
 	var out []parser.DiscoveredFile
 	for uuid, title := range titles {
-		if !e.codexStoredNameDiffers(uuid, title) {
+		ordinaryStale, reverted := e.codexThreadRolloutsWithStaleName(ctx, uuid, title)
+		out = append(out, reverted...)
+		if !ordinaryStale {
 			continue
 		}
 		var candidates []parser.DiscoveredFile
@@ -16760,25 +16792,72 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 	return out
 }
 
+// codexThreadRolloutsWithStaleName compares each stored rollout of a Codex
+// thread with the thread's index title. A reverted thread has two rollouts
+// and two sessions, and either one can hold the thread's id, so each row is
+// compared on its own. It reports whether the ordinary rollout's row is stale
+// and returns the reverted rollouts whose rows are stale, pinned to their
+// stored copies.
+func (e *Engine) codexThreadRolloutsWithStaleName(
+	ctx context.Context, uuid, title string,
+) (ordinaryStale bool, reverted []parser.DiscoveredFile) {
+	records, err := e.db.ListSessionPathRecords(ctx, e.idPrefix+"codex:"+uuid)
+	if err != nil {
+		log.Printf("codex index rename: list rollouts of thread %s: %v; "+
+			"refreshing only its ordinary rollout", uuid, err)
+		return e.codexStoredNameDiffers(uuid, title), nil
+	}
+	for _, r := range records {
+		if r.Excluded || r.FilePath == "" ||
+			!e.codexStoredNameDiffersBySessionID(r.ID, title, false) {
+			continue
+		}
+		if parser.CodexRevertedRolloutID(filepath.Base(r.FilePath)) == "" {
+			ordinaryStale = true
+			continue
+		}
+		if path, ok := e.codexLocalSourcePath(r.FilePath); ok {
+			reverted = append(reverted, parser.DiscoveredFile{
+				Path:            path,
+				Agent:           parser.AgentCodex,
+				Machine:         e.machineForPath(parser.AgentCodex, path),
+				ProviderProcess: true,
+				ProviderSource:  e.codexPinnedProviderSource(parser.AgentCodex, path),
+			})
+		}
+	}
+	return ordinaryStale, reverted
+}
+
+// codexLocalSourcePath maps a stored Codex source path to the file on disk,
+// resolving a remote mirror's stored path when one is configured.
+func (e *Engine) codexLocalSourcePath(stored string) (string, bool) {
+	path := stored
+	if e.pathRewriter != nil {
+		if e.storedPathResolver == nil {
+			return "", false
+		}
+		resolved, ok := e.storedPathResolver(stored)
+		if !ok {
+			return "", false
+		}
+		path = resolved
+	}
+	if _, err := os.Stat(path); err != nil {
+		return "", false
+	}
+	return path, true
+}
+
+// pickPreferredCodexIndexDiscoveredFile prefers the copy a stored session
+// tracks, matched by path because the rollout's row can hold the thread's id
+// or, after a revert, a derived one.
 func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
 	candidates []parser.DiscoveredFile,
 ) parser.DiscoveredFile {
-	if len(candidates) > 0 {
-		uuid := ""
-		for _, candidate := range candidates {
-			uuid = parser.CodexSessionUUIDFromFilename(filepath.Base(candidate.Path))
-			if uuid != "" {
-				break
-			}
-		}
-		storedPath := e.db.GetSessionFilePath(ctx, e.idPrefix+"codex:"+uuid)
-		if uuid != "" && storedPath != "" {
-			storedPath = filepath.Clean(storedPath)
-			for _, candidate := range candidates {
-				if filepath.Clean(e.effectiveSourcePath(candidate.Path)) == storedPath {
-					return candidate
-				}
-			}
+	for _, candidate := range candidates {
+		if codexCandidateTracked(ctx, e.db, e.effectiveSourcePath(candidate.Path), candidate) {
+			return candidate
 		}
 	}
 	return pickPreferredCodexDiscoveredFile(ctx, e.db, candidates)
@@ -16855,6 +16934,9 @@ func (e *Engine) codexStoredNameDiffersBySessionID(
 	sessionID, indexTitle string,
 	missingDiffers bool,
 ) bool {
+	if e.db.ArchiveContent().UsageOnly() {
+		return false
+	}
 	storedName, found, err := e.db.GetSessionName(
 		context.Background(), sessionID,
 	)
@@ -16868,29 +16950,30 @@ func codexSessionNameDiffers(storedName, indexTitle string) bool {
 	return strings.TrimSpace(indexTitle) != strings.TrimSpace(storedName)
 }
 
+// codexCandidateTracked reports whether a stored session owns the candidate's
+// stored path, including one whose source is marked missing. A failed lookup
+// counts as untracked, so the caller falls back to its layout preference.
+func codexCandidateTracked(ctx context.Context,
+	database *db.DB, storedPath string, candidate parser.DiscoveredFile,
+) bool {
+	tracked, err := database.HasSessionAtFilePath(ctx, storedPath, string(candidate.Agent))
+	if err != nil {
+		log.Printf("codex duplicate selection: %v; using layout preference", err)
+	}
+	return tracked
+}
+
 func pickPreferredCodexDiscoveredFile(ctx context.Context,
 	database *db.DB, candidates []parser.DiscoveredFile,
 ) parser.DiscoveredFile {
 	if len(candidates) == 0 {
 		return parser.DiscoveredFile{}
 	}
-	if id := parser.CodexSessionUUIDFromFilename(
-		filepath.Base(candidates[0].Path),
-	); id != "" {
-		sessionID := "codex:" + id
-		for _, candidate := range candidates {
-			storedPath := database.GetSessionFilePath(ctx, applyIDPrefixToID(
-				discoveredFileIDPrefix(candidate), sessionID,
-			))
-			if storedPath == "" {
-				continue
-			}
-			storedPath = filepath.Clean(storedPath)
-			for _, candidate := range candidates {
-				if filepath.Clean(candidate.Path) == storedPath {
-					return candidate
-				}
-			}
+	// Prefer the copy a stored session tracks. Match by path: the rollout's
+	// row can hold the thread's id or, after a revert, a derived one.
+	for _, candidate := range candidates {
+		if codexCandidateTracked(ctx, database, candidate.Path, candidate) {
+			return candidate
 		}
 	}
 	chosen := candidates[0]

@@ -573,6 +573,29 @@ fixtures retain this field; missing identities remain source-local.
   call per file. `custom_tool_call` items carry the same patch text under
   `input` instead of a JSON `patch` argument.
 
+- **Reverted rollouts (verified 2026-10-08):** `thread/revert` keeps the thread
+  ID and writes a new immutable rollout named
+  `rollout-<timestamp>-<thread_id>_<rollout_id>.jsonl`; ordinary rollouts name
+  only the thread ID. See the pinned
+  [recorder parameters](https://github.com/openai/codex/blob/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e/codex-rs/rollout/src/recorder.rs#L98-L104)
+  and
+  [rollout filename parser](https://github.com/openai/codex/blob/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e/codex-rs/rollout/src/rollout_file_name.rs#L10-L14).
+  The old rollout stays on disk. The new file's `session_meta` carries the
+  same thread ID plus a `history_base` reference to the retained prefix
+  instead of a copy, and Codex repoints its SQLite thread record at the new
+  file; see
+  [revert_thread.rs](https://github.com/openai/codex/blob/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e/codex-rs/thread-store/src/local/revert_thread.rs#L15-L18).
+  For local sources, Agentsview keeps both files: the stored rollout keeps
+  the thread's session ID and the other is stored under a derived ID as a
+  linked session. A reverted rollout never takes over the thread's ID, even
+  after the stored rollout's file is gone. The parser ignores `history_base`,
+  so the reverted rollout's session holds only turns written after the revert.
+  Discovery keys a reverted rollout by `<thread_id>_<rollout_id>`, so its live
+  and archived copies are one source, and thread-name refresh reads the thread
+  ID from the name. S3 imports do not apply this collision policy yet, for
+  Codex or for Cursor; see
+  [#2170](https://github.com/kenn-io/agentsview/issues/2170).
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/openai/codex.git` at

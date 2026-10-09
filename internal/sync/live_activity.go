@@ -137,13 +137,18 @@ func NewLiveActivityPoller(
 	}
 }
 
-// DBLiveActivityLookup finds one stored session's source in the archive.
+// DBLiveActivityLookup finds one stored session's source in the archive. A
+// hint for a reverted Codex thread resolves to the rollout Codex still writes.
 func DBLiveActivityLookup(database *db.DB) LiveActivityLookup {
 	return func(
 		ctx context.Context,
 		fullSessionID string,
 	) (LiveActivitySource, bool, error) {
-		session, err := database.GetSessionFull(ctx, fullSessionID)
+		sessionID, err := currentCodexRolloutSessionID(ctx, database, fullSessionID)
+		if err != nil {
+			return LiveActivitySource{}, false, err
+		}
+		session, err := database.GetSessionFull(ctx, sessionID)
 		if err != nil {
 			return LiveActivitySource{}, false, err
 		}
@@ -155,6 +160,32 @@ func DBLiveActivityLookup(database *db.DB) LiveActivityLookup {
 			session.FileInode, session.FileDevice,
 		), true, nil
 	}
+}
+
+// currentCodexRolloutSessionID returns the stored session of the rollout a
+// Codex thread is writing. A reverted thread stores each rollout as its own
+// session, one under the thread's id and the rest under derived ids, and
+// Codex appends only to the newest. Rollout filenames begin with their
+// creation timestamp, so the greatest name is the newest. Any other session
+// id is returned unchanged.
+func currentCodexRolloutSessionID(
+	ctx context.Context, database *db.DB, fullSessionID string,
+) (string, error) {
+	records, err := database.ListSessionPathRecords(ctx, fullSessionID)
+	if err != nil {
+		return "", fmt.Errorf("listing stored rollouts of %s: %w", fullSessionID, err)
+	}
+	current, currentName := fullSessionID, ""
+	for _, r := range records {
+		if r.Excluded || r.Trashed || r.SourceMissing || r.FilePath == "" {
+			continue
+		}
+		name := filepath.Base(r.FilePath)
+		if parser.CodexThreadIDFromFilename(name) != "" && name > currentName {
+			current, currentName = r.ID, name
+		}
+	}
+	return current, nil
 }
 
 // DBRecentSessionLookup lists recent sessions from the archive that local

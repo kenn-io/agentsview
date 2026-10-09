@@ -24,6 +24,15 @@ var uuidRe = regexp.MustCompile(
 		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
 )
 
+// revertedRolloutRe matches the stem Codex writes when it reverts a thread:
+// the stable thread UUID, an underscore, then the new rollout's own UUID.
+var revertedRolloutRe = regexp.MustCompile(
+	`^rollout-.*-(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-` +
+		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_` +
+		`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-` +
+		`[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
+)
+
 const (
 	copilotStateDir = "session-state"
 	geminiChatsDir  = "chats"
@@ -784,6 +793,48 @@ func CodexSessionUUIDFromFilename(name string) string {
 		return ""
 	}
 	return extractUUIDFromRollout(name)
+}
+
+// CodexThreadIDFromFilename returns the thread UUID a Codex rollout filename
+// names, including a reverted thread's rollout
+// (rollout-<timestamp>-<thread>_<rollout>.jsonl). A reverted rollout is a
+// separate source from the thread's other rollouts; use this only to find the
+// thread's metadata, such as its name.
+func CodexThreadIDFromFilename(name string) string {
+	if id := CodexSessionUUIDFromFilename(name); id != "" {
+		return id
+	}
+	if match := codexRevertedRolloutMatch(name); match != nil {
+		return match[2]
+	}
+	return ""
+}
+
+// CodexRevertedRolloutID returns "<thread>_<rollout>" for a reverted thread's
+// rollout filename and "" for any other name. Every copy of that rollout, in
+// the live or the archived root, shares this discovery identity.
+func CodexRevertedRolloutID(name string) string {
+	if match := codexRevertedRolloutMatch(name); match != nil {
+		return match[1]
+	}
+	return ""
+}
+
+// CodexRolloutDiscoveryID is the identity every copy of a Codex rollout
+// shares across the live and archived roots: the thread UUID for the
+// thread's ordinary rollout, or "<thread>_<rollout>" for a reverted one.
+func CodexRolloutDiscoveryID(name string) string {
+	if id := CodexSessionUUIDFromFilename(name); id != "" {
+		return id
+	}
+	return CodexRevertedRolloutID(name)
+}
+
+func codexRevertedRolloutMatch(name string) []string {
+	if !isCodexSessionFilename(name) {
+		return nil
+	}
+	return revertedRolloutRe.FindStringSubmatch(strings.TrimSuffix(name, ".jsonl"))
 }
 
 // CodexLayout reports which on-disk layout a Codex session path uses.

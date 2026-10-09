@@ -352,6 +352,17 @@ The latest published release is
   which search and usage count twice. A copied subagent links to the session
   with the same ID, replacing its original parent link. Other agents sync as
   before.
+- Reverting a Codex thread no longer replaces its stored conversation with a
+  shorter copy. Codex writes the reverted thread to a second rollout file
+  under the same thread ID, and the two files used to overwrite each other on
+  sync and resync. Agentsview now keeps both: the session already stored
+  keeps the thread, and the other file appears as a linked session. That
+  session holds only the turns written after the revert, and the original
+  session still shows the turns that were reverted away. Renaming the thread
+  updates both sessions. Upgrading reprocesses the archive once to recover
+  conversations that were already collapsed. TraeX and Augure Code use the same
+  rollout format and behave the same way. Codex sessions imported from S3
+  storage still collapse the two files into one session.
 - Recall no longer records work an agent only proposed as work it completed.
   When a stretch of a session ran no tools, extraction cannot produce a
   procedure entry for it and tells the model nothing there was executed.

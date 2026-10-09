@@ -3316,6 +3316,25 @@ func (db *DB) GetFileInfoByPath(ctx context.Context,
 	return s.Int64, m.Int64, true
 }
 
+// HasSessionAtFilePath reports whether a stored session of agent records path
+// as its source. Unlike GetFileInfoByAgentPath it counts a session whose
+// source is marked missing, which still owns that path if the file returns.
+func (db *DB) HasSessionAtFilePath(ctx context.Context, path, agent string) (bool, error) {
+	var found int
+	err := db.getReader().QueryRowContext(ctx,
+		"SELECT 1 FROM sessions INDEXED BY idx_sessions_file_path"+
+			" WHERE file_path = ? AND agent = ? LIMIT 1",
+		path, agent,
+	).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking for a %s session at %s: %w", agent, path, err)
+	}
+	return true, nil
+}
+
 // GetFileInfoByAgentPath is GetFileInfoByPath scoped to the agent that owns
 // the source path. Agent-scoped freshness queries force the path index because
 // SQLite otherwise prefers idx_sessions_agent and scans every session for the
