@@ -138,7 +138,6 @@ const (
 	FieldSourceVersion        = "source_version"
 	FieldTranscriptFidelity   = "transcript_fidelity"
 	FieldGroupKey             = "group_key"
-	FieldGroupLabel           = "group_label"
 	FieldParserMalformedLines = "parser_malformed_lines"
 	FieldIsTruncated          = "is_truncated"
 	// FieldPresence is the synthetic diff attached when a stored,

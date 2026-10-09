@@ -272,15 +272,15 @@ func SeedSessionWithMessages(
 // SeedUsageGroups records renamed jobs, matching names and ungrouped runs.
 func SeedUsageGroups(t *testing.T, conn *sql.DB) {
 	t.Helper()
-	_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions(id, project, machine, agent, group_key, group_label, started_at, deleted_at, message_count, user_message_count) VALUES
- ('group-a-old', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Old digest', '2026-10-07T12:00:00Z', NULL, 1, 1),
- ('group-a-new', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Research digest', '2026-10-08T12:00:00Z', NULL, 1, 1),
+	_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions(id, project, machine, agent, group_key, session_name, started_at, deleted_at, message_count, user_message_count) VALUES
+ ('group-a-old', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Old digest · Oct 07 12:00', '2026-10-07T12:00:00Z', NULL, 1, 1),
+ ('group-a-new', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Research digest · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1),
  ('group-a-untitled', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', '', '2026-10-09T12:00:00Z', NULL, 1, 1),
- ('group-a-deleted', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Deleted digest', '2026-10-10T12:00:00Z', '2026-10-10T13:00:00Z', 1, 1),
- ('group-second-machine', 'hermes-cron', 'host-b.example', 'hermes', 'job-a', 'Research digest', '2026-10-08T12:00:00Z', NULL, 1, 1),
- ('group-b', 'hermes-cron', 'host-a.example', 'hermes', 'job-b', 'Research digest', '2026-10-08T12:00:00Z', NULL, 1, 1),
+ ('group-a-deleted', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Deleted digest · Oct 10 12:00', '2026-10-10T12:00:00Z', '2026-10-10T13:00:00Z', 1, 1),
+ ('group-second-machine', 'hermes-cron', 'host-b.example', 'hermes', 'job-a', 'Research digest · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1),
+ ('group-b', 'hermes-cron', 'host-a.example', 'hermes', 'job-b', 'Research digest · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1),
  ('group-other', 'hermes-cron', 'host-a.example', 'hermes', '', '', '2026-10-08T12:00:00Z', NULL, 1, 1),
- ('group-another-project', 'another-project', 'host-a.example', 'hermes', 'job-a', 'Separate project', '2026-10-08T12:00:00Z', NULL, 1, 1);
+ ('group-another-project', 'another-project', 'host-a.example', 'hermes', 'job-a', 'Separate project · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1);
  INSERT INTO messages(session_id, ordinal, role, content, timestamp)
  SELECT id, 0, 'assistant', 'run message', started_at FROM sessions WHERE id LIKE 'group-%';
  INSERT INTO usage_events(session_id, source, model, input_tokens, output_tokens, cost_microdollars, cost_status, cost_source, occurred_at, dedup_key)

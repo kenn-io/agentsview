@@ -31,7 +31,6 @@ func ConvertSessionContext(
 		SourceSessionID:      parsed.SourceSessionID,
 		SourceVersion:        parsed.SourceVersion,
 		GroupKey:             parsed.GroupKey,
-		GroupLabel:           parsed.GroupLabel,
 		TranscriptFidelity:   parsed.TranscriptFidelity,
 		ParserMalformedLines: parsed.MalformedLines,
 		IsTruncated:          parsed.IsTruncated,

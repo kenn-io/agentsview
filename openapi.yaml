@@ -2489,8 +2489,6 @@ components:
           type: string
         group_key:
           type: string
-        group_label:
-          type: string
         has_peak_context_tokens:
           type: boolean
         has_total_output_tokens:
@@ -6453,8 +6451,6 @@ components:
         git_branch:
           type: string
         group_key:
-          type: string
-        group_label:
           type: string
         has_peak_context_tokens:
           type: boolean

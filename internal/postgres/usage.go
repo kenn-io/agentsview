@@ -517,7 +517,7 @@ LEFT JOIN sessions attributed
 		sessionMetadataColumns = `,
 	COALESCE(attributed.machine, '') AS group_machine,
 	COALESCE(attributed.group_key, '') AS group_key,
-	COALESCE(attributed.group_label, '') AS group_label,
+	COALESCE(attributed.session_name, '') AS session_name,
 	attributed.started_at AS group_started_at`
 	}
 	return `
@@ -2088,7 +2088,7 @@ func (s *Store) GetTopSessionsByCost(
 	rateResolver := export.NewPricingResolver(pricing)
 
 	pb := &paramBuilder{}
-	query := pgTopSessionsUsageRowQuery(pb, f, true)
+	query := pgTopSessionsUsageRowQuery(pb, f, f.TopSessionsByGroup)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -2117,8 +2117,11 @@ func (s *Store) GetTopSessionsByCost(
 	for rows.Next() {
 		var entry db.TopSessionEntry
 		var startedAt sql.NullTime
-		r, err := scanPGDailyUsageRowWithMachine(rows, false,
-			&entry.Machine, &entry.GroupKey, &entry.GroupLabel, &startedAt)
+		var groupColumns []any
+		if f.TopSessionsByGroup {
+			groupColumns = []any{&entry.Machine, &entry.GroupKey, &entry.SessionName, &startedAt}
+		}
+		r, err := scanPGDailyUsageRowWithMachine(rows, false, groupColumns...)
 		entry.Project, entry.Agent = r.project, r.agent
 		entry.StartedAt = startedAtString(startedAt)
 		if err != nil {
@@ -2182,7 +2185,7 @@ func (s *Store) GetTopSessionsByCost(
 		result = append(result, db.TopSessionEntry{
 			SessionID: id, DisplayName: id,
 			Project: sa.entry.Project, Agent: sa.entry.Agent,
-			GroupKey: sa.entry.GroupKey, GroupLabel: sa.entry.GroupLabel, Machine: sa.entry.Machine,
+			GroupKey: sa.entry.GroupKey, SessionName: sa.entry.SessionName, Machine: sa.entry.Machine,
 			StartedAt:           sa.entry.StartedAt,
 			InputTokens:         sa.inputTokens,
 			OutputTokens:        sa.outputTokens,

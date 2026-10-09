@@ -184,8 +184,8 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 		out := map[string]any{}
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			// Empty group fields preserve revisions of previously ungrouped sessions.
-			if !f.IsExported() || f.Name == "UsageAutomationProjected" || ((f.Name == "GroupKey" || f.Name == "GroupLabel") && v.Field(i).IsZero()) {
+			// An empty session group key preserves revisions of previously ungrouped sessions.
+			if !f.IsExported() || f.Name == "UsageAutomationProjected" || (v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) {
 				continue
 			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)

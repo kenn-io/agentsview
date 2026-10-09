@@ -1056,7 +1056,6 @@ func applyHermesStateMetadata(
 		sess.RelationshipType = RelContinuation
 	}
 	sess.GroupKey = ss.cronJob
-	sess.GroupLabel = hermesCronRecordedName(ss.cronJob, ss.title)
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
 	sess.SessionName = ss.title
@@ -1552,8 +1551,8 @@ func hermesCronParent(ctx context.Context, conn *sql.DB, id string) (string, err
 	return parent, err
 }
 
-// hermesCronRecordedName strips the run timestamp from a recorded job title.
-func hermesCronRecordedName(job, title string) string {
+// HermesCronJobName strips the run timestamp from a recorded job title.
+func HermesCronJobName(job, title string) string {
 	i := strings.LastIndex(title, " · ")
 	if job == "" || i < 0 || strings.TrimSpace(title[i+len(" · "):]) == "" {
 		return ""

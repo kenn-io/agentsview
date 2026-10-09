@@ -167,7 +167,8 @@ return to project tiles with the current dates, filters, and selection.
 Opening a project stays in the panel; browser Back and Forward follow page
 history.
 The **Projects** picker excludes a project. Usage outside the top 100 tiles
-appears under **Other**. Archives without `state.db` titles show job IDs.
+appears under **Other**. Usage-only and discarded-evidence archives omit titles
+and show job IDs, as do archives without `state.db` titles.
 Orphaned Hermes sessions synced before the upgrade can't be reparsed and appear
 as individual sessions.
 
@@ -180,8 +181,8 @@ session ranking can be shared directly.
 
 Project-key exclusions are the exception. Shared-store project keys are scoped
 to the current aggregate archive set, so the page keeps those exclusions in
-memory and does not write or restore them through the URL. Project selections
-also stay in memory. Model and agent selections survive reload.
+memory and does not write or restore them through the URL. Project and model
+selections also stay in memory. Agent selections use the page's Agent filter.
 
 ![Usage toolbar with filters](/docs/assets/generated/screenshots/usage-toolbar.png)
 
@@ -193,9 +194,10 @@ In the Model picker, checked models are visible and unchecked models are
 hidden. Attribution selections show in the picker label. Hidden models
 remain in the picker after a reload or when opening a shared URL.
 
-Usage saves model visibility with `exclude_model` and the selected model with
-`model`. Unchecking the selected model clears its selection and shows the
-remaining models.
+Usage saves model visibility with `exclude_model`. The previous Usage-only
+`model` URL parameter and saved inclusion selections no longer restrict the
+view; choose hidden models in the picker instead. The Analytics model filter
+and API model filters are unchanged.
 
 ![Model filter dropdown](/docs/assets/generated/screenshots/usage-filter-dropdown.png)
 

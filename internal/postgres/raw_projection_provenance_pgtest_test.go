@@ -298,8 +298,8 @@ func TestRawProjectionReprocessedCronPublishesGroup(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, manifest), manifest, outcome))
 	first, err := f.sink.Resolve(t.Context(), session.ID)
 	require.NoError(t, err)
-	var key, label string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key, group_label FROM sessions WHERE id=$1`, first.SessionID).Scan(&key, &label))
+	var key string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key FROM sessions WHERE id=$1`, first.SessionID).Scan(&key))
 	assert.Empty(t, key)
 	_, err = f.sink.SelectSourceGeneration(t.Context(), manifest, "parser-2")
 	require.NoError(t, err)
@@ -307,11 +307,9 @@ func TestRawProjectionReprocessedCronPublishesGroup(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	session.GroupKey = "digest"
-	session.GroupLabel = "Daily digest"
 	require.NoError(t, f.sink.Project(t.Context(), leases[0], manifest, outcome))
 	resolved, err := f.sink.Resolve(t.Context(), session.ID)
 	require.NoError(t, err)
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key, group_label FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&key, &label))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&key))
 	assert.Equal(t, "digest", key)
-	assert.Equal(t, "Daily digest", label)
 }

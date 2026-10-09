@@ -205,7 +205,7 @@
   // apply params that are actually present in the URL.
   const USAGE_FILTER_KEYS = new Set([
     "from", "to", "window_days",
-    "model", "exclude_model", "exclude_agent",
+    "exclude_model", "exclude_agent",
   ]);
   const SESSION_FILTER_KEYS = new Set([
     "project", "machine", "agent",
@@ -377,11 +377,6 @@
         usage.excludedModels = newExModel;
         changed = true;
       }
-      const newModel = params["model"] ?? "";
-      if (newModel !== usage.selectedModel) {
-        usage.selectedModel = newModel;
-        changed = true;
-      }
       if ((changed || sessionChanged) && urlInitRan) {
         usage.fetchAll();
       }
@@ -399,7 +394,6 @@
       excludedProjectKeys: usage.excludedProjectKeys,
       excludedAgents: usage.excludedAgents,
       excludedModels: usage.excludedModels,
-      selectedModel: usage.selectedModel,
     };
     return withSelectedTokenTypes(
       withUsageMode(

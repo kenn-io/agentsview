@@ -1428,7 +1428,6 @@ type ParsedSession struct {
 	SourceSessionID  string
 	SourceVersion    string
 	GroupKey         string `json:"group_key,omitempty"`
-	GroupLabel       string `json:"group_label,omitempty"`
 	// TranscriptFidelity classifies how complete a stored transcript is
 	// relative to the agent's full session data: "full" when the
 	// high-resolution source was used, "summary" for a degraded/fallback

@@ -394,7 +394,6 @@ func TestSanitizeSession(t *testing.T) {
 	s := db.Session{
 		Project:      "proj\x1bx",
 		GroupKey:     "job\x00-a",
-		GroupLabel:   "Daily\u0081 digest",
 		Machine:      "host",
 		AgentLabel:   "tri\x07age",
 		Entrypoint:   "sdk\x00cli",
@@ -408,7 +407,6 @@ func TestSanitizeSession(t *testing.T) {
 
 	assert.Equal(t, "projx", s.Project)
 	assert.Equal(t, "job-a", s.GroupKey)
-	assert.Equal(t, "Daily digest", s.GroupLabel)
 	assert.Equal(t, "host", s.Machine)
 	assert.Equal(t, "triage", s.AgentLabel)
 	assert.Equal(t, "sdkcli", s.Entrypoint)
@@ -420,8 +418,8 @@ func TestSanitizeSession(t *testing.T) {
 	require.NotNil(t, s.EndedAt)
 	assert.Equal(t, good, *s.EndedAt)
 
-	// project + group fields + agent label + entrypoint + first message
-	assert.Equal(t, 6, stats.ControlCharsStripped)
+	// project + group key + agent label + entrypoint + first message
+	assert.Equal(t, 5, stats.ControlCharsStripped)
 	assert.Equal(t, 1, stats.TimestampsBlanked)
 }
 

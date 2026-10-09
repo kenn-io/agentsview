@@ -9825,7 +9825,7 @@ func TestSessionGroupColumnsMigrateWithoutLosingRuns(t *testing.T) {
 	require.NoError(t, database.Close())
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN group_key; ALTER TABLE sessions DROP COLUMN group_label`)
+	_, err = conn.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN group_key`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	database, err = Open(t.Context(), path)
@@ -9836,12 +9836,10 @@ func TestSessionGroupColumnsMigrateWithoutLosingRuns(t *testing.T) {
 	require.NotNil(t, session)
 	assert.Equal(t, "hermes-cron", session.Project)
 	assert.Empty(t, session.GroupKey)
-	assert.Empty(t, session.GroupLabel)
-	session.GroupKey, session.GroupLabel = "job-a", "Daily digest"
+	session.GroupKey = "job-a"
 	require.NoError(t, database.UpsertSession(t.Context(), *session))
 	session, err = database.GetSession(t.Context(), session.ID)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "job-a", session.GroupKey)
-	assert.Equal(t, "Daily digest", session.GroupLabel)
 }

@@ -144,7 +144,6 @@ func TestHermesArchiveStoresCronGroups(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "job-a", stored.GroupKey)
-	assert.Equal(t, "Daily digest", stored.GroupLabel)
 }
 
 func TestHermesProfileCreatedAfterEngineInitializationIsDiscovered(t *testing.T) {

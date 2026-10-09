@@ -307,11 +307,6 @@ func schemaColumnMigrations() []columnMigration {
 			"adding sessions.group_key",
 		},
 		{
-			"sessions", "group_label",
-			`group_label TEXT DEFAULT ''`,
-			"adding sessions.group_label",
-		},
-		{
 			"sessions", "transcript_fidelity",
 			`transcript_fidelity TEXT NOT NULL DEFAULT ''`,
 			"adding sessions.transcript_fidelity",

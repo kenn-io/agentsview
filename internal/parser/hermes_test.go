@@ -941,7 +941,6 @@ func TestHermesCronTranscriptProjects(t *testing.T) {
 				require.NotNil(t, sess)
 				assert.Equal(t, tc.project, sess.Project)
 				assert.Equal(t, tc.group, sess.GroupKey)
-				assert.Empty(t, sess.GroupLabel)
 				assert.Empty(t, sess.ParentSessionID)
 			})
 		}
@@ -2182,6 +2181,6 @@ func TestHermesCronRecordedNames(t *testing.T) {
 		{"job-a · Oct 08", ""},
 		{"cron job-a · Oct 08", ""},
 	} {
-		t.Run(tc.title, func(t *testing.T) { assert.Equal(t, tc.want, hermesCronRecordedName("job-a", tc.title)) })
+		t.Run(tc.title, func(t *testing.T) { assert.Equal(t, tc.want, HermesCronJobName("job-a", tc.title)) })
 	}
 }

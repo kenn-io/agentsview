@@ -64,7 +64,7 @@ test.describe("Usage attribution selection", () => {
     await expect(panel.locator(".tile, .rail-row").first()).toBeVisible();
   });
 
-  test("model selection survives reload and unchecking it shows remaining models", async ({ page }) => {
+  test("model selection clears on reload and unchecking it shows remaining models", async ({ page }) => {
     await page.goto("/usage");
     const panel = page.locator(".attribution-panel");
     await expect(panel.locator(".tile").first()).toBeVisible();
@@ -74,9 +74,12 @@ test.describe("Usage attribution selection", () => {
     await expect(row).toBeVisible();
     const model = await row.locator(".list-label").textContent();
     await row.click();
-    await expect(page).toHaveURL(new RegExp(`model=${encodeURIComponent(model!)}`));
+    await expect(row).toHaveAttribute("aria-pressed", "true");
+    expect(new URL(page.url()).searchParams.has("model")).toBe(false);
     await page.reload();
-    await expect(panel.locator('.list-row[aria-pressed="true"] .list-label')).toHaveText(model!);
+    await expect(panel.locator(".list-row").first()).toBeVisible();
+    await expect(panel.locator('.list-row[aria-pressed="true"]')).toHaveCount(0);
+    await panel.locator(".list-row").filter({ hasText: model! }).click();
     await page.getByRole("button", { name: `Model: ${model}`, exact: true }).click();
     await page.locator(".kit-filter-dropdown__item").filter({ hasText: model! }).click();
     await expect(panel.getByRole("button", { name: "Clear selection", exact: true })).toBeHidden();
@@ -111,7 +114,7 @@ test.describe("Usage attribution selection", () => {
     await expect(panel.locator('.list-row[aria-pressed="true"] .list-label')).toHaveText(["claude", "copilot"]);
   });
 
-  test("panel and chart header buttons match", async ({ page }, testInfo) => {
+  test("panel actions share styling and chart clear stays compact", async ({ page }, testInfo) => {
     await page.goto("/usage");
     const panel = page.locator(".attribution-panel");
     await expect(panel.locator(".tile").first()).toBeVisible();
@@ -131,7 +134,7 @@ test.describe("Usage attribution selection", () => {
       const css = getComputedStyle(button);
       return { height: css.height, padding: css.padding, font: css.font, background: css.backgroundColor, border: css.border, radius: css.borderRadius };
     };
-    expect(await panelClear.evaluate(style)).toEqual(await chart.getByRole("button", { name: "Clear selection", exact: true }).evaluate(style));
+    expect(await chart.getByRole("button", { name: "Clear selection", exact: true }).evaluate(style)).toEqual(expect.objectContaining({ height: "22px", padding: "0px 8px" }));
     expect(await panel.getByRole("button", { name: "Open", exact: true }).evaluate(style)).toEqual(await panelClear.evaluate(style));
     await page.evaluate(() => {
       const comparison = document.createElement("div");

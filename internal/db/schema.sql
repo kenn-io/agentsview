@@ -71,7 +71,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     source_session_id TEXT NOT NULL DEFAULT '',
     source_version TEXT NOT NULL DEFAULT '',
     group_key TEXT NOT NULL DEFAULT '',
-    group_label TEXT NOT NULL DEFAULT '',
     transcript_fidelity TEXT NOT NULL DEFAULT '',
     parser_malformed_lines INTEGER NOT NULL DEFAULT 0,
     is_truncated INTEGER NOT NULL DEFAULT 0,

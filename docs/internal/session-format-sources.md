@@ -2944,7 +2944,8 @@ schemas keep their existing ordering behavior.
   and the run timestamp. Reverified on 2026-10-08: `_title_base` falls back to
   `cron {job_id}` for a blank job name. Agentsview treats that generated title
   as unnamed and stores `group_key` as the job ID. Usage
-  groups by project, machine and job ID. Names stay in `group_label`.
+  groups by project, machine and job ID. Names derive from the recorded `session_name` at read time; usage-only
+  archives show job IDs because their titles are discarded.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
   recognized. Transcript projects use `platform`. Cron continuations follow

@@ -359,10 +359,3 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 	}
 	return record
 }
-
-func manifestWriteVersion(session manifestSession) int {
-	if session.GroupKey != "" || session.GroupLabel != "" {
-		return manifestFormatVersion
-	}
-	return 4
-}

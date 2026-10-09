@@ -656,7 +656,7 @@ type dailyUsageScanRow struct {
 type topSessionMetadata struct {
 	machine     string
 	groupKey    string
-	groupLabel  string
+	sessionName string
 	displayName string
 	agent       string
 	project     string
@@ -1645,7 +1645,7 @@ SELECT
 	COALESCE(started_at, '') AS started_at,
 	machine,
 	group_key,
-	group_label
+	COALESCE(session_name, '')
 FROM sessions
 WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
@@ -1665,7 +1665,7 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 			&meta.startedAt,
 			&meta.machine,
 			&meta.groupKey,
-			&meta.groupLabel,
+			&meta.sessionName,
 		); err != nil {
 			return nil, fmt.Errorf("scanning top session metadata: %w", err)
 		}
@@ -2654,6 +2654,7 @@ func (db *DB) getDailyUsageLegacy(
 type TopSessionEntry struct {
 	Machine             string      `json:"machine,omitempty"`
 	GroupKey            string      `json:"groupKey,omitempty"`
+	SessionName         string      `json:"-"`
 	GroupLabel          string      `json:"groupLabel,omitempty"`
 	SessionID           string      `json:"sessionId"`
 	DisplayName         string      `json:"displayName"`
@@ -2694,22 +2695,16 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 			}
 			grouped[k] = row
 		}
-		row.InputTokens += entry.InputTokens
-		row.OutputTokens += entry.OutputTokens
-		row.CacheCreationTokens += entry.CacheCreationTokens
-		row.CacheReadTokens += entry.CacheReadTokens
-		row.TotalTokens += entry.TotalTokens
-		var err error
-		row.Cost, err = money.Add(row.Cost, entry.Cost)
-		if err != nil {
+		if err := addTopSessionTotals(&row.TopSessionEntry, entry); err != nil {
 			return nil, err
 		}
 		if started.After(row.started) || started.Equal(row.started) && entry.SessionID > row.sessionID {
 			row.StartedAt = entry.StartedAt
 			row.started, row.sessionID = started, entry.SessionID
 		}
-		if entry.GroupLabel != "" && (row.GroupLabel == "" || started.After(row.labelStarted) || started.Equal(row.labelStarted) && entry.SessionID > row.labelSessionID) {
-			row.GroupLabel = entry.GroupLabel
+		label := parser.HermesCronJobName(entry.GroupKey, entry.SessionName)
+		if label != "" && (row.GroupLabel == "" || started.After(row.labelStarted) || started.Equal(row.labelStarted) && entry.SessionID > row.labelSessionID) {
+			row.GroupLabel = label
 			row.labelStarted, row.labelSessionID = started, entry.SessionID
 		}
 	}
@@ -2726,20 +2721,24 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 	if len(ranked) < len(out) {
 		var remainder TopSessionEntry
 		for _, row := range out[len(ranked):] {
-			remainder.InputTokens += row.InputTokens
-			remainder.OutputTokens += row.OutputTokens
-			remainder.CacheCreationTokens += row.CacheCreationTokens
-			remainder.CacheReadTokens += row.CacheReadTokens
-			remainder.TotalTokens += row.TotalTokens
-			var err error
-			remainder.Cost, err = money.Add(remainder.Cost, row.Cost)
-			if err != nil {
+			if err := addTopSessionTotals(&remainder, row); err != nil {
 				return nil, err
 			}
 		}
 		ranked = append(ranked, remainder)
 	}
 	return ranked, nil
+}
+
+func addTopSessionTotals(dst *TopSessionEntry, src TopSessionEntry) error {
+	dst.InputTokens += src.InputTokens
+	dst.OutputTokens += src.OutputTokens
+	dst.CacheCreationTokens += src.CacheCreationTokens
+	dst.CacheReadTokens += src.CacheReadTokens
+	dst.TotalTokens += src.TotalTokens
+	var err error
+	dst.Cost, err = money.Add(dst.Cost, src.Cost)
+	return err
 }
 
 // TopSessionsSortCost and TopSessionsSortTokens select top-session ranking.
@@ -2952,7 +2951,7 @@ func (db *DB) getTopSessionsByCostLegacy(
 			result[i].StartedAt = meta.startedAt
 			result[i].Machine = meta.machine
 			result[i].GroupKey = meta.groupKey
-			result[i].GroupLabel = meta.groupLabel
+			result[i].SessionName = meta.sessionName
 		}
 	}
 

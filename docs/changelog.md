@@ -23,6 +23,7 @@ The latest release is
   Hermes cron jobs keep renamed runs and continuations together through
   recorded parent links. Each job shows its latest recorded name in the
   selected range, including on hosted PostgreSQL archives.
+  Usage-only archives show job IDs because their titles are discarded.
   The first sync after upgrading rebuilds the archive once to populate groups.
   Changed push fingerprints re-push every session once to PostgreSQL and
   ClickHouse after upgrade.

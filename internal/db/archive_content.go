@@ -128,7 +128,6 @@ func sessionForStoragePolicy(
 	session.FirstMessage = nil
 	session.DisplayName = nil
 	session.SessionName = nil
-	session.GroupLabel = ""
 	session.PreserveSessionName = false
 	session.SecretLeakCount = 0
 	session.SecretsRulesVersion = ""
@@ -683,7 +682,7 @@ func compactCopiedSessionsForUsageTx(
 		{"session titles", `
 			UPDATE sessions
 			SET first_message = NULL, display_name = NULL,
-			    session_name = NULL, group_label = '', secret_leak_count = 0,
+			    session_name = NULL, secret_leak_count = 0,
 			    secrets_rules_version = ''
 			WHERE id` + inCopied},
 		{"pin notes", `

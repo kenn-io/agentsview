@@ -547,7 +547,7 @@ func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 
 	normalized := strings.ToLower(query)
 	assert.Contains(t, normalized, "coalesce(attributed.group_key, '') as group_key")
-	assert.Contains(t, normalized, "coalesce(attributed.group_label, '') as group_label")
+	assert.Contains(t, normalized, "coalesce(attributed.session_name, '') as session_name")
 	assert.Contains(t, normalized, "attributed.started_at as group_started_at")
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")

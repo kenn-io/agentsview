@@ -154,7 +154,7 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
-  it("hydrates a model URL into requests and shows it in the picker until cleared", async () => {
+  it("ignores a legacy model URL and shows all models", async () => {
     vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
     const summary = tenModelUsageSummary();
     const requests = vi.spyOn(UsageService, "getApiV1UsageSummary").mockResolvedValue(summary);
@@ -162,15 +162,12 @@ describe("UsagePage refresh behavior", () => {
     vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({ priorFrom: "2026-06-01", priorTo: "2026-06-30", priorTotalCost: testMoney(0), deltaPct: 0 });
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     router.route = "usage";
-    router.params = { model: "model-alpha" };
+    router.params = { model: "model-alpha", exclude_agent: "hidden-agent" };
     usage.toggles.attribution.groupBy = "model";
     component = mount(UsagePage, { target: document.body });
-    await vi.waitFor(() => expect(requests.mock.calls.some(([params]) => params?.model === "model-alpha")).toBe(true));
+    await vi.waitFor(() => expect(requests).toHaveBeenCalled());
     await flushEffects();
-    expect(document.querySelector('button[aria-label="Model: model-alpha"]')).not.toBeNull();
-    const clear = [...document.querySelectorAll<HTMLButtonElement>(".attribution-panel button")].find((button) => button.textContent?.trim() === "Clear selection")!;
-    clear.click();
-    await vi.waitFor(() => expect(router.params.model).toBeUndefined());
+    for (const [params] of requests.mock.calls) expect(params?.model).toBeUndefined();
     expect(usage.selectedModel).toBe("");
     expect(document.querySelector('button[aria-label="Model: All"]')).not.toBeNull();
     usage.cancelInFlightReads();

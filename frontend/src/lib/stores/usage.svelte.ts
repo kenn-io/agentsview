@@ -138,7 +138,6 @@ const MAX_WINDOW_DAYS = 36500;
 const USAGE_FILTERS_KEY = "usage-filters";
 
 export interface UsageFilterState {
-  selectedModel?: string;
   excludedProjects: string;
   excludedProjectKeys?: string;
   excludedAgents: string;
@@ -155,7 +154,6 @@ function loadUsageFilters(): UsageFilterState {
         excludedProjectKeys: "",
         excludedAgents: saved.excludedAgents ?? "",
         excludedModels: saved.excludedModels ?? "",
-        selectedModel: saved.selectedModel ?? "",
       };
     }
   } catch {
@@ -166,7 +164,6 @@ function loadUsageFilters(): UsageFilterState {
     excludedProjectKeys: "",
     excludedAgents: "",
     excludedModels: "",
-    selectedModel: "",
   };
 }
 
@@ -176,7 +173,6 @@ function saveUsageFilters(f: UsageFilterState): void {
       excludedProjects: f.excludedProjects,
       excludedAgents: f.excludedAgents,
       excludedModels: f.excludedModels,
-      selectedModel: f.selectedModel,
     };
     localStorage.setItem(USAGE_FILTERS_KEY, JSON.stringify(data));
   } catch {
@@ -359,7 +355,6 @@ class UsageStore {
     this.excludedProjectKeys = saved.excludedProjectKeys ?? "";
     this.excludedAgents = saved.excludedAgents;
     this.excludedModels = saved.excludedModels;
-    this.selectedModel = saved.selectedModel ?? "";
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
@@ -1469,7 +1464,6 @@ class UsageStore {
 export const usage = new UsageStore();
 
 export interface UsageUrlState {
-  selectedModel?: string;
   from: string;
   to: string;
   isPinned: boolean;
@@ -1493,7 +1487,6 @@ export function parseWindowDays(raw: string | undefined): number | null {
 
 export function buildUsageUrlParams(state: UsageUrlState): Record<string, string> {
   const params: Record<string, string> = {};
-  if (state.selectedModel) params["model"] = state.selectedModel;
   if (state.isPinned) {
     if (state.from) params["from"] = state.from;
     if (state.to) params["to"] = state.to;

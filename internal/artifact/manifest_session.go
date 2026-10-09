@@ -59,7 +59,6 @@ type manifestSession struct {
 	SourceSessionID      string `json:"source_session_id,omitempty"`
 	SourceVersion        string `json:"source_version,omitempty"`
 	GroupKey             string `json:"group_key,omitempty"`
-	GroupLabel           string `json:"group_label,omitempty"`
 	TranscriptFidelity   string `json:"transcript_fidelity,omitempty"`
 	ParserMalformedLines int    `json:"parser_malformed_lines,omitzero"`
 	IsTruncated          bool   `json:"is_truncated,omitzero"`
@@ -134,7 +133,6 @@ func manifestSessionFromDB(s db.Session) manifestSession {
 		SourceSessionID:      s.SourceSessionID,
 		SourceVersion:        s.SourceVersion,
 		GroupKey:             s.GroupKey,
-		GroupLabel:           s.GroupLabel,
 		TranscriptFidelity:   s.TranscriptFidelity,
 		ParserMalformedLines: s.ParserMalformedLines,
 		IsTruncated:          s.IsTruncated,
@@ -197,7 +195,6 @@ func (m manifestSession) dbSession() db.Session {
 		SourceSessionID:      m.SourceSessionID,
 		SourceVersion:        m.SourceVersion,
 		GroupKey:             m.GroupKey,
-		GroupLabel:           m.GroupLabel,
 		TranscriptFidelity:   m.TranscriptFidelity,
 		ParserMalformedLines: m.ParserMalformedLines,
 		IsTruncated:          m.IsTruncated,

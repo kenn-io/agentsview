@@ -2040,7 +2040,7 @@ func sessionPushFingerprint(
 		sess.GitBranch,
 		sess.SourceSessionID,
 		sess.SourceVersion,
-		sess.TranscriptFidelity, sess.GroupKey, sess.GroupLabel,
+		sess.TranscriptFidelity, sess.GroupKey,
 		stringValue(sess.TranscriptRevision),
 		strconv.Itoa(sess.ParserMalformedLines),
 		strconv.FormatBool(sess.IsTruncated),
@@ -2229,7 +2229,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			transcript_fidelity, transcript_revision,
 			agent_label, entrypoint, session_kind,
 			source_archive_id, source_database_generation, file_path,
-			project_assigned, prompt_evidence_discarded, group_key, group_label, updated_at
+			project_assigned, prompt_evidence_discarded, group_key, updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
@@ -2247,7 +2247,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 				$50, $51,
 				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
 				$62, $63, $64, $65, $66, $67, $68,
-				$70, $71, $72, NOW()
+				$70, $71, NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
 			)
@@ -2306,7 +2306,6 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			source_session_id = EXCLUDED.source_session_id,
 			source_version = EXCLUDED.source_version,
 			group_key = EXCLUDED.group_key,
-			group_label = CASE WHEN EXCLUDED.prompt_evidence_discarded THEN NULL ELSE EXCLUDED.group_label END,
 			transcript_fidelity = EXCLUDED.transcript_fidelity,
 			transcript_revision = EXCLUDED.transcript_revision,
 			parser_malformed_lines = EXCLUDED.parser_malformed_lines,
@@ -2373,8 +2372,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR (EXCLUDED.prompt_evidence_discarded AND (
 				sessions.display_name IS NOT NULL OR
 				sessions.source_display_name IS NOT NULL OR
-				sessions.session_name IS NOT NULL OR
-				sessions.group_label IS NOT NULL))
+				sessions.session_name IS NOT NULL))
 			OR sessions.source_display_name IS DISTINCT FROM EXCLUDED.display_name
 			OR sessions.session_name IS DISTINCT FROM EXCLUDED.session_name
 			OR sessions.created_at IS DISTINCT FROM EXCLUDED.created_at
@@ -2396,7 +2394,6 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 			OR sessions.source_session_id IS DISTINCT FROM EXCLUDED.source_session_id
 			OR sessions.source_version IS DISTINCT FROM EXCLUDED.source_version
 			OR sessions.group_key IS DISTINCT FROM EXCLUDED.group_key
-			OR sessions.group_label IS DISTINCT FROM EXCLUDED.group_label
 			OR sessions.transcript_fidelity IS DISTINCT FROM EXCLUDED.transcript_fidelity
 			OR sessions.transcript_revision IS DISTINCT FROM EXCLUDED.transcript_revision
 			OR sessions.parser_malformed_lines IS DISTINCT FROM EXCLUDED.parser_malformed_lines
@@ -2482,7 +2479,7 @@ func writePGSession(ctx context.Context, tx *sql.Tx, sess db.Session, markerID s
 		sess.ProjectAssigned,
 		string(legacyMarkerMachinesJSON),
 		options.UsageOnly,
-		sanitizePG(sess.GroupKey), sanitizePG(sess.GroupLabel),
+		sanitizePG(sess.GroupKey),
 	)
 	if err != nil {
 		return err

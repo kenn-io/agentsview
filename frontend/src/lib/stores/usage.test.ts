@@ -2057,19 +2057,23 @@ describe("UsageStore attribution focus", () => {
     usage.cancelInFlightReads();
   });
 
-  it("round-trips model selection while project keys stay live-only", async () => {
+  it("keeps model selection in memory while saving exclusions", async () => {
+    localStorage.setItem("usage-filters", JSON.stringify({ selectedModel: "old-model" }));
     const { usage, buildUsageUrlParams } = await loadStore();
+    expect(usage.selectedModel).toBe("");
     usage.toggleSelection("model", "gpt-4o");
-    usage.toggleSelection("project", "pl1:sha256:alpha");
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(buildUsageUrlParams(usage)).toEqual({ model: "gpt-4o" });
+    usage.excludedModels = "hidden-model";
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].model).toBe("gpt-4o");
+    expect(buildUsageUrlParams(usage)).toEqual({ exclude_model: "hidden-model" });
+    expect(JSON.parse(localStorage.getItem("usage-filters")!)).toEqual(expect.objectContaining({ excludedModels: "hidden-model" }));
+    expect(JSON.parse(localStorage.getItem("usage-filters")!).selectedModel).toBeUndefined();
+    usage.cancelInFlightReads();
     const restored = (await loadStore()).usage;
-    expect(restored.selectedModel).toBe("gpt-4o");
-    expect(restored.selectedProjectKey).toBe("");
+    expect(restored.selectedModel).toBe("");
+    expect(restored.excludedModels).toBe("hidden-model");
     await restored.fetchAll();
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls).toContainEqual([
-      expect.objectContaining({ model: "gpt-4o" }), expect.anything(),
-    ]);
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].model).toBeUndefined();
     restored.cancelInFlightReads();
   });
 

@@ -125,14 +125,14 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 	database.SetArchiveContent(config.ArchiveContentUsage)
 	require.Equal(t, config.ArchiveContentUsage, database.ArchiveContent())
 
-	privateTitle := "private conversation title"
+	privateTitle := "private conversation title · Aug 31 10:00"
 	privatePrompt := "You are a code reviewer. Review the code changes shown below."
 	startedAt := "2026-08-31T10:00:00Z"
 	session := Session{
 		ID: "direct", Project: "project", Agent: "claude", Machine: "local",
 		FirstMessage: &privatePrompt, DisplayName: &privateTitle,
 		SessionName: &privateTitle, PreserveSessionName: true,
-		GroupKey: "job-a", GroupLabel: privateTitle,
+		GroupKey:     "job-a",
 		StartedAt:    &startedAt,
 		MessageCount: 4, UserMessageCount: 1,
 		SecretLeakCount: 2, SecretsRulesVersion: "private-rules",
@@ -166,7 +166,8 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 	))
 
 	assertUsageOnlyStoredSession(t, database, session.ID, []int{2, 3})
-	replacementTitle := "title added after the initial import"
+	assertUsageOnlyGroup(t, database, "project", "job-a")
+	replacementTitle := "title added after the initial import · Aug 31 10:00"
 	require.NoError(t, database.RefreshSessionName(t.Context(), session.ID, &replacementTitle))
 	require.NoError(t, database.RenameSession(t.Context(), session.ID, &replacementTitle))
 	stored, err := database.GetSessionFull(t.Context(), session.ID)
@@ -176,8 +177,8 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 		"classification must be derived before private prompt text is discarded")
 	assert.Nil(t, stored.SessionName)
 	assert.Equal(t, "job-a", stored.GroupKey)
-	assert.Empty(t, stored.GroupLabel)
 	assert.Nil(t, stored.DisplayName)
+	assertUsageOnlyGroup(t, database, "project", "job-a")
 
 	batchSession := session
 	batchSession.ID = "batch"
@@ -205,12 +206,13 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 		incrementalSession.ID,
 		[]Message{{
 			SessionID: incrementalSession.ID, Ordinal: 0,
-			Role: "user", Content: privatePrompt,
+			Role: "user", Content: privatePrompt, Model: "model-a", TokenUsage: []byte(`{"input_tokens":5,"output_tokens":1}`),
 		}},
 		IncrementalSessionUpdate{MsgCount: 1, UserMsgCount: 1},
 	)
 	require.NoError(t, err)
-	assertUsageOnlyStoredSession(t, database, incrementalSession.ID, []int{})
+	assertUsageOnlyStoredSession(t, database, incrementalSession.ID, []int{0})
+	assertUsageOnlyGroup(t, database, "project", "job-a")
 	incrementalStored, err := database.GetSessionFull(
 		t.Context(), incrementalSession.ID,
 	)
@@ -1087,13 +1089,13 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.db")
 	full := testDBAtPath(t, path, "full")
-	title := "private title"
+	title := "private title · Aug 31 10:00"
 	prompt := "private prompt"
 	startedAt := "2026-08-31T10:00:00Z"
 	seed := func(id string) {
 		require.NoError(t, full.UpsertSession(t.Context(), Session{
 			ID: id, Project: "project", Agent: "claude", Machine: "local",
-			FirstMessage: &prompt, DisplayName: &title, SessionName: &title,
+			FirstMessage: &prompt, DisplayName: &title, SessionName: &title, GroupKey: id,
 			StartedAt: &startedAt, MessageCount: 1,
 		}))
 		require.NoError(t, full.InsertMessages(t.Context(), []Message{{
@@ -1112,6 +1114,8 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 		require.NoError(t, err)
 		note := "quoted secret"
 		_, err = full.PinMessage(t.Context(), id, rows[0].ID, &note)
+		require.NoError(t, err)
+		_, err = full.getWriter().Exec(t.Context(), `INSERT INTO usage_events(session_id, source, model, input_tokens, output_tokens, occurred_at) VALUES (?, 'session', 'model-a', 10, 2, ?)`, id, startedAt)
 		require.NoError(t, err)
 	}
 	seed("upsert")
@@ -1139,7 +1143,7 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
 	require.NoError(t, database.UpsertSession(t.Context(), Session{
-		ID: "upsert", Project: "project", Agent: "claude", Machine: "local",
+		ID: "upsert", GroupKey: "upsert", Project: "project", Agent: "claude", Machine: "local",
 		StartedAt: &startedAt, MessageCount: 1,
 	}))
 	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "replace", []Message{{
@@ -1159,9 +1163,10 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 	))
 	_, err = database.WriteSessionBatch([]SessionBatchWrite{{
 		Session: Session{
-			ID: "batch", Project: "project", Agent: "claude", Machine: "local",
+			ID: "batch", GroupKey: "batch", Project: "project", Agent: "claude", Machine: "local",
 			StartedAt: &startedAt, MessageCount: 1,
 		},
+		UsageEvents: []UsageEvent{{SessionID: "batch", Source: "session", Model: "model-a", InputTokens: 10, OutputTokens: 2, OccurredAt: startedAt}},
 		Messages: []Message{{
 			SessionID: "batch", Ordinal: 0, Role: "assistant", Model: "model-a",
 			Content: "reply",
@@ -1171,7 +1176,7 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, database.UpsertSessionWithProjectIdentity(t.Context(),
 		Session{
-			ID: "identity", Project: "project", Agent: "claude",
+			ID: "identity", GroupKey: "identity", Project: "project", Agent: "claude",
 			Machine: "local", StartedAt: &startedAt, MessageCount: 1,
 		},
 		export.ProjectIdentityObservation{
@@ -1205,6 +1210,17 @@ func TestUsageArchiveClearsTextLeftByAnEarlierPolicy(t *testing.T) {
 		assert.Nil(t, stored.FirstMessage, id)
 		assert.Nil(t, stored.DisplayName, id)
 		assert.Nil(t, stored.SessionName, id)
+		rows, err := database.GetTopSessionsByCost(t.Context(), UsageFilter{TopSessionsByGroup: true}, 100)
+		require.NoError(t, err)
+		var found bool
+		for _, row := range rows {
+			if row.GroupKey == id {
+				found = true
+				assert.Empty(t, row.GroupLabel, id)
+				assert.Equal(t, id, row.DisplayName)
+			}
+		}
+		assert.True(t, found, id)
 		_, hasCheckpoint, err := database.GetParserCheckpointBlobs(t.Context(), id)
 		require.NoError(t, err)
 		assert.False(t, hasCheckpoint, id)
@@ -1226,14 +1242,14 @@ func TestUsageOnlyTitleChangesRollBackWhenCleanupFails(t *testing.T) {
 	for _, name := range []string{"refresh", "rename"} {
 		t.Run(name, func(t *testing.T) {
 			database := testDB(t)
-			title, prompt, note := "provider title", "original prompt", "pinned note"
+			title, prompt, note := "provider title · Aug 31 10:00", "original prompt", "pinned note"
 			require.NoError(t, database.UpsertSession(t.Context(), Session{
 				ID: "title-update", Project: "project", Agent: "claude", Machine: "local",
-				SessionName: &title, FirstMessage: &prompt,
+				SessionName: &title, FirstMessage: &prompt, GroupKey: "job-a", StartedAt: new("2026-08-31T10:00:00Z"),
 			}))
 			require.NoError(t, database.RenameSession(t.Context(), "title-update", &title))
 			require.NoError(t, database.InsertMessages(t.Context(), []Message{{
-				SessionID: "title-update", Ordinal: 0, Role: "assistant", Content: "reply",
+				SessionID: "title-update", Ordinal: 0, Role: "assistant", Content: "reply", Model: "model-a", TokenUsage: []byte(`{"input_tokens":10,"output_tokens":2}`),
 			}}))
 			messages, err := database.GetAllMessages(t.Context(), "title-update")
 			require.NoError(t, err)
@@ -1272,6 +1288,7 @@ func TestUsageOnlyTitleChangesRollBackWhenCleanupFails(t *testing.T) {
 			assert.Nil(t, after.FirstMessage)
 			assert.Nil(t, after.DisplayName)
 			assert.Nil(t, after.SessionName)
+			assertUsageOnlyGroup(t, database, "project", "job-a")
 			pins, err = database.ListPinnedMessages(t.Context(), "title-update", "")
 			require.NoError(t, err)
 			require.Len(t, pins, 1)
@@ -1373,4 +1390,14 @@ func TestArchiveProjectionOfLateToolResults(t *testing.T) {
 			}
 		})
 	}
+}
+
+func assertUsageOnlyGroup(t *testing.T, database *DB, project, key string) {
+	t.Helper()
+	rows, err := database.GetTopSessionsByCost(t.Context(), UsageFilter{ProjectLabels: []string{project}, TopSessionsByGroup: true}, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, key, rows[0].GroupKey)
+	assert.Empty(t, rows[0].GroupLabel)
+	assert.Equal(t, key, rows[0].DisplayName)
 }

@@ -752,7 +752,7 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 			ID: "session", Project: "project", Machine: "push-machine",
 			Agent: "claude", CreatedAt: "2026-01-01T00:00:00Z",
 			DeletedAt: &deletedAt, DeletionCause: &cause,
-			GroupKey: "group-key", GroupLabel: "group-label",
+			GroupKey: "group-key",
 		},
 		"marker", nil,
 	)

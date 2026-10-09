@@ -70,7 +70,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
-	group_key, group_label, transcript_fidelity,
+	group_key, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, transcript_revision, created_at,
 	EXISTS (
@@ -105,7 +105,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
-	group_key, group_label, transcript_fidelity,
+	group_key, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, transcript_revision,
 	file_path, file_size, created_at`
@@ -136,7 +136,7 @@ const sessionFullCols = `id, project, machine, agent,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
-	group_key, group_label, transcript_fidelity,
+	group_key, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	last_write_incremental,
 	deleted_at, deletion_cause, source_missing_at,
@@ -198,7 +198,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.DataVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
-		&s.GroupKey, &s.GroupLabel, &s.TranscriptFidelity,
+		&s.GroupKey, &s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
@@ -370,7 +370,6 @@ type Session struct {
 	SourceSessionID             string          `json:"source_session_id,omitempty"`
 	SourceVersion               string          `json:"source_version,omitempty"`
 	GroupKey                    string          `json:"group_key,omitempty"`
-	GroupLabel                  string          `json:"group_label,omitempty"`
 	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
 	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
 	IsTruncated                 bool            `json:"is_truncated,omitzero"`
@@ -1219,7 +1218,7 @@ func scanSessionFullRow(row interface{ Scan(...any) error }, id string) (*Sessio
 		&s.DataVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
-		&s.GroupKey, &s.GroupLabel, &s.TranscriptFidelity,
+		&s.GroupKey, &s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.LastWriteIncremental,
 		&s.DeletedAt, &s.DeletionCause, &s.SourceMissingAt,
@@ -1391,14 +1390,14 @@ const insertSessionSQL = `
 			is_automated,
 			termination_status,
 			cwd, git_branch, source_session_id,
-			source_version, group_key, group_label, transcript_fidelity,
+			source_version, group_key, transcript_fidelity,
 			parser_malformed_lines,
 			is_truncated,
 			last_write_incremental,
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1437,7 +1436,6 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			source_session_id = excluded.source_session_id,
 			source_version = excluded.source_version,
 			group_key = excluded.group_key,
-			group_label = excluded.group_label,
 			transcript_fidelity = excluded.transcript_fidelity,
 			parser_malformed_lines = excluded.parser_malformed_lines,
 			is_truncated = excluded.is_truncated,
@@ -1494,7 +1492,7 @@ func upsertSessionArgs(s Session) []any {
 		sessionIsAutomated(s),
 		s.TerminationStatus,
 		s.Cwd, s.GitBranch, s.SourceSessionID,
-		s.SourceVersion, s.GroupKey, s.GroupLabel, s.TranscriptFidelity,
+		s.SourceVersion, s.GroupKey, s.TranscriptFidelity,
 		s.ParserMalformedLines,
 		s.IsTruncated,
 		// last_write_incremental is seeded false on fresh INSERT: a brand-new
@@ -5967,7 +5965,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 			&s.DataVersion,
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
-			&s.GroupKey, &s.GroupLabel, &s.TranscriptFidelity,
+			&s.GroupKey, &s.TranscriptFidelity,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.DeletedAt, &s.TerminationStatus, &s.TranscriptRevision,
 			&s.FilePath, &s.FileSize, &s.CreatedAt,
@@ -6413,7 +6411,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.DataVersion,
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
-			&s.GroupKey, &s.GroupLabel, &s.TranscriptFidelity,
+			&s.GroupKey, &s.TranscriptFidelity,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.LastWriteIncremental,
 			&s.DeletedAt, &s.DeletionCause, &s.SourceMissingAt,
@@ -6522,7 +6520,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.DataVersion,
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
-			&s.GroupKey, &s.GroupLabel, &s.TranscriptFidelity,
+			&s.GroupKey, &s.TranscriptFidelity,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.LastWriteIncremental,
 			&s.DeletedAt, &s.DeletionCause, &s.SourceMissingAt,

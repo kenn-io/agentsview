@@ -648,7 +648,6 @@ func TestImporterHermesCronGroupsSurviveRepeatedSnapshots(t *testing.T) {
 		require.NotNil(t, session)
 		assert.Equal(t, "job-a", session.GroupKey)
 		assert.Equal(t, host, session.Machine)
-		assert.Equal(t, "Digest", session.GroupLabel)
 	}
 }
 

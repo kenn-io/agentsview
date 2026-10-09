@@ -18,7 +18,7 @@ func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
 	f := newHostedFixture(t, "tenant-group-label")
 	sess := db.Session{
 		ID: "group-label-discard", Machine: "device-a", Agent: "hermes", Project: "scheduled",
-		CreatedAt: "2026-01-01T00:00:00Z", GroupKey: "job-a", GroupLabel: "Private job title",
+		CreatedAt: "2026-01-01T00:00:00Z", GroupKey: "job-a", SessionName: new("Private job title · Jan 01 00:00"), StartedAt: new("2026-01-01T00:00:00Z"),
 	}
 	options := pgSessionWriteOptions{Machine: "device-a", SkipAliases: true}
 	write := func() {
@@ -31,12 +31,12 @@ func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
 	read := func(wantLabel sql.NullString) {
 		var key string
 		var label sql.NullString
-		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key, group_label FROM sessions WHERE id=$1`, sess.ID).Scan(&key, &label))
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key, session_name FROM sessions WHERE id=$1`, sess.ID).Scan(&key, &label))
 		assert.Equal(t, "job-a", key)
 		assert.Equal(t, wantLabel, label)
 	}
 	write()
-	read(sql.NullString{String: "Private job title", Valid: true})
+	read(sql.NullString{String: "Private job title · Jan 01 00:00", Valid: true})
 	options.UsageOnly = true
 	write()
 	read(sql.NullString{})
@@ -47,12 +47,19 @@ func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "job-a", stored.GroupKey)
-	assert.Empty(t, stored.GroupLabel)
-	sess.GroupLabel = "stale title"
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET group_label='stale title' WHERE id=$1`, sess.ID)
+	assert.Nil(t, stored.SessionName)
+	sess.SessionName = new("stale title · Jan 01 00:00")
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET session_name='stale title · Jan 01 00:00' WHERE id=$1`, sess.ID)
 	require.NoError(t, err)
 	write()
 	read(sql.NullString{})
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO usage_events(session_id, source, model, input_tokens, output_tokens, occurred_at) VALUES ($1, 'session', 'gpt-5.4', 10, 2, '2026-01-01T00:00:00Z')`, sess.ID)
+	require.NoError(t, err)
+	rows, err := store.physical.GetTopSessionsByCost(t.Context(), db.UsageFilter{TopSessionsByGroup: true}, 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].GroupLabel)
+	assert.Equal(t, "job-a", rows[0].DisplayName)
 }
 
 // A physical Store passed through the hosted constructor cannot resolve the
@@ -441,12 +448,12 @@ func TestHostedUsageGroups(t *testing.T) {
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	outcome := projectionOutcome("cron usage")
 	outcome.Outcome.Results[0].Result.Session.GroupKey = "job-a"
-	outcome.Outcome.Results[0].Result.Session.GroupLabel = "Daily digest"
+	outcome.Outcome.Results[0].Result.Session.SessionName = "Daily digest · Oct 07 12:00"
 	continuation := projectionOutcome("next cron run").Outcome.Results[0]
 	continuation.Result.Session.ID = "codex:continuation"
 	continuation.Result.Session.SourceSessionID = "continuation"
 	continuation.Result.Session.GroupKey = "job-a"
-	continuation.Result.Session.GroupLabel = "Renamed digest"
+	continuation.Result.Session.SessionName = "Renamed digest · Oct 08 12:00"
 	continuation.Result.Session.StartedAt = time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	individual := projectionOutcome("individual usage").Outcome.Results[0]
 	individual.Result.Session.ID = "codex:individual"
