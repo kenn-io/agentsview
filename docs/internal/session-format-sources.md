@@ -2581,10 +2581,11 @@ schemas keep their existing ordering behavior.
     [v4 migration](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/session/session-format-v3-to-v4/README.md),
     [tool-role conversion](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/session/session-format-v3-to-v4/src/tool-role.ts),
     and [event schema](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/core/session/src/types.ts).
-    Dense sequences and physical framing remain unchanged. `workspace/changes`
-    and `image/offload` are metadata. Release `dsh-v0.2.1-alpha.2`, commit
+    Dense sequences and physical framing remain unchanged.
+    [`workspace/changes` and `image/offload`](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/core/session/src/known-event-types.ts)
+    are metadata. Release `dsh-v0.2.1-alpha.2`, commit
     `d743267388641bc76f17c45ce8b4c231aed1d32c`, retains generation 4 and adds
-    [working-directory changes](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/core/session/src/types.ts),
+    [working-directory changes](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/session/working-directory/src/index.ts),
     also metadata; the producer separately emits readable directory-change text.
 
 - **Usage and cost:** Each model response and summarizing compaction can persist
