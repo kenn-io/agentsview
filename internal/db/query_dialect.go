@@ -51,10 +51,7 @@ type QueryDialect struct {
 	terminationExpr             string
 	terminationKind             timestampKind
 	trimUsageCSV                bool
-	usageFalseLiteral           string
 	messageMembership           func(string, string) string
-	reportTerminationFlagFirst  bool
-	reportTerminationRawTime    bool
 	signedWindowCounts          bool
 	recentEditTimestamp         func(string) string
 	caseInsensitiveLike         string
@@ -151,12 +148,10 @@ func SQLiteQueryDialect() QueryDialect {
 // read-only shared store.
 func PostgresQueryDialect() QueryDialect {
 	return QueryDialect{
-		name:                     "postgres",
-		placeholderStyle:         placeholderDollar,
-		trueLiteral:              "TRUE",
-		falseLiteral:             "FALSE",
-		usageFalseLiteral:        "false",
-		reportTerminationRawTime: true,
+		name:             "postgres",
+		placeholderStyle: placeholderDollar,
+		trueLiteral:      "TRUE",
+		falseLiteral:     "FALSE",
 		dateStartExpr: func(q func(string) string) string {
 			return "COALESCE(" + q("started_at") + ", " +
 				q("created_at") + ")"
@@ -200,12 +195,11 @@ func PostgresQueryDialect() QueryDialect {
 // inline case-insensitive flag.
 func ClickHouseQueryDialect() QueryDialect {
 	return QueryDialect{
-		name:                       "clickhouse",
-		placeholderStyle:           placeholderQuestion,
-		trueLiteral:                "true",
-		falseLiteral:               "false",
-		trimUsageCSV:               true,
-		reportTerminationFlagFirst: true,
+		name:             "clickhouse",
+		placeholderStyle: placeholderQuestion,
+		trueLiteral:      "true",
+		falseLiteral:     "false",
+		trimUsageCSV:     true,
 		messageMembership: func(sessionID, pred string) string {
 			return sessionID + " IN (SELECT m.session_id FROM messages m WHERE " + pred + ")"
 		},
@@ -267,12 +261,11 @@ func clickhouseCastCursor(ph string, kind valueKind) string {
 // and future backend use. It does not couple to internal/duckdb.
 func DuckDBQueryDialect() QueryDialect {
 	return QueryDialect{
-		name:                       "duckdb",
-		placeholderStyle:           placeholderQuestion,
-		trueLiteral:                "TRUE",
-		falseLiteral:               "FALSE",
-		trimUsageCSV:               true,
-		reportTerminationFlagFirst: true,
+		name:             "duckdb",
+		placeholderStyle: placeholderQuestion,
+		trueLiteral:      "TRUE",
+		falseLiteral:     "FALSE",
+		trimUsageCSV:     true,
 		dateStartExpr: func(q func(string) string) string {
 			return "CAST(COALESCE(" + q("started_at") + ", " +
 				q("created_at") + ") AS TIMESTAMP)"
@@ -685,7 +678,7 @@ func buildSessionFilterWithBuilder(
 	rootMatchParts = append(rootMatchParts,
 		BuildCanonicalRootWhere(b.dialect, "root_session", f.IncludeOrphans))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
-	childAutomationPred := automationScopePredicate(f, b.dialect, "s")
+	childAutomationPred := b.dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), "s.is_automated")
 	childAutomationWhere := ""
 	if childAutomationPred != "" {
 		childAutomationWhere = " AND " + childAutomationPred
@@ -706,18 +699,13 @@ func buildSessionFilterWithBuilder(
 	return baseWhere + " AND " + q("id") + " IN (" + cte + ")"
 }
 
-func automationScopePredicate(
-	f SessionFilter, dialect QueryDialect, sessionAlias string,
-) string {
-	col := "is_automated"
-	if sessionAlias != "" {
-		col = sessionAlias + "." + col
-	}
-	switch normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated) {
+// AutomatedScopePredicate renders a normalized scope against a boolean column.
+func (d QueryDialect) AutomatedScopePredicate(scope, col string) string {
+	switch scope {
 	case "human":
-		return col + " = " + dialect.falseLiteral
+		return col + " = " + d.falseLiteral
 	case "automated":
-		return col + " = " + dialect.trueLiteral
+		return col + " = " + d.trueLiteral
 	default:
 		return ""
 	}
@@ -828,7 +816,7 @@ func appendSessionVisibilityPredicates(
 	b *QueryBuilder,
 	q func(string) string,
 ) ([]string, string) {
-	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	scope := NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	oneShotPred := ""
 	if f.ExcludeOneShot {
 		pred := oneShotPredicate(f, b, q, scope)
@@ -838,13 +826,8 @@ func appendSessionVisibilityPredicates(
 			preds = append(preds, pred)
 		}
 	}
-	switch scope {
-	case "human":
-		preds = append(preds, q("is_automated")+" = "+
-			b.dialect.falseLiteral)
-	case "automated":
-		preds = append(preds, q("is_automated")+" = "+
-			b.dialect.trueLiteral)
+	if pred := b.dialect.AutomatedScopePredicate(scope, q("is_automated")); pred != "" {
+		preds = append(preds, pred)
 	}
 	return preds, oneShotPred
 }
@@ -887,15 +870,16 @@ func buildSessionBaseFilter(f SessionFilter) (string, []any) {
 }
 
 func inPredicate(col string, values []string, b *QueryBuilder) string {
-	return valuesPredicate(col, values, b, true)
+	if len(values) == 0 {
+		return "1 = 0"
+	}
+	return b.ValuesPredicate(col, values, true)
 }
 
-func valuesPredicate(col string, values []string, b *QueryBuilder, include bool) string {
+// ValuesPredicate renders membership and ignores empty optional filters.
+func (b *QueryBuilder) ValuesPredicate(col string, values []string, include bool) string {
 	if len(values) == 0 {
-		if !include {
-			return "1 = 1"
-		}
-		return "1 = 0"
+		return ""
 	}
 	equalOp, listOp := " = ", " IN "
 	if !include {
@@ -990,10 +974,10 @@ func nonEmpty(values []string) []string {
 func terminationPredicate(
 	status string, b *QueryBuilder, q func(string) string,
 ) string {
-	return renderTerminationPredicate(status, b.dialect.terminationExpr, q("termination_status"), b.terminationParam, false, false)
+	return renderTerminationPredicate(status, b.dialect.terminationExpr, q("termination_status"), b.terminationParam)
 }
 
-func renderTerminationPredicate(status, activityExpr, statusExpr string, param func(time.Time) string, flagFirst, wrapSingle bool) string {
+func renderTerminationPredicate(status, activityExpr, statusExpr string, param func(time.Time) string) string {
 	if status == "" || status == "all" {
 		return ""
 	}
@@ -1011,18 +995,10 @@ func renderTerminationPredicate(status, activityExpr, statusExpr string, param f
 			preds = append(preds, activityExpr+" > "+param(activeCutoff))
 		case "stale":
 			pred := activityExpr + " > " + param(staleCutoff) + " AND " + activityExpr + " <= " + param(activeCutoff)
-			if flagFirst {
-				preds = append(preds, "("+flagged+" AND "+pred+")")
-			} else {
-				preds = append(preds, "("+pred+" AND "+flagged+")")
-			}
+			preds = append(preds, "("+pred+" AND "+flagged+")")
 		case "unclean":
 			pred := activityExpr + " <= " + param(staleCutoff)
-			if flagFirst {
-				preds = append(preds, "("+flagged+" AND "+pred+")")
-			} else {
-				preds = append(preds, "("+pred+" AND "+flagged+")")
-			}
+			preds = append(preds, "("+pred+" AND "+flagged+")")
 		case "clean":
 			preds = append(preds,
 				statusExpr+" = 'clean'")
@@ -1034,7 +1010,7 @@ func renderTerminationPredicate(status, activityExpr, statusExpr string, param f
 	if len(preds) == 0 {
 		return ""
 	}
-	if len(preds) == 1 && !wrapSingle {
+	if len(preds) == 1 {
 		return preds[0]
 	}
 	return "(" + strings.Join(preds, " OR ") + ")"
@@ -1044,6 +1020,8 @@ func (b *QueryBuilder) terminationParam(t time.Time) string {
 	switch b.dialect.terminationKind {
 	case timestampUnixSeconds:
 		return b.Add(t.Unix())
+	case timestampTimestamptz:
+		return b.Add(t)
 	case timestampCast:
 		return b.dialect.activityParam(b.Add(t.Format(time.RFC3339)))
 	default:

@@ -11,16 +11,16 @@ import (
 )
 
 type filterMatrixDialect struct {
-	name                                                     string
-	dialect                                                  QueryDialect
-	trueSQL, falseSQL, usageFalseSQL, activity, join, search string
+	name                                      string
+	dialect                                   QueryDialect
+	trueSQL, falseSQL, activity, join, search string
 }
 
 var filterMatrixDialects = []filterMatrixDialect{
-	{"sqlite", SQLiteQueryDialect(), "1", "0", "0", "COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) >= ?", "m.id = tc.message_id", `tc.file_path LIKE ? ESCAPE '\'`},
-	{"postgres", PostgresQueryDialect(), "TRUE", "FALSE", "false", "COALESCE(s.ended_at, s.started_at, s.created_at) >= ?::timestamptz", "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal", `tc.file_path ILIKE ? ESCAPE E'\\'`},
-	{"duckdb", DuckDBQueryDialect(), "TRUE", "FALSE", "FALSE", "COALESCE(s.ended_at, s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)", "m.session_id = tc.session_id AND m.id = tc.message_id", `tc.file_path ILIKE ? ESCAPE '\'`},
-	{"clickhouse", ClickHouseQueryDialect(), "true", "false", "false", "COALESCE(s.ended_at, s.started_at, s.created_at) >= parseDateTime64BestEffort(?, 6, 'UTC')", "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal", "tc.file_path ILIKE ?"},
+	{"sqlite", SQLiteQueryDialect(), "1", "0", "COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) >= ?", "m.id = tc.message_id", `tc.file_path LIKE ? ESCAPE '\'`},
+	{"postgres", PostgresQueryDialect(), "TRUE", "FALSE", "COALESCE(s.ended_at, s.started_at, s.created_at) >= ?::timestamptz", "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal", `tc.file_path ILIKE ? ESCAPE E'\\'`},
+	{"duckdb", DuckDBQueryDialect(), "TRUE", "FALSE", "COALESCE(s.ended_at, s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)", "m.session_id = tc.session_id AND m.id = tc.message_id", `tc.file_path ILIKE ? ESCAPE '\'`},
+	{"clickhouse", ClickHouseQueryDialect(), "true", "false", "COALESCE(s.ended_at, s.started_at, s.created_at) >= parseDateTime64BestEffort(?, 6, 'UTC')", "m.session_id = tc.session_id AND m.ordinal = tc.message_ordinal", "tc.file_path ILIKE ?"},
 }
 
 func matrixSQL(d filterMatrixDialect, sql string, offset int) string {
@@ -39,9 +39,6 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 		t.Run(d.name, func(t *testing.T) {
 			base := "s.message_count > 0 AND s.relationship_type NOT IN ('subagent', 'fork') AND s.deleted_at IS NULL"
 			clean := "s.termination_status = 'clean'"
-			if d.name == "duckdb" || d.name == "clickhouse" {
-				clean = "(" + clean + ")"
-			}
 			cases := []struct {
 				name string
 				f    AnalyticsFilter
@@ -54,6 +51,7 @@ func TestFilterMatrixAnalytics(t *testing.T) {
 				{"blank-csv", AnalyticsFilter{Machine: " , ", Agent: " , ", Model: " , "}, base, []any{}},
 				{"project", AnalyticsFilter{Project: "team,tools"}, base + " AND s.project = ?", []any{"team,tools"}},
 				{"branch", AnalyticsFilter{GitBranch: EncodeBranchFilterToken("team,tools", "topic")}, base + " AND (s.project = ? AND s.git_branch = ?)", []any{"team,tools", "topic"}},
+				{"empty-branch", AnalyticsFilter{GitBranch: EncodeBranchFilterToken("alpha", "") + branchListSep + EncodeBranchFilterToken("alpha", "unknown")}, base + " AND ((s.project = ? AND s.git_branch = ?) OR (s.project = ? AND s.git_branch = ?))", []any{"alpha", "", "alpha", "unknown"}},
 				{"agent", AnalyticsFilter{Agent: "codex"}, base + " AND s.agent = ?", []any{"codex"}},
 				{"minimum", AnalyticsFilter{MinUserMessages: 3}, base + " AND s.user_message_count >= ?", []any{3}},
 				{"automated", AnalyticsFilter{AutomatedScope: "automated"}, base + " AND s.is_automated = " + d.trueSQL, []any{}},
@@ -94,7 +92,7 @@ func TestFilterMatrixUsage(t *testing.T) {
 			source := BuildUsageSourceFilter(f, b, "ue.model")
 			assert.Equal(t, matrixSQL(d, "ue.model IN (?,?) AND ue.model != ?", 3), strings.Join(source, " AND "))
 			session := BuildUsageSessionFilter(f, b, "session-1")
-			want := "s.agent IN (?,?) AND s.project IN (?,?) AND s.machine = ? AND (s.project = ? AND s.git_branch = ?) AND s.project != ? AND s.agent != ? AND s.id = ? AND s.user_message_count >= ? AND s.user_message_count > 1 AND COALESCE(s.is_automated, " + d.usageFalseSQL + ") = " + d.falseSQL + " AND " + d.activity + " AND (s.termination_status = 'clean' OR s.termination_status = 'awaiting_user')"
+			want := "s.agent IN (?,?) AND s.project IN (?,?) AND s.machine = ? AND (s.project = ? AND s.git_branch = ?) AND s.project != ? AND s.agent != ? AND s.id = ? AND s.user_message_count >= ? AND s.user_message_count > 1 AND COALESCE(s.is_automated, " + d.falseSQL + ") = " + d.falseSQL + " AND " + d.activity + " AND (s.termination_status = 'clean' OR s.termination_status = 'awaiting_user')"
 			assert.Equal(t, matrixSQL(d, want, 6), strings.Join(session, " AND "))
 			assert.Equal(t, []any{"a", "b", "c", "codex", "claude", "team,tools", "other", "laptop", "team,tools", "topic", "excluded,tools", "cursor", "session-1", 2, f.ActiveSince}, b.Args())
 			for _, raw := range []string{" a, b, ", " , "} {
@@ -118,7 +116,7 @@ func TestFilterMatrixUsage(t *testing.T) {
 			}
 			b = NewQueryBuilder(d.dialect, 0)
 			preds := BuildUsageSessionFilter(UsageFilter{ExcludeOneShot: true, AutomatedScope: "automated"}, b, "")
-			automated := "COALESCE(s.is_automated, " + d.usageFalseSQL + ")"
+			automated := "COALESCE(s.is_automated, " + d.falseSQL + ")"
 			assert.Equal(t, "(s.user_message_count > 1 OR "+automated+" = "+d.trueSQL+") AND "+automated+" = "+d.trueSQL, strings.Join(preds, " AND "))
 		})
 	}
@@ -140,18 +138,10 @@ func TestFilterMatrixTermination(t *testing.T) {
 			active := activity + " > " + ph
 			stale := "(" + activity + " > " + ph + " AND " + activity + " <= " + ph + " AND " + flagged + ")"
 			unclean := "(" + activity + " <= " + ph + " AND " + flagged + ")"
-			wrapped := d.name == "duckdb" || d.name == "clickhouse"
-			if wrapped {
-				stale = "(" + flagged + " AND " + activity + " > " + ph + " AND " + activity + " <= " + ph + ")"
-				unclean = "(" + flagged + " AND " + activity + " <= " + ph + ")"
-			}
 			for _, c := range []struct{ status, sql string }{{"active", active}, {"stale", stale}, {"unclean", unclean}, {"active,stale,unclean", "(" + active + " OR " + stale + " OR " + unclean + ")"}} {
 				before := time.Now().UTC()
 				b := NewQueryBuilder(d.dialect, 4)
 				want := c.sql
-				if wrapped && c.status != "active,stale,unclean" {
-					want = "(" + want + ")"
-				}
 				assert.Equal(t, []string{matrixSQL(d, want, 4)}, BuildUsageSessionFilter(UsageFilter{Termination: c.status}, b, ""))
 				if c.status != "active,stale,unclean" {
 					continue

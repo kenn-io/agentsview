@@ -1380,7 +1380,7 @@ func canonicalSessionExportFilter(f SessionFilter) SessionFilter {
 		f.Timezone = strings.TrimSpace(f.Timezone)
 	}
 	f.ActiveSince = strings.TrimSpace(f.ActiveSince)
-	f.AutomatedScope = normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	f.AutomatedScope = NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	f.ExcludeAutomated = false
 	f.Outcome = canonicalStringSliceFilter(f.Outcome)
 	f.HealthGrade = canonicalStringSliceFilter(f.HealthGrade)

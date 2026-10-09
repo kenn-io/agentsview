@@ -138,31 +138,6 @@ func appendChUsageSourceFilterClauses(
 	return where, append(args, b.Args()...)
 }
 
-func chNormalizeAutomatedScope(
-	scope string,
-	excludeAutomated bool,
-) string {
-	switch strings.TrimSpace(scope) {
-	case "human", "all", "automated":
-		return strings.TrimSpace(scope)
-	}
-	if excludeAutomated {
-		return "human"
-	}
-	return "all"
-}
-
-func chAutomatedScopePredicate(scope, col string) string {
-	switch scope {
-	case "human":
-		return col + " = false"
-	case "automated":
-		return col + " = true"
-	default:
-		return ""
-	}
-}
-
 func appendChUsageSessionFilterClauses(
 	where string, args []any, f db.UsageFilter, sessionID string,
 ) (string, []any) {
@@ -394,8 +369,8 @@ func chCursorUsageRowsWhere(
 
 	where := "cu.model != ''"
 	var args []any
-	scope := chNormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
-	if pred := chAutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
+	scope := db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	if pred := db.ClickHouseQueryDialect().AutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
 		where += "\n\tAND " + pred
 	}
 	where, args = appendChUsageSourceFilterClauses(

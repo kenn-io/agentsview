@@ -1,9 +1,6 @@
 package db
 
-import (
-	"strings"
-	"time"
-)
+import "strings"
 
 // BuildAnalyticsWhere shares filter decisions; callers append their date and time predicates in query order.
 func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID string, datePreds []string) string {
@@ -35,7 +32,7 @@ func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID s
 	if f.MinUserMessages > 0 {
 		preds = append(preds, q("user_message_count")+" >= "+b.Add(f.MinUserMessages))
 	}
-	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	scope := NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	if f.ExcludeOneShot {
 		pred := q("user_message_count") + " > 1"
 		if scope != "human" {
@@ -44,14 +41,14 @@ func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID s
 		pred = f.oneShotExclusionSQL(pred, prefix)
 		preds = append(preds, pred)
 	}
-	if pred := automationScopePredicate(SessionFilter{AutomatedScope: scope}, b.dialect, strings.TrimSuffix(prefix, ".")); pred != "" {
+	if pred := b.dialect.AutomatedScopePredicate(scope, q("is_automated")); pred != "" {
 		preds = append(preds, pred)
 	}
 	if f.ExcludeInteractive {
 		preds = append(preds, q("is_automated")+" = "+b.dialect.trueLiteral)
 	}
 	if f.ActiveSince != "" {
-		preds = append(preds, b.reportActivityExpr(prefix)+" >= "+b.dialect.activityParam(b.Add(f.ActiveSince)))
+		preds = append(preds, b.activityExpr(prefix)+" >= "+b.dialect.activityParam(b.Add(f.ActiveSince)))
 	}
 	if pred := b.reportTerminationPredicate(f.Termination, prefix); pred != "" {
 		preds = append(preds, pred)
@@ -59,19 +56,14 @@ func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID s
 	return strings.Join(preds, " AND ")
 }
 
-func (b *QueryBuilder) reportActivityExpr(prefix string) string {
+func (b *QueryBuilder) activityExpr(prefix string) string {
 	return "COALESCE(" + b.dialect.timestampExpr(prefix+"ended_at") + ", " + b.dialect.timestampExpr(prefix+"started_at") + ", " + prefix + "created_at)"
 }
 
 func (b *QueryBuilder) reportTerminationPredicate(status, prefix string) string {
-	activity := b.reportActivityExpr(prefix)
+	activity := b.activityExpr(prefix)
 	if b.dialect.terminationKind == timestampUnixSeconds {
 		activity = "CAST(strftime('%s', " + activity + ") AS INTEGER)"
 	}
-	param := b.terminationParam
-	if b.dialect.reportTerminationRawTime {
-		param = func(t time.Time) string { return b.Add(t) }
-	}
-	// Existing report SQL wraps single states on the same dialects that place flags first.
-	return renderTerminationPredicate(status, activity, prefix+"termination_status", param, b.dialect.reportTerminationFlagFirst, b.dialect.reportTerminationFlagFirst)
+	return renderTerminationPredicate(status, activity, prefix+"termination_status", b.terminationParam)
 }

@@ -250,23 +250,10 @@ func chBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, in
 	return where, args
 }
 
-func chAnalyticsCSVPredicate(
-	col string, raw string,
-) (string, []any) {
-	values := db.CSVFilterValues(raw)
-	if len(values) == 0 {
-		return "", nil
-	}
-	if len(values) == 1 {
-		return col + " = ?", []any{values[0]}
-	}
-	placeholders := make([]string, len(values))
-	args := make([]any, 0, len(values))
-	for i, value := range values {
-		placeholders[i] = "?"
-		args = append(args, value)
-	}
-	return col + " IN (" + strings.Join(placeholders, ",") + ")", args
+func chAnalyticsCSVPredicate(col, raw string) (string, []any) {
+	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+	pred := b.ValuesPredicate(col, db.CSVFilterValues(raw), true)
+	return pred, b.Args()
 }
 
 func chAnalyticsLocalDateExpr(

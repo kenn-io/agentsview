@@ -496,7 +496,7 @@ func contractAnalyticsTrendsAndUsage(
 	// With one-shot exclusion on (the summary endpoint default), the
 	// one-shot subagent child must still be counted (workflow subagents
 	// are inherently one-shot) while one-shot root sessions drop. This
-	// exercises OneShotExclusionSQL on every backend, including PG.
+	// exercises oneShotExclusionSQL on every backend, including PG.
 	//
 	// Kept rows: alpha (3 user msgs, 320 tok), gamma (2 user, 60 tok),
 	// automated (roborev, kept via is_automated, 0 tok), and the subagent

@@ -296,24 +296,10 @@ func CSVFilterValues(raw string) []string {
 	return out
 }
 
-func sqliteAnalyticsCSVPredicate(
-	col string,
-	raw string,
-) (string, []any) {
-	values := CSVFilterValues(raw)
-	if len(values) == 0 {
-		return "", nil
-	}
-	if len(values) == 1 {
-		return col + " = ?", []any{values[0]}
-	}
-	placeholders := make([]string, len(values))
-	args := make([]any, 0, len(values))
-	for i, value := range values {
-		placeholders[i] = "?"
-		args = append(args, value)
-	}
-	return col + " IN (" + strings.Join(placeholders, ",") + ")", args
+func sqliteAnalyticsCSVPredicate(col, raw string) (string, []any) {
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	pred := b.ValuesPredicate(col, CSVFilterValues(raw), true)
+	return pred, b.Args()
 }
 
 func (db *DB) getAnalyticsFilteredMessageCounts(
@@ -378,26 +364,17 @@ func (f AnalyticsFilter) buildWhereWithDate(dateCol string, includeDate bool, se
 	return where, b.Args()
 }
 
-func normalizeAutomatedScope(scope string, excludeAutomated bool) string {
-	switch strings.TrimSpace(scope) {
+// NormalizeAutomatedScope resolves the explicit scope and legacy exclusion flag.
+func NormalizeAutomatedScope(scope string, excludeAutomated bool) string {
+	scope = strings.TrimSpace(scope)
+	switch scope {
 	case "human", "all", "automated":
-		return strings.TrimSpace(scope)
+		return scope
 	}
 	if excludeAutomated {
 		return "human"
 	}
 	return "all"
-}
-
-func automatedScopePredicate(scope, col string) string {
-	switch scope {
-	case "human":
-		return col + " = 0"
-	case "automated":
-		return col + " = 1"
-	default:
-		return ""
-	}
 }
 
 func (db *DB) queryAnalyticsModels(

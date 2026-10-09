@@ -628,7 +628,7 @@ func filterUsageRollupOwners(
 }
 
 func usageCursorAutomatedScopePasses(filter UsageFilter, isHeadless bool) bool {
-	switch normalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated) {
+	switch NormalizeAutomatedScope(filter.AutomatedScope, filter.ExcludeAutomated) {
 	case "human":
 		return !isHeadless
 	case "automated":

@@ -12,13 +12,6 @@ func (b *QueryBuilder) usageCSV(raw string) []string {
 	return CSVFilterValues(raw)
 }
 
-func (b *QueryBuilder) usageValuesPredicate(col string, values []string, include bool) string {
-	if len(values) == 0 {
-		return ""
-	}
-	return valuesPredicate(col, values, b, include)
-}
-
 // BuildUsageSourceFilter renders model filters before session predicates.
 func BuildUsageSourceFilter(f UsageFilter, b *QueryBuilder, modelCol string) []string {
 	var preds []string
@@ -26,7 +19,7 @@ func BuildUsageSourceFilter(f UsageFilter, b *QueryBuilder, modelCol string) []s
 		raw     string
 		include bool
 	}{{f.Model, true}, {f.ExcludeModel, false}} {
-		if pred := b.usageValuesPredicate(modelCol, b.usageCSV(item.raw), item.include); pred != "" {
+		if pred := b.ValuesPredicate(modelCol, b.usageCSV(item.raw), item.include); pred != "" {
 			preds = append(preds, pred)
 		}
 	}
@@ -37,11 +30,10 @@ func BuildUsageSourceFilter(f UsageFilter, b *QueryBuilder, modelCol string) []s
 func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) []string {
 	var preds []string
 	for _, item := range []struct {
-		col     string
-		values  []string
-		include bool
-	}{{"s.agent", b.usageCSV(f.Agent), true}, {"s.project", f.ProjectFilterLabels(), true}, {"s.machine", b.usageCSV(f.Machine), true}} {
-		if pred := b.usageValuesPredicate(item.col, item.values, item.include); pred != "" {
+		col    string
+		values []string
+	}{{"s.agent", b.usageCSV(f.Agent)}, {"s.project", f.ProjectFilterLabels()}, {"s.machine", b.usageCSV(f.Machine)}} {
+		if pred := b.ValuesPredicate(item.col, item.values, true); pred != "" {
 			preds = append(preds, pred)
 		}
 	}
@@ -52,7 +44,7 @@ func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) [
 		col    string
 		values []string
 	}{{"s.project", f.ExcludedProjectFilterLabels()}, {"s.agent", b.usageCSV(f.ExcludeAgent)}} {
-		if pred := b.usageValuesPredicate(item.col, item.values, false); pred != "" {
+		if pred := b.ValuesPredicate(item.col, item.values, false); pred != "" {
 			preds = append(preds, pred)
 		}
 	}
@@ -62,11 +54,8 @@ func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) [
 	if f.MinUserMessages > 0 {
 		preds = append(preds, "s.user_message_count >= "+b.Add(f.MinUserMessages))
 	}
-	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	scope := NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	falseLiteral := b.dialect.falseLiteral
-	if b.dialect.usageFalseLiteral != "" {
-		falseLiteral = b.dialect.usageFalseLiteral
-	}
 	automated := "COALESCE(s.is_automated, " + falseLiteral + ")"
 	if f.ExcludeOneShot {
 		pred := "s.user_message_count > 1"
@@ -75,14 +64,11 @@ func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) [
 		}
 		preds = append(preds, pred)
 	}
-	switch scope {
-	case "human":
-		preds = append(preds, automated+" = "+b.dialect.falseLiteral)
-	case "automated":
-		preds = append(preds, automated+" = "+b.dialect.trueLiteral)
+	if pred := b.dialect.AutomatedScopePredicate(scope, automated); pred != "" {
+		preds = append(preds, pred)
 	}
 	if f.ActiveSince != "" {
-		preds = append(preds, b.reportActivityExpr("s.")+" >= "+b.dialect.activityParam(b.Add(f.ActiveSince)))
+		preds = append(preds, b.activityExpr("s.")+" >= "+b.dialect.activityParam(b.Add(f.ActiveSince)))
 	}
 	if pred := b.reportTerminationPredicate(f.Termination, "s."); pred != "" {
 		preds = append(preds, pred)

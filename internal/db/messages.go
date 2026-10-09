@@ -856,7 +856,7 @@ type UnitOffset struct {
 // scans every session. includeAutomated=false additionally excludes
 // automated sessions (sessions.is_automated = 1) using the exact predicate
 // sessionFilterPredicates' ExcludeAutomated scope applies
-// (automatedScopePredicate("human", ...)), so the embedding index's default
+// (SQLiteQueryDialect().AutomatedScopePredicate("human", ...)), so the embedding index's default
 // scope matches session search's default exclusion of automated sessions.
 // maxEnded returns the maximum sessions.ended_at seen across the scanned
 // rows (as its original raw string), or "" when the scan produced no rows.
@@ -1111,7 +1111,7 @@ func embeddableUnitsQuery(since, sessionID string, includeAutomated bool) string
 		SystemPrefixSQL("m.content", "m.role"),
 	}
 	if !includeAutomated {
-		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
+		preds = append(preds, SQLiteQueryDialect().AutomatedScopePredicate("human", "s.is_automated"))
 	}
 	if sessionID != "" {
 		preds = append(preds, "m.session_id = ?")
@@ -1170,7 +1170,7 @@ func sinceSessionScopeClause(since string, includeAutomated bool) string {
 	}
 	preds := []string{"es.deleted_at IS NULL"}
 	if !includeAutomated {
-		preds = append(preds, automatedScopePredicate("human", "es.is_automated"))
+		preds = append(preds, SQLiteQueryDialect().AutomatedScopePredicate("human", "es.is_automated"))
 	}
 	preds = append(preds, "(NULLIF(es.ended_at, '') IS NULL OR "+
 		"datetime(NULLIF(es.ended_at, '')) >= datetime(?))")

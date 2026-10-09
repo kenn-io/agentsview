@@ -92,31 +92,6 @@ func (pb *paramBuilder) add(v any) string {
 	return fmt.Sprintf("$%d", pb.n)
 }
 
-func normalizePGAutomatedScope(
-	scope string,
-	excludeAutomated bool,
-) string {
-	switch strings.TrimSpace(scope) {
-	case "human", "all", "automated":
-		return strings.TrimSpace(scope)
-	}
-	if excludeAutomated {
-		return "human"
-	}
-	return "all"
-}
-
-func pgAutomatedScopePredicate(scope, col string) string {
-	switch scope {
-	case "human":
-		return col + " = FALSE"
-	case "automated":
-		return col + " = TRUE"
-	default:
-		return ""
-	}
-}
-
 const pgSidebarActivityExprS = "COALESCE(s.ended_at, s.started_at, s.created_at)"
 
 func pgSidebarStarredRootCTE(enabled bool) string {
@@ -534,8 +509,8 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootFilter.Starred = false
 	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
 	canonicalRootWhere := db.BuildCanonicalRootWhere(s.sessionDialect(), "sessions", f.IncludeOrphans)
-	childAutomationPred := pgAutomatedScopePredicate(
-		normalizePGAutomatedScope(f.AutomatedScope, f.ExcludeAutomated),
+	childAutomationPred := db.PostgresQueryDialect().AutomatedScopePredicate(
+		db.NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated),
 		"s.is_automated",
 	)
 	childAutomationWhere := ""

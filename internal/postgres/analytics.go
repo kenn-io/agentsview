@@ -157,25 +157,14 @@ func buildAnalyticsWhereWithDate(f db.AnalyticsFilter, dateCol string, pb *param
 	return where
 }
 
-func appendPGAnalyticsCSVFilter(
-	preds []string,
-	col string,
-	raw string,
-	pb *paramBuilder,
-) []string {
-	values := db.CSVFilterValues(raw)
-	if len(values) == 0 {
-		return preds
+func appendPGAnalyticsCSVFilter(preds []string, col, raw string, pb *paramBuilder) []string {
+	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+	if pred := b.ValuesPredicate(col, db.CSVFilterValues(raw), true); pred != "" {
+		preds = append(preds, pred)
 	}
-	if len(values) == 1 {
-		return append(preds, col+" = "+pb.add(values[0]))
-	}
-	phs := make([]string, len(values))
-	for i, value := range values {
-		phs[i] = pb.add(value)
-	}
-	return append(preds,
-		col+" IN ("+strings.Join(phs, ",")+")")
+	pb.args = append(pb.args, b.Args()...)
+	pb.n += len(b.Args())
+	return preds
 }
 
 func (s *Store) getAnalyticsFilteredMessageCounts(

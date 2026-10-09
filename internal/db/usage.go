@@ -1004,8 +1004,8 @@ func cursorUsageRowsSQLForBounds(
 
 	where := "cu.model != ''"
 	var args []any
-	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
-	if pred := automatedScopePredicate(scope, "cu.is_headless"); pred != "" {
+	scope := NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	if pred := SQLiteQueryDialect().AutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
 		where += "\n\tAND " + pred
 	}
 	where, args = f.appendUsageSourceFilterClauses(
