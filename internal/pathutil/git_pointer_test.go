@@ -11,7 +11,7 @@ import (
 func TestGitPointerPath(t *testing.T) {
 	base, cwd := t.TempDir(), t.TempDir()
 	assert.Equal(t, filepath.Join(base, "metadata"), GitPointerPath("metadata", base, cwd))
-	assert.Equal(t, cwd, GitPointerPath(cwd, base, base))
+	assert.Equal(t, filepath.Clean(cwd), GitPointerPath(cwd, base, base))
 	assert.Empty(t, GitPointerPath("", base, cwd))
 	if runtime.GOOS != "windows" {
 		return
