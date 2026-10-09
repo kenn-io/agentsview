@@ -86,7 +86,6 @@ approved mapping, not current behavior.
 
 ## Deliberate differences
 
-- Pattern evidence carries plain text instead of backticks around names.
 - Titles use `[friction/<kind>]`, labels use `friction`, and the digest
   heading is `# Friction Log — <date>`.
 - Coding corrections require the chat marker patterns too. jilog counts every
