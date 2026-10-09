@@ -136,7 +136,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				payload["code"] = "claude_ai_auth_required"
 			}
 			if errors.Is(err, chromehost.ErrCompatibility) {
-				payload["error"] = chromehost.ErrCompatibility.Error()
+				payload["error"] = "Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again"
 				payload["code"] = "claude_ai_chrome_host_update_required"
 			}
 			stream.SendJSON("error", payload)

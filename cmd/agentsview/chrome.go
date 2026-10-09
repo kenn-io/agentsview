@@ -173,13 +173,13 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		}
 		target := filepath.Join(folder, relative)
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0700)
+			return os.MkdirAll(target, 0o700)
 		}
 		data, err := fs.ReadFile(assets, path)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, 0600)
+		return os.WriteFile(target, data, 0o600)
 	}); err != nil {
 		return "", fmt.Errorf("extension assets: %w; build the frontend first", err)
 	}
@@ -198,7 +198,7 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		launcher += ".cmd"
 		command = "@echo off\r\n\"" + strings.ReplaceAll(executable, "%", "%%") + "\" chrome-host --socket \"" + strings.ReplaceAll(socket, "%", "%%") + "\"\r\n"
 	}
-	if err := os.WriteFile(launcher, []byte(command), 0700); err != nil {
+	if err := os.WriteFile(launcher, []byte(command), 0o700); err != nil {
 		return "", err
 	}
 	manifestDir := dir
@@ -208,7 +208,7 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 	if runtime.GOOS == "linux" {
 		manifestDir = filepath.Join(home, ".config", "google-chrome", "NativeMessagingHosts")
 	}
-	if err := os.MkdirAll(manifestDir, 0700); err != nil {
+	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
 		return "", err
 	}
 	body, err := json.Marshal(map[string]any{"name": chromeNativeHost, "description": "AgentsView Claude.ai Sync", "path": launcher, "type": "stdio", "allowed_origins": []string{"chrome-extension://" + id.String() + "/"}})
@@ -216,7 +216,7 @@ func setupChrome(dataDir, home, executable string, assets fs.FS, register func(s
 		return "", err
 	}
 	path := filepath.Join(manifestDir, chromeNativeHost+".json")
-	if err := os.WriteFile(path, body, 0600); err != nil {
+	if err := os.WriteFile(path, body, 0o600); err != nil {
 		return "", err
 	}
 	if err := register(path); err != nil {
@@ -240,7 +240,7 @@ func chromeSocketPath(dataDir string) (string, error) {
 		digest := sha256.Sum256([]byte(dir))
 		socket = filepath.Join(root, fmt.Sprintf("av-chrome-%x", digest[:8]), "host.sock")
 		if len(socket) >= 104 {
-			return "", errors.New("Chrome socket path exceeds the Unix socket path limit")
+			return "", errors.New("chrome socket path exceeds the Unix socket path limit")
 		}
 	}
 	return socket, nil

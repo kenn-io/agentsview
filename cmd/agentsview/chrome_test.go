@@ -35,8 +35,8 @@ func chromeTestExecutable(t *testing.T) string {
 		executable += ".cmd"
 		program = "@echo off\r\necho %~1\r\necho %~2\r\necho %~3\r\n"
 	}
-	require.NoError(t, os.MkdirAll(filepath.Dir(executable), 0700))
-	require.NoError(t, os.WriteFile(executable, []byte(program), 0700))
+	require.NoError(t, os.MkdirAll(filepath.Dir(executable), 0o700))
+	require.NoError(t, os.WriteFile(executable, []byte(program), 0o700))
 	return executable
 }
 
@@ -139,7 +139,7 @@ func TestChromeHostRelay(t *testing.T) {
 	case err := <-finished:
 		require.NoError(t, err)
 	case <-ctx.Done():
-		t.Fatal("relay did not exit on stdin EOF")
+		require.FailNow(t, "relay did not exit on stdin EOF")
 	}
 }
 
@@ -178,7 +178,7 @@ func TestChromeHostRelayRetriesRefusedConnection(t *testing.T) {
 	select {
 	case second = <-accepted:
 	case <-ctx.Done():
-		t.Fatal("refused relay did not reconnect")
+		require.FailNow(t, "refused relay did not reconnect")
 	}
 	defer second.Close()
 	require.NoError(t, chromehost.WriteFrame(second, []byte(`{"id":"b","path":"/api/organizations"}`)))
@@ -190,7 +190,7 @@ func TestChromeHostRelayRetriesRefusedConnection(t *testing.T) {
 	case err := <-finished:
 		require.NoError(t, err)
 	case <-ctx.Done():
-		t.Fatal("relay did not exit")
+		require.FailNow(t, "relay did not exit")
 	}
 }
 
@@ -229,7 +229,7 @@ func TestChromeLongDataDirSetupAndServe(t *testing.T) {
 	args := strings.FieldsFunc(strings.TrimSpace(string(output)), func(r rune) bool { return r == '\r' || r == '\n' })
 	require.Len(t, args, 3)
 	assert.Equal(t, []string{"chrome-host", "--socket", socket}, args)
-	conn, err := net.Dial("unix", args[2])
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", args[2])
 	require.NoError(t, err)
 	defer conn.Close()
 	again, err := chromeSocketPath(dir)

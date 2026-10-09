@@ -11,7 +11,7 @@ const FrameLimit = 64 << 20
 // Version covers message encoding and supported request shapes; bump both peers together.
 const Version = 1
 
-var ErrCompatibility = errors.New("Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again")
+var ErrCompatibility = errors.New("run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again")
 
 func ReadFrame(reader io.Reader) ([]byte, error) {
 	var header [4]byte
@@ -20,7 +20,7 @@ func ReadFrame(reader io.Reader) ([]byte, error) {
 	}
 	size := binary.NativeEndian.Uint32(header[:])
 	if size > FrameLimit {
-		return nil, errors.New("Chrome frame exceeds 64 MiB")
+		return nil, errors.New("chrome frame exceeds 64 MiB")
 	}
 	body := make([]byte, size)
 	_, err := io.ReadFull(reader, body)
@@ -29,7 +29,7 @@ func ReadFrame(reader io.Reader) ([]byte, error) {
 
 func WriteFrame(writer io.Writer, body []byte) error {
 	if len(body) > FrameLimit {
-		return errors.New("Chrome frame exceeds 64 MiB")
+		return errors.New("chrome frame exceeds 64 MiB")
 	}
 	var header [4]byte
 	binary.NativeEndian.PutUint32(header[:], uint32(len(body)))
