@@ -575,13 +575,18 @@ func (b *codexSessionBuilder) handleHistoryMutation(
 	if b.suppresses(codexTypeHistoryMutation, payload) {
 		return nil
 	}
-	if version := payload.Get("version"); version.Exists() && (version.Type != gjson.Number || version.Num != 1) {
+	if version := payload.Get("version"); version.Exists() &&
+		(version.Type != gjson.Number || version.Num != 1) {
 		return fmt.Errorf("%w: version %s", errTraeXHistoryMutationUnsupported, version.Raw)
 	}
 	if operation := payload.Get("operation").Str; operation != "append" {
 		return fmt.Errorf("%w: operation %q", errTraeXHistoryMutationUnsupported, operation)
 	}
-	for _, item := range payload.Get("items").Array() {
+	items := payload.Get("items")
+	if items.Exists() && !items.IsArray() {
+		return fmt.Errorf("%w: items %s", errTraeXHistoryMutationUnsupported, items.Raw)
+	}
+	for _, item := range items.Array() {
 		if b.incremental && b.codexResponseItemNeedsFullParse(item) {
 			return errCodexIncrementalNeedsFullParse
 		}

@@ -532,6 +532,12 @@ func TestTraeXProviderHistoryMutationRefusal(t *testing.T) {
 		path    string
 	}{
 		{"missing version", `{"operation":"append","items":[]}`, "", "full"},
+		{"missing items", `{"operation":"append"}`, "", "full"},
+		{"object items", `{"operation":"append","items":{}}`, "items", "full"},
+		{"string items", `{"operation":"append","items":"invalid"}`, "items", "full"},
+		{"null items", `{"operation":"append","items":null}`, "items", "full"},
+		{"seed invalid items", `{"operation":"append","items":{}}`, "items", "seed"},
+		{"incremental invalid items", `{"operation":"append","items":{}}`, "items", "incremental"},
 		{"replace", `{"operation":"replace","items":[]}`, "operation", "full"},
 		{"missing operation", `{"items":[]}`, "operation", "full"},
 		{"newer version", `{"version":2,"operation":"append","items":[]}`, "version", "full"},

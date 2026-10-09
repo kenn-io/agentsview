@@ -851,7 +851,8 @@ fixtures retain this field; missing identities remain source-local.
   user-facing transcript in Codex-compatible `response_item` rows. Newer
   observed rollouts keep the same session envelope but carry transcript changes
   in append-only `history_mutation.payload.items[]`; applied mutations accept
-  version 1 or an absent version and refuse other versions or operations.
+  version 1 or an absent version and refuse other versions or operations,
+  or a present `items` value that isn't an array.
   Token deltas appear in `token_usage_record.payload.usage`.
   The sibling `history.jsonl` carries the
   same `session_id`/Unix-seconds `ts`/prompt `text` records, and agentsview
@@ -877,7 +878,8 @@ fixtures retain this field; missing identities remain source-local.
   catalog pricing, including the same reasoning-output omission. Consecutive
   repeats are suppressed using a single usage digest keyed by `response_id`
   when present, so equal counts for different responses remain distinct.
-  `cache_creation_input_tokens` is unread on purpose; the only capture has 0 and no source shows whether it sits inside `input_tokens`.
+  `cache_creation_input_tokens` is unread on purpose; the only capture has 0
+  and no source shows whether it sits inside `input_tokens`.
 - **Agentsview:** `internal/parser/traex.go` relabels the shared Codex parser
   (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
   `traex:` ID namespace, and `internal/sync` gates the format-shaped branches
