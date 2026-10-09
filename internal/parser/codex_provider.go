@@ -1233,7 +1233,7 @@ func (s codexSourceSet) directPathSource(
 	if requireRegular && !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
-	return SourceRef{
+	source := SourceRef{
 		Provider:       s.agent,
 		Key:            path,
 		DisplayPath:    path,
@@ -1242,7 +1242,16 @@ func (s codexSourceSet) directPathSource(
 			Root: root,
 			Path: path,
 		},
-	}, true
+	}
+	// A reverted rollout's copies in the live and archived roots are one
+	// source, preferred like the thread's ordinary rollout copies.
+	if id := CodexRevertedRolloutID(filepath.Base(path)); id != "" {
+		if layout, _, ok := CodexSessionPathInfo(root, path); ok {
+			source.Key = codexSourceKey(s.agent, id)
+			source.Opaque = codexSource{Root: root, Path: path, Layout: layout}
+		}
+	}
+	return source, true
 }
 
 func (s codexSourceSet) canonicalSource(

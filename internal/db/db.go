@@ -565,7 +565,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // rows with source_subtype peer_message instead of user prompts. Re-parse
 // unchanged Claude sources so user-message counts and first messages drop
 // them.)
-const dataVersion = 126
+// (127: A reverted Codex thread's rollout and the thread's original rollout
+// share a session ID but remain separate conversations. Re-parse unchanged
+// sources, including cached remote mirrors, to recover conversations
+// previously collapsed into one archived session.)
+const dataVersion = 127
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

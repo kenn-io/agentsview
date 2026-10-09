@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"slices"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -71,7 +70,12 @@ func (e *Engine) sourceCollisionID(
 	}
 	if altID == "" {
 		available := !hasStored
+		// A Codex rollout moves only between roots, which the same-source
+		// checks above already recognize. Any other Codex file with the id is
+		// a separate rollout, so it never takes over a vanished one's id and
+		// archived messages.
 		if hasStored && !owner.Trashed && stored != "" &&
+			!isCodexFormatAgent(provider.Definition().Type) &&
 			s.MessageCount >= owner.MessageCount {
 			available = e.storedSourceGone(ctx, provider, stored)
 		}
@@ -117,22 +121,11 @@ func collisionPolicyApplies(provider parser.Provider) bool {
 }
 
 // sameDiscoveredSource reports whether two paths are the same discovered
-// source. A Codex rollout filename that names the thread resolves to one key
-// even across a live and an archived root. A reverted thread's rollout has no
-// discovery key of its own, but its name carries a unique rollout id, so its
-// filename stands in for the path key and a move between roots keeps the same
-// identity.
+// source. Every copy of a Codex rollout, ordinary or reverted, resolves to one
+// key even across a live and an archived root.
 func sameDiscoveredSource(agent parser.AgentType, a, b string) bool {
-	if discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: a}) ==
-		discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: b}) {
-		return true
-	}
-	if !isCodexFormatAgent(agent) {
-		return false
-	}
-	name := filepath.Base(a)
-	return name == filepath.Base(b) &&
-		parser.CodexSessionUUIDFromFilename(name) == ""
+	return discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: a}) ==
+		discoveredFileKey(parser.DiscoveredFile{Agent: agent, Path: b})
 }
 
 // collisionPolicyAgents lists shared-id providers with roots participating in

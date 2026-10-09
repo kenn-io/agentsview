@@ -336,8 +336,10 @@ The latest published release is
   keeps the thread, and the other file appears as a linked session. That
   session holds only the turns written after the revert, and the original
   session still shows the turns that were reverted away. Renaming the thread
-  updates both sessions. TraeX and Augure Code use the same rollout format and
-  behave the same way.
+  updates both sessions. Upgrading reprocesses the archive once to recover
+  conversations that were already collapsed. TraeX and Augure Code use the same
+  rollout format and behave the same way. Codex sessions imported from S3
+  storage still collapse the two files into one session.
 - Recall no longer records work an agent only proposed as work it completed.
   When a stretch of a session ran no tools, extraction cannot produce a
   procedure entry for it and tells the model nothing there was executed.

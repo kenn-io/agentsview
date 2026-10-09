@@ -129,10 +129,16 @@ func requireSessionName(t *testing.T, env *testEnv, id, want string) {
 }
 
 // Renaming a reverted thread refreshes both of its rollouts' rows, whichever
-// rollout synced first and so holds the thread's id.
+// rollout synced first and so holds the thread's id. A full sync and a
+// watcher event that delivers only the index both refresh them.
 func TestCodexRevertedRolloutRefreshesThreadName(t *testing.T) {
-	for _, revertedFirst := range []bool{false, true} {
-		t.Run(fmt.Sprintf("reverted first %t", revertedFirst), func(t *testing.T) {
+	for _, tc := range []struct {
+		revertedFirst bool
+		indexEvent    bool
+	}{{false, false}, {true, false}, {false, true}, {true, true}} {
+		revertedFirst := tc.revertedFirst
+		name := fmt.Sprintf("reverted first %t index event %t", revertedFirst, tc.indexEvent)
+		t.Run(name, func(t *testing.T) {
 			env, liveDir, _ := codexRootEnv(t)
 			sessionID := "codex:" + codexThreadID
 			day := filepath.Join("2026", "07", "28")
@@ -151,8 +157,13 @@ func TestCodexRevertedRolloutRefreshesThreadName(t *testing.T) {
 			requireSessionName(t, env, altID, "First")
 
 			writeCodexThreadName(t, liveDir, "Renamed", time.Now())
-			env.engine.SyncAll(t.Context(), nil)
-			env.engine.SyncAll(t.Context(), nil)
+			if tc.indexEvent {
+				env.engine.SyncPaths([]string{
+					filepath.Join(filepath.Dir(liveDir), parser.CodexSessionIndexFilename),
+				})
+			} else {
+				env.engine.SyncAll(t.Context(), nil)
+			}
 
 			requireSessionName(t, env, sessionID, "Renamed")
 			requireSessionName(t, env, altID, "Renamed")
@@ -286,4 +297,64 @@ func TestCodexDeletedRevertedRolloutStaysDeletedAfterRootMove(t *testing.T) {
 
 	requireSessionGone(t, env, altID)
 	requireNoLiveDerivedRecords(t, env, sessionID)
+}
+
+// A reverted rollout is a different file from the thread's stored rollout,
+// never its replacement. When the stored rollout's file is gone, a longer
+// reverted rollout must still be stored under a derived id so the archived
+// conversation keeps its messages.
+func TestCodexRevertedRolloutDoesNotClaimMissingRollout(t *testing.T) {
+	for _, mode := range []string{"sync", "resync"} {
+		t.Run(mode, func(t *testing.T) {
+			env := setupTestEnv(t)
+			day := filepath.Join("2026", "07", "28")
+			sessionID := "codex:" + codexThreadID
+
+			basePath := env.writeCodexSession(t, day, codexOrdinaryName, codexRollout(codexThreadID, 2))
+			env.engine.SyncAll(t.Context(), nil)
+			require.NoError(t, os.Remove(basePath))
+			revertedPath := env.writeCodexSession(
+				t, day, codexRevertedName, codexRollout(codexThreadID, 4),
+			)
+			if mode == "resync" {
+				stats := env.engine.ResyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "%v", stats.Warnings)
+			} else {
+				env.engine.SyncAll(t.Context(), nil)
+			}
+
+			base := requireStoredSession(t, env.db, sessionID)
+			require.NotNil(t, base.FilePath)
+			assert.Equal(t, basePath, *base.FilePath)
+			assertSessionMessageCount(t, env.db, sessionID, 2)
+			assertSessionMessageCount(t, env.db, parser.AltSessionID(sessionID, revertedPath), 4)
+		})
+	}
+}
+
+// Codex can hold the same reverted rollout in the live and archived roots.
+// Both copies are one source, so they must produce one derived session that
+// stays put across syncs.
+func TestCodexRevertedRolloutCopiesInBothRootsAreOneSession(t *testing.T) {
+	env, _, archivedDir := codexRootEnv(t)
+	day := filepath.Join("2026", "07", "28")
+	sessionID := "codex:" + codexThreadID
+
+	env.writeCodexSession(t, day, codexOrdinaryName, codexRollout(codexThreadID, 3))
+	env.engine.SyncAll(t.Context(), nil)
+	livePath := env.writeCodexSession(t, day, codexRevertedName, codexRollout(codexThreadID, 1))
+	env.writeSession(t, archivedDir, codexRevertedName, codexRollout(codexThreadID, 1))
+
+	for range 2 {
+		env.engine.SyncAll(t.Context(), nil)
+		records, err := env.db.ListSessionPathRecords(t.Context(), sessionID)
+		require.NoError(t, err)
+		var derived []string
+		for _, r := range records {
+			if r.ID != sessionID && !r.Excluded {
+				derived = append(derived, r.ID+" "+r.FilePath)
+			}
+		}
+		assert.Equal(t, []string{parser.AltSessionID(sessionID, livePath) + " " + livePath}, derived)
+	}
 }

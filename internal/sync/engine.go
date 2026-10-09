@@ -2590,7 +2590,7 @@ func dedupeDiscoveredFilesByPreference(
 
 func discoveredFileKey(file parser.DiscoveredFile) string {
 	if isCodexFormatAgent(file.Agent) {
-		if id := parser.CodexSessionUUIDFromFilename(filepath.Base(file.Path)); id != "" {
+		if id := codexDiscoveryID(filepath.Base(file.Path)); id != "" {
 			return string(file.Agent) + "\x00" +
 				discoveredFileIDPrefix(file) + "\x00" + id
 		}
@@ -2695,10 +2695,20 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 	return out, nil
 }
 
+// codexDiscoveryID is the identity every copy of a Codex rollout shares: the
+// thread UUID for the thread's ordinary rollout, or "<thread>_<rollout>" for
+// the rollout Codex writes when it reverts the thread.
+func codexDiscoveryID(name string) string {
+	if id := parser.CodexSessionUUIDFromFilename(name); id != "" {
+		return id
+	}
+	return parser.CodexRevertedRolloutID(name)
+}
+
 func codexLayoutForPath(path string) parser.CodexLayout {
 	path = filepath.Clean(path)
 	name := filepath.Base(path)
-	if parser.CodexSessionUUIDFromFilename(name) == "" {
+	if codexDiscoveryID(name) == "" {
 		return parser.CodexLayoutUnknown
 	}
 	day := filepath.Base(filepath.Dir(path))
@@ -6884,11 +6894,11 @@ func reconciliationReplacementIdentity(
 	}
 	switch agent {
 	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode:
-		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(storedPath))
-		if uuid == "" {
+		id := codexDiscoveryID(filepath.Base(storedPath))
+		if id == "" {
 			return ""
 		}
-		return parser.CodexSourceKey(agent, uuid)
+		return parser.CodexSourceKey(agent, id)
 	default:
 		return ""
 	}
@@ -16751,7 +16761,9 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 
 	var out []parser.DiscoveredFile
 	for uuid, title := range titles {
-		if !e.codexStoredNameDiffers(uuid, title) {
+		ordinaryStale, reverted := e.codexThreadRolloutsWithStaleName(ctx, uuid, title)
+		out = append(out, reverted...)
+		if !ordinaryStale {
 			continue
 		}
 		var candidates []parser.DiscoveredFile
@@ -16782,6 +16794,63 @@ func (e *Engine) classifyCodexIndexPath(ctx context.Context,
 		out = append(out, chosen)
 	}
 	return out
+}
+
+// codexThreadRolloutsWithStaleName compares each stored rollout of a Codex
+// thread with the thread's index title. A reverted thread has two rollouts
+// and two sessions, and either one can hold the thread's id, so each row is
+// compared on its own. It reports whether the ordinary rollout's row is stale
+// and returns the reverted rollouts whose rows are stale, pinned to their
+// stored copies.
+func (e *Engine) codexThreadRolloutsWithStaleName(
+	ctx context.Context, uuid, title string,
+) (ordinaryStale bool, reverted []parser.DiscoveredFile) {
+	records, err := e.db.ListSessionPathRecords(ctx, e.idPrefix+"codex:"+uuid)
+	if err != nil {
+		log.Printf("codex index rename: list rollouts of thread %s: %v; "+
+			"refreshing only its ordinary rollout", uuid, err)
+		return e.codexStoredNameDiffers(uuid, title), nil
+	}
+	for _, r := range records {
+		if r.Excluded || r.FilePath == "" ||
+			!e.codexStoredNameDiffersBySessionID(r.ID, title, false) {
+			continue
+		}
+		if parser.CodexRevertedRolloutID(filepath.Base(r.FilePath)) == "" {
+			ordinaryStale = true
+			continue
+		}
+		if path, ok := e.codexLocalSourcePath(r.FilePath); ok {
+			reverted = append(reverted, parser.DiscoveredFile{
+				Path:            path,
+				Agent:           parser.AgentCodex,
+				Machine:         e.machineForPath(parser.AgentCodex, path),
+				ProviderProcess: true,
+				ProviderSource:  e.codexPinnedProviderSource(parser.AgentCodex, path),
+			})
+		}
+	}
+	return ordinaryStale, reverted
+}
+
+// codexLocalSourcePath maps a stored Codex source path to the file on disk,
+// resolving a remote mirror's stored path when one is configured.
+func (e *Engine) codexLocalSourcePath(stored string) (string, bool) {
+	path := stored
+	if e.pathRewriter != nil {
+		if e.storedPathResolver == nil {
+			return "", false
+		}
+		resolved, ok := e.storedPathResolver(stored)
+		if !ok {
+			return "", false
+		}
+		path = resolved
+	}
+	if _, err := os.Stat(path); err != nil {
+		return "", false
+	}
+	return path, true
 }
 
 func (e *Engine) pickPreferredCodexIndexDiscoveredFile(ctx context.Context,
