@@ -264,24 +264,34 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 
 func TestS3CursorCollidingParents(t *testing.T) {
 	for _, tt := range []struct {
-		name   string
-		passes [][]int
+		name            string
+		passes          [][]int
+		childrenCollide bool
 	}{
-		{"parents first", [][]int{{0}, {1}, {2}}},
-		{"parents reversed", [][]int{{1}, {0}, {2}}},
-		{"child first separate", [][]int{{2}, {0}, {1}}},
-		{"child first together", [][]int{{2, 1, 0}}},
-		{"own parent late", [][]int{{0}, {2}, {1}}},
+		{"parents first", [][]int{{0}, {1}, {2}}, false},
+		{"parents reversed", [][]int{{1}, {0}, {2}}, false},
+		{"child first separate", [][]int{{2}, {0}, {1}}, false},
+		{"child first together", [][]int{{2, 1, 0}}, false},
+		{"own parent late", [][]int{{0}, {2}, {1}}, false},
+		{"children collide", [][]int{{0}, {1}, {3}, {2}}, true},
+		{"children collide reversed", [][]int{{1}, {0}, {2}, {3}}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			const root = "s3://bucket/host-a/raw/cursor"
 			const aliasRoot = "s3://other-bucket/host-a/raw/cursor"
-			const content = "user:\nHello\nassistant:\nReply\n"
+			const content = "user:\nHello A\nassistant:\nReply A\n"
 			paths := []string{root + "/project-a/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared/subagents/child.txt"}
+			if tt.childrenCollide {
+				paths = []string{root + "/project-a/agent-transcripts/parent-a.txt", root + "/project-b/agent-transcripts/parent-b.txt", root + "/project-b/agent-transcripts/parent-b/subagents/child.txt", root + "/project-a/agent-transcripts/parent-a/subagents/child.txt"}
+			}
 			oldFetch := fetchS3Object
 			t.Cleanup(func() { fetchS3Object = oldFetch })
-			fetchS3Object = func(string) (io.ReadCloser, error) {
-				return io.NopCloser(strings.NewReader(content)), nil
+			fetchS3Object = func(uri string) (io.ReadCloser, error) {
+				body := content
+				if strings.Contains(uri, "/project-b/") {
+					body = strings.ReplaceAll(body, " A", " B")
+				}
+				return io.NopCloser(strings.NewReader(body)), nil
 			}
 			database := openTestDB(t)
 			def, ok := parser.AgentByType(parser.AgentCursor)
@@ -300,22 +310,43 @@ func TestS3CursorCollidingParents(t *testing.T) {
 					Opaque: parser.S3DiscoveredSource{URI: uri, Machine: "host-a", Size: int64(len(content)), MtimeNS: time.Unix(100, 0).UnixNano()},
 				}
 			}
+			childIDs := make(map[string]string)
 			verify := func() {
 				t.Helper()
-				child, err := database.GetSessionFull(t.Context(), "host-a~cursor:child")
-				require.NoError(t, err)
-				if child == nil {
-					return
+				for i, uri := range paths[2:] {
+					ids, err := database.ListSessionIDsByFilePath(t.Context(), uri, "cursor")
+					require.NoError(t, err)
+					if len(ids) == 0 {
+						assert.Empty(t, childIDs[uri], "an archived child must remain present")
+						continue
+					}
+					require.Len(t, ids, 1)
+					if childIDs[uri] == "" {
+						childIDs[uri] = ids[0]
+					}
+					assert.Equal(t, childIDs[uri], ids[0])
+					if ids[0] != "host-a~cursor:child" {
+						assert.Equal(t, parser.AltSessionID("host-a~cursor:child", uri), ids[0])
+					}
+					child, err := database.GetSessionFull(t.Context(), ids[0])
+					require.NoError(t, err)
+					require.NotNil(t, child)
+					parentIndex := 1 - i
+					parents, err := database.ListSessionIDsByFilePath(t.Context(), paths[parentIndex], "cursor")
+					require.NoError(t, err)
+					if len(parents) == 0 {
+						assert.Nil(t, child.ParentSessionID, "a different project's parent cannot own this child")
+					} else {
+						require.Len(t, parents, 1)
+						assert.Equal(t, parents[0], derefString(child.ParentSessionID))
+					}
+					assert.Equal(t, "subagent", child.RelationshipType)
+					assert.Equal(t, "host-a~"+parser.CursorSessionID(paths[parentIndex]), derefString(child.ParserParentSessionID))
+					messages, err := database.GetAllMessages(t.Context(), ids[0])
+					require.NoError(t, err)
+					require.Len(t, messages, 2)
+					assert.Equal(t, []string{"Hello A", "Hello B"}[parentIndex], messages[0].Content)
 				}
-				parents, err := database.ListSessionIDsByFilePath(t.Context(), paths[1], "cursor")
-				require.NoError(t, err)
-				if len(parents) == 0 {
-					assert.Nil(t, child.ParentSessionID, "a different project's parent cannot own this child")
-				} else {
-					require.Len(t, parents, 1)
-					assert.Equal(t, parents[0], derefString(child.ParentSessionID))
-				}
-				assert.Equal(t, "host-a~cursor:shared", derefString(child.ParserParentSessionID))
 			}
 			for _, pass := range tt.passes {
 				provider.discovered = nil
@@ -329,6 +360,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				require.Zero(t, stats.Failed)
 				verify()
 			}
+			require.Len(t, childIDs, len(paths)-2)
 			if tt.name == "own parent late" {
 				parents, err := database.ListSessionIDsByFilePath(t.Context(), paths[1], "cursor")
 				require.NoError(t, err)
@@ -343,15 +375,20 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				verify()
 			}
 			provider.discovered = []parser.SourceRef{source(paths[2])}
+			if tt.childrenCollide {
+				provider.discovered = append(provider.discovered, source(paths[3]))
+			}
 			stats := engine.ResyncAll(t.Context(), nil)
 			require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
 			require.Zero(t, stats.Failed)
 			verify()
-			_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
-				Agent: parser.AgentCursor, Path: paths[2], Machine: "host-a", SourceSize: int64(len(content)), SourceMtime: time.Unix(100, 0).UnixNano(), ForceParse: true,
-			}, "host-a~cursor:child")
-			require.NoError(t, err)
-			verify()
+			for _, uri := range paths[2:] {
+				_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
+					Agent: parser.AgentCursor, Path: uri, Machine: "host-a", SourceSize: int64(len(content)), SourceMtime: time.Unix(100, 0).UnixNano(), ForceParse: true,
+				}, childIDs[uri])
+				require.NoError(t, err)
+				verify()
+			}
 		})
 	}
 }

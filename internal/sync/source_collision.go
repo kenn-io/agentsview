@@ -69,8 +69,10 @@ func (e *Engine) sourceCollisionID(
 		}
 		altID = parser.AltSessionID(s.ID, lookupPath)
 	}
-	s.ParentSessionID = s.ID
-	s.RelationshipType = parser.RelContinuation
+	if s.Agent != parser.AgentCursor || !isS3SourcePath(lookupPath) || s.RelationshipType != parser.RelSubagent {
+		s.ParentSessionID = s.ID
+		s.RelationshipType = parser.RelContinuation
+	}
 	s.ID = altID
 	return altID, moved, nil
 }

@@ -2171,6 +2171,7 @@ func (db *DB) queueSubagentParentRepairs(ctx context.Context, ids []string, clea
 // clears the queue in the same transaction. A failed link or cleanup rolls
 // back both the hierarchy changes and queue deletion so a later sync retries
 // the exact IDs even when their original spawn edges have disappeared.
+// Cursor S3 directory evidence requires configured roots in the context form.
 func (db *DB) RepairQueuedSubagentParents() error {
 	_, err := db.RepairQueuedSubagentParentsContext(context.Background(), nil)
 	return err
