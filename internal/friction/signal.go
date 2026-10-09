@@ -82,7 +82,7 @@ type Signal struct {
 	Text        string // correction context, error message, or pattern description
 	ToolName    string
 	Label       string // workaround pattern, deferral item, or pattern kind
-	Evidence    string
+	Evidence    string // plain text; renderers add the code span
 	Ordinal     *int
 	CallIndex   *int
 	OccurredAt  time.Time

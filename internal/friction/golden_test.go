@@ -39,7 +39,11 @@ func goldenDigestFixture() DigestSnapshot {
 	}
 	return DigestSnapshot{
 		Date: "2026-09-16", Signals: sigs,
-		P0Alerts: DetectP0Alerts(sigs, nil), SessionsScanned: 3,
+		P0Alerts: map[string][]string{
+			"Bash": {"s-1", "s-2", "s-3"},
+			"Read": {"s-1", "s-2", "s-3"},
+		},
+		SessionsScanned: 3,
 	}
 }
 
