@@ -2462,6 +2462,6 @@
   "tool_sequences_retry": "Réessayer",
   "import_claude_connect": "Se connecter",
   "import_claude_sync": "Synchroniser",
-  "import_claude_help": "Connectez-vous, fermez la fenêtre, puis cliquez sur Synchroniser.",
+  "import_claude_help": "Connectez-vous avec un code par e-mail, fermez la fenêtre, puis cliquez sur Synchroniser. La connexion Google nécessite un hôte navigateur.",
   "import_claude_auth_required": "Connectez-vous à Claude.ai, puis relancez la synchronisation."
 }
