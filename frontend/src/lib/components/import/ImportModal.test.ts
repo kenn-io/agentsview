@@ -25,6 +25,7 @@ afterEach(() => { vi.resetAllMocks(); syncState.readOnly = false; setLocale("en"
 it.each([
   ["claude_ai_auth_required", "Sign in to Claude.ai, then Sync again", "Connectez-vous à Claude.ai, puis relancez la synchronisation."],
   ["claude_ai_sign_in_pending", "Claude sign-in is still pending", "Terminez la connexion à Claude.ai, fermez la fenêtre, puis relancez la synchronisation."],
+  ["claude_ai_archive_upgrade_required", "Let the archive finish upgrading, then Sync again.", "Attendez la fin de la mise à niveau de l'archive, puis relancez la synchronisation."],
 ])("shows localized recovery for %s", async (code, message, expected) => {
   setLocale("fr", { reload: false });
   syncClaudeAI.mockRejectedValue(new ApiError(0, message, code));

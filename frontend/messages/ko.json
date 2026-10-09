@@ -2384,5 +2384,6 @@
   "import_claude_help": "로그인한 후 창을 닫고 동기화를 누르세요.",
   "import_claude_auth_required": "Claude.ai에 로그인한 후 다시 동기화하세요.",
   "import_claude_sign_in_pending": "Claude.ai 로그인을 완료하고 창을 닫은 후 다시 동기화하세요.",
+  "import_claude_archive_upgrade_required": "아카이브 업그레이드가 완료될 때까지 기다린 후 다시 동기화하세요.",
   "import_newer_marker": "보관된 세션 {session}에는 더 최신 버전의 AgentsView가 필요합니다. AgentsView를 업데이트한 후 다시 동기화하세요."
 }

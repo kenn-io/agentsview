@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -250,6 +251,71 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			assert.JSONEq(t, `{"error":"fetch request expired or already answered"}`, late.Body.String())
 		})
 	})
+}
+
+func TestClaudeAISyncNeedsResync(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	require.NoError(t, srv.db.(*db.DB).Close())
+	raw, err := sql.Open("sqlite3", srv.cfg.DBPath)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), "PRAGMA user_version = 126")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	store, err := db.Open(t.Context(), srv.cfg.DBPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	srv.db = store
+	require.True(t, store.NeedsResync())
+	httpServer := httptest.NewServer(srv.mux)
+	defer httpServer.Close()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
+	require.NoError(t, err)
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	gotError := false
+	readImportEvents(t, response.Body, func(event, data string) {
+		switch event {
+		case "fetch":
+			var fetch struct {
+				ID   string `json:"id"`
+				Path string `json:"path"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(data), &fetch))
+			var body string
+			switch fetch.Path {
+			case "/api/organizations":
+				body = `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`
+			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
+				body = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222222","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
+			case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+				body = `{"uuid":"22222222-2222-4222-8222-222222222222","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Must wait for upgrade","created_at":"2026-03-01T10:00:00Z"}]}`
+			default:
+				require.FailNowf(t, "unexpected fetch", "%s", fetch.Path)
+			}
+			answer, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+fetch.ID+"?status=200", strings.NewReader(body))
+			require.NoError(t, err)
+			answer.Header.Set("Content-Type", "application/octet-stream")
+			result, err := http.DefaultClient.Do(answer)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusNoContent, result.StatusCode)
+			require.NoError(t, result.Body.Close())
+		case "error":
+			assert.JSONEq(t, `{"error":"Let the archive finish upgrading, then Sync again.","code":"claude_ai_archive_upgrade_required"}`, data)
+			gotError = true
+		case "done":
+			require.FailNow(t, "sync completed before the archive upgrade")
+		}
+	})
+	assert.True(t, gotError)
+	session, err := store.GetSessionFull(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+	require.NoError(t, err)
+	assert.Nil(t, session)
+	messages, err := store.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+	require.NoError(t, err)
+	assert.Empty(t, messages)
+	assert.True(t, store.NeedsResync())
 }
 
 func TestHandleImportClaudeAI(t *testing.T) {
