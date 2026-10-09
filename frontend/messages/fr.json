@@ -2462,6 +2462,6 @@
   "tool_sequences_retry": "Réessayer",
   "import_claude_connect": "Se connecter",
   "import_claude_sync": "Synchroniser",
-  "import_claude_help": "Chrome utilise votre session Claude.ai existante et prend en charge Google. La fenêtre de connexion de l'application de bureau nécessite un code par e-mail.",
+  "import_claude_help": "La synchronisation utilise la session Claude.ai de ce navigateur. Se connecter ouvre Claude.ai.",
   "import_claude_auth_required": "Connectez-vous à Claude.ai, puis relancez la synchronisation."
 }

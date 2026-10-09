@@ -2,8 +2,9 @@
   "manifest_version": 3,
   "name": "AgentsView Claude.ai Sync",
   "version": "0.1.0",
+  "minimum_chrome_version": "106",
   "host_permissions": ["https://claude.ai/*"],
-  "permissions": ["scripting", "storage", "tabs"],
+  "permissions": ["scripting", "storage", "activeTab"],
   "background": { "service_worker": "worker.js", "type": "module" },
   "action": { "default_title": "Allow Claude.ai Sync on this AgentsView tab" },
   "content_scripts": [{

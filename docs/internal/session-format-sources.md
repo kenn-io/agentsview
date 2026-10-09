@@ -2743,14 +2743,14 @@ schemas keep their existing ordering behavior.
   `content[].text` and thinking blocks.
   Malformed selected paths and mismatched conversation UUIDs fail before writes.
   Exports preserve their original message order.
-- **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible leaf, stored message count, and transcript revision in `provider_freshness`, keyed by `claude-ai` and session ID. Resync and `ResetAllMtimes` clear it. A zip re-import that changes stored text or count triggers a detail fetch. Sync stores messages in the same shape as zip import, without source UUIDs. Pins match by role, text, and occurrence rank. Reverified 2026-10-08 against the reconstructed list and detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and `TestSyncClaudeAIBranchSwitch`. Shorter zip exports remain refused. See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for branch updates and Trash copies.
+- **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible leaf, stored message count, and transcript revision in `provider_freshness`, keyed by `claude-ai` and session ID. Resync and `ResetAllMtimes` clear it. A zip re-import that changes stored text or count triggers a detail fetch. Sync stores messages in the same shape as zip import, without source UUIDs. Pins match by role, text, and occurrence rank. Reverified 2026-10-08 against the reconstructed list and detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and `TestSyncClaudeAIBranchSwitch`. Shorter zip exports remain refused. See [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats) for branch updates and Trash copies.
 - **Limits:** Browser reads and decoded relay responses are capped at 32 MiB. The JSON relay body allows twice that size plus 64 KiB for escaping and metadata. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
   `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
   Other detail failures stop Sync after two chats fail in a row. Unchanged and
   skipped chats, successful writes, 404s, and oversized responses reset the
   streak. See
-  [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for failure handling.
+  [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats) for failure handling.
   Organization responses must decode to an array; null and other shapes fail.
   Organization and list failures, cancellation, and an empty page with
   `has_more: true` stop Sync. Null and root-sentinel list leaves skip detail

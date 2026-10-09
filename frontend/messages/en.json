@@ -2463,6 +2463,6 @@
   "tool_sequences_retry": "Try again",
   "import_claude_connect": "Sign in",
   "import_claude_sync": "Sync",
-  "import_claude_help": "Chrome uses your existing Claude.ai sign-in and supports Google. The desktop sign-in window requires an email code.",
+  "import_claude_help": "Sync uses this browser's Claude.ai sign-in. Sign in opens Claude.ai.",
   "import_claude_auth_required": "Sign in to Claude.ai, then Sync again"
 }

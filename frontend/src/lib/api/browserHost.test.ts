@@ -26,7 +26,6 @@ describe("browser host discovery", () => {
       window.dispatchEvent(new MessageEvent("message", { source, origin, data: { type: "agentsview-claude-reply", id, result: { status: 200, body } } }));
     }
     reply(firstId, "foreign", null);
-    reply(firstId, "foreign", window, "https://example.com");
     reply("unrelated", "foreign");
     reply(secondId, "second");
     reply(firstId, "first");
@@ -41,5 +40,22 @@ describe("browser host discovery", () => {
     });
     await expect(getBrowserHost()!.connect()).rejects.toThrow("Allow Sync");
     await expect(getBrowserHost()!.close()).rejects.toThrow("Allow Sync");
+  });
+
+  it("rejects a reply without a result or error", async () => {
+    document.documentElement.dataset.agentsviewClaudeHost = "chrome";
+    vi.spyOn(window, "postMessage").mockImplementation((data) => {
+      window.dispatchEvent(new MessageEvent("message", { source: window, data: { type: "agentsview-claude-reply", id: data.id } }));
+    });
+    await expect(getBrowserHost()!.fetch("/api/organizations")).rejects.toThrow("Claude host returned no result");
+  });
+
+  it("accepts null results for connect and close", async () => {
+    document.documentElement.dataset.agentsviewClaudeHost = "chrome";
+    vi.spyOn(window, "postMessage").mockImplementation((data) => {
+      window.dispatchEvent(new MessageEvent("message", { source: window, data: { type: "agentsview-claude-reply", id: data.id, result: null } }));
+    });
+    await expect(getBrowserHost()!.connect()).resolves.toBeNull();
+    await expect(getBrowserHost()!.close()).resolves.toBeNull();
   });
 });

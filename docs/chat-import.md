@@ -74,9 +74,11 @@ In Chrome, load the extension from a checkout:
 
 1. Open `chrome://extensions` and turn on **Developer mode**.
 2. Click **Load unpacked** and select `frontend/chrome-extension`.
-3. Open AgentsView on `http://localhost` or `http://127.0.0.1`, at the port your server uses, and click the extension's toolbar button once to allow Sync for that origin.
+3. Open AgentsView on `http://localhost` or `http://127.0.0.1`, at the port your server uses, and click the extension's toolbar button to allow Sync for that tab's current page. Click again after navigating or reloading.
 
 Open **Import conversations**, select **Claude.ai**, and click **Sync**. Chrome uses your existing Claude.ai session, including Google sign-in. If you need to sign in, click **Sign in**, finish in the new tab, then return to AgentsView and click **Sync**.
+
+Sync reuses an open Claude.ai tab. When none is available, it opens a background Claude.ai tab and leaves it open.
 
 In the desktop app connected to its local archive, click **Sign in**, use an email code, close the sign-in window, then click **Sync**. The desktop sign-in window supports email codes only.
 

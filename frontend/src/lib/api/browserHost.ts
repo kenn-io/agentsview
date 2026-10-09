@@ -24,9 +24,10 @@ export function getBrowserHost(): BrowserHost | undefined {
     const id = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const reply = (event: MessageEvent) => {
-        if (event.source !== window || event.origin !== location.origin || event.data?.type !== "agentsview-claude-reply" || event.data.id !== id) return;
+        if (event.source !== window || event.data?.type !== "agentsview-claude-reply" || event.data.id !== id) return;
         window.removeEventListener("message", reply);
         if (event.data.error) reject(new Error(event.data.error));
+        else if (event.data.result === undefined) reject(new Error("Claude host returned no result"));
         else resolve(event.data.result);
       };
       window.addEventListener("message", reply);
