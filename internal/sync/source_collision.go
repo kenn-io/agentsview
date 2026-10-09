@@ -53,23 +53,29 @@ func (e *Engine) sourceCollisionID(
 	}
 	var altID string
 	var moved bool
+	bestRank := 0
+	minted := applyIDPrefixToID(idPrefix, parser.AltSessionID(s.ID, lookupPath))
 	for _, record := range records {
-		if lookupPath != "" && record.FilePath == lookupPath {
-			if record.ID == fullID {
-				return s.ID, false, nil
-			}
+		rank := 0
+		switch {
+		case lookupPath != "" && record.FilePath == lookupPath:
+			rank = 3
+		case s.Agent == parser.AgentCursor && isS3SourcePath(lookupPath):
+			rank = e.cursorS3SourceMatch(record.FilePath, lookupPath)
+		case e.storedSourceLivesAt(ctx, provider, record.FilePath, lookupPath):
+			rank = 1
+		}
+		if rank == 0 && record.ID != fullID && record.ID == minted {
+			rank = 1
+		}
+		if rank > bestRank {
+			bestRank = rank
 			altID = s.ID + record.ID[len(fullID):]
-			break
+			moved = record.FilePath != "" && record.FilePath != lookupPath
 		}
 	}
-	if altID == "" {
-		if e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) {
-			return s.ID, false, nil
-		}
-		if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {
-			return s.ID, stored != lookupPath, nil
-		}
-		altID, moved = e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath, idPrefix)
+	if altID == s.ID {
+		return s.ID, moved, nil
 	}
 	if altID == "" && !admitted {
 		return s.ID, false, nil
@@ -180,23 +186,6 @@ func (e *Engine) sessionPathRecords(ctx context.Context, fullID string) ([]db.Se
 	return records, nil
 }
 
-// existingAltID returns the derived id already held by this file, stored or
-// deleted, including one the provider has since moved to lookupPath, so its
-// curation and any deletion carry over. The second result reports a changed
-// source path. It returns "" when no derived id belongs to this file.
-func (e *Engine) existingAltID(
-	ctx context.Context, provider parser.Provider, records []db.SessionPathRecord,
-	fullID, rawID, lookupPath, idPrefix string,
-) (string, bool) {
-	minted := applyIDPrefixToID(idPrefix, parser.AltSessionID(rawID, lookupPath))
-	for _, r := range records {
-		if r.ID != fullID && (r.ID == minted || e.storedSourceLivesAt(ctx, provider, r.FilePath, lookupPath)) {
-			return rawID + r.ID[len(fullID):], r.FilePath != "" && r.FilePath != lookupPath
-		}
-	}
-	return "", false
-}
-
 // claimSessionID records path as the owner of an id no stored session holds,
 // for this pass. It fails when another file claimed the id earlier in the pass.
 func (e *Engine) claimSessionID(
@@ -232,9 +221,7 @@ func (e *Engine) storedSourceLivesAt(
 	}
 	if isS3SourcePath(stored) || isS3SourcePath(path) {
 		if provider.Definition().Type == parser.AgentCursor {
-			roots := e.sources().agentDirs[parser.AgentCursor]
-			key := parser.CursorS3SourceKey(roots, stored)
-			return key != "" && key == parser.CursorS3SourceKey(roots, path)
+			return e.cursorS3SourceMatch(stored, path) > 0
 		}
 		return false
 	}
@@ -253,6 +240,19 @@ func (e *Engine) storedSourceLivesAt(
 		at = e.pathRewriter(at)
 	}
 	return live && at == path
+}
+
+func (e *Engine) cursorS3SourceMatch(stored, path string) int {
+	roots := e.sources().agentDirs[parser.AgentCursor]
+	key, root := parser.CursorS3SourceKey(roots, stored)
+	incomingKey, incomingRoot := parser.CursorS3SourceKey(roots, path)
+	if key == "" || key != incomingKey {
+		return 0
+	}
+	if root == incomingRoot {
+		return 2
+	}
+	return 1
 }
 
 // providerSourcePath asks the provider where it serves a stored source path

@@ -237,6 +237,31 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				verify()
 			}
 			if tt.restoreRoots {
+				oldPath := paths[1]
+				paths[1] = strings.TrimSuffix(oldPath, ".txt") + ".jsonl"
+				contents[paths[1]] = strings.ReplaceAll(contents[oldPath], "Updated B", "Format B")
+				ids[paths[1]] = ids[oldPath]
+				for _, uri := range []string{paths[1], oldPath, paths[1]} {
+					changed := sources[1]
+					changed.Key, changed.DisplayPath, changed.FingerprintKey = uri, uri, uri
+					remote := changed.Opaque.(parser.S3DiscoveredSource)
+					remote.URI, remote.Size = uri, int64(len(contents[uri]))
+					changed.Opaque = remote
+					provider.discovered = []parser.SourceRef{changed}
+					stats = engine.SyncAll(t.Context(), nil)
+					require.Zero(t, stats.Failed)
+				}
+				sources[1] = provider.discovered[0]
+				verify()
+				messages, err := database.GetAllMessages(t.Context(), ids[paths[1]])
+				require.NoError(t, err)
+				assert.Equal(t, "Format B", messages[1].Content)
+				stats = engine.ResyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+				require.Zero(t, stats.Failed)
+				verify()
+			}
+			if tt.restoreRoots {
 				require.NoError(t, database.DeleteSession(t.Context(), ids[paths[1]]))
 				provider.discovered = sources[1:]
 				_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
@@ -277,6 +302,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 		{"own parent late", [][]int{{0}, {2}, {1}}, false},
 		{"own parent missing", [][]int{{0}, {2}}, false},
 		{"parent root removed", [][]int{{0}, {1}, {2}}, false},
+		{"same-family roots restored", [][]int{{0}, {1}, {2}}, false},
 		{"new child after parent root removed", [][]int{{0}, {1}, {2}}, false},
 		{"children collide", [][]int{{0}, {1}, {3}, {2}}, true},
 	} {
@@ -290,6 +316,9 @@ func TestS3CursorCollidingParents(t *testing.T) {
 			}
 			if tt.name == "parent root removed" || tt.name == "new child after parent root removed" {
 				paths[2] = strings.Replace(paths[2], root, aliasRoot, 1)
+			}
+			if tt.name == "same-family roots restored" {
+				paths = []string{root + "/project/agent-transcripts/shared.txt", aliasRoot + "/project/agent-transcripts/shared.txt", aliasRoot + "/project/agent-transcripts/shared/subagents/child.txt"}
 			}
 			oldFetch := fetchS3Object
 			refreshed := false
@@ -337,13 +366,20 @@ func TestS3CursorCollidingParents(t *testing.T) {
 						childIDs[uri] = ids[0]
 					}
 					assert.Equal(t, childIDs[uri], ids[0])
-					if ids[0] != "host-a~cursor:child" {
-						assert.Equal(t, parser.AltSessionID("host-a~cursor:child", uri), ids[0])
+					baseID := "host-a~" + parser.CursorSessionID(uri)
+					if ids[0] != baseID {
+						assert.Equal(t, parser.AltSessionID(baseID, uri), ids[0])
 					}
 					child, err := database.GetSessionFull(t.Context(), ids[0])
 					require.NoError(t, err)
 					require.NotNil(t, child)
 					parentIndex := 1 - i
+					if tt.name == "same-family roots restored" {
+						parentIndex = 1
+						if strings.HasPrefix(uri, root+"/") {
+							parentIndex = 0
+						}
+					}
 					parents, err := database.ListSessionIDsByFilePath(t.Context(), paths[parentIndex], "cursor")
 					require.NoError(t, err)
 					if len(parents) == 0 || (tt.name == "new child after parent root removed" && !parentEvidenceRestored) {
@@ -357,7 +393,11 @@ func TestS3CursorCollidingParents(t *testing.T) {
 					messages, err := database.GetAllMessages(t.Context(), ids[0])
 					require.NoError(t, err)
 					require.Len(t, messages, 2)
-					assert.Equal(t, []string{"Hello A", "Hello B"}[parentIndex], messages[0].Content)
+					expected := []string{"Hello A", "Hello B"}[parentIndex]
+					if tt.name == "same-family roots restored" {
+						expected = "Hello A"
+					}
+					assert.Equal(t, expected, messages[0].Content)
 				}
 			}
 			for _, pass := range tt.passes {
@@ -369,6 +409,13 @@ func TestS3CursorCollidingParents(t *testing.T) {
 					if tt.name == "new child after parent root removed" && i == 2 {
 						engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {aliasRoot}}})
 					}
+					if tt.name == "same-family roots restored" {
+						selectedRoot := root
+						if i > 0 {
+							selectedRoot = aliasRoot
+						}
+						engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {selectedRoot}}})
+					}
 					provider.discovered = append(provider.discovered, source(paths[i]))
 				}
 				stats := engine.SyncAll(t.Context(), nil)
@@ -376,6 +423,22 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				verify()
 			}
 			require.Len(t, childIDs, len(paths)-2)
+			if tt.name == "same-family roots restored" {
+				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {aliasRoot, root}}})
+				_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
+					Agent: parser.AgentCursor, Path: paths[2], Machine: "host-a", SourceSize: int64(len(content)), SourceMtime: time.Unix(200, 0).UnixNano(), ForceParse: true,
+				}, childIDs[paths[2]])
+				require.NoError(t, err)
+				verify()
+				for i, parent := range paths[:2] {
+					uri := strings.TrimSuffix(parent, ".txt") + "/subagents/fresh-" + []string{"a", "b"}[i] + ".txt"
+					paths = append(paths, uri)
+					provider.discovered = []parser.SourceRef{source(uri)}
+					stats := engine.SyncAll(t.Context(), nil)
+					require.Zero(t, stats.Failed)
+					verify()
+				}
+			}
 			provider.discovered = []parser.SourceRef{source(paths[2])}
 			if tt.childrenCollide {
 				provider.discovered = append(provider.discovered, source(paths[3]))
@@ -385,6 +448,9 @@ func TestS3CursorCollidingParents(t *testing.T) {
 			require.Zero(t, stats.Failed)
 			verify()
 			if tt.name == "new child after parent root removed" {
+				oldPath := paths[2]
+				paths[2] = strings.TrimSuffix(oldPath, ".txt") + ".jsonl"
+				childIDs[paths[2]] = childIDs[oldPath]
 				for _, uri := range paths[2:] {
 					_, _, err := engine.processAndWriteSessionFile(t.Context(), parser.DiscoveredFile{
 						Agent: parser.AgentCursor, Path: uri, Machine: "host-a", SourceSize: int64(len(content)), SourceMtime: time.Unix(100, 0).UnixNano(), ForceParse: true,
@@ -433,6 +499,16 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				updated := source(paths[2])
 				remote := updated.Opaque.(parser.S3DiscoveredSource)
 				remote.MtimeNS = time.Unix(200, 0).UnixNano()
+				updated.Opaque = remote
+				provider.discovered = []parser.SourceRef{updated}
+				stats = engine.SyncAll(t.Context(), nil)
+				require.Zero(t, stats.Failed)
+				verifyRefresh()
+				oldPath := paths[2]
+				paths[2] = strings.TrimSuffix(oldPath, ".txt") + ".jsonl"
+				childIDs[paths[2]] = childIDs[oldPath]
+				updated.Key, updated.DisplayPath, updated.FingerprintKey = paths[2], paths[2], paths[2]
+				remote.URI = paths[2]
 				updated.Opaque = remote
 				provider.discovered = []parser.SourceRef{updated}
 				stats = engine.SyncAll(t.Context(), nil)

@@ -70,10 +70,12 @@ capability.
   the object. Roots without a machine boundary use the local machine label.
 - Archive ownership uses the exact object URI, with Cursor format and layout
   alternatives sharing the same machine, raw project, and session stem retaining
-  their saved ID and stars. Different projects keep separate conversations.
+  their saved ID and stars. Alternatives under the same canonical root take
+  precedence over other roots. Different projects keep separate conversations.
 - Cursor subagents link to their project's archived parent, including when
   the child arrives first or the parent's object changes format. Refreshing a
-  saved child after removing a source root keeps its resolved parent or unlinked state.
+  saved child after removing a source root keeps its resolved parent or unlinked state,
+  including format changes. Unlinked children prefer their own root's parent.
 - Validate IDs with the same rules the local provider already uses.
 - Do not invent a second discover wrapper that bypasses the scanner. Extra
   post-processing (prefer `.jsonl`, fold sidecars) belongs next to the

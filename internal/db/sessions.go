@@ -2345,7 +2345,7 @@ func repairCursorS3Parents(ctx context.Context, tx *sql.Tx, ids, roots []string)
 	defer rows.Close()
 	type family struct {
 		baseID   string
-		prefixes []string
+		prefixes []parser.CursorS3ChildPrefix
 	}
 	families := make(map[string]family)
 	for rows.Next() {
@@ -2370,7 +2370,6 @@ func repairCursorS3Parents(ctx context.Context, tx *sql.Tx, ids, roots []string)
 		if err != nil {
 			return 0, err
 		}
-		var parent any
 		var query strings.Builder
 		query.WriteString(cursorS3ParentRepairQuery)
 		var retainedParents []any
@@ -2378,18 +2377,30 @@ func repairCursorS3Parents(ctx context.Context, tx *sql.Tx, ids, roots []string)
 			if record.Excluded {
 				continue
 			}
-			sourceKey := parser.CursorS3SourceKey(roots, record.FilePath)
-			if sourceKey == key && parent == nil {
-				parent = record.ID
-			}
-			if sourceKey == "" && strings.HasPrefix(record.FilePath, "s3://") {
-				// Removing a root doesn't invalidate an archived relationship.
+			sourceKey, _ := parser.CursorS3SourceKey(roots, record.FilePath)
+			if sourceKey == key || (sourceKey == "" && strings.HasPrefix(record.FilePath, "s3://")) {
+				// Keep verified saved parentage across root and format changes.
 				query.WriteString(" AND parent_session_id IS NOT ?")
 				retainedParents = append(retainedParents, record.ID)
 			}
 		}
 		for _, prefix := range family.prefixes {
-			args := append([]any{parent, prefix, strings.TrimSuffix(prefix, "/") + "0", parent}, retainedParents...)
+			var parent any
+			bestRank := 0
+			for _, record := range records {
+				sourceKey, sourceRoot := parser.CursorS3SourceKey(roots, record.FilePath)
+				if record.Excluded || sourceKey != key {
+					continue
+				}
+				rank := 1
+				if sourceRoot == prefix.Root {
+					rank = 2
+				}
+				if rank > bestRank {
+					bestRank, parent = rank, record.ID
+				}
+			}
+			args := append([]any{parent, prefix.Path, strings.TrimSuffix(prefix.Path, "/") + "0", parent}, retainedParents...)
 			res, err := tx.ExecContext(ctx, query.String(), args...)
 			if err != nil {
 				return 0, err

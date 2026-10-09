@@ -18353,7 +18353,7 @@ func (e *Engine) reconcileProviderHistoryContext(
 			return ingest.HistoryResult{}, err
 		}
 		if stored != nil && stored.Agent == string(agent) && stored.RelationshipType == string(parser.RelSubagent) &&
-			stored.FilePath != nil && *stored.FilePath == path {
+			stored.FilePath != nil && (*stored.FilePath == path || e.cursorS3SourceMatch(*stored.FilePath, path) > 0) {
 			candidate.Session.ParentSessionID = stored.ParentSessionID
 		}
 	case parser.AgentOpenClaw:
