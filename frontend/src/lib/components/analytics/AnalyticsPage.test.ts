@@ -883,9 +883,9 @@ describe("AnalyticsPage refresh behavior", () => {
     document.querySelector<HTMLButtonElement>(".outcome-load-prs")!.click();
     await flushEffects();
     expect(statsRequests).toHaveLength(1);
-    const signal = statsRequests[0].signal;
+    const signal = statsRequests[0]!.signal;
     expect(signal).toBeDefined();
-    expect(statsRequests[0].url).toContain("include_github_outcomes=true");
+    expect(statsRequests[0]!.url).toContain("include_github_outcomes=true");
     const beforeRefresh = panels.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     await flushEffects();
@@ -905,7 +905,7 @@ describe("AnalyticsPage refresh behavior", () => {
         },
       }),
     );
-    await lookup.mock.results[0].value;
+    await lookup.mock.results[0]!.value;
     await flushEffects();
     expect(outcomeTotals.stats?.prs_opened).toBe(7);
     expect(
