@@ -46,9 +46,13 @@ func newChromeCommand() *cobra.Command {
 			return err
 		}
 		registered, _ := chromehost.RegisteredManifest(home)
-		folder, err := setupChromeReporting(cfg.DataDir, home, executable, assets, registerChromeHost, chromehost.RegistrationDataDir(registered), cmd.OutOrStdout())
+		previousDir := chromehost.RegistrationDataDir(registered)
+		folder, err := setupChrome(cfg.DataDir, home, executable, assets, registerChromeHost)
 		if err != nil {
 			return err
+		}
+		if previousDir != "" && previousDir != filepath.Dir(filepath.Dir(folder)) {
+			fmt.Fprintf(cmd.OutOrStdout(), "Replaced Chrome native host registration for data directory %s\n", previousDir)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Open chrome://extensions, enable Developer mode, and Load unpacked:\n%s\n", folder)
 		return nil
@@ -182,6 +186,7 @@ func setupChromeWithWriter(dataDir, home, executable string, assets fs.FS, regis
 	}
 	var files []installFile
 	folder := filepath.Join(dir, "extension")
+	extensionPaths := make(map[string]bool)
 	if err := fs.WalkDir(assets, "chrome-extension", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -191,6 +196,7 @@ func setupChromeWithWriter(dataDir, home, executable string, assets fs.FS, regis
 			relative = ""
 		}
 		target := filepath.Join(folder, relative)
+		extensionPaths[target] = true
 		if entry.IsDir() {
 			return nil
 		}
@@ -207,7 +213,7 @@ func setupChromeWithWriter(dataDir, home, executable string, assets fs.FS, regis
 	if err != nil {
 		return "", err
 	}
-	socket, err := chromeSocketPath(dataDir)
+	socket, err := chromehost.SocketPath(dataDir)
 	if err != nil {
 		return "", err
 	}
@@ -256,28 +262,22 @@ func setupChromeWithWriter(dataDir, home, executable string, assets fs.FS, regis
 			return "", err
 		}
 	}
+	if err := filepath.WalkDir(folder, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || extensionPaths[path] {
+			return err
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	}); err != nil {
+		return "", err
+	}
 	if err := register(path); err != nil {
 		return "", err
-	}
-	return folder, nil
-}
-
-func chromeConfigRoot(home string) string {
-	return chromehost.ConfigRoot(home)
-}
-
-func chromeSocketPath(dataDir string) (string, error) {
-	return chromehost.SocketPath(dataDir)
-}
-
-func setupChromeReporting(dataDir, home, executable string, assets fs.FS, register func(string) error, previousDir string, output io.Writer) (string, error) {
-	folder, err := setupChrome(dataDir, home, executable, assets, register)
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Dir(filepath.Dir(folder))
-	if previousDir != "" && previousDir != dir {
-		fmt.Fprintf(output, "Replaced Chrome native host registration for data directory %s\n", previousDir)
 	}
 	return folder, nil
 }

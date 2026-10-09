@@ -165,8 +165,16 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			}
 			return awaitClaudeAIResponse(ctx, answer)
 		}
+		var compatibilityErr error
 		if in.Browser == "chrome" {
-			fetch = s.chrome.fetch
+			fetch = func(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
+				response, err := s.chrome.fetch(ctx, path)
+				if errors.Is(err, chromehost.ErrCompatibility) && compatibilityErr == nil {
+					compatibilityErr = err
+					cancel()
+				}
+				return response, err
+			}
 		}
 		stats, err := importer.SyncClaudeAI(ctx, store, fetch, &importer.ImportCallbacks{
 			SerializeWrite: func(write func() error) error {
@@ -178,6 +186,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				}
 			},
 		}, s.cfg.InstallationID)
+		if compatibilityErr != nil {
+			err = compatibilityErr
+		}
 		if stats.Imported+stats.Updated > 0 {
 			if s.broadcaster != nil {
 				s.broadcaster.Emit("sessions")

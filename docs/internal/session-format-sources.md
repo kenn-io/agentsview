@@ -2797,7 +2797,9 @@ schemas keep their existing ordering behavior.
   write failures preserve the installed files. `TestChromeHostLocalOnly` refuses
   remote-auth, bind-all, and forwarded requests before Chrome fetches.
   `TestChromeHostIncompatibleReply` checks stale unversioned and newer replies
-  before status or body consumption without imports. Stale replies return the
+  during organization, list, and detail fetches before status or body
+  consumption without imports. Sync cancels on compatibility errors and
+  preserves their codes. Stale replies return the
   SSE code `claude_ai_chrome_host_update_required`; newer replies return
   `claude_ai_agentsview_update_required` and ask users to upgrade AgentsView.
   `TestClaudeAIChromeStatus` verifies installation, connection, and
@@ -2807,8 +2809,8 @@ schemas keep their existing ordering behavior.
   worker test `refuses before touching tabs` checks
   absent and unknown request revisions before tab access or fetch.
   `TestChromeSyncResults` checks the generated CLI operation with a base path,
-  Origin, bearer token, partial summaries, and the pre-stream 409 code
-  `claude_ai_chrome_host_required`.
+  Origin, bearer token, partial summaries, and pre-stream error messages,
+  including `claude_ai_chrome_host_required` and `claude_ai_sync_running`.
 - **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`,
   visible leaf, stored message count, and transcript revision in
   `provider_freshness`, keyed by `claude-ai` and session ID. Resync and

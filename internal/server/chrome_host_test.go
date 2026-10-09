@@ -170,9 +170,12 @@ func TestClaudeAIChromeStatus(t *testing.T) {
 					require.NoError(t, os.WriteFile(registered, body, 0o600))
 				}
 				if tt.name == "registration missing" {
+					require.NoError(t, os.Remove(registered))
 					registered = ""
 				}
-				srv.chrome.registeredManifest = func(string) (string, error) { return registered, nil }
+				if runtime.GOOS == "windows" {
+					srv.chrome.registeredManifest = func(string) (string, error) { return registered, nil }
+				}
 			}
 			if tt.connected {
 				socket, _ := testChromeConnection(t, srv)
@@ -231,7 +234,9 @@ func TestClaudeAIChromeStatusIncompleteInstall(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.MkdirAll(filepath.Dir(registered), 0o700))
 			require.NoError(t, os.WriteFile(registered, body, 0o600))
-			srv.chrome.registeredManifest = func(string) (string, error) { return registered, nil }
+			if runtime.GOOS == "windows" {
+				srv.chrome.registeredManifest = func(string) (string, error) { return registered, nil }
+			}
 			response := httptest.NewRecorder()
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/import/claude-ai/chrome", nil)
 			req.RemoteAddr = "127.0.0.1:1234"
@@ -330,31 +335,55 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 		{"newer extension", `{"version":2,"status":600,"body":"private"}`, "upgrade AgentsView, then Sync again", "claude_ai_agentsview_update_required"},
 	} {
 		t.Run(reply.name, func(t *testing.T) {
-			srv := testServer(t, 5*time.Second)
-			_, conn := testChromeConnection(t, srv)
-			response := httptest.NewRecorder()
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
-				req.RemoteAddr = "127.0.0.1:1234"
-				srv.mux.ServeHTTP(response, req)
-			}()
-			id, _ := readChromeRequest(t, conn)
-			payload := `{"id":"` + id + `",` + reply.body[1:]
-			require.NoError(t, chromehost.WriteFrame(conn, []byte(payload)))
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				require.FailNow(t, "incompatible host did not stop Sync")
+			for _, stage := range []string{"organizations", "list", "detail"} {
+				t.Run(stage, func(t *testing.T) {
+					srv := testServer(t, 5*time.Second)
+					_, conn := testChromeConnection(t, srv)
+					response := httptest.NewRecorder()
+					done := make(chan struct{})
+					go func() {
+						defer close(done)
+						req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
+						req.RemoteAddr = "127.0.0.1:1234"
+						srv.mux.ServeHTTP(response, req)
+					}()
+					for _, fixture := range []struct{ stage, file string }{
+						{"organizations", "organizations.json"},
+						{"list", "list_all.json"},
+					} {
+						if fixture.stage == stage {
+							break
+						}
+						id, path := readChromeRequest(t, conn)
+						if fixture.stage == "organizations" {
+							require.Equal(t, "/api/organizations", path)
+						} else {
+							require.Contains(t, path, "/chat_conversations_v2?")
+						}
+						body, err := os.ReadFile(filepath.Join("../importer/testdata/claude_ai_sync", fixture.file))
+						require.NoError(t, err)
+						writeChromeReply(t, conn, id, 200, string(body))
+					}
+					id, path := readChromeRequest(t, conn)
+					if stage == "detail" {
+						require.Contains(t, path, "/chat_conversations/22222222-2222-4222-8222-222222222222?")
+					}
+					payload := `{"id":"` + id + `",` + reply.body[1:]
+					require.NoError(t, chromehost.WriteFrame(conn, []byte(payload)))
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						require.FailNow(t, "incompatible host did not stop Sync")
+					}
+					assert.Contains(t, response.Body.String(), reply.message)
+					assert.Contains(t, response.Body.String(), `"code":"`+reply.code+`"`)
+					assert.NotContains(t, response.Body.String(), "event: done")
+					assert.NotContains(t, response.Body.String(), "private")
+					stats, err := srv.db.GetStats(t.Context(), false, false)
+					require.NoError(t, err)
+					assert.Zero(t, stats.SessionCount)
+				})
 			}
-			assert.Contains(t, response.Body.String(), reply.message)
-			assert.Contains(t, response.Body.String(), `"code":"`+reply.code+`"`)
-			assert.NotContains(t, response.Body.String(), "event: done")
-			assert.NotContains(t, response.Body.String(), "private")
-			stats, err := srv.db.GetStats(t.Context(), false, false)
-			require.NoError(t, err)
-			assert.Zero(t, stats.SessionCount)
 		})
 	}
 }
