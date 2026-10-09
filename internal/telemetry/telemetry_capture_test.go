@@ -57,19 +57,19 @@ func TestCoreActionAllowlist(t *testing.T) {
 		{EventScreenViewed, "screen", "settings", true},
 		{EventScreenViewed, "screen", "unknown", false},
 		{EventScreenViewed, "surface", "terminal", false},
-		{EventSessionEnded, "duration_bucket", "under_1m", true},
-		{EventSessionEnded, "duration_bucket", "1_to_5m", true},
-		{EventSessionEnded, "duration_bucket", "5_to_30m", true},
-		{EventSessionEnded, "duration_bucket", "over_30m", true},
-		{EventSessionEnded, "duration_bucket", "120s", false},
-		{EventSessionEnded, "surface", "web", true},
-		{EventSessionEnded, "surface", "terminal", false},
+		{EventVisitEnded, "duration_bucket", "under_1m", true},
+		{EventVisitEnded, "duration_bucket", "1_to_5m", true},
+		{EventVisitEnded, "duration_bucket", "5_to_30m", true},
+		{EventVisitEnded, "duration_bucket", "over_30m", true},
+		{EventVisitEnded, "duration_bucket", "120s", false},
+		{EventVisitEnded, "surface", "web", true},
+		{EventVisitEnded, "surface", "terminal", false},
 		// A later visit with the same bucket must reach the collector again.
-		{EventSessionEnded, "duration_bucket", "1_to_5m", true},
+		{EventVisitEnded, "duration_bucket", "1_to_5m", true},
 	}
 	for _, c := range cases {
 		properties := map[string]any{c.key: c.value, "query": "secret prompt"}
-		if c.event == EventSessionEnded {
+		if c.event == EventVisitEnded {
 			properties["duration_ms"] = 120000
 			if c.key == "duration_bucket" {
 				properties["surface"] = "web"
@@ -140,7 +140,7 @@ func TestCoreActionAllowlist(t *testing.T) {
 			continue
 		}
 		assert.NotContains(t, sent[i], "query", c.event)
-		if c.event == EventSessionEnded {
+		if c.event == EventVisitEnded {
 			assert.NotContains(t, sent[i], "duration_ms")
 			if c.key == "duration_bucket" {
 				assert.Equal(t, "web", sent[i]["surface"])

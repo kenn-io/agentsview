@@ -19,7 +19,7 @@ const (
 	postHogAPIKey         = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
 	EventDaemonActive     = "daemon_active"
 	EventAppOpened        = "app_opened"
-	EventSessionEnded     = "session_ended"
+	EventVisitEnded       = "visit_ended"
 	EventScreenViewed     = "screen_viewed"
 	EventSearchRun        = "search_run"
 	EventSessionViewed    = "session_viewed"
@@ -159,7 +159,7 @@ func allowedEventOptions(opts Options) []kittelemetry.Option {
 	return []kittelemetry.Option{
 		kittelemetry.WithAllowedEvent(EventDaemonActive),
 		kittelemetry.WithAllowedEvent(EventAppOpened),
-		kittelemetry.WithAllowedEvent(EventSessionEnded,
+		kittelemetry.WithAllowedEvent(EventVisitEnded,
 			kittelemetry.AllowProperty("surface", kittelemetry.AllowStringValues("web")),
 			kittelemetry.AllowProperty("duration_bucket", kittelemetry.AllowStringValues("under_1m", "1_to_5m", "5_to_30m", "over_30m"))),
 		kittelemetry.WithAllowedEvent(EventScreenViewed,

@@ -1895,13 +1895,13 @@ describe("App telemetry", () => {
     await flushEffects();
     now = 120_000;
     window.dispatchEvent(new Event("pagehide"));
-    expect(postedFor("session_ended")).toHaveLength(1);
+    expect(postedFor("visit_ended")).toHaveLength(1);
     window.dispatchEvent(new Event("pageshow"));
     await unmount(component);
     component = undefined;
     now = 240_000;
     window.dispatchEvent(new Event("pagehide"));
-    expect(postedFor("session_ended")).toHaveLength(1);
+    expect(postedFor("visit_ended")).toHaveLength(1);
   });
 
   it("reports authenticated route changes, the usage alias, and focus until unmount", async () => {

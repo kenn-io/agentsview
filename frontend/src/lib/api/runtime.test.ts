@@ -3,8 +3,9 @@ import { getApiV1Version } from "./generated/metadata/metadata.js";
 import {
   ApiError,
   orvalFetch,
+  getServerUrl,
   responseTimingOf,
-  SERVER_URL_KEY,
+  SERVER_URL_CHANGE_EVENT,
   setAuthToken,
   setServerUrl,
 } from "./runtime.js";
@@ -17,26 +18,17 @@ describe("orvalFetch", () => {
   });
 
   it("notifies this tab only when the selected server changes", () => {
-    const listener = vi.fn();
-    window.addEventListener("storage", listener);
+    const servers: string[] = [];
+    const listener = () => servers.push(getServerUrl());
+    window.addEventListener(SERVER_URL_CHANGE_EVENT, listener);
     try {
       setServerUrl("https://example.com/remote");
       setServerUrl("https://example.com/remote");
       setServerUrl("");
       setServerUrl("");
-      expect(
-        listener.mock.calls.map(([event]) => [
-          event.key,
-          event.oldValue,
-          event.newValue,
-          event.storageArea,
-        ]),
-      ).toEqual([
-        [SERVER_URL_KEY, null, "https://example.com/remote", localStorage],
-        [SERVER_URL_KEY, "https://example.com/remote", null, localStorage],
-      ]);
+      expect(servers).toEqual(["https://example.com/remote", ""]);
     } finally {
-      window.removeEventListener("storage", listener);
+      window.removeEventListener(SERVER_URL_CHANGE_EVENT, listener);
     }
   });
 

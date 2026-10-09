@@ -1,9 +1,22 @@
-import { getGeneratedBase, getServerUrl, SERVER_URL_KEY } from "../api/runtime.js";
+import {
+  getGeneratedBase,
+  getServerUrl,
+  SERVER_URL_CHANGE_EVENT,
+  SERVER_URL_KEY,
+} from "../api/runtime.js";
 import { reportTelemetry } from "./telemetry.js";
 
-const THIRTY_MINUTES = 1_800_000;
+const HIDDEN_VISIT_TIMEOUT_MS = 1_800_000;
 
-export function setupSessionEndedReporting(): () => void {
+function durationBucket(ms: number): string {
+  if (ms < 60_000) return "under_1m";
+  if (ms < 300_000) return "1_to_5m";
+  if (ms < 1_800_000) return "5_to_30m";
+  return "over_30m";
+}
+
+/** Reports visible visit time as a duration bucket when a visit ends; returns a cleanup. */
+export function setupVisitEndedReporting(): () => void {
   let visibleMs = 0;
   let started = document.hidden ? undefined : performance.now();
   let destination = started === undefined ? undefined : getGeneratedBase();
@@ -21,19 +34,10 @@ export function setupSessionEndedReporting(): () => void {
     clearTimeout(hiddenTimer);
     hiddenAt = undefined;
     pause();
-    const currentDestination = getGeneratedBase();
-    if (visibleMs > 0 && !invalid && destination === currentDestination) {
-      const bucket =
-        visibleMs < 60_000
-          ? "under_1m"
-          : visibleMs < 300_000
-            ? "1_to_5m"
-            : visibleMs <= THIRTY_MINUTES
-              ? "5_to_30m"
-              : "over_30m";
+    if (visibleMs > 0 && !invalid && destination === getGeneratedBase()) {
       reportTelemetry(
-        "session_ended",
-        { surface: "web", duration_bucket: bucket },
+        "visit_ended",
+        { surface: "web", duration_bucket: durationBucket(visibleMs) },
         { keepalive: true, signal: AbortSignal.timeout(10_000) },
       );
     }
@@ -43,7 +47,7 @@ export function setupSessionEndedReporting(): () => void {
   };
   const resume = () => {
     if (document.hidden) return;
-    if (hiddenAt !== undefined && Date.now() - hiddenAt >= THIRTY_MINUTES) end();
+    if (hiddenAt !== undefined && Date.now() - hiddenAt >= HIDDEN_VISIT_TIMEOUT_MS) end();
     clearTimeout(hiddenTimer);
     hiddenAt = undefined;
     if (started === undefined) {
@@ -54,20 +58,24 @@ export function setupSessionEndedReporting(): () => void {
       started = performance.now();
     }
   };
+  const serverChanged = (server: string) => {
+    if (destination !== undefined && server !== selection) invalid = true;
+  };
+  const localServerChange = () => serverChanged(getServerUrl());
   const storage = (event: StorageEvent) => {
     if (
-      destination !== undefined &&
       event.storageArea === localStorage &&
-      (event.key === SERVER_URL_KEY || event.key === null) &&
-      (event.newValue ?? "") !== selection
-    )
-      invalid = true;
+      (event.key === SERVER_URL_KEY || event.key === null)
+    ) {
+      serverChanged(event.newValue ?? "");
+    }
   };
   const visibility = () => {
     if (document.hidden) {
       pause();
+      clearTimeout(hiddenTimer);
       hiddenAt = Date.now();
-      hiddenTimer = setTimeout(end, THIRTY_MINUTES);
+      hiddenTimer = setTimeout(end, HIDDEN_VISIT_TIMEOUT_MS);
     } else {
       resume();
     }
@@ -76,11 +84,13 @@ export function setupSessionEndedReporting(): () => void {
   window.addEventListener("pagehide", end);
   window.addEventListener("pageshow", resume);
   window.addEventListener("storage", storage);
+  window.addEventListener(SERVER_URL_CHANGE_EVENT, localServerChange);
   return () => {
     clearTimeout(hiddenTimer);
     document.removeEventListener("visibilitychange", visibility);
     window.removeEventListener("pagehide", end);
     window.removeEventListener("pageshow", resume);
     window.removeEventListener("storage", storage);
+    window.removeEventListener(SERVER_URL_CHANGE_EVENT, localServerChange);
   };
 }

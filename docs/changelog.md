@@ -11,10 +11,12 @@ The latest published release is
 
 **New features**
 
-- Anonymous visit duration counts visible time across tab switches, including
-  idle visible time, and reports one time bucket when the page closes, reloads,
-  or stays hidden for 30 minutes. Visits that span a server change are
-  discarded. The existing telemetry opt-out turns it off.
+- Anonymous telemetry now shows how long the web UI stays open. When a visit
+  ends, the web UI reports a `visit_ended` event with one of four duration
+  buckets through the server. A visit counts visible time across tab switches
+  and ends when the page closes, reloads, or stays hidden for 30 minutes.
+  Visits that span a server change are discarded.
+  `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off.
 
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.

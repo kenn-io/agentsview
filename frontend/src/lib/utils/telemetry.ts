@@ -1,8 +1,8 @@
-import { orvalRequest, type ApiRequestOptions } from "../api/runtime.js";
+import { orvalRequest } from "../api/runtime.js";
 
 export type TelemetryEvent =
   | "app_opened"
-  | "session_ended"
+  | "visit_ended"
   | "screen_viewed"
   | "search_run"
   | "session_viewed"
@@ -14,7 +14,7 @@ export type TelemetryEvent =
 export function reportTelemetry(
   event: TelemetryEvent,
   properties?: Record<string, string>,
-  options?: ApiRequestOptions,
+  options?: Pick<RequestInit, "keepalive" | "signal">,
 ): void {
   orvalRequest("/api/v1/telemetry/events", {
     ...options,

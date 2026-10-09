@@ -90,7 +90,7 @@
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { setupAppOpenedReporting } from "./lib/utils/app-opened.js";
   import { reportTelemetry } from "./lib/utils/telemetry.js";
-  import { setupSessionEndedReporting } from "./lib/utils/session-ended.js";
+  import { setupVisitEndedReporting } from "./lib/utils/visit-ended.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
   import {
@@ -813,7 +813,7 @@
     sync.checkForUpdate();
     sync.startPolling();
     const appOpenedCleanup = setupAppOpenedReporting();
-    const sessionEndedCleanup = setupSessionEndedReporting();
+    const visitEndedCleanup = setupVisitEndedReporting();
     window.addEventListener("focus", reportScreenView);
 
     const healthCleanup = setupVisibilityHealthCheck({
@@ -827,7 +827,7 @@
     });
     return () => {
       appOpenedCleanup();
-      sessionEndedCleanup();
+      visitEndedCleanup();
       window.removeEventListener("focus", reportScreenView);
       healthCleanup();
       cleanup();
