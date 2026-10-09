@@ -140,7 +140,7 @@ func (db *DB) ClearSessionExternalParent(
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE sessions
 			SET parent_session_id = NULL,
-				relationship_type = '',
+				relationship_type = `+parentlessRelationshipSQL+`,
 				sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 			WHERE id = ?`, sessionID,
 		); err != nil {
@@ -247,7 +247,8 @@ func externalParentChainSQL(start, target string) string {
 // current evidence. A link is the effective parent
 // when the session has no transcript parent, no spawn edge, and the link's
 // chain does not lead back to the session; otherwise a session it once
-// applied to returns to no parent.
+// applied to returns to no parent, keeping the subagent classification a
+// parentless non-interactive worker has without one.
 // Launcher annotations advance mirror selection without changing Recall coverage.
 func applySessionExternalParentsSQL(linksSQL string) string {
 	// LIMIT -1 keeps the planner from flattening l into the update, which
@@ -256,7 +257,7 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	return `
 	UPDATE sessions
 	SET parent_session_id = IIF(l.cyclic, NULL, l.parent_session_id),
-		relationship_type = IIF(l.cyclic, '', 'subagent'),
+		relationship_type = IIF(l.cyclic, ` + parentlessRelationshipSQL + `, 'subagent'),
 		sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 	FROM (
 		SELECT ep.session_id, ep.parent_session_id,
@@ -269,7 +270,7 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	AND NOT ` + spawnEdgeExistsSQL("sessions") + `
 	AND (
 		COALESCE(sessions.parent_session_id, '') <> IIF(l.cyclic, '', l.parent_session_id)
-		OR COALESCE(sessions.relationship_type, '') <> IIF(l.cyclic, '', 'subagent')
+		OR COALESCE(sessions.relationship_type, '') <> IIF(l.cyclic, ` + parentlessRelationshipSQL + `, 'subagent')
 	)`
 }
 

@@ -12,6 +12,12 @@ const automationAuditPrefixBytes = AutomationEvidencePrefixBytes
 const ParentlessWorkerSQL = `session_kind = 'non-interactive'
  AND COALESCE(parent_session_id, '') = '' AND COALESCE(relationship_type, '') = ''`
 
+// parentlessRelationshipSQL is the relationship a sessions row takes when a
+// write leaves it without a parent: a non-interactive worker stays a
+// subagent, as parser.PromoteParentlessWorker classifies it, and any other
+// session has none.
+const parentlessRelationshipSQL = `IIF(sessions.session_kind = 'non-interactive', 'subagent', '')`
+
 func repairParentlessWorkers(ctx context.Context, w *writerHandle) error {
 	if _, err := w.Exec(ctx, `UPDATE sessions
 		SET relationship_type = 'subagent', local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')

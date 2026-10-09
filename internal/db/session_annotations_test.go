@@ -533,3 +533,58 @@ func TestAnnotationTreeSkipsHiddenAncestors(t *testing.T) {
 		})
 	}
 }
+
+func TestDetachedLauncherLinkKeepsWorkerClassification(t *testing.T) {
+	for _, tt := range []struct {
+		sessionKind string
+		want        string
+	}{
+		{sessionKind: "non-interactive", want: "subagent"},
+		{sessionKind: "", want: ""},
+	} {
+		t.Run("kind "+tt.sessionKind, func(t *testing.T) {
+			ctx := t.Context()
+			seed := func(t *testing.T, d *DB) {
+				t.Helper()
+				insertSession(t, d, "launcher", "proj")
+				insertSession(t, d, "worker", "proj", func(s *Session) {
+					s.SessionKind = tt.sessionKind
+				})
+				link, err := d.SetSessionExternalParent(ctx, "worker", "launcher")
+				require.NoError(t, err)
+				require.True(t, link.Applied)
+			}
+			assertDetached := func(t *testing.T, d *DB) {
+				t.Helper()
+				worker, err := d.GetSession(ctx, "worker")
+				require.NoError(t, err)
+				assert.Nil(t, worker.ParentSessionID)
+				assert.Equal(t, tt.want, worker.RelationshipType)
+			}
+
+			t.Run("cleared", func(t *testing.T) {
+				d := testDB(t)
+				seed(t, d)
+				_, err := d.ClearSessionExternalParent(ctx, "worker")
+				require.NoError(t, err)
+				assertDetached(t, d)
+			})
+
+			t.Run("suppressed by a cycle", func(t *testing.T) {
+				d := testDB(t)
+				seed(t, d)
+				// The launcher's transcript now names the worker as its own
+				// parent, so the launcher link would close a loop.
+				launcher := Session{
+					ID: "launcher", Project: "proj", Machine: defaultMachine,
+					Agent: defaultAgent, MessageCount: 1,
+					ParentSessionID: new("worker"), RelationshipType: "continuation",
+				}
+				_, err := d.getWriter().ExecContext(ctx, upsertSessionBaseSQL, upsertSessionArgs(launcher)...)
+				require.NoError(t, err)
+				require.NoError(t, d.LinkSubagentSessions())
+				assertDetached(t, d)
+			})
+		})
+	}
+}
