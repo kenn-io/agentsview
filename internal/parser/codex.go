@@ -577,14 +577,14 @@ func (b *codexSessionBuilder) handleHistoryMutation(
 	}
 	if version := payload.Get("version"); version.Exists() &&
 		(version.Type != gjson.Number || version.Num != 1) {
-		return fmt.Errorf("%w: version %s", errTraeXHistoryMutationUnsupported, version.Raw)
+		return fmt.Errorf("%w: version is %s", errTraeXHistoryMutationUnsupported, strings.ToLower(version.Type.String()))
 	}
-	if operation := payload.Get("operation").Str; operation != "append" {
-		return fmt.Errorf("%w: operation %q", errTraeXHistoryMutationUnsupported, operation)
+	if operation := payload.Get("operation"); operation.Str != "append" {
+		return fmt.Errorf("%w: operation is %s", errTraeXHistoryMutationUnsupported, strings.ToLower(operation.Type.String()))
 	}
 	items := payload.Get("items")
 	if items.Exists() && !items.IsArray() {
-		return fmt.Errorf("%w: items %s", errTraeXHistoryMutationUnsupported, items.Raw)
+		return fmt.Errorf("%w: items is %s", errTraeXHistoryMutationUnsupported, strings.ToLower(items.Type.String()))
 	}
 	for _, item := range items.Array() {
 		if b.incremental && b.codexResponseItemNeedsFullParse(item) {

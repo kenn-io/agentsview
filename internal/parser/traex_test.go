@@ -527,13 +527,13 @@ func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
 	}
 }
 
-func TestTraeXProviderHistoryMutationRefusal(t *testing.T) {
+func TestTraeXProviderHistoryMutationValidation(t *testing.T) {
 	const uuid = "019fcf70-1111-7000-8000-000000000005"
 	tests := []struct {
 		name    string
 		payload string
 		wantErr string
-		path    string
+		mode    string
 	}{
 		{"missing version", `{"operation":"append","items":[]}`, "", "full"},
 		{"missing items", `{"operation":"append"}`, "", "full"},
@@ -558,11 +558,11 @@ func TestTraeXProviderHistoryMutationRefusal(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 			appendCodexProviderContent(t, path, `{"type":"history_mutation","payload":`+tt.payload+"}\n")
-			if tt.path == "full" {
+			if tt.mode == "full" {
 				_, err = provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			} else {
 				offset := int64(len(prefix))
-				if tt.path == "seed" {
+				if tt.mode == "seed" {
 					info, statErr := os.Stat(path)
 					require.NoError(t, statErr)
 					offset = info.Size()

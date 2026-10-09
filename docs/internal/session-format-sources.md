@@ -880,10 +880,7 @@ fixtures retain this field; missing identities remain source-local.
   when present, so equal counts for different responses remain distinct.
   `cache_creation_input_tokens` is unread on purpose; the only capture has 0
   and no source shows whether it sits inside `input_tokens`.
-  Reverified 2026-10-09 against the shared normalizer and parser fixtures:
-  usage records require a numeric `input_tokens`, `cached_input_tokens`,
-  `output_tokens`, or `cache_write_input_tokens` counter. Empty usage objects
-  leave the response available for a later valid record.
+  Empty usage objects leave the response available for a later valid record.
 - **Agentsview:** `internal/parser/traex.go` relabels the shared Codex parser
   (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
   `traex:` ID namespace, and `internal/sync` gates the format-shaped branches
