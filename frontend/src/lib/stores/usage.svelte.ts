@@ -637,7 +637,7 @@ class UsageStore {
     void this.fetchAll({ preserveTimeRange: true, refreshTimeSeriesContext: false });
   }
 
-  clearTimeRange() {
+  clearTimeRange(refresh = true) {
     if (this.selectedTimeRange === null) return;
     this.selectedTimeRange = null;
     if (this.timeSeriesContextSummary) {
@@ -645,7 +645,7 @@ class UsageStore {
       this.timeSeriesContextSummary = null;
     }
     this.isTimeRangeSummaryProvisional = false;
-    void this.fetchAll();
+    if (refresh) void this.fetchAll();
   }
 
   setPairwiseSide(side: UsagePairwiseSide, updates: Partial<UsagePairwiseSideSelection>): void {

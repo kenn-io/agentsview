@@ -188,7 +188,7 @@ describe("UsagePage refresh behavior", () => {
     expect(usage.hasActiveFilters).toBe(true);
   });
 
-  it("refreshes once when Clear all clears shared and usage filters", async () => {
+  it("refreshes once when Clear all clears shared filters, usage filters and the brush", async () => {
     const fetchAll = vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     router.route = "usage";
@@ -197,11 +197,13 @@ describe("UsagePage refresh behavior", () => {
 
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
+    usage.setTimeRange("2024-06-01", "2024-06-02");
     fetchAll.mockClear();
     document.querySelector<HTMLButtonElement>(".clear-all")!.click();
     await flushEffects();
 
     expect(usage.hasActiveFilters).toBe(false);
+    expect(usage.selectedTimeRange).toBeNull();
     expect(fetchAll).toHaveBeenCalledTimes(1);
     expect(fetchAll).toHaveBeenCalledWith({ preserveTimeRange: true });
   });

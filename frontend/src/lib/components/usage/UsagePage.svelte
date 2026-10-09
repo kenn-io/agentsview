@@ -532,7 +532,12 @@
   </div>
 
   <!-- Clear all also resets session filters, whose change effect does the one refresh. -->
-  <SessionActiveFilters onClearProjects={() => usage.clearFilters(false)} />
+  <SessionActiveFilters
+    onClearProjects={() => {
+      usage.clearTimeRange(false);
+      usage.clearFilters(false);
+    }}
+  />
 
   <div
     class="usage-content"
