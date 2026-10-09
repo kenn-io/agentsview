@@ -12,7 +12,7 @@ import (
 )
 
 func TestKitSqlitevecRoundTrip(t *testing.T) {
-	sqlitevec.Register()
+	registerVecOnce.Do(registerVec)
 	db, err := sql.Open(vectorDriverName, vectorDSN(filepath.Join(t.TempDir(), "v.db"), false))
 	require.NoError(t, err)
 	defer db.Close()

@@ -6,13 +6,17 @@ import (
 	"net/url"
 
 	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite/vec"
 )
 
+// registerVec is a no-op: importing modernc.org/sqlite/vec registers the
+// extension during package initialization.
+func registerVec() {}
+
 // vectorDriverName selects the database/sql driver vectors.db opens with.
-// The cgo sqlite-vec bindings do not build on Windows, so kit's sqlitevec
-// registers the pure-Go modernc.org/sqlite/vec extension there (via
-// sqlite3_auto_extension at package init) and expects databases opened with
-// modernc's "sqlite" driver; sqlitevec.Register is a no-op in this build.
+// The cgo sqlite-vec bindings do not build on Windows, so this build imports
+// the pure-Go modernc.org/sqlite/vec extension, which registers itself at
+// package init, and opens databases with modernc's "sqlite" driver.
 // The main archive keeps its own driver — only vectors.db switches.
 const vectorDriverName = "sqlite"
 
