@@ -1812,10 +1812,13 @@ to this, so `over_30m` can undercount.
 
 The web UI also reports `screen_viewed` with `surface: web`. The server counts
 each screen once per installation per UTC day, across tabs and server restarts.
-It stores the installation ID, date, and that day's screen names in
-`telemetry-screen-views` beside the installation identity. Invalid screen names
-are dropped.
-A claim that cannot be saved lasts only until the daemon exits.
+It stores versioned JSON claims in `telemetry-screen-views` beside the
+installation identity and converts older plain-text claims when telemetry is
+enabled. Malformed plain-text claims reset to an empty state. Requests must use
+`application/json` with exactly one JSON value; a missing or unknown `screen`
+returns 400. The server reserves each claim before enqueueing its event. If
+reservation storage fails, the request returns 500 without enqueueing; a later
+visit retries.
 
 The web UI reports five core actions the same way. Each carries one property,
 and the server drops any value outside its fixed list. A search counts once per

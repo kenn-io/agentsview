@@ -1,48 +1,54 @@
 package config
 
 import (
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 )
 
 const telemetryScreensFilename = "telemetry-screen-views"
 
-// ClaimScreenView serializes enqueueing and persists only accepted events.
-func (c *Config) ClaimScreenView(screen string, send func() error) (day string, claimed bool, err error) {
-	sendAttempted := false
-	err = c.withConfigLock(func() error {
-		day = time.Now().UTC().Format(time.DateOnly)
-		data, err := os.ReadFile(filepath.Join(c.DataDir, telemetryScreensFilename))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		fields := strings.Fields(string(data))
-		if len(fields) < 2 || fields[0] != c.InstallationID || fields[1] != day {
-			fields = []string{c.InstallationID, day}
-		}
-		if slices.Contains(fields[2:], screen) {
+func (c *Config) TelemetryScreenClaimsPath() string {
+	return filepath.Join(c.DataDir, telemetryScreensFilename)
+}
+
+// MigrateTelemetryScreenClaims converts legacy claims before kit owns the file.
+func (c *Config) MigrateTelemetryScreenClaims() error {
+	return c.withConfigLock(func() error {
+		path := c.TelemetryScreenClaimsPath()
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		sendAttempted = true
-		if err := send(); err != nil {
+		if err != nil {
 			return err
 		}
-		claimed = true
-		if err := c.writeInstallationFile(telemetryScreensFilename, strings.Join(append(fields, screen), " ")); err != nil {
+		if strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
+			return nil
+		}
+		fields := strings.Fields(string(data))
+		state := struct {
+			Version int                 `json:"version"`
+			Days    map[string][]string `json:"days"`
+		}{Version: 1, Days: make(map[string][]string)}
+		if len(fields) >= 2 {
+			if _, err := time.Parse(time.DateOnly, fields[1]); err == nil {
+				for _, screen := range fields[2:] {
+					key, err := json.Marshal([]string{fields[0], "screen_viewed", screen})
+					if err != nil {
+						return err
+					}
+					state.Days[string(key)] = []string{fields[1]}
+				}
+			}
+		}
+		encoded, err := json.Marshal(state)
+		if err != nil {
 			return err
 		}
-		return nil
+		return c.writeInstallationFile(telemetryScreensFilename, string(encoded))
 	})
-	if err != nil && !sendAttempted {
-		day = time.Now().UTC().Format(time.DateOnly)
-		if sendErr := send(); sendErr != nil {
-			return day, false, sendErr
-		}
-		return day, true, err
-	}
-	return day, claimed, err
 }
