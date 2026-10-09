@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -241,7 +241,7 @@ func TestResyncBuildThenSwapMatchesResyncAll(t *testing.T) {
 
 func TestResyncRecomputesStaleSourceMissingSignals(t *testing.T) {
 	for _, version := range []int{0, db.CurrentQualitySignalVersion - 1} {
-		t.Run(fmt.Sprint(version), func(t *testing.T) {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
 			e, database, root := newResyncSplitEngine(t)
 			for _, id := range []string{"orphan", "keep1"} {
 				require.NoError(t, database.ReplaceSessionMessages(t.Context(), id, []db.Message{
