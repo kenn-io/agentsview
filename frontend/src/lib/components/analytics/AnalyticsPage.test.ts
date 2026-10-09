@@ -164,18 +164,22 @@ describe("AnalyticsPage outcome window", () => {
     expect(document.querySelector(".outcome-load-prs")).not.toBeNull();
   });
 
-  it.each([false, true])(
-    "refreshes only Git totals, respecting unsupported filters (%s)",
-    async (unsupported) => {
+  it.each([
+    { unsupported: false, requestedPRs: false, gitLoads: 1 },
+    { unsupported: true, requestedPRs: false, gitLoads: 0 },
+    { unsupported: false, requestedPRs: true, gitLoads: 0 },
+  ])(
+    "refresh reloads only unrequested Git totals: %o",
+    async ({ unsupported, requestedPRs, gitLoads }) => {
       const load = await start();
       const loadPRs = vi.spyOn(outcomeTotals, "loadWithPullRequests").mockResolvedValue();
       if (unsupported) analytics.model = "demo-model";
       await flushEffects();
       load.mockClear();
-      outcomeTotals.includePullRequests = true;
+      outcomeTotals.includePullRequests = requestedPRs;
       document.querySelector<HTMLButtonElement>('button[aria-label="Refresh analytics"]')!.click();
       await flushEffects();
-      expect(load).toHaveBeenCalledTimes(unsupported ? 0 : 1);
+      expect(load).toHaveBeenCalledTimes(gitLoads);
       expect(loadPRs).not.toHaveBeenCalled();
     },
   );
@@ -832,7 +836,7 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(noStateBlock).toContain("state = rollingPanelDate(analytics.windowDays);");
     expect(noStateBlock).toContain("changed = applyAnalyticsPanelDate(state);");
   });
-  it("keeps a pending GitHub lookup through automatic refresh", async () => {
+  it("keeps requested GitHub totals through automatic refresh", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     vi.stubGlobal(
       "ResizeObserver",
@@ -907,12 +911,17 @@ describe("AnalyticsPage refresh behavior", () => {
     );
     await lookup.mock.results[0]!.value;
     await flushEffects();
-    expect(outcomeTotals.stats?.prs_opened).toBe(7);
-    expect(
+    const showsOpenedPRs = () =>
       [...document.querySelectorAll(".outcome-card")].some(
         (card) =>
           card.textContent?.includes("7") && card.textContent?.includes("Pull requests opened"),
-      ),
-    ).toBe(true);
+      );
+    expect(outcomeTotals.stats?.prs_opened).toBe(7);
+    expect(showsOpenedPRs()).toBe(true);
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    await flushEffects();
+    expect(panels).toHaveBeenCalledTimes(beforeRefresh + 2);
+    expect(statsRequests).toHaveLength(1);
+    expect(showsOpenedPRs()).toBe(true);
   });
 });

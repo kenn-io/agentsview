@@ -248,7 +248,10 @@
   async function refreshAnalytics(): Promise<void> {
     cancelInitialLoad();
     const refresh = analytics.fetchAll();
-    const outcomes = outcomeWindow && !outcomeFiltersUnsupported && !(outcomeTotals.loading && outcomeTotals.includePullRequests)
+    // A pull-request lookup can take minutes, so refresh keeps its totals;
+    // changing the window or filters reloads them through the outcome effect.
+    const outcomes = outcomeWindow && !outcomeFiltersUnsupported &&
+      !outcomeTotals.includePullRequests
       ? outcomeTotals.load(outcomeWindow)
       : undefined;
     if (!router.isRootPath && !suppressSessionDateRefresh) {
