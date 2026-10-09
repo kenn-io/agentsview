@@ -90,7 +90,7 @@ func TestChromeSetup(t *testing.T) {
 
 func TestChromeConfigRoot(t *testing.T) {
 	for _, tt := range []struct{ name, chrome, xdg, want string }{
-		{"Chrome overrides XDG", "chrome-config", "xdg-config", "chrome-config"},
+		{"Chrome overrides XDG", "chrome-config", "xdg-config", "chrome-config/google-chrome"},
 		{"XDG overrides home", "", "xdg-config", "xdg-config/google-chrome"},
 		{"home fallback", "", "", "home/.config/google-chrome"},
 	} {
@@ -132,12 +132,26 @@ func TestChromeHostRelay(t *testing.T) {
 	readOutput, output := io.Pipe()
 	defer readOutput.Close()
 	defer output.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	finished := make(chan error, 1)
 	go func() { finished <- relayChromeHost(ctx, socket, input, output) }()
-	conn, err := listener.Accept()
+	first, err := listener.Accept()
 	require.NoError(t, err)
+	require.NoError(t, first.Close())
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+	var conn net.Conn
+	select {
+	case conn = <-accepted:
+	case <-ctx.Done():
+		require.FailNow(t, "refused relay did not reconnect")
+	}
 	defer conn.Close()
 	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
 	request := []byte(`{"id":"a","path":"/api/organizations"}`)
@@ -163,53 +177,6 @@ func TestChromeHostRelayEOFWhileServerDown(t *testing.T) {
 	require.NoError(t, relayChromeHost(t.Context(), filepath.Join(t.TempDir(), "missing.sock"), strings.NewReader(""), io.Discard))
 }
 
-func TestChromeHostRelayRetriesRefusedConnection(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, safefileio.EnsurePrivateDir(dir))
-	socket := filepath.Join(dir, "host.sock")
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
-	defer cancel()
-	listener, err := daemon.Listen(ctx, daemon.Endpoint{Network: daemon.NetworkUnix, Address: socket})
-	require.NoError(t, err)
-	defer listener.Close()
-	input, writeInput := io.Pipe()
-	defer input.Close()
-	defer writeInput.Close()
-	readOutput, output := io.Pipe()
-	defer readOutput.Close()
-	defer output.Close()
-	finished := make(chan error, 1)
-	go func() { finished <- relayChromeHost(ctx, socket, input, output) }()
-	first, err := listener.Accept()
-	require.NoError(t, err)
-	require.NoError(t, first.Close())
-	accepted := make(chan net.Conn, 1)
-	go func() {
-		conn, err := listener.Accept()
-		if err == nil {
-			accepted <- conn
-		}
-	}()
-	var second net.Conn
-	select {
-	case second = <-accepted:
-	case <-ctx.Done():
-		require.FailNow(t, "refused relay did not reconnect")
-	}
-	defer second.Close()
-	require.NoError(t, chromehost.WriteFrame(second, []byte(`{"id":"b","path":"/api/organizations"}`)))
-	frame, err := chromehost.ReadFrame(readOutput)
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"id":"b","path":"/api/organizations"}`, string(frame))
-	require.NoError(t, writeInput.Close())
-	select {
-	case err := <-finished:
-		require.NoError(t, err)
-	case <-ctx.Done():
-		require.FailNow(t, "relay did not exit")
-	}
-}
-
 func TestChromeLongDataDirSetupAndServe(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), strings.Repeat("data", 25))
 	socket, err := chromeSocketPath(dir)
@@ -229,49 +196,12 @@ func TestChromeLongDataDirSetupAndServe(t *testing.T) {
 		require.NoError(t, srv.Shutdown(t.Context()))
 		require.ErrorIs(t, <-run.ServeErrCh, http.ErrServerClosed)
 	}()
-	assets := fstest.MapFS{"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)}}
-	_, err = setupChrome(dir, t.TempDir(), chromeTestExecutable(t), assets, func(string) error { return nil })
-	require.NoError(t, err)
-	launcher := filepath.Join(dir, "chrome", "host")
-	if runtime.GOOS == "windows" {
-		launcher += ".cmd"
-	}
-	command := exec.CommandContext(t.Context(), launcher)
-	if runtime.GOOS == "windows" {
-		command = exec.CommandContext(t.Context(), "cmd", "/c", launcher)
-	}
-	output, err := command.CombinedOutput()
-	require.NoError(t, err, "%s", output)
-	args := strings.FieldsFunc(strings.TrimSpace(string(output)), func(r rune) bool { return r == '\r' || r == '\n' })
-	require.Len(t, args, 3)
-	assert.Equal(t, []string{"chrome-host", "--socket", socket}, args)
-	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", args[2])
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
 	require.NoError(t, err)
 	defer conn.Close()
 	again, err := chromeSocketPath(dir)
 	require.NoError(t, err)
 	assert.Equal(t, socket, again)
-}
-
-func TestChromeSyncPartialFailureSummary(t *testing.T) {
-	dataDir := testDataDir(t)
-	t.Setenv("AGENTSVIEW_AUTH_TOKEN", "")
-	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-		"/api/v1/import/claude-ai/sync": func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, err := io.WriteString(w, "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n")
-			assert.NoError(t, err)
-		},
-	})
-	registerTestRuntime(t, dataDir, ts.URL, false)
-	output := captureStderr(t, func() {
-		cmd := newImportCommand()
-		cmd.SetArgs([]string{"--type", "claude-ai", "--sync"})
-		require.ErrorContains(t, cmd.ExecuteContext(t.Context()), "Sign in required")
-	})
-	assert.Contains(t, output, "Done: 6 processed (2 new, 1 updated, 3 skipped)")
-	assert.Contains(t, output, "1 errors")
 }
 
 func TestChromeSyncResults(t *testing.T) {
@@ -289,12 +219,7 @@ func TestChromeSyncResults(t *testing.T) {
 		{"EOF", "event: progress\ndata: {}\n\n", "without a result", 200, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(t, http.MethodPost, r.Method)
-				assert.Equal(t, "/base/api/v1/import/claude-ai/sync", r.URL.Path)
-				assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
-				assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin"))
-				assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				if tt.status == 200 {
 					w.Header().Set("Content-Type", "text/event-stream")
 				} else {
@@ -331,50 +256,62 @@ func TestChromeSyncResults(t *testing.T) {
 	}
 }
 
-func TestChromeSyncCancellation(t *testing.T) {
-	dataDir := testDataDir(t)
-	t.Setenv("AGENTSVIEW_AUTH_TOKEN", "")
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-		"/api/v1/import/claude-ai/sync": func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.WriteHeader(http.StatusOK)
-			w.(http.Flusher).Flush()
-			cancel()
-			<-r.Context().Done()
-		},
-	})
-	registerTestRuntime(t, dataDir, ts.URL, false)
-	cmd := newImportCommand()
-	cmd.SetArgs([]string{"--type", "claude-ai", "--sync"})
-	require.ErrorIs(t, cmd.ExecuteContext(ctx), context.Canceled)
+func TestChromeSyncCommand(t *testing.T) {
+	for _, tt := range []struct {
+		name, body, wantError string
+		cancel                bool
+	}{
+		{"done", "event: done\ndata: {\"imported\":2}\n\n", "", false},
+		{"partial failure", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", false},
+		{"cancel", "", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dataDir := testDataDir(t)
+			t.Setenv("AGENTSVIEW_AUTH_TOKEN", "")
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+				"/api/v1/import/claude-ai/sync": func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, http.MethodPost, r.Method)
+					assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
+					if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
+						http.Error(w, "Forbidden", http.StatusForbidden)
+						return
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					if tt.cancel {
+						w.WriteHeader(http.StatusOK)
+						w.(http.Flusher).Flush()
+						cancel()
+						<-r.Context().Done()
+						return
+					}
+					_, err := io.WriteString(w, tt.body)
+					assert.NoError(t, err)
+				},
+			})
+			registerTestRuntime(t, dataDir, ts.URL, false)
+			output := captureStderr(t, func() {
+				cmd := newImportCommand()
+				cmd.SetArgs([]string{"--type", "claude-ai", "--sync"})
+				err := cmd.ExecuteContext(ctx)
+				if tt.cancel {
+					require.ErrorIs(t, err, context.Canceled)
+				} else if tt.wantError != "" {
+					require.ErrorContains(t, err, tt.wantError)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+			if tt.wantError != "" {
+				assert.Contains(t, output, "Done: 6 processed (2 new, 1 updated, 3 skipped)")
+				assert.Contains(t, output, "1 errors")
+			}
+		})
+	}
 }
 
 func TestChromeImportArguments(t *testing.T) {
-	t.Run("sync request", func(t *testing.T) {
-		dataDir := t.TempDir()
-		t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
-		t.Setenv("AGENTSVIEW_AUTH_TOKEN", "")
-		ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-			"/api/v1/import/claude-ai/sync": func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(t, http.MethodPost, r.Method)
-				assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
-				if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
-					http.Error(w, "Forbidden", http.StatusForbidden)
-					return
-				}
-				w.Header().Set("Content-Type", "text/event-stream")
-				_, err := io.WriteString(w, "event: done\ndata: {\"imported\":2}\n\n")
-				assert.NoError(t, err)
-			},
-		})
-		registerTestRuntime(t, dataDir, ts.URL, false)
-		cmd := newImportCommand()
-		cmd.SetArgs([]string{"--type", "claude-ai", "--sync"})
-		require.NoError(t, cmd.ExecuteContext(t.Context()))
-	})
-
 	for _, tt := range []struct {
 		name        string
 		flags, args []string

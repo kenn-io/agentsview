@@ -88,7 +88,7 @@ host registration for your platform:
 - Windows: `<dataDir>/chrome/io.kenn.agentsview.json` and the registry key
   `HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\io.kenn.agentsview`.
 - macOS: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/io.kenn.agentsview.json`.
-- Linux: `<configRoot>/NativeMessagingHosts/io.kenn.agentsview.json`. Chrome uses `CHROME_CONFIG_HOME` first, then `$XDG_CONFIG_HOME/google-chrome`, then `~/.config/google-chrome`.
+- Linux: `<configRoot>/NativeMessagingHosts/io.kenn.agentsview.json`. Chrome uses `$CHROME_CONFIG_HOME/google-chrome` first, then `$XDG_CONFIG_HOME/google-chrome`, then `~/.config/google-chrome`.
 
 If Sync reports a disconnected host after setup, open Chrome and enable the extension at `chrome://extensions`. If it still fails, check the server startup error log for a Chrome host endpoint bind failure.
 

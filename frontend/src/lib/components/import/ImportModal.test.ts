@@ -40,35 +40,14 @@ it("shows Chrome Sync without a page host or version flag", async () => {
   expect(syncClaudeAI).toHaveBeenCalledWith(undefined, expect.objectContaining({ onProgress: expect.any(Function) }), expect.any(AbortSignal));
 });
 
-it("shows desktop email-code instructions with a Chrome route for Google sign-in", () => {
-  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  expect(screen.getByText("Sign in with an email code, close the window, then Sync. For Google sign-in, run agentsview chrome setup and Sync from the web UI.")).toBeTruthy();
-  expect(screen.queryByText(/browser host/)).toBeNull();
-});
-
-it("shows the sign-in error message", async () => {
-  host.connect.mockRejectedValue(new Error("Could not open the Claude.ai sign-in window."));
-  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
-  await waitFor(() => expect(screen.getByText("Could not open the Claude.ai sign-in window.")).toBeTruthy());
-});
-
-it("shows a desktop sign-in error rejected as a string", async () => {
-  host.connect.mockRejectedValue("Could not open the Claude.ai sign-in window.");
-  render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
-  await waitFor(() => expect(screen.getByText("Could not open the Claude.ai sign-in window.")).toBeTruthy());
-});
-
 it.each([
-  ["claude_ai_auth_required", "Sign in to Claude.ai, then Sync again", "Connectez-vous à Claude.ai, puis relancez la synchronisation."],
-])("shows localized recovery for %s", async (code, message, expected) => {
-  setLocale("fr", { reload: false });
-  syncClaudeAI.mockRejectedValue(new ApiError(0, message, code));
+  new Error("Could not open the Claude.ai sign-in window."),
+  "Could not open the Claude.ai sign-in window.",
+])("shows the sign-in error message for %s", async (error) => {
+  host.connect.mockRejectedValue(error);
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
-  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
-  await waitFor(() => expect(screen.getByText(expected)).toBeTruthy());
-  expect(screen.queryByText(message)).toBeNull();
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
+  await waitFor(() => expect(screen.getByText("Could not open the Claude.ai sign-in window.")).toBeTruthy());
 });
 
 it("offers sign in and sync without a sign-in probe", async () => {
@@ -81,7 +60,6 @@ it("offers sign in and sync without a sign-in probe", async () => {
   const onimported = vi.fn();
   render(ImportModal, { open: true, onclose: vi.fn(), onimported });
   expect(screen.getByText(m.import_claude_help())).toBeTruthy();
-  expect(screen.getByText(/email code/)).toBeTruthy();
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
   expect(host.connect).toHaveBeenCalledOnce();
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
@@ -128,6 +106,7 @@ it("hides browser sync controls for a read-only archive", () => {
 });
 
 it.each([
+  ["claude_ai_auth_required", 0, "Sign in to Claude.ai, then Sync again", "Connectez-vous à Claude.ai, puis relancez la synchronisation."],
   ["claude_ai_chrome_host_required", 409, "Run agentsview chrome setup and keep Chrome open, then Sync again", "Exécutez agentsview chrome setup et gardez Chrome ouvert, puis relancez la synchronisation."],
   ["claude_ai_chrome_host_update_required", 0, "Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again", "Exécutez agentsview chrome setup, rechargez l’extension dans chrome://extensions, puis relancez la synchronisation."],
 ])("recovers from %s without a reload", async (code, status, message, expected) => {
@@ -139,6 +118,7 @@ it.each([
   render(ImportModal, { open: true, onclose: vi.fn(), onimported });
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
   await waitFor(() => expect(screen.getByText(expected)).toBeTruthy());
+  expect(screen.queryByText(message)).toBeNull();
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
   await waitFor(() => expect(screen.getByText(m.import_processed({ count: 1 }))).toBeTruthy());
   expect(syncClaudeAI).toHaveBeenCalledTimes(2);

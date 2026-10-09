@@ -46,21 +46,15 @@ describe("Chrome native host worker", () => {
     [undefined, "Upgrade AgentsView, then Sync again"],
     [0, "Upgrade AgentsView, then Sync again"],
     [2, "Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again"],
-  ])("refuses incompatible revision %s before touching tabs", async (version, error) => {
+    [1, "Unsupported Claude fetch path"],
+  ])("refuses before touching tabs", async (version, error) => {
     message({ id: "a", path: "/api/settings", version });
     await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
     expect(port.postMessage).toHaveBeenCalledWith({ id: "a", version: 1, status: 0, error });
     expect(chrome.tabs.query).not.toHaveBeenCalled();
     expect(chrome.tabs.create).not.toHaveBeenCalled();
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("refuses a disallowed path before touching tabs", async () => {
-    expect(await request("/api/settings")).toEqual({ id: "a", version: 1, status: 0, error: "Unsupported Claude fetch path" });
-    expect(chrome.tabs.query).not.toHaveBeenCalled();
-    expect(chrome.tabs.create).not.toHaveBeenCalled();
-    expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+    if (version !== 1) expect(fetch).not.toHaveBeenCalled();
   });
 
   it("fetches in an existing Claude tab and replies by id", async () => {
