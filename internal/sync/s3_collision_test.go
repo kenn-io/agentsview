@@ -20,6 +20,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 		reverse, separate bool
 		root              string
 		preCollapsed      bool
+		overlapping       bool
 	}{
 		{name: "together"}, {name: "together reversed", reverse: true},
 		{name: "separate", separate: true}, {name: "separate reversed", reverse: true, separate: true},
@@ -27,6 +28,8 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 		{name: "no machine boundary separate", root: "s3://bucket/archive", separate: true},
 		{name: "bucket is not a machine", root: "s3://bucket/raw/cursor"},
 		{name: "pre-collapsed cached source", preCollapsed: true},
+		{name: "overlapping roots", overlapping: true, separate: true},
+		{name: "overlapping roots reversed", overlapping: true, separate: true, reverse: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root, machine, storedMachine := tt.root, "", "local"
@@ -77,8 +80,12 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				sources[0], sources[1] = sources[1], sources[0]
 			}
 			provider.discovered = sources
+			roots := []string{root}
+			if tt.overlapping {
+				roots = append(roots, root+"/project-b/agent-transcripts")
+			}
 			engine := NewEngine(t.Context(), database, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}}, Machine: "local",
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: roots}, Machine: "local",
 				DisableFilesystemProjectDiscovery: true, ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
 			})
 			t.Cleanup(engine.Close)
@@ -194,6 +201,12 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 			require.Zero(t, stats.Failed)
 			verify()
+			page, err := database.ListSessions(t.Context(), db.SessionFilter{})
+			require.NoError(t, err)
+			assert.Len(t, page.Sessions, 2, "a layout move must preserve exactly two conversations")
+			movedStars, err := database.ListStarredSessionIDs(t.Context())
+			require.NoError(t, err)
+			assert.ElementsMatch(t, []string{ids[paths[0]], ids[paths[1]]}, movedStars)
 			// Rebuild discovers the alternate first and must keep both saved IDs.
 			provider.discovered = sources
 			if ids[sources[0].DisplayPath] == baseID {

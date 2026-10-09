@@ -214,15 +214,9 @@ func (e *Engine) storedSourceLivesAt(
 	}
 	if isS3SourcePath(stored) || isS3SourcePath(path) {
 		if provider.Definition().Type == parser.AgentCursor && isS3SourcePath(stored) && isS3SourcePath(path) {
-			var storedKey, pathKey string
-			for _, root := range e.sources().agentDirs[parser.AgentCursor] {
-				if key := parser.CursorS3SourceKey(root, stored); key != "" {
-					storedKey = key
-				}
-				if key := parser.CursorS3SourceKey(root, path); key != "" {
-					pathKey = key
-				}
-			}
+			roots := e.sources().agentDirs[parser.AgentCursor]
+			storedKey := parser.CursorS3SourceKey(roots, stored)
+			pathKey := parser.CursorS3SourceKey(roots, path)
 			return storedKey != "" && storedKey == pathKey
 		}
 		return false
