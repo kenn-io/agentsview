@@ -528,7 +528,6 @@ describe("AttributionPanel job groups", () => {
       (button) => button.textContent?.trim() === "← All projects",
     )!;
     back.click();
-    usage.backToProjects();
     await tick();
     expect(usage.zoomedProject).toBeNull();
     expect(document.querySelectorAll(".list-row")).toHaveLength(2);

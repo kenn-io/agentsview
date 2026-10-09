@@ -79,9 +79,13 @@ export function mergeUsageColorSummary(
     for (const summary of summaries) {
       const incoming = usageChartColorMaps(summary, palette);
       for (const by of ["project", "model", "agent"] as const) {
-        const ids = [...new Set([...maps[by].keys(), ...incoming[by].keys()])];
+        const preserved = maps[by];
+        const ids = [...new Set([...preserved.keys(), ...incoming[by].keys()])];
         const assigned = orderedChartSeriesColorMap(ids, palette);
-        maps[by] = new Map(ids.map((id) => [id, maps[by].get(id) ?? assigned.get(id)!]));
+        // New IDs take colors no preserved ID holds, so a palette family switch cannot duplicate one.
+        const held = new Set(preserved.values());
+        const free = [...new Set([...assigned].filter(([id]) => id !== "" && id !== "__other__").map(([, color]) => color))].filter((color) => !held.has(color));
+        maps[by] = new Map(ids.map((id) => [id, preserved.get(id) ?? (id === "" || id === "__other__" ? undefined : free.shift()) ?? assigned.get(id)!]));
       }
     }
     colors[palette] = maps;

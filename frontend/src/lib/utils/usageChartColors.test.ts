@@ -1,21 +1,20 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { UsageSummaryResponse } from "../api/generated/index";
 import { testMoney } from "../test/money.js";
-import { usageChartColorMaps } from "./usageChartColors.js";
+import { mergeUsageColorSummary, usageChartColorMaps } from "./usageChartColors.js";
 
-function tenModelSummary(): UsageSummaryResponse {
-  const models = [
-    "model-alpha",
-    "model-bravo",
-    "model-charlie",
-    "model-delta",
-    "model-echo",
-    "model-foxtrot",
-    "model-golf",
-    "model-hotel",
-    "model-india",
-    "model-zulu",
-  ];
+function tenModelSummary(models = [
+  "model-alpha",
+  "model-bravo",
+  "model-charlie",
+  "model-delta",
+  "model-echo",
+  "model-foxtrot",
+  "model-golf",
+  "model-hotel",
+  "model-india",
+  "model-zulu",
+]): UsageSummaryResponse {
   const modelTotals = models.map((model, index) => ({
     model,
     inputTokens: 10,
@@ -81,5 +80,16 @@ describe("usageChartColorMaps", () => {
     expect(colors.get("model-zulu")).toBe("#1f77b4");
     expect(colors.get("model-india")).toBe("#aec7e8");
     expect(colors.get("model-alpha")).toBe("#c5b0d5");
+  });
+
+  it("keeps merged Matplotlib colors distinct when new models switch the palette family", () => {
+    const models = Array.from({ length: 11 }, (_, index) => `model-${index}`);
+    const nine = mergeUsageColorSummary(null, [tenModelSummary(models.slice(0, 9))]);
+    const eleven = mergeUsageColorSummary(nine, [tenModelSummary(models)]);
+    const before = nine.colors!.matplotlib.model;
+    const after = eleven.colors!.matplotlib.model;
+
+    expect(models.slice(0, 9).map((model) => after.get(model))).toEqual(models.slice(0, 9).map((model) => before.get(model)));
+    expect(new Set(after.values()).size).toBe(11);
   });
 });
