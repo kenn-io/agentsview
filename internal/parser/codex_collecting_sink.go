@@ -293,9 +293,6 @@ func applyCodexTokenUsage(msg *ParsedMessage, raw string) {
 
 	uncached := max(totalInput-cached, 0)
 	writeTokens := usage.Get("cache_write_input_tokens")
-	if !writeTokens.Exists() {
-		writeTokens = usage.Get("cache_creation_input_tokens")
-	}
 	cacheWrite := min(max(int(writeTokens.Int()), 0), uncached)
 	uncached -= cacheWrite
 

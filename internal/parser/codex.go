@@ -579,7 +579,33 @@ func (b *codexSessionBuilder) handleHistoryMutation(
 	if operation := payload.Get("operation").Str; operation != "append" {
 		return fmt.Errorf("unsupported TraeX history mutation operation %q", operation)
 	}
-	for _, item := range payload.Get("items").Array() {
+	items := payload.Get("items").Array()
+	hasUserMessage := false
+	for _, item := range items {
+		if item.Get("type").Str == "message" && item.Get("role").Str == "user" {
+			hasUserMessage = true
+			break
+		}
+	}
+	if !hasUserMessage {
+		var prompts []gjson.Result
+		for _, completion := range payload.Get("display_completions").Array() {
+			if completion.Get("item.type").Str != "UserMessage" {
+				continue
+			}
+			if thread := completion.Get("thread_id").Str; thread != "" && thread != b.sessionID {
+				continue
+			}
+			if turn, mutationTurn := completion.Get("turn_id").Str, payload.Get("turn_id").Str; turn != "" && mutationTurn != "" && turn != mutationTurn {
+				continue
+			}
+			if content := completion.Get("item.content"); content.Exists() {
+				prompts = append(prompts, gjson.Parse(`{"type":"message","role":"user","content":`+content.Raw+`}`))
+			}
+		}
+		items = append(prompts, items...)
+	}
+	for _, item := range items {
 		if b.incremental && b.codexResponseItemNeedsFullParse(item) {
 			return errCodexIncrementalNeedsFullParse
 		}
@@ -594,9 +620,13 @@ func (b *codexSessionBuilder) handleTokenUsageRecord(
 	if b.agent != AgentTraeX {
 		return
 	}
-	raw := payload.Get("usage").Raw
-	if raw == "" {
+	usage := payload.Get("usage")
+	if !usage.IsObject() {
 		return
+	}
+	raw := usage.Raw
+	if creation := usage.Get("cache_creation_input_tokens"); creation.Exists() && !usage.Get("cache_write_input_tokens").Exists() {
+		raw = `{"cache_write_input_tokens":` + creation.Raw + `,` + raw[1:]
 	}
 	b.applyTokenUsage(raw, payload.Get("response_id").Str)
 }
@@ -2637,6 +2667,7 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 		NewCodexCollectingSink(startOrdinal),
 	)
 	b.incremental = true
+	b.sessionID = extractUUIDFromRollout(filepath.Base(path))
 	b.codexCursorState = seed.codexCursorState
 	b.overflowPendingCalls = seed.overflowPendingCalls
 	if committedUsageTarget != nil {
