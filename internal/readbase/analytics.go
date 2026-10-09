@@ -533,6 +533,7 @@ func (s *Analytics) GetAnalyticsSignalSessions(
 func (s *Analytics) analyticsSessions(ctx context.Context, f db.AnalyticsFilter) ([]AnalyticsSession, error) {
 	return s.analyticsSessionsFiltered(ctx, f, true, true, "", nil)
 }
+
 func (s *Analytics) analyticsSessionsFiltered(ctx context.Context, f db.AnalyticsFilter, includeDate, includeTime bool, extraPred string, extraArgs []any) ([]AnalyticsSession, error) {
 	if includeTime && f.HasTimeFilter() && strings.TrimSpace(f.Model) != "" {
 		return s.analyticsSessionsModelTimeFiltered(ctx, f, includeDate)
@@ -890,7 +891,7 @@ func (s *Analytics) GetAnalyticsTopSessions(
 		row.DurationMin = db.Round1(row.DurationMin)
 		row.ActiveDurationMin = db.Round1(row.ActiveDurationMin)
 		out.Sessions = append(out.Sessions, row)
-		if len(out.Sessions) >= 10 {
+		if pairedSet != nil && len(out.Sessions) >= 10 {
 			break
 		}
 	}
@@ -943,13 +944,13 @@ func (s *Analytics) GetTrendsTerms(
 	defer rows.Close()
 	type trendRow struct {
 		sessionID string
-		Role      string
+		role      string
 		isSystem  bool
 		model     string
 		content   string
 		msgTS     any
-		StartedAt any
-		CreatedAt any
+		startedAt any
+		createdAt any
 	}
 	processRow := func(sessionID, content string, local time.Time) {
 		if !allowedSessions[sessionID] {
@@ -967,10 +968,10 @@ func (s *Analytics) GetTrendsTerms(
 	for rows.Next() {
 		var row trendRow
 		var ordinal int
-		if err := rows.Scan(&row.sessionID, &ordinal, &row.Role, &row.isSystem, &row.model, &row.content, &row.msgTS, &row.StartedAt, &row.CreatedAt); err != nil {
+		if err := rows.Scan(&row.sessionID, &ordinal, &row.role, &row.isSystem, &row.model, &row.content, &row.msgTS, &row.startedAt, &row.createdAt); err != nil {
 			return db.TrendsTermsResponse{}, err
 		}
-		local, has := trendLocal(row.msgTS, row.StartedAt, row.CreatedAt)
+		local, has := trendLocal(row.msgTS, row.startedAt, row.createdAt)
 		if !modelFiltering {
 			if has && flt.MatchesDayHour(local, true) {
 				processRow(row.sessionID, row.content, local)
@@ -980,7 +981,7 @@ func (s *Analytics) GetTrendsTerms(
 		if err := reducer.Push(db.MessageInput{
 			SessionID:    row.sessionID,
 			Ordinal:      ordinal,
-			Role:         row.Role,
+			Role:         row.role,
 			Model:        row.model,
 			IsSystem:     row.isSystem,
 			LocalTime:    local,
@@ -1078,4 +1079,33 @@ func signalRowsFromSessions(
 		})
 	}
 	return rows
+}
+
+// ScanAnalyticsSummary reads and closes an aggregate result after its first Next.
+func ScanAnalyticsSummary(rows *sql.Rows, resp db.AnalyticsSummary, backend string) (db.AnalyticsSummary, error) {
+	if err := rows.Scan(
+		&resp.TotalSessions,
+		&resp.TotalMessages,
+		&resp.TotalOutputTokens,
+		&resp.TokenReportingSessions,
+		&resp.ActiveProjects,
+		&resp.ActiveDays,
+		&resp.AvgMessages,
+		&resp.MedianMessages,
+		&resp.P90Messages,
+		&resp.MostActive,
+		&resp.Concentration,
+	); err != nil {
+		rows.Close()
+		return db.AnalyticsSummary{}, fmt.Errorf("scanning %s analytics summary: %w", backend, err)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return db.AnalyticsSummary{}, fmt.Errorf("iterating %s analytics summary: %w", backend, err)
+	}
+	if err := rows.Close(); err != nil {
+		return db.AnalyticsSummary{}, fmt.Errorf("closing %s analytics summary rows: %w", backend, err)
+	}
+
+	return resp, nil
 }

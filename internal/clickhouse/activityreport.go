@@ -8,13 +8,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"go.kenn.io/agentsview/internal/readbase"
 	"iter"
 	"maps"
 	"slices"
 	"sort"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/readbase"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"

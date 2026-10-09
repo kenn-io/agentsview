@@ -16,9 +16,11 @@ type analyticsSQL struct{ store *Store }
 func (s *Store) analytics() *readbase.Analytics {
 	return readbase.NewAnalytics(analyticsSQL{s}, "clickhouse")
 }
+
 func (s analyticsSQL) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return s.store.queryContext(ctx, query, args...)
 }
+
 func (s analyticsSQL) Sessions(ctx context.Context, f db.AnalyticsFilter, includeDate, includeTime bool, extraPred string, extraArgs []any) ([]readbase.AnalyticsSession, error) {
 	return s.store.loadAnalyticsSessions(ctx, f, includeDate, includeTime, extraPred, extraArgs)
 }
@@ -34,29 +36,8 @@ func (s analyticsSQL) Summary(ctx context.Context, f db.AnalyticsFilter) (db.Ana
 	if !rows.Next() {
 		return resp, false, rows.Err()
 	}
-	if err := rows.Scan(
-		&resp.TotalSessions,
-		&resp.TotalMessages,
-		&resp.TotalOutputTokens,
-		&resp.TokenReportingSessions,
-		&resp.ActiveProjects,
-		&resp.ActiveDays,
-		&resp.AvgMessages,
-		&resp.MedianMessages,
-		&resp.P90Messages,
-		&resp.MostActive,
-		&resp.Concentration,
-	); err != nil {
-		return db.AnalyticsSummary{}, false, fmt.Errorf("scanning clickhouse analytics summary: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		return db.AnalyticsSummary{}, false, fmt.Errorf("iterating clickhouse analytics summary: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return db.AnalyticsSummary{}, false, fmt.Errorf("closing clickhouse analytics summary rows: %w", err)
-	}
-
-	return resp, true, nil
+	resp, err = readbase.ScanAnalyticsSummary(rows, resp, "clickhouse")
+	return resp, true, err
 }
 
 func (s analyticsSQL) SummarySQL(f db.AnalyticsFilter) (string, []any) {

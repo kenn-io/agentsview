@@ -2,9 +2,10 @@ package clickhouse
 
 import (
 	"database/sql"
-	"go.kenn.io/agentsview/internal/readbase"
 	"slices"
 	"testing"
+
+	"go.kenn.io/agentsview/internal/readbase"
 
 	"github.com/stretchr/testify/require"
 )

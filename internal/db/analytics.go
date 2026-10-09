@@ -3234,22 +3234,13 @@ func (db *DB) GetAnalyticsSkills(
 
 // --- Velocity ---
 
-// velocityMsg holds per-message data needed for velocity
-// calculations.
-type velocityMsg struct {
-	role          string
-	ts            time.Time
-	valid         bool
-	contentLength int
-}
-
 // queryVelocityMsgs fetches messages for a chunk of session IDs
 // and appends them to sessionMsgs, keyed by session ID.
 func (db *DB) queryVelocityMsgs(
 	ctx context.Context,
 	chunk []string,
 	loc *time.Location,
-	sessionMsgs map[string][]velocityMsg,
+	sessionMsgs map[string][]TimingMessage,
 ) error {
 	ph, args := inPlaceholders(chunk)
 	// COALESCE the nullable timestamp column to '' so a NULL (only present
@@ -3286,9 +3277,9 @@ func (db *DB) queryVelocityMsgs(
 		}
 		t, ok := LocalTime(ts, loc)
 		sessionMsgs[sid] = append(sessionMsgs[sid],
-			velocityMsg{
-				role: role, ts: t, valid: ok,
-				contentLength: cl,
+			TimingMessage{
+				Role: role, Time: t, Valid: ok,
+				ContentLength: cl,
 			})
 	}
 	return rows.Err()
@@ -3298,8 +3289,8 @@ func (db *DB) getAnalyticsVelocityMessages(
 	ctx context.Context,
 	sessionIDs []string,
 	f AnalyticsFilter,
-) (map[string][]velocityMsg, error) {
-	sessionMsgs := make(map[string][]velocityMsg, len(sessionIDs))
+) (map[string][]TimingMessage, error) {
+	sessionMsgs := make(map[string][]TimingMessage, len(sessionIDs))
 	if len(sessionIDs) == 0 {
 		return sessionMsgs, nil
 	}
@@ -3319,15 +3310,7 @@ func (db *DB) getAnalyticsVelocityMessages(
 	if scope == nil {
 		return sessionMsgs, nil
 	}
-	for sessionID, rows := range scope.TimingBySession() {
-		for _, row := range rows {
-			sessionMsgs[sessionID] = append(sessionMsgs[sessionID], velocityMsg{
-				role: row.Role, ts: row.Time, valid: row.Valid,
-				contentLength: row.ContentLength,
-			})
-		}
-	}
-	return sessionMsgs, nil
+	return scope.TimingBySession(), nil
 }
 
 // Percentiles holds p50 and p90 values.
@@ -3399,7 +3382,7 @@ func populateVelocityAccumulator(
 		return accum, nil
 	}
 
-	sessionMsgs := make(map[string][]velocityMsg)
+	sessionMsgs := make(map[string][]TimingMessage)
 	if err := queryChunked(sessionIDs,
 		func(chunk []string) error {
 			return db.queryVelocityMsgs(
@@ -3464,7 +3447,7 @@ func populateVelocityAccumulator(
 // itself bumps each accumulator's sessions counter.
 func processSessionVelocity(
 	accums []*velocityAccumulator,
-	msgs []velocityMsg,
+	msgs []TimingMessage,
 	toolCount int,
 ) {
 	const maxCycleSec = 1800.0
@@ -3480,11 +3463,11 @@ func processSessionVelocity(
 	for i := 1; i < len(msgs); i++ {
 		prev := msgs[i-1]
 		cur := msgs[i]
-		if !prev.valid || !cur.valid {
+		if !prev.Valid || !cur.Valid {
 			continue
 		}
-		if prev.role == "user" && cur.role == "assistant" {
-			delta := cur.ts.Sub(prev.ts).Seconds()
+		if prev.Role == "user" && cur.Role == "assistant" {
+			delta := cur.Time.Sub(prev.Time).Seconds()
 			if delta > 0 && delta <= maxCycleSec {
 				for _, a := range accums {
 					a.turnCycles = append(a.turnCycles, delta)
@@ -3495,10 +3478,10 @@ func processSessionVelocity(
 
 	// First response: first user → first assistant after it.
 	// Scan by ordinal (conversation order), not timestamp.
-	var firstUser, firstAsst *velocityMsg
+	var firstUser, firstAsst *TimingMessage
 	firstUserIdx := -1
 	for i := range msgs {
-		if msgs[i].role == "user" && msgs[i].valid {
+		if msgs[i].Role == "user" && msgs[i].Valid {
 			firstUser = &msgs[i]
 			firstUserIdx = i
 			break
@@ -3506,14 +3489,14 @@ func processSessionVelocity(
 	}
 	if firstUserIdx >= 0 {
 		for i := firstUserIdx + 1; i < len(msgs); i++ {
-			if msgs[i].role == "assistant" && msgs[i].valid {
+			if msgs[i].Role == "assistant" && msgs[i].Valid {
 				firstAsst = &msgs[i]
 				break
 			}
 		}
 	}
 	if firstUser != nil && firstAsst != nil {
-		delta := firstAsst.ts.Sub(firstUser.ts).Seconds()
+		delta := firstAsst.Time.Sub(firstUser.Time).Seconds()
 		// Clamp negative deltas to 0: ordinal order is
 		// authoritative, so a negative delta means clock skew,
 		// not a missing response.
@@ -3529,11 +3512,11 @@ func processSessionVelocity(
 	activeSec := 0.0
 	asstChars := 0
 	for i, m := range msgs {
-		if m.role == "assistant" {
-			asstChars += m.contentLength
+		if m.Role == "assistant" {
+			asstChars += m.ContentLength
 		}
-		if i > 0 && msgs[i-1].valid && m.valid {
-			gap := m.ts.Sub(msgs[i-1].ts).Seconds()
+		if i > 0 && msgs[i-1].Valid && m.Valid {
+			gap := m.Time.Sub(msgs[i-1].Time).Seconds()
 			if gap > 0 {
 				if gap > maxGapSec {
 					gap = maxGapSec
@@ -3636,11 +3619,7 @@ func (db *DB) GetAnalyticsVelocity(
 	}
 	defer sessRows.Close()
 
-	type sessInfo struct {
-		agent string
-		mc    int
-	}
-	sessionMap := make(map[string]sessInfo)
+	sessionMap := make(map[string]VelocitySession)
 	var sessionIDs []string
 
 	for sessRows.Next() {
@@ -3659,7 +3638,7 @@ func (db *DB) GetAnalyticsVelocity(
 		if timeIDs != nil && !timeIDs[id] {
 			continue
 		}
-		sessionMap[id] = sessInfo{agent: agent, mc: mc}
+		sessionMap[id] = VelocitySession{Agent: agent, MessageCount: mc}
 		sessionIDs = append(sessionIDs, id)
 	}
 	if err := sessRows.Err(); err != nil {
@@ -3682,7 +3661,7 @@ func (db *DB) GetAnalyticsVelocity(
 		}
 		for _, sid := range sessionIDs {
 			info := sessionMap[sid]
-			info.mc = stats[sid].Messages
+			info.MessageCount = stats[sid].Messages
 			sessionMap[sid] = info
 		}
 	}
@@ -3739,6 +3718,17 @@ func (db *DB) GetAnalyticsVelocity(
 		}
 	}
 
+	return BuildVelocityResponse(sessionIDs, sessionMap, sessionMsgs, toolCountMap), nil
+}
+
+// VelocitySession supplies the metadata used for velocity breakdowns.
+type VelocitySession struct {
+	Agent        string
+	MessageCount int
+}
+
+// BuildVelocityResponse aggregates timing and tool counts by agent and complexity.
+func BuildVelocityResponse(sessionIDs []string, sessionMap map[string]VelocitySession, sessionMsgs map[string][]TimingMessage, toolCountMap map[string]int) VelocityResponse {
 	// Process per-session metrics
 	overall := &velocityAccumulator{}
 	byAgent := make(map[string]*velocityAccumulator)
@@ -3751,8 +3741,8 @@ func (db *DB) GetAnalyticsVelocity(
 			continue
 		}
 
-		agentKey := info.agent
-		compKey := ComplexityBucket(info.mc)
+		agentKey := info.Agent
+		compKey := ComplexityBucket(info.MessageCount)
 
 		if byAgent[agentKey] == nil {
 			byAgent[agentKey] = &velocityAccumulator{}
@@ -3819,7 +3809,7 @@ func (db *DB) GetAnalyticsVelocity(
 			})
 	}
 
-	return resp, nil
+	return resp
 }
 
 // --- Signals ---

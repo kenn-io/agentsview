@@ -5,10 +5,11 @@ package duckdb
 import (
 	"context"
 	"fmt"
-	"go.kenn.io/agentsview/internal/readbase"
 	"strings"
 	"testing"
 	"time"
+
+	"go.kenn.io/agentsview/internal/readbase"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

@@ -3,8 +3,9 @@ package duckdb
 import (
 	"context"
 	"fmt"
-	"go.kenn.io/agentsview/internal/readbase"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/readbase"
 
 	"go.kenn.io/agentsview/internal/db"
 )

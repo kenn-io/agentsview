@@ -3,6 +3,7 @@ package readbase
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"slices"
 	"testing"
@@ -79,4 +80,64 @@ func TestAnalyticsPropagatesBackendErrors(t *testing.T) {
 	_, err = analytics.GetAnalyticsHeatmap(t.Context(), db.AnalyticsFilter{}, "messages")
 	assert.ErrorIs(t, err, want)
 	assert.EqualError(t, err, "querying fixture analytics heatmap: read failed")
+}
+
+var errTopSessionsTerminal = errors.New("terminal read failure")
+
+type topSessionsDriver struct{}
+
+func (topSessionsDriver) Open(string) (driver.Conn, error) { return topSessionsDriver{}, nil }
+func (topSessionsDriver) Connect(context.Context) (driver.Conn, error) {
+	return topSessionsDriver{}, nil
+}
+func (topSessionsDriver) Driver() driver.Driver { return topSessionsDriver{} }
+func (topSessionsDriver) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("unexpected prepare")
+}
+
+func (topSessionsDriver) Begin() (driver.Tx, error) { return nil, errors.New("unexpected transaction") }
+func (topSessionsDriver) Close() error              { return nil }
+func (topSessionsDriver) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	return &topSessionsRows{}, nil
+}
+
+type topSessionsRows struct{ count int }
+
+func (*topSessionsRows) Columns() []string { return []string{"id"} }
+func (*topSessionsRows) Close() error      { return nil }
+func (r *topSessionsRows) Next(values []driver.Value) error {
+	if r.count == 10 {
+		return errTopSessionsTerminal
+	}
+	r.count++
+	values[0] = "session"
+	return nil
+}
+
+type topSessionsBackend struct {
+	AnalyticsBackend
+	pool *sql.DB
+}
+
+func (b topSessionsBackend) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return b.pool.QueryContext(ctx, query, args...)
+}
+
+func (topSessionsBackend) TopSessionsSQL(db.AnalyticsFilter, string, bool, bool) (string, []any) {
+	return "SELECT id FROM sessions LIMIT 10", nil
+}
+
+func (topSessionsBackend) ScanTopSession(rows *sql.Rows) (db.TopSession, error) {
+	var row db.TopSession
+	err := rows.Scan(&row.ID)
+	return row, err
+}
+
+func TestAnalyticsTopSessionsReturnsTerminalErrorAfterTenRows(t *testing.T) {
+	pool := sql.OpenDB(topSessionsDriver{})
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	analytics := NewAnalytics(topSessionsBackend{pool: pool}, "fixture")
+	_, err := analytics.GetAnalyticsTopSessions(t.Context(), db.AnalyticsFilter{}, "messages")
+	require.ErrorIs(t, err, errTopSessionsTerminal)
+	assert.EqualError(t, err, "iterating fixture analytics top sessions: terminal read failure")
 }
