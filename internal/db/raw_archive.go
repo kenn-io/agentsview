@@ -359,23 +359,63 @@ func (d *DB) BindRawArchiveSession(ctx context.Context, root RawArchiveRoot, sou
 func (d *DB) TrashedSessionsByFilePath(ctx context.Context, agent string, paths []string) (map[string]string, error) {
 	out := make(map[string]string)
 	for _, path := range paths {
-		rows, err := d.getReader().QueryContext(ctx, `SELECT id, machine FROM sessions INDEXED BY idx_sessions_file_path
-			WHERE file_path = ? AND agent = ? AND deleted_at IS NOT NULL`, path, agent)
-		if err != nil {
+		if err := d.collectTrashedSessions(ctx, agent, path, out); err != nil {
 			return nil, fmt.Errorf("listing trashed sessions for a source: %w", err)
-		}
-		for rows.Next() {
-			var id, machine string
-			if err := rows.Scan(&id, &machine); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			out[id] = machine
-		}
-		err = errors.Join(rows.Err(), rows.Close())
-		if err != nil {
-			return nil, err
 		}
 	}
 	return out, nil
+}
+
+func (d *DB) collectTrashedSessions(ctx context.Context, agent, path string, out map[string]string) error {
+	rows, err := d.getReader().QueryContext(ctx, `SELECT id, machine FROM sessions INDEXED BY idx_sessions_file_path
+		WHERE file_path = ? AND agent = ? AND deleted_at IS NOT NULL`, path, agent)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, machine string
+		if err := rows.Scan(&id, &machine); err != nil {
+			return err
+		}
+		out[id] = machine
+	}
+	return rows.Err()
+}
+
+// RecordRawArchiveRootAliases adds verified spellings of a root's original
+// path. Aliases from later captures of the same root accumulate.
+func (d *DB) RecordRawArchiveRootAliases(ctx context.Context, rootID string, aliases []string) error {
+	if len(aliases) == 0 {
+		return nil
+	}
+	if err := rawArchiveFields(append([]string{rootID}, aliases...)...); err != nil {
+		return err
+	}
+	return d.Update(ctx, func(tx *sql.Tx) error {
+		for _, alias := range aliases {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO raw_archive_root_aliases(root_id,alias) VALUES(?,?) ON CONFLICT DO NOTHING`, rootID, alias); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// RawArchiveRootAliases lists the verified spellings recorded for a root.
+func (d *DB) RawArchiveRootAliases(ctx context.Context, rootID string) ([]string, error) {
+	rows, err := d.getReader().QueryContext(ctx, `SELECT alias FROM raw_archive_root_aliases WHERE root_id=? ORDER BY alias`, rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			return nil, err
+		}
+		out = append(out, alias)
+	}
+	return out, rows.Err()
 }

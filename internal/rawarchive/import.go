@@ -38,6 +38,9 @@ type RootSpec struct {
 	OriginalPath   string   `json:"original_path"`
 	ConfiguredPath string   `json:"configured_path,omitempty"`
 	SessionDirs    []string `json:"session_dirs,omitempty"`
+	// Aliases are other spellings of OriginalPath that the captured database
+	// uses, verified to resolve to the same directory at capture time.
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 func LoadImportSpec(ctx context.Context, path string) (ImportSpec, error) {
@@ -116,6 +119,9 @@ func (a *Archive) Import(ctx context.Context, spec ImportSpec) (Report, error) {
 		opened[input.ID] = root
 		binding := db.RawArchiveRoot{ID: archiveRootID(spec.DeviceID, input.Provider, input.ID), ConfiguredRootID: input.ID, DeviceID: spec.DeviceID, Machine: spec.Machine, Provider: input.Provider, OriginalPath: input.OriginalPath}
 		if err := a.database.RegisterRawArchiveRoot(ctx, binding); err != nil {
+			return report, err
+		}
+		if err := a.database.RecordRawArchiveRootAliases(ctx, binding.ID, input.Aliases); err != nil {
 			return report, err
 		}
 		report.Roots++

@@ -38,7 +38,10 @@ agentsview archive capture /media/backup/source-capture \
 The standard Claude `projects` and Codex `sessions`/`archived_sessions` roots
 include their parent directory to retain companion files. Only the selected
 session directory is parsed. Selecting a provider home includes its existing
-conventional session directories. No other home-directory scanning occurs.
+conventional session directories. No other home-directory scanning occurs. Capture also records other spellings
+of each root that the captured database uses, such as a path through a
+symlink, after checking that they resolve to the same directory. Reparse then
+recognizes those seeded sessions after the originals are gone.
 
 Capture reads the installation ID without creating one in the source. It reuses
 known raw-sync root IDs. When it generates identities, the JSON report lists

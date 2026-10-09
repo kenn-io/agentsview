@@ -117,6 +117,7 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 		return d, err
 	}
 	seen := map[string]bool{"application": true}
+	canonicalBases := make(map[string]string)
 	for _, input := range opts.Roots {
 		if input.Provider != "claude" && input.Provider != "codex" && input.Provider != "files" {
 			return d, errors.New("capture provider must be claude, codex or files")
@@ -174,6 +175,7 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 			return d, errors.New("duplicate selected capture root")
 		}
 		seen[input.ID] = true
+		canonicalBases[input.ID] = canonicalBase
 		input.Path = "roots/" + input.ID
 		d.Source.Roots = append(d.Source.Roots, input)
 	}
@@ -292,6 +294,10 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 		return d, err
 	}
 	if d.Preflight.DatabaseSHA256 != "" {
+		if err := recordRootAliases(ctx, filepath.Join(app, "sessions.db"), d.Source.Roots, canonicalBases); err != nil {
+			return d, fmt.Errorf("recording equivalent root spellings: %w", err)
+		}
+		inventory.Source = d.Source
 		database, err := db.OpenReadOnly(ctx, filepath.Join(app, "sessions.db"))
 		if err != nil {
 			return d, fmt.Errorf("cannot verify captured asset closure without a compatible schema: %w", err)

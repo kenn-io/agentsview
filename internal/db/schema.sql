@@ -1515,6 +1515,12 @@ CREATE TABLE IF NOT EXISTS raw_archive_heads (
 CREATE TABLE IF NOT EXISTS raw_archive_devices (
     device_id TEXT PRIMARY KEY, suppressions BLOB NOT NULL
 );
+-- Other spellings of a root's original path, verified at capture time, that
+-- seeded sessions may store for the same transcripts.
+CREATE TABLE IF NOT EXISTS raw_archive_root_aliases (
+    root_id TEXT NOT NULL REFERENCES raw_archive_roots(id), alias TEXT NOT NULL,
+    PRIMARY KEY(root_id,alias)
+);
 CREATE TABLE IF NOT EXISTS raw_archive_sessions (
     device_id TEXT NOT NULL, provider TEXT NOT NULL, parser_id TEXT NOT NULL,
     session_id TEXT NOT NULL UNIQUE,

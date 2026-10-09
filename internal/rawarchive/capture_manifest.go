@@ -133,6 +133,11 @@ func readCaptureDescriptor(ctx context.Context, root *os.Root, name string) (Cap
 				return d, nil, errors.New("invalid capture session directory")
 			}
 		}
+		for _, alias := range r.Aliases {
+			if strings.TrimSpace(alias) == "" || alias == r.OriginalPath {
+				return d, nil, errors.New("invalid capture root alias")
+			}
+		}
 		roots[r.ID] = r
 	}
 	if root, ok := roots["application"]; !ok || root.Provider != "files" {

@@ -187,6 +187,16 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 	if err != nil {
 		return err
 	}
+	// A seeded session may store a verified equivalent spelling of its source,
+	// such as a path through a symlinked ancestor.
+	sourcePaths := prepared.SourcePaths
+	if root.DeviceID == owner {
+		rootAliases, err := scratch.RawArchiveRootAliases(ctx, root.ID)
+		if err != nil {
+			return err
+		}
+		sourcePaths = equivalentSourcePaths(prepared.SourcePaths, root.OriginalPath, rootAliases)
+	}
 	// The owner may have stored a session under an older machine key that
 	// now resolves to this installation.
 	ownedBy := func(machine string) bool {
@@ -211,7 +221,7 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 		if existing != nil {
 			// A joined continuation may have been stored under either verified
 			// transcript on the source machine. Keep that spelling and identity.
-			if root.DeviceID == owner && existing.FilePath != nil && slices.Contains(prepared.SourcePaths, *existing.FilePath) {
+			if root.DeviceID == owner && existing.FilePath != nil && slices.Contains(sourcePaths, *existing.FilePath) {
 				s.FilePath = existing.FilePath
 			}
 			if (!known && root.DeviceID != owner) || existing.Agent != root.Provider || !ownedBy(existing.Machine) || existing.FilePath == nil || s.FilePath == nil || *existing.FilePath != *s.FilePath {
@@ -230,7 +240,7 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 				return false, err
 			}
 			for _, path := range recorded {
-				if !slices.Contains(prepared.SourcePaths, path) {
+				if !slices.Contains(sourcePaths, path) {
 					return false, fmt.Errorf("missing recorded Claude continuation for %s", s.ID)
 				}
 			}
@@ -245,7 +255,7 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 	// Sync keeps a trashed row in trash without parsing it again, so the
 	// policy above never sees it. Count trash that this source owns as an
 	// intentional suppression instead of a missing result.
-	trashed, err := scratch.TrashedSessionsByFilePath(ctx, root.Provider, prepared.SourcePaths)
+	trashed, err := scratch.TrashedSessionsByFilePath(ctx, root.Provider, sourcePaths)
 	if err != nil {
 		return err
 	}
@@ -281,4 +291,22 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 		}
 	}
 	return nil
+}
+
+// equivalentSourcePaths adds each recorded alias spelling of paths beneath the
+// root's original path. Paths keep the source machine's separator.
+func equivalentSourcePaths(paths []string, original string, aliases []string) []string {
+	out := slices.Clone(paths)
+	for _, path := range paths {
+		rest, ok := strings.CutPrefix(path, original)
+		if !ok || rest == "" || (rest[0] != '/' && rest[0] != '\\') {
+			continue
+		}
+		for _, alias := range aliases {
+			if spelled := alias + rest; !slices.Contains(out, spelled) {
+				out = append(out, spelled)
+			}
+		}
+	}
+	return out
 }
