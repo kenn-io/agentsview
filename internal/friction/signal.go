@@ -11,7 +11,7 @@ import (
 
 // RulesVersion identifies the detector rule set. Bump it whenever a
 // detector's output can change for the same input.
-const RulesVersion = "friction-v1"
+const RulesVersion = "friction-v2"
 
 // Kind is a friction signal kind (jilog signal.rs:60-68).
 type Kind string

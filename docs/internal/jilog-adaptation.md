@@ -168,7 +168,8 @@ The digest follows jilog's `learning-digest.md` layout with these differences:
 - Archived text renders inside code spans, with control characters replaced by
   spaces and backticks by apostrophes. Markdown and HTML render literally.
 - Pattern evidence is plain text, unlike jilog's backticked names; the digest
-  wraps it in a code span. Fingerprints remain unchanged.
+  wraps it in a code span. This output change bumps the detector rule set to
+  `friction-v2`. Fingerprints remain unchanged.
 - The JSON summary uses AgentsView schema 1 with `schema_version`,
   `sessions_scanned`, seven kind counts and `p0_alerts`.
 
