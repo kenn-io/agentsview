@@ -58,6 +58,24 @@ describe("syncClaudeAI browser relay", () => {
     close();
   });
 
+  it("starts a new sync only after the previous browser close finishes", async () => {
+    let close!: () => void;
+    const host = { close: vi.fn(() => new Promise<void>((resolve) => { close = resolve; })) } as unknown as BrowserHost;
+    const fetch = vi.fn(async () => new Response(
+      'event: done\ndata: {"imported":0,"updated":0,"skipped":0,"errors":0}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+    await syncClaudeAI(host);
+    const next = syncClaudeAI(host);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetch).toHaveBeenCalledOnce();
+    close();
+    await next;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    close();
+  });
+
   it("answers fetch events with browser status", async () => {
     const status = 429;
     let stream: ReadableStreamDefaultController<Uint8Array>;
