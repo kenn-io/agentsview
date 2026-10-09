@@ -40,8 +40,7 @@ const (
 	// Manifest v2 replaces usage_events[].cost_usd floats with exact
 	// integer-microdollar cost objects. Manifest v3 adds the optional
 	// session_kind provenance field. Manifest v4 adds the optional
-	// provider_id billing field on usage events. Manifest v5 adds session groups.
-	// Writers retain v4 for sessions without group fields.
+	// provider_id billing field on usage events. Manifest v5 adds the optional session group_key.
 	// Versions v2 through v4 decode with missing fields defaulting to empty.
 	manifestFormatVersion    = 5
 	manifestMinDecodeVersion = 2

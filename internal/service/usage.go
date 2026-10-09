@@ -5,7 +5,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -74,13 +73,13 @@ func ResolveUsageProjectKeys(
 		if len(resolved) == 0 {
 			return UsageRequest{}, &UsageInputError{Code: UsageErrorCodeUnknownProjectKey, Msg: "unknown project key"}
 		}
-		base := append(splitCSVTokens(req.Project), req.ProjectLabels...)
-		for _, label := range resolved {
-			if len(base) > 0 && !slices.Contains(base, label) {
-				req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, label)
-			}
+		labels, ok := intersectValues(append(splitCSVTokens(req.Project), req.ProjectLabels...), resolved)
+		if ok {
+			req.ProjectLabels = labels
+		} else {
+			req.ProjectLabels = resolved
+			req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
 		}
-		req.ProjectLabels = resolved
 		req.Project = ""
 		req.ProjectKey = ""
 	}

@@ -45,7 +45,7 @@ func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 		Agent: "claude", GitBranch: "main",
 		CreatedAt:   "2026-08-01T00:00:00.000Z",
 		StartedAt:   "2026-08-01T00:00:00Z",
-		DisplayName: "Inside", StartedAtMillis: new(int64(1785542400000)),
+		DisplayName: "Inside", SessionName: "Inside", StartedAtMillis: new(int64(1785542400000)),
 		StartedAtNanos:   new(int64(0)),
 		UserMessageCount: 2, PassesFilter: true,
 	}, byID["inside-message"])
