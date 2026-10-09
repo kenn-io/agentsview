@@ -162,6 +162,7 @@ describe("CostTimeSeriesChart", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     usage.summary = null;
+    usage.attributionSummary = null;
     usage.selectedTimeRange = null;
     usage.excludedProjectKeys = "";
     usage.excludedAgents = "";
@@ -495,6 +496,12 @@ describe("CostTimeSeriesChart", () => {
       modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
       modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
     ]);
+    usage.attributionSummary = usageSummary([
+      modelDailyEntry(0, [
+        { modelName: "single-model", cost: testMoney(6) },
+        { modelName: "total", cost: testMoney(4) },
+      ]),
+    ]);
 
     const component = mountChart();
     await tick();
@@ -502,7 +509,9 @@ describe("CostTimeSeriesChart", () => {
     const paths = document.querySelectorAll<SVGPathElement>("path.lc-area-path");
     expect(paths).toHaveLength(1);
     expect(paths[0]!.getAttribute("fill")).toBe("var(--accent-blue)");
-    expect(Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim())).toEqual(["single-model"]);
+    // The legend keeps the unselected view's entries, dimming those the selection hides.
+    const legend = Array.from(document.querySelectorAll(".legend-item"), (item) => [item.textContent?.trim(), item.classList.contains("dimmed")]);
+    expect(legend).toEqual([["single-model", false], ["total", true]]);
     unmount(component);
   });
 

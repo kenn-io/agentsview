@@ -102,15 +102,17 @@
     return daily;
   }
 
-  const seriesData = $derived.by((): {
+  interface SeriesData {
     points: Point[];
     keys: string[];
     maxY: number;
     labels: Record<string, string>;
-  } => {
-    const summary = usage.timeSeriesSummary;
+    grouped: boolean;
+  }
+
+  function buildSeries(summary: UsageSummaryResponse | null): SeriesData {
     if (!summary || summary.daily.length === 0) {
-      return { points: [], keys: [], maxY: 0, labels: {} };
+      return { points: [], keys: [], maxY: 0, labels: {}, grouped: false };
     }
     const daily = fillMissingDailyEntries(summary);
 
@@ -164,7 +166,7 @@
     // If only one key or few keys, no need for "Other".
     if (totals.size === 0) {
       if (hasBreakdownData) {
-        return { points: [], keys: [], maxY: 0, labels };
+        return { points: [], keys: [], maxY: 0, labels, grouped: true };
       }
       const points = daily.map((d) => ({
         date: d.date,
@@ -179,7 +181,7 @@
       for (const pt of points) {
         if (pt.values.total > maxY) maxY = pt.values.total;
       }
-      return { points, keys: ["total"], maxY: maxY || 1, labels };
+      return { points, keys: ["total"], maxY: maxY || 1, labels, grouped: false };
     }
 
     // Pick top N by total value, group the rest as "Other".
@@ -245,8 +247,14 @@
       if (stack > maxY) maxY = stack;
     }
 
-    return { points, keys, maxY: maxY || 1, labels };
-  });
+    return { points, keys, maxY: maxY || 1, labels, grouped: true };
+  }
+
+  const seriesData = $derived(buildSeries(usage.timeSeriesSummary));
+  // The legend lists the unselected view's series so selecting never changes its line count.
+  const legendData = $derived(
+    usage.attributionSummary ? buildSeries(usage.attributionSummary) : seriesData,
+  );
 
   const view = $derived(usage.toggles.timeSeries.view);
   const viewOptions = $derived<SegmentedControlOption[]>([
@@ -347,7 +355,7 @@
   function seriesLabel(key: string): string {
     return key === "__other__"
       ? m.shared_other()
-      : seriesData.labels[key] ?? key;
+      : seriesData.labels[key] ?? legendData.labels[key] ?? key;
   }
 
   const cells = $derived(seriesData.points.map((point, idx) => {
@@ -664,18 +672,22 @@
   {#if seriesData.points.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    <!-- Always rendered at one line so selecting a series never shifts the page. -->
-    <div class="legend">
-      {#each seriesData.keys.filter((key) => key !== "total") as key (key)}
-        <span class="legend-item">
+    {#if legendData.grouped}
+      <div class="legend">
+        {#each legendData.keys as key (key)}
           <span
-            class="legend-dot"
-            style="background: {seriesColor(key)}"
-          ></span>
-          {seriesLabel(key)}
-        </span>
-      {/each}
-    </div>
+            class="legend-item"
+            class:dimmed={!seriesData.keys.includes(key)}
+          >
+            <span
+              class="legend-dot"
+              style="background: {seriesColor(key)}"
+            ></span>
+            {seriesLabel(key)}
+          </span>
+        {/each}
+      </div>
+    {/if}
 
     <div
       class="chart-body"
@@ -858,25 +870,21 @@
   .legend {
     display: flex;
     align-items: center;
-    height: 15px;
-    overflow-x: auto;
-    scrollbar-width: none;
+    flex-wrap: wrap;
     gap: var(--space-5);
     margin-bottom: 4px;
   }
 
-  .legend::-webkit-scrollbar {
-    display: none;
-  }
-
   .legend-item {
     display: inline-flex;
-    flex-shrink: 0;
-    white-space: nowrap;
     align-items: center;
     gap: 4px;
     font-size: 10px;
     color: var(--text-muted);
+  }
+
+  .legend-item.dimmed {
+    opacity: 0.35;
   }
 
   .legend-dot {
