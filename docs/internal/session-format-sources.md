@@ -1203,8 +1203,10 @@ fixtures retain this field; missing identities remain source-local.
   include `subagent_id` attach that child on the parent's `spawn_subagent` call.
   Reverified against the pinned session guide (`17-sessions.md`), the
   `SubagentMeta` writer, and
-  [`attempt_runner.rs`](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/attempt_runner.rs)
-  resume/fork summary writes at the commit above.
+  [live-fork](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1136-L1143),
+  [resume](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1180-L1195),
+  and [copied-fork](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1291-L1306)
+  summary writes in `subagent/mod.rs` at the commit above.
 
 - **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
   colocated tests, and the sanitized upstream-generated fixtures in
