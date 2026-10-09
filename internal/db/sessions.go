@@ -4082,10 +4082,7 @@ func (db *DB) ListSessionPathRecords(ctx context.Context, baseID string) ([]Sess
 	return listSessionPathRecords(ctx, db.getReader(), baseID)
 }
 
-func listSessionPathRecords(ctx context.Context, q interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, baseID string,
-) ([]SessionPathRecord, error) {
+func listSessionPathRecords(ctx context.Context, q messageRowsQuerier, baseID string) ([]SessionPathRecord, error) {
 	const match = "(id = ? OR (id >= ? AND id < ?))"
 	low, high := baseID+"_alt-", baseID+"_alt."
 	return querySessionPathRecords(ctx, q,
@@ -4110,10 +4107,7 @@ func (db *DB) ListSessionPathRecordsForAgents(ctx context.Context, agents []stri
 	)
 }
 
-func querySessionPathRecords(ctx context.Context, q interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, query string, args ...any,
-) ([]SessionPathRecord, error) {
+func querySessionPathRecords(ctx context.Context, q messageRowsQuerier, query string, args ...any) ([]SessionPathRecord, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing session path records: %w", err)
