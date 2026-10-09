@@ -407,8 +407,7 @@ export async function syncClaudeAI(
     const result = readImportResponse(
       response,
       cb,
-      (id, path) => {
-        if (!host) throw new Error("Chrome Sync unexpectedly requested a page relay");
+      host ? (id, path) => {
         void (async () => {
           let fetched;
           try {
@@ -425,7 +424,7 @@ export async function syncClaudeAI(
           fail(error);
           abort();
         });
-      },
+      } : undefined,
     );
     return await Promise.race([result, failed]);
   } finally {

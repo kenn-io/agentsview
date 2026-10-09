@@ -29,19 +29,25 @@ async function loadedTab(id) {
 async function request({ id, path, version: peerVersion }, port) {
   let result;
   try {
-    if (peerVersion !== version) throw new Error("Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again");
+    if (peerVersion !== version) throw new Error((peerVersion ?? 0) < version ? "Upgrade AgentsView, then Sync again" : "Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again");
     if (!await allowedPath(path)) throw new Error("Unsupported Claude fetch path");
     let [tab] = await chrome.tabs.query({ url: "https://claude.ai/*", discarded: false });
     if (!tab) tab = await chrome.tabs.create({ url: "https://claude.ai/new", active: false });
     await loadedTab(tab.id);
     const target = { tabId: tab.id };
     await chrome.scripting.executeScript({ target, files: ["claude_fetch.js"], world: "ISOLATED" });
-    const [reply] = await chrome.scripting.executeScript({
-      target,
-      world: "ISOLATED",
-      func: (url) => claudeFetch(url),
-      args: [`https://claude.ai${path}`],
-    });
+    let reply;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      [reply] = await chrome.scripting.executeScript({
+        target,
+        world: "ISOLATED",
+        func: (url) => typeof claudeFetch === "function" ? claudeFetch(url) : undefined,
+        args: [`https://claude.ai${path}`],
+      });
+      if (reply?.result !== undefined) break;
+      if (attempt === 1) throw new Error("Claude.ai page changed during Sync; try Sync again");
+      await chrome.scripting.executeScript({ target, files: ["claude_fetch.js"], world: "ISOLATED" });
+    }
     result = { ...reply.result, id, version };
   } catch (error) {
     result = { id, version, status: 0, error: error.message };

@@ -77,8 +77,8 @@ Set up Chrome once:
 2. Open `chrome://extensions` and turn on **Developer mode**.
 3. Click **Load unpacked** and select the folder printed by the command.
 
-Keep Chrome open during Sync. Re-run setup and reload the extension at `chrome://extensions` when the executable path or data directory changes, or when Sync asks for it after an upgrade. Then click **Sync** again.
-The extension reconnects when AgentsView restarts.
+Keep Chrome open during Sync. Re-run setup and reload the extension at `chrome://extensions` when the executable path or data directory changes, or when Sync asks for it after an upgrade. If the extension is newer than the server, upgrade AgentsView. Then click **Sync** again.
+The extension reconnects when AgentsView restarts. Only one Chrome profile connects at a time. The first profile to connect keeps the connection; other profiles wait until it disconnects.
 
 There's no removal command. Remove the extension at `chrome://extensions`, then
 delete `<dataDir>/chrome/extension/` and the launcher, `<dataDir>/chrome/host.cmd`
@@ -88,11 +88,11 @@ host registration for your platform:
 - Windows: `<dataDir>/chrome/io.kenn.agentsview.json` and the registry key
   `HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\io.kenn.agentsview`.
 - macOS: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/io.kenn.agentsview.json`.
-- Linux: `~/.config/google-chrome/NativeMessagingHosts/io.kenn.agentsview.json`.
+- Linux: `<configRoot>/NativeMessagingHosts/io.kenn.agentsview.json`. Chrome uses `CHROME_CONFIG_HOME` first, then `$XDG_CONFIG_HOME/google-chrome`, then `~/.config/google-chrome`.
 
 If Sync reports a disconnected host after setup, open Chrome and enable the extension at `chrome://extensions`. If it still fails, check the server startup error log for a Chrome host endpoint bind failure.
 
-Open **Import conversations**, select **Claude.ai**, and click **Sync**. Chrome uses your existing Claude.ai session, including Google sign-in. If you need to sign in, click **Sign in**, finish in the new tab, then return to AgentsView and click **Sync**.
+**Sync** appears in every local web UI connected to a writable archive. A disconnected Chrome host is reported when you click **Sync**. Open **Import conversations**, select **Claude.ai**, and click **Sync**. Chrome uses your existing Claude.ai session, including Google sign-in. If you need to sign in, click **Sign in**, finish in the new tab, then return to AgentsView and click **Sync**.
 
 You can also run `agentsview import --type claude-ai --sync` while the server and Chrome are running, with no AgentsView tab open.
 

@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
@@ -29,6 +30,14 @@ func (s *Server) registerImportRoutes() {
 		func(ctx context.Context, in *claudeAISyncInput) (*huma.StreamResponse, error) {
 			return s.humaSyncClaudeAI(ctx, in, &results)
 		}, func(op *huma.Operation) {
+			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
+				r, _ := humago.Unwrap(ctx)
+				if r.URL.Query().Get("browser") == "chrome" && !isLocalhostRequest(r) {
+					_ = huma.WriteErr(s.api, ctx, http.StatusForbidden, "Chrome Sync requires a local connection")
+					return
+				}
+				next(ctx)
+			})
 			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required or claude_ai_chrome_host_update_required."
 			op.Description = "Before streaming, HTTP 409 with code claude_ai_chrome_host_required reports that the Chrome host is disconnected."
 		})
@@ -136,8 +145,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				payload["code"] = "claude_ai_auth_required"
 			}
 			if errors.Is(err, chromehost.ErrCompatibility) {
-				payload["error"] = "Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again"
-				payload["code"] = "claude_ai_chrome_host_update_required"
+				if versionErr, ok := errors.AsType[chromehost.VersionError](err); !ok || versionErr.Version <= chromehost.Version {
+					payload["code"] = "claude_ai_chrome_host_update_required"
+				}
 			}
 			stream.SendJSON("error", payload)
 			return

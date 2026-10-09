@@ -5,6 +5,9 @@ export async function allowedPath(path) {
   requestShapes ??= fetch(chrome.runtime.getURL("claude_ai_requests.txt")).then(async (response) => {
     if (!response.ok) throw new Error("Claude request shapes unavailable");
     return (await response.text()).trim().split(/\r?\n/);
+  }).catch((error) => {
+    requestShapes = undefined;
+    throw error;
   });
   const shapes = await requestShapes;
   if (path === shapes[0]) return true;

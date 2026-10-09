@@ -13,6 +13,19 @@ const Version = 1
 
 var ErrCompatibility = errors.New("run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again")
 
+type VersionError struct {
+	Version int
+}
+
+func (e VersionError) Error() string {
+	if e.Version > Version {
+		return "upgrade AgentsView, then Sync again"
+	}
+	return ErrCompatibility.Error()
+}
+
+func (e VersionError) Unwrap() error { return ErrCompatibility }
+
 func ReadFrame(reader io.Reader) ([]byte, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
