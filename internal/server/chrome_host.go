@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json/v2"
 	"errors"
+	"log"
 	"net"
 	"path/filepath"
 	"sync"
@@ -24,9 +25,11 @@ type chromeConnection struct {
 }
 
 type chromeHost struct {
-	mu             sync.Mutex
-	connection     *chromeConnection
-	refusedProfile bool
+	syncMu             sync.Mutex
+	registeredManifest func(string) (string, error)
+	mu                 sync.Mutex
+	connection         *chromeConnection
+	refusedProfile     bool
 }
 
 // ServeChromeHost binds the private endpoint before starting its accept loop.
@@ -50,32 +53,43 @@ func (s *Server) ServeChromeHost(ctx context.Context, socketPath string) error {
 		}
 		s.chrome.mu.Unlock()
 	}()
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			current := &chromeConnection{Conn: conn, pending: make(map[string]chan claudeAISyncResult)}
-			s.chrome.mu.Lock()
-			if ctx.Err() != nil {
-				s.chrome.mu.Unlock()
-				_ = conn.Close()
-				return
-			}
-			if s.chrome.connection != nil {
-				s.chrome.refusedProfile = true
-				s.chrome.mu.Unlock()
-				_ = conn.Close()
-				continue
-			}
-			s.chrome.connection = current
-			s.chrome.refusedProfile = false
-			s.chrome.mu.Unlock()
-			go s.chrome.read(current)
-		}
-	}()
+	go s.acceptChromeHost(ctx, listener)
 	return nil
+}
+
+func (s *Server) acceptChromeHost(ctx context.Context, listener net.Listener) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.Printf("Chrome host accept: %v", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+			continue
+		}
+		current := &chromeConnection{Conn: conn, pending: make(map[string]chan claudeAISyncResult)}
+		s.chrome.mu.Lock()
+		if ctx.Err() != nil {
+			s.chrome.mu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		if s.chrome.connection != nil {
+			s.chrome.refusedProfile = true
+			s.chrome.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		s.chrome.connection = current
+		s.chrome.refusedProfile = false
+		s.chrome.mu.Unlock()
+		go s.chrome.read(current)
+	}
 }
 
 func (h *chromeHost) Connected() bool {

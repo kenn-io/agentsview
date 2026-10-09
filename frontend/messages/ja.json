@@ -2450,6 +2450,7 @@
   "tool_sequences_full_result_in_message": "完全な結果はメッセージ {ordinal} にあります。",
   "tool_sequences_retry": "再試行",
   "import_claude_connect": "サインイン",
+  "import_claude_sync_running": "Chrome の同期はすでに実行中です。",
   "import_claude_sync": "同期",
   "import_claude_chrome_title": "Chrome",
   "import_claude_desktop_title": "アカウント",

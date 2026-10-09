@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -72,6 +74,7 @@ func TestChromeSetup(t *testing.T) {
 	assert.Equal(t, "stdio", manifest.Type)
 	assert.Equal(t, []string{"chrome-extension://jpignaibiiemhngfjkcpokkamffknabf/"}, manifest.AllowedOrigins)
 	assert.True(t, filepath.IsAbs(manifest.Path))
+	assert.True(t, chromehost.Installed(dir, home, registered))
 	command := exec.CommandContext(t.Context(), manifest.Path)
 	if runtime.GOOS == "windows" {
 		command = exec.CommandContext(t.Context(), "cmd", "/c", manifest.Path)
@@ -308,6 +311,7 @@ func TestChromeSyncResults(t *testing.T) {
 		imported              int
 	}{
 		{"done", "event: progress\ndata: {}\n\nevent: done\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":0}\n\n", "", 200, 2},
+		{"running", `{"code":"claude_ai_sync_running","error":"Chrome Sync is already running"}`, "Chrome Sync is already running", 409, 0},
 		{"absent host", `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, "Run agentsview chrome setup and keep Chrome open, then Sync again", 409, 0},
 		{"error", "event: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 0},
 		{"partial failure", "event:progress\ndata:{\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent:error\ndata:{\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 2},
@@ -340,7 +344,7 @@ func TestChromeSyncResults(t *testing.T) {
 			defer response.HTTPResponse.Body.Close()
 			stats, err := readChromeSync(response)
 			if tt.wantError != "" {
-				if tt.name == "absent host" {
+				if tt.status == http.StatusConflict {
 					require.EqualError(t, err, tt.wantError)
 				} else {
 					require.ErrorContains(t, err, tt.wantError)
@@ -357,10 +361,12 @@ func TestChromeSyncCommand(t *testing.T) {
 	for _, tt := range []struct {
 		name, body, wantError string
 		cancel                bool
+		status                int
 	}{
-		{"done", "event: done\ndata: {\"imported\":2}\n\n", "", false},
-		{"partial failure", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", false},
-		{"cancel", "", "", true},
+		{"running", `{"code":"claude_ai_sync_running","error":"Chrome Sync is already running"}`, "Chrome Sync is already running", false, 409},
+		{"done", "event: done\ndata: {\"imported\":2}\n\n", "", false, 200},
+		{"partial failure", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", false, 200},
+		{"cancel", "", "", true, 200},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dataDir := testDataDir(t)
@@ -373,6 +379,13 @@ func TestChromeSyncCommand(t *testing.T) {
 					assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
 					if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
 						http.Error(w, "Forbidden", http.StatusForbidden)
+						return
+					}
+					if tt.status == http.StatusConflict {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(tt.status)
+						_, err := io.WriteString(w, tt.body)
+						assert.NoError(t, err)
 						return
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
@@ -400,7 +413,7 @@ func TestChromeSyncCommand(t *testing.T) {
 					require.NoError(t, err)
 				}
 			})
-			if tt.wantError != "" {
+			if tt.wantError != "" && tt.status == http.StatusOK {
 				assert.Contains(t, output, "Done: 6 processed (2 new, 1 updated, 3 skipped)")
 				assert.Contains(t, output, "1 errors")
 			}
@@ -429,6 +442,34 @@ func TestChromeImportArguments(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestChromeSetupReportsReplacement(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(strconv.FormatBool(replace), func(t *testing.T) {
+			dir, home := t.TempDir(), t.TempDir()
+			previous := dir
+			if replace {
+				previous = t.TempDir()
+			}
+			assets := fstest.MapFS{"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)}}
+			var output bytes.Buffer
+			var registered string
+			register := func(path string) error { registered = path; return nil }
+			_, err := setupChrome(previous, home, chromeTestExecutable(t), assets, register)
+			require.NoError(t, err)
+			previous = chromehost.RegistrationDataDir(registered)
+			_, err = setupChromeReporting(dir, home, chromeTestExecutable(t), assets, register, previous, &output)
+			require.NoError(t, err)
+			assert.True(t, chromehost.Installed(dir, home, registered))
+			if replace {
+				assert.False(t, chromehost.Installed(previous, home, registered))
+				assert.Equal(t, "Replaced Chrome native host registration for data directory "+previous+"\n", output.String())
+			} else {
+				assert.Empty(t, output.String())
 			}
 		})
 	}

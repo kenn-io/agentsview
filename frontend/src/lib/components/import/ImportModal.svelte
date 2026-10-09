@@ -149,6 +149,8 @@
         return;
       } else if (e instanceof ApiError && ["claude_ai_auth_required", "claude_ai_chrome_host_update_required", "claude_ai_agentsview_update_required"].includes(e.code ?? "")) {
         syncFlag = e.code ?? null;
+      } else if (e instanceof ApiError && e.code === "claude_ai_sync_running") {
+        syncError = m.import_claude_sync_running();
       } else {
         syncError = e instanceof Error ? e.message : m.import_failed();
       }

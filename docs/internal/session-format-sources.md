@@ -2804,7 +2804,7 @@ schemas keep their existing ordering behavior.
   refused-profile status through the local-only GET route.
   `TestChromeHostDisconnectClearsOtherProfile` verifies that disconnecting the
   active host clears refused-profile status before another host connects. The
-  worker test `refuses incompatible revision %s before touching tabs` checks
+  worker test `refuses before touching tabs` checks
   absent and unknown request revisions before tab access or fetch.
   `TestChromeSyncResults` checks the generated CLI operation with a base path,
   Origin, bearer token, partial summaries, and the pre-stream 409 code

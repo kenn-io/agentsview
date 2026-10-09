@@ -24,7 +24,7 @@ import (
 	"go.kenn.io/kit/safefileio"
 )
 
-const chromeNativeHost = "io.kenn.agentsview"
+const chromeNativeHost = chromehost.NativeHost
 
 func newChromeCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "chrome", Short: "Set up Claude.ai Sync in Chrome", GroupID: groupData}
@@ -45,7 +45,8 @@ func newChromeCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		folder, err := setupChrome(cfg.DataDir, home, executable, assets, registerChromeHost)
+		registered, _ := chromehost.RegisteredManifest(home)
+		folder, err := setupChromeReporting(cfg.DataDir, home, executable, assets, registerChromeHost, chromehost.RegistrationDataDir(registered), cmd.OutOrStdout())
 		if err != nil {
 			return err
 		}
@@ -210,26 +211,14 @@ func setupChromeWithWriter(dataDir, home, executable string, assets fs.FS, regis
 	if err != nil {
 		return "", err
 	}
-	launcher := filepath.Join(dir, "host")
-	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
-	command := "#!/bin/sh\nexec " + quote(executable) + " chrome-host --socket " + quote(socket) + "\n"
-	if runtime.GOOS == "windows" {
-		launcher += ".cmd"
-		command = "@echo off\r\n\"" + strings.ReplaceAll(executable, "%", "%%") + "\" chrome-host --socket \"" + strings.ReplaceAll(socket, "%", "%%") + "\"\r\n"
-	}
+	launcher := chromehost.LauncherPath(filepath.Dir(dir))
+	command := chromehost.BuildLauncher(executable, socket, runtime.GOOS)
 	files = append(files, installFile{launcher, []byte(command), 0o700})
-	manifestDir := dir
-	if runtime.GOOS == "darwin" {
-		manifestDir = filepath.Join(home, "Library", "Application Support", "Google", "Chrome", "NativeMessagingHosts")
-	}
-	if runtime.GOOS == "linux" {
-		manifestDir = filepath.Join(chromeConfigRoot(home), "NativeMessagingHosts")
-	}
 	body, err := json.Marshal(map[string]any{"name": chromeNativeHost, "description": "AgentsView Claude.ai Sync", "path": launcher, "type": "stdio", "allowed_origins": []string{"chrome-extension://" + id.String() + "/"}})
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(manifestDir, chromeNativeHost+".json")
+	path := chromehost.ManifestPath(filepath.Dir(dir), home)
 	files = append(files, installFile{path, body, 0o600})
 	if err := safefileio.EnsurePrivateDir(dir); err != nil {
 		return "", err
@@ -274,32 +263,21 @@ func setupChromeWithWriter(dataDir, home, executable string, assets fs.FS, regis
 }
 
 func chromeConfigRoot(home string) string {
-	if root := os.Getenv("CHROME_CONFIG_HOME"); root != "" {
-		return filepath.Join(root, "google-chrome")
-	}
-	if root := os.Getenv("XDG_CONFIG_HOME"); root != "" {
-		return filepath.Join(root, "google-chrome")
-	}
-	return filepath.Join(home, ".config", "google-chrome")
+	return chromehost.ConfigRoot(home)
 }
 
 func chromeSocketPath(dataDir string) (string, error) {
-	dir, err := filepath.Abs(dataDir)
+	return chromehost.SocketPath(dataDir)
+}
+
+func setupChromeReporting(dataDir, home, executable string, assets fs.FS, register func(string) error, previousDir string, output io.Writer) (string, error) {
+	folder, err := setupChrome(dataDir, home, executable, assets, register)
 	if err != nil {
 		return "", err
 	}
-	socket := filepath.Join(dir, "chrome", "host.sock")
-	// macOS has the smallest supported sockaddr_un path, at 104 bytes including NUL.
-	if len(socket) >= 104 {
-		root, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		digest := sha256.Sum256([]byte(dir))
-		socket = filepath.Join(root, fmt.Sprintf("av-chrome-%x", digest[:8]), "host.sock")
-		if len(socket) >= 104 {
-			return "", errors.New("chrome socket path exceeds the Unix socket path limit")
-		}
+	dir := filepath.Dir(filepath.Dir(folder))
+	if previousDir != "" && previousDir != dir {
+		fmt.Fprintf(output, "Replaced Chrome native host registration for data directory %s\n", previousDir)
 	}
-	return socket, nil
+	return folder, nil
 }
