@@ -220,6 +220,7 @@ A stacked chart shows cost per day across the range, grouped by project, model,
 or agent — toggle the grouping with the segment buttons in the panel header.
 Each series is colored consistently with the attribution panel below so you can
 cross-reference them.
+Filter changes keep the range selected with the chart's brush.
 
 Choose **Smooth**, **Lines**, or **Bars** in the chart header. The page
 remembers the style in your browser. Days without spend remain visible as zero,

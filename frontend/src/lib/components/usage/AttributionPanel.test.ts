@@ -259,9 +259,10 @@ describe("AttributionPanel selection", () => {
   });
 
   it.each(["Enter", " "])("%s selects a project and Open opens it", async (key) => {
-    usage.summary = summaryWithDuplicateProjectLabels();
-    usage.summary.projectTotals[1]!.project = "Project B";
-    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usage.summary);
+    const full = summaryWithDuplicateProjectLabels();
+    full.projectTotals[1]!.project = "Project B";
+    usage.summary = full;
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(full);
     usage.toggles.attribution.groupBy = "project";
     usage.toggles.attribution.view = "list";
     const component = mountPanel();
@@ -273,6 +274,15 @@ describe("AttributionPanel selection", () => {
     await tick();
     expect(row.getAttribute("aria-pressed")).toBe("true");
     expect(usage.zoomedProject).toBeNull();
+    expect(openButton()).toBeDefined();
+    await vi.waitFor(() => expect(usage.attributionSummary).toEqual(full));
+    const narrowed = { ...full, projectTotals: [full.projectTotals[0]!] };
+    usage.attributionSummary = narrowed;
+    await tick();
+    expect(usage.selectedProjectKey).toBe("pl1:sha256:second");
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Open")).toBe(false);
+    usage.attributionSummary = full;
+    await tick();
     expect(openButton()).toBeDefined();
     openButton()!.click();
     await tick();

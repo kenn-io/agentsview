@@ -369,7 +369,7 @@ type Session struct {
 	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
 	SourceSessionID             string          `json:"source_session_id,omitempty"`
 	SourceVersion               string          `json:"source_version,omitempty"`
-	GroupKey                    string          `json:"group_key,omitempty"`
+	GroupKey                    string          `json:"-"`
 	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
 	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
 	IsTruncated                 bool            `json:"is_truncated,omitzero"`

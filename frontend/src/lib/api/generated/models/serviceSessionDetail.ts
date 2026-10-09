@@ -30,7 +30,6 @@ export interface ServiceSessionDetail {
   /** @nullable */
   first_message: string | null;
   git_branch?: string;
-  group_key?: string;
   has_peak_context_tokens: boolean;
   has_total_output_tokens: boolean;
   health_grade?: string;
