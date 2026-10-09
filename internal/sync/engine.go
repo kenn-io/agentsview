@@ -3853,6 +3853,26 @@ func (e *Engine) resyncBuildLocked(
 		}
 	}
 
+	if !e.disableSignalRecompute {
+		reportResyncPhase(PhaseReclassifying, "Recomputing archived session signals", "")
+		e.db = newDB
+		err := newDB.BackfillSignals(ctx, e.BackfillSignalComputer())
+		e.db = origDB
+		if err != nil {
+			stats.Aborted = true
+			stats.Warnings = append(stats.Warnings,
+				"archived session signal recompute failed, aborting swap: "+err.Error(),
+			)
+			newDB.Close()
+			removeTempDB(tempPath)
+			restoreSkipCache()
+			e.mu.Lock()
+			e.lastSyncStats = stats
+			e.mu.Unlock()
+			return stats, err
+		}
+	}
+
 	if ftsDropped {
 		tFTS := time.Now()
 		reportResyncPhase(

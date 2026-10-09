@@ -110,6 +110,27 @@ func TestHandleToolSequences_Example(t *testing.T) {
 	assert.InDelta(t, float64(0), call["result_omitted_bytes"], 0)
 }
 
+func TestHandleToolSequences_RepeatedCallStartsRecovery(t *testing.T) {
+	te := setup(t)
+	const sessionID = "repeated-sequence-start"
+	seedSequenceSession(t, te.db, sessionID, new("clean"), []db.ToolCall{
+		{ToolName: "Grep", Category: "Grep", InputJSON: `{"pattern":"needle"}`, ResultContent: "match", ResultContentLength: 5},
+		{ToolName: "Grep", Category: "Grep", InputJSON: `{"pattern":"needle"}`, ResultContent: "No matches found", ResultContentLength: 16},
+		{ToolName: "Read", Category: "Read", InputJSON: `{"path":"file.txt"}`, ResultContent: "contents", ResultContentLength: 8},
+	})
+	got := fetchSessionToolSequences(t, te, sessionID)
+	assert.Equal(t, 3, got.TotalToolCalls)
+	require.Len(t, got.Sequences, 1)
+	sequence := got.Sequences[0]
+	assert.Equal(t, "recovered", sequence.Ending)
+	require.Len(t, sequence.Calls, 2)
+	assert.Equal(t, 2, sequence.Calls[0].Ordinal)
+	assert.Equal(t, "empty", sequence.Calls[0].Outcome)
+	assert.Equal(t, "identical", sequence.Calls[0].Repeat)
+	assert.Equal(t, "content", sequence.Calls[1].Outcome)
+	assert.True(t, sequence.Calls[1].ToolChanged)
+}
+
 func TestHandleToolSequences_NoSequences(t *testing.T) {
 	te := setup(t)
 	dbtest.SeedSession(t, te.db, "tool-sequences-none", "test")

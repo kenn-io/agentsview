@@ -209,10 +209,25 @@ describe("ToolUsage", () => {
     seedRates();
     analytics.tools!.by_tool[0]!.call_count = 1200;
     analytics.tools!.by_tool[0]!.analyzed_calls = 1100;
+    analytics.tools!.by_tool[0]!.session_count = 1000;
+    analytics.tools!.by_tool[0]!.repeat_rate = 0;
+    vi.spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions").mockResolvedValue({
+      signal: "tool_empty_rate",
+      total: 1200,
+      sessions: [{ ...example, signal_total: 1100 }],
+    });
     const component = mount(ToolUsage, { target: document.body });
     await tick();
     expect(document.querySelector(".tool-rate")?.textContent).toMatch(/70,0\s%/u);
     expect(document.body.textContent).toMatch(/1\s100\/1\s200/u);
+    expect(document.querySelector(".tool-count")?.textContent).toMatch(/1\s200/u);
+    expect(document.querySelector(".tool-sessions")?.textContent).toMatch(/1\s000/u);
+    expect(document.querySelectorAll(".tool-rate")[1]?.textContent).toMatch(/0,0\s%/u);
+    document.querySelector<HTMLButtonElement>(".tool-rate button")!.click();
+    await tick();
+    await tick();
+    expect(document.querySelector(".tool-evidence .rate-note")?.textContent).toMatch(/1\s200 sessions/u);
+    expect(document.querySelector(".evidence-count")?.textContent).toMatch(/Matching calls: 1\s100/u);
     await unmount(component);
   });
 
@@ -363,7 +378,7 @@ describe("ToolUsage", () => {
     await unmount(component);
   });
 
-  it("keeps loaded pages across an unchanged refresh and reloads when a filter changes", async () => {
+  it("reloads evidence and resets pages after a tools refresh or filter change", async () => {
     seedRates();
     const fetch = vi
       .spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions")
@@ -378,6 +393,12 @@ describe("ToolUsage", () => {
         total: 2,
         sessions: [{ ...example, session_id: "second" }],
       })
+      .mockResolvedValueOnce({
+        signal: "tool_empty_rate",
+        total: 2,
+        next_offset: 1,
+        sessions: [{ ...example, session_id: "replacement", message_ordinal: 3 }],
+      })
       .mockResolvedValue({ signal: "tool_empty_rate", total: 1, sessions: [example] });
     const component = mount(ToolUsage, { target: document.body });
     await tick();
@@ -391,16 +412,18 @@ describe("ToolUsage", () => {
     await tick();
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(document.querySelectorAll("a.evidence-row")).toHaveLength(2);
-    // A live refresh replaces the tool data with equal counts.
+    // Equal counts can describe different contributing calls after a resync.
     analytics.tools = JSON.parse(JSON.stringify(analytics.tools));
     await tick();
     await tick();
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(document.querySelectorAll("a.evidence-row")).toHaveLength(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 0 }), expect.anything());
+    expect(document.querySelectorAll("a.evidence-row")).toHaveLength(1);
+    expect(document.querySelector("a.evidence-row")?.getAttribute("href")).toContain("replacement?msg=3");
     analytics.project = "project-b";
     await tick();
     await tick();
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenCalledTimes(4);
     expect(fetch).toHaveBeenLastCalledWith(
       expect.objectContaining({ project: "project-b", offset: 0 }),
       expect.anything(),

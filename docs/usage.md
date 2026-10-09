@@ -194,6 +194,7 @@ Each link opens the session at the message that holds the first matching call.
 - **Repeat rate** divides calls that repeat the previous call's tool and input,
   exactly or after normalizing the JSON, by analyzed calls. The previous call's
   outcome does not matter, and calls in the same message do not count.
+  A sequence's first call can repeat a previous successful call.
 - **Recovery rate** divides recovered sequences by recovered plus abandoned
   sequences. A sequence starts with an empty result or an error. It recovers
   when a call in a later message returns content. The tool that started the

@@ -49,9 +49,8 @@
   const evidenceRead = new LatestRead();
   const evidenceParams = $derived(analytics.filterParams());
   const evidenceInputs = $derived({ params: evidenceParams, rows: toolRows });
-  // Identifies what the loaded evidence pages describe. A refresh that leaves the
-  // filters and the selected rate's count unchanged keeps the pages already loaded.
   let loadedEvidenceKey: string | null = null;
+  let loadedEvidenceRows: ToolUsageAnalysis[] | null = null;
 
   function metricCount(tool: ToolUsageAnalysis, metric: string): number {
     switch (metric) {
@@ -77,7 +76,7 @@
         selectedRate = null;
         evidenceLoading = false;
         loadedEvidenceKey = null;
-      } else if (key !== loadedEvidenceKey) {
+      } else if (key !== loadedEvidenceKey || inputs.rows !== loadedEvidenceRows) {
         void loadEvidence(selection.tool, selection.category, selection.metric);
       }
     });
@@ -92,6 +91,7 @@
     if (offset === 0) {
       evidence = []; evidenceTotal = undefined; nextOffset = null;
       loadedEvidenceKey = evidenceKeyFor(selectedRate, evidenceInputs);
+      loadedEvidenceRows = toolRows;
     }
     try {
       const response = await AnalyticsService.getApiV1AnalyticsSignalSessions({ ...evidenceParams, signal: metric, tool_name: tool, tool_category: category, limit: 10, offset }, { signal });
@@ -193,7 +193,7 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${cat.category}: ${cat.count.toLocaleString()} (${cat.pct}%)`,
+      text: `${cat.category}: ${formatCount(cat.count)} (${cat.pct}%)`,
     };
   }
 
@@ -232,7 +232,7 @@
       <span class="count">
         {m.analytics_tool_usage_call_count({
           count: analytics.tools.total_calls,
-          countLabel: analytics.tools.total_calls.toLocaleString(),
+          countLabel: formatCount(analytics.tools.total_calls),
         })}
       </span>
     {/if}
@@ -273,12 +273,12 @@
                 </span>
                 <span class="tool-category"><Tooltip text={m.analytics_tool_coverage_explanation()} focusable>{formatCount(tool.analyzed_calls ?? 0)}/{formatCount(tool.call_count)}</Tooltip></span>
                 <span class="tool-count">
-                  {tool.call_count.toLocaleString()}
+                  {formatCount(tool.call_count)}
                 </span>
                 <span class="tool-sessions">
                   {m.analytics_tool_usage_sessions({
                     count: tool.session_count,
-                    countLabel: tool.session_count.toLocaleString(),
+                    countLabel: formatCount(tool.session_count),
                   })}
                 </span>
                 <span class="tool-pct">{tool.pct}%</span>
@@ -320,7 +320,7 @@
                       <span class="evidence-project" title={project}>{project}</span>
                       <span class="evidence-meta">{agentLabel(example.agent)} · {m.analytics_tool_latest_matching_call({ date: example.date })}</span>
                     </span>
-                    <span class="evidence-count">{m.analytics_tool_matching_calls({ count: example.signal_total })}</span>
+                    <span class="evidence-count">{m.analytics_tool_matching_calls({ count: formatCount(example.signal_total) })}</span>
                   </a>
                 {/each}
               </div>
@@ -349,7 +349,7 @@
                 ></div>
               </div>
               <span class="bar-value">
-                {cat.count.toLocaleString()}
+                {formatCount(cat.count)}
               </span>
               <span class="bar-pct">{cat.pct}%</span>
             </div>

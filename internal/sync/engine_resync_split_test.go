@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -238,9 +239,85 @@ func TestResyncBuildThenSwapMatchesResyncAll(t *testing.T) {
 	assert.Zero(t, warm.Synced, "persisted skip state must survive the swap")
 }
 
-// TestSwapWindowRejectsDirectWrites proves the write barrier: with the writer
-// closed a direct star write is rejected with ErrWriterClosed, and the rejected
-// write is absent from the rebuilt archive after the swap.
+func TestResyncRecomputesStaleSourceMissingSignals(t *testing.T) {
+	for _, version := range []int{0, db.CurrentQualitySignalVersion - 1} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			e, database, root := newResyncSplitEngine(t)
+			for _, id := range []string{"orphan", "keep1"} {
+				require.NoError(t, database.ReplaceSessionMessages(t.Context(), id, []db.Message{
+					{SessionID: id, Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read", ResultContent: "file contents", ResultContentLength: 13}}},
+				}))
+				require.NoError(t, database.UpdateSessionSignals(t.Context(), id, db.SessionSignalUpdate{
+					QualitySignals: db.QualitySignals{Version: version},
+				}))
+			}
+			require.NoError(t, database.SoftDeleteSession(t.Context(), "keep1"))
+			require.NoError(t, os.Remove(filepath.Join(root, "project", "orphan.jsonl")))
+
+			tempPath, stats, err := e.ResyncBuild(t.Context(), nil)
+			require.NoError(t, err)
+			require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
+			installed, err := e.SwapResyncDatabase(tempPath)
+			require.NoError(t, err)
+			require.True(t, installed)
+			require.NoError(t, e.ResetCachesAfterSwap(t.Context()))
+
+			assertRefreshed := func() {
+				for _, id := range []string{"orphan", "keep1"} {
+					session, err := database.GetSessionFull(t.Context(), id)
+					require.NoError(t, err)
+					assert.Equal(t, db.CurrentQualitySignalVersion, session.QualitySignalVersion)
+					messages, err := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					require.Len(t, messages, 1)
+					require.Len(t, messages[0].ToolCalls, 1)
+					assert.Equal(t, "file contents", messages[0].ToolCalls[0].ResultContent)
+					assert.Equal(t, new("content"), messages[0].ToolCalls[0].ObservedOutcome)
+					assert.Equal(t, new("none"), messages[0].ToolCalls[0].ObservedRepeat)
+				}
+				tools, err := database.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{})
+				require.NoError(t, err)
+				require.Len(t, tools.ByTool, 1)
+				assert.Equal(t, 1, tools.ByTool[0].AnalyzedCalls)
+				assert.Zero(t, tools.ByTool[0].MissingCalls)
+			}
+			assertRefreshed()
+			for _, id := range []string{"orphan", "keep1"} {
+				require.NoError(t, database.UpdateSessionSignals(t.Context(), id, db.SessionSignalUpdate{
+					QualitySignals: db.QualitySignals{Version: version},
+				}))
+			}
+			stats = e.ResyncAll(t.Context(), nil)
+			require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
+			assertRefreshed()
+		})
+	}
+}
+
+func TestResyncSignalRecomputeFailureKeepsOriginalArchive(t *testing.T) {
+	e, database, root := newResyncSplitEngine(t)
+	require.NoError(t, os.Remove(filepath.Join(root, "project", "orphan.jsonl")))
+	require.NoError(t, database.UpdateSessionSignals(t.Context(), "orphan", db.SessionSignalUpdate{}))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stats := e.ResyncAll(ctx, func(p Progress) {
+		if p.Detail == "Recomputing archived session signals" {
+			cancel()
+		}
+	})
+	require.True(t, stats.Aborted)
+	assert.False(t, stats.ArchiveRebuilt)
+	require.NotEmpty(t, stats.Warnings)
+	assert.Contains(t, stats.Warnings[len(stats.Warnings)-1], "archived session signal recompute failed")
+	assert.NoFileExists(t, e.ResyncTempPath())
+	session, err := database.GetSessionFull(t.Context(), "orphan")
+	require.NoError(t, err)
+	assert.Zero(t, session.QualitySignalVersion)
+	assert.Equal(t, database, e.db)
+	requireOriginalArchiveServes(t, e, database)
+}
+
+// TestSwapWindowRejectsDirectWrites proves the write barrier rejects a direct write during the swap.
 func TestSwapWindowRejectsDirectWrites(t *testing.T) {
 	e, database, _ := newResyncSplitEngine(t)
 
