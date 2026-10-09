@@ -15,7 +15,6 @@ func TestCodexCursorStateCheckpointRoundTrip(t *testing.T) {
 	seed := codexCursorState{
 		model:                    "gpt-5.6-luna",
 		cwd:                      "/workspace/project-a",
-		gitBranch:                "feat/123-rate-limit",
 		agentPath:                "codex/agents/a",
 		firstUserSeen:            true,
 		sawUserTurnAfterFirst:    true,

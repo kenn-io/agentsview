@@ -573,6 +573,24 @@ fixtures retain this field; missing identities remain source-local.
   call per file. `custom_tool_call` items carry the same patch text under
   `input` instead of a JSON `patch` argument.
 
+- **Git branch (2026-10-09):** Issue
+  [#2161](https://github.com/kenn-io/agentsview/issues/2161) reports that
+  Codex sessions never store `git_branch`. The pinned recorder's
+  [`write_session_meta`](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/rollout/src/recorder.rs#L1806-L1823)
+  writes a
+  [`SessionMetaLine`](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/protocol.rs#L3157-L3161)
+  whose optional `git` object is a
+  [`GitInfo`](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/protocol.rs#L3398-L3404)
+  with an optional `branch`. The recorder omits `git` when the cwd is not
+  inside a repository, and
+  [`collect_git_info`](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/git-utils/src/info.rs#L84-L112)
+  omits `branch` on a detached HEAD. Agentsview stores
+  `session_meta.payload.git.branch` as `git_branch`, paired with the `cwd`
+  from the same record, so a later `session_meta` with a new cwd and no branch
+  clears it. When the branch is absent, project identity falls back to probing
+  the local checkout. Reverified the same
+  [`GitInfo` shape on upstream `main`](https://github.com/openai/codex/blob/5fe4fc8f7cd16688b5c661d8cdb76e2a340b046d/codex-rs/protocol/src/protocol.rs#L3534-L3549).
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/openai/codex.git` at

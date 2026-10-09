@@ -71,6 +71,7 @@ type codexSessionBuilder struct {
 	relationshipType            RelationshipType
 	sessionKind                 string
 	project                     string
+	gitBranch                   string
 	callNames                   map[string]string
 	agentSpawnCalls             map[string]string
 	agentWaitCalls              map[string]string
