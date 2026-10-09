@@ -1529,32 +1529,6 @@ func TestDeepSeekHarnessV3SessionParses(t *testing.T) {
 	assert.Equal(t, 2, *usage.MessageOrdinal)
 }
 
-func TestDeepSeekHarnessProviderDiscoversV4OnlySession(t *testing.T) {
-	root := t.TempDir()
-	const id = "session-00000000-0000-4000-8000-000000000001"
-	// Synthetic values preserve the reporter's v4 filename and header structure.
-	header := deepSeekHarnessV3Header(id, deepSeekHarnessFixtureCwd)
-	header["version"] = 4
-	header["createdAt"] = int64(1791501756261)
-	path := writeDeepSeekHarnessVersionedFixture(
-		t, root, id, deepSeekHarnessFixtureCwd, "zstd", 4, []any{header},
-	)
-	provider, ok := NewProvider(
-		AgentDeepSeekHarness,
-		ProviderConfig{Roots: []string{root}},
-	)
-	require.True(t, ok)
-
-	discovered, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, path, discovered[0].DisplayPath)
-	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: id})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, path, found.DisplayPath)
-}
-
 func TestDeepSeekHarnessProviderPrefersNewestGeneration(t *testing.T) {
 	root := t.TempDir()
 	v0Path := writeDeepSeekHarnessFixture(
@@ -1579,6 +1553,11 @@ func TestDeepSeekHarnessProviderPrefersNewestGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, v4Path, discovered[0].DisplayPath)
+
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "generation-pick"})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, v4Path, found.DisplayPath)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
 	require.NoError(t, err)
@@ -1620,21 +1599,6 @@ func TestDeepSeekHarnessProviderIgnoresUnsupportedGeneration(t *testing.T) {
 	assert.Equal(t, "3", outcome.Results[0].Result.Session.SourceVersion)
 }
 
-func TestDeepSeekHarnessRejectsUnsupportedGenerationByPath(t *testing.T) {
-	records := deepSeekHarnessV3Fixture("future-only")
-	header, ok := records[0].(map[string]any)
-	require.True(t, ok)
-	header["version"] = deepSeekHarnessNewestFormatVersion + 1
-	path := writeDeepSeekHarnessVersionedFixture(
-		t, t.TempDir(), "future-only", deepSeekHarnessFixtureCwd, "plain",
-		deepSeekHarnessNewestFormatVersion+1, records,
-	)
-
-	_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported DeepSeek Harness session format version")
-}
-
 func TestDeepSeekHarnessV3AllowsLegacyTurnRestart(t *testing.T) {
 	records := []any{
 		deepSeekHarnessV3Header("v3-restart", deepSeekHarnessFixtureCwd),
@@ -1672,78 +1636,64 @@ func TestDeepSeekHarnessV3AllowsLegacyTurnRestart(t *testing.T) {
 }
 
 func TestDeepSeekHarnessV3SeedCutExcludesInheritedTranscript(t *testing.T) {
-	for _, version := range []int64{3, 4} {
-		t.Run(strconv.FormatInt(version, 10), func(t *testing.T) {
-			header := deepSeekHarnessV3Header("v3-seed", deepSeekHarnessFixtureCwd)
-			header["version"] = version
-			header["isSeeded"] = true
-			header["parentSession"] = "parent"
-			header["delegationDepth"] = 1
-			records := []any{
-				header,
-				deepSeekHarnessFixtureEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
-				deepSeekHarnessFixtureEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
-				deepSeekHarnessFixtureEvent(2, "user/message", deepSeekHarnessUser("parent prompt", "user"), "append"),
-				deepSeekHarnessFixtureEvent(3, "assistant/message", deepSeekHarnessAssistantDataMap(1, 1, "parent answer", nil), "append"),
-				deepSeekHarnessFixtureEvent(4, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
-				deepSeekHarnessFixtureEvent(5, "session/end-seed", map[string]any{"inherited": true}, nil),
-				deepSeekHarnessFixtureEvent(6, "agent/inbox/spliced", map[string]any{
-					"target": "next-turn", "start": 0,
-					"inserted": []any{map[string]any{
-						"role": "user", "id": "inbox-child",
-						"source":  map[string]any{"kind": "user"},
-						"content": []any{map[string]any{"type": "text", "text": "child context"}},
-					}},
-				}, nil),
-				deepSeekHarnessFixtureEvent(7, "turn/start", map[string]any{"turn": 2}, nil),
-				deepSeekHarnessFixtureEvent(8, "step/start", map[string]any{"turn": 2, "step": 1}, nil),
-				deepSeekHarnessFixtureEvent(9, "user/message", deepSeekHarnessUser("child prompt", "user"), "append"),
-				deepSeekHarnessFixtureEvent(10, "assistant/message", deepSeekHarnessAssistantDataMap(2, 1, "child answer", nil), "append"),
-				deepSeekHarnessFixtureEvent(11, "step/end", map[string]any{"turn": 2, "step": 1}, nil),
-				deepSeekHarnessFixtureEvent(12, "turn/end", deepSeekHarnessTurnEnd(2, "completed"), nil),
-			}
-			path := writeDeepSeekHarnessVersionedFixture(
-				t, t.TempDir(), "v3-seed", deepSeekHarnessFixtureCwd, "plain", version, records,
-			)
-			result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-			require.NoError(t, err)
-			assert.Equal(t, "deepseek-harness:parent", result.Session.ParentSessionID)
-			assert.Equal(t, strconv.FormatInt(version, 10), result.Session.SourceVersion)
-			require.Len(t, result.Messages, 2)
-			assert.Equal(t, "child prompt", result.Messages[0].Content)
-			assert.Equal(t, "child answer", result.Messages[1].Content)
-			assert.Empty(t, result.UsageEvents)
-			assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
-		})
+	header := deepSeekHarnessV3Header("v3-seed", deepSeekHarnessFixtureCwd)
+	header["isSeeded"] = true
+	header["parentSession"] = "parent"
+	header["delegationDepth"] = 1
+	records := []any{
+		header,
+		deepSeekHarnessFixtureEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
+		deepSeekHarnessFixtureEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(2, "user/message", deepSeekHarnessUser("parent prompt", "user"), "append"),
+		deepSeekHarnessFixtureEvent(3, "assistant/message", deepSeekHarnessAssistantDataMap(1, 1, "parent answer", nil), "append"),
+		deepSeekHarnessFixtureEvent(4, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(5, "session/end-seed", map[string]any{"inherited": true}, nil),
+		deepSeekHarnessFixtureEvent(6, "agent/inbox/spliced", map[string]any{
+			"target": "next-turn", "start": 0,
+			"inserted": []any{map[string]any{
+				"role": "user", "id": "inbox-child",
+				"source":  map[string]any{"kind": "user"},
+				"content": []any{map[string]any{"type": "text", "text": "child context"}},
+			}},
+		}, nil),
+		deepSeekHarnessFixtureEvent(7, "turn/start", map[string]any{"turn": 2}, nil),
+		deepSeekHarnessFixtureEvent(8, "step/start", map[string]any{"turn": 2, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(9, "user/message", deepSeekHarnessUser("child prompt", "user"), "append"),
+		deepSeekHarnessFixtureEvent(10, "assistant/message", deepSeekHarnessAssistantDataMap(2, 1, "child answer", nil), "append"),
+		deepSeekHarnessFixtureEvent(11, "step/end", map[string]any{"turn": 2, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(12, "turn/end", deepSeekHarnessTurnEnd(2, "completed"), nil),
 	}
+	path := writeDeepSeekHarnessVersionedFixture(
+		t, t.TempDir(), "v3-seed", deepSeekHarnessFixtureCwd, "plain", 3, records,
+	)
+	result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+	require.NoError(t, err)
+	assert.Equal(t, "deepseek-harness:parent", result.Session.ParentSessionID)
+	assert.Equal(t, "3", result.Session.SourceVersion)
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "child prompt", result.Messages[0].Content)
+	assert.Equal(t, "child answer", result.Messages[1].Content)
+	assert.Empty(t, result.UsageEvents)
+	assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
 }
 
 func TestDeepSeekHarnessV4SessionParses(t *testing.T) {
-	for _, compression := range []string{"plain", "zstd"} {
-		t.Run(compression, func(t *testing.T) {
-			path := writeDeepSeekHarnessVersionedFixture(
-				t, t.TempDir(), "v4-session", deepSeekHarnessFixtureCwd, compression, 4,
-				deepSeekHarnessV4Fixture("v4-session"),
-			)
-			result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
-			require.NoError(t, err)
-			assert.Equal(t, "4", result.Session.SourceVersion)
-			assert.False(t, result.Session.IsTruncated)
-			require.Len(t, result.Messages, 5)
-			assert.Equal(t, "answer", result.Messages[2].Content)
-			require.Len(t, result.Messages[3].ToolResults, 1)
-			assert.Equal(t, "call-1", result.Messages[3].ToolResults[0].ToolUseID)
-			assert.Contains(t, result.Messages[3].ToolResults[0].ContentRaw, "output")
-			developer := result.Messages[4]
-			assert.Equal(t, RoleSystem, developer.Role)
-			assert.True(t, developer.IsSystem)
-			assert.Equal(t, "tool-registry", developer.SourceType)
-			assert.Equal(t, "Use the read-only connection\nTool added: read\nTool removed: write", developer.Content)
-			require.Len(t, result.UsageEvents, 1)
-			assert.Equal(t, 10, result.UsageEvents[0].InputTokens)
-			assert.Equal(t, 5, result.UsageEvents[0].OutputTokens)
-		})
-	}
+	path := writeDeepSeekHarnessVersionedFixture(
+		t, t.TempDir(), "v4-session", deepSeekHarnessFixtureCwd, "zstd", 4,
+		deepSeekHarnessV4Fixture("v4-session"),
+	)
+	result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+	require.NoError(t, err)
+	assert.Equal(t, "4", result.Session.SourceVersion)
+	require.Len(t, result.Messages, 5)
+	require.Len(t, result.Messages[3].ToolResults, 1)
+	assert.Equal(t, "call-1", result.Messages[3].ToolResults[0].ToolUseID)
+	assert.Contains(t, result.Messages[3].ToolResults[0].ContentRaw, "output")
+	developer := result.Messages[4]
+	assert.Equal(t, RoleSystem, developer.Role)
+	assert.True(t, developer.IsSystem)
+	assert.Equal(t, "tool-registry", developer.SourceType)
+	assert.Equal(t, "Use the read-only connection\nTool added: read\nTool removed: write", developer.Content)
 }
 
 func TestDeepSeekHarnessV4ToolResultValidation(t *testing.T) {

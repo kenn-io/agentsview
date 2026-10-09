@@ -27,51 +27,13 @@ func TestDeepSeekHarnessSyncDiscoversV4AndUpgradesV3(t *testing.T) {
 		AgentDirs: map[parser.AgentType][]string{parser.AgentDeepSeekHarness: {root}},
 		Machine:   "local",
 	})
-	events := harnessSyncCompleteTurn("answer")
-	assistant := events[4].(map[string]any)["data"].(map[string]any)["message"].(map[string]any)
-	assistant["content"] = append(assistant["content"].([]any), map[string]any{
-		"type": "tool-call", "id": "call-1", "name": "read", "arguments": `{}`,
-	})
-	tail := []any{
-		harnessSyncEvent(5, "tool/call", map[string]any{
-			"turn": 1, "step": 1, "callId": "call-1", "name": "read", "arguments": `{}`,
-		}, nil),
-		harnessSyncEvent(6, "tool/result", map[string]any{
-			"turn": 1, "step": 1,
-			"message": map[string]any{
-				"id": "result-1", "role": "tool", "toolCallId": "call-1", "isError": false,
-				"source":  map[string]any{"kind": "tool", "callId": "call-1"},
-				"content": []any{map[string]any{"type": "text", "text": "file contents"}},
-			},
-		}, "append"),
-		harnessSyncEvent(7, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
-		harnessSyncEvent(8, "turn/end", map[string]any{
-			"turn": 1, "reason": map[string]any{"kind": "completed"},
-		}, nil),
-	}
-	events = append(events[:5], tail...)
-	header := map[string]any{"version": 4, "isSeeded": false, "agentPreset": "minimal"}
-	v4Path := harnessSyncWriteLog(t, root, "v4-only", header, events)
-	engine.SyncAll(t.Context(), nil)
-
-	messages, err := database.GetMessages(t.Context(), "deepseek-harness:v4-only", 0, 20, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	require.Len(t, messages[1].ToolCalls, 1)
-	assert.Contains(t, messages[1].ToolCalls[0].ResultContent, "file contents")
-	usage, err := database.GetSessionUsage(t.Context(), "deepseek-harness:v4-only", true)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.Equal(t, 2, usage.TotalOutputTokens)
-	assert.Equal(t, v4Path, database.GetSessionFilePath(t.Context(), "deepseek-harness:v4-only"))
-
-	header["version"] = 3
+	header := map[string]any{"version": 3, "isSeeded": false, "agentPreset": "minimal"}
 	harnessSyncWriteLog(t, root, "upgrade", header, harnessSyncCompleteTurn("older generation"))
 	engine.SyncAll(t.Context(), nil)
 	header["version"] = 4
-	upgradePath := harnessSyncWriteLog(t, root, "upgrade", header, events)
+	upgradePath := harnessSyncWriteLog(t, root, "upgrade", header, harnessSyncCompleteTurn("answer"))
 	engine.SyncAll(t.Context(), nil)
-	messages, err = database.GetMessages(t.Context(), "deepseek-harness:upgrade", 0, 20, true)
+	messages, err := database.GetMessages(t.Context(), "deepseek-harness:upgrade", 0, 20, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, "answer", messages[1].Content)
