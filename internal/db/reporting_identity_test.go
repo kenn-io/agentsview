@@ -7,8 +7,100 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 )
+
+func TestReportingProjectEvidenceRootConsensus(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		roots      []string
+		wantRoot   string
+		resolution export.ProjectResolution
+	}{
+		{"one root", []string{"root-a"}, "root-a", export.ProjectResolutionResolved},
+		{"same root", []string{"root-a", "root-a"}, "root-a", export.ProjectResolutionResolved},
+		{"different roots", []string{"root-a", "root-b", "root-a"}, "", export.ProjectResolutionResolved},
+		{"missing root fact", []string{"root-a", ""}, "", export.ProjectResolutionResolved},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			contributors := map[string]bool{}
+			sessions := map[string]activity.SessionMeta{}
+			references := map[string]export.ProjectReference{}
+			for i, root := range tc.roots {
+				id := []string{"session-a", "session-b", "session-c"}[i]
+				contributors[id] = true
+				sessions[id] = activity.SessionMeta{Project: "api"}
+				references[id] = export.ProjectReference{
+					ProjectKey: "project-a", Resolution: export.ProjectResolutionResolved,
+					Identity: &export.ProjectIdentity{Key: "identity-a", Kind: export.ProjectKindMachineRoot, RepositoryKey: "repository-a", RootKey: root},
+				}
+			}
+			projects := map[string]export.ProjectMapEntry{"api": {ProjectKey: "project-a"}}
+			for range 32 {
+				got := reportingProjectEvidence(contributors, sessions, projects, references)["project-a"]
+				require.Equal(t, tc.resolution, got.Resolution)
+				require.NotNil(t, got.Identity)
+				require.Equal(t, &export.ProjectIdentity{Key: "identity-a", Kind: export.ProjectKindMachineRoot, RepositoryKey: "repository-a", RootKey: tc.wantRoot}, got.Identity)
+			}
+			for i, root := range tc.roots {
+				assert.Equal(t, root, references[[]string{"session-a", "session-b", "session-c"}[i]].Identity.RootKey, "aggregation must not alter session facts")
+			}
+		})
+	}
+}
+
+func TestReportingWorktreeIdentityExportsRemainStable(t *testing.T) {
+	d := testDB(t)
+	date := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+	for i, root := range []string{"/synthetic/main", "/synthetic/linked"} {
+		id := []string{"session-a", "session-b"}[i]
+		insertSession(t, d, id, "api", func(s *Session) {
+			s.Agent = "agent-a"
+			s.StartedAt, s.EndedAt = new("2026-07-28T12:00:00Z"), new("2026-07-28T12:01:00Z")
+		})
+		insertMessages(t, d,
+			Message{SessionID: id, Ordinal: 0, Role: "user", Timestamp: "2026-07-28T12:00:00Z"},
+			Message{SessionID: id, Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T12:01:00Z", Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`)},
+		)
+		require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), export.ProjectIdentityObservation{
+			SessionID: id, Project: "api", Machine: "synthetic", RootPath: root,
+			RepositoryPath: "/synthetic/main", WorktreeRootPath: root,
+			WorktreeRelationship: []export.WorktreeRelationship{export.WorktreeMain, export.WorktreeLinked}[i], ObservedAt: date,
+		}))
+	}
+	opts := ReportingExportOptions{Date: date, Now: date.Add(24 * time.Hour), SchemaVersion: 4, Bucket: "5m"}
+	first, err := d.ExportReportingDay(t.Context(), opts)
+	require.NoError(t, err)
+	firstBytes, err := export.MarshalCanonical(first)
+	require.NoError(t, err)
+	require.Len(t, first.Hours[12].Joint.Projects, 1)
+	for _, project := range first.Hours[12].Joint.Projects {
+		require.Equal(t, export.ProjectResolutionResolved, project.Resolution)
+		require.NotNil(t, project.Identity)
+		assert.Equal(t, export.ProjectKindMachineRoot, project.Identity.Kind)
+		assert.NotEmpty(t, project.Identity.Key)
+		assert.NotEmpty(t, project.Identity.RepositoryKey)
+		require.Empty(t, project.Identity.RootKey, "no individual worktree represents the shared repository")
+	}
+	for range 8 {
+		day, err := d.ExportReportingDay(t.Context(), opts)
+		require.NoError(t, err)
+		dayBytes, err := export.MarshalCanonical(day)
+		require.NoError(t, err)
+		assert.Equal(t, firstBytes, dayBytes)
+		digests, err := d.ExportReportingDigest(t.Context(), ReportingDigestExportOptions{
+			From: date, To: date, Now: opts.Now, SchemaVersion: 4, Bucket: "5m",
+		})
+		require.NoError(t, err)
+		require.Len(t, digests, 1)
+		assert.Equal(t, first.Digest, digests[0].DayDigest)
+		require.Len(t, digests[0].HourDigests, 24)
+		for i, hour := range first.Hours {
+			assert.Equal(t, hour.Digest, digests[0].HourDigests[i])
+		}
+	}
+}
 
 func TestReportingJointProjectIdentityRequiresEverySession(t *testing.T) {
 	for _, tc := range []struct {
