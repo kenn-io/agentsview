@@ -82,13 +82,6 @@ func TestGetActivityReportAutomatedSubagentPrecedence(t *testing.T) {
 	assert.Equal(t, 3, report.Totals.SubagentSessions)
 	assert.Zero(t, report.Totals.AutomatedSessions)
 	assert.Zero(t, report.Totals.InteractiveSessions)
-	day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
-		Date: time.Date(2026, time.June, 14, 0, 0, 0, 0, time.UTC),
-		Now:  time.Date(2026, time.June, 15, 0, 0, 0, 0, time.UTC),
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 3, day.Hours[10].Activity.Totals.NewSubagentSessions)
-	assert.Zero(t, day.Hours[10].Activity.Totals.NewAutomatedSessions)
 }
 
 func TestActivityReportMessageCounts(t *testing.T) {

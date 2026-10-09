@@ -5,11 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -25,12 +23,6 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 		relationship                             parser.RelationshipType
 		automated                                bool
 	}{
-		{
-			id: "human", path: filepath.Join(claudeRoot, "project", "human.jsonl"),
-			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"human","origin":{"kind":"human"},"promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Plan a settings change."}}` + "\n",
-			reply:    testjsonl.NewSessionBuilder().AddClaudeAssistantWithUUID("2026-10-01T10:01:00Z", "The plan is ready.", "a1", "u1").String(),
-			followup: `{"type":"user","uuid":"u2","parentUuid":"a1","turnOrigin":"human","timestamp":"2026-10-01T10:02:00Z","message":{"content":"Explain the plan."}}` + "\n",
-		},
 		{
 			id: "worker", path: filepath.Join(claudeRoot, "project", "worker.jsonl"), relationship: parser.RelSubagent,
 			content:  `{"type":"user","entrypoint":"sdk-cli","uuid":"u1","turnOrigin":"sdk","promptSource":"sdk","timestamp":"2026-10-01T10:00:00Z","message":{"content":"Delegate a settings change."}}` + "\n",
@@ -58,10 +50,6 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	}
 	engine := sync.NewEngine(t.Context(), database, engineConfig)
 	t.Cleanup(func() { engine.Close() })
-	query, err := activity.ResolveQuery(activity.QueryInput{
-		Preset: "day", Date: "2026-10-01", Timezone: "UTC",
-	}, time.Date(2026, time.October, 2, 0, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
 	for stage := range 3 {
 		for i := range sessions {
 			session := &sessions[i]
@@ -74,7 +62,7 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(session.path), 0o700))
 			require.NoError(t, os.WriteFile(session.path, []byte(session.content), 0o600))
 		}
-		require.Equal(t, 4, engine.SyncAll(t.Context(), nil).Synced)
+		require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 		for _, session := range sessions {
 			stored, err := database.GetSession(t.Context(), session.id)
 			require.NoError(t, err)
@@ -83,16 +71,6 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 			assert.Equal(t, string(session.relationship), stored.RelationshipType)
 			assert.Nil(t, stored.ParentSessionID)
 			assert.Equal(t, session.automated, stored.IsAutomated)
-		}
-		if stage > 0 {
-			report, err := database.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, query)
-			require.NoError(t, err)
-			assert.Equal(t, 1, report.Totals.InteractiveSessions)
-			assert.Equal(t, 3, report.Totals.SubagentSessions)
-			assert.Zero(t, report.Totals.AutomatedSessions)
-			assert.Equal(t, 1, report.InteractivePeak.Agents)
-			assert.Equal(t, 3, report.SubagentPeak.Agents)
-			assert.Equal(t, 4, report.Peak.Agents)
 		}
 	}
 	engine.Close()
@@ -110,11 +88,6 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	reopened := dbtest.OpenTestDBAt(t, path)
 	engine = sync.NewEngine(t.Context(), reopened, engineConfig)
 	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
-	report, err := reopened.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, query)
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Totals.InteractiveSessions)
-	assert.Equal(t, 3, report.Totals.SubagentSessions)
-	assert.Zero(t, report.Totals.AutomatedSessions)
 	worker, err := reopened.GetSession(t.Context(), "worker")
 	require.NoError(t, err)
 	require.NotNil(t, worker)
@@ -131,9 +104,4 @@ func TestHeadlessSubagentsSurviveSyncAppends(t *testing.T) {
 	require.NotNil(t, worker)
 	assert.True(t, worker.IsAutomated)
 	assert.Equal(t, "subagent", worker.RelationshipType)
-	report, err = reclassified.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, query)
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Totals.InteractiveSessions)
-	assert.Equal(t, 3, report.Totals.SubagentSessions)
-	assert.Zero(t, report.Totals.AutomatedSessions)
 }

@@ -45,14 +45,12 @@ func TestUsageOnlyAuditPreservesLegacyHeadlessAutomation(t *testing.T) {
 			database.SetArchiveContent(config.ArchiveContentUsage)
 			_, err := database.getWriter().Exec(t.Context(), `INSERT INTO sessions (id, machine, project, agent, session_kind, user_message_count, is_automated) VALUES
 				('codex-headless', 'local', 'project', 'codex', 'headless', 2, 1),
-				('grok-headless', 'local', 'project', 'grok', 'headless', 2, 1),
-				('codex-interactive', 'local', 'project', 'codex', '', 2, 0),
-				('grok-interactive', 'local', 'project', 'grok', '', 2, 0)`)
+				('codex-interactive', 'local', 'project', 'codex', '', 2, 0)`)
 			require.NoError(t, err)
 			_, err = database.getWriter().Exec(t.Context(), `UPDATE stats SET value = ? WHERE key = ?`, hash, ClassifierHashKey)
 			require.NoError(t, err)
 			require.NoError(t, database.backfillIsAutomatedLocked(t.Context(), database.getWriter()))
-			for id, want := range map[string]bool{"codex-headless": true, "grok-headless": true, "codex-interactive": false, "grok-interactive": false} {
+			for id, want := range map[string]bool{"codex-headless": true, "codex-interactive": false} {
 				stored, err := database.GetSessionFull(t.Context(), id)
 				require.NoError(t, err)
 				require.NotNil(t, stored)

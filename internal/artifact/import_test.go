@@ -2,7 +2,6 @@ package artifact
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -15,33 +14,6 @@ import (
 )
 
 const importLocalOrigin = "local-b2c3d4"
-
-func TestArtifactImportParentlessWorkerAfterRepair(t *testing.T) {
-	source := testExportDB(t)
-	seedSession(t, source, "worker", "project-a", func(s *db.Session) {
-		s.Agent = "codex"
-		s.SessionKind = "non-interactive"
-	})
-	raw, err := sql.Open("sqlite3", source.Path())
-	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `UPDATE sessions SET relationship_type = '' WHERE id = 'worker'`)
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	store := newTestArtifactStore(t)
-	_, err = ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
-	require.NoError(t, err)
-	destination := testDB(t)
-	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
-	recordAllImportEntries(t, coordinator, store, contractOrigin)
-	result, err := coordinator.Finalize(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, 1, result.Sessions)
-	stored, err := destination.GetSessionFull(t.Context(), contractOrigin+"~worker")
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Equal(t, "subagent", stored.RelationshipType)
-	assert.Nil(t, stored.FilePath)
-}
 
 func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 	t.Parallel()

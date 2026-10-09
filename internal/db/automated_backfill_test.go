@@ -63,6 +63,16 @@ func TestHeadlessClassificationRepairOnOpen(t *testing.T) {
 			assert.Greater(t, *stored.LocalModifiedAt, "2000-01-01T00:00:00.000Z")
 		}
 	}
+
+	revision, err := reopened.SessionDeletionPublicationRevision(t.Context())
+	require.NoError(t, err)
+	tombstones, err := reopened.LoadSessionDeletionDelta(t.Context(), 0, revision, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, tombstones, "live repair entries cannot delete mirrored sessions")
+	changes, err := reopened.LoadSessionDeletionChanges(t.Context(), 0, revision)
+	require.NoError(t, err)
+	assert.Contains(t, changes, "plain")
+	assert.Contains(t, changes, "script")
 	_, err = reopened.getWriter().Exec(t.Context(), `UPDATE sessions SET relationship_type = '' WHERE id = 'plain'`)
 	require.NoError(t, err)
 	require.NoError(t, reopened.Close())

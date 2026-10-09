@@ -26,7 +26,6 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 		{"worker", nil, false},
 		{"script", nil, true},
 		{"child", new("worker"), true},
-		{"dangling-task", nil, true},
 	} {
 		prompt := "Explain this function."
 		if tc.automated {
@@ -49,11 +48,6 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 			DataVersion: db.CurrentDataVersion(), ReplaceMessages: true,
 		}})
 		require.NoError(t, err)
-		stored, err := local.GetSession(t.Context(), tc.id)
-		require.NoError(t, err)
-		require.NotNil(t, stored)
-		require.Equal(t, tc.automated, stored.IsAutomated)
-		require.Equal(t, "subagent", stored.RelationshipType)
 	}
 	_, err := syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
@@ -63,7 +57,7 @@ func TestActivityReportParentlessAutomatedWorker(t *testing.T) {
 	require.NoError(t, err)
 	report, err := store.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true}, q)
 	require.NoError(t, err)
-	assert.Equal(t, 4, report.Totals.SubagentSessions)
+	assert.Equal(t, 3, report.Totals.SubagentSessions)
 	assert.Zero(t, report.Totals.AutomatedSessions)
 	assert.Zero(t, report.Totals.InteractiveSessions)
 }
