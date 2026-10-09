@@ -255,6 +255,13 @@
   const legendData = $derived(
     usage.attributionSummary ? buildSeries(usage.attributionSummary) : seriesData,
   );
+  const legendKeys = $derived.by(() => {
+    const missing = seriesData.keys.filter((key) => !legendData.keys.includes(key));
+    if (missing.length === 0) return legendData.keys;
+    // A selected series outside the unselected top ten takes Other's slot.
+    const other = seriesData.keys.includes("__other__") ? ["__other__"] : [];
+    return [...legendData.keys.filter((key) => key !== "__other__"), ...missing, ...other];
+  });
 
   const view = $derived(usage.toggles.timeSeries.view);
   const viewOptions = $derived<SegmentedControlOption[]>([
@@ -674,7 +681,7 @@
   {:else}
     {#if legendData.grouped}
       <div class="legend">
-        {#each legendData.keys as key (key)}
+        {#each legendKeys as key (key)}
           <span
             class="legend-item"
             class:dimmed={!seriesData.keys.includes(key)}

@@ -515,6 +515,26 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  it("shows a selected series outside the unselected top ten in Other's slot", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    const models = Array.from({ length: 12 }, (_, index) => ({
+      modelName: `model-${index}`,
+      cost: testMoney(12 - index),
+    }));
+    usage.attributionSummary = usageSummary([modelDailyEntry(0, models)]);
+    usage.summary = usageSummary([modelDailyEntry(0, [models[11]!])]);
+    const colorMap = usageChartColorMaps(usage.attributionSummary, settings.chartPalette).model;
+
+    const component = mount(CostTimeSeriesChart, { target: document.body, props: { colorMap } });
+    await tick();
+
+    const items = Array.from(document.querySelectorAll<HTMLElement>(".legend-item"));
+    expect(items.map((item) => item.textContent?.trim())).toEqual(models.slice(0, 10).map((model) => model.modelName).concat("model-11"));
+    expect(items.filter((item) => !item.classList.contains("dimmed")).map((item) => item.textContent?.trim())).toEqual(["model-11"]);
+    expect(items.at(-1)!.querySelector<HTMLElement>(".legend-dot")!.style.background).toBe(colorMap.get("model-11"));
+    unmount(component);
+  });
+
   it("renders ten named series before rolling the rest into Other", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     const models = Array.from({ length: 11 }, (_, index) => ({

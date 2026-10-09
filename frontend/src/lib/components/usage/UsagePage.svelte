@@ -384,7 +384,9 @@
     });
   });
 
-  function usageUrlParams(): Record<string, string> {
+  // URL write-back: keep URL params in sync with filter state
+  // so users can share/bookmark the view.
+  $effect(() => {
     const state = {
       from: usage.from,
       to: usage.to,
@@ -395,7 +397,7 @@
       excludedAgents: usage.excludedAgents,
       excludedModels: usage.excludedModels,
     };
-    return withSelectedTokenTypes(
+    const nextParams = withSelectedTokenTypes(
       withUsageMode(
         mergeUsageAndSessionUrlParams(
           buildUsageUrlParams(state),
@@ -406,10 +408,6 @@
       usage.selectedTokenTypes,
       usage.mode,
     );
-  }
-
-  $effect(() => {
-    const nextParams = usageUrlParams();
     const ready = urlInitRan && urlWritebackReady;
     untrack(() => {
       if (!ready || router.route !== "usage") return;
