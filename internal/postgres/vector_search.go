@@ -295,9 +295,11 @@ func (v *vectorSearcher) lookupDocs(
 		return docs, nil
 	}
 	rows, err := v.pg.QueryContext(ctx, `
-SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
-  FROM vector_documents
- WHERE ordinal >= 0 AND doc_key = ANY($1)`, docKeys)
+SELECT d.doc_key, d.session_id, d.ordinal, d.ordinal_end,
+       d.subordinate OR `+db.SubordinateSessionSQL("s")+`, d.offsets, d.content
+  FROM vector_documents d
+  LEFT JOIN sessions s ON s.id = d.session_id
+ WHERE d.ordinal >= 0 AND d.doc_key = ANY($1)`, docKeys)
 	if err != nil {
 		return nil, fmt.Errorf("looking up search hit documents: %w", err)
 	}
@@ -339,10 +341,12 @@ func (v *vectorSearcher) ResolveMessageUnits(
 		return out, nil
 	}
 	stmt, err := v.pg.PrepareContext(ctx, `
-SELECT doc_key, ordinal, ordinal_end, subordinate
-  FROM vector_documents
- WHERE session_id = $1 AND ordinal >= 0 AND ordinal <= $2
- ORDER BY ordinal DESC LIMIT 1`)
+SELECT d.doc_key, d.ordinal, d.ordinal_end,
+       d.subordinate OR `+db.SubordinateSessionSQL("s")+`
+  FROM vector_documents d
+  LEFT JOIN sessions s ON s.id = d.session_id
+ WHERE d.session_id = $1 AND d.ordinal >= 0 AND d.ordinal <= $2
+ ORDER BY d.ordinal DESC LIMIT 1`)
 	if err != nil {
 		return nil, fmt.Errorf("resolve message units: %w", err)
 	}
