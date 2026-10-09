@@ -881,11 +881,7 @@ class UsageStore {
   }
 
   setTimeSeriesGroupBy(g: GroupBy) {
-    this.backToProjects();
-    this.toggles.timeSeries.groupBy = g;
-    this.toggles.attribution.groupBy = g;
-    saveToggles(this.toggles);
-    void this.fetchAll({ preserveTimeRange: true });
+    this.setGroupBy(g);
   }
 
   setTimeSeriesView(v: TimeSeriesView) {
@@ -894,11 +890,18 @@ class UsageStore {
   }
 
   setAttributionGroupBy(g: GroupBy) {
-    this.backToProjects();
+    this.setGroupBy(g);
+  }
+
+  private setGroupBy(g: GroupBy): void {
+    const previous = this.toggles.attribution.groupBy;
+    if (g === previous) return;
     this.toggles.timeSeries.groupBy = g;
     this.toggles.attribution.groupBy = g;
     saveToggles(this.toggles);
-    void this.fetchAll({ preserveTimeRange: true });
+    this.backToProjects();
+    if (this.hasSelection(previous) || this.hasSelection(g))
+      void this.fetchAll({ preserveTimeRange: true });
   }
 
   setAttributionView(v: AttributionView) {

@@ -17,12 +17,17 @@ test.describe("Usage attribution touch", () => {
       expect(count).toBeGreaterThan(1);
       const colors = await rows.evaluateAll((items) => items.map((item) => item.querySelector("rect")?.getAttribute("fill") ?? item.querySelector(".list-dot")?.getAttribute("style")));
       await rows.first().scrollIntoViewIfNeeded();
-      const bounds = await rows.first().boundingBox();
+      const geometry = (row: Element) => {
+        const bounds = row.getBoundingClientRect();
+        const panel = row.closest(".attribution-panel")!.getBoundingClientRect();
+        return { width: bounds.width, height: bounds.height, x: bounds.x - panel.x, y: bounds.y - panel.y };
+      };
+      const bounds = await rows.first().evaluate(geometry);
       await rows.first().tap();
       await expect(rows.first()).toHaveAttribute("aria-pressed", "true");
       await expect(rows).toHaveCount(count);
       await expect(panel.locator(".dimmed").first()).toBeVisible();
-      expect(await rows.first().boundingBox()).toEqual(bounds);
+      expect(await rows.first().evaluate(geometry)).toEqual(bounds);
       expect(await rows.evaluateAll((items) => items.map((item) => item.querySelector("rect")?.getAttribute("fill") ?? item.querySelector(".list-dot")?.getAttribute("style")))).toEqual(colors);
       await panel.getByRole("button", { name: "Open", exact: true }).tap();
       await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
@@ -62,6 +67,7 @@ test.describe("Usage attribution selection", () => {
     await expect(panel.locator(".tile").first()).toBeVisible();
     const chart = page.locator(".chart-container");
     const brush = chart.locator(".chart-body").first();
+    await brush.scrollIntoViewIfNeeded();
     const bounds = (await brush.boundingBox())!;
     const y = bounds.y + bounds.height / 2;
     await page.mouse.move(bounds.x + bounds.width * 0.2, y);
@@ -103,6 +109,7 @@ test.describe("Usage attribution selection", () => {
     const rows = panel.locator(".list-row");
     await expect(rows.first()).toBeVisible();
     const brush = page.locator(".chart-container .chart-body").first();
+    await brush.scrollIntoViewIfNeeded();
     const bounds = await brush.boundingBox();
     expect(bounds).not.toBeNull();
     const rangeResponse = page.waitForResponse(

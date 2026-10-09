@@ -490,6 +490,7 @@ describe("UsageStore group-by linking", () => {
 
     usage.setTimeSeriesGroupBy("model");
 
+    expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
     expect(usage.toggles.timeSeries.groupBy).toBe("model");
     expect(usage.toggles.attribution.groupBy).toBe("model");
     expect(JSON.parse(localStorage.getItem(TOGGLES_KEY) || "{}")).toMatchObject({
@@ -503,12 +504,30 @@ describe("UsageStore group-by linking", () => {
 
     usage.setAttributionGroupBy("agent");
 
+    expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
     expect(usage.toggles.timeSeries.groupBy).toBe("agent");
     expect(usage.toggles.attribution.groupBy).toBe("agent");
     expect(JSON.parse(localStorage.getItem(TOGGLES_KEY) || "{}")).toMatchObject({
       timeSeries: { groupBy: "agent" },
       attribution: { groupBy: "agent" },
     });
+  });
+
+  it("refetches when switching away from a selected model", async () => {
+    const { usage } = await loadStore();
+    usage.setAttributionGroupBy("model");
+    usage.toggleSelection("model", "gpt-4o");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    vi.clearAllMocks();
+
+    usage.setTimeSeriesGroupBy("project");
+
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ model: "gpt-4o" }),
+      expect.anything(),
+    );
+    expect(usage.selectedModel).toBe("gpt-4o");
   });
 
   it("defaults the cost chart to smooth areas and remembers the chosen style", async () => {

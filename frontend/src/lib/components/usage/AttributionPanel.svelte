@@ -159,7 +159,7 @@
 
   function handleSelect(id: string) {
     if (zoomedProject) return;
-    if (rows.some((row) => row.id === id)) usage.toggleSelection(groupBy, id);
+    usage.toggleSelection(groupBy, id);
   }
 
   function handleOpen(id: string) {

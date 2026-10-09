@@ -2956,7 +2956,8 @@ schemas keep their existing ordering behavior.
   and `prune_sessions` in
   [hermes_state_maintenance.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_maintenance.py)
   clear surviving children's parent links. A cron continuation whose ancestors
-  were pruned keeps its stored job.
+  were pruned keeps its stored job, including transcript-only parses and Augure
+  Desktop. Reverified on 2026-10-09 with parser and sync fixtures for both formats.
 
 ## Forge (`forge`)
 

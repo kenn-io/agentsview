@@ -946,10 +946,13 @@ func TestBuildHermesStateResultGroupPreservation(t *testing.T) {
 
 func TestHermesCronTranscriptProjects(t *testing.T) {
 	for _, format := range []string{"json", "jsonl"} {
-		for _, tc := range []struct{ id, source, project, group string }{
-			{"cron_job-1_20261007_120000", "cron", "hermes-cron", "job-1"},
-			{"child", "cron", "hermes-cron", ""},
-			{"cron_job-1_20261007_120000", "cli", "hermes-cli", ""},
+		for _, tc := range []struct {
+			id, source, project, group string
+			keepStored                 bool
+		}{
+			{"cron_job-1_20261007_120000", "cron", "hermes-cron", "job-1", false},
+			{"child", "cron", "hermes-cron", "", true},
+			{"cron_job-1_20261007_120000", "cli", "hermes-cli", "", false},
 		} {
 			t.Run(format+"/"+tc.id+"/"+tc.source, func(t *testing.T) {
 				name := "session_" + tc.id + ".json"
@@ -964,6 +967,7 @@ func TestHermesCronTranscriptProjects(t *testing.T) {
 				require.NotNil(t, sess)
 				assert.Equal(t, tc.project, sess.Project)
 				assert.Equal(t, tc.group, sess.GroupKey)
+				assert.Equal(t, tc.keepStored, sess.KeepStoredGroupKey)
 				assert.Empty(t, sess.ParentSessionID)
 			})
 		}

@@ -354,7 +354,6 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	fullID := "hermes:" + sessionID
 
 	// Derive project from the session platform or default.
-	job := hermesTranscriptCronJob(sessionPlatform, sessionID)
 	projectSynthesized := false
 	if project == "" {
 		if sessionPlatform != "" {
@@ -368,7 +367,6 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	sess := &ParsedSession{
 		ID:                         fullID,
 		Project:                    project,
-		GroupKey:                   job,
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
@@ -384,6 +382,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		},
 	}
 
+	setHermesCronGroup(sess, sessionPlatform, hermesCronRunJob(sessionID))
 	return sess, messages, nil
 }
 
@@ -546,7 +545,6 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 
 	fullID := "hermes:" + sessionID
 
-	job := hermesTranscriptCronJob(sessionPlatform, sessionID)
 	projectSynthesized := false
 	if project == "" {
 		if sessionPlatform != "" {
@@ -560,7 +558,6 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 	sess := &ParsedSession{
 		ID:                         fullID,
 		Project:                    project,
-		GroupKey:                   job,
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
@@ -576,6 +573,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 		},
 	}
 
+	setHermesCronGroup(sess, sessionPlatform, hermesCronRunJob(sessionID))
 	return sess, messages, nil
 }
 
@@ -1049,8 +1047,7 @@ func applyHermesStateMetadata(
 		sess.ParentSessionID = "hermes:" + ss.parentSessionID
 		sess.RelationshipType = RelContinuation
 	}
-	sess.GroupKey = ss.cronJob
-	sess.KeepStoredGroupKey = ss.source == "cron" && ss.cronJob == ""
+	setHermesCronGroup(sess, ss.source, ss.cronJob)
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
 	sess.SessionName = ss.title
@@ -1511,11 +1508,12 @@ func hermesCronJobID(id string, parent func(string) string) string {
 	return ""
 }
 
-func hermesTranscriptCronJob(platform, sessionID string) string {
-	if platform == "cron" {
-		return hermesCronRunJob(sessionID)
+func setHermesCronGroup(sess *ParsedSession, platform, job string) {
+	if platform != "cron" {
+		return
 	}
-	return ""
+	sess.GroupKey = job
+	sess.KeepStoredGroupKey = job == ""
 }
 
 func hermesCronRunJob(id string) string {
