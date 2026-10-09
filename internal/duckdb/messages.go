@@ -277,7 +277,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 			COALESCE(tc.skill_name, ''), COALESCE(tc.result_content_length, 0),
 			COALESCE(tc.result_content, ''),
 			COALESCE(tc.subagent_session_id, ''),
-			COALESCE(tc.file_path, '')
+			COALESCE(tc.file_path, ''), tc.observed_outcome, tc.observed_repeat, tc.sequence_ending
 		FROM tool_calls tc
 		JOIN messages m ON m.session_id = tc.session_id
 			AND m.id = tc.message_id
@@ -295,7 +295,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 		if err := rows.Scan(&ordinal, &callIndex, &tc.ToolName,
 			&tc.Category, &tc.ToolUseID, &tc.InputJSON,
 			&tc.SkillName, &tc.ResultContentLength,
-			&tc.ResultContent, &tc.SubagentSessionID, &tc.FilePath); err != nil {
+			&tc.ResultContent, &tc.SubagentSessionID, &tc.FilePath, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding); err != nil {
 			return err
 		}
 		tc.CallIndex = callIndex

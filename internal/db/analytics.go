@@ -88,10 +88,14 @@ func queryChunkedSize(
 
 // AnalyticsFilter is the shared filter for all analytics queries.
 type AnalyticsFilter struct {
-	From    string // ISO date YYYY-MM-DD, inclusive
-	To      string // ISO date YYYY-MM-DD, inclusive
-	Machine string // optional machine filter
-	Project string // optional project filter
+	ToolCategory   string
+	ToolName       string
+	ToolMetric     string
+	EvidenceOffset int
+	From           string // ISO date YYYY-MM-DD, inclusive
+	To             string // ISO date YYYY-MM-DD, inclusive
+	Machine        string // optional machine filter
+	Project        string // optional project filter
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch        string
 	Agent            string // optional agent filter
@@ -2496,11 +2500,16 @@ type ToolAgentBreakdown struct {
 
 // ToolUsageAnalysis holds ranked usage for one concrete tool name.
 type ToolUsageAnalysis struct {
-	ToolName     string  `json:"tool_name"`
-	Category     string  `json:"category"`
-	CallCount    int     `json:"call_count"`
-	SessionCount int     `json:"session_count"`
-	Pct          float64 `json:"pct"`
+	ToolEffectivenessCounts
+	MissingCalls int      `json:"missing_calls"`
+	EmptyRate    *float64 `json:"empty_rate"`
+	RepeatRate   *float64 `json:"repeat_rate"`
+	RecoveryRate *float64 `json:"recovery_rate"`
+	ToolName     string   `json:"tool_name"`
+	Category     string   `json:"category"`
+	CallCount    int      `json:"call_count"`
+	SessionCount int      `json:"session_count"`
+	Pct          float64  `json:"pct"`
 }
 
 // ToolTrendEntry holds tool call counts for one time bucket.
@@ -2521,6 +2530,9 @@ type ToolsAnalyticsResponse struct {
 // ToolAnalyticsRow is a backend-neutral intermediate row used to
 // aggregate concrete tool usage after native stores apply their filters.
 type ToolAnalyticsRow struct {
+	ToolEffectivenessCounts
+	Project   string
+	Ordinal   int
 	SessionID string
 	ToolName  string
 	Category  string
@@ -2579,6 +2591,7 @@ type SkillAnalyticsRow struct {
 }
 
 type toolUsageAccumulator struct {
+	ToolEffectivenessCounts
 	toolName   string
 	category   string
 	callCount  int
@@ -2622,10 +2635,7 @@ func BuildToolsAnalytics(rows []ToolAnalyticsRow) ToolsAnalyticsResponse {
 		}
 		trendBuckets[week][row.Category] += row.Count
 
-		name := strings.TrimSpace(row.ToolName)
-		if name == "" {
-			name = "Unknown"
-		}
+		name := normalizeToolName(row.ToolName)
 		key := row.Category + "\x00" + name
 		acc := toolCounts[key]
 		if acc == nil {
@@ -2636,6 +2646,7 @@ func BuildToolsAnalytics(rows []ToolAnalyticsRow) ToolsAnalyticsResponse {
 			}
 			toolCounts[key] = acc
 		}
+		acc.Add(row.ToolEffectivenessCounts)
 		acc.callCount += row.Count
 		if row.SessionID != "" {
 			acc.sessionIDs[row.SessionID] = struct{}{}
@@ -2704,11 +2715,16 @@ func BuildToolsAnalytics(rows []ToolAnalyticsRow) ToolsAnalyticsResponse {
 			float64(acc.callCount)/float64(resp.TotalCalls)*1000,
 		) / 10
 		resp.ByTool = append(resp.ByTool, ToolUsageAnalysis{
-			ToolName:     acc.toolName,
-			Category:     acc.category,
-			CallCount:    acc.callCount,
-			SessionCount: len(acc.sessionIDs),
-			Pct:          pct,
+			ToolEffectivenessCounts: acc.ToolEffectivenessCounts,
+			MissingCalls:            acc.callCount - acc.AnalyzedCalls,
+			EmptyRate:               toolRate(acc.EmptyCalls, acc.KnownOutcomeCalls),
+			RepeatRate:              toolRate(acc.RepeatedCalls, acc.AnalyzedCalls),
+			RecoveryRate:            toolRate(acc.RecoveredSequences, acc.RecoveredSequences+acc.AbandonedSequences),
+			ToolName:                acc.toolName,
+			Category:                acc.category,
+			CallCount:               acc.callCount,
+			SessionCount:            len(acc.sessionIDs),
+			Pct:                     pct,
 		})
 	}
 	sort.Slice(resp.ByTool, func(i, j int) bool {
@@ -2914,10 +2930,10 @@ func analyticsToolsQuery(
 	query := `SELECT tc.session_id, tc.category,
 			TRIM(COALESCE(tc.tool_name, '')), COUNT(*)`
 	if includeMessageMeta {
-		query += `, MAX(COALESCE(m.timestamp, ''))`
+		query += `, MAX(COALESCE(m.timestamp, '')), COALESCE(MIN(m.ordinal), 0)` + ToolEffectivenessSQL("tc", "s.quality_signal_version")
 	}
 	query += `
-		FROM tool_calls tc`
+		FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id`
 	if includeMessageMeta {
 		query += `
 		LEFT JOIN messages m
@@ -2968,9 +2984,14 @@ func analyticsSkillsQuery(
 
 // GetAnalyticsTools returns tool usage analytics aggregated
 // from the tool_calls table.
-func (db *DB) GetAnalyticsTools(
+func (db *DB) GetAnalyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
+	rows, err := db.analyticsToolRows(ctx, f)
+	return BuildToolsAnalytics(rows), err
+}
+
+func (db *DB) analyticsToolRows(
 	ctx context.Context, f AnalyticsFilter,
-) (ToolsAnalyticsResponse, error) {
+) ([]ToolAnalyticsRow, error) {
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhereWithoutDate()
 	if pred, windowArgs := f.toolSessionWindowSQL(dateCol, "sessions.id"); pred != "" {
@@ -2979,46 +3000,40 @@ func (db *DB) GetAnalyticsTools(
 	}
 
 	// Fetch filtered session IDs and their metadata.
-	sessQ := `SELECT id, ` + dateCol + `, agent
+	sessQ := `SELECT id, ` + dateCol + `, agent, project
 		FROM sessions WHERE ` + where
 
 	sessRows, err := db.getReader().QueryContext(ctx, sessQ, args...)
 	if err != nil {
-		return ToolsAnalyticsResponse{},
+		return nil,
 			fmt.Errorf("querying tool sessions: %w", err)
 	}
 	defer sessRows.Close()
 
 	type sessInfo struct {
-		ts    string
-		agent string
+		ts      string
+		agent   string
+		project string
 	}
 	sessionMap := make(map[string]sessInfo)
 	var sessionIDs []string
 
 	for sessRows.Next() {
-		var id, ts, agent string
-		if err := sessRows.Scan(&id, &ts, &agent); err != nil {
-			return ToolsAnalyticsResponse{},
+		var id, ts, agent, project string
+		if err := sessRows.Scan(&id, &ts, &agent, &project); err != nil {
+			return nil,
 				fmt.Errorf("scanning tool session: %w", err)
 		}
-		sessionMap[id] = sessInfo{ts: ts, agent: agent}
+		sessionMap[id] = sessInfo{ts: ts, agent: agent, project: project}
 		sessionIDs = append(sessionIDs, id)
 	}
 	if err := sessRows.Err(); err != nil {
-		return ToolsAnalyticsResponse{},
+		return nil,
 			fmt.Errorf("iterating tool sessions: %w", err)
 	}
 
-	resp := ToolsAnalyticsResponse{
-		ByCategory: []ToolCategoryCount{},
-		ByAgent:    []ToolAgentBreakdown{},
-		ByTool:     []ToolUsageAnalysis{},
-		Trend:      []ToolTrendEntry{},
-	}
-
 	if len(sessionIDs) == 0 {
-		return resp, nil
+		return nil, nil
 	}
 
 	// Query tool_calls for filtered sessions (chunked).
@@ -3031,6 +3046,12 @@ func (db *DB) GetAnalyticsTools(
 				"m.model", f.Model,
 			)
 			chunkArgs = append(chunkArgs, modelArgs...)
+			for _, predicate := range ToolSelectionPredicates("tc", "s.quality_signal_version", f, func(value string) string { chunkArgs = append(chunkArgs, value); return "?" }) {
+				if modelPred != "" {
+					modelPred += " AND "
+				}
+				modelPred += predicate
+			}
 			from, to := f.messageWindowBoundsUTC()
 			windowPred, windowArgs := analyticsMessageWindowPred("m.timestamp", from, to)
 			chunkArgs = append(chunkArgs, windowArgs...)
@@ -3047,9 +3068,10 @@ func (db *DB) GetAnalyticsTools(
 			defer rows.Close()
 			for rows.Next() {
 				var sid, cat, toolName, ts string
-				var count int
+				var count, ordinal int
+				var facts ToolEffectivenessCounts
 				if err := rows.Scan(
-					&sid, &cat, &toolName, &count, &ts,
+					append([]any{&sid, &cat, &toolName, &count, &ts, &ordinal}, facts.ScanTargets()...)...,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning tool_call: %w", err,
@@ -3066,6 +3088,7 @@ func (db *DB) GetAnalyticsTools(
 					continue
 				}
 				toolRows = append(toolRows, ToolAnalyticsRow{
+					ToolEffectivenessCounts: facts, Ordinal: ordinal, Project: info.project,
 					SessionID: sid,
 					Category:  cat,
 					ToolName:  toolName,
@@ -3077,14 +3100,14 @@ func (db *DB) GetAnalyticsTools(
 			return rows.Err()
 		})
 	if err != nil {
-		return ToolsAnalyticsResponse{}, err
+		return nil, err
 	}
 
 	if len(toolRows) == 0 {
-		return resp, nil
+		return nil, nil
 	}
 
-	return BuildToolsAnalytics(toolRows), nil
+	return toolRows, nil
 }
 
 // ResolveSkillRowTime resolves the timestamp for a single skill call and
@@ -3897,8 +3920,10 @@ type SignalCalibration struct {
 // SignalSessionsResponse returns concrete sessions that triggered
 // an aggregate signal, including the best available message excerpt.
 type SignalSessionsResponse struct {
-	Signal   string                 `json:"signal"`
-	Sessions []SignalSessionExample `json:"sessions"`
+	Total      *int                   `json:"total,omitempty"`
+	NextOffset *int                   `json:"next_offset,omitempty"`
+	Signal     string                 `json:"signal"`
+	Sessions   []SignalSessionExample `json:"sessions"`
 }
 
 type SignalSessionExample struct {
@@ -3906,7 +3931,7 @@ type SignalSessionExample struct {
 	Project        string  `json:"project"`
 	Agent          string  `json:"agent"`
 	Date           string  `json:"date"`
-	IsAutomated    bool    `json:"is_automated"`
+	IsAutomated    *bool   `json:"is_automated,omitempty"`
 	Outcome        string  `json:"outcome"`
 	HealthScore    *int    `json:"health_score"`
 	HealthGrade    *string `json:"health_grade"`
@@ -3914,9 +3939,9 @@ type SignalSessionExample struct {
 	ReasonCode     string  `json:"reason_code"`
 	Excerpt        string  `json:"excerpt"`
 	MessageOrdinal *int    `json:"message_ordinal,omitempty"`
-	FailureSignals int     `json:"failure_signals"`
-	Retries        int     `json:"retries"`
-	EditChurn      int     `json:"edit_churn"`
+	FailureSignals *int    `json:"failure_signals,omitempty"`
+	Retries        *int    `json:"retries,omitempty"`
+	EditChurn      *int    `json:"edit_churn,omitempty"`
 }
 
 type SignalMessage struct {
@@ -4100,6 +4125,14 @@ func (db *DB) GetAnalyticsSignalSessions(
 	signal string,
 	limit int,
 ) (SignalSessionsResponse, error) {
+	if IsToolMetric(signal) {
+		f.ToolMetric = signal
+		rows, err := db.analyticsToolRows(ctx, f)
+		if err != nil {
+			return SignalSessionsResponse{}, err
+		}
+		return BuildToolMetricEvidence(rows, signal, f.ToolName, f.EvidenceOffset, limit), nil
+	}
 	if !IsSupportedAnalyticsSignal(signal) {
 		return SignalSessionsResponse{}, ErrUnsupportedAnalyticsSignal
 	}
@@ -4397,7 +4430,7 @@ func BuildSignalExamples(
 			Project:        r.Project,
 			Agent:          r.Agent,
 			Date:           r.Date,
-			IsAutomated:    r.IsAutomated,
+			IsAutomated:    new(r.IsAutomated),
 			Outcome:        r.Outcome,
 			HealthScore:    r.HealthScore,
 			HealthGrade:    r.HealthGrade,
@@ -4405,9 +4438,9 @@ func BuildSignalExamples(
 			ReasonCode:     signalReason(signal),
 			Excerpt:        truncateExcerpt(excerpt, 180),
 			MessageOrdinal: ordinal,
-			FailureSignals: r.ToolFailureSignalCount,
-			Retries:        r.ToolRetryCount,
-			EditChurn:      r.EditChurnCount,
+			FailureSignals: new(r.ToolFailureSignalCount),
+			Retries:        new(r.ToolRetryCount),
+			EditChurn:      new(r.EditChurnCount),
 		})
 	}
 	return examples

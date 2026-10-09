@@ -31,7 +31,8 @@ const (
 	// v3 added LastValidTokensOrdinal.
 	// v4 recognizes provider error and denied statuses in failure facts.
 	// v5 uses normalized file paths and all supported JSON path keys for churn.
-	IncrementalStateCodecVersion = 5
+	// v6 retains bounded tool sequence continuation and per-call observations.
+	IncrementalStateCodecVersion = 6
 
 	// TrailingFactCount is the size of the trailing facts window. It must
 	// cover every window any delta can affect: a modified call in the last
@@ -54,6 +55,7 @@ type CallPos struct {
 // ToolFact is the per-call fact set the incremental machinery needs: the
 // position plus the failure bit, exact tool signature, and command class.
 type ToolFact struct {
+	Sequence ToolSequenceFact `json:"sequence"`
 	CallPos
 	Failure        bool   `json:"failure"`
 	ExactSignature string `json:"exact_signature,omitempty"`
@@ -86,7 +88,8 @@ type PendingBoundary struct {
 // stamps a verification token (transcript revision + signal version) next
 // to it so a state that fell behind the rows is never folded.
 type IncrementalState struct {
-	CodecVersion int `json:"codec_version"`
+	SequencePrefix ToolSequenceContinuation `json:"sequence_prefix"`
+	CodecVersion   int                      `json:"codec_version"`
 
 	// Failure runs. PrefixFailureMax is the longest failure run ending
 	// before the trailing window; TailFailureRun is the length of the
@@ -208,6 +211,9 @@ func SeedIncrementalState(
 	// Only retain the mutable tail after seeding; a slice into facts would
 	// keep the full history and its input strings alive.
 	s.Trailing = slices.Clone(facts[cut:])
+	for _, fact := range facts[:cut] {
+		s.SequencePrefix.Step(fact.Sequence)
+	}
 
 	// Failure runs: latch runs ending before the cut, crossing run at it.
 	// TailFailureRun holds the portion of the boundary run before the
@@ -332,6 +338,7 @@ func factsFor(calls []ToolCallRow) []ToolFact {
 			MessageOrdinal: c.MessageOrdinal,
 			CallIndex:      c.CallIndex,
 			Failure:        IsFailure(c),
+			Sequence:       SequenceFactFor(c),
 			ExactSignature: ExactToolSignature(c),
 			CommandClass:   CommandClass(c),
 		})

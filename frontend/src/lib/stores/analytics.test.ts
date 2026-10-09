@@ -244,6 +244,7 @@ function resetStore() {
   analytics.sessionShape = null;
   analytics.velocity = null;
   analytics.tools = null;
+  analytics.toolsFilterParams = null;
   analytics.skills = null;
   analytics.topSessions = null;
   analytics.signals = null;

@@ -110,6 +110,27 @@ func TestHandleToolSequences_Example(t *testing.T) {
 	assert.InDelta(t, float64(0), call["result_omitted_bytes"], 0)
 }
 
+func TestHandleToolSequences_RepeatedCallStartsRecovery(t *testing.T) {
+	te := setup(t)
+	const sessionID = "repeated-sequence-start"
+	seedSequenceSession(t, te.db, sessionID, new("clean"), []db.ToolCall{
+		{ToolName: "Grep", Category: "Grep", InputJSON: `{"pattern":"needle"}`, ResultContent: "match", ResultContentLength: 5},
+		{ToolName: "Grep", Category: "Grep", InputJSON: `{"pattern":"needle"}`, ResultContent: "No matches found", ResultContentLength: 16},
+		{ToolName: "Read", Category: "Read", InputJSON: `{"path":"file.txt"}`, ResultContent: "contents", ResultContentLength: 8},
+	})
+	got := fetchSessionToolSequences(t, te, sessionID)
+	assert.Equal(t, 3, got.TotalToolCalls)
+	require.Len(t, got.Sequences, 1)
+	sequence := got.Sequences[0]
+	assert.Equal(t, "recovered", sequence.Ending)
+	require.Len(t, sequence.Calls, 2)
+	assert.Equal(t, 2, sequence.Calls[0].Ordinal)
+	assert.Equal(t, "empty", sequence.Calls[0].Outcome)
+	assert.Equal(t, "identical", sequence.Calls[0].Repeat)
+	assert.Equal(t, "content", sequence.Calls[1].Outcome)
+	assert.True(t, sequence.Calls[1].ToolChanged)
+}
+
 func TestHandleToolSequences_NoSequences(t *testing.T) {
 	te := setup(t)
 	dbtest.SeedSession(t, te.db, "tool-sequences-none", "test")
@@ -388,12 +409,39 @@ func TestHandleToolSequences_DuckDBParity(t *testing.T) {
 	require.Len(t, streamed.Sequences[0].Calls, 10)
 	assert.Equal(t, 260, streamed.Sequences[0].Calls[9].Ordinal)
 
+	for _, id := range sessionIDs {
+		session, err := te.db.GetSessionFull(t.Context(), id)
+		require.NoError(t, err)
+		messages, err := te.db.GetAllMessages(t.Context(), id)
+		require.NoError(t, err)
+		update, _ := ingest.ComputeSignalsAndSecrets(*session, messages)
+		require.NoError(t, te.db.UpdateSessionSignals(t.Context(), id, update))
+	}
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	_, err := duckdb.Push(t.Context(), path, te.db, "test-installation", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	store, err := duckdb.NewStore(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26"}
+	wantRates, err := te.db.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	gotRates, err := store.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantRates, gotRates)
+	evidenceFilter := filter
+	evidenceFilter.ToolName, evidenceFilter.ToolCategory = "Grep", "Grep"
+	for _, signal := range []string{"tool_empty_rate", "tool_repeat_rate", "tool_recovery_rate"} {
+		wantEvidence, err := te.db.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
+		require.NoError(t, err)
+		require.NotNil(t, wantEvidence.Total)
+		if signal == "tool_empty_rate" {
+			require.Positive(t, *wantEvidence.Total)
+		}
+		gotEvidence, err := store.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
+		require.NoError(t, err)
+		assert.Equal(t, wantEvidence, gotEvidence, signal)
+	}
 	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
 	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
 	for sessionID, sqlite := range source {

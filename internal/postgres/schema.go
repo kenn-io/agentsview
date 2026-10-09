@@ -511,6 +511,9 @@ CREATE INDEX IF NOT EXISTS idx_source_worktree_project_mapping_scopes_scope
     );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
+    observed_outcome TEXT,
+    observed_repeat TEXT,
+    sequence_ending TEXT,
     id                    BIGSERIAL PRIMARY KEY,
     session_id            TEXT NOT NULL,
     tool_name             TEXT NOT NULL,
@@ -2092,7 +2095,7 @@ func CheckSchemaCompat(
 	}
 
 	_, err = db.ExecContext(ctx,
-		`SELECT call_index, file_path FROM tool_calls LIMIT 0`)
+		`SELECT call_index, file_path, observed_outcome, observed_repeat, sequence_ending FROM tool_calls LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"tool_calls table missing required columns: %w",

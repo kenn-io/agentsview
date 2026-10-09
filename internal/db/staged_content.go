@@ -40,6 +40,12 @@ type StagedToolResults interface {
 	Close() error
 }
 
+// StagedToolVerdict carries the two classifiers' facts while real content is available.
+type StagedToolVerdict struct {
+	Failure bool
+	Outcome string
+}
+
 // StagedSignalsFunc computes the final signal update and secret findings
 // for a staged session once every per-call summary has been resolved in
 // the publish transaction. verdicts carries the per-call content-failure
@@ -48,7 +54,7 @@ type StagedToolResults interface {
 // of being recomputed after commit. A nil function skips signal and secret
 // recomputation.
 type StagedSignalsFunc func(
-	verdicts map[string]bool,
+	verdicts map[string]StagedToolVerdict,
 ) (SessionSignalUpdate, []SecretFinding, error)
 
 // StagedToolCallPosition identifies one tool call's final coordinates.
@@ -550,9 +556,9 @@ func (db *DB) replaceSessionContentStaged(
 // contentFailureVerdicts reads the per-call verdicts a staging handle
 // captured during summary resolution. Handles that do not expose them
 // yield nil, which signalsFn treats as an empty verdict set.
-func contentFailureVerdicts(staged StagedToolResults) map[string]bool {
+func contentFailureVerdicts(staged StagedToolResults) map[string]StagedToolVerdict {
 	if v, ok := staged.(interface {
-		ContentFailures() map[string]bool
+		ContentFailures() map[string]StagedToolVerdict
 	}); ok {
 		return v.ContentFailures()
 	}

@@ -56,6 +56,7 @@ func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
 func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
 	write.Messages = db.projectSessionBatchMessages(write)
 	if db.ArchiveContent().OmitsToolContent() {
+		write.Signals.ToolObservations = []ToolObservation{}
 		write.Checkpoint, write.CheckpointBlobs = nil, nil
 	}
 	write.Session, write.Messages = db.sessionAndMessagesForStorage(write.Session, write.Messages)
@@ -602,6 +603,10 @@ func writeOneSessionBatchTx(
 	}
 
 	if len(msgs) > 0 {
+		if !write.SkipSignalUpdates && (replaceMessages || !sessionExists) {
+			ApplyToolObservations(msgs, write.Signals.ToolObservations)
+			write.Signals.ToolObservations = nil
+		}
 		ids, err := insertMessagesTx(queries, msgs)
 		if err != nil {
 			return 0, err

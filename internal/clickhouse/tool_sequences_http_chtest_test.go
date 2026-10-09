@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -45,6 +46,14 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	}
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), boundaryID, messages))
 	sessionIDs = append(sessionIDs, boundaryID)
+	for _, id := range sessionIDs {
+		session, err := local.GetSessionFull(t.Context(), id)
+		require.NoError(t, err)
+		messages, err := local.GetAllMessages(t.Context(), id)
+		require.NoError(t, err)
+		update, _ := ingest.ComputeSignalsAndSecrets(*session, messages)
+		require.NoError(t, local.UpdateSessionSignals(t.Context(), id, update))
+	}
 	localHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "local"}, local, nil).Handler()
 
 	dsn, database := chtest.FreshDatabase(t)
@@ -58,6 +67,25 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 	store, err := clickhouse.NewStore(t.Context(), target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26"}
+	wantRates, err := local.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	gotRates, err := store.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantRates, gotRates)
+	evidenceFilter := filter
+	evidenceFilter.ToolName, evidenceFilter.ToolCategory = "Grep", "Grep"
+	for _, signal := range []string{"tool_empty_rate", "tool_repeat_rate", "tool_recovery_rate"} {
+		wantEvidence, err := local.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
+		require.NoError(t, err)
+		require.NotNil(t, wantEvidence.Total)
+		if signal == "tool_empty_rate" {
+			require.Positive(t, *wantEvidence.Total)
+		}
+		gotEvidence, err := store.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
+		require.NoError(t, err)
+		assert.Equal(t, wantEvidence, gotEvidence, signal)
+	}
 	remoteHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "remote"}, store, nil).Handler()
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	_, err = duckdb.Push(t.Context(), path, local, "tool-sequences-boundary", storage.MirrorPushOptions{}, true, nil)
@@ -107,4 +135,48 @@ func getToolSequencesDocument(t *testing.T, handler http.Handler, sessionID stri
 	var document map[string]any
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &document))
 	return document
+}
+
+// A push that fails after deleting a shortened transcript's messages can leave
+// their tool calls behind. Evidence must not link to the missing message.
+func TestToolEvidenceIgnoresOrdinalOfMissingMessage(t *testing.T) {
+	local := dbtest.OpenTestDB(t)
+	const sessionID = "tool-evidence-missing-message"
+	dbtest.SeedToolSequencesExample(t, local, sessionID)
+	session, err := local.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	messages, err := local.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	update, _ := ingest.ComputeSignalsAndSecrets(*session, messages)
+	require.NoError(t, local.UpdateSessionSignals(t.Context(), sessionID, update))
+
+	dsn, database := chtest.FreshDatabase(t)
+	target := clickhouse.Target{URL: dsn, Database: database}
+	syncer, err := clickhouse.New(t.Context(), target, local, "tool-evidence-missing-host", storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	store, err := clickhouse.NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26", ToolName: "Grep", ToolCategory: "Grep"}
+	before, err := store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	require.Len(t, before.Sessions, 1)
+	require.NotNil(t, before.Sessions[0].MessageOrdinal)
+	missing := *before.Sessions[0].MessageOrdinal
+
+	conn := chtest.Open(t, dsn, database)
+	_, err = conn.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id = ? AND ordinal = ?`, sessionID, missing)
+	require.NoError(t, err)
+	require.Equal(t, 1, chtest.Count(t, conn, "tool_calls", "session_id = ? AND message_ordinal = ?", sessionID, missing))
+
+	after, err := store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	for _, example := range after.Sessions {
+		require.NotNil(t, example.MessageOrdinal)
+		assert.NotEqual(t, missing, *example.MessageOrdinal)
+	}
 }

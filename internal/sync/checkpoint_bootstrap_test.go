@@ -110,15 +110,25 @@ func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
 	require.NoError(t, err)
 	stored, err := database.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
+	expected := toDBMessages(pendingWrite{sess: parser.ParsedSession{Agent: parser.AgentCodex}, msgs: msgs}, nil)
+	session, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	want := computeSignalsFromMessages(*session, expected).ToolObservations
+	for _, fact := range want {
+		call := stored[fact.MessageOrdinal].ToolCalls[fact.CallIndex]
+		require.Equal(t, new(fact.Outcome), call.ObservedOutcome)
+		require.Equal(t, new(fact.Repeat), call.ObservedRepeat)
+		require.Equal(t, fact.SequenceEnding, call.SequenceEnding)
+	}
 	for i := range stored {
 		stored[i].ID = 0
 		stored[i].SessionID = ""
 		for j := range stored[i].ToolCalls {
 			stored[i].ToolCalls[j].MessageID = 0
 			stored[i].ToolCalls[j].SessionID = ""
+			stored[i].ToolCalls[j].ObservedOutcome, stored[i].ToolCalls[j].ObservedRepeat, stored[i].ToolCalls[j].SequenceEnding = nil, nil, nil
 		}
 	}
-	expected := toDBMessages(pendingWrite{sess: parser.ParsedSession{Agent: parser.AgentCodex}, msgs: msgs}, nil)
 	for i := range expected {
 		for j := range expected[i].ToolCalls {
 			// Rendering is parser input to the write projection, not a stored field.

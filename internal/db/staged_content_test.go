@@ -219,7 +219,7 @@ func TestReplaceSessionContentStagedAttachLifecycle(t *testing.T) {
 		require.NoError(t, database.ReplaceSessionContentStaged(
 			t.Context(), sessionID, msgs, staged,
 			map[string]bool{},
-			func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
+			func(map[string]StagedToolVerdict) (SessionSignalUpdate, []SecretFinding, error) {
 				return SessionSignalUpdate{}, nil, nil
 			},
 		))
@@ -275,7 +275,7 @@ func TestReplaceSessionContentStagedIdenticalPublishKeepsRevision(t *testing.T) 
 					ToolName: "exec_command", Category: "Bash", CallIndex: 0,
 				}},
 			}}, staged, map[string]bool{},
-			func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
+			func(map[string]StagedToolVerdict) (SessionSignalUpdate, []SecretFinding, error) {
 				return SessionSignalUpdate{}, nil, nil
 			},
 		))
@@ -324,7 +324,7 @@ func TestReplaceSessionContentStagedIdenticalPublishRefreshesDerivedState(
 					ToolName: "exec_command", Category: "Bash", CallIndex: 0,
 				}},
 			}}, staged, map[string]bool{},
-			func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
+			func(map[string]StagedToolVerdict) (SessionSignalUpdate, []SecretFinding, error) {
 				update := SessionSignalUpdate{
 					Outcome: outcome, OutcomeConfidence: "high",
 					SecretsRulesVersion: rules,
@@ -476,7 +476,7 @@ func TestReplaceSessionContentStagedWithCheckpointUsesPrefixedSessionID(t *testi
 	err = database.ReplaceSessionContentStagedWithCheckpoint(
 		t.Context(), storedID, msgs, staged,
 		map[string]bool{},
-		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
+		func(map[string]StagedToolVerdict) (SessionSignalUpdate, []SecretFinding, error) {
 			return SessionSignalUpdate{}, nil, nil
 		},
 		cp, blobs,
@@ -534,7 +534,7 @@ func TestReplaceSessionContentStagedRollbackDetaches(t *testing.T) {
 	err = database.ReplaceSessionContentStaged(
 		t.Context(), sessionID, msgs, failing,
 		map[string]bool{},
-		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
+		func(map[string]StagedToolVerdict) (SessionSignalUpdate, []SecretFinding, error) {
 			return SessionSignalUpdate{}, nil, nil
 		},
 	)
@@ -558,7 +558,7 @@ func TestReplaceSessionContentStagedRollbackDetaches(t *testing.T) {
 	require.NoError(t, database.ReplaceSessionContentStaged(
 		t.Context(), sessionID, msgs, staged,
 		map[string]bool{},
-		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
+		func(map[string]StagedToolVerdict) (SessionSignalUpdate, []SecretFinding, error) {
 			return SessionSignalUpdate{}, nil, nil
 		},
 	))

@@ -184,9 +184,8 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 		out := map[string]any{}
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			// This transient projection marker adds no content to the existing
-			// normalized-content-v1 representation.
-			if !f.IsExported() || f.Name == "UsageAutomationProjected" {
+			// Derived projection fields preserve the historical normalized-content-v1 representation.
+			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "ToolObservations" || f.Name == "ObservedOutcome" || f.Name == "ObservedRepeat" || f.Name == "SequenceEnding" {
 				continue
 			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)

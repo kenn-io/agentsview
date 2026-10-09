@@ -2459,5 +2459,41 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"L’aperçu montre {shownLabel} octet sur {countLabel}.","countPlural=other":"L’aperçu montre {shownLabel} octets sur {countLabel}.","countPlural=many":"L’aperçu montre {shownLabel} octets sur {countLabel}."}}],
   "tool_sequences_full_input_in_message": "L’entrée complète se trouve dans le message {ordinal}.",
   "tool_sequences_full_result_in_message": "Le résultat complet se trouve dans le message {ordinal}.",
-  "tool_sequences_retry": "Réessayer"
+  "tool_sequences_retry": "Réessayer",
+  "analytics_tool_empty_rate": "Taux vide",
+  "analytics_tool_repeat_rate": "Taux de répétition",
+  "analytics_tool_recovery_rate": "Taux de récupération",
+  "analytics_tool_name": "Outil",
+  "analytics_tool_coverage": "Analysés",
+  "analytics_tool_sessions": "Sessions",
+  "analytics_tool_share": "Part",
+  "analytics_tool_unavailable": "Indisponible",
+  "analytics_tool_show_all": "Tous les outils",
+  "analytics_tool_show_less": "Moins d’outils",
+  "analytics_tool_more_sessions": "Plus de sessions",
+  "analytics_tool_empty_explanation": "{count}/{total} résultats vides parmi les résultats connus.",
+  "analytics_tool_repeat_explanation": "{count}/{total} appels de suivi identiques ou presque parmi les appels analysés.",
+  "analytics_tool_recovery_explanation": "{count}/{total} séquences récupérées. Ouvertes : {open}. Inconnues : {unknown}.",
+  "analytics_tool_coverage_explanation": "Appels analysés / tous les appels. Les recalculs en attente et les anciennes sessions sans calcul ont une couverture incomplète.",
+  "analytics_tool_recovery_note": "La récupération signifie qu’un appel ultérieur a renvoyé du contenu. Le taux appartient à l’outil qui a commencé la séquence.",
+  "analytics_tool_evidence_count": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} session",
+        "countPlural=other": "{countLabel} sessions"
+      }
+    }
+  ],
+  "analytics_tool_history_note": "Les taux excluent les appels des sessions en cours de recalcul ou enregistrées sans résultats d'outils.",
+  "analytics_tool_rate_button_label": "{tool} – {rate} : {value}",
+  "analytics_tool_latest_matching_call": "Dernier appel correspondant : {date}",
+  "analytics_tool_matching_calls": "Appels correspondants : {count}"
 }

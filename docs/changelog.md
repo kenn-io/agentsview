@@ -18,6 +18,14 @@ The latest published release is
   Visits that span a server change are discarded.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off.
 
+- Tool Usage shows empty, repeat and recovery rates for each tool. Click a rate
+  to list the sessions behind it and open the message with the matching call.
+  Rates follow the same filters as the rest of the Analytics page. After you
+  upgrade, AgentsView recomputes older sessions in the background, so their
+  rates appear without a resync. Archives that store no tool results show no
+  rates. Hosted deployments must grant the runtime role `UPDATE` on three new
+  `tool_calls` columns before upgrading, or hosted startup fails; see
+  [Hosted Raw Sync](/docs/hosted-raw-sync/#http-control-plane).
 - The web UI reports an anonymous `app_opened` event through the server when it
   loads and on the first focus of each later UTC day.
   `AGENTSVIEW_TELEMETRY_ENABLED=0` turns it off with the daemon ping.

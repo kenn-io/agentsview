@@ -5289,7 +5289,7 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	for rows.Next() {
 		var r ToolAnalyticsRow
 		var ts string
-		require.NoError(t, rows.Scan(&r.SessionID, &r.Category, &r.ToolName, &r.Count, &ts))
+		require.NoError(t, rows.Scan(append([]any{&r.SessionID, &r.Category, &r.ToolName, &r.Count, &ts, &r.Ordinal}, r.ScanTargets()...)...))
 		r.Agent = defaultAgent
 		r.Date = "2025-06-01"
 		all = append(all, r)

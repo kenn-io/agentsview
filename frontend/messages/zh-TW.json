@@ -2377,5 +2377,40 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。","countPlural=other":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。"}}],
   "tool_sequences_full_input_in_message": "完整輸入在訊息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整結果在訊息 {ordinal} 中。",
-  "tool_sequences_retry": "重試"
+  "tool_sequences_retry": "重試",
+  "analytics_tool_empty_rate": "空結果率",
+  "analytics_tool_repeat_rate": "重複率",
+  "analytics_tool_recovery_rate": "恢復率",
+  "analytics_tool_name": "工具",
+  "analytics_tool_coverage": "已分析",
+  "analytics_tool_sessions": "工作階段",
+  "analytics_tool_share": "占比",
+  "analytics_tool_unavailable": "無法使用",
+  "analytics_tool_show_all": "顯示所有工具",
+  "analytics_tool_show_less": "收起工具",
+  "analytics_tool_more_sessions": "更多工作階段",
+  "analytics_tool_empty_explanation": "已知結果中空結果為 {count}/{total}。",
+  "analytics_tool_repeat_explanation": "已分析呼叫中相同或近似的後續呼叫為 {count}/{total}。",
+  "analytics_tool_recovery_explanation": "已恢復序列為 {count}/{total}。未結束：{open}。未知：{unknown}。",
+  "analytics_tool_coverage_explanation": "已分析呼叫 / 所有呼叫。等待重新計算及尚未計算的舊工作階段缺少涵蓋。",
+  "analytics_tool_recovery_note": "恢復表示後續呼叫傳回了內容。恢復率歸屬於開始該序列的工具。",
+  "analytics_tool_evidence_count": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countLabel} 個對話"
+      }
+    }
+  ],
+  "analytics_tool_history_note": "比率不包含仍在重新計算或未儲存工具結果的工作階段中的呼叫。",
+  "analytics_tool_rate_button_label": "{tool} {rate}：{value}",
+  "analytics_tool_latest_matching_call": "最近符合的呼叫：{date}",
+  "analytics_tool_matching_calls": "符合的呼叫：{count}"
 }

@@ -2377,5 +2377,40 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"预览显示 {countLabel} 字节中的 {shownLabel} 字节。","countPlural=other":"预览显示 {countLabel} 字节中的 {shownLabel} 字节。"}}],
   "tool_sequences_full_input_in_message": "完整输入在消息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整结果在消息 {ordinal} 中。",
-  "tool_sequences_retry": "重试"
+  "tool_sequences_retry": "重试",
+  "analytics_tool_empty_rate": "空结果率",
+  "analytics_tool_repeat_rate": "重复率",
+  "analytics_tool_recovery_rate": "恢复率",
+  "analytics_tool_name": "工具",
+  "analytics_tool_coverage": "已分析",
+  "analytics_tool_sessions": "会话",
+  "analytics_tool_share": "占比",
+  "analytics_tool_unavailable": "不可用",
+  "analytics_tool_show_all": "显示所有工具",
+  "analytics_tool_show_less": "收起工具",
+  "analytics_tool_more_sessions": "更多会话",
+  "analytics_tool_empty_explanation": "已知结果中空结果为 {count}/{total}。",
+  "analytics_tool_repeat_explanation": "已分析调用中相同或近似的后续调用为 {count}/{total}。",
+  "analytics_tool_recovery_explanation": "已恢复序列为 {count}/{total}。未结束：{open}。未知：{unknown}。",
+  "analytics_tool_coverage_explanation": "已分析调用 / 所有调用。等待重新计算及尚未计算的旧会话缺少覆盖。",
+  "analytics_tool_recovery_note": "恢复表示后续调用返回了内容。恢复率归属于开始该序列的工具。",
+  "analytics_tool_evidence_count": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countLabel} 个会话"
+      }
+    }
+  ],
+  "analytics_tool_history_note": "比率不包括仍在重新计算或未保存工具结果的会话中的调用。",
+  "analytics_tool_rate_button_label": "{tool} {rate}：{value}",
+  "analytics_tool_latest_matching_call": "最近匹配调用：{date}",
+  "analytics_tool_matching_calls": "匹配调用：{count}"
 }

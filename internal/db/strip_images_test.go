@@ -558,6 +558,10 @@ func TestStripPublicationSequence(t *testing.T) {
 	seedArtifactOrigin(t, d)
 	insertSession(t, d, "pub-unchanged", "project")
 	insertMessages(t, d, testImageMessage("pub-unchanged"))
+	tx, err := d.getWriter().Begin(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, ensureToolCallAgentStateTx(t.Context(), tx, "pub-unchanged", ToolCallPosition{}))
+	require.NoError(t, tx.Commit())
 	clearArtifactExportQueue(t, d)
 
 	var before string
@@ -583,6 +587,13 @@ func TestStripPublicationSequence(t *testing.T) {
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "pub-unchanged",
 	).Scan(&eventContent))
 	assert.Equal(t, wantStripped, eventContent, "post-strip content preserves text around the placeholder")
+	var stateRows int
+	require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT count(*) FROM tool_call_occurrence_agent_state WHERE session_id='pub-unchanged'").Scan(&stateRows))
+	assert.Zero(t, stateRows)
+	tx, err = d.getWriter().Begin(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, ensureToolCallAgentStateTx(t.Context(), tx, "pub-unchanged", ToolCallPosition{}))
+	require.NoError(t, tx.Commit())
 
 	// Second strip: no change, revision stays.
 	report2, err := d.StripToolImages(t.Context(), StripImagesFilter{})

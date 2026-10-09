@@ -2460,5 +2460,41 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Preview shows {shownLabel} of {countLabel} byte.","countPlural=other":"Preview shows {shownLabel} of {countLabel} bytes."}}],
   "tool_sequences_full_input_in_message": "Full input is in message {ordinal}.",
   "tool_sequences_full_result_in_message": "Full result is in message {ordinal}.",
-  "tool_sequences_retry": "Try again"
+  "tool_sequences_retry": "Try again",
+  "analytics_tool_empty_rate": "Empty rate",
+  "analytics_tool_repeat_rate": "Repeat rate",
+  "analytics_tool_recovery_rate": "Recovery rate",
+  "analytics_tool_name": "Tool",
+  "analytics_tool_coverage": "Analyzed",
+  "analytics_tool_sessions": "Sessions",
+  "analytics_tool_share": "Share",
+  "analytics_tool_unavailable": "Unavailable",
+  "analytics_tool_show_all": "Show all tools",
+  "analytics_tool_show_less": "Show fewer tools",
+  "analytics_tool_more_sessions": "More sessions",
+  "analytics_tool_empty_explanation": "{count}/{total} empty results among known outcomes.",
+  "analytics_tool_repeat_explanation": "{count}/{total} identical or near-identical follow-ups among analyzed calls.",
+  "analytics_tool_recovery_explanation": "{count}/{total} recovered sequences. Open: {open}. Unknown: {unknown}.",
+  "analytics_tool_coverage_explanation": "Analyzed calls / all calls. Pending recomputations and older uncomputed sessions have missing coverage.",
+  "analytics_tool_recovery_note": "Recovery means a later call returned content. The tool that started the sequence owns its recovery rate.",
+  "analytics_tool_evidence_count": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{countLabel} session",
+        "countPlural=other": "{countLabel} sessions"
+      }
+    }
+  ],
+  "analytics_tool_history_note": "Rates leave out calls from sessions that are still being recomputed or were stored without tool results.",
+  "analytics_tool_rate_button_label": "{tool} {rate}: {value}",
+  "analytics_tool_latest_matching_call": "Latest matching call: {date}",
+  "analytics_tool_matching_calls": "Matching calls: {count}"
 }

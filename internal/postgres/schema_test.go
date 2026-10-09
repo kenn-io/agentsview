@@ -1162,13 +1162,7 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 
 	require.NoError(t, EnsureSchema(t.Context(), db, "agentsview"))
 
-	// Four tables have missing columns (sessions: termination_status;
-	// messages: source_parent_uuid, is_sidechain, is_compact_boundary,
-	// thinking_text; usage_events: provider_id;
-	// source_project_identity_observations: repository/worktree/checkout/remote
-	// context). Per-table batching means one ALTER each. tool_calls
-	// lists all its migration columns (call_index, file_path) as present, so
-	// it contributes no ALTER. Already-present raw job columns are probed
-	// without issuing a redundant ALTER.
-	assert.Equal(t, 4, state.alterTableExecCount(), "ALTER TABLE execs")
+	// sessions, messages, usage_events, source_project_identity_observations and tool_calls each share one ALTER.
+	assert.Equal(t, 5, state.alterTableExecCount(), "ALTER TABLE execs")
+	assert.Contains(t, state.alterTableSQL(), "ADD COLUMN IF NOT EXISTS observed_outcome TEXT, ADD COLUMN IF NOT EXISTS observed_repeat TEXT, ADD COLUMN IF NOT EXISTS sequence_ending TEXT")
 }

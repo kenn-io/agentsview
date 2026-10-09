@@ -909,7 +909,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
                         <span>{agentLabel(example.agent)}</span>
                         <span>{example.outcome || m.insights_page_unknown()}</span>
                         <span>{qualityBadge(example)}</span>
-                        <span>{m.insights_page_failures({ count: example.failure_signals })}</span>
+                        {#if example.failure_signals != null}<span>{m.insights_page_failures({ count: example.failure_signals })}</span>{/if}
                       </span>
                     </Card>
                   {/each}

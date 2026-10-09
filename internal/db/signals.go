@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 )
@@ -14,6 +15,7 @@ type SessionSignalUpdate struct {
 	// FullState is optional state computed from the complete message snapshot
 	// being published. The same transaction binds it to the stored revision.
 	// Incremental and asynchronous writers use their own snapshot guards.
+	ToolObservations       []ToolObservation
 	FullState              *SessionSignalState
 	ToolFailureSignalCount int
 	ToolRetryCount         int
@@ -34,6 +36,15 @@ type SessionSignalUpdate struct {
 	SecretLeakCount        int
 	SecretsRulesVersion    string
 	QualitySignals         QualitySignals
+}
+
+// ToolObservation addresses derived facts by stable transcript coordinates.
+type ToolObservation struct {
+	MessageOrdinal int
+	CallIndex      int
+	Outcome        string
+	Repeat         string
+	SequenceEnding *string
 }
 
 // usageOnlySignalUpdate is the canonical derived-signal state for an archive
@@ -107,6 +118,9 @@ func (db *DB) UpdateSessionSignals(ctx context.Context,
 	if db.usageOnlyStorage() {
 		err = settleUsageOnlySignalsTx(tx, sessionID)
 	} else {
+		if db.ArchiveContent().OmitsToolContent() {
+			u.ToolObservations = []ToolObservation{}
+		}
 		err = updateSessionSignalsTx(tx, sessionID, u)
 	}
 	if err != nil {
@@ -185,6 +199,9 @@ func updateSessionSignalsTx(
 			sessionID, err,
 		)
 	}
+	if err := updateToolObservationsTx(tx, sessionID, u.ToolObservations); err != nil {
+		return err
+	}
 	if u.FullState != nil {
 		state := u.FullState
 		// Copy the revision inside SQLite, avoiding a post-commit read and
@@ -205,6 +222,64 @@ func updateSessionSignalsTx(
 		}
 	}
 	return nil
+}
+
+// updateToolObservationsTx rewrites only the calls whose stored facts differ,
+// so recomputing an unchanged session leaves its tool-call rows untouched. A
+// nil slice keeps the stored facts; an empty slice clears them.
+func updateToolObservationsTx(tx transactionQueries, sessionID string, observations []ToolObservation) error {
+	if observations == nil {
+		return nil
+	}
+	wanted := make(map[ToolCallPosition][3]sql.NullString, len(observations))
+	for _, fact := range observations {
+		values := [3]sql.NullString{{String: fact.Outcome, Valid: true}, {String: fact.Repeat, Valid: true}, {}}
+		if fact.SequenceEnding != nil {
+			values[2] = sql.NullString{String: *fact.SequenceEnding, Valid: true}
+		}
+		wanted[ToolCallPosition{MessageOrdinal: fact.MessageOrdinal, CallIndex: fact.CallIndex}] = values
+	}
+	changed, err := changedToolObservationsTx(tx, sessionID, wanted)
+	if err != nil {
+		return err
+	}
+	for id, values := range changed {
+		if _, err := tx.Exec(`UPDATE tool_calls SET observed_outcome = ?, observed_repeat = ?, sequence_ending = ? WHERE id = ?`, values[0], values[1], values[2], id); err != nil {
+			return fmt.Errorf("updating tool observations for %s: %w", sessionID, err)
+		}
+	}
+	return nil
+}
+
+// changedToolObservationsTx returns the wanted facts for each stored call whose
+// facts differ, keyed by tool_calls.id. Calls absent from wanted are cleared.
+func changedToolObservationsTx(tx transactionQueries, sessionID string, wanted map[ToolCallPosition][3]sql.NullString) (map[int64][3]sql.NullString, error) {
+	rows, err := tx.Query(`SELECT tc.id, m.ordinal, tc.call_index, tc.observed_outcome, tc.observed_repeat, tc.sequence_ending FROM tool_calls tc JOIN messages m ON m.id = tc.message_id AND m.session_id = tc.session_id WHERE tc.session_id = ?`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("reading tool observations for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	changed := make(map[int64][3]sql.NullString)
+	for rows.Next() {
+		var id int64
+		var ordinal int
+		var callIndex sql.NullInt64
+		var stored [3]sql.NullString
+		if err := rows.Scan(&id, &ordinal, &callIndex, &stored[0], &stored[1], &stored[2]); err != nil {
+			return nil, fmt.Errorf("scanning tool observations for %s: %w", sessionID, err)
+		}
+		var values [3]sql.NullString
+		if callIndex.Valid {
+			values = wanted[ToolCallPosition{MessageOrdinal: ordinal, CallIndex: int(callIndex.Int64)}]
+		}
+		if stored != values {
+			changed[id] = values
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading tool observations for %s: %w", sessionID, err)
+	}
+	return changed, nil
 }
 
 // PendingSignalSessions returns session IDs whose
@@ -379,4 +454,28 @@ func (db *DB) MarkSignalsBackfillDone(ctx context.Context) error {
 		)
 	}
 	return nil
+}
+
+// ApplyToolObservations carries prepared observations into an existing mirror writer.
+func ApplyToolObservations(messages []Message, observations []ToolObservation) {
+	if observations == nil {
+		return
+	}
+	byOrdinal := make(map[int][]ToolCall, len(messages))
+	for i, message := range messages {
+		byOrdinal[message.Ordinal] = message.ToolCalls
+		for j := range messages[i].ToolCalls {
+			call := &messages[i].ToolCalls[j]
+			call.ObservedOutcome, call.ObservedRepeat, call.SequenceEnding = nil, nil, nil
+		}
+	}
+	for _, fact := range observations {
+		calls := byOrdinal[fact.MessageOrdinal]
+		if fact.CallIndex < 0 || fact.CallIndex >= len(calls) {
+			continue
+		}
+		call := &calls[fact.CallIndex]
+		outcome, repeat := fact.Outcome, fact.Repeat
+		call.ObservedOutcome, call.ObservedRepeat, call.SequenceEnding = &outcome, &repeat, fact.SequenceEnding
+	}
 }

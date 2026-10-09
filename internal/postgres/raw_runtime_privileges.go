@@ -63,6 +63,16 @@ func CheckHostedRuntimeWritable(ctx context.Context, database *sql.DB, schema st
 			return err
 		}
 	}
+	// Missing columns count as missing grants: a runtime started before owner
+	// provisioning adds them gets the provisioning message, not a SQL error.
+	var observationsWritable bool
+	err = database.QueryRowContext(ctx, `SELECT count(*) = 3 AND COALESCE(bool_and(has_column_privilege(a.attrelid, a.attnum, 'UPDATE')), false) FROM pg_attribute a WHERE a.attrelid = to_regclass(format('%I.tool_calls', $1::text)) AND a.attname IN ('observed_outcome', 'observed_repeat', 'sequence_ending') AND NOT a.attisdropped`, schema).Scan(&observationsWritable)
+	if err != nil {
+		return fmt.Errorf("checking tool_calls observation privileges: %w", err)
+	}
+	if !observationsWritable {
+		return errors.New("hosted runtime cannot update tool_calls observed_outcome, observed_repeat, and sequence_ending; owner provisioning required")
+	}
 	// nextval accepts USAGE or UPDATE. GENERATED AS IDENTITY does not require
 	// sequence privileges; neither does a provisioned sequence-free ID default.
 	for _, table := range []string{"tool_calls", "tool_result_events", "usage_events", "pinned_messages"} {

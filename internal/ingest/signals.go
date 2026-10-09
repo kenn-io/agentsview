@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -34,7 +35,7 @@ func ComputeSignalsAndSecrets(
 // ComputeSignalsAndSecretsWithContentFailures uses precomputed staged result
 // failures when placeholder content cannot carry the verdict.
 func ComputeSignalsAndSecretsWithContentFailures(
-	session db.Session, messages []db.Message, failures map[string]bool,
+	session db.Session, messages []db.Message, failures map[string]db.StagedToolVerdict,
 ) (db.SessionSignalUpdate, []db.SecretFinding) {
 	update := ComputeSignalsFromMessagesWithContentFailures(
 		session, messages, failures,
@@ -59,7 +60,7 @@ func ComputeSignalsFromMessages(
 // ComputeSignalsFromMessagesWithContentFailures derives signals using staged
 // content-failure verdicts.
 func ComputeSignalsFromMessagesWithContentFailures(
-	session db.Session, messages []db.Message, failures map[string]bool,
+	session db.Session, messages []db.Message, failures map[string]db.StagedToolVerdict,
 ) db.SessionSignalUpdate {
 	rows := ExtractToolCallRows(messages)
 	PatchToolCallRowsWithContentFailures(rows, messages, failures)
@@ -70,7 +71,7 @@ func ComputeSignalsFromMessagesWithContentFailures(
 // occurrence-qualified calls whose event status does not already decide them.
 func PatchToolCallRowsWithContentFailures(
 	rows []signals.ToolCallRow, messages []db.Message,
-	failures map[string]bool,
+	failures map[string]db.StagedToolVerdict,
 ) {
 	if len(failures) == 0 {
 		return
@@ -82,16 +83,14 @@ func PatchToolCallRowsWithContentFailures(
 			if index >= len(rows) {
 				return
 			}
-			failed := false
 			if call.ToolUseID != "" {
 				occurrence := occurrences[call.ToolUseID]
 				occurrences[call.ToolUseID] = occurrence + 1
-				failed = failures[db.StagedToolCallKey(
-					call.ToolUseID, occurrence,
-				)]
-			}
-			if failed && rows[index].EventStatus == "" {
-				rows[index].ContentFailure = true
+				if verdict, ok := failures[db.StagedToolCallKey(call.ToolUseID, occurrence)]; ok {
+					rows[index].ContentFailure = verdict.Failure
+					rows[index].ContentFailureKnown = true
+					rows[index].ContentOutcome = signals.ToolOutcome(verdict.Outcome)
+				}
 			}
 			index++
 		}
@@ -155,7 +154,23 @@ func ComputeSignalsFromToolRows(
 			RunawayToolLoopCount:        heuristics.RunawayToolLoopCount,
 		},
 	}
+	update.ToolObservations = ComputeToolObservations(session, rows)
 	return RefreshSignalRecencyAt(session, messages, update, time.Now())
+}
+
+// ComputeToolObservations derives only call outcomes and sequence endings.
+func ComputeToolObservations(session db.Session, rows []signals.ToolCallRow) []db.ToolObservation {
+	complete := parser.TerminationComplete(session.TerminationStatus)
+	extracted := signals.ExtractToolSequences(rows, complete)
+	observations := make([]db.ToolObservation, len(extracted.Calls))
+	for i, call := range extracted.Calls {
+		observations[i] = db.ToolObservation{MessageOrdinal: call.MessageOrdinal, CallIndex: call.CallIndex, Outcome: string(call.Outcome), Repeat: string(call.Repeat)}
+	}
+	for _, sequence := range extracted.Sequences {
+		ending := string(sequence.Ending)
+		observations[sequence.Start].SequenceEnding = &ending
+	}
+	return observations
 }
 
 // RefreshSignalRecencyAt settles only clock-derived state using the same stable
@@ -203,6 +218,7 @@ func ExtractToolCallRows(messages []db.Message) []signals.ToolCallRow {
 	rows := make([]signals.ToolCallRow, 0)
 	for _, message := range messages {
 		for callIndex, call := range message.ToolCalls {
+			db.RestoreToolCallResultContent(&call)
 			status := ""
 			if count := len(call.ResultEvents); count > 0 {
 				status = call.ResultEvents[count-1].Status
@@ -214,7 +230,7 @@ func ExtractToolCallRows(messages []db.Message) []signals.ToolCallRow {
 				MessageOrdinal: message.Ordinal, CallIndex: callIndex,
 				ToolUseID: call.ToolUseID, ResultContentLength: call.ResultContentLength,
 				EventStatus:          status,
-				ResultContentUnknown: toolResultContentUnknown(call),
+				ResultContentUnknown: ToolResultContentUnknown(call),
 			})
 		}
 	}

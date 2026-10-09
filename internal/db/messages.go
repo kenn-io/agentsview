@@ -54,14 +54,17 @@ const (
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
 	messageInsertRowsPerStmt         = 35  // 28 params per row
-	toolCallInsertRowsPerStmt        = 83  // 12 params per row (999/12 = 83)
+	toolCallInsertRowsPerStmt        = 66  // 15 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
-	toolCallAgentStateRowsPerStmt    = 166 // 6 params per row
+	toolCallAgentStateRowsPerStmt    = 142 // 7 params per row
 )
 
 // ToolCall represents a single tool invocation stored in
 // the tool_calls table.
 type ToolCall struct {
+	ObservedOutcome     *string           `json:"-"`
+	ObservedRepeat      *string           `json:"-"`
+	SequenceEnding      *string           `json:"-"`
 	MessageID           int64             `json:"-"`
 	SessionID           string            `json:"-"`
 	ToolName            string            `json:"tool_name"`
@@ -341,6 +344,18 @@ func summarizeToolCallLengthFromStateTx(ctx context.Context,
 	}
 }
 
+// A NULL coordinate means initialized without retained evidence; -1 means legacy state.
+func ensureToolCallAgentStateTx(ctx context.Context, tx *sql.Tx, sessionID string, position ToolCallPosition) error {
+	var exists, uninitialized bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tool_call_occurrence_agent_state WHERE session_id=? AND message_ordinal=? AND call_index=?), EXISTS(SELECT 1 FROM tool_call_occurrence_agent_state WHERE session_id=? AND message_ordinal=? AND call_index=? AND latest_evidence_event_index=-1)`, sessionID, position.MessageOrdinal, position.CallIndex, sessionID, position.MessageOrdinal, position.CallIndex).Scan(&exists, &uninitialized); err != nil {
+		return err
+	}
+	if exists && !uninitialized {
+		return nil
+	}
+	return backfillToolCallAgentStateTx(ctx, tx, sessionID, position)
+}
+
 // backfillToolCallAgentStateTx rebuilds the per-call agent state rows
 // from the stored events. It runs once per call for sessions written
 // before the state table existed or through the staged publish; after
@@ -348,24 +363,13 @@ func summarizeToolCallLengthFromStateTx(ctx context.Context,
 func backfillToolCallAgentStateTx(ctx context.Context,
 	tx *sql.Tx, sessionID string, position ToolCallPosition,
 ) error {
-	var missing bool
-	if err := tx.QueryRowContext(ctx, toolResultMetadataMissingSQL,
-		sessionID, position.MessageOrdinal, position.CallIndex,
-	).Scan(&missing); err != nil {
-		return fmt.Errorf("checking tool result metadata: %w", err)
-	}
-	if missing {
-		return ErrToolResultMetadataMissing
-	}
 	messageOrdinal := position.MessageOrdinal
 	callIndex := position.CallIndex
 	rows, err := tx.QueryContext(ctx,
-		`SELECT COALESCE(agent_id, ''), event_index
+		`SELECT COALESCE(agent_id, ''), event_index, content, COALESCE(summary_participates, 0), raw_content_digest IS NOT NULL
 		 FROM tool_result_events
 		 WHERE session_id = ? AND tool_call_message_ordinal = ?
 		   AND call_index = ?
-		   AND (summary_participates IS NULL OR raw_content_digest IS NULL) = 0
-		   AND summary_participates = 1
 		 ORDER BY event_index, id`,
 		sessionID, messageOrdinal, callIndex,
 	)
@@ -377,15 +381,18 @@ func backfillToolCallAgentStateTx(ctx context.Context,
 	}
 	defer rows.Close()
 	type stateRow struct {
-		firstIndex  int
-		latestIndex int
+		firstIndex    int
+		latestIndex   int
+		evidenceIndex *int
 	}
 	latest := make(map[string]stateRow)
 	for rows.Next() {
 		var agentID string
 		var eventIndex int
+		var content string
+		var participates, metadata bool
 		if err := rows.Scan(
-			&agentID, &eventIndex,
+			&agentID, &eventIndex, &content, &participates, &metadata,
 		); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf(
@@ -396,9 +403,17 @@ func backfillToolCallAgentStateTx(ctx context.Context,
 		key := strings.TrimSpace(agentID)
 		entry, ok := latest[key]
 		if !ok {
-			entry.firstIndex = eventIndex
+			entry.firstIndex, entry.latestIndex = -1, -1
 		}
-		entry.latestIndex = eventIndex
+		if participates && metadata {
+			if entry.firstIndex == -1 {
+				entry.firstIndex = eventIndex
+			}
+			entry.latestIndex = eventIndex
+		}
+		if strings.TrimSpace(content) != "" {
+			entry.evidenceIndex = new(eventIndex)
+		}
 		latest[key] = entry
 	}
 	if err := rows.Err(); err != nil {
@@ -414,26 +429,26 @@ func backfillToolCallAgentStateTx(ctx context.Context,
 			sessionID, formatToolCallPosition(position), err,
 		)
 	}
-	args := make([]any, 0, len(latest)*6)
+	args := make([]any, 0, len(latest)*7)
 	for key, entry := range latest {
 		args = append(args,
 			sessionID, position.MessageOrdinal, position.CallIndex, key,
-			entry.firstIndex, entry.latestIndex,
+			entry.firstIndex, entry.latestIndex, entry.evidenceIndex,
 		)
 	}
-	for chunk := range slices.Chunk(args, toolCallAgentStateRowsPerStmt*6) {
+	for chunk := range slices.Chunk(args, toolCallAgentStateRowsPerStmt*7) {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO tool_call_occurrence_agent_state
 				(session_id, message_ordinal, call_index, agent_id,
-				 first_event_index, latest_event_index)
-			 VALUES `+multiRowPlaceholders(len(chunk)/6, 6)+`
+				 first_event_index, latest_event_index, latest_evidence_event_index)
+			 VALUES `+multiRowPlaceholders(len(chunk)/7, 7)+`
 			 ON CONFLICT(session_id, message_ordinal, call_index, agent_id)
-			 DO UPDATE SET latest_event_index = excluded.latest_event_index`,
+			 DO UPDATE SET first_event_index = excluded.first_event_index, latest_event_index = excluded.latest_event_index, latest_evidence_event_index = excluded.latest_evidence_event_index`,
 			chunk...,
 		); err != nil {
 			return fmt.Errorf(
 				"backfilling tool_call_agent_state (%d rows): %w",
-				len(chunk)/6, err,
+				len(chunk)/7, err,
 			)
 		}
 	}
@@ -1283,7 +1298,7 @@ func multiRowPlaceholders(rows, cols int) string {
 func insertToolCallsChunkTx(
 	tx transactionQueries, calls []ToolCall,
 ) error {
-	args := make([]any, 0, len(calls)*12)
+	args := make([]any, 0, len(calls)*15)
 	for _, tc := range calls {
 		args = append(args,
 			tc.MessageID, tc.SessionID,
@@ -1295,7 +1310,7 @@ func insertToolCallsChunkTx(
 			nilIfEmpty(tc.ResultContent),
 			nilIfEmpty(tc.SubagentSessionID),
 			nilIfEmpty(tc.FilePath),
-			tc.CallIndex,
+			tc.CallIndex, tc.ObservedOutcome, tc.ObservedRepeat, tc.SequenceEnding,
 		)
 	}
 	query := `
@@ -1303,8 +1318,8 @@ func insertToolCallsChunkTx(
 			(message_id, session_id, tool_name, category,
 			 tool_use_id, input_json, skill_name,
 			 result_content_length, result_content, subagent_session_id,
-			 file_path, call_index)
-		VALUES ` + multiRowPlaceholders(len(calls), 12)
+			 file_path, call_index, observed_outcome, observed_repeat, sequence_ending)
+		VALUES ` + multiRowPlaceholders(len(calls), 15)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf(
 			"inserting tool_calls batch (%d rows): %w",
@@ -1358,34 +1373,40 @@ func upsertToolCallAgentStateRows(
 	tx transactionQueries, rows []toolResultEventRow,
 ) error {
 	for chunk := range slices.Chunk(rows, toolCallAgentStateRowsPerStmt) {
-		args := make([]any, 0, len(chunk)*6)
+		args := make([]any, 0, len(chunk)*7)
 		for _, r := range chunk {
-			if r.Event.SummaryParticipates == nil || !*r.Event.SummaryParticipates {
-				continue
+			rawIndex := -1
+			if r.Event.SummaryParticipates != nil && *r.Event.SummaryParticipates && r.Event.RawContentDigest != nil {
+				rawIndex = r.Event.EventIndex
+			}
+			var evidenceIndex *int
+			if strings.TrimSpace(r.Event.Content) != "" {
+				evidenceIndex = new(r.Event.EventIndex)
 			}
 			args = append(args,
 				r.SessionID,
 				r.MessageOrdinal,
 				r.CallIndex,
 				strings.TrimSpace(r.Event.AgentID),
-				r.Event.EventIndex,
-				r.Event.EventIndex,
+				rawIndex,
+				rawIndex,
+				evidenceIndex,
 			)
-		}
-		if len(args) == 0 {
-			continue
 		}
 		query := `
 			INSERT INTO tool_call_occurrence_agent_state
 				(session_id, message_ordinal, call_index, agent_id,
-				 first_event_index, latest_event_index)
-			VALUES ` + multiRowPlaceholders(len(args)/6, 6) + `
+				 first_event_index, latest_event_index, latest_evidence_event_index)
+			VALUES ` + multiRowPlaceholders(len(args)/7, 7) + `
 			ON CONFLICT(session_id, message_ordinal, call_index, agent_id)
-			DO UPDATE SET latest_event_index = excluded.latest_event_index`
+			DO UPDATE SET
+			 first_event_index = CASE WHEN tool_call_occurrence_agent_state.first_event_index=-1 THEN excluded.first_event_index ELSE tool_call_occurrence_agent_state.first_event_index END,
+			 latest_event_index = CASE WHEN excluded.latest_event_index=-1 THEN tool_call_occurrence_agent_state.latest_event_index ELSE excluded.latest_event_index END,
+			 latest_evidence_event_index = COALESCE(excluded.latest_evidence_event_index, tool_call_occurrence_agent_state.latest_evidence_event_index)`
 		if _, err := tx.Exec(query, args...); err != nil {
 			return fmt.Errorf(
 				"upserting tool_call_agent_state (%d rows): %w",
-				len(args)/6, err,
+				len(args)/7, err,
 			)
 		}
 	}
@@ -2443,6 +2464,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		findings = nil
 	}
 	if db.ArchiveContent().OmitsToolContent() {
+		signals.ToolObservations = []ToolObservation{}
 		cp, blobs = nil, nil
 	}
 
@@ -2486,8 +2508,12 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		if err := applySessionMessageDiffTx(ctx, tx, sessionID, plan); err != nil {
 			return err
 		}
-	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
-		return err
+	} else {
+		ApplyToolObservations(msgs, signals.ToolObservations)
+		if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
+			return err
+		}
+		signals.ToolObservations = nil
 	}
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
@@ -2970,7 +2996,7 @@ func attachToolCallsBatch(
 		SELECT message_id, session_id, tool_name, category,
 			tool_use_id, input_json, skill_name,
 			result_content_length, result_content, subagent_session_id,
-			file_path, call_index
+			file_path, call_index, observed_outcome, observed_repeat, sequence_ending
 		FROM tool_calls
 		WHERE message_id IN (%s)
 		ORDER BY message_id, call_index`,
@@ -2994,7 +3020,7 @@ func attachToolCallsBatch(
 			&tc.ToolName, &tc.Category,
 			&toolUseID, &inputJSON, &skillName,
 			&resultLen, &resultContent, &subagentSessionID,
-			&filePath, &callIndex,
+			&filePath, &callIndex, &tc.ObservedOutcome, &tc.ObservedRepeat, &tc.SequenceEnding,
 		); err != nil {
 			return fmt.Errorf("scanning tool_call: %w", err)
 		}
@@ -3797,29 +3823,21 @@ func applyToolCallResultUpdateTx(ctx context.Context,
 		)
 	}
 
+	var missing bool
+	if err := tx.QueryRowContext(ctx, toolResultMetadataMissingSQL,
+		sessionID, position.MessageOrdinal, position.CallIndex,
+	).Scan(&missing); err != nil {
+		return false, nil, fmt.Errorf("checking tool result metadata: %w", err)
+	}
+	if missing {
+		return false, nil, ErrToolResultMetadataMissing
+	}
 	// Deduplication probes raw identity directly, and the summary reads
 	// only the call's distinct agents. Full and staged writes initialize
 	// summary state lazily on their first late result, after verifying that
 	// the stored events retain their raw metadata.
-	var stateExists int
-	err := tx.QueryRowContext(ctx,
-		`SELECT 1 FROM tool_call_occurrence_agent_state
-		 WHERE session_id = ? AND message_ordinal = ? AND call_index = ?
-		 LIMIT 1`,
-		sessionID, position.MessageOrdinal, position.CallIndex,
-	).Scan(&stateExists)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return false, nil, fmt.Errorf(
-			"checking agent state for %s/%s: %w",
-			sessionID, update.ToolUseID, err,
-		)
-	}
-	if err != nil {
-		if err := backfillToolCallAgentStateTx(ctx,
-			tx, sessionID, position,
-		); err != nil {
-			return false, nil, err
-		}
+	if err := ensureToolCallAgentStateTx(ctx, tx, sessionID, position); err != nil {
+		return false, nil, err
 	}
 	var nextEventIndex int
 	if err := tx.QueryRowContext(ctx,
@@ -4034,7 +4052,7 @@ func toolCallFingerprintWithQuerier(ctx context.Context, q messageRowsQuerier, s
 			COALESCE(tc.subagent_session_id, ''),
 			COALESCE(tc.result_content_length, 0),
 			COALESCE(tc.result_content, ''),
-			COALESCE(tc.file_path, '')
+			COALESCE(tc.file_path, ''), COALESCE(tc.observed_outcome, ''), COALESCE(tc.observed_repeat, ''), COALESCE(tc.sequence_ending, '')
 		 FROM tool_calls tc
 		 JOIN messages m ON m.id = tc.message_id
 		 WHERE tc.session_id = ?
@@ -4054,7 +4072,7 @@ func toolCallFingerprintWithQuerier(ctx context.Context, q messageRowsQuerier, s
 			&r.messageOrdinal, &r.toolName, &r.category,
 			&r.toolUseID, &r.inputJSON, &r.skillName,
 			&r.subagentSessionID, &r.resultContentLength,
-			&r.resultContent, &r.filePath,
+			&r.resultContent, &r.filePath, &r.observedOutcome, &r.observedRepeat, &r.sequenceEnding,
 		); err != nil {
 			return "", err
 		}
@@ -4172,6 +4190,7 @@ func resolveToolCalls(
 				SubagentSessionID: tc.SubagentSessionID,
 				FilePath:          tc.FilePath,
 				CallIndex:         callIdx,
+				ObservedOutcome:   tc.ObservedOutcome, ObservedRepeat: tc.ObservedRepeat, SequenceEnding: tc.SequenceEnding,
 			})
 		}
 	}

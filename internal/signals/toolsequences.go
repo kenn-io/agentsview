@@ -1,7 +1,9 @@
 package signals
 
 import (
+	"crypto/sha256"
 	"encoding/json/jsontext"
+	"fmt"
 	"strings"
 )
 
@@ -73,84 +75,107 @@ func ExtractToolSequences(calls []ToolCallRow, complete bool) ToolSequences {
 		Calls:     make([]ToolCallOutcome, 0, len(calls)),
 		Sequences: make([]ToolSequence, 0),
 	}
+	var state ToolSequenceContinuation
 	activeStart := -1
-	identical := false
-	nearIdentical := false
-	toolChanged := false
-
 	for i, call := range calls {
-		outcome := classifyToolOutcome(call)
-		observed := ToolCallOutcome{
-			ToolUseID:      call.ToolUseID,
-			MessageOrdinal: call.MessageOrdinal,
-			CallIndex:      call.CallIndex,
-			ToolName:       call.ToolName,
-			Outcome:        outcome,
-			Repeat:         ToolRepeatNone,
-		}
-
-		followup := activeStart >= 0 && call.MessageOrdinal > calls[i-1].MessageOrdinal
-		if followup {
-			observed.ToolChanged = call.ToolName != calls[i-1].ToolName
-			observed.Repeat = classifyToolRepeat(
-				calls[i-1], call,
-			)
-			identical = identical || observed.Repeat == ToolRepeatIdentical
-			nearIdentical = nearIdentical ||
-				observed.Repeat == ToolRepeatNearIdentical
-			toolChanged = toolChanged || observed.ToolChanged
-		}
+		wasActive := state.Active != nil
+		observed, recovered := state.Step(SequenceFactFor(call))
+		observed.ToolUseID = call.ToolUseID
 		result.Calls = append(result.Calls, observed)
-
-		if activeStart < 0 {
-			if startsToolSequence(outcome) {
-				activeStart = i
-				identical = false
-				nearIdentical = false
-				toolChanged = false
-			}
-			continue
+		if !wasActive && state.Active != nil {
+			activeStart = i
 		}
-
-		if followup && outcome == ToolOutcomeContent {
-			result.Sequences = append(result.Sequences, ToolSequence{
-				Start:         activeStart,
-				End:           i + 1,
-				Identical:     identical,
-				NearIdentical: nearIdentical,
-				ToolChanged:   toolChanged,
-				Ending:        ToolSequenceEndingRecovered,
-			})
+		if recovered != nil {
+			result.Sequences = append(result.Sequences, ToolSequence{Start: activeStart, End: i + 1, Identical: recovered.Identical, NearIdentical: recovered.NearIdentical, ToolChanged: recovered.ToolChanged, Ending: ToolSequenceEndingRecovered})
 			activeStart = -1
-			continue
 		}
+	}
+	if state.Active != nil {
+		result.Sequences = append(result.Sequences, ToolSequence{Start: activeStart, End: len(calls), Identical: state.Active.Identical, NearIdentical: state.Active.NearIdentical, ToolChanged: state.Active.ToolChanged, Ending: state.Ending(complete)})
 	}
 
-	if activeStart >= 0 {
-		ending := ToolSequenceEndingOpen
-		if complete {
-			ending = ToolSequenceEndingUnknown
-			if startsToolSequence(result.Calls[len(result.Calls)-1].Outcome) {
-				ending = ToolSequenceEndingAbandoned
-			}
-		}
-		result.Sequences = append(result.Sequences, ToolSequence{
-			Start:         activeStart,
-			End:           len(calls),
-			Identical:     identical,
-			NearIdentical: nearIdentical,
-			ToolChanged:   toolChanged,
-			Ending:        ending,
-		})
-	}
 	return result
+}
+
+// ToolSequenceFact retains bounded comparison facts rather than result content.
+type ToolSequenceFact struct {
+	CallPos
+	ToolName       string      `json:"tool_name"`
+	Outcome        ToolOutcome `json:"outcome"`
+	InputHash      string      `json:"input_hash,omitempty"`
+	NormalizedHash string      `json:"normalized_hash,omitempty"`
+}
+
+type ToolSequenceProgress struct {
+	Start         CallPos `json:"start"`
+	Identical     bool    `json:"identical,omitempty"`
+	NearIdentical bool    `json:"near_identical,omitempty"`
+	ToolChanged   bool    `json:"tool_changed,omitempty"`
+}
+
+// ToolSequenceContinuation resumes immediately before the retained call window.
+type ToolSequenceContinuation struct {
+	Active   *ToolSequenceProgress `json:"active,omitempty"`
+	Previous ToolSequenceFact      `json:"previous"`
+}
+
+func SequenceFactFor(call ToolCallRow) ToolSequenceFact {
+	fact := ToolSequenceFact{CallPos: CallPos{call.MessageOrdinal, call.CallIndex}, ToolName: call.ToolName, Outcome: ClassifyToolOutcome(call)}
+	if call.InputJSON != "" {
+		fact.InputHash = fmt.Sprintf("%x", sha256.Sum256([]byte(call.InputJSON)))
+		if normalized, ok := normalizeToolInput(call.InputJSON); ok {
+			fact.NormalizedHash = fmt.Sprintf("%x", sha256.Sum256([]byte(normalized)))
+		}
+	}
+	return fact
+}
+
+// Step applies the same adjacent-call and same-message rules for full and tail replay.
+func (s *ToolSequenceContinuation) Step(call ToolSequenceFact) (ToolCallOutcome, *ToolSequenceProgress) {
+	observed := ToolCallOutcome{MessageOrdinal: call.MessageOrdinal, CallIndex: call.CallIndex, ToolName: call.ToolName, Outcome: call.Outcome, Repeat: ToolRepeatNone}
+	if call.MessageOrdinal > s.Previous.MessageOrdinal {
+		observed.Repeat = compareSequenceInputs(s.Previous, call)
+	}
+	followup := s.Active != nil && call.MessageOrdinal > s.Previous.MessageOrdinal
+	var recovered *ToolSequenceProgress
+	if s.Active != nil {
+		active := *s.Active
+		s.Active = &active
+	}
+	if followup {
+		observed.ToolChanged = call.ToolName != s.Previous.ToolName
+		s.Active.Identical = s.Active.Identical || observed.Repeat == ToolRepeatIdentical
+		s.Active.NearIdentical = s.Active.NearIdentical || observed.Repeat == ToolRepeatNearIdentical
+		s.Active.ToolChanged = s.Active.ToolChanged || observed.ToolChanged
+	}
+	if s.Active == nil {
+		if startsToolSequence(call.Outcome) {
+			s.Active = &ToolSequenceProgress{Start: call.CallPos}
+		}
+	} else if followup && call.Outcome == ToolOutcomeContent {
+		recovered = s.Active
+		s.Active = nil
+	}
+	s.Previous = call
+	return observed, recovered
+}
+
+func (s *ToolSequenceContinuation) Ending(complete bool) ToolSequenceEnding {
+	if !complete {
+		return ToolSequenceEndingOpen
+	}
+	if startsToolSequence(s.Previous.Outcome) {
+		return ToolSequenceEndingAbandoned
+	}
+	return ToolSequenceEndingUnknown
 }
 
 func startsToolSequence(outcome ToolOutcome) bool {
 	return outcome == ToolOutcomeErrored || outcome == ToolOutcomeEmpty
 }
 
-func classifyToolOutcome(call ToolCallRow) ToolOutcome {
+// ClassifyToolOutcome classifies one retained tool result.
+func ClassifyToolOutcome(call ToolCallRow) ToolOutcome {
 	if IsFailure(call) {
 		return ToolOutcomeErrored
 	}
@@ -158,6 +183,9 @@ func classifyToolOutcome(call ToolCallRow) ToolOutcome {
 		return ToolOutcomeUnknown
 	}
 
+	if call.ContentOutcome != "" {
+		return call.ContentOutcome
+	}
 	if call.ResultContentUnknown {
 		return ToolOutcomeUnknown
 	}
@@ -204,20 +232,14 @@ func isMeasuredEmptyToolResult(toolName, content string) bool {
 	}
 }
 
-func classifyToolRepeat(previous, current ToolCallRow) ToolRepeat {
-	if previous.ToolName != current.ToolName || current.InputJSON == "" {
+func compareSequenceInputs(previous, current ToolSequenceFact) ToolRepeat {
+	if previous.ToolName != current.ToolName || current.InputHash == "" {
 		return ToolRepeatNone
 	}
-	if previous.InputJSON == current.InputJSON && previous.InputJSON != "" {
+	if current.InputHash == previous.InputHash {
 		return ToolRepeatIdentical
 	}
-	if previous.InputJSON == "" {
-		return ToolRepeatNone
-	}
-	previousNormalized, previousOK := normalizeToolInput(previous.InputJSON)
-	currentNormalized, currentOK := normalizeToolInput(current.InputJSON)
-	if previousOK && currentOK && previousNormalized == currentNormalized &&
-		previous.InputJSON != current.InputJSON {
+	if current.NormalizedHash != "" && current.NormalizedHash == previous.NormalizedHash {
 		return ToolRepeatNearIdentical
 	}
 	return ToolRepeatNone

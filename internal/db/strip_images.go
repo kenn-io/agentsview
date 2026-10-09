@@ -282,6 +282,11 @@ func (db *DB) rewriteStoredToolResultRows(
 			return false, fmt.Errorf("updating orphaned tool result event: %w", err)
 		}
 	}
+	for _, update := range events {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM tool_call_occurrence_agent_state WHERE session_id=? AND message_ordinal=? AND call_index=?`, sessionID, update.key.messageOrdinal, update.key.callIndex); err != nil {
+			return false, fmt.Errorf("invalidating tool result coordinates: %w", err)
+		}
+	}
 	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 		return false, err
 	}

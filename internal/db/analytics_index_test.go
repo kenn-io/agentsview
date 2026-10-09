@@ -32,10 +32,10 @@ func TestAnalyticsMetadataIndexLifecycle(t *testing.T) {
 				insertMessages(t, d, messages...)
 			}
 			if lifecycle == "upgrade" {
-				// Model a populated archive from before this index and before
-				// archive-wide planner statistics were collected.
+				// Model an archive whose metadata index predates tool evidence ordinals.
 				_, err := d.getWriter().Exec(t.Context(), `
 					DROP INDEX idx_messages_analytics_metadata;
+					CREATE INDEX idx_messages_analytics_metadata ON messages(session_id, id, timestamp, model);
 					ANALYZE;
 					DELETE FROM sqlite_stat1`)
 				require.NoError(t, err)

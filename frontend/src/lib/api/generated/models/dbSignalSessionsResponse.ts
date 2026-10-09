@@ -4,6 +4,8 @@
 import type { DbSignalSessionExample } from "./dbSignalSessionExample.ts";
 
 export interface DbSignalSessionsResponse {
+  next_offset?: number;
   sessions: DbSignalSessionExample[];
   signal: string;
+  total?: number;
 }

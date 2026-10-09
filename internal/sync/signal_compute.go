@@ -15,7 +15,7 @@ func computeSignalsFromMessages(
 }
 
 func patchToolCallRowsWithContentFailures(
-	rows []signals.ToolCallRow, messages []db.Message, failures map[string]bool,
+	rows []signals.ToolCallRow, messages []db.Message, failures map[string]db.StagedToolVerdict,
 ) {
 	ingest.PatchToolCallRowsWithContentFailures(rows, messages, failures)
 }

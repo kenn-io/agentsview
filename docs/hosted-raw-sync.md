@@ -116,6 +116,9 @@ GRANT INSERT ON hosted_sessions.raw_device_tokens,
   hosted_sessions.raw_session_public_aliases,
   hosted_sessions.raw_embedding_outbox TO hosted_runtime;
 
+GRANT UPDATE (observed_outcome, observed_repeat, sequence_ending)
+  ON hosted_sessions.tool_calls TO hosted_runtime;
+
 GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
   hosted_sessions.raw_source_heads, hosted_sessions.raw_ingest_jobs,
   hosted_sessions.raw_source_projections, hosted_sessions.raw_session_groups,
@@ -393,9 +396,9 @@ AgentsView data directory. `agentsview raw-sync status` prints path-free JSON
 describing the local checkpoint, pending work, retry time, failures, and
 coverage.
 
-When a complete audit finds that a previously captured file is gone, the
-watcher uploads a tombstone for it. The server keeps the sessions already
-derived from that file; see
+When a complete audit finds that a previously captured file is gone, the watcher
+uploads a tombstone for it. The server keeps the sessions already derived from
+that file; see
 [Isolation and processing limits](#isolation-and-processing-limits).
 
 The normal writable `agentsview serve` daemon has its own parser watcher. Run
@@ -438,6 +441,24 @@ Explicit hosted mode uses `raw_tenant` and requires the full hosted preflight;
 missing, startup logs `raw-sync routes disabled; missing requirements:` followed
 by the exact missing table privileges, sequence access, or read-only transaction
 setting.
+
+Explicit hosted mode also requires `UPDATE` on the `tool_calls` columns
+`observed_outcome`, `observed_repeat`, and `sequence_ending`, which hold the
+facts behind tool effectiveness rates. The grant appears in the provisioning
+example above; a table-wide `UPDATE` grant also satisfies it. Without it, or
+before owner provisioning adds the columns, hosted startup fails with
+`owner provisioning required`. Apply the grant as the schema owner before
+upgrading:
+
+```sql
+GRANT UPDATE (observed_outcome, observed_repeat, sequence_ending)
+  ON hosted_sessions.tool_calls TO hosted_runtime;
+```
+
+Hosted sessions projected before the upgrade show as not analyzed in tool rate
+coverage. They gain rates when their source changes and the new transcript
+replaces the stored one. Uploading an unchanged transcript keeps the stored row
+and its older signal version, so its calls stay not analyzed.
 
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.

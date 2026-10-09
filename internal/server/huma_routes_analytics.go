@@ -76,6 +76,9 @@ type analyticsTopSessionsInput struct {
 }
 
 type analyticsSignalSessionsInput struct {
+	ToolCategory string `query:"tool_category" doc:"Tool category for a tool rate"`
+	ToolName     string `query:"tool_name" doc:"Tool name for a tool rate"`
+	Offset       int    `query:"offset" minimum:"0" default:"0" doc:"Session evidence offset for a tool rate"`
 	AnalyticsFilterInput
 	Signal string `query:"signal" required:"true" doc:"Signal name"`
 	Limit  int    `query:"limit" minimum:"0" maximum:"20" default:"10" doc:"Maximum number of session examples"`
@@ -292,10 +295,14 @@ func (s *Server) humaAnalyticsSignalSessions(
 	ctx context.Context,
 	in *analyticsSignalSessionsInput,
 ) (*jsonOutput[db.SignalSessionsResponse], error) {
+	if !db.IsToolMetric(in.Signal) && (in.Offset > 0 || in.ToolName != "" || in.ToolCategory != "") {
+		return nil, apiError(http.StatusBadRequest, "offset and tool filters require a tool rate signal")
+	}
 	f, err := s.analyticsFilterFromInput(ctx, in.AnalyticsFilterInput)
 	if err != nil {
 		return nil, err
 	}
+	f.ToolName, f.ToolCategory, f.EvidenceOffset = in.ToolName, in.ToolCategory, in.Offset
 	result, err := s.db.GetAnalyticsSignalSessions(
 		ctx, f, in.Signal, in.Limit,
 	)

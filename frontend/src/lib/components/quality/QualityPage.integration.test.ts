@@ -524,6 +524,7 @@ describe("QualityPage evidence navigation", () => {
   it("navigates with the clicked example's session and message ordinal", async () => {
     vi.spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions").mockResolvedValue({
       signal: "short_prompt_count",
+      total: 2,
       sessions: [
         {
           session_id: "first-session",

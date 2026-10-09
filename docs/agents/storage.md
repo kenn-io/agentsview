@@ -467,9 +467,10 @@ read-only opens require the indexes.
 
 SQLite's summary and tool analytics can read model names and message timestamps
 through `idx_messages_analytics_metadata` on
-`messages(session_id, id, timestamp, model)` without loading message body pages.
-The next writable open builds this index once and logs that startup is waiting
-for the message scan. Existing rows are preserved; no parser resync is required.
+`messages(session_id, id, timestamp, model, ordinal)` without loading message body
+pages. The next writable open builds or upgrades this index and logs that startup
+is waiting for the message scan. Existing rows are preserved; no parser resync is
+required.
 
 Writable opens and completed bulk index builds run `PRAGMA optimize = 0x10012`.
 This considers all archive tables and limits the statistics samples. Statistics

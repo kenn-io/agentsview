@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
@@ -177,6 +178,11 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		var prepared ingest.PreparedSession
 		if decision.Action == ingest.HistoryPreserve {
 			prepared = old
+			if s.options.Content.ArchiveContent.OmitsToolContent() {
+				prepared.Signals.ToolObservations = []db.ToolObservation{}
+			} else if prepared.Signals.ToolObservations == nil {
+				prepared.Signals.ToolObservations = ingest.ComputeToolObservations(prepared.Session, ingest.ExtractToolCallRows(prepared.Messages))
+			}
 		} else {
 			prepared, err = ingest.Finalize(ctx, decision.Candidate, s.options.Content)
 			if err != nil {

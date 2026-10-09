@@ -1777,22 +1777,28 @@ func pgScanLocalDate(t *time.Time) string {
 // filtered sessions to their tool calls and returns one row per session,
 // category, tool name, and local date; BuildToolsAnalytics forms the
 // weekly trend from those dates.
-func (s *Store) GetAnalyticsTools(
+func (s *Store) GetAnalyticsTools(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
+	rows, err := s.analyticsToolRows(ctx, f)
+	return db.BuildToolsAnalytics(rows), err
+}
+
+func (s *Store) analyticsToolRows(
 	ctx context.Context, f db.AnalyticsFilter,
-) (db.ToolsAnalyticsResponse, error) {
+) ([]db.ToolAnalyticsRow, error) {
 	pb := &paramBuilder{}
-	q := pgAnalyticsCallsSQL(f, pb, ", agent",
+	predicates := db.ToolSelectionPredicates("tc", "s.quality_signal_version", f, func(value string) string { return pb.add(value) })
+	q := pgAnalyticsCallsSQL(f, pb, ", agent, project, quality_signal_version",
 		`, tc.category,
-			TRIM(COALESCE(tc.tool_name, '')) AS tool_name, s.agent`) + `
+			TRIM(COALESCE(tc.tool_name, '')) AS tool_name, s.agent, s.project, m.ordinal, s.quality_signal_version, tc.observed_outcome, tc.observed_repeat, tc.sequence_ending`, predicates...) + `
 	SELECT session_id, category, tool_name, agent,
-		local_at::date AS local_date, COUNT(*)
+		local_at::date AS local_date, COUNT(*), project, COALESCE(MIN(ordinal), 0)` + db.ToolEffectivenessSQL("analytics_calls", "quality_signal_version") + `
 	FROM analytics_calls
 	WHERE ` + pgAnalyticsCallLocalWhere(f, pb) + `
-	GROUP BY session_id, category, tool_name, agent, local_at::date`
+	GROUP BY session_id, category, tool_name, agent, project, local_at::date`
 
 	rows, err := s.pg.QueryContext(ctx, q, pb.args...)
 	if err != nil {
-		return db.ToolsAnalyticsResponse{},
+		return nil,
 			fmt.Errorf("querying tool_calls: %w", err)
 	}
 	defer rows.Close()
@@ -1802,20 +1808,19 @@ func (s *Store) GetAnalyticsTools(
 		var row db.ToolAnalyticsRow
 		var date *time.Time
 		if err := rows.Scan(
-			&row.SessionID, &row.Category, &row.ToolName,
-			&row.Agent, &date, &row.Count,
+			append([]any{&row.SessionID, &row.Category, &row.ToolName, &row.Agent, &date, &row.Count, &row.Project, &row.Ordinal}, row.ScanTargets()...)...,
 		); err != nil {
-			return db.ToolsAnalyticsResponse{},
+			return nil,
 				fmt.Errorf("scanning tool_call: %w", err)
 		}
 		row.Date = pgScanLocalDate(date)
 		toolRows = append(toolRows, row)
 	}
 	if err := rows.Err(); err != nil {
-		return db.ToolsAnalyticsResponse{},
+		return nil,
 			fmt.Errorf("iterating tool_calls: %w", err)
 	}
-	return db.BuildToolsAnalytics(toolRows), nil
+	return toolRows, nil
 }
 
 // pgSkillsTrendGranularity maps a skills trend granularity to a
@@ -2629,6 +2634,14 @@ func (s *Store) GetAnalyticsSignalSessions(
 	signal string,
 	limit int,
 ) (db.SignalSessionsResponse, error) {
+	if db.IsToolMetric(signal) {
+		f.ToolMetric = signal
+		rows, err := s.analyticsToolRows(ctx, f)
+		if err != nil {
+			return db.SignalSessionsResponse{}, err
+		}
+		return db.BuildToolMetricEvidence(rows, signal, f.ToolName, f.EvidenceOffset, limit), nil
+	}
 	if !db.IsSupportedAnalyticsSignal(signal) {
 		return db.SignalSessionsResponse{},
 			db.ErrUnsupportedAnalyticsSignal

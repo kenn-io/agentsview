@@ -297,11 +297,16 @@ func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
 		_, err := f.admin.Exec(`REVOKE UPDATE,DELETE ON "` + table + `" FROM "` + f.role + `"`)
 		require.NoError(t, err)
 	}
+	_, err := f.admin.Exec(`GRANT UPDATE(observed_outcome,observed_repeat) ON tool_calls TO "` + f.role + `"`)
+	require.NoError(t, err)
+	require.ErrorContains(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull), "owner provisioning required")
+	_, err = f.admin.Exec(`GRANT UPDATE(sequence_ending) ON tool_calls TO "` + f.role + `"`)
+	require.NoError(t, err)
 	for _, table := range []string{"tool_calls", "tool_result_events", "usage_events", "pinned_messages"} {
 		_, err := f.admin.Exec(`REVOKE USAGE ON SEQUENCE "` + table + `_id_seq" FROM "` + f.role + `"; GRANT UPDATE ON SEQUENCE "` + table + `_id_seq" TO "` + f.role + `"`)
 		require.NoError(t, err)
 	}
-	_, err := f.admin.Exec(`REVOKE USAGE ON SEQUENCE secret_findings_id_seq FROM "` + f.role + `"`)
+	_, err = f.admin.Exec(`REVOKE USAGE ON SEQUENCE secret_findings_id_seq FROM "` + f.role + `"`)
 	require.NoError(t, err)
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 	m, receipt := f.accept(t, "device-a", "first", "")
@@ -314,6 +319,15 @@ func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
 		require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM `+table).Scan(&count))
 		assert.Positive(t, count, table)
 	}
+	_, err = f.admin.Exec(`UPDATE tool_calls SET observed_outcome=NULL,observed_repeat=NULL,sequence_ending=NULL`)
+	require.NoError(t, err)
+	replay, replayReceipt := f.accept(t, "device-a", "observation-refresh", receipt.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, replay), replay, out))
+	receipt = replayReceipt
+	_, err = f.runtime.Exec(`UPDATE tool_calls SET result_content='edited'`)
+	require.Error(t, err)
+	_, err = f.runtime.Exec(`DELETE FROM tool_calls`)
+	require.Error(t, err)
 	require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "starred", true))
 	require.NoError(t, f.sink.SetPin(t.Context(), "codex:portable", 0, true, "note"))
 	n, _ := f.accept(t, "device-a", "next", receipt.Receipt)
@@ -342,4 +356,14 @@ func TestHostedRuntimeUsagePolicyRequiresVectorRemovalPrivileges(t *testing.T) {
 	var content string
 	require.NoError(t, f.runtime.QueryRow(`SELECT content FROM messages ORDER BY ordinal LIMIT 1`).Scan(&content))
 	assert.Empty(t, content)
+}
+
+func TestHostedRuntimeRequiresProvisionedObservationColumns(t *testing.T) {
+	f := newProjectionFixture(t)
+	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
+	// A schema that owner provisioning has not upgraded lacks the columns.
+	_, err := f.admin.Exec(`ALTER TABLE tool_calls DROP COLUMN sequence_ending`)
+	require.NoError(t, err)
+	err = CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull)
+	require.ErrorContains(t, err, "owner provisioning required")
 }

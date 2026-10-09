@@ -10,6 +10,58 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+func TestStagedMultiAgentToolObservationParity(t *testing.T) {
+	for _, prior := range []struct {
+		content         string
+		imagePeer, nul  bool
+		outcome, ending string
+	}{
+		{"file contents", true, false, "content", "recovered"},
+		{"file contents", false, true, "empty", "abandoned"},
+		{"command not found", false, true, "empty", "abandoned"},
+		{"[image]", false, true, "unknown", "unknown"},
+		{"[image]", true, true, "unknown", "unknown"},
+	} {
+		for _, textAgent := range []string{"agent-a", ""} {
+			t.Run(prior.content+strconv.FormatBool(prior.imagePeer)+textAgent, func(t *testing.T) {
+				staged, err := newCodexStagingSink(t.Context(), t.TempDir(), nil)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, staged.Close()) }()
+				full := parser.NewCodexCollectingSink(0)
+				for _, sink := range []parser.CodexSessionSink{full, staged} {
+					sink.AppendMessage(parser.ParsedMessage{Role: parser.RoleAssistant, ToolCalls: []parser.ParsedToolCall{{ToolUseID: "grep", ToolName: "Grep", Category: "Grep"}}})
+					sink.AppendToolResultEvent(t.Context(), "grep", nil, parser.ParsedToolResultEvent{Content: "No matches found", Status: "completed"})
+					sink.AppendMessage(parser.ParsedMessage{Role: parser.RoleAssistant, ToolCalls: []parser.ParsedToolCall{{ToolUseID: "read", ToolName: "Read", Category: "Read"}}})
+					sink.AppendToolResultEvent(t.Context(), "read", nil, parser.ParsedToolResultEvent{AgentID: textAgent, Content: prior.content, Status: "completed"})
+					if prior.imagePeer {
+						sink.AppendToolResultEvent(t.Context(), "read", nil, parser.ParsedToolResultEvent{AgentID: "image-agent", Content: "[image]", Status: "completed"})
+					}
+					if prior.nul {
+						sink.AppendToolResultEvent(t.Context(), "read", nil, parser.ParsedToolResultEvent{AgentID: textAgent, Content: "\x00", Status: "completed"})
+					}
+
+				}
+				for range 16 {
+					for _, call := range []string{"grep", "read"} {
+						_, _, err := staged.ResolveSummary(t.Context(), db.StagedToolCallKey(call, 0))
+						require.NoError(t, err)
+					}
+					session := db.Session{ID: "fixture", TerminationStatus: new("clean")}
+					fullMessages := toDBMessages(pendingWrite{sess: parser.ParsedSession{Agent: parser.AgentCodex}, msgs: full.Messages()}, nil)
+					for i := range fullMessages {
+						db.SanitizeMessage(&fullMessages[i])
+					}
+					want, _ := computeSignalsAndSecrets(session, fullMessages)
+					got, _ := computeSignalsAndSecretsWithContentFailures(session, toDBMessages(pendingWrite{sess: parser.ParsedSession{Agent: parser.AgentCodex}, msgs: staged.Messages()}, nil), staged.ContentFailures())
+					require.Equal(t, want.ToolObservations, got.ToolObservations)
+					require.Equal(t, prior.outcome, got.ToolObservations[1].Outcome)
+					require.Equal(t, new(prior.ending), got.ToolObservations[0].SequenceEnding)
+				}
+			})
+		}
+	}
+}
+
 func TestStagedSingleEventSummaryThenAdditionalEvent(t *testing.T) {
 	for _, tc := range []struct {
 		name, content string
@@ -36,7 +88,7 @@ func TestStagedSingleEventSummaryThenAdditionalEvent(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, summary)
 			require.Equal(t, tc.length, length)
-			require.Equal(t, tc.failure, sink.ContentFailures()[key])
+			require.Equal(t, tc.failure, sink.ContentFailures()[key].Failure)
 			sink.AppendToolResultEvent(t.Context(), "call", nil, parser.ParsedToolResultEvent{
 				Source: "function_call_output", Content: "done",
 			})
@@ -45,7 +97,7 @@ func TestStagedSingleEventSummaryThenAdditionalEvent(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "done", summary)
 			require.Equal(t, 4, length)
-			require.False(t, sink.ContentFailures()[key])
+			require.False(t, sink.ContentFailures()[key].Failure)
 		})
 	}
 }

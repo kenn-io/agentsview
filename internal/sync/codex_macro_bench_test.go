@@ -476,7 +476,7 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 			require.NoError(t, database.ReplaceSessionContentStaged(
 				context.Background(), row.ID, dbMsgs, staged,
 				map[string]bool{},
-				func(verdicts map[string]bool) (
+				func(verdicts map[string]db.StagedToolVerdict) (
 					db.SessionSignalUpdate, []db.SecretFinding, error,
 				) {
 					update, findings := computeSignalsAndSecretsWithContentFailures(
@@ -632,7 +632,7 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 	require.NoError(t, database.ReplaceSessionContentStaged(
 		context.Background(), row.ID, dbMsgs, staged,
 		map[string]bool{},
-		func(verdicts map[string]bool) (
+		func(verdicts map[string]db.StagedToolVerdict) (
 			db.SessionSignalUpdate, []db.SecretFinding, error,
 		) {
 			update, findings := computeSignalsAndSecretsWithContentFailures(

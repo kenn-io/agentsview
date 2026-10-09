@@ -9,13 +9,13 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// Only these fields depend on observation time. Their small mutable snapshot
-// belongs to a content revision but never participates in its immutable hash.
+// Derived facts stay mutable without participating in immutable content identity.
 type rawRecencyState struct {
 	Outcome, OutcomeConfidence string
 	SignalsPendingSince        *string
 	HealthScore                *int
 	HealthGrade                *string
+	ToolObservations           []db.ToolObservation `json:",omitzero"`
 }
 
 func decodeRawRecency(data []byte) (rawRecencyState, error) {
@@ -28,13 +28,16 @@ func (r rawRecencyState) apply(update *db.SessionSignalUpdate) {
 	update.Outcome, update.OutcomeConfidence = r.Outcome, r.OutcomeConfidence
 	update.SignalsPendingSince = r.SignalsPendingSince
 	update.HealthScore, update.HealthGrade = r.HealthScore, r.HealthGrade
+	if r.ToolObservations != nil {
+		update.ToolObservations = r.ToolObservations
+	}
 }
 
 // publishRawRecency runs under the logical group lock. It persists settling for
 // later reactivation and reports only a change to a currently materialized row.
 // Equal recent observations retain the original pending timestamp.
 func publishRawRecency(ctx context.Context, tx *sql.Tx, id string, update db.SessionSignalUpdate) (bool, error) {
-	next := rawRecencyState{update.Outcome, update.OutcomeConfidence, update.SignalsPendingSince, update.HealthScore, update.HealthGrade}
+	next := rawRecencyState{update.Outcome, update.OutcomeConfidence, update.SignalsPendingSince, update.HealthScore, update.HealthGrade, update.ToolObservations}
 	var data []byte
 	if err := tx.QueryRowContext(ctx, `SELECT recency_state FROM raw_content_revisions WHERE session_id=$1`, id).Scan(&data); err != nil {
 		return false, err
@@ -42,6 +45,9 @@ func publishRawRecency(ctx context.Context, tx *sql.Tx, id string, update db.Ses
 	prior, err := decodeRawRecency(data)
 	if err != nil {
 		return false, err
+	}
+	if next.ToolObservations == nil {
+		next.ToolObservations = prior.ToolObservations
 	}
 	if prior.SignalsPendingSince != nil && next.SignalsPendingSince != nil {
 		next.SignalsPendingSince = prior.SignalsPendingSince
@@ -61,5 +67,27 @@ func publishRawRecency(ctx context.Context, tx *sql.Tx, id string, update db.Ses
 		return false, err
 	}
 	count, err := result.RowsAffected()
-	return count > 0, err
+	if err != nil {
+		return false, err
+	}
+	if next.ToolObservations != nil && !reflect.DeepEqual(prior.ToolObservations, next.ToolObservations) {
+		observations, err := json.Marshal(next.ToolObservations)
+		if err != nil {
+			return false, err
+		}
+		result, err := tx.ExecContext(ctx, `WITH facts AS (
+ SELECT tc.id, o."Outcome" AS outcome, o."Repeat" AS repeat, o."SequenceEnding" AS ending
+ FROM tool_calls tc LEFT JOIN jsonb_to_recordset($2::jsonb) AS o("MessageOrdinal" int,"CallIndex" int,"Outcome" text,"Repeat" text,"SequenceEnding" text)
+ ON tc.message_ordinal=o."MessageOrdinal" AND tc.call_index=o."CallIndex" WHERE tc.session_id=$1
+) UPDATE tool_calls tc SET observed_outcome=f.outcome,observed_repeat=f.repeat,sequence_ending=f.ending FROM facts f WHERE tc.id=f.id AND (tc.observed_outcome,tc.observed_repeat,tc.sequence_ending) IS DISTINCT FROM (f.outcome,f.repeat,f.ending)`, id, observations)
+		if err != nil {
+			return false, err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		count += changed
+	}
+	return count > 0, nil
 }

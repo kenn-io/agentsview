@@ -2974,26 +2974,28 @@ components:
         - project
         - agent
         - date
-        - is_automated
         - outcome
         - health_score
         - health_grade
         - signal_total
         - reason_code
         - excerpt
-        - failure_signals
-        - retries
-        - edit_churn
       type: object
     DbSignalSessionsResponse:
       additionalProperties: false
       properties:
+        next_offset:
+          format: int64
+          type: integer
         sessions:
           items:
             $ref: "#/components/schemas/DbSignalSessionExample"
           type: array
         signal:
           type: string
+        total:
+          format: int64
+          type: integer
       required:
         - signal
         - sessions
@@ -3881,25 +3883,79 @@ components:
     DbToolUsageAnalysis:
       additionalProperties: false
       properties:
+        abandoned_sequences:
+          format: int64
+          type: integer
+        analyzed_calls:
+          format: int64
+          type: integer
         call_count:
           format: int64
           type: integer
         category:
           type: string
+        empty_calls:
+          format: int64
+          type: integer
+        empty_rate:
+          format: double
+          type:
+            - number
+            - "null"
+        known_outcome_calls:
+          format: int64
+          type: integer
+        missing_calls:
+          format: int64
+          type: integer
+        open_sequences:
+          format: int64
+          type: integer
         pct:
           format: double
           type: number
+        recovered_sequences:
+          format: int64
+          type: integer
+        recovery_rate:
+          format: double
+          type:
+            - number
+            - "null"
+        repeat_rate:
+          format: double
+          type:
+            - number
+            - "null"
+        repeated_calls:
+          format: int64
+          type: integer
         session_count:
           format: int64
           type: integer
         tool_name:
           type: string
+        unknown_sequences:
+          format: int64
+          type: integer
       required:
+        - missing_calls
+        - empty_rate
+        - repeat_rate
+        - recovery_rate
         - tool_name
         - category
         - call_count
         - session_count
         - pct
+        - analyzed_calls
+        - known_outcome_calls
+        - empty_calls
+        - repeated_calls
+        - recovered_sequences
+        - abandoned_sequences
+        - open_sequences
+        - unknown_sequences
       type: object
     DbToolsAnalyticsResponse:
       additionalProperties: false
@@ -9470,6 +9526,30 @@ paths:
     get:
       operationId: get-api-v1-analytics-signal-sessions
       parameters:
+        - description: Tool category for a tool rate
+          explode: false
+          in: query
+          name: tool_category
+          schema:
+            description: Tool category for a tool rate
+            type: string
+        - description: Tool name for a tool rate
+          explode: false
+          in: query
+          name: tool_name
+          schema:
+            description: Tool name for a tool rate
+            type: string
+        - description: Session evidence offset for a tool rate
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: Session evidence offset for a tool rate
+            format: int64
+            minimum: 0
+            type: integer
         - description: Range start date
           explode: false
           in: query

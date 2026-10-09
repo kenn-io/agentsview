@@ -41,7 +41,7 @@ func computeSignalsAndSecrets(
 // scan is unchanged (staged event findings arrive through the sink's
 // Findings instead).
 func computeSignalsAndSecretsWithContentFailures(
-	s db.Session, msgs []db.Message, failures map[string]bool,
+	s db.Session, msgs []db.Message, failures map[string]db.StagedToolVerdict,
 ) (db.SessionSignalUpdate, []db.SecretFinding) {
 	return ingest.ComputeSignalsAndSecretsWithContentFailures(
 		s, msgs, failures,
@@ -53,7 +53,7 @@ func computeSignalsAndSecretsWithContentFailures(
 // follow-up transaction or revision read is needed. Reuse the tool rows for
 // aggregate signals and the incremental seed.
 func computeFullSignalsAndSecrets(
-	s db.Session, msgs []db.Message, failures map[string]bool,
+	s db.Session, msgs []db.Message, failures map[string]db.StagedToolVerdict,
 ) (db.SessionSignalUpdate, []db.SecretFinding, error) {
 	rows := extractToolCallRows(msgs)
 	patchToolCallRowsWithContentFailures(rows, msgs, failures)
@@ -85,7 +85,7 @@ func computeFullSignalsAndSecrets(
 // recompute aggregate signals.
 func (e *Engine) attachFullSignalState(
 	s db.Session, msgs []db.Message, update db.SessionSignalUpdate,
-	failures map[string]bool,
+	failures map[string]db.StagedToolVerdict,
 ) (db.SessionSignalUpdate, error) {
 	if !isCodexFormatAgent(parser.AgentType(s.Agent)) {
 		return update, nil
@@ -138,7 +138,7 @@ func (e *Engine) computeSignalsAndSecretsForStorage(
 // computeFullSignalsAndSecretsForStorage seeds full-parse state from the same
 // content retained by the archive.
 func (e *Engine) computeFullSignalsAndSecretsForStorage(
-	s db.Session, msgs []db.Message, failures map[string]bool,
+	s db.Session, msgs []db.Message, failures map[string]db.StagedToolVerdict,
 ) (db.SessionSignalUpdate, []db.SecretFinding, error) {
 	if e.db.ArchiveContent().OmitsToolContent() {
 		s, msgs = e.db.ProjectSessionForStorage(s, msgs)

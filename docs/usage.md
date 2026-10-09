@@ -186,7 +186,30 @@ Three histograms showing the distribution of:
 
 Total tool call count with breakdowns by category (Read, Edit, Write, Bash,
 Search, Web, Task) and by agent. Includes a trend chart showing tool usage over
-time.
+time. Each tool also shows empty, repeat and recovery rates. Click a nonzero
+rate to list the sessions behind it, with the number of matching calls in each.
+Each link opens the session at the message that holds the first matching call.
+
+- **Empty rate** divides empty results by calls with a known outcome.
+- **Repeat rate** divides calls that repeat the previous call's tool and input,
+  exactly or after normalizing the JSON, by analyzed calls. The previous call's
+  outcome does not matter, and calls in the same message do not count.
+  A sequence's first call can repeat a previous successful call.
+- **Recovery rate** divides recovered sequences by recovered plus abandoned
+  sequences. A sequence starts with an empty result or an error. It recovers
+  when a call in a later message returns content. The tool that started the
+  sequence owns it. Sequences still open, or with an unknown ending, stay out of
+  the denominator.
+
+A rate with no denominator shows Unavailable. Rates follow the same filters as
+the rest of the Analytics page and count individual calls, so a date or model
+filter selects the calls made in that window or by that model.
+
+The Analyzed column shows analyzed calls out of all calls. After an upgrade,
+AgentsView recomputes older sessions in the background. Until a session's
+recompute finishes, its calls count as not analyzed. Archives that store no tool
+results never analyze calls. PostgreSQL, DuckDB, and ClickHouse mirrors receive
+the results through their normal pushes.
 
 ![Tool usage](/docs/assets/generated/screenshots/tool-usage.png)
 
