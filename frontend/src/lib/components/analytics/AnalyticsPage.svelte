@@ -248,7 +248,7 @@
   async function refreshAnalytics(): Promise<void> {
     cancelInitialLoad();
     const refresh = analytics.fetchAll();
-    const outcomes = outcomeWindow && !outcomeFiltersUnsupported
+    const outcomes = outcomeWindow && !outcomeFiltersUnsupported && !(outcomeTotals.loading && outcomeTotals.includePullRequests)
       ? outcomeTotals.load(outcomeWindow)
       : undefined;
     if (!router.isRootPath && !suppressSessionDateRefresh) {

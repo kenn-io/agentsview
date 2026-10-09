@@ -832,4 +832,87 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(noStateBlock).toContain("state = rollingPanelDate(analytics.windowDays);");
     expect(noStateBlock).toContain("changed = applyAnalyticsPanelDate(state);");
   });
+  it("keeps a pending GitHub lookup through automatic refresh", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const panels = vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    let resolvePRs!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolvePRs = resolve;
+    });
+    const statsRequests: { url: string; signal: AbortSignal | null | undefined }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+      if (!String(url).includes("/api/v1/session-stats"))
+        return Response.json({ models: [], agents: [] });
+      statsRequests.push({ url: String(url), signal: options?.signal });
+      if (String(url).includes("include_github_outcomes=true")) return pending;
+      return Response.json({
+        outcome_stats: {
+          repos_active: 1,
+          commits: 2,
+          loc_added: 3,
+          loc_removed: 0,
+          files_changed: 1,
+        },
+      });
+    });
+    settings.githubConfigured = true;
+    sync.serverVersion = {
+      version: "test",
+      commit: "test",
+      build_date: "",
+      api_version: 10,
+      data_version: 1,
+      insight_generation_available: false,
+      session_stats_available: true,
+    };
+    router.params = { date_from: "2026-03-01", date_to: "2026-03-31" };
+    analytics.from = "2026-03-01";
+    analytics.to = "2026-03-31";
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    statsRequests.length = 0;
+    const lookup = vi.spyOn(outcomeTotals, "loadWithPullRequests");
+    document.querySelector<HTMLButtonElement>(".outcome-load-prs")!.click();
+    await flushEffects();
+    expect(statsRequests).toHaveLength(1);
+    const signal = statsRequests[0].signal;
+    expect(signal).toBeDefined();
+    expect(statsRequests[0].url).toContain("include_github_outcomes=true");
+    const beforeRefresh = panels.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    await flushEffects();
+    expect(panels).toHaveBeenCalledTimes(beforeRefresh + 1);
+    expect(statsRequests).toHaveLength(1);
+    expect(signal?.aborted).toBe(false);
+    resolvePRs(
+      Response.json({
+        outcome_stats: {
+          repos_active: 1,
+          commits: 2,
+          loc_added: 3,
+          loc_removed: 0,
+          files_changed: 1,
+          prs_opened: 7,
+          prs_merged: 5,
+        },
+      }),
+    );
+    await lookup.mock.results[0].value;
+    await flushEffects();
+    expect(outcomeTotals.stats?.prs_opened).toBe(7);
+    expect(
+      [...document.querySelectorAll(".outcome-card")].some(
+        (card) =>
+          card.textContent?.includes("7") && card.textContent?.includes("Pull requests opened"),
+      ),
+    ).toBe(true);
+  });
 });
