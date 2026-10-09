@@ -59,7 +59,8 @@ type codexSessionIndexEntry struct {
 // JSONL session file line by line.
 type codexSessionBuilder struct {
 	codexCursorState
-	agent AgentType
+	agent       AgentType
+	incremental bool
 	// sink receives every normalized operation; the collecting
 	// implementation keeps the slice-based behavior, the streaming one
 	// batches into a scratch store.
@@ -365,7 +366,7 @@ func (b *codexSessionBuilder) refreshPendingCallPositions() {
 // processLine handles a single non-empty, valid JSON line.
 func (b *codexSessionBuilder) processLine(ctx context.Context,
 	line string,
-) (skip bool) {
+) (skip bool, err error) {
 	tsStr := gjson.Get(line, "timestamp").Str
 	ts := parseTimestamp(tsStr)
 	if ts.IsZero() {
@@ -386,37 +387,34 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 		if b.forkGate.suppressesSessionMeta(payload) {
 			// A forked rollout replays the parent's session_meta
 			// too — the fork's own meta came first and wins.
-			return false
+			return false, nil
 		}
-		return b.handleSessionMeta(payload, ts)
+		return b.handleSessionMeta(payload, ts), nil
 	case codexTypeTurnContext:
 		if b.suppresses(codexTypeTurnContext, payload) {
-			return false
+			return false, nil
 		}
 		b.model = payload.Get("model").Str
 		b.reasoningEffort = payload.Get("effort").Str
 	case codexTypeResponseItem:
 		if b.suppresses(codexTypeResponseItem, payload) {
-			return false
+			return false, nil
 		}
 		b.handleResponseItem(ctx, payload, ts)
 	case codexTypeEventMsg:
 		if b.suppresses(codexTypeEventMsg, payload) {
-			return false
+			return false, nil
 		}
 		b.handleEventMsg(payload)
 	case codexTypeHistoryMutation:
-		if b.suppresses(codexTypeHistoryMutation, payload) {
-			return false
-		}
-		b.handleHistoryMutation(ctx, payload, ts)
+		return false, b.handleHistoryMutation(ctx, payload, ts)
 	case codexTypeTokenUsageRecord:
 		if b.suppresses(codexTypeTokenUsageRecord, payload) {
-			return false
+			return false, nil
 		}
 		b.handleTokenUsageRecord(payload)
 	}
-	return false
+	return false, nil
 }
 
 func (b *codexSessionBuilder) handleSessionMeta(
@@ -568,14 +566,23 @@ func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
 
 func (b *codexSessionBuilder) handleHistoryMutation(
 	ctx context.Context, payload gjson.Result, ts time.Time,
-) {
+) error {
 	if b.agent != AgentTraeX {
-		return
+		return nil
 	}
-	payload.Get("items").ForEach(func(_, item gjson.Result) bool {
+	if operation := payload.Get("operation").Str; operation != "append" {
+		return fmt.Errorf("unsupported TraeX history mutation operation %q", operation)
+	}
+	if b.suppresses(codexTypeHistoryMutation, payload) {
+		return nil
+	}
+	for _, item := range payload.Get("items").Array() {
+		if b.incremental && b.codexResponseItemNeedsFullParse(item) {
+			return errCodexIncrementalNeedsFullParse
+		}
 		b.handleResponseItem(ctx, item, ts)
-		return true
-	})
+	}
+	return nil
 }
 
 func (b *codexSessionBuilder) handleTokenUsageRecord(
@@ -588,7 +595,11 @@ func (b *codexSessionBuilder) handleTokenUsageRecord(
 	if raw == "" {
 		return
 	}
-	b.applyTokenUsage(raw)
+	key := raw
+	if responseID := payload.Get("response_id"); responseID.Str != "" {
+		key = `{"response_id":` + responseID.Raw + `,"usage":` + raw + `}`
+	}
+	b.applyTokenUsage(raw, key)
 }
 
 func (b *codexSessionBuilder) markFirstUserReplayPossible() {
@@ -602,11 +613,11 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 	if raw == "" {
 		return
 	}
-	b.applyTokenUsage(raw)
+	b.applyTokenUsage(raw, raw)
 }
 
-func (b *codexSessionBuilder) applyTokenUsage(raw string) {
-	if b.observeTokenUsage(raw) {
+func (b *codexSessionBuilder) applyTokenUsage(raw, key string) {
+	if b.observeTokenUsage(key) {
 		return
 	}
 
@@ -752,7 +763,7 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(ctx context.Context,
 	}
 	defer b.forgetToolCall(callID)
 
-	output, raw := parseCodexFunctionOutput(payload)
+	output, raw := parseCodexFunctionOutput(payload, b.agent)
 	if !output.Exists() {
 		if strings.TrimSpace(raw) == "" {
 			return
@@ -1367,11 +1378,26 @@ func firstNonEmpty(vals ...string) string {
 }
 
 func parseCodexFunctionOutput(
-	payload gjson.Result,
+	payload gjson.Result, agent AgentType,
 ) (gjson.Result, string) {
 	out := payload.Get("output")
 	if !out.Exists() {
 		return gjson.Result{}, ""
+	}
+
+	if agent == AgentTraeX && out.IsArray() && len(out.Array()) > 0 {
+		allText := true
+		for _, block := range out.Array() {
+			switch block.Get("type").Str {
+			case "input_text", "output_text", "text":
+				allText = allText && block.Get("text").Type == gjson.String
+			default:
+				allText = false
+			}
+		}
+		if allText {
+			out = gjson.Result{Type: gjson.String, Str: strings.Join(extractCodexTextBlocksFromResult(out), "\n")}
+		}
 	}
 
 	switch out.Type {
@@ -1388,13 +1414,6 @@ func parseCodexFunctionOutput(
 		raw := strings.TrimSpace(out.Raw)
 		if raw == "" {
 			return gjson.Result{}, ""
-		}
-		if out.IsArray() {
-			if text := strings.TrimSpace(
-				strings.Join(extractCodexTextBlocksFromResult(out), "\n"),
-			); text != "" {
-				return out, text
-			}
 		}
 		if gjson.Valid(raw) {
 			return gjson.Parse(raw), raw
@@ -1875,7 +1894,11 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 			}
 			continue
 		}
-		if b.processLine(ctx, line) {
+		skip, err := b.processLine(ctx, line)
+		if err != nil {
+			return nil, nil, codexCursorState{}, false, nil, "", "", err
+		}
+		if skip {
 			return nil, nil, codexCursorState{}, false, nil, "", "", nil
 		}
 	}
@@ -2233,7 +2256,7 @@ func (p *codexProvider) seedCodexIncrementalState(ctx context.Context,
 		)
 	}
 	defer f.Close()
-	seed, err := seedCodexIncrementalStateFromReader(ctx,
+	seed, err := seedCodexIncrementalStateFromReader(ctx, p.spec.agent,
 		io.LimitReader(f, offset),
 		p.parentTurnResolver(ctx, path),
 	)
@@ -2245,13 +2268,13 @@ func (p *codexProvider) seedCodexIncrementalState(ctx context.Context,
 	return seed, nil
 }
 
-func seedCodexIncrementalStateFromReader(ctx context.Context,
+func seedCodexIncrementalStateFromReader(ctx context.Context, agent AgentType,
 	r io.Reader,
 	resolveParentTurns codexParentTurnResolver,
 ) (codexIncrementalSeed, error) {
 	sink := newCodexSeedSink()
 	b := newCodexSessionBuilder(
-		ctx, AgentCodex, false, resolveParentTurns, sink,
+		ctx, agent, false, resolveParentTurns, sink,
 	)
 	lr := newLineReader(r, maxLineSize)
 	defer releaseLineReader(lr)
@@ -2263,7 +2286,9 @@ func seedCodexIncrementalStateFromReader(ctx context.Context,
 		if !gjson.Valid(line) {
 			continue
 		}
-		b.processLine(ctx, line)
+		if _, err := b.processLine(ctx, line); err != nil {
+			return codexIncrementalSeed{}, err
+		}
 	}
 	if err := lr.Err(); err != nil {
 		return codexIncrementalSeed{}, err
@@ -2497,7 +2522,7 @@ func (p *codexProvider) parseSessionFromSnapshot(ctx context.Context,
 			return readCodexJSONLSection(f, offset, limit, fn)
 		},
 		func() (codexIncrementalSeed, error) {
-			return seedCodexIncrementalStateFromReader(ctx,
+			return seedCodexIncrementalStateFromReader(ctx, p.spec.agent,
 				io.NewSectionReader(f, 0, offset),
 				p.parentTurnResolver(ctx, path),
 			)
@@ -2612,6 +2637,7 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 		p.parentTurnResolver(ctx, path),
 		NewCodexCollectingSink(startOrdinal),
 	)
+	b.incremental = true
 	b.codexCursorState = seed.codexCursorState
 	b.overflowPendingCalls = seed.overflowPendingCalls
 	if committedUsageTarget != nil {
@@ -2633,16 +2659,11 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
-			if p.spec.agent == AgentTraeX &&
-				lineType == codexTypeHistoryMutation {
-				fallbackErr = errCodexIncrementalNeedsFullParse
-				return
-			}
 			if b.codexIncrementalNeedsFullParse(line) {
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
-			b.processLine(ctx, line)
+			_, fallbackErr = b.processLine(ctx, line)
 			if b.unattachedTokenUsage {
 				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
@@ -2840,12 +2861,15 @@ func (b *codexSessionBuilder) codexIncrementalNeedsFullParse(
 		return false
 	}
 
-	payload := gjson.Get(line, "payload")
+	return b.codexResponseItemNeedsFullParse(gjson.Get(line, "payload"))
+}
+
+func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Result) bool {
 	switch payload.Get("type").Str {
 	case "function_call", "custom_tool_call":
 		return isCodexWaitAgentCall(payload.Get("name").Str)
 	case "function_call_output", "custom_tool_call_output":
-		output, raw := parseCodexFunctionOutput(payload)
+		output, raw := parseCodexFunctionOutput(payload, b.agent)
 		if isCodexSubagentFunctionOutput(output) {
 			return true
 		}

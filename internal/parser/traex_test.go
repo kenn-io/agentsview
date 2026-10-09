@@ -362,7 +362,7 @@ func TestTraeXProviderParsesHistoryMutationRollout(t *testing.T) {
 	assert.Equal(t, `{"cmd":"ls internal/parser"}`, call.InputJSON)
 	require.Len(t, call.ResultEvents, 1)
 	assert.Equal(t, "codex.go\ntraex.go", call.ResultEvents[0].Content)
-	assert.NotEmpty(t, msgs[2].TokenUsage)
+	assert.JSONEq(t, `{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, string(msgs[2].TokenUsage))
 	assert.Equal(t, RoleAssistant, msgs[3].Role)
 	assert.Equal(t,
 		"The parser files are codex.go and traex.go.",
@@ -468,4 +468,184 @@ func TestTraeXRegistryCoversArchivedSessions(t *testing.T) {
 	}, def.DefaultDirs)
 	assert.Nil(t, def.ShallowWatchRootsFunc,
 		"the shallow watch exists for Codex's session_index.jsonl only")
+}
+
+func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
+	const uuid = "019fcf70-1111-7000-8000-000000000002"
+	const reply = `{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Reply"}]}]}}`
+	const usage = `"usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`
+	const record = `{"type":"token_usage_record","payload":{"response_id":"response-1",` + usage + `}}`
+	tests := []struct {
+		name      string
+		rows      string
+		wantError bool
+		wantUsage []string
+	}{
+		{name: "replace fails", rows: `{"type":"history_mutation","payload":{"operation":"replace","items":[]}}`, wantError: true},
+		{name: "missing operation fails", rows: `{"type":"history_mutation","payload":{"items":[]}}`, wantError: true},
+		{
+			name:      "equal usage from distinct responses",
+			rows:      testjsonl.JoinJSONL(reply, record, reply, `{"type":"token_usage_record","payload":{"response_id":"response-2",`+usage+`}}`),
+			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, `{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`},
+		},
+		{
+			name:      "repeated response counted once",
+			rows:      testjsonl.JoinJSONL(reply, record, reply, record),
+			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, ""},
+		},
+		{
+			name:      "missing response ID uses usage",
+			rows:      testjsonl.JoinJSONL(reply, `{"type":"token_usage_record","payload":{`+usage+`}}`, reply, `{"type":"token_usage_record","payload":{`+usage+`}}`),
+			wantUsage: []string{`{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, ""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			prefix := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+				testjsonl.CodexMsgJSON("user", "Inspect", tsEarlyS1),
+			)
+			path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+			provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			appendCodexProviderContent(t, path, tt.rows+"\n")
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			if tt.wantError {
+				require.ErrorContains(t, err, "unsupported TraeX history mutation operation")
+				fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+				require.NoError(t, err)
+				_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
+					Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
+					Offset: int64(len(prefix)), StartOrdinal: 1,
+				})
+				require.ErrorContains(t, err, "unsupported TraeX history mutation operation")
+				invalidPrefixSize := fingerprint.Size
+				appendCodexProviderContent(t, path, reply+"\n")
+				fingerprint, err = provider.Fingerprint(t.Context(), sources[0])
+				require.NoError(t, err)
+				_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
+					Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
+					Offset: invalidPrefixSize, StartOrdinal: 1,
+				})
+				require.ErrorContains(t, err, "unsupported TraeX history mutation operation")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			msgs := outcome.Results[0].Result.Messages
+			require.Len(t, msgs, 1+len(tt.wantUsage))
+			for i, want := range tt.wantUsage {
+				assert.Equal(t, "Reply", msgs[i+1].Content)
+				if want == "" {
+					assert.Empty(t, msgs[i+1].TokenUsage)
+				} else {
+					assert.JSONEq(t, want, string(msgs[i+1].TokenUsage))
+					assert.Equal(t, 100, msgs[i+1].ContextTokens)
+				}
+			}
+		})
+	}
+}
+
+func TestTraeXProviderHistoryMutationIncremental(t *testing.T) {
+	const uuid = "019fcf70-1111-7000-8000-000000000003"
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+		`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect"}]},{"type":"function_call","name":"shell","call_id":"call-late","arguments":"{}"}]}}`,
+	)
+	tail := testjsonl.JoinJSONL(
+		`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"function_call_output","call_id":"call-late","output":[{"type":"text","text":"Done"}]}]}}`,
+		`{"type":"token_usage_record","payload":{"response_id":"response-1","usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}}}`,
+	)
+	root := t.TempDir()
+	path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+	provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	appendCodexProviderContent(t, path, tail)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	ordinal := 1
+	outcome, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
+		Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
+		Offset: int64(len(prefix)), StartOrdinal: 2, StoredPendingUsageOrdinal: &ordinal,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, status)
+	assert.False(t, outcome.ForceReplace)
+	assert.Empty(t, outcome.Messages)
+	require.Len(t, outcome.ToolCallUpdates, 1)
+	update := outcome.ToolCallUpdates[0]
+	assert.Equal(t, "call-late", update.ToolUseID)
+	require.Len(t, update.ResultEvents, 1)
+	assert.Equal(t, "Done", update.ResultEvents[0].Content)
+	require.Len(t, outcome.MessageTokenUsageUpdates, 1)
+	assert.Equal(t, 1, outcome.MessageTokenUsageUpdates[0].Ordinal)
+	assert.JSONEq(t, `{"input_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":30,"output_tokens":12}`, string(outcome.MessageTokenUsageUpdates[0].TokenUsage))
+	full, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], ForceParse: true})
+	require.NoError(t, err)
+	require.Len(t, full.Results, 1)
+	msgs := full.Results[0].Result.Messages
+	require.Len(t, msgs, 2)
+	assert.Equal(t, string(msgs[1].TokenUsage), string(outcome.MessageTokenUsageUpdates[0].TokenUsage))
+	assert.Equal(t, msgs[1].ToolCalls[0].ResultEvents, update.ResultEvents)
+	appendCodexProviderContent(t, path, testjsonl.JoinJSONL(
+		`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"function_call","name":"wait_agent","call_id":"call-wait","arguments":"{}"}]}}`,
+	))
+	nextFingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	fallback, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
+		Source: sources[0], Fingerprint: nextFingerprint, SessionID: "traex:" + uuid,
+		Offset: fingerprint.Size, StartOrdinal: 2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalNeedsFullParse, status)
+	assert.True(t, fallback.ForceReplace)
+}
+
+func TestTraeXProviderHistoryMutationToolOutputs(t *testing.T) {
+	tests := []struct {
+		name         string
+		tool         string
+		output       string
+		want         string
+		wantSubagent string
+	}{
+		{"text JSON", "spawn_agent", `[{"type":"text","text":"{\"agent_id\":\"child\"}"}]`, `{"agent_id":"child"}`, "traex:child"},
+		{"mixed image", "shell", `[{"type":"text","text":"Done"},{"type":"image","url":"https://example.com/image.png"}]`, `[{"type":"text","text":"Done"},{"type":"image","url":"https://example.com/image.png"}]`, ""},
+		{"unknown block", "shell", `[{"type":"text","text":"Done"},{"type":"unknown","text":"Keep"}]`, `[{"type":"text","text":"Done"},{"type":"unknown","text":"Keep"}]`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const uuid = "019fcf70-1111-7000-8000-000000000004"
+			root := t.TempDir()
+			writeCodexProviderSessionContent(t, root, uuid, testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+				`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"function_call","name":"`+tt.tool+`","call_id":"call-1","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":`+tt.output+`}]}}`,
+			))
+			provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			msgs := outcome.Results[0].Result.Messages
+			require.Len(t, msgs, 1)
+			require.Len(t, msgs[0].ToolCalls, 1)
+			assert.Equal(t, tt.wantSubagent, msgs[0].ToolCalls[0].SubagentSessionID)
+			if tt.wantSubagent != "" {
+				return
+			}
+			require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
+			assert.Equal(t, tt.want, msgs[0].ToolCalls[0].ResultEvents[0].Content)
+		})
+	}
 }

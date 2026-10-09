@@ -3813,7 +3813,7 @@ func TestSeedCodexIncrementalState_Model(t *testing.T) {
 func TestSeedCodexIncrementalStatePropagatesReaderError(t *testing.T) {
 	wantErr := errors.New("prefix read failed")
 
-	_, err := seedCodexIncrementalStateFromReader(t.Context(),
+	_, err := seedCodexIncrementalStateFromReader(t.Context(), AgentCodex,
 		iotest.ErrReader(wantErr),
 		nil,
 	)
@@ -3904,4 +3904,19 @@ func TestCodexDuplicateCallIDsAttachOutputsToLatestCall(t *testing.T) {
 	require.Len(t, msgs[2].ToolCalls[0].ResultEvents, 2)
 	assert.Equal(t, "first result", msgs[2].ToolCalls[0].ResultEvents[0].Content)
 	assert.Equal(t, "second result", msgs[2].ToolCalls[0].ResultEvents[1].Content)
+}
+
+func TestParseCodexSession_ArrayOutputKeepsRawJSON(t *testing.T) {
+	const output = `[{"type":"text","text":"Result"},{"type":"image","url":"https://example.com/image.png"}]`
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("array-output", "/workspace/project", "codex-tui", tsEarly),
+		testjsonl.CodexMsgJSON("user", "Inspect", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("shell", "call-array", `{}`, tsEarlyS5),
+		`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-array","output":`+output+`}}`,
+	)
+	_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, output, msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }

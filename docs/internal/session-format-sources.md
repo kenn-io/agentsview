@@ -850,8 +850,9 @@ fixtures retain this field; missing identities remain source-local.
   `traex archive <id>` moves a rollout into. Some observed rollouts keep the
   user-facing transcript in Codex-compatible `response_item` rows. Newer
   observed rollouts keep the same session envelope but carry transcript changes
-  in `history_mutation.payload.items[]`, with token deltas in
-  `token_usage_record.payload.usage`. The sibling `history.jsonl` carries the
+  in append-only `history_mutation.payload.items[]`; other operations fail
+  parsing. Token deltas appear in `token_usage_record.payload.usage`.
+  The sibling `history.jsonl` carries the
   same `session_id`/Unix-seconds `ts`/prompt `text` records, and agentsview
   consumes it as the same live-activity hint. No `session_index.jsonl` sidecar
   is produced, so titles come from the rollout head alone.
@@ -872,7 +873,10 @@ fixtures retain this field; missing identities remain source-local.
 - **Usage and cost:** `token_count` records carry the Codex fields. Newer
   rollouts can instead write the same per-response usage shape at
   `token_usage_record.payload.usage`. Both paths use Codex normalization and
-  catalog pricing, including the same reasoning-output omission.
+  catalog pricing, including the same reasoning-output omission. Deduplication
+  includes `response_id` when present, so equal counts for different responses
+  remain distinct. `cache_creation_input_tokens` supplies cache writes when
+  `cache_write_input_tokens` is absent; writes are included in input totals.
 - **Agentsview:** `internal/parser/traex.go` relabels the shared Codex parser
   (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
   `traex:` ID namespace, and `internal/sync` gates the format-shaped branches
