@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
+	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
 )
@@ -28,7 +29,8 @@ func (s *Server) registerImportRoutes() {
 		func(ctx context.Context, in *claudeAISyncInput) (*huma.StreamResponse, error) {
 			return s.humaSyncClaudeAI(ctx, in, &results)
 		}, func(op *huma.Operation) {
-			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required or claude_ai_chrome_host_required."
+			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required or claude_ai_chrome_host_update_required."
+			op.Description = "Before streaming, HTTP 409 with code claude_ai_chrome_host_required reports that the Chrome host is disconnected."
 		})
 	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
 		func(ctx context.Context, in *claudeAISyncResultInput) (*struct{}, error) {
@@ -132,6 +134,10 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			if errors.Is(err, importer.ErrClaudeAIAuthRequired) {
 				payload["error"] = "Sign in to Claude.ai, then Sync again"
 				payload["code"] = "claude_ai_auth_required"
+			}
+			if errors.Is(err, chromehost.ErrCompatibility) {
+				payload["error"] = chromehost.ErrCompatibility.Error()
+				payload["code"] = "claude_ai_chrome_host_update_required"
 			}
 			stream.SendJSON("error", payload)
 			return

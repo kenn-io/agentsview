@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -241,6 +243,7 @@ func TestChromeSyncPartialFailureSummary(t *testing.T) {
 	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
 		"/api/v1/import/claude-ai/sync": func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
+			w.Header().Set("Content-Type", "text/event-stream")
 			_, err := io.WriteString(w, "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n")
 			assert.NoError(t, err)
 		},
@@ -271,7 +274,34 @@ func TestChromeSyncResults(t *testing.T) {
 		{"EOF", "event: progress\ndata: {}\n\n", "without a result", 200, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			stats, err := readChromeSync(&http.Response{StatusCode: tt.status, Body: io.NopCloser(strings.NewReader(tt.body))})
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/base/api/v1/import/claude-ai/sync", r.URL.Path)
+				assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
+				assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin"))
+				assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+				if tt.status == 200 {
+					w.Header().Set("Content-Type", "text/event-stream")
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+				}
+				w.WriteHeader(tt.status)
+				_, err := io.WriteString(w, tt.body)
+				assert.NoError(t, err)
+			}))
+			defer ts.Close()
+			api, err := apiclient.NewHTTPClient(ts.URL+"/base/", "test-token", ts.Client())
+			require.NoError(t, err)
+			browser := apiclient.Chrome
+			response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(t.Context(), &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
+			if tt.status == http.StatusOK {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			require.NotNil(t, response)
+			defer response.HTTPResponse.Body.Close()
+			stats, err := readChromeSync(response)
 			if tt.wantError != "" {
 				if tt.name == "absent host" {
 					require.EqualError(t, err, tt.wantError)
@@ -284,6 +314,26 @@ func TestChromeSyncResults(t *testing.T) {
 			assert.Equal(t, tt.imported, stats.Imported)
 		})
 	}
+}
+
+func TestChromeSyncCancellation(t *testing.T) {
+	dataDir := testDataDir(t)
+	t.Setenv("AGENTSVIEW_AUTH_TOKEN", "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/import/claude-ai/sync": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			cancel()
+			<-r.Context().Done()
+		},
+	})
+	registerTestRuntime(t, dataDir, ts.URL, false)
+	cmd := newImportCommand()
+	cmd.SetArgs([]string{"--type", "claude-ai", "--sync"})
+	require.ErrorIs(t, cmd.ExecuteContext(ctx), context.Canceled)
 }
 
 func TestChromeImportArguments(t *testing.T) {

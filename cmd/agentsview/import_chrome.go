@@ -5,11 +5,9 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 
-	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/importer"
 )
@@ -26,19 +24,16 @@ func syncClaudeAIChrome(ctx context.Context) error {
 	if transport.Mode != transportHTTP {
 		return errors.New("Claude.ai Sync requires a running server")
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(transport.URL, "/")+"/api/v1/import/claude-ai/sync?browser=chrome", nil)
+	api, err := apiclient.NewHTTPClient(transport.URL, cfg.AuthToken, http.DefaultClient)
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Origin", daemonOriginURL(transport.URL))
-	if cfg.AuthToken != "" {
-		request.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
-	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
+	browser := apiclient.Chrome
+	response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
+	if err != nil && (response == nil || response.StatusCode == http.StatusOK) {
 		return err
 	}
-	defer response.Body.Close()
+	defer response.HTTPResponse.Body.Close()
 	stats, err := readChromeSync(response)
 	printImportSummary(stats)
 	if err != nil {
@@ -50,12 +45,9 @@ func syncClaudeAIChrome(ctx context.Context) error {
 	return nil
 }
 
-func readChromeSync(response *http.Response) (importer.ImportStats, error) {
+func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (importer.ImportStats, error) {
 	if response.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
-		if err != nil {
-			return importer.ImportStats{}, err
-		}
+		body := response.Body
 		var failure struct {
 			Code  string `json:"code"`
 			Error string `json:"error"`
@@ -65,7 +57,7 @@ func readChromeSync(response *http.Response) (importer.ImportStats, error) {
 		}
 		return importer.ImportStats{}, fmt.Errorf("Claude.ai Sync: HTTP %d: %s", response.StatusCode, body)
 	}
-	stream := runtime.NewEventStream[[]byte](response)
+	stream := response.Stream200
 	defer stream.Close()
 	var stats importer.ImportStats
 	for stream.Next() {
