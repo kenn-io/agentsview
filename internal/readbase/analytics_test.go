@@ -84,7 +84,7 @@ func TestAnalyticsPropagatesBackendErrors(t *testing.T) {
 	backend := analyticsFixtureBackend{sessions: []AnalyticsSession{{ID: "session"}}, err: want}
 	analytics := NewAnalytics(backend, "fixture")
 	_, err := analytics.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{Model: "selected"})
-	assert.ErrorIs(t, err, want)
+	require.ErrorIs(t, err, want)
 	_, err = analytics.GetAnalyticsHeatmap(t.Context(), db.AnalyticsFilter{}, "messages")
 	assert.EqualError(t, err, "querying fixture analytics heatmap: read failed")
 }
