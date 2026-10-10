@@ -162,3 +162,43 @@ func TestCaptureRejectsAliasInferredFromDescendantLink(t *testing.T) {
 		assert.NotContains(t, root.Aliases, other, "a directory that is not the root is not an alias")
 	}
 }
+
+func TestRepeatedCapturePreservesRootOriginalPath(t *testing.T) {
+	ctx := t.Context()
+	const owner = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const foreign = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	require.NoError(t, os.MkdirAll(real, 0o700))
+	require.NoError(t, os.Symlink(real, link))
+	dbtest.WriteTestFile(t, filepath.Join(real, "home", "projects", "project-a", id+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "captured history", id).String()))
+	opts := newImportCapture(t, foreign, "source", RootSpec{Provider: "claude", Path: filepath.Join(link, "home")})
+	first := loadTestCapture(t, &opts)
+	require.NoError(t, os.Remove(link))
+	opts.Roots[0].Path = filepath.Join(real, "home")
+	second := loadTestCapture(t, &opts)
+	assert.Equal(t, first.Roots[0].ID, second.Roots[0].ID)
+	assert.Equal(t, filepath.Join(link, "home"), second.Roots[0].OriginalPath)
+	assert.Contains(t, second.Roots[0].Aliases, filepath.Join(real, "home"))
+	data := t.TempDir()
+	dbtest.WriteTestFile(t, filepath.Join(data, "telemetry-install-id"), []byte(owner))
+	database := dbtest.OpenTestDB(t)
+	require.NoError(t, database.EnableArchiveOnly(ctx))
+	archive, err := Open(ctx, database, data, nil)
+	require.NoError(t, err)
+	defer archive.Close()
+	for _, spec := range []ImportSpec{first, second} {
+		report, err := archive.Import(ctx, spec)
+		require.NoError(t, err)
+		assert.Empty(t, report.Gaps)
+		assert.Equal(t, 1, report.Sources)
+	}
+	_, err = archive.Reparse(ctx, ReparseOptions{All: true, ScratchBytes: 1 << 20})
+	require.NoError(t, err)
+	messages, err := database.GetAllMessages(ctx, foreign+"~"+id)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "captured history", messages[0].Content)
+}

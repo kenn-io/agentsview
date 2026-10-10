@@ -165,6 +165,11 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 					return d, errors.New("raw-sync root identity differs from previous capture")
 				}
 				input.ID = r.ID
+				input.OriginalPath = r.OriginalPath
+				input.Aliases = slices.Clone(r.Aliases)
+				if base != input.OriginalPath && !slices.Contains(input.Aliases, base) {
+					input.Aliases = append(input.Aliases, base)
+				}
 			}
 		}
 		if input.ID == "" {
@@ -200,7 +205,7 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 		if opts.Progress != nil {
 			opts.Progress("Capturing " + root.Provider + " root " + root.ID)
 		}
-		files, omissions, err := captureTree(ctx, root.OriginalPath, filepath.Join(stage, root.Path), root)
+		files, omissions, err := captureTree(ctx, canonicalBases[root.ID], filepath.Join(stage, root.Path), root)
 		if err != nil {
 			return d, err
 		}
