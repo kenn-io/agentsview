@@ -618,27 +618,18 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 
 			tc.mutate(t, oc)
 
-			if tc.viaReconcile {
-				require.NoError(t, env.engine.ReconcileWatchRoots(
-					t.Context(), []string{env.opencodeDir}, false,
-				))
-			}
 			require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), "sqlite-container:"))
-			unverified := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
-			t.Cleanup(unverified.Close)
-			stats := unverified.SyncAll(
-				t.Context(), nil,
-			)
-			require.False(t, stats.Aborted, "full pass aborted: %+v", stats)
-			if !tc.viaReconcile {
-				// The reconcile pass may already have done the write, so the
-				// count only binds on the direct rows.
-				assert.Equal(t, 1, stats.Synced,
-					"a hidden child change must re-parse the session")
+			if tc.viaReconcile {
+				require.NoError(t, env.engine.ReconcileWatchRoots(t.Context(), []string{env.opencodeDir}, false))
+			} else {
+				unverified := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+				t.Cleanup(unverified.Close)
+				stats := unverified.SyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "full pass aborted: %+v", stats)
+				assert.Equal(t, 1, stats.Synced, "a hidden child change must re-parse the session")
 			}
 			if tc.wantAbsent != "" {
-				// Assert the observable outcome rather than which pass did
-				// the write: the removed content must no longer be archived.
+				// Deletion must be visible immediately after the selected pass.
 				for _, m := range fetchMessages(t, env.db, "opencode:probe") {
 					assert.NotContains(t, m.Content, tc.wantAbsent,
 						"deleted child content must not remain archived")

@@ -605,6 +605,24 @@ func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *tes
 	require.Contains(t, states, firstDB)
 	require.NotContains(t, states, secondDB)
 	assert.Equal(t, []string{filepath.Clean(firstDB)}, statPaths)
+	for _, agent := range openCodeFamilySQLiteAgents {
+		t.Run(string(agent), func(t *testing.T) {
+			path := firstDB
+			if agent != parser.AgentOpenCode {
+				path = filepath.Join(t.TempDir(), openCodeFormatDBName(agent))
+				data, err := os.ReadFile(firstDB)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(path, data, 0o600))
+				engine.sources().agentDirs[agent] = []string{filepath.Dir(path)}
+			}
+			outside := filepath.Join(t.TempDir(), openCodeFormatDBName(agent))
+			statPaths = nil
+			states := engine.captureSQLiteContainerStates([]string{path + "#ses-1", path + "#ses-2", path, path + "-wal", outside + "#ses-1"})
+			require.Len(t, states, 1)
+			require.Contains(t, states, path)
+			assert.Equal(t, []string{filepath.Clean(path)}, statPaths)
+		})
+	}
 }
 
 // TestSQLiteContainerTrustLifecycle drives the gate's one trust invariant
@@ -762,36 +780,40 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			wantStamp:  wantPrior,
 		},
 		{
-			name:             "attributed failure clears only its own container",
-			priorStamp:       true,
-			capture:          captureLive,
-			result:           resultFailed,
-			finish:           finishIncomplete,
-			sibling:          true,
-			wantStamp:        wantPrior,
-			wantSiblingStamp: wantPrior,
+			name:              "attributed failure clears only its own container",
+			priorTrustCapture: true,
+			priorStamp:        true,
+			capture:           captureLive,
+			result:            resultFailed,
+			finish:            finishIncomplete,
+			sibling:           true,
+			wantStamp:         wantPrior,
+			wantSiblingStamp:  wantPrior,
+			wantSiblingTrust:  wantFresh,
 		},
 		{
-			name:             "poisoned incomplete pass revokes every captured authority",
-			priorStamp:       true,
-			capture:          captureLive,
-			result:           resultPoisoned,
-			finish:           finishIncomplete,
-			sibling:          true,
-			wantStamp:        wantPrior,
-			wantSiblingStamp: wantPrior,
+			name:              "poisoned incomplete pass revokes every captured authority",
+			priorTrustCapture: true,
+			priorStamp:        true,
+			capture:           captureLive,
+			result:            resultPoisoned,
+			finish:            finishIncomplete,
+			sibling:           true,
+			wantStamp:         wantPrior,
+			wantSiblingStamp:  wantPrior,
 		},
 		{
-			name:             "poisoned complete pass clears instead of promoting",
-			priorStamp:       true,
-			capture:          captureLive,
-			digestList:       true,
-			result:           resultPoisoned,
-			finish:           finishFull,
-			sibling:          true,
-			wantTrust:        wantAbsent,
-			wantStamp:        wantPrior,
-			wantSiblingStamp: wantPrior,
+			name:              "poisoned complete pass clears instead of promoting",
+			priorTrustCapture: true,
+			priorStamp:        true,
+			capture:           captureLive,
+			digestList:        true,
+			result:            resultPoisoned,
+			finish:            finishFull,
+			sibling:           true,
+			wantTrust:         wantAbsent,
+			wantStamp:         wantPrior,
+			wantSiblingStamp:  wantPrior,
 		},
 		{
 			name:             "clean scoped pass preserves uncovered verification",
@@ -841,6 +863,9 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 				siblingState, ok := parser.StatSQLiteContainerState(siblingPath)
 				require.True(t, ok, "sibling state must be readable")
 				states[siblingPath] = siblingState
+				if tc.priorTrust || tc.priorTrustCapture {
+					e.trustedSQLiteContainers[siblingPath] = trustedSQLiteContainer{state: siblingState}
+				}
 				if e.digestVerifiedAt == nil {
 					e.digestVerifiedAt = map[string]time.Time{}
 				}
@@ -1569,7 +1594,6 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		want                               bool
 		wantNil, rollback                  bool
 	}{
-		{name: "recent match", age: time.Minute, want: true},
 		{name: "watermark publication rejects later rollback", age: time.Minute, want: true, rollback: true},
 		{name: "force parse overrides a current stamp", wantNil: true, setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceParse = true }},
 		{name: "force full parse overrides a current stamp", wantNil: true, setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceFullParse = true }},
@@ -1791,7 +1815,7 @@ func (p openCodeMemberFailureProvider) Parse(ctx context.Context, req parser.Par
 }
 
 func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
-	for _, mode := range []string{"failed first partial pass", "preparation write fails", "initial capture fails"} {
+	for _, mode := range []string{"failed first partial pass", "preparation write fails", "initial capture fails", "virtual member", "planned virtual member"} {
 		t.Run(mode, func(t *testing.T) {
 			preparationFails := mode == "preparation write fails"
 			path, conn := seededCompositeContainerTestDB(t)
@@ -1834,7 +1858,22 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 				}
 				t.Cleanup(func() { statSQLiteContainerState = originalStat })
 			}
-			require.Error(t, fresh.SyncPathsContext(t.Context(), []string{path}))
+			if mode == "planned virtual member" {
+				provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{filepath.Dir(path)}})
+				source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{StoredFilePath: blockedPath})
+				require.NoError(t, err)
+				require.True(t, found)
+				_, err = fresh.SyncChangedPathPlanWithOptionsContext(t.Context(), ChangedPathPlan{Files: []parser.DiscoveredFile{{
+					Agent: parser.AgentOpenCode, Path: blockedPath, ProviderSource: &source, ProviderProcess: true,
+				}}}, ChangedPathSyncOptions{}, nil)
+				require.Error(t, err)
+			} else {
+				changed := path
+				if mode == "virtual member" {
+					changed = blockedPath
+				}
+				require.Error(t, fresh.SyncPathsContext(t.Context(), []string{changed}))
+			}
 			record, found := readContainerVerification(t, archive, path)
 			require.True(t, found)
 			assert.True(t, original.VerifiedAt.Equal(record.VerifiedAt))
