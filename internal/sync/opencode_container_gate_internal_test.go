@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -374,6 +375,58 @@ func TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows(t *testing.T) {
 	assert.Equal(t, container+"#b", rows[1].Path)
 	assert.Equal(t, int64(30)*1_000_000, rows[1].CoveredThroughNS,
 		"a child digest yields its embedded metadata watermark")
+	t.Run("interleaved quick-sync groups span pages", func(t *testing.T) {
+		archive := openTestDB(t)
+		root := t.TempDir()
+		states := make(map[string]parser.SQLiteContainerState)
+		var files []parser.DiscoveredFile
+		require.NoError(t, archive.Update(t.Context(), func(tx *sql.Tx) error {
+			for i := range 257 {
+				for _, agent := range []parser.AgentType{parser.AgentOpenCode, parser.AgentMiMoCode} {
+					container := filepath.Join(root, openCodeFormatDBName(agent))
+					states[container] = parser.SQLiteContainerState{DBInode: 1, DBDevice: 1}
+					path := fmt.Sprintf("%s#ses-%04d", container, i)
+					source := parser.SourceRef{Provider: agent, DisplayPath: path}
+					files = append(files, parser.DiscoveredFile{Agent: agent, Path: path, ProviderSource: &source})
+					if _, err := tx.ExecContext(t.Context(), `INSERT INTO sessions (id, agent, project, file_path, deleted_at)
+						VALUES (?, ?, 'project', ?, '2026-01-01T00:00:00Z')`, fmt.Sprintf("%s:%d", agent, i), agent, path); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}))
+		originalStat := statSQLiteContainerState
+		statSQLiteContainerState = func(path string) (parser.SQLiteContainerState, bool) {
+			state, ok := states[path]
+			return state, ok
+		}
+		t.Cleanup(func() { statSQLiteContainerState = originalStat })
+		e := &Engine{db: archive, digestVerifiedAt: make(map[string]time.Time)}
+		e.beginSQLiteContainerPass(files, states)
+		for container := range states {
+			e.digestVerifiedAt[container] = time.Now().Add(-openCodeContainerDigestVerifyInterval)
+			e.containerPass.fullDigestListed[container] = true
+		}
+		var pages atomic.Int32
+		reader := archive.Reader().(interface {
+			Conn(context.Context) (*sql.Conn, error)
+		})
+		conn, err := reader.Conn(t.Context())
+		require.NoError(t, err)
+		require.NoError(t, conn.Raw(func(raw any) error {
+			raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+				if op == sqlite3.SQLITE_READ && table == "sessions" && column == "file_hash" {
+					pages.Add(1)
+				}
+				return sqlite3.SQLITE_OK
+			})
+			return nil
+		}))
+		require.NoError(t, conn.Close())
+		assert.Empty(t, e.filterQuickSyncFiles(t.Context(), files, time.Now()))
+		assert.Equal(t, int32(4), pages.Load(), "each container/agent group reads two pages once")
+	})
 }
 
 // TestStoredMemberFreshnessPagerAdvancesPastAllStalePages pins the pager's
@@ -1754,17 +1807,22 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
 	openCodeContainerDigestVerifyNow = func() time.Time { return now }
 	for _, tc := range []struct {
-		name             string
-		age              time.Duration
-		setup            func(*Engine, *parser.SQLiteContainerState)
-		absent, canceled bool
-		raw              string
-		want             bool
+		name                               string
+		age                                time.Duration
+		setup                              func(*Engine, *parser.SQLiteContainerState)
+		absent, canceled                   bool
+		localLegacy, localTimed, wantTrust bool
+		raw                                string
+		want                               bool
 	}{
 		{name: "recent match", age: time.Minute, want: true},
 		{name: "expired", age: openCodeContainerDigestVerifyInterval},
 		{name: "future timestamp", age: -time.Second},
 		{name: "absent", absent: true},
+		{name: "untimed legacy trust", absent: true, localLegacy: true, wantTrust: true},
+		{name: "timed authority without record", absent: true, localLegacy: true, localTimed: true},
+		{name: "legacy trust with revoked record", raw: `{"version":1,"verified_at":"1970-01-01T00:16:40Z"}`, localLegacy: true},
+		{name: "legacy trust with malformed record", raw: "{", localLegacy: true},
 		{name: "changed counter", want: true, setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBChangeCounter++ }},
 		{name: "counter rollback", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBChangeCounter-- }},
 		{name: "malformed record", raw: "{"},
@@ -1797,6 +1855,12 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 				require.NoError(t, archive.SetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path, tc.raw))
 			}
 			e := &Engine{db: archive}
+			if tc.localLegacy {
+				e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{path: {state: state}}
+				if tc.localTimed {
+					e.digestVerifiedAt = map[string]time.Time{path: now}
+				}
+			}
 			if tc.setup != nil {
 				tc.setup(e, &state)
 			}
@@ -1816,6 +1880,13 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			fn := e.sqliteContainerListsWatermarkOnly(states)
 			got := fn != nil && fn(path)
 			assert.Equal(t, tc.want, got)
+			if tc.localLegacy {
+				_, trusted := e.trustedSQLiteContainers[path]
+				assert.Equal(t, tc.wantTrust, trusted)
+				if tc.wantTrust {
+					assert.Empty(t, e.digestVerifiedAt)
+				}
+			}
 			if tc.canceled {
 				require.NoError(t, e.prepareSQLiteContainerVerification(t.Context(), states))
 				assert.True(t, e.sqliteContainerListsWatermarkOnly(map[string]parser.SQLiteContainerState{path: state})(path), "a successful read can restore trust after a transient error")
@@ -1927,8 +1998,9 @@ func (p openCodeMemberFailureProvider) Parse(ctx context.Context, req parser.Par
 }
 
 func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
-	for _, preparationFails := range []bool{false, true} {
-		t.Run(map[bool]string{false: "failed first partial pass", true: "preparation write fails"}[preparationFails], func(t *testing.T) {
+	for _, mode := range []string{"failed first partial pass", "preparation write fails", "initial capture fails"} {
+		t.Run(mode, func(t *testing.T) {
+			preparationFails := mode == "preparation write fails"
 			path, conn := seededCompositeContainerTestDB(t)
 			archive := openTestDB(t)
 			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
@@ -1957,6 +2029,18 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 			fresh := NewEngine(t.Context(), archive, cfg)
 			t.Cleanup(fresh.Close)
 			calls.Store(0)
+			if mode == "initial capture fails" {
+				originalStat := statSQLiteContainerState
+				failed := false
+				statSQLiteContainerState = func(p string) (parser.SQLiteContainerState, bool) {
+					if p == path && !failed {
+						failed = true
+						return parser.SQLiteContainerState{}, false
+					}
+					return originalStat(p)
+				}
+				t.Cleanup(func() { statSQLiteContainerState = originalStat })
+			}
 			require.Error(t, fresh.SyncPathsContext(t.Context(), []string{path}))
 			record, found := readContainerVerification(t, archive, path)
 			require.True(t, found)

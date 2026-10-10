@@ -101,8 +101,7 @@ type sqliteContainerPass struct {
 // rows: promotion may only trust a state that is at least as old as the
 // discovered session set, otherwise a session written between the listing
 // and a later capture would be promoted away and gate-skipped without ever
-// being parsed. Containers whose state cannot be read are simply absent
-// from the map and never promoted.
+// being parsed. Failed captures retain their path with zero state to revoke authority.
 func (e *Engine) captureSQLiteContainerStates(
 	changedPaths []string,
 ) map[string]parser.SQLiteContainerState {
@@ -217,7 +216,7 @@ func addSQLiteContainerState(
 	}
 	state, ok := statSQLiteContainerState(dbPath)
 	if !ok {
-		return
+		state = parser.SQLiteContainerState{}
 	}
 	states[dbPath] = state
 }
@@ -397,6 +396,7 @@ func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states 
 			if raw == "" {
 				continue
 			}
+			records[path] = record
 			if err := json.Unmarshal([]byte(raw), &record); err != nil {
 				log.Printf("decoding SQLite container verification: %v", err)
 				continue
@@ -424,9 +424,13 @@ func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states 
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()
 	for path, state := range states {
+		// Untimed legacy trust has no durable digest authority to consume.
+		if _, recorded := records[path]; !recorded && e.digestVerifiedAt[path].IsZero() && state != (parser.SQLiteContainerState{}) {
+			continue
+		}
 		delete(e.trustedSQLiteContainers, path)
 		delete(e.digestVerifiedAt, path)
-		if record, valid := records[path]; valid {
+		if record, valid := records[path]; valid && !record.VerifiedAt.IsZero() {
 			if e.digestVerifiedAt == nil {
 				e.digestVerifiedAt = make(map[string]time.Time)
 			}
@@ -475,7 +479,17 @@ func (e *Engine) filterQuickSyncFiles(
 			filterable = append(filterable, f)
 		}
 	}
-	slices.SortFunc(candidates, func(a, b parser.DiscoveredFile) int { return strings.Compare(a.Path, b.Path) })
+	slices.SortFunc(candidates, func(a, b parser.DiscoveredFile) int {
+		aContainer, _, _ := sqliteContainerSourceForFile(a)
+		bContainer, _, _ := sqliteContainerSourceForFile(b)
+		if c := strings.Compare(aContainer, bContainer); c != 0 {
+			return c
+		}
+		if c := strings.Compare(string(a.Agent), string(b.Agent)); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Path, b.Path)
+	})
 	var container, afterPath string
 	var agent parser.AgentType
 	var page []parser.StoredMemberFreshness
@@ -653,7 +667,12 @@ func (e *Engine) beginStreamingSQLiteContainerPass(
 		failed:           make(map[string]bool),
 		fullDigestListed: make(map[string]bool),
 	}
-	maps.Copy(pass.captured, preStates)
+	for path, state := range preStates {
+		pass.captured[path] = state
+		if state == (parser.SQLiteContainerState{}) {
+			pass.failed[path] = true
+		}
+	}
 	e.containerMu.Lock()
 	e.containerPass = pass
 	e.containerMu.Unlock()
@@ -1018,7 +1037,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 		pass.failed[dbPath] = true
 	}
 	for dbPath := range pass.failed {
-		e.revokeSQLiteContainerTrust(dbPath)
+		delete(e.trustedSQLiteContainers, dbPath)
 	}
 	for dbPath, state := range pass.captured {
 		if pass.failed[dbPath] {
@@ -1079,10 +1098,10 @@ func (e *Engine) sqliteContainerDigestRevalidationFailures(
 // may have no captured entry, so both maps are part of the invalidation set.
 func (e *Engine) clearDigestVerificationForPass(pass *sqliteContainerPass) {
 	for dbPath := range pass.captured {
-		e.revokeSQLiteContainerTrust(dbPath)
+		delete(e.trustedSQLiteContainers, dbPath)
 	}
 	for dbPath := range pass.failed {
-		e.revokeSQLiteContainerTrust(dbPath)
+		delete(e.trustedSQLiteContainers, dbPath)
 	}
 }
 
@@ -1095,8 +1114,4 @@ func (e *Engine) clearTrustedSQLiteContainers() {
 	e.trustedSQLiteContainers = nil
 	e.digestVerifiedAt = nil
 	e.containerPass = nil
-}
-
-func (e *Engine) revokeSQLiteContainerTrust(path string) {
-	delete(e.trustedSQLiteContainers, path)
 }
