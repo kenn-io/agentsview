@@ -196,12 +196,17 @@ func usageSummaryAPIError(err error) error {
 func (s *Server) humaUsageSummaryStream(
 	ctx context.Context, in *UsageFilterInput,
 ) (*huma.StreamResponse, error) {
-	req := usageRequestFromInput(*in)
-	if _, err := service.BuildUsageFilter(req); err != nil {
-		if input, ok := errors.AsType[*service.UsageInputError](err); ok {
-			return nil, usageInputAPIError(input)
-		}
-		return nil, serverError(err)
+	// Resolve project keys before the stream starts so an unknown key is a
+	// 400 like /usage/summary, not a 200 followed by an SSE error event.
+	// The resolved request has no keys left, so UsageSummary skips them.
+	req, err := service.ResolveUsageProjectKeys(
+		ctx, s.db, usageRequestFromInput(*in),
+	)
+	if err == nil {
+		_, err = service.BuildUsageFilter(req)
+	}
+	if err != nil {
+		return nil, usageSummaryAPIError(err)
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)

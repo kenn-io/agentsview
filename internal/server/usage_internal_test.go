@@ -469,3 +469,32 @@ func TestUsagePairwiseComparisonOpenAPIAllowsNullCostPerSessionDelta(
 	)
 	assert.Equal(t, "null", costPerSessionSchema.AnyOf[1].Type)
 }
+
+func TestUsageRoutesRejectUnknownProjectKeysBeforeQuerying(t *testing.T) {
+	for _, path := range []string{
+		"/api/v1/usage/summary", "/api/v1/usage/summary/stream",
+		"/api/v1/usage/comparison",
+	} {
+		for _, param := range []string{"project_key", "exclude_project_key"} {
+			t.Run(path+"/"+param, func(t *testing.T) {
+				spy := &usageComparisonProjectKeySpy{
+					activeLabels: []string{"team"},
+					projectMap: map[string]export.ProjectMapEntry{
+						"team": {ProjectKey: "pl1:sha256:known"},
+					},
+				}
+				s := newRoutedTestServerWithStore(t, spy)
+
+				w := serveGet(t, s, path+"?"+oneDayUsageRange+
+					"&current_microdollars=0&"+param+"="+
+					url.QueryEscape("pl1:sha256:missing"))
+
+				assertRecorderStatus(t, w, http.StatusBadRequest)
+				assert.Contains(t, w.Body.String(),
+					`"code":"`+service.UsageErrorCodeUnknownProjectKey+`"`)
+				assert.NotContains(t, w.Body.String(), "event:")
+				assertUsageQueryCalls(t, &spy.usageSummaryCountsSpy, 0, 0, 0)
+			})
+		}
+	}
+}
