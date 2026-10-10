@@ -13,17 +13,15 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawarchive"
 )
 
 func TestArchiveModeRecoversInterruptedCompaction(t *testing.T) {
-	for _, entry := range []string{"serve", "archive"} {
+	for _, entry := range []string{"serve", "archive", "watch", "backfill"} {
 		for _, primary := range []string{"missing", "unreadable"} {
 			t.Run(entry+"/"+primary, func(t *testing.T) {
-				cfg := config.Config{DataDir: t.TempDir()}
-				cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+				cfg := testConfigWithClaudeFixture(t)
 				t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
 				database, err := db.OpenIsolatedContext(t.Context(), cfg.DBPath)
 				require.NoError(t, err)
@@ -76,13 +74,16 @@ func TestArchiveModeRecoversInterruptedCompaction(t *testing.T) {
 					enabled, err := archiveModeAfterRecovery(t.Context(), cfg)
 					require.NoError(t, err)
 					assert.True(t, enabled)
-				} else {
+				} else if entry == "archive" {
 					called := false
 					cmd := &cobra.Command{}
 					cmd.SetContext(t.Context())
 					err = withRawArchive(cmd, func(*rawarchive.Archive) error { called = true; return nil })
 					require.NoError(t, err)
 					assert.True(t, called)
+				} else {
+					err = runRawSyncWithoutHostWork(t, cfg, entry)
+					require.ErrorIs(t, err, db.ErrArchiveOnly)
 				}
 				assert.NoFileExists(t, filepath.Join(cfg.DataDir, "compact-recovery.json"))
 				enabled, err := db.ArchiveOnlyAt(t.Context(), cfg.DBPath)

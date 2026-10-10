@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
@@ -74,8 +75,10 @@ func TestRawSyncBackfillCommandCommitsOnceAndReusesHistoricalProof(t *testing.T)
 	require.NoError(t, os.MkdirAll(codexRoot, 0o700))
 	unselectedRoot := filepath.Join(t.TempDir(), "unreadable-import")
 	archivePath := filepath.Join(dataDir, "sessions.db")
-	require.NoError(t, os.Mkdir(archivePath, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(archivePath, "sentinel"), []byte("archive untouched"), 0o600))
+	database, err := db.OpenIsolatedContext(t.Context(), archivePath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	archiveBefore := mustReadRawSyncTestFile(t, archivePath)
 	configBody := rawSyncBackfillPGConfig(claudeRoot, codexRoot, unselectedRoot)
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), configBody, 0o600))
 	sourceBefore, err := os.ReadFile(claudePath)
@@ -105,7 +108,7 @@ func TestRawSyncBackfillCommandCommitsOnceAndReusesHistoricalProof(t *testing.T)
 	assert.Equal(t, hex.EncodeToString(manifestDigest[:]), manifestID)
 	assert.Equal(t, configBody, mustReadRawSyncTestFile(t, filepath.Join(dataDir, "config.toml")))
 	assert.Equal(t, sourceBefore, mustReadRawSyncTestFile(t, claudePath))
-	assert.Equal(t, []byte("archive untouched"), mustReadRawSyncTestFile(t, filepath.Join(archivePath, "sentinel")), "backfill must leave the archive unchanged")
+	assert.Equal(t, archiveBefore, mustReadRawSyncTestFile(t, archivePath), "backfill must leave the archive unchanged")
 
 	checkpoint, err := rawcheckpoint.Open(t.Context(), rawSyncCheckpointPath(dataDir))
 	require.NoError(t, err)

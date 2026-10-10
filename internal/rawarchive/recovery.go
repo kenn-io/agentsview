@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -361,8 +360,7 @@ func recoveryComponent(name string) bool {
 }
 
 func validateRecoveryIdentity(data []byte) error {
-	decoded, err := hex.DecodeString(strings.TrimSpace(string(data)))
-	if err != nil || len(decoded) != 16 {
+	if err := config.ValidateInstallationID(strings.TrimSpace(string(data))); err != nil {
 		return errors.New("recovery installation identity must contain 32 hexadecimal characters")
 	}
 	return nil

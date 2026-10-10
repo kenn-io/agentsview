@@ -1673,3 +1673,22 @@ func TestDirectBackendSyncVisualStudioCopilotByIDFollowsConversationToSibling(
 		"a scoped single-session sync must not insert unrelated conversations "+
 			"from the same trace file")
 }
+
+func TestDirectBackend_Stats_ArchiveOnlyHostOutcomesUnavailable(t *testing.T) {
+	svc, env := newDirectTestSvc(t)
+	require.NoError(t, env.db.EnableArchiveOnly(t.Context()))
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
+		Since: "28d", Agent: "claude", IncludeGitOutcomes: true, IncludeGitHubOutcomes: true,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, stats.OutcomeStats)
+	require.NotNil(t, stats.CodeAttribution)
+	require.Len(t, stats.CodeAttribution.Sources, 2)
+	for i, provider := range []string{"git", "github"} {
+		source := stats.CodeAttribution.Sources[i]
+		assert.Equal(t, provider, source.Provider)
+		assert.Equal(t, "unavailable", source.Status)
+		assert.Nil(t, source.Metrics)
+		assert.Contains(t, source.Warnings, provider+" outcomes are unavailable in an archive-only database")
+	}
+}

@@ -668,7 +668,9 @@
         if (!sync.readOnly && !sync.archiveOnly) showImportModal = true;
       }}
       disabled={sync.readOnly || sync.archiveOnly}
-      title={sync.readOnly
+      title={sync.archiveOnly
+        ? m.header_actions_import_archive_only()
+        : sync.readOnly
         ? m.header_actions_import_unavailable()
         : m.header_actions_import_conversations()}
       aria-label={m.header_actions_import_conversations()}

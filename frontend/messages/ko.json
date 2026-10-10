@@ -93,6 +93,7 @@
   "header_actions_refresh": "새로고침",
   "header_actions_sync": "동기화",
   "header_actions_import_unavailable": "읽기 전용 모드에서는 가져오기를 사용할 수 없습니다",
+  "header_actions_import_archive_only": "보관 전용 모드에서는 가져올 수 없습니다",
   "header_actions_import_conversations": "대화 가져오기",
   "header_actions_import": "가져오기",
   "header_actions_toggle_theme": "테마 전환",

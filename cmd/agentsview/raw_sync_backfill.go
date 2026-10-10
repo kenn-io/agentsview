@@ -228,8 +228,10 @@ func runRawSyncBackfill(
 	if err != nil {
 		return errors.New("raw-sync backfill: configuration could not be loaded")
 	}
-	// Raw publication can run without a readable normalized archive.
-	archiveOnly, _ := db.ArchiveOnlyAt(ctx, appCfg.DBPath)
+	archiveOnly, err := archiveModeAfterRecovery(ctx, appCfg)
+	if err != nil {
+		return err
+	}
 	if archiveOnly {
 		return db.ErrArchiveOnly
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,35 +57,71 @@ func TestArchiveOnlyRefusesReceivingHostOnRestart(t *testing.T) {
 	}
 }
 
-func TestRawSyncAllowsUnreadableArchive(t *testing.T) {
-	for _, primary := range []string{"missing", "directory", "corrupt"} {
+func TestRawSyncRejectsUnreadableArchive(t *testing.T) {
+	for _, primary := range []string{"directory", "corrupt", "missing-pending", "corrupt-pending"} {
 		for _, command := range []string{"watch", "backfill"} {
 			t.Run(primary+"/"+command, func(t *testing.T) {
 				cfg := testConfigWithClaudeFixture(t)
-				t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
-				t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "test-credential")
-				require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(fmt.Sprintf("[agents.claude]\ndirs = [%q]\n", cfg.AgentDirs[parser.AgentClaude][0])), 0o600))
 				if primary == "directory" {
 					require.NoError(t, os.Mkdir(cfg.DBPath, 0o700))
-				} else if primary == "corrupt" {
+				} else if primary != "missing-pending" {
 					require.NoError(t, os.WriteFile(cfg.DBPath, []byte("unreadable archive"), 0o600))
 				}
-				store, err := rawcheckpoint.Open(t.Context(), rawSyncCheckpointPath(cfg.DataDir))
-				require.NoError(t, err)
-				require.NoError(t, store.EnsureDevice(t.Context(), "original-device"))
-				require.NoError(t, store.Close())
-				cmd := newRootCommand()
-				cmd.SetContext(t.Context())
-				args := []string{"raw-sync", command, "--server", "http://127.0.0.1:1", "--device-id", "different-device", "--allow-insecure-http"}
-				if command == "backfill" {
-					args = append(args, "--run-id", "test-run", "--provider", "claude")
+				if strings.HasSuffix(primary, "pending") {
+					require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "compact-recovery.json"), []byte("interrupted manifest"), 0o600))
 				}
-				_, err = executeCommand(cmd, args...)
-				require.ErrorContains(t, err, "device")
+				err := runRawSyncWithoutHostWork(t, cfg, command)
+				require.Error(t, err)
 				assert.NotErrorIs(t, err, db.ErrArchiveOnly)
 			})
 		}
 	}
+}
+
+func TestRawSyncAllowsAbsentArchive(t *testing.T) {
+	for _, command := range []string{"watch", "backfill"} {
+		t.Run(command, func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
+			t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "test-credential")
+			require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(fmt.Sprintf("[agents.claude]\ndirs = [%q]\n", cfg.AgentDirs[parser.AgentClaude][0])), 0o600))
+			store, err := rawcheckpoint.Open(t.Context(), rawSyncCheckpointPath(cfg.DataDir))
+			require.NoError(t, err)
+			require.NoError(t, store.EnsureDevice(t.Context(), "original-device"))
+			require.NoError(t, store.Close())
+			args := []string{"raw-sync", command, "--server", "http://127.0.0.1:1", "--device-id", "different-device", "--allow-insecure-http"}
+			if command == "backfill" {
+				args = append(args, "--run-id", "test-run", "--provider", "claude")
+			}
+			_, err = executeCommand(newRootCommand(), args...)
+			require.ErrorContains(t, err, "device")
+		})
+	}
+}
+
+func runRawSyncWithoutHostWork(t *testing.T, cfg config.Config, command string) error {
+	t.Helper()
+	t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
+	t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "test-credential")
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(fmt.Sprintf("[agents.claude]\ndirs = [%q]\n", cfg.AgentDirs[parser.AgentClaude][0])), 0o600))
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected raw-sync request", http.StatusForbidden)
+	}))
+	defer server.Close()
+	cmd := newRootCommand()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	cmd.SetContext(ctx)
+	args := []string{"raw-sync", command, "--server", server.URL, "--device-id", "original-device", "--allow-insecure-http"}
+	if command == "backfill" {
+		args = append(args, "--run-id", "test-run", "--provider", "claude")
+	}
+	_, err := executeCommand(cmd, args...)
+	assert.Zero(t, requests.Load())
+	assert.NoDirExists(t, filepath.Join(cfg.DataDir, "raw-sync"), "rejection must precede captures and checkpoint writes")
+	return err
 }
 
 func TestArchiveOnlyRefusesRawSyncWatch(t *testing.T) {

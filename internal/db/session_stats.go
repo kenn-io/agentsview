@@ -1521,6 +1521,13 @@ func (db *DB) computeOutcomeStats(
 	ctx context.Context, s *SessionStats, f StatsFilter,
 	from, to time.Time, rows []sessionStatsRow,
 ) error {
+	archiveOnly, err := db.IsArchiveOnly(ctx)
+	if err != nil {
+		return err
+	}
+	if archiveOnly {
+		return nil
+	}
 	cwds := make([]string, 0, len(rows))
 	for _, r := range rows {
 		if r.cwd != "" {

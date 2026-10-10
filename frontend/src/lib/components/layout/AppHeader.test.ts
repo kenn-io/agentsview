@@ -105,6 +105,8 @@ describe("AppHeader export actions", () => {
 
     const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
     expect(importButton.disabled).toBe(importDisabled);
+    if (archive_only) expect(importButton.title).toBe("Import unavailable in archive-only mode");
+    else if (read_only) expect(importButton.title).toBe("Import unavailable in read-only mode");
     const syncButton = document.querySelector<HTMLButtonElement>(".sync-btn");
     if (syncLabel) expect(syncButton?.getAttribute("aria-label")).toBe(syncLabel);
     else expect(syncButton).toBeNull();

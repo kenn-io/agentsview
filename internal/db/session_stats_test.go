@@ -3066,3 +3066,22 @@ func TestGetSessionStats_OutcomeStatsUnionsCheckouts(t *testing.T) {
 		})
 	}
 }
+
+func TestGetSessionStats_ArchiveOnlySkipsHostOutcomes(t *testing.T) {
+	skipIfNoGit(t)
+	d := testDB(t)
+	repo := statsOutcomeRepo(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "archived-outcomes", agent: "claude", userMsgs: 5, startedAt: hoursAgo(5), cwd: repo,
+	})
+	ordinary, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "28d", IncludeGitOutcomes: true})
+	require.NoError(t, err)
+	require.NotNil(t, ordinary.OutcomeStats)
+	require.Equal(t, 3, ordinary.OutcomeStats.Commits)
+	require.NoError(t, d.EnableArchiveOnly(t.Context()))
+	archived, err := d.GetSessionStats(t.Context(), StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true, IncludeGitHubOutcomes: true, GHToken: "unused-token",
+	})
+	require.NoError(t, err)
+	assert.Nil(t, archived.OutcomeStats)
+}

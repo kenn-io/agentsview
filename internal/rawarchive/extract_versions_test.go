@@ -3,7 +3,9 @@ package rawarchive
 import (
 	"context"
 	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,4 +74,38 @@ func TestExtractConflictingCapturesBeforeReadingContent(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, captureID, recovered.CaptureID)
 	}
+}
+
+func TestExtractCaseCollisionsBeforeReadingContent(t *testing.T) {
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	require.NoError(t, database.EnableArchiveOnly(ctx))
+	archive, err := Open(ctx, database, t.TempDir(), nil)
+	require.NoError(t, err)
+	defer archive.Close()
+	reads := &extractionReads{ObjectStore: archive.objects}
+	archive.objects = reads
+	require.NoError(t, database.RegisterRawArchiveRoot(ctx, db.RawArchiveRoot{
+		ID: "root-a", DeviceID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Machine: "source-device",
+		Provider: "files", OriginalPath: "/source", ConfiguredRootID: "root-a",
+	}))
+	for _, path := range []string{"Session.jsonl", "session.jsonl"} {
+		require.NoError(t, database.RecordRawArchiveFile(ctx, db.RawArchiveFile{
+			RootID: "root-a", Path: path, SHA256: strings.Repeat("a", 64), Size: 1,
+		}))
+	}
+	parent := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(parent, "CaseProbe"), []byte("probe"), 0o600))
+	_, statErr := os.Stat(filepath.Join(parent, "caseprobe"))
+	if os.IsNotExist(statErr) {
+		t.Skip("test destination is case-sensitive")
+	}
+	require.NoError(t, statErr)
+	target := filepath.Join(parent, "extracted")
+	_, err = archive.Extract(ctx, target, "")
+	require.ErrorContains(t, err, "case-folding collision")
+	assert.ErrorContains(t, err, "Session.jsonl")
+	assert.ErrorContains(t, err, "session.jsonl")
+	assert.Zero(t, reads.copies)
+	assert.NoDirExists(t, target)
 }

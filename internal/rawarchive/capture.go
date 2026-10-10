@@ -2,7 +2,6 @@ package rawarchive
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
 	"go.kenn.io/kit/atomicfile"
@@ -92,7 +92,10 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 	if d.Source.DeviceID == "" {
 		d.Source.DeviceID = previous.Source.DeviceID
 		if d.Source.DeviceID == "" {
-			d.Source.DeviceID = newCaptureIdentity()
+			d.Source.DeviceID, err = config.NewInstallationID()
+			if err != nil {
+				return d, err
+			}
 			d.NewIdentities = append(d.NewIdentities, "installation")
 		}
 	}
@@ -175,7 +178,10 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 			}
 		}
 		if input.ID == "" {
-			input.ID = newCaptureIdentity()
+			input.ID, err = config.NewInstallationID()
+			if err != nil {
+				return d, err
+			}
 			d.NewIdentities = append(d.NewIdentities, input.ID)
 		}
 		if seen[input.ID] {
@@ -344,12 +350,6 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 		return d, err
 	}
 	return d, nil
-}
-
-func newCaptureIdentity() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
 }
 
 func captureRootLayout(provider, path string) (string, []string) {

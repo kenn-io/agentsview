@@ -93,6 +93,7 @@
   "header_actions_refresh": "Actualiser",
   "header_actions_sync": "Synchroniser",
   "header_actions_import_unavailable": "Import indisponible en mode lecture seule",
+  "header_actions_import_archive_only": "Import indisponible en mode archive seule",
   "header_actions_import_conversations": "Importer des conversations",
   "header_actions_import": "Importer",
   "header_actions_toggle_theme": "Changer de thème",

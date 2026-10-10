@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/rawsync"
@@ -40,6 +41,9 @@ func (a *Archive) Extract(ctx context.Context, target, captureID string) (report
 	defer func() { retErr = errors.Join(retErr, root.Close()) }()
 	if captureID != "" {
 		return a.extractCapture(ctx, root, target, captureID)
+	}
+	if err := a.checkExtractCaseCollisions(ctx, target); err != nil {
+		return report, err
 	}
 	var after int64
 	for {
@@ -150,4 +154,49 @@ func (a *Archive) extractCapture(ctx context.Context, root *os.Root, target, cap
 	}
 	_, err = LoadCapture(ctx, filepath.Join(target, "capture.json"))
 	return report, err
+}
+
+func (a *Archive) checkExtractCaseCollisions(ctx context.Context, target string) (retErr error) {
+	probe, err := os.CreateTemp(target, ".case-probe-*")
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, os.Remove(probe.Name())) }()
+	if err := probe.Close(); err != nil {
+		return err
+	}
+	info, err := os.Stat(probe.Name())
+	if err != nil {
+		return err
+	}
+	alias, err := os.Stat(filepath.Join(target, strings.ToUpper(filepath.Base(probe.Name()))))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(info, alias) {
+		return nil
+	}
+	seen := map[string]string{}
+	var after int64
+	for {
+		files, err := a.database.ListRawArchiveFiles(ctx, after, pageSize)
+		if err != nil {
+			return err
+		}
+		for _, file := range files {
+			path := filepath.Join(file.RootID, filepath.FromSlash(file.Path))
+			folded := strings.ToLower(path)
+			if previous, ok := seen[folded]; ok && previous != path {
+				return fmt.Errorf("case-folding collision between %q and %q on the extraction destination", previous, path)
+			}
+			seen[folded] = path
+			after = file.ID
+		}
+		if len(files) < pageSize {
+			return nil
+		}
+	}
 }

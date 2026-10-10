@@ -1360,6 +1360,21 @@ func collectCodeAttribution(ctx context.Context,
 		return nil
 	}
 	sources := []db.CodeAttributionSource{}
+	if archiveOnly {
+		for _, outcome := range []struct {
+			provider  string
+			requested bool
+		}{
+			{"git", f.IncludeGitOutcomes}, {"github", f.IncludeGitHubOutcomes},
+		} {
+			if outcome.requested {
+				sources = append(sources, db.CodeAttributionSource{
+					Provider: outcome.provider, Scope: "machine_local", Status: "unavailable",
+					Warnings: []string{outcome.provider + " outcomes are unavailable in an archive-only database"},
+				})
+			}
+		}
+	}
 	if source, ok := collectCursorAttribution(ctx, f, stats, archiveOnly); ok {
 		sources = append(sources, source)
 	}
