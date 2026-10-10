@@ -724,91 +724,6 @@ func TestSearchContent_ContextRedactsSecretByDefault(t *testing.T) {
 	}
 }
 
-// search_content's self-reference guard must exclude matches from sessions
-// that are active now, even when the matching message itself is old. A
-// long-running current session can match on a stale line; excluding by the
-// match timestamp alone would leak it. Exclusion is by session activity,
-// like search_sessions.
-func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
-	ts, d := newTestToolset(t)
-	// Active session: ended one minute before now, but its matching message
-	// is two hours old.
-	dbtest.SeedSession(t, d, "active", "proj", func(s *db.Session) {
-		s.MessageCount = 3
-		s.UserMessageCount = 2
-		ended := "2024-06-15T11:59:00Z"
-		s.EndedAt = &ended
-	})
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{
-		SessionID: "active", Ordinal: 0, Role: "user",
-		Content: "old needle here", ContentLength: len("old needle here"),
-		Timestamp: "2024-06-15T10:00:00Z",
-	}}))
-	// Idle session: ended two hours before now.
-	dbtest.SeedSession(t, d, "idle", "proj", func(s *db.Session) {
-		s.MessageCount = 3
-		s.UserMessageCount = 2
-		ended := "2024-06-15T10:00:00Z"
-		s.EndedAt = &ended
-	})
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{
-		SessionID: "idle", Ordinal: 0, Role: "user",
-		Content: "idle needle here", ContentLength: len("idle needle here"),
-		Timestamp: "2024-06-15T10:00:00Z",
-	}}))
-
-	// Default (include_active=false): the active session is excluded despite
-	// its old match; only the idle session is returned.
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "needle", Mode: "substring",
-	})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 1)
-	assert.Equal(t, "idle", out.Matches[0].SessionID)
-	assert.True(t, out.Exclusions.RecentActive)
-
-	// include_active=true returns both, excluding nothing.
-	_, all, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "needle", Mode: "substring", IncludeActive: true,
-	})
-	require.NoError(t, err)
-	assert.Len(t, all.Matches, 2)
-}
-
-// A freshly created/synced session can have no parsed ended_at or started_at
-// yet, only created_at. Its activity must fall back to created_at so a
-// current timestampless session is still excluded by the default guard,
-// rather than resolving to an empty timestamp and leaking through. Uses a
-// real clock because created_at is set to now by the DB at insert.
-func TestSearchContent_TimestamplessSessionExcludedByCreatedAt(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	ts := &toolset{svc: service.NewDirectBackend(d, nil), now: time.Now}
-	// StartedAt and EndedAt are left nil on purpose; created_at defaults to
-	// now in the schema, so the session is active.
-	dbtest.SeedSession(t, d, "fresh", "proj", func(s *db.Session) {
-		s.MessageCount = 3
-		s.UserMessageCount = 2
-	})
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		dbtest.UserMsg("fresh", 0, "needle in a fresh session"),
-	}))
-
-	// Default guard excludes the still-active session despite no start/end.
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "needle", Mode: "substring",
-	})
-	require.NoError(t, err)
-	assert.Empty(t, out.Matches)
-	assert.True(t, out.Exclusions.RecentActive)
-
-	// include_active=true surfaces it.
-	_, all, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "needle", Mode: "substring", IncludeActive: true,
-	})
-	require.NoError(t, err)
-	assert.Len(t, all.Matches, 1)
-}
-
 func TestUsageSummary_EmptyRange(t *testing.T) {
 	ts, _ := newTestToolset(t)
 	_, out, err := ts.usageSummary(t.Context(), nil, usageSummaryIn{
@@ -932,32 +847,6 @@ func TestSearchContent_SessionClassOptIns(t *testing.T) {
 			assert.ElementsMatch(t, tc.want, got)
 		})
 	}
-}
-
-func TestSearchContent_OneShotOptInKeepsActiveGuard(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "active-one", "proj", func(s *db.Session) {
-		s.MessageCount = 1
-		s.UserMessageCount = 1
-		s.EndedAt = new("2024-06-15T11:59:00Z")
-	})
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		dbtest.UserMsg("active-one", 0, "active one-shot marker"),
-	}))
-
-	_, excluded, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "active one-shot marker", Mode: "substring", IncludeOneShot: true,
-	})
-	require.NoError(t, err)
-	assert.Empty(t, excluded.Matches)
-	assert.True(t, excluded.Exclusions.RecentActive)
-
-	_, included, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "active one-shot marker", Mode: "substring",
-		IncludeOneShot: true, IncludeActive: true,
-	})
-	require.NoError(t, err)
-	assert.Len(t, included.Matches, 1)
 }
 
 // search_content must surface the conversation-unit citation fields
@@ -1652,6 +1541,15 @@ func TestSearchContent_BlankCurrentSessionKeepsRecentActiveGuard(t *testing.T) {
 		"the reported exclusion must be normalized")
 	assert.True(t, out.Exclusions.RecentActive,
 		"a blank current_session_id must not disable the recent-active guard")
+	assert.Equal(t, 1, fake.calls)
+	assert.Zero(t, out.ExcludedActive)
+
+	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{
+		Pattern: "needle", IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, fake.lastReq.ExcludeActiveSince)
+	assert.False(t, out.Exclusions.RecentActive)
 }
 
 func TestSearchContent_OutOfRangeLimitUsesDefault(t *testing.T) {

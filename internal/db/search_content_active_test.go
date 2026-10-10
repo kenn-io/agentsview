@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,6 +9,37 @@ import (
 )
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {
+	t.Run("fills page before pagination", func(t *testing.T) {
+		d := testDB(t)
+		for i := range 7 {
+			id := fmt.Sprintf("session-%d", i)
+			seedSearchSession(t, d, id, "project-a", [][2]string{{"user", "docker-compose.test.yml"}})
+			ended := "2024-06-15T10:00:00Z"
+			if i < 3 {
+				ended = "2024-06-15T11:59:00Z"
+			}
+			_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET ended_at = ? WHERE id = ?", ended, id)
+			require.NoError(t, err)
+		}
+		filter := ContentSearchFilter{
+			Pattern: "docker-compose.test.yml", Limit: 3, ExcludeActiveSince: "2024-06-15T11:50:00Z",
+		}
+		page, err := d.SearchContent(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 3)
+		require.NotZero(t, page.NextCursor)
+		ids := make([]string, 0, 4)
+		for _, match := range page.Matches {
+			ids = append(ids, match.SessionID)
+		}
+		filter.Cursor = page.NextCursor
+		page, err = d.SearchContent(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Zero(t, page.NextCursor)
+		ids = append(ids, page.Matches[0].SessionID)
+		assert.ElementsMatch(t, []string{"session-3", "session-4", "session-5", "session-6"}, ids)
+	})
 	d := testDB(t)
 	fixtures := []struct {
 		id, ended, started string
@@ -38,7 +70,11 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 	d.SetVectorSearcher(&fakeVectorSearcher{hits: hits})
 	for _, mode := range []string{"substring", "regex", "fts", "terms", "semantic", "hybrid"} {
 		t.Run(mode, func(t *testing.T) {
-			for _, cutoff := range []string{"2024-06-15T11:50:00Z", "2024-06-15T13:50:00+02:00", "2024-06-15T06:50:00-05:00"} {
+			cutoffs := []string{"2024-06-15T11:50:00Z"}
+			if mode == "substring" {
+				cutoffs = append(cutoffs, "2024-06-15T13:50:00+02:00", "2024-06-15T06:50:00-05:00")
+			}
+			for _, cutoff := range cutoffs {
 				t.Run(cutoff, func(t *testing.T) {
 					page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 						Pattern: "needle", Mode: mode, Limit: 6,

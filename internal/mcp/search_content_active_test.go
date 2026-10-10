@@ -10,54 +10,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
-func TestSearchContent_ActiveBeforeLimit(t *testing.T) {
-	ts, d := newTestToolset(t)
-	for i := range 7 {
-		id := fmt.Sprintf("session-%d", i)
-		ended := "2024-06-15T10:00:00Z"
-		if i < 3 {
-			ended = "2024-06-15T11:59:00Z"
-		}
-		dbtest.SeedSession(t, d, id, "project-a", func(s *db.Session) {
-			s.UserMessageCount = 2
-			s.MessageCount = 3
-			s.EndedAt = &ended
-		})
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-			dbtest.UserMsg(id, 0, "docker-compose.test.yml"),
-		}))
-	}
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "docker-compose.test.yml", Limit: 3,
-	})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 3)
-	assert.True(t, out.Exclusions.RecentActive)
-	require.NotNil(t, out.NextCursor)
-	_, page, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "docker-compose.test.yml", Limit: 3, Cursor: *out.NextCursor,
-	})
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
-	assert.Nil(t, page.NextCursor)
-	ids := []string{page.Matches[0].SessionID}
-	for _, match := range out.Matches {
-		ids = append(ids, match.SessionID)
-	}
-	assert.ElementsMatch(t, []string{"session-3", "session-4", "session-5", "session-6"}, ids)
-}
-
 func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 	for _, tc := range []struct {
-		name                         string
-		supported, empty, retryError bool
+		name              string
+		empty, retryError bool
 	}{
-		{name: "updated server", supported: true},
 		{name: "older server"},
 		{name: "older server empty page", empty: true},
 		{name: "older server retry fails", retryError: true},
@@ -77,12 +37,6 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 						assert.Equal(t, "2024-06-15T11:50:00Z", q.Get("exclude_active_since"))
 					} else {
 						assert.Empty(t, q.Get("exclude_active_since"))
-					}
-					if tc.supported {
-						w.Header().Set("X-AgentsView-Active-Filter", "true")
-						_, err := w.Write([]byte(`{"matches":[{"session_id":"idle"}],"next_cursor":13}`))
-						assert.NoError(t, err)
-						return
 					}
 					if tc.retryError && searches == 2 {
 						w.WriteHeader(http.StatusInternalServerError)
@@ -131,13 +85,7 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 			require.NotNil(t, out.NextCursor)
 			assert.Equal(t, 13, *out.NextCursor)
 			assert.True(t, out.Exclusions.RecentActive)
-			if tc.supported {
-				assert.Equal(t, 1, searches)
-				assert.Empty(t, lookups)
-				assert.Zero(t, out.ExcludedActive)
-				require.Len(t, out.Matches, 1)
-				assert.Equal(t, "idle", out.Matches[0].SessionID)
-			} else if tc.empty {
+			if tc.empty {
 				assert.Equal(t, 2, searches)
 				assert.Equal(t, 1, out.ExcludedActive)
 				assert.Empty(t, out.Matches)
