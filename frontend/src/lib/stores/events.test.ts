@@ -55,10 +55,113 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("events store", () => {
+  it("defers a hidden tab's stream and refreshes subscribers when it becomes visible", async () => {
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const { events } = await import("./events.svelte.js");
+    const received = vi.fn();
+    const unsub = events.subscribe(received);
+    try {
+      expect(FakeEventSource.instances).toHaveLength(0);
+      visibility.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(received).not.toHaveBeenCalled();
+      FakeEventSource.instances[0]!.fire("events_ready", {});
+      expect(received).toHaveBeenCalledExactlyOnceWith({ scope: "sync" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(received).toHaveBeenCalledTimes(1);
+    } finally {
+      unsub();
+    }
+  });
+
+  it("releases hidden tab connections without letting the heal timer reopen them", async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import("./events.svelte.js");
+    const received = vi.fn();
+    const unsub = events.subscribe(received);
+    try {
+      const first = FakeEventSource.instances[0]!;
+      visibility.mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(first.closed).toBe(true);
+      await vi.advanceTimersByTimeAsync(EVENTS_STORE_HEAL_INTERVAL_MS * 2);
+      expect(FakeEventSource.instances).toHaveLength(1);
+      visibility.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(FakeEventSource.instances).toHaveLength(2);
+      expect(received).not.toHaveBeenCalled();
+      FakeEventSource.instances[1]!.fire("events_ready", {});
+      expect(received).toHaveBeenCalledExactlyOnceWith({ scope: "sync" });
+      FakeEventSource.instances[1]!.fire("data_changed", { scope: "messages" });
+      expect(received).toHaveBeenLastCalledWith({ scope: "messages" });
+    } finally {
+      unsub();
+    }
+  });
+
+  it("does not reopen after the last hidden subscriber leaves or the backend disables events", async () => {
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const { events } = await import("./events.svelte.js");
+    const unsub = events.subscribe(vi.fn());
+    unsub();
+    visibility.mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(FakeEventSource.instances).toHaveLength(0);
+
+    visibility.mockReturnValue(true);
+    const unsub2 = events.subscribe(vi.fn());
+    try {
+      events.setAvailable(false);
+      visibility.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(FakeEventSource.instances).toHaveLength(0);
+    } finally {
+      unsub2();
+    }
+  });
+
+  it("reads changes committed while a replacement stream is still subscribing", async () => {
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    const { events } = await import("./events.svelte.js");
+    let storedVersion = 1;
+    let displayedVersion = 1;
+    const refresh = vi.fn(() => {
+      displayedVersion = storedVersion;
+    });
+    const unsub = events.subscribe(refresh);
+    try {
+      visibility.mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+      visibility.mockReturnValue(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      const replacement = FakeEventSource.instances[1]!;
+      replacement.fireOpen();
+      expect(refresh).not.toHaveBeenCalled();
+      storedVersion = 2;
+      replacement.fire("events_ready", {});
+      expect(displayedVersion).toBe(2);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      // Automatic EventSource reconnects have the same subscription gap.
+      replacement.fireError();
+      replacement.fireOpen();
+      storedVersion = 3;
+      replacement.fire("events_ready", {});
+      expect(displayedVersion).toBe(3);
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      unsub();
+    }
+  });
+
   it("does not open an EventSource while live events are unavailable", async () => {
     const { events } = await import("./events.svelte.js");
     events.setAvailable(false);

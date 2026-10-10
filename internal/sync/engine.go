@@ -20570,6 +20570,18 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 // cancellable git-backed project resolution and database reads on this path.
 func (e *Engine) SyncSingleSessionContext(
 	ctx context.Context, sessionID string,
+) error {
+	return e.syncSingleSessionContext(ctx, sessionID, true)
+}
+
+// ReconcileSessionContext imports missed source changes without forcing a
+// reparse. Passive watches retain provider freshness and incremental checkpoints.
+func (e *Engine) ReconcileSessionContext(ctx context.Context, sessionID string) error {
+	return e.syncSingleSessionContext(ctx, sessionID, false)
+}
+
+func (e *Engine) syncSingleSessionContext(
+	ctx context.Context, sessionID string, forceParse bool,
 ) (err error) {
 	if e.refuseWriteInForceParse("SyncSingleSession") {
 		return fmt.Errorf(
@@ -20640,13 +20652,13 @@ func (e *Engine) SyncSingleSessionContext(
 	file := parser.DiscoveredFile{
 		Path:       path,
 		Agent:      agent,
-		ForceParse: true,
+		ForceParse: forceParse,
 	}
 	e.hydrateS3DiscoveredFile(ctx, sessionID, &file)
 	if file.Machine == "" && !isS3SourcePath(file.Path) {
 		file.Machine = e.machineForPath(file.Agent, file.Path)
 	}
-	if e.shouldCacheSkip(file) {
+	if forceParse && e.shouldCacheSkip(file) {
 		e.clearSkip(ctx, path)
 	}
 
@@ -20856,7 +20868,7 @@ func (e *Engine) processAndWriteSessionFile(
 			)
 		}
 		sessionsChanged = sessionsChanged || linked > 0
-		return false, sessionsChanged, nil
+		return true, sessionsChanged, nil
 	}
 	if res.cacheSkip {
 		e.clearSkip(ctx, res.skipCacheKey(path))

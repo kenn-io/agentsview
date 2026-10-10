@@ -121,6 +121,13 @@ export function watchSession(
     onUpdate();
   });
 
+  // HTTP `open` precedes the server's watch baseline. Refresh only after
+  // that baseline exists, including on automatic EventSource reconnects.
+  es.addEventListener("session_ready", () => {
+    consecutiveErrors = 0;
+    onUpdate();
+  });
+
   if (onTiming) {
     es.addEventListener("session.timing", (ev: MessageEvent) => {
       try {
@@ -190,6 +197,14 @@ export function watchEvents(
   es.addEventListener("open", () => {
     hasOpened = true;
     consecutiveErrors = 0;
+  });
+
+  // Read after the server has subscribed, including automatic reconnects.
+  // An HTTP open alone leaves a gap between the read and subscription.
+  es.addEventListener("events_ready", () => {
+    consecutiveErrors = 0;
+    hasOpened = true;
+    onEvent({ scope: "sync" });
   });
 
   es.addEventListener("data_changed", (msg) => {

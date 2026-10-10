@@ -58,6 +58,7 @@ class SyncStore {
   }
 
   private watchEventSource: EventSource | null = null;
+  private watchVisibilityHandler: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastStatsParams: {
     include_one_shot?: boolean;
@@ -305,10 +306,34 @@ class SyncStore {
 
   watchSession(sessionId: string, onUpdate: () => void, onTiming?: (t: SessionTiming) => void) {
     this.unwatchSession();
-    this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
+    const open = () => {
+      this.watchEventSource = watchSession(sessionId, onUpdate, onTiming);
+    };
+    if (typeof document === "undefined") {
+      open();
+      return;
+    }
+    this.watchVisibilityHandler = () => {
+      if (document.hidden) {
+        this.closeSessionStream();
+      } else if (!this.watchEventSource) {
+        open();
+        // watchSession refreshes after the server establishes its baseline.
+      }
+    };
+    document.addEventListener("visibilitychange", this.watchVisibilityHandler);
+    if (!document.hidden) open();
   }
 
   unwatchSession() {
+    if (this.watchVisibilityHandler) {
+      document.removeEventListener("visibilitychange", this.watchVisibilityHandler);
+      this.watchVisibilityHandler = null;
+    }
+    this.closeSessionStream();
+  }
+
+  private closeSessionStream() {
     if (this.watchEventSource) {
       this.watchEventSource.close();
       this.watchEventSource = null;

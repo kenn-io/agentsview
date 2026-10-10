@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
 import type {
   SyncSyncStats as SyncStats,
@@ -91,6 +91,64 @@ function mockResyncFailure(error: Error): void {
     done: Promise.reject(error),
   });
 }
+
+describe("session watch visibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    api.watchSession.mockImplementation(() => ({ close: vi.fn() }));
+  });
+
+  afterEach(() => {
+    sync.unwatchSession();
+    vi.restoreAllMocks();
+  });
+
+  it("closes a hidden session stream and waits for its ready update on return", () => {
+    const onUpdate = vi.fn();
+    const onTiming = vi.fn();
+    sync.watchSession("session-a", onUpdate, onTiming);
+    const first = api.watchSession.mock.results[0]!.value;
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(first.close).toHaveBeenCalledTimes(1);
+
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(api.watchSession).toHaveBeenCalledTimes(2);
+    expect(api.watchSession).toHaveBeenLastCalledWith("session-a", onUpdate, onTiming);
+    expect(onUpdate).not.toHaveBeenCalled();
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(api.watchSession).toHaveBeenCalledTimes(2);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("only starts the latest selected session when a hidden tab returns", () => {
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const oldUpdate = vi.fn();
+    const newUpdate = vi.fn();
+    sync.watchSession("session-a", oldUpdate);
+    sync.watchSession("session-b", newUpdate);
+    expect(api.watchSession).not.toHaveBeenCalled();
+
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(api.watchSession).toHaveBeenCalledExactlyOnceWith("session-b", newUpdate, undefined);
+    expect(oldUpdate).not.toHaveBeenCalled();
+    expect(newUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not reconnect after unwatching a hidden session", () => {
+    vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const onUpdate = vi.fn();
+    sync.watchSession("session-a", onUpdate);
+    sync.unwatchSession();
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(api.watchSession).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+});
 
 describe("commitsDisagree", () => {
   it.each([
