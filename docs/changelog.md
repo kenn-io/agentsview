@@ -58,8 +58,9 @@ The latest release is
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on
   hosted PostgreSQL archives. Usage-only archives show job IDs because their
-  titles are discarded. Archived Hermes and Augure Desktop cron runs whose
-  sources were gone before upgrading stay individual sessions unless they
+  titles are discarded. AgentsView keeps no copy of the original Hermes and
+  Augure Desktop files, so cron runs stay individual sessions in archive-only
+  databases and when their sources were gone before upgrading, unless they
   already have a stored job ID. A non-empty source in `state.db` takes precedence
   over the transcript's platform when grouping runs.
   The first sync after upgrading rebuilds the archive once to populate groups.
