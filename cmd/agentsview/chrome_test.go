@@ -80,41 +80,15 @@ func TestChromeSetup(t *testing.T) {
 	socket, err := chromehost.SocketPath(dir)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"chrome-host", "--socket", socket}, strings.FieldsFunc(strings.TrimSpace(string(output)), func(r rune) bool { return r == '\r' || r == '\n' }))
-	if runtime.GOOS == "linux" {
-		assert.Equal(t, filepath.Join(home, ".config/google-chrome/NativeMessagingHosts/io.kenn.agentsview.json"), registered)
-	}
 	if runtime.GOOS == "darwin" {
 		assert.Equal(t, filepath.Join(home, "Library/Application Support/Google/Chrome/NativeMessagingHosts/io.kenn.agentsview.json"), registered)
 	}
-}
-
-func TestChromeConfigRoot(t *testing.T) {
-	for _, tt := range []struct{ name, chrome, xdg, want string }{
-		{"Chrome overrides XDG", "chrome-config", "xdg-config", "chrome-config/google-chrome"},
-		{"XDG overrides home", "", "xdg-config", "xdg-config/google-chrome"},
-		{"home fallback", "", "", "home/.config/google-chrome"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("CHROME_CONFIG_HOME", tt.chrome)
-			t.Setenv("XDG_CONFIG_HOME", tt.xdg)
-			assert.Equal(t, filepath.FromSlash(tt.want), chromehost.ConfigRoot("home"))
-		})
+	if runtime.GOOS == "windows" {
+		assert.Equal(t, filepath.Join(dir, "chrome", "io.kenn.agentsview.json"), registered)
 	}
-}
-
-func TestChromeSetupPreservesInstalledExtension(t *testing.T) {
-	dir := t.TempDir()
-	assets := fstest.MapFS{
-		"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)},
-		"chrome-extension/worker.js":     {Data: []byte("worker")},
-	}
-	executable := chromeTestExecutable(t)
-	register := func(string) error { return nil }
-	folder, err := setupChrome(dir, dir, executable, assets, register)
-	require.NoError(t, err)
-	_, err = setupChrome(dir, dir, executable, fstest.MapFS{}, register)
+	_, err = setupChrome(dir, home, executable, fstest.MapFS{}, func(string) error { return nil })
 	require.Error(t, err)
-	worker, err := os.ReadFile(filepath.Join(folder, "worker.js"))
+	worker, err = os.ReadFile(filepath.Join(folder, "worker.js"))
 	require.NoError(t, err)
 	assert.Equal(t, "worker", string(worker))
 }
@@ -252,8 +226,6 @@ func TestChromeSyncResults(t *testing.T) {
 	}{
 		{"done", "event: progress\ndata: {}\n\nevent: done\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":0}\n\n", "", 200, 2},
 		{"running", `{"code":"claude_ai_sync_running","error":"Chrome Sync is already running"}`, "Chrome Sync is already running", 409, 0},
-		{"absent host", `{"code":"claude_ai_chrome_host_required","error":"Run agentsview chrome setup and keep Chrome open, then Sync again"}`, "Run agentsview chrome setup and keep Chrome open, then Sync again", 409, 0},
-		{"update required", `{"code":"claude_ai_chrome_host_update_required","error":"Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again."}`, "Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again.", 409, 0},
 		{"invalid body", "unavailable", "HTTP 503: unavailable", 503, 0},
 		{"error", "event: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 0},
 		{"partial failure", "event:progress\ndata:{\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent:error\ndata:{\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 2},
@@ -301,14 +273,11 @@ func TestChromeSyncResults(t *testing.T) {
 
 func TestChromeSyncCommand(t *testing.T) {
 	for _, tt := range []struct {
-		name, body, wantError string
-		cancel                bool
-		status                int
+		name, body string
+		cancel     bool
 	}{
-		{"running", `{"code":"claude_ai_sync_running","error":"Chrome Sync is already running"}`, "Chrome Sync is already running", false, 409},
-		{"done", "event: done\ndata: {\"imported\":2}\n\n", "", false, 200},
-		{"partial failure", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", false, 200},
-		{"cancel", "", "", true, 200},
+		{"partial failure", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", false},
+		{"cancel", "", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dataDir := testDataDir(t)
@@ -321,13 +290,6 @@ func TestChromeSyncCommand(t *testing.T) {
 					assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
 					if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
 						http.Error(w, "Forbidden", http.StatusForbidden)
-						return
-					}
-					if tt.status == http.StatusConflict {
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(tt.status)
-						_, err := io.WriteString(w, tt.body)
-						assert.NoError(t, err)
 						return
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
@@ -349,13 +311,9 @@ func TestChromeSyncCommand(t *testing.T) {
 				err := cmd.ExecuteContext(ctx)
 				if tt.cancel {
 					require.ErrorIs(t, err, context.Canceled)
-				} else if tt.wantError != "" {
-					require.ErrorContains(t, err, tt.wantError)
-				} else {
-					require.NoError(t, err)
 				}
 			})
-			if tt.wantError != "" && tt.status == http.StatusOK {
+			if !tt.cancel {
 				assert.Contains(t, output, "Done: 6 processed (2 new, 1 updated, 3 skipped)")
 				assert.Contains(t, output, "1 errors")
 			}

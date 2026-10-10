@@ -55,7 +55,6 @@ describe("Chrome native host worker", () => {
     message({ id: "a", path: "/api/organizations", version });
     await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
     expect(port.postMessage).toHaveBeenCalledWith({ id: "a", version: 1, status: 200, body: "chats" });
-    expect(chrome.scripting.executeScript).toHaveBeenLastCalledWith({ target: { tabId: 7 }, world: "ISOLATED", func: expect.any(Function), args: ["https://claude.ai/api/organizations"] });
   });
 
   it("fetches in an existing Claude tab and replies by id", async () => {

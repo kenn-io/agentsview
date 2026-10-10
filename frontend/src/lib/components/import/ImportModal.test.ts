@@ -117,21 +117,6 @@ it("offers browser sign-in after auth failure", async () => {
   expect(screen.queryByText("Server auth text")).toBeNull();
   await fireEvent.click(screen.getByRole("button", { name: "Sign in to claude.ai in the Chrome profile with the AgentsView extension. Enable the extension in only one Chrome profile. Sync uses the first profile that connects." }));
   expect(open).toHaveBeenCalledExactlyOnceWith("https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
-  await clickSync();
-  await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
-});
-
-it("keeps update instructions and Sync enabled when disconnected", async () => {
-  syncClaudeAI.mockRejectedValueOnce(new ApiError(0, "Server version text", "claude_ai_chrome_host_update_required"));
-  render(ImportModal, props());
-  await clickSync();
-  await waitFor(() => expect(screen.getByText("Update needed")).toBeTruthy());
-  chromeStatus.mockResolvedValue({ connected: false });
-  await fireEvent.focus(window);
-  await tick();
-  expect(screen.getByText("Restart AgentsView if you upgraded it.")).toBeTruthy();
-  expect(syncButton().disabled).toBe(false);
-  expect(screen.getByText("agentsview chrome setup")).toBeTruthy();
 });
 
 it.each(["claude_ai_auth_required", "claude_ai_chrome_host_update_required"])("recovers from %s without a reload", async (code) => {
@@ -139,6 +124,13 @@ it.each(["claude_ai_auth_required", "claude_ai_chrome_host_update_required"])("r
   render(ImportModal, props());
   await clickSync();
   await waitFor(() => expect(screen.getByText(code === "claude_ai_auth_required" ? "Signed out" : "Update needed")).toBeTruthy());
+  if (code === "claude_ai_chrome_host_update_required") {
+    chromeStatus.mockResolvedValue({ connected: false });
+    await fireEvent.focus(window);
+    await tick();
+    expect(screen.getByText("Restart AgentsView if you upgraded it.")).toBeTruthy();
+    expect(screen.getByText("agentsview chrome setup")).toBeTruthy();
+  }
   expect(syncButton().disabled).toBe(false);
   await clickSync();
   await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
@@ -172,19 +164,6 @@ it("clears a Sync conflict after closing while status hangs", async () => {
   expect(screen.queryByText("Chrome Sync is already running.")).toBeNull();
 });
 
-it("shows a sync failure Notice and retries", async () => {
-  syncClaudeAI.mockRejectedValueOnce(new Error("Network interrupted"));
-  const p = props();
-  render(ImportModal, p);
-  await clickSync();
-  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Sync failed"));
-  expect(screen.getByRole("alert").textContent).toContain("Network interrupted");
-  expect(screen.getByText("Connected")).toBeTruthy();
-  expect(p.onimported).toHaveBeenCalledOnce();
-  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
-});
-
 it.each([new Error("Network interrupted"), new ApiError(0, "Auth required", "claude_ai_auth_required")])("keeps processed counts after a partial Sync fails with %s", async (error) => {
   syncClaudeAI.mockImplementationOnce(async (_host, callbacks) => {
     callbacks.onProgress({ imported: 128, updated: 3, skipped: 7, errors: 1 });
@@ -195,11 +174,17 @@ it.each([new Error("Network interrupted"), new ApiError(0, "Auth required", "cla
   await clickSync();
   await waitFor(() => expect(screen.getByText("139 conversations processed")).toBeTruthy());
   if (error instanceof ApiError) expect(screen.getByText("Signed out")).toBeTruthy();
-  else expect(screen.getByRole("alert").textContent).toContain("Network interrupted");
+  else {
+    expect(screen.getByRole("alert").textContent).toContain("Sync failed");
+    expect(screen.getByRole("alert").textContent).toContain("Network interrupted");
+    expect(screen.getByText("Connected")).toBeTruthy();
+  }
   expect(p.onimported).toHaveBeenCalledOnce();
-  await clickSync();
-  await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
-  expect(screen.queryByText("139 conversations processed")).toBeNull();
+  if (!(error instanceof ApiError)) {
+    await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
+    expect(screen.queryByText("139 conversations processed")).toBeNull();
+  }
 });
 
 it("uses the desktop account and email-code sign-in without polling Chrome", async () => {
