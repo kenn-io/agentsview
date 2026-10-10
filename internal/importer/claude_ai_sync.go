@@ -72,6 +72,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	IsSessionExcluded(context.Context, string) bool
 	GetProviderStatHash(context.Context, parser.AgentType, string) (uint64, bool, error)
 	UpsertProviderStatHash(context.Context, parser.AgentType, string, uint64) error
+	DeleteProviderStatHash(context.Context, parser.AgentType, string) error
 }, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks, machine ...string,
 ) (stats ImportStats, retErr error) {
 	raw, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(claudeAIOrganizationsRequest, "", "", 0))
@@ -218,6 +219,11 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				var status importStatus
 				var detailErr error
 				write := func() error {
+					if existing != nil {
+						if err := store.DeleteProviderStatHash(ctx, parser.AgentClaudeAI, id); err != nil {
+							return err
+						}
+					}
 					result.Session.Machine = resolvedImportMachine(result.Session.Machine, machine)
 					status, detailErr = syncConversation(ctx, store, result)
 					if errors.Is(detailErr, db.ErrSessionTrashed) {

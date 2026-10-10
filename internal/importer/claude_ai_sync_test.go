@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -461,6 +462,7 @@ func TestSyncClaudeAIFailureStreak(t *testing.T) {
 					IsSessionExcluded(context.Context, string) bool
 					GetProviderStatHash(context.Context, parser.AgentType, string) (uint64, bool, error)
 					UpsertProviderStatHash(context.Context, parser.AgentType, string, uint64) error
+					DeleteProviderStatHash(context.Context, parser.AgentType, string) error
 				} = d
 				if tt.failWrite {
 					store = failedSyncStore{d}
@@ -714,6 +716,79 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
 		})
 	}
+}
+
+func TestSyncClaudeAIMetadataUpdateEntersMirrorWindow(t *testing.T) {
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	const watermark = "2026-03-02T00:00:00.000Z"
+	d := testDB(t)
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	})
+	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	exported := strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)
+	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
+	require.NoError(t, err)
+	before, err := d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	// Backdate the completed ZIP import to represent a title already pushed to the mirror.
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET created_at = '2026-03-01T12:00:00.000Z', local_modified_at = '2026-03-01T12:00:00.000Z' WHERE id = ?", id)
+		return err
+	}))
+	candidates, err := d.ListSessionsForMirrorWindow(t.Context(), watermark, nil, nil)
+	require.NoError(t, err)
+	require.Empty(t, candidates)
+	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	candidates, err = d.ListSessionsForMirrorWindow(t.Context(), watermark, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	assert.Equal(t, id, candidates[0].ID)
+	assert.Equal(t, before.TranscriptRevision, candidates[0].TranscriptRevision)
+	require.NotNil(t, candidates[0].SessionName)
+	assert.Equal(t, "Chat", *candidates[0].SessionName)
+}
+
+type cancelAfterReplacementSyncStore struct {
+	*db.DB
+	cancel context.CancelFunc
+}
+
+func (s cancelAfterReplacementSyncStore) ReplaceSessionKeepingTrashedCopy(ctx context.Context, write db.SessionBatchWrite) (string, error) {
+	copyID, err := s.DB.ReplaceSessionKeepingTrashedCopy(ctx, write)
+	if err == nil {
+		s.cancel()
+	}
+	return copyID, err
+}
+
+func TestSyncClaudeAICancelledBranchSwitchRefetchesPreviousBranch(t *testing.T) {
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	d := testDB(t)
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	})
+	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	otherDetail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"other","parent_message_uuid":"root","sender":"assistant","text":"Other reply"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"other"`, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, err = SyncClaudeAI(ctx, cancelAfterReplacementSyncStore{d, cancel}, syncOneFetch(t, strings.Replace(syncSummary, "reply", "other", 1), func() (ClaudeAIResponse, error) {
+		return ClaudeAIResponse{Status: 200, Body: []byte(otherDetail)}, nil
+	}), nil)
+	require.ErrorIs(t, err, context.Canceled)
+	messages, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Hello", "Other reply"}, messageContents(messages))
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	messages, err = d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
 }
 
 func TestSyncClaudeAIBranchSwitch(t *testing.T) {
