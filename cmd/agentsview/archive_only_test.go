@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 func TestArchiveOnlyRefusesReceivingHostOnRestart(t *testing.T) {
@@ -149,21 +150,9 @@ func ordinaryImportInputs(t *testing.T) map[string]string {
 		`"created_at":"2026-03-01T10:00:00.000000Z","updated_at":"2026-03-01T10:05:00.000000Z",`+
 		`"chat_messages":[{"uuid":"m1","text":"Imported","sender":"human",`+
 		`"content":[{"type":"text","text":"Imported"}],"created_at":"2026-03-01T10:00:00.000000Z"}]}]`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(chatGPT, "conversations-000.json"), []byte(`[{
-  "id":"cg-1","conversation_id":"cg-1","title":"Import",
-  "create_time":1706745600.0,"update_time":1706745660.0,
-  "current_node":"n1","mapping":{
-    "r":{"id":"r","parent":null,"children":["n1"],"message":null},
-    "n1":{"id":"n1","parent":"r","children":[],"message":{
-      "id":"m1","create_time":1706745600.0,
-      "author":{"role":"user","name":null,"metadata":{}},
-      "content":{"content_type":"multimodal_text","parts":["See this:",
-        {"content_type":"image_asset_pointer","asset_pointer":"file-service://file-img1"}]},
-      "status":"finished_successfully","metadata":{}}}
-  }
-}]`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(chatGPT, "file-img1-aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.png"),
-		[]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, 0o600))
+	for name, data := range testjsonl.ChatGPTImageExport() {
+		require.NoError(t, os.WriteFile(filepath.Join(chatGPT, name), []byte(data), 0o600))
+	}
 	require.NoError(t, os.WriteFile(filepath.Join(gemini, "activity.html"), []byte(`<!doctype html>
 <html><head><title>My Activity History</title></head><body>
 <div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>first prompt</p><p>first answer</p></div></div>
