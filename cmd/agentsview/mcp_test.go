@@ -376,9 +376,10 @@ func TestMCPDaemonCallRetryClassification(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			var failure error = &url.Error{Op: "Get", Err: io.EOF}
-			if outcome == "timeout" {
+			switch outcome {
+			case "timeout":
 				failure = &url.Error{Op: "Get", Err: context.DeadlineExceeded}
-			} else if outcome == "rejected" {
+			case "rejected":
 				failure = errors.New("HTTP 400: invalid search")
 			}
 			retry := outcome == "EOF read" || outcome == "refused"
