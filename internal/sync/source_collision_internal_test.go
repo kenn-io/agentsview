@@ -119,12 +119,14 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 		cachedLost  bool
 		batch       bool
 		lookupError bool
+		trashed     bool
 	}{
 		{name: "both in one pass", order: []int{0, 1}, batch: true},
 		{name: "both in one pass reversed", order: []int{1, 0}, batch: true},
 		{name: "A then B", order: []int{0, 1}},
 		{name: "B then A", order: []int{1, 0}},
 		{name: "ownership lookup fails", order: []int{0, 1}, lookupError: true},
+		{name: "trashed object", order: []int{0, 1}, trashed: true},
 		{name: "main dropped object", order: []int{0}, legacy: true},
 		{name: "main overwritten row", order: []int{1}, legacy: true},
 		{name: "main overwritten cached row", order: []int{1}, legacy: true, cachedLost: true},
@@ -273,9 +275,19 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				assert.Equal(t, []string{baseID}, stars)
 			}
 			before := fetches.Load()
+			if tt.trashed {
+				require.NoError(t, database.SoftDeleteSession(t.Context(), ids[1]))
+			}
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 			require.Zero(t, stats.Failed)
 			assert.Equal(t, before, fetches.Load(), "unchanged objects must stay behind the cutoff")
+			if tt.trashed {
+				stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+				require.Zero(t, stats.Failed)
+				assert.Equal(t, before, fetches.Load(), "trashed objects must stay behind the cutoff on the second pass")
+				assert.True(t, database.IsSessionTrashed(t.Context(), ids[1]))
+				return
+			}
 			stats = engine.SyncAll(t.Context(), nil)
 			require.Zero(t, stats.Failed)
 			assert.Equal(t, before, fetches.Load(), "unchanged objects must not download without a cutoff")

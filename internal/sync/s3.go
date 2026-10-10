@@ -273,8 +273,7 @@ func (e *Engine) processS3Session(
 			if !e.forceParseRequested(file) && !sourceChanged &&
 				e.shouldSkipFileWithPrefix(ctx,
 					"", fullID, sourceInfo, sourceFingerprint,
-				) &&
-				e.db.GetSessionFilePath(ctx, fullID) == file.Path {
+				) {
 				sess, _ := e.db.GetSession(ctx, fullID)
 				if sess != nil &&
 					sess.Project != "" &&

@@ -121,8 +121,7 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(ctx context.Context,
 	if sessionID == "" {
 		return false
 	}
-	storedPath := e.db.GetSessionFilePath(ctx, sessionID)
-	if storedPath == "" || storedPath != file.Path {
+	if !parser.SharesSessionIDs(file.Agent) && e.db.GetSessionFilePath(ctx, sessionID) != file.Path {
 		return true
 	}
 	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(ctx, sessionID)
@@ -144,12 +143,14 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(ctx context.Context,
 // Shared-ID sources must compare metadata with the row owned by this object.
 func (e *Engine) s3StoredSessionID(ctx context.Context, file parser.DiscoveredFile, p parser.S3Provider) (string, error) {
 	if parser.SharesSessionIDs(file.Agent) {
-		ids, err := e.db.ListSessionIDsByFilePath(ctx, file.Path, string(file.Agent))
+		records, err := e.db.ListSessionPathRecords(ctx, s3DiscoveredSessionIDWithProvider(file, p))
 		if err != nil {
 			return "", err
 		}
-		if len(ids) > 0 {
-			return ids[0], nil
+		for _, r := range records {
+			if !r.Excluded && r.FilePath == file.Path {
+				return r.ID, nil
+			}
 		}
 		return "", nil
 	}

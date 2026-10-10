@@ -1957,10 +1957,9 @@ schemas keep their existing ordering behavior.
   archive reconciliation fixture. The official support post linked above still
   documents the `agent-transcripts` location; the history documentation link
   now redirects to the Agent overview.
-  Reverified 2026-10-10 against the support post and synthetic S3 fixtures:
-  discovery preserves same-ID sources in different projects, and sync applies
-  the local collision policy, including continuation relationships.
-  These are archive policies, not producer
+  Synthetic S3 fixtures verify that discovery preserves same-ID sources in
+  different projects and sync applies the local collision policy, including
+  continuation relationships. These are archive policies, not producer
   guarantees of globally unique IDs.
 
 ## Cursor IDE (`cursor-ide`)
