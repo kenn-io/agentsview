@@ -17,9 +17,9 @@ func TestArchiveOnlyPreservesPendingRebuild(t *testing.T) {
 		wantRaw     int
 		stale       bool
 	}{
-		{"pending archive", 127, true, 1048703, true},
-		{"current archive", 128, true, 1048704, false},
-		{"ordinary upgrade", 128, false, 128, false},
+		{"pending archive", dataVersion - 1, true, (1 << 20) + dataVersion - 1, true},
+		{"current archive", dataVersion, true, (1 << 20) + dataVersion, false},
+		{"ordinary archive", dataVersion, false, dataVersion, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -43,7 +43,7 @@ func TestArchiveOnlyPreservesPendingRebuild(t *testing.T) {
 			assert.Equal(t, tc.wantRaw, raw)
 			if tc.archiveOnly {
 				require.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
-				assert.Greater(t, raw, 128, "the pre-merge reader rejects user_version above 128")
+				assert.Greater(t, raw, dataVersion, "readers without archive-only support reject the encoded version")
 			} else {
 				assert.NoError(t, reopened.RequireSourceSync(ctx))
 			}
@@ -67,5 +67,5 @@ func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
 	require.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
 	var raw int
 	require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
-	assert.Equal(t, 1048704, raw)
+	assert.Equal(t, (1<<20)+dataVersion, raw)
 }
