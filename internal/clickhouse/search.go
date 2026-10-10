@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -229,10 +230,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		return s.searchContentSemantic(ctx, f)
 	}
 	if len(f.Sources) == 0 {
-		f.Sources = []string{"messages", "tool_input", "tool_result"}
+		f.Sources = db.ContentSearchSources
 	}
 	for _, source := range f.Sources {
-		if source != "messages" && source != "tool_input" && source != "tool_result" {
+		if !slices.Contains(db.ContentSearchSources, source) {
 			return db.ContentSearchPage{},
 				&db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 		}
@@ -307,18 +308,36 @@ func (s *Store) collectContentSubstringMatches(
 			if f.ExcludeSystem {
 				sysPred = embeddableMessagePredicate("m")
 			}
-			contentPred := addSearchArgs("m.content")
+			// FTS mode keeps matching full content, as SQLite's FTS index does.
+			body := db.MessageDialogueSQL("m")
+			if f.Mode == "fts" {
+				body = "m.content"
+			}
+			contentPred := addSearchArgs(body)
 			branches = append(branches, `
 				SELECT m.session_id AS session_id, s.project AS project, s.agent AS agent,
 					'message' AS location, m.role AS role, '' AS tool_name, m.ordinal AS ordinal,
 					m.timestamp AS ts,
-					m.content AS body,
+					`+body+` AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 					0 AS src, m.id AS row_id,
 					toInt64(0) AS call_index, toInt64(0) AS event_index
 				FROM messages m JOIN sessions s ON s.id = m.session_id
 				WHERE `+contentPred+`
 					AND `+sysPred+`
+					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
+		case "thinking":
+			thinkingPred := addSearchArgs("m.thinking_text")
+			branches = append(branches, `
+				SELECT m.session_id AS session_id, s.project AS project, s.agent AS agent,
+					'thinking' AS location, m.role AS role, '' AS tool_name, m.ordinal AS ordinal,
+					m.timestamp AS ts,
+					m.thinking_text AS body,
+					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+					4 AS src, m.id AS row_id,
+					toInt64(0) AS call_index, toInt64(0) AS event_index
+				FROM messages m JOIN sessions s ON s.id = m.session_id
+				WHERE `+thinkingPred+`
 					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
 		case "tool_input":
 			inputPred := addSearchArgs("tc.input_json")
@@ -446,7 +465,7 @@ func (s *Store) collectContentSource(
 	case "messages":
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
 			m.role, '', m.ordinal, m.timestamp,
-			m.content,
+			` + db.MessageDialogueSQL("m") + `,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 			0 AS src, m.id AS row_id,
 			toInt64(0) AS call_index, toInt64(0) AS event_index
@@ -456,6 +475,17 @@ func (s *Store) collectContentSource(
 			query += " AND " + embeddableMessagePredicate("m")
 		}
 		query += " ORDER BY m.session_id, m.ordinal, m.id"
+	case "thinking":
+		query = `SELECT m.session_id, s.project, s.agent, 'thinking',
+			m.role, '', m.ordinal, m.timestamp,
+			m.thinking_text,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+			4 AS src, m.id AS row_id,
+			toInt64(0) AS call_index, toInt64(0) AS event_index
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE m.thinking_text != ''
+				AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
+			ORDER BY m.session_id, m.ordinal, m.id`
 	case "tool_input":
 		query = `SELECT tc.session_id, s.project, s.agent, 'tool_input',
 			'assistant', tc.tool_name, m.ordinal, m.timestamp,

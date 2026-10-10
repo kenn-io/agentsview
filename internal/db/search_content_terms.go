@@ -119,7 +119,7 @@ func BuildTermsSearchSQL(
 			  AND m.session_id IN (
 				SELECT session_id FROM messages
 				WHERE session_id IN (SELECT id FROM scoped)
-				  AND ` + b.ContainsPredicate("content", term) + ")")
+				  AND ` + b.DialogueContainsPredicate("", term) + ")")
 	}
 	predicates := make([]string, 0, len(terms)+1)
 	for _, term := range terms {
@@ -141,7 +141,7 @@ func BuildTermsSearchSQL(
 				COALESCE(s.transcript_revision,'') AS transcript_revision,
 				COALESCE(s.relationship_type,'') AS relationship_type,
 				COALESCE(s.parent_session_id,'') AS parent_session_id,
-				m.role, m.ordinal, %s AS ts, m.content, m.is_sidechain,
+				m.role, m.ordinal, %s AS ts, %s AS content, m.is_sidechain,
 				%s AS sort_ts,
 				CASE WHEN m.is_sidechain = %s OR %s
 					THEN %s ELSE %s END AS subordinate,
@@ -177,7 +177,7 @@ func BuildTermsSearchSQL(
 		WHERE %s
 		ORDER BY subordinate ASC, %s, session_id ASC, start_ordinal ASC
 		LIMIT %s OFFSET %s`,
-		where, frag.timestamp, frag.sessionSort,
+		where, frag.timestamp, MessageDialogueSQL("m"), frag.sessionSort,
 		dialect.trueLiteral, SubordinateSessionSQL("s"),
 		dialect.trueLiteral, dialect.falseLiteral,
 		dialect.falseLiteral, frag.systemPrefix("m.content", "m.role"),

@@ -107,7 +107,7 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.BoolVar(&useHybrid, "hybrid", false,
 		"Hybrid semantic + full-text search (reciprocal rank fusion)")
 	flags.StringVar(&in, "in", "",
-		"Comma-separated sources: messages,tool_input,tool_result (default all)")
+		"Comma-separated sources: messages,thinking,tool_input,tool_result (default all)")
 	flags.BoolVar(&excludeSystem, "exclude-system", false,
 		"Exclude system messages (included by default)")
 	flags.BoolVar(&reveal, "reveal", false, "Show full secret values (unredacted)")

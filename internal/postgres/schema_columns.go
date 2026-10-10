@@ -357,6 +357,11 @@ func schemaColumnMigrations() []columnMigration {
 			"adding messages.thinking_text",
 		},
 		{
+			"messages", "dialogue_text",
+			`dialogue_text TEXT`,
+			"adding messages.dialogue_text",
+		},
+		{
 			"sessions", "termination_status",
 			`termination_status TEXT`,
 			"adding sessions.termination_status",

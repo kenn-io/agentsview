@@ -710,7 +710,7 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string `json:"pattern" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text and tool inputs/results."`
+	Pattern          string `json:"pattern" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text, reasoning, and tool inputs/results."`
 	Mode             string `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
 	Scope            string `json:"scope,omitempty" jsonschema:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)."`
 	Project          string `json:"project,omitempty" jsonschema:"Restrict to one project."`
@@ -755,7 +755,7 @@ type contentMatch struct {
 	SessionID       string   `json:"session_id"`
 	Project         string   `json:"project,omitempty"`
 	Agent           string   `json:"agent"`
-	Location        string   `json:"location" jsonschema:"Where the match occurred: one of message, tool_input, or tool_result."`
+	Location        string   `json:"location" jsonschema:"Where the match occurred: one of message, thinking, tool_input, or tool_result."`
 	Role            string   `json:"role,omitempty"`
 	Ordinal         int      `json:"ordinal"`
 	Timestamp       string   `json:"timestamp"`

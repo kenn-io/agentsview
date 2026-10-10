@@ -20,7 +20,7 @@ const diffDeleteChunkSize = 500
 func messageInsertArgs(m Message) []any {
 	return []any{
 		m.SessionID, m.Ordinal, m.Role, m.Content,
-		m.ThinkingText,
+		m.ThinkingText, m.DialogueText,
 		m.Timestamp, m.HasThinking, m.HasToolUse,
 		m.ContentLength, m.IsSystem,
 		m.Model, m.ReasoningEffort, string(m.TokenUsage),
@@ -65,7 +65,8 @@ func messageRowEqual(a, b Message) bool {
 		a.PromptSource != b.PromptSource || a.SourceUUID != b.SourceUUID ||
 		a.SourceParentUUID != b.SourceParentUUID ||
 		a.IsSidechain != b.IsSidechain ||
-		a.IsCompactBoundary != b.IsCompactBoundary {
+		a.IsCompactBoundary != b.IsCompactBoundary ||
+		!equalOptional(a.DialogueText, b.DialogueText) {
 		return false
 	}
 
@@ -454,4 +455,8 @@ func placeholderList(n int) string {
 	return strings.TrimSuffix(
 		strings.Repeat("?,", n), ",",
 	)
+}
+
+func equalOptional(a, b *string) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }

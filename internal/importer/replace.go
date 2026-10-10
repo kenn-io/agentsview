@@ -121,6 +121,7 @@ func claudeAIMessages(
 			Ordinal:       m.Ordinal,
 			Role:          string(m.Role),
 			Content:       m.Content,
+			HasThinking:   m.HasThinking,
 			Timestamp:     m.Timestamp.UTC().Format(time.RFC3339Nano),
 			ContentLength: m.ContentLength,
 		}

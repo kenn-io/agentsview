@@ -311,53 +311,27 @@ func TestSessionAliasBackfillForcesOneFullPush(t *testing.T) {
 	assert.False(t, needed)
 }
 
-func TestTranscriptRevisionBackfillForcesOneFullPush(t *testing.T) {
+func TestBackfillMarkerForcesOneFullPush(t *testing.T) {
 	store := &syncStateStoreStub{}
+	const key = "test_backfill_v1"
 
-	full, needed, err := applyTranscriptRevisionBackfillRequirement(
-		t.Context(), store, false,
-	)
+	full, needed, err := applyBackfillRequirement(t.Context(), store, key, false)
 	require.NoError(t, err)
 	assert.True(t, full)
 	assert.True(t, needed)
 
-	require.NoError(t, markTranscriptRevisionBackfillDone(t.Context(), store))
-	full, needed, err = applyTranscriptRevisionBackfillRequirement(
-		t.Context(), store, false,
-	)
+	require.NoError(t, completeBackfill(
+		t.Context(), store, key, needed, storage.PushResult{Errors: 1},
+	))
+	assert.Empty(t, store.values[key], "a push with errors retries")
+
+	require.NoError(t, completeBackfill(
+		t.Context(), store, key, needed, storage.PushResult{},
+	))
+	full, needed, err = applyBackfillRequirement(t.Context(), store, key, false)
 	require.NoError(t, err)
 	assert.False(t, full)
 	assert.False(t, needed)
-}
-
-func TestTimestampNormalizationBackfillForcesOneFullPush(t *testing.T) {
-	store := &syncStateStoreStub{}
-
-	full, needed, err := applyTimestampNormalizationBackfillRequirement(t.Context(),
-		store, false,
-	)
-	require.NoError(t, err)
-	assert.True(t, full)
-	assert.True(t, needed)
-
-	require.NoError(t, completeTimestampNormalizationBackfill(
-		t.Context(), store, needed, storage.PushResult{},
-	))
-	full, needed, err = applyTimestampNormalizationBackfillRequirement(
-		t.Context(), store, false,
-	)
-	require.NoError(t, err)
-	assert.False(t, full)
-	assert.False(t, needed)
-}
-
-func TestTimestampNormalizationBackfillRetriesAfterPushErrors(t *testing.T) {
-	store := &syncStateStoreStub{}
-
-	require.NoError(t, completeTimestampNormalizationBackfill(t.Context(),
-		store, true, storage.PushResult{Errors: 1},
-	))
-	assert.Empty(t, store.values[timestampNormalizationBackfillStateKey])
 }
 
 func TestCompleteSessionAliasBackfillMarksDoneUnlessErrors(t *testing.T) {

@@ -15,7 +15,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -36,6 +36,7 @@ const (
 	cursorUsageMaxIDKeyBase    = "agentsview_cursor_usage_max_id"
 	usageSnapshotReadyKeyBase  = "agentsview_usage_snapshot_ready"
 	storedCountRepairKeyBase   = "agentsview_stored_message_count_repair"
+	dialogueBackfillKeyBase    = "agentsview_dialogue_backfill_v1"
 )
 
 // archiveMetadataKey scopes a sync_metadata key to one source archive so
@@ -238,6 +239,7 @@ var mirrorTables = []tableSpec{
 			col("role", tString),
 			col("content", tString),
 			col("thinking_text", tString),
+			col("dialogue_text", tNullString),
 			col("timestamp", tNullTime),
 			col("has_thinking", tBool),
 			col("has_tool_use", tBool),

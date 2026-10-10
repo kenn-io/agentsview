@@ -1248,15 +1248,16 @@ func insertMessages(
 		if _, err := exec.ExecContext(ctx, `
 			INSERT INTO messages (
 				id, session_id, ordinal, role, content, thinking_text,
+				dialogue_text,
 				timestamp, has_thinking, has_tool_use, content_length,
 				is_system, model, reasoning_effort, token_usage, context_tokens, output_tokens,
 				provider_id,
 				has_context_tokens, has_output_tokens, claude_message_id,
 				claude_request_id, source_type, source_subtype, prompt_source, source_uuid,
 				source_parent_uuid, is_sidechain, is_compact_boundary
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			m.ID, m.SessionID, m.Ordinal, m.Role, m.Content,
-			m.ThinkingText, timeValue(m.Timestamp),
+			m.ThinkingText, m.DialogueText, timeValue(m.Timestamp),
 			m.HasThinking, m.HasToolUse, m.ContentLength,
 			m.IsSystem, m.Model, m.ReasoningEffort, string(m.TokenUsage),
 			m.ContextTokens, m.OutputTokens, m.ProviderID,

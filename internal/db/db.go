@@ -567,7 +567,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // them.)
 // (127: reparse readable sources to classify headless workers as subagents.)
 // (128: reparse all sources to recover TraeX mutation rollouts and per-response usage.)
-const dataVersion = 128
+// (129: Messages store their dialogue without inline thinking blocks and tool
+// renderings, and inline-only reasoning is recorded as thinking text. Re-parse
+// so messages-only search excludes reasoning and tool calls.)
+const dataVersion = 129
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -2540,6 +2543,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"messages", "thinking_text",
 			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"messages", "dialogue_text",
+			"ALTER TABLE messages ADD COLUMN dialogue_text TEXT",
 		},
 		{
 			"messages", "provider_id",

@@ -118,7 +118,7 @@ func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
 			stored[i].ToolCalls[j].SessionID = ""
 		}
 	}
-	expected := toDBMessages(pendingWrite{sess: parser.ParsedSession{Agent: parser.AgentCodex}, msgs: msgs}, nil)
+	expected := db.DeriveSearchText(toDBMessages(pendingWrite{sess: parser.ParsedSession{Agent: parser.AgentCodex}, msgs: msgs}, nil))
 	for i := range expected {
 		for j := range expected[i].ToolCalls {
 			// Rendering is parser input to the write projection, not a stored field.

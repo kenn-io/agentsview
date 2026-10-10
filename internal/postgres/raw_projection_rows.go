@@ -149,6 +149,8 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET provenance_kind='raw',raw_group_id=$2,raw_content_revision=$3 WHERE id=$1`, id, group, revision); err != nil {
 		return err
 	}
+	// The payload round trip drops empty dialogue.
+	p.Messages = db.DeriveSearchText(p.Messages)
 	if err := bulkInsertMessages(ctx, tx, id, p.Messages); err != nil {
 		return err
 	}

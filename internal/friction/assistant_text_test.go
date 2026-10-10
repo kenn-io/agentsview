@@ -168,3 +168,8 @@ func TestAssistantText(t *testing.T) {
 		})
 	}
 }
+
+func TestInlineThinking(t *testing.T) {
+	content := "[Thinking]\nfirst\n[/Thinking]\nHi [Thinking]\nquoted\n[/Thinking]\n[Thinking]\nsecond\n[/Thinking]\n[Thinking]\nunclosed"
+	assert.Equal(t, "first\n\nsecond", InlineThinking(content))
+}

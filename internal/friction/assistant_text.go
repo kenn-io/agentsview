@@ -16,7 +16,13 @@ const (
 func AssistantText(
 	agent, content, thinking string, calls []RawToolCall, redacted bool,
 ) string {
-	text := stripThinking(content, thinking)
+	return StripToolRenderings(agent, StripThinking(content, thinking), calls, redacted)
+}
+
+// StripToolRenderings removes the rendering each call inlined into text.
+func StripToolRenderings(
+	agent, text string, calls []RawToolCall, redacted bool,
+) string {
 	if agent == "openhands" && len(calls) == 1 {
 		if at := openHandsSummaryStart(text, calls[0].ToolName); at >= 0 {
 			return removePart(text, at, len(text)-at)
@@ -141,9 +147,24 @@ func removePart(text string, at, n int) string {
 	return text[:at] + text[end:]
 }
 
-// stripThinking removes line-start thinking blocks whose close marker ends
+// InlineThinking joins the inner text of the thinking blocks StripThinking
+// removes when no thinking text is recorded.
+func InlineThinking(text string) string {
+	_, inner := cutThinking(text, "")
+	return inner
+}
+
+// StripThinking removes line-start thinking blocks whose close marker ends
 // a line. The inner text is matched against thinking when available.
-func stripThinking(text, thinking string) string {
+func StripThinking(text, thinking string) string {
+	stripped, _ := cutThinking(text, thinking)
+	return stripped
+}
+
+// cutThinking returns text without its thinking blocks and their joined
+// inner text.
+func cutThinking(text, thinking string) (string, string) {
+	var parts []string
 	for from := 0; from < len(text); {
 		i := strings.Index(text[from:], thinkingOpen)
 		if i < 0 {
@@ -159,10 +180,12 @@ func stripThinking(text, thinking string) string {
 			from = start + len(thinkingOpen)
 			continue
 		}
+		inner := start + len(thinkingOpen)
+		parts = append(parts, text[inner:max(end-len(thinkingClose), inner)])
 		text = removePart(text, start, end-start)
 		from = max(start-1, 0)
 	}
-	return text
+	return text, strings.Join(parts, "\n\n")
 }
 
 // blockEnd returns the end of the longest inner text found in thinking.

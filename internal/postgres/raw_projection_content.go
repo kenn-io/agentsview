@@ -184,9 +184,11 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 		out := map[string]any{}
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			// This transient projection marker adds no content to the existing
-			// normalized-content-v1 representation.
-			if !f.IsExported() || f.Name == "UsageAutomationProjected" {
+			// The projection marker and dialogue add no content to the existing
+			// normalized-content-v1 representation; dialogue is derived from
+			// hashed fields, and keys that change break pins.
+			if !f.IsExported() || f.Name == "UsageAutomationProjected" ||
+				f.Name == "DialogueText" {
 				continue
 			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)

@@ -77,3 +77,60 @@ func TestPushThinkingText_SanitizesNullAndInvalidUTF8(t *testing.T) {
 	assert.Equal(t, "planstep", msgs[0].ThinkingText,
 		"sanitize skipped?")
 }
+
+// TestPushCopiesStoredDialogue verifies push copies the dialogue SQLite
+// stored rather than deriving it again from the replica's copy.
+func TestPushCopiesStoredDialogue(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"dialogue-test-machine", true,
+		storage.PusherOptions{},
+	)
+	require.NoError(t, err, "creating sync")
+	defer ps.Close()
+
+	ctx := context.Background()
+	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
+
+	started := time.Now().UTC().Format(time.RFC3339)
+	first := "hello"
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: "dialogue-1", Project: "proj", Machine: "local", Agent: "pi",
+		FirstMessage: &first, StartedAt: &started, MessageCount: 2,
+	}), "upsert")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
+		SessionID: "dialogue-1", Ordinal: 0, Role: "user", Content: "hello",
+	}, {
+		SessionID: "dialogue-1", Ordinal: 1, Role: "assistant",
+		Content:      "[Thinking]\nplan\n[/Thinking]\nDone.\n[Pi tool]",
+		ThinkingText: "plan", HasThinking: true, HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolName: "pi_tool", Category: "Other", Rendering: "[Pi tool]",
+		}},
+	}}), "insert local messages")
+
+	_, err = ps.Push(ctx, false, nil)
+	require.NoError(t, err, "push")
+
+	var dialogue []*string
+	rows, err := ps.pg.QueryContext(ctx,
+		`SELECT dialogue_text FROM agentsview.messages
+		 WHERE session_id = 'dialogue-1' ORDER BY ordinal`)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var d *string
+		require.NoError(t, rows.Scan(&d))
+		dialogue = append(dialogue, d)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, dialogue, 2)
+	assert.Nil(t, dialogue[0])
+	require.NotNil(t, dialogue[1])
+	assert.Equal(t, "Done.", *dialogue[1])
+}

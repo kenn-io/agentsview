@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1158,10 +1159,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	}
 
 	if len(f.Sources) == 0 {
-		f.Sources = []string{"messages", "tool_input", "tool_result"}
+		f.Sources = db.ContentSearchSources
 	}
 	for _, source := range f.Sources {
-		if source != "messages" && source != "tool_input" && source != "tool_result" {
+		if !slices.Contains(db.ContentSearchSources, source) {
 			return db.ContentSearchPage{},
 				&db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 		}
@@ -1255,18 +1256,36 @@ func (s *Store) collectContentSubstringMatches(
 			if f.ExcludeSystem {
 				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 			}
-			contentPred := addSearchArgs("m.content")
+			// FTS mode keeps matching full content, as SQLite's FTS index does.
+			body := db.MessageDialogueSQL("m")
+			if f.Mode == "fts" {
+				body = "m.content"
+			}
+			contentPred := addSearchArgs(body)
 			branches = append(branches, `
 				SELECT m.session_id, s.project, s.agent, 'message' AS location,
 					m.role, '' AS tool_name, m.ordinal,
 					m.timestamp AS ts,
-					m.content AS body,
+					`+body+` AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 					0 AS src, COALESCE(m.id, 0) AS row_id,
 					0 AS call_index, 0 AS event_index
 				FROM messages m JOIN sessions s ON s.id = m.session_id
 				WHERE `+contentPred+`
 					AND `+sysPred+`
+					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
+		case "thinking":
+			thinkingPred := addSearchArgs("m.thinking_text")
+			branches = append(branches, `
+				SELECT m.session_id, s.project, s.agent, 'thinking' AS location,
+					m.role, '' AS tool_name, m.ordinal,
+					m.timestamp AS ts,
+					m.thinking_text AS body,
+					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+					4 AS src, COALESCE(m.id, 0) AS row_id,
+					0 AS call_index, 0 AS event_index
+				FROM messages m JOIN sessions s ON s.id = m.session_id
+				WHERE `+thinkingPred+`
 					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
 		case "tool_input":
 			inputPred := addSearchArgs("tc.input_json")
@@ -1446,20 +1465,36 @@ func (s *Store) collectContentSource(
 	args := append([]any{}, scopeArgs...)
 	switch source {
 	case "messages":
+		body := db.MessageDialogueSQL("m")
 		query = `SELECT m.session_id, s.project, s.agent, 'message',
 			m.role, '', m.ordinal, m.timestamp,
-			m.content,
+			` + body + `,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 			0 AS src, COALESCE(m.id, 0) AS row_id,
 			0 AS call_index, 0 AS event_index
 			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
 		if f.Mode != "regex" {
-			query += ` AND m.content ILIKE ? ESCAPE '\'`
+			query += ` AND ` + body + ` ILIKE ? ESCAPE '\'`
 			args = append(args, pattern)
 		}
 		if f.ExcludeSystem {
 			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+		}
+		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
+	case "thinking":
+		query = `SELECT m.session_id, s.project, s.agent, 'thinking',
+			m.role, '', m.ordinal, m.timestamp,
+			m.thinking_text,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+			4 AS src, COALESCE(m.id, 0) AS row_id,
+			0 AS call_index, 0 AS event_index
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE m.thinking_text <> ''
+				AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
+		if f.Mode != "regex" {
+			query += ` AND m.thinking_text ILIKE ? ESCAPE '\'`
+			args = append(args, pattern)
 		}
 		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
 	case "tool_input":
