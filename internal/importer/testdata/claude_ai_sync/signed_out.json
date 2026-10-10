@@ -1,0 +1,12 @@
+{
+  "type": "error",
+  "error": {
+    "type": "permission_error",
+    "message": "Invalid authorization",
+    "details": {
+      "error_visibility": "user_facing",
+      "error_code": "account_session_invalid"
+    }
+  },
+  "request_id": "req_example"
+}

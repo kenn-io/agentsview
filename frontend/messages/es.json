@@ -2462,5 +2462,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"La vista previa muestra {shownLabel} de {countLabel} byte.","countPlural=other":"La vista previa muestra {shownLabel} de {countLabel} bytes.","countPlural=many":"La vista previa muestra {shownLabel} de {countLabel} bytes."}}],
   "tool_sequences_full_input_in_message": "La entrada completa está en el mensaje {ordinal}.",
   "tool_sequences_full_result_in_message": "El resultado completo está en el mensaje {ordinal}.",
-  "tool_sequences_retry": "Reintentar"
+  "tool_sequences_retry": "Reintentar",
+  "import_claude_connect": "Iniciar sesión",
+  "import_claude_sync": "Sincronizar",
+  "import_claude_help": "Inicia sesión con un código de correo, cierra la ventana y pulsa Sincronizar. El inicio de sesión con Google necesita un host de navegador.",
+  "import_claude_auth_required": "Inicia sesión en Claude.ai y vuelve a sincronizar."
 }

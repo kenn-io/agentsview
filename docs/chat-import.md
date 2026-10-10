@@ -68,6 +68,20 @@ The dialog shows a summary when finished — for example,
 "5 conversations processed (4 new, 1 updated)". The session
 list refreshes automatically.
 
+## Sync in the desktop app
+
+With the desktop app connected to its local archive, open **Import conversations**, select **Claude.ai**, and click **Sign in**. Sign in to Claude.ai with an email code, close the window to hide it, then click **Sync** to download your chats. Google sign-in needs a browser host, which a later release can add beside the desktop window.
+
+Sync checks every chat, including archived chats. It fetches new chats and chats whose `updated_at` or visible leaf changed. Sync also refetches chats touched by a zip import. Resync clears freshness, so the next Sync fetches each chat once. Search stays available during Sync.
+
+Changed chats show Claude.ai's visible branch, even when it has fewer turns. Usage-only archives update their counts to match that branch. If a replacement loses a pin or note, Sync keeps the previous version in Trash with its pins and notes. Replacements that preserve every pin and note make no copy. Switching back on Claude.ai restores those turns, but dropped pins and notes stay in the Trash copy. Trashed and permanently deleted chats stay deleted.
+
+Each chat has a 32 MiB response limit. Larger chats count as failed while Sync continues. An expired sign-in or two chat failures in a row ends Sync. Closing the dialog cancels it. Completed chats stay imported, and the next Sync fetches unfinished chats.
+
+Sign-in persists across app restarts. To sign out, open **Sign in** and use Claude.ai's own log-out menu. Credentials stay inside that window's browser. Sync requires the desktop app and a local connection; file imports remain available in the web UI.
+
+Claude.ai's private endpoints can change without notice. Sign in again if Sync reports that your sign-in expired.
+
 ## Importing via the CLI
 
 Use `agentsview import` to import from the command line:

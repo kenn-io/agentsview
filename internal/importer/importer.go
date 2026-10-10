@@ -44,6 +44,7 @@ type ImportRefusal struct {
 
 // ImportCallbacks provides optional progress reporting.
 type ImportCallbacks struct {
+	SerializeWrite func(func() error) error
 	// OnProgress fires after each conversation with current
 	// cumulative counts; Refusals is always left empty.
 	OnProgress func(ImportStats)
@@ -263,6 +264,13 @@ func upsertConversation(
 	}
 	db.ApplyParsedSessionIdentity(&sess, s)
 
+	if freshness, ok := store.(interface {
+		DeleteProviderStatHash(context.Context, parser.AgentType, string) error
+	}); ok && s.Agent == parser.AgentClaudeAI {
+		if err := freshness.DeleteProviderStatHash(ctx, parser.AgentClaudeAI, s.ID); err != nil {
+			return importNew, fmt.Errorf("clearing Claude.ai freshness: %w", err)
+		}
+	}
 	if err := store.UpsertSession(ctx, sess); err != nil {
 		if errors.Is(err, db.ErrSessionExcluded) {
 			return importSkipped, nil

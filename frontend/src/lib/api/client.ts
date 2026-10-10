@@ -16,6 +16,7 @@ import {
 } from "./generated/index.js";
 import { ApiError, getAuthToken, getGeneratedBase, isRemoteConnection } from "./runtime.js";
 import { reportTelemetry } from "../utils/telemetry.js";
+import type { BrowserHost } from "./browserHost.js";
 
 export interface SyncHandle {
   abort: () => void;
@@ -354,18 +355,74 @@ export interface ImportCallbacks {
   onIndexing?: () => void;
 }
 
-async function readImportResponse(response: Response, cb?: ImportCallbacks): Promise<ImportStats> {
+async function readImportResponse(
+  response: Response,
+  cb?: ImportCallbacks,
+  onFetch?: (id: string, path: string) => void,
+): Promise<ImportStats> {
   if (!response.headers.get("content-type")?.includes("text/event-stream")) return response.json();
   return consumeEvents<ImportStats>(
     response,
     ({ event, data }) => {
+      if (event === "fetch") {
+        const request = JSON.parse(data);
+        onFetch?.(request.id, request.path);
+      }
       if (event === "progress") cb?.onProgress?.(JSON.parse(data));
       if (event === "indexing") cb?.onIndexing?.();
       if (event === "done") return JSON.parse(data);
-      if (event === "error") throw new Error(JSON.parse(data).error ?? "Import failed");
+      if (event === "error") {
+        const failure = JSON.parse(data);
+        throw new ApiError(response.status, failure.error ?? "Import failed", failure.code);
+      }
     },
     "Import stream ended without result",
   );
+}
+
+export async function syncClaudeAI(
+  host: BrowserHost,
+  cb?: ImportCallbacks,
+  signal?: AbortSignal,
+): Promise<ImportStats> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    const response = await ImportService.postApiV1ImportClaudeAiSync({ signal: controller.signal });
+    let fail: (error: unknown) => void = () => {};
+    const failed = new Promise<never>((_, reject) => {
+      fail = reject;
+    });
+    const result = readImportResponse(
+      response,
+      cb,
+      (id, path) => {
+        void (async () => {
+          let fetched;
+          try {
+            fetched = await host.fetch(path);
+          } catch (error) {
+            fetched = { status: 0, body: "", error: String(error) };
+          }
+          if (controller.signal.aborted) return;
+          await ImportService.postApiV1ImportClaudeAiSyncResultsById(
+            { id },
+            { status: fetched.status, body: fetched.body, retry_after: fetched.retryAfter, error: fetched.error },
+            { signal: controller.signal },
+          );
+        })().catch((error) => {
+          fail(error);
+          abort();
+        });
+      },
+    );
+    return await Promise.race([result, failed]);
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    abort();
+  }
 }
 
 export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<ImportStats> {

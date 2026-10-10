@@ -91,6 +91,13 @@ func (ci conversationImport) importConversation(
 	if !ok {
 		return importNew, fmt.Errorf("replace needs a local archive: %w", refused)
 	}
+	if freshness, ok := store.(interface {
+		DeleteProviderStatHash(context.Context, parser.AgentType, string) error
+	}); ok && ci.agent == parser.AgentClaudeAI {
+		if err := freshness.DeleteProviderStatHash(ctx, ci.agent, result.Session.ID); err != nil {
+			return importNew, fmt.Errorf("clearing Claude.ai freshness: %w", err)
+		}
+	}
 	fts.suspend(ctx)
 	// chatGPTSession builds the same row both upserts write.
 	_, err = r.ReplaceSessionKeepingTrashedCopy(ctx, db.SessionBatchWrite{

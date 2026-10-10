@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "claude-auth",
+  "description": "Claude.ai fetch results from the sign-in window",
+  "local": false,
+  "remote": { "urls": ["https://claude.ai/*"] },
+  "windows": ["claude-auth"],
+  "permissions": ["allow-claude-auth-fetch-result"]
+}

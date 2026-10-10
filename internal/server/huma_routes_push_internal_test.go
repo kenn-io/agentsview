@@ -456,9 +456,18 @@ func TestDuckDBPushSyncOptionsPassesThroughProjectFilters(t *testing.T) {
 func TestSyncRemotesRouteIsStreaming(t *testing.T) {
 	s := testServer(t, 30)
 	spec := readOpenAPISpec(t, s.Handler())
-	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/sync/remotes")
-	require.Contains(t, op.Responses, "200")
-	assertStreamingResponseContent(t, op.Responses["200"].Content)
+	for _, path := range []string{"/api/v1/sync/remotes", "/api/v1/import/claude-ai/sync"} {
+		t.Run(path, func(t *testing.T) {
+			op := requireOpenAPIOperation(t, spec, "post", path)
+			require.Contains(t, op.Responses, "200")
+			if path == "/api/v1/import/claude-ai/sync" {
+				assert.Len(t, op.Responses["200"].Content, 1)
+				assert.Contains(t, op.Responses["200"].Content, "text/event-stream")
+			} else {
+				assertStreamingResponseContent(t, op.Responses["200"].Content)
+			}
+		})
+	}
 }
 
 // TestPushRoutesAreStreaming pins that both push routes negotiate SSE (the

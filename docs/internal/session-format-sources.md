@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-02
+last_edited: 2026-10-07
 ---
 
 # Session Format Source Inventory
@@ -2785,8 +2785,54 @@ schemas keep their existing ordering behavior.
   publish its complete JSON schema.
 - **Usage and cost:** The export contains conversation content and timestamps,
   not authoritative token, cache, reasoning, credit, or USD accounting.
-- **Agentsview:** `internal/parser/claude_ai.go`; this is an import format, not
-  a live application session store.
+- **Agentsview:** `internal/parser/claude_ai.go` parses exports;
+  `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
+- **Desktop sync:** The browser reads organizations, paginated conversation
+  summaries, and selected conversation trees from Claude.ai's private API.
+  Request shapes are shared by Go and Rust in
+  `internal/importer/claude_ai_requests.txt`. Lists use `data` and `has_more`
+  and include active, archived, and starred chats.
+  Details select `current_leaf_message_uuid` and follow string
+  `parent_message_uuid` links to the root sentinel
+  `00000000-0000-4000-8000-000000000000`. Message text comes from
+  `content[].text` and thinking blocks.
+  Malformed selected paths and mismatched conversation UUIDs fail before writes.
+  Exports preserve their original message order.
+- **Freshness:** Sync stores an FNV-64a hash of the detail's `updated_at` and visible leaf in `provider_freshness`, keyed by `claude-ai` and session ID. Resync and `ResetAllMtimes` clear it. Zip imports clear the chat's hash so the next Sync refetches it. Sync always clears the chat's hash inside the serialized write, so interrupted writes force a refetch even when initial imports overlap. Freshness write failures are logged and allow a later refetch. Metadata-only Sync updates bump `local_modified_at` for incremental mirror pushes. Sync stores messages in the same shape as zip import, without source UUIDs. Pins match by role, text, and occurrence rank. Overlapping initial imports and post-commit cancellation reverified 2026-10-10 with `TestSyncClaudeAICancelledBranchSwitchRefetchesPreviousBranch`. Reverified 2026-10-09 against the reconstructed list and detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIDetailNewerThanListCachesDetail`, `TestSyncClaudeAIBranchSwitch`, `TestSyncClaudeAICancelledBranchSwitchRefetchesPreviousBranch`, and `TestSyncClaudeAIMetadataUpdateEntersMirrorWindow`. Shorter zip exports remain refused. Closing the Sign-in window hides it for reuse. See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for branch updates and Trash copies.
+- **Limits:** Browser reads and decoded relay responses are capped at 32 MiB. The JSON relay body allows twice that size plus 64 KiB for escaping and metadata. Detail 404
+  responses count as skipped; 401 or `error.details.error_code` equal to
+  `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
+  Other detail failures stop Sync after two chats fail in a row. Unchanged and
+  skipped chats, successful writes, 404s, and oversized responses reset the
+  streak. See
+  [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for failure handling.
+  Organization responses must decode to an array; null and other shapes fail.
+  Organization and list failures, cancellation, and an empty page with
+  `has_more: true` stop Sync. Null and root-sentinel list leaves skip detail
+  fetches; absent or malformed leaves count toward the two-failure stop.
+  Reverified 2026-10-09 against the reconstructed fixtures and
+  `TestSyncClaudeAIFailureStreak`. Usage-only Sync replaces
+  shorter selected branches through the replacement writer, with a Trash copy
+  when a pin or note is lost;
+  `TestSyncClaudeAIUsageArchiveShorterBranchReplacesCounts` covers repeat Sync.
+- **Observed 2026-10-07:** Authenticated Team and personal account checks
+  found `current_leaf_message_uuid` on list items and byte-identical list and
+  detail `updated_at` values with microseconds. Branch switches changed the
+  leaf without changing that timestamp. `archived=false` returned active chats,
+  `archived=true` returned archived chats, and omitting it returned both.
+  [List](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_sync/list_all.json)
+  and [detail](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_sync/detail.json)
+  are sanitized reconstructions of observed fields with synthetic identities
+  and content.
+- **Observed 2026-10-08:** With `render_all_tools=true`, an artifact's file
+  text arrived only in `tool_use(create_file).input.file_text`. Its
+  `tool_result` and `Artifact` blocks held creation and publication status.
+  The importer, like zip import on main, stores text and thinking blocks only.
+  Signed-out organization, list, and detail requests returned HTTP 403 with
+  `error.details.error_code` equal to `account_session_invalid`.
+- **Evidence limits:** Existing selected-path and Sync fixtures cover these
+  shapes. Multiple chat organizations, web-search blocks, unanswered final
+  prompts, and tree fields in official exports still need live verification.
 
 ## ChatGPT Export (`chatgpt`)
 

@@ -6,7 +6,11 @@
   import {
     importClaudeAI,
     importChatGPT,
+    syncClaudeAI,
   } from "../../api/client.js";
+  import { getBrowserHost } from "../../api/browserHost.js";
+  import { sync as syncState } from "../../stores/sync.svelte.js";
+  import { ApiError, isRemoteConnection } from "../../api/runtime.js";
   import {
     FileCheckIcon,
     FileIcon,
@@ -27,13 +31,6 @@
     onimported,
   }: Props = $props();
 
-  type ImportResult = {
-    imported: number;
-    updated: number;
-    skipped: number;
-    errors: number;
-  };
-
   let fileInput: HTMLInputElement | undefined = $state();
   let selectedFile = $state<File | null>(null);
   let provider: "claude-ai" | "chatgpt" =
@@ -41,12 +38,46 @@
   let importing = $state(false);
   let dragOver = $state(false);
   let dragCount = $state(0);
-  let result = $state<ImportResult | null>(null);
+  let result = $state<ImportStats | null>(null);
   let error = $state<string | null>(null);
   let phase = $state<"importing" | "indexing">(
     "importing",
   );
   let progressStats = $state<ImportStats | null>(null);
+  const host = getBrowserHost();
+  let syncController = $state<AbortController>();
+  const canSync = $derived(open && provider === "claude-ai" && !!host && !isRemoteConnection() && !syncState.readOnly);
+
+  async function connect() {
+    try { if (host) await host.connect(); }
+    catch (e) { error = String(e); }
+  }
+
+  async function sync() {
+    if (!host || importing) return;
+    importing = true;
+    error = null;
+    result = null;
+    phase = "importing";
+    progressStats = null;
+    const controller = new AbortController();
+    syncController = controller;
+    try {
+      const stats = await syncClaudeAI(host, { onProgress: (stats) => { progressStats = stats; } }, controller.signal);
+      if (!controller.signal.aborted) result = stats;
+    } catch (e) {
+      if (controller.signal.aborted) return;
+      error = e instanceof Error ? e.message : m.import_failed();
+      if (e instanceof ApiError && e.code === "claude_ai_auth_required") {
+        error = m.import_claude_auth_required();
+      }
+    }
+    finally {
+      importing = false;
+      syncController = undefined;
+      onimported();
+    }
+  }
 
   const fileSize = $derived(
     selectedFile
@@ -180,7 +211,8 @@
   }
 
   function handleClose() {
-    if (importing) return;
+    if (importing && !syncController) return;
+    syncController?.abort();
     selectedFile = null;
     result = null;
     error = null;
@@ -217,7 +249,7 @@
       label={m.import_cancel()}
       tone="neutral"
       surface="outline"
-      disabled={importing}
+      disabled={importing && !syncController}
       onclick={handleClose}
     />
     <Button
@@ -236,8 +268,8 @@
     closeLabel={m.import_close()}
     width="460px"
     maxWidth="min(460px, 92vw)"
-    closable={!importing}
-    closeOnOverlayClick={!importing}
+    closable={!importing || !!syncController}
+    closeOnOverlayClick={!importing || !!syncController}
     onclose={handleClose}
     footer={actions}
   >
@@ -313,6 +345,12 @@
           {m.import_hint_chatgpt({ zip: ".zip" })}
         {/if}
       </p>
+
+      {#if canSync}
+        <Button label={m.import_claude_connect()} tone="info" surface="outline" disabled={importing} onclick={connect} />
+        <Button label={m.import_claude_sync()} tone="info" surface="outline" disabled={importing} onclick={sync} />
+        <p class="hint">{m.import_claude_help()}</p>
+      {/if}
 
       <!-- ── Drop zone ── -->
       {#if importing}

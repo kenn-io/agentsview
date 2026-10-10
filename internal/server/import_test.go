@@ -2,15 +2,19 @@ package server
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json/v2"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -19,6 +23,140 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
 )
+
+func readImportEvents(t *testing.T, body io.Reader, handle func(string, string) bool) {
+	t.Helper()
+	scanner := bufio.NewScanner(body)
+	event := ""
+	terminal := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if value, ok := strings.CutPrefix(line, "event: "); ok {
+			event = value
+		}
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			if !handle(event, data) {
+				return
+			}
+			terminal = terminal || event == "done" || event == "error"
+		}
+	}
+	require.NoError(t, scanner.Err())
+	require.True(t, terminal, "import stream must finish with done or error")
+}
+
+func claudeAIRelayBody(t *testing.T, status int, body, retryAfter string) io.Reader {
+	t.Helper()
+	payload := map[string]any{"status": status, "body": body, "retry_after": retryAfter}
+	if status == 0 {
+		payload["body"], payload["error"] = "", body
+	}
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return bytes.NewReader(data)
+}
+
+func startClaudeAISyncRelay(t *testing.T, ctx context.Context, srv *Server) (string, io.Reader) {
+	t.Helper()
+	httpServer := httptest.NewServer(srv.mux)
+	t.Cleanup(httpServer.Close)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
+	return httpServer.URL, response.Body
+}
+
+func answerClaudeAIFetch(t *testing.T, serverURL, id string, status int, body, retryAfter string) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, serverURL+"/api/v1/import/claude-ai/sync/results/"+id, claudeAIRelayBody(t, status, body, retryAfter))
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, response.Body.Close()) }()
+	require.Equal(t, http.StatusNoContent, response.StatusCode)
+}
+
+func TestClaudeAISyncRelay(t *testing.T) {
+	for _, tt := range []struct {
+		name, body, wantError string
+		status                int
+		wantCalls             int
+	}{
+		{name: "Retry-After in JSON", status: 429, wantCalls: 2},
+		{name: "unauthorized", status: 401, body: "{}", wantCalls: 1, wantError: `{"error":"Sign in to Claude.ai, then Sync again","code":"claude_ai_auth_required"}`},
+		{name: "browser failure", status: 0, body: "TypeError: Failed to fetch", wantCalls: 1, wantError: `{"error":"TypeError: Failed to fetch"}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			serverURL, body := startClaudeAISyncRelay(t, t.Context(), srv)
+			calls := 0
+			gotError := false
+			started := time.Now()
+			readImportEvents(t, body, func(event, data string) bool {
+				switch event {
+				case "fetch":
+					var fetch struct {
+						ID   string `json:"id"`
+						Path string `json:"path"`
+					}
+					require.NoError(t, json.Unmarshal([]byte(data), &fetch))
+					require.Equal(t, "/api/organizations", fetch.Path)
+					calls++
+					status, body := tt.status, tt.body
+					if calls == 2 {
+						status, body = 200, "[]"
+					}
+					answerClaudeAIFetch(t, serverURL, fetch.ID, status, body, "2")
+				case "error":
+					require.NotEmpty(t, tt.wantError, data)
+					assert.JSONEq(t, tt.wantError, data)
+					gotError = true
+				case "done":
+					require.Empty(t, tt.wantError)
+				}
+				return true
+			})
+			assert.Equal(t, tt.wantCalls, calls)
+			assert.Equal(t, tt.wantError != "", gotError)
+			if tt.status == 429 {
+				assert.GreaterOrEqual(t, time.Since(started), 2*time.Second)
+			}
+		})
+	}
+	t.Run("unanswered fetch expires", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync", nil)
+			req.Header.Set("Content-Type", "application/json")
+			start := time.Now()
+			srv.mux.ServeHTTP(recorder, req)
+			assert.Equal(t, 2*time.Minute, time.Since(start))
+			assert.Contains(t, recorder.Body.String(), "claude browser fetch timed out")
+			assert.Contains(t, recorder.Body.String(), "event: error")
+			var request struct {
+				ID string `json:"id"`
+			}
+			for line := range strings.SplitSeq(recorder.Body.String(), "\n") {
+				if data, ok := strings.CutPrefix(line, "data: "); ok {
+					require.NoError(t, json.Unmarshal([]byte(data), &request))
+					break
+				}
+			}
+			require.NotEmpty(t, request.ID)
+			late := httptest.NewRecorder()
+			answer := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync/results/"+request.ID, claudeAIRelayBody(t, 200, "{}", ""))
+			answer.Header.Set("Content-Type", "application/json")
+			srv.mux.ServeHTTP(late, answer)
+			assert.Equal(t, http.StatusNotFound, late.Code)
+			assert.JSONEq(t, `{"error":"fetch request expired or already answered"}`, late.Body.String())
+		})
+	})
+}
 
 func TestHandleImportClaudeAI(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
@@ -436,6 +574,93 @@ func TestHandleImportReplaceQuery(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, trashed, 1)
 			assert.True(t, strings.HasPrefix(trashed[0].ID, tt.route.id+":replaced:"), trashed[0].ID)
+		})
+	}
+}
+
+func TestClaudeAISyncMutationNotifications(t *testing.T) {
+	for _, ending := range []string{"done", "two detail errors", "cancel"} {
+		t.Run(ending, func(t *testing.T) {
+			content := "Committed chat"
+			if ending == "done" {
+				content = strings.Repeat("x", 2<<20)
+			}
+			mutations := make(chan struct{}, 2)
+			recall := make(chan struct{}, 2)
+			srv := testServer(t, 5*time.Second,
+				WithSessionMutationNotifier(func() { mutations <- struct{}{} }),
+				WithRecallCorpusMutationNotifier(func() { recall <- struct{}{} }),
+			)
+			srv.broadcaster = NewBroadcaster(0)
+			events, unsubscribe := srv.broadcaster.Subscribe()
+			defer unsubscribe()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			serverURL, stream := startClaudeAISyncRelay(t, ctx, srv)
+			terminal := ""
+			readImportEvents(t, stream, func(event, data string) bool {
+				if event == "done" || event == "error" {
+					terminal = event
+				}
+				if event == "done" {
+					var stats importer.ImportStats
+					require.NoError(t, json.Unmarshal([]byte(data), &stats))
+					assert.Zero(t, stats.Errors)
+				}
+				if event != "fetch" {
+					return true
+				}
+				var fetch struct {
+					ID   string `json:"id"`
+					Path string `json:"path"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(data), &fetch))
+				body, status := "", 200
+				switch {
+				case fetch.Path == "/api/organizations":
+					body = `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`
+				case strings.Contains(fetch.Path, "chat_conversations_v2"):
+					body = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222222","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
+					if ending != "done" {
+						body += `,{"uuid":"22222222-2222-4222-8222-222222222223","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
+					}
+					if ending == "two detail errors" {
+						body += `,{"uuid":"22222222-2222-4222-8222-222222222224","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
+					}
+					body += `],"has_more":false}`
+				case strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222222?"):
+					body = `{"uuid":"22222222-2222-4222-8222-222222222222","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"` + content + `"}]}`
+				case strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222223?"), strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222224?"):
+					if ending == "cancel" {
+						cancel()
+						terminal = "cancel"
+						return false
+					}
+					status, body = 0, "browser disconnected"
+				default:
+					require.FailNowf(t, "unexpected fetch", "%s", fetch.Path)
+				}
+				answerClaudeAIFetch(t, serverURL, fetch.ID, status, body, "")
+				return true
+			})
+			wantTerminal := ending
+			if ending == "two detail errors" {
+				wantTerminal = "error"
+			}
+			assert.Equal(t, wantTerminal, terminal)
+			for _, ch := range []<-chan struct{}{mutations, recall} {
+				select {
+				case <-ch:
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "committed chat did not notify mutation consumer")
+				}
+			}
+			select {
+			case event := <-events:
+				assert.Equal(t, "sessions", event.Scope)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "committed chat did not broadcast sessions")
+			}
 		})
 	}
 }

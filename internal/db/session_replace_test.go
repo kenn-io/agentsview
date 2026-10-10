@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -104,22 +105,45 @@ func TestReplaceSessionKeepingTrashedCopy(t *testing.T) {
 }
 
 func TestReplaceSessionKeepingTrashedCopyRollsBack(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	before := seedReplaceSession(t, d)
+	for _, tt := range []struct {
+		name    string
+		pinLoss bool
+	}{
+		{"invalid ordinals", false},
+		{"pin loss after copy", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			before := seedReplaceSession(t, d)
 
-	write := replaceWrite("first", "second")
-	write.Messages[1].Ordinal = 0
-	_, err := d.ReplaceSessionKeepingTrashedCopy(ctx, write)
-	require.Error(t, err)
+			write := replaceWrite("first", "second")
+			if tt.pinLoss {
+				_, err := d.getWriter().Exec(ctx, `CREATE TRIGGER reject_replacement_copy BEFORE INSERT ON messages
+			WHEN NEW.session_id LIKE 'replace:replaced:%' AND EXISTS(SELECT 1 FROM messages WHERE session_id = 'replace' AND content = 'Changed pinned turn')
+			BEGIN SELECT RAISE(ABORT, 'replacement rejected'); END`)
+				require.NoError(t, err)
+				write = replaceWrite("Changed pinned turn", "Changed reply")
+				write.KeepTrashedCopyOnlyOnPinLoss = true
+			} else {
+				write.Messages[1].Ordinal = 0
+			}
+			_, err := d.ReplaceSessionKeepingTrashedCopy(ctx, write)
+			require.Error(t, err)
+			if tt.pinLoss {
+				require.ErrorContains(t, err, "replacement rejected")
+			}
 
-	assert.Empty(t, trashedSessionIDs(t, d))
-	after, err := d.GetAllMessages(ctx, "replace")
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	pins, err := d.ListPinnedMessages(ctx, "replace", "")
-	require.NoError(t, err)
-	assert.Len(t, pins, 2)
+			assert.Empty(t, trashedSessionIDs(t, d))
+			after, err := d.GetAllMessages(ctx, "replace")
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			pins, err := d.ListPinnedMessages(ctx, "replace", "")
+			require.NoError(t, err)
+			require.Len(t, pins, 2)
+			assert.Equal(t, Ptr("note"), pins[0].Note)
+		})
+	}
 }
 
 func TestReplaceSessionKeepingTrashedCopyRefusals(t *testing.T) {
@@ -139,4 +163,71 @@ func TestReplaceSessionKeepingTrashedCopyRefusals(t *testing.T) {
 		require.ErrorIs(t, err, ErrSessionTrashed)
 		assert.Equal(t, []string{"replace"}, trashedSessionIDs(t, d))
 	})
+}
+
+func TestReplaceSessionKeepingTrashedCopyPinIdentities(t *testing.T) {
+	msg := func(uuid, content string) Message {
+		return Message{SourceUUID: uuid, Role: "user", Content: content, ContentLength: len(content)}
+	}
+	for _, pinLoss := range []bool{false, true} {
+		t.Run(strconv.FormatBool(pinLoss), func(t *testing.T) {
+			d := testDB(t)
+			write := replaceWrite()
+			write.Session.Agent = "claude-ai"
+			write.Session.MessageCount = 2
+			write.Messages = []Message{msg("a", "same"), msg("", "other")}
+			for i := range write.Messages {
+				write.Messages[i].SessionID = "replace"
+				write.Messages[i].Ordinal = i
+			}
+			_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
+			require.NoError(t, err)
+			stored, err := d.GetAllMessages(t.Context(), "replace")
+			require.NoError(t, err)
+			for _, i := range []int{0, 1} {
+				_, err := d.PinMessage(t.Context(), "replace", stored[i].ID, Ptr("saved note"))
+				require.NoError(t, err)
+			}
+			write.Messages = []Message{msg("a", "other")}
+			if !pinLoss {
+				write.Messages = []Message{msg("a", "same"), msg("", "other"), msg("", "Changed unpinned turn")}
+			}
+			write.Session.MessageCount = len(write.Messages)
+			write.KeepTrashedCopyOnlyOnPinLoss = true
+			for i := range write.Messages {
+				write.Messages[i].SessionID = "replace"
+				write.Messages[i].Ordinal = i
+			}
+			copyID, err := d.ReplaceSessionKeepingTrashedCopy(t.Context(), write)
+			require.NoError(t, err)
+			if !pinLoss {
+				assert.Empty(t, copyID)
+				assert.Empty(t, trashedSessionIDs(t, d))
+				pins, err := d.ListPinnedMessages(t.Context(), "replace", "")
+				require.NoError(t, err)
+				require.Len(t, pins, 2)
+				assert.Equal(t, Ptr("saved note"), pins[0].Note)
+				stored, err := d.GetAllMessages(t.Context(), "replace")
+				require.NoError(t, err)
+				require.Len(t, stored, 3)
+				assert.Equal(t, "Changed unpinned turn", stored[2].Content)
+				return
+			}
+			require.NotEmpty(t, copyID)
+			pins, err := d.ListPinnedMessages(t.Context(), "replace", "")
+			require.NoError(t, err)
+			var ordinals []int
+			for _, pin := range pins {
+				ordinals = append(ordinals, pin.Ordinal)
+				assert.Equal(t, Ptr("saved note"), pin.Note)
+			}
+			assert.Equal(t, []int{0}, ordinals)
+
+			oldPins, err := d.ListPinnedMessages(t.Context(), copyID, "")
+			require.NoError(t, err)
+			require.Len(t, oldPins, 2)
+			assert.ElementsMatch(t, []int{0, 1}, []int{oldPins[0].Ordinal, oldPins[1].Ordinal})
+			assert.Equal(t, Ptr("saved note"), oldPins[0].Note)
+		})
+	}
 }

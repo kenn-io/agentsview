@@ -2448,5 +2448,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"プレビューは {countLabel} バイト中 {shownLabel} バイトを表示しています。","countPlural=other":"プレビューは {countLabel} バイト中 {shownLabel} バイトを表示しています。"}}],
   "tool_sequences_full_input_in_message": "完全な入力はメッセージ {ordinal} にあります。",
   "tool_sequences_full_result_in_message": "完全な結果はメッセージ {ordinal} にあります。",
-  "tool_sequences_retry": "再試行"
+  "tool_sequences_retry": "再試行",
+  "import_claude_connect": "サインイン",
+  "import_claude_sync": "同期",
+  "import_claude_help": "メールコードでサインインしてウィンドウを閉じ、同期をクリックしてください。Google サインインにはブラウザーホストが必要です。",
+  "import_claude_auth_required": "Claude.ai にサインインしてから、もう一度同期してください。"
 }

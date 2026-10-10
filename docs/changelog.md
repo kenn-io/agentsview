@@ -7,6 +7,15 @@ description: Release history for AgentsView
 The latest release is
 [0.45.0](https://github.com/kenn-io/agentsview/releases/tag/v0.45.0).
 
+## Unreleased
+
+**New features**
+
+- Sync Claude.ai chats from the desktop Import dialog without downloading an
+  export. Later runs fetch new or changed chats, including branch switches.
+  See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app)
+  for branch updates, Trash copies, and failure handling.
+
 ## 0.45.0
 
 <small>2026-10-09</small>

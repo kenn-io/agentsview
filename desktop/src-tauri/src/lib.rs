@@ -25,7 +25,11 @@ use tauri::menu::{
 use tauri::plugin::Builder as PluginBuilder;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::tray::TrayIconBuilder;
-use tauri::{App, AppHandle, Emitter, Manager, RunEvent, Url, WebviewWindow};
+use tauri::utils::config::BackgroundThrottlingPolicy;
+use tauri::{
+    App, AppHandle, Emitter, Manager, RunEvent, State, Url, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
@@ -34,6 +38,36 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
 const HOST: &str = "127.0.0.1";
+const CLAUDE_AUTH_WINDOW_LABEL: &str = "claude-auth";
+const CLAUDE_AUTH_URL: &str = "https://claude.ai/login?return_url=%2Fnew";
+
+#[derive(Default)]
+struct ClaudeAuthState {
+    pending_browser_requests:
+        Mutex<BTreeMap<String, tokio::sync::oneshot::Sender<ClaudeBrowserResponse>>>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeBrowserResponse {
+    status: u16,
+    body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_after: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeBrowserFetchResult {
+    request_id: String,
+    status: u16,
+    body: String,
+    error: Option<String>,
+    retry_after: Option<String>,
+}
+
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const DAEMON_STARTUP_LONG_NOTICE_AFTER: Duration = Duration::from_secs(300);
 const DAEMON_UNHEALTHY_GRACE: Duration = Duration::from_secs(15);
@@ -284,7 +318,13 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(init_navigation_guard_plugin())
         .manage(SidecarState::default())
-        .manage(DeepLinkState::default());
+        .manage(DeepLinkState::default())
+        .manage(ClaudeAuthState::default())
+        .invoke_handler(tauri::generate_handler![
+            claude_auth_connect,
+            claude_auth_fetch,
+            claude_auth_fetch_result
+        ]);
 
     #[cfg(target_os = "macos")]
     let builder = builder.manage(DockModeCheckItem::default());
@@ -345,6 +385,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build tauri app")
         .run(|app_handle, event| {
+            if let RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } = &event
+            {
+                if label == "main" {
+                    app_handle.exit(0);
+                }
+            }
             if let RunEvent::MenuEvent(event) = &event {
                 handle_desktop_menu_event(app_handle, event.id().0.as_str());
             }
@@ -637,7 +687,6 @@ fn deep_link_msg_param(url: &Url) -> Option<String> {
 }
 
 trait MainWindowVisibility {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn hide_main_window(&self);
     fn show_main_window(&self);
     fn unminimize_main_window(&self);
@@ -645,7 +694,6 @@ trait MainWindowVisibility {
 }
 
 impl MainWindowVisibility for WebviewWindow {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn hide_main_window(&self) {
         let _ = self.hide();
     }
@@ -663,7 +711,6 @@ impl MainWindowVisibility for WebviewWindow {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn hide_main_window_on_close(window: &impl MainWindowVisibility, prevent_close: impl FnOnce()) {
     prevent_close();
     window.hide_main_window();
@@ -960,6 +1007,9 @@ fn combined_preflight_output(stdout: &str, stderr: &str) -> Option<String> {
 fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     PluginBuilder::new("navigation-guard")
         .on_navigation(|webview, url| {
+            if webview.label() == CLAUDE_AUTH_WINDOW_LABEL {
+                return url.scheme() == "https";
+            }
             let backend_port = webview
                 .app_handle()
                 .try_state::<SidecarState>()
@@ -3959,6 +4009,221 @@ fn version_response_looks_valid(response: &[u8]) -> bool {
         && body.contains("\"data_version\"")
 }
 
+#[tauri::command]
+async fn claude_auth_connect(handle: AppHandle) -> Result<(), String> {
+    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        Some(window) => window,
+        None => create_claude_auth_window(&handle, true)?.0,
+    };
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn claude_auth_fetch(
+    handle: AppHandle,
+    path: String,
+) -> Result<ClaudeBrowserResponse, String> {
+    validate_claude_fetch_path(&path)?;
+    let window = match handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
+        Some(window) => window,
+        None => {
+            let (window, loaded) = create_claude_auth_window(&handle, false)?;
+            tokio::time::timeout(Duration::from_secs(30), loaded)
+                .await
+                .map_err(|_| "Claude page load timed out")?
+                .map_err(|_| "Claude page load failed")?;
+            window
+        }
+    };
+    let origin = window.url().map_err(|e| e.to_string())?;
+    if origin.origin().ascii_serialization() != "https://claude.ai" {
+        return Ok(ClaudeBrowserResponse {
+            status: 401,
+            body: String::new(),
+            error: None,
+            retry_after: None,
+        });
+    }
+    let state = handle.state::<ClaudeAuthState>();
+    let (request_id, receiver) = state.start_browser_request()?;
+    let request_id_json = serde_json::to_string(&request_id).map_err(|e| e.to_string())?;
+    let url =
+        serde_json::to_string(&format!("https://claude.ai{path}")).map_err(|e| e.to_string())?;
+    let script = claude_fetch_script(&url, &request_id_json);
+    let response = match window.eval(&script) {
+        Err(err) => Err(err.to_string()),
+        Ok(()) => match tokio::time::timeout(Duration::from_secs(60), receiver).await {
+            Ok(Ok(response)) => Ok(response),
+            _ => Err("Claude browser fetch timed out or disconnected".into()),
+        },
+    };
+    state
+        .pending_browser_requests
+        .lock()
+        .map_err(|_| "Claude request lock failed")?
+        .remove(&request_id);
+    response
+}
+
+fn claude_fetch_script(url: &str, request_id_json: &str) -> String {
+    format!(
+        r#"(async () => {{
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 45000);
+        try {{
+            const response = await fetch({url}, {{ method: "GET", credentials: "include", redirect: "error", signal: controller.signal }});
+            const limit = 32 * 1024 * 1024; // Matches importer.ClaudeAIResponseLimit in internal/importer/claude_ai_sync.go.
+            const oversized = () => window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 413, body: "" }} }});
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let size = 0;
+            let body = "";
+            if (reader) {{
+                for (;;) {{
+                    const {{ done, value }} = await reader.read();
+                    if (done) break;
+                    size += value.byteLength;
+                    if (size > limit) {{
+                        controller.abort();
+                        try {{ await reader.cancel(); }} catch {{}}
+                        await oversized();
+                        return;
+                    }}
+                    body += decoder.decode(value, {{ stream: true }});
+                }}
+                body += decoder.decode();
+            }}
+            const retryAfter = response.headers.get("retry-after") ?? undefined;
+            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: response.status, body, retryAfter }} }});
+        }} catch (error) {{
+            await window.__TAURI__.core.invoke("claude_auth_fetch_result", {{ payload: {{ requestId: {request_id_json}, status: 0, body: "", error: String(error) }} }});
+        }} finally {{
+            clearTimeout(timer);
+        }}
+    }})()"#
+    )
+}
+
+fn validate_claude_fetch_path(path: &str) -> Result<(), String> {
+    const ORGANIZATIONS_REQUEST: usize = 0;
+    const CONVERSATIONS_REQUEST: usize = 1;
+    const CONVERSATION_REQUEST: usize = 2;
+    let shapes: Vec<_> = include_str!("../../../internal/importer/claude_ai_requests.txt").lines().collect();
+    if path == shapes[ORGANIZATIONS_REQUEST] {
+        return Ok(());
+    }
+    let valid_uuid = |id: &str| {
+        uuid::Uuid::parse_str(id)
+            .is_ok_and(|uuid| uuid.hyphenated().to_string() == id.to_ascii_lowercase())
+    };
+    let (prefix, rest) = shapes[CONVERSATIONS_REQUEST].split_once("{organization}").unwrap();
+    if let Some(rest_path) = path.strip_prefix(prefix) {
+        if let Some((org, tail)) = rest_path.split_once('/') {
+            if valid_uuid(org) {
+                let list_prefix = rest.trim_start_matches('/').strip_suffix("{offset}").unwrap();
+                if let Some(offset) = tail.strip_prefix(list_prefix) {
+                    if !offset.is_empty() && offset.bytes().all(|b| b.is_ascii_digit()) {
+                        return Ok(());
+                    }
+                }
+                let detail = shapes[CONVERSATION_REQUEST].split_once("{organization}/").unwrap().1;
+                let (detail_prefix, detail_suffix) = detail.split_once("{conversation}").unwrap();
+                if let Some(id) = tail.strip_prefix(detail_prefix).and_then(|s| s.strip_suffix(detail_suffix)) {
+                    if valid_uuid(id) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    Err("Unsupported Claude fetch path".into())
+}
+
+fn create_claude_auth_window(
+    handle: &AppHandle,
+    visible: bool,
+) -> Result<(WebviewWindow, tokio::sync::oneshot::Receiver<()>), String> {
+    let url = Url::parse(if visible {
+        CLAUDE_AUTH_URL
+    } else {
+        "https://claude.ai/"
+    })
+    .map_err(|err| err.to_string())?;
+    let (sender, loaded) = tokio::sync::oneshot::channel();
+    let sender = Mutex::new(Some(sender));
+    let window =
+        WebviewWindowBuilder::new(handle, CLAUDE_AUTH_WINDOW_LABEL, WebviewUrl::External(url))
+            .title("Sign in to Claude.ai")
+            .inner_size(1100.0, 800.0)
+            .min_inner_size(800.0, 600.0)
+            .visible(visible)
+            .background_throttling(BackgroundThrottlingPolicy::Disabled)
+            .on_page_load(move |_, payload| {
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    if let Ok(mut sender) = sender.lock() {
+                        if let Some(sender) = sender.take() {
+                            let _ = sender.send(());
+                        }
+                    }
+                }
+            })
+            .build()
+            .map_err(|err| format!("could not open the Claude sign-in window: {err}"))?;
+    let close_window = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            hide_main_window_on_close(&close_window, || api.prevent_close());
+        }
+    });
+    Ok((window, loaded))
+}
+
+#[tauri::command]
+async fn claude_auth_fetch_result(
+    state: State<'_, ClaudeAuthState>,
+    payload: ClaudeBrowserFetchResult,
+) -> Result<(), String> {
+    state.finish_browser_request(payload)
+}
+
+impl ClaudeAuthState {
+    fn start_browser_request(
+        &self,
+    ) -> Result<
+        (
+            String,
+            tokio::sync::oneshot::Receiver<ClaudeBrowserResponse>,
+        ),
+        String,
+    > {
+        let id = uuid::Uuid::new_v4().to_string();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.pending_browser_requests
+            .lock()
+            .map_err(|_| "Claude request lock failed")?
+            .insert(id.clone(), sender);
+        Ok((id, receiver))
+    }
+
+    fn finish_browser_request(&self, payload: ClaudeBrowserFetchResult) -> Result<(), String> {
+        let sender = self
+            .pending_browser_requests
+            .lock()
+            .map_err(|_| "Claude browser request lock failed")?
+            .remove(&payload.request_id)
+            .ok_or("no Claude browser request is pending")?;
+        sender
+            .send(ClaudeBrowserResponse {
+                status: payload.status,
+                body: payload.body,
+                error: payload.error,
+                retry_after: payload.retry_after,
+            })
+            .map_err(|_| "Claude browser request was cancelled".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6359,5 +6624,97 @@ agentsview running at http://127.0.0.1:18082
         // Opening a link does not establish readiness; the navigation can
         // fail while the backend is down and still needs recovery afterward.
         assert!(dispatch.observe_backend(8080, true));
+    }
+}
+
+#[cfg(test)]
+mod claude_sync_tests {
+    #[test]
+    fn claude_browser_response_omits_absent_fields() {
+        let response = super::ClaudeBrowserResponse { status: 200, body: String::new(), error: None, retry_after: None };
+        assert_eq!(serde_json::to_string(&response).unwrap(), r#"{"status":200,"body":""}"#);
+    }
+
+    #[test]
+    fn claude_fetch_bounds_browser_response() {
+        use std::io::Write;
+        let child = std::process::Command::new("node")
+            .arg("-e")
+            .arg(include_str!("claude_fetch_test.cjs"))
+            .env("CLAUDE_SIGNED_OUT_FIXTURE", concat!(env!("CARGO_MANIFEST_DIR"), "/../../internal/importer/testdata/claude_ai_sync/signed_out.json"))
+            .stdin(std::process::Stdio::piped())
+            .spawn();
+        let mut child = match child {
+            Ok(child) => child,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                panic!("Node.js is required for the browser response bounds test");
+            }
+            Err(err) => panic!("could not start Node.js: {err}"),
+        };
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                super::claude_fetch_script("\"https://claude.ai/api/detail\"", "\"request\"")
+                    .as_bytes(),
+            )
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn claude_fetch_accepts_only_sync_requests() {
+        let base = "/api/organizations/11111111-1111-4111-8111-111111111111";
+        let list = format!("{base}/chat_conversations_v2?limit=50&offset=0");
+        let detail = format!("{base}/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true");
+        assert!(super::validate_claude_fetch_path(&list).is_ok(), "{list}");
+        for template in include_str!("../../../internal/importer/claude_ai_requests.txt").lines() {
+            let path = template
+                .replace("{organization}", "11111111-1111-4111-8111-111111111111")
+                .replace("{conversation}", "22222222-2222-4222-8222-222222222222")
+                .replace("{offset}", "50");
+            assert!(super::validate_claude_fetch_path(&path).is_ok(), "{path}");
+        }
+        for path in [
+            "".into(), "/api".into(), "/api/../settings".into(), "/api/organizations/../organizations".into(),
+            "//example.com/api/organizations".into(), "https://claude.ai/api/organizations".into(),
+            "/api/organizations?extra=true".into(), format!("{base}/settings"),
+            list.replace("limit=50", "limit=100"), list.replace("offset=0", "offset=-1"),
+            format!("{list}&extra=true"), format!("{list}#fragment"),
+            list.replace("11111111-1111-4111-8111-111111111111", "%2e%2e"),
+            detail.replace("22222222-2222-4222-8222-222222222222", ".."),
+            detail.replace("22222222-2222-4222-8222-222222222222", "%2e%2e"),
+            detail.replace("22222222-2222-4222-8222-222222222222", "one/../../settings"),
+            detail.replace("tree=True", "tree=False"), format!("{detail}&extra=true"),
+        ] {
+            assert!(super::validate_claude_fetch_path(&path).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn claude_fetch_cancelled_request_does_not_block_next() {
+        let state = super::ClaudeAuthState::default();
+        let (old_id, old_receiver) = state.start_browser_request().unwrap();
+        drop(old_receiver);
+        let (id, mut receiver) = state.start_browser_request().unwrap();
+        let result = |request_id, body: &str| super::ClaudeBrowserFetchResult {
+            request_id,
+            status: 200,
+            body: body.into(),
+            error: None,
+            retry_after: None,
+        };
+        assert!(state
+            .finish_browser_request(result(old_id, "stale"))
+            .is_err());
+        assert!(receiver.try_recv().is_err());
+        state
+            .finish_browser_request(result(id.clone(), "new chat"))
+            .unwrap();
+        assert_eq!(receiver.try_recv().unwrap().body, "new chat");
+        assert!(state
+            .finish_browser_request(result(id, "duplicate"))
+            .is_err());
     }
 }
