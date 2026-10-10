@@ -664,29 +664,46 @@ func (s cancelAfterReplacementSyncStore) ReplaceSessionKeepingTrashedCopy(ctx co
 }
 
 func TestSyncClaudeAICancelledBranchSwitchRefetchesPreviousBranch(t *testing.T) {
-	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
-	d := testDB(t)
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-	})
-	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	otherDetail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"other","parent_message_uuid":"root","sender":"assistant","text":"Other reply"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"other"`, 1)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	_, err = SyncClaudeAI(ctx, cancelAfterReplacementSyncStore{d, cancel}, syncOneFetch(t, strings.Replace(syncSummary, "reply", "other", 1), func() (ClaudeAIResponse, error) {
-		return ClaudeAIResponse{Status: 200, Body: []byte(otherDetail)}, nil
-	}), nil)
-	require.ErrorIs(t, err, context.Canceled)
-	messages, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	require.Equal(t, []string{"Hello", "Other reply"}, messageContents(messages))
-	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Updated)
-	messages, err = d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+	for _, tt := range []struct {
+		name    string
+		overlap bool
+	}{
+		{name: "existing chat"},
+		{name: "overlapping initial imports", overlap: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+			d := testDB(t)
+			fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+			})
+			if !tt.overlap {
+				_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+				require.NoError(t, err)
+			}
+			otherDetail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"other","parent_message_uuid":"root","sender":"assistant","text":"Other reply"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"other"`, 1)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			_, err := SyncClaudeAI(ctx, cancelAfterReplacementSyncStore{d, cancel}, syncOneFetch(t, strings.Replace(syncSummary, "reply", "other", 1), func() (ClaudeAIResponse, error) {
+				if tt.overlap {
+					stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+					require.NoError(t, err)
+					require.Equal(t, 1, stats.Imported)
+				}
+				return ClaudeAIResponse{Status: 200, Body: []byte(otherDetail)}, nil
+			}), nil)
+			require.ErrorIs(t, err, context.Canceled)
+			messages, err := d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Equal(t, []string{"Hello", "Other reply"}, messageContents(messages))
+			stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Updated)
+			messages, err = d.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+		})
+	}
 }
 
 func TestSyncClaudeAIBranchSwitch(t *testing.T) {

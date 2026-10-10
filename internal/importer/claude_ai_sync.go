@@ -219,10 +219,8 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				var status importStatus
 				var detailErr error
 				write := func() error {
-					if existing != nil {
-						if err := store.DeleteProviderStatHash(ctx, parser.AgentClaudeAI, id); err != nil {
-							return err
-						}
+					if err := store.DeleteProviderStatHash(ctx, parser.AgentClaudeAI, id); err != nil {
+						return err
 					}
 					result.Session.Machine = resolvedImportMachine(result.Session.Machine, machine)
 					status, detailErr = syncConversation(ctx, store, result)
