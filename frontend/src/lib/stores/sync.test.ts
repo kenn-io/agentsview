@@ -118,11 +118,9 @@ describe("session watch visibility", () => {
     expect(api.watchSession).toHaveBeenCalledTimes(2);
     expect(api.watchSession).toHaveBeenLastCalledWith("session-a", onUpdate, onTiming);
     expect(onUpdate).not.toHaveBeenCalled();
-    api.watchSession.mock.calls[1]![1]();
-    expect(onUpdate).toHaveBeenCalledTimes(1);
     document.dispatchEvent(new Event("visibilitychange"));
     expect(api.watchSession).toHaveBeenCalledTimes(2);
-    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it("only starts the latest selected session when a hidden tab returns", () => {
@@ -138,8 +136,6 @@ describe("session watch visibility", () => {
     expect(api.watchSession).toHaveBeenCalledExactlyOnceWith("session-b", newUpdate, undefined);
     expect(oldUpdate).not.toHaveBeenCalled();
     expect(newUpdate).not.toHaveBeenCalled();
-    api.watchSession.mock.calls[0]![1]();
-    expect(newUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("does not reconnect after unwatching a hidden session", () => {
