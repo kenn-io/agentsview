@@ -218,10 +218,6 @@ function samePairwiseSelection(
 
 export type UsageMode = "cost" | "token";
 
-function scopeKey(params: UsageParams): string {
-  return JSON.stringify(Object.entries(params).filter(([, value]) => value !== undefined).sort(([a], [b]) => a.localeCompare(b)));
-}
-
 function summaryForDateRange(
   summary: UsageSummaryResponse,
   from: string,
@@ -369,8 +365,6 @@ class UsageStore {
   // The selected-dimension-free summary over the full unbrushed window.
   referenceSummary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
-  // Responses by request scope, so a brushed reference can reuse one.
-  private summariesByScope = new Map<string, UsageSummaryResponse>();
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
@@ -1074,8 +1068,7 @@ class UsageStore {
     const liveAttributionStep = attributionParams ? this.liveQuery.start("attributionSummary", started) : 0;
     // Unbrushed, the attribution request already covers the full window.
     const referenceParams = attributionParams && options.contextParams ? { ...attributionParams, from: options.contextParams.from, to: options.contextParams.to } : undefined;
-    const cachedReference = referenceParams && this.summariesByScope.get(scopeKey(referenceParams));
-    const liveReferenceStep = referenceParams && !cachedReference ? this.liveQuery.start("referenceSummary", started) : 0;
+    const liveReferenceStep = referenceParams ? this.liveQuery.start("referenceSummary", started) : 0;
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const params = options.params ?? this.baseParams();
@@ -1091,7 +1084,7 @@ class UsageStore {
           UsageService.getApiV1UsageSummary(params, { signal }),
           contextParams ? UsageService.getApiV1UsageSummary(contextParams, { signal }) : null,
           attributionParams ? UsageService.getApiV1UsageSummary(attributionParams, { signal }) : null,
-          cachedReference || (referenceParams ? UsageService.getApiV1UsageSummary(referenceParams, { signal }) : null),
+          referenceParams ? UsageService.getApiV1UsageSummary(referenceParams, { signal }) : null,
         ]);
       }
       if (this.versions.summary === v) {
@@ -1118,12 +1111,7 @@ class UsageStore {
             attributionData,
             applyStartedAt,
           );
-        // Scopes accumulate while a brush stays up and reset once it clears.
-        if (!this.selectedTimeRange) this.summariesByScope.clear();
-        for (const [scope, body] of [[params, data], [contextParams, contextData], [attributionParams, attributionData], [referenceParams, referenceData]] as const) {
-          if (scope && body) this.summariesByScope.set(scopeKey(scope), body);
-        }
-        if (referenceData && !cachedReference) this.noteStep("referenceSummary", liveReferenceStep, started, referenceData, applyStartedAt);
+        if (referenceData) this.noteStep("referenceSummary", liveReferenceStep, started, referenceData, applyStartedAt);
         this.isTimeRangeSummaryProvisional = false;
         if (contextData !== null) {
           this.timeSeriesContextSummary = contextData;

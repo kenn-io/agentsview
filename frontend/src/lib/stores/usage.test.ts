@@ -2242,11 +2242,8 @@ describe("UsageStore attribution focus", () => {
     usage.setTimeRange("2024-01-08", "2024-01-14");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usageChartColorMaps(usage.colorSummary, "matplotlib").project).toEqual(colors);
-    usageServiceMocks.getApiV1UsageSummary.mockClear();
     usage.toggleSelection("project", "pl1:sha256:beta");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    // The unselected full-window context already has the reference scope.
-    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(3);
     expect(usage.summary?.projectTotals).toEqual(selected.projectTotals);
     expect(usage.attributionSummary?.projectTotals).toEqual(brushed.projectTotals);
     expect(usageChartColorMaps(usage.colorSummary, "matplotlib").project).toEqual(colors);

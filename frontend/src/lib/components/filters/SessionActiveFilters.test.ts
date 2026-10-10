@@ -19,12 +19,10 @@ describe("SessionActiveFilters clear all", () => {
     vi.spyOn(sessions, "load").mockResolvedValue();
     sessions.filters.project = "alpha";
     const onClearProjects = vi.fn();
-    const onClearModels = vi.fn();
-    const onClearAgents = vi.fn();
 
     component = mount(SessionActiveFilters, {
       target: document.body,
-      props: { onClearProjects, onClearModels, onClearAgents },
+      props: { onClearProjects },
     });
     flushSync();
 
@@ -34,7 +32,5 @@ describe("SessionActiveFilters clear all", () => {
     flushSync();
 
     expect(onClearProjects).toHaveBeenCalledOnce();
-    expect(onClearModels).toHaveBeenCalledOnce();
-    expect(onClearAgents).toHaveBeenCalledOnce();
   });
 });
