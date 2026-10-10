@@ -240,3 +240,33 @@ func TestAnalyticsActivityRoleSplitMatchesSQLite(t *testing.T) {
 	assert.Equal(t, 2, got.Series[1].Messages, "system-only day")
 	assert.Equal(t, 1, got.Series[2].UserMessages, "mixed day")
 }
+
+// TestAnalyticsSummaryFromYearOne pins the year-one clamp on padded date
+// bounds. Unclamped, From=0001-01-01 pads to 0000-12-31T10:00:00Z, which
+// parseDateTime64BestEffort reads as a recent date and drops older sessions.
+func TestAnalyticsSummaryFromYearOne(t *testing.T) {
+	local, target := seedFixture(t)
+	ctx := t.Context()
+	const id = "ch-year-one"
+	ts := "2024-06-01T10:00:00.000Z"
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:         fixtureSession(id, "gamma", "old", ts, 1),
+		Messages:        []db.Message{fixtureMessage(id, 0, "user", "old", ts)},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(ctx, target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	summary, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
+		From: "0001-01-01", To: "2024-12-31", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.TotalSessions)
+	assert.Equal(t, 1, summary.TotalMessages)
+}
