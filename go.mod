@@ -35,7 +35,7 @@ require (
 	github.com/thlib/go-timezone-local v0.0.8
 	github.com/tidwall/gjson v1.19.0
 	github.com/yuin/goldmark v1.8.5
-	go.kenn.io/docbank v0.15.1
+	go.kenn.io/docbank v0.15.2
 	go.kenn.io/kit v0.33.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b
