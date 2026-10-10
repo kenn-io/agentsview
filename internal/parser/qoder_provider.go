@@ -10,11 +10,26 @@ func newQoderProviderFactory(def AgentDef) ProviderFactory {
 	return NewSourceSetFactory(
 		def,
 		qoderProviderCapabilities(),
-		func(cfg ProviderConfig) SourceSet { return newQoderSourceSet(cfg.Roots) },
+		func(cfg ProviderConfig) SourceSet {
+			var titleRoots []string
+			if cfg.PathRewriter == nil {
+				for _, root := range cfg.Roots {
+					owner := cfg.SourceMachines[root]
+					if owner == "" || owner == cfg.Machine {
+						titleRoots = append(titleRoots, root)
+					}
+				}
+			}
+			return newQoderSourceSetWithTitleRoots(cfg.Roots, titleRoots)
+		},
 	)
 }
 
 func newQoderSourceSet(roots []string) JSONLSourceSet {
+	return newQoderSourceSetWithTitleRoots(roots, roots)
+}
+
+func newQoderSourceSetWithTitleRoots(roots, titleRoots []string) JSONLSourceSet {
 	return NewJSONLSourceSet(AgentQoder, roots,
 		WithRecursive(),
 		WithSymlinkFollowing(),
@@ -23,21 +38,35 @@ func newQoderSourceSet(roots []string) JSONLSourceSet {
 		WithProjectHint(qoderProjectHintFromPath),
 		WithSessionIDFromPath(qoderSessionIDFromPath),
 		WithLookupIDValid(isQoderLookupID),
-		WithParseFile(qoderParseFile),
+		// The title database lives in Application Support, outside every
+		// session root, and the database is bound to this provider's roots.
+		// The ParseRequest carries no roots, so capture them here.
+		WithParseFile(func(ctx context.Context, path string, req ParseRequest) ([]ParseResult, []string, error) {
+			return parseQoderFile(ctx, path, titleRoots, req)
+		}),
 		WithForceReplace(),
 		WithCompanionFiles(qoderCompanionFiles),
 		WithCompanionTranscript(qoderCompanionTranscript),
+		WithExtraWatchRoots(qoderTitleDatabaseWatchRoots(titleRoots)...),
 	)
 }
 
-func qoderParseFile(
-	_ context.Context, path string, req ParseRequest,
+func parseQoderFile(
+	ctx context.Context, path string, roots []string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	results, excluded, err := ParseQoderSessionWithExclusions(
 		path, req.Source.ProjectHint, req.Machine,
 	)
 	if err != nil {
 		return nil, nil, err
+	}
+	if _, _, isSubagent := qoderPathIDs(path, req.Source.ProjectHint); !isSubagent {
+		// A subagent transcript has no title of its own and must never
+		// inherit its parent's; skip the lookup entirely.
+		retryReason := applyQoderTitles(ctx, path, roots, results)
+		for i := range results {
+			results[i].TitleRetryReason = retryReason
+		}
 	}
 	for i := range results {
 		if req.Fingerprint.Size > 0 {
@@ -51,6 +80,29 @@ func qoderParseFile(
 		}
 	}
 	return results, excluded, nil
+}
+
+// qoderTitleDatabaseWatchRoots returns the watch roots for the title
+// databases reachable from the configured Qoder session roots. Only roots
+// whose client can be identified unambiguously are registered, and only when
+// the database already exists: a database created later is picked up by the
+// next title sweep rather than by inventing a path for a platform this
+// machine does not have.
+func qoderTitleDatabaseWatchRoots(roots []string) []WatchRoot {
+	var watchRoots []WatchRoot
+	for _, databasePath := range qoderTitleDatabasePathsForRoots(roots) {
+		if !IsRegularFile(databasePath) {
+			continue
+		}
+		dir := filepath.Dir(databasePath)
+		watchRoots = append(watchRoots, WatchRoot{
+			Path:         dir,
+			Recursive:    false,
+			IncludeGlobs: []string{qoderAppDatabaseName, qoderAppDatabaseName + "-wal"},
+			DebounceKey:  string(AgentQoder) + ":titles:" + dir,
+		})
+	}
+	return watchRoots
 }
 
 func isQoderSourcePath(root, path string) bool {
@@ -160,6 +212,7 @@ func qoderProviderCapabilities() Capabilities {
 		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
+			SessionName:          CapabilitySupported,
 			Cwd:                  CapabilitySupported,
 			Relationships:        CapabilitySupported,
 			Subagents:            CapabilitySupported,

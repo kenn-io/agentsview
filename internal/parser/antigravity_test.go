@@ -68,7 +68,10 @@ func parseAntigravityTestSession(
 	t *testing.T, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	t.Helper()
-	return newAntigravityTestProvider(t).parseSession(t.Context(), path, project, machine)
+	sess, msgs, usage, _, err := newAntigravityTestProvider(t).parseSession(
+		t.Context(), path, project, machine,
+	)
+	return sess, msgs, usage, err
 }
 
 // discoverAntigravityCLITestSessions discovers CLI sessions under root through

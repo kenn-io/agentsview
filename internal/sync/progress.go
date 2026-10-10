@@ -93,6 +93,13 @@ type SyncStats struct {
 	// LinksPending is the worker's terminal snapshot of unfinished linking.
 	// The daemon retains it for its next poll when the worker exits.
 	LinksPending bool `json:"links_pending,omitempty"`
+	// TitlesUpdated counts session_name rows refreshed from a shared title
+	// database (Antigravity conversation_summaries.db, Qoder main.sqlite)
+	// without an ordinary session write. It is exported and serialized for the
+	// same reason as CwdUpdated: a title-only pass changes the database but
+	// writes no session file, so without this the daemon would never emit
+	// "sessions" and the UI would keep showing the stale title.
+	TitlesUpdated int `json:"titles_updated,omitempty"`
 
 	// Anomalies aggregates per-run parser/sanitizer anomaly signals
 	// surfaced in the CLI sync summary. These are live per-run counters
@@ -143,7 +150,8 @@ func (s *SyncStats) shouldEmitSync() bool {
 }
 
 func (s *SyncStats) hasSessionChanges() bool {
-	return s.Synced > 0 || s.CwdUpdated > 0 || s.Tombstoned > 0 || s.LinksUpdated > 0
+	return s.Synced > 0 || s.CwdUpdated > 0 || s.Tombstoned > 0 ||
+		s.LinksUpdated > 0 || s.TitlesUpdated > 0
 }
 
 // AnomalyStats aggregates parser-output anomaly signals observed during a
@@ -426,6 +434,15 @@ func (s *SyncStats) RecordCwdUpdated(n int) {
 func (s *SyncStats) RecordLinksUpdated(n int) {
 	if n > 0 {
 		s.LinksUpdated += n
+	}
+}
+
+// RecordTitlesUpdated records session_name rows refreshed from a shared title
+// database without an ordinary session write. Zero and negative counts are
+// ignored so a no-op scan reports no change.
+func (s *SyncStats) RecordTitlesUpdated(n int) {
+	if n > 0 {
+		s.TitlesUpdated += n
 	}
 }
 

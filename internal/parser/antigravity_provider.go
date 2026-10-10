@@ -99,7 +99,7 @@ func (p *antigravityProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.Path, err)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, usageEvents, err := p.parseSession(ctx,
+	sess, msgs, usageEvents, titleRetry, err := p.parseSession(ctx,
 		src.Path,
 		req.Source.ProjectHint,
 		machine,
@@ -117,15 +117,26 @@ func (p *antigravityProvider) Parse(
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
+	result := ParseResultOutcome{
+		Result: ParseResult{
+			Session:     *sess,
+			Messages:    msgs,
+			UsageEvents: usageEvents,
+		},
+		DataVersion: DataVersionCurrent,
+	}
+	// A title-database read failure keeps the body result but asks the engine
+	// to retry; it must not be recorded as a clean skip, or the title would
+	// never be re-attempted until the session file itself changed. The reason
+	// is carried on both the result and the outcome so a caller that inspects
+	// only one of them still sees why the data version is not current.
+	if titleRetry != "" {
+		result.DataVersion = DataVersionNeedsRetry
+		result.RetryReason = titleRetry
+		result.Result.TitleRetryReason = titleRetry
+	}
 	return ParseOutcome{
-		Results: []ParseResultOutcome{{
-			Result: ParseResult{
-				Session:     *sess,
-				Messages:    msgs,
-				UsageEvents: usageEvents,
-			},
-			DataVersion: DataVersionCurrent,
-		}},
+		Results:           []ParseResultOutcome{result},
 		ResultSetComplete: true,
 		ForceReplace:      true,
 	}, nil
@@ -288,6 +299,19 @@ func (s antigravitySourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				Recursive:    false,
 				IncludeGlobs: []string{"*.db", "*.db-wal", "*.trajectory.json"},
 				DebounceKey:  string(AgentAntigravity) + ":conversations:" + root,
+			},
+			// The IDE's shared title store. It is one database per root, not
+			// per session, so it must not be folded into any session's
+			// fingerprint (a single rename would then invalidate every
+			// Antigravity session). WatchPlan carries the globs; the engine's
+			// scheduling path strips them, so the event filter is what really
+			// excludes the -shm index -- a bare -shm event must be ignored
+			// because every read-only parse rewrites it.
+			WatchRoot{
+				Path:         root,
+				Recursive:    false,
+				IncludeGlobs: []string{antigravitySummariesDBName, antigravitySummariesDBName + "-wal"},
+				DebounceKey:  string(AgentAntigravity) + ":summaries:" + root,
 			},
 		)
 	}
@@ -578,6 +602,7 @@ func antigravityProviderCapabilities() Capabilities {
 		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
+			SessionName:          CapabilitySupported,
 			Thinking:             CapabilitySupported,
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,

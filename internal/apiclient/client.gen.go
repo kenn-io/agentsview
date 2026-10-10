@@ -21581,6 +21581,7 @@ type SyncSyncStats struct {
 	RebuildPhases  []SyncRebuildPhaseStats `json:"rebuild_phases,omitempty"`
 	Skipped        int64                   `json:"skipped"`
 	Synced         int64                   `json:"synced"`
+	TitlesUpdated  *int64                  `json:"titles_updated,omitempty"`
 	Tombstoned     *int64                  `json:"tombstoned,omitempty"`
 	TotalSessions  int64                   `json:"total_sessions"`
 	Warnings       []string                `json:"warnings,omitempty"`

@@ -108,7 +108,8 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 		planFiles, fallbackFiles...,
 	))
 	result.FilesDiscovered = len(files)
-	if len(files) == 0 {
+	titleTasks := plan.SharedTitleTasks
+	if len(files) == 0 && len(titleTasks) == 0 {
 		return result, ctx.Err()
 	}
 
@@ -124,6 +125,24 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	e.resetS3CodexIndexCache()
 	e.anomalies.reset()
 	var processErr error
+
+	// A shared title database changed but produced no import files. Refresh
+	// only the differing session_name values here, under the same lock body
+	// syncs take, so a title-only pass writes nothing else.
+	if len(titleTasks) > 0 {
+		updated, titleErr := e.refreshSharedTitleDatabasesLocked(ctx, titleTasks)
+		stats.RecordTitlesUpdated(updated)
+		if titleErr != nil {
+			// Keep the stored names and let a later pass retry; a title read
+			// failure must not fail the body sync below.
+			log.Printf("sync: shared title refresh: %v", titleErr)
+		}
+	}
+	if len(files) == 0 {
+		result.Stats = stats
+		return result, ctx.Err()
+	}
+	titleUpdates := stats.TitlesUpdated
 
 	physicalPaths := make([]string, 0, len(files))
 	for _, file := range files {
@@ -162,6 +181,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 			},
 		},
 	)
+	stats.TitlesUpdated += titleUpdates
 	if err := affectedSessionIDs.link(ctx, e, &stats); err != nil {
 		stats.RecordFailed()
 		processErr = errors.Join(processErr, err)

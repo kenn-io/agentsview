@@ -83,24 +83,37 @@ func antigravityIDECompanionPaths(path string) []string {
 // parseSession parses one IDE session DB. It is owned by the
 // antigravityProvider; the package-level ParseAntigravitySession
 // entrypoint was folded onto the provider.
+//
+// The trailing string return is a title-retry reason: the body always parses
+// independently, and a title-database read failure is reported there so it
+// never turns into a body parse error. The final error still means only that
+// the transcript itself could not be parsed.
 func (p *antigravityProvider) parseSession(ctx context.Context,
 	path, project, machine string,
-) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
-	if _, id, ok := antigravityBrainTranscriptConversation(path); ok {
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, string, error) {
+	if root, id, ok := antigravityBrainTranscriptConversation(path); ok {
 		// A conversation with no database of its own: the brain's
 		// plaintext transcript is the session. It carries no token usage.
+		// The summaries database still lives at the IDE root, which
+		// antigravityBrainTranscriptConversation reports directly -- two
+		// filepath.Dir calls would land in .system_generated instead.
 		sess, msgs, err := parseAntigravityBrainTranscriptSession(
 			path, id, project, machine,
 		)
-		return sess, msgs, nil, err
+		if err != nil {
+			return nil, nil, nil, "", err
+		}
+		title, titlePresent, titleErr := readAntigravityTitle(ctx, root, id)
+		applyAntigravityTitle(sess, title, titlePresent)
+		return sess, msgs, nil, antigravityTitleRetryReason(titleErr), nil
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, nil, "", fmt.Errorf("stat %s: %w", path, err)
 	}
 	id := strings.TrimSuffix(filepath.Base(path), ".db")
 	if !IsValidSessionID(id) {
-		return nil, nil, nil, fmt.Errorf(
+		return nil, nil, nil, "", fmt.Errorf(
 			"invalid Antigravity IDE session filename: %s", path,
 		)
 	}
@@ -110,7 +123,7 @@ func (p *antigravityProvider) parseSession(ctx context.Context,
 	// sidecars that the driver expects in the same dir.
 	db, err := openSQLiteReadOnly(path, sqliteReadOptions{})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf(
+		return nil, nil, nil, "", fmt.Errorf(
 			"open antigravity db %s: %w", path, err,
 		)
 	}
@@ -135,7 +148,7 @@ func (p *antigravityProvider) parseSession(ctx context.Context,
 		// engine-level no-clobber support, tracked separately. The
 		// parse error preserves stored data and the engine retries
 		// failed files.
-		return nil, nil, nil, err
+		return nil, nil, nil, "", err
 	}
 	messages := dbResult.messages
 	// gen_metadata token usage describes the session's actual
@@ -192,7 +205,7 @@ func (p *antigravityProvider) parseSession(ctx context.Context,
 		antigravityBrainTranscriptPath(root, id),
 	)
 	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, nil, err
+		return nil, nil, nil, "", err
 	}
 	messages = append(messages, brainMessages...)
 
@@ -265,6 +278,13 @@ func (p *antigravityProvider) parseSession(ctx context.Context,
 			Mtime: mtime,
 		},
 	}
+	// The IDE's own title store, shared by every conversation under this root.
+	// A read failure is reported through titleRetry and never fails the parse:
+	// the body above is complete and already persisted by the caller.
+	title, titlePresent, titleErr := readAntigravityTitle(ctx, root, id)
+	applyAntigravityTitle(sess, title, titlePresent)
+	titleRetry := antigravityTitleRetryReason(titleErr)
+
 	accumulateMessageTokenUsage(sess, messages)
 	applyUsageEventTokenTotals(sess, usageEvents)
 	// gen_metadata rows with zero decoded usage events flag a possible
@@ -277,9 +297,42 @@ func (p *antigravityProvider) parseSession(ctx context.Context,
 		// Usage events still flow for message-less parses (e.g. an
 		// undecodable DB with gen_metadata) so daily usage analytics
 		// match the event-derived session totals stamped above.
-		return sess, nil, usageEvents, nil
+		return sess, nil, usageEvents, titleRetry, nil
 	}
-	return sess, messages, usageEvents, nil
+	return sess, messages, usageEvents, titleRetry, nil
+}
+
+// readAntigravityTitle reads one conversation's title from the IDE root's
+// conversation_summaries.db. It implements the shared four-state contract:
+// present=true only when the row exists and the stored value is not SQL NULL,
+// so a missing database or row never clears an existing name.
+func readAntigravityTitle(
+	ctx context.Context, root, conversationID string,
+) (string, bool, error) {
+	return readTitleFromDatabase(ctx, SharedTitleDatabase{
+		Agent:  AgentAntigravity,
+		DBPath: AntigravityTitleDatabasePath(root),
+	}, conversationID)
+}
+
+// applyAntigravityTitle stores a present title on the session. An explicitly
+// present blank title clears the stored name; a missing signal leaves both
+// fields untouched so PreserveSessionName can carry the old value forward.
+func applyAntigravityTitle(sess *ParsedSession, title string, present bool) {
+	if sess == nil || !present {
+		return
+	}
+	sess.SessionName = title
+	sess.SessionNamePresent = true
+}
+
+// antigravityTitleRetryReason converts a title read error into the retry
+// reason Parse reports as DataVersionNeedsRetry.
+func antigravityTitleRetryReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("antigravity title read failed: %v", err)
 }
 
 type antigravityStepLoadResult struct {

@@ -123,6 +123,10 @@ type JSONLSourceSetOptions struct {
 	// owning transcript path from a changed sidecar path so companion events
 	// resolve without scanning the archive. See WithCompanionTranscript.
 	CompanionTranscript func(companionPath string) (string, bool)
+	// ExtraWatchRoots are watch roots outside the session roots (see
+	// WithExtraWatchRoots). They join WatchPlan and WatchRoots but never
+	// Discover.
+	ExtraWatchRoots []WatchRoot
 }
 
 // JSONLSourceSet discovers, watches, locates, and fingerprints JSONL-like
@@ -232,7 +236,10 @@ func (s JSONLSourceSet) WatchPlan(ctx context.Context) (WatchPlan, error) {
 			DebounceKey:  string(s.provider) + ":jsonl:" + root,
 		})
 	}
-	return WatchPlan{Roots: roots}, nil
+	// Extra roots (shared databases outside the session roots) are watched but
+	// never discovered; see WithExtraWatchRoots.
+	roots = append(roots, s.options.ExtraWatchRoots...)
+	return WatchPlan{Roots: dedupeWatchRoots(roots)}, nil
 }
 
 // WatchRoots returns configured root metadata without discovering transcripts
@@ -252,7 +259,31 @@ func (s JSONLSourceSet) WatchRoots(
 			DebounceKey: string(s.provider) + ":jsonl:" + root,
 		})
 	}
-	return roots, nil
+	// WatchRoots is the scheduling surface the engine actually consumes, so
+	// the extra roots must appear here too; otherwise a configured shared
+	// database would only ever be visible to WatchPlan callers.
+	roots = append(roots, s.options.ExtraWatchRoots...)
+	return dedupeWatchRoots(roots), nil
+}
+
+// dedupeWatchRoots drops repeated roots by debounce key (falling back to path)
+// while preserving first-seen order, so a shared database registered through
+// both WatchPlan and WatchRoots is scheduled once.
+func dedupeWatchRoots(roots []WatchRoot) []WatchRoot {
+	seen := make(map[string]struct{}, len(roots))
+	out := make([]WatchRoot, 0, len(roots))
+	for _, root := range roots {
+		key := root.DebounceKey
+		if key == "" {
+			key = root.Path
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, root)
+	}
+	return out
 }
 
 // companionGlobs enumerates the distinct sidecar basenames across all
@@ -570,9 +601,20 @@ func (s JSONLSourceSet) Parse(
 	}
 	out := make([]ParseResultOutcome, 0, len(results))
 	for i := range results {
+		// A non-empty TitleRetryReason means the body parsed but a shared
+		// title database could not be read. Mark the result for retry so the
+		// engine does not record a clean skip that would never re-attempt the
+		// title. The parse itself stays successful and its error stays nil.
+		version := DataVersionCurrent
+		retryReason := ""
+		if results[i].TitleRetryReason != "" {
+			version = DataVersionNeedsRetry
+			retryReason = results[i].TitleRetryReason
+		}
 		out = append(out, ParseResultOutcome{
 			Result:      results[i],
-			DataVersion: DataVersionCurrent,
+			DataVersion: version,
+			RetryReason: retryReason,
 		})
 	}
 	return ParseOutcome{

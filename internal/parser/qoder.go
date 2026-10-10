@@ -1,7 +1,9 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -284,6 +286,10 @@ func retagQoderToolCalls(messages []ParsedMessage, sessionID string) {
 func applyQoderMeta(sess *ParsedSession, meta qoderSessionMeta) {
 	if meta.Title != "" {
 		sess.SessionName = meta.Title
+		// The sibling JSON is the high-priority title source, so a non-empty
+		// value is an explicitly present title that must not be overwritten
+		// by the shared database.
+		sess.SessionNamePresent = true
 	}
 	if sess.Cwd == "" && meta.WorkingDir != "" {
 		sess.Cwd = meta.WorkingDir
@@ -301,16 +307,135 @@ func hasParserDiscoveredForkParent(sess *ParsedSession) bool {
 }
 
 func readQoderSessionMeta(path string) qoderSessionMeta {
+	meta, _ := readQoderSessionMetaFile(path)
+	return meta
+}
+
+// readQoderSessionMetaFile reads the sibling "<uuid>-session.json". A missing
+// file is not an error: it is the expected low-priority case that falls
+// through to the IDE database. A present but unreadable or malformed file is
+// returned as an error so the caller can keep the stored title and retry
+// instead of pretending the JSON held no title.
+func readQoderSessionMetaFile(path string) (qoderSessionMeta, error) {
 	metaPath := strings.TrimSuffix(path, ".jsonl") + "-session.json"
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
-		return qoderSessionMeta{}
+		if errors.Is(err, os.ErrNotExist) {
+			return qoderSessionMeta{}, nil
+		}
+		return qoderSessionMeta{}, err
 	}
 	var meta qoderSessionMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return qoderSessionMeta{}
+		return qoderSessionMeta{}, err
 	}
-	return meta
+	return meta, nil
+}
+
+// qoderAppDatabasePathOverride is a test hook that replaces the Application
+// Support lookup. Production code leaves it nil; tests point it at a fixture
+// database so the CN/international split can be exercised without the real
+// clients installed.
+var qoderAppDatabasePathOverride func(isCN bool) string
+
+// resolveQoderAppSQLitePath binds a session file to the Qoder application
+// database that owns its title. Binding is by configured root, never by a
+// substring guess: a root that is not under one of the two recognized client
+// directories (a custom root, a remote mirror) has no title database on this
+// machine, so the caller must treat it as no signal rather than reading this
+// machine's application database for it.
+func resolveQoderAppSQLitePath(sessionPath string, roots []string) string {
+	cleanPath := filepath.Clean(sessionPath)
+	sep := string(filepath.Separator)
+	matchedRoot := ""
+	isCN := false
+	for _, root := range roots {
+		cleanRoot := filepath.Clean(root)
+		if cleanPath != cleanRoot &&
+			!strings.HasPrefix(cleanPath+sep, cleanRoot+sep) {
+			continue
+		}
+		matchedRoot = cleanRoot
+		// The client directory is an ancestor of the root, not the root's last
+		// segment: default roots are <client>/projects.
+		isCN = QoderClientAppForPath(cleanRoot) == qoderCNClientApp
+		break
+	}
+	if qoderAppDatabasePathOverride != nil {
+		return qoderAppDatabasePathOverride(isCN)
+	}
+	if matchedRoot == "" {
+		return ""
+	}
+	app := qoderAppForRoot(matchedRoot)
+	if app == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "Library", "Application Support", app, qoderAppDatabaseName)
+}
+
+// QoderSiblingJSONTitle reports the title carried by a Qoder transcript's
+// sibling "<uuid>-session.json". That file outranks the shared application
+// database, so a refresh that cannot rule it out must not write.
+//
+// present is true only for a non-empty JSON title. A missing file reports
+// present=false with a nil error. An unreadable or malformed file returns an
+// error: the caller cannot tell whether a high-priority title is being
+// overwritten, so it must keep the stored name and retry.
+func QoderSiblingJSONTitle(path string) (title string, present bool, err error) {
+	meta, err := readQoderSessionMetaFile(path)
+	if err != nil {
+		return "", false, err
+	}
+	if meta.Title == "" {
+		return "", false, nil
+	}
+	return meta.Title, true, nil
+}
+
+// applyQoderTitles resolves the title for a parsed Qoder session using the
+// shared two-tier contract, and returns a non-empty retry reason when a
+// readable title source failed. The sibling JSON wins whenever it carries a
+// non-empty title (already applied by applyQoderMeta); otherwise the bound
+// IDE database supplies the title, and an explicitly empty TEXT is allowed to
+// clear the stored name. Missing files, missing rows, and SQL NULL are all
+// no-signal and leave the stored name alone.
+func applyQoderTitles(
+	ctx context.Context, path string, roots []string, results []ParseResult,
+) string {
+	meta, jsonErr := readQoderSessionMetaFile(path)
+	if jsonErr != nil {
+		// A malformed or unreadable JSON could itself be a high-priority
+		// title source, so falling through to the database would silently
+		// replace it with a lower-priority value.
+		return fmt.Sprintf("qoder session metadata read failed: %v", jsonErr)
+	}
+	if meta.Title != "" {
+		return ""
+	}
+	databasePath := resolveQoderAppSQLitePath(path, roots)
+	if databasePath == "" {
+		return ""
+	}
+	sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	title, present, err := readTitleFromDatabase(ctx, SharedTitleDatabase{
+		Agent: AgentQoder, DBPath: databasePath,
+	}, sessionID)
+	if err != nil {
+		return fmt.Sprintf("qoder title read failed: %v", err)
+	}
+	if !present {
+		return ""
+	}
+	for i := range results {
+		results[i].Session.SessionName = title
+		results[i].Session.SessionNamePresent = true
+	}
+	return ""
 }
 
 func qoderPathIDs(path, _ string) (parentID, subagentID string, isSubagent bool) {
