@@ -71,11 +71,16 @@ func discoverCursorS3ByRoot(
 // <project>/agent-transcripts/, including a parent session's subagents
 // directory. Other .jsonl/.txt objects are ignored.
 func keepCursorS3Session(_ string, segs []string) bool {
+	_, ok := cursorS3TranscriptLocation(segs)
+	return ok
+}
+
+func cursorS3TranscriptLocation(segs []string) (cursorTranscriptLocation, bool) {
 	if len(segs) == 2 {
-		return cursorS3TranscriptName(segs[1])
+		return cursorTranscriptLocation{ProjectDir: segs[0], RawID: strings.TrimSuffix(segs[1], path.Ext(segs[1]))}, cursorS3TranscriptName(segs[1])
 	}
 	loc, ok := parseCursorTranscriptRelParts(segs)
-	return ok && IsValidSessionID(loc.RawID)
+	return loc, ok && IsValidSessionID(loc.RawID)
 }
 
 func cursorS3TranscriptName(name string) bool {
@@ -104,15 +109,24 @@ func cursorS3Location(roots []string, uri string) (string, string, cursorTranscr
 			continue
 		}
 		segs := strings.Split(rel, "/")
-		if keepCursorS3Session(rel, segs) {
-			loc, _ := parseCursorTranscriptRelParts(segs)
-			if len(segs) == 2 {
-				loc = cursorTranscriptLocation{ProjectDir: segs[0], RawID: strings.TrimSuffix(path.Base(uri), path.Ext(uri))}
-			}
+		if loc, ok := cursorS3TranscriptLocation(segs); ok {
 			return s3MachineFromRoot(root, "cursor"), root, loc, true
 		}
 	}
 	return "", "", cursorTranscriptLocation{}, false
+}
+
+// CursorS3ArchivedSourceMatches checks a saved parent's family after its root is removed.
+func CursorS3ArchivedSourceMatches(key, uri string) bool {
+	if key == "" || !isS3URI(uri) {
+		return false
+	}
+	for end := strings.LastIndex(uri, "/"); end > len("s3://"); end = strings.LastIndex(uri[:end], "/") {
+		if sourceKey, _ := CursorS3SourceKey([]string{uri[:end]}, uri); sourceKey == key {
+			return true
+		}
+	}
+	return false
 }
 
 // CursorS3ChildPrefix pairs a child directory with its canonical scanner root.
@@ -158,7 +172,8 @@ func preferCursorS3Transcripts(
 	order := make([]string, 0, len(transcripts))
 	for _, transcript := range transcripts {
 		file := transcript.file
-		k, _ := CursorS3SourceKey(roots, file.Path)
+		_, _, loc, _ := cursorS3Location(roots, file.Path)
+		k := file.Machine + "/" + loc.ProjectDir + "/" + loc.RawID
 		prev, ok := best[k]
 		if !ok {
 			best[k] = transcript

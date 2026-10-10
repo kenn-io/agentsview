@@ -2378,7 +2378,7 @@ func repairCursorS3Parents(ctx context.Context, tx *sql.Tx, ids, roots []string)
 				continue
 			}
 			sourceKey, _ := parser.CursorS3SourceKey(roots, record.FilePath)
-			if sourceKey == key || (sourceKey == "" && strings.HasPrefix(record.FilePath, "s3://")) {
+			if sourceKey == key || (sourceKey == "" && parser.CursorS3ArchivedSourceMatches(key, record.FilePath)) {
 				// Keep verified saved parentage across root and format changes.
 				query.WriteString(" AND parent_session_id IS NOT ?")
 				retainedParents = append(retainedParents, record.ID)

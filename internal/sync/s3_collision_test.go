@@ -3,6 +3,7 @@ package sync
 import (
 	"database/sql"
 	"io"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -134,9 +135,10 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					session := storedSession(ids[uri])
 					assert.Equal(t, uri, derefString(session.FilePath))
 					assert.Equal(t, storedMachine, session.Machine)
-					if ids[uri] != baseID {
-						assert.Equal(t, baseID, derefString(session.ParentSessionID))
-					}
+					assert.Nil(t, session.ParentSessionID)
+					sidebar, err := database.GetSidebarSessionIndex(t.Context(), db.SessionFilter{Project: session.Project, Limit: 50})
+					require.NoError(t, err)
+					assert.True(t, slices.ContainsFunc(sidebar.Sessions, func(row db.SidebarSessionIndexRow) bool { return row.ID == ids[uri] }), "each project must show its conversation")
 					messages, err := database.GetAllMessages(t.Context(), ids[uri])
 					require.NoError(t, err)
 					require.Len(t, messages, i+2)
@@ -211,15 +213,6 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, messages, 3)
 				assert.Equal(t, "Updated B", messages[1].Content)
-			}
-			if tt.restoreRoots {
-				provider.discovered = []parser.SourceRef{sources[1], sources[0]}
-				stats = engine.ResyncAll(t.Context(), nil)
-				require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
-				require.Zero(t, stats.Failed)
-				verify()
-			}
-			if tt.name == "together" {
 				// A second machine owns its own base ID despite the same project and stem.
 				otherMachine := "s3://bucket/host-b/raw/cursor/agent-transcripts/" + stem + ".txt"
 				contents[otherMachine] = contents[paths[0]]
@@ -237,6 +230,11 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				verify()
 			}
 			if tt.restoreRoots {
+				provider.discovered = []parser.SourceRef{sources[1], sources[0]}
+				stats = engine.ResyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+				require.Zero(t, stats.Failed)
+				verify()
 				oldPath := paths[1]
 				paths[1] = strings.TrimSuffix(oldPath, ".txt") + ".jsonl"
 				contents[paths[1]] = strings.ReplaceAll(contents[oldPath], "Answer B", "Format B")
@@ -304,6 +302,7 @@ func TestS3CursorCollidingParents(t *testing.T) {
 		{"parent root removed", [][]int{{0}, {1}, {2}}, false},
 		{"same-family roots restored", [][]int{{0}, {1}, {2}}, false},
 		{"new child after parent root removed", [][]int{{0}, {1}, {2}}, false},
+		{"legacy wrong parent root removed", [][]int{{0}, {1}, {2}}, false},
 		{"children collide", [][]int{{0}, {1}, {3}, {2}}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -319,6 +318,10 @@ func TestS3CursorCollidingParents(t *testing.T) {
 			}
 			if tt.name == "same-family roots restored" {
 				paths = []string{root + "/project/agent-transcripts/shared.txt", aliasRoot + "/project/agent-transcripts/shared.txt", aliasRoot + "/project/agent-transcripts/shared/subagents/child.txt"}
+			}
+			if tt.name == "legacy wrong parent root removed" {
+				paths[1] = strings.Replace(paths[1], root, aliasRoot, 1)
+				paths[2] = strings.Replace(paths[2], root, aliasRoot, 1)
 			}
 			oldFetch := fetchS3Object
 			refreshed := false
@@ -440,6 +443,14 @@ func TestS3CursorCollidingParents(t *testing.T) {
 				}
 			}
 			provider.discovered = []parser.SourceRef{source(paths[2])}
+			if tt.name == "legacy wrong parent root removed" {
+				require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET parent_session_id = ?, data_version = 128 WHERE id = ?", "host-a~cursor:shared", childIDs[paths[2]])
+					return err
+				}))
+				engine.ReconfigureSources(SourceConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {aliasRoot}}})
+				provider.discovered = append(provider.discovered, source(paths[1]))
+			}
 			if tt.childrenCollide {
 				provider.discovered = append(provider.discovered, source(paths[3]))
 			}

@@ -1957,6 +1957,11 @@ schemas keep their existing ordering behavior.
   archive reconciliation fixture. The official support post linked above still
   documents the `agent-transcripts` location; the history documentation link
   now redirects to the Agent overview.
+  Reverified 2026-10-09 against the support post and synthetic S3 archive
+  workflows: same-ID conversations in different projects remain independent
+  in the project sidebar, and rebuilds repair legacy wrong-project parent links
+  after a source root is removed. These are archive policies, not producer
+  guarantees of globally unique IDs.
 
 ## Cursor IDE (`cursor-ide`)
 

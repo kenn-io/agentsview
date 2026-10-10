@@ -12,7 +12,7 @@ import (
 // sourceCollisionID returns the raw session id to store s under. A stored
 // session keeps its id unless its file is gone and an unclaimed replacement
 // has at least as many messages. Other files with the same id are stored under
-// parser.AltSessionID as continuations, unless the provider recognizes a move.
+// parser.AltSessionID, retaining Cursor S3's parser relationship.
 // A session the write step will filter out (admitted false) keeps any id its
 // file already holds but never claims or mints one.
 // The second result requests message replacement when an existing id moves
@@ -91,7 +91,7 @@ func (e *Engine) sourceCollisionID(
 		}
 		altID = parser.AltSessionID(s.ID, lookupPath)
 	}
-	if s.Agent != parser.AgentCursor || !isS3SourcePath(lookupPath) || s.RelationshipType != parser.RelSubagent {
+	if s.Agent != parser.AgentCursor || !isS3SourcePath(lookupPath) {
 		s.ParentSessionID = s.ID
 		s.RelationshipType = parser.RelContinuation
 	}

@@ -58,7 +58,8 @@ stat, and `s3PrefixScan`. Agent policy does not belong there.
 `S3SessionID` is the session key before the engine prefixes the source machine.
 Providers declaring `SharedSessionIDs` use the local collision policy for S3:
 each distinct source keeps its saved ID, and a new source with an occupied ID
-gets a derived continuation ID. An omitted remote object keeps its ownership
+gets a derived ID. Cursor conversations in different projects keep their parser
+relationships. An omitted remote object keeps its ownership
 because discovery does not prove deletion. Codex does not yet declare this
 capability.
 
@@ -74,8 +75,9 @@ capability.
   precedence over other roots. Different projects keep separate conversations.
 - Cursor subagents link to their project's archived parent, including when
   the child arrives first or the parent's object changes format. Refreshing a
-  saved child after removing a source root keeps its resolved parent or unlinked state,
-  including format changes. Unlinked children prefer their own root's parent.
+  saved child after removing a source root keeps its verified same-family parent
+  or unlinked state, including format changes. Wrong-project legacy links are
+  repaired. Unlinked children prefer their own root's parent.
 - Validate IDs with the same rules the local provider already uses.
 - Do not invent a second discover wrapper that bypasses the scanner. Extra
   post-processing (prefer `.jsonl`, fold sidecars) belongs next to the
