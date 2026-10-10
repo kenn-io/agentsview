@@ -473,6 +473,9 @@ var ErrSourceChanged = errors.New("source_changed")
 // transcript revisions for evidence reads.
 var ErrRevisionBoundReadUnavailable = errors.New("revision-bound reads unavailable")
 
+// ErrActiveFilterUnavailable marks a backend that cannot exclude activity before pagination.
+var ErrActiveFilterUnavailable = errors.New("active-session filter unavailable")
+
 // ToolCall mirrors a flattened tool call with its enclosing message's
 // ordinal/timestamp attached. Serialized from parser.ParsedToolCall.
 type ToolCall struct {

@@ -145,8 +145,9 @@ full stored ID with an older server.
 `search_sessions` and `search_content` exclude sessions active in the last ten
 minutes by default, including the current conversation. `search_content`
 applies this exclusion before the result limit so older matches fill the page.
-It reports the guard in `exclusions.recent_active` and omits `excluded_active`.
-The HTTP client returns an upgrade error for older servers. Set
+It reports the guard in `exclusions.recent_active`. Older servers retain the
+guard after pagination and report dropped matches in `excluded_active`, so
+their pages can still be short or empty with a `next_cursor`. Set
 `include_active: true` when you need that recent work. For recall from a known
 conversation, pass its full ID as `current_session_id`; `search_content` then
 excludes only that session before applying the result limit and does not hide

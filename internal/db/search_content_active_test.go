@@ -19,6 +19,8 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 		{"started-boundary", "", "2024-06-15T11:50:00Z"},
 		{"created-boundary", "", ""},
 		{"idle", "2024-06-15T10:00:00Z", ""},
+		{"malformed", "invalid", "2024-06-15T11:59:00Z"},
+		{"unknown", "", ""},
 	}
 	hits := make([]VectorHit, 0, len(fixtures))
 	for _, f := range fixtures {
@@ -27,21 +29,29 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 			"UPDATE sessions SET ended_at = ?, started_at = ?, created_at = ? WHERE id = ?",
 			f.ended, f.started, "2024-06-15T11:50:00Z", f.id)
 		require.NoError(t, err)
+		if f.id == "unknown" {
+			_, err = d.getWriter().Exec(t.Context(), "UPDATE sessions SET created_at = '' WHERE id = ?", f.id)
+			require.NoError(t, err)
+		}
 		hits = append(hits, VectorHit{SessionID: f.id, Ordinal: 0, Score: 0.9, Snippet: "needle"})
 	}
 	d.SetVectorSearcher(&fakeVectorSearcher{hits: hits})
 	for _, mode := range []string{"substring", "regex", "fts", "terms", "semantic", "hybrid"} {
 		t.Run(mode, func(t *testing.T) {
-			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
-				Pattern: "needle", Mode: mode, Limit: 4,
-				ExcludeActiveSince: "2024-06-15T11:50:00Z",
-			})
-			require.NoError(t, err)
-			ids := make([]string, 0, len(page.Matches))
-			for _, match := range page.Matches {
-				ids = append(ids, match.SessionID)
+			for _, cutoff := range []string{"2024-06-15T11:50:00Z", "2024-06-15T13:50:00+02:00", "2024-06-15T06:50:00-05:00"} {
+				t.Run(cutoff, func(t *testing.T) {
+					page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+						Pattern: "needle", Mode: mode, Limit: 6,
+						ExcludeActiveSince: cutoff,
+					})
+					require.NoError(t, err)
+					ids := make([]string, 0, len(page.Matches))
+					for _, match := range page.Matches {
+						ids = append(ids, match.SessionID)
+					}
+					assert.ElementsMatch(t, []string{"boundary", "started-boundary", "created-boundary", "idle", "malformed", "unknown"}, ids)
+				})
 			}
-			assert.ElementsMatch(t, []string{"boundary", "started-boundary", "created-boundary", "idle"}, ids)
 		})
 	}
 }

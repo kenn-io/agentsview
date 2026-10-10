@@ -775,8 +775,9 @@ type contentMatch struct {
 }
 
 type searchContentOut struct {
-	Matches    []contentMatch `json:"matches"`
-	NextCursor *int           `json:"next_cursor,omitempty"`
+	ExcludedActive int            `json:"excluded_active,omitempty"`
+	Matches        []contentMatch `json:"matches"`
+	NextCursor     *int           `json:"next_cursor,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
 	// resolved, which the caller cannot see in its own request.
 	EffectiveMode  string                  `json:"effective_mode"`
@@ -837,10 +838,11 @@ func (t *toolset) searchContent(
 	currentSession := strings.TrimSpace(in.CurrentSessionID)
 	excludeSessions := db.NormalizeExcludeSessionIDs([]string{currentSession})
 	cutoff := ""
+	now := t.clock()
 	if currentSession == "" && !in.IncludeActive {
-		cutoff = t.clock().Add(-activeExclusionWindow).UTC().Format(time.RFC3339Nano)
+		cutoff = now.Add(-activeExclusionWindow).UTC().Format(time.RFC3339Nano)
 	}
-	res, err := t.svc.SearchContent(ctx, service.ContentSearchRequest{
+	req := service.ContentSearchRequest{
 		Pattern:            in.Pattern,
 		Mode:               in.Mode,
 		Scope:              in.Scope,
@@ -857,7 +859,13 @@ func (t *toolset) searchContent(
 		IncludeAutomated:   in.IncludeAutomated,
 		ExcludeSessionIDs:  excludeSessions,
 		ExcludeActiveSince: cutoff,
-	})
+	}
+	res, err := t.svc.SearchContent(ctx, req)
+	legacy := cutoff != "" && errors.Is(err, service.ErrActiveFilterUnavailable)
+	if legacy {
+		req.ExcludeActiveSince = ""
+		res, err = t.svc.SearchContent(ctx, req)
+	}
 	if err != nil {
 		return nil, searchContentOut{}, err
 	}
@@ -875,7 +883,18 @@ func (t *toolset) searchContent(
 	if db.ContentSearchModeSupportsScope(in.Mode) {
 		out.EffectiveScope = cmp.Or(in.Scope, "all")
 	}
+	activity := make(map[string]string)
 	for _, m := range res.Matches {
+		if legacy {
+			ts, ok := t.lookupActivity(ctx, m.SessionID, activity)
+			if !ok {
+				ts = m.Timestamp
+			}
+			if isActiveSince(ts, now) {
+				out.ExcludedActive++
+				continue
+			}
+		}
 		out.Matches = append(out.Matches, contentMatch{
 			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
 			Location: m.Location, Role: m.Role, Ordinal: m.Ordinal,

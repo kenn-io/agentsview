@@ -823,7 +823,7 @@ func (b *httpBackend) SearchContent(
 		return nil, err
 	}
 	if req.ExcludeActiveSince != "" && response.HTTPResponse.Header.Get("X-AgentsView-Active-Filter") != "true" {
-		return nil, errors.New("server does not support excluding active sessions before the search limit; upgrade the server")
+		return nil, service.ErrActiveFilterUnavailable
 	}
 	for i := range out.Matches {
 		out.Matches[i].WebURL = b.sessionWebURL(out.Matches[i].SessionID)

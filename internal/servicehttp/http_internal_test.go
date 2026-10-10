@@ -46,7 +46,7 @@ func TestHTTPContentSearchActiveFilterCompatibility(t *testing.T) {
 				require.NoError(t, err)
 				assert.Empty(t, out.Matches)
 			} else {
-				require.ErrorContains(t, err, "upgrade the server")
+				require.ErrorIs(t, err, service.ErrActiveFilterUnavailable)
 				assert.Nil(t, out)
 			}
 		})

@@ -1507,6 +1507,7 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 // when IncludeActive is set, which skips the session-activity lookup).
 type fakeContentSearchService struct {
 	service.SessionService
+	calls   int
 	lastReq service.ContentSearchRequest
 	result  *service.ContentSearchResult
 	err     error
@@ -1516,6 +1517,7 @@ func (f *fakeContentSearchService) SearchContent(
 	_ context.Context, req service.ContentSearchRequest,
 ) (*service.ContentSearchResult, error) {
 	f.lastReq = req
+	f.calls++
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -1531,12 +1533,13 @@ func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
 	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "how do I configure retries", Mode: "semantic", IncludeActive: true,
+		Pattern: "how do I configure retries", Mode: "semantic",
 	})
 	require.Error(t, err)
 	require.ErrorIs(t, err, service.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "embeddings build")
 	assert.Equal(t, "semantic", fake.lastReq.Mode)
+	assert.Equal(t, 1, fake.calls)
 }
 
 // search_content must reject scope outside semantic/hybrid/terms with the same
