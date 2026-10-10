@@ -12,8 +12,8 @@ The latest release is
 **Bug fixes**
 
 - Keep both Cursor conversations when S3 objects in different projects share
-  a session ID. Data version 129 triggers a one-time archive rebuild to recover
-  previously lost conversations while preserving archived sessions and stars.
+  a session ID. A one-time archive rebuild recovers overwritten Cursor S3
+  conversations while preserving archived sessions and stars.
 
 ## 0.45.0
 

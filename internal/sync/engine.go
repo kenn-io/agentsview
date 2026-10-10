@@ -8691,7 +8691,7 @@ func (e *Engine) filterFilesByMtime(
 			out = append(out, f)
 			continue
 		}
-		if isS3SourcePath(f.Path) && e.s3SourceMetadataChanged(ctx, &f) {
+		if isS3SourcePath(f.Path) && e.s3SourceMetadataChanged(ctx, f) {
 			out = append(out, f)
 			continue
 		}

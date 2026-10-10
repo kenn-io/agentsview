@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,8 +54,10 @@ func TestSourceCollisionKeepsRetryFlag(t *testing.T) {
 	altID := parser.AltSessionID(id, other)
 	assert.Equal(t, altID, res.results[0].Session.ID)
 	assert.True(t, res.needsRetryForSession(altID))
-	assert.Equal(t, "gemini:spawner", res.results[0].Session.ParentSessionID)
-	assert.Equal(t, parser.RelSubagent, res.results[0].Session.RelationshipType)
+	// The derived session links to the session it shares an id with, even
+	// when its parser recorded another parent.
+	assert.Equal(t, id, res.results[0].Session.ParentSessionID)
+	assert.Equal(t, parser.RelContinuation, res.results[0].Session.RelationshipType)
 }
 
 // A failed ownership lookup skips the source this pass so it retries, rather
@@ -110,18 +113,18 @@ func TestChangedPathSyncResetsSourceClaims(t *testing.T) {
 
 func TestS3CursorSharedSessionProjects(t *testing.T) {
 	for _, tt := range []struct {
-		name       string
-		order      []int
-		legacy     bool
-		cachedLost bool
-		batch      bool
-		subagents  bool
+		name        string
+		order       []int
+		legacy      bool
+		cachedLost  bool
+		batch       bool
+		lookupError bool
 	}{
 		{name: "both in one pass", order: []int{0, 1}, batch: true},
 		{name: "both in one pass reversed", order: []int{1, 0}, batch: true},
-		{name: "children of different parents", order: []int{0, 1}, subagents: true},
 		{name: "A then B", order: []int{0, 1}},
 		{name: "B then A", order: []int{1, 0}},
+		{name: "ownership lookup fails", order: []int{0, 1}, lookupError: true},
 		{name: "main dropped object", order: []int{0}, legacy: true},
 		{name: "main overwritten row", order: []int{1}, legacy: true},
 		{name: "main overwritten cached row", order: []int{1}, legacy: true, cachedLost: true},
@@ -130,19 +133,19 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			const root = "s3://bucket/host-a/raw/cursor"
 			const baseID = "host-a~cursor:shared"
 			paths := []string{root + "/project-a/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared.txt"}
-			parents := []string{"parent-a", "parent-b"}
-			if tt.subagents {
-				paths = []string{root + "/project-a/agent-transcripts/parent-a/subagents/shared.txt", root + "/project-b/agent-transcripts/parent-b/subagents/shared.txt"}
-			}
 			bodies := map[string]string{
 				paths[0]: "user:\nProject A\nassistant:\nAnswer A\n",
 				paths[1]: "user:\nProject B\nassistant:\nAnswer B\n",
 			}
 			mtime := time.Unix(100, 0)
 			var fetches atomic.Int32
+			var reopen func()
 			oldFetch := fetchS3Object
 			t.Cleanup(func() { fetchS3Object = oldFetch })
 			fetchS3Object = func(uri string) (io.ReadCloser, error) {
+				if reopen != nil {
+					reopen()
+				}
 				body, ok := bodies[uri]
 				require.True(t, ok, "unexpected object %s", uri)
 				fetches.Add(1)
@@ -168,17 +171,6 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 			engine.workerCountOverride = 2
-			if tt.subagents {
-				for i, parent := range parents {
-					uri := root + "/" + []string{"project-a", "project-b"}[i] + "/agent-transcripts/" + parent + ".txt"
-					bodies[uri] = "user:\nParent\nassistant:\nAnswer\n"
-					ref := source(i)
-					ref.Key, ref.DisplayPath, ref.FingerprintKey = uri, uri, uri
-					ref.Opaque = parser.S3DiscoveredSource{URI: uri, Machine: "host-a", Size: int64(len(bodies[uri])), MtimeNS: mtime.UnixNano(), Fingerprint: "s3-meta:stable"}
-					provider.discovered = append(provider.discovered, ref)
-				}
-				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-			}
 			if tt.batch {
 				provider.discovered = []parser.SourceRef{source(tt.order[0]), source(tt.order[1])}
 				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
@@ -214,8 +206,26 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				}
 			}
 			provider.discovered = []parser.SourceRef{source(0), source(1)}
+			if tt.lookupError {
+				oldLookup := lookupS3Provider
+				t.Cleanup(func() { lookupS3Provider = oldLookup })
+				lookupS3Provider = func(agent parser.AgentType) (parser.S3Provider, bool) {
+					// A maintenance handoff temporarily closes the archive's connections.
+					lookupS3Provider = oldLookup
+					require.NoError(t, database.CloseConnections(t.Context()))
+					_, err := database.ListSessionIDsByFilePath(t.Context(), paths[0], "cursor")
+					require.Error(t, err)
+					return oldLookup(agent)
+				}
+				var once sync.Once
+				reopen = func() { once.Do(func() { require.NoError(t, database.Reopen()) }) }
+				t.Cleanup(reopen)
+			}
 			stats := engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 			require.Zero(t, stats.Failed)
+			if tt.lookupError {
+				assert.EqualValues(t, 4, fetches.Load(), "lookup failure must keep both objects in the work list")
+			}
 			if tt.cachedLost {
 				missing, err := database.ListSessionIDsByFilePath(t.Context(), paths[0], "cursor")
 				require.NoError(t, err)
@@ -245,10 +255,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					require.NotNil(t, session)
 					assert.Equal(t, "host-a", session.Machine)
 					assert.Equal(t, uri, derefString(session.FilePath))
-					if tt.subagents {
-						assert.Equal(t, "host-a~cursor:"+parents[i], derefString(session.ParentSessionID))
-						assert.Equal(t, "subagent", session.RelationshipType)
-					} else if ids[i] != baseID {
+					if ids[i] != baseID {
 						assert.Equal(t, baseID, derefString(session.ParentSessionID))
 						assert.Equal(t, "continuation", session.RelationshipType)
 					}
@@ -278,9 +285,6 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				require.True(t, starred)
 			}
 			paths[1] = root + "/project-b/agent-transcripts/shared/shared.jsonl"
-			if tt.subagents {
-				paths[1] = root + "/project-b/agent-transcripts/parent-b/subagents/shared.jsonl"
-			}
 			bodies[paths[1]] = `{"role":"user","message":{"content":"Project B"}}` + "\n" + `{"role":"assistant","message":{"content":"Answer B"}}` + "\n"
 			provider.discovered = []parser.SourceRef{source(0), source(1)}
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)

@@ -64,8 +64,6 @@ type DiscoveredFile struct {
 	TranscriptMtime int64
 	// SourceFingerprint is a durable object fingerprint for s3:// sources.
 	SourceFingerprint string
-	// S3StoredSessionID retains this pass's ownership lookup, including an empty result.
-	S3StoredSessionID *string
 	ForceParse        bool // caller requires freshness bypass
 	// ForceFullParse also disables append-only processing so a materialized
 	// replacement cannot be mistaken for bytes appended to the stored source.

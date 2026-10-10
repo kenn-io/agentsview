@@ -77,7 +77,8 @@ func keepCursorS3Session(_ string, segs []string) bool {
 
 func cursorS3TranscriptLocation(segs []string) (cursorTranscriptLocation, bool) {
 	if len(segs) == 2 {
-		return cursorTranscriptLocation{ProjectDir: segs[0], RawID: strings.TrimSuffix(segs[1], path.Ext(segs[1]))}, cursorS3TranscriptName(segs[1])
+		loc := cursorTranscriptLocation{ProjectDir: segs[0], RawID: strings.TrimSuffix(segs[1], path.Ext(segs[1]))}
+		return loc, cursorS3TranscriptName(segs[1])
 	}
 	loc, ok := parseCursorTranscriptRelParts(segs)
 	return loc, ok && IsValidSessionID(loc.RawID)
