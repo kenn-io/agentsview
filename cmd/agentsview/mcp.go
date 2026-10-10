@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
+	"go.kenn.io/kit/daemon"
 )
 
 func newMCPCommand() *cobra.Command {
@@ -42,10 +44,9 @@ Use --profile memory to advertise only get_memory_status, search_content, and
 get_messages for focused conversation-memory clients. The default full profile
 is unchanged.
 
-The server reads through the daemon path. By default each tool call talks to
-the local agentsview daemon, starting it when needed so a long-lived MCP server
-can recover after the daemon exits due to idleness. Use --server to target an
-explicit daemon URL.
+The server reuses its connection while the writable daemon runtime record and
+process identity match. After the daemon exits, the next call finds it again
+and starts it when needed. Use --server to target an explicit daemon URL.
 
 Add to your MCP client config (e.g. Claude Desktop):
   {
@@ -201,8 +202,8 @@ func applyMemoryTargetEnv(cmd *cobra.Command, profileName string) error {
 
 // resolveMCPService constructs the SessionService used by the long-lived
 // MCP server. The implicit local path is intentionally daemon-only and
-// lazy: every operation re-resolves the daemon transport so a tool call can
-// wake the daemon after it exits due to idleness.
+// lazy: calls reuse the daemon transport while its record and identity match.
+// The next call can wake the daemon after it exits due to idleness.
 func resolveMCPService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
@@ -241,8 +242,10 @@ func resolveMCPService(
 }
 
 type mcpDaemonService struct {
-	mu  sync.Mutex
-	cfg config.Config
+	mu      sync.Mutex
+	cfg     config.Config
+	backend service.SessionService
+	runtime *daemon.RuntimeRecord
 }
 
 func newMCPDaemonService(cfg config.Config) service.SessionService {
@@ -263,6 +266,10 @@ func (s *mcpDaemonService) daemonService(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.backend != nil && s.cachedDaemonMatches() {
+		return s.backend, nil
+	}
+	s.backend, s.runtime = nil, nil
 	cfg := s.cfg
 	tr, err := ensureTransportContext(
 		ctx, &cfg, transportIntentLongLived, 0,
@@ -276,7 +283,32 @@ func (s *mcpDaemonService) daemonService(
 		)
 	}
 	s.cfg.AuthToken = cfg.AuthToken
-	return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL), nil
+	backend := servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL)
+	if tr.Runtime != nil && !tr.ReadOnly && !tr.Runtime.RuntimeFallback {
+		rec := tr.Runtime.Record
+		rec.SourcePath = ""
+		s.runtime = &rec
+		s.backend = backend
+	}
+	return backend, nil
+}
+
+// cachedDaemonMatches requires unchanged evidence before reusing cached credentials.
+func (s *mcpDaemonService) cachedDaemonMatches() bool {
+	if s.runtime == nil {
+		return false
+	}
+	store := runtimeStore(s.cfg.DataDir)
+	path, err := store.Path(s.runtime.PID)
+	if err != nil {
+		return false
+	}
+	rec, err := store.Read(path)
+	if err != nil {
+		return false
+	}
+	rec.SourcePath = ""
+	return reflect.DeepEqual(rec, *s.runtime) && runtimeRecordIdentityState(rec) == processCreateTimeMatch
 }
 
 func (s *mcpDaemonService) Get(

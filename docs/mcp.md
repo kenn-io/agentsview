@@ -210,9 +210,11 @@ short page can have a `next_from` and should be continued.
 
 ## Daemon-Backed Reads
 
-Local MCP mode talks to the AgentsView daemon. Each tool call resolves the local
-daemon and starts it when needed, so a long-lived MCP server keeps working even
-after the daemon exits due to idleness.
+Local MCP mode reuses its connection while the writable daemon runtime record
+and process identity match. After the daemon exits, the next call finds it again
+and starts it when needed.
+Read-only daemons, startup fallbacks, and daemons whose process identity cannot
+be verified use full discovery for each call.
 
 The MCP server does not open the local SQLite archive directly. This keeps MCP
 reads on the same daemon policy as the desktop app and avoids a long-running MCP
