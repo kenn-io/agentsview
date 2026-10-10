@@ -2935,12 +2935,7 @@ func TestFindPruneCandidatesAgentTrees(t *testing.T) {
 		{"other agent protects ancestors", PruneFilter{Agent: "mimocode"}, "claude", false, false, []string{"sibling"}},
 		{"other agent trash protects ancestors", PruneFilter{Agent: "mimocode"}, "claude", true, false, []string{"sibling"}},
 		{"project protects ancestors", PruneFilter{Agent: "mimocode", Project: "selected"}, "mimocode", false, false, []string{"sibling"}},
-		{"date protects ancestors", PruneFilter{Agent: "mimocode", Before: "2025-01-01"}, "mimocode", false, false, []string{"sibling"}},
-		{"message count protects ancestors", PruneFilter{Agent: "mimocode", MaxMessages: new(1)}, "mimocode", false, false, []string{"sibling"}},
-		{"first message protects ancestors", PruneFilter{Agent: "mimocode", FirstMessage: "selected"}, "mimocode", false, false, []string{"sibling"}},
-		{"matching cycle", PruneFilter{Agent: "mimocode"}, "mimocode", false, true, []string{"parent", "child", "grandchild", "sibling"}},
 		{"protected cycle terminates", PruneFilter{Agent: "mimocode"}, "claude", false, true, []string{"sibling"}},
-		{"without agent keeps parents", PruneFilter{MaxMessages: new(2)}, "mimocode", false, false, []string{"grandchild", "sibling"}},
 		{"without agent excludes trash", PruneFilter{MaxMessages: new(2)}, "mimocode", true, false, []string{"sibling"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

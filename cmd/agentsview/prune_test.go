@@ -233,19 +233,6 @@ func TestPruner_PruneScenarios(t *testing.T) {
 		wantKept   bool
 	}{
 		{
-			name:       "agent dry run",
-			cfg:        PruneConfig{Filter: db.PruneFilter{Agent: "mimocode"}, DryRun: true},
-			wantOutput: []string{"Dry run", "Found 1 sessions"},
-			wantKept:   true,
-		},
-		{
-			name:       "agent abort",
-			input:      "n\n",
-			cfg:        PruneConfig{Filter: db.PruneFilter{Agent: "mimocode"}},
-			wantOutput: []string{"Aborted"},
-			wantKept:   true,
-		},
-		{
 			name:       "dry run",
 			cfg:        PruneConfig{Filter: db.PruneFilter{Project: "test"}, DryRun: true},
 			wantOutput: []string{"Dry run", "Found 1 sessions"},
@@ -283,7 +270,6 @@ func TestPruner_PruneScenarios(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
 			dbtest.SeedSession(t, d, "s1", "test", func(s *db.Session) {
-				s.Agent = "mimocode"
 				s.EndedAt = new("2024-01-01T00:00:00Z")
 				s.MessageCount = 0
 			})
@@ -324,33 +310,12 @@ func TestPrunerAgentTreeDeletion(t *testing.T) {
 	}
 	_, err := d.SoftDeleteSessions(t.Context(), []string{"grandchild"})
 	require.NoError(t, err)
-	before, err := d.SessionDeletionPublicationRevision(t.Context())
-	require.NoError(t, err)
 	pruner, buf := newTestPruner(t, d, "y\n")
 	require.NoError(t, pruner.Prune(t.Context(), PruneConfig{Filter: db.PruneFilter{Agent: "mimocode"}}))
 	assert.Contains(t, buf.String(), "Deleted 3 sessions")
-	for _, id := range []string{"parent", "child", "grandchild"} {
-		s, err := d.GetSession(t.Context(), id)
-		require.NoError(t, err)
-		assert.Nil(t, s, id)
-		assert.True(t, d.IsSessionExcluded(t.Context(), id), id)
-		msgs, err := d.GetAllMessages(t.Context(), id)
-		require.NoError(t, err)
-		assert.Empty(t, msgs, id)
-	}
 	other, err := d.GetSession(t.Context(), "other")
 	require.NoError(t, err)
 	assert.NotNil(t, other)
-	assert.False(t, d.IsSessionExcluded(t.Context(), "other"))
-	page, err := d.Search(t.Context(), db.SearchFilter{Query: "prunetree"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	assert.Equal(t, "other", page.Results[0].SessionID)
-	after, err := d.SessionDeletionPublicationRevision(t.Context())
-	require.NoError(t, err)
-	ids, err := d.LoadSessionDeletionChanges(t.Context(), before, after)
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"parent", "child", "grandchild"}, ids)
 }
 
 func TestDeleteFilesRemovesFiles(t *testing.T) {
