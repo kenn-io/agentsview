@@ -34,7 +34,7 @@ func newArchiveCommand() *cobra.Command {
 		report, err := rawarchive.Capture(cmd.Context(), rawarchive.CaptureOptions{
 			Destination: args[0], DataDir: cfg.DataDir, Roots: roots, IdentityFrom: identityFrom,
 			WritersStopped: writersStopped, ReaderBuild: version, Progress: archiveProgress(cmd),
-			Settings: rawarchive.RecoverySettings{ArchiveContent: cfg.ArchiveContent, ToolResultImages: cfg.ToolResultImages, LocalMachineName: cfg.LocalMachineName},
+			Settings: rawarchive.RecoverySettings{ArchiveContent: cfg.ArchiveContent, ToolResultImages: cfg.ToolResultImages, LocalMachineName: cfg.LocalMachineName, ResultContentBlockedCategories: &cfg.ResultContentBlockedCategories},
 		})
 		if err != nil {
 			return err
@@ -138,6 +138,7 @@ func newArchiveCommand() *cobra.Command {
 		return withRawArchive(cmd, func(a *rawarchive.Archive) error {
 			report, err := a.Backup(cmd.Context(), args[0], rawarchive.RecoverySettings{
 				ArchiveContent: cfg.ArchiveContent, ToolResultImages: cfg.ToolResultImages, LocalMachineName: cfg.LocalMachineName,
+				ResultContentBlockedCategories: &cfg.ResultContentBlockedCategories,
 			}, version)
 			return errors.Join(err, writeArchiveJSON(cmd.OutOrStdout(), report))
 		})

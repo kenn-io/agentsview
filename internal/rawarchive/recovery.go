@@ -26,9 +26,10 @@ const recoveryInventoryName = "inventory.json"
 // RecoverySettings is the complete allowlist of settings retained in a backup.
 // Original credentials, connections, provider roots and runtime config are omitted.
 type RecoverySettings struct {
-	ArchiveContent   config.ArchiveContent   `json:"archive_content"`
-	ToolResultImages config.ToolResultImages `json:"tool_result_images"`
-	LocalMachineName string                  `json:"local_machine_name"`
+	ResultContentBlockedCategories *[]string               `json:"result_content_blocked_categories,omitzero"`
+	ArchiveContent                 config.ArchiveContent   `json:"archive_content"`
+	ToolResultImages               config.ToolResultImages `json:"tool_result_images"`
+	LocalMachineName               string                  `json:"local_machine_name"`
 }
 
 type recoveryInventory struct {
@@ -372,11 +373,15 @@ func writeRecoveryConfig(path string, settings RecoverySettings) error {
 		return err
 	}
 	cfg := config.Config{DataDir: path}
-	if err := cfg.SaveSettings(map[string]any{
+	values := map[string]any{
 		"archive_content": settings.ArchiveContent, "tool_result_images": settings.ToolResultImages,
 		"local_machine_name": settings.LocalMachineName, "host": "127.0.0.1", "require_auth": true,
 		"cursor_secret": base64.StdEncoding.EncodeToString(secret),
-	}); err != nil {
+	}
+	if settings.ResultContentBlockedCategories != nil {
+		values["result_content_blocked_categories"] = *settings.ResultContentBlockedCategories
+	}
+	if err := cfg.SaveSettings(values); err != nil {
 		return err
 	}
 	return cfg.EnsureAuthToken()

@@ -12,10 +12,58 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/assets"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/docbank"
 )
+
+func TestRecoveryPreservesBlockedResultCategories(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		categories *[]string
+		want       []string
+	}{
+		{name: "custom", categories: new([]string{"Bash", "Write"}), want: []string{"Bash", "Write"}},
+		{name: "empty", categories: new([]string{}), want: []string{}},
+		{name: "legacy absent", want: []string{"Read", "Glob"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			opts := captureFixture(t)
+			opts.Roots[0].Provider = "files"
+			opts.Settings.ResultContentBlockedCategories = tt.categories
+			_, err := Capture(ctx, opts)
+			require.NoError(t, err)
+			seed := filepath.Join(t.TempDir(), "seed")
+			_, err = Seed(ctx, filepath.Join(opts.Destination, "capture.json"), seed, nil)
+			require.NoError(t, err)
+			t.Setenv("AGENTSVIEW_DATA_DIR", seed)
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.ResultContentBlockedCategories)
+			database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			archive, err := Open(ctx, database, seed, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, archive.Close()) })
+			backup := filepath.Join(t.TempDir(), "backup")
+			report, err := archive.Backup(ctx, backup, RecoverySettings{
+				ArchiveContent: cfg.ArchiveContent, ToolResultImages: cfg.ToolResultImages,
+				LocalMachineName: cfg.LocalMachineName, ResultContentBlockedCategories: &cfg.ResultContentBlockedCategories,
+			}, "test")
+			require.NoError(t, err)
+			restored := filepath.Join(t.TempDir(), "restored")
+			_, err = Restore(ctx, backup, report.SnapshotID, restored, nil)
+			require.NoError(t, err)
+			t.Setenv("AGENTSVIEW_DATA_DIR", restored)
+			cfg, err = config.LoadReadOnly()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.ResultContentBlockedCategories)
+		})
+	}
+}
 
 // The default crosses the recipe boundary. Run with
 // AGENTSVIEW_RECOVERY_TEST_BYTES=4294967297 to exercise the former 4 GiB limit.
