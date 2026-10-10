@@ -284,6 +284,7 @@ func (pending *PreparedDeltaImport) Execute(
 	}
 	stats.ProcessingDuration = time.Since(processingStart)
 	stats.SessionsSynced = engineStats.Synced
+	stats.TitlesUpdated = engineStats.TitlesUpdated
 	stats.SessionsTotal = engineStats.TotalSessions
 	stats.Skipped = engineStats.Skipped
 	stats.Failed = engineStats.Failed

@@ -3301,6 +3301,10 @@ schemas keep their existing ordering behavior.
   or brain transcript conversation ID. This is local observation, not a
   published producer schema. Synthetic parser and sync tests cover missing
   rows, SQL NULL, explicit blank titles, and read failures.
+  Verified remote summary stores refresh titles through their configured IDE
+  roots and source machines. Transported paths must resolve and round-trip
+  through the import mapping. Title-only delta tests cover database and WAL
+  renames, clears, unchanged messages, notifications, and retained failures.
 
 ## Antigravity CLI (`antigravity-cli`)
 
@@ -3567,7 +3571,10 @@ schemas keep their existing ordering behavior.
   app names `SharedClientCache/cache/db/local.db` for a different store, which
   does not establish that those transcripts use `chat_sessions`. Synthetic
   tests cover native local roots, source machine ownership, mirrors, explicit
-  blanks, read failures, and JSON recovery.
+  blanks, read failures, and JSON recovery. For overlapping roots, the most
+  specific configured owner controls application database access; a local
+  ancestor cannot authorize a foreign child. Subagent tests use a corrupt
+  native application database to prove the lookup is skipped entirely.
 
 ## QwenPaw (`qwenpaw`)
 
@@ -4073,3 +4080,5 @@ schemas keep their existing ordering behavior.
 [evener-source-5]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/fork.go
 [omo-configuration-paths]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/config.ts
 [omo-session-manager]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/core/session-manager.ts
+
+<!-- Modification: 2026-10-10 22:36:37 +0800; model: unknown (not provided by the session); platform: Codex. Remote title behavior and nested-root ownership verified against source and isolated tests; Windows runtime and production upgrade not performed. -->

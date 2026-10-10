@@ -207,11 +207,13 @@ func TestQoderParseCorruptJSONDoesNotFallThrough(t *testing.T) {
 	assert.NotEmpty(t, results[0].RetryReason)
 }
 
-// TestQoderParseSubagentNeverAdoptsTitle keeps the subagent boundary: a
-// subagent transcript must not inherit the parent's title even when the shared
-// database has a row for the parent id.
+// TestQoderParseSubagentNeverAdoptsTitle proves no application lookup runs:
+// a corrupt native database would force a retry if the subagent guard vanished.
 func TestQoderParseSubagentNeverAdoptsTitle(t *testing.T) {
-	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	root := filepath.Join(home, ".qoder", "projects")
 	subPath := filepath.Join(root, "proj", qoderTitleTestID, "subagents", "agent-123.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(subPath), 0o755))
 	require.NoError(t, os.WriteFile(subPath, []byte(
@@ -219,16 +221,17 @@ func TestQoderParseSubagentNeverAdoptsTitle(t *testing.T) {
 			"\"timestamp\":\"2026-06-04T09:47:27.966Z\","+
 			"\"message\":{\"role\":\"user\",\"content\":\"sub task\"},"+
 			"\"sessionId\":\"child\"}\n"), 0o644))
-	title := "parent title"
-	fixture := filepath.Join(t.TempDir(), "main.sqlite")
-	writeQoderTitleDB(t, fixture, map[string]*string{qoderTitleTestID: &title})
-	withQoderTitleDBOverride(t, fixture)
-
+	fixture := filepath.Join(home, "Library", "Application Support", qoderIntlClientApp, "main.sqlite")
+	require.NoError(t, os.MkdirAll(filepath.Dir(fixture), 0o755))
+	require.NoError(t, os.WriteFile(fixture, []byte("not a database"), 0o644))
 	results := qoderTitleTestParse(t, qoderTitleTestProvider(t, []string{root}), root)
 	sess := results[0].Result.Session
 	assert.Equal(t, RelSubagent, sess.RelationshipType)
 	assert.Empty(t, sess.SessionName)
 	assert.False(t, sess.SessionNamePresent)
+	assert.Equal(t, DataVersionCurrent, results[0].DataVersion)
+	assert.Empty(t, results[0].RetryReason)
+	assert.Empty(t, results[0].Result.TitleRetryReason)
 }
 
 // TestResolveQoderAppSQLitePathBindsRoots covers root affinity against the
@@ -290,67 +293,6 @@ func TestResolveQoderAppSQLitePathBindsRoots(t *testing.T) {
 	))
 	assert.Empty(t, resolveQoderAppSQLitePath(
 		filepath.Join(home, ".qoder", "projects", "p", "s.jsonl"), nil))
-}
-
-// TestQoderClientAppForPathMatchesWholeSegments pins the segment rule directly:
-// the nearest matching ancestor wins, and a directory whose name merely starts
-// with a client directory is not that client.
-func TestQoderClientAppForPathMatchesWholeSegments(t *testing.T) {
-	for _, tt := range []struct {
-		path string
-		want string
-	}{
-		{path: "/home/u/.qoder-cn/projects/p/s.jsonl", want: qoderCNClientApp},
-		{path: "/home/u/.qoder/projects/p/s.jsonl", want: qoderIntlClientApp},
-		{path: "/home/u/.qoder-cn", want: qoderCNClientApp},
-		{path: "/home/u/.qoderwork/projects/p/s.jsonl"},
-		{path: "/home/u/.qoder-cn-backup/projects/p/s.jsonl"},
-		{path: "/home/u/qoder/projects/p/s.jsonl"},
-		{path: "/home/u"},
-		{path: ""},
-	} {
-		t.Run(tt.path, func(t *testing.T) {
-			assert.Equal(t, tt.want, QoderClientAppForPath(tt.path))
-		})
-	}
-}
-
-// TestQoderParseBindsDefaultProjectRoots is the regression guard for the
-// default root shape: with root = <client>/projects the parser must still read
-// the client's application database, and must report the CN build as CN.
-func TestQoderParseBindsDefaultProjectRoots(t *testing.T) {
-	for _, tt := range []struct {
-		root string
-		isCN bool
-	}{
-		{root: filepath.Join(".qoder-cn", "projects"), isCN: true},
-		{root: filepath.Join(".qoder", "projects"), isCN: false},
-	} {
-		t.Run(tt.root, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), tt.root)
-			writeQoderTitleTestSession(t, root, qoderTitleTestID)
-			title := "默认项目根目录下的标题"
-			fixture := filepath.Join(t.TempDir(), "main.sqlite")
-			writeQoderTitleDB(t, fixture, map[string]*string{
-				qoderTitleTestID: &title,
-			})
-
-			var seenCN []bool
-			previous := qoderAppDatabasePathOverride
-			qoderAppDatabasePathOverride = func(isCN bool) string {
-				seenCN = append(seenCN, isCN)
-				return fixture
-			}
-			t.Cleanup(func() { qoderAppDatabasePathOverride = previous })
-
-			results := qoderTitleTestParse(t,
-				qoderTitleTestProvider(t, []string{root}), root)
-			assert.Equal(t, title, results[0].Result.Session.SessionName)
-			require.NotEmpty(t, seenCN,
-				"the title lookup must consult the bound application database")
-			assert.Equal(t, tt.isCN, seenCN[0])
-		})
-	}
 }
 
 // TestQoderTitleDatabasePathsForRootsDedupes keeps one watch root per

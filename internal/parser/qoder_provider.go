@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -42,7 +43,23 @@ func newQoderSourceSetWithTitleRoots(roots, titleRoots []string) JSONLSourceSet 
 		// session root, and the database is bound to this provider's roots.
 		// The ParseRequest carries no roots, so capture them here.
 		WithParseFile(func(ctx context.Context, path string, req ParseRequest) ([]ParseResult, []string, error) {
-			return parseQoderFile(ctx, path, titleRoots, req)
+			// Filtering foreign roots alone leaves a local ancestor eligible.
+			// Resolve ownership against all configured roots before lookup.
+			ownerRoot := ""
+			cleanPath := filepath.Clean(path)
+			bestLength := 0
+			for _, root := range roots {
+				cleanRoot := filepath.Clean(root)
+				if (cleanPath == cleanRoot || strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator))) && len(cleanRoot) > bestLength {
+					ownerRoot = root
+					bestLength = len(cleanRoot)
+				}
+			}
+			parseRoots := titleRoots
+			if ownerRoot == "" || !slices.Contains(titleRoots, ownerRoot) {
+				parseRoots = nil
+			}
+			return parseQoderFile(ctx, path, parseRoots, req)
 		}),
 		WithForceReplace(),
 		WithCompanionFiles(qoderCompanionFiles),

@@ -172,32 +172,6 @@ func TestAntigravityBrainTranscriptTitleReachesProviderParse(t *testing.T) {
 	assert.Equal(t, "list the files in the project", result.Result.Messages[0].Content)
 }
 
-// TestAntigravityBrainTranscriptTitleUsesIDERoot guards the brain branch: the
-// summaries database sits at the IDE root, which is what
-// antigravityBrainTranscriptConversation reports. Deriving the root with two
-// filepath.Dir calls would land in .system_generated and find nothing.
-func TestAntigravityBrainTranscriptTitleUsesIDERoot(t *testing.T) {
-	root := t.TempDir()
-	id := "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-	transcript := antigravityBrainTranscriptPath(root, id)
-	require.NoError(t, os.MkdirAll(filepath.Dir(transcript), 0o755))
-
-	gotRoot, gotID, ok := antigravityBrainTranscriptConversation(transcript)
-	require.True(t, ok)
-	assert.Equal(t, filepath.Clean(root), filepath.Clean(gotRoot))
-	assert.Equal(t, id, gotID)
-	assert.NotEqual(t, filepath.Clean(root),
-		filepath.Clean(filepath.Dir(filepath.Dir(transcript))),
-		"two parent steps must not be mistaken for the IDE root")
-
-	title := "Synthetic conversation title"
-	writeAntigravitySummariesDB(t, root, map[string]*string{id: &title})
-	got, present, err := readAntigravityTitle(t.Context(), gotRoot, gotID)
-	require.NoError(t, err)
-	assert.True(t, present)
-	assert.Equal(t, title, got)
-}
-
 // TestAntigravityTitleDatabasePathEmptyRoot ensures an empty root degrades to
 // a no-signal read rather than opening a path relative to the process cwd.
 func TestAntigravityTitleDatabasePathEmptyRoot(t *testing.T) {

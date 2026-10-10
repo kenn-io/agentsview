@@ -119,12 +119,15 @@ func (e *Engine) SyncSharedTitlesContext(ctx context.Context) error {
 func (e *Engine) refreshSharedTitleDatabasesLocked(
 	ctx context.Context, databases []parser.SharedTitleDatabase,
 ) (int, error) {
-	if e.db.ArchiveContent().UsageOnly() || e.pathRewriter != nil || e.idPrefix != "" {
+	if e.db.ArchiveContent().UsageOnly() {
 		return 0, ctx.Err()
 	}
 	updated := 0
 	var errs error
 	for _, database := range databases {
+		if database.Agent == parser.AgentQoder && (e.pathRewriter != nil || e.idPrefix != "") {
+			continue
+		}
 		if slices.Contains(e.sources().preserveAgents, database.Agent) {
 			continue
 		}
@@ -183,7 +186,7 @@ func (e *Engine) applySharedTitleRecords(
 			))
 			continue
 		}
-		if !filepath.IsAbs(sourcePath) {
+		if sourcePath == "" {
 			continue
 		}
 		ids, err := e.db.ListSessionIDsByFilePath(
@@ -246,15 +249,17 @@ func (e *Engine) sharedTitleForSession(ctx context.Context, database parser.Shar
 	if err != nil {
 		return "", false, err
 	}
-	if !filepath.IsAbs(sourcePath) || (machine != "" && machine != e.machine) {
-		return "", false, nil
-	}
 	switch database.Agent {
 	case parser.AgentAntigravity:
-		if !pathWithinRoot(sourcePath, filepath.Dir(database.DBPath)) {
+		if !e.antigravityTitleOwnsSource(database.DBPath, sourcePath, machine) {
 			return "", false, nil
 		}
 	case parser.AgentQoder:
+		// Application Support belongs to this machine, even when transported
+		// source paths happen to resemble native local paths.
+		if e.pathRewriter != nil || e.idPrefix != "" || !filepath.IsAbs(sourcePath) || (machine != "" && machine != e.machine) {
+			return "", false, nil
+		}
 		expected := parser.QoderTitleDatabaseForLocalSource(sourcePath)
 		if expected == "" || filepath.Clean(database.DBPath) != expected {
 			return "", false, nil
@@ -273,4 +278,47 @@ func (e *Engine) sharedTitleForSession(ctx context.Context, database parser.Shar
 		return "", false, nil
 	}
 	return *fallback, true, nil
+}
+
+// antigravityTitleOwnsSource permits local and transported summaries only for
+// the IDE root and machine that own the transcript. Remote stored identities
+// must resolve to a physical source and round-trip through the import mapping.
+func (e *Engine) antigravityTitleOwnsSource(databasePath, storedPath, machine string) bool {
+	root := filepath.Dir(databasePath)
+	physical := storedPath
+	owner := e.machineForPath(parser.AgentAntigravity, databasePath)
+	remote := e.pathRewriter != nil || e.idPrefix != "" || owner != e.machine
+	if remote {
+		configured := slices.ContainsFunc(e.sources().agentDirs[parser.AgentAntigravity], func(candidate string) bool {
+			return filepath.Clean(candidate) == filepath.Clean(root)
+		})
+		if !configured || machine == "" {
+			return false
+		}
+	}
+	if e.pathRewriter != nil {
+		if e.storedPathResolver == nil {
+			return false
+		}
+		var ok bool
+		physical, ok = e.storedPathResolver(storedPath)
+		if !ok || e.pathRewriter(physical) != storedPath {
+			return false
+		}
+	}
+	if remote {
+		bestRoot := ""
+		for _, candidate := range e.sources().agentDirs[parser.AgentAntigravity] {
+			clean := filepath.Clean(candidate)
+			if pathWithinRoot(physical, clean) && len(clean) > len(bestRoot) {
+				bestRoot = clean
+			}
+		}
+		if bestRoot != filepath.Clean(root) {
+			return false
+		}
+	}
+	return filepath.IsAbs(physical) && pathWithinRoot(physical, root) &&
+		(machine == "" || machine == owner) &&
+		e.machineForPath(parser.AgentAntigravity, physical) == owner
 }

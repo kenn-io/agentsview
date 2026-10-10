@@ -136,11 +136,16 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 			// Keep the stored names and let a later pass retry; a title read
 			// failure must not fail the body sync below.
 			log.Printf("sync: shared title refresh: %v", titleErr)
+			if e.pathRewriter != nil || e.idPrefix != "" {
+				// Remote deltas have no guaranteed local sweep. Retain their
+				// journal for retry while still processing any body sources.
+				processErr = errors.Join(processErr, titleErr)
+			}
 		}
 	}
 	if len(files) == 0 {
 		result.Stats = stats
-		return result, ctx.Err()
+		return result, errors.Join(processErr, ctx.Err())
 	}
 	titleUpdates := stats.TitlesUpdated
 
