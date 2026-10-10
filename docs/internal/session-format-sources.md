@@ -2943,8 +2943,10 @@ schemas keep their existing ordering behavior.
   records `source = "cron"` and titles as the job name followed by ` · `
   and the run timestamp. `_title_base` falls back to
   `cron {job_id}` for a blank job name. Agentsview treats that generated title
-  as unnamed and stores `group_key` as the job ID. Usage groups by project,
-  machine and job ID. Names derive from the recorded `session_name` at read
+  as unnamed and stores `group_key` as the job ID plus a hash of the source
+  home path. Usage groups by project, machine, home and job ID. The pinned
+  recognizer's legacy `job-1` example was reverified on 2026-10-09.
+  Names derive from the recorded `session_name` at read
   time; usage-only archives show job IDs because their titles are discarded.
   Resync copies preserve stored job IDs, including imported sessions. Archived
   runs whose sources were gone before upgrading stay individual sessions unless

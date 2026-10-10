@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -1397,9 +1398,12 @@ func TestHermesCronStateGroups(t *testing.T) {
 		parent = id
 	}
 	provider := newHermesTestProvider(t, root)
-	bulk, err := provider.parseArchive(t.Context(), stateDB, "", "local")
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
-	require.Len(t, bulk, 188)
+	require.Len(t, sources, 1)
+	bulk, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, bulk.Results, 188)
 	for _, tc := range []struct{ id, key string }{
 		{"cron_job-a_20261007_120000", "job-a"},
 		{"cron_job-a_20261008_120000", "job-a"},
@@ -1417,14 +1421,15 @@ func TestHermesCronStateGroups(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, member.Results, 1)
 			sessions := []ParsedSession{member.Results[0].Result.Session}
-			for _, result := range bulk {
-				if result.Session.SourceSessionID == tc.id {
-					sessions = append(sessions, result.Session)
+			for _, result := range bulk.Results {
+				if result.Result.Session.SourceSessionID == tc.id {
+					sessions = append(sessions, result.Result.Session)
 				}
 			}
 			require.Len(t, sessions, 2)
 			for _, session := range sessions {
-				assert.Equal(t, tc.key, session.GroupKey)
+				job, _, _ := strings.Cut(session.GroupKey, ":")
+				assert.Equal(t, tc.key, job)
 			}
 			assert.Equal(t, sessions[0].GroupKey, sessions[1].GroupKey)
 		})

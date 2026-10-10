@@ -241,7 +241,7 @@ func WriteHermesSessionJSONL(ctx context.Context,
 func (p *hermesProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,
-) (ParseOutcome, error) {
+) (outcome ParseOutcome, err error) {
 	if err := ctx.Err(); err != nil {
 		return ParseOutcome{}, err
 	}
@@ -250,6 +250,26 @@ func (p *hermesProvider) Parse(
 		return ParseOutcome{}, errors.New("hermes source path unavailable")
 	}
 	path := src.Path
+	defer func() {
+		sourcePath := firstNonEmptyJSONLString(src.StateDB, path)
+		if p.Config.PathRewriter != nil {
+			sourcePath = p.Config.PathRewriter(sourcePath)
+		} else if absolute, err := filepath.Abs(sourcePath); err == nil {
+			sourcePath = absolute
+		}
+		home := filepath.Dir(sourcePath)
+		if filepath.Base(sourcePath) != "state.db" && filepath.Base(home) == "sessions" {
+			home = filepath.Dir(home)
+		}
+		// Legacy job IDs can repeat across homes on the same machine.
+		hash := sha256.Sum256([]byte(filepath.Clean(home)))
+		for i := range outcome.Results {
+			sess := &outcome.Results[i].Result.Session
+			if sess.GroupKey != "" {
+				sess.GroupKey = fmt.Sprintf("%s:%x", sess.GroupKey, hash[:16])
+			}
+		}
+	}()
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	if src.SessionID != "" {
 		return p.parseStateMember(ctx, src, req.Source.ProjectHint, machine, req.Fingerprint)

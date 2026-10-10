@@ -2711,7 +2711,7 @@ func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, token
 	for _, row := range grouped {
 		row.DisplayName = row.GroupLabel
 		if row.DisplayName == "" {
-			row.DisplayName = row.GroupKey
+			row.DisplayName, _, _ = strings.Cut(row.GroupKey, ":")
 		}
 		out = append(out, row.TopSessionEntry)
 	}

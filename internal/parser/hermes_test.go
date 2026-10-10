@@ -944,6 +944,58 @@ func TestBuildHermesStateResultGroupPreservation(t *testing.T) {
 	}
 }
 
+func TestHermesCronGroupsScopeHomes(t *testing.T) {
+	var homeKeys []string
+	for _, profile := range []string{"", "", "profile-a", "profile-a", "profile-b"} {
+		root := t.TempDir()
+		sessionsDir := filepath.Join(root, "sessions")
+		require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+		createHermesStateDB(t, root)
+		conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET id = 'cron_job-1_20261006_120000', source = 'cron', parent_session_id = NULL; UPDATE messages SET session_id = 'cron_job-1_20261006_120000'`)
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+		for _, transcript := range []struct{ name, body string }{
+			{"session_cron_job-1_20261007_120000.json", `{"platform":"cron","messages":[{"role":"user","content":"hello"}]}`},
+			{"cron_job-1_20261008_120000.jsonl", "{\"role\":\"session_meta\",\"platform\":\"cron\"}\n{\"role\":\"user\",\"content\":\"hello\"}\n"},
+		} {
+			path := filepath.Join(sessionsDir, transcript.name)
+			require.NoError(t, os.WriteFile(path, []byte(transcript.body), 0o644))
+		}
+		provider := newHermesTestProvider(t, root)
+		if profile != "" {
+			provider.Config.PathRewriter = func(path string) string {
+				relative, err := filepath.Rel(root, path)
+				require.NoError(t, err)
+				return "capture://" + profile + "/" + filepath.ToSlash(relative)
+			}
+		}
+		sources, err := provider.Discover(t.Context())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		var key string
+		for _, source := range sources {
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 3)
+			for _, result := range outcome.Results {
+				group := result.Result.Session.GroupKey
+				if key == "" {
+					key = group
+				}
+				assert.True(t, strings.HasPrefix(group, "job-1:"))
+				assert.NotContains(t, group, root)
+				assert.Equal(t, key, group)
+			}
+		}
+		homeKeys = append(homeKeys, key)
+	}
+	assert.NotEqual(t, homeKeys[0], homeKeys[1])
+	assert.Equal(t, homeKeys[2], homeKeys[3])
+	assert.NotEqual(t, homeKeys[2], homeKeys[4])
+}
+
 func TestHermesCronTranscriptProjects(t *testing.T) {
 	for _, format := range []string{"json", "jsonl"} {
 		for _, tc := range []struct {
@@ -1009,7 +1061,8 @@ func TestHermesCronTranscriptProjects(t *testing.T) {
 							} else {
 								assert.Equal(t, string(agent)+"-"+tc.source, parsed.Session.Project)
 							}
-							assert.Equal(t, wantGroup, parsed.Session.GroupKey)
+							job, _, _ := strings.Cut(parsed.Session.GroupKey, ":")
+							assert.Equal(t, wantGroup, job)
 							assert.Equal(t, wantKeep, parsed.Session.KeepStoredGroupKey)
 						})
 					}

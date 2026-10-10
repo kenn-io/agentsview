@@ -6176,6 +6176,29 @@ func TestGroupTopSessions(t *testing.T) {
 		want  []TopSessionEntry
 	}{
 		{
+			name: "same job ID in different homes", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-a", SessionName: "Digest · Oct 07 12:00", InputTokens: 10},
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-a", SessionName: "Digest · Oct 08 12:00", InputTokens: 20},
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-b", SessionName: "Backup · Oct 08 12:00", InputTokens: 5},
+			},
+			want: []TopSessionEntry{
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-a", GroupLabel: "Digest", DisplayName: "Digest", InputTokens: 30},
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-b", GroupLabel: "Backup", DisplayName: "Backup", InputTokens: 5},
+			},
+		},
+		{
+			name: "scoped unnamed jobs show their job ID", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{GroupKey: "job-1:home-a", SessionName: "cron job-1 · Oct 08 12:00"},
+				{GroupKey: "job-1:home-b"},
+			},
+			want: []TopSessionEntry{
+				{GroupKey: "job-1:home-a", DisplayName: "job-1"},
+				{GroupKey: "job-1:home-b", DisplayName: "job-1"},
+			},
+		},
+		{
 			name: "latest recorded label", limit: 100, sort: TopSessionsSortCost,
 			input: []TopSessionEntry{
 				{SessionID: "z", Project: "hermes-cron", GroupKey: "job-a", SessionName: "Earlier · Oct 08 12:00", StartedAt: "2026-10-08T13:00:00+02:00"},
