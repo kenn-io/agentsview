@@ -795,6 +795,70 @@ func TestDuckAnalyticsSummaryScopedModels(t *testing.T) {
 		assert.Equal(t, 2, resp.TotalSessions, "TotalSessions")
 		assert.Equal(t, 2, resp.TotalMessages, "TotalMessages")
 	})
+
+	t.Run("hour_only", func(t *testing.T) {
+		ctx := t.Context()
+		store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{
+			{
+				Session: syncSession(
+					"duck-summary-hour-mixed", "alpha", "mixed",
+					"2024-06-01T09:00:00Z", 2,
+				),
+				Messages: []db.Message{
+					duckModelMessage(
+						"duck-summary-hour-mixed", 0, "assistant", "gpt",
+						"2024-06-01T09:05:00Z", "gpt-4o",
+					),
+					duckModelMessage(
+						"duck-summary-hour-mixed", 1, "assistant", "claude",
+						"2024-06-01T10:05:00Z", "claude-3-5-sonnet",
+					),
+				},
+				DataVersion:     1,
+				ReplaceMessages: true,
+			},
+		})
+
+		hour := 9
+		resp, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
+			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+			Hour: &hour,
+		})
+		require.NoError(t, err, "GetAnalyticsSummary")
+		assert.Equal(t, 1, resp.TotalSessions, "TotalSessions")
+		assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
+	})
+
+	t.Run("model_only", func(t *testing.T) {
+		ctx := t.Context()
+		start := "2024-06-01T09:00:00Z"
+		store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{
+			{
+				Session: syncSession("duck-model-a", "alpha", "gpt", start, 1),
+				Messages: []db.Message{
+					duckModelMessage("duck-model-a", 0, "assistant", "gpt", start, "gpt-4o"),
+				},
+				DataVersion:     1,
+				ReplaceMessages: true,
+			},
+			{
+				Session: syncSession("duck-model-b", "alpha", "claude", start, 1),
+				Messages: []db.Message{
+					duckModelMessage("duck-model-b", 0, "assistant", "claude", start, "claude-3-5-sonnet"),
+				},
+				DataVersion:     1,
+				ReplaceMessages: true,
+			},
+		})
+
+		resp, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
+			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+			Model: "gpt-4o",
+		})
+		require.NoError(t, err, "GetAnalyticsSummary")
+		assert.Equal(t, 1, resp.TotalSessions, "TotalSessions")
+		assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
+	})
 }
 
 func TestDuckAnalyticsMixedModelFilters(t *testing.T) {

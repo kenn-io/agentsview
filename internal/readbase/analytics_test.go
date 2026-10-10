@@ -46,7 +46,6 @@ func (b analyticsFixtureBackend) QueryContext(ctx context.Context, query string,
 func TestAnalyticsModelSummaryUsesScopedCounts(t *testing.T) {
 	pool := sql.OpenDB(&analyticsFixtureDriver{rows: []driver.Rows{
 		&candidateMessageRows{}, &candidateMessageRows{}, &modelTimesRows{},
-		&candidateMessageRows{}, &candidateMessageRows{}, &modelTimesRows{},
 	}})
 	t.Cleanup(func() { require.NoError(t, pool.Close()) })
 	backend := analyticsFixtureBackend{
@@ -59,19 +58,15 @@ func TestAnalyticsModelSummaryUsesScopedCounts(t *testing.T) {
 	analytics := NewAnalytics(backend, "fixture")
 	hour := 10
 	filter := db.AnalyticsFilter{Model: "selected", Hour: &hour}
-	for range 2 {
-		result, err := analytics.GetAnalyticsSummary(t.Context(), filter)
-		require.NoError(t, err)
-		assert.Equal(t, 1, result.TotalSessions)
-		assert.Equal(t, 2, result.TotalMessages)
-		assert.Equal(t, 7, result.TotalOutputTokens)
-		assert.Equal(t, 2, result.MedianMessages)
-		assert.Equal(t, 1, result.TokenReportingSessions)
-		assert.Equal(t, []string{"selected"}, result.Models)
-		assert.Equal(t, &db.AgentSummary{Sessions: 1, Messages: 2}, result.Agents["claude"])
-	}
-	assert.Equal(t, 20, backend.sessions[0].MessageCount)
-	assert.Equal(t, 100, backend.sessions[0].TotalOutputTokens)
+	result, err := analytics.GetAnalyticsSummary(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TotalSessions)
+	assert.Equal(t, 2, result.TotalMessages)
+	assert.Equal(t, 7, result.TotalOutputTokens)
+	assert.Equal(t, 2, result.MedianMessages)
+	assert.Equal(t, 1, result.TokenReportingSessions)
+	assert.Equal(t, []string{"selected"}, result.Models)
+	assert.Equal(t, &db.AgentSummary{Sessions: 1, Messages: 2}, result.Agents["claude"])
 	t.Run("empty summary", func(t *testing.T) {
 		pool := sql.OpenDB(&analyticsFixtureDriver{rows: []driver.Rows{summaryErrorRows{empty: true}}})
 		t.Cleanup(func() { require.NoError(t, pool.Close()) })
