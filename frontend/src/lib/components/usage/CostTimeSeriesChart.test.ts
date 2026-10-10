@@ -495,20 +495,25 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("assigns the first usage color to a single rendered model series", async () => {
+  it.each([
+    ["selected", [["single-model", false], ["total", true]]],
+    ["unselected", []],
+  ] as const)("draws a single %s model series in the first usage color", async (state, legend) => {
     usage.toggles.timeSeries.groupBy = "model";
     usage.toggles.attribution.groupBy = "model";
     usage.summary = usageSummary([
       modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
       modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
     ]);
-    usage.selectedModel = "single-model";
-    usage.referenceSummary = usageSummary([
-      modelDailyEntry(0, [
-        { modelName: "single-model", cost: testMoney(6) },
-        { modelName: "total", cost: testMoney(4) },
-      ]),
-    ]);
+    if (state === "selected") {
+      usage.selectedModel = "single-model";
+      usage.referenceSummary = usageSummary([
+        modelDailyEntry(0, [
+          { modelName: "single-model", cost: testMoney(6) },
+          { modelName: "total", cost: testMoney(4) },
+        ]),
+      ]);
+    }
 
     const component = mountChart();
     await tick();
@@ -516,24 +521,8 @@ describe("CostTimeSeriesChart", () => {
     const paths = document.querySelectorAll<SVGPathElement>("path.lc-area-path");
     expect(paths).toHaveLength(1);
     expect(paths[0]!.getAttribute("fill")).toBe("var(--accent-blue)");
-    // The legend keeps the unselected view's entries, dimming those the selection hides.
-    const legend = Array.from(document.querySelectorAll(".legend-item"), (item) => [item.textContent?.trim(), item.classList.contains("dimmed")]);
-    expect(legend).toEqual([["single-model", false], ["total", true]]);
-    unmount(component);
-  });
-
-  it("hides the legend for a single unselected series", async () => {
-    usage.toggles.timeSeries.groupBy = "model";
-    usage.summary = usageSummary([
-      modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
-      modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
-    ]);
-
-    const component = mountChart();
-    await tick();
-
-    expect(document.querySelectorAll("path.lc-area-path")).toHaveLength(1);
-    expect(document.querySelector(".legend")).toBeNull();
+    // A selection keeps the unselected view's entries and dims hidden ones; one unselected series shows no legend.
+    expect(Array.from(document.querySelectorAll(".legend-item"), (item) => [item.textContent?.trim(), item.classList.contains("dimmed")])).toEqual(legend);
     unmount(component);
   });
 

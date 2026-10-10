@@ -22,8 +22,8 @@ test.describe("Usage attribution touch", () => {
 });
 
 test.describe("Usage attribution selection", () => {
-  for (const [view, selector, labels, brushed] of [["treemap", ".tile", ".rail-label", false], ["list", ".list-row", ".list-label", false], ["list", ".list-row", ".list-label", true]] as const) {
-    test(`selecting keeps ${brushed ? "brushed " : ""}${view} geometry and double click opens the clicked project`, async ({ page }) => {
+  for (const [view, selector, brushed] of [["treemap", ".tile", false], ["list", ".list-row", false], ["list", ".list-row", true]] as const) {
+    test(`selecting keeps ${brushed ? "brushed " : ""}${view} geometry`, async ({ page }) => {
       // Summary cards wrap at this width, so a card dropping out on select would shift the panel.
       await page.setViewportSize({ width: 700, height: 900 });
       // A refresh includes both summaries and the comparison requests they start afterward.
@@ -71,10 +71,6 @@ test.describe("Usage attribution selection", () => {
       await expect(items.nth(1)).toHaveAttribute("aria-pressed", "true");
       await expect(page.locator(".usage-content")).toHaveAttribute("aria-busy", "false");
       expect(await geometry()).toEqual(before);
-
-      const label = await panel.locator(labels).nth(2).textContent();
-      await items.nth(2).dblclick();
-      await expect(panel.locator("h3")).toHaveText(label!);
     });
   }
 

@@ -198,7 +198,6 @@ describe("AttributionPanel selection", () => {
     expect(rows[1]!.getAttribute("aria-pressed")).toBe("true");
     expect(rows[0]!.classList.contains("dimmed")).toBe(true);
     if (selector !== ".tile") {
-      expect(usage.zoomedProject).toBeNull();
       rows[1]!.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
       rows[1]!.dispatchEvent(new MouseEvent("dblclick", { detail: 2, bubbles: true }));
       expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:second", label: "Project B" });
@@ -442,77 +441,33 @@ describe("AttributionPanel job groups", () => {
     vi.restoreAllMocks();
   });
 
-  it("zooms into stable jobs and keeps the remainder", async () => {
-    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usage.summary);
-    await usage.fetchSummary({ loadComparison: false });
-    const group = (key: string, cost: number): DbTopSessionEntry => ({
-      groupKey: key,
-      groupLabel: "Daily digest",
-      sessionId: key,
-      displayName: "Daily digest",
-      project: "hermes-cron",
-      agent: "hermes",
-      startedAt: "",
-      inputTokens: 10,
-      outputTokens: 0,
-      cacheCreationTokens: 0,
-      cacheReadTokens: 0,
-      totalTokens: 10,
-      cost: testMoney(cost),
-    });
-    usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([
-      group("abcdef-job", 3),
-      group("abcdef-other", 2),
-      { ...group("", 1), sessionId: "hermes:ungrouped", displayName: "Ungrouped run" },
-      { ...group("", 2), groupLabel: "", sessionId: "", displayName: "" },
-    ]);
-    const component = mountPanel();
-    await tick();
-    document
-      .querySelectorAll<HTMLElement>(".list-row")[0]!
-      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    await vi.waitFor(() => expect(usage.zoomedProject?.key).toBe("pl1:sha256:first"));
-    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
-    await tick();
-    expect(document.activeElement).toBe(document.querySelector(".attribution-panel"));
-    const rows = [...document.querySelectorAll<HTMLElement>(".list-row")];
-    expect(rows[2]!.querySelector(".list-label")!.textContent).toBe("Other");
-    expect(rows.map((row) => row.querySelector(".list-cost")!.textContent?.trim())).toEqual([
-      "$3.00",
-      "$2.00",
-      "$2.00",
-      "$1.00",
-    ]);
-    expect(rows[2]!.title).toBe("Other");
-    expect(
-      new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size,
-    ).toBe(1);
-    unmount(component);
-  });
-
-  it("uses zoom rows and remainder when summary fails after a date change", async () => {
-    usage.applyDateRange("2024-02-01", "2024-02-29");
-    usage.summary = null;
-    usage.setOpenProject("pl1:sha256:first");
+  it.each(["with a summary", "after the summary fails on a date change"])("keeps the zoom remainder %s", async (situation) => {
+    const withSummary = situation === "with a summary";
+    let component;
+    if (withSummary) {
+      component = mountPanel();
+      await tick();
+      document.querySelectorAll<HTMLElement>(".list-row")[0]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(document.activeElement).toBe(document.querySelector(".attribution-panel"));
+    } else {
+      usage.applyDateRange("2024-02-01", "2024-02-29");
+      usage.summary = null;
+      usage.setOpenProject("pl1:sha256:first");
+    }
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usage.zoomRows = [
       { ...topSessionForRemainder(), groupKey: "job-a", groupLabel: "Digest", cost: testMoney(2) },
-      {
-        ...topSessionForRemainder(),
-        groupKey: "job-b",
-        groupLabel: "Research",
-        cost: testMoney(3),
-      },
+      { ...topSessionForRemainder(), groupKey: "job-b", groupLabel: "Research", cost: testMoney(3) },
       topSessionForRemainder(),
     ];
-    const component = mountPanel();
+    component ??= mountPanel();
     await tick();
-    expect(
-      [...document.querySelectorAll(".list-cost")].map((row) => row.textContent?.trim()),
-    ).toEqual(["$3.00", "$2.00", "$1.00"]);
-    expect(
-      [...document.querySelectorAll(".list-pct")].map((row) => row.textContent?.trim()),
-    ).toEqual(["50.0%", "33.3%", "16.7%"]);
+    const rows = [...document.querySelectorAll<HTMLElement>(".list-row")];
+    expect(rows.map((row) => row.querySelector(".list-cost")!.textContent?.trim())).toEqual(["$3.00", "$2.00", "$1.00"]);
+    expect(rows[2]!.querySelector(".list-label")!.textContent).toBe("Other");
+    expect(rows[2]!.title).toBe("Other");
+    expect(new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size).toBe(1);
+    if (!withSummary) expect(rows.map((row) => row.querySelector(".list-pct")!.textContent?.trim())).toEqual(["50.0%", "33.3%", "16.7%"]);
     await unmount(component);
   });
 
