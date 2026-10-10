@@ -6,12 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/assets"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -59,17 +59,8 @@ func (d *DB) VerifyAssets(ctx context.Context, directory string) error {
 				return fmt.Errorf("opening required assets: %w", err)
 			}
 		}
-		f, err := root.Open(name)
-		if err != nil {
-			return fmt.Errorf("opening required asset %s: %w", name, err)
-		}
-		h := sha256.New()
-		_, copyErr := io.Copy(h, f)
-		if err := errors.Join(copyErr, f.Close()); err != nil {
-			return fmt.Errorf("reading required asset %s: %w", name, err)
-		}
-		if hex.EncodeToString(h.Sum(nil)) != want {
-			return fmt.Errorf("required asset %s differs from its content hash", name)
+		if !assets.IsCompleteObject(root, name, -1, want) {
+			return fmt.Errorf("required asset %s is missing, corrupt, or has an unsupported file type", name)
 		}
 		seen[ref] = true
 		return nil

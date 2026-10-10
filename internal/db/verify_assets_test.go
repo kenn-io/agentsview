@@ -51,3 +51,26 @@ func TestVerifyAssets(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifyAssetsRejectsUnsupportedAndNonregularObjects(t *testing.T) {
+	for _, kind := range []string{"unsupported extension", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			database := testDB(t)
+			ctx := t.Context()
+			dir := t.TempDir()
+			ref, _, err := assets.Put(dir, "image/png", []byte("synthetic image"))
+			require.NoError(t, err)
+			if kind == "unsupported extension" {
+				ref = strings.TrimSuffix(ref, ".png") + ".svg"
+				require.NoError(t, os.WriteFile(filepath.Join(dir, strings.TrimPrefix(ref, "asset://")), []byte("synthetic image"), 0o600))
+			} else {
+				path := filepath.Join(dir, strings.TrimPrefix(ref, "asset://"))
+				require.NoError(t, os.Remove(path))
+				require.NoError(t, os.Mkdir(path, 0o700))
+			}
+			require.NoError(t, database.UpsertSession(ctx, Session{ID: "example", Agent: "claude", Project: "example"}))
+			require.NoError(t, database.InsertMessages(ctx, []Message{{SessionID: "example", Ordinal: 0, Role: "assistant", Content: "![image](" + ref + ")"}}))
+			assert.ErrorContains(t, database.VerifyAssets(ctx, dir), "unsupported file type")
+		})
+	}
+}

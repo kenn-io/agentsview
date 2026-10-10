@@ -101,7 +101,9 @@ are recognized during reparse. Other named machines still require proven
 ownership.
 
 Add another machine's capture with `archive import --spec OTHER/capture.json`,
-then explicitly reparse its accepted sources. Sessions remain attributed to the
+then explicitly reparse its accepted sources. A hard import failure can leave
+retained raw objects and already accepted sources in the target. Retrying the
+same capture is safe and reuses that evidence. Sessions remain attributed to the
 source installation even if the archive moves or a display label changes.
 These commands require an archive-only destination created by seed import or
 restore. They refuse an everyday database instead of converting it.

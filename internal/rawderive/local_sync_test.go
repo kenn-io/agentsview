@@ -85,7 +85,7 @@ func TestLocalSyncFromVaultPreservesSourceIdentity(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.True(t, discovery.Complete)
-			source, err := matchProviderSource(ctx, restored, discovery.Sources, manifest, materialized, false)
+			source, _, err := matchProviderSource(ctx, restored, discovery.Sources, manifest, materialized, false)
 			require.NoError(t, err)
 			paths.bindSource(source, manifest.Manifest.SourceKey)
 

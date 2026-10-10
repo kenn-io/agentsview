@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"go.kenn.io/agentsview/internal/artifact"
+	"go.kenn.io/agentsview/internal/capture"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
@@ -86,21 +87,9 @@ type Report struct {
 	UnownedMachines  []db.MachineIdentityCandidate `json:"unowned_machines,omitempty"`
 }
 
-type contextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r contextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.reader.Read(p)
-}
-
 func hashReader(ctx context.Context, r io.Reader) (rawsync.ObjectRef, error) {
 	h := sha256.New()
-	n, err := io.Copy(h, contextReader{ctx, r})
+	n, err := io.Copy(h, &capture.ContextReader{Context: ctx, Reader: r})
 	if err != nil {
 		return rawsync.ObjectRef{}, err
 	}

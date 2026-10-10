@@ -27,9 +27,6 @@ func PrepareLocalSource(
 	ctx context.Context, manifest rawsync.CanonicalManifest,
 	materialized *Materialization, machine, storedPath string,
 ) (LocalSource, error) {
-	if err := rawsync.ValidateCanonicalManifest(manifest); err != nil {
-		return LocalSource{}, err
-	}
 	if materialized == nil || materialized.Root() == "" || storedPath == "" ||
 		manifest.Manifest.Kind != rawsync.ManifestSnapshot {
 		return LocalSource{}, errors.New("local reparse requires a materialized snapshot and stored source path")
@@ -38,23 +35,13 @@ func PrepareLocalSource(
 	if err != nil {
 		return LocalSource{}, err
 	}
-	provider, source, paths, err := dispatch.prepareSource(
+	_, source, _, members, paths, err := dispatch.prepareSource(
 		parser.WithoutFilesystemProjectDiscovery(ctx), manifest, materialized, true,
 	)
 	if err != nil {
 		return LocalSource{}, err
 	}
 	sourcePaths := []string{storedPath}
-	// Reconstruct the same verified group used at import. Preserve original
-	// member paths for a seed, including forks parsed from companion files.
-	discovery, err := parser.DiscoverRawCaptureSources(ctx, provider)
-	if err != nil {
-		return LocalSource{}, err
-	}
-	_, members, err := PlanLocalCapture(ctx, provider, source, discovery.Sources)
-	if err != nil {
-		return LocalSource{}, err
-	}
 	if len(members) > 1 && storedPath == manifest.Manifest.SourceKey {
 		sourcePaths = nil
 		clientRoot, separator := clientSourceRoot(manifest.Manifest.SourceKey, manifestPrimaryEntry(manifest))
