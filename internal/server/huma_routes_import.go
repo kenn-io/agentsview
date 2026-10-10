@@ -48,8 +48,10 @@ func (s *Server) registerImportRoutes() {
 			return s.humaSyncClaudeAI(ctx, in, &results)
 		}, func(op *huma.Operation) {
 			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
-				r, _ := humago.Unwrap(ctx)
-				if r.URL.Query().Get("browser") == "chrome" {
+				// Read the parameter the way Huma binds it. net/url takes the
+				// first of repeated keys, but Huma's parser can pick a later
+				// one, so ?browser&browser=chrome would skip this check.
+				if ctx.Query("browser") == "chrome" {
 					localChrome(ctx, next)
 					return
 				}
