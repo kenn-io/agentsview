@@ -26,10 +26,9 @@ async function loadedTab(id) {
   });
 }
 
-async function request({ id, path, version: peerVersion }, port) {
+async function request({ id, path }, port) {
   let result;
   try {
-    if (peerVersion !== version) throw new Error("Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again.");
     if (!await allowedPath(path)) throw new Error("Unsupported Claude fetch path");
     let [tab] = await chrome.tabs.query({ url: "https://claude.ai/*", discarded: false });
     if (!tab) tab = await chrome.tabs.create({ url: "https://claude.ai/new", active: false });
