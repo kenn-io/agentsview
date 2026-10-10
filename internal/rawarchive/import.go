@@ -270,13 +270,13 @@ func (a *Archive) Import(ctx context.Context, spec ImportSpec) (Report, error) {
 			slices.SortFunc(entries, func(a, b rawsync.Entry) int { return strings.Compare(a.Path, b.Path) })
 			sourceKey := plan.SourceKey
 			if rel, err := containedPath(rootPath, sourceKey); err == nil {
-				sourceKey = filepath.Join(input.OriginalPath, rel)
+				sourceKey = originalSourcePath(input.OriginalPath, rel)
 			}
 			originalRel, err := containedPath(rootPath, source.DisplayPath)
 			if err != nil {
 				return report, err
 			}
-			originalPath := filepath.Join(input.OriginalPath, originalRel)
+			originalPath := originalSourcePath(input.OriginalPath, originalRel)
 			manifest := rawsync.Manifest{SchemaVersion: rawsync.ManifestSchemaVersion, Provider: parser.AgentType(input.Provider), ConfiguredRootID: input.ID, SourceKey: sourceKey, Kind: rawsync.ManifestSnapshot, Entries: entries, CapturedAt: capturedAt}
 			encoded, err := json.Marshal(manifest)
 			if err != nil {
@@ -383,4 +383,12 @@ func findInventoryPath(spec ImportSpec, record db.RawArchiveFile) string {
 func archiveRootID(device, provider, root string) string {
 	sum := sha256.Sum256([]byte(device + "\x00" + provider + "\x00" + root))
 	return hex.EncodeToString(sum[:])
+}
+
+func originalSourcePath(root, rel string) string {
+	separator := "/"
+	if strings.LastIndex(root, "\\") > strings.LastIndex(root, "/") {
+		separator = "\\"
+	}
+	return strings.TrimRight(root, separator) + separator + strings.ReplaceAll(filepath.ToSlash(rel), "/", separator)
 }
