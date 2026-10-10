@@ -832,9 +832,11 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 		1779012600000,
 	)
 
-	// A fresh engine has no recent verification watermark, so this pass is due
-	// for full-digest discovery without waiting for the interval.
-	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
+	// Clear recent verification to exercise complete fingerprint discovery.
+	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), db.SQLiteContainerSyncStatePrefix))
+	restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+	t.Cleanup(restarted.Close)
+	stats = restarted.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"same-mtime SQLite fingerprint changes must be rewritten")
@@ -942,9 +944,11 @@ func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
 		"fixture must keep the container size stable for this test")
 	setFileMtime(t, dbPath, before.ModTime().UnixNano())
 
-	// A fresh engine has no recent verification watermark, so this pass is due
-	// for full-digest discovery without waiting for the interval.
-	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
+	// Clear recent verification to exercise complete fingerprint discovery.
+	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), db.SQLiteContainerSyncStatePrefix))
+	restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+	t.Cleanup(restarted.Close)
+	stats = restarted.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"stat-identical content change must still be re-emitted")

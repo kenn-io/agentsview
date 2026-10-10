@@ -1623,7 +1623,9 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   time from the archive's sync metadata after a worker restart. Native identity
   and counter rollback checks reject replacements and restores. Ordinary changed
   containers can use timestamp-first discovery until the original five-minute
-  deadline. Windows captures native file identity from the same open handle as
+  deadline. Child-only edits that leave session timestamps unchanged wait for
+  the next complete pass after that deadline, including across worker restarts.
+  Windows captures native file identity from the same open handle as
   the database header. A container whose last complete digest verification
   is less than five minutes old may list the watermark form
   (`SQLiteContainerListsWatermarkOnly`): every member gate-skips before

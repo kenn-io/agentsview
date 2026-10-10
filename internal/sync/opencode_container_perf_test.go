@@ -7,23 +7,10 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/sync"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func newOpenCodeTestEngine(t *testing.T, env *testEnv) *sync.Engine {
-	t.Helper()
-	engine := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentOpenCode: {env.opencodeDir},
-		},
-		Machine: "local",
-	})
-	t.Cleanup(engine.Close)
-	return engine
-}
 
 // TestOpenCodeSessionPrefilterIssue1557 reproduces the archive-wide child scan
 // caused by one changed session in a changed OpenCode container.
@@ -53,7 +40,9 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 
 	scansBefore := parser.OpenCodeContainerChildScans()
 	lookupsBefore := parser.OpenCodeSessionChildLookups()
-	second := newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
+	restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+	t.Cleanup(restarted.Close)
+	second := restarted.SyncAll(t.Context(), nil)
 	scans := parser.OpenCodeContainerChildScans() - scansBefore
 	lookups := parser.OpenCodeSessionChildLookups() - lookupsBefore
 
@@ -516,7 +505,9 @@ func testOpenCodeIdleFullPass(t *testing.T, n int) {
 
 	scansBefore = parser.OpenCodeContainerChildScans()
 	lookupsBefore = parser.OpenCodeSessionChildLookups()
-	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
+	restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+	t.Cleanup(restarted.Close)
+	stats = restarted.SyncAll(t.Context(), nil)
 	assert.Equal(t, n, stats.Skipped)
 	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 		"a fresh worker must reuse the last verified unchanged container")
@@ -528,7 +519,9 @@ func testOpenCodeIdleFullPass(t *testing.T, n int) {
 		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
 	)
 	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), db.SQLiteContainerSyncStatePrefix))
-	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
+	unverified := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+	t.Cleanup(unverified.Close)
+	stats = unverified.SyncAll(t.Context(), nil)
 	assert.Equal(t, 1, stats.Synced,
 		"the ordinary full digest pass must reconcile the child-only edit")
 	assertMessageContent(
@@ -542,8 +535,7 @@ func testOpenCodeIdleFullPass(t *testing.T, n int) {
 // the composite watermark — the session or project row already holds the
 // highest timestamp, and counts or extrema are preserved where noted — so
 // only the complete child identity carried in the stored digest can catch
-// it on the next ordinary full pass (run on a fresh engine, whose missing
-// persisted verification is cleared to make the digest listing due immediately).
+// it on a complete pass after persisted verification is cleared.
 func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 	deleteAssistant := func(t *testing.T, oc *openCodeTestDB) {
 		t.Helper()
@@ -688,7 +680,9 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 				))
 			}
 			require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), db.SQLiteContainerSyncStatePrefix))
-			stats := newOpenCodeTestEngine(t, env).SyncAll(
+			unverified := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+			t.Cleanup(unverified.Close)
+			stats := unverified.SyncAll(
 				t.Context(), nil,
 			)
 			require.False(t, stats.Aborted, "full pass aborted: %+v", stats)

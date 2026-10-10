@@ -18,8 +18,8 @@ import (
 
 // OpenCode-family providers expose each shared SQLite session as a virtual source.
 // Complete digest verification authorizes timestamp-first discovery for five
-// minutes. Matching container state restores that deadline after worker restarts;
-// child-only edits reconcile at the next complete verification.
+// minutes. Worker restarts restore that original deadline for the same database;
+// child-only edits reconcile at the next complete verification, even after restart.
 
 // openCodeFamilySQLiteAgents lists the agents whose sessions live in a
 // shared OpenCode-format SQLite container.
@@ -472,8 +472,8 @@ func (e *Engine) filterQuickSyncFiles(
 // watermark-only has no digest findings to process and could not refresh
 // the stamp, so its sessions stay behind the cutoff until the next pass
 // lists the digest form. A container with no stamp stays subject to the
-// cutoff: a fresh engine has no verification window to restore, and
-// exempting it would turn every quick sync into container-sized work.
+// cutoff: without a valid persisted stamp there is no verification deadline,
+// and exempting it would turn every quick sync into container-sized work.
 func (e *Engine) lapsedDigestVerificationContainers(
 	files []parser.DiscoveredFile,
 ) map[string]bool {

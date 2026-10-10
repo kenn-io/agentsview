@@ -1553,8 +1553,16 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 }
 
 func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
-	for _, streamed := range []bool{false, true} {
-		t.Run(map[bool]string{false: "full", true: "streamed"}[streamed], func(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		streamed, matchingMarkers bool
+	}{
+		{"full/matching markers", false, true},
+		{"full/changed markers", false, false},
+		{"streamed/matching markers", true, true},
+		{"streamed/changed markers", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			dbPath, conn := seededCompositeContainerTestDB(t)
 			_, err := conn.ExecContext(t.Context(), "PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)")
 			require.NoError(t, err)
@@ -1576,16 +1584,32 @@ func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
 			now := verifiedAt
 			openCodeContainerDigestVerifyNow = func() time.Time { return now }
 			require.Equal(t, 1, newEngine().SyncAll(t.Context(), nil).Synced)
-			_, err = conn.ExecContext(t.Context(), `UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = time_updated+1; PRAGMA wal_checkpoint(TRUNCATE)`)
+			_, err = conn.ExecContext(t.Context(), `UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = time_updated+1`)
 			require.NoError(t, err)
-			require.NoError(t, os.Chtimes(dbPath, recordedSecond, recordedSecond))
+			if tc.matchingMarkers {
+				_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
+				require.NoError(t, err)
+				require.NoError(t, os.Chtimes(dbPath, recordedSecond, recordedSecond))
+			}
 			after, ok := parser.StatSQLiteContainerState(dbPath)
 			require.True(t, ok)
-			require.Equal(t, before, after, "same-size checkpointed WAL edits can preserve every captured marker")
+			if tc.matchingMarkers {
+				require.Equal(t, before, after, "same-size checkpointed WAL edits can preserve every captured marker")
+			} else {
+				require.NotEqual(t, before, after, "ordinary child writes change container markers")
+			}
 			now = verifiedAt.Add(time.Minute)
 			recent := newEngine()
 			scans := parser.OpenCodeContainerChildScans()
-			require.Zero(t, recent.SyncAll(t.Context(), nil).Synced)
+			if tc.streamed {
+				require.NoError(t, recent.ReconcileWatchRoots(t.Context(), []string{filepath.Dir(dbPath)}, false))
+				require.Zero(t, recent.LastSyncStats().Synced)
+			} else {
+				require.Zero(t, recent.SyncAll(t.Context(), nil).Synced)
+			}
+			matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
+			require.NoError(t, err)
+			assert.Empty(t, matches, "child-only edits wait for the original verification deadline")
 			assert.Zero(t, parser.OpenCodeContainerChildScans()-scans)
 			record, found := readContainerVerification(t, archive, dbPath)
 			require.True(t, found)
@@ -1593,7 +1617,7 @@ func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
 			now = verifiedAt.Add(openCodeContainerDigestVerifyInterval)
 			due := newEngine()
 			scans = parser.OpenCodeContainerChildScans()
-			if streamed {
+			if tc.streamed {
 				require.NoError(t, due.ReconcileWatchRoots(t.Context(), []string{filepath.Dir(dbPath)}, false))
 				assert.Equal(t, 1, due.LastSyncStats().Synced)
 			} else {
@@ -1605,7 +1629,7 @@ func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
 			require.Len(t, messages, 2)
 			assert.Equal(t, "modified prompt", messages[0].Content)
 			assert.Equal(t, "modified answer", messages[1].Content)
-			matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
+			matches, err = archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
 			require.NoError(t, err)
 			assert.Len(t, matches, 2)
 		})

@@ -174,15 +174,6 @@ func StatSQLiteContainerState(dbPath string) (SQLiteContainerState, bool) {
 	return state, true
 }
 
-func readSQLiteChangeCounter(dbPath string) (uint32, bool) {
-	f, err := os.Open(dbPath)
-	if err != nil {
-		return 0, false
-	}
-	defer f.Close()
-	return readSQLiteChangeCounterFromFile(f)
-}
-
 func readSQLiteChangeCounterFromFile(f *os.File) (uint32, bool) {
 	header := make([]byte, sqliteHeaderProbeSize)
 	if _, err := f.ReadAt(header, 0); err != nil {
