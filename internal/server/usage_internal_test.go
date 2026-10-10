@@ -30,6 +30,8 @@ func TestUsageInputAPIErrorMapsToBadRequest(t *testing.T) {
 	var response *apiResponseError
 	require.ErrorAs(t, err, &response)
 	assert.Equal(t, http.StatusBadRequest, response.Status)
+	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, response.Code)
+	assert.Equal(t, "wording may change", response.Message)
 }
 
 type usageSummaryCountsSpy struct {

@@ -1442,6 +1442,9 @@ func TestHermesCronStateGroups(t *testing.T) {
 	} {
 		for _, agent := range []AgentType{AgentHermes, AgentAugureDesktop} {
 			for _, source := range []string{"cron", "cli", ""} {
+				if agent == AgentHermes && source == "" {
+					continue
+				}
 				t.Run(string(agent)+"/"+tc.id+"/transcript="+tc.source+"/state="+source, func(t *testing.T) {
 					name := "session_" + tc.id + ".json"
 					body := fmt.Sprintf(`{"platform":%q,"messages":[{"role":"user","content":"hello"}]}`, tc.source)

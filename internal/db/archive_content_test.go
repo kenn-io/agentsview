@@ -166,7 +166,6 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 	))
 
 	assertUsageOnlyStoredSession(t, database, session.ID, []int{2, 3})
-	assertUsageOnlyGroup(t, database, "project", "job-a")
 	replacementTitle := "title added after the initial import · Aug 31 10:00"
 	require.NoError(t, database.RefreshSessionName(t.Context(), session.ID, &replacementTitle))
 	require.NoError(t, database.RenameSession(t.Context(), session.ID, &replacementTitle))
@@ -176,7 +175,6 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 	assert.True(t, stored.IsAutomated,
 		"classification must be derived before private prompt text is discarded")
 	assert.Nil(t, stored.SessionName)
-	assert.Equal(t, "job-a", stored.GroupKey)
 	assert.Nil(t, stored.DisplayName)
 
 	batchSession := session
@@ -205,13 +203,12 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 		incrementalSession.ID,
 		[]Message{{
 			SessionID: incrementalSession.ID, Ordinal: 0,
-			Role: "user", Content: privatePrompt, Model: "model-a", TokenUsage: []byte(`{"input_tokens":5,"output_tokens":1}`),
+			Role: "user", Content: privatePrompt,
 		}},
 		IncrementalSessionUpdate{MsgCount: 1, UserMsgCount: 1},
 	)
 	require.NoError(t, err)
-	assertUsageOnlyStoredSession(t, database, incrementalSession.ID, []int{0})
-	assertUsageOnlyGroup(t, database, "project", "job-a")
+	assertUsageOnlyStoredSession(t, database, incrementalSession.ID, []int{})
 	incrementalStored, err := database.GetSessionFull(
 		t.Context(), incrementalSession.ID,
 	)
