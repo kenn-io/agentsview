@@ -21,14 +21,60 @@ function setup() {
 }
 
 describe("settleVirtualScroll", () => {
-  it("completes immediately when an exact rendered offset exists", async () => {
+  it("waits for rendered offsets to settle before completing", async () => {
     const { options, virtualizer } = setup();
     virtualizer.getVirtualItems.mockReturnValue([{ index: 1 }]);
     virtualizer.getOffsetForIndex.mockReturnValue([123.6, "start"]);
     expect(await settleVirtualScroll(options)).toBe(true);
     expect(virtualizer.scrollToOffset).toHaveBeenCalledWith(124, { align: "start" });
-    expect(options.nextFrame).not.toHaveBeenCalled();
+    expect(options.nextFrame).toHaveBeenCalled();
     expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("corrects offsets that change after asynchronous row measurement", async () => {
+    const { options, virtualizer } = setup();
+    virtualizer.getVirtualItems.mockReturnValue([{ index: 1 }]);
+    virtualizer.getOffsetForIndex.mockReturnValue([120, "start"]);
+    let frame = 0;
+    options.nextFrame = vi.fn(async () => {
+      frame++;
+      if (frame === 2) virtualizer.getOffsetForIndex.mockReturnValue([700, "start"]);
+      if (frame === 4) virtualizer.getOffsetForIndex.mockReturnValue([980, "start"]);
+    });
+    expect(await settleVirtualScroll(options)).toBe(true);
+    expect(virtualizer.scrollToOffset).toHaveBeenLastCalledWith(980, { align: "start" });
+  });
+
+  it("cancels measurement settling when the user starts another scroll", async () => {
+    const { options, virtualizer } = setup();
+    virtualizer.getVirtualItems.mockReturnValue([{ index: 1 }]);
+    virtualizer.getOffsetForIndex.mockReturnValue([120, "start"]);
+    let current = true;
+    options.isCurrent = () => current;
+    options.nextFrame = vi.fn(async () => {
+      current = false;
+    });
+    expect(await settleVirtualScroll(options)).toBe(false);
+    expect(virtualizer.scrollToOffset).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts settling when the target moves to another row at the same offset", async () => {
+    const { options, virtualizer } = setup();
+    let index = 1;
+    options.getIndex = () => index;
+    virtualizer.getVirtualItems.mockReturnValue([{ index: 1 }, { index: 2 }]);
+    virtualizer.getOffsetForIndex.mockReturnValue([120, "start"]);
+    let frame = 0;
+    options.nextFrame = vi.fn(async () => {
+      if (++frame === 4) index = 2;
+    });
+
+    expect(await settleVirtualScroll(options)).toBe(true);
+    expect(virtualizer.getOffsetForIndex).toHaveBeenNthCalledWith(1, 1, "start");
+    expect(virtualizer.getOffsetForIndex).toHaveBeenNthCalledWith(2, 1, "start");
+    expect(virtualizer.getOffsetForIndex).toHaveBeenNthCalledWith(3, 2, "start");
+    expect(virtualizer.getOffsetForIndex).toHaveBeenNthCalledWith(5, 2, "start");
+    expect(options.nextFrame).toHaveBeenCalledTimes(8);
   });
 
   it("does not report an estimated scroll as completion", async () => {
@@ -42,7 +88,7 @@ describe("settleVirtualScroll", () => {
       }
     });
     expect(await settleVirtualScroll(options)).toBe(true);
-    expect(options.nextFrame).toHaveBeenCalledTimes(2);
+    expect(options.nextFrame).toHaveBeenCalled();
     expect(virtualizer.scrollToIndex).toHaveBeenCalledTimes(1);
     expect(virtualizer.scrollToOffset).toHaveBeenCalledWith(240, { align: "start" });
   });
@@ -56,7 +102,7 @@ describe("settleVirtualScroll", () => {
       virtualizer.getOffsetForIndex.mockReturnValue([100, "start"]);
     });
     expect(await settleVirtualScroll(options)).toBe(true);
-    expect(options.nextFrame).toHaveBeenCalledTimes(1);
+    expect(options.nextFrame).toHaveBeenCalled();
     expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
   });
 
@@ -65,6 +111,19 @@ describe("settleVirtualScroll", () => {
     expect(await settleVirtualScroll(options)).toBe(false);
     expect(virtualizer.scrollToIndex).toHaveBeenCalledTimes(16);
     expect(options.nextFrame).toHaveBeenCalledTimes(30);
+  });
+
+  it("bounds retries when measured row heights keep changing", async () => {
+    const { options, virtualizer } = setup();
+    virtualizer.getVirtualItems.mockReturnValue([{ index: 1 }]);
+    let offset = 120;
+    virtualizer.getOffsetForIndex.mockImplementation(() => [offset, "start"]);
+    options.nextFrame = vi.fn(async () => {
+      offset += 20;
+    });
+    expect(await settleVirtualScroll(options)).toBe(false);
+    expect(options.nextFrame).toHaveBeenCalledTimes(30);
+    expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
   });
 
   it("cancels between estimate frames without a stale exact scroll", async () => {
