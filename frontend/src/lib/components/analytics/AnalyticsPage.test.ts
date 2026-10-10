@@ -177,6 +177,18 @@ describe("AnalyticsPage outcome window", () => {
       await flushEffects();
       load.mockClear();
       outcomeTotals.includePullRequests = requestedPRs;
+      if (requestedPRs) {
+        outcomeTotals.stats = {
+          repos_active: 1,
+          commits: 2,
+          loc_added: 3,
+          loc_removed: 0,
+          files_changed: 1,
+          prs_opened: 0,
+          prs_merged: 0,
+        };
+        expect(outcomeTotals.pullRequestLookupFailed).toBe(false);
+      }
       document.querySelector<HTMLButtonElement>('button[aria-label="Refresh analytics"]')!.click();
       await flushEffects();
       expect(load).toHaveBeenCalledTimes(gitLoads);
@@ -184,7 +196,7 @@ describe("AnalyticsPage outcome window", () => {
     },
   );
 
-  it.each(["transport error", "skipped PR"])(
+  it.each(["transport error", "skipped PR", "skipped author", "absent totals"])(
     "refresh reloads Git totals after a failed pull request lookup and restores the button (%s)",
     async (failure) => {
       const initialLoad = await start();
@@ -201,7 +213,18 @@ describe("AnalyticsPage outcome window", () => {
               loc_added: 3,
               loc_removed: 0,
               files_changed: 1,
-              skipped: [{ repo: "example", op: "pr", reason: "GitHub lookup failed" }],
+              prs_opened: failure === "absent totals" ? undefined : 0,
+              prs_merged: failure === "absent totals" ? undefined : 0,
+              skipped:
+                failure === "absent totals"
+                  ? []
+                  : [
+                      {
+                        repo: "example",
+                        op: failure === "skipped author" ? "author" : "pr",
+                        reason: "GitHub lookup failed",
+                      },
+                    ],
             },
           });
         }
@@ -216,9 +239,12 @@ describe("AnalyticsPage outcome window", () => {
         });
       });
       document.querySelector<HTMLButtonElement>(".outcome-load-prs")!.click();
+      expect(outcomeTotals.pullRequestLookupFailed).toBe(false);
       await lookup.mock.results[0]!.value;
       await flushEffects();
-      expect(outcomeTotals.error).toBe(failure === "transport error" ? "Pull request lookup failed" : null);
+      expect(outcomeTotals.error).toBe(
+        failure === "transport error" ? "Pull request lookup failed" : null,
+      );
       expect(document.querySelector(".outcome-load-prs")).toBeNull();
 
       document.querySelector<HTMLButtonElement>('button[aria-label="Refresh analytics"]')!.click();
