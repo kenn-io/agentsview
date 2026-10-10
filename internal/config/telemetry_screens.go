@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gofrs/flock"
+	"go.kenn.io/kit/atomicfile"
 )
 
 const telemetryScreensFilename = "telemetry-screen-views"
@@ -40,50 +43,61 @@ func (c *Config) TelemetryScreenClaimsPath() string {
 
 // MigrateTelemetryScreenClaims converts legacy claims and moves unreadable claims aside.
 func (c *Config) MigrateTelemetryScreenClaims() error {
-	return c.withConfigLock(func() error {
-		path := c.TelemetryScreenClaimsPath()
-		data, err := os.ReadFile(path)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		var current screenClaims
-		if json.Unmarshal(data, &current) == nil && current.readable() {
-			return nil
-		}
-		fields := strings.Fields(string(data))
-		if len(fields) >= 3 && isClaimDay(fields[1]) {
-			state := screenClaims{Version: 1, Days: make(map[string][]string)}
-			if err := addLegacyScreenClaims(state.Days, fields); err != nil {
-				return err
-			}
-			encoded, err := json.Marshal(state)
-			if err != nil {
-				return err
-			}
-			return c.writeInstallationFile(telemetryScreensFilename, string(encoded))
-		}
-		unreadablePath := path + ".unreadable"
-		if err := os.Rename(path, unreadablePath); err != nil {
-			return err
-		}
-		log.Printf("moved unreadable telemetry screen claims to %s", unreadablePath)
+	path := c.TelemetryScreenClaimsPath()
+	lock := flock.New(path + ".lock")
+	if err := lock.Lock(); err != nil {
+		return err
+	}
+	defer lock.Unlock()
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
-	})
+	}
+	if err != nil {
+		return err
+	}
+	var current screenClaims
+	if json.Unmarshal(data, &current) == nil && current.readable() {
+		return nil
+	}
+	backup, err := os.CreateTemp(c.DataDir, telemetryScreensFilename+".unreadable-*")
+	if err != nil {
+		return err
+	}
+	if err := backup.Close(); err != nil {
+		os.Remove(backup.Name())
+		return err
+	}
+	if err := atomicfile.Replace(path, backup.Name()); err != nil {
+		os.Remove(backup.Name())
+		return err
+	}
+	log.Printf("moved unreadable telemetry screen claims to %s", backup.Name())
+	fields := strings.Fields(string(data))
+	if len(fields) >= 3 && fields[0] == c.InstallationID && isClaimDay(fields[1]) {
+		state := screenClaims{Version: 1, Days: make(map[string][]string)}
+		if !addLegacyScreenClaims(state.Days, fields) {
+			return nil
+		}
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			return nil
+		}
+		return c.writeInstallationFile(telemetryScreensFilename, string(encoded))
+	}
+	return nil
 }
 
 // addLegacyScreenClaims converts validated "installation-id day screen..." claims.
-func addLegacyScreenClaims(days map[string][]string, fields []string) error {
+func addLegacyScreenClaims(days map[string][]string, fields []string) bool {
 	for _, screen := range fields[2:] {
 		key, err := json.Marshal([]string{fields[0], "screen_viewed", screen})
 		if err != nil {
-			return err
+			return false
 		}
 		days[string(key)] = []string{fields[1]}
 	}
-	return nil
+	return true
 }
 
 func isClaimDay(value string) bool {
