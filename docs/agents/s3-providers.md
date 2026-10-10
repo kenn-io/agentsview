@@ -56,7 +56,10 @@ stat, and `s3PrefixScan`. Agent policy does not belong there.
 ## Identity Rules
 
 `S3SessionID` is the session key before the engine prefixes the source machine.
-Providers with `SharedSessionIDs` apply the local collision policy to S3 object URIs, retaining saved IDs across Cursor format and layout changes; omitted objects keep their ownership.
+Providers with `SharedSessionIDs` apply the local collision policy to S3 object
+URIs. S3 ownership lookup supports Cursor only, retaining saved IDs across
+format and layout changes; omitted objects keep their ownership. Codex ownership
+lookup is deferred.
 
 - Keep only paths that are real transcripts for that agent.
 - If `.jsonl` and `.txt` (or any other pair) share a stem, keep one. Prefer the

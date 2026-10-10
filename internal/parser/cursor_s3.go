@@ -91,10 +91,15 @@ func cursorS3TranscriptName(name string) bool {
 	return IsValidSessionID(stem)
 }
 
-// CursorS3SourceKey identifies alternatives within the broadest accepted scanner root.
-func CursorS3SourceKey(roots []string, uri string) string {
+// CursorS3SourceRoots orders S3 roots from broadest to narrowest for source lookup.
+func CursorS3SourceRoots(roots []string) []string {
 	roots = slices.DeleteFunc(slices.Clone(roots), func(root string) bool { return !isS3URI(root) })
 	slices.SortFunc(roots, func(a, b string) int { return len(a) - len(b) })
+	return roots
+}
+
+// CursorS3SourceKey identifies alternatives using roots ordered by CursorS3SourceRoots.
+func CursorS3SourceKey(roots []string, uri string) string {
 	for _, root := range roots {
 		rel, ok := s3RelativePath(root, uri)
 		if !ok {
@@ -116,6 +121,7 @@ func preferCursorS3Transcripts(
 	roots []string,
 	transcripts []cursorS3Transcript,
 ) []cursorS3Transcript {
+	roots = CursorS3SourceRoots(roots)
 	best := make(map[string]cursorS3Transcript, len(transcripts))
 	order := make([]string, 0, len(transcripts))
 	for _, transcript := range transcripts {

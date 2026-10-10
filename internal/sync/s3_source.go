@@ -97,7 +97,7 @@ func s3DiscoveredSessionIDWithProvider(
 	return applyIDPrefixToID(s3SessionIDPrefix(file.Machine), id)
 }
 
-func (e *Engine) s3SourceMetadataChanged(ctx context.Context, file parser.DiscoveredFile) bool {
+func (e *Engine) s3SourceMetadataChanged(ctx context.Context, file *parser.DiscoveredFile) bool {
 	if file.SourceMtime == 0 {
 		return false
 	}
@@ -106,7 +106,7 @@ func (e *Engine) s3SourceMetadataChanged(ctx context.Context, file parser.Discov
 		return false
 	}
 	return e.s3SourceMetadataChangedFromInfo(ctx,
-		file, e.s3StoredSessionID(ctx, file, p), file.SourceSize, file.SourceMtime, file.SourceFingerprint,
+		*file, e.s3StoredSessionID(ctx, file, p), file.SourceSize, file.SourceMtime, file.SourceFingerprint,
 	)
 }
 
@@ -138,8 +138,12 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(ctx context.Context,
 }
 
 // Shared-ID sources must compare metadata with the row owned by this object.
-func (e *Engine) s3StoredSessionID(ctx context.Context, file parser.DiscoveredFile, p parser.S3Provider) string {
-	baseID := s3DiscoveredSessionIDWithProvider(file, p)
+func (e *Engine) s3StoredSessionID(ctx context.Context, file *parser.DiscoveredFile, p parser.S3Provider) (id string) {
+	if file.S3StoredSessionID != nil {
+		return *file.S3StoredSessionID
+	}
+	defer func() { file.S3StoredSessionID = &id }()
+	baseID := s3DiscoveredSessionIDWithProvider(*file, p)
 	if parser.SharesSessionIDs(file.Agent) {
 		records, err := e.sessionPathRecords(ctx, baseID)
 		if err != nil {

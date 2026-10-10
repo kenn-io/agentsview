@@ -143,26 +143,22 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 
 func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 	for _, tt := range []struct {
+		name     string
+		root     string
 		roots    []string
 		projects [2]string
 		harvest  bool
 	}{
-		{roots: []string{"s3://bucket/archive"}},
-		{roots: []string{"s3://bucket/laptop/raw/cursor", "s3://bucket/laptop/raw/cursor/project-one/agent-transcripts"}},
-		{roots: []string{"s3://bucket/laptop/raw/cursor/project-one/agent-transcripts", "s3://bucket/laptop/raw/cursor"}},
-		{roots: []string{"s3://bucket/host-a/raw/cursor"}, projects: [2]string{"agent-transcripts", "cursor"}, harvest: true},
-		{roots: []string{"s3://bucket/archive/agent-transcripts/laptop/raw/cursor"}, projects: [2]string{"Users-fiona-Documents-demo", "home-user-a-Documents-demo"}},
+		{name: "archive", root: "s3://bucket/archive", roots: []string{"s3://bucket/archive"}, projects: [2]string{"project-one", "project-two"}},
+		{name: "broad root first", root: "s3://bucket/laptop/raw/cursor", roots: []string{"s3://bucket/laptop/raw/cursor", "s3://bucket/laptop/raw/cursor/project-one/agent-transcripts"}, projects: [2]string{"project-one", "project-two"}},
+		{name: "nested root first", root: "s3://bucket/laptop/raw/cursor", roots: []string{"s3://bucket/laptop/raw/cursor/project-one/agent-transcripts", "s3://bucket/laptop/raw/cursor"}, projects: [2]string{"project-one", "project-two"}},
+		{name: "harvest", root: "s3://bucket/host-a/raw/cursor", roots: []string{"s3://bucket/host-a/raw/cursor"}, projects: [2]string{"agent-transcripts", "cursor"}, harvest: true},
+		{name: "encoded projects", root: "s3://bucket/archive/agent-transcripts/laptop/raw/cursor", roots: []string{"s3://bucket/archive/agent-transcripts/laptop/raw/cursor"}, projects: [2]string{"Users-fiona-Documents-demo", "home-user-a-Documents-demo"}},
 	} {
 		roots := tt.roots
 		projects := tt.projects
-		if projects[0] == "" {
-			projects = [2]string{"project-one", "project-two"}
-		}
-		root := roots[0]
-		if strings.HasSuffix(root, "/agent-transcripts") {
-			root = roots[1]
-		}
-		t.Run(root, func(t *testing.T) {
+		root := tt.root
+		t.Run(tt.name, func(t *testing.T) {
 			oldList := listS3Objects
 			t.Cleanup(func() { listS3Objects = oldList })
 			firstURI := root + "/" + projects[0] + "/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl"
@@ -174,11 +170,18 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 			}
 			listS3Objects = func(got string) ([]S3Object, error) {
 				require.Contains(t, roots, got)
-				return []S3Object{
+				objects := []S3Object{
 					{URI: secondURI, LastModified: time.Unix(200, 0)},
 					{URI: firstURI, LastModified: time.Unix(100, 0)},
 					{URI: otherURI, LastModified: time.Unix(100, 0)},
-				}, nil
+				}
+				var listed []S3Object
+				for _, object := range objects {
+					if strings.HasPrefix(object.URI, got+"/") {
+						listed = append(listed, object)
+					}
+				}
+				return listed, nil
 			}
 			sourceSet := newCursorSourceSet(roots)
 			sources, err := sourceSet.Discover(t.Context())

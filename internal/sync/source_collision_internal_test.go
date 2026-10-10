@@ -53,10 +53,8 @@ func TestSourceCollisionKeepsRetryFlag(t *testing.T) {
 	altID := parser.AltSessionID(id, other)
 	assert.Equal(t, altID, res.results[0].Session.ID)
 	assert.True(t, res.needsRetryForSession(altID))
-	// The derived session links to the session it shares an id with, even
-	// when its parser recorded another parent.
-	assert.Equal(t, id, res.results[0].Session.ParentSessionID)
-	assert.Equal(t, parser.RelContinuation, res.results[0].Session.RelationshipType)
+	assert.Equal(t, "gemini:spawner", res.results[0].Session.ParentSessionID)
+	assert.Equal(t, parser.RelSubagent, res.results[0].Session.RelationshipType)
 }
 
 // A failed ownership lookup skips the source this pass so it retries, rather
@@ -116,7 +114,12 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 		order      []int
 		legacy     bool
 		cachedLost bool
+		batch      bool
+		subagents  bool
 	}{
+		{name: "both in one pass", order: []int{0, 1}, batch: true},
+		{name: "both in one pass reversed", order: []int{1, 0}, batch: true},
+		{name: "children of different parents", order: []int{0, 1}, subagents: true},
 		{name: "A then B", order: []int{0, 1}},
 		{name: "B then A", order: []int{1, 0}},
 		{name: "main dropped object", order: []int{0}, legacy: true},
@@ -127,6 +130,10 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			const root = "s3://bucket/host-a/raw/cursor"
 			const baseID = "host-a~cursor:shared"
 			paths := []string{root + "/project-a/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared.txt"}
+			parents := []string{"parent-a", "parent-b"}
+			if tt.subagents {
+				paths = []string{root + "/project-a/agent-transcripts/parent-a/subagents/shared.txt", root + "/project-b/agent-transcripts/parent-b/subagents/shared.txt"}
+			}
 			bodies := map[string]string{
 				paths[0]: "user:\nProject A\nassistant:\nAnswer A\n",
 				paths[1]: "user:\nProject B\nassistant:\nAnswer B\n",
@@ -160,12 +167,42 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				DisableFilesystemProjectDiscovery: true, ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
 			})
 			t.Cleanup(engine.Close)
-			for _, i := range tt.order {
-				provider.discovered = []parser.SourceRef{source(i)}
-				stats := engine.SyncAll(t.Context(), nil)
-				require.Zero(t, stats.Failed)
+			engine.workerCountOverride = 2
+			if tt.subagents {
+				for i, parent := range parents {
+					uri := root + "/" + []string{"project-a", "project-b"}[i] + "/agent-transcripts/" + parent + ".txt"
+					bodies[uri] = "user:\nParent\nassistant:\nAnswer\n"
+					ref := source(i)
+					ref.Key, ref.DisplayPath, ref.FingerprintKey = uri, uri, uri
+					ref.Opaque = parser.S3DiscoveredSource{URI: uri, Machine: "host-a", Size: int64(len(bodies[uri])), MtimeNS: mtime.UnixNano(), Fingerprint: "s3-meta:stable"}
+					provider.discovered = append(provider.discovered, ref)
+				}
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			}
+			if tt.batch {
+				provider.discovered = []parser.SourceRef{source(tt.order[0]), source(tt.order[1])}
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				for i, uri := range paths {
+					storedIDs, err := database.ListSessionIDsByFilePath(t.Context(), uri, "cursor")
+					require.NoError(t, err)
+					require.Len(t, storedIDs, 1)
+					messages, err := database.GetAllMessages(t.Context(), storedIDs[0])
+					require.NoError(t, err)
+					require.Len(t, messages, 2)
+					assert.Equal(t, []string{"Project A", "Project B"}[i], messages[0].Content)
+					assert.Equal(t, []string{"Answer A", "Answer B"}[i], messages[1].Content)
+				}
+			} else {
+				for _, i := range tt.order {
+					provider.discovered = []parser.SourceRef{source(i)}
+					stats := engine.SyncAll(t.Context(), nil)
+					require.Zero(t, stats.Failed)
+				}
 			}
 			if tt.legacy {
+				starred, err := database.StarSession(t.Context(), baseID)
+				require.NoError(t, err)
+				require.True(t, starred)
 				require.NoError(t, database.SetSessionDataVersion(t.Context(), baseID, 128))
 				require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
 					_, err := tx.ExecContext(t.Context(), "PRAGMA user_version = 128")
@@ -186,6 +223,8 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				needsResync, err := db.ArchiveNeedsResync(t.Context(), database.Path())
 				require.NoError(t, err)
 				require.True(t, needsResync, "the data-version bump must schedule recovery")
+			}
+			if tt.legacy {
 				stats = engine.ResyncAll(t.Context(), nil)
 				require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
 				require.Zero(t, stats.Failed)
@@ -206,7 +245,10 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					require.NotNil(t, session)
 					assert.Equal(t, "host-a", session.Machine)
 					assert.Equal(t, uri, derefString(session.FilePath))
-					if ids[i] != baseID {
+					if tt.subagents {
+						assert.Equal(t, "host-a~cursor:"+parents[i], derefString(session.ParentSessionID))
+						assert.Equal(t, "subagent", session.RelationshipType)
+					} else if ids[i] != baseID {
 						assert.Equal(t, baseID, derefString(session.ParentSessionID))
 						assert.Equal(t, "continuation", session.RelationshipType)
 					}
@@ -218,6 +260,11 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				}
 			}
 			verify()
+			if tt.legacy {
+				stars, err := database.ListStarredSessionIDs(t.Context())
+				require.NoError(t, err)
+				assert.Equal(t, []string{baseID}, stars)
+			}
 			before := fetches.Load()
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 			require.Zero(t, stats.Failed)
@@ -225,13 +272,15 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			stats = engine.SyncAll(t.Context(), nil)
 			require.Zero(t, stats.Failed)
 			assert.Equal(t, before, fetches.Load(), "unchanged objects must not download without a cutoff")
-			if tt.legacy {
-				return
+			if !tt.legacy || ids[1] != baseID {
+				starred, err := database.StarSession(t.Context(), ids[1])
+				require.NoError(t, err)
+				require.True(t, starred)
 			}
-			starred, err := database.StarSession(t.Context(), ids[1])
-			require.NoError(t, err)
-			require.True(t, starred)
 			paths[1] = root + "/project-b/agent-transcripts/shared/shared.jsonl"
+			if tt.subagents {
+				paths[1] = root + "/project-b/agent-transcripts/parent-b/subagents/shared.jsonl"
+			}
 			bodies[paths[1]] = `{"role":"user","message":{"content":"Project B"}}` + "\n" + `{"role":"assistant","message":{"content":"Answer B"}}` + "\n"
 			provider.discovered = []parser.SourceRef{source(0), source(1)}
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
@@ -239,7 +288,11 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			verify()
 			stars, err := database.ListStarredSessionIDs(t.Context())
 			require.NoError(t, err)
-			assert.Equal(t, []string{ids[1]}, stars)
+			wantStars := []string{ids[1]}
+			if tt.legacy && baseID != ids[1] {
+				wantStars = append(wantStars, baseID)
+			}
+			assert.ElementsMatch(t, wantStars, stars)
 		})
 	}
 }

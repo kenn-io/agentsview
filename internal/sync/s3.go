@@ -185,7 +185,7 @@ func (e *Engine) processS3Session(
 ) processResult {
 	idPrefix := s3SessionIDPrefix(file.Machine)
 	sourceFingerprint := s3SourceFingerprint(file)
-	storedID := e.s3StoredSessionID(ctx, file, p)
+	storedID := e.s3StoredSessionID(ctx, &file, p)
 	sourceChanged := e.s3SourceMetadataChangedFromInfo(ctx,
 		file, storedID,
 		sourceInfo.Size(),
@@ -368,12 +368,9 @@ func (e *Engine) processS3Session(
 	if err != nil {
 		return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 	}
-	// Record the real s3:// source on each parsed session rather than the
-	// transient temp path (which is deleted on return), so the stored source
-	// pointer reflects where the session actually came from.
+	// Persist object metadata instead of transient materialization metadata.
 	for i := range res.results {
 		applyIDPrefixToParsedResult(idPrefix, &res.results[i])
-		res.results[i].Session.File.Path = file.Path
 		res.results[i].Session.File.Size = sourceInfo.Size()
 		res.results[i].Session.File.Mtime = sourceInfo.ModTime().UnixNano()
 		if sourceFingerprint != "" {
@@ -519,10 +516,10 @@ func (e *Engine) parseMaterializedS3Source(
 		noCacheSkip:              !providerOutcomeAllowsCleanSkipCache(outcome),
 		deferredCount:            deferredCount,
 	}
+	for i := range res.results {
+		res.results[i].Session.File.Path = file.Path
+	}
 	if collisionPolicyApplies(provider) {
-		for i := range res.results {
-			res.results[i].Session.File.Path = file.Path
-		}
 		e.applyProviderFilePathPolicies(ctx, provider, file.Agent, file.Path, &res, s3SessionIDPrefix(file.Machine))
 	}
 	return res, nil
