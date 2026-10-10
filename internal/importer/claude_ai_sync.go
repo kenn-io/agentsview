@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"net/url"
 	"slices"
 	"strconv"
@@ -42,15 +43,9 @@ func claudeAIRequest(shape int, organization, conversation string, offset int) s
 	return strings.NewReplacer("{organization}", url.PathEscape(organization), "{conversation}", url.PathEscape(conversation), "{offset}", strconv.Itoa(offset)).Replace(strings.Split(claudeAIRequests, "\n")[shape])
 }
 
-func claudeAIFreshness(updatedAt, leaf string, session *db.Session) uint64 {
+func claudeAIFreshness(updatedAt, leaf string) uint64 {
 	hash := fnv.New64a()
-	fmt.Fprintf(hash, "%s\x00%s\x00%d", updatedAt, leaf, session.MessageCount)
-	for _, field := range []*string{session.TranscriptRevision, session.SessionName, session.EndedAt} {
-		fmt.Fprint(hash, "\x00")
-		if field != nil {
-			fmt.Fprint(hash, *field)
-		}
-	}
+	fmt.Fprintf(hash, "%s\x00%s", updatedAt, leaf)
 	return hash.Sum64()
 }
 
@@ -95,6 +90,25 @@ func SyncClaudeAI(ctx context.Context, store interface {
 	}
 
 	failedLast := false
+	id := ""
+	chatFailed := func(err error) error {
+		if id == "" {
+			stats.Errors++
+		} else {
+			stats.record(id, importSkipped, err)
+		}
+		cb.progress(stats)
+		if failedLast {
+			return err
+		}
+		failedLast = true
+		return nil
+	}
+	chatDone := func(status importStatus) {
+		failedLast = false
+		stats.record("", status, nil)
+		cb.progress(stats)
+	}
 	for _, org := range organizations {
 		if !slices.Contains(org.Capabilities, "chat") {
 			continue
@@ -122,6 +136,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				break
 			}
 			for _, summary := range items {
+				id = ""
 				if err := ctx.Err(); err != nil {
 					return stats, err
 				}
@@ -131,41 +146,29 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					CurrentLeaf jsontext.Value `json:"current_leaf_message_uuid"`
 				}
 				if err := json.Unmarshal(summary, &marker); err != nil || marker.UUID == "" || marker.UpdatedAt == "" {
-					stats.Errors++
-					cb.progress(stats)
-					if failedLast {
-						return stats, errors.New("invalid claude conversation summary")
+					if err := chatFailed(errors.New("invalid claude conversation summary")); err != nil {
+						return stats, err
 					}
-					failedLast = true
 					continue
 				}
 				var leaf string
 				if err := json.Unmarshal(marker.CurrentLeaf, &leaf); err != nil || leaf == "" && string(marker.CurrentLeaf) != "null" {
-					stats.Errors++
-					cb.progress(stats)
-					if failedLast {
-						return stats, errors.New("invalid claude conversation leaf")
+					if err := chatFailed(errors.New("invalid claude conversation leaf")); err != nil {
+						return stats, err
 					}
-					failedLast = true
 					continue
 				}
 				if leaf == "" || leaf == "00000000-0000-4000-8000-000000000000" {
-					failedLast = false
-					stats.Skipped++
-					cb.progress(stats)
+					chatDone(importSkipped)
 					continue
 				}
-				id := "claude-ai:" + marker.UUID
+				id = "claude-ai:" + marker.UUID
 				if store.IsSessionTrashed(ctx, id) {
-					failedLast = false
-					stats.Skipped++
-					cb.progress(stats)
+					chatDone(importSkipped)
 					continue
 				}
 				if store.IsSessionExcluded(ctx, id) {
-					failedLast = false
-					stats.Skipped++
-					cb.progress(stats)
+					chatDone(importSkipped)
 					continue
 				}
 				existing, err := store.GetSessionFull(ctx, id)
@@ -176,10 +179,8 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err != nil {
 					return stats, err
 				}
-				if existing != nil && fresh && storedHash == claudeAIFreshness(marker.UpdatedAt, leaf, existing) {
-					failedLast = false
-					stats.Skipped++
-					cb.progress(stats)
+				if existing != nil && fresh && storedHash == claudeAIFreshness(marker.UpdatedAt, leaf) {
+					chatDone(importSkipped)
 					continue
 				}
 				detail, err := fetchClaudeAI(ctx, fetch, claudeAIRequest(claudeAIConversationRequest, org.UUID, marker.UUID, 0))
@@ -192,57 +193,48 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					}
 					detailError, _ := errors.AsType[*claudeAIHTTPError](err)
 					if detailError != nil && detailError.status == 404 {
-						failedLast = false
-						stats.record(id, importSkipped, nil)
-					} else {
+						chatDone(importSkipped)
+					} else if errors.Is(err, ErrClaudeAIResponseTooLarge) {
 						stats.record(id, importSkipped, err)
-						if !errors.Is(err, ErrClaudeAIResponseTooLarge) {
-							if failedLast {
-								cb.progress(stats)
-								return stats, err
-							}
-							failedLast = true
-						} else {
-							failedLast = false
+						failedLast = false
+						cb.progress(stats)
+					} else {
+						if err := chatFailed(err); err != nil {
+							return stats, err
 						}
 					}
-					cb.progress(stats)
 					continue
 				}
+				result, err := parser.ParseClaudeAIDetail(detail)
+				if err == nil && result.Session.ID != id {
+					err = fmt.Errorf("conversation uuid differs from requested %s", marker.UUID)
+				}
+				if err != nil {
+					if err := chatFailed(err); err != nil {
+						return stats, err
+					}
+					continue
+				}
+				var status importStatus
 				var detailErr error
 				write := func() error {
-					result, err := parser.ParseClaudeAIDetail(detail)
-					if err == nil && result.Session.ID != id {
-						err = fmt.Errorf("conversation uuid differs from requested %s", marker.UUID)
-					}
-					if err != nil {
-						stats.record(id, importSkipped, err)
-						detailErr = err
-						return nil
-					}
 					result.Session.Machine = resolvedImportMachine(result.Session.Machine, machine)
-					status, err := syncConversation(ctx, store, result)
-					if errors.Is(err, db.ErrSessionTrashed) {
-						stats.record(id, importSkipped, nil)
+					status, detailErr = syncConversation(ctx, store, result)
+					if errors.Is(detailErr, db.ErrSessionTrashed) {
+						status, detailErr = importSkipped, nil
 						return nil
 					}
-					stats.record(id, status, err)
-					if err == nil {
-						stored, readErr := store.GetSessionFull(ctx, id)
-						err = readErr
+					if detailErr == nil {
 						var current struct {
 							UpdatedAt string `json:"updated_at"`
 							Leaf      string `json:"current_leaf_message_uuid"`
 						}
-						// The chat can change between list and detail; cache only what was imported.
-						if err == nil && stored != nil && json.Unmarshal(detail, &current) == nil && current.UpdatedAt == marker.UpdatedAt && current.Leaf == leaf {
-							err = store.UpsertProviderStatHash(ctx, parser.AgentClaudeAI, id, claudeAIFreshness(marker.UpdatedAt, leaf, stored))
-						}
-						if err != nil {
-							stats.record(id, importSkipped, err)
+						if json.Unmarshal(detail, &current) == nil {
+							if err := store.UpsertProviderStatHash(ctx, parser.AgentClaudeAI, id, claudeAIFreshness(current.UpdatedAt, current.Leaf)); err != nil {
+								log.Printf("import: writing Claude.ai freshness: %v", err)
+							}
 						}
 					}
-					detailErr = err
 					return nil
 				}
 				if cb != nil && cb.SerializeWrite != nil {
@@ -250,17 +242,19 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				} else {
 					err = write()
 				}
-				cb.progress(stats)
-				if ctx.Err() != nil {
-					return stats, ctx.Err()
-				}
 				if err != nil {
 					return stats, err
 				}
-				if detailErr != nil && failedLast {
-					return stats, detailErr
+				if detailErr != nil {
+					if err := chatFailed(detailErr); err != nil {
+						return stats, err
+					}
+				} else {
+					chatDone(status)
 				}
-				failedLast = detailErr != nil
+				if ctx.Err() != nil {
+					return stats, ctx.Err()
+				}
 			}
 			offset += len(items)
 			if page.HasMore != nil && !*page.HasMore {
@@ -288,25 +282,6 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		return importNew, err
 	}
 	msgs := claudeAIMessages(id, result.Messages)
-	archived, err := store.GetAllMessages(ctx, id)
-	if err != nil {
-		return importUpdated, err
-	}
-	usageOnly := storeArchiveContent(store).UsageOnly()
-	if usageOnly || sameMessages(archived, storedFormMessages(store, msgs)) {
-		_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-			Session: chatGPTSession(result.Session), Messages: msgs,
-			ReplaceMessages: usageOnly, SkipSignalUpdates: true,
-		}})
-		if errors.Is(err, db.ErrSessionExcluded) {
-			return importSkipped, nil
-		}
-		s := result.Session
-		if err != nil || usageOnly || existing.MessageCount != s.MessageCount || existing.UserMessageCount != s.UserMessageCount || !ptrEqual(existing.SessionName, db.ParsedSessionName(s)) || !ptrEqual(existing.FirstMessage, strPtr(s.FirstMessage)) || !ptrEqual(existing.StartedAt, timeStr(s.StartedAt)) || !ptrEqual(existing.EndedAt, timeStr(s.EndedAt)) {
-			return importUpdated, err
-		}
-		return importSkipped, nil
-	}
 	replacer, ok := store.(sessionReplacer)
 	if !ok {
 		return importUpdated, errors.New("store cannot preserve replaced chats")
@@ -316,6 +291,11 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		KeepTrashedCopyOnlyOnPinLoss: true,
 	})
 	if errors.Is(err, db.ErrReplaceUnchanged) {
+		_, err = store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: chatGPTSession(result.Session), Messages: msgs, SkipSignalUpdates: true,
+		}})
+	}
+	if errors.Is(err, db.ErrSessionExcluded) {
 		return importSkipped, nil
 	}
 	return importUpdated, err

@@ -278,6 +278,9 @@ func upsertConversation(
 		if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
 			log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
 		}
+		if err := localDB.DeleteProviderStatHash(ctx, parser.AgentClaudeAI, s.ID); err != nil {
+			log.Printf("import: clearing Claude.ai freshness: %v", err)
+		}
 	}
 
 	// Skip expensive message replacement when the conversation

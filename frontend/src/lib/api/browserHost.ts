@@ -3,7 +3,6 @@ export interface BrowserHost {
   fetch(
     path: string,
   ): Promise<{ status: number; body: string; retryAfter?: string; error?: string }>;
-  close(): Promise<void>;
 }
 
 export function getBrowserHost(): BrowserHost | undefined {
@@ -18,6 +17,5 @@ export function getBrowserHost(): BrowserHost | undefined {
   return {
     connect: () => tauri.core.invoke("claude_auth_connect"),
     fetch: (path) => tauri.core.invoke("claude_auth_fetch", { path }),
-    close: () => tauri.core.invoke("claude_auth_close"),
   };
 }

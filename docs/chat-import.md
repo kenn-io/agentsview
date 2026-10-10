@@ -70,9 +70,9 @@ list refreshes automatically.
 
 ## Sync in the desktop app
 
-With the desktop app connected to its local archive, open **Import conversations**, select **Claude.ai**, and click **Sign in**. Sign in to Claude.ai with an email code, close the window, then click **Sync** to download your chats. Google sign-in needs a browser host, which a later release can add beside the desktop window.
+With the desktop app connected to its local archive, open **Import conversations**, select **Claude.ai**, and click **Sign in**. Sign in to Claude.ai with an email code, close the window to hide it, then click **Sync** to download your chats. Google sign-in needs a browser host, which a later release can add beside the desktop window.
 
-Sync checks every chat, including archived chats. It fetches new chats and chats whose `updated_at`, visible leaf, or stored transcript changed. A zip re-import that changes text or message count triggers another fetch. Resync clears freshness, so the next Sync fetches each chat once. Search stays available during Sync.
+Sync checks every chat, including archived chats. It fetches new chats and chats whose `updated_at` or visible leaf changed. Sync also refetches chats touched by a zip import. Resync clears freshness, so the next Sync fetches each chat once. Search stays available during Sync.
 
 Changed chats show Claude.ai's visible branch, even when it has fewer turns. Usage-only archives update their counts to match that branch. If a replacement loses a pin or note, Sync keeps the previous version in Trash with its pins and notes. Replacements that preserve every pin and note make no copy. Switching back on Claude.ai restores those turns, but dropped pins and notes stay in the Trash copy. Trashed and permanently deleted chats stay deleted.
 

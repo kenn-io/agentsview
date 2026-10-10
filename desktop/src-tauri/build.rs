@@ -3,7 +3,6 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "claude_auth_connect",
             "claude_auth_fetch",
-            "claude_auth_close",
             "claude_auth_fetch_result",
         ]),
     ))

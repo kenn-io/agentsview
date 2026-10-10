@@ -6,7 +6,7 @@ import { m } from "../../i18n/index.js";
 import { setLocale } from "../../paraglide/runtime.js";
 import { ApiError } from "../../api/runtime.js";
 
-const host = vi.hoisted(() => ({ connect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
+const host = vi.hoisted(() => ({ connect: vi.fn(), fetch: vi.fn() }));
 vi.mock("../../api/browserHost.js", () => ({ getBrowserHost: () => host }));
 vi.mock("../../api/runtime.js", async (original) => ({
   ...(await original<typeof import("../../api/runtime.js")>()),
@@ -16,7 +16,6 @@ const syncState = vi.hoisted(() => ({ readOnly: false }));
 vi.mock("../../stores/sync.svelte.js", () => ({ sync: syncState }));
 const syncClaudeAI = vi.hoisted(() => vi.fn());
 vi.mock("../../api/client.js", () => ({
-  connectClaudeAI: (browser: typeof host) => browser.connect(),
   syncClaudeAI,
   importClaudeAI: vi.fn(),
   importChatGPT: vi.fn(),

@@ -2798,7 +2798,7 @@ schemas keep their existing ordering behavior.
   `content[].text` and thinking blocks.
   Malformed selected paths and mismatched conversation UUIDs fail before writes.
   Exports preserve their original message order.
-- **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible leaf, stored message count, and transcript revision in `provider_freshness`, keyed by `claude-ai` and session ID. Resync and `ResetAllMtimes` clear it. A zip re-import that changes stored text or count triggers a detail fetch. Sync stores messages in the same shape as zip import, without source UUIDs. Pins match by role, text, and occurrence rank. Reverified 2026-10-08 against the reconstructed list and detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIZipSameCountFreshness`, and `TestSyncClaudeAIBranchSwitch`. Shorter zip exports remain refused. See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for branch updates and Trash copies.
+- **Freshness:** Sync stores an FNV-64a hash of the detail's `updated_at` and visible leaf in `provider_freshness`, keyed by `claude-ai` and session ID. Resync and `ResetAllMtimes` clear it. Zip imports clear the chat's hash so the next Sync refetches it. Freshness write failures are logged and allow a later refetch. Sync stores messages in the same shape as zip import, without source UUIDs. Pins match by role, text, and occurrence rank. Reverified 2026-10-09 against the reconstructed list and detail fixtures and `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`, `TestSyncClaudeAIDetailNewerThanListCachesDetail`, and `TestSyncClaudeAIBranchSwitch`. Shorter zip exports remain refused. Closing the Sign-in window hides it for reuse. See [desktop Sync](https://agentsview.io/docs/chat-import/#sync-in-the-desktop-app) for branch updates and Trash copies.
 - **Limits:** Browser reads and decoded relay responses are capped at 32 MiB. The JSON relay body allows twice that size plus 64 KiB for escaping and metadata. Detail 404
   responses count as skipped; 401 or `error.details.error_code` equal to
   `account_session_invalid` in a non-2xx response stop Sync with a sign-in error.
@@ -2811,8 +2811,9 @@ schemas keep their existing ordering behavior.
   `has_more: true` stop Sync. Null and root-sentinel list leaves skip detail
   fetches; absent or malformed leaves count toward the two-failure stop.
   Reverified 2026-10-09 against the reconstructed fixtures and
-  `TestSyncClaudeAIConsecutiveInvalidSummariesStop`. Usage-only Sync replaces
-  counts from shorter selected branches through the projected batch writer;
+  `TestSyncClaudeAIFailureStreak`. Usage-only Sync replaces
+  shorter selected branches through the replacement writer, with a Trash copy
+  when a pin or note is lost;
   `TestSyncClaudeAIUsageArchiveShorterBranchReplacesCounts` covers repeat Sync.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks
   found `current_leaf_message_uuid` on list items and byte-identical list and

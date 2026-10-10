@@ -380,14 +380,6 @@ async function readImportResponse(
   );
 }
 
-// The browser window is shared, so Sign in and a new Sync wait for the previous run's close.
-let claudeAIClosing: Promise<void> = Promise.resolve();
-
-export async function connectClaudeAI(host: BrowserHost): Promise<void> {
-  await claudeAIClosing;
-  await host.connect();
-}
-
 export async function syncClaudeAI(
   host: BrowserHost,
   cb?: ImportCallbacks,
@@ -398,7 +390,6 @@ export async function syncClaudeAI(
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   try {
-    await claudeAIClosing;
     const response = await ImportService.postApiV1ImportClaudeAiSync({ signal: controller.signal });
     let fail: (error: unknown) => void = () => {};
     const failed = new Promise<never>((_, reject) => {
@@ -415,6 +406,7 @@ export async function syncClaudeAI(
           } catch (error) {
             fetched = { status: 0, body: "", error: String(error) };
           }
+          if (controller.signal.aborted) return;
           await ImportService.postApiV1ImportClaudeAiSyncResultsById(
             { id },
             { status: fetched.status, body: fetched.body, retry_after: fetched.retryAfter, error: fetched.error },
@@ -430,7 +422,6 @@ export async function syncClaudeAI(
   } finally {
     signal?.removeEventListener("abort", abort);
     abort();
-    claudeAIClosing = host.close().catch(() => {}); // Cleanup failure must preserve the sync outcome.
   }
 }
 

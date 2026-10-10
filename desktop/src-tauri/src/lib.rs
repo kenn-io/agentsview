@@ -323,7 +323,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             claude_auth_connect,
             claude_auth_fetch,
-            claude_auth_close,
             claude_auth_fetch_result
         ]);
 
@@ -386,6 +385,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build tauri app")
         .run(|app_handle, event| {
+            if let RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } = &event
+            {
+                if label == "main" {
+                    app_handle.exit(0);
+                }
+            }
             if let RunEvent::MenuEvent(event) = &event {
                 handle_desktop_menu_event(app_handle, event.id().0.as_str());
             }
@@ -678,7 +687,6 @@ fn deep_link_msg_param(url: &Url) -> Option<String> {
 }
 
 trait MainWindowVisibility {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn hide_main_window(&self);
     fn show_main_window(&self);
     fn unminimize_main_window(&self);
@@ -686,7 +694,6 @@ trait MainWindowVisibility {
 }
 
 impl MainWindowVisibility for WebviewWindow {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn hide_main_window(&self) {
         let _ = self.hide();
     }
@@ -704,7 +711,6 @@ impl MainWindowVisibility for WebviewWindow {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn hide_main_window_on_close(window: &impl MainWindowVisibility, prevent_close: impl FnOnce()) {
     prevent_close();
     window.hide_main_window();
@@ -4014,39 +4020,6 @@ async fn claude_auth_connect(handle: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn claude_auth_close(handle: AppHandle) -> Result<(), String> {
-    handle
-        .state::<ClaudeAuthState>()
-        .pending_browser_requests
-        .lock()
-        .map_err(|_| "Claude request lock failed")?
-        .clear();
-    if let Some(window) = handle.get_webview_window(CLAUDE_AUTH_WINDOW_LABEL) {
-        if !window.is_visible().map_err(|e| e.to_string())? {
-            let (sender, destroyed) = tokio::sync::oneshot::channel();
-            let sender = Mutex::new(Some(sender));
-            window.on_window_event(move |event| {
-                if matches!(event, tauri::WindowEvent::Destroyed) {
-                    if let Some(sender) = sender.lock().unwrap().take() {
-                        let _ = sender.send(());
-                    }
-                }
-            });
-            window.close().map_err(|e| e.to_string())?;
-            wait_for_claude_auth_destroyed(destroyed).await?;
-        }
-    }
-    Ok(())
-}
-
-async fn wait_for_claude_auth_destroyed(destroyed: tokio::sync::oneshot::Receiver<()>) -> Result<(), String> {
-    tokio::time::timeout(Duration::from_secs(5), destroyed)
-        .await
-        .map_err(|_| "Claude window close timed out")?
-        .map_err(|_| "Claude window destruction was not observed".into())
-}
-
-#[tauri::command]
 async fn claude_auth_fetch(
     handle: AppHandle,
     path: String,
@@ -4197,6 +4170,12 @@ fn create_claude_auth_window(
             })
             .build()
             .map_err(|err| format!("could not open the Claude sign-in window: {err}"))?;
+    let close_window = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            hide_main_window_on_close(&close_window, || api.prevent_close());
+        }
+    });
     Ok((window, loaded))
 }
 
@@ -5350,6 +5329,26 @@ agentsview running at http://127.0.0.1:18082
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn close_hides_the_existing_window_and_show_restores_it() {
+        let window = FakeMainWindow::default();
+        let close_calls = window.calls.clone();
+
+        hide_main_window_on_close(&window, move || {
+            close_calls
+                .lock()
+                .expect("lock close calls")
+                .push("prevent_close");
+        });
+        restore_main_window(&window);
+
+        assert_eq!(
+            *window.calls.lock().expect("lock calls for assertion"),
+            vec!["prevent_close", "hide", "show", "unminimize", "focus"]
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn claude_window_close_hides() {
         let window = FakeMainWindow::default();
         let close_calls = window.calls.clone();
 
@@ -6650,21 +6649,6 @@ agentsview running at http://127.0.0.1:18082
 
 #[cfg(test)]
 mod claude_sync_tests {
-    #[test]
-    fn claude_close_waits_for_window_destruction() {
-        use std::future::Future;
-        tauri::async_runtime::block_on(async {
-            let (sender, destroyed) = tokio::sync::oneshot::channel();
-            let mut closing = Box::pin(super::wait_for_claude_auth_destroyed(destroyed));
-            std::future::poll_fn(|cx| {
-                assert!(closing.as_mut().poll(cx).is_pending());
-                std::task::Poll::Ready(())
-            }).await;
-            sender.send(()).unwrap();
-            closing.await.unwrap();
-        });
-    }
-
     #[test]
     fn claude_browser_response_omits_absent_fields() {
         let response = super::ClaudeBrowserResponse { status: 200, body: String::new(), error: None, retry_after: None };
