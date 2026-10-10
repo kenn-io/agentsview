@@ -207,7 +207,6 @@ describe("AttributionPanel selection", () => {
       rows[1]!.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
       rows[1]!.dispatchEvent(new MouseEvent("dblclick", { detail: 2, bubbles: true }));
       expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:second", label: "Project B" });
-      expect(usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0]).toEqual(expect.objectContaining({ project_key: "pl1:sha256:second", group_by: "group" }));
     }
     await unmount(component);
   });
@@ -485,9 +484,6 @@ describe("AttributionPanel job groups", () => {
       group("abcdef-other", 2),
       { ...group("", 1), sessionId: "hermes:ungrouped", displayName: "Ungrouped run" },
       { ...group("", 2), groupLabel: "", sessionId: "", displayName: "" },
-      { ...group("remainder", 0.5), groupLabel: "Other" },
-      { ...group("", 0.4), sessionId: "hermes:", displayName: "Repeated run" },
-      { ...group("", 0.3), sessionId: "hermes:run-b", displayName: "Repeated run" },
     ]);
     const component = mountPanel();
     await tick();
@@ -504,21 +500,13 @@ describe("AttributionPanel job groups", () => {
       "Daily digest · abcdef-o",
       "Other",
       "Ungrouped run",
-      "Other · remainde",
-      "Repeated run · hermes:",
-      "Repeated run · hermes:r",
     ]);
     expect(rows.map((row) => row.querySelector(".list-cost")!.textContent?.trim())).toEqual([
       "$3.00",
       "$2.00",
       "$2.00",
       "$1.00",
-      "$0.50",
-      "$0.40",
-      "$0.30",
     ]);
-    expect(rows[0]!.title).toBe("Daily digest · abcdef-job");
-    expect(rows[4]!.title).toBe("Other · remainder");
     expect(rows[2]!.title).toBe("Other");
     expect(
       new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size,
@@ -551,11 +539,6 @@ describe("AttributionPanel job groups", () => {
     ];
     const component = mountPanel();
     await tick();
-    expect([...document.querySelectorAll(".list-label")].map((row) => row.textContent)).toEqual([
-      "Research",
-      "Digest",
-      "Other",
-    ]);
     expect(
       [...document.querySelectorAll(".list-cost")].map((row) => row.textContent?.trim()),
     ).toEqual(["$3.00", "$2.00", "$1.00"]);

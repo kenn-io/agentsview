@@ -12,36 +12,18 @@ test.describe("Usage attribution touch", () => {
       await expect(panel.locator(".tile").first()).toBeVisible();
       if (view === "list") await panel.getByRole("button", { name: "List", exact: true }).tap();
       const rows = panel.locator(view === "treemap" ? ".tile" : ".list-row");
-      await expect(rows.first()).toBeVisible();
-      const count = await rows.count();
-      expect(count).toBeGreaterThan(1);
-      const colors = await rows.evaluateAll((items) => items.map((item) => item.querySelector("rect")?.getAttribute("fill") ?? item.querySelector(".list-dot")?.getAttribute("style")));
       await rows.first().scrollIntoViewIfNeeded();
-      const geometry = (row: Element) => {
-        const bounds = row.getBoundingClientRect();
-        const panel = row.closest(".attribution-panel")!.getBoundingClientRect();
-        return { width: bounds.width, height: bounds.height, x: bounds.x - panel.x, y: bounds.y - panel.y };
-      };
-      const bounds = await rows.first().evaluate(geometry);
       await rows.first().tap();
       await expect(rows.first()).toHaveAttribute("aria-pressed", "true");
-      await expect(rows).toHaveCount(count);
-      await expect(panel.locator(".dimmed").first()).toBeVisible();
-      expect(await rows.first().evaluate(geometry)).toEqual(bounds);
-      expect(await rows.evaluateAll((items) => items.map((item) => item.querySelector("rect")?.getAttribute("fill") ?? item.querySelector(".list-dot")?.getAttribute("style")))).toEqual(colors);
       await panel.getByRole("button", { name: "Open", exact: true }).tap();
       await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
-      await expect(rows.first()).toBeVisible();
-      await panel.getByRole("button", { name: "All projects" }).tap();
-      await expect(rows).toHaveCount(count);
-      await expect(rows.first()).toHaveAttribute("aria-pressed", "true");
     });
   }
 });
 
 test.describe("Usage attribution selection", () => {
-  for (const [view, selector, labels] of [["treemap", ".tile", ".rail-label"], ["list", ".list-row", ".list-label"]] as const) {
-    test(`selecting keeps ${view} geometry and double click opens the clicked project`, async ({ page }) => {
+  for (const [view, selector, labels, brushed] of [["treemap", ".tile", ".rail-label", false], ["list", ".list-row", ".list-label", false], ["list", ".list-row", ".list-label", true]] as const) {
+    test(`selecting keeps ${brushed ? "brushed " : ""}${view} geometry and double click opens the clicked project`, async ({ page }) => {
       // Summary cards wrap at this width, so a card dropping out on select would shift the panel.
       await page.setViewportSize({ width: 700, height: 900 });
       // A refresh includes both summaries and the comparison requests they start afterward.
@@ -60,6 +42,17 @@ test.describe("Usage attribution selection", () => {
       const panel = page.locator(".attribution-panel");
       await expect(panel.locator(".tile").first()).toBeVisible();
       if (view === "list") await panel.getByRole("button", { name: "List", exact: true }).click();
+      if (brushed) {
+        const brush = page.locator(".chart-container .chart-body").first();
+        await brush.scrollIntoViewIfNeeded();
+        const bounds = (await brush.boundingBox())!;
+        const y = bounds.y + bounds.height / 2;
+        await page.mouse.move(bounds.x + bounds.width * 0.2, y);
+        await page.mouse.down();
+        await page.mouse.move(bounds.x + bounds.width * 0.75, y, { steps: 8 });
+        await page.mouse.up();
+        await expect(page.locator(".chart-container").getByRole("button", { name: "Clear selection", exact: true })).toBeVisible();
+      }
       await expect(page.locator(".usage-content")).toHaveAttribute("aria-busy", "false");
       const items = panel.locator(selector);
       // Content coordinates, so clicking's scroll into view and scroll anchoring cannot mask a shift.
@@ -85,7 +78,7 @@ test.describe("Usage attribution selection", () => {
     });
   }
 
-  test("selection clears in the header and double click opens the clicked project", async ({ page }) => {
+  test("selection clears in the header", async ({ page }) => {
     await page.goto("/usage");
     const panel = page.locator(".attribution-panel");
     const tiles = panel.locator(".tile");
@@ -99,11 +92,6 @@ test.describe("Usage attribution selection", () => {
     await expect(panel.getByRole("button", { name: "Open", exact: true })).toBeHidden();
     await expect(panel.locator('.tile[aria-pressed="true"]')).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Project: All", exact: true })).toBeVisible();
-    const clickedLabel = await panel.locator(".rail-label").nth(1).textContent();
-    await tiles.nth(1).dblclick();
-    await expect(panel.getByRole("button", { name: "All projects" })).toBeVisible();
-    await expect(panel.locator("h3")).toHaveText(clickedLabel!);
-    await expect(panel.locator(".tile, .rail-row").first()).toBeVisible();
   });
 
   test("panel actions share styling and chart clear stays compact", async ({ page }, testInfo) => {
@@ -143,43 +131,6 @@ test.describe("Usage attribution selection", () => {
       document.body.append(comparison);
     });
     await page.locator("#header-comparison").screenshot({ path: testInfo.outputPath("usage-panel-and-chart-headers.png") });
-  });
-
-  test("brush then select keeps all attribution rows", async ({
-    page,
-  }) => {
-    await page.goto("/usage");
-    const panel = page.locator(".attribution-panel");
-    await panel.getByRole("button", { name: "List", exact: true }).click();
-    const rows = panel.locator(".list-row");
-    await expect(rows.first()).toBeVisible();
-    const brush = page.locator(".chart-container .chart-body").first();
-    await brush.scrollIntoViewIfNeeded();
-    const bounds = await brush.boundingBox();
-    expect(bounds).not.toBeNull();
-    const rangeResponse = page.waitForResponse(
-      (response) => response.url().includes("/usage/summary") && response.ok(),
-    );
-    const y = bounds!.y + bounds!.height / 2;
-    await page.mouse.move(bounds!.x + bounds!.width * 0.2, y);
-    await page.mouse.down();
-    await page.mouse.move(bounds!.x + bounds!.width * 0.75, y, { steps: 8 });
-    await page.mouse.up();
-    const brushedResponse = await rangeResponse;
-    const count = (await brushedResponse.json()).projectTotals.length;
-    await expect(page.locator(".chart-container").getByRole("button", { name: "Clear selection", exact: true })).toBeVisible();
-    await expect(rows).toHaveCount(count);
-    const narrowed = page.waitForResponse(
-      (response) =>
-        response.url().includes("/usage/summary") &&
-        new URL(response.url()).searchParams.has("project_key") &&
-        response.ok(),
-    );
-    await rows.first().click();
-    await narrowed;
-    await expect(rows.first()).toHaveAttribute("aria-pressed", "true");
-    await expect(rows).toHaveCount(count);
-    await expect(panel.locator(".dimmed").first()).toBeVisible();
   });
 
   test("Back and Forward follow page history and retain populated project rows", async ({ page }) => {

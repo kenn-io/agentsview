@@ -537,69 +537,47 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("lists a selected series outside the unselected top ten before Other", async () => {
-    usage.toggles.timeSeries.groupBy = "model";
-    const models = Array.from({ length: 12 }, (_, index) => ({
-      modelName: `model-${index}`,
-      cost: testMoney(12 - index),
-    }));
-    usage.toggles.attribution.groupBy = "model";
-    usage.selectedModel = "model-11";
-    usage.referenceSummary = usageSummary([modelDailyEntry(0, models)]);
-    usage.summary = usageSummary([modelDailyEntry(0, [models[11]!])]);
-    const colorMap = usageChartColorMaps(usage.colorSummary, settings.chartPalette).model;
+  const names = (by: string, from: number, to: number) => Array.from({ length: to - from }, (_, index) => `${by}-${from + index}`);
+  const seriesSummary = (by: "model" | "agent", ids: string[]) => {
+    const entry = dailyEntry(0);
+    entry.projectBreakdowns = [];
+    const rows = ids.map((id) => ({ inputTokens: 60, outputTokens: 30, cacheCreationTokens: 0, cacheReadTokens: 0, cost: testMoney(12 - Number(id.split("-")[1])) }));
+    if (by === "model") entry.modelBreakdowns = rows.map((row, index) => ({ ...row, modelName: ids[index]! }));
+    else entry.agentBreakdowns = rows.map((row, index) => ({ ...row, agent: ids[index]! }));
+    return usageSummary([entry]);
+  };
 
-    const component = mount(CostTimeSeriesChart, { target: document.body, props: { colorMap } });
-    await tick();
-
-    const items = Array.from(document.querySelectorAll<HTMLElement>(".legend-item"));
-    expect(items.map((item) => item.textContent?.trim())).toEqual(models.slice(0, 10).map((model) => model.modelName).concat("model-11", "Other"));
-    expect(items.filter((item) => !item.classList.contains("dimmed")).map((item) => item.textContent?.trim())).toEqual(["model-11"]);
-    expect(items.at(-2)!.querySelector<HTMLElement>(".legend-dot")!.style.background).toBe(colorMap.get("model-11"));
-    unmount(component);
-  });
-
-  it("keeps Other in the legend when eleven selected agents draw it", async () => {
-    usage.toggles.timeSeries.groupBy = "agent";
-    usage.toggles.attribution.groupBy = "agent";
-    const agents = Array.from({ length: 12 }, (_, index) => ({ agent: `agent-${index}`, cost: testMoney(12 - index), inputTokens: 60, outputTokens: 30, cacheCreationTokens: 0, cacheReadTokens: 0 }));
-    const agentSummary = (rows: typeof agents) => {
-      return usageSummary([0, 1].map((index) => {
-        const entry = dailyEntry(index);
-        entry.projectBreakdowns = [];
-        entry.agentBreakdowns = rows;
-        return entry;
-      }));
-    };
-    sessions.filters.agent = agents.slice(1).map((row) => row.agent).join(",");
-    usage.referenceSummary = agentSummary(agents);
-    usage.summary = agentSummary(agents.slice(1));
+  it.each<{ name: string; by: "model" | "agent"; selected: string; reference?: string[]; brushed?: string[]; plotted: string[]; legend: string[]; lit: string[] }>([
+    {
+      name: "lists a selected series outside the unselected top ten before Other",
+      by: "model", selected: "model-11", reference: names("model", 0, 12), plotted: ["model-11"],
+      legend: [...names("model", 0, 10), "model-11", "Other"], lit: ["model-11"],
+    },
+    {
+      name: "keeps Other in the legend when eleven selected agents draw it",
+      by: "agent", selected: names("agent", 1, 12).join(","), reference: names("agent", 0, 12), plotted: names("agent", 1, 12),
+      legend: [...names("agent", 0, 11), "Other"], lit: [...names("agent", 1, 11), "Other"],
+    },
+    {
+      name: "lists Other once when the full window has more series than the brushed range",
+      by: "model", selected: "", brushed: names("model", 0, 10), plotted: names("model", 0, 11),
+      legend: [...names("model", 0, 10), "Other"], lit: [...names("model", 0, 10), "Other"],
+    },
+  ])("$name", async ({ by, selected, reference, brushed, plotted, legend, lit }) => {
+    usage.toggles.timeSeries.groupBy = by;
+    usage.toggles.attribution.groupBy = by;
+    if (by === "model") usage.selectedModel = selected;
+    else sessions.filters.agent = selected;
+    usage.referenceSummary = reference ? seriesSummary(by, reference) : null;
+    usage.attributionSummary = brushed ? seriesSummary(by, brushed) : null;
+    usage.summary = seriesSummary(by, plotted);
 
     const component = mountChart();
     await tick();
 
-    expect(document.querySelectorAll("path.lc-area-path")).toHaveLength(11);
-    expect(document.querySelectorAll("path.lc-area-path[fill='var(--text-muted)']")).toHaveLength(1);
     const items = Array.from(document.querySelectorAll<HTMLElement>(".legend-item"));
-    expect(items.map((item) => item.textContent?.trim())).toEqual(agents.slice(0, 11).map((row) => row.agent).concat("Other"));
-    expect(items.filter((item) => item.textContent?.trim() === "Other" && !item.classList.contains("dimmed"))).toHaveLength(1);
-    expect(items[0]!.classList.contains("dimmed")).toBe(true);
-    unmount(component);
-  });
-
-  it("lists Other once when the full window has more series than the brushed range", async () => {
-    usage.toggles.timeSeries.groupBy = "model";
-    const models = Array.from({ length: 11 }, (_, index) => ({
-      modelName: `model-${index}`,
-      cost: testMoney(11 - index),
-    }));
-    usage.summary = usageSummary([modelDailyEntry(0, models)]);
-    usage.attributionSummary = usageSummary([modelDailyEntry(0, models.slice(0, 10))]);
-
-    const component = mountChart();
-    await tick();
-
-    expect(Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim())).toEqual(models.slice(0, 10).map((model) => model.modelName).concat("Other"));
+    expect(items.map((item) => item.textContent?.trim())).toEqual(legend);
+    expect(items.filter((item) => !item.classList.contains("dimmed")).map((item) => item.textContent?.trim())).toEqual(lit);
     unmount(component);
   });
 

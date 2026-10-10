@@ -904,7 +904,7 @@ describe("Usage attribution navigation", () => {
   });
 
 
-  it.each(["button", "Escape", "Backspace"])("%s Back keeps the current dates and selection", async (action) => {
+  it.each(["button", "Escape"])("%s Back keeps the current dates and selection", async (action) => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });

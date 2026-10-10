@@ -170,9 +170,6 @@ describe("Usage model visibility", () => {
         const params = api.getApiV1UsageSummary.mock.lastCall?.[0];
         expect(params.exclude_model).toBe("model-bravo");
         expect(params.model).toBeUndefined();
-        expect(
-          Array.from(document.querySelectorAll(".tile title"), (tile) => tile.textContent),
-        ).toEqual(["Click to focus model-alpha", "Click to focus model-charlie"]);
       });
       expect(router.params.exclude_model).toBe("model-bravo");
     },

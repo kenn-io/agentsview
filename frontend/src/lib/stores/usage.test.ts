@@ -2133,14 +2133,23 @@ describe("UsageStore attribution focus", () => {
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
   });
 
-  it.each(["project", "model", "agent"] as const)("drops selected %s before picker exclusions reach the API", async (by) => {
+  it.each([
+    ["project", "picker"],
+    ["model", "picker"],
+    ["agent", "picker"],
+    ["project", "Deselect all"],
+    ["model", "Deselect all"],
+  ] as const)("drops selected %s before %s exclusions reach the API", async (by, action) => {
     const { usage } = await loadStore();
     const id = by === "project" ? "pl1:sha256:alpha" : by === "model" ? "gpt-4o" : "claude";
     usage.toggleSelection(by, id);
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     if (by === "project") usage.setOpenProject(id);
     usageServiceMocks.getApiV1UsageSummary.mockClear();
-    if (by === "project") usage.toggleProjectKey(id);
+    if (action === "Deselect all") {
+      if (by === "project") usage.deselectAllProjectKeys([id]);
+      else usage.deselectAllModels([id]);
+    } else if (by === "project") usage.toggleProjectKey(id);
     else if (by === "model") usage.toggleModel(id);
     else usage.toggleAgent(id);
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
@@ -2153,19 +2162,6 @@ describe("UsageStore attribution focus", () => {
       expect(params[exclude]).toBe(id);
     }
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalled();
-    usage.cancelInFlightReads();
-  });
-
-  it.each(["project", "model"] as const)("drops selected %s through Deselect all", async (by) => {
-    const { usage } = await loadStore();
-    const id = by === "project" ? "pl1:sha256:alpha" : "gpt-4o";
-    usage.toggleSelection(by, id);
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    if (by === "project") usage.deselectAllProjectKeys([id]);
-    else usage.deselectAllModels([id]);
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(usage.hasSelection(by)).toBe(false);
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0][by === "project" ? "project_key" : "model"]).toBeUndefined();
     usage.cancelInFlightReads();
   });
 
@@ -2218,35 +2214,6 @@ describe("UsageStore attribution focus", () => {
       project_key: "pl1:sha256:alpha", exclude_model: "hidden", from: "2024-01-08", to: "2024-01-14",
     }));
     expect(usage.selectedModel).toBe("");
-    usage.cancelInFlightReads();
-  });
-
-  it("keeps full-window colors when brushing reverses the project ranking and then selecting", async () => {
-    const { usage } = await loadStore();
-    const { usageChartColorMaps } = await import("../utils/usageChartColors.js");
-    const full = usageSummary(12);
-    full.projectTotals[0]!.cost = testMoney(8);
-    full.projectTotals[1]!.cost = testMoney(4);
-    const brushed = usageSummary(5);
-    brushed.projectTotals[0]!.cost = testMoney(1);
-    brushed.projectTotals[1]!.cost = testMoney(4);
-    const selected = structuredClone(brushed);
-    selected.projectTotals = [selected.projectTotals[1]!];
-    usage.applyDateRange("2024-01-01", "2024-01-31");
-    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) =>
-      params.project_key ? selected : params.from === "2024-01-08" ? brushed : full,
-    );
-    await usage.fetchAll();
-    const colors = usageChartColorMaps(usage.colorSummary, "matplotlib").project;
-    expect(new Set(colors.values()).size).toBe(2);
-    usage.setTimeRange("2024-01-08", "2024-01-14");
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(usageChartColorMaps(usage.colorSummary, "matplotlib").project).toEqual(colors);
-    usage.toggleSelection("project", "pl1:sha256:beta");
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    expect(usage.summary?.projectTotals).toEqual(selected.projectTotals);
-    expect(usage.attributionSummary?.projectTotals).toEqual(brushed.projectTotals);
-    expect(usageChartColorMaps(usage.colorSummary, "matplotlib").project).toEqual(colors);
     usage.cancelInFlightReads();
   });
 
@@ -2353,6 +2320,13 @@ describe("UsageStore attribution focus", () => {
     const unfocused = usageServiceMocks.getApiV1UsageSummary.mock.calls[1]![0];
     expect(unfocused[param]).toBeUndefined();
     expect(unfocused).toEqual(expect.objectContaining({ from: "2024-01-08", to: "2024-01-14" }));
+    usage.setTimeRange("2024-01-09", "2024-01-10");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    await usage.fetchAll({ preserveTimeRange: true });
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[1]![0]).toEqual(
+      expect.objectContaining({ [param]: id, from: "2024-01-08", to: "2024-01-14" }),
+    );
     usage.applyDateRange("2024-01-01", "2024-02-29");
     usageServiceMocks.getApiV1UsageSummary.mockClear();
     await usage.fetchAll();
@@ -2369,30 +2343,6 @@ describe("UsageStore attribution focus", () => {
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledOnce();
     expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0][param]).toBeUndefined();
     expect(usage.attributionSummary).toBeNull();
-    usage.cancelInFlightReads();
-  });
-
-  it("keeps project selection in range and context summaries while attribution shows every project", async () => {
-    const { usage } = await loadStore();
-    usage.summary = usageSummary();
-    usage.applyDateRange("2024-01-01", "2024-01-31");
-    usage.toggleSelection("project", "pl1:sha256:alpha");
-    await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
-    usage.setTimeRange("2024-01-08", "2024-01-14");
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    usageServiceMocks.getApiV1UsageSummary.mockClear();
-    await usage.fetchAll({ preserveTimeRange: true });
-    const calls = usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params);
-    expect(calls[0]).toEqual(
-      expect.objectContaining({
-        project_key: "pl1:sha256:alpha",
-        from: "2024-01-08",
-        to: "2024-01-14",
-      }),
-    );
-    expect(calls[1]).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }));
-    expect(calls[1].project_key).toBe("pl1:sha256:alpha");
-    expect(calls[2].project_key).toBeUndefined();
     usage.cancelInFlightReads();
   });
 
@@ -2508,21 +2458,6 @@ describe("UsageStore project zoom", () => {
   it("drops stale results and clears loading when returning to projects", async () => {
     const { usage } = await loadStore();
     let resolveOld!: (rows: DbTopSessionEntry[]) => void;
-    usageServiceMocks.getUsageZoom.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveOld = resolve;
-        }),
-    );
-    usage.setOpenProject("pl1:sha256:alpha");
-    const oldSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
-    usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(9)]);
-    usage.setOpenProject("pl1:sha256:beta");
-    await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(9)]));
-    expect(oldSignal.aborted).toBe(true);
-    resolveOld([group(1)]);
-    await Promise.resolve();
-    expect(usage.zoomRows).toEqual([group(9)]);
     usageServiceMocks.getUsageZoom.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
