@@ -707,6 +707,44 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 	}
 }
 
+func TestSyncClaudeAIRefetchesAfterZipReplace(t *testing.T) {
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	d := testDB(t)
+	calls := 0
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		calls++
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	})
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Imported)
+	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Skipped)
+	require.Equal(t, 1, calls)
+
+	stats, err = ImportClaudeAIWithOptions(t.Context(), d, strings.NewReader(`[{
+		"uuid":"22222222-2222-4222-8222-222222222222",
+		"name":"Chat",
+		"created_at":"2026-03-01T10:00:00Z",
+		"updated_at":"2026-03-01T10:05:00.123456Z",
+		"chat_messages":[{"sender":"human","text":"Hello"}]
+	}]`), nil, ImportOptions{Replace: []string{id}})
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Updated)
+	messages, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Hello"}, messageContents(messages))
+
+	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Equal(t, 2, calls)
+	messages, err = d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
+}
+
 func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 	const extra = `,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"},{"uuid":"a2","parent_message_uuid":"q2","sender":"assistant","text":"Answer"},{"uuid":"edit","parent_message_uuid":"reply","sender":"human","text":"Edited question"},{"uuid":"b2","parent_message_uuid":"edit","sender":"assistant","text":"Edited answer"}]}`
 	for _, leaf := range []string{"reply", "b2"} {

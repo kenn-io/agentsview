@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"slices"
 	"time"
 
@@ -107,6 +108,11 @@ func (ci conversationImport) importConversation(
 		return importSkipped, nil
 	case err != nil:
 		return importNew, fmt.Errorf("replacing messages: %w", err)
+	}
+	if localDB, ok := store.(*db.DB); ok && ci.agent == parser.AgentClaudeAI {
+		if err := localDB.DeleteProviderStatHash(ctx, ci.agent, result.Session.ID); err != nil {
+			log.Printf("import: clearing Claude.ai freshness: %v", err)
+		}
 	}
 	return importUpdated, nil
 }
