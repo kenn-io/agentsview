@@ -8,6 +8,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUniqueAnalyticsIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ids  []string
+		want []string
+	}{
+		{name: "nil", want: []string{}},
+		{name: "empty", ids: []string{}, want: []string{}},
+		{name: "first-seen order", ids: []string{"b", "a", "b", "", "a", ""}, want: []string{"b", "a", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, UniqueAnalyticsIDs(tc.ids))
+		})
+	}
+}
+
 func TestQueryChunkedSizeSplitsAtSize(t *testing.T) {
 	const size = 900
 	ids := make([]string, size+1)

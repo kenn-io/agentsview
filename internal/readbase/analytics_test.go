@@ -82,8 +82,10 @@ func TestAnalyticsPropagatesBackendErrors(t *testing.T) {
 	assert.EqualError(t, err, "querying fixture analytics heatmap: read failed")
 }
 
-var errTopSessionsTerminal = errors.New("terminal read failure")
-var errSummaryRead = errors.New("summary read failure")
+var (
+	errTopSessionsTerminal = errors.New("terminal read failure")
+	errSummaryRead         = errors.New("summary read failure")
+)
 
 func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
 	pool := sql.OpenDB(analyticsFixtureDriver{})

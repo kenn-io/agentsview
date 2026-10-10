@@ -19,7 +19,7 @@ func (s *Analytics) ResolveMessageScope(
 		return nil, nil
 	}
 
-	unique := uniqueAnalyticsIDs(sessionIDs)
+	unique := db.UniqueAnalyticsIDs(sessionIDs)
 
 	flt := f.MessageScopeFilter()
 	loc := AnalyticsLocation(f.Timezone)

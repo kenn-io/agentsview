@@ -609,7 +609,11 @@ func TestDuckSignalMessagesFormatsTimestampValues(t *testing.T) {
 	require.NoError(t, err)
 
 	var got []db.SignalMessage
-	err = store.analytics().VisitSignalMessages(ctx, []string{"signal-time"}, func(row db.SignalMessage) {
+	query, args := readbase.AnalyticsSignalMessagesSQL([]string{"signal-time"})
+	rows, err := store.duck.QueryContext(ctx, query, args...)
+	require.NoError(t, err)
+	defer rows.Close()
+	err = readbase.ScanAnalyticsSignalMessages(rows, "duckdb", formatDBTime, func(row db.SignalMessage) {
 		got = append(got, row)
 	})
 	require.NoError(t, err)

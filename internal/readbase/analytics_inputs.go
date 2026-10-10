@@ -72,7 +72,7 @@ func (s *Analytics) filteredModels(ctx context.Context, ids []string, f db.Analy
 	if len(ids) == 0 {
 		return []string{}, nil
 	}
-	unique := uniqueAnalyticsIDs(ids)
+	unique := db.UniqueAnalyticsIDs(ids)
 	filter := f.MessageScopeFilter()
 	loc := AnalyticsLocation(f.Timezone)
 	models := map[string]bool{}
@@ -169,7 +169,7 @@ func (s *Analytics) signalMessages(ctx context.Context, rows []db.SignalRow, f d
 		}
 		return out, nil
 	}
-	err := s.VisitSignalMessages(ctx, ids, func(row db.SignalMessage) {
+	err := s.visitSignalMessages(ctx, ids, func(row db.SignalMessage) {
 		out[row.SessionID] = append(out[row.SessionID], row)
 	})
 	if err != nil {
@@ -178,7 +178,7 @@ func (s *Analytics) signalMessages(ctx context.Context, rows []db.SignalRow, f d
 	return out, nil
 }
 
-func (s *Analytics) VisitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error {
+func (s *Analytics) visitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error {
 	query, args := AnalyticsSignalMessagesSQL(ids)
 	rows, err := s.backend.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -186,17 +186,4 @@ func (s *Analytics) VisitSignalMessages(ctx context.Context, ids []string, emit 
 	}
 	defer rows.Close()
 	return ScanAnalyticsSignalMessages(rows, s.name, s.backend.FormatTime, emit)
-}
-
-func uniqueAnalyticsIDs(ids []string) []string {
-	seen := make(map[string]struct{}, len(ids))
-	unique := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		unique = append(unique, id)
-	}
-	return unique
 }

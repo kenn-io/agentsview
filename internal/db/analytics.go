@@ -438,15 +438,7 @@ func (db *DB) getAnalyticsModelsForSessionIDs(
 	if len(sessionIDs) == 0 {
 		return []string{}, nil
 	}
-	seen := make(map[string]struct{}, len(sessionIDs))
-	unique := make([]string, 0, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		if _, ok := seen[sessionID]; ok {
-			continue
-		}
-		seen[sessionID] = struct{}{}
-		unique = append(unique, sessionID)
-	}
+	unique := UniqueAnalyticsIDs(sessionIDs)
 
 	modelSet := make(map[string]struct{})
 	models := make([]string, 0)
@@ -486,15 +478,7 @@ func (db *DB) getAnalyticsModelsForSessionIDsFiltered(
 	if len(sessionIDs) == 0 {
 		return []string{}, nil
 	}
-	seen := make(map[string]struct{}, len(sessionIDs))
-	unique := make([]string, 0, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		if _, ok := seen[sessionID]; ok {
-			continue
-		}
-		seen[sessionID] = struct{}{}
-		unique = append(unique, sessionID)
-	}
+	unique := UniqueAnalyticsIDs(sessionIDs)
 
 	filterModels := CSVFilterValues(f.Model)
 	allowedModels := make(map[string]struct{}, len(filterModels))
