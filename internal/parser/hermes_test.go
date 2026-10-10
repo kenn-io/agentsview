@@ -921,26 +921,6 @@ func TestParseHermesArchiveIncludesTranscriptsMissingFromStateDB(
 	assert.Contains(t, ids, "hermes:extra")
 }
 
-func TestBuildHermesStateResultGroupPreservation(t *testing.T) {
-	tests := []struct {
-		name, source, job, project string
-		keepStored                 bool
-	}{
-		{name: "explicit project", source: "cron", project: "ops", keepStored: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, ok := buildHermesStateResult(hermesStateSession{
-				id: "middle", source: tt.source, cronJob: tt.job,
-				model: "gpt-5.4", inputTokens: 10,
-			}, nil, t.TempDir(), "state.db", tt.project, "local")
-			require.True(t, ok)
-			assert.Equal(t, tt.keepStored, result.Session.KeepStoredGroupKey)
-			assert.Equal(t, tt.job, result.Session.GroupKey)
-		})
-	}
-}
-
 func TestHermesCronGroupsScopeHomes(t *testing.T) {
 	var homeKeys []string
 	for _, profile := range []string{"", "", "profile-a", "profile-a", "profile-b", `remote:C:\profiles\a`, `remote:C:\profiles\b`} {

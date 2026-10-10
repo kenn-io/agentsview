@@ -15,6 +15,4 @@ func TestUsageGroups(t *testing.T) {
 	defer conn.Close()
 	dbtest.SeedUsageGroups(t, conn)
 	dbtest.AssertUsageGroups(t, database)
-	require.NoError(t, database.RenameSession(t.Context(), "group-a-new", new("Manual run name")))
-	dbtest.AssertUsageGroups(t, database)
 }

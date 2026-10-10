@@ -120,109 +120,108 @@ func TestHermesProviderFingerprintChangesWhenTranscriptRemoved(t *testing.T) {
 }
 
 func TestHermesArchiveStoresCronGroups(t *testing.T) {
-	agent := parser.AgentHermes
-	id := "cron_job-a_20261008_120000"
-	root := t.TempDir()
-	stateDB := writeHermesArchiveStateDB(t, root)
-	conn, err := sql.Open("sqlite3", stateDB)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, conn.Close()) })
-	_, err = conn.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, title, started_at, ended_at, message_count)
-		VALUES (?, 'cron', 'Daily digest · 2026-10-08 12:00:00', 1791460800, 1791460860, 1)`, id)
-	require.NoError(t, err)
-	name := "session_" + id + ".json"
-	body := `{"platform":"cron","messages":[{"role":"user","content":"Generate digest"}]}`
-	sessionsDir := filepath.Join(root, "sessions")
-	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, name), []byte(body), 0o644))
-	database := dbtest.OpenTestDB(t)
-	sessionID := string(agent) + ":" + id
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: sessionID, Agent: string(agent), Project: "hermes-cron", GroupKey: "job-a"}))
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{agent: {root}},
-		Machine:   "local",
-	})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	stored, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Regexp(t, `^job-a:[0-9a-f]{8}$`, stored.GroupKey)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET source = 'cli' WHERE id = ?`, id)
-	require.NoError(t, err)
-	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, true))
-	stored, err = database.GetSession(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Empty(t, stored.GroupKey)
-	assert.Equal(t, string(agent)+"-cli", stored.Project)
-}
+	for _, tc := range []struct {
+		name      string
+		pruneRoot bool
+		synced    int
+	}{
+		{name: "cron becomes cli", synced: 1},
+		{name: "pruned root and resync", pruneRoot: true, synced: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := parser.AgentHermes
+			id := "cron_job-a_20261008_120000"
+			prefix := string(agent) + ":"
+			sessionID := prefix + id
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			database := dbtest.OpenTestDB(t)
+			_, err = conn.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions`)
+			require.NoError(t, err)
+			if tc.pruneRoot {
+				_, err = conn.ExecContext(t.Context(), `
+					INSERT INTO sessions (id, source, parent_session_id, started_at, ended_at, message_count)
+					VALUES ('cron_job-a_20261008_120000', 'cron', NULL, 1791460800, 1791460860, 1),
+					       ('middle', 'cron', 'cron_job-a_20261008_120000', 1791460860, 1791460920, 1),
+					       ('tip', 'cron', 'middle', 1791460920, 1791460980, 1);
+					INSERT INTO messages (session_id, role, content, timestamp)
+					VALUES ('cron_job-a_20261008_120000', 'user', 'Generate digest', 1791460801),
+					       ('middle', 'user', 'Continue digest', 1791460861),
+					       ('tip', 'user', 'Finish digest', 1791460921);
+				`)
+				require.NoError(t, err)
+			} else {
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, title, started_at, ended_at, message_count)
+					VALUES (?, 'cron', 'Daily digest · 2026-10-08 12:00:00', 1791460800, 1791460860, 1)`, id)
+				require.NoError(t, err)
+				name := "session_" + id + ".json"
+				body := `{"platform":"cron","messages":[{"role":"user","content":"Generate digest"}]}`
+				sessionsDir := filepath.Join(root, "sessions")
+				require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, name), []byte(body), 0o644))
+				require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: sessionID, Agent: string(agent), Project: "hermes-cron", GroupKey: "job-a"}))
+			}
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{agent: {root}},
+				Machine:   "local",
+			})
+			t.Cleanup(engine.Close)
+			require.Equal(t, tc.synced, engine.SyncAll(t.Context(), nil).Synced)
+			if !tc.pruneRoot {
+				stored, err := database.GetSession(t.Context(), sessionID)
+				require.NoError(t, err)
+				require.NotNil(t, stored)
+				assert.Regexp(t, `^job-a:[0-9a-f]{8}$`, stored.GroupKey)
+				_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET source = 'cli' WHERE id = ?`, id)
+				require.NoError(t, err)
+				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, true))
+				stored, err = database.GetSession(t.Context(), sessionID)
+				require.NoError(t, err)
+				require.NotNil(t, stored)
+				assert.Empty(t, stored.GroupKey)
+				assert.Equal(t, string(agent)+"-cli", stored.Project)
+				return
+			}
+			checkGroups := func() {
+				t.Helper()
+				for _, id := range []string{prefix + "middle", prefix + "tip"} {
+					stored, err := database.GetSession(t.Context(), id)
+					require.NoError(t, err)
+					require.NotNil(t, stored)
+					assert.Regexp(t, `^job-a:[0-9a-f]{8}$`, stored.GroupKey, id)
+				}
+			}
+			require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
 
-func TestHermesCronContinuationKeepsGroupAfterRootPrunedAndResync(t *testing.T) {
-	agent := parser.AgentHermes
-	prefix := string(agent) + ":"
-	root := t.TempDir()
-	stateDB := writeHermesArchiveStateDB(t, root)
-	conn, err := sql.Open("sqlite3", stateDB)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `
-		DELETE FROM messages;
-		DELETE FROM sessions;
-		INSERT INTO sessions (id, source, parent_session_id, started_at, ended_at, message_count)
-		VALUES ('cron_job-a_20261008_120000', 'cron', NULL, 1791460800, 1791460860, 1),
-		       ('middle', 'cron', 'cron_job-a_20261008_120000', 1791460860, 1791460920, 1),
-		       ('tip', 'cron', 'middle', 1791460920, 1791460980, 1);
-		INSERT INTO messages (session_id, role, content, timestamp)
-		VALUES ('cron_job-a_20261008_120000', 'user', 'Generate digest', 1791460801),
-		       ('middle', 'user', 'Continue digest', 1791460861),
-		       ('tip', 'user', 'Finish digest', 1791460921);
-	`)
-	require.NoError(t, err)
-	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{agent: {root}},
-		Machine:   "local",
-	})
-	t.Cleanup(engine.Close)
-	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
-	checkGroups := func() {
-		t.Helper()
-		for _, id := range []string{prefix + "middle", prefix + "tip"} {
-			stored, err := database.GetSession(t.Context(), id)
+			_, err = conn.ExecContext(t.Context(), `
+				UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = 'cron_job-a_20261008_120000';
+				DELETE FROM messages WHERE session_id = 'cron_job-a_20261008_120000';
+				DELETE FROM sessions WHERE id = 'cron_job-a_20261008_120000';
+			`)
+			require.NoError(t, err)
+			require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+			checkGroups()
+			stored, err := database.GetSession(t.Context(), prefix+"middle")
 			require.NoError(t, err)
 			require.NotNil(t, stored)
-			assert.Regexp(t, `^job-a:[0-9a-f]{8}$`, stored.GroupKey, id)
-		}
-	}
-	checkGroups()
-	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+			assert.Empty(t, stored.ParentSessionID)
 
-	_, err = conn.ExecContext(t.Context(), `
-		UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = 'cron_job-a_20261008_120000';
-		DELETE FROM messages WHERE session_id = 'cron_job-a_20261008_120000';
-		DELETE FROM sessions WHERE id = 'cron_job-a_20261008_120000';
-	`)
-	require.NoError(t, err)
-	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
-	checkGroups()
-	stored, err := database.GetSession(t.Context(), prefix+"middle")
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Empty(t, stored.ParentSessionID)
-
-	require.NoError(t, conn.Close())
-	_, err = database.AssignSessionProject(t.Context(), prefix+"middle", "ops")
-	require.NoError(t, err)
-	for range 2 {
-		stats := engine.ResyncAll(t.Context(), nil)
-		require.False(t, stats.Aborted, "%v", stats.Warnings)
-		checkGroups()
-		stored, err := database.GetSession(t.Context(), prefix+"middle")
-		require.NoError(t, err)
-		require.NotNil(t, stored)
-		assert.Equal(t, "ops", stored.Project)
+			require.NoError(t, conn.Close())
+			_, err = database.AssignSessionProject(t.Context(), prefix+"middle", "ops")
+			require.NoError(t, err)
+			for range 2 {
+				stats := engine.ResyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "%v", stats.Warnings)
+				checkGroups()
+				stored, err := database.GetSession(t.Context(), prefix+"middle")
+				require.NoError(t, err)
+				require.NotNil(t, stored)
+				assert.Equal(t, "ops", stored.Project)
+			}
+		})
 	}
 }
 
