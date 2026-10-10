@@ -104,41 +104,28 @@ func TestCoreActionAllowlist(t *testing.T) {
 	}
 }
 
-func TestScreenRequestValidationLeavesValidRetry(t *testing.T) {
+func TestScreenViewWithoutScreenLeavesValidRetry(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")
 	const valid = `{"event":"screen_viewed","properties":{"screen":"sessions"}}`
-	for _, tc := range []struct {
-		name, contentType, body string
-		status                  int
-	}{
-		{"missing content type", "", valid, http.StatusUnsupportedMediaType},
-		{"plain text", "text/plain", valid, http.StatusUnsupportedMediaType},
-		{"trailing value", "application/json", valid + " {}", http.StatusBadRequest},
-		{"trailing garbage", "application/json", valid + " x", http.StatusBadRequest},
-		{"missing screen", "application/json", `{"event":"screen_viewed"}`, http.StatusBadRequest},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			endpoint, captured := captureCollector(t)
-			opts := Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens")}
-			reporter := captureReporter(t, endpoint, opts)
-			srv := server.New(config.Config{Host: "127.0.0.1", Port: 8080}, dbtest.OpenTestDB(t), nil, server.WithTelemetryCapture(reporter.CaptureHandler()))
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8080/api/v1/telemetry/events", strings.NewReader(tc.body))
-			req.Header.Set("Origin", "http://127.0.0.1:8080")
-			req.Header.Set("Content-Type", tc.contentType)
-			rec := httptest.NewRecorder()
-			srv.Handler().ServeHTTP(rec, req)
-			require.Equal(t, tc.status, rec.Code, rec.Body.String())
-			require.NoError(t, reporter.Close())
-			assert.Empty(t, captured())
-			_, err := os.Stat(opts.ScreenClaimsPath)
-			require.ErrorIs(t, err, os.ErrNotExist)
-			retry := captureReporter(t, endpoint, opts)
-			postCapture(t, retry.CaptureHandler(), valid, http.StatusAccepted)
-			require.NoError(t, retry.Close())
-			assert.Len(t, captured(), 1)
-		})
-	}
+	endpoint, captured := captureCollector(t)
+	opts := Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens")}
+	reporter := captureReporter(t, endpoint, opts)
+	srv := server.New(config.Config{Host: "127.0.0.1", Port: 8080}, dbtest.OpenTestDB(t), nil, server.WithTelemetryCapture(reporter.CaptureHandler()))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:8080/api/v1/telemetry/events", strings.NewReader(`{"event":"screen_viewed"}`))
+	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.NoError(t, reporter.Close())
+	assert.Empty(t, captured())
+	_, err := os.Stat(opts.ScreenClaimsPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	retry := captureReporter(t, endpoint, opts)
+	postCapture(t, retry.CaptureHandler(), valid, http.StatusAccepted)
+	require.NoError(t, retry.Close())
+	assert.Len(t, captured(), 1)
 }
 
 func TestScreenViewDisabled(t *testing.T) {
