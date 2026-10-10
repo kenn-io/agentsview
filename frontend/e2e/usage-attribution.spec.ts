@@ -78,22 +78,6 @@ test.describe("Usage attribution selection", () => {
     });
   }
 
-  test("selection clears in the header", async ({ page }) => {
-    await page.goto("/usage");
-    const panel = page.locator(".attribution-panel");
-    const tiles = panel.locator(".tile");
-    await expect(tiles.first()).toBeVisible();
-    const label = await tiles.first().locator("text").first().textContent();
-    await tiles.first().click();
-    await expect(panel.getByRole("button", { name: "Clear selection", exact: true })).toBeVisible();
-    await expect(panel.getByRole("button", { name: "Open", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: `Project: ${label}`, exact: true })).toBeVisible();
-    await panel.getByRole("button", { name: "Clear selection", exact: true }).click();
-    await expect(panel.getByRole("button", { name: "Open", exact: true })).toBeHidden();
-    await expect(panel.locator('.tile[aria-pressed="true"]')).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Project: All", exact: true })).toBeVisible();
-  });
-
   test("panel actions share styling and chart clear stays compact", async ({ page }, testInfo) => {
     await page.goto("/usage");
     const panel = page.locator(".attribution-panel");

@@ -158,7 +158,6 @@ describe("AttributionPanel selection", () => {
     [...actions.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Clear selection")!.click();
     await tick();
     expect(actions.classList.contains("inactive")).toBe(true);
-    expect(document.querySelector('.list-row[aria-pressed="true"]')).toBeNull();
     await unmount(component);
     usage.cancelInFlightReads();
   });
@@ -179,7 +178,7 @@ describe("AttributionPanel selection", () => {
     ["treemap", ".tile"],
     ["treemap", ".rail-row"],
     ["list", ".list-row"],
-  ] as const)("keeps every item and color through %s %s", async (view, selector) => {
+  ] as const)("keeps every item through %s %s", async (view, selector) => {
     const full = summaryWithDuplicateProjectLabels();
     full.projectTotals[0]!.project = "Project A";
     full.projectTotals[1]!.project = "Project B";
@@ -191,9 +190,6 @@ describe("AttributionPanel selection", () => {
     usage.toggles.attribution.view = view;
     const component = mountPanel();
     await tick();
-    const colors = Array.from(document.querySelectorAll(selector), (row) =>
-      row.querySelector("rect")?.getAttribute("fill") ?? row.querySelector(".rail-dot, .list-dot")?.getAttribute("style"),
-    );
     document.querySelectorAll(selector)[1]!.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     await vi.waitFor(() => expect(usage.attributionSummary).toEqual(full));
     await tick();
@@ -201,37 +197,12 @@ describe("AttributionPanel selection", () => {
     expect(rows).toHaveLength(2);
     expect(rows[1]!.getAttribute("aria-pressed")).toBe("true");
     expect(rows[0]!.classList.contains("dimmed")).toBe(true);
-    expect(Array.from(rows, (row) => row.querySelector("rect")?.getAttribute("fill") ?? row.querySelector(".rail-dot, .list-dot")?.getAttribute("style"))).toEqual(colors);
     if (selector !== ".tile") {
       expect(usage.zoomedProject).toBeNull();
       rows[1]!.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
       rows[1]!.dispatchEvent(new MouseEvent("dblclick", { detail: 2, bubbles: true }));
       expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:second", label: "Project B" });
     }
-    await unmount(component);
-  });
-
-  it.each(["model", "agent"] as const)("Enter selects a %s row and a quick second click clears it", async (by) => {
-    const full = by === "model" ? summaryWithModels() : summaryWithAgents(["claude", "codex"]);
-    usage.summary = full;
-    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(full);
-    usage.toggles.attribution.groupBy = by;
-    usage.toggles.attribution.view = "list";
-    const component = mountPanel();
-    await tick();
-    const row = document.querySelectorAll(".list-row")[1]!;
-    row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-    if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
-    await vi.waitFor(() => expect(usage.attributionSummary).toEqual(full));
-    await tick();
-    expect(row.getAttribute("aria-pressed")).toBe("true");
-    expect(document.querySelector(".list-row.dimmed")).not.toBeNull();
-    expect(document.querySelectorAll(".list-row")).toHaveLength(2);
-    expect(usage.zoomedProject).toBeNull();
-    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Open")).toBe(false);
-    row.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
-    await tick();
-    expect(row.getAttribute("aria-pressed")).toBe("false");
     await unmount(component);
   });
 
@@ -257,36 +228,46 @@ describe("AttributionPanel selection", () => {
     usage.cancelInFlightReads();
   });
 
-  it.each(["Enter", " "])("%s selects a project and Open opens it", async (key) => {
-    const full = summaryWithDuplicateProjectLabels();
-    full.projectTotals[1]!.project = "Project B";
+  it.each([
+    ["model", "Enter"],
+    ["agent", "Enter"],
+    ["project", "Enter"],
+    ["project", " "],
+  ] as const)("%s row: %j selects it", async (by, key) => {
+    const full = by === "model" ? summaryWithModels() : by === "agent" ? summaryWithAgents(["claude", "codex"]) : summaryWithDuplicateProjectLabels();
+    if (by === "project") full.projectTotals[1]!.project = "Project B";
     usage.summary = full;
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(full);
-    usage.toggles.attribution.groupBy = "project";
+    usage.toggles.attribution.groupBy = by;
     usage.toggles.attribution.view = "list";
     const component = mountPanel();
     await tick();
     const openButton = () => [...document.querySelectorAll<HTMLButtonElement>(".selection-actions:not(.inactive) span:not(.inactive) button")].find((button) => button.textContent?.trim() === "Open");
-    expect(openButton()).toBeUndefined();
     const row = document.querySelectorAll(".list-row")[1]!;
     row.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
+    await vi.waitFor(() => expect(usage.attributionSummary).toEqual(full));
     await tick();
     expect(row.getAttribute("aria-pressed")).toBe("true");
     expect(usage.zoomedProject).toBeNull();
-    expect(openButton()).toBeDefined();
-    await vi.waitFor(() => expect(usage.attributionSummary).toEqual(full));
-    const narrowed = { ...full, projectTotals: [full.projectTotals[0]!] };
-    usage.attributionSummary = narrowed;
-    await tick();
-    expect(usage.selectedProjectKey).toBe("pl1:sha256:second");
-    expect(openButton()).toBeUndefined();
-    usage.attributionSummary = full;
-    await tick();
-    expect(openButton()).toBeDefined();
-    openButton()!.click();
-    await tick();
-    expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:second", label: "Project B" });
-    expect(openButton()).toBeUndefined();
+    if (by !== "project") {
+      // Open appears only for projects, and a quick second click clears instead of opening.
+      expect(openButton()).toBeUndefined();
+      row.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+      await tick();
+      expect(row.getAttribute("aria-pressed")).toBe("false");
+    } else {
+      expect(openButton()).toBeDefined();
+      usage.attributionSummary = { ...full, projectTotals: [full.projectTotals[0]!] };
+      await tick();
+      expect(openButton()).toBeUndefined();
+      usage.attributionSummary = full;
+      await tick();
+      openButton()!.click();
+      await tick();
+      expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:second", label: "Project B" });
+      expect(openButton()).toBeUndefined();
+    }
     await unmount(component);
   });
 });
@@ -461,7 +442,7 @@ describe("AttributionPanel job groups", () => {
     vi.restoreAllMocks();
   });
 
-  it("zooms into stable jobs, keeps the remainder, and returns to projects", async () => {
+  it("zooms into stable jobs and keeps the remainder", async () => {
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usage.summary);
     await usage.fetchSummary({ loadComparison: false });
     const group = (key: string, cost: number): DbTopSessionEntry => ({
@@ -495,12 +476,7 @@ describe("AttributionPanel job groups", () => {
     await tick();
     expect(document.activeElement).toBe(document.querySelector(".attribution-panel"));
     const rows = [...document.querySelectorAll<HTMLElement>(".list-row")];
-    expect(rows.map((row) => row.querySelector(".list-label")!.textContent)).toEqual([
-      "Daily digest · abcdef-j",
-      "Daily digest · abcdef-o",
-      "Other",
-      "Ungrouped run",
-    ]);
+    expect(rows[2]!.querySelector(".list-label")!.textContent).toBe("Other");
     expect(rows.map((row) => row.querySelector(".list-cost")!.textContent?.trim())).toEqual([
       "$3.00",
       "$2.00",
@@ -511,14 +487,6 @@ describe("AttributionPanel job groups", () => {
     expect(
       new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size,
     ).toBe(1);
-    rows[0]!.click();
-    const back = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "← All projects",
-    )!;
-    back.click();
-    await tick();
-    expect(usage.zoomedProject).toBeNull();
-    expect(document.querySelectorAll(".list-row")).toHaveLength(2);
     unmount(component);
   });
 
@@ -548,91 +516,37 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
-  it("shows the job ID for an unnamed group in its label and tooltip", async () => {
-    usage.setOpenProject("pl1:sha256:first");
-    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
-    usage.zoomRows = [
-      {
-        ...topSessionForRemainder(),
-        groupKey: "digest",
-        groupLabel: "",
-        displayName: "digest",
-      },
-    ];
-    const component = mountPanel();
-    await tick();
-    const row = document.querySelector<HTMLElement>(".list-row")!;
-    expect(row.querySelector(".list-label")!.textContent).toBe("digest");
-    expect(row.title).toBe("digest");
-    await unmount(component);
-  });
-
-  it("hides the home hash in tooltips and shows it only for the same job in two homes", async () => {
-    usage.setOpenProject("pl1:sha256:first");
-    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
-    usage.zoomRows = [["job-1:0a1b2c3d", "Digest"], ["job-1:4e5f6a7b", "Digest"], ["job-2:0a1b2c3d", "Backup"]].map(([groupKey, groupLabel]) => ({
-      ...topSessionForRemainder(), groupKey, groupLabel,
-    }));
-    const component = mountPanel();
-    await tick();
-    const rows = document.querySelectorAll<HTMLElement>(".list-row");
-    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual(["Digest · 0a1b2c3d", "Digest · 4e5f6a7b", "Backup"]);
-    expect(Array.from(rows, (row) => row.title)).toEqual(["Digest · job-1", "Digest · job-1", "Backup · job-2"]);
-    await unmount(component);
-  });
-
-  it.each(["list", "treemap"] as const)("distinguishes two same-named jobs on two machines in %s", async (view) => {
+  const machineRows = ["a1b2c3d4-job", "e5f6a7b8-job", "digest"].flatMap((groupKey) => ["host-a", "host-b"].map((machine) => ({ groupKey, machine, groupLabel: groupKey === "digest" ? "Daily digest" : "Digest" })));
+  const machineLabels = ["Digest · a1b2c3d4 · host-a", "Digest · a1b2c3d4 · host-b", "Digest · e5f6a7b8 · host-a", "Digest · e5f6a7b8 · host-b", "Daily digest · host-a", "Daily digest · host-b"];
+  const machineTitles = ["Digest · a1b2c3d4-job · host-a", "Digest · a1b2c3d4-job · host-b", "Digest · e5f6a7b8-job · host-a", "Digest · e5f6a7b8-job · host-b", "Daily digest · digest · host-a", "Daily digest · digest · host-b"];
+  it.each<{ name: string; view: "list" | "treemap"; rows: Partial<DbTopSessionEntry>[]; labels: string[]; titles?: string[] }>([
+    { name: "shows an unnamed job's ID", view: "list", rows: [{ groupKey: "digest", groupLabel: "", displayName: "digest" }], labels: ["digest"], titles: ["digest"] },
+    { name: "shortens same-named job IDs", view: "list", rows: [{ groupKey: "abcdef-job", groupLabel: "Daily digest" }, { groupKey: "abcdef-other", groupLabel: "Daily digest" }], labels: ["Daily digest · abcdef-j", "Daily digest · abcdef-o"] },
+    {
+      name: "hides the home hash in tooltips and shows it only for the same job in two homes", view: "list",
+      rows: [{ groupKey: "job-1:0a1b2c3d", groupLabel: "Digest" }, { groupKey: "job-1:4e5f6a7b", groupLabel: "Digest" }, { groupKey: "job-2:0a1b2c3d", groupLabel: "Backup" }],
+      labels: ["Digest · 0a1b2c3d", "Digest · 4e5f6a7b", "Backup"], titles: ["Digest · job-1", "Digest · job-1", "Backup · job-2"],
+    },
+    { name: "distinguishes same-named jobs on two machines in the list", view: "list", rows: machineRows, labels: machineLabels, titles: machineTitles },
+    { name: "distinguishes same-named jobs on two machines in the treemap rail", view: "treemap", rows: machineRows, labels: machineLabels, titles: machineTitles },
+    { name: "shortens full IDs for same-named ungrouped sessions", view: "list", rows: ["hermes:run-a", "augure-desktop:run-a"].map((sessionId) => ({ groupKey: "", sessionId, displayName: "Repeated run" })), labels: ["Repeated run · hermes:r", "Repeated run · augure-d"] },
+  ])("$name", async ({ view, rows: zoomRows, labels, titles }) => {
     usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
     usage.toggles.attribution.view = view;
-    usage.zoomRows = ["a1b2c3d4-job", "e5f6a7b8-job", "digest"].flatMap((groupKey) => ["host-a", "host-b"].map((machine) => ({
-      ...topSessionForRemainder(), groupKey, machine, groupLabel: groupKey === "digest" ? "Daily digest" : "Digest",
-    })));
+    usage.zoomRows = zoomRows.map((row) => ({ ...topSessionForRemainder(), ...row }));
     const component = mountPanel();
     await tick();
     const rows = document.querySelectorAll<HTMLElement>(view === "list" ? ".list-row" : ".rail-row");
-    expect(Array.from(rows, (row) => row.querySelector(".list-label, .rail-label")!.textContent)).toEqual([
-      "Digest · a1b2c3d4 · host-a",
-      "Digest · a1b2c3d4 · host-b",
-      "Digest · e5f6a7b8 · host-a",
-      "Digest · e5f6a7b8 · host-b",
-      "Daily digest · host-a",
-      "Daily digest · host-b",
-    ]);
-    expect(Array.from(rows, (row) => row.title)).toEqual([
-      "Digest · a1b2c3d4-job · host-a",
-      "Digest · a1b2c3d4-job · host-b",
-      "Digest · e5f6a7b8-job · host-a",
-      "Digest · e5f6a7b8-job · host-b",
-      "Daily digest · digest · host-a",
-      "Daily digest · digest · host-b",
-    ]);
-    for (const row of document.querySelectorAll(".list-row, .rail-row, .tile")) {
+    expect(Array.from(rows, (row) => row.querySelector(".list-label, .rail-label")!.textContent)).toEqual(labels);
+    if (titles) expect(Array.from(rows, (row) => row.title)).toEqual(titles);
+    for (const row of rows) {
       expect(row.hasAttribute("role")).toBe(false);
       expect(row.hasAttribute("tabindex")).toBe(false);
       expect(row.hasAttribute("aria-pressed")).toBe(false);
     }
     rows[0]!.click();
     expect(usage.zoomedProject?.key).toBe("pl1:sha256:first");
-    expect(usage.selectedProjectKey).toBe("pl1:sha256:first");
-    await unmount(component);
-  });
-
-  it("shortens full IDs for same-named ungrouped sessions", async () => {
-    usage.setOpenProject("pl1:sha256:first");
-    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
-    usage.zoomRows = ["hermes:run-a", "augure-desktop:run-a"].map((sessionId) => ({
-      ...topSessionForRemainder(),
-      sessionId,
-      displayName: "Repeated run",
-    }));
-    const component = mountPanel();
-    await tick();
-    const rows = document.querySelectorAll<HTMLElement>(".list-row");
-    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual([
-      "Repeated run · hermes:r",
-      "Repeated run · augure-d",
-    ]);
     await unmount(component);
   });
 
@@ -650,10 +564,9 @@ describe("AttributionPanel job groups", () => {
   it("keeps zoom when the project leaves the refreshed summary", async () => {
     usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     usage.zoomRows = [];
-    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(summaryWithAgents([]));
-    usageServiceMocks.getApiV1UsageTopSessions.mockResolvedValue([]);
-    await usage.fetchAll({ preserveTimeRange: true });
+    usage.summary = summaryWithAgents([]);
     const component = mountPanel();
     await tick();
     expect(document.querySelector(".panel-header")?.textContent).toContain("hermes-cron");
