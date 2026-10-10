@@ -382,6 +382,53 @@ func TestCaptureRejectsDuplicateSelectedRoots(t *testing.T) {
 				require.EqualError(t, err, "duplicate selected capture root")
 				assert.NoDirExists(t, opts.Destination)
 			}
+			for _, tc := range []struct {
+				name, provider string
+				paths          []string
+				duplicate      bool
+			}{
+				{"claude-home-projects", "claude", []string{".", "projects"}, true},
+				{"claude-projects-home", "claude", []string{"projects", "."}, true},
+				{"claude-projects-nested", "claude", []string{"projects", "projects/project-a"}, true},
+				{"claude-nested-projects", "claude", []string{"projects/project-a", "projects"}, true},
+				{"codex-home-sessions", "codex", []string{".", "sessions"}, true},
+				{"codex-sessions-home", "codex", []string{"sessions", "."}, true},
+				{"codex-home-archived", "codex", []string{".", "archived_sessions"}, true},
+				{"codex-disjoint", "codex", []string{"sessions", "archived_sessions"}, false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					opts := captureFixture(t)
+					root := filepath.Dir(opts.Roots[0].Path)
+					if tc.provider == "codex" {
+						for _, dir := range []string{"sessions", "archived_sessions"} {
+							dbtest.WriteTestFile(t, filepath.Join(root, dir, "saved.jsonl"), []byte("original bytes\n"))
+						}
+					}
+					opts.Roots = nil
+					for _, path := range tc.paths {
+						opts.Roots = append(opts.Roots, RootSpec{Provider: tc.provider, Path: filepath.Join(root, filepath.FromSlash(path))})
+					}
+					if identity == "reused" {
+						first := opts
+						first.Roots = opts.Roots[:1]
+						_, err := Capture(t.Context(), first)
+						require.NoError(t, err)
+						opts.IdentityFrom = filepath.Join(first.Destination, "capture.json")
+						opts.Destination = filepath.Join(t.TempDir(), "again")
+					}
+					descriptor, err := Capture(t.Context(), opts)
+					if tc.duplicate {
+						require.EqualError(t, err, "duplicate selected capture root")
+						assert.NoDirExists(t, opts.Destination)
+					} else {
+						require.NoError(t, err)
+						require.Len(t, descriptor.Source.Roots, 3)
+						assert.NotEqual(t, descriptor.Source.Roots[0].ID, descriptor.Source.Roots[1].ID)
+						assert.FileExists(t, filepath.Join(opts.Destination, descriptor.Source.Roots[0].Path, "sessions", "saved.jsonl"))
+						assert.FileExists(t, filepath.Join(opts.Destination, descriptor.Source.Roots[1].Path, "archived_sessions", "saved.jsonl"))
+					}
+				})
+			}
 		})
 	}
 }

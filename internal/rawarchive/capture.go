@@ -121,6 +121,7 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 	}
 	seen := map[string]bool{"application": true}
 	selected := make(map[[2]string]bool)
+	selectedSessionDirs := make(map[string][]string)
 	canonicalBases := make(map[string]string)
 	for _, input := range opts.Roots {
 		if input.Provider != "claude" && input.Provider != "codex" && input.Provider != "files" {
@@ -150,6 +151,22 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 		canonicalBase, err := canonicalRecoverySource(base)
 		if err != nil {
 			return d, err
+		}
+		sessionDirs := dirs
+		if len(sessionDirs) == 0 {
+			sessionDirs = []string{"."}
+		}
+		for _, dir := range sessionDirs {
+			canonicalDir, err := canonicalRecoverySource(filepath.Join(canonicalBase, dir))
+			if err != nil {
+				return d, err
+			}
+			for _, previousDir := range selectedSessionDirs[input.Provider] {
+				if err := rejectPathsOverlap(canonicalDir, previousDir, "duplicate selected capture root"); err != nil {
+					return d, err
+				}
+			}
+			selectedSessionDirs[input.Provider] = append(selectedSessionDirs[input.Provider], canonicalDir)
 		}
 		for _, protected := range []string{target, source} {
 			if err := rejectPathsOverlap(canonicalBase, protected, "capture roots must not overlap application data or destination"); err != nil {
