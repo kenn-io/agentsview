@@ -3,7 +3,6 @@ package parser
 import (
 	"encoding/binary"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -68,14 +67,13 @@ func TestSQLiteContainerStateRejectsNonSQLiteFiles(t *testing.T) {
 // restored or replaced database landing in the same second with the same
 // size and change counter would be indistinguishable from the original.
 func TestSQLiteContainerStateDetectsFileReplacement(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("file identity is unavailable on Windows")
-	}
 	dbPath, _, db := newTestDB(t)
 	require.NoError(t, db.Close())
 
 	before, ok := StatSQLiteContainerState(dbPath)
 	require.True(t, ok, "state must be readable before replacement")
+	require.NotZero(t, before.DBInode)
+	require.NotZero(t, before.DBDevice)
 
 	raw, err := os.ReadFile(dbPath)
 	require.NoError(t, err, "read container bytes")

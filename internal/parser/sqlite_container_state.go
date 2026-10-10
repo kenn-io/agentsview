@@ -52,9 +52,7 @@ type SQLiteContainerState struct {
 	// DBInode and DBDevice distinguish a replaced or restored container
 	// file (new inode) from in-place transaction writes, which the header
 	// markers alone cannot: a byte-identical copy carries the same size,
-	// counter, and salts. Zero on platforms without cheap file identity
-	// (Windows), where replacement detection degrades to the other
-	// markers. In-place byte surgery that preserves every marker and
+	// counter, and salts. Zero when native file identity is unavailable. In-place byte surgery that preserves every marker and
 	// lands within the trusted mtime's second is explicitly out of
 	// scope — the same exposure class every mtime-based sync tool
 	// accepts.
@@ -148,7 +146,12 @@ func sqliteWALHasFrames(path string) bool {
 // headers cannot be read, in which case the container must never be treated
 // as unchanged.
 func StatSQLiteContainerState(dbPath string) (SQLiteContainerState, bool) {
-	info, err := os.Stat(dbPath)
+	file, err := os.Open(dbPath)
+	if err != nil {
+		return SQLiteContainerState{}, false
+	}
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		return SQLiteContainerState{}, false
 	}
@@ -156,8 +159,8 @@ func StatSQLiteContainerState(dbPath string) (SQLiteContainerState, bool) {
 		DBSize:     info.Size(),
 		DBMtimeSec: info.ModTime().Unix(),
 	}
-	state.DBInode, state.DBDevice = sourceFileIdentity(info)
-	counter, ok := readSQLiteChangeCounter(dbPath)
+	state.DBInode, state.DBDevice = sourceFileIdentityForFile(file, info)
+	counter, ok := readSQLiteChangeCounterFromFile(file)
 	if !ok {
 		return SQLiteContainerState{}, false
 	}
@@ -207,6 +210,10 @@ func readSQLiteChangeCounter(dbPath string) (uint32, bool) {
 		return 0, false
 	}
 	defer f.Close()
+	return readSQLiteChangeCounterFromFile(f)
+}
+
+func readSQLiteChangeCounterFromFile(f *os.File) (uint32, bool) {
 	header := make([]byte, sqliteHeaderProbeSize)
 	if _, err := f.ReadAt(header, 0); err != nil {
 		return 0, false

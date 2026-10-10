@@ -792,6 +792,7 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			}
 			if tc.priorStamp {
 				e.digestVerifiedAt = map[string]time.Time{dbPath: prior}
+				e.digestVerifiedState = map[string]parser.SQLiteContainerState{dbPath: sentinel}
 			}
 			states := map[string]parser.SQLiteContainerState{}
 			if tc.capture != captureMissing {
@@ -807,6 +808,10 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 					e.digestVerifiedAt = map[string]time.Time{}
 				}
 				e.digestVerifiedAt[siblingPath] = prior
+				if e.digestVerifiedState == nil {
+					e.digestVerifiedState = make(map[string]parser.SQLiteContainerState)
+				}
+				e.digestVerifiedState[siblingPath] = siblingState
 			}
 
 			fileA := parser.DiscoveredFile{
@@ -877,6 +882,8 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 				t.Helper()
 
 				got, ok := e.digestVerifiedAt[path]
+				_, stateExists := e.digestVerifiedState[path]
+				assert.Equal(t, ok, stateExists, "%s: exact-state authority follows full verification", label)
 				switch want {
 				case wantAbsent:
 					assert.False(t, ok, "%s: stamp must be cleared", label)
@@ -1266,20 +1273,6 @@ func TestOpenCodeContainerDiscoveryReplacementMovesAdmission(t *testing.T) {
 
 func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
 	dbPath, conn := newCompositeContainerTestDB(t)
-	origStat := statSQLiteContainerState
-	t.Cleanup(func() { statSQLiteContainerState = origStat })
-	statSQLiteContainerState = func(path string) (parser.SQLiteContainerState, bool) {
-		state, ok := parser.StatSQLiteContainerState(path)
-		if ok {
-			// The Windows path-stat implementation intentionally reports no
-			// stable identity. This test exercises the available-identity
-			// interval contract; the unavailable-identity fail-closed policy
-			// is covered separately below.
-			state.DBInode = 1
-			state.DBDevice = 1
-		}
-		return state, ok
-	}
 	_, err := conn.ExecContext(t.Context(), `
 		INSERT INTO project (id, worktree, time_updated)
 		VALUES ('proj', '/home/user/code/app', 1779012000000);
@@ -1415,6 +1408,11 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 			{name: "an expired stamp is due for the digest form", setup: func(e *Engine) {
 				trust(e, 2*openCodeContainerDigestVerifyInterval)
 			}},
+			{name: "an exact verified state survives expiry", setup: func(e *Engine) {
+				trust(e, 2*openCodeContainerDigestVerifyInterval)
+				e.db = openTestDB(t)
+				e.digestVerifiedState = map[string]parser.SQLiteContainerState{dbPath: state}
+			}, wantWatermark: true},
 			{name: "force parse overrides a current stamp", setup: func(e *Engine) {
 				trust(e, 0)
 				e.forceParse = true
@@ -1503,18 +1501,6 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				dbPath, conn := newCompositeContainerTestDB(t)
-				origStat := statSQLiteContainerState
-				t.Cleanup(func() { statSQLiteContainerState = origStat })
-				statSQLiteContainerState = func(
-					path string,
-				) (parser.SQLiteContainerState, bool) {
-					state, ok := parser.StatSQLiteContainerState(path)
-					if ok {
-						state.DBInode = 1
-						state.DBDevice = 1
-					}
-					return state, ok
-				}
 				_, err := conn.ExecContext(t.Context(), `
 					INSERT INTO project (id, worktree, time_updated)
 					VALUES ('proj', '/home/user/code/app', 1779012000000);

@@ -2,7 +2,6 @@ package sync_test
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -62,13 +61,8 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 		"the changed session must be archived")
 	assert.Equal(t, 122, second.Skipped,
 		"unchanged sessions must be skipped")
-	if runtime.GOOS == "windows" {
-		assert.Equal(t, int64(1), scans,
-			"unavailable file identity must fail closed to full digest listing")
-	} else {
-		assert.Zero(t, scans,
-			"a changed full pass must not scan every child row")
-	}
+	assert.Zero(t, scans,
+		"a changed full pass must not scan every child row")
 	assert.LessOrEqual(t, lookups, int64(1),
 		"the changed session's child lookup must stay bounded")
 	assertMessageContent(
@@ -79,9 +73,6 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 func TestOpenCodeChangedContainerStreamRehydratesWatermarkMetadata(
 	t *testing.T,
 ) {
-	if runtime.GOOS == "windows" {
-		t.Skip("file identity is unavailable; container fast path is disabled")
-	}
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj", "/home/user/code/app")
@@ -439,9 +430,6 @@ func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
 // remain deferred during the verification interval; the force pass below
 // represents the next complete digest verification.
 func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("file identity is unavailable; idle passes require full digest listing")
-	}
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj", "/home/user/code/app")
@@ -489,12 +477,9 @@ func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
 // tables at all: the container gate will skip every member before
 // fingerprinting, so discovery lists the bounded watermark form instead of
 // computing archive-sized child identities nothing reads. Child-only edits
-// remain deferred during the interval. A fresh ordinary engine below has no
-// verification timestamp, so its full digest pass reconciles the edit.
+// remain deferred during the interval. A fresh worker reuses unchanged state,
+// and requires a full digest when the persisted state differs.
 func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("file identity is unavailable; idle passes require full digest listing")
-	}
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj", "/home/user/code/app")
@@ -519,6 +504,14 @@ func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
 		"an idle full pass must not aggregate the container's child tables")
 	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
 		"an idle full pass must not pay per-session child lookups")
+
+	scansBefore = parser.OpenCodeContainerChildScans()
+	lookupsBefore = parser.OpenCodeSessionChildLookups()
+	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
+	assert.Equal(t, 5, stats.Skipped)
+	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
+		"a fresh worker must reuse the last verified unchanged container")
+	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore)
 
 	// A child-only replacement below every watermark is deferred by an ordinary
 	// pass until the verification boundary.
