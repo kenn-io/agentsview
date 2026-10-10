@@ -168,6 +168,12 @@ func TestScreenViewClaimsAcrossDaemonRestarts(t *testing.T) {
 		}
 		require.NoError(t, reporter.Close())
 	}
+	moved, err := filepath.Glob(cfg.TelemetryScreenClaimsPath() + ".unreadable-*")
+	require.NoError(t, err)
+	require.Len(t, moved, 1)
+	data, err := os.ReadFile(moved[0])
+	require.NoError(t, err)
+	assert.Equal(t, legacy, string(data))
 	sent := captured()
 	require.Len(t, sent, 1)
 	assert.Equal(t, "usage", sent[0]["screen"])
@@ -181,6 +187,12 @@ func TestScreenViewRecoversUnreadableClaimsAtStartup(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-id"}
 	require.NoError(t, os.WriteFile(cfg.TelemetryScreenClaimsPath(), []byte(`{"version":2,"claims":[]}`), 0o600))
 	require.NoError(t, cfg.MigrateTelemetryScreenClaims())
+	moved, err := filepath.Glob(cfg.TelemetryScreenClaimsPath() + ".unreadable-*")
+	require.NoError(t, err)
+	require.Len(t, moved, 1)
+	data, err := os.ReadFile(moved[0])
+	require.NoError(t, err)
+	assert.Equal(t, `{"version":2,"claims":[]}`, string(data))
 	reporter := captureReporter(t, endpoint, Options{ScreenClaimsPath: cfg.TelemetryScreenClaimsPath()})
 	postCapture(t, reporter.CaptureHandler(), `{"event":"screen_viewed","properties":{"screen":"sessions"}}`, http.StatusAccepted)
 	require.NoError(t, reporter.Close())

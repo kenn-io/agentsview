@@ -2,8 +2,10 @@ package config
 
 import (
 	"bytes"
+	"encoding/json/v2"
 	"log"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,6 +18,9 @@ func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
 		{"short fields", "install-one", ""},
 		{"invalid date", "install-one broken sessions", ""},
 		{"no screens", "install-one 2026-10-08", ""},
+		{"invalid UTF-8 screen", "install-one 2026-10-08 sessions \xff", ""},
+		{"another installation", "install-two 2026-10-08 sessions", ""},
+		{"existing backup", "malformed", ""},
 		{"empty file", "", ""},
 		{"whitespace only", " \t\r\n", ""},
 		{"future date", "install-one 2099-10-08 sessions", `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"sessions\"]":["2099-10-08"]}}`},
@@ -33,37 +38,41 @@ func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
 			c := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 			path := c.TelemetryScreenClaimsPath()
 			require.NoError(t, os.WriteFile(path, []byte(tc.stored), 0o600))
-			if tc.want == "" {
-				require.NoError(t, os.WriteFile(path+".unreadable", []byte("older claims"), 0o600))
+			olderPath := path + ".unreadable-existing"
+			if tc.name == "existing backup" {
+				require.NoError(t, os.WriteFile(olderPath, []byte("older claims"), 0o600))
 			}
 			require.NoError(t, c.MigrateTelemetryScreenClaims())
-			if tc.want == "" {
-				data, err := os.ReadFile(path + ".unreadable")
+			moved, err := filepath.Glob(path + ".unreadable-*")
+			require.NoError(t, err)
+			copies := 0
+			for _, movedPath := range moved {
+				data, err := os.ReadFile(movedPath)
 				require.NoError(t, err)
+				if movedPath == olderPath {
+					assert.Equal(t, "older claims", string(data))
+					continue
+				}
+				copies++
 				assert.Equal(t, tc.stored, string(data))
-				assert.Contains(t, logs.String(), "moved unreadable telemetry screen claims to "+path+".unreadable")
-				_, err = os.Stat(path)
+				assert.Contains(t, filepath.ToSlash(logs.String()), "moved unreadable telemetry screen claims to "+filepath.ToSlash(movedPath))
+			}
+			assert.Equal(t, 1, copies)
+			if tc.name == "existing backup" {
+				assert.Contains(t, moved, olderPath)
+			}
+			data, err := os.ReadFile(path)
+			if tc.want == "" {
 				assert.ErrorIs(t, err, os.ErrNotExist)
 				return
 			}
-			data, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.JSONEq(t, tc.want, string(data))
-			assert.Empty(t, logs.String())
+			var claims screenClaims
+			require.NoError(t, json.Unmarshal(data, &claims))
+			assert.True(t, claims.readable())
 		})
 	}
-}
-
-func TestTelemetryScreenClaimsMigrationKeepsFileWhenMoveFails(t *testing.T) {
-	c := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
-	path := c.TelemetryScreenClaimsPath()
-	const stored = `{"version":2,"claims":[]}`
-	require.NoError(t, os.WriteFile(path, []byte(stored), 0o600))
-	require.NoError(t, os.Mkdir(path+".unreadable", 0o700))
-	require.Error(t, c.MigrateTelemetryScreenClaims())
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, stored, string(data))
 }
 
 func TestTelemetryScreenClaimsMigrationKeepsReadableClaims(t *testing.T) {

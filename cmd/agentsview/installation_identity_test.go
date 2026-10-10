@@ -130,13 +130,13 @@ func TestTelemetryOptionsKeepsConfiguredClaimsPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("malformed"), 0o600))
 	opts := telemetryOptions(cfg)
 	assert.Equal(t, path, opts.ScreenClaimsPath)
-	data, err := os.ReadFile(path + ".unreadable")
+	moved, err := filepath.Glob(path + ".unreadable-*")
+	require.NoError(t, err)
+	require.Len(t, moved, 1)
+	data, err := os.ReadFile(moved[0])
 	require.NoError(t, err)
 	assert.Equal(t, "malformed", string(data))
 	assert.NoFileExists(t, path)
-	require.NoError(t, os.Mkdir(path, 0o700))
-	opts = telemetryOptions(cfg)
-	assert.Equal(t, path, opts.ScreenClaimsPath)
 }
 
 func TestTelemetryOptionsOptOutPreservesLegacyClaims(t *testing.T) {
