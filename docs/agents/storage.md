@@ -473,6 +473,14 @@ Full resync drops these indexes in the temporary database during the bulk load
 must rebuild them before the swap; a failed rebuild aborts the swap because
 read-only opens require the indexes.
 
+### Sidebar tree index
+
+The sidebar's recursive child lookup uses
+`idx_sessions_parent_automated` on `(parent_session_id, is_automated)`.
+Writable opens create this index after column migrations; fresh archives create
+it during initialization. Bulk imports retain it. Existing sessions are
+preserved and adding the index does not require a parser resync.
+
 ### Dashboard metadata index
 
 SQLite's summary and tool analytics can read model names and message timestamps

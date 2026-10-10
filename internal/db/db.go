@@ -1263,7 +1263,10 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 		return nil, errors.Join(err, d.CloseContext(ctx))
 	}
 	d.mu.Lock()
-	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
+	err = ensureSidebarIndexLocked(ctx, d.getWriter())
+	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
+	}
 	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
@@ -3640,6 +3643,9 @@ func (db *DB) scrubProjectIdentityGitRemoteCredentialsLocked(ctx context.Context
 // createPartialIndexesLocked creates partial indexes that are not
 // covered by the initial schema DDL. Idempotent via IF NOT EXISTS.
 func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) error {
+	if err := ensureSidebarIndexLocked(ctx, w); err != nil {
+		return err
+	}
 	var terminalIndexExists bool
 	if err := w.QueryRow(ctx, `SELECT EXISTS (
 		SELECT 1 FROM sqlite_master WHERE type = 'index'
