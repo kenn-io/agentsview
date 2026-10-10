@@ -174,10 +174,17 @@ func (s *Server) humaListAgents(
 }
 
 func (s *Server) humaGetVersion(
-	_ context.Context,
+	ctx context.Context,
 	_ *emptyInput,
 ) (*jsonOutput[VersionInfo], error) {
 	version := s.version
+	if database, ok := s.db.(*db.DB); ok {
+		var err error
+		version.ArchiveOnly, err = database.IsArchiveOnly(ctx)
+		if err != nil {
+			return nil, serverError(err)
+		}
+	}
 	version.InsightGenerationAvailable = supportsInsightGeneration(s.db)
 	_, version.SessionStatsAvailable = s.db.(*db.DB)
 	return &jsonOutput[VersionInfo]{Body: version}, nil

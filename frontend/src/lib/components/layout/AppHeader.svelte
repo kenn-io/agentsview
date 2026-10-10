@@ -644,6 +644,7 @@
       </div>
     {/if}
 
+    {#if !sync.archiveOnly}
     <button
       class="header-btn sync-btn"
       class:syncing={sync.syncing}
@@ -659,6 +660,7 @@
       {/if}
       <span class="sync-label" class:collapsed={navCollapsed}>{sync.readOnly ? m.header_actions_refresh() : m.header_actions_sync()}</span>
     </button>
+    {/if}
 
     <button
       class="import-btn"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 )
 
 // ArchiveEvidence contains only identity and acknowledged receipts. It omits
@@ -34,6 +35,13 @@ func (s *Store) ArchiveEvidence(ctx context.Context) (ArchiveEvidence, error) {
 		return evidence, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var version int
+	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return evidence, err
+	}
+	if version > schemaVersion {
+		return evidence, fmt.Errorf("rawcheckpoint: schema version %d is newer than supported version %d", version, schemaVersion)
+	}
 	err = tx.QueryRowContext(ctx, "SELECT device_id FROM device_config WHERE id=1").Scan(&evidence.DeviceID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return evidence, err

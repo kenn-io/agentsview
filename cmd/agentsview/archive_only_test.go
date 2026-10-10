@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawcheckpoint"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -52,6 +53,37 @@ func TestArchiveOnlyRefusesReceivingHostOnRestart(t *testing.T) {
 		var out bytes.Buffer
 		err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: mode}, &out)
 		assert.ErrorContains(t, err, "archive-only", mode)
+	}
+}
+
+func TestRawSyncAllowsUnreadableArchive(t *testing.T) {
+	for _, primary := range []string{"missing", "directory", "corrupt"} {
+		for _, command := range []string{"watch", "backfill"} {
+			t.Run(primary+"/"+command, func(t *testing.T) {
+				cfg := testConfigWithClaudeFixture(t)
+				t.Setenv("AGENTSVIEW_DATA_DIR", cfg.DataDir)
+				t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "test-credential")
+				require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(fmt.Sprintf("[agents.claude]\ndirs = [%q]\n", cfg.AgentDirs[parser.AgentClaude][0])), 0o600))
+				if primary == "directory" {
+					require.NoError(t, os.Mkdir(cfg.DBPath, 0o700))
+				} else if primary == "corrupt" {
+					require.NoError(t, os.WriteFile(cfg.DBPath, []byte("unreadable archive"), 0o600))
+				}
+				store, err := rawcheckpoint.Open(t.Context(), rawSyncCheckpointPath(cfg.DataDir))
+				require.NoError(t, err)
+				require.NoError(t, store.EnsureDevice(t.Context(), "original-device"))
+				require.NoError(t, store.Close())
+				cmd := newRootCommand()
+				cmd.SetContext(t.Context())
+				args := []string{"raw-sync", command, "--server", "http://127.0.0.1:1", "--device-id", "different-device", "--allow-insecure-http"}
+				if command == "backfill" {
+					args = append(args, "--run-id", "test-run", "--provider", "claude")
+				}
+				_, err = executeCommand(cmd, args...)
+				require.ErrorContains(t, err, "device")
+				assert.NotErrorIs(t, err, db.ErrArchiveOnly)
+			})
+		}
 	}
 }
 

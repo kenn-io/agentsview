@@ -143,7 +143,7 @@ func applyServeMemoryLimit() {
 }
 
 func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restartPort int) {
-	archiveOnly, err := db.ArchiveOnlyAt(ctx, cfg.DBPath)
+	archiveOnly, err := archiveModeAfterRecovery(ctx, cfg)
 	if err != nil {
 		fatal("reading archive mode: %v", err)
 	}

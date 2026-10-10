@@ -2,6 +2,7 @@ package rawarchive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
@@ -25,6 +26,22 @@ func captureFixture(t *testing.T) CaptureOptions {
 	root := t.TempDir()
 	dbtest.WriteTestFile(t, filepath.Join(root, "projects", "project-a", "saved.jsonl"), []byte("original bytes\n"))
 	return CaptureOptions{DataDir: data, Destination: filepath.Join(t.TempDir(), "capture"), Roots: []RootSpec{{Provider: "claude", Path: filepath.Join(root, "projects")}}, Settings: RecoverySettings{LocalMachineName: "source-device"}, ReaderBuild: "test-build"}
+}
+
+func TestCaptureRejectsNewerCheckpointSchema(t *testing.T) {
+	opts := captureFixture(t)
+	path := filepath.Join(opts.DataDir, "raw-sync", "checkpoint.db")
+	store, err := rawcheckpoint.Open(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	checkpoint, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = checkpoint.ExecContext(t.Context(), "PRAGMA user_version=1000")
+	require.NoError(t, err)
+	require.NoError(t, checkpoint.Close())
+	_, err = Capture(t.Context(), opts)
+	require.ErrorContains(t, err, "newer than supported")
+	assert.NoDirExists(t, opts.Destination)
 }
 
 func TestCaptureIdentityContinuity(t *testing.T) {

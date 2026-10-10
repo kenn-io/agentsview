@@ -5,6 +5,7 @@ import { sessions } from "../stores/sessions.svelte.js";
 import { starred } from "../stores/starred.svelte.js";
 import { router } from "../stores/router.svelte.js";
 import { messages } from "../stores/messages.svelte.js";
+import { sync } from "../stores/sync.svelte.js";
 import { inSessionSearch } from "../stores/inSessionSearch.svelte.js";
 import { SessionsService } from "../api/generated/index";
 import { copyToClipboard } from "../utils/clipboard.js";
@@ -67,6 +68,21 @@ describe("registerShortcuts", () => {
     document.body.innerHTML = "";
     vi.restoreAllMocks();
     vi.clearAllMocks();
+  });
+
+  it("hides sync and ignores r for an archive-only server", async () => {
+    sync.serverVersion = { archive_only: true } as NonNullable<typeof sync.serverVersion>;
+    const trigger = vi.spyOn(sync, "triggerSync");
+    const header = mount(AppHeader, { target: document.body });
+    try {
+      await tick();
+      expect(document.querySelector(".sync-btn")).toBeNull();
+      fireKey("r");
+      expect(trigger).not.toHaveBeenCalled();
+    } finally {
+      unmount(header);
+      sync.serverVersion = null;
+    }
   });
 
   describe("remote c copy", () => {

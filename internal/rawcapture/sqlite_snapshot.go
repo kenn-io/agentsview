@@ -331,16 +331,14 @@ func SnapshotSQLite(ctx context.Context, sourcePath, destination string, expecte
 			_ = os.Remove(destination)
 		}
 	}()
-	backupCtx, cancel := context.WithTimeout(ctx, sqliteBackupTimeout)
-	defer cancel()
-	if err := sqliteOnlineBackup(backupCtx, source.connection, destination, math.MaxInt64); err != nil {
+	if err := sqliteOnlineBackup(ctx, source.connection, destination, math.MaxInt64); err != nil {
 		return err
 	}
 	standalone, err := sql.Open(sqliteSnapshotDriverName, sqliteSnapshotDSN(destination, false))
 	if err != nil {
 		return err
 	}
-	_, err = standalone.ExecContext(backupCtx, "PRAGMA journal_mode=DELETE")
+	_, err = standalone.ExecContext(ctx, "PRAGMA journal_mode=DELETE")
 	if err = errors.Join(err, standalone.Close()); err != nil {
 		return err
 	}

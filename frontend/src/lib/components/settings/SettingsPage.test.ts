@@ -6,6 +6,7 @@ import { dismissFlash } from "@kenn-io/kit-ui";
 import SettingsPage from "./SettingsPage.svelte";
 import { SettingsService } from "../../api/generated/index";
 import { settings } from "../../stores/settings.svelte.js";
+import { sync } from "../../stores/sync.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { initI18n, LOCALE_STORAGE_KEY, setLocale } from "../../i18n/index.js";
 
@@ -56,6 +57,26 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("hides full resync for an archive-only database", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {}, chart_palette: "agentsview", github_configured: false,
+      host: "127.0.0.1", port: 8080, read_only: false, require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    sync.serverVersion = { archive_only: true } as NonNullable<typeof sync.serverVersion>;
+    const component = mount(SettingsPage, { target: document.body });
+    try {
+      await tick();
+      await tick();
+      expect(document.body.textContent).toContain("Settings");
+      expect(document.querySelector('button[title="Full Resync"]')).toBeNull();
+      expect(document.body.textContent).not.toContain("Full Resync");
+    } finally {
+      unmount(component);
+      sync.serverVersion = null;
+    }
+  });
+
   it("renders browser-local settings with the Data-mode worktree pointer", async () => {
     let resolveSettings!: (value: unknown) => void;
     settingsService.getApiV1Settings.mockReturnValue(

@@ -13,8 +13,6 @@ linters:
         settings:
           include-pkgs: "go.kenn.io/agentsview"
   exclusions:
-    paths:
-      - ^frontend/node_modules/
     rules:
       - path: "_test\\.go"
         linters:

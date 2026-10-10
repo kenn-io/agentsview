@@ -131,10 +131,8 @@ func runRawSyncWatch(ctx context.Context, watchCfg rawSyncWatchConfig) error {
 	if err != nil {
 		return err
 	}
-	archiveOnly, err := db.ArchiveOnlyAt(ctx, appCfg.DBPath)
-	if err != nil {
-		return err
-	}
+	// Raw publication can run without a readable normalized archive.
+	archiveOnly, _ := db.ArchiveOnlyAt(ctx, appCfg.DBPath)
 	if archiveOnly {
 		return db.ErrArchiveOnly
 	}

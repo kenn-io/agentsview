@@ -37,6 +37,14 @@ describe("ResyncModal", () => {
     await tick();
   }
 
+  it("hides resync in an archive-only database", async () => {
+    sync.serverVersion = { archive_only: true } as NonNullable<typeof sync.serverVersion>;
+    component = mount(ResyncModal, { target: document.body });
+    await tick();
+    expect(document.querySelector("button")).toBeNull();
+    expect(sync.triggerResync).not.toHaveBeenCalled();
+  });
+
   it("shows an uncounted finalization detail without a zero-value bar", async () => {
     sync.progress = {
       phase: "finalizing",

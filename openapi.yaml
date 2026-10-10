@@ -7773,6 +7773,8 @@ components:
         api_version:
           format: int64
           type: integer
+        archive_only:
+          type: boolean
         build_date:
           type: string
         commit:

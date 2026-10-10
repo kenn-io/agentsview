@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -192,14 +193,23 @@ func withRawArchive(cmd *cobra.Command, run func(*rawarchive.Archive) error) (re
 	if err != nil {
 		return err
 	}
-	archiveOnly, err := db.ArchiveOnlyAt(cmd.Context(), cfg.DBPath)
+	archiveOnly, err := archiveModeAfterRecovery(cmd.Context(), cfg)
 	if err != nil {
 		return err
 	}
 	if !archiveOnly {
 		return rawarchive.ErrArchiveOnlyRequired
 	}
-	database, lock, err := openWriteDB(cmd.Context(), cfg)
+	database, lock, err := openWriteDBWith(cmd.Context(), cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
+		archiveOnly, err := db.ArchiveOnlyAt(ctx, cfg.DBPath)
+		if err != nil {
+			return nil, err
+		}
+		if !archiveOnly {
+			return nil, rawarchive.ErrArchiveOnlyRequired
+		}
+		return openDB(ctx, cfg)
+	})
 	if err != nil {
 		return err
 	}
@@ -210,4 +220,23 @@ func withRawArchive(cmd *cobra.Command, run func(*rawarchive.Archive) error) (re
 	}
 	defer func() { retErr = errors.Join(retErr, archive.Close()) }()
 	return run(archive)
+}
+
+func archiveModeAfterRecovery(ctx context.Context, cfg config.Config) (bool, error) {
+	pending, err := db.CompactRecoveryPending(cfg.DBPath)
+	if err != nil {
+		return false, err
+	}
+	if pending {
+		lock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
+		if err != nil {
+			return false, err
+		}
+		defer lock.Close()
+		if err := db.RecoverCompactManifest(cfg.DBPath); err != nil {
+			return false, err
+		}
+		return db.ArchiveOnlyAt(ctx, cfg.DBPath)
+	}
+	return db.ArchiveOnlyAt(ctx, cfg.DBPath)
 }

@@ -219,7 +219,9 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       },
       o: () => ui.toggleSort(),
       l: () => ui.cycleLayout(),
-      r: () => sync.triggerSync(),
+      r: () => {
+        if (!sync.archiveOnly) sync.triggerSync();
+      },
       e: () => {
         if (sessions.activeSessionId) {
           window.open(getExportUrl(sessions.activeSessionId), "_blank");

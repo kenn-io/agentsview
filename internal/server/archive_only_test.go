@@ -20,6 +20,17 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+func TestVersionReportsArchiveOnly(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	before := serveJSON(t, f.handler, http.MethodGet, "/api/v1/version", nil)
+	require.Equal(t, http.StatusOK, before.Code)
+	assert.False(t, decodeRecorder[VersionInfo](t, before).ArchiveOnly)
+	require.NoError(t, f.db.EnableArchiveOnly(t.Context()))
+	after := serveJSON(t, f.handler, http.MethodGet, "/api/v1/version", nil)
+	require.Equal(t, http.StatusOK, after.Code)
+	assert.True(t, decodeRecorder[VersionInfo](t, after).ArchiveOnly)
+}
+
 func TestArchiveOnlyRejectsManualSync(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	require.NoError(t, f.db.EnableArchiveOnly(t.Context()))

@@ -1157,6 +1157,15 @@ func compactManifestPath(databasePath string) string {
 	return filepath.Join(filepath.Dir(databasePath), compactManifestName)
 }
 
+// CompactRecoveryPending reports whether startup must settle an interrupted swap.
+func CompactRecoveryPending(databasePath string) (bool, error) {
+	_, err := os.Lstat(compactManifestPath(databasePath))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func writeCompactManifest(path string, manifest compactManifest) error {
 	data, err := json.Marshal(manifest, jsontext.WithIndent("  "))
 	if err != nil {
