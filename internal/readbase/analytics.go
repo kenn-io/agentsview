@@ -33,9 +33,10 @@ type AnalyticsBackend interface {
 	ScanTopSession(*sql.Rows) (db.TopSession, error)
 	TrendsSQL() string
 	FormatTime(any) string
-	Autonomy(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error)
-	VelocityMessages(ctx context.Context, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error)
-	VelocityToolCounts(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error)
+	// DuckDB binds captured IDs; ClickHouse reselects by filter to stay under its statement size cap.
+	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
+	VelocityMessages(ctx context.Context, ids []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error)
+	VelocityToolCounts(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
 	ToolCountsSQL(ids []string) (string, []any)
 	// Session metadata supplies ClickHouse cache versions; DuckDB uses only rows.
 	PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []AnalyticsSession) error
@@ -174,7 +175,7 @@ func (s *Analytics) getAnalyticsSummaryWithModelCounts(
 	sessionIDs := make([]string, 0, len(sessions))
 
 	for _, session := range sessions {
-		date := AnalyticsLocalDate(AnalyticsDateTime(session), f.Timezone)
+		date := AnalyticsLocalDate(analyticsDateTime(session), f.Timezone)
 		resp.TotalSessions++
 		resp.TotalMessages += session.MessageCount
 		if session.HasTotalOutputTokens {
@@ -261,7 +262,7 @@ func (s *Analytics) getAnalyticsActivityFilteredByModelTime(
 	buckets := map[string]*db.ActivityEntry{}
 	for _, session := range sessions {
 		date := db.BucketDate(
-			AnalyticsLocalDate(AnalyticsDateTime(session), f.Timezone),
+			AnalyticsLocalDate(analyticsDateTime(session), f.Timezone),
 			granularity,
 		)
 		entry := buckets[date]
@@ -346,7 +347,7 @@ func (s *Analytics) GetAnalyticsProjects(
 			}
 			byProject[r.Project] = a
 		}
-		date := AnalyticsLocalDate(AnalyticsDateTime(r), f.Timezone)
+		date := AnalyticsLocalDate(analyticsDateTime(r), f.Timezone)
 		if a.row.FirstSession == "" || date < a.row.FirstSession {
 			a.row.FirstSession = date
 		}
@@ -457,7 +458,7 @@ func (s *Analytics) GetAnalyticsSessionShape(
 			}
 		}
 	} else if len(ids) > 0 {
-		autonomy, err = s.backend.Autonomy(ctx, f)
+		autonomy, err = s.backend.Autonomy(ctx, ids, f)
 		if err != nil {
 			return db.SessionShapeResponse{}, err
 		}
@@ -546,7 +547,7 @@ func (s *Analytics) GetAnalyticsSummary(
 		}
 		return db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, nil
 	}
-	resp, err := ScanAnalyticsSummary(rows, db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, s.name)
+	resp, err := scanAnalyticsSummary(rows, db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, s.name)
 	if err != nil {
 		return db.AnalyticsSummary{}, err
 	}
@@ -665,7 +666,7 @@ func (s *Analytics) GetAnalyticsHeatmap(
 		}
 		counts := map[string]int{}
 		for _, session := range sessions {
-			date := AnalyticsLocalDate(AnalyticsDateTime(session), f.Timezone)
+			date := AnalyticsLocalDate(analyticsDateTime(session), f.Timezone)
 			switch metric {
 			case "sessions":
 				counts[date]++
@@ -743,7 +744,7 @@ func (s *Analytics) GetAnalyticsTools(ctx context.Context, f db.AnalyticsFilter)
 		if !ok {
 			return
 		}
-		_, date, keep := f.ResolveSkillRowTime(timestamp, AnalyticsDateTime(session))
+		_, date, keep := f.ResolveSkillRowTime(timestamp, analyticsDateTime(session))
 		if !keep {
 			return
 		}
@@ -769,7 +770,7 @@ func (s *Analytics) GetAnalyticsSkills(ctx context.Context, f db.AnalyticsFilter
 		if !ok {
 			return
 		}
-		usedTS, date, keep := f.ResolveSkillRowTime(timestamp, AnalyticsDateTime(session))
+		usedTS, date, keep := f.ResolveSkillRowTime(timestamp, analyticsDateTime(session))
 		if !keep {
 			return
 		}
@@ -926,7 +927,7 @@ func (s *Analytics) GetTrendsTerms(
 	if len(allowedSessions) == 0 {
 		return acc.Response(), nil
 	}
-	loc := AnalyticsLocation(f.Timezone)
+	loc := analyticsLocation(f.Timezone)
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
 	rows, err := s.backend.QueryContext(ctx, s.backend.TrendsSQL())
@@ -964,7 +965,7 @@ func (s *Analytics) GetTrendsTerms(
 			return db.TrendsTermsResponse{}, err
 		}
 		ts := cmp.Or(s.backend.FormatTime(row.msgTS), s.backend.FormatTime(row.startedAt), s.backend.FormatTime(row.createdAt))
-		local, has := AnalyticsLocalTime(ts, loc)
+		local, has := analyticsLocalTime(ts, loc)
 		if !modelFiltering {
 			if has && flt.MatchesDayHour(local, true) {
 				processRow(row.sessionID, row.content, local)
@@ -990,7 +991,7 @@ func (s *Analytics) GetTrendsTerms(
 	return acc.Response(), nil
 }
 
-func AnalyticsDateTime(r AnalyticsSession) string {
+func analyticsDateTime(r AnalyticsSession) string {
 	if r.StartedAt != "" {
 		return r.StartedAt
 	}
@@ -1002,10 +1003,10 @@ func AnalyticsLocalDate(ts, tz string) string {
 	if !ok {
 		return ""
 	}
-	return t.In(AnalyticsLocation(tz)).Format("2006-01-02")
+	return t.In(analyticsLocation(tz)).Format("2006-01-02")
 }
 
-func AnalyticsLocation(tz string) *time.Location {
+func analyticsLocation(tz string) *time.Location {
 	return db.LoadLocationOr(tz, time.UTC)
 }
 
@@ -1045,7 +1046,7 @@ func signalRowsFromSessions(
 			Project:                     r.Project,
 			FirstMessage:                r.FirstMessage,
 			IsAutomated:                 r.IsAutomated,
-			Date:                        AnalyticsLocalDate(AnalyticsDateTime(r), f.Timezone),
+			Date:                        AnalyticsLocalDate(analyticsDateTime(r), f.Timezone),
 			HealthScore:                 r.HealthScore,
 			HealthGrade:                 r.HealthGrade,
 			Outcome:                     r.Outcome,
@@ -1069,8 +1070,8 @@ func signalRowsFromSessions(
 	return rows
 }
 
-// ScanAnalyticsSummary reads and closes an aggregate result after its first Next.
-func ScanAnalyticsSummary(rows *sql.Rows, resp db.AnalyticsSummary, backend string) (db.AnalyticsSummary, error) {
+// scanAnalyticsSummary reads and closes an aggregate result after its first Next.
+func scanAnalyticsSummary(rows *sql.Rows, resp db.AnalyticsSummary, backend string) (db.AnalyticsSummary, error) {
 	if err := rows.Scan(
 		&resp.TotalSessions,
 		&resp.TotalMessages,

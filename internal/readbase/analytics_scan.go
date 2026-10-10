@@ -8,7 +8,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func ScanAnalyticsModelTimes(rows *sql.Rows, backend string, formatTime func(any) string, emit func(model, timestamp string)) error {
+func scanAnalyticsModelTimes(rows *sql.Rows, backend string, formatTime func(any) string, emit func(model, timestamp string)) error {
 	for rows.Next() {
 		var model string
 		var ts any
@@ -20,7 +20,7 @@ func ScanAnalyticsModelTimes(rows *sql.Rows, backend string, formatTime func(any
 	return rows.Err()
 }
 
-func ScanAnalyticsToolCounts(rows *sql.Rows, backend string, formatTime func(any) string, emit func(sessionID, model, timestamp string, count int)) error {
+func scanAnalyticsToolCounts(rows *sql.Rows, backend string, formatTime func(any) string, emit func(sessionID, model, timestamp string, count int)) error {
 	for rows.Next() {
 		var sessionID, model string
 		var ts any
@@ -60,7 +60,7 @@ func ScanAnalyticsVelocityMessages(rows *sql.Rows, backend string, formatTime fu
 		if err := rows.Scan(&sid, &ordinal, &role, &ts, &contentLength); err != nil {
 			return nil, fmt.Errorf("scanning %s velocity message: %w", backend, err)
 		}
-		parsed, ok := AnalyticsLocalTime(formatTime(ts), loc)
+		parsed, ok := analyticsLocalTime(formatTime(ts), loc)
 		out[sid] = append(out[sid], db.TimingMessage{
 			Role:          role,
 			Time:          parsed,
@@ -109,7 +109,7 @@ func ScanAnalyticsSkills(rows *sql.Rows, backend string, formatTime func(any) st
 	return rows.Err()
 }
 
-func ScanAnalyticsSignalMessages(rows *sql.Rows, backend string, formatTime func(any) string, emit func(db.SignalMessage)) error {
+func scanAnalyticsSignalMessages(rows *sql.Rows, backend string, formatTime func(any) string, emit func(db.SignalMessage)) error {
 	for rows.Next() {
 		var m db.SignalMessage
 		var ts any
@@ -129,7 +129,7 @@ func ScanAnalyticsSignalMessages(rows *sql.Rows, backend string, formatTime func
 	return nil
 }
 
-func ScanAnalyticsMessageScope(rows *sql.Rows, backend string, formatTime func(any) string, loc *time.Location, reducer *db.ScopeReducer) error {
+func scanAnalyticsMessageScope(rows *sql.Rows, backend string, formatTime func(any) string, loc *time.Location, reducer *db.ScopeReducer) error {
 	for rows.Next() {
 		var (
 			sessionID, role, sourceSubtype, model, content     string
@@ -145,7 +145,7 @@ func ScanAnalyticsMessageScope(rows *sql.Rows, backend string, formatTime func(a
 			return fmt.Errorf("scanning %s analytics candidate message: %w", backend, err)
 		}
 		tsStr := formatTime(ts)
-		parsed, has := AnalyticsLocalTime(tsStr, loc)
+		parsed, has := analyticsLocalTime(tsStr, loc)
 		if err := reducer.Push(db.MessageInput{
 			SessionID:       sessionID,
 			Ordinal:         ordinal,

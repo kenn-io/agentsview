@@ -182,7 +182,7 @@ func chAnalyticsToolMessageJoin(
 				AND m.ordinal = ` + toolAlias + `.message_ordinal`
 }
 
-func (s analyticsSQL) Autonomy(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error) {
+func (s analyticsSQL) Autonomy(ctx context.Context, _ []string, f db.AnalyticsFilter) (map[string]int, error) {
 	sessions := chAnalyticsSessionSet(f)
 
 	sessionIn, args := sessions.in("session_id")
@@ -269,7 +269,7 @@ func analyticsSessionIDsContext(ctx context.Context, ids []string) (context.Cont
 	return chdriver.Context(ctx, chdriver.WithExternalTable(table)), "(SELECT id FROM analytics_session_ids)", nil
 }
 
-func (s analyticsSQL) VelocityMessages(ctx context.Context, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
+func (s analyticsSQL) VelocityMessages(ctx context.Context, _ []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
 	sessions := chAnalyticsSessionSet(f)
 
 	out := make(map[string][]db.TimingMessage)
@@ -288,7 +288,7 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, f db.AnalyticsFilter
 	return readbase.ScanAnalyticsVelocityMessages(rows, "clickhouse", formatDBTime, loc, out)
 }
 
-func (s analyticsSQL) VelocityToolCounts(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error) {
+func (s analyticsSQL) VelocityToolCounts(ctx context.Context, _ []string, f db.AnalyticsFilter) (map[string]int, error) {
 	sessions := chAnalyticsSessionSet(f)
 
 	out := make(map[string]int)

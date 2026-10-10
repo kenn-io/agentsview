@@ -79,15 +79,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		assert.Len(t, scope.TimingBySession()[sessionA], 2)
 	})
 
-	t.Run("deduplicates sessionIDs", func(t *testing.T) {
-		scope, err := store.analytics().ResolveMessageScope(
-			t.Context(), []string{sessionA, sessionA},
-			db.AnalyticsFilter{Model: model}, false)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
-		assert.Equal(t, 2, scope.StatsBySession()[sessionA].Messages, "dedup keeps exactly 2 rows")
-	})
-
 	t.Run("hour filter drops non-matching rows", func(t *testing.T) {
 		h := 14 // rows are at 09:00 UTC
 		scope, err := store.analytics().ResolveMessageScope(

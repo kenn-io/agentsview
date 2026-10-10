@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,7 +44,10 @@ func (b analyticsFixtureBackend) QueryContext(ctx context.Context, query string,
 }
 
 func TestAnalyticsModelSummaryUsesScopedCounts(t *testing.T) {
-	pool := sql.OpenDB(analyticsFixtureDriver{})
+	pool := sql.OpenDB(&analyticsFixtureDriver{rows: []driver.Rows{
+		&candidateMessageRows{}, &candidateMessageRows{}, &modelTimesRows{},
+		&candidateMessageRows{}, &candidateMessageRows{}, &modelTimesRows{},
+	}})
 	t.Cleanup(func() { require.NoError(t, pool.Close()) })
 	backend := analyticsFixtureBackend{
 		pool: pool,
@@ -70,16 +72,14 @@ func TestAnalyticsModelSummaryUsesScopedCounts(t *testing.T) {
 	}
 	assert.Equal(t, 20, backend.sessions[0].MessageCount)
 	assert.Equal(t, 100, backend.sessions[0].TotalOutputTokens)
-}
-
-func TestAnalyticsPropagatesBackendErrors(t *testing.T) {
-	want := errors.New("read failed")
-	backend := analyticsFixtureBackend{sessions: []AnalyticsSession{{ID: "session"}}, err: want}
-	analytics := NewAnalytics(backend, "fixture")
-	_, err := analytics.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{Model: "selected"})
-	require.ErrorIs(t, err, want)
-	_, err = analytics.GetAnalyticsHeatmap(t.Context(), db.AnalyticsFilter{}, "messages")
-	assert.EqualError(t, err, "querying fixture analytics heatmap: read failed")
+	t.Run("empty summary", func(t *testing.T) {
+		pool := sql.OpenDB(&analyticsFixtureDriver{rows: []driver.Rows{summaryErrorRows{empty: true}}})
+		t.Cleanup(func() { require.NoError(t, pool.Close()) })
+		analytics := NewAnalytics(analyticsFixtureBackend{pool: pool}, "fixture")
+		result, err := analytics.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{})
+		require.NoError(t, err)
+		assert.Equal(t, db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, result)
+	})
 }
 
 var (
@@ -87,21 +87,58 @@ var (
 	errSummaryRead         = errors.New("summary read failure")
 )
 
-func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
-	pool := sql.OpenDB(analyticsFixtureDriver{})
-	t.Cleanup(func() { require.NoError(t, pool.Close()) })
-	analytics := NewAnalytics(analyticsFixtureBackend{pool: pool}, "fixture")
-	_, err := analytics.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{})
-	require.ErrorIs(t, err, errSummaryRead)
-	assert.EqualError(t, err, "iterating fixture analytics summary: summary read failure")
-	t.Run("empty summary", func(t *testing.T) {
-		pool := sql.OpenDB(analyticsFixtureDriver{emptySummary: true})
-		t.Cleanup(func() { require.NoError(t, pool.Close()) })
-		analytics := NewAnalytics(analyticsFixtureBackend{pool: pool}, "fixture")
-		result, err := analytics.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{})
-		require.NoError(t, err)
-		assert.Equal(t, db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, result)
-	})
+func TestAnalyticsPropagatesBackendErrors(t *testing.T) {
+	queryErr := errors.New("read failed")
+	for _, tt := range []struct {
+		name     string
+		queryErr error
+		rows     driver.Rows
+		read     func(*Analytics, context.Context) error
+		want     error
+		message  string
+	}{
+		{
+			name: "model summary query", queryErr: queryErr, want: queryErr,
+			message: "querying fixture analytics candidate messages: read failed",
+			read: func(a *Analytics, ctx context.Context) error {
+				_, err := a.GetAnalyticsSummary(ctx, db.AnalyticsFilter{Model: "selected"})
+				return err
+			},
+		},
+		{
+			name: "heatmap query", queryErr: queryErr, want: queryErr,
+			message: "querying fixture analytics heatmap: read failed",
+			read: func(a *Analytics, ctx context.Context) error {
+				_, err := a.GetAnalyticsHeatmap(ctx, db.AnalyticsFilter{}, "messages")
+				return err
+			},
+		},
+		{
+			name: "summary first read", rows: summaryErrorRows{}, want: errSummaryRead,
+			message: "iterating fixture analytics summary: summary read failure",
+			read: func(a *Analytics, ctx context.Context) error {
+				_, err := a.GetAnalyticsSummary(ctx, db.AnalyticsFilter{})
+				return err
+			},
+		},
+		{
+			name: "top sessions terminal read after ten rows", rows: &topSessionsRows{}, want: errTopSessionsTerminal,
+			message: "iterating fixture analytics top sessions: terminal read failure",
+			read: func(a *Analytics, ctx context.Context) error {
+				_, err := a.GetAnalyticsTopSessions(ctx, db.AnalyticsFilter{}, "messages")
+				return err
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := sql.OpenDB(&analyticsFixtureDriver{rows: []driver.Rows{tt.rows}})
+			t.Cleanup(func() { require.NoError(t, pool.Close()) })
+			backend := analyticsFixtureBackend{pool: pool, sessions: []AnalyticsSession{{ID: "session"}}, err: tt.queryErr}
+			err := tt.read(NewAnalytics(backend, "fixture"), t.Context())
+			require.ErrorIs(t, err, tt.want)
+			assert.EqualError(t, err, tt.message)
+		})
+	}
 }
 
 type summaryErrorRows struct{ empty bool }
@@ -115,33 +152,26 @@ func (r summaryErrorRows) Next([]driver.Value) error {
 	return errSummaryRead
 }
 
-type analyticsFixtureDriver struct{ emptySummary bool }
+type analyticsFixtureDriver struct{ rows []driver.Rows }
 
-func (analyticsFixtureDriver) Open(string) (driver.Conn, error) { return analyticsFixtureDriver{}, nil }
-
-func (d analyticsFixtureDriver) Connect(context.Context) (driver.Conn, error) {
-	return d, nil
-}
-func (analyticsFixtureDriver) Driver() driver.Driver { return analyticsFixtureDriver{} }
-func (analyticsFixtureDriver) Prepare(string) (driver.Stmt, error) {
+func (d *analyticsFixtureDriver) Open(string) (driver.Conn, error)             { return d, nil }
+func (d *analyticsFixtureDriver) Connect(context.Context) (driver.Conn, error) { return d, nil }
+func (d *analyticsFixtureDriver) Driver() driver.Driver                        { return d }
+func (*analyticsFixtureDriver) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("unexpected prepare")
 }
 
-func (analyticsFixtureDriver) Begin() (driver.Tx, error) {
+func (*analyticsFixtureDriver) Begin() (driver.Tx, error) {
 	return nil, errors.New("unexpected transaction")
 }
-func (analyticsFixtureDriver) Close() error { return nil }
-func (d analyticsFixtureDriver) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	if query == "summary" {
-		return summaryErrorRows{empty: d.emptySummary}, nil
+func (*analyticsFixtureDriver) Close() error { return nil }
+func (d *analyticsFixtureDriver) QueryContext(_ context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+	if len(d.rows) == 0 {
+		return nil, errors.New("unexpected query")
 	}
-	if strings.Contains(query, "SELECT model, timestamp") {
-		return &modelTimesRows{}, nil
-	}
-	if strings.Contains(query, "has_thinking, has_tool_use, timestamp,") {
-		return &candidateMessageRows{}, nil
-	}
-	return &topSessionsRows{}, nil
+	rows := d.rows[0]
+	d.rows = d.rows[1:]
+	return rows, nil
 }
 
 type topSessionsRows struct{ count int }
@@ -165,15 +195,6 @@ func (analyticsFixtureBackend) ScanTopSession(rows *sql.Rows) (db.TopSession, er
 	var row db.TopSession
 	err := rows.Scan(&row.ID)
 	return row, err
-}
-
-func TestAnalyticsTopSessionsReturnsTerminalErrorAfterTenRows(t *testing.T) {
-	pool := sql.OpenDB(analyticsFixtureDriver{})
-	t.Cleanup(func() { require.NoError(t, pool.Close()) })
-	analytics := NewAnalytics(analyticsFixtureBackend{pool: pool}, "fixture")
-	_, err := analytics.GetAnalyticsTopSessions(t.Context(), db.AnalyticsFilter{}, "messages")
-	require.ErrorIs(t, err, errTopSessionsTerminal)
-	assert.EqualError(t, err, "iterating fixture analytics top sessions: terminal read failure")
 }
 
 type modelTimesRows struct{ done bool }

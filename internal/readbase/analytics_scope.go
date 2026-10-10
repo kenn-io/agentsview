@@ -22,7 +22,7 @@ func (s *Analytics) ResolveMessageScope(
 	unique := db.UniqueAnalyticsIDs(sessionIDs)
 
 	flt := f.MessageScopeFilter()
-	loc := AnalyticsLocation(f.Timezone)
+	loc := analyticsLocation(f.Timezone)
 	bySession := make(db.MessageScope, len(unique))
 	emit := func(m db.ScopedMessage) {
 		bySession[m.SessionID] = append(bySession[m.SessionID], m)
@@ -31,14 +31,14 @@ func (s *Analytics) ResolveMessageScope(
 	if err := db.QueryChunkedSize(unique, MaxSQLVars, func(chunk []string) error {
 		reducer := db.NewScopeReducer(flt, emit)
 		ph, args := db.InPlaceholders(chunk)
-		query := AnalyticsCandidateMessagesSQL(ph, includeContent)
+		query := analyticsCandidateMessagesSQL(ph, includeContent)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying %s analytics candidate messages: %w", s.name, err)
 		}
 		defer rows.Close()
 
-		return ScanAnalyticsMessageScope(rows, s.name, s.backend.FormatTime, loc, reducer)
+		return scanAnalyticsMessageScope(rows, s.name, s.backend.FormatTime, loc, reducer)
 	}); err != nil {
 		return nil, err
 	}

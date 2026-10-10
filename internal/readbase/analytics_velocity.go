@@ -53,7 +53,7 @@ func (s *Analytics) GetAnalyticsVelocity(
 		sessionMsgs = scope.TimingBySession()
 	} else {
 		sessionMsgs, err = s.backend.VelocityMessages(
-			ctx, f, AnalyticsLocation(f.Timezone),
+			ctx, sessionIDs, f, analyticsLocation(f.Timezone),
 		)
 	}
 	if err != nil {
@@ -65,7 +65,7 @@ func (s *Analytics) GetAnalyticsVelocity(
 			ctx, sessionIDs, f,
 		)
 	} else {
-		toolCounts, err = s.backend.VelocityToolCounts(ctx, f)
+		toolCounts, err = s.backend.VelocityToolCounts(ctx, sessionIDs, f)
 	}
 	if err != nil {
 		return db.VelocityResponse{}, err

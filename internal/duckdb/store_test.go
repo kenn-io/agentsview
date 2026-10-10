@@ -1604,6 +1604,14 @@ func TestAnalyticsVelocityUsesMessageCyclesAndBreakdowns(t *testing.T) {
 		},
 		DataVersion:     1,
 		ReplaceMessages: true,
+	}, {
+		Session: syncSession("duck-velocity-second", "beta", "second", "2026-01-22T00:00:00.000Z", 2),
+		Messages: []db.Message{
+			syncMessage("duck-velocity-second", 0, "user", "second user", "2026-01-22T00:00:00.000Z"),
+			syncMessage("duck-velocity-second", 1, "assistant", "second response", "2026-01-22T00:00:30.000Z", call),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
 
@@ -1614,8 +1622,9 @@ func TestAnalyticsVelocityUsesMessageCyclesAndBreakdowns(t *testing.T) {
 	store := NewStoreFromDB(syncer.DB())
 
 	got, err := store.GetAnalyticsVelocity(ctx, db.AnalyticsFilter{
-		From: "2026-01-01",
-		To:   "2026-01-31",
+		From:    "2026-01-01",
+		To:      "2026-01-31",
+		Project: "alpha",
 	})
 	require.NoError(t, err)
 	assert.InDelta(t, 30.0, got.Overall.TurnCycleSec.P50, 0)
@@ -1628,6 +1637,27 @@ func TestAnalyticsVelocityUsesMessageCyclesAndBreakdowns(t *testing.T) {
 	assert.Equal(t, 1, got.ByAgent[0].Sessions)
 	require.Len(t, got.ByComplexity, 1)
 	assert.Equal(t, "1-15", got.ByComplexity[0].Label)
+	t.Run("captured session IDs across chunks", func(t *testing.T) {
+		ids := make([]string, 901)
+		for i := range ids {
+			ids[i] = fmt.Sprintf("absent-%d", i)
+		}
+		ids[0] = sessionID
+		ids[900] = "duck-velocity-second"
+		filter := db.AnalyticsFilter{Project: "changed-after-selection"}
+		backend := analyticsSQL{store}
+		autonomy, err := backend.Autonomy(ctx, ids, filter)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]int{"0.5-1": 1, "1-2": 1}, autonomy)
+		messages, err := backend.VelocityMessages(ctx, ids, filter, time.UTC)
+		require.NoError(t, err)
+		require.Len(t, messages, 2)
+		assert.Len(t, messages[sessionID], 4)
+		assert.Len(t, messages["duck-velocity-second"], 2)
+		tools, err := backend.VelocityToolCounts(ctx, ids, filter)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]int{sessionID: 1, "duck-velocity-second": 1}, tools)
+	})
 }
 
 func TestAnalyticsVelocitySingleMessageSessionsReturnArrays(t *testing.T) {

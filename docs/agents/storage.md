@@ -240,8 +240,9 @@ timestamp parsing, UTC padding, or output formats stay in their backend.
    two worked examples. The push returns `storage.PushResult` and reports
    progress as `storage.PushProgress`; a backend without a vector phase sets
    `Vectors.Skipped`. Route catalog reads through `readbase.NewCatalog` with
-   an adapter implementing every `readbase.CatalogBackend` method. Forward
-   common SQL to the shared builders; keep specialized SQL and typed loaders
+   an adapter implementing every `readbase.CatalogBackend` method; route
+   DuckDB- or ClickHouse-style analytics through `readbase.NewAnalytics`.
+   Forward common SQL to the shared builders; keep specialized SQL and typed loaders
    in the backend.
 1. Add the config section and its resolvers in `internal/config` the way
    `[pg]`/`[pg.NAME]` and `[clickhouse]` work: a struct, `Resolve<Name>`,

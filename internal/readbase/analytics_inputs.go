@@ -12,7 +12,7 @@ import (
 // MaxSQLVars bounds mirror ID batches below driver parameter limits.
 const MaxSQLVars = 900
 
-func AnalyticsLocalTime(ts string, loc *time.Location) (time.Time, bool) {
+func analyticsLocalTime(ts string, loc *time.Location) (time.Time, bool) {
 	t, ok := ParseAnalyticsTime(ts)
 	if !ok {
 		return time.Time{}, false
@@ -47,7 +47,7 @@ func (s *Analytics) models(ctx context.Context, ids []string) ([]string, error) 
 	}
 	models := map[string]bool{}
 	err := db.QueryChunkedSize(ids, MaxSQLVars, func(chunk []string) error {
-		query, args := AnalyticsModelsSQL(chunk)
+		query, args := analyticsModelsSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying %s analytics models: %w", s.name, err)
@@ -74,7 +74,7 @@ func (s *Analytics) filteredModels(ctx context.Context, ids []string, f db.Analy
 	}
 	unique := db.UniqueAnalyticsIDs(ids)
 	filter := f.MessageScopeFilter()
-	loc := AnalyticsLocation(f.Timezone)
+	loc := analyticsLocation(f.Timezone)
 	models := map[string]bool{}
 	emit := func(model, timestamp string) {
 		if len(filter.Models) > 0 {
@@ -87,13 +87,13 @@ func (s *Analytics) filteredModels(ctx context.Context, ids []string, f db.Analy
 		}
 	}
 	err := db.QueryChunkedSize(unique, MaxSQLVars, func(chunk []string) error {
-		query, args := AnalyticsModelTimesSQL(chunk)
+		query, args := analyticsModelTimesSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying %s filtered analytics models: %w", s.name, err)
 		}
 		defer rows.Close()
-		return ScanAnalyticsModelTimes(rows, s.name, s.backend.FormatTime, emit)
+		return scanAnalyticsModelTimes(rows, s.name, s.backend.FormatTime, emit)
 	})
 	if err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func (s *Analytics) filteredToolCounts(ctx context.Context, ids []string, f db.A
 		return counts, nil
 	}
 	filter := f.MessageScopeFilter()
-	loc := AnalyticsLocation(f.Timezone)
+	loc := analyticsLocation(f.Timezone)
 	emit := func(id, model, timestamp string, count int) {
 		if _, ok := filter.Models[model]; !ok {
 			return
@@ -123,7 +123,7 @@ func (s *Analytics) filteredToolCounts(ctx context.Context, ids []string, f db.A
 			return fmt.Errorf("querying %s filtered analytics tool calls: %w", s.name, err)
 		}
 		defer rows.Close()
-		return ScanAnalyticsToolCounts(rows, s.name, s.backend.FormatTime, emit)
+		return scanAnalyticsToolCounts(rows, s.name, s.backend.FormatTime, emit)
 	})
 	if err != nil {
 		return nil, err
@@ -179,11 +179,11 @@ func (s *Analytics) signalMessages(ctx context.Context, rows []db.SignalRow, f d
 }
 
 func (s *Analytics) visitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error {
-	query, args := AnalyticsSignalMessagesSQL(ids)
+	query, args := analyticsSignalMessagesSQL(ids)
 	rows, err := s.backend.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying %s signal messages: %w", s.name, err)
 	}
 	defer rows.Close()
-	return ScanAnalyticsSignalMessages(rows, s.name, s.backend.FormatTime, emit)
+	return scanAnalyticsSignalMessages(rows, s.name, s.backend.FormatTime, emit)
 }

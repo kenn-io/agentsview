@@ -56,7 +56,7 @@ func AnalyticsActivityAgentsSQL(where string, args []any, localDate string, loca
 		ORDER BY bucket, fs.agent`, queryArgs
 }
 
-func AnalyticsModelsSQL(ids []string) (string, []any) {
+func analyticsModelsSQL(ids []string) (string, []any) {
 	ph, args := db.InPlaceholders(ids)
 	return `
 			SELECT DISTINCT model
@@ -66,7 +66,7 @@ func AnalyticsModelsSQL(ids []string) (string, []any) {
 			ORDER BY model`, args
 }
 
-func AnalyticsModelTimesSQL(ids []string) (string, []any) {
+func analyticsModelTimesSQL(ids []string) (string, []any) {
 	ph, args := db.InPlaceholders(ids)
 	return `
 			SELECT model, timestamp
@@ -75,7 +75,7 @@ func AnalyticsModelTimesSQL(ids []string) (string, []any) {
 				AND COALESCE(model, '') <> ''`, args
 }
 
-func AnalyticsSignalMessagesSQL(ids []string) (string, []any) {
+func analyticsSignalMessagesSQL(ids []string) (string, []any) {
 	ph, args := db.InPlaceholders(ids)
 	return `SELECT session_id, ordinal, role, content,
 			timestamp, is_system, has_tool_use, COALESCE(source_subtype, '')
@@ -135,7 +135,7 @@ func AnalyticsMessageWindowPred(col, from, to, timestampParam string) (string, [
 	return "(" + col + " IS NULL OR (" + strings.Join(preds, " AND ") + "))", args
 }
 
-func AnalyticsCandidateMessagesSQL(ph string, includeContent bool) string {
+func analyticsCandidateMessagesSQL(ph string, includeContent bool) string {
 	contentExpr := "''"
 	if includeContent {
 		contentExpr = "COALESCE(content, '')"
