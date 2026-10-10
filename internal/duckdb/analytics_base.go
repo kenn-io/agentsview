@@ -105,7 +105,7 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 	bucketExpr := duckAnalyticsBucketExpr("local_date", granularity)
 	queryArgs := append([]any{}, localDateArgs...)
 	queryArgs = append(queryArgs, args...)
-	if _, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model); len(modelArgs) > 0 {
+	if _, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect()); len(modelArgs) > 0 {
 		queryArgs = append(queryArgs, modelArgs...)
 		queryArgs = append(queryArgs, modelArgs...)
 	}
@@ -130,7 +130,7 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 				COUNT(*) FILTER (WHERE m.has_thinking = TRUE) AS thinking_messages
 			FROM filtered_sessions fs
 			JOIN messages m ON m.session_id = fs.id
-			` + duckAnalyticsMessageFilterClause("m.model", f.Model) + `
+			` + readbase.AnalyticsMessageFilterClause("m.model", f.Model, db.DuckDBQueryDialect()) + `
 			GROUP BY bucket
 		),
 		tool_rows AS (
@@ -138,7 +138,7 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 			FROM filtered_sessions fs
 			JOIN tool_calls tc ON tc.session_id = fs.id
 			` + duckAnalyticsToolMessageJoin("tc", f.Model) + `
-			` + duckAnalyticsMessageFilterClause("m.model", f.Model) + `
+			` + readbase.AnalyticsMessageFilterClause("m.model", f.Model, db.DuckDBQueryDialect()) + `
 			GROUP BY bucket
 		)
 		SELECT COALESCE(sr.bucket, mr.bucket, tr.bucket) AS bucket,
@@ -162,8 +162,8 @@ func (s analyticsSQL) ActivityAgentsSQL(f db.AnalyticsFilter, granularity string
 	localDate, localDateArgs := duckAnalyticsLocalDateExpr(
 		"COALESCE(s.started_at, s.created_at)", f)
 	bucketExpr := duckAnalyticsBucketExpr("local_date", granularity)
-	_, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
-	return readbase.AnalyticsActivityAgentsSQL(where, args, localDate, localDateArgs, bucketExpr, duckAnalyticsMessageFilterClause("m.model", f.Model), modelArgs, db.DuckDBQueryDialect())
+	_, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect())
+	return readbase.AnalyticsActivityAgentsSQL(where, args, localDate, localDateArgs, bucketExpr, readbase.AnalyticsMessageFilterClause("m.model", f.Model, db.DuckDBQueryDialect()), modelArgs, db.DuckDBQueryDialect())
 }
 
 func (s analyticsSQL) HeatmapSQL(f db.AnalyticsFilter, metric string) (string, []any) {
@@ -209,7 +209,7 @@ func (s analyticsSQL) HourOfWeekSQL(f db.AnalyticsFilter) (string, []any) {
 func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, category, name, timestamp string, count int)) error {
 	err := db.QueryChunkedSize(ids, readbase.AnalyticsMaxSQLVars, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
-		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
+		modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect())
 		args = append(args, modelArgs...)
 		from, to := readbase.AnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
@@ -226,7 +226,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 			query += `
 				AND ` + modelPred
 		}
-		query += duckAnalyticsAndClause(windowPred)
+		query += readbase.AnalyticsAndClause(windowPred)
 		query += `
 				GROUP BY tc.session_id, tc.category,
 					TRIM(COALESCE(tc.tool_name, '')), date_trunc('minute', m.timestamp)`
@@ -247,7 +247,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error {
 	err := db.QueryChunkedSize(ids, readbase.AnalyticsMaxSQLVars, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
-		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
+		modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect())
 		args = append(args, modelArgs...)
 		from, to := readbase.AnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
@@ -261,7 +261,7 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 					AND m.id = tc.message_id
 				WHERE tc.session_id IN `+ph+`
 					AND TRIM(COALESCE(tc.skill_name, '')) != ''
-					`+duckAnalyticsAndClause(modelPred)+duckAnalyticsAndClause(windowPred)+`
+					`+readbase.AnalyticsAndClause(modelPred)+readbase.AnalyticsAndClause(windowPred)+`
 				GROUP BY tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
 					date_trunc('minute', m.timestamp)`, args...)
 		if qErr != nil {
@@ -349,10 +349,6 @@ func (s analyticsSQL) TrendsSQL() string {
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
-
-func (s analyticsSQL) MessageScope(ctx context.Context, ids []string, f db.AnalyticsFilter, includeContent bool) (db.MessageScope, error) {
-	return s.store.resolveAnalyticsMessageScope(ctx, ids, f, includeContent)
-}
 
 func (s analyticsSQL) PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []readbase.AnalyticsSession) error {
 	return s.store.duckPopulateFrustrationMarkers(ctx, rows)

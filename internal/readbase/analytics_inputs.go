@@ -47,7 +47,7 @@ func (s *Analytics) models(ctx context.Context, ids []string) ([]string, error) 
 	}
 	models := map[string]bool{}
 	err := db.QueryChunkedSize(ids, AnalyticsMaxSQLVars, func(chunk []string) error {
-		query, args := s.backend.ModelsSQL(chunk)
+		query, args := AnalyticsModelsSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying %s analytics models: %w", s.name, err)
@@ -87,7 +87,7 @@ func (s *Analytics) filteredModels(ctx context.Context, ids []string, f db.Analy
 		}
 	}
 	err := db.QueryChunkedSize(unique, AnalyticsMaxSQLVars, func(chunk []string) error {
-		query, args := s.backend.ModelTimesSQL(chunk)
+		query, args := AnalyticsModelTimesSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying %s filtered analytics models: %w", s.name, err)
@@ -149,7 +149,7 @@ func (s *Analytics) signalMessages(ctx context.Context, rows []db.SignalRow, f d
 		ids = append(ids, row.ID)
 	}
 	if strings.TrimSpace(f.Model) != "" {
-		scope, err := s.backend.MessageScope(ctx, ids, f, true)
+		scope, err := s.ResolveMessageScope(ctx, ids, f, true)
 		if err != nil {
 			return nil, err
 		}
@@ -179,7 +179,7 @@ func (s *Analytics) signalMessages(ctx context.Context, rows []db.SignalRow, f d
 }
 
 func (s *Analytics) VisitSignalMessages(ctx context.Context, ids []string, emit func(db.SignalMessage)) error {
-	query, args := s.backend.SignalMessagesSQL(ids)
+	query, args := AnalyticsSignalMessagesSQL(ids)
 	rows, err := s.backend.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying %s signal messages: %w", s.name, err)

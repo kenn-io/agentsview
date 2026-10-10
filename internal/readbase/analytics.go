@@ -33,15 +33,10 @@ type AnalyticsBackend interface {
 	ScanTopSession(*sql.Rows) (db.TopSession, error)
 	TrendsSQL() string
 	FormatTime(any) string
-	MessageScope(ctx context.Context, ids []string, f db.AnalyticsFilter, includeContent bool) (db.MessageScope, error)
-	ModelsSQL(ids []string) (string, []any)
-	ModelTimesSQL(ids []string) (string, []any)
-	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
-	VelocityMessages(ctx context.Context, ids []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error)
-	VelocityToolCounts(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
+	Autonomy(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error)
+	VelocityMessages(ctx context.Context, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error)
+	VelocityToolCounts(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error)
 	ToolCountsSQL(ids []string) (string, []any)
-	SignalMessagesSQL(ids []string) (string, []any)
-	CandidateMessagesSQL(ids []string, includeContent bool) (string, []any)
 	// Session metadata supplies ClickHouse cache versions; DuckDB uses only rows.
 	PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []AnalyticsSession) error
 }
@@ -106,7 +101,7 @@ func (s *Analytics) analyticsSessionsModelTimeFiltered(
 	for _, session := range sessions {
 		candidateIDs = append(candidateIDs, session.ID)
 	}
-	scope, err := s.backend.MessageScope(ctx, candidateIDs, f, false)
+	scope, err := s.ResolveMessageScope(ctx, candidateIDs, f, false)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +119,7 @@ func (s *Analytics) getAnalyticsFilteredMessageStats(
 	sessionIDs []string,
 	f db.AnalyticsFilter,
 ) (map[string]db.MessageStats, error) {
-	scope, err := s.backend.MessageScope(ctx, sessionIDs, f, false)
+	scope, err := s.ResolveMessageScope(ctx, sessionIDs, f, false)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +405,7 @@ func (s *Analytics) getAnalyticsHourOfWeekFilteredByModel(
 	scopeFilter := f
 	scopeFilter.DayOfWeek = nil
 	scopeFilter.Hour = nil
-	scope, err := s.backend.MessageScope(
+	scope, err := s.ResolveMessageScope(
 		ctx, sessionIDs, scopeFilter, false,
 	)
 	if err != nil {
@@ -470,7 +465,7 @@ func (s *Analytics) GetAnalyticsSessionShape(
 			}
 		}
 	} else if len(ids) > 0 {
-		autonomy, err = s.backend.Autonomy(ctx, ids, f)
+		autonomy, err = s.backend.Autonomy(ctx, f)
 		if err != nil {
 			return db.SessionShapeResponse{}, err
 		}
@@ -557,7 +552,7 @@ func (s *Analytics) GetAnalyticsSummary(
 		if err := rows.Err(); err != nil {
 			return db.AnalyticsSummary{}, fmt.Errorf("iterating %s analytics summary: %w", s.name, err)
 		}
-		return db.AnalyticsSummary{}, fmt.Errorf("reading %s analytics summary: %w", s.name, sql.ErrNoRows)
+		return db.AnalyticsSummary{}, nil
 	}
 	resp, err := ScanAnalyticsSummary(rows, db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, s.name)
 	if err != nil {

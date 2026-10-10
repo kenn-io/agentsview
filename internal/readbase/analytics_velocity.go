@@ -51,7 +51,7 @@ func (s *Analytics) GetAnalyticsVelocity(
 		)
 	} else {
 		sessionMsgs, err = s.backend.VelocityMessages(
-			ctx, sessionIDs, f, AnalyticsLocation(f.Timezone),
+			ctx, f, AnalyticsLocation(f.Timezone),
 		)
 	}
 	if err != nil {
@@ -63,7 +63,7 @@ func (s *Analytics) GetAnalyticsVelocity(
 			ctx, sessionIDs, f,
 		)
 	} else {
-		toolCounts, err = s.backend.VelocityToolCounts(ctx, sessionIDs, f)
+		toolCounts, err = s.backend.VelocityToolCounts(ctx, f)
 	}
 	if err != nil {
 		return db.VelocityResponse{}, err
@@ -82,7 +82,7 @@ func (s *Analytics) filteredVelocityMessages(
 		return out, nil
 	}
 
-	scope, err := s.backend.MessageScope(ctx, sessionIDs, f, false)
+	scope, err := s.ResolveMessageScope(ctx, sessionIDs, f, false)
 	if err != nil {
 		return nil, err
 	}

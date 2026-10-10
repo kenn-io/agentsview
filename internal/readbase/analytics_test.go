@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,6 @@ import (
 type analyticsFixtureBackend struct {
 	AnalyticsBackend
 	sessions []AnalyticsSession
-	scope    db.MessageScope
 	err      error
 	pool     *sql.DB
 }
@@ -27,13 +27,6 @@ func (b analyticsFixtureBackend) Sessions(context.Context, db.AnalyticsFilter, b
 	return slices.Clone(b.sessions), nil
 }
 
-func (b analyticsFixtureBackend) MessageScope(context.Context, []string, db.AnalyticsFilter, bool) (db.MessageScope, error) {
-	return b.scope, b.err
-}
-
-func (b analyticsFixtureBackend) ModelTimesSQL([]string) (string, []any) {
-	return "model times", nil
-}
 func (b analyticsFixtureBackend) FormatTime(value any) string { return value.(string) }
 
 func (b analyticsFixtureBackend) HeatmapSQL(db.AnalyticsFilter, string) (string, []any) {
@@ -60,10 +53,6 @@ func TestAnalyticsModelSummaryUsesScopedCounts(t *testing.T) {
 			{ID: "selected", Project: "project", Agent: "claude", StartedAt: "2026-01-05T10:00:00Z", MessageCount: 20, TotalOutputTokens: 100, HasTotalOutputTokens: true},
 			{ID: "outside-hour", MessageCount: 40},
 		},
-		scope: db.MessageScope{"selected": {
-			{Role: "user"},
-			{Role: "assistant", OutputTokens: 7, HasOutputTokens: true},
-		}},
 	}
 	analytics := NewAnalytics(backend, "fixture")
 	hour := 10
@@ -103,20 +92,33 @@ func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
 	_, err := analytics.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{})
 	require.ErrorIs(t, err, errSummaryRead)
 	assert.EqualError(t, err, "iterating fixture analytics summary: summary read failure")
+	t.Run("empty summary", func(t *testing.T) {
+		pool := sql.OpenDB(analyticsFixtureDriver{emptySummary: true})
+		t.Cleanup(func() { require.NoError(t, pool.Close()) })
+		analytics := NewAnalytics(analyticsFixtureBackend{pool: pool}, "fixture")
+		result, err := analytics.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{})
+		require.NoError(t, err)
+		assert.Equal(t, db.AnalyticsSummary{}, result)
+	})
 }
 
-type summaryErrorRows struct{}
+type summaryErrorRows struct{ empty bool }
 
-func (summaryErrorRows) Columns() []string         { return []string{"total_sessions"} }
-func (summaryErrorRows) Close() error              { return nil }
-func (summaryErrorRows) Next([]driver.Value) error { return errSummaryRead }
+func (summaryErrorRows) Columns() []string { return []string{"total_sessions"} }
+func (summaryErrorRows) Close() error      { return nil }
+func (r summaryErrorRows) Next([]driver.Value) error {
+	if r.empty {
+		return io.EOF
+	}
+	return errSummaryRead
+}
 
-type analyticsFixtureDriver struct{}
+type analyticsFixtureDriver struct{ emptySummary bool }
 
 func (analyticsFixtureDriver) Open(string) (driver.Conn, error) { return analyticsFixtureDriver{}, nil }
 
-func (analyticsFixtureDriver) Connect(context.Context) (driver.Conn, error) {
-	return analyticsFixtureDriver{}, nil
+func (d analyticsFixtureDriver) Connect(context.Context) (driver.Conn, error) {
+	return d, nil
 }
 func (analyticsFixtureDriver) Driver() driver.Driver { return analyticsFixtureDriver{} }
 func (analyticsFixtureDriver) Prepare(string) (driver.Stmt, error) {
@@ -127,12 +129,15 @@ func (analyticsFixtureDriver) Begin() (driver.Tx, error) {
 	return nil, errors.New("unexpected transaction")
 }
 func (analyticsFixtureDriver) Close() error { return nil }
-func (analyticsFixtureDriver) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+func (d analyticsFixtureDriver) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	if query == "summary" {
-		return summaryErrorRows{}, nil
+		return summaryErrorRows{empty: d.emptySummary}, nil
 	}
-	if query == "model times" {
+	if strings.Contains(query, "SELECT model, timestamp") {
 		return &modelTimesRows{}, nil
+	}
+	if strings.Contains(query, "has_thinking, has_tool_use, timestamp,") {
+		return &candidateMessageRows{}, nil
 	}
 	return &topSessionsRows{}, nil
 }
@@ -179,5 +184,25 @@ func (r *modelTimesRows) Next(values []driver.Value) error {
 	}
 	r.done = true
 	values[0], values[1] = "selected", "2026-01-05T10:00:00Z"
+	return nil
+}
+
+type candidateMessageRows struct{ index int }
+
+func (*candidateMessageRows) Columns() []string {
+	return []string{"session_id", "ordinal", "role", "source_subtype", "is_system", "model", "has_thinking", "has_tool_use", "timestamp", "output_tokens", "has_output_tokens", "content_length", "content"}
+}
+func (*candidateMessageRows) Close() error { return nil }
+func (r *candidateMessageRows) Next(values []driver.Value) error {
+	rows := [][]driver.Value{
+		{"selected", int64(0), "user", "", false, "", false, false, "2026-01-05T10:00:00Z", int64(0), false, int64(0), ""},
+		{"selected", int64(1), "assistant", "", false, "selected", false, false, "2026-01-05T10:00:00Z", int64(7), true, int64(0), ""},
+		{"outside-hour", int64(0), "assistant", "", false, "selected", false, false, "2026-01-05T11:00:00Z", int64(90), true, int64(0), ""},
+	}
+	if r.index == len(rows) {
+		return io.EOF
+	}
+	copy(values, rows[r.index])
+	r.index++
 	return nil
 }

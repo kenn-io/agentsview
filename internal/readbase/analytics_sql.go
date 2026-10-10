@@ -162,3 +162,38 @@ func AnalyticsTrendsSQL(systemPrefix string, dialect db.QueryDialect) string {
 			AND ` + systemPrefix + `
 		ORDER BY m.session_id, m.ordinal`
 }
+
+const AnalyticsSessionColumns = `id, project, machine, agent, first_message,
+			COALESCE(display_name, session_name) AS display_name,
+			started_at, ended_at, created_at, message_count,
+			user_message_count, total_output_tokens,
+			has_total_output_tokens, is_automated,
+			termination_status, health_score, health_grade, outcome,
+			outcome_confidence, tool_failure_signal_count,
+			tool_retry_count, edit_churn_count, compaction_count,
+			mid_task_compaction_count, context_pressure_max,
+			quality_signal_version, short_prompt_count,
+			unstructured_start, missing_success_criteria_count,
+			missing_verification_count, duplicate_prompt_count,
+			no_code_context_count, runaway_tool_loop_count`
+
+func AnalyticsCSVPredicate(col, raw string, dialect db.QueryDialect) (string, []any) {
+	b := db.NewQueryBuilder(dialect, 0)
+	pred := b.ValuesPredicate(col, db.CSVFilterValues(raw), true)
+	return pred, b.Args()
+}
+
+func AnalyticsMessageFilterClause(col, raw string, dialect db.QueryDialect) string {
+	pred, _ := AnalyticsCSVPredicate(col, raw, dialect)
+	if pred == "" {
+		return ""
+	}
+	return "WHERE " + pred
+}
+
+func AnalyticsAndClause(pred string) string {
+	if pred == "" {
+		return ""
+	}
+	return " AND " + pred
+}

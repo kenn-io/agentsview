@@ -62,19 +62,7 @@ func (s *Store) loadAnalyticsSessions(
 
 func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []any) ([]readbase.AnalyticsSession, error) {
 	rows, err := s.queryContext(ctx, `
-		SELECT id, project, machine, agent, first_message,
-			COALESCE(display_name, session_name) AS display_name,
-			started_at, ended_at, created_at, message_count,
-			user_message_count, total_output_tokens,
-			has_total_output_tokens, is_automated,
-			termination_status, health_score, health_grade, outcome,
-			outcome_confidence, tool_failure_signal_count,
-			tool_retry_count, edit_churn_count, compaction_count,
-			mid_task_compaction_count, context_pressure_max,
-			quality_signal_version, short_prompt_count,
-			unstructured_start, missing_success_criteria_count,
-			missing_verification_count, duplicate_prompt_count,
-			no_code_context_count, runaway_tool_loop_count, push_version
+		SELECT `+readbase.AnalyticsSessionColumns+`, push_version
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -82,37 +70,7 @@ func (s *Store) readAnalyticsSessions(ctx context.Context, where string, args []
 	}
 	defer rows.Close()
 
-	var out []readbase.AnalyticsSession
-	for rows.Next() {
-		var r readbase.AnalyticsSession
-		var startedAt, endedAt, createdAt any
-		if err := rows.Scan(
-			&r.ID, &r.Project, &r.Machine, &r.Agent,
-			&r.FirstMessage, &r.DisplayName,
-			&startedAt, &endedAt, &createdAt,
-			&r.MessageCount, &r.UserMessageCount,
-			&r.TotalOutputTokens, &r.HasTotalOutputTokens,
-			&r.IsAutomated, &r.TerminationStatus,
-			&r.HealthScore, &r.HealthGrade, &r.Outcome,
-			&r.OutcomeConfidence, &r.ToolFailures, &r.ToolRetries,
-			&r.EditChurn, &r.Compactions, &r.MidTaskCompactions,
-			&r.ContextPressureMax, &r.QualitySignalVersion,
-			&r.ShortPromptCount, &r.UnstructuredStart,
-			&r.MissingSuccessCriteriaCount, &r.MissingVerificationCount,
-			&r.DuplicatePromptCount, &r.NoCodeContextCount,
-			&r.RunawayToolLoopCount, &r.PushVersion,
-		); err != nil {
-			return nil, fmt.Errorf("scanning clickhouse analytics session: %w", err)
-		}
-		r.StartedAt = formatDBTime(startedAt)
-		r.EndedAt = formatDBTime(endedAt)
-		r.CreatedAt = formatDBTime(createdAt)
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return readbase.ScanAnalyticsSessions(rows, "clickhouse", formatDBTime, true)
 }
 
 // analyticsSessionMemoKey names a session listing by predicate and
@@ -135,12 +93,6 @@ func chBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, in
 		args = append(args, pargs...)
 	}
 	return where, args
-}
-
-func chAnalyticsCSVPredicate(col, raw string) (string, []any) {
-	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
-	pred := b.ValuesPredicate(col, db.CSVFilterValues(raw), true)
-	return pred, b.Args()
 }
 
 func chAnalyticsLocalDateExpr(
@@ -175,7 +127,7 @@ func chAnalyticsMessageTimeExists(
 		"m.timestamp IS NOT NULL",
 	}
 	var args []any
-	if modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model); modelPred != "" {
+	if modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect()); modelPred != "" {
 		preds = append(preds, modelPred)
 		args = append(args, modelArgs...)
 	}
@@ -191,14 +143,6 @@ func chAnalyticsMessageTimeExists(
 	}
 	return sessionIDExpr + " IN (SELECT m.session_id FROM messages m WHERE " +
 		strings.Join(preds, " AND ") + ")", args
-}
-
-func (s analyticsSQL) ModelsSQL(ids []string) (string, []any) {
-	return readbase.AnalyticsModelsSQL(ids)
-}
-
-func (s analyticsSQL) ModelTimesSQL(ids []string) (string, []any) {
-	return readbase.AnalyticsModelTimesSQL(ids)
 }
 
 func (s analyticsSQL) ToolCountsSQL(ids []string) (string, []any) {
@@ -226,21 +170,6 @@ func chAnalyticsBucketExpr(dateExpr, granularity string) string {
 	}
 }
 
-func chAnalyticsMessageFilterClause(col, raw string) string {
-	pred, _ := chAnalyticsCSVPredicate(col, raw)
-	if pred == "" {
-		return ""
-	}
-	return "WHERE " + pred
-}
-
-func chAnalyticsAndClause(pred string) string {
-	if pred == "" {
-		return ""
-	}
-	return " AND " + pred
-}
-
 func chAnalyticsToolMessageJoin(
 	toolAlias string, model string,
 ) string {
@@ -253,7 +182,7 @@ func chAnalyticsToolMessageJoin(
 				AND m.ordinal = ` + toolAlias + `.message_ordinal`
 }
 
-func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
+func (s analyticsSQL) Autonomy(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error) {
 	sessions := chAnalyticsSessionSet(f)
 
 	sessionIn, args := sessions.in("session_id")
@@ -340,7 +269,7 @@ func analyticsSessionIDsContext(ctx context.Context, ids []string) (context.Cont
 	return chdriver.Context(ctx, chdriver.WithExternalTable(table)), "(SELECT id FROM analytics_session_ids)", nil
 }
 
-func (s analyticsSQL) VelocityMessages(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
+func (s analyticsSQL) VelocityMessages(ctx context.Context, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
 	sessions := chAnalyticsSessionSet(f)
 
 	out := make(map[string][]db.TimingMessage)
@@ -359,7 +288,7 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, sessionIDs []string,
 	return readbase.ScanAnalyticsVelocityMessages(rows, "clickhouse", formatDBTime, loc, out)
 }
 
-func (s analyticsSQL) VelocityToolCounts(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
+func (s analyticsSQL) VelocityToolCounts(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error) {
 	sessions := chAnalyticsSessionSet(f)
 
 	out := make(map[string]int)
@@ -487,15 +416,6 @@ func (s *Store) chPopulateFrustrationMarkers(
 		}
 	}
 	return nil
-}
-
-func (s analyticsSQL) SignalMessagesSQL(ids []string) (string, []any) {
-	return readbase.AnalyticsSignalMessagesSQL(ids)
-}
-
-func (s analyticsSQL) CandidateMessagesSQL(ids []string, includeContent bool) (string, []any) {
-	ph, args := db.InPlaceholders(ids)
-	return readbase.AnalyticsCandidateMessagesSQL(ph, includeContent), args
 }
 
 func chAnalyticsMessageWindowPred(col, from, to string) (string, []any) {

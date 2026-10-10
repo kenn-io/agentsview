@@ -33,19 +33,7 @@ func (s *Store) loadAnalyticsSessions(
 		args = append(args, extraArgs...)
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT id, project, machine, agent, first_message,
-			COALESCE(display_name, session_name) AS display_name,
-			started_at, ended_at, created_at, message_count,
-			user_message_count, total_output_tokens,
-			has_total_output_tokens, is_automated,
-			termination_status, health_score, health_grade, outcome,
-			outcome_confidence, tool_failure_signal_count,
-			tool_retry_count, edit_churn_count, compaction_count,
-			mid_task_compaction_count, context_pressure_max,
-			quality_signal_version, short_prompt_count,
-			unstructured_start, missing_success_criteria_count,
-			missing_verification_count, duplicate_prompt_count,
-			no_code_context_count, runaway_tool_loop_count
+		SELECT `+readbase.AnalyticsSessionColumns+`
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -53,34 +41,7 @@ func (s *Store) loadAnalyticsSessions(
 	}
 	defer rows.Close()
 
-	var out []readbase.AnalyticsSession
-	for rows.Next() {
-		var r readbase.AnalyticsSession
-		var startedAt, endedAt, createdAt any
-		if err := rows.Scan(
-			&r.ID, &r.Project, &r.Machine, &r.Agent,
-			&r.FirstMessage, &r.DisplayName,
-			&startedAt, &endedAt, &createdAt,
-			&r.MessageCount, &r.UserMessageCount,
-			&r.TotalOutputTokens, &r.HasTotalOutputTokens,
-			&r.IsAutomated, &r.TerminationStatus,
-			&r.HealthScore, &r.HealthGrade, &r.Outcome,
-			&r.OutcomeConfidence, &r.ToolFailures, &r.ToolRetries,
-			&r.EditChurn, &r.Compactions, &r.MidTaskCompactions,
-			&r.ContextPressureMax, &r.QualitySignalVersion,
-			&r.ShortPromptCount, &r.UnstructuredStart,
-			&r.MissingSuccessCriteriaCount, &r.MissingVerificationCount,
-			&r.DuplicatePromptCount, &r.NoCodeContextCount,
-			&r.RunawayToolLoopCount,
-		); err != nil {
-			return nil, fmt.Errorf("scanning duckdb analytics session: %w", err)
-		}
-		r.StartedAt = formatDBTime(startedAt)
-		r.EndedAt = formatDBTime(endedAt)
-		r.CreatedAt = formatDBTime(createdAt)
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, false)
 }
 
 func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -96,12 +57,6 @@ func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, 
 		args = append(args, pargs...)
 	}
 	return where, args
-}
-
-func duckAnalyticsCSVPredicate(col, raw string) (string, []any) {
-	b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
-	pred := b.ValuesPredicate(col, db.CSVFilterValues(raw), true)
-	return pred, b.Args()
 }
 
 func duckAnalyticsLocalDateExpr(
@@ -131,7 +86,7 @@ func duckAnalyticsMessageTimeExists(
 		"m.timestamp IS NOT NULL",
 	}
 	var args []any
-	if modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model); modelPred != "" {
+	if modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect()); modelPred != "" {
 		preds = append(preds, modelPred)
 		args = append(args, modelArgs...)
 	}
@@ -149,14 +104,6 @@ func duckAnalyticsMessageTimeExists(
 	}
 	return "EXISTS (SELECT 1 FROM messages m WHERE " +
 		strings.Join(preds, " AND ") + ")", args
-}
-
-func (s analyticsSQL) ModelsSQL(ids []string) (string, []any) {
-	return readbase.AnalyticsModelsSQL(ids)
-}
-
-func (s analyticsSQL) ModelTimesSQL(ids []string) (string, []any) {
-	return readbase.AnalyticsModelTimesSQL(ids)
 }
 
 func (s analyticsSQL) ToolCountsSQL(ids []string) (string, []any) {
@@ -182,21 +129,6 @@ func duckAnalyticsBucketExpr(dateExpr, granularity string) string {
 	}
 }
 
-func duckAnalyticsMessageFilterClause(col, raw string) string {
-	pred, _ := duckAnalyticsCSVPredicate(col, raw)
-	if pred == "" {
-		return ""
-	}
-	return "WHERE " + pred
-}
-
-func duckAnalyticsAndClause(pred string) string {
-	if pred == "" {
-		return ""
-	}
-	return " AND " + pred
-}
-
 func duckAnalyticsToolMessageJoin(
 	toolAlias string, model string,
 ) string {
@@ -209,11 +141,13 @@ func duckAnalyticsToolMessageJoin(
 				AND m.id = ` + toolAlias + `.message_id`
 }
 
-func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
-	if len(sessionIDs) == 0 {
-		return map[string]int{}, nil
-	}
-	ph, args := db.InPlaceholders(sessionIDs)
+func duckAnalyticsSessionSet(f db.AnalyticsFilter) (string, []any) {
+	where, args := duckBuildAnalyticsWhere(f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
+	return "(SELECT s.id FROM sessions s WHERE " + where + ")", args
+}
+
+func (s analyticsSQL) Autonomy(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error) {
+	ph, args := duckAnalyticsSessionSet(f)
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id,
 			SUM(CASE WHEN role = 'user' AND is_system = FALSE
@@ -231,12 +165,9 @@ func (s analyticsSQL) Autonomy(ctx context.Context, sessionIDs []string, f db.An
 	return readbase.ScanAnalyticsAutonomy(rows, "duckdb")
 }
 
-func (s analyticsSQL) VelocityMessages(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
-	out := make(map[string][]db.TimingMessage, len(sessionIDs))
-	if len(sessionIDs) == 0 {
-		return out, nil
-	}
-	ph, args := db.InPlaceholders(sessionIDs)
+func (s analyticsSQL) VelocityMessages(ctx context.Context, f db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
+	out := make(map[string][]db.TimingMessage)
+	ph, args := duckAnalyticsSessionSet(f)
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
@@ -251,12 +182,9 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, sessionIDs []string,
 	return readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
 }
 
-func (s analyticsSQL) VelocityToolCounts(ctx context.Context, sessionIDs []string, f db.AnalyticsFilter) (map[string]int, error) {
-	out := make(map[string]int, len(sessionIDs))
-	if len(sessionIDs) == 0 {
-		return out, nil
-	}
-	ph, args := db.InPlaceholders(sessionIDs)
+func (s analyticsSQL) VelocityToolCounts(ctx context.Context, f db.AnalyticsFilter) (map[string]int, error) {
+	out := make(map[string]int)
+	ph, args := duckAnalyticsSessionSet(f)
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, COUNT(*)
 		FROM tool_calls
@@ -315,15 +243,6 @@ func (s *Store) duckPopulateFrustrationMarkers(
 		return fmt.Errorf("iterating duckdb frustration markers: %w", err)
 	}
 	return nil
-}
-
-func (s analyticsSQL) SignalMessagesSQL(ids []string) (string, []any) {
-	return readbase.AnalyticsSignalMessagesSQL(ids)
-}
-
-func (s analyticsSQL) CandidateMessagesSQL(ids []string, includeContent bool) (string, []any) {
-	ph, args := db.InPlaceholders(ids)
-	return readbase.AnalyticsCandidateMessagesSQL(ph, includeContent), args
 }
 
 func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, error) {

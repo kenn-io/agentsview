@@ -30,7 +30,8 @@ func (s *Analytics) ResolveMessageScope(
 
 	if err := db.QueryChunkedSize(unique, AnalyticsMaxSQLVars, func(chunk []string) error {
 		reducer := db.NewScopeReducer(flt, emit)
-		query, args := s.backend.CandidateMessagesSQL(chunk, includeContent)
+		ph, args := db.InPlaceholders(chunk)
+		query := AnalyticsCandidateMessagesSQL(ph, includeContent)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying %s analytics candidate messages: %w", s.name, err)

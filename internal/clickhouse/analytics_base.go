@@ -103,7 +103,7 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 	bucketExpr := chAnalyticsBucketExpr("local_date", granularity)
 	queryArgs := append([]any{}, localDateArgs...)
 	queryArgs = append(queryArgs, args...)
-	if _, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model); len(modelArgs) > 0 {
+	if _, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect()); len(modelArgs) > 0 {
 		queryArgs = append(queryArgs, modelArgs...)
 		queryArgs = append(queryArgs, modelArgs...)
 	}
@@ -128,7 +128,7 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 				toInt64(countIf(m.has_thinking = true)) AS thinking_messages
 			FROM filtered_sessions fs
 			JOIN messages m ON m.session_id = fs.id
-			` + chAnalyticsMessageFilterClause("m.model", f.Model) + `
+			` + readbase.AnalyticsMessageFilterClause("m.model", f.Model, db.ClickHouseQueryDialect()) + `
 			GROUP BY bucket
 		),
 		tool_rows AS (
@@ -136,7 +136,7 @@ func (s analyticsSQL) ActivityBucketsSQL(f db.AnalyticsFilter, granularity strin
 			FROM filtered_sessions fs
 			JOIN tool_calls tc ON tc.session_id = fs.id
 			` + chAnalyticsToolMessageJoin("tc", f.Model) + `
-			` + chAnalyticsMessageFilterClause("m.model", f.Model) + `
+			` + readbase.AnalyticsMessageFilterClause("m.model", f.Model, db.ClickHouseQueryDialect()) + `
 			GROUP BY bucket
 		)
 		SELECT bucket,
@@ -173,8 +173,8 @@ func (s analyticsSQL) ActivityAgentsSQL(f db.AnalyticsFilter, granularity string
 	localDate, localDateArgs := chAnalyticsLocalDateExpr(
 		"COALESCE(s.started_at, s.created_at)", f)
 	bucketExpr := chAnalyticsBucketExpr("local_date", granularity)
-	_, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
-	return readbase.AnalyticsActivityAgentsSQL(where, args, localDate, localDateArgs, bucketExpr, chAnalyticsMessageFilterClause("m.model", f.Model), modelArgs, db.ClickHouseQueryDialect())
+	_, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect())
+	return readbase.AnalyticsActivityAgentsSQL(where, args, localDate, localDateArgs, bucketExpr, readbase.AnalyticsMessageFilterClause("m.model", f.Model, db.ClickHouseQueryDialect()), modelArgs, db.ClickHouseQueryDialect())
 }
 
 func (s analyticsSQL) HeatmapSQL(f db.AnalyticsFilter, metric string) (string, []any) {
@@ -219,7 +219,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 	if err != nil {
 		return err
 	}
-	modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
+	modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect())
 	from, to := readbase.AnalyticsWindowBounds(f)
 	windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
 	args := slices.Concat(modelArgs, windowArgs)
@@ -235,7 +235,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		query += `
 			AND ` + modelPred
 	}
-	query += chAnalyticsAndClause(windowPred)
+	query += readbase.AnalyticsAndClause(windowPred)
 	query += `
 			GROUP BY tc.session_id, tc.category,
 				trim(COALESCE(tc.tool_name, '')), toStartOfMinute(m.timestamp)`
@@ -252,7 +252,7 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 	if err != nil {
 		return err
 	}
-	modelPred, modelArgs := chAnalyticsCSVPredicate("m.model", f.Model)
+	modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.ClickHouseQueryDialect())
 	from, to := readbase.AnalyticsWindowBounds(f)
 	windowPred, windowArgs := chAnalyticsMessageWindowPred("m.timestamp", from, to)
 	args := slices.Concat(modelArgs, windowArgs)
@@ -265,7 +265,7 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 				AND m.ordinal = tc.message_ordinal
 			WHERE tc.session_id IN `+ph+`
 				AND trim(COALESCE(tc.skill_name, '')) != ''
-				`+chAnalyticsAndClause(modelPred)+chAnalyticsAndClause(windowPred)+`
+				`+readbase.AnalyticsAndClause(modelPred)+readbase.AnalyticsAndClause(windowPred)+`
 			GROUP BY tc.session_id, trim(COALESCE(tc.skill_name, '')),
 				toStartOfMinute(m.timestamp)`, args...)
 	if qErr != nil {
@@ -351,10 +351,6 @@ func (s analyticsSQL) TrendsSQL() string {
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
-
-func (s analyticsSQL) MessageScope(ctx context.Context, ids []string, f db.AnalyticsFilter, includeContent bool) (db.MessageScope, error) {
-	return s.store.resolveAnalyticsMessageScope(ctx, ids, f, includeContent)
-}
 
 func (s analyticsSQL) PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []readbase.AnalyticsSession) error {
 	return s.store.chPopulateFrustrationMarkers(ctx, rows, chSessionPushVersions(sessions))

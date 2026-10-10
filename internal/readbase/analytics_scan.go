@@ -171,3 +171,38 @@ func ScanAnalyticsMessageScope(rows *sql.Rows, backend string, formatTime func(a
 	}
 	return nil
 }
+
+func ScanAnalyticsSessions(rows *sql.Rows, backend string, formatTime func(any) string, pushVersion bool) ([]AnalyticsSession, error) {
+	var out []AnalyticsSession
+	for rows.Next() {
+		var r AnalyticsSession
+		var startedAt, endedAt, createdAt any
+		dest := []any{
+			&r.ID, &r.Project, &r.Machine, &r.Agent,
+			&r.FirstMessage, &r.DisplayName,
+			&startedAt, &endedAt, &createdAt,
+			&r.MessageCount, &r.UserMessageCount,
+			&r.TotalOutputTokens, &r.HasTotalOutputTokens,
+			&r.IsAutomated, &r.TerminationStatus,
+			&r.HealthScore, &r.HealthGrade, &r.Outcome,
+			&r.OutcomeConfidence, &r.ToolFailures, &r.ToolRetries,
+			&r.EditChurn, &r.Compactions, &r.MidTaskCompactions,
+			&r.ContextPressureMax, &r.QualitySignalVersion,
+			&r.ShortPromptCount, &r.UnstructuredStart,
+			&r.MissingSuccessCriteriaCount, &r.MissingVerificationCount,
+			&r.DuplicatePromptCount, &r.NoCodeContextCount,
+			&r.RunawayToolLoopCount,
+		}
+		if pushVersion {
+			dest = append(dest, &r.PushVersion)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, fmt.Errorf("scanning %s analytics session: %w", backend, err)
+		}
+		r.StartedAt = formatTime(startedAt)
+		r.EndedAt = formatTime(endedAt)
+		r.CreatedAt = formatTime(createdAt)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

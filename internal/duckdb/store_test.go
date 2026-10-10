@@ -924,6 +924,23 @@ func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	assert.Equal(t, 2, shape.Count)
 	assert.Equal(t, 1, distributionCount(shape.AutonomyDistribution, "1-2"))
 	assert.Equal(t, 1, distributionCount(shape.AutonomyDistribution, "<0.5"))
+	for _, tc := range []struct {
+		project string
+		bucket  string
+	}{
+		{"alpha", "1-2"},
+		{"beta", "<0.5"},
+	} {
+		t.Run("autonomy_project_"+tc.project, func(t *testing.T) {
+			selected := filter
+			selected.Project = tc.project
+			shape, err := store.GetAnalyticsSessionShape(ctx, selected)
+			require.NoError(t, err)
+			assert.Equal(t, 1, shape.Count)
+			assert.Equal(t, 1, distributionCount(shape.AutonomyDistribution, tc.bucket))
+			assert.Len(t, shape.AutonomyDistribution, 1)
+		})
+	}
 
 	tools, err := store.GetAnalyticsTools(ctx, filter)
 	require.NoError(t, err)
