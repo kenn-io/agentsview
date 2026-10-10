@@ -15107,18 +15107,18 @@ func (e *Engine) providerSourceUnchangedInDB(
 	}
 	project, _ := e.db.GetProjectByAgentPath(ctx, lookupPath, string(agent))
 	stored := db.VirtualContainerMemberFreshness{
-		Agent: string(agent), Project: project,
+		Project:     project,
 		DataVersion: e.db.GetDataVersionByAgentPath(ctx, lookupPath, string(agent)),
 	}
-	fresh := providerSourceMetadataFresh(agent, stored)
+	fresh := providerSourceMetadataFresh(stored)
 	if fresh {
 		e.stampProviderStatHashForConfirmedSource(ctx, preParseStatHash)
 	}
 	return fresh
 }
 
-func providerSourceMetadataFresh(agent parser.AgentType, stored db.VirtualContainerMemberFreshness) bool {
-	return stored.Agent == string(agent) && stored.DataVersion >= db.CurrentDataVersion() &&
+func providerSourceMetadataFresh(stored db.VirtualContainerMemberFreshness) bool {
+	return stored.DataVersion >= db.CurrentDataVersion() &&
 		!parser.NeedsProjectReparse(stored.Project)
 }
 

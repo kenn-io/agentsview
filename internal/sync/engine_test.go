@@ -12243,7 +12243,7 @@ func TestProviderStoredFreshnessSharedDecision(t *testing.T) {
 			ordinary := e.providerSourceUnchangedInDB(t.Context(), parser.SourceRef{Provider: tc.agent, DisplayPath: path}, fp,
 				parser.ProviderSyncSemantics{FingerprintHashRequiredForFreshness: tc.required}, nil)
 			assert.Equal(t, tc.want, ordinary)
-			assert.Equal(t, ordinary, providerSourceMetadataFresh(tc.agent, stored) && providerFingerprintMatchesStored(tc.agent, fp, 0, stored.MTimeNS, stored.Hash, tc.required))
+			assert.Equal(t, ordinary, stored.Agent == string(tc.agent) && providerSourceMetadataFresh(stored) && providerFingerprintMatchesStored(tc.agent, fp, 0, stored.MTimeNS, stored.Hash, tc.required))
 			assert.Equal(t, tc.wantReads, reads.Load())
 		})
 	}
