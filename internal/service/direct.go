@@ -1343,19 +1343,24 @@ func (b *directBackend) Stats(
 	if err != nil {
 		return nil, err
 	}
-	stats.CodeAttribution = collectCodeAttribution(ctx, f, stats)
+	archiveOnly, err := b.local.IsArchiveOnly(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stats.CodeAttribution = collectCodeAttribution(ctx, f, stats, archiveOnly)
 	return stats, nil
 }
 
 func collectCodeAttribution(ctx context.Context,
 	f StatsFilter,
 	stats *SessionStats,
+	archiveOnly bool,
 ) *db.CodeAttribution {
 	if stats == nil {
 		return nil
 	}
 	sources := []db.CodeAttributionSource{}
-	if source, ok := collectCursorAttribution(ctx, f, stats); ok {
+	if source, ok := collectCursorAttribution(ctx, f, stats, archiveOnly); ok {
 		sources = append(sources, source)
 	}
 	if len(sources) == 0 {
@@ -1376,8 +1381,13 @@ func collectCodeAttribution(ctx context.Context,
 func collectCursorAttribution(ctx context.Context,
 	f StatsFilter,
 	stats *SessionStats,
+	archiveOnly bool,
 ) (db.CodeAttributionSource, bool) {
-	switch cursorAttributionDecision(f) {
+	decision := cursorAttributionDecision(f)
+	if archiveOnly && decision != cursorAttributionSkip {
+		return cursorAttributionSource("unavailable", "Cursor attribution is unavailable in an archive-only database"), true
+	}
+	switch decision {
 	case cursorAttributionSkip:
 		return db.CodeAttributionSource{}, false
 	case cursorAttributionUnsupportedProjectFilter:
