@@ -80,6 +80,7 @@ func TestReparseSuppressesTrashedCodexSessions(t *testing.T) {
 				require.NoError(t, err)
 				database, err = db.OpenIsolatedContext(ctx, filepath.Join(seedPath, "sessions.db"))
 				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, database.Close()) })
 				archive, err = Open(ctx, database, seedPath, nil)
 				sessionID = func(id string) string { return "codex:" + id }
 			} else {
