@@ -195,6 +195,51 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 	assert.False(t, stale, "a direct serve must complete required reparse before publishing readiness")
 }
 
+func TestServeAbortedRebuildPreservesArchive(t *testing.T) {
+	for _, noSync := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no-sync=%t", noSync), func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			cfg.Host = "127.0.0.1"
+			cfg.NoSync = noSync
+			cfg.AgentDirs[parser.AgentClaude] = []string{t.TempDir()}
+			database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+			missingPath := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "missing.jsonl")
+			dbtest.SeedSession(t, database, "existing", "project", func(s *db.Session) {
+				s.FilePath = &missingPath
+			})
+			require.NoError(t, database.Close())
+			markArchiveStale(t, cfg.DBPath)
+			data, err := json.Marshal(cfg)
+			require.NoError(t, err)
+			out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeStaleArchiveHelperProcess",
+				[]string{
+					"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data),
+					"AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
+					"AGENTSVIEW_STALE_SERVE_NO_SYNC=" + strconv.FormatBool(noSync),
+				}, "listening at")
+			if noSync {
+				require.NoError(t, err, string(out))
+			} else {
+				require.Error(t, err, string(out))
+				assert.Contains(t, string(out), "required archive rebuild did not complete")
+				assert.Contains(t, string(out), "serve --no-sync")
+				assert.NotContains(t, string(out), "listening at")
+				assert.Nil(t, FindDaemonRuntime(cfg.DataDir))
+			}
+			stale, err := db.ArchiveNeedsResync(t.Context(), cfg.DBPath)
+			require.NoError(t, err)
+			assert.True(t, stale)
+			archive, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
+			require.NoError(t, err)
+			defer archive.Close()
+			session, err := archive.GetSession(t.Context(), "existing")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, "project", session.Project)
+		})
+	}
+}
+
 func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	data := os.Getenv("AGENTSVIEW_STALE_SERVE_CONFIG")
 	if data == "" {
@@ -202,6 +247,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	}
 	var cfg config.Config
 	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
+	cfg.NoSync = os.Getenv("AGENTSVIEW_STALE_SERVE_NO_SYNC") == "true"
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
 	cfg.AgentDirs = map[parser.AgentType][]string{
 		parser.AgentClaude: {os.Getenv("AGENTSVIEW_STALE_SERVE_SOURCES")},

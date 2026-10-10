@@ -420,6 +420,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				return
 			}
 		}
+		if database.NeedsResync() {
+			fatal("required archive rebuild did not complete for data version %d; restart to retry, or run agentsview serve --no-sync to serve the existing archive", db.CurrentDataVersion())
+		}
 
 		// Backfill runs in the background. On a large DB (e.g.
 		// after copying tens of thousands of orphaned sessions
