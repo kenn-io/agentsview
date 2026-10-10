@@ -165,3 +165,38 @@ func TestArchiveOnlyRejectsOrdinaryImports(t *testing.T) {
 		})
 	}
 }
+
+func TestArchiveOnlySync(t *testing.T) {
+	for _, tt := range []struct {
+		name, path string
+		chrome     bool
+	}{
+		{name: "desktop", path: "/api/v1/import/claude-ai/sync"},
+		{name: "chrome", path: "/api/v1/import/claude-ai/sync?browser=chrome", chrome: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := testServer(t, 5*time.Second)
+			if tt.chrome {
+				// A connected host proves the refusal comes from the
+				// archive mode, not from a missing Chrome connection.
+				testChromeConnection(t, srv)
+			}
+			local, ok := srv.db.(*db.DB)
+			require.True(t, ok)
+			require.NoError(t, local.EnableArchiveOnly(t.Context()))
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tt.path, nil)
+			req.RemoteAddr = "127.0.0.1:1234"
+			rec := httptest.NewRecorder()
+			srv.mux.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+			assert.Contains(t, rec.Body.String(), "archive-only")
+			assert.NotContains(t, rec.Body.String(), "event:",
+				"the rejection must not open an SSE stream")
+			var count int
+			require.NoError(t, local.Reader().QueryRow(t.Context(), "SELECT COUNT(*) FROM sessions").Scan(&count))
+			assert.Zero(t, count)
+		})
+	}
+}

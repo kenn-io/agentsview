@@ -127,6 +127,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 	if err := s.rejectWriterClosedWrite(); err != nil {
 		return nil, err
 	}
+	if err := s.requireSourceSync(ctx); err != nil {
+		return nil, err
+	}
 	store, ok := s.db.(*db.DB)
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
