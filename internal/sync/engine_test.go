@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -12182,4 +12183,68 @@ func TestReconcileWatchRootsAfterConstructorCancellation(t *testing.T) {
 	cancel()
 	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
 	assert.True(t, engine.LastReconciliationResult().Complete)
+}
+
+func TestProviderStoredFreshnessSharedDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		agent                        parser.AgentType
+		mtime                        int64
+		required, changedHash, stale bool
+		project                      string
+		want                         bool
+		wantReads                    int32
+	}{
+		{name: "optional hash with matching stats", agent: parser.AgentVibe, mtime: 100, want: true},
+		{name: "stat mismatch rejects before hash", agent: parser.AgentOpenCode, mtime: 200, required: true},
+		{name: "required matching hash", agent: parser.AgentOpenCode, mtime: 100, required: true, want: true, wantReads: 1},
+		{name: "required changed hash", agent: parser.AgentOpenCode, mtime: 100, required: true, changedHash: true, wantReads: 1},
+		{name: "hash overrides shared stat", agent: parser.AgentHermes, mtime: 200, want: true, wantReads: 1},
+		{name: "stale data version", agent: parser.AgentVibe, mtime: 100, stale: true},
+		{name: "project needs reparse", agent: parser.AgentVibe, mtime: 100, project: "_home_user_app"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			archive := openTestDB(t)
+			const path = "/data/source"
+			stored := db.VirtualContainerMemberFreshness{Agent: string(tc.agent), Project: "app", MTimeNS: 100, Hash: "digest", DataVersion: db.CurrentDataVersion()}
+			if tc.project != "" {
+				stored.Project = tc.project
+			}
+			if tc.stale {
+				stored.DataVersion = 0
+			}
+			require.NoError(t, archive.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), `INSERT INTO sessions
+					(id, project, agent, file_path, file_size, file_mtime, file_hash, data_version)
+					VALUES ('session', ?, ?, ?, 0, ?, ?, ?)`, stored.Project, stored.Agent, path, stored.MTimeNS, stored.Hash, stored.DataVersion)
+				return err
+			}))
+			var reads atomic.Int32
+			reader := archive.Reader().(interface {
+				Conn(context.Context) (*sql.Conn, error)
+			})
+			conn, err := reader.Conn(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, conn.Raw(func(raw any) error {
+				raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+					if op == sqlite3.SQLITE_READ && table == "sessions" && column == "file_hash" {
+						reads.Add(1)
+					}
+					return sqlite3.SQLITE_OK
+				})
+				return nil
+			}))
+			require.NoError(t, conn.Close())
+			fp := parser.SourceFingerprint{MTimeNS: tc.mtime, Hash: "digest"}
+			if tc.changedHash {
+				fp.Hash = "changed"
+			}
+			e := &Engine{db: archive}
+			ordinary := e.providerSourceUnchangedInDB(t.Context(), parser.SourceRef{Provider: tc.agent, DisplayPath: path}, fp,
+				parser.ProviderSyncSemantics{FingerprintHashRequiredForFreshness: tc.required}, nil)
+			assert.Equal(t, tc.want, ordinary)
+			assert.Equal(t, ordinary, providerSourceMatchesStored(tc.agent, fp, 0, stored, tc.required))
+			assert.Equal(t, tc.wantReads, reads.Load())
+		})
+	}
 }

@@ -1260,7 +1260,6 @@ func TestOpenCodeProviderSQLiteFingerprintUsesDiscoveryMeta(t *testing.T) {
 	require.True(t, complete)
 	assert.Equal(t, fp.MTimeNS, carried.MTimeNS)
 	assert.Equal(t, fp.Hash, carried.Hash)
-
 }
 
 func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {

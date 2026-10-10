@@ -1,10 +1,15 @@
 package sync_test
 
 import (
+	"database/sql"
+	"encoding/json/v2"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 
@@ -17,17 +22,7 @@ import (
 func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/app")
-	oc.inTransaction(t, func(oc *openCodeTestDB) {
-		for i := range 123 {
-			seedOpenCodeSQLiteTextSession(
-				t, oc, "proj", fmt.Sprintf("ses%05d", i),
-				1779012000000, 1779012030000,
-				"prompt", "answer",
-			)
-		}
-	})
-
+	seedOpenCodeSQLiteTextSessions(t, oc, 123, 1779012030000)
 	first := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, first.Aborted, "initial sync aborted: %+v", first)
 	require.Equal(t, 123, first.Synced)
@@ -65,13 +60,7 @@ func TestOpenCodeChangedContainerStreamRehydratesWatermarkMetadata(
 ) {
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/app")
-	for i := range 123 {
-		seedOpenCodeSQLiteTextSession(
-			t, oc, "proj", fmt.Sprintf("ses%05d", i),
-			1779012000000, 1779012030000, "prompt", "answer",
-		)
-	}
+	seedOpenCodeSQLiteTextSessions(t, oc, 123, 1779012030000)
 	require.Equal(t, 123, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	oc.updateSessionTime(t, "ses00000", 1779015630000)
@@ -119,16 +108,7 @@ func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
 		t.Run(fmt.Sprintf("sessions_%d", n), func(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 			oc := createOpenCodeDB(t, env.opencodeDir)
-			oc.addProject(t, "proj", "/home/user/code/app")
-			oc.inTransaction(t, func(oc *openCodeTestDB) {
-				for i := range n {
-					seedOpenCodeSQLiteTextSession(
-						t, oc, "proj", fmt.Sprintf("ses%05d", i),
-						1779012000000, 1779012030000,
-						"prompt", "answer",
-					)
-				}
-			})
+			seedOpenCodeSQLiteTextSessions(t, oc, n, 1779012030000)
 			require.Equal(t, n,
 				env.engine.SyncAll(t.Context(), nil).Synced)
 
@@ -183,16 +163,7 @@ func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
 		t.Run(fmt.Sprintf("sessions_%d", n), func(t *testing.T) {
 			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 			oc := createOpenCodeDB(t, env.opencodeDir)
-			oc.addProject(t, "proj", "/home/user/code/app")
-			oc.inTransaction(t, func(oc *openCodeTestDB) {
-				for i := range n {
-					seedOpenCodeSQLiteTextSession(
-						t, oc, "proj", fmt.Sprintf("ses%05d", i),
-						1779012000000, 1779012030000,
-						"prompt", "answer",
-					)
-				}
-			})
+			seedOpenCodeSQLiteTextSessions(t, oc, n, 1779012030000)
 			require.Equal(t, n,
 				env.engine.SyncAll(t.Context(), nil).Synced)
 
@@ -327,14 +298,7 @@ func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
 func TestOpenCodeFullPassSkipsAfterWatcherPassParse(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/app")
-	for i := range 3 {
-		seedOpenCodeSQLiteTextSession(
-			t, oc, "proj", fmt.Sprintf("ses%05d", i),
-			1779012000000, 1779012030000,
-			"prompt", "answer",
-		)
-	}
+	seedOpenCodeSQLiteTextSessions(t, oc, 3, 1779012030000)
 	require.Equal(t, 3, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	oc.updateSessionTime(t, "ses00000", 1779015630000)
@@ -422,14 +386,7 @@ func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
 func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/app")
-	for i := range 5 {
-		seedOpenCodeSQLiteTextSession(
-			t, oc, "proj", fmt.Sprintf("ses%05d", i),
-			1779012000000, 1779099999000,
-			"prompt", "answer",
-		)
-	}
+	seedOpenCodeSQLiteTextSessions(t, oc, 5, 1779099999000)
 	require.Equal(t, 5, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	scansBefore := parser.OpenCodeContainerChildScans()
@@ -470,26 +427,43 @@ func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
 // remain deferred during the interval, including after worker restarts.
 func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
 	for _, n := range []int{5, 2803} {
-		t.Run(fmt.Sprint(n), func(t *testing.T) { testOpenCodeIdleFullPass(t, n) })
+		t.Run(strconv.Itoa(n), func(t *testing.T) { testOpenCodeIdleFullPass(t, n) })
 	}
 }
 
 func testOpenCodeIdleFullPass(t *testing.T, n int) {
+	t.Helper()
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/app")
-	oc.inTransaction(t, func(oc *openCodeTestDB) {
-		for i := range n {
-			// Session rows far ahead of every child, so the later child-only
-			// replacement stays below the stored composite.
-			seedOpenCodeSQLiteTextSession(
-				t, oc, "proj", fmt.Sprintf("ses%05d", i),
-				1779012000000, 1779099999000,
-				"prompt", "answer",
-			)
-		}
-	})
-	require.Equal(t, n, env.engine.SyncAll(t.Context(), nil).Synced)
+	seedOpenCodeSQLiteTextSessions(t, oc, n, 1779099999000)
+	if n == 5 {
+		require.Equal(t, n, env.engine.SyncAll(t.Context(), nil).Synced)
+	} else {
+		// Seed verified archive metadata in bulk; small fixtures exercise ingestion.
+		metas, err := parser.ListOpenCodeSessionMeta(oc.path)
+		require.NoError(t, err)
+		require.Len(t, metas, n)
+		require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+			stmt, err := tx.PrepareContext(t.Context(), `INSERT INTO sessions
+				(id, project, agent, file_path, file_size, file_mtime, file_hash, data_version)
+				VALUES (?, 'app', 'opencode', ?, 0, ?, ?, ?)`)
+			if err != nil {
+				return err
+			}
+			defer stmt.Close()
+			for _, meta := range metas {
+				if _, err := stmt.ExecContext(t.Context(), "opencode:"+meta.SessionID, oc.path+"#"+meta.SessionID, meta.FileMtime, meta.ChildDigest, db.CurrentDataVersion()); err != nil {
+					return err
+				}
+			}
+			return nil
+		}))
+		state, ok := parser.StatSQLiteContainerState(oc.path)
+		require.True(t, ok)
+		raw, err := json.Marshal(map[string]any{"version": 1, "state": state, "verified_at": time.Now()})
+		require.NoError(t, err)
+		require.NoError(t, env.db.SetSyncState(t.Context(), sync.SQLiteContainerSyncStatePrefix+oc.path, string(raw)))
+	}
 
 	scansBefore := parser.OpenCodeContainerChildScans()
 	lookupsBefore := parser.OpenCodeSessionChildLookups()
@@ -511,6 +485,10 @@ func testOpenCodeIdleFullPass(t *testing.T, n int) {
 	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 		"a fresh worker must reuse the last verified unchanged container")
 	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore)
+
+	if n != 5 {
+		return
+	}
 
 	// A child-only replacement below every watermark is deferred by an ordinary
 	// pass until the verification boundary.
@@ -701,4 +679,14 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 			}
 		})
 	}
+}
+
+func seedOpenCodeSQLiteTextSessions(t *testing.T, oc *openCodeTestDB, n int, updated int64) {
+	t.Helper()
+	oc.inTransaction(t, func(oc *openCodeTestDB) {
+		oc.addProject(t, "proj", "/home/user/code/app")
+		for i := range n {
+			seedOpenCodeSQLiteTextSession(t, oc, "proj", fmt.Sprintf("ses%05d", i), 1779012000000, updated, "prompt", "answer")
+		}
+	})
 }

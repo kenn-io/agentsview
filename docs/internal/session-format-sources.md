@@ -1620,26 +1620,20 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   is always a candidate, wherever other sessions' watermarks or its own child
   timestamps sit.
 
-  Full passes and streamed reconciliation restore a container's prior SQLite
-  state and original verification time from the archive's sync metadata after
-  a worker restart. Native identity and counter rollback checks reject
-  replacements and restores. Windows captures native file identity from the
-  same open handle as the database header. A container verified less than five
-  minutes ago can use timestamp-first discovery
-  (`SQLiteContainerListsWatermarkOnly`) after ordinary writes and across restarts.
-  Child-only edits that leave session
-  timestamps unchanged wait for the next complete pass after the original
-  deadline. Each pass atomically consumes durable skip authority before it
-  starts; successful cheap passes restore it with the original deadline.
-  Preparation failures abort before processing, and failed completion writes
-  leave authority revoked. Expired verification times
-  also survive restarts so the due pass can reconcile deferred edits that have
-  fallen behind a quick-sync cutoff. A failed pass revokes skip authority but
-  preserves verification history so complete recovery remains eligible until
-  a successful complete pass finishes it. Due quick syncs compare complete
-  fingerprints with paged archive freshness before dispatching workers, so
-  unchanged members finish while changed or unresolved members remain eligible.
-  Every member of an unchanged container
+  Workers restore prior SQLite state and the original verification time from
+  durable sync metadata. Native identity and counter rollback checks reject
+  replacements and restores; Windows reads identity and the database header
+  from the same handle. Verification permits timestamp-first discovery for
+  five minutes, including after ordinary writes and restarts. Child-only edits
+  wait for a complete pass after that original deadline. Each pass atomically
+  consumes durable authority before processing; preparation errors abort the
+  pass, cheap successes restore the original deadline, and failures leave
+  authority revoked. Expired and failed verification history survives restarts
+  so deferred edits remain eligible despite advancing quick-sync cutoffs until
+  complete recovery succeeds. Due quick syncs compare full fingerprints with
+  paged archive freshness: unchanged members finish before workers, while
+  changed or unresolved members retry. Ephemeral engines leave durable records
+  untouched. Every member of an unchanged container
   gate-skips before fingerprinting, so a child identity scan would do
   archive-sized work nothing reads. Watermark-only skips require the pass's
   container capture to still be valid (`sqliteContainerPassCaptureValid`) — a container

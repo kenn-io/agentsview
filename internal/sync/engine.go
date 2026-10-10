@@ -6040,7 +6040,7 @@ func (e *Engine) streamReconciliationCandidates(
 	// captures; a container that changes mid-stream fails its recapture
 	// check and its candidates resolve full fingerprints instead.
 	containerListsWatermarkOnly := e.sqliteContainerListsWatermarkOnly(
-		ctx, preContainerStates,
+		preContainerStates,
 	)
 	for _, plan := range plans {
 		agent := plan.agent
@@ -8275,7 +8275,7 @@ func (e *Engine) discoverProviderSources(
 	var files []parser.DiscoveredFile
 	var failures int
 	containerListsWatermarkOnly := e.sqliteContainerListsWatermarkOnly(
-		ctx, preContainerStates,
+		preContainerStates,
 	)
 
 	agents := make([]parser.AgentType, 0, len(e.sources().providerFactories))
@@ -15094,38 +15094,34 @@ func (e *Engine) providerSourceUnchangedInDB(
 	if !ok {
 		return false
 	}
+	statsMatch := storedSize == fingerprint.Size && storedMtime == fingerprint.MTimeNS
+	if !statsMatch && (fingerprint.Hash == "" || !providerFingerprintHashEstablishesFreshness(agent)) {
+		return false
+	}
 	var storedHash string
-	if fingerprint.Hash != "" {
+	if fingerprint.Hash != "" && (!statsMatch || semantics.FingerprintHashRequiredForFreshness) {
 		storedHash, _ = e.db.GetFileHashByAgentPath(ctx, lookupPath, string(agent))
 	}
 	if !providerFingerprintMatchesStored(agent, fingerprint, storedSize, storedMtime, storedHash, semantics.FingerprintHashRequiredForFreshness) {
 		return false
 	}
-
-	// A stale stored project (e.g. a generated roborev CI worktree name)
-	// must defeat the unchanged-source skip so the corrected project is
-	// reparsed, mirroring shouldSkipCodexFingerprint and the in-memory
-	// skip-cache bypass in processProviderFile.
-	if project, ok := e.db.GetProjectByAgentPath(ctx,
-		lookupPath, string(agent),
-	); ok &&
-		parser.NeedsProjectReparse(project) {
-		return false
+	project, _ := e.db.GetProjectByAgentPath(ctx, lookupPath, string(agent))
+	stored := db.VirtualContainerMemberFreshness{
+		Agent: string(agent), Project: project, MTimeNS: storedMtime, Hash: storedHash,
+		DataVersion: e.db.GetDataVersionByAgentPath(ctx, lookupPath, string(agent)),
 	}
-	// Only a source confirmed unchanged against an existing current session
-	// row may earn a provider_freshness side-table stamp. This is the
-	// DB-confirmed skip site the cold-start branch of
-	// providerSourceFreshBeforeFingerprint closes its loop through: a
-	// content-unchanged source with no stored digest flows fingerprint →
-	// this skip → stamp, without ever persisting a digest before an outcome
-	// the engine can trust.
-	fresh := e.db.GetDataVersionByAgentPath(ctx,
-		lookupPath, string(agent),
-	) >= db.CurrentDataVersion()
+	fresh := providerSourceMatchesStored(agent, fingerprint, storedSize, stored, semantics.FingerprintHashRequiredForFreshness)
 	if fresh {
 		e.stampProviderStatHashForConfirmedSource(ctx, preParseStatHash)
 	}
 	return fresh
+}
+
+func providerSourceMatchesStored(agent parser.AgentType, fingerprint parser.SourceFingerprint, size int64, stored db.VirtualContainerMemberFreshness, required bool) bool {
+	return (fingerprint.MTimeNS != 0 || fingerprint.Size != 0) &&
+		stored.Agent == string(agent) && stored.DataVersion >= db.CurrentDataVersion() &&
+		!parser.NeedsProjectReparse(stored.Project) &&
+		providerFingerprintMatchesStored(agent, fingerprint, size, stored.MTimeNS, stored.Hash, required)
 }
 
 func providerFingerprintMatchesStored(agent parser.AgentType, fingerprint parser.SourceFingerprint, size, mtime int64, hash string, required bool) bool {
@@ -15181,7 +15177,7 @@ func (e *Engine) providerFingerprintHashMatchesDB(ctx context.Context,
 	storedHash, ok := e.db.GetFileHashByAgentPath(ctx,
 		lookupPath, string(agent),
 	)
-	return ok && storedHash == fingerprint.Hash
+	return ok && providerFingerprintMatchesStored(agent, fingerprint, fingerprint.Size, fingerprint.MTimeNS, storedHash, required)
 }
 
 // providerFingerprintHashEstablishesFreshness reports whether a matching
@@ -15195,25 +15191,6 @@ func (e *Engine) providerFingerprintHashMatchesDB(ctx context.Context,
 // per-source stay stat-gated: a stat mismatch there means real change.
 func providerFingerprintHashEstablishesFreshness(agent parser.AgentType) bool {
 	return agent == parser.AgentHermes || agent == parser.AgentAugureDesktop
-}
-
-// providerSourceHashFreshDespiteStat is the stat-mismatch arm of
-// providerSourceUnchangedInDB. Unlike providerFingerprintHashMatchesDB, an
-// absent hash can never establish freshness here: the stat already disagrees,
-// so only a positive content match may skip. GetFileHashByAgentPath excludes
-// source-missing rows, so a returning member still passes through a full parse.
-func (e *Engine) providerSourceHashFreshDespiteStat(ctx context.Context,
-	agent parser.AgentType,
-	lookupPath string,
-	fingerprint parser.SourceFingerprint,
-) bool {
-	if fingerprint.Hash == "" || !providerFingerprintHashEstablishesFreshness(agent) {
-		return false
-	}
-	storedHash, ok := e.db.GetFileHashByAgentPath(ctx,
-		lookupPath, string(agent),
-	)
-	return ok && storedHash == fingerprint.Hash
 }
 
 // shouldSkipByPath checks file size and mtime against what is
