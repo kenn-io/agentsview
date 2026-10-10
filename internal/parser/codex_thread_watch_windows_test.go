@@ -59,7 +59,7 @@ func TestCodexThreadWatchClosesInvalidatedRoot(t *testing.T) {
 	cache.invalidate([]string{root})
 	for _, handle := range handles {
 		_, err = windows.WaitForSingleObject(handle, 0)
-		assert.ErrorIs(t, err, windows.ERROR_INVALID_HANDLE)
+		require.ErrorIs(t, err, windows.ERROR_INVALID_HANDLE)
 	}
 	file := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
