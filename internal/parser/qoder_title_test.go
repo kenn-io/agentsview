@@ -375,3 +375,147 @@ func TestQoderTitleDatabasePathsForRootsDedupes(t *testing.T) {
 		filepath.Join(home, ".qoderwork", "projects"),
 	}), "a root that belongs to neither client binds nothing")
 }
+
+// TestQoderTitleDatabasesStaySplitAcrossClients parses the same synthetic
+// session id through the two default project roots, each backed by its own
+// application database. No path override is installed.
+func TestQoderTitleDatabasesStaySplitAcrossClients(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cnRoot := filepath.Join(home, ".qoder-cn", "projects")
+	intlRoot := filepath.Join(home, ".qoder", "projects")
+	writeQoderTitleTestSession(t, cnRoot, qoderTitleTestID)
+	writeQoderTitleTestSession(t, intlRoot, qoderTitleTestID)
+	cnTitle := "国内库标题"
+	intlTitle := "国际库标题"
+	cnDB := filepath.Join(home, "Library", "Application Support", qoderCNClientApp, "main.sqlite")
+	intlDB := filepath.Join(home, "Library", "Application Support", qoderIntlClientApp, "main.sqlite")
+	writeQoderTitleDB(t, cnDB, map[string]*string{qoderTitleTestID: &cnTitle})
+	writeQoderTitleDB(t, intlDB, map[string]*string{qoderTitleTestID: &intlTitle})
+
+	cnProvider := qoderTitleTestProvider(t, []string{cnRoot})
+	intlProvider := qoderTitleTestProvider(t, []string{intlRoot})
+	cnSess := qoderTitleTestParse(t, cnProvider, cnRoot)[0].Result.Session
+	intlSess := qoderTitleTestParse(t, intlProvider, intlRoot)[0].Result.Session
+	assert.Equal(t, cnTitle, cnSess.SessionName)
+	assert.True(t, cnSess.SessionNamePresent)
+	assert.Equal(t, intlTitle, intlSess.SessionName)
+	assert.True(t, intlSess.SessionNamePresent)
+
+	cnWatch, err := ResolveWatchRoots(t.Context(), cnProvider)
+	require.NoError(t, err)
+	intlWatch, err := ResolveWatchRoots(t.Context(), intlProvider)
+	require.NoError(t, err)
+	assert.True(t, watchRootContains(cnWatch, filepath.Dir(cnDB)))
+	assert.False(t, watchRootContains(cnWatch, filepath.Dir(intlDB)))
+	assert.True(t, watchRootContains(intlWatch, filepath.Dir(intlDB)))
+	assert.False(t, watchRootContains(intlWatch, filepath.Dir(cnDB)))
+}
+
+func watchRootContains(roots []WatchRoot, dir string) bool {
+	dir = filepath.Clean(dir)
+	for _, root := range roots {
+		if filepath.Clean(root.Path) == dir {
+			return true
+		}
+	}
+	return false
+}
+
+func appendQoderLines(t *testing.T, path string, lines ...string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	for _, line := range lines {
+		_, err := f.WriteString(line + "\n")
+		require.NoError(t, err)
+	}
+}
+
+func TestQoderParseCustomTitleWhenHigherSourcesAreSilent(t *testing.T) {
+	root := t.TempDir()
+	path := writeQoderTitleTestSession(t, root, qoderTitleTestID)
+	appendQoderLines(t, path, `{"type":"custom-title","customTitle":"Transcript title"}`)
+
+	sess := qoderTitleTestParse(t, qoderTitleTestProvider(t, []string{root}), root)[0].Result.Session
+	assert.Equal(t, "Transcript title", sess.SessionName)
+	assert.True(t, sess.SessionNamePresent)
+}
+
+func TestQoderParseEmptyCustomTitleIsIgnored(t *testing.T) {
+	root := t.TempDir()
+	path := writeQoderTitleTestSession(t, root, qoderTitleTestID)
+	appendQoderLines(t, path, `{"type":"custom-title","customTitle":""}`)
+
+	sess := qoderTitleTestParse(t, qoderTitleTestProvider(t, []string{root}), root)[0].Result.Session
+	assert.Empty(t, sess.SessionName)
+	assert.False(t, sess.SessionNamePresent)
+}
+
+func TestQoderParseRenameCommandSetsPresentTitle(t *testing.T) {
+	root := t.TempDir()
+	path := writeQoderTitleTestSession(t, root, qoderTitleTestID)
+	appendQoderLines(t, path,
+		`{"type":"system","content":"<command-name>/rename</command-name><command-args>Renamed</command-args>"}`)
+
+	sess := qoderTitleTestParse(t, qoderTitleTestProvider(t, []string{root}), root)[0].Result.Session
+	assert.Equal(t, "Renamed", sess.SessionName)
+	assert.True(t, sess.SessionNamePresent)
+}
+
+func TestQoderParseEmptyRenameClearsTitle(t *testing.T) {
+	root := t.TempDir()
+	path := writeQoderTitleTestSession(t, root, qoderTitleTestID)
+	appendQoderLines(t, path,
+		`{"type":"custom-title","customTitle":"First"}`,
+		`{"type":"system","content":"<command-name>/rename</command-name><command-args></command-args>"}`)
+
+	sess := qoderTitleTestParse(t, qoderTitleTestProvider(t, []string{root}), root)[0].Result.Session
+	assert.Empty(t, sess.SessionName)
+	assert.True(t, sess.SessionNamePresent)
+}
+
+func TestQoderParseSQLiteOutranksTranscriptTitle(t *testing.T) {
+	root := t.TempDir()
+	path := writeQoderTitleTestSession(t, root, qoderTitleTestID)
+	appendQoderLines(t, path, `{"type":"custom-title","customTitle":"Transcript title"}`)
+	dbTitle := "database title"
+	fixture := filepath.Join(t.TempDir(), "main.sqlite")
+	writeQoderTitleDB(t, fixture, map[string]*string{qoderTitleTestID: &dbTitle})
+	withQoderTitleDBOverride(t, fixture)
+
+	sess := qoderTitleTestParse(t, qoderTitleTestProvider(t, []string{root}), root)[0].Result.Session
+	assert.Equal(t, dbTitle, sess.SessionName)
+	assert.True(t, sess.SessionNamePresent)
+}
+
+func TestQoderParseJSONOutranksTranscriptTitle(t *testing.T) {
+	root := t.TempDir()
+	path := writeQoderTitleTestSession(t, root, qoderTitleTestID)
+	appendQoderLines(t, path, `{"type":"custom-title","customTitle":"Transcript title"}`)
+	require.NoError(t, os.WriteFile(
+		strings.TrimSuffix(path, ".jsonl")+"-session.json",
+		[]byte(`{"title":"JSON wins"}`), 0o644,
+	))
+
+	sess := qoderTitleTestParse(t, qoderTitleTestProvider(t, []string{root}), root)[0].Result.Session
+	assert.Equal(t, "JSON wins", sess.SessionName)
+	assert.True(t, sess.SessionNamePresent)
+}
+
+func TestQoderParseCorruptJSONDoesNotUseTranscriptTitle(t *testing.T) {
+	root := t.TempDir()
+	path := writeQoderTitleTestSession(t, root, qoderTitleTestID)
+	appendQoderLines(t, path, `{"type":"custom-title","customTitle":"Transcript title"}`)
+	require.NoError(t, os.WriteFile(
+		strings.TrimSuffix(path, ".jsonl")+"-session.json",
+		[]byte("{not json"), 0o644,
+	))
+
+	result := qoderTitleTestParse(t, qoderTitleTestProvider(t, []string{root}), root)[0]
+	assert.False(t, result.Result.Session.SessionNamePresent)
+	assert.NotEmpty(t, result.Result.TitleRetryReason)
+	assert.Equal(t, DataVersionNeedsRetry, result.DataVersion)
+}

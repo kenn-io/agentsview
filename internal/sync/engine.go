@@ -1987,6 +1987,9 @@ func (e *Engine) classifyChangedPaths(
 	var titles []parser.SharedTitleDatabase
 	var classificationErr error
 	for _, p := range paths {
+		if e.isConfiguredSharedTitleSHMPath(p) {
+			continue
+		}
 		if database, ok := parser.SharedTitleDatabaseForChangedPath(p); ok {
 			titles = append(titles, database)
 			continue
@@ -2049,6 +2052,9 @@ func (e *Engine) classifyProviderChangedPath(
 	ctx context.Context,
 	path string,
 ) ([]parser.DiscoveredFile, error) {
+	if e.isConfiguredSharedTitleSHMPath(path) {
+		return nil, nil
+	}
 	eventKind := providerChangedPathEventKind(path)
 	// A shared title database is never a session source. Claim it here too so
 	// no provider can turn a title write into a fallback import.

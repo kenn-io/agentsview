@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -21,6 +22,36 @@ import (
 // Planning only records which database changed (see ChangedPathPlan
 // .SharedTitleTasks and classifyChangedPaths). Every write happens here, under
 // syncMu.
+
+// isConfiguredSharedTitleSHMPath claims only the shared-memory sidecar of
+// a configured title database. SHM rewrites carry no title changes and must
+// not fall through to a provider-wide import. Match paths without statting
+// the database, so deleted sidecars remain irrelevant too.
+func (e *Engine) isConfiguredSharedTitleSHMPath(path string) bool {
+	clean := filepath.Clean(path)
+	if !strings.HasSuffix(clean, "-shm") {
+		return false
+	}
+	main := strings.TrimSuffix(clean, "-shm")
+	for _, agent := range []parser.AgentType{parser.AgentAntigravity, parser.AgentQoder} {
+		if slices.Contains(e.sources().preserveAgents, agent) {
+			continue
+		}
+		for _, root := range e.sources().agentDirs[agent] {
+			var expected string
+			switch agent {
+			case parser.AgentAntigravity:
+				expected = filepath.Join(root, "conversation_summaries.db")
+			case parser.AgentQoder:
+				expected = parser.QoderTitleDatabaseForLocalSource(root)
+			}
+			if expected != "" && main == filepath.Clean(expected) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // sharedTitleDatabases lists every shared title database reachable from the
 // configured roots, across the providers that have one. It is recomputed on
@@ -128,43 +159,82 @@ func (e *Engine) applySharedTitleRecords(
 	}
 	updated := 0
 	var errs error
+	seenRecord := make(map[string]struct{}, len(records))
 	for _, record := range records {
 		if err := ctx.Err(); err != nil {
 			return updated, errors.Join(errs, err)
 		}
-		fullID := applyIDPrefixToID(e.idPrefix, prefix+record.ID)
-		current, found, err := e.db.GetSessionName(ctx, fullID)
+		if record.ID == "" {
+			continue
+		}
+		if _, ok := seenRecord[record.ID]; ok {
+			continue
+		}
+		seenRecord[record.ID] = struct{}{}
+		ownerID := applyIDPrefixToID(e.idPrefix, prefix+record.ID)
+		// The database row names the owning transcript. Forks of that file
+		// have different session IDs, so refresh every active row that still
+		// points at the same source path. If the owning row itself is gone,
+		// there is no indexed path to those forks; do not scan the archive.
+		sourcePath, _, err := e.db.GetSessionTitleSource(ctx, ownerID)
 		if err != nil {
 			errs = errors.Join(errs, fmt.Errorf(
-				"read stored title %s: %w", fullID, err,
+				"read title source %s: %w", ownerID, err,
 			))
 			continue
 		}
-		if !found {
-			// The session has not been imported yet (or was removed). The
-			// next parse extracts its title; never create a row here.
+		if !filepath.IsAbs(sourcePath) {
 			continue
 		}
-		title, present, err := e.sharedTitleForSession(ctx, database, fullID, record.Title)
+		ids, err := e.db.ListSessionIDsByFilePath(
+			ctx, sourcePath, string(database.Agent),
+		)
 		if err != nil {
 			errs = errors.Join(errs, err)
 			continue
 		}
-		if !present || title == current {
-			continue
+		seenSession := make(map[string]struct{}, len(ids))
+		for _, fullID := range ids {
+			if err := ctx.Err(); err != nil {
+				return updated, errors.Join(errs, err)
+			}
+			if _, ok := seenSession[fullID]; ok {
+				continue
+			}
+			seenSession[fullID] = struct{}{}
+			current, found, err := e.db.GetSessionName(ctx, fullID)
+			if err != nil {
+				errs = errors.Join(errs, fmt.Errorf(
+					"read stored title %s: %w", fullID, err,
+				))
+				continue
+			}
+			if !found {
+				continue
+			}
+			title, present, err := e.sharedTitleForSession(
+				ctx, database, fullID, record.Title,
+			)
+			if err != nil {
+				errs = errors.Join(errs, err)
+				continue
+			}
+			if !present || title == current {
+				continue
+			}
+			var value *string
+			if title != "" {
+				clean := title
+				value = &clean
+			}
+			if err := e.db.RefreshSessionName(ctx, fullID, value); err != nil {
+				errs = errors.Join(errs, fmt.Errorf(
+					"refresh title %s: %w", fullID, err,
+				))
+				continue
+			}
+			updated++
 		}
-		var value *string
-		if title != "" {
-			clean := title
-			value = &clean
-		}
-		if err := e.db.RefreshSessionName(ctx, fullID, value); err != nil {
-			errs = errors.Join(errs, fmt.Errorf(
-				"refresh title %s: %w", fullID, err,
-			))
-			continue
-		}
-		updated++
 	}
 	return updated, errs
 }

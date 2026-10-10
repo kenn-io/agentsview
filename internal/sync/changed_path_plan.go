@@ -58,6 +58,10 @@ func (e *Engine) PlanChangedPathsContext(
 		if _, exists := plan.attribution[path]; exists {
 			continue
 		}
+		if e.isConfiguredSharedTitleSHMPath(path) {
+			plan.attribution[path] = changedPathAttribution{provenIrrelevant: true}
+			continue
+		}
 		// A shared title database is claimed before any provider runs. It is
 		// not a session source: classifying it through a provider would either
 		// match nothing (and widen into a fallback import of that provider) or,

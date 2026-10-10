@@ -3558,8 +3558,16 @@ schemas keep their existing ordering behavior.
   `session_id` and `title`. IDs match top-level JSONL filenames. This local
   observation does not establish non-macOS paths. Non-empty sibling JSON
   titles take precedence; unreadable JSON preserves the existing title and
-  requests a retry. Synthetic tests cover native local roots, source machine
-  ownership, mirrors, explicit blanks, read failures, and JSON recovery.
+  requests a retry. When neither sibling JSON nor the application database
+  supplies a title, a non-empty `custom-title` or a `/rename` command in the
+  transcript is an explicit title, and an empty `/rename` clears it. A title
+  refresh updates every active session stored from that same file, including
+  an in-file fork; a subagent file is left alone. `Library/Application
+  Support/Qoder/SharedClientCache/cli/projects` stays unbound: the installed
+  app names `SharedClientCache/cache/db/local.db` for a different store, which
+  does not establish that those transcripts use `chat_sessions`. Synthetic
+  tests cover native local roots, source machine ownership, mirrors, explicit
+  blanks, read failures, and JSON recovery.
 
 ## QwenPaw (`qwenpaw`)
 

@@ -148,6 +148,7 @@ func writeQoderSessionsDB(
 ) string {
 	t.Helper()
 	t.Setenv("HOME", base)
+	t.Setenv("USERPROFILE", base)
 	path := filepath.Join(base, "Library", "Application Support", app, "main.sqlite")
 	writeSharedTitleDB(t, path, "chat_sessions", "session_id", titles)
 	return path
@@ -242,8 +243,10 @@ func TestSharedTitleRefreshAppliesProviderIDPrefix(t *testing.T) {
 	root := filepath.Join(base, ".qoder")
 	const bare = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 	seedSharedTitleSession(t, database, "qoder:"+bare, parser.AgentQoder, "old", root)
-	seedSharedTitleSession(t, database, bare, parser.AgentQoder,
-		"unprefixed row", root)
+	// A same-file fork is refreshed with the owner. This row only shares the
+	// bare id, so it keeps a different source path and must stay untouched.
+	seedSharedTitleSessionAt(t, database, bare, parser.AgentQoder,
+		"unprefixed row", filepath.Join(root, "projects", "other.jsonl"))
 
 	title := "Qoder 标题"
 	titlePath := writeQoderSessionsDB(t, base, "com.qoder.app.stable",
@@ -652,4 +655,75 @@ func TestSharedTitleDatabasesDedupeOnPlan(t *testing.T) {
 	assert.Equal(t, path, titles[0].DBPath)
 	assert.False(t, strings.Contains(titles[0].DBPath, "-wal"),
 		"a -wal event must resolve to the main database file")
+}
+
+func TestSharedTitleWALEventIsOneTitleTask(t *testing.T) {
+	engine, _ := sharedTitleTestEngine(t, nil)
+	titlePath := writeConversationSummariesDB(t, t.TempDir(), nil)
+	wal := titlePath + "-wal"
+
+	files, titles, err := engine.classifyChangedPaths(t.Context(), []string{wal})
+	require.NoError(t, err)
+	assert.Empty(t, files)
+	require.Len(t, titles, 1)
+	assert.Equal(t, titlePath, titles[0].DBPath)
+
+	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{wal})
+	require.NoError(t, err)
+	assert.Empty(t, plan.Files)
+	assert.Empty(t, plan.FallbackProviders)
+	require.Len(t, plan.SharedTitleTasks, 1)
+	assert.Equal(t, titlePath, plan.SharedTitleTasks[0].DBPath)
+}
+
+func TestSharedTitleSHMEventIsNotATitleTask(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		agent     parser.AgentType
+		clientDir string
+		app       string
+	}{
+		{name: "antigravity", agent: parser.AgentAntigravity},
+		{name: "qoder international", agent: parser.AgentQoder, clientDir: ".qoder", app: "com.qoder.app.stable"},
+		{name: "qoder domestic", agent: parser.AgentQoder, clientDir: ".qoder-cn", app: "com.qodercn.app.stable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			root := home
+			var titlePath string
+			if tc.agent == parser.AgentQoder {
+				root = filepath.Join(home, tc.clientDir, "projects")
+				titlePath = writeQoderSessionsDB(t, home, tc.app, nil)
+			} else {
+				titlePath = writeConversationSummariesDB(t, root, nil)
+			}
+			require.NoError(t, os.MkdirAll(root, 0o755))
+			engine, _ := sharedTitleTestEngineForDirs(t, nil,
+				map[parser.AgentType][]string{tc.agent: {root}})
+			shm := titlePath + "-shm"
+
+			files, titles, err := engine.classifyChangedPaths(t.Context(), []string{shm})
+			require.NoError(t, err)
+			assert.Empty(t, files)
+			assert.Empty(t, titles)
+			files, err = engine.classifyProviderChangedPath(t.Context(), shm)
+			require.NoError(t, err)
+			assert.Empty(t, files)
+
+			plan, err := engine.PlanChangedPathsContext(t.Context(), []string{shm})
+			require.NoError(t, err)
+			assert.Empty(t, plan.Files)
+			assert.Empty(t, plan.FallbackProviders)
+			assert.Empty(t, plan.SharedTitleTasks)
+
+			// Other SQLite sidecars inside a configured root must still reach the
+			// provider; ignoring every -shm path would hide session source changes.
+			unrelated := filepath.Join(root, "other.sqlite-shm")
+			plan, err = engine.PlanChangedPathsContext(t.Context(), []string{unrelated})
+			require.NoError(t, err)
+			assert.Equal(t, []parser.AgentType{tc.agent}, plan.FallbackProviders)
+		})
+	}
 }

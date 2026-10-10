@@ -419,6 +419,7 @@ func applyQoderTitles(
 	}
 	databasePath := resolveQoderAppSQLitePath(path, roots)
 	if databasePath == "" {
+		markQoderTranscriptTitle(results)
 		return ""
 	}
 	sessionID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
@@ -429,6 +430,12 @@ func applyQoderTitles(
 		return fmt.Sprintf("qoder title read failed: %v", err)
 	}
 	if !present {
+		// Neither JSON nor the application database supplied a title. A
+		// custom-title or /rename already parsed into the transcript is then
+		// authoritative, including an empty /rename that clears the name.
+		// A read failure returns before this point so a transcript title
+		// cannot hide an unknown higher-priority source.
+		markQoderTranscriptTitle(results)
 		return ""
 	}
 	for i := range results {
@@ -436,6 +443,18 @@ func applyQoderTitles(
 		results[i].Session.SessionNamePresent = true
 	}
 	return ""
+}
+
+// markQoderTranscriptTitle promotes an explicit transcript rename to a present
+// title. claudeRenameSeen is set only for a non-empty custom-title or a
+// /rename command; an empty custom-title is ignored by the parser and must
+// not become a clear.
+func markQoderTranscriptTitle(results []ParseResult) {
+	for i := range results {
+		if results[i].Session.claudeRenameSeen {
+			results[i].Session.SessionNamePresent = true
+		}
+	}
 }
 
 func qoderPathIDs(path, _ string) (parentID, subagentID string, isSubagent bool) {

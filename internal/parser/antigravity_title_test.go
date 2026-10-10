@@ -138,6 +138,40 @@ func TestAntigravityParseTitleReadErrorRequestsRetry(t *testing.T) {
 	require.NotEmpty(t, result.Result.Messages)
 }
 
+// TestAntigravityBrainTranscriptTitleReachesProviderParse is the entry
+// coverage for a brain transcript: Discover and Parse, not a direct call to
+// readAntigravityTitle. The summaries database lives at the IDE root.
+func TestAntigravityBrainTranscriptTitleReachesProviderParse(t *testing.T) {
+	root := t.TempDir()
+	id := "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	path := writeAntigravityBrainTranscript(
+		t, root, id, antigravityBrainTranscriptFixture,
+	)
+	title := "Synthetic conversation title"
+	writeAntigravitySummariesDB(t, root, map[string]*string{id: &title})
+
+	provider := newAntigravityProviderForRoots(t, root)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, path, sources[0].DisplayPath)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
+		Source: sources[0], Machine: "devbox",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0]
+	assert.Equal(t, DataVersionCurrent, result.DataVersion)
+	assert.Empty(t, result.RetryReason)
+	sess := result.Result.Session
+	assert.Equal(t, "antigravity:"+id, sess.ID)
+	assert.Equal(t, title, sess.SessionName)
+	assert.True(t, sess.SessionNamePresent)
+	require.NotEmpty(t, result.Result.Messages)
+	assert.Equal(t, "list the files in the project", result.Result.Messages[0].Content)
+}
+
 // TestAntigravityBrainTranscriptTitleUsesIDERoot guards the brain branch: the
 // summaries database sits at the IDE root, which is what
 // antigravityBrainTranscriptConversation reports. Deriving the root with two

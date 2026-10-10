@@ -19,6 +19,7 @@ func TestQoderTitleRegressionProviderBindsOnlyLocalSources(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			root := filepath.Join(home, ".qoder", "projects")
 			writeQoderTitleTestSession(t, root, qoderTitleTestID)
 			title := "local database title"
