@@ -943,7 +943,7 @@ func TestBuildHermesStateResultGroupPreservation(t *testing.T) {
 
 func TestHermesCronGroupsScopeHomes(t *testing.T) {
 	var homeKeys []string
-	for _, profile := range []string{"", "", "profile-a", "profile-a", "profile-b"} {
+	for _, profile := range []string{"", "", "profile-a", "profile-a", "profile-b", `remote:C:\profiles\a`, `remote:C:\profiles\b`} {
 		root := t.TempDir()
 		sessionsDir := filepath.Join(root, "sessions")
 		require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
@@ -965,6 +965,9 @@ func TestHermesCronGroupsScopeHomes(t *testing.T) {
 			provider.Config.PathRewriter = func(path string) string {
 				relative, err := filepath.Rel(root, path)
 				require.NoError(t, err)
+				if strings.HasPrefix(profile, "remote:") {
+					return profile + `\` + strings.ReplaceAll(filepath.ToSlash(relative), "/", `\`)
+				}
 				return "capture://" + profile + "/" + filepath.ToSlash(relative)
 			}
 		}
@@ -991,6 +994,7 @@ func TestHermesCronGroupsScopeHomes(t *testing.T) {
 	assert.NotEqual(t, homeKeys[0], homeKeys[1])
 	assert.Equal(t, homeKeys[2], homeKeys[3])
 	assert.NotEqual(t, homeKeys[2], homeKeys[4])
+	assert.NotEqual(t, homeKeys[5], homeKeys[6])
 }
 
 func TestHermesCronTranscriptProjects(t *testing.T) {
@@ -1046,16 +1050,17 @@ func TestHermesCronTranscriptProjects(t *testing.T) {
 							require.Len(t, parsed.Messages, 1)
 							assert.Equal(t, "hello", parsed.Messages[0].Content)
 							wantGroup, wantKeep := tc.group, tc.keepStored
-							if source == "cli" {
+							switch source {
+							case "cli":
 								wantGroup, wantKeep = "", false
 								assert.Equal(t, string(agent)+"-cli", parsed.Session.Project)
-							} else if source == "cron" {
+							case "cron":
 								wantGroup, wantKeep = "job-1", false
 								assert.Equal(t, string(agent)+"-cron", parsed.Session.Project)
 								if tc.id == "child" {
 									wantGroup, wantKeep = "", true
 								}
-							} else {
+							default:
 								assert.Equal(t, string(agent)+"-"+tc.source, parsed.Session.Project)
 							}
 							job, _, _ := strings.Cut(parsed.Session.GroupKey, ":")

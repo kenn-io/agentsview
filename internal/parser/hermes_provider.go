@@ -257,6 +257,7 @@ func (p *hermesProvider) Parse(
 		} else if absolute, err := filepath.Abs(sourcePath); err == nil {
 			sourcePath = absolute
 		}
+		sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
 		home := filepath.Dir(sourcePath)
 		if filepath.Base(sourcePath) != "state.db" && filepath.Base(home) == "sessions" {
 			home = filepath.Dir(home)

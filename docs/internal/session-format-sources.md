@@ -2946,6 +2946,8 @@ schemas keep their existing ordering behavior.
   as unnamed and stores `group_key` as the job ID plus a hash of the source
   home path. Usage groups by project, machine, home and job ID. The pinned
   recognizer's legacy `job-1` example was reverified on 2026-10-09.
+  `TestHermesCronGroupsScopeHomes` verifies that rewritten Windows paths
+  keep distinct homes separate by accepting both path separators.
   Names derive from the recorded `session_name` at read
   time; usage-only archives show job IDs because their titles are discarded.
   Resync copies preserve stored job IDs, including imported sessions. Archived
