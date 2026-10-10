@@ -6,8 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -18,7 +22,11 @@ import (
 )
 
 func TestArchiveModeRecoversInterruptedCompaction(t *testing.T) {
-	for _, entry := range []string{"serve", "archive", "watch", "backfill"} {
+	if os.Getenv("AGENTSVIEW_COMPACT_SYNC_HELPER") == "1" {
+		doSync(SyncConfig{Host: "host-a.example", Full: true})
+		return
+	}
+	for _, entry := range []string{"serve", "archive", "watch", "backfill", "sync"} {
 		for _, primary := range []string{"missing", "unreadable"} {
 			t.Run(entry+"/"+primary, func(t *testing.T) {
 				cfg := testConfigWithClaudeFixture(t)
@@ -81,6 +89,22 @@ func TestArchiveModeRecoversInterruptedCompaction(t *testing.T) {
 					err = withRawArchive(cmd, func(*rawarchive.Archive) error { called = true; return nil })
 					require.NoError(t, err)
 					assert.True(t, called)
+				} else if entry == "sync" {
+					var requests atomic.Int32
+					remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						requests.Add(1)
+						http.Error(w, "unexpected transfer", http.StatusForbidden)
+					}))
+					defer remote.Close()
+					require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(fmt.Sprintf("[[remote_hosts]]\nhost = \"host-a.example\"\nurl = %q\ntoken = \"test-token\"\n", remote.URL)), 0o600))
+					child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestArchiveModeRecoversInterruptedCompaction$")
+					child.Env = append(os.Environ(), "AGENTSVIEW_COMPACT_SYNC_HELPER=1", "AGENTSVIEW_NO_DAEMON=1")
+					out, err := child.CombinedOutput()
+					var exitErr *exec.ExitError
+					require.ErrorAs(t, err, &exitErr, string(out))
+					assert.Equal(t, 1, exitErr.ExitCode())
+					assert.Contains(t, string(out), db.ErrArchiveOnly.Error())
+					assert.Zero(t, requests.Load(), "rejection must precede remote transfer")
 				} else {
 					err = runRawSyncWithoutHostWork(t, cfg, entry)
 					require.ErrorIs(t, err, db.ErrArchiveOnly)

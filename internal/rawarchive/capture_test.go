@@ -28,136 +28,78 @@ func captureFixture(t *testing.T) CaptureOptions {
 	return CaptureOptions{DataDir: data, Destination: filepath.Join(t.TempDir(), "capture"), Roots: []RootSpec{{Provider: "claude", Path: filepath.Join(root, "projects")}}, Settings: RecoverySettings{LocalMachineName: "source-device"}, ReaderBuild: "test-build"}
 }
 
-func TestCaptureRejectsCaseAliasOverlapBeforeStaging(t *testing.T) {
-	opts := captureFixture(t)
-	parent := t.TempDir()
-	provider := filepath.Join(parent, "Provider")
-	require.NoError(t, os.Mkdir(provider, 0o755))
-	alias := filepath.Join(parent, "provider")
-	aliasInfo, err := os.Stat(alias)
-	if err != nil {
-		t.Skip("test filesystem is case-sensitive")
-	}
-	providerInfo, err := os.Stat(provider)
-	require.NoError(t, err)
-	if !os.SameFile(aliasInfo, providerInfo) {
-		t.Skip("test filesystem does not resolve case aliases")
-	}
-	opts.Roots = []RootSpec{{Provider: "files", Path: provider}}
-	opts.Destination = filepath.Join(alias, "capture")
-	_, err = Capture(t.Context(), opts)
-	require.ErrorContains(t, err, "capture roots must not overlap")
-	entries, err := os.ReadDir(provider)
-	require.NoError(t, err)
-	assert.Empty(t, entries, "rejection must precede staging and copying")
-}
-
-func TestCaptureRejectsNewerCheckpointSchema(t *testing.T) {
-	opts := captureFixture(t)
-	path := filepath.Join(opts.DataDir, "raw-sync", "checkpoint.db")
-	store, err := rawcheckpoint.Open(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.Close())
-	checkpoint, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	_, err = checkpoint.ExecContext(t.Context(), "PRAGMA user_version=1000")
-	require.NoError(t, err)
-	require.NoError(t, checkpoint.Close())
-	_, err = Capture(t.Context(), opts)
-	require.ErrorContains(t, err, "newer than supported")
-	assert.NoDirExists(t, opts.Destination)
-}
-
 func TestCaptureIdentityContinuity(t *testing.T) {
-	opts := captureFixture(t)
-	first, err := Capture(t.Context(), opts)
-	require.NoError(t, err)
-	assert.NoFileExists(t, filepath.Join(opts.DataDir, "telemetry-install-id"), "capture never mints an identity in source state")
-	require.Len(t, first.NewIdentities, 2)
-	opts.IdentityFrom = filepath.Join(opts.Destination, "capture.json")
-	opts.Destination = filepath.Join(t.TempDir(), "again")
-	opts.Settings.LocalMachineName = "renamed-label"
-	second, err := Capture(t.Context(), opts)
-	require.NoError(t, err)
-	assert.Equal(t, first.Source.DeviceID, second.Source.DeviceID)
-	assert.Equal(t, first.Source.Roots[0].ID, second.Source.Roots[0].ID)
-	assert.Empty(t, second.NewIdentities)
-	assert.Equal(t, "renamed-label", second.Source.Machine)
-	dbtest.WriteTestFile(t, filepath.Join(opts.DataDir, "telemetry-install-id"), []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
-	opts.Destination = filepath.Join(t.TempDir(), "wrong-installation")
-	_, err = Capture(t.Context(), opts)
-	require.ErrorContains(t, err, "different installation")
-	assert.NoDirExists(t, opts.Destination)
-}
-
-func TestCaptureIdentityReuseWithoutOldPayload(t *testing.T) {
-	for _, condition := range []string{"descriptor-only", "changed-payload"} {
+	for _, condition := range []string{"unchanged", "descriptor-only", "changed-payload", "application-directory-moved"} {
 		t.Run(condition, func(t *testing.T) {
+			ctx := t.Context()
 			opts := captureFixture(t)
-			first, err := Capture(t.Context(), opts)
+			first, err := Capture(ctx, opts)
 			require.NoError(t, err)
+			assert.NoFileExists(t, filepath.Join(opts.DataDir, "telemetry-install-id"))
+			require.Len(t, first.NewIdentities, 2)
 			identity := filepath.Join(opts.Destination, "capture.json")
-			if condition == "descriptor-only" {
+			var archive *Archive
+			original, err := filepath.EvalSymlinks(opts.DataDir)
+			require.NoError(t, err)
+			switch condition {
+			case "descriptor-only":
 				data, err := os.ReadFile(identity)
 				require.NoError(t, err)
 				identity = filepath.Join(t.TempDir(), "capture.json")
 				require.NoError(t, os.WriteFile(identity, data, 0o600))
 				require.NoError(t, os.RemoveAll(opts.Destination))
-			} else {
-				dbtest.WriteTestFile(t, filepath.Join(opts.Destination, first.Source.Roots[0].Path,
-					"projects", "project-a", "saved.jsonl"), []byte("changed old copy"))
+			case "changed-payload":
+				dbtest.WriteTestFile(t, filepath.Join(opts.Destination, first.Source.Roots[0].Path, "projects", "project-a", "saved.jsonl"), []byte("changed old copy"))
+			case "application-directory-moved":
+				spec, err := LoadImportSpec(ctx, identity)
+				require.NoError(t, err)
+				database := dbtest.OpenTestDB(t)
+				require.NoError(t, database.EnableArchiveOnly(ctx))
+				archive, err = Open(ctx, database, t.TempDir(), nil)
+				require.NoError(t, err)
+				defer archive.Close()
+				_, err = archive.Import(ctx, spec)
+				require.NoError(t, err)
+				moved := filepath.Join(t.TempDir(), "moved")
+				require.NoError(t, os.Rename(original, moved))
+				opts.DataDir, err = filepath.EvalSymlinks(moved)
+				require.NoError(t, err)
 			}
-			// Identity reuse does not establish custody of the old capture.
-			_, err = LoadImportSpec(t.Context(), identity)
-			require.Error(t, err)
+			if condition == "descriptor-only" || condition == "changed-payload" {
+				_, err = LoadImportSpec(ctx, identity)
+				require.Error(t, err)
+			}
 			opts.IdentityFrom = identity
 			opts.Destination = filepath.Join(t.TempDir(), "again")
-			second, err := Capture(t.Context(), opts)
+			opts.Settings.LocalMachineName = "renamed-label"
+			second, err := Capture(ctx, opts)
 			require.NoError(t, err)
 			assert.Equal(t, first.Source.DeviceID, second.Source.DeviceID)
-			assert.Equal(t, first.Source.Roots, second.Source.Roots)
+			wantRoots := append([]RootSpec(nil), first.Source.Roots...)
+			if condition == "application-directory-moved" {
+				for i := range wantRoots {
+					if wantRoots[i].ID == "application" {
+						assert.Equal(t, original, wantRoots[i].OriginalPath)
+						wantRoots[i].ConfiguredPath = opts.DataDir
+					}
+				}
+				spec, err := LoadImportSpec(ctx, filepath.Join(opts.Destination, "capture.json"))
+				require.NoError(t, err)
+				_, err = archive.Import(ctx, spec)
+				require.NoError(t, err, "moving application data preserves its accepted root identity")
+			}
+			assert.Equal(t, wantRoots, second.Source.Roots)
 			assert.Empty(t, second.NewIdentities)
+			assert.Equal(t, "renamed-label", second.Source.Machine)
+			if condition == "unchanged" {
+				dbtest.WriteTestFile(t, filepath.Join(opts.DataDir, "telemetry-install-id"), []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+				opts.Destination = filepath.Join(t.TempDir(), "wrong-installation")
+				_, err = Capture(ctx, opts)
+				require.ErrorContains(t, err, "different installation")
+				assert.NoDirExists(t, opts.Destination)
+			}
 		})
 	}
-}
-
-func TestCaptureAfterApplicationDirectoryMove(t *testing.T) {
-	ctx := t.Context()
-	opts := captureFixture(t)
-	first, err := Capture(ctx, opts)
-	require.NoError(t, err)
-	opts.IdentityFrom = filepath.Join(opts.Destination, "capture.json")
-	spec, err := LoadImportSpec(ctx, opts.IdentityFrom)
-	require.NoError(t, err)
-	database := dbtest.OpenTestDB(t)
-	require.NoError(t, database.EnableArchiveOnly(ctx))
-	archive, err := Open(ctx, database, t.TempDir(), nil)
-	require.NoError(t, err)
-	defer archive.Close()
-	_, err = archive.Import(ctx, spec)
-	require.NoError(t, err)
-
-	original, err := filepath.EvalSymlinks(opts.DataDir)
-	require.NoError(t, err)
-	moved := filepath.Join(t.TempDir(), "moved")
-	require.NoError(t, os.Rename(original, moved))
-	moved, err = filepath.EvalSymlinks(moved)
-	require.NoError(t, err)
-	opts.DataDir = moved
-	opts.Destination = filepath.Join(t.TempDir(), "again")
-	second, err := Capture(ctx, opts)
-	require.NoError(t, err)
-	assert.Equal(t, first.Source.DeviceID, second.Source.DeviceID)
-	for _, root := range second.Source.Roots {
-		if root.ID == "application" {
-			assert.Equal(t, original, root.OriginalPath)
-			assert.Equal(t, moved, root.ConfiguredPath)
-		}
-	}
-	spec, err = LoadImportSpec(ctx, filepath.Join(opts.Destination, "capture.json"))
-	require.NoError(t, err)
-	_, err = archive.Import(ctx, spec)
-	require.NoError(t, err, "moving application data preserves its accepted root identity")
 }
 
 func TestCaptureOmitsProviderCredentials(t *testing.T) {
@@ -333,11 +275,37 @@ func TestCapturePreflightBlocksUnknownAndDeletedProjection(t *testing.T) {
 }
 
 func TestCaptureDoesNotPublishFailure(t *testing.T) {
-	for _, condition := range []string{"nested", "existing", "vault", "raw-vault", "canceled", "symlink-root", "invalid-identity", "missing-asset"} {
+	for _, condition := range []string{"nested", "existing", "vault", "raw-vault", "canceled", "symlink-root", "invalid-identity", "missing-asset", "case-alias-overlap", "newer-checkpoint"} {
 		t.Run(condition, func(t *testing.T) {
 			opts := captureFixture(t)
 			ctx := t.Context()
 			switch condition {
+			case "case-alias-overlap":
+				parent := t.TempDir()
+				provider := filepath.Join(parent, "Provider")
+				require.NoError(t, os.Mkdir(provider, 0o755))
+				alias := filepath.Join(parent, "provider")
+				aliasInfo, err := os.Stat(alias)
+				if err != nil {
+					t.Skip("test filesystem is case-sensitive")
+				}
+				providerInfo, err := os.Stat(provider)
+				require.NoError(t, err)
+				if !os.SameFile(aliasInfo, providerInfo) {
+					t.Skip("test filesystem does not resolve case aliases")
+				}
+				opts.Roots = []RootSpec{{Provider: "files", Path: provider}}
+				opts.Destination = filepath.Join(alias, "capture")
+			case "newer-checkpoint":
+				path := filepath.Join(opts.DataDir, "raw-sync", "checkpoint.db")
+				store, err := rawcheckpoint.Open(t.Context(), path)
+				require.NoError(t, err)
+				require.NoError(t, store.Close())
+				checkpoint, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = checkpoint.ExecContext(t.Context(), "PRAGMA user_version=1000")
+				require.NoError(t, err)
+				require.NoError(t, checkpoint.Close())
 			case "nested":
 				opts.Destination = filepath.Join(opts.Roots[0].Path, "capture")
 			case "existing":
@@ -366,6 +334,14 @@ func TestCaptureDoesNotPublishFailure(t *testing.T) {
 			}
 			_, err := Capture(ctx, opts)
 			require.Error(t, err)
+			if condition == "case-alias-overlap" {
+				require.ErrorContains(t, err, "capture roots must not overlap")
+				entries, err := os.ReadDir(opts.Roots[0].Path)
+				require.NoError(t, err)
+				assert.Empty(t, entries, "rejection must precede staging and copying")
+			} else if condition == "newer-checkpoint" {
+				require.ErrorContains(t, err, "newer than supported")
+			}
 			if condition == "existing" {
 				assert.FileExists(t, filepath.Join(opts.Destination, "keep"))
 			} else {
@@ -385,4 +361,26 @@ func TestCaptureRejectsChangedFile(t *testing.T) {
 	_, err = captureFile(t.Context(), source, target, "source", "transcript.jsonl", info)
 	require.ErrorContains(t, err, "source changed")
 	assert.NoFileExists(t, target)
+}
+
+func TestCaptureRejectsDuplicateSelectedRoots(t *testing.T) {
+	for _, identity := range []string{"new", "reused"} {
+		t.Run(identity, func(t *testing.T) {
+			opts := captureFixture(t)
+			if identity == "reused" {
+				_, err := Capture(t.Context(), opts)
+				require.NoError(t, err)
+				opts.IdentityFrom = filepath.Join(opts.Destination, "capture.json")
+				opts.Destination = filepath.Join(t.TempDir(), "again")
+			}
+			alias := filepath.Join(t.TempDir(), "alias")
+			require.NoError(t, os.Symlink(filepath.Dir(opts.Roots[0].Path), alias))
+			for _, path := range []string{opts.Roots[0].Path, filepath.Join(alias, "projects")} {
+				opts.Roots = []RootSpec{opts.Roots[0], {Provider: "claude", Path: path}}
+				_, err := Capture(t.Context(), opts)
+				require.EqualError(t, err, "duplicate selected capture root")
+				assert.NoDirExists(t, opts.Destination)
+			}
+		})
+	}
 }

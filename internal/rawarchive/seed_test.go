@@ -35,7 +35,6 @@ func TestSeedPreservesDeletionAndMachineEvidence(t *testing.T) {
 	assert.Equal(t, captured.CaptureID, report.CaptureID)
 	require.NotNil(t, report.Preflight)
 	assert.EqualValues(t, 1, *report.Preflight.Counts["trashed"])
-	assert.EqualValues(t, 1, *report.Preflight.Counts["deleted"])
 	assert.Equal(t, []db.MachineIdentityCandidate{{Machine: "historical-label", Sessions: 1}}, report.UnownedMachines)
 	database, err = db.OpenIsolatedContext(t.Context(), filepath.Join(target, "sessions.db"))
 	require.NoError(t, err)

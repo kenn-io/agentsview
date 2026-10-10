@@ -89,34 +89,52 @@ func TestRejectedIdentityKeepsHistoryAndChangedImportKeepsSource(t *testing.T) {
 // Sources absent from the seed must still claim distinct identities within one
 // batch. Otherwise the second parse silently overwrites the first scratch row.
 func TestReparseRejectsBatchIdentityCollision(t *testing.T) {
-	ctx := t.Context()
-	database := dbtest.OpenTestDB(t)
-	data := t.TempDir()
-	dbtest.WriteTestFile(t, filepath.Join(data, "telemetry-install-id"), []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
-	require.NoError(t, database.EnableArchiveOnly(ctx))
-	archive, err := Open(ctx, database, data, nil)
-	require.NoError(t, err)
-	defer archive.Close()
-	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
-	var roots []RootSpec
-	for _, name := range []string{"one", "two"} {
-		root := t.TempDir()
-		dbtest.WriteTestFile(t, filepath.Join(root, "project", id+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", name, id).String()))
-		roots = append(roots, RootSpec{Provider: "claude", Path: root})
+	for _, condition := range []string{"distinct roots", "same root, overlapping continuation paths"} {
+		t.Run(condition, func(t *testing.T) {
+			ctx := t.Context()
+			database := dbtest.OpenTestDB(t)
+			data := t.TempDir()
+			dbtest.WriteTestFile(t, filepath.Join(data, "telemetry-install-id"), []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+			require.NoError(t, database.EnableArchiveOnly(ctx))
+			archive, err := Open(ctx, database, data, nil)
+			require.NoError(t, err)
+			defer archive.Close()
+			id := "019eb791-cf7d-75c1-8439-9ed74c122e02"
+			var roots []RootSpec
+			if condition == "distinct roots" {
+				for _, name := range []string{"one", "two"} {
+					root := t.TempDir()
+					dbtest.WriteTestFile(t, filepath.Join(root, "project", id+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", name, id).String()))
+					roots = append(roots, RootSpec{Provider: "claude", Path: root})
+				}
+			} else {
+				id = "agent-reviewer"
+				root := t.TempDir()
+				for _, parent := range []string{"parent-a", "parent-b"} {
+					path := filepath.Join(root, "project", parent, "subagents", id+".jsonl")
+					dbtest.WriteTestFile(t, path, []byte(testjsonl.NewSessionBuilder().AddClaudeUser("2026-08-05T03:40:00Z", parent+" question").AddClaudeAssistant("2026-08-05T03:41:00Z", parent+" answer").String()))
+				}
+				roots = []RootSpec{{Provider: "claude", Path: root}}
+			}
+			capture := newImportCapture(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "source", roots...)
+			spec := loadTestCapture(t, &capture)
+			report, err := archive.Import(ctx, spec)
+			require.NoError(t, err)
+			require.Empty(t, report.Gaps)
+			require.Equal(t, 2, report.Sources)
+			for _, root := range roots {
+				require.NoError(t, os.RemoveAll(root.Path))
+			}
+			report, err = archive.Reparse(ctx, ReparseOptions{All: true, ScratchBytes: 1 << 20})
+			require.ErrorContains(t, err, "another selected source")
+			assert.Zero(t, report.Parsed)
+			session, err := database.GetSessionFull(ctx, id)
+			require.NoError(t, err)
+			assert.Nil(t, session)
+			report, err = archive.Verify(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, 2, report.Sources)
+			assert.Zero(t, report.Parsed)
+		})
 	}
-	capture := newImportCapture(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "source", roots...)
-	spec := loadTestCapture(t, &capture)
-	report, err := archive.Import(ctx, spec)
-	require.NoError(t, err)
-	require.Equal(t, 2, report.Sources)
-	report, err = archive.Reparse(ctx, ReparseOptions{All: true, ScratchBytes: 1 << 20})
-	require.ErrorContains(t, err, "another selected source")
-	assert.Zero(t, report.Parsed)
-	session, err := database.GetSessionFull(ctx, id)
-	require.NoError(t, err)
-	assert.Nil(t, session)
-	report, err = archive.Verify(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 2, report.Sources)
-	assert.Zero(t, report.Parsed)
 }

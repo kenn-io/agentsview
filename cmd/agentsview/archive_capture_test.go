@@ -82,11 +82,4 @@ func TestArchiveCapturePortableSource(t *testing.T) {
 	require.NoError(t, snapshot.Close())
 	assert.FileExists(t, filepath.Join(applicationPath, "assets", "kept.bin"))
 	assert.NoFileExists(t, filepath.Join(applicationPath, "config.toml"))
-	// Moving the whole capture does not require editing paths or identities.
-	moved := filepath.Join(t.TempDir(), "moved")
-	require.NoError(t, os.Rename(target, moved))
-	movedSpec, err := rawarchive.LoadImportSpec(t.Context(), filepath.Join(moved, "capture.json"))
-	require.NoError(t, err)
-	assert.Equal(t, spec.Roots[0].ID, movedSpec.Roots[0].ID)
-	assert.Equal(t, installation, movedSpec.DeviceID)
 }

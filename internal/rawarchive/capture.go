@@ -120,6 +120,7 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 		return d, err
 	}
 	seen := map[string]bool{"application": true}
+	selected := make(map[[2]string]bool)
 	canonicalBases := make(map[string]string)
 	for _, input := range opts.Roots {
 		if input.Provider != "claude" && input.Provider != "codex" && input.Provider != "files" {
@@ -140,6 +141,11 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 		if err != nil {
 			return d, err
 		}
+		key := [2]string{input.Provider, configured}
+		if selected[key] {
+			return d, errors.New("duplicate selected capture root")
+		}
+		selected[key] = true
 		base, dirs := captureRootLayout(input.Provider, original)
 		canonicalBase, err := canonicalRecoverySource(base)
 		if err != nil {

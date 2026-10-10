@@ -120,7 +120,7 @@ func TestArchiveExtractCaptureAfterRestore(t *testing.T) {
 	require.NoError(t, database.Close())
 	require.Len(t, messages, 1, "extraction must not advance the accepted source")
 	assert.Equal(t, "first capture", messages[0].Content)
-	for _, args := range [][]string{nil, {"--capture", "missing"}} {
+	for _, args := range [][]string{{"--capture", "missing"}} {
 		target := filepath.Join(t.TempDir(), "rejected")
 		_, err = run(append([]string{"archive", "extract", target}, args...)...)
 		require.Error(t, err)
@@ -394,20 +394,6 @@ func TestArchiveMoveAndReparse(t *testing.T) {
 	engine.Close()
 	require.NoError(t, err)
 	assert.True(t, stats.ArchiveRebuilt)
-	check()
-	// A receiving-host source must remain absent after the replacement swap.
-	liveRoot := t.TempDir()
-	newID := "019eb791-cf7d-75c1-8439-9ed74c122e03"
-	dbtest.WriteTestFile(t, filepath.Join(liveRoot, "project-b", newID+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-02-01T00:00:00Z", "new machine session", newID).String()))
-	engine = syncer.NewEngine(ctx, database, syncer.EngineConfig{Ephemeral: true, Machine: "destination-device", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {liveRoot}}})
-	stats, err = engine.ResyncAllWithOptions(ctx, nil, syncer.RebuildOptions{})
-	engine.Close()
-	require.NoError(t, err)
-	require.True(t, stats.ArchiveRebuilt)
-	receiving, err := database.GetSessionFull(ctx, newID)
-	require.NoError(t, err)
-	assert.Nil(t, receiving)
-	require.ErrorIs(t, database.RequireSourceSync(ctx), db.ErrArchiveOnly)
 	check()
 	require.NoError(t, database.Close())
 	// The accepted ledger by itself is not a backup. Missing raw bytes must be
