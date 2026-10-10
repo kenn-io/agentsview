@@ -371,6 +371,8 @@ class UsageStore {
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
   // Which selection the shown summary covers, so a failed reselect reports instead of showing old totals.
   private summarySelection: string | null = null;
+  // A full-window refresh is in flight, so a brush must refetch the window instead of slicing old data.
+  private fullWindowPending = false;
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
@@ -647,7 +649,7 @@ class UsageStore {
     if (this.referenceSummary) this.attributionSummary = summaryForDateRange(this.referenceSummary, from, to);
     this.topSessions = null;
     this.errors.topSessions = null;
-    void this.fetchAll({ preserveTimeRange: true, refreshTimeSeriesContext: false });
+    void this.fetchAll({ preserveTimeRange: true, refreshTimeSeriesContext: this.fullWindowPending });
   }
 
   clearTimeRange(refresh = true) {
@@ -971,6 +973,7 @@ class UsageStore {
       selectedRangeAtStart !== null
         ? { ...params, from: this.from, to: this.to }
         : undefined;
+    if (contextParams || this.selectedTimeRange === null) this.fullWindowPending = true;
     const summaryPromise = this.fetchSummary({
       loadComparison: false,
       params,
@@ -1096,6 +1099,7 @@ class UsageStore {
       if (this.versions.summary === v) {
         this.summary = data;
         this.summarySelection = selectionKey(params);
+        if (contextData !== null || this.selectedTimeRange === null) this.fullWindowPending = false;
         this.attributionSummary = attributionData;
         if (!attributionParams) this.referenceSummary = null;
         else if (referenceData || !this.selectedTimeRange) this.referenceSummary = referenceData ?? attributionData;

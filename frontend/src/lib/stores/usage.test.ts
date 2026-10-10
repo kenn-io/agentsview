@@ -2174,6 +2174,25 @@ describe("UsageStore attribution focus", () => {
     usage.cancelInFlightReads();
   });
 
+  it("refetches the full window when a brush interrupts a selection refresh", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2024-01-01", "2024-01-31");
+    await usage.fetchAll();
+    let release!: () => void;
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve(usageSummary(1)))));
+    usage.toggleSelection("project", "pl1:sha256:alpha");
+    const selected = usageSummary(4);
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => params.project_key && params.from === "2024-01-01" ? selected : usageSummary(2));
+    usage.setTimeRange("2024-01-08", "2024-01-14");
+    release();
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params)).toContainEqual(
+      expect.objectContaining({ project_key: "pl1:sha256:alpha", from: "2024-01-01", to: "2024-01-31" }),
+    );
+    expect(usage.timeSeriesSummary).toEqual(selected);
+    usage.cancelInFlightReads();
+  });
+
   it("keeps model selection in memory while saving exclusions", async () => {
     localStorage.setItem("usage-filters", JSON.stringify({ selectedModel: "old-model" }));
     const { usage, buildUsageUrlParams } = await loadStore();
