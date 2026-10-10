@@ -1915,6 +1915,8 @@ Local MCP mode reuses its connection while the writable daemon runtime record
 and process identity match. After the daemon exits, the next call finds it again
 and starts it when needed. The MCP server does not open the local SQLite archive
 directly.
+Failed operations discard the cached selection. The next operation discovers
+the daemon again; the failed operation is returned without replay.
 Read-only daemons, startup fallbacks, and daemons whose process identity cannot
 be verified use full discovery for each call.
 

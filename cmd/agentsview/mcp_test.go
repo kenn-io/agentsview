@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -362,6 +363,11 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 		case "/api/v1/sessions":
 			assert.Equal(t, "7", r.URL.Query().Get("limit"))
 			assert.NoError(t, json.MarshalWrite(w, service.SessionList{Sessions: []db.Session{{ID: "from-daemon"}}, Total: 1}))
+		case "/api/v1/search":
+			assert.Equal(t, "cached search", r.URL.Query().Get("q"))
+			assert.NoError(t, json.MarshalWrite(w, service.SessionSearchResult{Results: []db.SearchResult{{SessionID: "from-daemon"}}}))
+		case "/api/v1/sessions/from-daemon":
+			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{ID: "from-daemon"}))
 		default:
 			assert.Fail(t, "unexpected request path", r.URL.Path)
 			http.NotFound(w, r)
@@ -376,6 +382,13 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, probes)
 	initialProbes := probes
+	search, err := svc.Search(t.Context(), service.SearchRequest{Query: "cached search"})
+	require.NoError(t, err)
+	require.Len(t, search.Results, 1)
+	assert.Equal(t, "from-daemon", search.Results[0].SessionID)
+	detail, err := svc.Get(t.Context(), search.Results[0].SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "from-daemon", detail.ID)
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
@@ -388,6 +401,113 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, initialProbes, probes, "cached calls must avoid daemon discovery probes")
 	assert.NoFileExists(t, cfg.DBPath)
+}
+
+func TestMCPDaemonServiceRecoversAfterCachedListenerFailure(t *testing.T) {
+	dir := runtimeTestDir(t)
+	forbidStartBackgroundServeForTransport(t, "MCP must use the healthy read-only daemon")
+	writable := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/sessions": func(w http.ResponseWriter, _ *http.Request) {
+			assert.NoError(t, json.MarshalWrite(w, service.SessionList{Total: 1}))
+		},
+	})
+	host, port := splitTestServerURL(t, writable.URL)
+	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	readOnlyRequests := 0
+	readOnly := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/sessions": func(w http.ResponseWriter, _ *http.Request) {
+			readOnlyRequests++
+			assert.NoError(t, json.MarshalWrite(w, service.SessionList{Total: 9}))
+		},
+	})
+	readOnlyDir := t.TempDir()
+	host, port = splitTestServerURL(t, readOnly.URL)
+	writeDaemonRuntimeForTest(t, readOnlyDir, host, port, "test", true)
+	oldList := listDaemonRuntimeRecords
+	listDaemonRuntimeRecords = func(store daemon.RuntimeStore) ([]daemon.RuntimeRecord, error) {
+		records, err := store.List()
+		if err != nil {
+			return nil, err
+		}
+		fallbacks, err := runtimeStore(readOnlyDir).List()
+		return append(records, fallbacks...), err
+	}
+	t.Cleanup(func() { listDaemonRuntimeRecords = oldList })
+	svc := newMCPDaemonService(config.Config{DataDir: dir})
+	result, err := svc.List(t.Context(), service.ListFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Total)
+	writable.Close()
+	assert.True(t, daemon.ProcessAlive(os.Getpid()))
+	result, err = svc.List(t.Context(), service.ListFilter{})
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Zero(t, readOnlyRequests, "the failed operation must not be replayed")
+	runtime := FindDaemonRuntime(dir)
+	require.NotNil(t, runtime)
+	require.True(t, runtime.ReadOnly, "existing discovery can reach the healthy fallback")
+	result, err = svc.List(t.Context(), service.ListFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 9, result.Total)
+	assert.Equal(t, 1, readOnlyRequests)
+}
+
+func TestMCPDaemonServiceLateFailurePreservesReplacement(t *testing.T) {
+	dir := runtimeTestDir(t)
+	forbidStartBackgroundServeForTransport(t, "MCP must use the replacement daemon")
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	writable := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/sessions/session-a": func(w http.ResponseWriter, _ *http.Request) {
+			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{ID: "session-a"}))
+		},
+		"/api/v1/sessions": func(w http.ResponseWriter, _ *http.Request) {
+			close(started)
+			<-release
+			http.Error(w, "operation failed", http.StatusInternalServerError)
+		},
+	})
+	t.Cleanup(unblock)
+	host, port := splitTestServerURL(t, writable.URL)
+	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	svc := newMCPDaemonService(config.Config{DataDir: dir})
+	_, err := svc.Get(t.Context(), "session-a")
+	require.NoError(t, err)
+	failed := make(chan error, 1)
+	go func() {
+		_, err := svc.List(t.Context(), service.ListFilter{})
+		failed <- err
+	}()
+	<-started
+	var probes atomic.Int32
+	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
+	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/ping":
+			probes.Add(1)
+			ping.ServeHTTP(w, r)
+		case "/api/v1/sessions/session-a":
+			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{ID: "replacement-session"}))
+		default:
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(replacement.Close)
+	host, port = splitTestServerURL(t, replacement.URL)
+	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	detail, err := svc.Get(t.Context(), "session-a")
+	require.NoError(t, err)
+	assert.Equal(t, "replacement-session", detail.ID)
+	initialProbes := probes.Load()
+	require.Positive(t, initialProbes)
+	unblock()
+	require.ErrorContains(t, <-failed, "operation failed")
+	detail, err = svc.Get(t.Context(), "session-a")
+	require.NoError(t, err)
+	assert.Equal(t, "replacement-session", detail.ID)
+	assert.Equal(t, initialProbes, probes.Load(), "the late failure must preserve the replacement cache")
 }
 
 func TestMCPDaemonServiceRejectsIncompatibleDaemonWithoutReplacement(t *testing.T) {
