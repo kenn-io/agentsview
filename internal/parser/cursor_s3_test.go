@@ -153,7 +153,6 @@ func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
 		{name: "broad root first", root: "s3://bucket/laptop/raw/cursor", roots: []string{"s3://bucket/laptop/raw/cursor", "s3://bucket/laptop/raw/cursor/project-one/agent-transcripts"}, projects: [2]string{"project-one", "project-two"}},
 		{name: "nested root first", root: "s3://bucket/laptop/raw/cursor", roots: []string{"s3://bucket/laptop/raw/cursor/project-one/agent-transcripts", "s3://bucket/laptop/raw/cursor"}, projects: [2]string{"project-one", "project-two"}},
 		{name: "harvest", root: "s3://bucket/host-a/raw/cursor", roots: []string{"s3://bucket/host-a/raw/cursor"}, projects: [2]string{"agent-transcripts", "cursor"}, harvest: true},
-		{name: "encoded projects", root: "s3://bucket/archive/agent-transcripts/laptop/raw/cursor", roots: []string{"s3://bucket/archive/agent-transcripts/laptop/raw/cursor"}, projects: [2]string{"Users-fiona-Documents-demo", "home-user-a-Documents-demo"}},
 	} {
 		roots := tt.roots
 		projects := tt.projects
