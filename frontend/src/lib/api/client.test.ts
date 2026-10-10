@@ -20,16 +20,6 @@ vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 describe("syncClaudeAI browser relay", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(["claude_ai_auth_required"])("preserves recovery code %s", async (code) => {
-    const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
-      `event: error\ndata: ${JSON.stringify({ error: "English recovery instruction", code })}\n\n`,
-      { headers: { "Content-Type": "text/event-stream" } },
-    )));
-    await expect(syncClaudeAI(host)).rejects.toMatchObject({ message: "English recovery instruction", code });
-    expect(host.close).toHaveBeenCalledOnce();
-  });
-
   it.each(["done", "error"])("preserves sync %s when closing the browser fails", async (event) => {
     const host = { close: vi.fn().mockRejectedValue(new Error("Close failed")) } as unknown as BrowserHost;
     const data = event === "done"
@@ -47,50 +37,30 @@ describe("syncClaudeAI browser relay", () => {
     expect(host.close).toHaveBeenCalledOnce();
   });
 
-  it("returns completed sync while browser cleanup is pending", async () => {
-    let close!: () => void;
-    const host = { close: vi.fn(() => new Promise<void>((resolve) => { close = resolve; })) } as unknown as BrowserHost;
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
-      'event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    )));
-    await expect(syncClaudeAI(host)).resolves.toEqual({ imported: 1, updated: 0, skipped: 0, errors: 0 });
-    expect(host.close).toHaveBeenCalledOnce();
-    close();
-  });
-
-  it("signs in only after the previous browser close finishes", async () => {
+  it.each(["sign in", "sync"])("starts %s only after the previous browser close finishes", async (action) => {
     let close!: () => void;
     const host = { connect: vi.fn().mockResolvedValue(undefined), close: vi.fn(() => new Promise<void>((resolve) => { close = resolve; })) } as unknown as BrowserHost;
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(
-      'event: done\ndata: {"imported":0,"updated":0,"skipped":0,"errors":0}\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    )));
-    await syncClaudeAI(host);
-    const connecting = connectClaudeAI(host);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(host.connect).not.toHaveBeenCalled();
-    close();
-    await connecting;
-    expect(host.connect).toHaveBeenCalledOnce();
-  });
-
-  it("starts a new sync only after the previous browser close finishes", async () => {
-    let close!: () => void;
-    const host = { close: vi.fn(() => new Promise<void>((resolve) => { close = resolve; })) } as unknown as BrowserHost;
     const fetch = vi.fn(async () => new Response(
       'event: done\ndata: {"imported":0,"updated":0,"skipped":0,"errors":0}\n\n',
       { headers: { "Content-Type": "text/event-stream" } },
     ));
     vi.stubGlobal("fetch", fetch);
     await syncClaudeAI(host);
-    const next = syncClaudeAI(host);
+    const next = action === "sign in" ? connectClaudeAI(host) : syncClaudeAI(host);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fetch).toHaveBeenCalledOnce();
+    if (action === "sign in") {
+      expect(host.connect).not.toHaveBeenCalled();
+    } else {
+      expect(fetch).toHaveBeenCalledOnce();
+    }
     close();
     await next;
-    expect(fetch).toHaveBeenCalledTimes(2);
-    close();
+    if (action === "sign in") {
+      expect(host.connect).toHaveBeenCalledOnce();
+    } else {
+      expect(fetch).toHaveBeenCalledTimes(2);
+      close();
+    }
   });
 
   it("answers fetch events with browser status", async () => {

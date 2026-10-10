@@ -56,30 +56,18 @@ it("offers sign in and sync without a sign-in probe", async () => {
   expect(screen.getByText(m.import_processed({ count: 1 }))).toBeTruthy();
 });
 
-it.each(["cancel", "error"])("refreshes completed chats after sync %s", async (exit) => {
+it("refreshes completed chats after sync error", async () => {
   let rejectSync!: (error: Error) => void;
-  let signal!: AbortSignal;
-  syncClaudeAI.mockImplementation(async (_host, callbacks, runSignal) => {
-    signal = runSignal;
+  syncClaudeAI.mockImplementation(async (_host, callbacks) => {
     callbacks.onProgress({ imported: 0, updated: 1, skipped: 0, errors: 0 });
     return await new Promise((_, reject) => { rejectSync = reject; });
   });
   const onimported = vi.fn();
   const onclose = vi.fn();
-  const { rerender } = render(ImportModal, { open: true, onclose, onimported });
+  render(ImportModal, { open: true, onclose, onimported });
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
-  if (exit === "cancel") {
-    await fireEvent.click(screen.getByRole("button", { name: m.import_cancel() }));
-    expect(signal.aborted).toBe(true);
-    expect(onclose).toHaveBeenCalledOnce();
-  }
   rejectSync(new Error("Interrupted sync"));
   await waitFor(() => expect(onimported).toHaveBeenCalledOnce());
-  if (exit === "cancel") {
-    await rerender({ open: true, onclose, onimported });
-    expect((screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText("Interrupted sync")).toBeNull();
-  }
 });
 
 it("hides browser sync controls for a read-only archive", () => {
@@ -89,20 +77,25 @@ it("hides browser sync controls for a read-only archive", () => {
   expect(screen.queryByRole("button", { name: m.import_claude_connect() })).toBeNull();
 });
 
-it.each(["close", "overlay"])("cancels browser sync through %s", async (action) => {
+it.each(["close", "overlay", "cancel"])("cancels browser sync through %s", async (action) => {
   let signal!: AbortSignal;
-  syncClaudeAI.mockImplementation(async (_host, _callbacks, runSignal) => {
+  syncClaudeAI.mockImplementation(async (_host, callbacks, runSignal) => {
     signal = runSignal;
+    if (action === "cancel") {
+      callbacks.onProgress({ imported: 0, updated: 1, skipped: 0, errors: 0 });
+    }
     return await new Promise((_, reject) => {
       runSignal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true });
     });
   });
   const onclose = vi.fn();
   const onimported = vi.fn();
-  render(ImportModal, { open: true, onclose, onimported });
+  const { rerender } = render(ImportModal, { open: true, onclose, onimported });
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
   if (action === "close") {
     await fireEvent.click(screen.getByRole("button", { name: m.import_close() }));
+  } else if (action === "cancel") {
+    await fireEvent.click(screen.getByRole("button", { name: m.import_cancel() }));
   } else {
     const overlay = screen.getByRole("dialog").parentElement!;
     await fireEvent.pointerDown(overlay);
@@ -113,4 +106,9 @@ it.each(["close", "overlay"])("cancels browser sync through %s", async (action) 
   expect(onclose).toHaveBeenCalledOnce();
   await waitFor(() => expect(onimported).toHaveBeenCalledOnce());
   expect(screen.queryByRole("dialog")).toBeNull();
+  if (action === "cancel") {
+    await rerender({ open: true, onclose, onimported });
+    expect((screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText("Cancelled")).toBeNull();
+  }
 });

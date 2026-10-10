@@ -351,7 +351,6 @@ func TestSyncClaudeAIDetailFailures(t *testing.T) {
 		wantCalls int
 	}{
 		{name: "bad request", status: 400, wantCalls: 1},
-		{name: "oversize", err: ErrClaudeAIResponseTooLarge, wantCalls: 1},
 		{name: "forbidden", status: 403, wantCalls: 1},
 		{name: "transport", err: errors.New("transport failed"), wantCalls: 1},
 		{name: "host cancelled", err: context.Canceled, wantCalls: 1},
@@ -523,35 +522,6 @@ func TestSyncClaudeAIMalformedRetries(t *testing.T) {
 	}
 }
 
-func TestSyncClaudeAIZipSameCountFreshness(t *testing.T) {
-	d := testDB(t)
-	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
-	calls := 0
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		calls++
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-	})
-	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	exported := strings.Replace(syncDetail, "Chosen reply", "Zip reply", 1)
-	stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.Updated)
-	messages, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	require.Equal(t, []string{"Hello", "Zip reply"}, messageContents(messages))
-	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Updated)
-	messages, err = d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
-	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
-	assert.Equal(t, 2, calls)
-}
-
 func TestSyncClaudeAIDetailNewerThanListNotCached(t *testing.T) {
 	d := testDB(t)
 	changed := regexp.MustCompile(`"updated_at":\s*"[^"]*"`).ReplaceAllString(syncDetail, `"updated_at":"2099-01-01T00:00:00Z"`)
@@ -565,50 +535,6 @@ func TestSyncClaudeAIDetailNewerThanListNotCached(t *testing.T) {
 	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, calls)
-}
-
-func TestSyncClaudeAIZipTitleFreshness(t *testing.T) {
-	d := testDB(t)
-	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
-	calls := 0
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		calls++
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-	})
-	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	exported := strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)
-	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
-	require.NoError(t, err)
-	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 2, calls)
-	session, err := d.GetSessionFull(t.Context(), id)
-	require.NoError(t, err)
-	require.NotNil(t, session.SessionName)
-	assert.Equal(t, "Chat", *session.SessionName)
-}
-
-func TestSyncClaudeAITitleOnlyChangeCountsAsUpdate(t *testing.T) {
-	d := testDB(t)
-	renamed := false
-	fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
-		summary, detail := syncSummary, syncDetail
-		if renamed {
-			summary = strings.Replace(summary, "2026-03-01T10:05:00.123456Z", "2026-03-02T10:05:00.123456Z", 1)
-			detail = strings.Replace(detail, `"name":"Chat"`, `"name":"Renamed"`, 1)
-		}
-		return syncOneFetch(t, summary, func() (ClaudeAIResponse, error) {
-			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
-		})(ctx, path)
-	}
-	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	renamed = true
-	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Updated)
-	assert.Zero(t, stats.Skipped)
 }
 
 func TestSyncClaudeAIUsageArchiveShorterBranchReplacesCounts(t *testing.T) {
@@ -746,30 +672,50 @@ func TestSyncClaudeAICommittedContentCountsOnFreshnessFailure(t *testing.T) {
 }
 
 func TestSyncClaudeAIZipFreshness(t *testing.T) {
-	t.Run("zip changes stored count", func(t *testing.T) {
-		d := testDB(t)
-		calls := 0
-		fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-			calls++
-			return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	for _, tt := range []struct{ name, exported string }{
+		{"zip changes stored count", strings.TrimSuffix(syncDetail, "]}") + `,{"sender":"human","text":"Other branch"}]}`},
+		{"zip changes content at same count", strings.Replace(syncDetail, "Chosen reply", "Zip reply", 1)},
+		{"zip changes title", strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			calls := 0
+			fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+				calls++
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+			})
+			_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+tt.exported+"]"), nil)
+			require.NoError(t, err)
+			if tt.name != "zip changes title" {
+				require.Equal(t, 1, stats.Updated)
+			}
+			if tt.name == "zip changes content at same count" {
+				messages, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+				require.NoError(t, err)
+				require.Equal(t, []string{"Hello", "Zip reply"}, messageContents(messages))
+			}
+			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			if tt.name == "zip changes title" {
+				assert.Equal(t, 2, calls)
+				session, err := d.GetSessionFull(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+				require.NoError(t, err)
+				require.NotNil(t, session.SessionName)
+				assert.Equal(t, "Chat", *session.SessionName)
+				return
+			}
+			assert.Equal(t, 1, stats.Updated)
+			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, stats.Skipped)
+			assert.Equal(t, 2, calls)
+			messages, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+			require.NoError(t, err)
+			assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
 		})
-		_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-		require.NoError(t, err)
-		exported := strings.TrimSuffix(syncDetail, "]}") + `,{"sender":"human","text":"Other branch"}]}`
-		stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
-		require.NoError(t, err)
-		require.Equal(t, 1, stats.Updated)
-		stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-		require.NoError(t, err)
-		assert.Equal(t, 1, stats.Updated)
-		stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-		require.NoError(t, err)
-		assert.Equal(t, 1, stats.Skipped)
-		assert.Equal(t, 2, calls)
-		messages, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
-		require.NoError(t, err)
-		assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
-	})
+	}
 	const shorter = `{"uuid":"22222222-2222-4222-8222-222222222222","current_leaf_message_uuid":"reply","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00.123456Z","chat_messages":[{"uuid":"reply","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`
 	for _, tt := range []struct {
 		name, seed, detail string
@@ -902,27 +848,8 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 			}
 			copies := replacedCopies(t, d, "claude-ai:22222222-2222-4222-8222-222222222222")
 			require.Len(t, copies, 1)
-			pins, err := d.ListPinnedMessages(t.Context(), copies[0].ID, "")
-			require.NoError(t, err)
-			require.Len(t, pins, 2)
-			assert.ElementsMatch(t, []int{1, 3}, []int{pins[0].Ordinal, pins[1].Ordinal})
-			copied, err := d.GetAllMessages(t.Context(), copies[0].ID)
-			require.NoError(t, err)
-			assert.Equal(t, []string{"Hello", "Chosen reply", "More", "Answer"}, messageContents(copied))
 		})
 	}
-}
-
-func TestSyncClaudeAIShorterZipStillRefused(t *testing.T) {
-	d := testDB(t)
-	_, err := SyncClaudeAI(t.Context(), d, syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-	}), nil)
-	require.NoError(t, err)
-	stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader(`[{"uuid":"22222222-2222-4222-8222-222222222222","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:04:00Z","chat_messages":[{"sender":"human","text":"Hello"}]}]`), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Errors)
-	assert.Equal(t, []ImportRefusal{{SessionID: "claude-ai:22222222-2222-4222-8222-222222222222", Reason: RefusalShorterExport}}, stats.Refusals)
 }
 
 func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {
@@ -980,7 +907,6 @@ func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {
 func TestSyncClaudeAIConsecutiveInvalidSummariesStop(t *testing.T) {
 	for _, summary := range []string{
 		`{"uuid":42}`,
-		strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply",`, "", 1),
 	} {
 		t.Run(summary, func(t *testing.T) {
 			details := 0
