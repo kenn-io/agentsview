@@ -55,15 +55,30 @@ func (e *Engine) sourceCollisionID(
 	var moved bool
 	bestRank := 0
 	minted := applyIDPrefixToID(idPrefix, parser.AltSessionID(s.ID, lookupPath))
+	cursorS3 := s.Agent == parser.AgentCursor && isS3SourcePath(lookupPath)
+	if !cursorS3 {
+		if e.storedSourceLivesAt(ctx, provider, deleted, lookupPath) {
+			return s.ID, false, nil
+		}
+		if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {
+			return s.ID, stored != lookupPath, nil
+		}
+	}
 	for _, record := range records {
+		if !cursorS3 {
+			if record.ID != fullID && (record.ID == minted || e.storedSourceLivesAt(ctx, provider, record.FilePath, lookupPath)) {
+				altID = s.ID + record.ID[len(fullID):]
+				moved = record.FilePath != "" && record.FilePath != lookupPath
+				break
+			}
+			continue
+		}
 		rank := 0
 		switch {
 		case lookupPath != "" && record.FilePath == lookupPath:
 			rank = 3
-		case s.Agent == parser.AgentCursor && isS3SourcePath(lookupPath):
+		default:
 			rank = e.cursorS3SourceMatch(record.FilePath, lookupPath)
-		case e.storedSourceLivesAt(ctx, provider, record.FilePath, lookupPath):
-			rank = 1
 		}
 		if rank == 0 && record.ID != fullID && record.ID == minted {
 			rank = 1

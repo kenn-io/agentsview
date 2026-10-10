@@ -52,6 +52,28 @@ func TestSourceCollisionKeepsRetryFlag(t *testing.T) {
 	// when its parser recorded another parent.
 	assert.Equal(t, id, res.results[0].Session.ParentSessionID)
 	assert.Equal(t, parser.RelContinuation, res.results[0].Session.RelationshipType)
+
+	t.Run("local moved owner precedes exact alternate", func(t *testing.T) {
+		cursorRoot := t.TempDir()
+		stored := filepath.Join(cursorRoot, "project-a", "agent-transcripts", "shared.txt")
+		incoming := filepath.Join(cursorRoot, "project-a", "agent-transcripts", "shared", "shared.jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(incoming), 0o755))
+		require.NoError(t, os.WriteFile(incoming, []byte(`{"role":"user","content":"hello"}`), 0o644))
+		const baseID = "cursor:shared"
+		alt := parser.AltSessionID(baseID, incoming)
+		for id, path := range map[string]string{baseID: stored, alt: incoming} {
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+				ID: id, Project: "project-a", Machine: "local", Agent: "cursor", FilePath: &path,
+			}))
+		}
+		cursor, ok := parser.NewProvider(parser.AgentCursor, parser.ProviderConfig{Roots: []string{cursorRoot}})
+		require.True(t, ok)
+		session := parser.ParsedSession{ID: baseID, Agent: parser.AgentCursor}
+		id, moved, err := e.sourceCollisionID(t.Context(), cursor, incoming, &session, true, "")
+		require.NoError(t, err)
+		assert.Equal(t, baseID, id)
+		assert.True(t, moved)
+	})
 }
 
 // A failed ownership lookup skips the source this pass so it retries, rather

@@ -77,7 +77,8 @@ capability.
   the child arrives first or the parent's object changes format. Refreshing a
   saved child after removing a source root keeps its verified same-family parent
   or unlinked state, including format changes. Wrong-project legacy links are
-  repaired. Unlinked children prefer their own root's parent.
+  repaired. Unlinked children prefer their own root's parent. Queued repairs
+  wait while no Cursor S3 root is configured.
 - Validate IDs with the same rules the local provider already uses.
 - Do not invent a second discover wrapper that bypasses the scanner. Extra
   post-processing (prefer `.jsonl`, fold sidecars) belongs next to the

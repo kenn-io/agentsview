@@ -105,28 +105,28 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 	for _, tt := range []struct {
 		name, loser, winner string
 	}{
-		{"JSONL over text", "sess.txt", "sess.jsonl"},
-		{"own text over subagent JSONL", "agent-transcripts/aaa/subagents/sess.jsonl", "agent-transcripts/sess.txt"},
+		{"JSONL over text", "s3://bucket/laptop/raw/cursor/project-a/sess.txt", "s3://bucket/laptop/raw/cursor/project-a/sess.jsonl"},
+		{"nested JSONL over flat JSONL", "s3://bucket/laptop/raw/cursor/project-a/agent-transcripts/sess.jsonl", "s3://bucket/laptop/raw/cursor/project-a/agent-transcripts/sess/sess.jsonl"},
+		{"own text over subagent JSONL", "s3://bucket/laptop/raw/cursor/project-a/agent-transcripts/aaa/subagents/sess.jsonl", "s3://bucket/laptop/raw/cursor/project-a/agent-transcripts/sess.txt"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			oldList := listS3Objects
 			t.Cleanup(func() { listS3Objects = oldList })
 			const root = "s3://bucket/laptop/raw/cursor"
-			projectRoot := root + "/Users-fiona-Documents-demo/"
-			winner, other := projectRoot+tt.winner, projectRoot+"other.txt"
+			const other = "s3://bucket/laptop/raw/cursor/project-a/other.txt"
 			listS3Objects = func(got string) ([]S3Object, error) {
 				require.Equal(t, root, got)
 				return []S3Object{
-					{URI: projectRoot + tt.loser},
-					{URI: winner},
-					{URI: projectRoot + "logs/trace.txt"},
+					{URI: tt.loser},
+					{URI: tt.winner},
+					{URI: "s3://bucket/laptop/raw/cursor/project-a/logs/trace.txt"},
 					{URI: other},
 				}, nil
 			}
 			sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 2)
-			assert.ElementsMatch(t, []string{winner, other}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
+			assert.ElementsMatch(t, []string{tt.winner, other}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
 		})
 	}
 }

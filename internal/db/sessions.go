@@ -2213,13 +2213,20 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 	}
 	updated := 0
 	var done, total int
+	queued := `SELECT session_id FROM (
+		SELECT session_id FROM subagent_parent_repair_queue
+		UNION
+		SELECT session_id FROM subagent_parent_cleanup_queue
+	)`
+	if len(cursorRoots) == 0 {
+		// Retain S3 repairs until Cursor roots return, including unchanged sources.
+		queued += ` WHERE NOT EXISTS (
+			SELECT 1 FROM sessions WHERE id = session_id
+			AND agent = 'cursor' AND file_path GLOB 's3://*'
+		)`
+	}
 	if onProgress != nil {
-		if err := tx.QueryRowContext(ctx, `
-			SELECT count(*) FROM (
-				SELECT session_id FROM subagent_parent_repair_queue
-				UNION
-				SELECT session_id FROM subagent_parent_cleanup_queue
-			)`).Scan(&total); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM ("+queued+")").Scan(&total); err != nil {
 			return 0, fmt.Errorf("counting queued subagent parent repairs: %w", err)
 		}
 		if total > 0 {
@@ -2228,11 +2235,7 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 	}
 	for {
 		ids, err := func() ([]string, error) {
-			rows, err := tx.QueryContext(ctx, `
-			SELECT session_id FROM subagent_parent_repair_queue
-			UNION
-			SELECT session_id FROM subagent_parent_cleanup_queue
-			ORDER BY session_id LIMIT ?`, maxSQLVars/2)
+			rows, err := tx.QueryContext(ctx, queued+" ORDER BY session_id LIMIT ?", maxSQLVars/2)
 			if err != nil {
 				return nil, fmt.Errorf("listing queued subagent parent repairs: %w", err)
 			}

@@ -11162,7 +11162,13 @@ func (e *Engine) repairQueuedSubagentParents(ctx context.Context, archive *db.DB
 		// Rebuild parents may remain in the original archive until orphan copying.
 		return 0, nil
 	}
-	return archive.RepairQueuedSubagentParentsContext(ctx, onProgress, e.sources().agentDirs[parser.AgentCursor]...)
+	var cursorRoots []string
+	for _, root := range e.sources().agentDirs[parser.AgentCursor] {
+		if isS3SourcePath(root) {
+			cursorRoots = append(cursorRoots, root)
+		}
+	}
+	return archive.RepairQueuedSubagentParentsContext(ctx, onProgress, cursorRoots...)
 }
 
 func (e *Engine) linkSubagentSessions(ctx context.Context) (int, error) {
