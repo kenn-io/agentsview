@@ -1552,6 +1552,50 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 	})
 }
 
+func TestOpenCodeRestartedQuickSyncReconcilesAtOriginalDeadline(t *testing.T) {
+	dbPath, conn := seededCompositeContainerTestDB(t)
+	archive := openTestDB(t)
+	newEngine := func() *Engine {
+		engine := NewEngine(t.Context(), archive, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(dbPath)}}, Machine: "local",
+		})
+		t.Cleanup(engine.Close)
+		return engine
+	}
+	verifiedAt := time.UnixMilli(1779100000000)
+	now := verifiedAt
+	originalNow := openCodeContainerDigestVerifyNow
+	openCodeContainerDigestVerifyNow = func() time.Time { return now }
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = originalNow })
+	require.Equal(t, 1, newEngine().SyncAll(t.Context(), nil).Synced)
+	_, err := conn.ExecContext(t.Context(),
+		`UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = ?`,
+		verifiedAt.Add(30*time.Second).UnixMilli())
+	require.NoError(t, err)
+	previousStart := verifiedAt
+	for minute := 1; minute <= 5; minute++ {
+		now = verifiedAt.Add(time.Duration(minute) * time.Minute)
+		scans := parser.OpenCodeContainerChildScans()
+		stats := newEngine().SyncAllSince(t.Context(), previousStart.Add(-10*time.Second), nil)
+		require.True(t, stats.ProcessingComplete())
+		record, found := readContainerVerification(t, archive, dbPath)
+		require.True(t, found)
+		if minute < 5 {
+			require.Zero(t, stats.Synced)
+			assert.Zero(t, parser.OpenCodeContainerChildScans()-scans)
+			assert.True(t, verifiedAt.Equal(record.VerifiedAt), "quick syncs preserve the original deadline")
+		} else {
+			require.Equal(t, 1, stats.Synced, "expiry bypasses the cutoff advanced past the deferred child edit")
+			assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
+			assert.True(t, now.Equal(record.VerifiedAt), "complete verification stores the new deadline")
+		}
+		previousStart = now
+	}
+	matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
+	require.NoError(t, err)
+	assert.Len(t, matches, 2)
+}
+
 func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
 	for _, tc := range []struct {
 		name                      string
@@ -1687,6 +1731,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		{name: "counter rollback", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBChangeCounter-- }},
 		{name: "malformed record", raw: "{"},
 		{name: "malformed timestamp", raw: `{"version":1,"verified_at":"invalid"}`},
+		{name: "missing timestamp", raw: `{"version":1,"state":{"DBDevice":1,"DBInode":1}}`},
 		{name: "future record version", raw: `{"version":2,"verified_at":"1970-01-01T00:16:40Z"}`},
 		{name: "missing stored identity", raw: `{"version":1,"verified_at":"1970-01-01T00:16:40Z"}`},
 		{name: "replaced", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBInode++ }},

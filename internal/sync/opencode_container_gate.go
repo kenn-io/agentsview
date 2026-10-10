@@ -415,9 +415,10 @@ func (e *Engine) restoreSQLiteContainerFreshness(
 		}
 		if record.Version != 1 ||
 			record.State.DBInode == 0 || record.State.DBDevice == 0 ||
-			!openCodeContainerDigestVerificationCurrent(record.VerifiedAt, openCodeContainerDigestVerifyNow()) {
+			record.VerifiedAt.IsZero() || record.VerifiedAt.After(openCodeContainerDigestVerifyNow()) {
 			continue
 		}
+		// Expired stamps keep deferred child edits eligible past quick-sync cutoffs.
 		e.containerMu.Lock()
 		if e.trustedSQLiteContainers == nil {
 			e.trustedSQLiteContainers = make(map[string]trustedSQLiteContainer)
@@ -889,13 +890,13 @@ func (e *Engine) poisonSQLiteContainerPass() {
 // here also keeps the compact state map aligned with current discovery.
 func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, fullDiscovery bool) {
 	persist := make(map[string]parser.SQLiteContainerState)
-	clear := make(map[string]bool)
+	clearPaths := make(map[string]bool)
 	verifiedAt := openCodeContainerDigestVerifyNow()
 	defer func() {
 		if e.db == nil || e.db.ReadOnly() || e.pathRewriter != nil {
 			return
 		}
-		for path := range clear {
+		for path := range clearPaths {
 			if err := e.db.DeleteSyncState(context.WithoutCancel(ctx), db.SQLiteContainerSyncStatePrefix+path); err != nil {
 				log.Printf("clearing SQLite container verification: %v", err)
 			}
@@ -916,10 +917,10 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 		e.containerPass = nil
 		if pass != nil {
 			if pass.poisoned {
-				e.clearDigestVerificationForPass(pass, clear)
+				e.clearDigestVerificationForPass(pass, clearPaths)
 			} else {
 				for dbPath := range pass.failed {
-					e.clearSQLiteContainerDigestVerification(dbPath, clear)
+					e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
 				}
 			}
 		}
@@ -937,14 +938,14 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 	}
 	e.containerPass = nil
 	if pass.poisoned {
-		e.clearDigestVerificationForPass(pass, clear)
+		e.clearDigestVerificationForPass(pass, clearPaths)
 		return
 	}
 	if fullDiscovery {
 		for dbPath := range e.trustedSQLiteContainers {
 			if pass.discovered[dbPath] == 0 {
 				delete(e.trustedSQLiteContainers, dbPath)
-				e.clearSQLiteContainerDigestVerification(dbPath, clear)
+				e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
 			}
 		}
 	}
@@ -952,7 +953,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 		pass.failed[dbPath] = true
 	}
 	for dbPath := range pass.failed {
-		e.clearSQLiteContainerDigestVerification(dbPath, clear)
+		e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
 	}
 	for dbPath, state := range pass.captured {
 		if pass.failed[dbPath] {
@@ -1013,12 +1014,12 @@ func (e *Engine) sqliteContainerDigestRevalidationFailures(
 // clearDigestVerificationForPass clears verification age for every container
 // whose capture or discovery was invalid during the pass. Failed discoveries
 // may have no captured entry, so both maps are part of the invalidation set.
-func (e *Engine) clearDigestVerificationForPass(pass *sqliteContainerPass, clear map[string]bool) {
+func (e *Engine) clearDigestVerificationForPass(pass *sqliteContainerPass, clearPaths map[string]bool) {
 	for dbPath := range pass.captured {
-		e.clearSQLiteContainerDigestVerification(dbPath, clear)
+		e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
 	}
 	for dbPath := range pass.failed {
-		e.clearSQLiteContainerDigestVerification(dbPath, clear)
+		e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
 	}
 }
 
@@ -1034,11 +1035,11 @@ func (e *Engine) clearTrustedSQLiteContainers() {
 	e.containerPass = nil
 }
 
-func (e *Engine) clearSQLiteContainerDigestVerification(path string, clear map[string]bool) {
+func (e *Engine) clearSQLiteContainerDigestVerification(path string, clearPaths map[string]bool) {
 	delete(e.digestVerifiedAt, path)
 	if e.sqliteContainerFreshnessLoaded == nil {
 		e.sqliteContainerFreshnessLoaded = make(map[string]bool)
 	}
 	e.sqliteContainerFreshnessLoaded[path] = true
-	clear[path] = true
+	clearPaths[path] = true
 }

@@ -1618,21 +1618,21 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   directory, worktree rename) whose stamp lands below that child maximum. A
   session or project row that advances past its own stored metadata watermark
   is always a candidate, wherever other sessions' watermarks or its own child
-  timestamps sit. Periodic full passes and streamed reconciliation restore a
-  recently verified container's prior SQLite state and original verification
-  time from the archive's sync metadata after a worker restart. Native identity
-  and counter rollback checks reject replacements and restores. Ordinary changed
-  containers can use timestamp-first discovery until the original five-minute
-  deadline. Child-only edits that leave session timestamps unchanged wait for
-  the next complete pass after that deadline, including across worker restarts.
-  Windows captures native file identity from the same open handle as
-  the database header. A container whose last complete digest verification
-  is less than five minutes old may list the watermark form
-  (`SQLiteContainerListsWatermarkOnly`): every member gate-skips before
-  fingerprinting, so the child identity scan would be archive-sized work
-  nothing reads. A changed container may continue using this form during that
-  bounded interval; after the interval, the next pass carries the complete
-  digest again. Watermark-only skips additionally require the pass's container
+  timestamps sit.
+
+  Full passes and streamed reconciliation restore a container's prior SQLite
+  state and original verification time from the archive's sync metadata after
+  a worker restart. Native identity and counter rollback checks reject
+  replacements and restores. Windows captures native file identity from the
+  same open handle as the database header. A container verified less than five
+  minutes ago can use timestamp-first discovery (`SQLiteContainerListsWatermarkOnly`)
+  after ordinary writes and across restarts. Child-only edits that leave session
+  timestamps unchanged wait for the next complete pass after the original
+  deadline. Cheap passes preserve that deadline. Expired verification times
+  also survive restarts so the due pass can reconcile deferred edits that have
+  fallen behind a quick-sync cutoff. Every member of an unchanged container
+  gate-skips before fingerprinting, so a child identity scan would do
+  archive-sized work nothing reads. Watermark-only skips require the pass's container
   capture to still be valid (`sqliteContainerPassCaptureValid`) — a container
   that changes between listing and the recapture check resolves full per-session
   digests instead, so a concurrent child-only write cannot hide beneath an
