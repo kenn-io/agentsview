@@ -496,7 +496,7 @@ func (e *Engine) filterQuickSyncFiles(
 	var pageFailed bool
 	for _, f := range candidates {
 		dbPath, _, _ := sqliteContainerSourceForFile(f)
-		if container != dbPath || agent != f.Agent {
+		if cursor == nil || container != dbPath || agent != f.Agent {
 			agent, container, pageFailed = f.Agent, dbPath, false
 			cursor = parser.NewStoredMemberFreshnessCursor(e.storedMemberFreshnessPager(dbPath, e.idPrefix+string(f.Agent)+":", func(row db.VirtualContainerMemberFreshness) (int64, bool) {
 				return row.MTimeNS, row.Agent == string(f.Agent) && providerSourceMetadataFresh(row)
@@ -1053,6 +1053,10 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 			continue
 		}
 		if trusted, ok := e.trustedSQLiteContainers[dbPath]; ok && (incomplete || !pass.fullDigestListed[dbPath]) {
+			if !incomplete && pass.discovered[dbPath] > 0 && pass.completed[dbPath] == pass.discovered[dbPath] {
+				trusted.state = state
+				e.trustedSQLiteContainers[dbPath] = trusted
+			}
 			if at := e.digestVerifiedAt[dbPath]; !at.IsZero() {
 				records[dbPath] = sqliteContainerVerification{Version: 1, State: trusted.state, VerifiedAt: at}
 			}

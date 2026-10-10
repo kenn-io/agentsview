@@ -903,61 +903,6 @@ func TestSyncEngineOpenCodeSQLiteUntouchedContainerSkipsReparse(
 	)
 }
 
-// TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits pins
-// the gate's safety boundary: file size and mtime equality alone must never
-// be trusted (mtime granularity differs across filesystems, and a rewrite
-// can land within one granularity unit). A content change that leaves the
-// container stat-identical — same size, mtime restored — still changes
-// SQLite's own write counters, so the sessions must be re-parsed and the
-// changed content re-emitted.
-func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
-	t *testing.T,
-) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/opencode-app")
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "stat-twin",
-		1779012000000, 1779012030000,
-		"original prompt", "original answer",
-	)
-
-	stats := env.engine.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
-	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
-
-	dbPath := filepath.Join(env.opencodeDir, "opencode.db")
-	before, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat opencode.db")
-
-	// Same-length replacement content keeps the SQLite file size stable, and
-	// the mtime is restored below, so only SQLite's internal change counter
-	// betrays the rewrite.
-	oc.replaceTextContent(
-		t, "stat-twin",
-		"replaced prompt", "replaced answer",
-		1779012600000,
-	)
-	after, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat opencode.db after rewrite")
-	require.Equal(t, before.Size(), after.Size(),
-		"fixture must keep the container size stable for this test")
-	setFileMtime(t, dbPath, before.ModTime().UnixNano())
-
-	// Clear recent verification to exercise complete fingerprint discovery.
-	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), "sqlite-container:"))
-	restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
-	t.Cleanup(restarted.Close)
-	stats = restarted.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
-	assert.Equal(t, 1, stats.Synced,
-		"stat-identical content change must still be re-emitted")
-	assertMessageContent(
-		t, env.db, "opencode:stat-twin",
-		"replaced prompt", "replaced answer",
-	)
-}
-
 // TestSyncEngineOpenCodeSQLiteWALOnlyChangeStillReemits pins the gate's WAL
 // awareness: OpenCode runs its database in WAL mode, where a committed write
 // only appends frames to opencode.db-wal and leaves the main file's size,

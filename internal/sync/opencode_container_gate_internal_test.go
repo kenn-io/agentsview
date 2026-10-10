@@ -1260,7 +1260,6 @@ func TestSQLiteContainerFullPassDropsUndiscoveredTrust(t *testing.T) {
 			assert.Equal(t, raw, got, "publication and cleanup preserve newer records")
 		}
 	})
-
 }
 
 func TestOpenCodeEphemeralVerificationIsLocal(t *testing.T) {
@@ -1506,7 +1505,7 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 					assert.Equal(t, verifyNow, e.digestVerifiedAt[dbPath],
 						"the completed due pass must refresh the stamp")
 				} else {
-					assert.Equal(t, now, e.digestVerifiedAt[dbPath],
+					assert.True(t, now.Equal(e.digestVerifiedAt[dbPath]),
 						"a deferring pass must keep the stamp's prior age")
 				}
 			})
@@ -1714,6 +1713,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		absent, canceled                   bool
 		localLegacy, localTimed, wantTrust bool
 		raw                                string
+		version                            int
 		want                               bool
 	}{
 		{name: "recent match", age: time.Minute, want: true},
@@ -1729,7 +1729,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		{name: "malformed record", raw: "{"},
 		{name: "malformed timestamp", raw: `{"version":1,"verified_at":"invalid"}`},
 		{name: "missing timestamp", raw: `{"version":1,"state":{"DBDevice":1,"DBInode":1}}`},
-		{name: "future record version", raw: `{"version":2,"verified_at":"1970-01-01T00:16:40Z"}`},
+		{name: "future record version", age: time.Minute, version: 2},
 		{name: "missing stored identity", raw: `{"version":1,"verified_at":"1970-01-01T00:16:40Z"}`},
 		{name: "replaced", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBInode++ }},
 		{name: "missing identity", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBInode = 0 }},
@@ -1743,13 +1743,19 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		{name: "read fails", canceled: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path, _ := newContainerTestDB(t)
+			path, container := newContainerTestDB(t)
 			state, ok := parser.StatSQLiteContainerState(path)
 			require.True(t, ok)
 			if !tc.absent {
 				writeContainerVerification(t, archive, path, state, now.Add(-tc.age))
 			}
 			if tc.raw != "" {
+				require.NoError(t, archive.SetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path, tc.raw))
+			}
+			if tc.version != 0 {
+				raw, err := json.Marshal(sqliteContainerVerification{Version: tc.version, State: state, VerifiedAt: now.Add(-tc.age)})
+				require.NoError(t, err)
+				tc.raw = string(raw)
 				require.NoError(t, archive.SetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path, tc.raw))
 			}
 			e := &Engine{db: archive}
@@ -1778,6 +1784,11 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			fn := e.sqliteContainerListsWatermarkOnly(states)
 			got := fn != nil && fn(path)
 			assert.Equal(t, tc.want, got)
+			if tc.version != 0 {
+				raw, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path)
+				require.NoError(t, err)
+				assert.Equal(t, tc.raw, raw, "admission leaves unsupported records unchanged")
+			}
 
 			if tc.localLegacy {
 				_, trusted := e.trustedSQLiteContainers[path]
@@ -1792,9 +1803,35 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			}
 			if tc.want {
 				assert.True(t, now.Add(-tc.age).Equal(e.digestVerifiedAt[path]))
-
-				fn = e.sqliteContainerListsWatermarkOnly(map[string]parser.SQLiteContainerState{path: state})
-				assert.True(t, fn(path), "the consuming engine retains its authority for this pass")
+			}
+			if tc.name == "recent match" {
+				before, err := os.ReadFile(path)
+				require.NoError(t, err)
+				_, err = container.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('advanced')")
+				require.NoError(t, err)
+				advanced, ok := parser.StatSQLiteContainerState(path)
+				require.True(t, ok)
+				require.Greater(t, advanced.DBChangeCounter, state.DBChangeCounter)
+				e.beginStreamingSQLiteContainerPass(map[string]parser.SQLiteContainerState{path: advanced})
+				e.containerPass.discovered[path], e.containerPass.completed[path] = 1, 1
+				e.finishSQLiteContainerPass(t.Context(), false, false)
+				record, found := readContainerVerification(t, archive, path)
+				require.True(t, found)
+				assert.Equal(t, advanced, e.trustedSQLiteContainers[path].state)
+				assert.Equal(t, advanced, record.State)
+				assert.True(t, now.Add(-tc.age).Equal(record.VerifiedAt), "watermark passes preserve the original deadline")
+				require.NoError(t, container.Close())
+				require.NoError(t, os.WriteFile(path, before, 0o600))
+				restored, ok := parser.StatSQLiteContainerState(path)
+				require.True(t, ok)
+				require.Equal(t, advanced.DBInode, restored.DBInode)
+				require.Less(t, restored.DBChangeCounter, advanced.DBChangeCounter)
+				for _, engine := range []*Engine{e, {db: archive}} {
+					writeContainerVerification(t, archive, path, record.State, record.VerifiedAt)
+					states[path] = restored
+					require.NoError(t, engine.prepareSQLiteContainerVerification(t.Context(), states))
+					assert.False(t, engine.sqliteContainerListsWatermarkOnly(states)(path), "rollback refuses prior authority in current and restarted workers")
+				}
 			}
 		})
 	}
