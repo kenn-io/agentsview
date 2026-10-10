@@ -287,7 +287,8 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 			switch change {
 			case "missing":
 				t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
-				stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+				stubStartBackgroundServeForTransport(t, func(_ context.Context, _ *config.Config, _ time.Duration, allowReplacement bool) (*DaemonRuntime, error) {
+					assert.False(t, allowReplacement, "MCP startup must not replace a daemon that appears during launch")
 					starts++
 					writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
 					return daemonRuntimeFromRecord(readRuntimeRecord(t, path)), nil
@@ -444,11 +445,16 @@ func TestMCPDaemonServiceKeepsUpgradedDaemon(t *testing.T) {
 				},
 			})
 			host, port := splitTestServerURL(t, ts.URL)
-			writeDaemonRuntimeForTest(t, dir, host, port, versions.daemon, false)
+			writeDaemonRuntimeForTest(t, dir, host, port, versions.client, false)
 			forbidStartBackgroundServeForTransport(t, "MCP must not replace a running daemon")
 			svc := newMCPDaemonService(config.Config{DataDir: dir})
 			_, err := svc.List(t.Context(), service.ListFilter{})
 			require.NoError(t, err)
+			writeDaemonRuntimeForTest(t, dir, host, port, versions.daemon, false)
+			res, err := svc.List(t.Context(), service.ListFilter{})
+			require.NoError(t, err)
+			require.Len(t, res.Sessions, 1)
+			assert.Equal(t, "from-daemon", res.Sessions[0].ID)
 		})
 	}
 }
@@ -548,6 +554,7 @@ func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) 
 		},
 	}
 
+	var starts int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
 		assert.Equal(t, "2024-06-01", r.URL.Query().Get("from"))
@@ -569,6 +576,7 @@ func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) 
 	stubStartBackgroundServeForTransport(t, func(
 		context.Context, *config.Config, time.Duration, bool,
 	) (*DaemonRuntime, error) {
+		starts++
 		return &DaemonRuntime{Host: host, Port: port}, nil
 	})
 
@@ -591,6 +599,7 @@ func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Equal(t, expected, *res)
+	assert.Equal(t, 1, starts)
 	assert.NoFileExists(t, cfg.DBPath)
 }
 
