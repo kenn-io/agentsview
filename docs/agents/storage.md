@@ -576,7 +576,7 @@ own metadata, which is why the docs below call the database a mirror.
   build an `IN (...)` list from a set the database already selected, such as
   the sessions matching a filter or the Claude snapshot keys of those
   sessions. Embed the selecting predicate as a subquery (`chSessionSet`) or
-  derive the keys in a CTE instead. Chunked lists (`chQueryChunked`) are for
+  derive the keys in a CTE instead. Chunked lists (`db.QueryChunkedSize`) are for
   sets that arrive from outside the database, and they bound entry count, not
   bytes.
 - Tests use the `chtest` build tag. Run `make test-clickhouse` against a

@@ -15,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/readbase"
-
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
 
@@ -24,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 var (
