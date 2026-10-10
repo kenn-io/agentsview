@@ -34,7 +34,11 @@ export class OutcomeTotalsStore {
   includePullRequests = $state(false);
   pullRequestLookupFailed = $derived(
     this.includePullRequests &&
-      (this.error !== null || this.stats?.skipped?.some((entry) => entry.op === "pr") === true),
+      !this.loading &&
+      (this.error !== null ||
+        this.stats?.prs_opened == null ||
+        this.stats?.prs_merged == null ||
+        (this.stats?.skipped?.length ?? 0) > 0),
   );
 
   /** Cancels replaced reads; only the newest request may apply its result. */
