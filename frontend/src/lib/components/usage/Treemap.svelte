@@ -78,7 +78,7 @@
               tabindex={onSelect ? 0 : undefined}
               role={onSelect ? "button" : undefined}
               aria-pressed={onSelect ? tile.selected ?? false : undefined}
-              aria-label={tile.title ?? m.usage_click_to_focus({ label: tile.label })}
+              aria-label={onSelect ? tile.title ?? m.usage_click_to_focus({ label: tile.label }) : undefined}
               onclick={onSelect ? (event) => { if (event.detail < 2 || !onOpen) onSelect(tile.id); } : undefined}
               ondblclick={onOpen ? () => onOpen(tile.id) : undefined}
               onkeydown={onSelect ? (event) => handleKey(event, tile.id) : undefined}

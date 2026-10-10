@@ -604,6 +604,38 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
+  it.each(["button", "Escape", "Backspace"])(
+    "returns focus to the open project's row after %s Back",
+    async (action) => {
+      usage.summary!.projectTotals[1]!.project = "Project B";
+      usage.selectedProjectKey = "pl1:sha256:second";
+      const component = mountPanel();
+      await tick();
+      const projectRow = () =>
+        [...document.querySelectorAll<HTMLElement>(".list-row")].find(
+          (row) => row.querySelector(".list-label")!.textContent === "Project B",
+        );
+      projectRow()!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+      await tick();
+      expect(usage.zoomedProject?.key).toBe("pl1:sha256:second");
+      if (action === "button") {
+        const back = [
+          ...document.querySelectorAll<HTMLButtonElement>(".attribution-panel button"),
+        ].find((button) => button.textContent?.trim() === "← All projects")!;
+        back.focus();
+        back.click();
+      } else {
+        document.activeElement!.dispatchEvent(
+          new KeyboardEvent("keydown", { key: action, bubbles: true, cancelable: true }),
+        );
+      }
+      await vi.waitFor(() => expect(usage.zoomedProject).toBeNull());
+      await vi.waitFor(() => expect(document.activeElement).toBe(projectRow()));
+      await unmount(component);
+    },
+  );
+
   it.each(["switching attribution dimensions", "the project leaving the refreshed summary"])(
     "handles zoom after %s",
     async (event) => {

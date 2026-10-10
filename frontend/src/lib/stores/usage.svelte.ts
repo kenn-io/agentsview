@@ -390,6 +390,8 @@ class UsageStore {
     );
   }
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
+  // The zoom query the current rows (or the request filling them) belong to.
+  private zoomScope = "";
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
   // Wall-clock ms of the most recent full refresh, request start to data
@@ -502,11 +504,10 @@ class UsageStore {
   }
 
   // Chart colors and legend rank from this, so selecting never recolors or reorders series.
+  // The reference stays until a refresh without a selection lands, so clearing a
+  // selection, or failing to refresh after clearing, keeps them still too.
   get colorSummary(): UsageSummaryResponse | null {
-    return (
-      (this.hasSelection(this.toggles.attribution.groupBy) && this.referenceSummary) ||
-      this.timeSeriesSummary
-    );
+    return this.referenceSummary ?? this.timeSeriesSummary;
   }
 
   get pairwiseModelOptions(): string[] {
@@ -1420,7 +1421,14 @@ class UsageStore {
   ): Promise<FetchResult> {
     const version = ++this.versions[panel];
     const signal = this.nextAbortSignal(panel);
-    if (panel === "zoom") this.zoomRows = null;
+    if (panel === "zoom") {
+      // Rows from another range or scope are wrong, so clear them. A metric or
+      // token-type change, a refresh, or a remount keeps them, even if it fails.
+      // active_since moves on every call, so skip it.
+      const scope = JSON.stringify({ ...query, active_since: undefined });
+      if (scope !== this.zoomScope) this.zoomRows = null;
+      this.zoomScope = scope;
+    }
     const isFirstLoad = (panel === "zoom" ? this.zoomRows : this.topSessions) === null;
     if (isFirstLoad) {
       this.loading[panel] = true;

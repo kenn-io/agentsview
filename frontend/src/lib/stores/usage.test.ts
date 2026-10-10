@@ -2554,6 +2554,40 @@ describe("UsageStore project zoom", () => {
     expect(usage.zoomRows).toEqual([]);
   });
 
+  it.each(["a metric change", "a same-range refresh"])(
+    "keeps zoom rows through %s, even when it fails",
+    async (event) => {
+      const { usage } = await loadStore();
+      usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
+      usage.setOpenProject("pl1:sha256:alpha");
+      await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(1)]));
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      let reject!: (error: Error) => void;
+      usageServiceMocks.getUsageZoom.mockImplementationOnce(
+        () =>
+          new Promise((_, r) => {
+            reject = r;
+          }),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const refreshed =
+        event === "a metric change"
+          ? Promise.resolve(usage.setMode("token"))
+          : usage.fetchAll({ preserveTimeRange: true });
+      expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(2);
+      expect(usage.zoomRows).toEqual([group(1)]);
+      expect(usage.loading.zoom).toBe(false);
+      reject(new Error("zoom failed"));
+      await refreshed;
+      await vi.waitFor(() => expect(usage.querying.zoom).toBe(false));
+      expect(usage.zoomRows).toEqual([group(1)]);
+      expect(usage.errors.zoom).toBeNull();
+      expect(warn).toHaveBeenCalledWith("usage.zoom refetch failed:", new Error("zoom failed"));
+      warn.mockRestore();
+      usage.cancelInFlightReads();
+    },
+  );
+
   it.each(["returning to projects", "metric and token selection changes"])(
     "drops stale zoom results after %s",
     async (event) => {

@@ -2749,5 +2749,9 @@
   "analytics_tool_history_note": "比率不包含仍在重新計算或未儲存工具結果的工作階段中的呼叫。",
   "analytics_tool_rate_button_label": "{tool} {rate}：{value}",
   "analytics_tool_latest_matching_call": "最近符合的呼叫：{date}",
-  "analytics_tool_matching_calls": "符合的呼叫：{count}"
+  "analytics_tool_matching_calls": "符合的呼叫：{count}",
+  "usage_all_projects": "所有專案",
+  "usage_clear_selection": "清除選擇",
+  "usage_open_project": "開啟",
+  "usage_loading": "正在載入..."
 }

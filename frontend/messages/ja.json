@@ -2821,5 +2821,9 @@
   "analytics_tool_history_note": "再計算中のセッションや、ツール結果を保存していないセッションの呼び出しは率に含まれません。",
   "analytics_tool_rate_button_label": "{tool} {rate}: {value}",
   "analytics_tool_latest_matching_call": "最後に一致した呼び出し: {date}",
-  "analytics_tool_matching_calls": "該当する呼び出し: {count}"
+  "analytics_tool_matching_calls": "該当する呼び出し: {count}",
+  "usage_all_projects": "すべてのプロジェクト",
+  "usage_clear_selection": "選択をクリア",
+  "usage_open_project": "開く",
+  "usage_loading": "読み込み中..."
 }
