@@ -531,6 +531,9 @@
   "shared_refresh_step_skills": "スキル",
   "shared_refresh_step_top_sessions": "トップセッション",
   "shared_refresh_step_context_summary": "期間全体の概要",
+  "shared_refresh_step_attribution_summary": "コストの帰属",
+  "shared_refresh_step_reference_summary": "期間全体のコストの帰属",
+  "shared_refresh_step_zoom": "プロジェクトのグループ",
   "shared_refresh_step_signals": "シグナル",
   "shared_refresh_step_comparison": "比較",
   "shared_refresh_step_pairwise": "ペア比較",
@@ -826,9 +829,6 @@
   "usage_chart_style_lines": "折れ線",
   "usage_chart_style_bars": "棒",
   "usage_chart_day_label": "{date}：{value}",
-  "usage_click_to_hide_hint": "クリックしてチャートから非表示にします",
-  "usage_click_to_hide": "クリックして {label} を非表示にします",
-  "usage_hide_from_chart": "グラフから {label} を非表示にする",
   "usage_cache_efficiency_title": "キャッシュ効率",
   "usage_cache_reads": "キャッシュ読取",
   "usage_cache_writes": "キャッシュ書込",
@@ -2219,7 +2219,6 @@
   "usage_treemap": "ツリーマップ",
   "usage_list": "リスト",
   "usage_no_data_period": "この期間のデータはありません",
-  "usage_click_to_hide_item": "クリックして {label} を非表示にします",
   "usage_cache_efficiency": "キャッシュ効率",
   "usage_cost_over_time": "時間の経過に伴うコスト",
   "filter_dropdown_all": "全て",
@@ -2449,5 +2448,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"プレビューは {countLabel} バイト中 {shownLabel} バイトを表示しています。","countPlural=other":"プレビューは {countLabel} バイト中 {shownLabel} バイトを表示しています。"}}],
   "tool_sequences_full_input_in_message": "完全な入力はメッセージ {ordinal} にあります。",
   "tool_sequences_full_result_in_message": "完全な結果はメッセージ {ordinal} にあります。",
-  "tool_sequences_retry": "再試行"
+  "tool_sequences_retry": "再試行",
+  "usage_click_project": "クリックして {label} に絞り込み、ダブルクリックでグループとセッションを開く",
+  "usage_click_project_hint": "プロジェクトを選択するとページを絞り込み、開くとグループとセッションを表示します。",
+  "usage_click_to_focus": "クリックして {label} に絞り込む",
+  "usage_click_to_focus_hint": "クリックして絞り込み、再クリックで解除"
 }

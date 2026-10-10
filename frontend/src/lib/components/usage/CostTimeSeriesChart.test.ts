@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
 import { usage } from "../../stores/usage.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { settings } from "../../stores/settings.svelte.js";
@@ -154,6 +155,7 @@ describe("CostTimeSeriesChart", () => {
     usage.summary = usageSummary();
     usage.selectedTimeRange = null;
     usage.toggles.timeSeries.groupBy = "project";
+    usage.toggles.attribution.groupBy = "project";
     usage.toggles.timeSeries.view = "smooth";
     settings.chartPalette = "agentsview";
     setLocale("en");
@@ -161,7 +163,11 @@ describe("CostTimeSeriesChart", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    sessions.filters.agent = "";
     usage.summary = null;
+    usage.attributionSummary = null;
+    usage.referenceSummary = null;
+    usage.selectedModel = "";
     usage.selectedTimeRange = null;
     usage.excludedProjectKeys = "";
     usage.excludedAgents = "";
@@ -489,7 +495,7 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it("assigns the first usage color to a single rendered model series", async () => {
+  it("draws a single unselected series in the first usage color without a legend", async () => {
     usage.toggles.timeSeries.groupBy = "model";
     usage.summary = usageSummary([
       modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
@@ -502,7 +508,56 @@ describe("CostTimeSeriesChart", () => {
     const paths = document.querySelectorAll<SVGPathElement>("path.lc-area-path");
     expect(paths).toHaveLength(1);
     expect(paths[0]!.getAttribute("fill")).toBe("var(--accent-blue)");
-    expect(document.querySelectorAll(".legend-item")).toHaveLength(0);
+    expect(document.querySelector(".legend")).toBeNull();
+    unmount(component);
+  });
+
+  const names = (by: string, from: number, to: number) => Array.from({ length: to - from }, (_, index) => `${by}-${from + index}`);
+  const seriesSummary = (by: "model" | "agent", ids: string[]) => {
+    const entry = dailyEntry(0);
+    entry.projectBreakdowns = [];
+    const rows = ids.map((id) => ({ inputTokens: 60, outputTokens: 30, cacheCreationTokens: 0, cacheReadTokens: 0, cost: testMoney(12 - Number(id.split("-")[1])) }));
+    if (by === "model") entry.modelBreakdowns = rows.map((row, index) => ({ ...row, modelName: ids[index]! }));
+    else entry.agentBreakdowns = rows.map((row, index) => ({ ...row, agent: ids[index]! }));
+    return usageSummary([entry]);
+  };
+
+  it.each<{ name: string; by: "model" | "agent"; selected: string; reference?: string[]; brushed?: string[]; plotted: string[]; legend: string[]; lit: string[] }>([
+    {
+      name: "keeps the unselected entries of a single selected series and dims them",
+      by: "model", selected: "model-0", reference: names("model", 0, 2), plotted: ["model-0"],
+      legend: ["model-0", "model-1"], lit: ["model-0"],
+    },
+    {
+      name: "lists a selected series outside the unselected top ten before Other",
+      by: "model", selected: "model-11", reference: names("model", 0, 12), plotted: ["model-11"],
+      legend: [...names("model", 0, 10), "model-11", "Other"], lit: ["model-11"],
+    },
+    {
+      name: "keeps Other in the legend when eleven selected agents draw it",
+      by: "agent", selected: names("agent", 1, 12).join(","), reference: names("agent", 0, 12), plotted: names("agent", 1, 12),
+      legend: [...names("agent", 0, 11), "Other"], lit: [...names("agent", 1, 11), "Other"],
+    },
+    {
+      name: "lists Other once when the full window has more series than the brushed range",
+      by: "model", selected: "", brushed: names("model", 0, 10), plotted: names("model", 0, 11),
+      legend: [...names("model", 0, 10), "Other"], lit: [...names("model", 0, 10), "Other"],
+    },
+  ])("$name", async ({ by, selected, reference, brushed, plotted, legend, lit }) => {
+    usage.toggles.timeSeries.groupBy = by;
+    usage.toggles.attribution.groupBy = by;
+    if (by === "model") usage.selectedModel = selected;
+    else sessions.filters.agent = selected;
+    usage.referenceSummary = reference ? seriesSummary(by, reference) : null;
+    usage.attributionSummary = brushed ? seriesSummary(by, brushed) : null;
+    usage.summary = seriesSummary(by, plotted);
+
+    const component = mountChart();
+    await tick();
+
+    const items = Array.from(document.querySelectorAll<HTMLElement>(".legend-item"));
+    expect(items.map((item) => item.textContent?.trim())).toEqual(legend);
+    expect(items.filter((item) => !item.classList.contains("dimmed")).map((item) => item.textContent?.trim())).toEqual(lit);
     unmount(component);
   });
 

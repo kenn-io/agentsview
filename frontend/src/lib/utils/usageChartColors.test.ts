@@ -3,19 +3,18 @@ import type { UsageSummaryResponse } from "../api/generated/index";
 import { testMoney } from "../test/money.js";
 import { usageChartColorMaps } from "./usageChartColors.js";
 
-function tenModelSummary(): UsageSummaryResponse {
-  const models = [
-    "model-alpha",
-    "model-bravo",
-    "model-charlie",
-    "model-delta",
-    "model-echo",
-    "model-foxtrot",
-    "model-golf",
-    "model-hotel",
-    "model-india",
-    "model-zulu",
-  ];
+function tenModelSummary(models = [
+  "model-alpha",
+  "model-bravo",
+  "model-charlie",
+  "model-delta",
+  "model-echo",
+  "model-foxtrot",
+  "model-golf",
+  "model-hotel",
+  "model-india",
+  "model-zulu",
+]): UsageSummaryResponse {
   const modelTotals = models.map((model, index) => ({
     model,
     inputTokens: 10,
@@ -81,5 +80,12 @@ describe("usageChartColorMaps", () => {
     expect(colors.get("model-zulu")).toBe("#1f77b4");
     expect(colors.get("model-india")).toBe("#aec7e8");
     expect(colors.get("model-alpha")).toBe("#c5b0d5");
+  });
+
+  it("keeps Matplotlib colors distinct when a filter exposes more models", () => {
+    const models = Array.from({ length: 11 }, (_, index) => `model-${index}`);
+    const colors = usageChartColorMaps(tenModelSummary(models), "matplotlib").model;
+
+    expect(new Set(colors.values()).size).toBe(11);
   });
 });

@@ -20,7 +20,8 @@ import (
 // assignment state. v16 rebuilds after SQLite data version 111 rewrote
 // stored Devin source identities; pre-111 mirrors would otherwise keep
 // serving bare ids that deduplicate across sessions.
-const SchemaVersion = 16
+// v17 adds session groups to the rebuilt mirror.
+const SchemaVersion = 17
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -170,6 +171,7 @@ var mirrorTables = []tableSpec{
 			git_branch TEXT NOT NULL DEFAULT '',
 			source_session_id TEXT NOT NULL DEFAULT '',
 			source_version TEXT NOT NULL DEFAULT '',
+			group_key TEXT NOT NULL DEFAULT '',
 			transcript_fidelity TEXT NOT NULL DEFAULT '',
 			parser_malformed_lines INTEGER NOT NULL DEFAULT 0,
 			is_truncated BOOLEAN NOT NULL DEFAULT FALSE,
@@ -242,6 +244,7 @@ var mirrorTables = []tableSpec{
 			{"git_branch", "git_branch TEXT NOT NULL DEFAULT ''"},
 			{"source_session_id", "source_session_id TEXT NOT NULL DEFAULT ''"},
 			{"source_version", "source_version TEXT NOT NULL DEFAULT ''"},
+			{"group_key", "group_key TEXT NOT NULL DEFAULT ''"},
 			{"transcript_fidelity", "transcript_fidelity TEXT NOT NULL DEFAULT ''"},
 			{"parser_malformed_lines", "parser_malformed_lines INTEGER NOT NULL DEFAULT 0"},
 			{"is_truncated", "is_truncated BOOLEAN NOT NULL DEFAULT FALSE"},

@@ -22,7 +22,7 @@ import (
 // window used across the usage handler tests.
 const oneDayUsageRange = "from=2024-06-01&to=2024-06-01"
 
-func TestUsageInputAPIErrorPreservesMachineReadableCode(t *testing.T) {
+func TestUsageInputAPIErrorMapsToBadRequest(t *testing.T) {
 	err := usageInputAPIError(&service.UsageInputError{
 		Code: service.UsageErrorCodeUnknownProjectKey,
 		Msg:  "wording may change",

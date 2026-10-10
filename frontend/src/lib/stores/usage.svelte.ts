@@ -16,15 +16,18 @@ import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usa
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
-type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions";
+type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions" | "zoom";
 // Steps of a full refresh in execution order; the breakdown follows it. The
 // window summary is the second summary request made while a time range is
 // selected on the chart.
-type UsageStep = UsagePanel | "contextSummary";
+type UsageStep = UsagePanel | "contextSummary" | "attributionSummary" | "referenceSummary";
 const USAGE_STEP_ORDER: readonly UsageStep[] = [
   "summary",
   "contextSummary",
+  "attributionSummary",
+  "referenceSummary",
   "topSessions",
+  "zoom",
   "comparison",
   "pairwise",
 ];
@@ -192,7 +195,7 @@ function joinCsvParts(...parts: string[]): string {
   return out.join(",");
 }
 
-type Endpoint = "summary" | "pairwise" | "topSessions";
+type Endpoint = "summary" | "pairwise" | "topSessions" | "zoom";
 
 function emptyPairwiseSelection(): UsagePairwiseSelection {
   return {
@@ -214,6 +217,10 @@ function samePairwiseSelection(
 }
 
 export type UsageMode = "cost" | "token";
+
+function selectionKey(params: UsageParams): string {
+  return [params.project_key, params.model, params.agent].join("|");
+}
 
 function summaryForDateRange(
   summary: UsageSummaryResponse,
@@ -340,9 +347,7 @@ class UsageStore {
   selectedTokenTypes: UsageTokenType[] = $state([...ALL_TOKEN_TYPES]);
   selectedTimeRange: { from: string; to: string } | null = $state(null);
 
-  // Empty exclusion sets show all items. Chart clicks and picker checkboxes
-  // share these comma-separated sets.
-  // Initialized from localStorage to survive tab switches.
+  // Picker exclusions persist across tab switches.
   excludedProjects: string = $state("");
   excludedProjectKeys: string = $state("");
   excludedAgents: string = $state("");
@@ -358,10 +363,28 @@ class UsageStore {
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
+  attributionSummary = $state<UsageSummaryResponse | null>(null);
+  selectedProjectKey = $state("");
+  selectedModel = $state("");
+  // The selected-dimension-free summary over the full unbrushed window.
+  referenceSummary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
+  // Which selection the shown summary covers, so a failed reselect reports instead of showing old totals.
+  private summarySelection: string | null = null;
+  // A full-window refresh is in flight, so a brush must refetch the window instead of slicing old data.
+  private fullWindowPending = false;
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
+  private zoomed = $state(false);
+
+  get zoomedProject(): { key: string; label: string } | null {
+    return this.zoomed && this.selectedProjectKey ? { key: this.selectedProjectKey, label: this.focusLabel } : null;
+  }
+  get focusLabel(): string {
+    return this.knownProjects.find((project) => project.id === this.selectedProjectKey)?.name ?? this.selectedProjectKey;
+  }
+  zoomRows = $state<DbTopSessionEntry[] | null>(null);
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
   // Wall-clock ms of the most recent full refresh, request start to data
@@ -382,17 +405,20 @@ class UsageStore {
     summary: false,
     pairwise: false,
     topSessions: false,
+    zoom: false,
   });
   querying = $state<Record<UsagePanel, boolean>>({
     summary: false,
     comparison: false,
     pairwise: false,
     topSessions: false,
+    zoom: false,
   });
   errors = $state<Record<Endpoint, string | null>>({
     summary: null,
     pairwise: null,
     topSessions: null,
+    zoom: null,
   });
 
   toggles: Toggles = $state(loadToggles());
@@ -401,6 +427,7 @@ class UsageStore {
     summary: 0,
     pairwise: 0,
     topSessions: 0,
+    zoom: 0,
   };
   private fetchAllVersion = 0;
   private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
@@ -450,11 +477,28 @@ class UsageStore {
     if (this.excludedModels) {
       p.exclude_model = this.excludedModels;
     }
+    if (this.selectedProjectKey) p.project_key = this.selectedProjectKey;
+    if (this.selectedModel) p.model = this.selectedModel;
     return p;
+  }
+
+  private attributionParams(): UsageParams | undefined {
+    const by = this.toggles.attribution.groupBy;
+    if (!this.hasSelection(by)) return undefined;
+    const params = this.baseParams();
+    if (by === "project") delete params.project_key;
+    else if (by === "model") delete params.model;
+    else delete params.agent;
+    return params;
   }
 
   get timeSeriesSummary(): UsageSummaryResponse | null {
     return this.timeSeriesContextSummary ?? this.summary;
+  }
+
+  // Chart colors and legend rank from this, so selecting never recolors or reorders series.
+  get colorSummary(): UsageSummaryResponse | null {
+    return (this.hasSelection(this.toggles.attribution.groupBy) && this.referenceSummary) || this.timeSeriesSummary;
   }
 
   get pairwiseModelOptions(): string[] {
@@ -551,6 +595,7 @@ class UsageStore {
   }
 
   applyDateRange(from: string, to: string) {
+    if (this.isPinned && this.from === from && this.to === to) return;
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
     this.isTimeRangeSummaryProvisional = false;
@@ -560,6 +605,14 @@ class UsageStore {
   }
 
   applyRollingWindow(days: number) {
+    const range = rollingRange(days);
+    if (
+      !this.isPinned &&
+      this.windowDays === days &&
+      this.from === range.from &&
+      this.to === range.to
+    )
+      return;
     this.selectedTimeRange = null;
     this.timeSeriesContextSummary = null;
     this.isTimeRangeSummaryProvisional = false;
@@ -593,20 +646,22 @@ class UsageStore {
       this.summary = summaryForDateRange(this.timeSeriesContextSummary, from, to);
       this.isTimeRangeSummaryProvisional = true;
     }
+    if (this.referenceSummary) this.attributionSummary = summaryForDateRange(this.referenceSummary, from, to);
     this.topSessions = null;
     this.errors.topSessions = null;
-    void this.fetchAll({ preserveTimeRange: true, refreshTimeSeriesContext: false });
+    void this.fetchAll({ preserveTimeRange: true, refreshTimeSeriesContext: this.fullWindowPending });
   }
 
-  clearTimeRange() {
+  clearTimeRange(refresh = true) {
     if (this.selectedTimeRange === null) return;
     this.selectedTimeRange = null;
     if (this.timeSeriesContextSummary) {
       this.summary = this.timeSeriesContextSummary;
       this.timeSeriesContextSummary = null;
     }
+    if (this.referenceSummary) this.attributionSummary = this.referenceSummary;
     this.isTimeRangeSummaryProvisional = false;
-    void this.fetchAll();
+    if (refresh) void this.fetchAll();
   }
 
   setPairwiseSide(side: UsagePairwiseSide, updates: Partial<UsagePairwiseSideSelection>): void {
@@ -629,6 +684,50 @@ class UsageStore {
       this.clearPairwiseComparisonState();
       void this.fetchPairwise(this.versions.summary, this.baseParams());
     }
+  }
+
+  isSelected(by: GroupBy, id: string): boolean {
+    return by === "agent"
+      ? sessions.isAgentSelected(id)
+      : (by === "project" ? this.selectedProjectKey : this.selectedModel) === id;
+  }
+
+  hasSelection(by: GroupBy): boolean {
+    return (by === "agent" ? sessions.filters.agent : by === "project" ? this.selectedProjectKey : this.selectedModel) !== "";
+  }
+
+  clearSelection(by: GroupBy): void {
+    if (by === "agent") {
+      sessions.filters.agent = "";
+      return;
+    }
+    if (by === "project") {
+      this.selectedProjectKey = "";
+      this.backToProjects();
+    } else this.selectedModel = "";
+    void this.fetchAll({ preserveTimeRange: true });
+  }
+
+  toggleSelection(by: GroupBy, id: string): void {
+    const clear = this.isSelected(by, id);
+    if (by === "agent") {
+      sessions.filters.agent = clear ? sessions.filters.agent.split(",").filter((agent) => agent !== id).join(",") : id;
+      return;
+    }
+    if (by === "project") {
+      this.selectedProjectKey = clear ? "" : id;
+      if (clear) this.backToProjects();
+    } else this.selectedModel = clear ? "" : id;
+    void this.fetchAll({ preserveTimeRange: true });
+  }
+
+  private dropExcludedSelection(): void {
+    sessions.filters.agent = sessions.filters.agent.split(",").filter((agent) => !this.isAgentExcluded(agent)).join(",");
+    if (this.selectedProjectKey && this.isProjectKeyExcluded(this.selectedProjectKey)) {
+      this.selectedProjectKey = "";
+      this.backToProjects();
+    }
+    if (this.selectedModel && this.isModelExcluded(this.selectedModel)) this.selectedModel = "";
   }
 
   // Toggle an item's exclusion. Clicking an included item
@@ -659,18 +758,6 @@ class UsageStore {
     void this.fetchAllWithResult(options).then((result) => {
       if (result !== "error" || !hadSelectedTimeRange || this.excludedAgents !== changed) return;
       this.excludedAgents = previous;
-      void this.fetchAll({ preserveTimeRange: true });
-    });
-  }
-
-  hideModel(name: string, options: { preserveTimeRange?: boolean } = {}): void {
-    const previous = this.excludedModels;
-    const hadSelectedTimeRange = options.preserveTimeRange && this.selectedTimeRange !== null;
-    this.excludedModels = joinCsvParts(this.excludedModels, name);
-    const changed = this.excludedModels;
-    void this.fetchAllWithResult(options).then((result) => {
-      if (result !== "error" || !hadSelectedTimeRange || this.excludedModels !== changed) return;
-      this.excludedModels = previous;
       void this.fetchAll({ preserveTimeRange: true });
     });
   }
@@ -755,16 +842,21 @@ class UsageStore {
     this.fetchAll();
   }
 
-  clearFilters(): void {
+  clearFilters(refresh = true): void {
+    this.selectedProjectKey = "";
+    this.selectedModel = "";
+    this.backToProjects();
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
     this.excludedAgents = "";
     this.excludedModels = "";
-    this.fetchAll();
+    if (refresh) this.fetchAll();
   }
 
   get hasActiveFilters(): boolean {
     return (
+      this.selectedProjectKey !== "" ||
+      this.selectedModel !== "" ||
       this.excludedProjects !== "" ||
       this.excludedProjectKeys !== "" ||
       this.excludedAgents !== "" ||
@@ -779,6 +871,7 @@ class UsageStore {
   setMode(mode: UsageMode): boolean {
     if (this.mode === mode) return false;
     this.mode = mode;
+    if (this.zoomedProject?.key) void this.fetchZoom();
     this.invalidatePanel("topSessions");
     this.topSessions = null;
     this.errors.topSessions = null;
@@ -796,6 +889,7 @@ class UsageStore {
       return false;
     }
     this.selectedTokenTypes = canonical;
+    if (this.zoomedProject?.key) void this.fetchZoom();
     this.invalidatePanel("topSessions");
     this.topSessions = null;
     this.errors.topSessions = null;
@@ -804,9 +898,7 @@ class UsageStore {
   }
 
   setTimeSeriesGroupBy(g: GroupBy) {
-    this.toggles.timeSeries.groupBy = g;
-    this.toggles.attribution.groupBy = g;
-    saveToggles(this.toggles);
+    this.setGroupBy(g);
   }
 
   setTimeSeriesView(v: TimeSeriesView) {
@@ -815,9 +907,18 @@ class UsageStore {
   }
 
   setAttributionGroupBy(g: GroupBy) {
+    this.setGroupBy(g);
+  }
+
+  private setGroupBy(g: GroupBy): void {
+    const previous = this.toggles.attribution.groupBy;
+    if (g === previous) return;
     this.toggles.timeSeries.groupBy = g;
     this.toggles.attribution.groupBy = g;
     saveToggles(this.toggles);
+    this.backToProjects();
+    if (this.hasSelection(previous) || this.hasSelection(g))
+      void this.fetchAll({ preserveTimeRange: true });
   }
 
   setAttributionView(v: AttributionView) {
@@ -837,6 +938,7 @@ class UsageStore {
   }
 
   private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
+    this.dropExcludedSelection();
     const startedAt = performance.now();
     this.stepTimings.clear();
     this.refreshStartedAt = startedAt;
@@ -860,6 +962,7 @@ class UsageStore {
     }
     const fetchVersion = ++this.fetchAllVersion;
     this.invalidatePanel("pairwise");
+    this.invalidatePanel("zoom");
     this.invalidatePanel("topSessions");
     this.rollDates();
     saveUsageFilters(this);
@@ -870,19 +973,21 @@ class UsageStore {
       selectedRangeAtStart !== null
         ? { ...params, from: this.from, to: this.to }
         : undefined;
+    if (contextParams || this.selectedTimeRange === null) this.fullWindowPending = true;
     const summaryPromise = this.fetchSummary({
       loadComparison: false,
       params,
       contextParams,
     });
     const topSessionsPromise = this.fetchTopSessions(params);
+    const zoomPromise = this.fetchZoom(params);
     const loadedSummary = await summaryPromise;
     if (fetchVersion !== this.fetchAllVersion) {
-      await topSessionsPromise;
+      await Promise.all([topSessionsPromise, zoomPromise]);
       return "aborted";
     }
     if (!loadedSummary) {
-      await topSessionsPromise;
+      await Promise.all([topSessionsPromise, zoomPromise]);
       if (fetchVersion !== this.fetchAllVersion) return "aborted";
       if (
         selectedRangeAtStart !== null &&
@@ -892,7 +997,10 @@ class UsageStore {
         this.invalidatePanel("topSessions");
         this.topSessions = null;
         this.errors.topSessions = null;
-        await this.fetchTopSessions(this.baseParams());
+        await Promise.all([
+          this.fetchTopSessions(this.baseParams()),
+          this.fetchZoom(this.baseParams()),
+        ]);
       }
       return "error";
     }
@@ -902,14 +1010,24 @@ class UsageStore {
           return this.fetchTopSessions(loadedSummary.params);
         })
       : topSessionsPromise;
-    const [topSessionsResult, comparisonResult, pairwiseResult] = await Promise.all([
-      currentTopSessionsPromise,
-      this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
-      this.fetchPairwise(loadedSummary.version, loadedSummary.params),
-    ]);
+    const currentZoomPromise = loadedSummary.projectScopeRecovered
+      ? zoomPromise.then(() => {
+          if (fetchVersion !== this.fetchAllVersion) return "aborted";
+          return this.fetchZoom(loadedSummary.params);
+        })
+      : zoomPromise;
+    const [topSessionsResult, loadedZoomResult, comparisonResult, pairwiseResult] =
+      await Promise.all([
+        currentTopSessionsPromise,
+        currentZoomPromise,
+        this.fetchComparison(loadedSummary.version, loadedSummary.summary, loadedSummary.params),
+        this.fetchPairwise(loadedSummary.version, loadedSummary.params),
+      ]);
+    const zoomResult = this.zoomedProject === null ? "ok" : loadedZoomResult;
     if (
       fetchVersion === this.fetchAllVersion &&
       topSessionsResult === "ok" &&
+      zoomResult === "ok" &&
       comparisonResult === "ok" &&
       pairwiseResult === "ok"
     ) {
@@ -919,6 +1037,7 @@ class UsageStore {
     if (
       fetchVersion !== this.fetchAllVersion ||
       topSessionsResult === "aborted" ||
+      zoomResult === "aborted" ||
       comparisonResult === "aborted" ||
       pairwiseResult === "aborted"
     ) {
@@ -937,6 +1056,7 @@ class UsageStore {
   ): Promise<LoadedUsageSummary | null> {
     const loadComparison = options.loadComparison ?? true;
     const recoverProjectScope = options.recoverProjectScope ?? true;
+    const attributionParams = this.attributionParams();
     const v = ++this.versions.summary;
     this.abortPanel("comparison");
     this.abortPanel("pairwise");
@@ -954,26 +1074,39 @@ class UsageStore {
     const liveContextStep = options.contextParams
       ? this.liveQuery.start("contextSummary", started)
       : 0;
+    const liveAttributionStep = attributionParams ? this.liveQuery.start("attributionSummary", started) : 0;
+    // Unbrushed, the attribution request already covers the full window.
+    const referenceParams = attributionParams && options.contextParams ? { ...attributionParams, from: options.contextParams.from, to: options.contextParams.to } : undefined;
+    const liveReferenceStep = referenceParams ? this.liveQuery.start("referenceSummary", started) : 0;
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
+    const params = options.params ?? this.baseParams();
     try {
-      const params = options.params ?? this.baseParams();
       const contextParams = options.contextParams;
       let data: UsageSummaryResponse;
       let contextData: UsageSummaryResponse | null = null;
-      if (contextParams) {
-        [data, contextData] = await Promise.all([
-          UsageService.getApiV1UsageSummary(params, { signal }),
-          UsageService.getApiV1UsageSummary(contextParams, { signal }),
-        ]);
-      } else {
+      let attributionData: UsageSummaryResponse | null = null;
+      let referenceData: UsageSummaryResponse | null = null;
+      if (!contextParams && !attributionParams) {
         data = await UsageService.getApiV1UsageSummary(params, { signal });
+      } else {
+        [data, contextData, attributionData, referenceData] = await Promise.all([
+          UsageService.getApiV1UsageSummary(params, { signal }),
+          contextParams ? UsageService.getApiV1UsageSummary(contextParams, { signal }) : null,
+          attributionParams ? UsageService.getApiV1UsageSummary(attributionParams, { signal }) : null,
+          referenceParams ? UsageService.getApiV1UsageSummary(referenceParams, { signal }) : null,
+        ]);
       }
       if (this.versions.summary === v) {
         this.summary = data;
+        this.summarySelection = selectionKey(params);
+        if (contextData !== null || this.selectedTimeRange === null) this.fullWindowPending = false;
+        this.attributionSummary = attributionData;
+        if (!attributionParams) this.referenceSummary = null;
+        else if (referenceData || !this.selectedTimeRange) this.referenceSummary = referenceData ?? attributionData;
         // Both responses are applied together, so each request's apply
         // phase starts once the later body has arrived; the earlier one
         // shows a gap while it waited for its sibling.
-        const bodies = [data, contextData]
+        const bodies = [data, contextData, attributionData, referenceData]
           .map((body) => responseTimingOf(body)?.bodyAt)
           .filter((at): at is number => at !== undefined);
         const applyStartedAt = bodies.length > 0 ? Math.max(...bodies) : undefined;
@@ -981,6 +1114,15 @@ class UsageStore {
         if (contextData !== null) {
           this.noteStep("contextSummary", liveContextStep, started, contextData, applyStartedAt);
         }
+        if (attributionData)
+          this.noteStep(
+            "attributionSummary",
+            liveAttributionStep,
+            started,
+            attributionData,
+            applyStartedAt,
+          );
+        if (referenceData) this.noteStep("referenceSummary", liveReferenceStep, started, referenceData, applyStartedAt);
         this.isTimeRangeSummaryProvisional = false;
         if (contextData !== null) {
           this.timeSeriesContextSummary = contextData;
@@ -1012,10 +1154,14 @@ class UsageStore {
       if (
         recoverProjectScope &&
         this.versions.summary === v &&
-        this.excludedProjectKeys !== "" &&
+        (this.excludedProjectKeys !== "" || this.selectedProjectKey !== "") &&
         isUnknownProjectKeyError(e)
       ) {
         this.excludedProjectKeys = "";
+        if (this.selectedProjectKey) {
+          this.selectedProjectKey = "";
+          this.backToProjects();
+        }
         this.abortPanel("topSessions");
         const recoveredParams = this.baseParams();
         const loaded = await this.fetchSummary({
@@ -1047,7 +1193,21 @@ class UsageStore {
           this.timeSeriesContextSummary = null;
           this.isTimeRangeSummaryProvisional = false;
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
-        } else if (this.summary === null) {
+          // The reference already holds this scope's full-window attribution.
+          this.attributionSummary = this.referenceSummary;
+          const restoredAttributionParams = this.attributionSummary ? undefined : this.attributionParams();
+          if (restoredAttributionParams) {
+            try {
+              const restoredAttribution = await UsageService.getApiV1UsageSummary(restoredAttributionParams, { signal });
+              if (this.versions.summary === v) {
+                this.attributionSummary = restoredAttribution;
+                this.referenceSummary = restoredAttribution;
+              }
+            } catch (attributionError) {
+              if (!isAbortError(attributionError)) console.warn("usage attribution restore failed:", attributionError);
+            }
+          }
+        } else if (this.summary === null || (this.summarySelection !== null && selectionKey(params) !== this.summarySelection)) {
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn("usage.fetchSummary refetch failed:", e);
@@ -1057,6 +1217,8 @@ class UsageStore {
       this.recordStep("summary", started, status);
       this.liveQuery.abandon(liveStep);
       this.liveQuery.abandon(liveContextStep);
+      this.liveQuery.abandon(liveAttributionStep);
+      this.liveQuery.abandon(liveReferenceStep);
       this.clearAbortSignal("summary", signal);
       if (this.versions.summary === v) {
         this.loading.summary = false;
@@ -1171,19 +1333,54 @@ class UsageStore {
     }
   }
 
+  backToProjects(): void {
+    this.invalidatePanel("zoom");
+    this.zoomed = false;
+    this.zoomRows = null;
+    this.errors.zoom = null;
+  }
+
+  setOpenProject(key: string | null): void {
+    if (key === null) {
+      this.backToProjects();
+      return;
+    }
+    const needsFocus = !this.isSelected("project", key);
+    this.selectedProjectKey = key;
+    this.zoomed = true;
+    if (needsFocus) void this.fetchAll({ preserveTimeRange: true });
+    else void this.fetchZoom();
+  }
+
+  private async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
+    const projectKey = this.zoomedProject?.key;
+    if (!projectKey) return "ok";
+    return this.fetchRanking("zoom", { ...params, group_by: "group", limit: 100 });
+  }
+
   async fetchTopSessions(params: UsageParams | null = null): Promise<FetchResult> {
-    const v = ++this.versions.topSessions;
-    const signal = this.nextAbortSignal("topSessions");
-    const isFirstLoad = this.topSessions === null;
-    if (isFirstLoad) this.loading.topSessions = true;
-    if (isFirstLoad) this.errors.topSessions = null;
+    return this.fetchRanking("topSessions", params ?? this.baseParams());
+  }
+
+  private async fetchRanking(
+    panel: "topSessions" | "zoom",
+    query: UsageParams & { group_by?: "group"; limit?: number },
+  ): Promise<FetchResult> {
+    const version = ++this.versions[panel];
+    const signal = this.nextAbortSignal(panel);
+    if (panel === "zoom") this.zoomRows = null;
+    const isFirstLoad = (panel === "zoom" ? this.zoomRows : this.topSessions) === null;
+    if (isFirstLoad) {
+      this.loading[panel] = true;
+      this.errors[panel] = null;
+    }
     const started = performance.now();
-    const liveStep = this.liveQuery.start("topSessions", started);
+    const liveStep = this.liveQuery.start(panel, started);
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await UsageService.getApiV1UsageTopSessions(
         {
-          ...(params ?? this.baseParams()),
+          ...query,
           sort: this.mode === "token" ? "tokens" : "cost",
           token_types:
             this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
@@ -1192,34 +1389,25 @@ class UsageStore {
         },
         { signal },
       );
-      if (this.versions.topSessions === v) {
-        this.topSessions = data;
-        this.errors.topSessions = null;
-        this.noteStep("topSessions", liveStep, started, data);
-        return "ok";
+      if (this.versions[panel] !== version) return "aborted";
+      if (panel === "zoom") this.zoomRows = data;
+      else this.topSessions = data;
+      this.errors[panel] = null;
+      this.noteStep(panel, liveStep, started, data);
+      return "ok";
+    } catch (error) {
+      status = isAbortError(error) ? "aborted" : "error";
+      if (status === "error" && this.versions[panel] === version) {
+        if ((panel === "zoom" ? this.zoomRows : this.topSessions) === null) {
+          this.errors[panel] = error instanceof Error ? error.message : m.shared_failed_to_load();
+        } else console.warn(`usage.${panel} refetch failed:`, error);
       }
-      return "aborted";
-    } catch (e) {
-      if (isAbortError(e)) {
-        status = "aborted";
-        return "aborted";
-      }
-      status = "error";
-      if (this.versions.topSessions === v) {
-        if (this.topSessions === null) {
-          this.errors.topSessions = e instanceof Error ? e.message : m.shared_failed_to_load();
-        } else {
-          console.warn("usage.fetchTopSessions refetch failed:", e);
-        }
-      }
-      return "error";
+      return status;
     } finally {
-      this.recordStep("topSessions", started, status);
+      this.recordStep(panel, started, status);
       this.liveQuery.abandon(liveStep);
-      this.clearAbortSignal("topSessions", signal);
-      if (this.versions.topSessions === v) {
-        this.loading.topSessions = false;
-      }
+      this.clearAbortSignal(panel, signal);
+      if (this.versions[panel] === version) this.loading[panel] = false;
     }
   }
 
@@ -1232,8 +1420,8 @@ class UsageStore {
     this.abortControllers[panel]?.abort();
     delete this.abortControllers[panel];
     this.querying[panel] = false;
-    if (panel === "pairwise") {
-      this.loading.pairwise = false;
+    if (panel === "pairwise" || panel === "zoom") {
+      this.loading[panel] = false;
     }
   }
 
@@ -1260,6 +1448,7 @@ class UsageStore {
     this.versions.summary++;
     this.versions.pairwise++;
     this.versions.topSessions++;
+    this.versions.zoom++;
     for (const panel of Object.keys(this.abortControllers) as UsagePanel[]) {
       this.abortControllers[panel]?.abort();
       delete this.abortControllers[panel];
@@ -1268,6 +1457,8 @@ class UsageStore {
     this.loading.summary = false;
     this.loading.pairwise = false;
     this.loading.topSessions = false;
+    this.loading.zoom = false;
+    this.zoomRows = null;
   }
 
   private markRefreshComplete(startedAt: number): void {

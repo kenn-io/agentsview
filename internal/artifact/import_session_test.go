@@ -35,6 +35,7 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 			ID: "session", Project: "project", Machine: contractOrigin,
 			Agent: "claude", ParentSessionID: &parent,
 			SourceSessionID: "source",
+			GroupKey:        "job-a",
 			SecretLeakCount: 4,
 			FilePath:        &filePath,
 			FileSize:        &fileSize,
@@ -72,6 +73,7 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	write := rewriteManifestForImport(m, messages)
 	importedID := contractOrigin + "~session"
 	assert.Equal(t, importedID, write.Session.ID)
+	assert.Equal(t, "job-a", write.Session.GroupKey)
 	assert.Equal(t, contractOrigin, write.Session.Machine)
 	assert.Equal(t, m.SessionName, write.Session.SessionName)
 	assert.Nil(t, write.Session.FilePath)
@@ -225,7 +227,7 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 			prepare: func(t *testing.T, store ArtifactStore) string {
 				t.Helper()
 
-				body := []byte(`{"origin":"contract-a1b2c3","v":5}`)
+				body := []byte(fmt.Sprintf(`{"origin":"contract-a1b2c3","v":%d}`, manifestFormatVersion+1))
 				return createHashedImportArtifact(
 					t, store, KindManifests, ".json", body,
 				)

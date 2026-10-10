@@ -28,6 +28,7 @@ type UsageRequest struct {
 	Machine           string `json:"machine,omitempty"`
 	GitBranch         string `json:"git_branch,omitempty"`
 	ExcludeProject    string `json:"exclude_project,omitempty"`
+	ProjectKey        string `json:"project_key,omitempty"`
 	ExcludeProjectKey string `json:"exclude_project_key,omitempty"`
 	ExcludeAgent      string `json:"exclude_agent,omitempty"`
 	ExcludeModel      string `json:"exclude_model,omitempty"`
@@ -57,23 +58,54 @@ type UsageRequest struct {
 func ResolveUsageProjectKeys(
 	ctx context.Context, store db.Store, req UsageRequest,
 ) (UsageRequest, error) {
-	if req.ExcludeProjectKey == "" {
+	if req.ExcludeProjectKey == "" && req.ProjectKey == "" {
 		return req, nil
 	}
-	resolved, err := resolveUsageProjectKeyLabels(
-		ctx, store, req.ExcludeProjectKey,
-	)
+	byKey, err := usageProjectKeyCatalog(ctx, store)
 	if err != nil {
 		return UsageRequest{}, err
 	}
-	req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
-	req.ExcludeProjectKey = ""
+	if req.ProjectKey != "" {
+		resolved, err := usageProjectKeyLabels(byKey, req.ProjectKey)
+		if err != nil {
+			return UsageRequest{}, err
+		}
+		if len(resolved) == 0 {
+			return UsageRequest{}, &UsageInputError{Code: UsageErrorCodeUnknownProjectKey, Msg: "unknown project key"}
+		}
+		labels, ok := intersectValues(append(splitCSVTokens(req.Project), req.ProjectLabels...), resolved)
+		if ok {
+			req.ProjectLabels = labels
+		} else {
+			// Equal include and exclude lists intentionally match nothing.
+			req.ProjectLabels = resolved
+			req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
+		}
+		req.Project = ""
+		req.ProjectKey = ""
+	}
+	if req.ExcludeProjectKey != "" {
+		resolved, err := usageProjectKeyLabels(byKey, req.ExcludeProjectKey)
+		if err != nil {
+			return UsageRequest{}, err
+		}
+		req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
+		req.ExcludeProjectKey = ""
+	}
 	return req, nil
 }
 
 func resolveUsageProjectKeyLabels(
 	ctx context.Context, store db.Store, keys string,
 ) ([]string, error) {
+	byKey, err := usageProjectKeyCatalog(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	return usageProjectKeyLabels(byKey, keys)
+}
+
+func usageProjectKeyCatalog(ctx context.Context, store db.Store) (map[string]string, error) {
 	labels, err := store.GetActiveProjectLabels(ctx)
 	if err != nil {
 		return nil, err
@@ -88,6 +120,10 @@ func resolveUsageProjectKeyLabels(
 			byKey[entry.ProjectKey] = label
 		}
 	}
+	return byKey, nil
+}
+
+func usageProjectKeyLabels(byKey map[string]string, keys string) ([]string, error) {
 	resolved := make([]string, 0)
 	for _, key := range splitCSVTokens(keys) {
 		label, ok := byKey[key]

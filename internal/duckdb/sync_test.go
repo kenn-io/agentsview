@@ -51,13 +51,13 @@ func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 	local, path := newPushFixture(t, 3)
 	require.NoError(t, local.Update(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			`UPDATE sessions SET machine = ?, group_key = 'job-a' WHERE id = ?`,
 			"source-machine", "sess-2",
 		); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx,
-			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			`UPDATE sessions SET machine = ?, group_key = 'job-a' WHERE id = ?`,
 			" source-machine ", "sess-3",
 		)
 		return err
@@ -67,15 +67,17 @@ func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 
 	conn, err := Open(ctx, path)
 	require.NoError(t, err)
-	var machine string
+	var machine, group string
 	require.NoError(t, conn.QueryRowContext(ctx,
-		`SELECT machine FROM sessions WHERE id = ?`, "sess-2",
-	).Scan(&machine))
+		`SELECT machine, group_key FROM sessions WHERE id = ?`, "sess-2",
+	).Scan(&machine, &group))
 	assert.Equal(t, "source-machine", machine)
+	assert.Equal(t, "job-a", group)
 	require.NoError(t, conn.QueryRowContext(ctx,
-		`SELECT machine FROM sessions WHERE id = ?`, "sess-3",
-	).Scan(&machine))
+		`SELECT machine, group_key FROM sessions WHERE id = ?`, "sess-3",
+	).Scan(&machine, &group))
 	assert.Equal(t, " source-machine ", machine)
+	assert.Equal(t, "job-a", group)
 	require.NoError(t, conn.Close())
 
 	starred, err := local.StarSession(ctx, "sess-2")

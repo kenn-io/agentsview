@@ -54,6 +54,11 @@ func ReconcileProviderHistory(
 		result.Candidate = candidate
 		result.PriorContributed = true
 	}
+	if candidate.Parsed.Session.KeepStoredGroupKey {
+		candidate.Session.GroupKey = prior.Session.GroupKey
+		result.Candidate = candidate
+		result.PriorContributed = true
+	}
 	agent := candidate.Parsed.Session.Agent
 	if agent == "" {
 		agent = parser.AgentType(candidate.Session.Agent)

@@ -4,6 +4,7 @@ package dbtest
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -266,4 +267,66 @@ func SeedSessionWithMessages(
 	t.Helper()
 	SeedSession(t, d, id, project, opts...)
 	SeedMessages(t, d, msgs...)
+}
+
+// SeedUsageGroups records renamed jobs, matching names and ungrouped runs.
+func SeedUsageGroups(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions(id, project, machine, agent, group_key, session_name, started_at, deleted_at, message_count, user_message_count) VALUES
+ ('group-a-old', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Old digest · Oct 07 12:00', '2026-10-07T12:00:00Z', NULL, 1, 1),
+ ('group-a-new', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Research digest · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1),
+ ('group-a-untitled', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', '', '2026-10-09T12:00:00Z', NULL, 1, 1),
+ ('group-a-deleted', 'hermes-cron', 'host-a.example', 'hermes', 'job-a', 'Deleted digest · Oct 10 12:00', '2026-10-10T12:00:00Z', '2026-10-10T13:00:00Z', 1, 1),
+ ('group-second-machine', 'hermes-cron', 'host-b.example', 'hermes', 'job-a', 'Research digest · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1),
+ ('group-b', 'hermes-cron', 'host-a.example', 'hermes', 'job-b', 'Research digest · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1),
+ ('group-other', 'hermes-cron', 'host-a.example', 'hermes', '', '', '2026-10-08T12:00:00Z', NULL, 1, 1),
+ ('group-another-project', 'another-project', 'host-a.example', 'hermes', 'job-a', 'Separate project · Oct 08 12:00', '2026-10-08T12:00:00Z', NULL, 1, 1);
+ INSERT INTO messages(session_id, ordinal, role, content, timestamp)
+ SELECT id, 0, 'assistant', 'run message', started_at FROM sessions WHERE id LIKE 'group-%';
+ INSERT INTO usage_events(session_id, source, model, input_tokens, output_tokens, cost_microdollars, cost_status, cost_source, occurred_at, dedup_key)
+ SELECT id, 'session', 'gpt-5.4', 10, 2, CASE WHEN id = 'group-b' THEN 4000000 ELSE 1000000 END, 'exact', 'provider-reported', started_at, id FROM sessions WHERE id LIKE 'group-%';`)
+	require.NoError(t, err)
+}
+
+// AssertUsageGroups protects the same filtered grouping contract on each backend.
+func AssertUsageGroups(t *testing.T, store db.Store) {
+	t.Helper()
+	filter := db.UsageFilter{From: "2026-10-07", To: "2026-10-10", Agent: "hermes", ProjectLabels: []string{"hermes-cron"}, TopSessionsByGroup: true, TopSessionsSort: "cost"}
+	rows, err := store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 4)
+	assert.Equal(t, "job-b", rows[0].GroupKey)
+	assert.Equal(t, int64(4_000_000), rows[0].Cost.Microdollars)
+	assert.Equal(t, "job-a", rows[1].GroupKey)
+	assert.Equal(t, int64(3_000_000), rows[1].Cost.Microdollars)
+	assert.Equal(t, 30, rows[1].InputTokens)
+	assert.Equal(t, 6, rows[1].OutputTokens)
+	byKey := make(map[string]db.TopSessionEntry)
+	for _, row := range rows {
+		byKey[row.Machine+"/"+row.GroupKey] = row
+		assert.Equal(t, "hermes-cron", row.Project)
+	}
+	assert.Equal(t, "group-other", byKey["host-a.example/"].SessionID)
+	assert.Equal(t, 10, byKey["host-a.example/"].InputTokens)
+	assert.Empty(t, byKey["host-a.example/job-a"].SessionID)
+	filter.From, filter.To = "2026-10-07", "2026-10-07"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(1_000_000), rows[0].Cost.Microdollars)
+	filter.From, filter.To = "2026-10-07", "2026-10-10"
+	filter.Machine = "host-b.example"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "host-b.example", rows[0].Machine)
+	filter.Machine = ""
+	filter.ProjectLabels = nil
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 5)
+	filter.Model = "absent-model"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	assert.Empty(t, rows)
 }

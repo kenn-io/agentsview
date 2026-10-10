@@ -517,6 +517,9 @@
   "shared_refresh_step_skills": "技能",
   "shared_refresh_step_top_sessions": "熱門會話",
   "shared_refresh_step_context_summary": "時間視窗概覽",
+  "shared_refresh_step_attribution_summary": "成本歸因",
+  "shared_refresh_step_reference_summary": "時間視窗成本歸因",
+  "shared_refresh_step_zoom": "專案分組",
   "shared_refresh_step_signals": "信號",
   "shared_refresh_step_comparison": "對比",
   "shared_refresh_step_pairwise": "成對對比",
@@ -799,9 +802,6 @@
   "usage_chart_style_lines": "折線",
   "usage_chart_style_bars": "長條",
   "usage_chart_day_label": "{date}：{value}",
-  "usage_click_to_hide_hint": "點擊可從圖表隱藏",
-  "usage_click_to_hide": "點擊隱藏 {label}",
-  "usage_hide_from_chart": "從圖表隱藏 {label}",
   "usage_cache_efficiency_title": "快取效率",
   "usage_cache_reads": "快取讀取",
   "usage_cache_writes": "快取寫入",
@@ -2146,7 +2146,6 @@
   "usage_treemap": "樹狀圖",
   "usage_list": "列表",
   "usage_no_data_period": "此時段無資料",
-  "usage_click_to_hide_item": "點擊隱藏 {label}",
   "usage_cache_efficiency": "快取效率",
   "usage_cost_over_time": "成本隨時間變化",
   "filter_dropdown_all": "全部",
@@ -2378,5 +2377,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。","countPlural=other":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。"}}],
   "tool_sequences_full_input_in_message": "完整輸入在訊息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整結果在訊息 {ordinal} 中。",
-  "tool_sequences_retry": "重試"
+  "tool_sequences_retry": "重試",
+  "usage_click_project": "點擊聚焦 {label}，雙擊開啟其群組和工作階段",
+  "usage_click_project_hint": "選取專案以篩選頁面，開啟專案可查看其分組與會話。",
+  "usage_click_to_focus": "點擊聚焦 {label}",
+  "usage_click_to_focus_hint": "點擊聚焦，再次點擊清除"
 }

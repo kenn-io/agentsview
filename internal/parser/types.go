@@ -1420,13 +1420,15 @@ type ParsedSession struct {
 	// SessionKind is a provider-owned top-level session classification marker
 	// (for example, Claude Code "bg" or Grok "non-interactive"); empty for
 	// interactive sessions and for agents that do not emit one.
-	SessionKind      string
-	ParentSessionID  string
-	RelationshipType RelationshipType
-	Cwd              string
-	GitBranch        string
-	SourceSessionID  string
-	SourceVersion    string
+	SessionKind        string
+	ParentSessionID    string
+	RelationshipType   RelationshipType
+	Cwd                string
+	GitBranch          string
+	SourceSessionID    string
+	SourceVersion      string
+	GroupKey           string `json:"group_key,omitempty"`
+	KeepStoredGroupKey bool   `json:"keep_stored_group_key,omitempty"`
 	// TranscriptFidelity classifies how complete a stored transcript is
 	// relative to the agent's full session data: "full" when the
 	// high-resolution source was used, "summary" for a degraded/fallback

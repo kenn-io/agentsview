@@ -2935,9 +2935,40 @@ schemas keep their existing ordering behavior.
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it
   is meaningfully identified; otherwise it falls back to catalog pricing.
+- **Cron identity:**
+  [hermes_state_ids.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_ids.py)
+  recognizes `cron_<job ID>_<YYYYMMDD>_<HHMMSS>` with job IDs matching
+  `[A-Za-z0-9][A-Za-z0-9._-]*`.
+  [cron/scheduler.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/cron/scheduler.py)
+  records `source = "cron"` and titles as the job name followed by ` · `
+  and the run timestamp. `_title_base` falls back to
+  `cron {job_id}` for a blank job name. Agentsview treats that generated title
+  as unnamed and stores `group_key` as the job ID plus a hash of the source
+  home path. Usage groups by project, machine, home and job ID. The pinned
+  recognizer's legacy `job-1` example was reverified on 2026-10-09.
+  `TestHermesCronGroupsScopeHomes` verifies that rewritten Windows paths
+  keep distinct homes separate by accepting both path separators.
+  Names derive from the recorded `session_name` at read
+  time; usage-only archives show job IDs because their titles are discarded.
+  Resync copies preserve stored job IDs, including imported sessions. Archived
+  runs whose sources were gone before upgrading stay individual sessions unless
+  they already have a stored job ID.
 - **Agentsview:** `internal/parser/hermes.go` and
   `internal/parser/hermes_provider.go`; database and file generations are both
-  recognized.
+  recognized. Transcript projects use `platform`. A non-empty `state.db` source
+  takes precedence over transcript platform for grouping as well as project.
+  Explicit non-cron sources clear the job and its retention flag; absent sources
+  keep transcript evidence. Cron continuations follow `state.db` parent links with cycle detection;
+  transcript runs group by their run ID only. All cron runs retain the
+  `hermes-cron` project.
+  `delete_session` in
+  [hermes_state_sessions.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_sessions.py)
+  and `prune_sessions` in
+  [hermes_state_maintenance.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_maintenance.py)
+  clear surviving children's parent links. A cron continuation whose ancestors
+  were pruned keeps its stored job, including transcript-only parses and Augure
+  Desktop. Cron member fingerprints include the resolved job ID in direct and
+  cached reads for both providers.
 
 ## Forge (`forge`)
 

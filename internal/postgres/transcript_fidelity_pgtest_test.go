@@ -48,6 +48,7 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 		Machine:            "test-machine",
 		Agent:              "antigravity-cli",
 		TranscriptFidelity: "summary",
+		GroupKey:           "job-a",
 		CreatedAt:          "2026-01-01T00:00:00Z",
 	}
 	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession (summary)")
@@ -64,6 +65,7 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	require.NotNil(t, got, "session not found after first push")
 	assert.Equal(t, "summary", got.TranscriptFidelity,
 		"TranscriptFidelity should be 'summary' after first push")
+	assert.Equal(t, "job-a", got.GroupKey)
 
 	// Change fidelity and re-push — exercises the IS DISTINCT FROM clause.
 	sess.TranscriptFidelity = "full"

@@ -531,6 +531,9 @@
   "shared_refresh_step_skills": "Skills",
   "shared_refresh_step_top_sessions": "Top sessions",
   "shared_refresh_step_context_summary": "Window summary",
+  "shared_refresh_step_attribution_summary": "Cost attribution",
+  "shared_refresh_step_reference_summary": "Window cost attribution",
+  "shared_refresh_step_zoom": "Project groups",
   "shared_refresh_step_signals": "Signals",
   "shared_refresh_step_comparison": "Comparison",
   "shared_refresh_step_pairwise": "Pairwise comparison",
@@ -826,9 +829,6 @@
   "usage_chart_style_lines": "Lines",
   "usage_chart_style_bars": "Bars",
   "usage_chart_day_label": "{date}: {value}",
-  "usage_click_to_hide_hint": "Click to hide from chart",
-  "usage_click_to_hide": "Click to hide {label}",
-  "usage_hide_from_chart": "Hide {label} from chart",
   "usage_cache_efficiency_title": "Cache Efficiency",
   "usage_cache_reads": "Cache Reads",
   "usage_cache_writes": "Cache Writes",
@@ -2231,7 +2231,6 @@
   "usage_treemap": "Treemap",
   "usage_list": "List",
   "usage_no_data_period": "No data for this period",
-  "usage_click_to_hide_item": "Click to hide {label}",
   "usage_cache_efficiency": "Cache Efficiency",
   "usage_cost_over_time": "Cost Over Time",
   "filter_dropdown_all": "All",
@@ -2461,5 +2460,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Preview shows {shownLabel} of {countLabel} byte.","countPlural=other":"Preview shows {shownLabel} of {countLabel} bytes."}}],
   "tool_sequences_full_input_in_message": "Full input is in message {ordinal}.",
   "tool_sequences_full_result_in_message": "Full result is in message {ordinal}.",
-  "tool_sequences_retry": "Try again"
+  "tool_sequences_retry": "Try again",
+  "usage_click_project": "Click to focus {label}; double-click to open its groups and sessions",
+  "usage_click_project_hint": "Select a project to filter the page, or open it to see its groups and sessions.",
+  "usage_click_to_focus": "Click to focus {label}",
+  "usage_click_to_focus_hint": "Click to focus; click again to clear"
 }

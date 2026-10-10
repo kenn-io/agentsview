@@ -493,6 +493,13 @@ not exist. If Windows `LOCALAPPDATA` is redirected or a named Windows profile
 uses another Hermes home, set `HERMES_SESSIONS_DIR` or `hermes_sessions_dirs`
 explicitly.
 
+Cron runs stay under `hermes-cron`, with stable job groups in Usage attribution.
+Renames keep costs together, and jobs with the same name stay separate.
+Compressed sessions follow parent links available in `state.db` when parsed.
+A non-empty source in `state.db` takes precedence over the transcript's platform.
+Archived runs whose sources were gone before upgrading stay individual sessions
+unless they already have a stored job ID.
+
 **Cline support covers the CLI**, not the VS Code extension. Set `CLINE_DIR` or
 `agents.cline.dirs` to its data root or directly to its sessions directory.
 AgentsView reads the CLI's conversations, tool activity, usage, and recorded

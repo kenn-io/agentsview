@@ -241,7 +241,7 @@ func WriteHermesSessionJSONL(ctx context.Context,
 func (p *hermesProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,
-) (ParseOutcome, error) {
+) (outcome ParseOutcome, err error) {
 	if err := ctx.Err(); err != nil {
 		return ParseOutcome{}, err
 	}
@@ -250,6 +250,27 @@ func (p *hermesProvider) Parse(
 		return ParseOutcome{}, errors.New("hermes source path unavailable")
 	}
 	path := src.Path
+	defer func() {
+		sourcePath := firstNonEmptyJSONLString(src.StateDB, path)
+		if p.Config.PathRewriter != nil {
+			sourcePath = p.Config.PathRewriter(sourcePath)
+		} else if absolute, err := filepath.Abs(sourcePath); err == nil {
+			sourcePath = absolute
+		}
+		sourcePath = strings.ReplaceAll(sourcePath, `\`, "/")
+		home := filepath.Dir(sourcePath)
+		if filepath.Base(sourcePath) != "state.db" && filepath.Base(home) == "sessions" {
+			home = filepath.Dir(home)
+		}
+		// Legacy job IDs can repeat across homes on the same machine.
+		hash := sha256.Sum256([]byte(filepath.Clean(home)))
+		for i := range outcome.Results {
+			sess := &outcome.Results[i].Result.Session
+			if sess.GroupKey != "" {
+				sess.GroupKey = fmt.Sprintf("%s:%x", sess.GroupKey, hash[:4])
+			}
+		}
+	}()
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	if src.SessionID != "" {
 		return p.parseStateMember(ctx, src, req.Source.ProjectHint, machine, req.Fingerprint)
@@ -336,6 +357,10 @@ func (p *hermesProvider) parseStateMember(
 	}
 	if !found {
 		return ParseOutcome{ResultSetComplete: true, ForceReplace: true, SkipReason: SkipNoSession}, nil
+	}
+
+	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) }); err != nil {
+		return ParseOutcome{}, err
 	}
 	messages, err := readHermesStateMessagesForSession(ctx, conn, src.SessionID)
 	if err != nil {
@@ -1591,13 +1616,21 @@ func hermesStateMemberFingerprint(
 		}
 	}
 	observeSharedContainerScan(ctx)
-	ss, messages, selectedPath, err := readHermesStateSessionSource(ctx,
-		src.StateDB, src.SessionID,
+	conn, err := openSQLiteReadOnly(src.StateDB, sqliteReadOptions{})
+	if err != nil {
+		return SourceFingerprint{}, hermesStateLookupError{err: fmt.Errorf("open hermes state db: %w", err)}
+	}
+	defer conn.Close()
+	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(ctx,
+		conn, src.StateDB, src.SessionID,
 	)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return SourceFingerprint{Key: source.FingerprintKey}, nil
 		}
+		return SourceFingerprint{}, err
+	}
+	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) }); err != nil {
 		return SourceFingerprint{}, err
 	}
 	h := sha256.New()
@@ -1714,6 +1747,9 @@ func cacheHermesMemberCore(
 	if err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
+	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) }); err != nil {
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
+	}
 	h := sha256.New()
 	if err := addHermesStateSessionFingerprint(h, ss, messages); err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
@@ -1764,6 +1800,11 @@ func cachedHermesMemberCore(
 func addHermesStateSessionFingerprint(
 	h hash.Hash, ss hermesStateSession, messages []hermesStateMessage,
 ) error {
+	if ss.source == "cron" {
+		if _, err := fmt.Fprintf(h, "cron-job\x00%q\x00", ss.cronJob); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(
 		h,
 		"state-member\x00%q\x00%q\x00%q\x00%q\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%t\x00%g\x00%t\x00%g\x00%q\x00%q\x00%q\x00%d\x00",

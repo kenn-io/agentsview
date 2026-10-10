@@ -213,6 +213,7 @@ var mirrorTables = []tableSpec{
 			col("git_branch", tString),
 			col("source_session_id", tString),
 			col("source_version", tString),
+			col("group_key", tString),
 			col("transcript_fidelity", tString),
 			col("parser_malformed_lines", tInt),
 			col("is_truncated", tBool),

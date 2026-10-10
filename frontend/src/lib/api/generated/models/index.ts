@@ -303,6 +303,7 @@ export * from "./getApiV1UsageComparisonParams.ts";
 export * from "./getApiV1UsagePairwiseComparisonParams.ts";
 export * from "./getApiV1UsageSummaryParams.ts";
 export * from "./getApiV1UsageSummaryStreamParams.ts";
+export * from "./getApiV1UsageTopSessionsGroupBy.ts";
 export * from "./getApiV1UsageTopSessionsParams.ts";
 export * from "./getApiV1UsageTopSessionsSort.ts";
 export * from "./githubConfigResponse.ts";

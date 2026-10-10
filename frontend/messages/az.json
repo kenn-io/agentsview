@@ -533,6 +533,9 @@
   "shared_refresh_step_skills": "Bacarıqlar",
   "shared_refresh_step_top_sessions": "Ən yaxşı sessiyalar",
   "shared_refresh_step_context_summary": "Dövr xülasəsi",
+  "shared_refresh_step_attribution_summary": "Xərcin bölgüsü",
+  "shared_refresh_step_reference_summary": "Dövr üzrə xərcin bölgüsü",
+  "shared_refresh_step_zoom": "Layihə qrupları",
   "shared_refresh_step_signals": "Siqnallar",
   "shared_refresh_step_comparison": "Müqayisə",
   "shared_refresh_step_pairwise": "Cüt müqayisə",
@@ -828,9 +831,6 @@
   "usage_chart_style_lines": "Xətlər",
   "usage_chart_style_bars": "Sütunlar",
   "usage_chart_day_label": "{date}: {value}",
-  "usage_click_to_hide_hint": "Diaqramdan gizlətmək üçün klikləyin",
-  "usage_click_to_hide": "{label} məlumatlarını gizlətmək üçün klikləyin",
-  "usage_hide_from_chart": "{label} məlumatlarını diaqramdan gizlət",
   "usage_cache_efficiency_title": "Keşin səmərəliliyi",
   "usage_cache_reads": "Keşdən oxuma",
   "usage_cache_writes": "Keşə yazma",
@@ -2233,7 +2233,6 @@
   "usage_treemap": "Ağac xəritəsi",
   "usage_list": "Siyahı",
   "usage_no_data_period": "Bu dövr üçün məlumat yoxdur",
-  "usage_click_to_hide_item": "{label} məlumatlarını gizlətmək üçün klikləyin",
   "usage_cache_efficiency": "Keşin səmərəliliyi",
   "usage_cost_over_time": "Zaman üzrə xərc",
   "filter_dropdown_all": "Hamısı",
@@ -2463,5 +2462,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir.","countPlural=other":"Önbaxış {countLabel} baytdan {shownLabel} baytı göstərir."}}],
   "tool_sequences_full_input_in_message": "Tam giriş {ordinal} nömrəli mesajdadır.",
   "tool_sequences_full_result_in_message": "Tam nəticə {ordinal} nömrəli mesajdadır.",
-  "tool_sequences_retry": "Yenidən cəhd et"
+  "tool_sequences_retry": "Yenidən cəhd et",
+  "usage_click_project": "{label} üzrə fokuslanmaq üçün klikləyin, qrupları və sessiyaları açmaq üçün iki dəfə klikləyin",
+  "usage_click_project_hint": "Səhifəni süzmək üçün layihə seçin və ya qruplarını və sessiyalarını görmək üçün onu açın.",
+  "usage_click_to_focus": "{label} üzrə fokuslanmaq üçün klikləyin",
+  "usage_click_to_focus_hint": "Fokuslanmaq üçün klikləyin, təmizləmək üçün yenidən klikləyin"
 }

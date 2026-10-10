@@ -1787,7 +1787,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"duplicate_prompt_count", "no_code_context_count",
 		"runaway_tool_loop_count",
 		"cwd", "git_branch", "source_session_id",
-		"source_version", "transcript_fidelity", "parser_malformed_lines",
+		"source_version", "group_key", "transcript_fidelity", "parser_malformed_lines",
 		"is_truncated", "last_write_incremental",
 		"transcript_revision",
 		"secret_leak_count", "secrets_rules_version",

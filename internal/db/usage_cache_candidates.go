@@ -36,6 +36,8 @@ func (v usageSourceVersion) Equal(other usageSourceVersion) bool {
 
 type usageQuerySession struct {
 	ID                string
+	GroupKey          string
+	SessionName       string
 	Project           string
 	Machine           string
 	Agent             string
@@ -279,7 +281,7 @@ func loadUsageQuerySessionRecords(
 				idArgs[i] = id
 			}
 			query := `SELECT
-			s.id, s.project, s.machine, s.agent, COALESCE(s.git_branch, ''),
+			s.id, s.project, s.group_key, COALESCE(s.session_name, ''), s.machine, s.agent, COALESCE(s.git_branch, ''),
 			COALESCE(s.created_at, ''), COALESCE(s.started_at, ''),
 			COALESCE(s.ended_at, ''),
 			COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''),
@@ -305,7 +307,7 @@ func loadUsageQuerySessionRecords(
 				var record usageQuerySessionRecord
 				var passes, automated, hasTotalOutput, hasPeakContext int
 				if err := rows.Scan(
-					&record.session.ID, &record.session.Project,
+					&record.session.ID, &record.session.Project, &record.session.GroupKey, &record.session.SessionName,
 					&record.session.Machine, &record.session.Agent,
 					&record.session.GitBranch, &record.session.CreatedAt,
 					&record.session.StartedAt, &record.session.EndedAt,

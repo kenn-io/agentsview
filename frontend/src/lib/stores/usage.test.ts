@@ -129,6 +129,7 @@ const usageServiceMocks = vi.hoisted(() => {
       },
     }),
     getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
+    getUsageZoom: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -160,7 +161,11 @@ vi.mock("../api/generated/index", () => ({
     getApiV1UsageSummary: usageServiceMocks.getApiV1UsageSummary,
     getApiV1UsageComparison: usageServiceMocks.getApiV1UsageComparison,
     getApiV1UsagePairwiseComparison: usageServiceMocks.getApiV1UsagePairwiseComparison,
-    getApiV1UsageTopSessions: usageServiceMocks.getApiV1UsageTopSessions,
+    getApiV1UsageTopSessions: vi.fn((params, options) =>
+      params?.group_by === "group"
+        ? usageServiceMocks.getUsageZoom(params, options)
+        : usageServiceMocks.getApiV1UsageTopSessions(params, options),
+    ),
   },
 }));
 
@@ -485,6 +490,7 @@ describe("UsageStore group-by linking", () => {
 
     usage.setTimeSeriesGroupBy("model");
 
+    expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
     expect(usage.toggles.timeSeries.groupBy).toBe("model");
     expect(usage.toggles.attribution.groupBy).toBe("model");
     expect(JSON.parse(localStorage.getItem(TOGGLES_KEY) || "{}")).toMatchObject({
@@ -498,12 +504,30 @@ describe("UsageStore group-by linking", () => {
 
     usage.setAttributionGroupBy("agent");
 
+    expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
     expect(usage.toggles.timeSeries.groupBy).toBe("agent");
     expect(usage.toggles.attribution.groupBy).toBe("agent");
     expect(JSON.parse(localStorage.getItem(TOGGLES_KEY) || "{}")).toMatchObject({
       timeSeries: { groupBy: "agent" },
       attribution: { groupBy: "agent" },
     });
+  });
+
+  it("refetches when switching away from a selected model", async () => {
+    const { usage } = await loadStore();
+    usage.setAttributionGroupBy("model");
+    usage.toggleSelection("model", "gpt-4o");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    vi.clearAllMocks();
+
+    usage.setTimeSeriesGroupBy("project");
+
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ model: "gpt-4o" }),
+      expect.anything(),
+    );
+    expect(usage.selectedModel).toBe("gpt-4o");
   });
 
   it("defaults the cost chart to smooth areas and remembers the chosen style", async () => {
@@ -636,15 +660,15 @@ describe("UsageStore session filter params", () => {
 
     void usage.fetchTopSessions();
     await Promise.resolve();
-    expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
-    ).toBe(false);
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      false,
+    );
 
     usage.setMode("token");
 
-    expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
-    ).toBe(true);
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
     expect(usage.topSessions).toBeNull();
   });
 
@@ -673,32 +697,60 @@ describe("UsageStore session filter params", () => {
     );
   });
 
-  it("refreshes response-scoped project selections after archive identity changes", async () => {
-    usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(
-      new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
-    );
+  it.each(["excluded", "selected", "zoomed"] as const)("refreshes response-scoped %s project keys after archive identity changes", async (scope) => {
+    const original = usageServiceMocks.getApiV1UsageSummary.getMockImplementation();
     const { usage } = await loadStore();
-    usage.excludedProjectKeys = "pl1:sha256:stale";
-    usage.pairwiseSelection = {
-      left: { dimension: "project", value: "pl1:sha256:stale" },
-      right: { dimension: "model", value: "gpt-4o" },
-    };
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    if (scope === "excluded") {
+      usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(
+        new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"),
+      );
+      usage.excludedProjectKeys = "pl1:sha256:stale";
+      usage.pairwiseSelection = {
+        left: { dimension: "project", value: "pl1:sha256:stale" },
+        right: { dimension: "model", value: "gpt-4o" },
+      };
+    } else {
+      usage.selectedProjectKey = "pl1:sha256:stale";
+      if (scope === "zoomed") usage.setOpenProject(usage.selectedProjectKey);
+      usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+      usageServiceMocks.getApiV1UsageSummary.mockImplementation((params) =>
+        params.project_key || params.exclude_project_key
+          ? Promise.reject(new apiRuntimeMocks.ApiError(400, "unknown project key", "unknown_project_key"))
+          : Promise.resolve(usageSummary(9)),
+      );
+    }
 
-    await usage.fetchAll();
+    await usage.fetchAll({ preserveTimeRange: scope !== "excluded" });
 
     expect(usage.excludedProjectKeys).toBe("");
-    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        exclude_project_key: "pl1:sha256:stale",
-      }),
-    );
-    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[1]?.[0]).toEqual(
-      expect.not.objectContaining({ exclude_project_key: expect.anything() }),
-    );
-    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(2);
-    expect(usage.pairwiseSelection.left.value).not.toBe("pl1:sha256:stale");
     expect(usage.summary).not.toBeNull();
+    expect(back).not.toHaveBeenCalled();
+    if (scope === "excluded") {
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(2);
+      expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          exclude_project_key: "pl1:sha256:stale",
+        }),
+      );
+      expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[1]?.[0]).toEqual(
+        expect.not.objectContaining({ exclude_project_key: expect.anything() }),
+      );
+      expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenCalledTimes(2);
+      expect(usage.pairwiseSelection.left.value).not.toBe("pl1:sha256:stale");
+    } else {
+      expect(usage.selectedProjectKey).toBe("");
+      expect(usage.zoomedProject).toBeNull();
+      expect(usage.errors.summary).toBeNull();
+      expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
+      expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(6);
+      expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[5]![0]).toEqual(
+        expect.objectContaining({ from: usage.from, to: usage.to }),
+      );
+    }
+    back.mockRestore();
+    usage.cancelInFlightReads();
+    if (original) usageServiceMocks.getApiV1UsageSummary.mockImplementation(original);
   });
 
   it("stores pairwise comparison data from the generated API", async () => {
@@ -975,6 +1027,45 @@ describe("UsageStore session filter params", () => {
     }
   });
 
+  it("times the full-window attribution request with the other summary steps", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      const { usage } = await loadStore();
+      usage.applyDateRange("2026-06-04", "2026-06-18");
+      usage.summary = usageSummary(15);
+      usage.toggles.attribution.groupBy = "project";
+      usage.selectedProjectKey = "pl1:sha256:alpha";
+      usage.selectedTimeRange = { from: "2026-06-07", to: "2026-06-10" };
+      // The unselected full-window response lands last.
+      const timedSummary = async (params: { from?: string; project_key?: string }) => {
+        const sentAt = performance.now();
+        const data = usageSummary(3);
+        await Promise.resolve();
+        vi.advanceTimersByTime(params.from === "2026-06-04" && !params.project_key ? 90 : 20);
+        const at = performance.now();
+        attachResponseTiming(data, { sentAt, headersAt: at, bodyAt: at });
+        return data;
+      };
+      for (let i = 0; i < 4; i++) usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(timedSummary);
+
+      await usage.fetchAll({ preserveTimeRange: true });
+
+      expect(usage.lastQuerySteps.map((step) => step.name).slice(0, 4)).toEqual([
+        "summary",
+        "contextSummary",
+        "attributionSummary",
+        "referenceSummary",
+      ]);
+      const step = (name: string) => usage.lastQuerySteps.find((entry) => entry.name === name)!;
+      const referenceBody = step("referenceSummary").segments!.find((segment) => segment.phase === "download")!;
+      expect(step("summary").segments!.find((segment) => segment.phase === "apply")!.startMs).toBe(
+        referenceBody.startMs + referenceBody.durationMs,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not mark cached partial refresh failures as current", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1101,16 +1192,16 @@ describe("UsageStore session filter params", () => {
 
     void usage.fetchTopSessions();
     await Promise.resolve();
-    expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
-    ).toBe(false);
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      false,
+    );
 
     void usage.fetchAll();
     await Promise.resolve();
 
-    expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
-    ).toBe(true);
+    expect(usageServiceMocks.getApiV1UsageTopSessions.mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 
   it("aborts visible panel requests on teardown", async () => {
@@ -1542,7 +1633,7 @@ describe("UsageStore time-series range selection", () => {
     expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
   });
 
-  it("shows locally aggregated daily data before the range request finishes", async () => {
+  it.each([false, true])("shows locally aggregated daily data before the range request finishes, project selected=%s", async (selected) => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");
     const context = usageSummary(6);
@@ -1618,9 +1709,16 @@ describe("UsageStore time-series range selection", () => {
       },
     ];
     usage.summary = context;
+    if (selected) {
+      usage.toggles.attribution.groupBy = "project";
+      usage.selectedProjectKey = "pl1:sha256:beta";
+      usage.attributionSummary = context;
+      usage.referenceSummary = context;
+    }
 
     usage.setTimeRange("2026-06-08", "2026-06-09");
 
+    if (selected) expect(usage.attributionSummary?.projectTotals.map((total) => total.project)).toEqual(["beta", "alpha"]);
     expect(usage.timeSeriesSummary).toEqual(context);
     expect(usage.summary).toMatchObject({
       from: "2026-06-08",
@@ -1644,6 +1742,11 @@ describe("UsageStore time-series range selection", () => {
       ],
     });
     expect(usage.summary?.daily.map((day) => day.date)).toEqual(["2026-06-08", "2026-06-09"]);
+    if (selected) {
+      usage.clearTimeRange(false);
+      expect(usage.attributionSummary).toEqual(context);
+    }
+    usage.cancelInFlightReads();
   });
 
   it("restores the parent summary when the selected-range request fails", async () => {
@@ -2007,5 +2110,413 @@ describe("parseWindowDays", () => {
     expect(parseWindowDays("36500")).toBe(36500);
     expect(parseWindowDays("36501")).toBeNull();
     expect(parseWindowDays("1000000000")).toBeNull();
+  });
+});
+
+describe("UsageStore attribution focus", () => {
+  beforeEach(() => {
+    installStorage();
+    vi.clearAllMocks();
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
+  });
+
+  it.each([
+    ["project", "picker"],
+    ["model", "picker"],
+    ["agent", "picker"],
+    ["project", "Deselect all"],
+    ["model", "Deselect all"],
+  ] as const)("drops selected %s before %s exclusions reach the API", async (by, action) => {
+    const { usage } = await loadStore();
+    const id = by === "project" ? "pl1:sha256:alpha" : by === "model" ? "gpt-4o" : "claude";
+    usage.toggleSelection(by, id);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    if (by === "project") usage.setOpenProject(id);
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    if (action === "Deselect all") {
+      if (by === "project") usage.deselectAllProjectKeys([id]);
+      else usage.deselectAllModels([id]);
+    } else if (by === "project") usage.toggleProjectKey(id);
+    else if (by === "model") usage.toggleModel(id);
+    else usage.toggleAgent(id);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.hasSelection(by)).toBe(false);
+    expect(usage.zoomedProject).toBeNull();
+    const include = by === "project" ? "project_key" : by;
+    const exclude = by === "project" ? "exclude_project_key" : `exclude_${by}`;
+    for (const [params] of usageServiceMocks.getApiV1UsageSummary.mock.calls) {
+      expect(params[include]).toBeUndefined();
+      expect(params[exclude]).toBe(id);
+    }
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalled();
+    usage.cancelInFlightReads();
+  });
+
+  it("reports a failed summary after a selection change instead of keeping the old totals", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchAll();
+    expect(usage.errors.summary).toBeNull();
+    usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("selection failed"));
+    usage.toggleSelection("project", "pl1:sha256:alpha");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.errors.summary).toBe("selection failed");
+    usage.cancelInFlightReads();
+  });
+
+  it("refetches the full window when a brush interrupts a selection refresh", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2024-01-01", "2024-01-31");
+    await usage.fetchAll();
+    let release!: () => void;
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve(usageSummary(1)))));
+    usage.toggleSelection("project", "pl1:sha256:alpha");
+    const selected = usageSummary(4);
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => params.project_key && params.from === "2024-01-01" ? selected : usageSummary(2));
+    usage.setTimeRange("2024-01-08", "2024-01-14");
+    release();
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params)).toContainEqual(
+      expect.objectContaining({ project_key: "pl1:sha256:alpha", from: "2024-01-01", to: "2024-01-31" }),
+    );
+    expect(usage.timeSeriesSummary).toEqual(selected);
+    usage.cancelInFlightReads();
+  });
+
+  it("keeps model selection in memory while saving exclusions", async () => {
+    localStorage.setItem("usage-filters", JSON.stringify({ selectedModel: "old-model" }));
+    const { usage, buildUsageUrlParams } = await loadStore();
+    expect(usage.selectedModel).toBe("");
+    usage.toggleSelection("model", "gpt-4o");
+    usage.excludedModels = "hidden-model";
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].model).toBe("gpt-4o");
+    expect(buildUsageUrlParams(usage)).toEqual({ exclude_model: "hidden-model" });
+    expect(JSON.parse(localStorage.getItem("usage-filters")!)).toEqual(expect.objectContaining({ excludedModels: "hidden-model" }));
+    expect(JSON.parse(localStorage.getItem("usage-filters")!).selectedModel).toBeUndefined();
+    usage.cancelInFlightReads();
+    const restored = (await loadStore()).usage;
+    expect(restored.selectedModel).toBe("");
+    expect(restored.excludedModels).toBe("hidden-model");
+    await restored.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].model).toBeUndefined();
+    restored.cancelInFlightReads();
+  });
+
+  it("highlights both header agents, removes one, then clears the sole selection", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    sessions.filters.agent = "claude,codex";
+    expect(usage.isSelected("agent", "claude")).toBe(true);
+    expect(usage.isSelected("agent", "codex")).toBe(true);
+    usage.toggleSelection("agent", "claude");
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].agent).toBe("codex");
+    usage.toggleSelection("agent", "codex");
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].agent).toBeUndefined();
+    expect(usage.hasSelection("agent")).toBe(false);
+    usage.cancelInFlightReads();
+  });
+
+  it("clears only the displayed dimension and preserves the brush and exclusions", async () => {
+    const { usage } = await loadStore();
+    usage.toggles.attribution.groupBy = "model";
+    usage.selectedProjectKey = "pl1:sha256:alpha";
+    usage.selectedModel = "gpt-4o";
+    usage.excludedModels = "hidden";
+    usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+    usage.clearSelection("model");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      project_key: "pl1:sha256:alpha", exclude_model: "hidden", from: "2024-01-08", to: "2024-01-14",
+    }));
+    expect(usage.selectedModel).toBe("");
+    usage.cancelInFlightReads();
+  });
+
+  it.each(["project", "agent"] as const)("keeps every %s colored through brush and grouping changes", async (by) => {
+    const { usage } = await loadStore();
+    const { usageChartColorMaps } = await import("../utils/usageChartColors.js");
+    const { sessions } = await import("./sessions.svelte.js");
+    const full = usageSummary(12);
+    full.projectTotals[0]!.cost = testMoney(8);
+    full.projectTotals[1]!.cost = testMoney(4);
+    full.agentTotals = [
+      { agent: "claude", cost: testMoney(4), inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 },
+      { agent: "codex", cost: testMoney(8), inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 },
+    ];
+    const brushed = structuredClone(full);
+    brushed.projectTotals[0]!.cost = testMoney(1);
+    brushed.agentTotals[0]!.cost = testMoney(1);
+    usage.applyDateRange("2024-01-01", "2024-01-31");
+    usage.toggles.attribution.groupBy = by;
+    if (by === "agent") sessions.filters.agent = "claude";
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      const response = structuredClone(params.from === "2024-01-08" ? brushed : full);
+      if (params.project_key) response.projectTotals = response.projectTotals.filter((entry) => entry.project_key === params.project_key);
+      if (params.agent) response.agentTotals = response.agentTotals.filter((entry) => entry.agent === params.agent);
+      return response;
+    });
+    await usage.fetchAll();
+    const colors = {
+      agentsview: usageChartColorMaps(usage.colorSummary, "agentsview")[by],
+      matplotlib: usageChartColorMaps(usage.colorSummary, "matplotlib")[by],
+    };
+    usage.setTimeRange("2024-01-08", "2024-01-14");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    if (by === "project") {
+      usage.toggleSelection("project", "pl1:sha256:beta");
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      usage.setAttributionGroupBy("model");
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    }
+    usage.setAttributionGroupBy(by);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.selectedTimeRange).toEqual({ from: "2024-01-08", to: "2024-01-14" });
+    expect(by === "project" ? usage.attributionSummary?.projectTotals.length : usage.attributionSummary?.agentTotals.length).toBe(2);
+    for (const palette of ["agentsview", "matplotlib"] as const) {
+      const result = usageChartColorMaps(usage.colorSummary, palette)[by];
+      for (const [id, color] of colors[palette]) expect(result.get(id)).toBe(color);
+      expect(result.size).toBe(2);
+      expect(new Set(result.values()).size).toBe(2);
+    }
+    usage.cancelInFlightReads();
+  });
+
+  it("restores full-window attribution offline after a successful selected brush followed by a failed brush", async () => {
+    const { usage } = await loadStore();
+    const full = usageSummary(12);
+    full.projectTotals[0]!.cost = testMoney(8);
+    full.projectTotals[1]!.cost = testMoney(4);
+    const brushed = structuredClone(full);
+    brushed.totals.totalCost = testMoney(3);
+    brushed.projectTotals[0]!.cost = testMoney(1);
+    brushed.projectTotals[1]!.cost = testMoney(2);
+    usage.applyDateRange("2024-01-01", "2024-01-31");
+    let offline = false;
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      if (offline) throw new Error("range request failed");
+      const response = structuredClone(params.from === "2024-01-08" ? brushed : full);
+      if (params.project_key) response.projectTotals = response.projectTotals.filter((entry) => entry.project_key === params.project_key);
+      return response;
+    });
+    await usage.fetchAll();
+    usage.toggleSelection("project", "pl1:sha256:beta");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    usage.setTimeRange("2024-01-08", "2024-01-14");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.attributionSummary?.projectTotals).toEqual(brushed.projectTotals);
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    offline = true;
+    usage.setTimeRange("2024-01-15", "2024-01-21");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.errors.summary).toBe("range request failed");
+    expect(usage.selectedTimeRange).toBeNull();
+    expect(usage.summary?.projectTotals).toEqual([full.projectTotals[1]]);
+    expect(usage.attributionSummary?.projectTotals).toEqual(full.projectTotals);
+    usage.cancelInFlightReads();
+  });
+
+  it.each([
+    ["project", "pl1:sha256:alpha", "project_key"],
+    ["model", "gpt-4o", "model"],
+    ["agent", "codex", "agent"],
+  ] as const)("keeps %s focus as an include when dates widen", async (by, id, param) => {
+    const { usage } = await loadStore();
+    usage.summary = usageSummary();
+    usage.applyDateRange("2024-01-08", "2024-01-14");
+    usage.excludedModels = "hidden-model";
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => {
+      const response = usageSummary();
+      if (params[param]) response.projectTotals = [response.projectTotals[0]!];
+      return response;
+    });
+    usage.toggles.attribution.groupBy = by;
+    usage.toggleSelection(by, id);
+    if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
+    await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
+    expect(
+      usageServiceMocks.getApiV1UsageSummary.mock.calls.map(([params]) => params),
+    ).toContainEqual(
+      expect.objectContaining({ [param]: id, from: "2024-01-08", to: "2024-01-14", exclude_model: "hidden-model" }),
+    );
+    const unfocused = usageServiceMocks.getApiV1UsageSummary.mock.calls[1]![0];
+    expect(unfocused[param]).toBeUndefined();
+    expect(unfocused).toEqual(expect.objectContaining({ from: "2024-01-08", to: "2024-01-14", exclude_model: "hidden-model" }));
+    expect(usage.summary?.projectTotals).toHaveLength(1);
+    expect(usage.attributionSummary?.projectTotals).toHaveLength(2);
+    usage.setTimeRange("2024-01-09", "2024-01-10");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    await usage.fetchAll({ preserveTimeRange: true });
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[1]![0]).toEqual(
+      expect.objectContaining({ [param]: id, from: "2024-01-08", to: "2024-01-14" }),
+    );
+    usage.applyDateRange("2024-01-01", "2024-02-29");
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ [param]: id, from: "2024-01-01", to: "2024-02-29" }),
+    );
+    expect(usage.isSelected(by, id)).toBe(true);
+    expect(usage.zoomedProject).toBeNull();
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
+    usage.toggles.attribution.groupBy = by;
+    usage.toggleSelection(by, id);
+    if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledOnce();
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0][param]).toBeUndefined();
+    expect(usage.attributionSummary).toBeNull();
+    usage.cancelInFlightReads();
+  });
+
+  it("combines project and model selection and clears both with Clear filters", async () => {
+    const { usage } = await loadStore();
+    usage.toggleSelection("project", "pl1:sha256:alpha");
+    usage.toggleSelection("model", "gpt-4o");
+    expect(usage.isSelected("project", "pl1:sha256:alpha")).toBe(true);
+    expect(usage.isSelected("model", "gpt-4o")).toBe(true);
+    usage.clearFilters();
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0].model).toBeUndefined();
+    usage.cancelInFlightReads();
+  });
+});
+
+describe("UsageStore project zoom", () => {
+  beforeEach(() => {
+    installStorage();
+    vi.clearAllMocks();
+    usageServiceMocks.getUsageZoom.mockReset().mockResolvedValue([]);
+    usageServiceMocks.getApiV1UsageTopSessions.mockReset().mockResolvedValue([]);
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(usageSummary());
+  });
+
+  const group = (cost: number): DbTopSessionEntry => ({
+    ...topSession(""),
+    groupKey: "job-a",
+    groupLabel: "Digest",
+    cost: testMoney(cost),
+  });
+
+  it("loads groups only after opening a project, scoped to that project", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchAll();
+    expect(usageServiceMocks.getUsageZoom).not.toHaveBeenCalled();
+    usage.setOpenProject("pl1:sha256:alpha");
+    expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(1);
+    expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        project_key: "pl1:sha256:alpha",
+        group_by: "group",
+        limit: 100,
+        sort: "cost",
+      }),
+    );
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    expect(usage.excludedProjectKeys).toBe("");
+    usage.toggleProjectKey("pl1:sha256:alpha");
+    usage.backToProjects();
+    expect(usage.zoomedProject).toBeNull();
+    expect(usage.zoomRows).toBeNull();
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:alpha");
+  });
+
+  it("keeps filters while pending and failed, and retries on another click", async () => {
+    const { usage } = await loadStore();
+    let reject!: (error: Error) => void;
+    usage.excludedProjectKeys = "pl1:sha256:beta";
+    usageServiceMocks.getUsageZoom.mockImplementationOnce(
+      () =>
+        new Promise((_, r) => {
+          reject = r;
+        }),
+    );
+    usage.setOpenProject("pl1:sha256:alpha");
+    expect(usage.loading.zoom).toBe(true);
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:beta");
+    reject(new Error("zoom failed"));
+    await vi.waitFor(() => expect(usage.errors.zoom).toBe("zoom failed"));
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:beta");
+    usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(9)]);
+    usage.setOpenProject("pl1:sha256:alpha");
+    await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(9)]));
+  });
+
+  it("clears old range rows and refreshes zoom even when top sessions fail", async () => {
+    const { usage } = await loadStore();
+    usage.mergeKnownProjects(usageSummary().projectTotals, {});
+    usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
+    usage.setOpenProject("pl1:sha256:alpha");
+    await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(1)]));
+    let resolveZoom!: (rows: DbTopSessionEntry[]) => void;
+    usageServiceMocks.getUsageZoom.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveZoom = resolve;
+        }),
+    );
+    usageServiceMocks.getApiV1UsageTopSessions.mockRejectedValueOnce(new Error("top failed"));
+    usage.applyDateRange("2026-10-01", "2026-10-08");
+    const refreshed = usage.fetchAll();
+    expect(usage.zoomRows).toBeNull();
+    expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        project_key: "pl1:sha256:alpha",
+        from: "2026-10-01",
+        to: "2026-10-08",
+      }),
+    );
+    resolveZoom([group(9)]);
+    await refreshed;
+    expect(usage.zoomRows).toEqual([group(9)]);
+    expect(usage.excludedProjectKeys).toBe("");
+    const emptySummary = usageSummary();
+    emptySummary.projectTotals = [];
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(emptySummary);
+    usageServiceMocks.getUsageZoom.mockResolvedValue([]);
+    await usage.fetchAll({ preserveTimeRange: true });
+    expect(usage.zoomedProject).toEqual({ key: "pl1:sha256:alpha", label: "alpha" });
+    expect(usage.zoomRows).toEqual([]);
+  });
+
+  it.each(["returning to projects", "metric and token selection changes"])("drops stale zoom results after %s", async (event) => {
+    const { usage } = await loadStore();
+    const pending: Array<(rows: DbTopSessionEntry[]) => void> = [];
+    usageServiceMocks.getUsageZoom.mockImplementation(
+      () => new Promise((resolve) => pending.push(resolve)),
+    );
+    usage.setOpenProject("pl1:sha256:alpha");
+    if (event === "returning to projects") {
+      usage.backToProjects();
+      expect(usage.loading.zoom).toBe(false);
+      pending[0]!([group(1)]);
+      await Promise.resolve();
+      expect(usage.zoomRows).toBeNull();
+      expect(usage.zoomedProject).toBeNull();
+      return;
+    }
+    const firstSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
+    usage.setMode("token");
+    const secondSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
+    usage.setSelectedTokenTypes(["output"]);
+    expect(usageServiceMocks.getUsageZoom).toHaveBeenCalledTimes(3);
+    expect(firstSignal.aborted).toBe(true);
+    expect(secondSignal.aborted).toBe(true);
+    expect(usage.zoomRows).toBeNull();
+    expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        project_key: "pl1:sha256:alpha",
+        sort: "tokens",
+        token_types: "output",
+      }),
+    );
+    pending[2]!([group(9)]);
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    pending[0]!([group(1)]);
+    pending[1]!([group(2)]);
+    await Promise.resolve();
+    expect(usage.zoomRows).toEqual([group(9)]);
   });
 });

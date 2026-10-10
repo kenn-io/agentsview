@@ -5,6 +5,7 @@ package postgres
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -283,4 +284,32 @@ func TestRawProjectionHonorsExplicitExclusionWithoutReplacingMembership(t *testi
 	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
 	assert.Equal(t, RawIdentityGone, resolved.State)
+}
+
+func TestRawProjectionReprocessedCronPublishesGroup(t *testing.T) {
+	f := newProjectionFixture(t)
+	manifest, _ := f.accept(t, "device-a", "ungrouped-cron", "", parser.AgentHermes)
+	outcome := projectionOutcome("same transcript")
+	session := &outcome.Outcome.Results[0].Result.Session
+	session.ID = "hermes:cron_digest_20261008_120000"
+	session.SourceSessionID = "cron_digest_20261008_120000"
+	session.Agent = parser.AgentHermes
+	session.Project = "hermes-cron"
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, manifest), manifest, outcome))
+	first, err := f.sink.Resolve(t.Context(), session.ID)
+	require.NoError(t, err)
+	var key string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key FROM sessions WHERE id=$1`, first.SessionID).Scan(&key))
+	assert.Empty(t, key)
+	_, err = f.sink.SelectSourceGeneration(t.Context(), manifest, "parser-2")
+	require.NoError(t, err)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "reprocess-worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	session.GroupKey = "digest"
+	require.NoError(t, f.sink.Project(t.Context(), leases[0], manifest, outcome))
+	resolved, err := f.sink.Resolve(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&key))
+	assert.Equal(t, "digest", key)
 }

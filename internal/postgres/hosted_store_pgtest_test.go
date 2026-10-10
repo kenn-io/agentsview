@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,6 +13,54 @@ import (
 	"testing"
 	"time"
 )
+
+func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
+	f := newHostedFixture(t, "tenant-group-label")
+	sess := db.Session{
+		ID: "group-label-discard", Machine: "device-a", Agent: "hermes", Project: "scheduled",
+		CreatedAt: "2026-01-01T00:00:00Z", GroupKey: "job-a", SessionName: new("Private job title · Jan 01 00:00"), StartedAt: new("2026-01-01T00:00:00Z"),
+	}
+	options := pgSessionWriteOptions{Machine: "device-a", SkipAliases: true}
+	write := func() {
+		tx, err := f.runtime.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		require.NoError(t, writePGSession(t.Context(), tx, sess, "", nil, options))
+		require.NoError(t, tx.Commit())
+	}
+	read := func(wantLabel sql.NullString) {
+		var key string
+		var label sql.NullString
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key, session_name FROM sessions WHERE id=$1`, sess.ID).Scan(&key, &label))
+		assert.Equal(t, "job-a", key)
+		assert.Equal(t, wantLabel, label)
+	}
+	write()
+	read(sql.NullString{String: "Private job title · Jan 01 00:00", Valid: true})
+	options.UsageOnly = true
+	write()
+	read(sql.NullString{})
+	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	defer store.Close()
+	stored, err := store.physical.GetSession(t.Context(), sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "job-a", stored.GroupKey)
+	assert.Nil(t, stored.SessionName)
+	sess.SessionName = new("stale title · Jan 01 00:00")
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET session_name='stale title · Jan 01 00:00' WHERE id=$1`, sess.ID)
+	require.NoError(t, err)
+	write()
+	read(sql.NullString{})
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO usage_events(session_id, source, model, input_tokens, output_tokens, occurred_at) VALUES ($1, 'session', 'gpt-5.4', 10, 2, '2026-01-01T00:00:00Z')`, sess.ID)
+	require.NoError(t, err)
+	rows, err := store.physical.GetTopSessionsByCost(t.Context(), db.UsageFilter{TopSessionsByGroup: true}, 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].GroupLabel)
+	assert.Equal(t, "job-a", rows[0].DisplayName)
+}
 
 // A physical Store passed through the hosted constructor cannot resolve the
 // provider alias and leaks storage identities in its list and transcript.

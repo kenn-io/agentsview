@@ -517,6 +517,9 @@
   "shared_refresh_step_skills": "스킬",
   "shared_refresh_step_top_sessions": "상위 세션",
   "shared_refresh_step_context_summary": "전체 기간 요약",
+  "shared_refresh_step_attribution_summary": "비용 귀속",
+  "shared_refresh_step_reference_summary": "전체 기간 비용 귀속",
+  "shared_refresh_step_zoom": "프로젝트 그룹",
   "shared_refresh_step_signals": "신호",
   "shared_refresh_step_comparison": "비교",
   "shared_refresh_step_pairwise": "쌍별 비교",
@@ -801,9 +804,6 @@
   "usage_chart_style_lines": "선",
   "usage_chart_style_bars": "막대",
   "usage_chart_day_label": "{date}: {value}",
-  "usage_click_to_hide_hint": "클릭하여 차트에서 숨기기",
-  "usage_click_to_hide": "{label} 숨기기",
-  "usage_hide_from_chart": "{label}을(를) 차트에서 숨기기",
   "usage_cache_efficiency_title": "캐시 효율성",
   "usage_cache_reads": "캐시 읽기",
   "usage_cache_writes": "캐시 쓰기",
@@ -2148,7 +2148,6 @@
   "usage_treemap": "트리맵",
   "usage_list": "목록",
   "usage_no_data_period": "이 기간에 대한 데이터 없음",
-  "usage_click_to_hide_item": "클릭하여 {label} 숨기기",
   "usage_cache_efficiency": "캐시 효율",
   "usage_cost_over_time": "시간별 비용",
   "filter_dropdown_all": "전체",
@@ -2378,5 +2377,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다.","countPlural=other":"미리보기는 {countLabel}바이트 중 {shownLabel}바이트를 보여 줍니다."}}],
   "tool_sequences_full_input_in_message": "전체 입력은 메시지 {ordinal}에 있습니다.",
   "tool_sequences_full_result_in_message": "전체 결과는 메시지 {ordinal}에 있습니다.",
-  "tool_sequences_retry": "다시 시도"
+  "tool_sequences_retry": "다시 시도",
+  "usage_click_project": "클릭하여 {label}에 집중, 두 번 클릭하여 그룹과 세션 열기",
+  "usage_click_project_hint": "프로젝트를 선택하면 페이지가 필터링되고, 열면 그룹과 세션이 표시됩니다.",
+  "usage_click_to_focus": "클릭하여 {label}에 집중",
+  "usage_click_to_focus_hint": "클릭하여 집중, 다시 클릭하여 해제"
 }

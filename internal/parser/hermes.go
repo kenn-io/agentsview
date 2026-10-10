@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +25,10 @@ import (
 )
 
 const hermesIDPrefix = string(AgentHermes) + ":"
+
+var hermesCronSessionID = regexp.MustCompile(`^cron_([A-Za-z0-9][A-Za-z0-9._-]*)_\d{8}_\d{6}$`)
+
+const hermesCronParentQuery = `SELECT COALESCE(parent_session_id, '') FROM sessions WHERE id = ?`
 
 type hermesStateSession struct {
 	id               string
@@ -43,6 +48,7 @@ type hermesStateSession struct {
 	costStatus       string
 	costSource       string
 	title            string
+	cronJob          string
 	apiCallCount     int
 }
 
@@ -376,6 +382,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		},
 	}
 
+	setHermesCronGroup(sess, sessionPlatform, hermesCronRunJob(sessionID))
 	return sess, messages, nil
 }
 
@@ -566,6 +573,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 		},
 	}
 
+	setHermesCronGroup(sess, sessionPlatform, hermesCronRunJob(sessionID))
 	return sess, messages, nil
 }
 
@@ -604,6 +612,15 @@ func (p *hermesProvider) parseStateDB(ctx context.Context,
 	sessions, err := readHermesStateSessions(ctx, conn)
 	if err != nil {
 		return nil, err
+	}
+	parents := make(map[string]string, len(sessions))
+	for _, ss := range sessions {
+		parents[ss.id] = ss.parentSessionID
+	}
+	for i := range sessions {
+		if err := resolveHermesStateCronJob(&sessions[i], func(id string) (string, error) { return parents[id], nil }); err != nil {
+			return nil, err
+		}
 	}
 	messages, err := readHermesStateMessages(ctx, conn)
 	if err != nil {
@@ -1030,6 +1047,7 @@ func applyHermesStateMetadata(
 		sess.ParentSessionID = "hermes:" + ss.parentSessionID
 		sess.RelationshipType = RelContinuation
 	}
+	setHermesCronGroup(sess, ss.source, ss.cronJob)
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
 	sess.SessionName = ss.title
@@ -1475,4 +1493,80 @@ func stripHermesSkillPrefix(s string) string {
 		return "[Skill: " + skillName + "]"
 	}
 	return s
+}
+
+// hermesCronJobID follows parents until a cron run identifies its job.
+func hermesCronJobID(id string, parent func(string) string) string {
+	seen := make(map[string]bool)
+	for id != "" && !seen[id] {
+		seen[id] = true
+		if job := hermesCronRunJob(id); job != "" {
+			return job
+		}
+		id = parent(id)
+	}
+	return ""
+}
+
+func setHermesCronGroup(sess *ParsedSession, platform, job string) {
+	if platform == "" {
+		return
+	}
+	if platform != "cron" {
+		sess.GroupKey = ""
+		sess.KeepStoredGroupKey = false
+		return
+	}
+	sess.GroupKey = job
+	sess.KeepStoredGroupKey = job == ""
+}
+
+// hermesCronRunJob returns the job ID from a native cron run ID, or empty for other sessions.
+func hermesCronRunJob(id string) string {
+	if match := hermesCronSessionID.FindStringSubmatch(id); match != nil {
+		return match[1]
+	}
+	return ""
+}
+
+func resolveHermesStateCronJob(ss *hermesStateSession, parent func(string) (string, error)) error {
+	if ss.source != "cron" {
+		return nil
+	}
+	var lookupErr error
+	ss.cronJob = hermesCronJobID(ss.id, func(id string) string {
+		if id == ss.id {
+			return ss.parentSessionID
+		}
+		var next string
+		next, lookupErr = parent(id)
+		if lookupErr != nil {
+			return ""
+		}
+		return next
+	})
+	return lookupErr
+}
+
+func hermesCronParent(ctx context.Context, conn *sql.DB, id string) (string, error) {
+	var parent string
+	err := conn.QueryRowContext(ctx, hermesCronParentQuery, id).Scan(&parent)
+	if err == sql.ErrNoRows {
+		err = nil
+	}
+	return parent, err
+}
+
+// HermesCronJobName strips the run timestamp from a recorded job title.
+func HermesCronJobName(job, title string) string {
+	job, _, _ = strings.Cut(job, ":")
+	i := strings.LastIndex(title, " · ")
+	if i < 0 || strings.TrimSpace(title[i+len(" · "):]) == "" {
+		return ""
+	}
+	name := strings.TrimSpace(title[:i])
+	if name == job || name == "cron "+job {
+		return ""
+	}
+	return name
 }

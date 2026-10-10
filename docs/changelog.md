@@ -9,6 +9,31 @@ The latest release is
 
 ## Unreleased
 
+**New features**
+
+- See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
+  Renamed runs and continuations stay together through recorded parent links.
+  Each job shows its latest recorded name in the selected range, including on
+  hosted PostgreSQL archives. Usage-only archives show job IDs because their
+  titles are discarded. Archived Hermes and Augure Desktop cron runs whose
+  sources were gone before upgrading stay individual sessions unless they
+  already have a stored job ID. A non-empty source in `state.db` takes precedence
+  over the transcript's platform when grouping runs.
+  The first sync after upgrading rebuilds the archive once to populate groups.
+  Allow for a one-time re-push of every session to PostgreSQL and ClickHouse
+  after upgrading. For DuckDB mirrors, run `agentsview duckdb push --full` once.
+  Upgrade importers to accept manifest v5 exports; older importers hold them.
+- Click a Usage attribution tile or row to narrow totals and charts while
+  every item stays visible in its own color. Double click or select an item
+  and use **Open** to see its groups and sessions. On touch screens, use
+  **Open**. **Clear selection** clears the displayed dimension. Enter and
+  Space select a project, and the Project and Model picker labels show the
+  selected item. Unchecking the selected item in a picker clears the selection.
+  **All projects**, Escape, and Backspace return with current dates, filters,
+  and selection. The Projects picker hides projects.
+  Project and model selections reset on reload; an agent selection is the header
+  Agent filter.
+
 **Bug fixes**
 
 - Keep both Cursor conversations when S3 objects in different projects share
