@@ -49,35 +49,33 @@ func (c *Config) MigrateTelemetryScreenClaims() error {
 		if err != nil {
 			return err
 		}
-		state := screenClaims{Version: 1, Days: make(map[string][]string)}
-		if strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
-			var current screenClaims
-			if json.Unmarshal(data, &current) == nil && current.readable() {
-				return nil
-			}
-			unreadablePath := path + ".unreadable"
-			if err := os.Rename(path, unreadablePath); err != nil {
+		var current screenClaims
+		if json.Unmarshal(data, &current) == nil && current.readable() {
+			return nil
+		}
+		fields := strings.Fields(string(data))
+		if len(fields) >= 3 && isClaimDay(fields[1]) {
+			state := screenClaims{Version: 1, Days: make(map[string][]string)}
+			if err := addLegacyScreenClaims(state.Days, fields); err != nil {
 				return err
 			}
-			log.Printf("moved unreadable telemetry screen claims to %s", unreadablePath)
-			return nil
-		} else if err := addLegacyScreenClaims(state.Days, strings.Fields(string(data))); err != nil {
+			encoded, err := json.Marshal(state)
+			if err != nil {
+				return err
+			}
+			return c.writeInstallationFile(telemetryScreensFilename, string(encoded))
+		}
+		unreadablePath := path + ".unreadable"
+		if err := os.Rename(path, unreadablePath); err != nil {
 			return err
 		}
-		encoded, err := json.Marshal(state)
-		if err != nil {
-			return err
-		}
-		return c.writeInstallationFile(telemetryScreensFilename, string(encoded))
+		log.Printf("moved unreadable telemetry screen claims to %s", unreadablePath)
+		return nil
 	})
 }
 
-// addLegacyScreenClaims reads "installation-id day screen..." claims; any
-// other shape carries no claims forward.
+// addLegacyScreenClaims converts validated "installation-id day screen..." claims.
 func addLegacyScreenClaims(days map[string][]string, fields []string) error {
-	if len(fields) < 2 || !isClaimDay(fields[1]) {
-		return nil
-	}
 	for _, screen := range fields[2:] {
 		key, err := json.Marshal([]string{fields[0], "screen_viewed", screen})
 		if err != nil {
