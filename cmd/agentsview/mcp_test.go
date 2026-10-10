@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestNormalizeMCPHTTPAddr(t *testing.T) {
@@ -254,7 +258,7 @@ func TestResolveMCPServiceExplicitServerUsesReportedCapabilities(
 	}
 }
 
-func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
+func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := config.Config{
 		DataDir: dataDir,
@@ -286,8 +290,125 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 		require.Len(t, res.Sessions, 1)
 		assert.Equal(t, "from-daemon", res.Sessions[0].ID)
 	}
-	assert.Equal(t, 2, starts)
+	assert.Equal(t, 1, starts)
 	assert.NoFileExists(t, cfg.DBPath)
+}
+
+func TestMCPDaemonServiceReconnectsAfterDaemonStops(t *testing.T) {
+	cfg := config.Config{DataDir: t.TempDir()}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.NoError(t, json.MarshalWrite(w, service.SessionList{}))
+	}))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	starts := 0
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		starts++
+		return &DaemonRuntime{Host: host, Port: port, ReadOnly: starts == 2}, nil
+	})
+	svc := newMCPDaemonService(cfg)
+	_, err := svc.List(t.Context(), service.ListFilter{})
+	require.NoError(t, err)
+	assert.True(t, service.SupportsRecallQueries(svc))
+	server.Close()
+	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.NoError(t, json.MarshalWrite(w, service.SessionList{Total: 9}))
+	}))
+	t.Cleanup(replacement.Close)
+	host, port = splitTestServerURL(t, replacement.URL)
+	result, err := svc.List(t.Context(), service.ListFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 9, result.Total)
+	assert.Equal(t, 2, starts)
+	assert.False(t, service.SupportsRecallQueries(svc))
+}
+
+func TestMCPDaemonServiceConcurrentReadsShareDiscovery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.NoError(t, json.MarshalWrite(w, service.SessionList{}))
+	}))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	starts := 0
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		starts++
+		return &DaemonRuntime{Host: host, Port: port}, nil
+	})
+	svc := newMCPDaemonService(config.Config{DataDir: t.TempDir()})
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			_, err := svc.List(t.Context(), service.ListFilter{})
+			assert.NoError(t, err)
+		})
+	}
+	wg.Wait()
+	assert.Equal(t, 1, starts)
+}
+
+func TestMCPDaemonServiceDoesNotReplayRejectedReadOrFailedWrite(t *testing.T) {
+	for _, write := range []bool{false, true} {
+		t.Run(fmt.Sprintf("write %t", write), func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if write {
+					conn, _, err := w.(http.Hijacker).Hijack()
+					require.NoError(t, err)
+					assert.NoError(t, conn.Close())
+					return
+				}
+				http.Error(w, "invalid search", http.StatusBadRequest)
+			}))
+			t.Cleanup(server.Close)
+			host, port := splitTestServerURL(t, server.URL)
+			starts := 0
+			stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+				starts++
+				return &DaemonRuntime{Host: host, Port: port}, nil
+			})
+			svc := newMCPDaemonService(config.Config{DataDir: t.TempDir()})
+			var err error
+			if write {
+				_, err = svc.Sync(t.Context(), service.SyncInput{})
+			} else {
+				_, err = svc.Search(t.Context(), service.SearchRequest{Query: "invalid"})
+			}
+			require.Error(t, err)
+			assert.Equal(t, 1, requests)
+			assert.Equal(t, 1, starts)
+			assert.Nil(t, svc.(*mcpDaemonService).backend)
+		})
+	}
+}
+
+func TestMCPDaemonCallPreservesReplacementAndCanceledBackend(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("canceled %t", canceled), func(t *testing.T) {
+			old := servicehttp.NewHTTPBackend("http://127.0.0.1", "", false, "")
+			replacement := servicehttp.NewHTTPBackend("http://127.0.0.1", "", false, "")
+			svc := &mcpDaemonService{backend: old}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			failure := &url.Error{Op: "Get", Err: errors.New("connection lost")}
+			_, err := mcpDaemonCall(ctx, svc, false, func(service.SessionService) (int, error) {
+				if canceled {
+					cancel()
+				} else {
+					svc.mu.Lock()
+					svc.backend = replacement
+					svc.mu.Unlock()
+				}
+				return 0, failure
+			})
+			require.ErrorIs(t, err, failure)
+			if canceled {
+				assert.Same(t, old, svc.backend)
+			} else {
+				assert.Same(t, replacement, svc.backend)
+			}
+		})
+	}
 }
 
 func TestMCPDaemonServiceKeepsUpgradedDaemon(t *testing.T) {
@@ -371,7 +492,7 @@ func TestMCPDaemonServiceForwardsMemoryStatus(t *testing.T) {
 	assert.NoFileExists(t, cfg.DBPath)
 }
 
-func TestMCPDaemonServiceRawSuffixResolvesDaemonPerCall(t *testing.T) {
+func TestMCPDaemonServiceRawSuffixReusesDaemon(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
 	var starts, requests int
@@ -395,7 +516,7 @@ func TestMCPDaemonServiceRawSuffixResolvesDaemonPerCall(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []string{"codex:from-daemon"}, ids)
 	}
-	assert.Equal(t, 2, starts)
+	assert.Equal(t, 1, starts)
 	assert.Equal(t, 2, requests)
 	assert.NoFileExists(t, cfg.DBPath)
 	t.Logf("daemon_starts=%d requests=%d ids=[codex:from-daemon] archive_opened=false", starts, requests)

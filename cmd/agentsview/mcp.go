@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -201,8 +202,8 @@ func applyMemoryTargetEnv(cmd *cobra.Command, profileName string) error {
 
 // resolveMCPService constructs the SessionService used by the long-lived
 // MCP server. The implicit local path is intentionally daemon-only and
-// lazy: every operation re-resolves the daemon transport so a tool call can
-// wake the daemon after it exits due to idleness.
+// lazy: successful calls reuse the daemon transport; failed calls let the
+// next read wake the daemon after it exits due to idleness.
 func resolveMCPService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
@@ -241,8 +242,9 @@ func resolveMCPService(
 }
 
 type mcpDaemonService struct {
-	mu  sync.Mutex
-	cfg config.Config
+	mu      sync.Mutex
+	cfg     config.Config
+	backend service.SessionService
 }
 
 func newMCPDaemonService(cfg config.Config) service.SessionService {
@@ -253,6 +255,9 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.backend != nil {
+		return service.SupportsRecallQueries(s.backend)
+	}
 	runtime := FindDaemonRuntime(s.cfg.DataDir, s.cfg.AuthToken)
 	return runtime == nil || !runtime.ReadOnly
 }
@@ -263,6 +268,12 @@ func (s *mcpDaemonService) daemonService(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.backend != nil {
+		return s.backend, nil
+	}
 	cfg := s.cfg
 	tr, err := ensureTransportContext(
 		ctx, &cfg, transportIntentLongLived, 0,
@@ -276,208 +287,196 @@ func (s *mcpDaemonService) daemonService(
 		)
 	}
 	s.cfg.AuthToken = cfg.AuthToken
-	return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL), nil
+	s.backend = servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL)
+	return s.backend, nil
+}
+
+// mcpDaemonCall retries reads only, since a failed write may have reached the daemon.
+func mcpDaemonCall[T any](
+	ctx context.Context, s *mcpDaemonService, retryRead bool,
+	call func(service.SessionService) (T, error),
+) (T, error) {
+	for attempt := 0; ; attempt++ {
+		svc, err := s.daemonService(ctx)
+		if err != nil {
+			var zero T
+			return zero, err
+		}
+		result, err := call(svc)
+		if err == nil || ctx.Err() != nil {
+			return result, err
+		}
+		s.mu.Lock()
+		if s.backend == svc {
+			s.backend = nil
+		}
+		s.mu.Unlock()
+		_, transportFailure := errors.AsType[*url.Error](err)
+		if !retryRead || attempt > 0 || !(transportFailure || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+			return result, err
+		}
+	}
 }
 
 func (s *mcpDaemonService) Get(
 	ctx context.Context, id string,
 ) (*service.SessionDetail, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.Get(ctx, id)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.SessionDetail, error) {
+		return svc.Get(ctx, id)
+	})
 }
 
 func (s *mcpDaemonService) FindSessionIDsByPartial(
 	ctx context.Context, partial string, limit int,
 ) ([]string, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.FindSessionIDsByPartial(ctx, partial, limit)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) ([]string, error) {
+		return svc.FindSessionIDsByPartial(ctx, partial, limit)
+	})
 }
 
 func (s *mcpDaemonService) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.FindSessionIDsByRawSuffix(ctx, raw, limit)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) ([]string, error) {
+		return svc.FindSessionIDsByRawSuffix(ctx, raw, limit)
+	})
 }
 
 func (s *mcpDaemonService) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.List(ctx, f)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.SessionList, error) {
+		return svc.List(ctx, f)
+	})
 }
 
 func (s *mcpDaemonService) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.Messages(ctx, id, f)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.MessageList, error) {
+		return svc.Messages(ctx, id, f)
+	})
 }
 
 func (s *mcpDaemonService) ToolCalls(
 	ctx context.Context, id string,
 ) (*service.ToolCallList, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.ToolCalls(ctx, id)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.ToolCallList, error) {
+		return svc.ToolCalls(ctx, id)
+	})
 }
 
 func (s *mcpDaemonService) Sync(
 	ctx context.Context, in service.SyncInput,
 ) (*service.SessionDetail, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.Sync(ctx, in)
+	return mcpDaemonCall(ctx, s, false, func(svc service.SessionService) (*service.SessionDetail, error) {
+		return svc.Sync(ctx, in)
+	})
 }
 
 func (s *mcpDaemonService) Watch(
 	ctx context.Context, id string,
 ) (<-chan service.Event, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.Watch(ctx, id)
+	return mcpDaemonCall(ctx, s, false, func(svc service.SessionService) (<-chan service.Event, error) {
+		return svc.Watch(ctx, id)
+	})
 }
 
 func (s *mcpDaemonService) Stats(
 	ctx context.Context, f service.StatsFilter,
 ) (*service.SessionStats, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.Stats(ctx, f)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.SessionStats, error) {
+		return svc.Stats(ctx, f)
+	})
 }
 
 func (s *mcpDaemonService) Search(
 	ctx context.Context, req service.SearchRequest,
 ) (*service.SessionSearchResult, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.Search(ctx, req)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.SessionSearchResult, error) {
+		return svc.Search(ctx, req)
+	})
 }
 
 func (s *mcpDaemonService) SearchContent(
 	ctx context.Context, req service.ContentSearchRequest,
 ) (*service.ContentSearchResult, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.SearchContent(ctx, req)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.ContentSearchResult, error) {
+		return svc.SearchContent(ctx, req)
+	})
 }
 
 func (s *mcpDaemonService) MemoryStatus(
 	ctx context.Context,
 ) (service.MemoryStatus, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return service.MemoryStatus{}, err
-	}
-	return service.GetMemoryStatus(ctx, svc)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (service.MemoryStatus, error) {
+		return service.GetMemoryStatus(ctx, svc)
+	})
 }
 
 func (s *mcpDaemonService) UsageSummary(
 	ctx context.Context, req service.UsageRequest,
 ) (*service.UsageSummaryResult, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.UsageSummary(ctx, req)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.UsageSummaryResult, error) {
+		return svc.UsageSummary(ctx, req)
+	})
 }
 
 func (s *mcpDaemonService) UsagePairwiseComparison(
 	ctx context.Context, req service.UsagePairwiseComparisonRequest,
 ) (*service.UsagePairwiseComparisonResponse, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.UsagePairwiseComparison(ctx, req)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.UsagePairwiseComparisonResponse, error) {
+		return svc.UsagePairwiseComparison(ctx, req)
+	})
 }
 
 func (s *mcpDaemonService) ListRecallEntries(
 	ctx context.Context, f service.RecallFilter,
 ) (*service.RecallList, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.ListRecallEntries(ctx, f)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.RecallList, error) {
+		return svc.ListRecallEntries(ctx, f)
+	})
 }
 
 func (s *mcpDaemonService) GetRecallEntry(
 	ctx context.Context, id string,
 ) (*db.RecallEntry, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.GetRecallEntry(ctx, id)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*db.RecallEntry, error) {
+		return svc.GetRecallEntry(ctx, id)
+	})
 }
 
 func (s *mcpDaemonService) QueryRecallEntries(
 	ctx context.Context, req service.RecallQuery,
 ) (*service.RecallQueryResult, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.QueryRecallEntries(ctx, req)
+	return mcpDaemonCall(ctx, s, req.SkipRecording, func(svc service.SessionService) (*service.RecallQueryResult, error) {
+		return svc.QueryRecallEntries(ctx, req)
+	})
 }
 
 func (s *mcpDaemonService) ImportRecallEntries(
 	ctx context.Context, r io.Reader, opts db.RecallImportOptions,
 ) (*db.RecallImportResult, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.ImportRecallEntries(ctx, r, opts)
+	return mcpDaemonCall(ctx, s, false, func(svc service.SessionService) (*db.RecallImportResult, error) {
+		return svc.ImportRecallEntries(ctx, r, opts)
+	})
 }
 
 func (s *mcpDaemonService) ListSecrets(
 	ctx context.Context, f service.SecretListFilter,
 ) (*service.SecretFindingList, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.ListSecrets(ctx, f)
+	return mcpDaemonCall(ctx, s, true, func(svc service.SessionService) (*service.SecretFindingList, error) {
+		return svc.ListSecrets(ctx, f)
+	})
 }
 
 func (s *mcpDaemonService) ScanSecrets(
 	ctx context.Context, in service.SecretScanInput,
 	progress func(service.SecretScanProgress),
 ) (*service.SecretScanSummary, error) {
-	svc, err := s.daemonService(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return svc.ScanSecrets(ctx, in, progress)
+	return mcpDaemonCall(ctx, s, false, func(svc service.SessionService) (*service.SecretScanSummary, error) {
+		return svc.ScanSecrets(ctx, in, progress)
+	})
 }
 
 // mcpListenerAuth decides the bearer token the MCP HTTP listener must
