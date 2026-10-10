@@ -128,7 +128,6 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		body   string
 	}{
 		{"large result stores session", 200, strings.Replace(fixtures["detail"], `"Hello"`, `"`+strings.Repeat("x", 2<<20)+`"`, 1)},
-		{"oversize 200", 200, strings.Repeat("x", importer.ClaudeAIResponseLimit+2)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -177,17 +176,13 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					require.NoError(t, json.Unmarshal([]byte(data), &stats))
 				}
 			})
-			if tt.name == "oversize 200" {
-				assert.Equal(t, 1, stats.Errors)
-			} else {
-				assert.Equal(t, 1, stats.Imported)
-				assert.Zero(t, stats.Errors)
-				messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
-				require.NoError(t, err)
-				require.Len(t, messages, 2)
-				assert.Equal(t, strings.Repeat("x", 2<<20), messages[0].Content)
-				assert.Equal(t, "Chosen reply", messages[1].Content)
-			}
+			assert.Equal(t, 1, stats.Imported)
+			assert.Zero(t, stats.Errors)
+			messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			assert.Equal(t, strings.Repeat("x", 2<<20), messages[0].Content)
+			assert.Equal(t, "Chosen reply", messages[1].Content)
 		})
 	}
 	for _, tt := range []struct {
@@ -196,9 +191,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		signIn     bool
 	}{
 		{"unauthorized", "{}", 401, true},
-		{"forbidden", "{}", 403, false},
 		{"browser failure", "TypeError: Failed to fetch", 0, false},
-		{"empty successful body", "", 200, false},
 	} {
 		t.Run("access failure "+tt.name+" reaches stream error", func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -231,12 +224,8 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				case "error":
 					if tt.signIn {
 						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again","code":"claude_ai_auth_required"}`, data)
-					} else if tt.status == 0 {
-						assert.JSONEq(t, `{"error":"TypeError: Failed to fetch"}`, data)
-					} else if tt.status == 403 {
-						assert.JSONEq(t, `{"error":"claude.ai access denied (HTTP 403)"}`, data)
 					} else {
-						assert.Contains(t, data, "unexpected EOF")
+						assert.JSONEq(t, `{"error":"TypeError: Failed to fetch"}`, data)
 					}
 					gotError = true
 				case "done":

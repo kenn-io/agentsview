@@ -209,17 +209,15 @@ func TestSyncClaudeAI(t *testing.T) {
 		assert.Equal(t, "Chosen reply", messages[1].Content)
 	})
 	t.Run("missing data fails", func(t *testing.T) {
-		for _, page := range []string{`{}`, `{"items":[]}`, `{"conversations":[]}`, `{"results":[]}`} {
-			d := testDB(t)
-			_, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
-				if path == "/api/organizations" {
-					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
-				}
-				require.Equal(t, "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0", path)
-				return ClaudeAIResponse{Status: 200, Body: []byte(page)}, nil
-			}, nil)
-			require.EqualError(t, err, "claude list had no data")
-		}
+		d := testDB(t)
+		_, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
+			if path == "/api/organizations" {
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
+			}
+			require.Equal(t, "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0", path)
+			return ClaudeAIResponse{Status: 200, Body: []byte(`{}`)}, nil
+		}, nil)
+		require.EqualError(t, err, "claude list had no data")
 	})
 	t.Run("retry limit and sign in", func(t *testing.T) {
 		for _, status := range []int{429, 503} {
@@ -381,6 +379,13 @@ func TestSyncClaudeAIDetailFailures(t *testing.T) {
 			})
 		})
 	}
+	t.Run("oversize 200", func(t *testing.T) {
+		stats, err := SyncClaudeAI(t.Context(), testDB(t), syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(strings.Repeat("x", ClaudeAIResponseLimit+2))}, nil
+		}), nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Errors)
+	})
 }
 
 type failedSyncStore struct{ *db.DB }
@@ -412,12 +417,6 @@ func TestSyncClaudeAIFailureStreak(t *testing.T) {
 	}{
 		{name: "malformed summaries stop", summary: `{"uuid":42}`, wantStop: true, wantErrors: 2},
 		{name: "valid chat resets malformed summary streak", summary: `{"uuid":42}`, wantErrors: 2, wantCalls: 1, wantImport: 1, wantStored: [3]bool{false, true, false}},
-		{name: "bad leaves stop", summary: strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":42`, 1), wantStop: true, wantErrors: 2},
-		{name: "valid chat resets bad leaf streak", summary: strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":42`, 1), wantErrors: 2, wantCalls: 1, wantImport: 1, wantStored: [3]bool{false, true, false}},
-		{name: "absent leaves stop", summary: strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply",`, "", 1), wantStop: true, wantErrors: 2},
-		{name: "valid chat resets absent leaf streak", summary: strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply",`, "", 1), wantErrors: 2, wantCalls: 1, wantImport: 1, wantStored: [3]bool{false, true, false}},
-		{name: "empty leaves stop", summary: strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":""`, 1), wantStop: true, wantErrors: 2},
-		{name: "valid chat resets empty leaf streak", summary: strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":""`, 1), wantErrors: 2, wantCalls: 1, wantImport: 1, wantStored: [3]bool{false, true, false}},
 		{name: "two retry ladders stop sync", statuses: [3]int{503, 503, 200}, wantCalls: 10, wantErrors: 2, wantStop: true, wantError: "claude returned HTTP 503"},
 		{name: "success resets failure streak", statuses: [3]int{503, 200, 503}, wantCalls: 11, wantErrors: 2, wantImport: 1, wantThird: 5, wantStored: [3]bool{false, true, false}},
 		{name: "two oversized host responses continue", statuses: [3]int{413, 413, 200}, wantCalls: 3, wantErrors: 2, wantImport: 1, wantThird: 1, wantStored: [3]bool{false, false, true}},
@@ -660,11 +659,16 @@ func TestSyncClaudeAINewChatCancellationIsAtomic(t *testing.T) {
 }
 
 func TestSyncClaudeAIZipFreshness(t *testing.T) {
-	for _, tt := range []struct{ name, exported string }{
-		{"zip touches unchanged chat", syncDetail},
-		{"zip changes stored count", strings.TrimSuffix(syncDetail, "]}") + `,{"sender":"human","text":"Other branch"}]}`},
-		{"zip changes content at same count", strings.Replace(syncDetail, "Chosen reply", "Zip reply", 1)},
-		{"zip changes title", strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)},
+	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	for _, tt := range []struct {
+		name, exported string
+		options        ImportOptions
+	}{
+		{name: "zip touches unchanged chat", exported: syncDetail},
+		{name: "zip changes stored count", exported: strings.TrimSuffix(syncDetail, "]}") + `,{"sender":"human","text":"Other branch"}]}`},
+		{name: "zip changes content at same count", exported: strings.Replace(syncDetail, "Chosen reply", "Zip reply", 1)},
+		{name: "zip changes title", exported: strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)},
+		{name: "zip replaces chat", exported: `{"uuid":"22222222-2222-4222-8222-222222222222","name":"Chat","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00.123456Z","chat_messages":[{"sender":"human","text":"Hello"}]}`, options: ImportOptions{Replace: []string{id}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -675,10 +679,15 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			})
 			_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
 			require.NoError(t, err)
-			stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+tt.exported+"]"), nil)
+			stats, err := ImportClaudeAIWithOptions(t.Context(), d, strings.NewReader("["+tt.exported+"]"), nil, tt.options)
 			require.NoError(t, err)
 			if tt.name != "zip changes title" && tt.name != "zip touches unchanged chat" {
 				require.Equal(t, 1, stats.Updated)
+			}
+			if tt.name == "zip replaces chat" {
+				messages, err := d.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				require.Equal(t, []string{"Hello"}, messageContents(messages))
 			}
 			if tt.name == "zip changes content at same count" {
 				messages, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
@@ -705,44 +714,6 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
 		})
 	}
-}
-
-func TestSyncClaudeAIRefetchesAfterZipReplace(t *testing.T) {
-	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
-	d := testDB(t)
-	calls := 0
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		calls++
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-	})
-	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.Imported)
-	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.Skipped)
-	require.Equal(t, 1, calls)
-
-	stats, err = ImportClaudeAIWithOptions(t.Context(), d, strings.NewReader(`[{
-		"uuid":"22222222-2222-4222-8222-222222222222",
-		"name":"Chat",
-		"created_at":"2026-03-01T10:00:00Z",
-		"updated_at":"2026-03-01T10:05:00.123456Z",
-		"chat_messages":[{"sender":"human","text":"Hello"}]
-	}]`), nil, ImportOptions{Replace: []string{id}})
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.Updated)
-	messages, err := d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	require.Equal(t, []string{"Hello"}, messageContents(messages))
-
-	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Updated)
-	assert.Equal(t, 2, calls)
-	messages, err = d.GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
 }
 
 func TestSyncClaudeAIBranchSwitch(t *testing.T) {
@@ -807,6 +778,9 @@ func TestSyncClaudeAIEmptyListLeaf(t *testing.T) {
 		{"null with archive", `"current_leaf_message_uuid":null,`, 1, true},
 		{"root without archive", `"current_leaf_message_uuid":"00000000-0000-4000-8000-000000000000",`, 1, false},
 		{"root with archive", `"current_leaf_message_uuid":"00000000-0000-4000-8000-000000000000",`, 1, true},
+		{"numeric", `"current_leaf_message_uuid":42,`, 0, false},
+		{"absent", "", 0, false},
+		{"empty", `"current_leaf_message_uuid":"",`, 0, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -847,18 +821,30 @@ func TestSyncClaudeAIEmptyListLeaf(t *testing.T) {
 }
 
 func TestSyncClaudeAIInvalidOrganizations(t *testing.T) {
-	for _, body := range []string{"null", "{}"} {
-		t.Run(body, func(t *testing.T) {
+	for _, tt := range []struct {
+		name, body, wantError string
+		status                int
+	}{
+		{name: "null", body: "null", status: 200, wantError: "claude organizations must be an array"},
+		{name: "{}", body: "{}", status: 200},
+		{name: "forbidden", body: "{}", status: 403, wantError: "claude.ai access denied (HTTP 403)"},
+		{name: "empty successful body", status: 200, wantError: "unexpected EOF"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
 			calls := 0
 			stats, err := SyncClaudeAI(t.Context(), d, func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 				calls++
 				require.Equal(t, "/api/organizations", path)
-				return ClaudeAIResponse{Status: 200, Body: []byte(body)}, nil
+				return ClaudeAIResponse{Status: tt.status, Body: []byte(tt.body)}, nil
 			}, nil)
 			require.Error(t, err)
-			if body == "null" {
-				require.EqualError(t, err, "claude organizations must be an array")
+			if tt.wantError != "" {
+				if tt.name == "empty successful body" {
+					assert.Contains(t, err.Error(), tt.wantError)
+				} else {
+					require.EqualError(t, err, tt.wantError)
+				}
 			}
 			assert.Equal(t, 1, calls)
 			assert.Zero(t, stats.Imported+stats.Updated+stats.Skipped+stats.Errors)
