@@ -113,17 +113,20 @@ func TestChangedPathSyncResetsSourceClaims(t *testing.T) {
 
 func TestS3CursorSharedSessionProjects(t *testing.T) {
 	for _, tt := range []struct {
-		name        string
-		order       []int
-		legacy      bool
-		cachedLost  bool
-		batch       bool
-		lookupError bool
-		trashed     bool
+		name          string
+		order         []int
+		legacy        bool
+		cachedLost    bool
+		batch         bool
+		lookupError   bool
+		trashed       bool
+		separateRoots bool
 	}{
 		{name: "both in one pass", order: []int{0, 1}, batch: true},
 		{name: "A then B", order: []int{0, 1}},
 		{name: "B then A", order: []int{1, 0}},
+		{name: "separate roots A then B", order: []int{0, 1}, separateRoots: true},
+		{name: "separate roots B then A", order: []int{1, 0}, separateRoots: true},
 		{name: "ownership lookup fails", order: []int{0, 1}, lookupError: true},
 		{name: "trashed object", order: []int{0, 1}, trashed: true},
 		{name: "main dropped object", order: []int{0}, legacy: true},
@@ -134,10 +137,16 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			const root = "s3://bucket/host-a/raw/cursor"
 			const baseID = "host-a~cursor:shared"
 			paths := []string{root + "/project-a/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared.txt"}
+			roots := []string{root}
+			if tt.separateRoots {
+				roots = []string{root, "s3://other-bucket/host-a/raw/cursor/"}
+				paths[1] = strings.TrimSuffix(roots[1], "/") + "/project-a/agent-transcripts/shared.txt"
+			}
 			bodies := map[string]string{
 				paths[0]: "user:\nProject A\nassistant:\nAnswer A\n",
 				paths[1]: "user:\nProject B\nassistant:\nAnswer B\n",
 			}
+			answers := []string{"Answer A", "Answer B"}
 			mtime := time.Unix(100, 0)
 			var fetches atomic.Int32
 			var reopen func()
@@ -160,18 +169,26 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 			}}
 			source := func(i int) parser.SourceRef {
 				uri := paths[i]
+				project := "project-a"
+				if i == 1 && !tt.separateRoots {
+					project = "project-b"
+				}
 				return parser.SourceRef{
 					Provider: parser.AgentCursor, Key: uri, DisplayPath: uri, FingerprintKey: uri,
-					ProjectHint: []string{"project-a", "project-b"}[i],
+					ProjectHint: project,
 					Opaque:      parser.S3DiscoveredSource{URI: uri, Machine: "host-a", Size: int64(len(bodies[uri])), MtimeNS: mtime.UnixNano(), Fingerprint: "s3-meta:stable"},
 				}
 			}
-			engine := NewEngine(t.Context(), database, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}}, Machine: "local",
-				DisableFilesystemProjectDiscovery: true, ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
-			})
-			t.Cleanup(engine.Close)
-			engine.workerCountOverride = 2
+			newEngine := func(roots []string) *Engine {
+				engine := NewEngine(t.Context(), database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: roots}, Machine: "local",
+					DisableFilesystemProjectDiscovery: true, ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+				})
+				t.Cleanup(engine.Close)
+				engine.workerCountOverride = 2
+				return engine
+			}
+			engine := newEngine(roots)
 			if tt.batch {
 				provider.discovered = []parser.SourceRef{source(tt.order[0]), source(tt.order[1])}
 				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
@@ -187,10 +204,18 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				}
 			} else {
 				for _, i := range tt.order {
+					if tt.separateRoots {
+						engine.Close()
+						engine = newEngine(roots[i : i+1])
+					}
 					provider.discovered = []parser.SourceRef{source(i)}
 					stats := engine.SyncAll(t.Context(), nil)
 					require.Zero(t, stats.Failed)
 				}
+			}
+			if tt.separateRoots {
+				engine.Close()
+				engine = newEngine(roots)
 			}
 			if tt.legacy {
 				starred, err := database.StarSession(t.Context(), baseID)
@@ -264,7 +289,7 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 					require.NoError(t, err)
 					require.Len(t, messages, 2)
 					assert.Equal(t, []string{"Project A", "Project B"}[i], messages[0].Content)
-					assert.Equal(t, []string{"Answer A", "Answer B"}[i], messages[1].Content)
+					assert.Equal(t, answers[i], messages[1].Content)
 				}
 			}
 			verify()
@@ -292,24 +317,32 @@ func TestS3CursorSharedSessionProjects(t *testing.T) {
 				require.Zero(t, stats.Failed)
 				assert.Equal(t, before, fetches.Load(), "unchanged objects must not download without a cutoff")
 			}
-			if tt.name != "A then B" && !tt.legacy {
+			if tt.name != "A then B" && !tt.legacy && !tt.separateRoots {
 				return
 			}
-			if !tt.legacy || ids[1] != baseID {
-				starred, err := database.StarSession(t.Context(), ids[1])
+			upgrade := 1
+			if tt.separateRoots {
+				upgrade = tt.order[1]
+			}
+			if !tt.legacy || ids[upgrade] != baseID {
+				starred, err := database.StarSession(t.Context(), ids[upgrade])
 				require.NoError(t, err)
 				require.True(t, starred)
 			}
-			paths[1] = root + "/project-b/agent-transcripts/shared/shared.jsonl"
-			bodies[paths[1]] = `{"role":"user","message":{"content":"Project B"}}` + "\n" + `{"role":"assistant","message":{"content":"Answer B"}}` + "\n"
+			paths[upgrade] = strings.TrimSuffix(paths[upgrade], "shared.txt") + "shared/shared.jsonl"
+			bodies[paths[upgrade]] = []string{
+				`{"role":"user","message":{"content":"Project A"}}` + "\n" + `{"role":"assistant","message":{"content":"Answer A updated"}}` + "\n",
+				`{"role":"user","message":{"content":"Project B"}}` + "\n" + `{"role":"assistant","message":{"content":"Answer B updated"}}` + "\n",
+			}[upgrade]
+			answers[upgrade] += " updated"
 			provider.discovered = []parser.SourceRef{source(0), source(1)}
 			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
 			require.Zero(t, stats.Failed)
 			verify()
 			stars, err := database.ListStarredSessionIDs(t.Context())
 			require.NoError(t, err)
-			wantStars := []string{ids[1]}
-			if tt.legacy && baseID != ids[1] {
+			wantStars := []string{ids[upgrade]}
+			if tt.legacy && baseID != ids[upgrade] {
 				wantStars = append(wantStars, baseID)
 			}
 			assert.ElementsMatch(t, wantStars, stars)
