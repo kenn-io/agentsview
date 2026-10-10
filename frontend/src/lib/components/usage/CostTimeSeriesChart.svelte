@@ -102,13 +102,14 @@
     return daily;
   }
 
-  const seriesData = $derived.by((): {
+  interface SeriesData {
     points: Point[];
     keys: string[];
     maxY: number;
     labels: Record<string, string>;
-  } => {
-    const summary = usage.timeSeriesSummary;
+  }
+
+  function buildSeries(summary: UsageSummaryResponse | null): SeriesData {
     if (!summary || summary.daily.length === 0) {
       return { points: [], keys: [], maxY: 0, labels: {} };
     }
@@ -246,6 +247,17 @@
     }
 
     return { points, keys, maxY: maxY || 1, labels };
+  }
+
+  const seriesData = $derived(buildSeries(usage.timeSeriesSummary));
+  // The legend lists the unselected view's series so selecting never changes its line count.
+  const legendData = $derived(
+    usage.colorSummary === usage.timeSeriesSummary ? seriesData : buildSeries(usage.colorSummary),
+  );
+  // Plotted series outside the unselected top ten follow it, then Other once.
+  const legendKeys = $derived.by(() => {
+    const named = [...new Set([...legendData.keys, ...seriesData.keys])].filter((key) => key !== "__other__");
+    return legendData.keys.includes("__other__") || seriesData.keys.includes("__other__") ? [...named, "__other__"] : named;
   });
 
   const view = $derived(usage.toggles.timeSeries.view);
@@ -347,7 +359,7 @@
   function seriesLabel(key: string): string {
     return key === "__other__"
       ? m.shared_other()
-      : seriesData.labels[key] ?? key;
+      : seriesData.labels[key] ?? legendData.labels[key] ?? key;
   }
 
   const cells = $derived(seriesData.points.map((point, idx) => {
@@ -664,10 +676,13 @@
   {#if seriesData.points.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    {#if seriesData.keys.length > 1}
+    {#if legendKeys.length > 1}
       <div class="legend">
-        {#each seriesData.keys as key (key)}
-          <span class="legend-item">
+        {#each legendKeys as key (key)}
+          <span
+            class="legend-item"
+            class:dimmed={!seriesData.keys.includes(key)}
+          >
             <span
               class="legend-dot"
               style="background: {seriesColor(key)}"
@@ -870,6 +885,10 @@
     gap: 4px;
     font-size: 10px;
     color: var(--text-muted);
+  }
+
+  .legend-item.dimmed {
+    opacity: 0.35;
   }
 
   .legend-dot {

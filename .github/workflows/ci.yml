@@ -291,9 +291,9 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      - name: Run raw capture, CLI, and volume identity tests (macOS)
+      - name: Run archive, CLI, and volume identity tests (macOS)
         if: runner.os == 'macOS'
-        run: go test -tags "fts5" ./internal/rawcapture ./cmd/agentsview ./internal/volumeid -count=1 -timeout=10m
+        run: go test -tags "fts5" ./internal/db ./internal/rawcapture ./cmd/agentsview ./internal/volumeid -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 

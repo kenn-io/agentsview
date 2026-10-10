@@ -458,6 +458,53 @@ func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
 	require.NoError(t, err, "recreate temp table after cleanup")
 }
 
+func TestCopyOrphanedDataPreservesHermesCronGroups(t *testing.T) {
+	for _, legacySchema := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy schema=%t", legacySchema), func(t *testing.T) {
+			ctx := t.Context()
+			srcPath := filepath.Join(t.TempDir(), "old.db")
+			src := testDBAtPath(t, srcPath, "src")
+			cases := []struct {
+				id, agent, stored string
+			}{
+				{"hermes:cron_job-a_20261009_120000", "hermes", ""},
+				{"augure-desktop:cron_job.b-c_20261009_120000", "augure-desktop", ""},
+				{"imported:hermes:cron_job-a_20261009_120000", "hermes", ""},
+			}
+			if !legacySchema {
+				cases = append(cases, struct{ id, agent, stored string }{
+					"hermes:cron_job-a_20261009_140000", "hermes", "retained-job",
+				}, struct{ id, agent, stored string }{
+					"hermes:20261009_140000_abcdef", "hermes", "retained-job",
+				}, struct{ id, agent, stored string }{
+					"imported:augure-desktop:cron_job-a_20261009_140000", "augure-desktop", "retained-job",
+				})
+			}
+			for _, tc := range cases {
+				require.NoError(t, src.UpsertSession(ctx, Session{ID: tc.id, Agent: tc.agent, Project: "hermes-cron", GroupKey: tc.stored}))
+			}
+			require.NoError(t, src.Close())
+			if legacySchema {
+				conn, err := sql.Open("sqlite3", srcPath)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(ctx, `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN group_key`)
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+			}
+			dst := testDB(t)
+			count, err := dst.CopyOrphanedDataFrom(srcPath)
+			require.NoError(t, err)
+			assert.Equal(t, len(cases), count)
+			for _, tc := range cases {
+				session, err := dst.GetSession(ctx, tc.id)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				assert.Equal(t, tc.stored, session.GroupKey, tc.id)
+			}
+		})
+	}
+}
+
 func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()

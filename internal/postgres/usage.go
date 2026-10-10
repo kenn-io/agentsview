@@ -416,6 +416,9 @@ type pgDailyUsageScanRow struct {
 }
 
 type pgTopSessionMetadata struct {
+	machine     string
+	groupKey    string
+	sessionName string
 	displayName string
 	agent       string
 	project     string
@@ -472,19 +475,19 @@ func pgDailyUsageRowSelectFromRowsWithMachine(
 	rowsSQL string, includeMachine bool,
 ) string {
 	return pgDailyUsageRowSelectFromRowsWithSession(
-		rowsSQL, includeMachine, "u.session_id", false)
+		rowsSQL, includeMachine, "u.session_id", false, false)
 }
 
 func pgDailyUsageRowSelectFromSnapshotRowsWithMachine(
 	rowsSQL string, includeMachine bool,
 ) string {
 	return pgDailyUsageRowSelectFromRowsWithSession(
-		rowsSQL, includeMachine, "u.snapshot_attribution_session_id", true)
+		rowsSQL, includeMachine, "u.snapshot_attribution_session_id", true, false)
 }
 
 func pgDailyUsageRowSelectFromRowsWithSession(
 	rowsSQL string, includeMachine bool, sessionColumn string,
-	reloadSessionMetadata bool,
+	reloadSessionMetadata, includeSessionGroups bool,
 ) string {
 	projectColumn := "u.project"
 	agentColumn := "u.agent"
@@ -512,9 +515,17 @@ LEFT JOIN sessions attributed
 	if includeMachine {
 		machineColumn = ",\n\t" + machineColumnExpr
 	}
+	sessionMetadataColumns := ""
+	if includeSessionGroups {
+		sessionMetadataColumns = `,
+	COALESCE(attributed.machine, '') AS group_machine,
+	COALESCE(attributed.group_key, '') AS group_key,
+	COALESCE(attributed.session_name, '') AS session_name,
+	attributed.started_at AS group_started_at`
+	}
 	return `
 SELECT
-	` + sessionColumn + `,
+	` + sessionColumn + ` AS session_id,
 	u.message_ordinal,
 	u.usage_source,
 	u.ts,
@@ -535,7 +546,7 @@ SELECT
 	u.source_uuid,
 	u.usage_dedup_key,
 	` + projectColumn + ` AS project,
-	` + agentColumn + ` AS agent` + machineColumn + `
+	` + agentColumn + ` AS agent` + machineColumn + sessionMetadataColumns + `
 FROM (` + rowsSQL + `) u` + metadataJoin + `
 WHERE 1=1`
 }
@@ -737,12 +748,12 @@ func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter, hasCursorTable boo
 		rowsSQL, f.Breakdowns)
 }
 
-func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
+func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter, includeSessionGroups bool) string {
 	bounds := pgUsageBoundsForFilter(pb, f)
 	rowsSQL := pgDailyUsageRowsSQLForBounds(
 		pb, pgUsageSnapshotInputFilter(f), bounds)
 	rowsSQL = pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, f)
-	return pgDailyUsageRowSelectFromSnapshotRowsWithMachine(rowsSQL, false)
+	return pgDailyUsageRowSelectFromRowsWithSession(rowsSQL, false, "u.snapshot_attribution_session_id", true, includeSessionGroups)
 }
 
 func pgUsageSnapshotInputFilter(f db.UsageFilter) db.UsageFilter {
@@ -884,7 +895,7 @@ func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
 }
 
 func scanPGDailyUsageRowWithMachine(
-	rows *sql.Rows, includeMachine bool,
+	rows *sql.Rows, includeMachine bool, extra ...any,
 ) (pgDailyUsageScanRow, error) {
 	var r pgDailyUsageScanRow
 	dest := []any{
@@ -914,7 +925,7 @@ func scanPGDailyUsageRowWithMachine(
 	if includeMachine {
 		dest = append(dest, &r.machine)
 	}
-	err := rows.Scan(dest...)
+	err := rows.Scan(append(dest, extra...)...)
 	return r, err
 }
 
@@ -1264,7 +1275,10 @@ SELECT
 	COALESCE(NULLIF(COALESCE(display_name, session_name), ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
 	agent,
 	project,
-	started_at
+	started_at,
+	machine,
+	group_key,
+	COALESCE(session_name, '')
 FROM sessions
 WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
@@ -1283,6 +1297,9 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 			&meta.agent,
 			&meta.project,
 			&startedAt,
+			&meta.machine,
+			&meta.groupKey,
+			&meta.sessionName,
 		); err != nil {
 			return nil,
 				fmt.Errorf("scanning pg top session metadata: %w", err)
@@ -2080,7 +2097,7 @@ func (s *Store) GetTopSessionsByCost(
 	rateResolver := export.NewPricingResolver(pricing)
 
 	pb := &paramBuilder{}
-	query := pgTopSessionsUsageRowQuery(pb, f)
+	query := pgTopSessionsUsageRowQuery(pb, f, f.TopSessionsByGroup)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -2099,6 +2116,7 @@ func (s *Store) GetTopSessionsByCost(
 		totalTokens       int
 		cost              money.Money
 		authoritativeCost *money.Money
+		entry             db.TopSessionEntry
 	}
 
 	accum := make(map[string]*sessAccum)
@@ -2106,7 +2124,15 @@ func (s *Store) GetTopSessionsByCost(
 	seen := make(map[db.UsageDedupToken]struct{})
 
 	for rows.Next() {
-		r, err := scanPGDailyUsageRow(rows)
+		var entry db.TopSessionEntry
+		var startedAt sql.NullTime
+		var groupColumns []any
+		if f.TopSessionsByGroup {
+			groupColumns = []any{&entry.Machine, &entry.GroupKey, &entry.SessionName, &startedAt}
+		}
+		r, err := scanPGDailyUsageRowWithMachine(rows, false, groupColumns...)
+		entry.Project, entry.Agent = r.project, r.agent
+		entry.StartedAt = startedAtString(startedAt)
 		if err != nil {
 			return nil,
 				fmt.Errorf("scanning top sessions row: %w", err)
@@ -2136,7 +2162,7 @@ func (s *Store) GetTopSessionsByCost(
 
 		sa, ok := accum[r.sessionID]
 		if !ok {
-			sa = &sessAccum{}
+			sa = &sessAccum{entry: entry}
 			accum[r.sessionID] = sa
 			order = append(order, r.sessionID)
 		}
@@ -2166,8 +2192,10 @@ func (s *Store) GetTopSessionsByCost(
 			continue
 		}
 		result = append(result, db.TopSessionEntry{
-			SessionID:           id,
-			DisplayName:         id,
+			SessionID: id, DisplayName: id,
+			Project: sa.entry.Project, Agent: sa.entry.Agent,
+			GroupKey: sa.entry.GroupKey, SessionName: sa.entry.SessionName, Machine: sa.entry.Machine,
+			StartedAt:           sa.entry.StartedAt,
 			InputTokens:         sa.inputTokens,
 			OutputTokens:        sa.outputTokens,
 			CacheCreationTokens: sa.cacheCreateTokens,
@@ -2182,13 +2210,20 @@ func (s *Store) GetTopSessionsByCost(
 		})
 	}
 
-	result = db.SortAndLimitTopSessions(
-		result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,
-	)
+	if f.TopSessionsByGroup {
+		result, err = db.GroupTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		result = db.SortAndLimitTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
+	}
 
-	sessionIDs := make([]string, len(result))
-	for i := range result {
-		sessionIDs[i] = result[i].SessionID
+	sessionIDs := make([]string, 0, len(result))
+	for _, entry := range result {
+		if entry.SessionID != "" {
+			sessionIDs = append(sessionIDs, entry.SessionID)
+		}
 	}
 	metadata, err := s.loadPGTopSessionMetadata(ctx, sessionIDs)
 	if err != nil {
@@ -2200,8 +2235,12 @@ func (s *Store) GetTopSessionsByCost(
 			result[i].Agent = meta.agent
 			result[i].Project = meta.project
 			result[i].StartedAt = meta.startedAt
+			result[i].Machine = meta.machine
+			result[i].GroupKey = meta.groupKey
+			result[i].SessionName = meta.sessionName
 		}
 	}
+
 	return result, nil
 }
 
@@ -2210,7 +2249,7 @@ func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
 	pb := &paramBuilder{}
-	query := pgTopSessionsUsageRowQuery(pb, f)
+	query := pgTopSessionsUsageRowQuery(pb, f, false)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 

@@ -24,6 +24,10 @@ export type GetApiV1UsagePairwiseComparisonParams = {
    */
   project?: string;
   /**
+   * Filter by an opaque project key
+   */
+  project_key?: string;
+  /**
    * Filter by machine
    */
   machine?: string;

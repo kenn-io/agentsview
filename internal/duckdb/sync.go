@@ -972,7 +972,7 @@ func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		sess.DataVersion,
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
-		sess.SourceVersion, sess.TranscriptFidelity, sess.ParserMalformedLines,
+		sess.SourceVersion, sess.GroupKey, sess.TranscriptFidelity, sess.ParserMalformedLines,
 		nilString(sess.TranscriptRevision),
 		sess.IsTruncated, nilTime(sess.DeletedAt), nilString(sess.DeletionCause),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),

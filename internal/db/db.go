@@ -568,7 +568,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (127: reparse readable sources to classify headless workers as subagents.)
 // (128: reparse all sources to recover TraeX mutation rollouts and per-response usage.)
 // (129: recover collapsed S3 Cursor conversations, including cached sources.)
-const dataVersion = 129
+// (130: Record stable Hermes cron groups under one project. Re-parse
+// unchanged Hermes sources to recover job IDs and recorded names.)
+const dataVersion = 130
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2534,6 +2536,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN session_kind TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"sessions", "group_key",
+			"ALTER TABLE sessions ADD COLUMN group_key TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"sessions", "transcript_fidelity",
 			"ALTER TABLE sessions ADD COLUMN transcript_fidelity TEXT NOT NULL DEFAULT ''",
 		},
@@ -2926,6 +2932,7 @@ WHEN (
     OLD.git_branch IS NOT NEW.git_branch OR
     OLD.source_session_id IS NOT NEW.source_session_id OR
     OLD.source_version IS NOT NEW.source_version OR
+    OLD.group_key IS NOT NEW.group_key OR
     OLD.transcript_fidelity IS NOT NEW.transcript_fidelity OR
     OLD.parser_malformed_lines IS NOT NEW.parser_malformed_lines OR
     OLD.is_truncated IS NOT NEW.is_truncated OR

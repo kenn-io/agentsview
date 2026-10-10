@@ -143,10 +143,35 @@ The toolbar at the top of the page scopes the entire dashboard. Pick a start and
 end date with the date inputs, or narrow down with the Project, Agent, and Model
 filter dropdowns. Usage opens to a rolling 30-day range. Linking its date
 selection to other date-aware pages is optional. Turn it on with **Settings >
-Date ranges > Link date ranges across pages**. Filter state is written back to
-the URL — copying the address bar gives you a shareable link to the exact view
-you're looking at. A **Clear filters** link appears next to the refresh button
+Date ranges > Link date ranges across pages**. The URL preserves dates and
+shareable filters. Project keys belong to the current archive set, so project
+exclusions by key and the opened attribution project stay in the current page.
+A **Clear filters** link appears next to the refresh button
 when anything is active.
+
+Click a tile or row in Usage attribution to select a project, model, or agent
+and narrow the page's stats. Every tile and row stays visible at its own color;
+the selection is highlighted and the others dimmed. Click the selection again
+or use **Clear selection** in the panel header to clear that dimension while
+keeping dates and other filters. The Project and Model pickers show the
+selected item. Selections combine across dimensions and stay active when dates
+widen. Unchecking the selected item in a picker clears its selection and any
+opened project view.
+Double click a project or select it and use **Open** beside **Clear selection**
+to see its groups and
+individual sessions for the selected date range. On touch screens, use **Open**.
+Usage outside the opened project's top 100 tiles appears under **Other**.
+Enter and Space select any item.
+Hermes cron jobs from different homes stay separate. They show their latest
+recorded name in that range and their home-scoped ID on hover.
+**All projects**, Escape, and Backspace
+return to project tiles with the current dates, filters, and selection.
+Opening a project stays in the panel; browser Back and Forward follow page
+history.
+The **Projects** picker excludes a project. Usage-only and discarded-evidence
+archives omit titles and show job IDs, as do archives without `state.db` titles.
+Archived Hermes and Augure Desktop cron runs whose sources were gone before
+upgrading stay individual sessions unless they already have a stored job ID.
 
 Switch the toolbar metric from **Cost** to **Tokens** to analyze token volume.
 The token-type multi-select scopes token totals, trends, attribution,
@@ -157,7 +182,8 @@ session ranking can be shared directly.
 
 Project-key exclusions are the exception. Shared-store project keys are scoped
 to the current aggregate archive set, so the page keeps those exclusions in
-memory and does not write or restore them through the URL.
+memory and does not write or restore them through the URL. Project and model
+selections also stay in memory. Agent selections use the page's Agent filter.
 
 ![Usage toolbar with filters](/docs/assets/generated/screenshots/usage-toolbar.png)
 
@@ -166,8 +192,7 @@ Deselect all shortcuts, and a colored dot for agents so you can tell them apart
 at a glance.
 
 In the Model picker, checked models are visible and unchecked models are
-hidden. Clicking a model in the attribution chart unchecks it in the picker.
-Recheck it to show it again without changing the other models. Hidden models
+hidden. Attribution selections show in the picker label. Hidden models
 remain in the picker after a reload or when opening a shared URL.
 
 Usage saves model visibility with `exclude_model`. The previous Usage-only
@@ -196,6 +221,8 @@ A stacked chart shows cost per day across the range, grouped by project, model,
 or agent — toggle the grouping with the segment buttons in the panel header.
 Each series is colored consistently with the attribution panel below so you can
 cross-reference them.
+Attribution selections and sidebar session-filter changes keep the range
+selected with the chart's brush.
 
 Choose **Smooth**, **Lines**, or **Bars** in the chart header. The page
 remembers the style in your browser. Days without spend remain visible as zero,
@@ -211,9 +238,9 @@ controls work in Tokens mode.
 The attribution panel breaks down total spend for the window into a treemap plus
 a ranked side rail. Switch the group-by between **Project**, **Model**, and
 **Agent**, or flip the view from **Treemap** to **List** for a table-style
-readout. Click any cell (or row) to hide it from the chart above, which is the
-primary drill-down mechanic — hide the obvious outliers and the remaining
-breakdown tells you where the smaller spend is going.
+readout. Click a tile or row to select it while keeping every item visible.
+Double click a project or select it and use **Open** to see its groups and
+sessions. Use the **Projects** filter to hide projects.
 
 ![Cost attribution treemap](/docs/assets/generated/screenshots/usage-attribution.png)
 

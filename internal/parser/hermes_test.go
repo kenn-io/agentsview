@@ -921,6 +921,36 @@ func TestParseHermesArchiveIncludesTranscriptsMissingFromStateDB(
 	assert.Contains(t, ids, "hermes:extra")
 }
 
+func TestHermesCronTranscriptProjects(t *testing.T) {
+	for _, format := range []string{"json", "jsonl"} {
+		for _, tc := range []struct {
+			id, source, project, group string
+			keepStored                 bool
+		}{
+			{"cron_job-1_20261007_120000", "cron", "hermes-cron", "job-1", false},
+			{"child", "cron", "hermes-cron", "", true},
+			{"cron_job-1_20261007_120000", "cli", "hermes-cli", "", false},
+		} {
+			t.Run(format+"/"+tc.id+"/"+tc.source, func(t *testing.T) {
+				name := "session_" + tc.id + ".json"
+				body := fmt.Sprintf(`{"platform":%q,"messages":[{"role":"user","content":"hello"}]}`, tc.source)
+				if format == "jsonl" {
+					name = tc.id + ".jsonl"
+					body = fmt.Sprintf("{\"role\":\"session_meta\",\"platform\":%q}\n{\"role\":\"user\",\"content\":\"hello\"}\n", tc.source)
+				}
+				path := createTestFile(t, name, body)
+				sess, _, err := parseHermesTestSession(t, path, "", "local")
+				require.NoError(t, err)
+				require.NotNil(t, sess)
+				assert.Equal(t, tc.project, sess.Project)
+				assert.Equal(t, tc.group, sess.GroupKey)
+				assert.Equal(t, tc.keepStored, sess.KeepStoredGroupKey)
+				assert.Empty(t, sess.ParentSessionID)
+			})
+		}
+	}
+}
+
 // TestBuildHermesStateResultKeepsUsageOnlySessions is proof row 3's P2 half:
 // a usage-only session (messages nil, usage events present) has no message
 // rows at all, so there is nothing to back-fill from and EndedAt stays the
@@ -2143,4 +2173,18 @@ func TestParseHermesSession_FileInfo(t *testing.T) {
 	assert.Equal(t, path, sess.File.Path)
 	assert.Equal(t, info.Size(), sess.File.Size)
 	assert.Equal(t, info.ModTime().UnixNano(), sess.File.Mtime)
+}
+
+func TestHermesCronRecordedNames(t *testing.T) {
+	for _, tc := range []struct{ title, want string }{
+		{"Daily digest · Oct 07 12:00", "Daily digest"},
+		{"Research · daily · Oct 08 12:00", "Research · daily"},
+		{"Missing separator", ""},
+		{" · Oct 08", ""},
+		{"Daily digest · ", ""},
+		{"job-a · Oct 08", ""},
+		{"cron job-a · Oct 08", ""},
+	} {
+		t.Run(tc.title, func(t *testing.T) { assert.Equal(t, tc.want, HermesCronJobName("job-a", tc.title)) })
+	}
 }

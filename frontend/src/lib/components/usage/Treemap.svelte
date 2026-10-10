@@ -11,12 +11,16 @@
     value: number;
     color: string;
     meta?: string;
+    title?: string;
+    selected?: boolean;
+    dimmed?: boolean;
   }
 
   interface Props {
     items: TreemapItem[];
     height?: number;
     onSelect?: (id: string) => void;
+    onOpen?: (id: string) => void;
     formatValue?: (value: number) => string;
   }
 
@@ -30,6 +34,7 @@
     items,
     height = 260,
     onSelect,
+    onOpen,
     formatValue = formatCost,
   }: Props = $props();
 
@@ -65,16 +70,20 @@
             <clipPath id={clipId}>
               <rect x={node.x0} y={node.y0} width={tileWidth} height={tileHeight} />
             </clipPath>
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable tiles receive a button role and tab stop.) -->
             <g
               class="tile"
+              class:dimmed={tile.dimmed}
               clip-path={`url(#${clipId})`}
-              tabindex={0}
-              role="button"
-              aria-label={m.usage_hide_from_chart({ label: tile.label })}
-              onclick={() => onSelect?.(tile.id)}
-              onkeydown={(event) => handleKey(event, tile.id)}
+              tabindex={onSelect ? 0 : undefined}
+              role={onSelect ? "button" : undefined}
+              aria-pressed={onSelect ? tile.selected ?? false : undefined}
+              aria-label={tile.title ?? m.usage_click_to_focus({ label: tile.label })}
+              onclick={onSelect ? (event) => { if (event.detail < 2 || !onOpen) onSelect(tile.id); } : undefined}
+              ondblclick={onOpen ? () => onOpen(tile.id) : undefined}
+              onkeydown={onSelect ? (event) => handleKey(event, tile.id) : undefined}
             >
-              <title>{m.usage_click_to_hide({ label: tile.label })}</title>
+              <title>{tile.title ?? m.usage_click_to_focus({ label: tile.label })}</title>
               <Group x={node.x0} y={node.y0}>
                 <Rect
                   width={tileWidth}
@@ -111,11 +120,24 @@
   }
 
   .treemap-container :global(.tile) {
+    touch-action: manipulation;
+  }
+
+  .treemap-container :global(.tile.dimmed) {
+    opacity: 0.35;
+  }
+
+  .treemap-container :global(.tile[role="button"]) {
     cursor: pointer;
   }
 
-  .treemap-container :global(.tile:hover rect) {
+  .treemap-container :global(.tile[role="button"]:hover rect) {
     opacity: 0.92;
+  }
+
+  .treemap-container :global(.tile rect) {
+    stroke: transparent;
+    stroke-width: 2;
   }
 
   .treemap-container :global(.tile:focus-visible) {
@@ -124,7 +146,10 @@
 
   .treemap-container :global(.tile:focus-visible rect) {
     stroke: white;
-    stroke-width: 2;
+  }
+
+  .treemap-container :global(.tile[aria-pressed="true"] rect) {
+    stroke: white;
   }
 
   .treemap-container :global(.tile-label) {

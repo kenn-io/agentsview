@@ -368,7 +368,7 @@ func TestDoctorSyncArchiveOnlyReportsDecodedVersion(t *testing.T) {
 	require.NoError(t, database.Close())
 	out, err := executeCommand(newRootCommand(), "doctor", "sync")
 	require.NoError(t, err)
-	assert.Contains(t, out, "SQLite user_version: 128\n")
+	assert.Contains(t, out, fmt.Sprintf("SQLite user_version: %d\n", db.CurrentDataVersion()))
 	assert.Contains(t, out, "Archive mode: archive-only")
 	assert.Contains(t, out, "Startup sync decision: archive-only; source sync is disabled")
 }

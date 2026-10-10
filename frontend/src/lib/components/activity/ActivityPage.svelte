@@ -34,6 +34,7 @@
   import ConcurrencyTimeline from "./ConcurrencyTimeline.svelte";
   import SessionsTable from "./SessionsTable.svelte";
   import Breakdowns from "./Breakdowns.svelte";
+  import { shortenId } from "../../utils/shortId.js";
   import ActivityInsight from "./ActivityInsight.svelte";
 
   // Date-only (local) bounds for the inline insight panel, derived from the
@@ -187,13 +188,6 @@
   // Machines sharing a friendly label get a short ID fragment so they stay
   // distinguishable. Full IDs are non-shrinking meta and would squeeze the
   // label to zero width in the compact menu, so unique labels get no meta.
-  function shortMachineId(machine: string, peers: string[]): string {
-    const head = machine.slice(0, 8);
-    if (peers.every((peer) => peer === machine || peer.slice(0, 8) !== head)) return head;
-    const tail = machine.slice(-8);
-    if (peers.every((peer) => peer === machine || peer.slice(-8) !== tail)) return `…${tail}`;
-    return machine;
-  }
   const machineOptions = $derived.by((): TypeaheadOption[] => {
     const byLabel = new Map<string, string[]>();
     for (const machine of activity.machines) {
@@ -209,7 +203,7 @@
       ...activity.machines.map((machine) => {
         const label = sessions.machineLabel(machine);
         const peers = byLabel.get(label) ?? [];
-        const shortId = peers.length > 1 ? shortMachineId(machine, peers) : undefined;
+        const shortId = peers.length > 1 ? shortenId(machine, peers) : undefined;
         return {
           name: machine,
           label,

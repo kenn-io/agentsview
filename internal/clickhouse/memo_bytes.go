@@ -43,7 +43,7 @@ func optionalStringBytes(values ...*string) int64 {
 
 func aggregateRowBytes(r chUsageAggregateRow) int64 {
 	return int64(unsafe.Sizeof(r)) + stringBytes(r.date, r.ts, r.pricingTS, r.sessionID, r.project,
-		r.agent, r.machine, r.model, r.providerID, r.priceModel, r.source, r.displayName, r.startedAt)
+		r.agent, r.machine, r.model, r.providerID, r.priceModel, r.source, r.displayName, r.startedAt, r.groupKey, r.sessionName)
 }
 
 func dailyUsageRowBytes(r chDailyUsageGroupRow) int64 {
@@ -56,7 +56,7 @@ func usageSessionRowBytes(r chUsageSessionRow) int64 {
 }
 
 func topSessionBytes(e db.TopSessionEntry) int64 {
-	return int64(unsafe.Sizeof(e)) + stringBytes(e.SessionID, e.DisplayName, e.Agent, e.Project, e.StartedAt)
+	return int64(unsafe.Sizeof(e)) + stringBytes(e.SessionID, e.DisplayName, e.Agent, e.Project, e.StartedAt, e.Machine, e.GroupKey, e.GroupLabel, e.SessionName)
 }
 
 func analyticsSessionBytes(r readbase.AnalyticsSession) int64 {

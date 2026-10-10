@@ -119,6 +119,72 @@ func TestHermesProviderFingerprintChangesWhenTranscriptRemoved(t *testing.T) {
 	assert.Equal(t, stateInfo.Size(), after.Size)
 }
 
+func TestHermesArchiveStoresCronGroups(t *testing.T) {
+	agent := parser.AgentHermes
+	prefix := string(agent) + ":"
+	root := t.TempDir()
+	stateDB := writeHermesArchiveStateDB(t, root)
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	database := dbtest.OpenTestDB(t)
+	_, err = conn.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `
+		INSERT INTO sessions (id, source, parent_session_id, started_at, ended_at, message_count)
+		VALUES ('cron_job-a_20261008_120000', 'cron', NULL, 1791460800, 1791460860, 1),
+		       ('middle', 'cron', 'cron_job-a_20261008_120000', 1791460860, 1791460920, 1),
+		       ('tip', 'cron', 'middle', 1791460920, 1791460980, 1);
+		INSERT INTO messages (session_id, role, content, timestamp)
+		VALUES ('cron_job-a_20261008_120000', 'user', 'Generate digest', 1791460801),
+		       ('middle', 'user', 'Continue digest', 1791460861),
+		       ('tip', 'user', 'Finish digest', 1791460921);
+	`)
+	require.NoError(t, err)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
+	checkGroups := func() {
+		t.Helper()
+		for _, id := range []string{prefix + "middle", prefix + "tip"} {
+			stored, err := database.GetSession(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Regexp(t, `^job-a:[0-9a-f]{8}$`, stored.GroupKey, id)
+		}
+	}
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+
+	_, err = conn.ExecContext(t.Context(), `
+		UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id = 'cron_job-a_20261008_120000';
+		DELETE FROM messages WHERE session_id = 'cron_job-a_20261008_120000';
+		DELETE FROM sessions WHERE id = 'cron_job-a_20261008_120000';
+	`)
+	require.NoError(t, err)
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), nil, true))
+	checkGroups()
+	stored, err := database.GetSession(t.Context(), prefix+"middle")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Empty(t, stored.ParentSessionID)
+
+	require.NoError(t, conn.Close())
+	_, err = database.AssignSessionProject(t.Context(), prefix+"middle", "ops")
+	require.NoError(t, err)
+	for range 2 {
+		stats := engine.ResyncAll(t.Context(), nil)
+		require.False(t, stats.Aborted, "%v", stats.Warnings)
+		checkGroups()
+		stored, err := database.GetSession(t.Context(), prefix+"middle")
+		require.NoError(t, err)
+		require.NotNil(t, stored)
+		assert.Equal(t, "ops", stored.Project)
+	}
+}
+
 func TestHermesProfileCreatedAfterEngineInitializationIsDiscovered(t *testing.T) {
 	profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
 	require.NoError(t, os.MkdirAll(profilesRoot, 0o755))

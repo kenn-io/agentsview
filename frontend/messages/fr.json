@@ -531,6 +531,9 @@
   "shared_refresh_step_skills": "Compétences",
   "shared_refresh_step_top_sessions": "Sessions principales",
   "shared_refresh_step_context_summary": "Résumé de la période",
+  "shared_refresh_step_attribution_summary": "Répartition des coûts",
+  "shared_refresh_step_reference_summary": "Répartition des coûts de la période",
+  "shared_refresh_step_zoom": "Groupes du projet",
   "shared_refresh_step_signals": "Signaux",
   "shared_refresh_step_comparison": "Comparaison",
   "shared_refresh_step_pairwise": "Comparaison par paires",
@@ -826,9 +829,6 @@
   "usage_chart_style_lines": "Lignes",
   "usage_chart_style_bars": "Barres",
   "usage_chart_day_label": "{date} : {value}",
-  "usage_click_to_hide_hint": "Cliquez pour masquer dans le graphique",
-  "usage_click_to_hide": "Cliquez pour masquer {label}",
-  "usage_hide_from_chart": "Masquer {label} du graphique",
   "usage_cache_efficiency_title": "Efficacité du cache",
   "usage_cache_reads": "Lectures de cache",
   "usage_cache_writes": "Écritures de cache",
@@ -2230,7 +2230,6 @@
   "usage_treemap": "Treemap",
   "usage_list": "Liste",
   "usage_no_data_period": "Aucune donnée pour cette période",
-  "usage_click_to_hide_item": "Cliquez pour masquer {label}",
   "usage_cache_efficiency": "Efficacité du cache",
   "usage_cost_over_time": "Coût dans le temps",
   "filter_dropdown_all": "Tout",
@@ -2460,5 +2459,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"L’aperçu montre {shownLabel} octet sur {countLabel}.","countPlural=other":"L’aperçu montre {shownLabel} octets sur {countLabel}.","countPlural=many":"L’aperçu montre {shownLabel} octets sur {countLabel}."}}],
   "tool_sequences_full_input_in_message": "L’entrée complète se trouve dans le message {ordinal}.",
   "tool_sequences_full_result_in_message": "Le résultat complet se trouve dans le message {ordinal}.",
-  "tool_sequences_retry": "Réessayer"
+  "tool_sequences_retry": "Réessayer",
+  "usage_click_project": "Cliquer pour cibler {label}, double-cliquer pour ouvrir ses groupes et sessions",
+  "usage_click_project_hint": "Sélectionnez un projet pour filtrer la page, ou ouvrez-le pour voir ses groupes et sessions.",
+  "usage_click_to_focus": "Cliquer pour cibler {label}",
+  "usage_click_to_focus_hint": "Cliquer pour cibler, recliquer pour effacer"
 }

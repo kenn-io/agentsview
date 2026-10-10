@@ -896,6 +896,9 @@ func (b *httpBackend) UsageSummary(
 	if req.ExcludeProject != "" {
 		q.ExcludeProject = new(req.ExcludeProject)
 	}
+	if req.ProjectKey != "" {
+		q.ProjectKey = new(req.ProjectKey)
+	}
 	if req.ExcludeProjectKey != "" {
 		q.ExcludeProjectKey = new(req.ExcludeProjectKey)
 	}
@@ -1005,6 +1008,9 @@ func (b *httpBackend) UsagePairwiseComparison(
 	}
 	if req.ExcludeProject != "" {
 		q.ExcludeProject = new(req.ExcludeProject)
+	}
+	if req.ProjectKey != "" {
+		q.ProjectKey = new(req.ProjectKey)
 	}
 	if req.ExcludeProjectKey != "" {
 		q.ExcludeProjectKey = new(req.ExcludeProjectKey)

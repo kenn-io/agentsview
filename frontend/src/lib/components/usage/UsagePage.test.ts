@@ -7,6 +7,7 @@ import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { UsageSummaryResponse } from "../../api/generated/index";
+import { UsageService } from "../../api/generated/index";
 import source from "./UsagePage.svelte?raw";
 import UsagePage from "./UsagePage.svelte";
 
@@ -124,7 +125,12 @@ afterEach(() => {
   router.params = {};
   router.sessionId = null;
   window.history.replaceState(null, "", "/");
+  usage.backToProjects();
+  usage.selectedProjectKey = "";
+  usage.selectedModel = "";
+  usage.attributionSummary = null;
   usage.summary = null;
+  usage.referenceSummary = null;
   usage.topSessions = null;
   usage.errors.summary = null;
   usage.errors.topSessions = null;
@@ -148,6 +154,25 @@ afterEach(() => {
 });
 
 describe("UsagePage refresh behavior", () => {
+  it("ignores a legacy model URL and shows all models", async () => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    const summary = tenModelUsageSummary();
+    const requests = vi.spyOn(UsageService, "getApiV1UsageSummary").mockResolvedValue(summary);
+    vi.spyOn(UsageService, "getApiV1UsageTopSessions").mockResolvedValue([]);
+    vi.spyOn(UsageService, "getApiV1UsageComparison").mockResolvedValue({ priorFrom: "2026-06-01", priorTo: "2026-06-30", priorTotalCost: testMoney(0), deltaPct: 0 });
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = { model: "model-alpha", exclude_agent: "hidden-agent" };
+    usage.toggles.attribution.groupBy = "model";
+    component = mount(UsagePage, { target: document.body });
+    await vi.waitFor(() => expect(requests).toHaveBeenCalled());
+    await flushEffects();
+    for (const [params] of requests.mock.calls) expect(params?.model).toBeUndefined();
+    expect(usage.selectedModel).toBe("");
+    expect(document.querySelector('button[aria-label="Model: All"]')).not.toBeNull();
+    usage.cancelInFlightReads();
+  });
+
   it("restores hidden models from a shared URL", async () => {
     vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -161,6 +186,26 @@ describe("UsagePage refresh behavior", () => {
     expect(usage.excludedModels).toBe("model-alpha");
     expect(router.params.exclude_model).toBe("model-alpha");
     expect(usage.hasActiveFilters).toBe(true);
+  });
+
+  it("refreshes once when Clear all clears shared filters, usage filters and the brush", async () => {
+    const fetchAll = vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = { exclude_model: "model-alpha", exclude_agent: "hidden-agent", machine: "box" };
+    usage.summary = usageSummaryWithUnsupported();
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    usage.setTimeRange("2024-06-01", "2024-06-02");
+    fetchAll.mockClear();
+    document.querySelector<HTMLButtonElement>(".clear-all")!.click();
+    await flushEffects();
+
+    expect(usage.hasActiveFilters).toBe(false);
+    expect(usage.selectedTimeRange).toBeNull();
+    expect(fetchAll).toHaveBeenCalledTimes(1);
+    expect(fetchAll).toHaveBeenCalledWith({ preserveTimeRange: true });
   });
 
   it("uses stable project keys in the Project filter", async () => {
@@ -825,5 +870,67 @@ describe("UsagePage refresh behavior", () => {
     expect(source).toContain('class="chart-panel bounded"');
     expect(source).toContain("max-height:");
     expect(source).toContain("overflow: auto;");
+  });
+});
+
+
+describe("Usage attribution navigation", () => {
+  it("refreshes once after an agent click under a brush and project selection", async () => {
+    const refresh = vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    router.route = "usage";
+    router.params = {};
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    usage.selectedTimeRange = { from: "2024-01-08", to: "2024-01-14" };
+    usage.selectedProjectKey = "pl1:sha256:alpha";
+    refresh.mockClear();
+    usage.toggleSelection("agent", "codex");
+    await flushEffects();
+    expect(refresh).toHaveBeenCalledExactlyOnceWith({ preserveTimeRange: true });
+    sessions.filters.agent = "";
+    usage.selectedTimeRange = null;
+  });
+
+
+  it.each(["button", "Escape"])("%s Back keeps the current dates and selection", async (action) => {
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    window.history.replaceState(null, "", "/usage?from=2024-01-01&to=2024-01-31");
+    router.route = "usage";
+    router.params = { from: "2024-01-01", to: "2024-01-31" };
+    usage.summary = usageSummaryWithUnsupported();
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+    usage.toggleSelection("project", "pl1:sha256:alpha");
+    usage.setOpenProject("pl1:sha256:alpha");
+    await flushEffects();
+    usage.applyDateRange("2024-01-01", "2024-03-31");
+    usage.excludedModels = "model-hidden";
+    await flushEffects();
+    expect(window.location.search).toContain("to=2024-03-31");
+    if (action === "button") {
+      [...document.querySelectorAll<HTMLButtonElement>(".attribution-panel button")]
+        .find((button) => button.textContent?.trim() === "← All projects")!.click();
+    } else {
+      const panel = document.querySelector<HTMLElement>(".attribution-panel")!;
+      panel.focus();
+      panel.dispatchEvent(new KeyboardEvent("keydown", { key: action, bubbles: true, cancelable: true }));
+    }
+    await flushEffects();
+    expect(usage.zoomedProject).toBeNull();
+    expect(usage.isSelected("project", "pl1:sha256:alpha")).toBe(true);
+    expect(router.params).toEqual(expect.objectContaining({ from: "2024-01-01", to: "2024-03-31", exclude_model: "model-hidden" }));
+    expect(usage.to).toBe("2024-03-31");
+    expect(window.location.search).toContain("to=2024-03-31");
   });
 });

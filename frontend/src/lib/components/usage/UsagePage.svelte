@@ -58,7 +58,7 @@
 
   const chartColorMaps = $derived(
     usageChartColorMaps(
-      usage.timeSeriesSummary,
+      usage.colorSummary,
       settings.chartPalette,
     ),
   );
@@ -67,10 +67,10 @@
   // available after filtering removes it or the page is remounted.
 
   $effect(() => {
-    const fromSummary = usage.summary?.projectTotals ?? [];
+    const fromSummary = (usage.attributionSummary ?? usage.summary)?.projectTotals ?? [];
     const counts = usage.isTimeRangeSummaryProvisional
       ? {}
-      : usage.summary?.sessionCounts.byProject ?? {};
+      : (usage.attributionSummary ?? usage.summary)?.sessionCounts.byProject ?? {};
     untrack(() => usage.mergeKnownProjects(fromSummary, counts));
   });
 
@@ -139,7 +139,7 @@
 
   // Seed from the filtered summary response.
   $effect(() => {
-    const fromSummary = (usage.summary?.modelTotals ?? [])
+    const fromSummary = ((usage.attributionSummary ?? usage.summary)?.modelTotals ?? [])
       .map((m) => m.model);
     untrack(() => mergeIntoKnownModels(fromSummary));
   });
@@ -425,7 +425,7 @@
       if (!initialFetchDone) {
         initialFetchDone = true;
       }
-      usage.fetchAll();
+      usage.fetchAll({ preserveTimeRange: true });
     });
   });
 
@@ -486,6 +486,7 @@
 
       <FilterDropdown
         label={m.analytics_col_project()}
+        selectedLabel={usage.selectedProjectKey ? usage.focusLabel : ""}
         items={projectItems}
         excludedCsv={usage.excludedProjectKeys}
         unlistedExcludedCount={legacyExcludedProjectCount}
@@ -507,6 +508,7 @@
 
       <FilterDropdown
         label={m.usage_model()}
+        selectedLabel={usage.selectedModel}
         items={modelItems}
         excludedCsv={usage.excludedModels}
         onToggle={(name) => usage.toggleModel(name)}
@@ -529,10 +531,12 @@
     </div>
   </div>
 
+  <!-- Clear all also resets session filters, whose change effect does the one refresh. -->
   <SessionActiveFilters
-    onClearProjects={() => usage.selectAllProjects()}
-    onClearAgents={() => usage.selectAllAgents()}
-    onClearModels={() => usage.selectAllModels()}
+    onClearProjects={() => {
+      usage.clearTimeRange(false);
+      usage.clearFilters(false);
+    }}
   />
 
   <div

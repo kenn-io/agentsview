@@ -9816,3 +9816,30 @@ func TestBackfillToolCallFieldsRunsOnce(t *testing.T) {
 	assert.False(t, fp["second"].Valid,
 		"second row left NULL: one-time gate skipped the rerun")
 }
+
+func TestSessionGroupColumnsMigrateWithoutLosingRuns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	database, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(t.Context(), Session{ID: "retained-run", Project: "hermes-cron", Agent: "hermes"}))
+	require.NoError(t, database.Close())
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS artifact_sessions_update_queue; ALTER TABLE sessions DROP COLUMN group_key`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	database, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	defer database.Close()
+	session, err := database.GetSession(t.Context(), "retained-run")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "hermes-cron", session.Project)
+	assert.Empty(t, session.GroupKey)
+	session.GroupKey = "job-a"
+	require.NoError(t, database.UpsertSession(t.Context(), *session))
+	session, err = database.GetSession(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "job-a", session.GroupKey)
+}

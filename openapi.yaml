@@ -2487,6 +2487,8 @@ components:
             - "null"
         git_branch:
           type: string
+        group_key:
+          type: string
         has_peak_context_tokens:
           type: boolean
         has_total_output_tokens:
@@ -3985,9 +3987,15 @@ components:
           $ref: "#/components/schemas/MoneyMoney"
         displayName:
           type: string
+        groupKey:
+          type: string
+        groupLabel:
+          type: string
         inputTokens:
           format: int64
           type: integer
+        machine:
+          type: string
         outputTokens:
           format: int64
           type: integer
@@ -6441,6 +6449,8 @@ components:
             - string
             - "null"
         git_branch:
+          type: string
+        group_key:
           type: string
         has_peak_context_tokens:
           type: boolean
@@ -22566,6 +22576,13 @@ paths:
           schema:
             description: Filter by project
             type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
+            type: string
         - description: Filter by machine
           explode: false
           in: query
@@ -22803,6 +22820,13 @@ paths:
           name: project
           schema:
             description: Filter by project
+            type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
             type: string
         - description: Filter by machine
           explode: false
@@ -23064,6 +23088,13 @@ paths:
           schema:
             description: Filter by project
             type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
+            type: string
         - description: Filter by machine
           explode: false
           in: query
@@ -23291,6 +23322,13 @@ paths:
           name: project
           schema:
             description: Filter by project
+            type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
             type: string
         - description: Filter by machine
           explode: false
@@ -23520,6 +23558,13 @@ paths:
           schema:
             description: Filter by project
             type: string
+        - description: Filter by an opaque project key
+          explode: false
+          in: query
+          name: project_key
+          schema:
+            description: Filter by an opaque project key
+            type: string
         - description: Filter by machine
           explode: false
           in: query
@@ -23652,6 +23697,15 @@ paths:
             enum:
               - cost
               - tokens
+            type: string
+        - description: Merge sessions by project and group; a trailing row with no session or group ID sums rows past limit
+          explode: false
+          in: query
+          name: group_by
+          schema:
+            description: Merge sessions by project and group; a trailing row with no session or group ID sums rows past limit
+            enum:
+              - group
             type: string
         - description: "Comma-separated token counters for token ranking: input, cache_write, cache_read, output"
           explode: false

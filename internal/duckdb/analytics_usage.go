@@ -469,6 +469,7 @@ SELECT
 	0 AS user_message_count,
 	cu.is_headless AS is_automated,
 	'' AS display_name,
+	'' AS group_key, '' AS session_name,
 	NULL AS started_at,
 	cu.occurred_at AS activity_at
 FROM cursor_usage_events cu
@@ -545,6 +546,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			s.group_key AS group_key, COALESCE(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM messages m
@@ -570,6 +572,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			s.group_key AS group_key, COALESCE(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM usage_events ue
@@ -814,7 +817,7 @@ func duckUsageCTEFromRaw(
 				snapshot_rank, session_id, snapshot_attribution_session_id,
 				web_search_requests_norm, snapshot_web_search_requests,
 				project, agent, machine, user_message_count, is_automated,
-				display_name, started_at, activity_at
+				display_name, started_at, activity_at, group_key, session_name
 			),
 				ranked.snapshot_attribution_session_id AS session_id,
 				ranked.snapshot_web_search_requests AS web_search_requests_norm,
@@ -832,6 +835,8 @@ func duckUsageCTEFromRaw(
 					attributed.display_name, attributed.session_name,
 					attributed.first_message, attributed.project, attributed.id
 				) END AS display_name,
+				CASE WHEN attributed.id IS NULL THEN ranked.group_key ELSE attributed.group_key END AS group_key,
+				CASE WHEN attributed.id IS NULL THEN ranked.session_name ELSE COALESCE(attributed.session_name, '') END AS session_name,
 				CASE WHEN attributed.id IS NULL THEN ranked.started_at
 					ELSE attributed.started_at END AS started_at,
 				CASE WHEN attributed.id IS NULL THEN ranked.activity_at ELSE COALESCE(
@@ -978,6 +983,7 @@ type duckUsageAggregateRow struct {
 	authoritativeCost     int64
 	authoritativeCostRows int
 	snapshotDedupOutput   int
+	groupKey, sessionName string
 }
 
 type duckSessionUsageRow struct {
@@ -1649,7 +1655,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 	// after each row has been quantized to whole microdollars.
 	query := cte + `
 		SELECT session_id, project, agent, model, provider_id, price_model, source, message_ordinal, ts,
-			pricing_ts, display_name, started_at,
+			pricing_ts, display_name, started_at, group_key, session_name, machine,
 			input_tokens_norm AS input_tokens,
 			output_tokens_norm AS output_tokens,
 			snapshot_deduplicated_output_tokens,
@@ -1685,7 +1691,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 		if err := rows.Scan(
 			&r.sessionID, &r.project, &r.agent, &r.model, &r.providerID,
 			&r.priceModel, &r.source, &r.messageOrdinal, &ts, &pricingTS,
-			&r.displayName, &startedAt,
+			&r.displayName, &startedAt, &r.groupKey, &r.sessionName, &r.machine,
 			&r.inputTok, &r.outputTok, &r.snapshotDedupOutput,
 			&r.cacheCr, &r.cacheCr1h, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
@@ -1795,6 +1801,7 @@ func (s *Store) GetTopSessionsByCost(
 				a = &acc{row: db.TopSessionEntry{
 					SessionID: r.sessionID, DisplayName: r.displayName,
 					Agent: r.agent, Project: r.project, StartedAt: r.startedAt,
+					GroupKey: r.groupKey, SessionName: r.sessionName, Machine: r.machine,
 				}}
 				bySession[r.sessionID] = a
 			}
@@ -1839,6 +1846,9 @@ func (s *Store) GetTopSessionsByCost(
 			a.row.Cost = a.cost
 		}
 		out = append(out, a.row)
+	}
+	if f.TopSessionsByGroup {
+		return db.GroupTopSessions(out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 	}
 	return db.SortAndLimitTopSessions(
 		out, limit, f.TopSessionsSort, f.TopSessionsTokenTypes,

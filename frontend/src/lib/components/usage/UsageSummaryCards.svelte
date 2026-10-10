@@ -239,7 +239,7 @@
         sub: () => vsPrior ?? "",
         featured: true,
       },
-      ...(usage.timeSeriesSummary?.totals.copilotAICredits
+      ...(usage.colorSummary?.totals.copilotAICredits
         ? [
             {
               label: () => m.usage_summary_copilot_ai_credits(),
@@ -330,7 +330,7 @@
     <span>{usage.errors.summary}</span>
     <button
       class="retry-btn"
-      onclick={() => usage.fetchSummary()}
+      onclick={() => usage.fetchAll({ preserveTimeRange: true })}
     >
       {m.shared_retry()}
     </button>

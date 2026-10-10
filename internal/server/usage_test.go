@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
@@ -503,4 +505,23 @@ func TestUsageRoutesRegistered(t *testing.T) {
 			assert.NotEqual(t, http.StatusNotFound, w.Code, "%s returned 404", ep)
 		})
 	}
+}
+
+func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
+	te := setup(t)
+	conn, err := sql.Open("sqlite3", te.db.Path())
+	require.NoError(t, err)
+	defer conn.Close()
+	dbtest.SeedUsageGroups(t, conn)
+	catalog, err := te.db.BuildProjectIdentityMap(t.Context(), []string{"hermes-cron"})
+	require.NoError(t, err)
+	key := catalog["hermes-cron"].ProjectKey
+	require.NotEmpty(t, key)
+	params := map[string]string{"from": "2026-10-07", "to": "2026-10-10", "timezone": "UTC", "include_automated": "true", "group_by": "group", "project_key": key, "project": "hermes-cron", "sort": "tokens", "limit": "1"}
+	w := te.get(t, buildPathURL("/api/v1/usage/top-sessions", params))
+	assertStatus(t, w, http.StatusOK)
+	var response []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.NotEmpty(t, response)
+	assert.Equal(t, "job-a", response[0]["groupKey"])
 }

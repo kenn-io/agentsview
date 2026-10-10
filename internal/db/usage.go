@@ -85,20 +85,21 @@ type UsageFilter struct {
 	ProjectLabels        []string
 	ExcludeProjectLabels []string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
-	GitBranch         string
-	Model             string // "" for all; supports comma-separated
-	ExcludeProject    string // comma-separated projects to exclude
-	ExcludeAgent      string // comma-separated agents to exclude
-	ExcludeModel      string // comma-separated models to exclude
-	Timezone          string // IANA timezone, "" for UTC
-	MinUserMessages   int    // user_message_count >= N
-	ExcludeOneShot    bool   // user_message_count > 1
-	ExcludeAutomated  bool   // is_automated = false
-	AutomatedScope    string // "", "human", "all", or "automated"
-	ActiveSince       string // RFC3339 session recency cutoff
-	Termination       string // "", "clean", "unclean", "active", or "stale"
-	Breakdowns        bool   // populate Project/AgentBreakdowns per day
-	SkipSessionCounts bool   // skip distinct session counts when callers do not need them
+	GitBranch          string
+	Model              string // "" for all; supports comma-separated
+	ExcludeProject     string // comma-separated projects to exclude
+	ExcludeAgent       string // comma-separated agents to exclude
+	ExcludeModel       string // comma-separated models to exclude
+	Timezone           string // IANA timezone, "" for UTC
+	MinUserMessages    int    // user_message_count >= N
+	ExcludeOneShot     bool   // user_message_count > 1
+	ExcludeAutomated   bool   // is_automated = false
+	AutomatedScope     string // "", "human", "all", or "automated"
+	ActiveSince        string // RFC3339 session recency cutoff
+	Termination        string // "", "clean", "unclean", "active", or "stale"
+	Breakdowns         bool   // populate Project/AgentBreakdowns per day
+	SkipSessionCounts  bool   // skip distinct session counts when callers do not need them
+	TopSessionsByGroup bool   // merge runs by project and group before ranking
 	// TopSessionsSort ranks GetTopSessionsByCost results: ""/"cost"
 	// (default) or "tokens". Ignored by other usage queries.
 	TopSessionsSort string
@@ -653,6 +654,9 @@ type dailyUsageScanRow struct {
 }
 
 type topSessionMetadata struct {
+	machine     string
+	groupKey    string
+	sessionName string
 	displayName string
 	agent       string
 	project     string
@@ -1638,7 +1642,10 @@ SELECT
 	COALESCE(NULLIF(COALESCE(display_name, session_name), ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
 	agent,
 	project,
-	COALESCE(started_at, '') AS started_at
+	COALESCE(started_at, '') AS started_at,
+	machine,
+	group_key,
+	COALESCE(session_name, '')
 FROM sessions
 WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
@@ -1656,6 +1663,9 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 			&meta.agent,
 			&meta.project,
 			&meta.startedAt,
+			&meta.machine,
+			&meta.groupKey,
+			&meta.sessionName,
 		); err != nil {
 			return nil, fmt.Errorf("scanning top session metadata: %w", err)
 		}
@@ -2642,6 +2652,10 @@ func (db *DB) getDailyUsageLegacy(
 
 // TopSessionEntry is one row in the "top sessions by cost" result.
 type TopSessionEntry struct {
+	Machine             string      `json:"machine,omitempty"`
+	GroupKey            string      `json:"groupKey,omitempty"`
+	SessionName         string      `json:"-"`
+	GroupLabel          string      `json:"groupLabel,omitempty"`
 	SessionID           string      `json:"sessionId"`
 	DisplayName         string      `json:"displayName"`
 	Agent               string      `json:"agent"`
@@ -2653,6 +2667,78 @@ type TopSessionEntry struct {
 	CacheReadTokens     int         `json:"cacheReadTokens"`
 	TotalTokens         int         `json:"totalTokens"`
 	Cost                money.Money `json:"cost"`
+}
+
+// GroupTopSessions merges grouped runs and preserves individual sessions.
+func GroupTopSessions(entries []TopSessionEntry, limit int, sortBy string, tokenTypes UsageTokenTypes) ([]TopSessionEntry, error) {
+	type key struct{ project, machine, group string }
+	type group struct {
+		TopSessionEntry
+		started, labelStarted     time.Time
+		sessionID, labelSessionID string
+	}
+	grouped := make(map[key]*group)
+	out := make([]TopSessionEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.GroupKey == "" {
+			out = append(out, entry)
+			continue
+		}
+		// Unparseable timestamps count as zero time.
+		started, _ := time.Parse(time.RFC3339Nano, entry.StartedAt)
+		k := key{entry.Project, entry.Machine, entry.GroupKey}
+		row := grouped[k]
+		if row == nil {
+			row = &group{
+				Machine: entry.Machine, Project: entry.Project, GroupKey: entry.GroupKey, Agent: entry.Agent, StartedAt: entry.StartedAt,
+				started: started, sessionID: entry.SessionID,
+			}
+			grouped[k] = row
+		}
+		if err := addTopSessionTotals(&row.TopSessionEntry, entry); err != nil {
+			return nil, err
+		}
+		if started.After(row.started) || started.Equal(row.started) && entry.SessionID > row.sessionID {
+			row.StartedAt = entry.StartedAt
+			row.started, row.sessionID = started, entry.SessionID
+		}
+		label := parser.HermesCronJobName(entry.GroupKey, entry.SessionName)
+		if label != "" && (row.GroupLabel == "" || started.After(row.labelStarted) || started.Equal(row.labelStarted) && entry.SessionID > row.labelSessionID) {
+			row.GroupLabel = label
+			row.labelStarted, row.labelSessionID = started, entry.SessionID
+		}
+	}
+	for _, row := range grouped {
+		row.DisplayName = row.GroupLabel
+		if row.DisplayName == "" {
+			row.DisplayName, _, _ = strings.Cut(row.GroupKey, ":")
+		}
+		out = append(out, row.TopSessionEntry)
+	}
+	sortTopSessions(out, sortBy, tokenTypes)
+	limit = min(len(out), normalizeTopSessionsLimit(limit))
+	ranked := out[:limit]
+	if len(ranked) < len(out) {
+		var remainder TopSessionEntry
+		for _, row := range out[len(ranked):] {
+			if err := addTopSessionTotals(&remainder, row); err != nil {
+				return nil, err
+			}
+		}
+		ranked = append(ranked, remainder)
+	}
+	return ranked, nil
+}
+
+func addTopSessionTotals(dst *TopSessionEntry, src TopSessionEntry) error {
+	dst.InputTokens += src.InputTokens
+	dst.OutputTokens += src.OutputTokens
+	dst.CacheCreationTokens += src.CacheCreationTokens
+	dst.CacheReadTokens += src.CacheReadTokens
+	dst.TotalTokens += src.TotalTokens
+	var err error
+	dst.Cost, err = money.Add(dst.Cost, src.Cost)
+	return err
 }
 
 // TopSessionsSortCost and TopSessionsSortTokens select top-session ranking.
@@ -2667,12 +2753,22 @@ func SortAndLimitTopSessions(
 	result []TopSessionEntry, limit int, sortBy string,
 	tokenTypes UsageTokenTypes,
 ) []TopSessionEntry {
+	sortTopSessions(result, sortBy, tokenTypes)
+	limit = normalizeTopSessionsLimit(limit)
+	if len(result) > limit {
+		return result[:limit]
+	}
+	return result
+}
+
+func normalizeTopSessionsLimit(limit int) int {
 	if limit <= 0 {
-		limit = 20
+		return 20
 	}
-	if limit > 100 {
-		limit = 100
-	}
+	return min(limit, 100)
+}
+
+func sortTopSessions(result []TopSessionEntry, sortBy string, tokenTypes UsageTokenTypes) {
 	byTokens := strings.EqualFold(sortBy, TopSessionsSortTokens)
 	sort.Slice(result, func(i, j int) bool {
 		if byTokens {
@@ -2694,12 +2790,17 @@ func SortAndLimitTopSessions(
 		} else if result[i].Cost.Microdollars != result[j].Cost.Microdollars {
 			return result[i].Cost.Microdollars > result[j].Cost.Microdollars
 		}
-		return result[i].SessionID < result[j].SessionID
+		if result[i].SessionID != result[j].SessionID {
+			return result[i].SessionID < result[j].SessionID
+		}
+		if result[i].Project != result[j].Project {
+			return result[i].Project < result[j].Project
+		}
+		if result[i].GroupKey != result[j].GroupKey {
+			return result[i].GroupKey < result[j].GroupKey
+		}
+		return result[i].Machine < result[j].Machine
 	})
-	if len(result) > limit {
-		return result[:limit]
-	}
-	return result
 }
 
 // getTopSessionsByCostLegacy is the wide-row test oracle for the facts path.
@@ -2848,6 +2949,9 @@ func (db *DB) getTopSessionsByCostLegacy(
 			result[i].Agent = meta.agent
 			result[i].Project = meta.project
 			result[i].StartedAt = meta.startedAt
+			result[i].Machine = meta.machine
+			result[i].GroupKey = meta.groupKey
+			result[i].SessionName = meta.sessionName
 		}
 	}
 

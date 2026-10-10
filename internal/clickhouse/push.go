@@ -810,7 +810,7 @@ func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) 
 		int64(sess.MissingSuccessCriteriaCount), int64(sess.MissingVerificationCount),
 		int64(sess.DuplicatePromptCount), int64(sess.NoCodeContextCount),
 		int64(sess.RunawayToolLoopCount), int64(sess.DataVersion),
-		sess.Cwd, sess.GitBranch, sess.SourceSessionID, sess.SourceVersion, sess.TranscriptFidelity,
+		sess.Cwd, sess.GitBranch, sess.SourceSessionID, sess.SourceVersion, sess.GroupKey, sess.TranscriptFidelity,
 		int64(sess.ParserMalformedLines), sess.IsTruncated,
 		nullTime(sess.DeletedAt), nullString(sess.DeletionCause), timeValue(sess.CreatedAt),
 		nullString(sess.TerminationStatus),

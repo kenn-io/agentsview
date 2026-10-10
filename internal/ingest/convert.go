@@ -30,6 +30,7 @@ func ConvertSessionContext(
 		Cwd: parsed.Cwd, GitBranch: parsed.GitBranch,
 		SourceSessionID:      parsed.SourceSessionID,
 		SourceVersion:        parsed.SourceVersion,
+		GroupKey:             parsed.GroupKey,
 		TranscriptFidelity:   parsed.TranscriptFidelity,
 		ParserMalformedLines: parsed.MalformedLines,
 		IsTruncated:          parsed.IsTruncated,

@@ -2619,6 +2619,8 @@ func TestGetTopSessionsByCost(t *testing.T) {
 	// Expensive session
 	insertSession(t, d, "sBig", "proj-a", func(s *Session) {
 		s.Agent = "claude"
+		s.Machine = "test-machine"
+		s.GroupKey = "test-group"
 		s.SessionName = new("Big Session")
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})
@@ -2659,6 +2661,9 @@ func TestGetTopSessionsByCost(t *testing.T) {
 	// Ordered cost desc — sBig first
 	assert.Equal(t, "sBig", top[0].SessionID, "top[0].SessionID")
 	assert.Equal(t, "Big Session", top[0].DisplayName, "top[0].DisplayName")
+	assert.Equal(t, "test-machine", top[0].Machine)
+	assert.Equal(t, "test-group", top[0].GroupKey)
+	assert.Equal(t, "Big Session", top[0].SessionName)
 	assert.Equal(t, "proj-a", top[0].Project, "top[0].Project")
 	assert.Equal(t, "claude", top[0].Agent, "top[0].Agent")
 	// TotalTokens = 5000 + 2000 + 1000 + 3000 = 11000
@@ -6126,4 +6131,121 @@ func TestUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *t
 		Kind:  "source",
 		Value: "claude-code:source-dup",
 	}, got)
+}
+
+func TestGroupTopSessions(t *testing.T) {
+	entries := []TopSessionEntry{
+		{GroupKey: "job-a", InputTokens: 5, OutputTokens: 1, CacheCreationTokens: 2, CacheReadTokens: 3, TotalTokens: 11, Cost: money.Money{Microdollars: 4_000_000}},
+		{GroupKey: "job-a", InputTokens: 5, OutputTokens: 1, CacheCreationTokens: 2, CacheReadTokens: 3, TotalTokens: 11, Cost: money.Money{Microdollars: 4_000_000}},
+		{GroupKey: "job-b", InputTokens: 30, OutputTokens: 5, CacheCreationTokens: 6, CacheReadTokens: 7, TotalTokens: 48, Cost: money.Money{Microdollars: 2_000_000}},
+		{GroupKey: "job-c", InputTokens: 20, OutputTokens: 2, CacheCreationTokens: 3, CacheReadTokens: 4, TotalTokens: 29, Cost: money.Money{Microdollars: 1_000_000}},
+	}
+	for _, tc := range []struct {
+		name  string
+		input []TopSessionEntry
+		limit int
+		sort  string
+		want  []TopSessionEntry
+	}{
+		{
+			name: "same job ID in different homes", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-a", SessionName: "Digest · Oct 07 12:00", InputTokens: 10},
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-a", SessionName: "Digest · Oct 08 12:00", InputTokens: 20},
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-b", SessionName: "Backup · Oct 08 12:00", InputTokens: 5},
+			},
+			want: []TopSessionEntry{
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-a", GroupLabel: "Digest", DisplayName: "Digest", InputTokens: 30},
+				{Project: "hermes-cron", Machine: "local", GroupKey: "job-1:home-b", GroupLabel: "Backup", DisplayName: "Backup", InputTokens: 5},
+			},
+		},
+		{
+			name: "scoped unnamed jobs show their job ID", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{GroupKey: "job-1:home-a"},
+				{GroupKey: "job-1:home-b"},
+			},
+			want: []TopSessionEntry{
+				{GroupKey: "job-1:home-a", DisplayName: "job-1"},
+				{GroupKey: "job-1:home-b", DisplayName: "job-1"},
+			},
+		},
+		{
+			name: "latest recorded label", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{SessionID: "z", Project: "hermes-cron", GroupKey: "job-a", SessionName: "Earlier · Oct 08 12:00", StartedAt: "2026-10-08T13:00:00+02:00"},
+				{SessionID: "b", Project: "hermes-cron", GroupKey: "job-a", SessionName: "Tie winner · Oct 08 12:00", StartedAt: "2026-10-08T12:00:00Z"},
+				{SessionID: "c", Project: "hermes-cron", GroupKey: "job-a", StartedAt: "2026-10-09T12:00:00Z"},
+				{SessionID: "d", Project: "hermes-cron", GroupKey: "job-a", StartedAt: "2026-10-09T14:00:00+02:00"},
+				{SessionID: "a", Project: "hermes-cron", GroupKey: "job-a", SessionName: "Newer · Oct 08 12:00", StartedAt: "2026-10-08T12:00:00Z"},
+				{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
+			},
+			want: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-a", GroupLabel: "Tie winner", DisplayName: "Tie winner", StartedAt: "2026-10-09T14:00:00+02:00"},
+				{SessionID: "ordinary", DisplayName: "Ungrouped run", Project: "hermes-cron", TotalTokens: 15},
+			},
+		},
+		{
+			name: "newest unlabeled run keeps older label", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{SessionID: "new", GroupKey: "job-a", StartedAt: "2026-10-09T12:00:00Z"},
+				{SessionID: "old", GroupKey: "job-a", SessionName: "Digest · Oct 08 12:00", StartedAt: "2026-10-08T12:00:00Z"},
+			},
+			want: []TopSessionEntry{
+				{GroupKey: "job-a", GroupLabel: "Digest", DisplayName: "Digest", StartedAt: "2026-10-09T12:00:00Z"},
+			},
+		},
+		{
+			name: "missing and invalid timestamps tie at zero", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{SessionID: "z", GroupKey: "job-a"},
+				{SessionID: "a", GroupKey: "job-a", StartedAt: "invalid"},
+			},
+			want: []TopSessionEntry{
+				{GroupKey: "job-a", DisplayName: "job-a"},
+			},
+		},
+		{
+			name: "ranks ties by group", limit: 1, sort: TopSessionsSortTokens,
+			input: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-b", InputTokens: 10},
+				{Project: "hermes-cron", GroupKey: "job-a", InputTokens: 10},
+			},
+			want: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10},
+				{InputTokens: 10},
+			},
+		},
+		{
+			name: "ranks matching jobs by machine on a tie", limit: 100, sort: TopSessionsSortCost,
+			input: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-b"},
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-a"},
+			},
+			want: []TopSessionEntry{
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-a", DisplayName: "job-a"},
+				{Project: "hermes-cron", GroupKey: "job-a", Machine: "host-b", DisplayName: "job-a"},
+			},
+		},
+		{
+			name: "cost truncation", input: entries, limit: 1, sort: TopSessionsSortCost,
+			want: []TopSessionEntry{
+				{GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10, OutputTokens: 2, CacheCreationTokens: 4, CacheReadTokens: 6, TotalTokens: 22, Cost: money.Money{Microdollars: 8_000_000}},
+				{InputTokens: 50, OutputTokens: 7, CacheCreationTokens: 9, CacheReadTokens: 11, TotalTokens: 77, Cost: money.Money{Microdollars: 3_000_000}},
+			},
+		},
+		{
+			name: "tokens truncation", input: entries, limit: 1, sort: TopSessionsSortTokens,
+			want: []TopSessionEntry{
+				{GroupKey: "job-b", DisplayName: "job-b", InputTokens: 30, OutputTokens: 5, CacheCreationTokens: 6, CacheReadTokens: 7, TotalTokens: 48, Cost: money.Money{Microdollars: 2_000_000}},
+				{InputTokens: 30, OutputTokens: 4, CacheCreationTokens: 7, CacheReadTokens: 10, TotalTokens: 51, Cost: money.Money{Microdollars: 9_000_000}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, err := GroupTopSessions(tc.input, tc.limit, tc.sort, UsageTokenTypesAll)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, rows)
+		})
+	}
 }

@@ -533,6 +533,9 @@
   "shared_refresh_step_skills": "Habilidades",
   "shared_refresh_step_top_sessions": "Sesiones principales",
   "shared_refresh_step_context_summary": "Resumen del periodo",
+  "shared_refresh_step_attribution_summary": "Atribución de costos",
+  "shared_refresh_step_reference_summary": "Atribución de costos del periodo",
+  "shared_refresh_step_zoom": "Grupos del proyecto",
   "shared_refresh_step_signals": "Señales",
   "shared_refresh_step_comparison": "Comparación",
   "shared_refresh_step_pairwise": "Comparación por pares",
@@ -828,9 +831,6 @@
   "usage_chart_style_lines": "Líneas",
   "usage_chart_style_bars": "Barras",
   "usage_chart_day_label": "{date}: {value}",
-  "usage_click_to_hide_hint": "Haz clic para ocultar del gráfico",
-  "usage_click_to_hide": "Haz clic para ocultar {label}",
-  "usage_hide_from_chart": "Ocultar {label} del gráfico",
   "usage_cache_efficiency_title": "Eficiencia de la caché",
   "usage_cache_reads": "Lecturas de caché",
   "usage_cache_writes": "Escrituras de caché",
@@ -2233,7 +2233,6 @@
   "usage_treemap": "Mapa de árbol",
   "usage_list": "Lista",
   "usage_no_data_period": "Sin datos para este período",
-  "usage_click_to_hide_item": "Haz clic para ocultar {label}",
   "usage_cache_efficiency": "Eficiencia de caché",
   "usage_cost_over_time": "Costo a lo largo del tiempo",
   "filter_dropdown_all": "Todos",
@@ -2463,5 +2462,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"La vista previa muestra {shownLabel} de {countLabel} byte.","countPlural=other":"La vista previa muestra {shownLabel} de {countLabel} bytes.","countPlural=many":"La vista previa muestra {shownLabel} de {countLabel} bytes."}}],
   "tool_sequences_full_input_in_message": "La entrada completa está en el mensaje {ordinal}.",
   "tool_sequences_full_result_in_message": "El resultado completo está en el mensaje {ordinal}.",
-  "tool_sequences_retry": "Reintentar"
+  "tool_sequences_retry": "Reintentar",
+  "usage_click_project": "Haz clic para enfocar {label}; haz doble clic para abrir sus grupos y sesiones",
+  "usage_click_project_hint": "Selecciona un proyecto para filtrar la página o ábrelo para ver sus grupos y sesiones.",
+  "usage_click_to_focus": "Haz clic para enfocar {label}",
+  "usage_click_to_focus_hint": "Haz clic para enfocar; vuelve a hacer clic para borrar"
 }

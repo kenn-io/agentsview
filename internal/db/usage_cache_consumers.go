@@ -202,8 +202,14 @@ func (db *DB) GetTopSessionsByCost(
 			entry.Agent = session.Agent
 			entry.Project = session.Project
 			entry.StartedAt = session.StartedAt
+			entry.Machine = session.Machine
+			entry.GroupKey = session.GroupKey
+			entry.SessionName = session.SessionName
 		}
 		result = append(result, entry)
+	}
+	if filter.TopSessionsByGroup {
+		return GroupTopSessions(result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes)
 	}
 	return SortAndLimitTopSessions(
 		result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes,

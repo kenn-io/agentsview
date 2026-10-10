@@ -517,6 +517,9 @@
   "shared_refresh_step_skills": "技能",
   "shared_refresh_step_top_sessions": "热门会话",
   "shared_refresh_step_context_summary": "时间窗口概览",
+  "shared_refresh_step_attribution_summary": "成本归因",
+  "shared_refresh_step_reference_summary": "时间窗口成本归因",
+  "shared_refresh_step_zoom": "项目分组",
   "shared_refresh_step_signals": "信号",
   "shared_refresh_step_comparison": "对比",
   "shared_refresh_step_pairwise": "成对对比",
@@ -799,9 +802,6 @@
   "usage_chart_style_lines": "折线",
   "usage_chart_style_bars": "柱状",
   "usage_chart_day_label": "{date}：{value}",
-  "usage_click_to_hide_hint": "点击可从图表隐藏",
-  "usage_click_to_hide": "点击隐藏 {label}",
-  "usage_hide_from_chart": "从图表隐藏 {label}",
   "usage_cache_efficiency_title": "缓存效率",
   "usage_cache_reads": "缓存读取",
   "usage_cache_writes": "缓存写入",
@@ -2146,7 +2146,6 @@
   "usage_treemap": "树状图",
   "usage_list": "列表",
   "usage_no_data_period": "此时段无数据",
-  "usage_click_to_hide_item": "点击隐藏 {label}",
   "usage_cache_efficiency": "缓存效率",
   "usage_cost_over_time": "成本随时间变化",
   "filter_dropdown_all": "全部",
@@ -2378,5 +2377,9 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"预览显示 {countLabel} 字节中的 {shownLabel} 字节。","countPlural=other":"预览显示 {countLabel} 字节中的 {shownLabel} 字节。"}}],
   "tool_sequences_full_input_in_message": "完整输入在消息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整结果在消息 {ordinal} 中。",
-  "tool_sequences_retry": "重试"
+  "tool_sequences_retry": "重试",
+  "usage_click_project": "点击聚焦 {label}，双击打开其分组和会话",
+  "usage_click_project_hint": "选择项目以筛选页面，打开项目可查看其分组和会话。",
+  "usage_click_to_focus": "点击聚焦 {label}",
+  "usage_click_to_focus_hint": "点击聚焦，再次点击清除"
 }

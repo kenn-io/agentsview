@@ -4322,6 +4322,7 @@ func (c *Client) GetAPIV1UsageSummaryStreamStreamWithResponse(ctx context.Contex
 		"model":               {Style: "form", Explode: &[]bool{false}[0]},
 		"no_default_range":    {Style: "form", Explode: &[]bool{false}[0]},
 		"project":             {Style: "form", Explode: &[]bool{false}[0]},
+		"project_key":         {Style: "form", Explode: &[]bool{false}[0]},
 		"session_counts":      {Style: "form", Explode: &[]bool{false}[0]},
 		"termination":         {Style: "form", Explode: &[]bool{false}[0]},
 		"timezone":            {Style: "form", Explode: &[]bool{false}[0]},
@@ -16626,6 +16627,9 @@ type GetAPIV1UsagePairwiseComparisonQuery struct {
 	// Project Filter by project
 	Project *string `json:"project,omitempty"`
 
+	// ProjectKey Filter by an opaque project key
+	ProjectKey *string `json:"project_key,omitempty"`
+
 	// Machine Filter by machine
 	Machine *string `json:"machine,omitempty"`
 
@@ -16739,6 +16743,9 @@ type GetAPIV1UsageSummaryQuery struct {
 	// Project Filter by project
 	Project *string `json:"project,omitempty"`
 
+	// ProjectKey Filter by an opaque project key
+	ProjectKey *string `json:"project_key,omitempty"`
+
 	// Machine Filter by machine
 	Machine *string `json:"machine,omitempty"`
 
@@ -16827,6 +16834,9 @@ type GetAPIV1UsageSummaryStreamQuery struct {
 
 	// Project Filter by project
 	Project *string `json:"project,omitempty"`
+
+	// ProjectKey Filter by an opaque project key
+	ProjectKey *string `json:"project_key,omitempty"`
 
 	// Machine Filter by machine
 	Machine *string `json:"machine,omitempty"`
@@ -19966,6 +19976,7 @@ type DBSession struct {
 	FinalFailureStreak     int64             `json:"final_failure_streak"`
 	FirstMessage           *string           `json:"first_message,omitempty" validate:"required"`
 	GitBranch              *string           `json:"git_branch,omitempty"`
+	GroupKey               *string           `json:"group_key,omitempty"`
 	HasPeakContextTokens   bool              `json:"has_peak_context_tokens"`
 	HasTotalOutputTokens   bool              `json:"has_total_output_tokens"`
 	HealthGrade            *string           `json:"health_grade,omitempty"`
