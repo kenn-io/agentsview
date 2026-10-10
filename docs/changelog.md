@@ -15,6 +15,19 @@ The latest release is
   a session ID. A one-time archive rebuild recovers overwritten Cursor S3
   conversations while preserving archived sessions and stars.
 
+- Codex threads rewound with undo keep every message and every day's usage.
+  Each extra rollout file Codex writes for the undo now shows as its own linked
+  session instead of replacing the thread's transcript. When parent rollout
+  files are available, a subagent started after an undo no longer repeats the
+  thread's earlier turns or counts their tokens again, including when parsed
+  from captured raw files with nested custom session directories.
+  Startup re-reads existing Codex sessions once to restore what was lost,
+  while keeping deleted threads and their undo files hidden or in trash.
+  Permanently deleted threads stay hidden if a missing undo file returns later.
+  Saved names, stars, pinned messages, project identities, and already archived
+  undo files survive this upgrade, even when their source files are gone. Live
+  updates follow the newest undo file even if the original file is gone.
+
 ## 0.45.0
 
 <small>2026-10-09</small>

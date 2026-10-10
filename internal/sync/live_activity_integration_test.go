@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -460,4 +461,46 @@ func requireActivityBucketMembership(
 	assert.True(t, slices.ContainsFunc(page.Sessions, func(row activity.SessionRow) bool {
 		return row.SessionID == sessionID
 	}), "activity bucket page should include the refreshed session")
+}
+
+func TestLiveActivityLookupFollowsNewestCodexRevertPage(t *testing.T) {
+	const thread = "codex:11111111-1111-4111-8111-111111111111"
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	base := time.Now().Add(-time.Hour)
+	// Every row stores the same mtime, as after a rename folds the
+	// session_index.jsonl mtime into each file of the thread.
+	storedMtime := base.Add(time.Hour).UnixNano()
+	store := func(id string, written time.Duration) string {
+		t.Helper()
+		path := filepath.Join(dir, strconv.Itoa(int(written))+".jsonl")
+		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+		require.NoError(t, os.Chtimes(path, base.Add(written), base.Add(written)))
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+			ID: id, Project: "project", Machine: "local",
+			Agent: string(parser.AgentCodex), FilePath: &path, FileMtime: &storedMtime,
+		}))
+		return path
+	}
+	lookupPath := func() string {
+		t.Helper()
+		got, found, err := agentsync.DBLiveActivityLookup(database)(t.Context(), thread)
+		require.NoError(t, err)
+		require.True(t, found)
+		return got.Path
+	}
+
+	threadPath := store(thread, 0)
+	assert.Equal(t, threadPath, lookupPath(), "a thread without pages polls its own file")
+
+	older := store(thread+"_22222222-2222-4222-8222-222222222222", time.Minute)
+	newest := store(thread+"_33333333-3333-4333-8333-333333333333", 2*time.Minute)
+	assert.Equal(t, newest, lookupPath(), "the page Codex wrote last is the live file")
+
+	// An upgrade can retire the old thread row when only its pages remain.
+	require.NoError(t, database.DeleteSession(t.Context(), thread))
+	assert.Equal(t, newest, lookupPath(), "a thread hint still finds its newest page without a head row")
+
+	require.NoError(t, os.Remove(newest))
+	assert.Equal(t, older, lookupPath(), "a page whose file is gone is never polled")
 }

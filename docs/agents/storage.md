@@ -24,8 +24,8 @@ The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
 store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
-builds refuse them. This build decodes that range and preserves pending rebuilds;
-ordinary archives keep their parser version unchanged.
+builds refuse them. This build decodes that range and preserves pending
+rebuilds; ordinary archives keep their parser version unchanged.
 
 ### Artifact checkpoint landings
 
@@ -86,6 +86,56 @@ recorded contributor is missing or no longer a regular file. Rebuilds copy this
 provenance with preserved sessions. Once all contributors are readable, a full
 parse can apply corrected or shortened transcripts. This metadata stays local to
 the archive; S3 materializations do not record temporary paths.
+
+### Codex deletion scope
+
+Before data version 130, deleting a Codex-format thread excluded all its rollout
+files under one ID. The upgrade marks those exclusions with
+`include_codex_pages`, so pages remain excluded even if their files were absent
+during the upgrade and return later. Copies preserve that scope across later
+rebuilds. New deletions keep the default per-file scope. Session and recall
+imports use the same exclusion check.
+
+Legacy trash keeps the same thread-wide scope in
+`sessions.trash_includes_codex_pages`. The retained thread row blocks imports of
+absent pages even when they return at a different path. Restoring the thread or
+one of its pages ends that inherited scope; other existing trash rows remain
+trashed. An archived page stored under the old thread ID moves to its page ID
+even while trashed; an empty thread row retains the scope. Restoring and
+reparsing the original thread therefore cannot replace that saved page.
+Permanently deleting the thread transfers the scope to `excluded_sessions` and
+removes its covered pages in the same transaction. New trash actions remain
+per-file.
+
+PostgreSQL mirrors this scope and keeps a separate source baseline for it, so
+restoring a page in PostgreSQL survives later pushes even when its thread row
+stays trashed. Restoring a page locally also advances the thread row's sync
+marker. PostgreSQL upgrades existing Codex thread trash and permanent exclusions
+to thread-wide scope once; later deletions remain per-file. Pages pushed from
+the same source inherit a trashed PostgreSQL thread's scope until a member is
+restored or purged. PostgreSQL purge retains thread-wide exclusions for later
+pushes; the hosted legacy routes use the same behavior without removing raw
+projections. Page publication locks the retained thread row through commit and
+checks exclusions after acquiring that lock, so a concurrent purge either
+removes the new page or prevents its publication. Thread-wide restore, purge,
+and new exclusions use the same owner and agent checks as inherited trash. Old
+permanent exclusions that have no recorded owner retain their existing global
+scope. Exact-session exclusions remain unchanged. PostgreSQL restore and purge
+retry complete transactions on deadlocks or serialization conflicts, including
+hosted legacy writes. Retries stop after five attempts or when the request is
+canceled.
+
+When an old PostgreSQL thread row held a revert page, the next push moves its
+remote pins and notes to that page before replacing the original thread. Both
+writes share a transaction, including when the page belongs to a later batch.
+When the original rollout is absent locally, the push also moves remote names,
+stars, and trash state to a newly published page, then removes the duplicate
+thread transcript and usage. Existing page curation takes precedence. An empty
+thread row retains any inherited trash scope for restore and purge. If the
+retained page cannot be published, the push stops and keeps the original row. A
+filtered push must include the page's project for this migration. A surviving
+original rollout without remote pins can still be pushed when its old page has
+been removed or filtered out.
 
 ### Codex incremental import state
 
@@ -231,9 +281,10 @@ mirror is a disposable local derived file. A new remote SQL backend is a
 replica. Do not model it on DuckDB, and do not add a fourth role.
 
 Common pure storage helpers live in `internal/db`; every backend calls that
-owner. `BuildAnalyticsWhere`, `BuildUsageSourceFilter`, `BuildUsageSessionFilter`,
-and `BuildRecentEditsQuery` own shared reporting SQL. Helpers with different
-timestamp parsing, UTC padding, or output formats stay in their backend.
+owner. `BuildAnalyticsWhere`, `BuildUsageSourceFilter`,
+`BuildUsageSessionFilter`, and `BuildRecentEditsQuery` own shared reporting SQL.
+Helpers with different timestamp parsing, UTC padding, or output formats stay in
+their backend.
 
 ### How to add a replica backend
 
@@ -249,8 +300,8 @@ timestamp parsing, UTC padding, or output formats stay in their backend.
    `Vectors.Skipped`. Route catalog reads through `readbase.NewCatalog` with
    an adapter implementing every `readbase.CatalogBackend` method; route
    DuckDB- or ClickHouse-style analytics through `readbase.NewAnalytics`.
-   Forward common SQL to the shared builders; keep specialized SQL and typed loaders
-   in the backend.
+   Forward common SQL to the shared builders; keep specialized SQL and typed
+   loaders in the backend.
 1. Add the config section and its resolvers in `internal/config` the way
    `[pg]`/`[pg.NAME]` and `[clickhouse]` work: a struct, `Resolve<Name>`,
    `Resolve<Name>Target`, and `<Name>TargetNames`. `Backend.Targets` and
@@ -333,8 +384,9 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   `internal/readbase.Catalog`. Shared query builders own SQL that differs only
   in syntax. Each backend explicitly supplies every required SQL operation and
   its typed timestamp, observation and snapshot loaders.
-- DuckDB and ClickHouse share report orchestration in `internal/readbase.Analytics`.
-  Backends supply every required SQL operation and retain typed loaders and caches.
+- DuckDB and ClickHouse share report orchestration in
+  `internal/readbase.Analytics`. Backends supply every required SQL operation
+  and retain typed loaders and caches.
 
 ### Usage cache divergence
 
@@ -584,9 +636,9 @@ own metadata, which is why the docs below call the database a mirror.
   build an `IN (...)` list from a set the database already selected, such as
   the sessions matching a filter or the Claude snapshot keys of those
   sessions. Embed the selecting predicate as a subquery (`chSessionSet`) or
-  derive the keys in a CTE instead. Chunked lists (`db.QueryChunkedSize`) are for
-  sets that arrive from outside the database, and they bound entry count, not
-  bytes.
+  derive the keys in a CTE instead. Chunked lists (`db.QueryChunkedSize`) are
+  for sets that arrive from outside the database, and they bound entry count,
+  not bytes.
 - Tests use the `chtest` build tag. Run `make test-clickhouse` against a
   dedicated test server (`TEST_CLICKHOUSE_URL` or the compose service). Do not
   point those tests at a live mirror.

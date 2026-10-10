@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- mirrored to PG/DuckDB.
     last_write_incremental INTEGER NOT NULL DEFAULT 0,
     deleted_at  TEXT,
+    -- Before revert pages had separate IDs, trash covered the whole thread.
+    -- A restore ends that inherited scope; later trash actions are per-file.
+    trash_includes_codex_pages INTEGER NOT NULL DEFAULT 0,
     -- Retained for compatibility with older archives and mirrors. New source
     -- availability state is stored independently in source_missing_at.
     deletion_cause TEXT,
@@ -739,7 +742,8 @@ CREATE TABLE IF NOT EXISTS excluded_sessions (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     -- Source file of the deleted session, so another file sharing its id
     -- does not take it over.
-    file_path  TEXT
+    file_path  TEXT,
+    include_codex_pages INTEGER NOT NULL DEFAULT 0
 );
 -- Skipped files cache: persists skip decisions for files that
 -- produced no session (non-interactive, parse errors) so they

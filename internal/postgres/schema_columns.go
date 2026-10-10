@@ -446,5 +446,11 @@ func schemaColumnMigrations() []columnMigration {
 			`file_path TEXT`,
 			"adding sessions.file_path",
 		},
+		{"sessions", "trash_includes_codex_pages", `trash_includes_codex_pages BOOLEAN NOT NULL DEFAULT FALSE`, "adding sessions.trash_includes_codex_pages"},
+		{"sessions", "source_trash_includes_codex_pages", `source_trash_includes_codex_pages BOOLEAN NOT NULL DEFAULT FALSE`, "adding sessions.source_trash_includes_codex_pages"},
+		{"excluded_sessions", "include_codex_pages", `include_codex_pages BOOLEAN NOT NULL DEFAULT FALSE`, "adding excluded_sessions.include_codex_pages"},
+		{"excluded_sessions", "owner_marker", `owner_marker TEXT`, "adding excluded_sessions.owner_marker"},
+		{"excluded_sessions", "machine", `machine TEXT`, "adding excluded_sessions.machine"},
+		{"excluded_sessions", "agent", `agent TEXT`, "adding excluded_sessions.agent"},
 	}
 }
