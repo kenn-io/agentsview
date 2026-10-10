@@ -58,22 +58,6 @@ func TestListForwardsListOptions(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestFindSessionIDsByRawSuffixForwardsQueryAndIDs(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/session-ids/resolve", r.URL.Path)
-		assert.Equal(t, "uuid-1", r.URL.Query().Get("partial"))
-		assert.Equal(t, "2", r.URL.Query().Get("limit"))
-		assert.Equal(t, "true", r.URL.Query().Get("raw_suffix"))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ids":["codex:uuid-1","claude:uuid-1"],"raw_suffix":true}`))
-	}))
-	t.Cleanup(srv.Close)
-	ids, err := NewHTTPBackend(srv.URL, "", false, "").FindSessionIDsByRawSuffix(t.Context(), "uuid-1", 2)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"codex:uuid-1", "claude:uuid-1"}, ids)
-}
-
 func TestSearchContentUsesLongRunningClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

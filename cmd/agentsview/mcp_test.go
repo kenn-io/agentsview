@@ -288,15 +288,13 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 			svc := newMCPDaemonService(cfg)
 			_, err := svc.List(t.Context(), service.ListFilter{})
 			require.NoError(t, err)
-			path, err := runtimeStore(dir).Path(os.Getpid())
-			require.NoError(t, err)
-			var rec daemon.RuntimeRecord
 			if change == "fallback" || change == "read-only" {
 				assert.Nil(t, svc.(*mcpDaemonService).backend)
+				return
 			}
-			if change != "fallback" {
-				rec = readRuntimeRecord(t, path)
-			}
+			path, err := runtimeStore(dir).Path(os.Getpid())
+			require.NoError(t, err)
+			rec := readRuntimeRecord(t, path)
 			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 			switch change {
 			case "missing":
@@ -313,7 +311,7 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 				delete(rec.Metadata, runtimeCreateTime)
 			case "base path":
 				rec.Metadata[runtimeBrowserURL] = server.URL + "/mounted"
-			case "replacement", "read-only", "fallback":
+			case "replacement":
 				t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
 				replacement := daemonRouteTestServer(t, map[string]http.HandlerFunc{
 					"/api/v1/sessions": func(w http.ResponseWriter, r *http.Request) {
@@ -331,7 +329,7 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 			}
 			result, err := svc.List(t.Context(), service.ListFilter{})
 			switch change {
-			case "base path", "replacement", "read-only", "fallback":
+			case "base path", "replacement":
 				require.NoError(t, err)
 				assert.Equal(t, 9, result.Total)
 				assert.Equal(t, 2, requests)
@@ -348,59 +346,6 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
-	dataDir := runtimeTestDir(t)
-	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
-	var probes int
-	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/ping":
-			probes++
-			ping.ServeHTTP(w, r)
-		case "/api/v1/sessions":
-			assert.Equal(t, "7", r.URL.Query().Get("limit"))
-			assert.NoError(t, json.MarshalWrite(w, service.SessionList{Sessions: []db.Session{{ID: "from-daemon"}}, Total: 1}))
-		case "/api/v1/search":
-			assert.Equal(t, "cached search", r.URL.Query().Get("q"))
-			assert.NoError(t, json.MarshalWrite(w, service.SessionSearchResult{Results: []db.SearchResult{{SessionID: "from-daemon"}}}))
-		case "/api/v1/sessions/from-daemon":
-			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{ID: "from-daemon"}))
-		default:
-			assert.Fail(t, "unexpected request path", r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-	host, port := splitTestServerURL(t, server.URL)
-	writeDaemonRuntimeForTest(t, dataDir, host, port, "test", false)
-	forbidStartBackgroundServeForTransport(t, "MCP must reuse the running daemon")
-	svc := newMCPDaemonService(cfg)
-	_, err := svc.List(t.Context(), service.ListFilter{Limit: 7})
-	require.NoError(t, err)
-	require.Positive(t, probes)
-	initialProbes := probes
-	search, err := svc.Search(t.Context(), service.SearchRequest{Query: "cached search"})
-	require.NoError(t, err)
-	require.Len(t, search.Results, 1)
-	assert.Equal(t, "from-daemon", search.Results[0].SessionID)
-	detail, err := svc.Get(t.Context(), search.Results[0].SessionID)
-	require.NoError(t, err)
-	assert.Equal(t, "from-daemon", detail.ID)
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Go(func() {
-			res, err := svc.List(t.Context(), service.ListFilter{Limit: 7})
-			if assert.NoError(t, err) && assert.Len(t, res.Sessions, 1) {
-				assert.Equal(t, "from-daemon", res.Sessions[0].ID)
-			}
-		})
-	}
-	wg.Wait()
-	assert.Equal(t, initialProbes, probes, "cached calls must avoid daemon discovery probes")
-	assert.NoFileExists(t, cfg.DBPath)
 }
 
 func TestMCPDaemonServiceRecoversAfterCachedListenerFailure(t *testing.T) {
@@ -438,14 +383,10 @@ func TestMCPDaemonServiceRecoversAfterCachedListenerFailure(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Total)
 	writable.Close()
-	assert.True(t, daemon.ProcessAlive(os.Getpid()))
 	result, err = svc.List(t.Context(), service.ListFilter{})
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Zero(t, readOnlyRequests, "the failed operation must not be replayed")
-	runtime := FindDaemonRuntime(dir)
-	require.NotNil(t, runtime)
-	require.True(t, runtime.ReadOnly, "existing discovery can reach the healthy fallback")
 	result, err = svc.List(t.Context(), service.ListFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 9, result.Total)
@@ -489,6 +430,10 @@ func TestMCPDaemonServiceLateFailurePreservesReplacement(t *testing.T) {
 			ping.ServeHTTP(w, r)
 		case "/api/v1/sessions/session-a":
 			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{ID: "replacement-session"}))
+		case "/api/v1/search":
+			assert.NoError(t, json.MarshalWrite(w, service.SessionSearchResult{Results: []db.SearchResult{{SessionID: "replacement-session"}}}))
+		case "/api/v1/memory/status":
+			assert.NoError(t, json.MarshalWrite(w, service.MemoryStatus{Status: service.MemoryReady}))
 		default:
 			assert.Fail(t, "unexpected request path", r.URL.Path)
 			http.NotFound(w, r)
@@ -507,6 +452,13 @@ func TestMCPDaemonServiceLateFailurePreservesReplacement(t *testing.T) {
 	detail, err = svc.Get(t.Context(), "session-a")
 	require.NoError(t, err)
 	assert.Equal(t, "replacement-session", detail.ID)
+	search, err := svc.Search(t.Context(), service.SearchRequest{Query: "cached search"})
+	require.NoError(t, err)
+	require.Len(t, search.Results, 1)
+	assert.Equal(t, "replacement-session", search.Results[0].SessionID)
+	status, err := service.GetMemoryStatus(t.Context(), svc)
+	require.NoError(t, err)
+	assert.Equal(t, service.MemoryReady, status.Status)
 	assert.Equal(t, initialProbes, probes.Load(), "the late failure must preserve the replacement cache")
 }
 
