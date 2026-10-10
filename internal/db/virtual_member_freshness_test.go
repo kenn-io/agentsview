@@ -57,6 +57,8 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 	assert.Equal(t, container+"#a", page[0].Path)
 	assert.Equal(t, int64(200), page[0].MTimeNS,
 		"the fold surfaces the newest row's mtime")
+	assert.Equal(t, "opencode", page[0].Agent)
+	assert.Equal(t, "proj", page[0].Project)
 	assert.Equal(t, "new-hash", page[0].Hash,
 		"the hash rides the newest-mtime row")
 	assert.Equal(t, 2, page[0].DataVersion,

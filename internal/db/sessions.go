@@ -3561,6 +3561,8 @@ func (db *DB) RecentSessionSources(ctx context.Context,
 // data version, and the newest row's fingerprint hash, mirroring
 // GetFileInfoByPath, GetDataVersionByPath, and GetFileHashByPath.
 type VirtualContainerMemberFreshness struct {
+	Agent       string
+	Project     string
 	MTimeNS     int64
 	DataVersion int
 	Hash        string
@@ -3666,7 +3668,7 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 
 	rows, err := db.getReader().QueryContext(ctx,
 		"SELECT file_path, file_mtime, data_version, file_hash,"+
-			" deleted_at IS NOT NULL FROM sessions"+
+			" deleted_at IS NOT NULL, agent, project FROM sessions"+
 			" WHERE file_path >= ? AND file_path <= ?"+notMissing,
 		paths[0], paths[len(paths)-1],
 	)
@@ -3680,15 +3682,16 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 	for rows.Next() {
 		var path string
 		var mtime, version sql.NullInt64
-		var hash sql.NullString
+		var hash, agent, project sql.NullString
 		var trashed bool
-		if err := rows.Scan(&path, &mtime, &version, &hash, &trashed); err != nil {
+		if err := rows.Scan(&path, &mtime, &version, &hash, &trashed, &agent, &project); err != nil {
 			return nil, false, fmt.Errorf(
 				"scanning container member freshness %s: %w",
 				containerPath, err,
 			)
 		}
 		row := VirtualContainerMemberFreshness{
+			Agent: agent.String, Project: project.String,
 			MTimeNS:     mtime.Int64,
 			DataVersion: int(version.Int64),
 			Hash:        hash.String,
@@ -3702,6 +3705,7 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 		if row.MTimeNS > member.MTimeNS {
 			member.MTimeNS = row.MTimeNS
 			member.Hash = row.Hash
+			member.Agent, member.Project = row.Agent, row.Project
 			member.Trashed = row.Trashed
 		}
 		if row.DataVersion < member.DataVersion {

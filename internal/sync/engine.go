@@ -754,11 +754,10 @@ type Engine struct {
 	// completed a full composite listing. containerPass is the bookkeeping
 	// for the pass currently running (nil outside passes). Persisted sync state
 	// restores recent verification after a restart without renewing its age.
-	containerMu                    gosync.Mutex
-	trustedSQLiteContainers        map[string]trustedSQLiteContainer
-	digestVerifiedAt               map[string]time.Time
-	sqliteContainerFreshnessLoaded map[string]bool
-	containerPass                  *sqliteContainerPass
+	containerMu             gosync.Mutex
+	trustedSQLiteContainers map[string]trustedSQLiteContainer
+	digestVerifiedAt        map[string]time.Time
+	containerPass           *sqliteContainerPass
 
 	// storageTrustMu guards the per-session freshness gate for
 	// OpenCode-family file-backed storage sessions (see
@@ -1829,6 +1828,9 @@ func (e *Engine) applyChangedPathSyncLocked(
 	e.anomalies.reset()
 	// Begin a container pass so an already-trusted, unchanged container
 	// still gates its fan-out, but never promote from a changed-path subset.
+	if err := e.prepareSQLiteContainerVerification(ctx, prepared.preContainerStates); err != nil {
+		return SyncStats{Aborted: true}, 0, err
+	}
 	e.beginSQLiteContainerPass(prepared.files, prepared.preContainerStates)
 	e.reportProgress(nil, Progress{
 		Phase:         PhaseSyncing,
@@ -5441,6 +5443,10 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	}()
 
 	preContainerStates := e.capturePlannedSQLiteContainerStates(plans, fullCoverage)
+	if err := e.prepareSQLiteContainerVerification(ctx, preContainerStates); err != nil {
+		stats.Aborted = true
+		return stats, metrics, 0, eligibility, err
+	}
 	e.beginStreamingSQLiteContainerPass(preContainerStates)
 	defer func() {
 		// Failures here cannot be attributed to one container, so they
@@ -7960,6 +7966,9 @@ func (e *Engine) syncAllLocked(
 	// rows, so a promoted state can never be newer than the discovered
 	// session set (see captureSQLiteContainerStates).
 	preContainerStates := e.captureSQLiteContainerStates(nil)
+	if err := e.prepareSQLiteContainerVerification(ctx, preContainerStates); err != nil {
+		return SyncStats{Aborted: true, Warnings: []string{err.Error()}}
+	}
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
@@ -15085,19 +15094,14 @@ func (e *Engine) providerSourceUnchangedInDB(
 	if !ok {
 		return false
 	}
-	if storedSize != fingerprint.Size || storedMtime != fingerprint.MTimeNS {
-		if !e.providerSourceHashFreshDespiteStat(ctx,
-			source.Provider, lookupPath, fingerprint,
-		) {
-			return false
-		}
-	} else if !e.providerFingerprintHashMatchesDB(ctx,
-		agent, lookupPath,
-		fingerprint,
-		semantics.FingerprintHashRequiredForFreshness,
-	) {
+	var storedHash string
+	if fingerprint.Hash != "" {
+		storedHash, _ = e.db.GetFileHashByAgentPath(ctx, lookupPath, string(agent))
+	}
+	if !providerFingerprintMatchesStored(agent, fingerprint, storedSize, storedMtime, storedHash, semantics.FingerprintHashRequiredForFreshness) {
 		return false
 	}
+
 	// A stale stored project (e.g. a generated roborev CI worktree name)
 	// must defeat the unchanged-source skip so the corrected project is
 	// reparsed, mirroring shouldSkipCodexFingerprint and the in-memory
@@ -15122,6 +15126,13 @@ func (e *Engine) providerSourceUnchangedInDB(
 		e.stampProviderStatHashForConfirmedSource(ctx, preParseStatHash)
 	}
 	return fresh
+}
+
+func providerFingerprintMatchesStored(agent parser.AgentType, fingerprint parser.SourceFingerprint, size, mtime int64, hash string, required bool) bool {
+	if size != fingerprint.Size || mtime != fingerprint.MTimeNS {
+		return fingerprint.Hash != "" && providerFingerprintHashEstablishesFreshness(agent) && hash == fingerprint.Hash
+	}
+	return fingerprint.Hash == "" || !required || hash == fingerprint.Hash
 }
 
 // stampProviderStatHashForConfirmedSource persists the pre-parse

@@ -1256,6 +1256,11 @@ func TestOpenCodeProviderSQLiteFingerprintUsesDiscoveryMeta(t *testing.T) {
 			"size: every session in the root shares one opencode.db, so any "+
 			"one session's write would change every other session's "+
 			"fingerprint and drop its freshness skip")
+	carried, complete := OpenCodeCompositeFingerprint(discovered[0])
+	require.True(t, complete)
+	assert.Equal(t, fp.MTimeNS, carried.MTimeNS)
+	assert.Equal(t, fp.Hash, carried.Hash)
+
 }
 
 func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {

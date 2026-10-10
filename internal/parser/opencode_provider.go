@@ -1307,6 +1307,15 @@ func SourceUsesOpenCodeCompositeMTime(source SourceRef) bool {
 	}
 }
 
+// OpenCodeCompositeFingerprint returns the complete fingerprint carried by discovery.
+func OpenCodeCompositeFingerprint(source SourceRef) (SourceFingerprint, bool) {
+	digest := sourceCarriedChildDigest(source)
+	if !SourceUsesOpenCodeCompositeMTime(source) || digest == "" {
+		return SourceFingerprint{}, false
+	}
+	return SourceFingerprint{MTimeNS: sourceCarriedMTimeNS(source), Hash: digest}, true
+}
+
 // changedWatermarkSources answers a shared-container change event with only
 // the members whose carried session-row watermark is not already covered by
 // the caller's stored freshness. The watermark listing streams in ascending

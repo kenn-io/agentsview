@@ -1629,11 +1629,17 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   (`SQLiteContainerListsWatermarkOnly`) after ordinary writes and across restarts.
   Child-only edits that leave session
   timestamps unchanged wait for the next complete pass after the original
-  deadline. Cheap passes preserve that deadline. Expired verification times
+  deadline. Each pass atomically consumes durable skip authority before it
+  starts; successful cheap passes restore it with the original deadline.
+  Preparation failures abort before processing, and failed completion writes
+  leave authority revoked. Expired verification times
   also survive restarts so the due pass can reconcile deferred edits that have
   fallen behind a quick-sync cutoff. A failed pass revokes skip authority but
   preserves verification history so complete recovery remains eligible until
-  a successful complete pass finishes it. Every member of an unchanged container
+  a successful complete pass finishes it. Due quick syncs compare complete
+  fingerprints with paged archive freshness before dispatching workers, so
+  unchanged members finish while changed or unresolved members remain eligible.
+  Every member of an unchanged container
   gate-skips before fingerprinting, so a child identity scan would do
   archive-sized work nothing reads. Watermark-only skips require the pass's
   container capture to still be valid (`sqliteContainerPassCaptureValid`) — a container
