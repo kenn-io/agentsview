@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -65,33 +66,22 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 }
 
 func TestPruneCommandAgentFilter(t *testing.T) {
-	dataDir := testDataDir(t)
-	database, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err)
-	for _, session := range []db.Session{
-		{ID: "mimo-a", Agent: "mimocode", Project: "project-a", Machine: "local"},
-		{ID: "mimo-b", Agent: "mimocode", Project: "project-b", Machine: "local"},
-		{ID: "claude-a", Agent: "claude", Project: "project-a", Machine: "local"},
-	} {
-		require.NoError(t, database.UpsertSession(t.Context(), session))
-	}
-	require.NoError(t, database.Close())
-
 	for _, tt := range []struct {
 		name string
 		args []string
-		want string
+		want PruneConfig
 	}{
-		{"agent only", []string{"--agent", "mimocode", "--dry-run"}, "Found 2 sessions"},
-		{"agent and project", []string{"--agent", "mimocode", "--project", "project-a", "--dry-run"}, "Found 1 sessions"},
+		{"agent only", []string{"--agent", "mimocode"}, PruneConfig{Filter: db.PruneFilter{Agent: "mimocode"}}},
+		{"combined filters", []string{"--agent", "mimocode", "--project", "project-a", "--max-messages", "0", "--before", "2025-01-01", "--first-message", "hello", "--dry-run", "--yes"}, PruneConfig{Filter: db.PruneFilter{Agent: "mimocode", Project: "project-a", MaxMessages: new(0), Before: "2025-01-01", FirstMessage: "hello"}, DryRun: true, Yes: true}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			out := captureStdout(t, func() {
-				_, err := executeCommand(newRootCommand(), append([]string{"prune"}, tt.args...)...)
-				require.NoError(t, err)
+			var got []PruneConfig
+			cmd := newPruneCommandWithRunner(func(ctx context.Context, cfg PruneConfig) {
+				got = append(got, cfg)
 			})
-			assert.Contains(t, out, tt.want)
-			assert.Contains(t, out, "Dry run: no changes made.")
+			_, err := executeCommand(cmd, tt.args...)
+			require.NoError(t, err)
+			assert.Equal(t, []PruneConfig{tt.want}, got)
 		})
 	}
 }

@@ -669,21 +669,29 @@ Delete sessions matching one or more filters. At least one filter is required.
 agentsview prune [flags]
 ```
 
-| Flag              | Default | Description                                         |
-| ----------------- | ------- | --------------------------------------------------- |
-| `--agent`         |         | Filter by agent name, such as `mimocode`             |
-| `--project`       |         | Sessions whose project contains this substring      |
+| Flag              | Default | Description                                        |
+| ----------------- | ------- | -------------------------------------------------- |
+| `--agent`         |         | Exact agent name, including matching trash          |
+| `--project`       |         | Sessions whose project contains this substring     |
 | `--max-messages`  | `-1`    | Sessions with at most N messages                    |
 | `--before`        |         | Sessions that ended before this date (`YYYY-MM-DD`) |
-| `--first-message` |         | Sessions whose first message starts with this text  |
+| `--first-message` |         | Sessions whose first message starts with this text |
 | `--dry-run`       | `false` | Show what would be pruned without deleting          |
-| `--yes`           | `false` | Skip confirmation prompt                            |
+| `--yes`           | `false` | Skip confirmation prompt                           |
+
+Filters combine with AND. With `--agent`, one prune removes matching parents
+and descendants, including matching trash. A descendant outside any supplied
+filter protects all its ancestors. Without `--agent`, prune excludes trash
+and parents.
 
 **Examples:**
 
 ```bash
 # Preview what would be deleted
 agentsview prune --project "scratch" --dry-run
+
+# Preview cleanup of an agent after stopping the daemon
+agentsview prune --agent mimocode --dry-run
 
 # Delete short sessions from before 2025
 agentsview prune --max-messages 2 --before 2025-01-01

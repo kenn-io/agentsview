@@ -2921,6 +2921,60 @@ func collectIDs(sessions []Session) []string {
 	return ids
 }
 
+func TestFindPruneCandidatesAgentTrees(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		filter PruneFilter
+		agent  string
+		trash  bool
+		cycle  bool
+		want   []string
+	}{
+		{"complete tree", PruneFilter{Agent: "mimocode"}, "mimocode", false, false, []string{"parent", "child", "grandchild", "sibling"}},
+		{"matching trash", PruneFilter{Agent: "mimocode"}, "mimocode", true, false, []string{"parent", "child", "grandchild", "sibling"}},
+		{"other agent protects ancestors", PruneFilter{Agent: "mimocode"}, "claude", false, false, []string{"sibling"}},
+		{"other agent trash protects ancestors", PruneFilter{Agent: "mimocode"}, "claude", true, false, []string{"sibling"}},
+		{"project protects ancestors", PruneFilter{Agent: "mimocode", Project: "selected"}, "mimocode", false, false, []string{"sibling"}},
+		{"date protects ancestors", PruneFilter{Agent: "mimocode", Before: "2025-01-01"}, "mimocode", false, false, []string{"sibling"}},
+		{"message count protects ancestors", PruneFilter{Agent: "mimocode", MaxMessages: new(1)}, "mimocode", false, false, []string{"sibling"}},
+		{"first message protects ancestors", PruneFilter{Agent: "mimocode", FirstMessage: "selected"}, "mimocode", false, false, []string{"sibling"}},
+		{"matching cycle", PruneFilter{Agent: "mimocode"}, "mimocode", false, true, []string{"parent", "child", "grandchild", "sibling"}},
+		{"protected cycle terminates", PruneFilter{Agent: "mimocode"}, "claude", false, true, []string{"sibling"}},
+		{"without agent keeps parents", PruneFilter{MaxMessages: new(2)}, "mimocode", false, false, []string{"grandchild", "sibling"}},
+		{"without agent excludes trash", PruneFilter{MaxMessages: new(2)}, "mimocode", true, false, []string{"sibling"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			for _, s := range []Session{
+				{ID: "parent"},
+				{ID: "child", ParentSessionID: new("parent")},
+				{ID: "grandchild", ParentSessionID: new("child")},
+				{ID: "sibling", ParentSessionID: new("parent")},
+			} {
+				s.Agent, s.Project = "mimocode", "selected"
+				s.EndedAt, s.FirstMessage = new("2024-01-01"), new("selected prompt")
+				if s.ID == "parent" && tt.cycle {
+					s.ParentSessionID = new("child")
+				}
+				if s.ID == "grandchild" {
+					s.Agent, s.Project = tt.agent, "other"
+					s.EndedAt, s.FirstMessage = new("2026-01-01"), new("other prompt")
+				}
+				require.NoError(t, d.UpsertSession(t.Context(), s))
+				insertMessages(t, d, userMsg(s.ID, 0, "prompt"))
+			}
+			insertMessages(t, d, userMsg("grandchild", 1, "second prompt"))
+			if tt.trash {
+				_, err := d.SoftDeleteSessions(t.Context(), []string{"grandchild"})
+				require.NoError(t, err)
+			}
+			got, err := d.FindPruneCandidates(t.Context(), tt.filter)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tt.want, collectIDs(got))
+		})
+	}
+}
+
 func TestFindPruneCandidatesExcludesParents(t *testing.T) {
 	d := testDB(t)
 

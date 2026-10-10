@@ -5893,7 +5893,10 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 		return nil, errors.New("at least one filter is required")
 	}
 
-	where := "deleted_at IS NULL"
+	where := "1 = 1"
+	if f.Agent == "" {
+		where = "deleted_at IS NULL"
+	}
 	args := []any{}
 
 	if f.Agent != "" {
@@ -5920,12 +5923,28 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 		args = append(args, escapeLike(f.FirstMessage)+"%")
 	}
 
-	// Exclude sessions that are parents of other sessions.
-	where += ` AND NOT EXISTS (
-		SELECT 1 FROM sessions AS child
-		WHERE child.parent_session_id = sessions.id)`
+	prefix := ""
+	if f.Agent != "" {
+		// Surviving descendants protect every ancestor, including through matching rows.
+		prefix = `WITH RECURSIVE matched(id) AS (
+			SELECT id FROM sessions WHERE ` + where + `
+		), protected(id) AS (
+			SELECT parent_session_id FROM sessions
+			WHERE id NOT IN (SELECT id FROM matched)
+			  AND parent_session_id IS NOT NULL
+			UNION
+			SELECT s.parent_session_id FROM sessions AS s
+			JOIN protected AS p ON s.id = p.id
+			WHERE s.parent_session_id IS NOT NULL
+		) `
+		where = "id IN (SELECT id FROM matched) AND id NOT IN (SELECT id FROM protected)"
+	} else {
+		where += ` AND NOT EXISTS (
+			SELECT 1 FROM sessions AS child
+			WHERE child.parent_session_id = sessions.id)`
+	}
 
-	query := "SELECT " + sessionPruneCols +
+	query := prefix + "SELECT " + sessionPruneCols +
 		" FROM sessions WHERE " + where + `
 		ORDER BY COALESCE(
 			NULLIF(ended_at, ''),
