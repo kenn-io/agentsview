@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -304,7 +305,7 @@ func (s *UploadService) finalize(
 		return UploadSession{}, fmt.Errorf("staged raw upload changed: %w", ErrConflict)
 	}
 	hash := sha256.New()
-	readBytes, readErr := io.Copy(hash, &uploadContextReader{ctx: ctx, reader: reader})
+	readBytes, readErr := io.Copy(hash, ctxio.Reader{Context: ctx, Reader: reader})
 	readErr = errors.Join(readErr, reader.Close())
 	if readErr != nil {
 		return UploadSession{}, fmt.Errorf("hashing staged raw upload: %w", readErr)
@@ -343,7 +344,7 @@ func (s *UploadService) finalize(
 	}
 	result, finalizeErr := s.custody.FinalizeObject(
 		ctx, identity, session.Provider, session.Object,
-		&uploadContextReader{ctx: ctx, reader: reader},
+		ctxio.Reader{Context: ctx, Reader: reader},
 	)
 	finalizeErr = errors.Join(finalizeErr, reader.Close())
 	if finalizeErr != nil {
@@ -377,18 +378,6 @@ func (s *UploadService) completedAfterFinalizeRace(
 		return UploadSession{}, false
 	}
 	return current, true
-}
-
-type uploadContextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r *uploadContextReader) Read(buffer []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.reader.Read(buffer)
 }
 
 func (s *UploadService) newUploadID() (string, error) {

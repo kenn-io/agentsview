@@ -13,12 +13,13 @@ func (s *Store) ListArchiveWorktreeCandidates(ctx context.Context, request db.Ar
 
 // Snapshots match the session source database generation.
 func (s *Store) loadWorktreeCandidateSessions(
-	ctx context.Context, ids []string,
+	ctx context.Context, ids []string, filter db.SessionFilter,
 ) ([]db.WorktreeCandidateSession, error) {
 	byID := make(map[string]db.WorktreeCandidateSession, len(ids))
 	err := pgQueryChunked(ids, func(chunk []string) error {
-		pb := &paramBuilder{}
-		ph := pgInPlaceholders(chunk, pb)
+		filter.IDs = chunk
+		filter.IDsExact = true
+		where, args := db.BuildSessionBaseFilterSQL(filter, db.PostgresQueryDialect())
 		query := `
 			SELECT s.id, s.project, s.machine, s.cwd,
 				COALESCE(snap.source_session_id, ''), COALESCE(snap.project, ''),
@@ -30,9 +31,9 @@ func (s *Store) loadWorktreeCandidateSessions(
 			 AND snap.source_database_generation =
 			     s.source_database_generation
 			 AND snap.source_session_id = s.id
-			WHERE s.id IN ` + ph + ` AND s.deleted_at IS NULL
+			WHERE s.id IN (SELECT id FROM sessions WHERE ` + where + `)
 			ORDER BY s.id`
-		rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+		rows, err := s.pg.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying pg worktree candidate sessions: %w", err)
 		}

@@ -121,3 +121,25 @@ func TestTelemetryOptionsPassInstallationAge(t *testing.T) {
 		})
 	}
 }
+
+func TestTelemetryOptionsKeepsConfiguredClaimsPath(t *testing.T) {
+	for _, enabled := range []string{"1", "0"} {
+		t.Run(enabled, func(t *testing.T) {
+			t.Setenv(telemetry.EnabledEnv, enabled)
+			t.Setenv(telemetry.GenericEnabledEnv, "1")
+			cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
+			path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
+			const legacy = "install-one 2026-10-08 sessions"
+			if enabled == "0" {
+				require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+			}
+			opts := telemetryOptions(cfg)
+			assert.Equal(t, path, opts.ScreenClaimsPath)
+			if enabled == "0" {
+				data, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, legacy, string(data))
+			}
+		})
+	}
+}

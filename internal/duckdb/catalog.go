@@ -23,8 +23,8 @@ func (s catalogSQL) InventoryAggregate(ctx context.Context, filter db.ProjectDat
 	return s.store.projectInventoryAggregate(ctx, filter)
 }
 
-func (s catalogSQL) WorktreeCandidateSessions(ctx context.Context, ids []string) ([]db.WorktreeCandidateSession, error) {
-	return s.store.loadWorktreeCandidateSessions(ctx, ids)
+func (s catalogSQL) WorktreeCandidateSessions(ctx context.Context, ids []string, filter db.SessionFilter) ([]db.WorktreeCandidateSession, error) {
+	return s.store.loadWorktreeCandidateSessions(ctx, ids, filter)
 }
 
 func (s catalogSQL) VisibleArchivesSQL() string {

@@ -13,7 +13,7 @@ import (
 	"slices"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/capture"
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/rawcapture"
 )
 
@@ -138,7 +138,7 @@ func captureRootFile(ctx context.Context, root *os.Root, source, target, rootID,
 			return CaptureFile{}, err
 		}
 		hash := sha256.New()
-		n, copyErr := io.Copy(io.MultiWriter(output, hash), &capture.ContextReader{Context: ctx, Reader: f})
+		n, copyErr := io.Copy(io.MultiWriter(output, hash), ctxio.Reader{Context: ctx, Reader: f})
 		wantHash = hex.EncodeToString(hash.Sum(nil))
 		err = errors.Join(copyErr, output.Close())
 		if err != nil {

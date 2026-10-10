@@ -95,7 +95,7 @@ func (db *DB) ListArchiveWorktreeCandidates(
 		}
 		selectedIDs = append(selectedIDs, session.id)
 	}
-	return db.worktreeCandidatesFromSelection(ctx, selectedIDs, selectedProjects)
+	return db.worktreeCandidatesFromSelection(ctx, selectedIDs, selectedProjects, request.ProjectDateFilter)
 }
 
 // SelectWorktreeCandidateProjects validates that the requested display label
@@ -181,8 +181,11 @@ func (db *DB) worktreeCandidatesFromSelection(
 	ctx context.Context,
 	selectedIDs []string,
 	selectedProjects map[string]struct{},
+	dateFilter ProjectDateFilter,
 ) ([]WorktreeReclassificationCandidate, error) {
-	details, err := db.loadWorktreeCandidateSessions(ctx, selectedIDs)
+	filter := dateFilter.SessionFilter()
+	filter.ProjectLabels = SortedKeys(selectedProjects)
+	details, err := db.loadWorktreeCandidateSessions(ctx, selectedIDs, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -326,10 +329,13 @@ func collapseObservedParents(
 func (db *DB) loadWorktreeCandidateSessions(
 	ctx context.Context,
 	ids []string,
+	filter SessionFilter,
 ) ([]WorktreeCandidateSession, error) {
 	byID := make(map[string]WorktreeCandidateSession, len(ids))
 	err := queryChunked(ids, func(chunk []string) error {
-		placeholders, args := InPlaceholders(chunk)
+		filter.IDs = chunk
+		filter.IDsExact = true
+		where, args := BuildSessionBaseFilterSQL(filter, SQLiteQueryDialect())
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT s.id, s.project, s.machine, s.cwd,
 				COALESCE(snap.session_id, ''), COALESCE(snap.project, ''),
@@ -338,7 +344,7 @@ func (db *DB) loadWorktreeCandidateSessions(
 			FROM sessions s
 			LEFT JOIN session_project_identity_snapshots snap
 			  ON snap.session_id = s.id
-			WHERE s.id IN `+placeholders+` AND s.deleted_at IS NULL
+			WHERE s.id IN (SELECT id FROM sessions WHERE `+where+`)
 			ORDER BY s.id`, args...)
 		if err != nil {
 			return fmt.Errorf("querying worktree candidate sessions: %w", err)

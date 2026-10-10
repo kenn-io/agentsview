@@ -9,10 +9,11 @@ func VisibleArchivesSQL() string {
 }
 
 func MachinesSQL() string {
-	return `SELECT machine FROM sessions WHERE deleted_at IS NULL AND machine != ''
+	return `SELECT machine FROM (
+		SELECT machine FROM sessions WHERE deleted_at IS NULL AND machine != ''
 		UNION DISTINCT
 		SELECT machine FROM source_worktree_project_mappings WHERE machine != ''
-		ORDER BY machine`
+		) machines ORDER BY machine`
 }
 
 func SourceArchivesSQL() string {

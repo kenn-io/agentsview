@@ -1,115 +1,88 @@
 package config
 
 import (
-	"errors"
+	"bytes"
+	"encoding/json/v2"
+	"log"
 	"os"
 	"path/filepath"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestClaimScreenView(t *testing.T) {
-	c := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
-	today := time.Now().UTC().Format(time.DateOnly)
-	for _, tc := range []struct {
-		screen            string
-		want              bool
-		failure, identity string
-	}{
-		{"sessions", true, "", ""},
-		{"sessions", false, "", ""},
-		{"usage", true, "", ""},
-		{"sessions", true, "", "install-two"},
-		{"sessions", false, "enqueue", ""},
-		{"sessions", true, "lock", ""},
-		{"sessions", true, "write", ""},
+func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
+	const readable = `{ "version": 1, "days": {"[\"install-one\",\"screen_viewed\",\"usage\"]": ["2026-10-08"]} }`
+	for _, tc := range []struct{ name, stored, want string }{
+		{"unchanged, no backup", readable, readable},
+		{"two screens", "install-one 2026-10-08 sessions usage", `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"sessions\"]":["2026-10-08"],"[\"install-one\",\"screen_viewed\",\"usage\"]":["2026-10-08"]}}`},
+		{"short fields", "install-one", ""},
+		{"invalid date", "install-one broken sessions", ""},
+		{"no screens", "install-one 2026-10-08", ""},
+		{"invalid UTF-8 screen", "install-one 2026-10-08 sessions \xff", ""},
+		{"another installation", "install-two 2026-10-08 sessions", ""},
+		{"existing backup", "malformed", ""},
+		{"empty file", "", ""},
+		{"whitespace only", " \t\r\n", ""},
+		{"future date", "install-one 2099-10-08 sessions", `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"sessions\"]":["2099-10-08"]}}`},
+		{"newer version", `{"version":2,"claims":[]}`, ""},
+		{"truncated JSON", `{"version":1,"days":{`, ""},
+		{"damaged JSON without brace", `"version":1,"days":{}}`, ""},
+		{"null days", `{"version":1,"days":null}`, ""},
+		{"invalid stored date", `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"usage\"]":["10/08/2026"]}}`, ""},
 	} {
-		if tc.identity != "" {
-			c.InstallationID = tc.identity
-		}
-		if tc.failure != "" {
-			c.DataDir = t.TempDir()
-		}
-		path := filepath.Join(c.DataDir, telemetryScreensFilename)
-		if tc.failure == "lock" {
-			require.NoError(t, os.Mkdir(c.configPath()+".lock", 0o700))
-		}
-		sends := 0
-		day, claimed, err := c.ClaimScreenView(tc.screen, func() error {
-			sends++
-			switch tc.failure {
-			case "enqueue":
-				return errors.New("enqueue failed")
-			case "write":
-				return os.Mkdir(path, 0o700)
-			default:
-				return nil
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			output := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(output) })
+			c := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
+			path := c.TelemetryScreenClaimsPath()
+			require.NoError(t, os.WriteFile(path, []byte(tc.stored), 0o600))
+			olderPath := path + ".unreadable-existing"
+			if tc.name == "existing backup" {
+				require.NoError(t, os.WriteFile(olderPath, []byte("older claims"), 0o600))
 			}
-		})
-		assert.Equal(t, tc.want, claimed)
-		assert.Equal(t, today, day)
-		if tc.failure == "" {
-			require.NoError(t, err)
-			data, err := os.ReadFile(path)
-			require.NoError(t, err)
-			wantScreens := "sessions"
-			if tc.screen == "usage" {
-				wantScreens += " usage"
+			require.NoError(t, c.MigrateTelemetryScreenClaims())
+			if tc.name == "invalid UTF-8 screen" {
+				assert.Contains(t, logs.String(), "skipping legacy telemetry screen claims: encoding claim key:")
 			}
-			assert.Equal(t, c.InstallationID+" "+today+" "+wantScreens+"\n", string(data))
-			if tc.want {
-				assert.Equal(t, 1, sends)
+			moved, err := filepath.Glob(path + ".unreadable-*")
+			require.NoError(t, err)
+			copies := 0
+			for _, movedPath := range moved {
+				data, err := os.ReadFile(movedPath)
+				require.NoError(t, err)
+				if movedPath == olderPath {
+					assert.Equal(t, "older claims", string(data))
+					continue
+				}
+				copies++
+				assert.Equal(t, tc.stored, string(data))
+				assert.Contains(t, filepath.ToSlash(logs.String()), "moved unreadable telemetry screen claims to "+filepath.ToSlash(movedPath))
+			}
+			if tc.name == "unchanged, no backup" {
+				assert.Empty(t, moved)
 			} else {
-				assert.Zero(t, sends)
+				assert.Equal(t, 1, copies)
 			}
-			continue
-		}
-		require.Error(t, err)
-		switch tc.failure {
-		case "lock", "write":
-			assert.Equal(t, 1, sends)
-		case "enqueue":
-			assert.NoFileExists(t, path)
-			day, claimed, err = c.ClaimScreenView(tc.screen, func() error { sends++; return nil })
+			if tc.name == "existing backup" {
+				assert.Contains(t, moved, olderPath)
+			}
+			data, err := os.ReadFile(path)
+			if tc.want == "" {
+				assert.ErrorIs(t, err, os.ErrNotExist)
+				return
+			}
 			require.NoError(t, err)
-			assert.Equal(t, today, day)
-			assert.True(t, claimed)
-			assert.Equal(t, 2, sends)
-		}
-	}
-}
-
-func TestClaimScreenViewConcurrent(t *testing.T) {
-	dir := t.TempDir()
-	today := time.Now().UTC().Format(time.DateOnly)
-	var wg sync.WaitGroup
-	var sends atomic.Int32
-	results := make(chan bool, 8)
-	for range 8 {
-		wg.Go(func() {
-			c := Config{DataDir: dir, InstallationID: "install-one"}
-			day, claimed, err := c.ClaimScreenView("settings", func() error {
-				sends.Add(1)
-				return nil
-			})
-			results <- claimed
-			assert.Equal(t, today, day)
-			assert.NoError(t, err)
+			if tc.name == "unchanged, no backup" {
+				assert.Equal(t, tc.stored, string(data))
+			}
+			assert.JSONEq(t, tc.want, string(data))
+			var claims screenClaims
+			require.NoError(t, json.Unmarshal(data, &claims))
+			assert.True(t, claims.readable())
 		})
 	}
-	wg.Wait()
-	close(results)
-	claims := 0
-	for claimed := range results {
-		if claimed {
-			claims++
-		}
-	}
-	assert.Equal(t, 1, claims)
-	assert.EqualValues(t, 1, sends.Load())
 }

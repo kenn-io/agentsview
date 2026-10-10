@@ -81,6 +81,29 @@ func TestDiscoverRepos_FindsRootAndFiltersMissing(t *testing.T) {
 	assert.Equal(t, canonAll(want), canonAll(slices.Concat(got...)), "DiscoverRepos")
 }
 
+func TestDiscoverRepos_SymlinkParentCommitTotals(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix resolves a parent after following its symbolic link")
+	}
+	skipIfNoGit(t)
+	actual, decoy := initBareRepo(t), initBareRepo(t)
+	commitAt(t, actual, "2026-01-01T00:00:00Z", "one")
+	commitAt(t, decoy, "2026-01-01T00:00:00Z", "one")
+	commitAt(t, decoy, "2026-01-02T00:00:00Z", "two")
+	child := mkdirIn(t, actual, "child")
+	link := filepath.Join(decoy, "link")
+	require.NoError(t, os.Symlink(child, link))
+	t.Chdir(decoy)
+	for _, recorded := range []string{link + "/..", link + "/../missing", "link/..", "link/../missing"} {
+		groups := DiscoverRepos(t.Context(), []string{recorded})
+		require.Len(t, groups, 1)
+		require.Equal(t, canonAll([]string{actual}), groups[0])
+		totals, err := AggregateLog(t.Context(), groups[0][0], "test@example.com", "1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z")
+		require.NoError(t, err)
+		assert.Equal(t, 1, totals.Commits)
+	}
+}
+
 func TestFindRepoRoot_DirectoryAlias(t *testing.T) {
 	skipIfNoGit(t)
 	repo := initBareRepo(t)
@@ -400,9 +423,11 @@ func TestFindRepoRoot_WindowsRootedPointers(t *testing.T) {
 					if filepath.VolumeName(cache) == filepath.VolumeName(repo) {
 						t.Skip("a second drive is unavailable")
 					}
-					t.Setenv("GOTMPDIR", cache)
 					original := gitdir
-					gitdir = t.TempDir()
+					gitdir, err = os.MkdirTemp(cache, "agentsview-gitdir-") //nolint:usetesting // t.TempDir allocates on the original drive.
+					require.NoError(t, err)
+					t.Cleanup(func() { _ = os.RemoveAll(gitdir) })
+					require.NotEqual(t, strings.ToLower(filepath.VolumeName(repo)), strings.ToLower(filepath.VolumeName(gitdir)))
 					require.NoError(t, os.WriteFile(original, []byte("gitdir: "+filepath.ToSlash(gitdir)+"\n"), 0o600))
 				} else {
 					require.NoError(t, os.Mkdir(gitdir, 0o700))
@@ -949,4 +974,23 @@ func TestDiscoverRepos_UsesGlobalOrigin(t *testing.T) {
 	require.NoError(t, os.WriteFile(os.Getenv("GIT_CONFIG_GLOBAL"), []byte("[remote \"origin\"]\n url = https://example.com/team/repo.git\n"), 0o600))
 	a, b := initRepo(t), initRepo(t)
 	assert.Len(t, DiscoverRepos(t.Context(), []string{a, b}), 1)
+}
+
+func TestFindRepoRoot_WindowsStartPaths(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows drive-relative and rooted paths")
+	}
+	skipIfNoGit(t)
+	repo := initBareRepo(t)
+	child := mkdirIn(t, repo, "child")
+	t.Chdir(repo)
+	volume := filepath.VolumeName(child)
+	for _, start := range []string{"child", volume + "child", strings.TrimPrefix(child, volume), filepath.ToSlash(strings.TrimPrefix(child, volume))} {
+		t.Run(start, func(t *testing.T) {
+			expected := gitToplevel(t.Context(), start)
+			require.NotEmpty(t, expected)
+			assert.Equal(t, expected, findRepoRoot(t.Context(), start))
+			assert.Equal(t, expected, findRepoRoot(t.Context(), start+string(filepath.Separator)+"missing"))
+		})
+	}
 }
