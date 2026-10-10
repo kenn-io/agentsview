@@ -490,45 +490,27 @@ func (e *Engine) filterQuickSyncFiles(
 		}
 		return strings.Compare(a.Path, b.Path)
 	})
-	var container, afterPath string
+	var container string
 	var agent parser.AgentType
-	var page []parser.StoredMemberFreshness
-	var pager parser.StoredMemberFreshnessPager
-	var pageIndex int
-	var done, pageFailed bool
+	var cursor *parser.StoredMemberFreshnessCursor
+	var pageFailed bool
 	for _, f := range candidates {
 		dbPath, _, _ := sqliteContainerSourceForFile(f)
 		if container != dbPath || agent != f.Agent {
-			agent = f.Agent
-			container, afterPath, page, pageIndex, done, pageFailed = dbPath, "", nil, 0, false, false
-			pager = e.storedMemberFreshnessPager(dbPath, e.idPrefix+string(f.Agent)+":", func(row db.VirtualContainerMemberFreshness) (int64, bool) {
+			agent, container, pageFailed = f.Agent, dbPath, false
+			cursor = parser.NewStoredMemberFreshnessCursor(e.storedMemberFreshnessPager(dbPath, e.idPrefix+string(f.Agent)+":", func(row db.VirtualContainerMemberFreshness) (int64, bool) {
 				return row.MTimeNS, providerSourceMetadataFresh(f.Agent, row)
-			})
+			}))
 		}
-		for !pageFailed && (pageIndex >= len(page) || page[pageIndex].Path < f.Path) {
-			if pageIndex < len(page) {
-				pageIndex++
-				continue
-			}
-			if done {
-				break
-			}
+		var row parser.StoredMemberFreshness
+		var found bool
+		if !pageFailed {
 			var err error
-			page, done, err = pager(ctx, afterPath, 256)
-			pageIndex = 0
-			if err != nil {
-				pageFailed = true
-				break
-			}
-			if len(page) > 0 {
-				afterPath = page[len(page)-1].Path
-			} else {
-				done = true
-			}
+			row, found, err = cursor.Lookup(ctx, f.Path)
+			pageFailed = err != nil
 		}
-		if !pageFailed && pageIndex < len(page) && page[pageIndex].Path == f.Path && f.ProviderSource != nil &&
+		if found && !pageFailed && f.ProviderSource != nil &&
 			!e.forceParseRequested(f) && e.pathRewriter == nil && e.sqliteContainerPassCaptureValid(dbPath) {
-			row := page[pageIndex]
 			fingerprint, complete := parser.OpenCodeCompositeFingerprint(*f.ProviderSource)
 			if row.Suppressed || (complete && fingerprint.MTimeNS != 0 && providerFingerprintMatchesStored(f.Agent, fingerprint, 0, row.CoveredThroughNS, row.FingerprintHash, true)) {
 				e.noteSQLiteContainerResult(f.Path, true)
@@ -968,6 +950,19 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 			return
 		}
 		err := e.db.Update(ctx, func(tx *sql.Tx) error {
+			mayWrite := func(key string) (bool, error) {
+				raw, err := db.GetSyncStateTx(ctx, tx, key)
+				if err != nil {
+					return false, err
+				}
+				var header struct {
+					Version int `json:"version"`
+				}
+				if json.Unmarshal([]byte(raw), &header) == nil && header.Version > 1 {
+					return false, nil
+				}
+				return true, nil
+			}
 			if discovered != nil {
 				keys, err := db.ListSyncStateKeysByPrefixTx(ctx, tx, sqliteContainerSyncStatePrefix)
 				if err != nil {
@@ -975,6 +970,13 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 				}
 				for _, key := range keys {
 					if discovered[strings.TrimPrefix(key, sqliteContainerSyncStatePrefix)] == 0 {
+						writable, err := mayWrite(key)
+						if err != nil {
+							return err
+						}
+						if !writable {
+							continue
+						}
 						if err := db.DeleteSyncStateTx(ctx, tx, key); err != nil {
 							return err
 						}
@@ -982,6 +984,13 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 				}
 			}
 			for path, record := range records {
+				writable, err := mayWrite(sqliteContainerSyncStatePrefix + path)
+				if err != nil {
+					return err
+				}
+				if !writable {
+					continue
+				}
 				raw, err := json.Marshal(record)
 				if err != nil {
 					return err

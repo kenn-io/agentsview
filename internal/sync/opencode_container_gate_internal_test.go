@@ -381,7 +381,7 @@ func TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows(t *testing.T) {
 		states := make(map[string]parser.SQLiteContainerState)
 		var files []parser.DiscoveredFile
 		require.NoError(t, archive.Update(t.Context(), func(tx *sql.Tx) error {
-			for i := range 257 {
+			for i := range 513 {
 				for _, agent := range []parser.AgentType{parser.AgentOpenCode, parser.AgentMiMoCode} {
 					container := filepath.Join(root, openCodeFormatDBName(agent))
 					states[container] = parser.SQLiteContainerState{DBInode: 1, DBDevice: 1}
@@ -1880,6 +1880,19 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			fn := e.sqliteContainerListsWatermarkOnly(states)
 			got := fn != nil && fn(path)
 			assert.Equal(t, tc.want, got)
+			if tc.name == "future record version" {
+				for _, listed := range []bool{true, false} {
+					e.beginStreamingSQLiteContainerPass(states)
+					if listed {
+						e.containerPass.discovered[path], e.containerPass.completed[path] = 1, 1
+						e.containerPass.fullDigestListed[path] = true
+					}
+					e.finishSQLiteContainerPass(t.Context(), false, true)
+					raw, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path)
+					require.NoError(t, err)
+					assert.Equal(t, tc.raw, raw, "publication and cleanup preserve newer records")
+				}
+			}
 			if tc.localLegacy {
 				_, trusted := e.trustedSQLiteContainers[path]
 				assert.Equal(t, tc.wantTrust, trusted)

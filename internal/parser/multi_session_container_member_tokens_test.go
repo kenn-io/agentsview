@@ -325,33 +325,33 @@ func TestStoredMemberFreshnessCursorLookup(t *testing.T) {
 		{Path: "c#4", CoveredThroughNS: 100},
 		{Path: "c#5", CoveredThroughNS: 100, Suppressed: true},
 	}
-	cursor := storedMemberFreshnessCursor{pager: memoryFreshnessPager(rows, 2)}
+	cursor := StoredMemberFreshnessCursor{pager: memoryFreshnessPager(rows, 2)}
 	ctx := t.Context()
 
-	row, ok, err := cursor.lookup(ctx, "c#1")
+	row, ok, err := cursor.Lookup(ctx, "c#1")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, "c#1", row.Path)
 
-	_, ok, err = cursor.lookup(ctx, "c#3")
+	_, ok, err = cursor.Lookup(ctx, "c#3")
 	require.NoError(t, err)
 	assert.False(t, ok, "path between two stored pages is absent")
 
-	row, ok, err = cursor.lookup(ctx, "c#5")
+	row, ok, err = cursor.Lookup(ctx, "c#5")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, "c#5", row.Path)
 
-	_, ok, err = cursor.lookup(ctx, "c#6")
+	_, ok, err = cursor.Lookup(ctx, "c#6")
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	failing := storedMemberFreshnessCursor{
+	failing := StoredMemberFreshnessCursor{
 		pager: func(context.Context, string, int) ([]StoredMemberFreshness, bool, error) {
 			return nil, false, errors.New("pager failed")
 		},
 	}
-	_, _, err = failing.lookup(ctx, "c#1")
+	_, _, err = failing.Lookup(ctx, "c#1")
 	require.Error(t, err)
 
 	for _, tc := range []struct {
@@ -365,7 +365,7 @@ func TestStoredMemberFreshnessCursorLookup(t *testing.T) {
 		{"c#5", 101, true},
 		{"c#6", 0, false},
 	} {
-		c := storedMemberFreshnessCursor{pager: memoryFreshnessPager(rows, 2)}
+		c := StoredMemberFreshnessCursor{pager: memoryFreshnessPager(rows, 2)}
 		got, err := c.covers(ctx, tc.path, tc.watermark)
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, got, tc.path)

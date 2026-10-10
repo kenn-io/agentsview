@@ -727,7 +727,7 @@ func (s multiSessionContainerSourceSet) changedTokenMembers(
 	var sources []SourceRef
 	err = s.cfg.memberTokens(ctx, match.toSource(root),
 		func(member multiSessionMemberToken) error {
-			row, ok, err := cursor.lookup(ctx, member.Path)
+			row, ok, err := cursor.Lookup(ctx, member.Path)
 			if err != nil {
 				return err
 			}
@@ -757,21 +757,21 @@ func (s multiSessionContainerSourceSet) changedTokenMembers(
 // start of the stored side, reusing the first page when that page holds one.
 func firstUnsuppressedStoredPage(
 	ctx context.Context, pager StoredMemberFreshnessPager,
-) (storedMemberFreshnessCursor, bool, error) {
+) (StoredMemberFreshnessCursor, bool, error) {
 	after := ""
 	for {
 		rows, done, err := pager(ctx, after, storedMemberFreshnessPageSize)
 		if err != nil {
-			return storedMemberFreshnessCursor{}, false, err
+			return StoredMemberFreshnessCursor{}, false, err
 		}
 		for _, row := range rows {
 			if row.Suppressed {
 				continue
 			}
 			if after != "" {
-				return storedMemberFreshnessCursor{pager: pager}, true, nil
+				return StoredMemberFreshnessCursor{pager: pager}, true, nil
 			}
-			return storedMemberFreshnessCursor{
+			return StoredMemberFreshnessCursor{
 				pager: pager,
 				rows:  rows,
 				after: rows[len(rows)-1].Path,
@@ -779,7 +779,7 @@ func firstUnsuppressedStoredPage(
 			}, true, nil
 		}
 		if done || len(rows) == 0 {
-			return storedMemberFreshnessCursor{}, false, nil
+			return StoredMemberFreshnessCursor{}, false, nil
 		}
 		after = rows[len(rows)-1].Path
 	}
