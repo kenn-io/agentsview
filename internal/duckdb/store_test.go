@@ -1637,7 +1637,7 @@ func TestAnalyticsVelocityUsesMessageCyclesAndBreakdowns(t *testing.T) {
 	assert.Equal(t, 1, got.ByAgent[0].Sessions)
 	require.Len(t, got.ByComplexity, 1)
 	assert.Equal(t, "1-15", got.ByComplexity[0].Label)
-	t.Run("captured session IDs across chunks", func(t *testing.T) {
+	t.Run("captured session IDs beyond 900 bind variables", func(t *testing.T) {
 		ids := make([]string, 901)
 		for i := range ids {
 			ids[i] = fmt.Sprintf("absent-%d", i)

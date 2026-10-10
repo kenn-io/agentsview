@@ -142,10 +142,11 @@ func duckAnalyticsToolMessageJoin(
 }
 
 func (s analyticsSQL) Autonomy(ctx context.Context, ids []string, _ db.AnalyticsFilter) (map[string]int, error) {
-	out := make(map[string]int)
-	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
-		ph, args := db.InPlaceholders(chunk)
-		rows, err := s.QueryContext(ctx, `
+	if len(ids) == 0 {
+		return map[string]int{}, nil
+	}
+	ph, args := db.InPlaceholders(ids)
+	rows, err := s.QueryContext(ctx, `
 		SELECT session_id,
 			SUM(CASE WHEN role = 'user' AND is_system = FALSE
 				AND COALESCE(source_subtype, '') != 'tool_result' THEN 1 ELSE 0 END) AS user_count,
@@ -153,73 +154,53 @@ func (s analyticsSQL) Autonomy(ctx context.Context, ids []string, _ db.Analytics
 		FROM messages
 		WHERE session_id IN `+ph+`
 		GROUP BY session_id`,
-			args...,
-		)
-		if err != nil {
-			return fmt.Errorf("querying duckdb autonomy: %w", err)
-		}
-		defer rows.Close()
-		counts, err := readbase.ScanAnalyticsAutonomy(rows, "duckdb")
-		if err != nil {
-			return err
-		}
-		for bucket, count := range counts {
-			out[bucket] += count
-		}
-		return nil
-	})
+		args...,
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying duckdb autonomy: %w", err)
 	}
-	return out, nil
+	defer rows.Close()
+	return readbase.ScanAnalyticsAutonomy(rows, "duckdb")
 }
 
 func (s analyticsSQL) VelocityMessages(ctx context.Context, ids []string, _ db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
 	out := make(map[string][]db.TimingMessage)
-	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
-		ph, args := db.InPlaceholders(chunk)
-		rows, err := s.QueryContext(ctx, `
+	if len(ids) == 0 {
+		return out, nil
+	}
+	ph, args := db.InPlaceholders(ids)
+	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
 		WHERE session_id IN `+ph+`
 		ORDER BY session_id, ordinal`,
-			args...,
-		)
-		if err != nil {
-			return fmt.Errorf("querying duckdb velocity messages: %w", err)
-		}
-		defer rows.Close()
-		_, err = readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
-		return err
-	})
+		args...,
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying duckdb velocity messages: %w", err)
 	}
-	return out, nil
+	defer rows.Close()
+	return readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
 }
 
 func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db.AnalyticsFilter) (map[string]int, error) {
 	out := make(map[string]int)
-	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
-		ph, args := db.InPlaceholders(chunk)
-		rows, err := s.QueryContext(ctx, `
+	if len(ids) == 0 {
+		return out, nil
+	}
+	ph, args := db.InPlaceholders(ids)
+	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, COUNT(*)
 		FROM tool_calls
 		WHERE session_id IN `+ph+`
 		GROUP BY session_id`,
-			args...,
-		)
-		if err != nil {
-			return fmt.Errorf("querying duckdb velocity tool calls: %w", err)
-		}
-		defer rows.Close()
-		_, err = readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
-		return err
-	})
+		args...,
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("querying duckdb velocity tool calls: %w", err)
 	}
-	return out, nil
+	defer rows.Close()
+	return readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
 }
 
 func (s *Store) duckPopulateFrustrationMarkers(
