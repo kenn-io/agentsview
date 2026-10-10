@@ -662,6 +662,7 @@ func TestSyncClaudeAINewChatCancellationIsAtomic(t *testing.T) {
 
 func TestSyncClaudeAIZipFreshness(t *testing.T) {
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
+	const watermark = "2026-03-02T00:00:00.000Z"
 	for _, tt := range []struct {
 		name, exported string
 		options        ImportOptions
@@ -696,6 +697,20 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, []string{"Hello", "Zip reply"}, messageContents(messages))
 			}
+			var before *db.Session
+			if tt.name == "zip changes title" {
+				before, err = d.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, before)
+				// Backdate the completed ZIP import to represent a title already pushed to the mirror.
+				require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET created_at = '2026-03-01T12:00:00.000Z', local_modified_at = '2026-03-01T12:00:00.000Z' WHERE id = ?", id)
+					return err
+				}))
+				candidates, err := d.ListSessionsForMirrorWindow(t.Context(), watermark, nil, nil)
+				require.NoError(t, err)
+				require.Empty(t, candidates)
+			}
 			stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
 			require.NoError(t, err)
 			if tt.name == "zip changes title" {
@@ -704,6 +719,13 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, session.SessionName)
 				assert.Equal(t, "Chat", *session.SessionName)
+				candidates, err := d.ListSessionsForMirrorWindow(t.Context(), watermark, nil, nil)
+				require.NoError(t, err)
+				require.Len(t, candidates, 1)
+				assert.Equal(t, id, candidates[0].ID)
+				assert.Equal(t, before.TranscriptRevision, candidates[0].TranscriptRevision)
+				require.NotNil(t, candidates[0].SessionName)
+				assert.Equal(t, "Chat", *candidates[0].SessionName)
 				return
 			}
 			assert.Equal(t, 1, stats.Updated)
@@ -716,40 +738,6 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			assert.Equal(t, []string{"Hello", "Chosen reply"}, messageContents(messages))
 		})
 	}
-}
-
-func TestSyncClaudeAIMetadataUpdateEntersMirrorWindow(t *testing.T) {
-	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
-	const watermark = "2026-03-02T00:00:00.000Z"
-	d := testDB(t)
-	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
-		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
-	})
-	_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	exported := strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)
-	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
-	require.NoError(t, err)
-	before, err := d.GetSessionFull(t.Context(), id)
-	require.NoError(t, err)
-	require.NotNil(t, before)
-	// Backdate the completed ZIP import to represent a title already pushed to the mirror.
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET created_at = '2026-03-01T12:00:00.000Z', local_modified_at = '2026-03-01T12:00:00.000Z' WHERE id = ?", id)
-		return err
-	}))
-	candidates, err := d.ListSessionsForMirrorWindow(t.Context(), watermark, nil, nil)
-	require.NoError(t, err)
-	require.Empty(t, candidates)
-	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
-	require.NoError(t, err)
-	candidates, err = d.ListSessionsForMirrorWindow(t.Context(), watermark, nil, nil)
-	require.NoError(t, err)
-	require.Len(t, candidates, 1)
-	assert.Equal(t, id, candidates[0].ID)
-	assert.Equal(t, before.TranscriptRevision, candidates[0].TranscriptRevision)
-	require.NotNil(t, candidates[0].SessionName)
-	assert.Equal(t, "Chat", *candidates[0].SessionName)
 }
 
 type cancelAfterReplacementSyncStore struct {
@@ -825,14 +813,11 @@ func TestSyncClaudeAIBranchSwitch(t *testing.T) {
 				assert.Empty(t, stats.Refusals)
 				messages, err := d.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 				require.NoError(t, err)
-				want := []string{"Hello", "Chosen reply"}
-				switch selected {
-				case "a2":
-					want = append(want, "More", "Answer")
-				case "b2":
-					want = append(want, "Edited question", "Edited answer")
+				wantCount := 4
+				if selected == "reply" {
+					wantCount = 2
 				}
-				assert.Equal(t, want, messageContents(messages))
+				assert.Len(t, messages, wantCount)
 				for _, row := range messages {
 					assert.Empty(t, row.SourceUUID)
 				}

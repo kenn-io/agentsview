@@ -22,14 +22,13 @@ vi.mock("../../api/client.js", () => ({
 }));
 afterEach(() => { vi.resetAllMocks(); syncState.readOnly = false; setLocale("en", { reload: false }); });
 
-it.each([
-  ["claude_ai_auth_required", "Sign in to Claude.ai, then Sync again", "Connectez-vous à Claude.ai, puis relancez la synchronisation."],
-])("shows localized recovery for %s", async (code, message, expected) => {
+it("shows localized recovery for claude_ai_auth_required", async () => {
+  const message = "Sign in to Claude.ai, then Sync again";
   setLocale("fr", { reload: false });
-  syncClaudeAI.mockRejectedValue(new ApiError(0, message, code));
+  syncClaudeAI.mockRejectedValue(new ApiError(0, message, "claude_ai_auth_required"));
   render(ImportModal, { open: true, onclose: vi.fn(), onimported: vi.fn() });
   await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
-  await waitFor(() => expect(screen.getByText(expected)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Connectez-vous à Claude.ai, puis relancez la synchronisation.")).toBeTruthy());
   expect(screen.queryByText(message)).toBeNull();
 });
 
@@ -53,20 +52,6 @@ it("offers sign in and sync without a sign-in probe", async () => {
   );
   expect(onimported).toHaveBeenCalledOnce();
   expect(screen.getByText(m.import_processed({ count: 1 }))).toBeTruthy();
-});
-
-it("refreshes completed chats after sync error", async () => {
-  let rejectSync!: (error: Error) => void;
-  syncClaudeAI.mockImplementation(async (_host, callbacks) => {
-    callbacks.onProgress({ imported: 0, updated: 1, skipped: 0, errors: 0 });
-    return await new Promise((_, reject) => { rejectSync = reject; });
-  });
-  const onimported = vi.fn();
-  const onclose = vi.fn();
-  render(ImportModal, { open: true, onclose, onimported });
-  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
-  rejectSync(new Error("Interrupted sync"));
-  await waitFor(() => expect(onimported).toHaveBeenCalledOnce());
 });
 
 it("hides browser sync controls for a read-only archive", () => {

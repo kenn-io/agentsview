@@ -122,69 +122,62 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		assert.JSONEq(t, `{"error":"fetch request expired or already answered"}`, response.Body.String())
 	})
 
-	for _, tt := range []struct {
-		name   string
-		status int
-		body   string
-	}{
-		{"large result stores session", 200, strings.Replace(fixtures["detail"], `"Hello"`, `"`+strings.Repeat("x", 2<<20)+`"`, 1)},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := testServer(t, 5*time.Second)
-			httpServer := httptest.NewServer(srv.mux)
-			defer httpServer.Close()
-			postResult := func(id string, status int, body string, want int) {
-				post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+id, claudeAIRelayBody(t, status, body, ""))
-				require.NoError(t, err)
-				post.Header.Set("Content-Type", "application/json")
-				response, err := http.DefaultClient.Do(post)
-				require.NoError(t, err)
-				defer response.Body.Close()
-				data, err := io.ReadAll(response.Body)
-				require.NoError(t, err)
-				require.Equal(t, want, response.StatusCode, "%s", data)
-			}
-			post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
+	t.Run("large result stores session", func(t *testing.T) {
+		detail := strings.Replace(fixtures["detail"], `"Hello"`, `"`+strings.Repeat("x", 2<<20)+`"`, 1)
+		srv := testServer(t, 5*time.Second)
+		httpServer := httptest.NewServer(srv.mux)
+		defer httpServer.Close()
+		postResult := func(id string, status int, body string, want int) {
+			post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync/results/"+id, claudeAIRelayBody(t, status, body, ""))
 			require.NoError(t, err)
 			post.Header.Set("Content-Type", "application/json")
 			response, err := http.DefaultClient.Do(post)
 			require.NoError(t, err)
 			defer response.Body.Close()
-			require.Equal(t, http.StatusOK, response.StatusCode)
-			var stats importer.ImportStats
-			readImportEvents(t, response.Body, func(event, data string) {
-				switch event {
-				case "fetch":
-					var request struct {
-						ID   string `json:"id"`
-						Path string `json:"path"`
-					}
-					require.NoError(t, json.Unmarshal([]byte(data), &request))
-					switch request.Path {
-					case "/api/organizations":
-						postResult(request.ID, 200, fixtures["organizations"], http.StatusNoContent)
-					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
-						postResult(request.ID, 200, string(list), http.StatusNoContent)
-					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-						postResult(request.ID, tt.status, tt.body, http.StatusNoContent)
-					default:
-						require.FailNowf(t, "unexpected path", "%s", request.Path)
-					}
-				case "error":
-					require.FailNowf(t, "sync failed", "%s", data)
-				case "done":
-					require.NoError(t, json.Unmarshal([]byte(data), &stats))
-				}
-			})
-			assert.Equal(t, 1, stats.Imported)
-			assert.Zero(t, stats.Errors)
-			messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+			data, err := io.ReadAll(response.Body)
 			require.NoError(t, err)
-			require.Len(t, messages, 2)
-			assert.Equal(t, strings.Repeat("x", 2<<20), messages[0].Content)
-			assert.Equal(t, "Chosen reply", messages[1].Content)
+			require.Equal(t, want, response.StatusCode, "%s", data)
+		}
+		post, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpServer.URL+"/api/v1/import/claude-ai/sync", nil)
+		require.NoError(t, err)
+		post.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(post)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		require.Equal(t, http.StatusOK, response.StatusCode)
+		var stats importer.ImportStats
+		readImportEvents(t, response.Body, func(event, data string) {
+			switch event {
+			case "fetch":
+				var request struct {
+					ID   string `json:"id"`
+					Path string `json:"path"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(data), &request))
+				switch request.Path {
+				case "/api/organizations":
+					postResult(request.ID, 200, fixtures["organizations"], http.StatusNoContent)
+				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
+					postResult(request.ID, 200, string(list), http.StatusNoContent)
+				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+					postResult(request.ID, 200, detail, http.StatusNoContent)
+				default:
+					require.FailNowf(t, "unexpected path", "%s", request.Path)
+				}
+			case "error":
+				require.FailNowf(t, "sync failed", "%s", data)
+			case "done":
+				require.NoError(t, json.Unmarshal([]byte(data), &stats))
+			}
 		})
-	}
+		assert.Equal(t, 1, stats.Imported)
+		assert.Zero(t, stats.Errors)
+		messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+		require.NoError(t, err)
+		require.Len(t, messages, 2)
+		assert.Equal(t, strings.Repeat("x", 2<<20), messages[0].Content)
+		assert.Equal(t, "Chosen reply", messages[1].Content)
+	})
 	for _, tt := range []struct {
 		name, body string
 		status     int
