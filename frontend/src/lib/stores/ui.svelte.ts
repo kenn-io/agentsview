@@ -36,31 +36,40 @@ type ModalType =
 
 /** A tool call a jump expects at its target message; a rewrite can renumber messages, so the jump checks it. */
 export interface ScrollCall {
-  index: number;
+  /** The call's position in its message; undefined when the jump targets the message itself. */
+  index?: number;
   toolUseId: string;
-  /** For a call with no tool ID, the transcript revision the link was made from, since position alone can't tell two such calls apart. */
+  /** Without a tool ID, the transcript revision the link was made from, since position alone can't tell calls apart. */
   revision?: string;
+  /** The call's tool name and input fingerprint, since some agents derive tool IDs from the call's position. */
+  fingerprint?: string;
 }
 
 /** URL parameters that carry a ScrollCall in a message link. */
 export function scrollCallParams(call: ScrollCall): Record<string, string> {
-  if (call.toolUseId) return { call: String(call.index), tool_use_id: call.toolUseId };
-  return call.revision
-    ? { call: String(call.index), rev: call.revision }
-    : { call: String(call.index) };
+  const params: Record<string, string> = {};
+  if (call.index !== undefined) params["call"] = String(call.index);
+  if (call.toolUseId) params["tool_use_id"] = call.toolUseId;
+  else if (call.revision) params["rev"] = call.revision;
+  if (call.index !== undefined && call.fingerprint) params["fp"] = call.fingerprint;
+  return params;
 }
 
-/** Read a ScrollCall back from message-link parameters; undefined when the link names no call. */
+/** Read a ScrollCall back from message-link parameters; undefined when the link names no call or revision. */
 export function parseScrollCall(
   index?: string,
   toolUseId?: string,
   revision?: string,
+  fingerprint?: string,
 ): ScrollCall | undefined {
-  if (index === undefined || !/^\d+$/.test(index)) return undefined;
-  if (toolUseId) return { index: Number(index), toolUseId };
-  return revision
-    ? { index: Number(index), toolUseId: "", revision }
-    : { index: Number(index), toolUseId: "" };
+  const position = index !== undefined && /^\d+$/.test(index) ? Number(index) : undefined;
+  if (position === undefined) return revision ? { toolUseId: "", revision } : undefined;
+  let call: ScrollCall;
+  if (toolUseId) call = { index: position, toolUseId };
+  else if (revision) call = { index: position, toolUseId: "", revision };
+  else call = { index: position, toolUseId: "" };
+  if (fingerprint) call.fingerprint = fingerprint;
+  return call;
 }
 
 /** Block types that can be toggled visible/hidden. */

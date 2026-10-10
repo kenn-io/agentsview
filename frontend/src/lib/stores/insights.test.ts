@@ -465,6 +465,38 @@ describe("generate (multi-task)", () => {
     expect(insights.selectedTaskId).toBe(insights.tasks[0]?.clientId);
   });
 
+  it("generates and retries a tool-effectiveness report for a single session", async () => {
+    vi.mocked(api.generateInsight)
+      .mockReturnValueOnce({
+        abort: vi.fn(),
+        done: Promise.reject(new Error("report failed validation")),
+      })
+      .mockReturnValueOnce({ abort: vi.fn(), done: new Promise(() => {}) });
+
+    insights.generateForSession(makeSession(), "tool_effectiveness");
+    const expected = expect.objectContaining({
+      type: "tool_effectiveness",
+      date_from: "2026-07-05",
+      date_to: "2026-07-05",
+      session_id: "run:session-1",
+    });
+    expect(api.generateInsight).toHaveBeenLastCalledWith(
+      expected,
+      expect.any(Function),
+      expect.any(Function),
+    );
+
+    const clientId = insights.tasks[0]!.clientId;
+    await vi.waitFor(() => expect(insights.tasks[0]!.status).not.toBe("generating"));
+    insights.retryTask(clientId);
+    expect(api.generateInsight).toHaveBeenCalledTimes(2);
+    expect(api.generateInsight).toHaveBeenLastCalledWith(
+      expected,
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
   it("sends only visible session scope for canned recommendations", async () => {
     insights.setType("llm_canned");
     insights.setCannedKind("prompt_maturity_review");

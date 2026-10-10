@@ -30,6 +30,7 @@
   } from "./message-scroll.js";
   import { m } from "../../i18n/index.js";
   import { settleVirtualScroll } from "./staged-scroll.js";
+  import { toolCallFingerprint } from "../../utils/tool-call-fingerprint.js";
   import { revealMatch } from "../../search/reveal.js";
   import type { Match } from "../../search/session-index.js";
   import {
@@ -526,10 +527,14 @@
       if (!call.toolUseId && call.revision !== undefined && messages.loadedRevision !== call.revision) {
         return false;
       }
+      if (call.index === undefined) return true;
       const message = messages.messages.find((m) => m.ordinal === ordinal);
       if (message === undefined) return true;
       const held = message.tool_calls?.[call.index];
-      return held !== undefined && (held.tool_use_id ?? "") === call.toolUseId;
+      if (held === undefined || (held.tool_use_id ?? "") !== call.toolUseId) return false;
+      // Some agents derive tool IDs from the call's position, so a rewrite can reuse one for another call.
+      return call.fingerprint === undefined ||
+        toolCallFingerprint(held.tool_name, held.input_json ?? "") === call.fingerprint;
     };
     const abandon = () => {
       if (ui.selectedOrdinal === ordinal) ui.selectedOrdinal = null;

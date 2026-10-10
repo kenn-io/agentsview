@@ -13082,6 +13082,7 @@ paths:
               - daily_activity
               - agent_analysis
               - llm_canned
+              - tool_effectiveness
             type: string
         - description: Filter by project
           explode: false
