@@ -27,7 +27,7 @@ const (
 	// keeps the original suffix-only filename (session.jsonl[.zstd]); later
 	// generations add a lowercase .vN component (session.vN.jsonl[.zstd]).
 	deepSeekHarnessOldestFormatVersion = 0
-	deepSeekHarnessNewestFormatVersion = 3
+	deepSeekHarnessNewestFormatVersion = 4
 	deepSeekHarnessMaxSafeInt          = int64(1<<53 - 1)
 	deepSeekHarnessMaxWindow           = 8 << 20
 	deepSeekHarnessDecoderMemory       = 64 << 20
@@ -81,7 +81,7 @@ func (err deepSeekHarnessUnsupportedError) Error() string {
 }
 
 // deepSeekHarnessKnownEvents is the union of the released generation-0 and
-// generation-3 inventories plus the compatibility events introduced between
+// generation-4 inventories plus the compatibility events introduced between
 // them; see the pinned provenance in session-format-sources.md.
 var deepSeekHarnessKnownEvents = map[string]struct{}{
 	"agent-preset/selected": {}, "agent/inbox/spliced": {},
@@ -89,10 +89,10 @@ var deepSeekHarnessKnownEvents = map[string]struct{}{
 	"assistant/attempt": {}, "assistant/chunk": {}, "assistant/message": {},
 	"command/done": {}, "command/run": {},
 	"compaction/end": {}, "compaction/prune": {}, "compaction/start": {},
-	"compaction/summary": {}, "deliverables/presented": {},
+	"compaction/summary": {}, "deliverables/presented": {}, "developer/message": {},
 	"feedback/message-delete": {}, "feedback/message-put": {},
 	"feedback/record": {}, "goal/change": {},
-	"hook/invoked": {}, "hook/result": {}, "llm/retry": {},
+	"hook/invoked": {}, "hook/result": {}, "image/offload": {}, "llm/retry": {},
 	"llm/retry-started": {}, "model/selection": {},
 	"permission/preset": {}, "plan/mode": {},
 	"request/context": {}, "request/header": {}, "sandbox/mode": {},
@@ -109,11 +109,12 @@ var deepSeekHarnessKnownEvents = map[string]struct{}{
 	"tool/code-dispatch-start": {}, "tool/ptc-dispatch": {},
 	"tool/ptc-dispatch-start": {}, "tool/result": {},
 	"turn/end": {}, "turn/start": {}, "user/message": {},
-	"web/deepseek-search-llm-request": {},
+	"web/deepseek-search-llm-request": {}, "workspace/changes": {},
+	"working-directory/change": {},
 }
 
 var deepSeekHarnessSurfaceEvents = map[string]struct{}{
-	"system/message": {}, "user/message": {}, "assistant/message": {},
+	"system/message": {}, "developer/message": {}, "user/message": {}, "assistant/message": {},
 	"tool/result": {},
 }
 

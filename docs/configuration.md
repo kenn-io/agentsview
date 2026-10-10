@@ -500,7 +500,7 @@ costs, including through remote sync. Continued teammate runs remain separate
 sessions, matching Cline's own store.
 
 DeepSeek Harness sessions are read from its default JSONL persistence backend,
-including released format versions 0 through 3 in plain or zstd-compressed
+including released format versions 0 through 4 in plain or zstd-compressed
 files. Version 0 uses `session.jsonl[.zstd]`; later versions use
 `session.vN.jsonl[.zstd]`. When a session directory retains multiple immutable
 generations, AgentsView reads the numerically newest supported generation.
