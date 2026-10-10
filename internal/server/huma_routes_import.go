@@ -24,6 +24,13 @@ import (
 func (s *Server) registerImportRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/import")
 	configureRouteGroup(group, "Import")
+	group.UseSimpleModifier(func(op *huma.Operation) {
+		if op.Method == http.MethodPost && op.Path == "/api/v1/import/claude-ai/sync" {
+			if response := op.Responses["409"]; response != nil {
+				response.Description = "Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running."
+			}
+		}
+	})
 	s.api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[importer.ImportStats](), true, "")
 	var results sync.Map
 	localChrome := func(ctx huma.Context, next func(huma.Context)) {
@@ -50,7 +57,6 @@ func (s *Server) registerImportRoutes() {
 			})
 			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required."
 		})
-	s.api.OpenAPI().Paths["/api/v1/import/claude-ai/sync"].Post.Responses["409"].Description = "Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running."
 	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
 		func(ctx context.Context, in *claudeAISyncResultInput) (*struct{}, error) {
 			value, ok := results.LoadAndDelete(in.ID)
