@@ -671,6 +671,7 @@ agentsview prune [flags]
 
 | Flag              | Default | Description                                         |
 | ----------------- | ------- | --------------------------------------------------- |
+| `--agent`         |         | Filter by agent name, such as `mimocode`             |
 | `--project`       |         | Sessions whose project contains this substring      |
 | `--max-messages`  | `-1`    | Sessions with at most N messages                    |
 | `--before`        |         | Sessions that ended before this date (`YYYY-MM-DD`) |

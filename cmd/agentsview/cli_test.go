@@ -64,6 +64,38 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 	}
 }
 
+func TestPruneCommandAgentFilter(t *testing.T) {
+	dataDir := testDataDir(t)
+	database, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	for _, session := range []db.Session{
+		{ID: "mimo-a", Agent: "mimocode", Project: "project-a", Machine: "local"},
+		{ID: "mimo-b", Agent: "mimocode", Project: "project-b", Machine: "local"},
+		{ID: "claude-a", Agent: "claude", Project: "project-a", Machine: "local"},
+	} {
+		require.NoError(t, database.UpsertSession(t.Context(), session))
+	}
+	require.NoError(t, database.Close())
+
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"agent only", []string{"--agent", "mimocode", "--dry-run"}, "Found 2 sessions"},
+		{"agent and project", []string{"--agent", "mimocode", "--project", "project-a", "--dry-run"}, "Found 1 sessions"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				_, err := executeCommand(newRootCommand(), append([]string{"prune"}, tt.args...)...)
+				require.NoError(t, err)
+			})
+			assert.Contains(t, out, tt.want)
+			assert.Contains(t, out, "Dry run: no changes made.")
+		})
+	}
+}
+
 func TestRootHelpShowsDuckDBEnvironment(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "--help")
 	require.NoError(t, err, "Execute")

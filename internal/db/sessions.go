@@ -5862,6 +5862,7 @@ func scanSessionRowsWithSource(rows *sql.Rows, includeSource bool) ([]Session, e
 // PruneFilter defines criteria for finding sessions to prune.
 // Filters combine with AND. At least one must be set.
 type PruneFilter struct {
+	Agent        string // exact match
 	Project      string // substring match (LIKE '%x%')
 	MaxMessages  *int   // user messages <= N (nil = no filter)
 	Before       string // ended_at < date (YYYY-MM-DD)
@@ -5870,7 +5871,8 @@ type PruneFilter struct {
 
 // HasFilters reports whether at least one filter is set.
 func (f PruneFilter) HasFilters() bool {
-	return f.Project != "" ||
+	return f.Agent != "" ||
+		f.Project != "" ||
 		f.MaxMessages != nil ||
 		f.Before != "" ||
 		f.FirstMessage != ""
@@ -5894,6 +5896,10 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 	where := "deleted_at IS NULL"
 	args := []any{}
 
+	if f.Agent != "" {
+		where += " AND agent = ?"
+		args = append(args, f.Agent)
+	}
 	if f.Project != "" {
 		where += ` AND project LIKE ? ESCAPE '\'`
 		args = append(args, "%"+escapeLike(f.Project)+"%")

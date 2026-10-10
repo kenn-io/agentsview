@@ -2741,6 +2741,7 @@ func setupPruneData(t *testing.T, d *DB) {
 	t.Helper()
 	// s1: 2 user messages
 	insertSession(t, d, "s1", "spicytakes", func(s *Session) {
+		s.Agent = "mimocode"
 		s.FirstMessage = new("You are a code reviewer")
 		s.EndedAt = new("2024-01-15T00:00:00Z")
 		s.MessageCount = 2
@@ -2761,6 +2762,7 @@ func setupPruneData(t *testing.T, d *DB) {
 	insertMessages(t, d, b2.msgs...)
 	// s3: 2 user messages
 	insertSession(t, d, "s3", "roborev", func(s *Session) {
+		s.Agent = "mimocode"
 		s.FirstMessage = new("You are a code reviewer")
 		s.EndedAt = new("2024-03-01T00:00:00Z")
 		s.MessageCount = 2
@@ -2798,6 +2800,26 @@ func TestFindPruneCandidates(t *testing.T) {
 		filter PruneFilter
 		want   []string
 	}{
+		{
+			name:   "AgentOnly",
+			filter: PruneFilter{Agent: "mimocode"},
+			want:   []string{"s1", "s3"},
+		},
+		{
+			name:   "CombinedAgentAndProject",
+			filter: PruneFilter{Agent: "mimocode", Project: "spicy"},
+			want:   []string{"s1"},
+		},
+		{
+			name:   "AgentExactMatch",
+			filter: PruneFilter{Agent: "mimo"},
+			want:   []string{},
+		},
+		{
+			name:   "AgentLiteralMatch",
+			filter: PruneFilter{Agent: "mimocode' OR 1=1 --"},
+			want:   []string{},
+		},
 		{
 			name:   "ProjectSubstring",
 			filter: PruneFilter{Project: "spicy"},

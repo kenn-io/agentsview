@@ -39,8 +39,17 @@ func TestParsePruneFlags(t *testing.T) {
 			},
 		},
 		{
+			name: "agent filter",
+			args: []string{"--agent", "mimocode"},
+			check: func(t *testing.T, cfg PruneConfig) {
+				t.Helper()
+				assert.Equal(t, "mimocode", cfg.Filter.Agent)
+			},
+		},
+		{
 			name: "all flags",
 			args: []string{
+				"--agent", "mimocode",
 				"--project", "p",
 				"--max-messages", "5",
 				"--before", "2024-01-01",
@@ -52,6 +61,7 @@ func TestParsePruneFlags(t *testing.T) {
 				t.Helper()
 
 				assert.Equal(t, "p", cfg.Filter.Project)
+				assert.Equal(t, "mimocode", cfg.Filter.Agent)
 				require.NotNil(t, cfg.Filter.MaxMessages)
 				assert.Equal(t, 5, *cfg.Filter.MaxMessages)
 				assert.Equal(t, "2024-01-01", cfg.Filter.Before)
