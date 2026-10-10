@@ -203,6 +203,22 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 		return machine == root.DeviceID ||
 			(root.DeviceID == owner && (machine == "" || machine == "local" || aliases[machine] == owner))
 	}
+	active := make(map[string]bool)
+	for _, path := range sourcePaths {
+		ids, err := scratch.ListSessionIDsByFilePath(ctx, path, root.Provider)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			session, err := scratch.GetSessionFull(ctx, id)
+			if err != nil {
+				return err
+			}
+			if session != nil && ownedBy(session.Machine) {
+				active[id] = true
+			}
+		}
+	}
 	seen := make(map[string]bool)
 	var policyError error
 	prepared.Config.ArchiveSessionPolicy = func(ctx context.Context, s *db.Session, native string) (keep bool, retErr error) {
@@ -250,10 +266,29 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 	// The parser can intentionally drop a source's only session, such as a
 	// content-free usage probe. Sync accepts that, so reparse does too.
 	excluded := make(map[string]bool)
-	prepared.Config.ParserExclusionObserver = func(ids []string) {
+	prepared.Config.ParserExclusionPolicy = func(ctx context.Context, ids []string) (retErr error) {
+		defer func() { policyError = errors.Join(policyError, retErr) }()
 		for _, id := range ids {
+			existing, err := scratch.GetSessionFull(ctx, id)
+			if err != nil {
+				return err
+			}
+			if existing != nil && (existing.Agent != root.Provider || !ownedBy(existing.Machine) || existing.FilePath == nil || !slices.Contains(sourcePaths, *existing.FilePath)) {
+				return fmt.Errorf("parser exclusion conflicts with a different source: %s", id)
+			}
+			if active[id] {
+				return fmt.Errorf("provider excluded an existing active session: %s", id)
+			}
+			native := strings.TrimPrefix(id, prepared.Config.IDPrefix)
+			if strings.Contains(native, "~") {
+				return errors.New("parser excluded a transport-qualified session identity")
+			}
+			if _, err := scratch.BindRawArchiveSession(ctx, root, source.SourceKey, native, id); err != nil {
+				return err
+			}
 			excluded[id] = true
 		}
+		return nil
 	}
 	engine := syncer.NewEngine(ctx, scratch, prepared.Config)
 	defer engine.Close()
@@ -277,6 +312,11 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 		if !seen[id] {
 			suppressed[id] = true
 			seen[id] = true
+		}
+	}
+	for id := range active {
+		if !seen[id] || suppressed[id] {
+			return fmt.Errorf("provider did not retain existing active session %s", id)
 		}
 	}
 	if len(seen) == 0 {
