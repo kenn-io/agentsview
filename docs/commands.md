@@ -1912,9 +1912,9 @@ bind to `127.0.0.1`; non-loopback binds require `--http-allow-insecure` plus a
 configured bearer token.
 
 Local MCP mode reuses its connection while the writable daemon runtime record
-and process identity match. If a read loses its connection, MCP resolves the
-daemon again, starts it when needed, and retries once. The MCP server does not
-open the local SQLite archive directly.
+and process identity match. After the daemon exits, the next call finds it again
+and starts it when needed. The MCP server does not open the local SQLite archive
+directly.
 Read-only daemons, startup fallbacks, and daemons whose process identity cannot
 be verified use full discovery for each call.
 

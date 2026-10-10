@@ -211,9 +211,8 @@ short page can have a `next_from` and should be continued.
 ## Daemon-Backed Reads
 
 Local MCP mode reuses its connection while the writable daemon runtime record
-and process identity match. If a read loses its connection, MCP resolves the
-daemon again, starts it when needed, and retries the read once. Writes and
-streams are never replayed.
+and process identity match. After the daemon exits, the next call finds it again
+and starts it when needed.
 Read-only daemons, startup fallbacks, and daemons whose process identity cannot
 be verified use full discovery for each call.
 
