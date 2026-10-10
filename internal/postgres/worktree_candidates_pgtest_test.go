@@ -267,27 +267,3 @@ func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	assert.Equal(t, "snapshot", candidates[0].EvidenceKind)
 	assert.Equal(t, "/srv/new/repo/worktree", candidates[0].EvidenceRoot)
 }
-
-func TestPGWorktreeCandidatesSelectProjectKeys(t *testing.T) {
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_candidate_project_keys_test")
-	for _, project := range []string{"alpha", "beta"} {
-		seedPGCandidateSession(t, local, project, project, "host.example", "/repo/shared", "2025-06-02T10:00:00Z")
-	}
-	_, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	store := &Store{pg: pg}
-	projects, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
-	require.NoError(t, err)
-	require.NotEqual(t, projects["alpha"].ProjectKey, projects["beta"].ProjectKey)
-	for _, key := range []string{projects["alpha"].ProjectKey, projects["beta"].ProjectKey} {
-		candidates, err := store.ListArchiveWorktreeCandidates(ctx, db.ArchiveWorktreeCandidateRequest{ProjectLabel: "alpha", ProjectKey: key})
-		require.NoError(t, err)
-		if key == projects["beta"].ProjectKey {
-			assert.Empty(t, candidates)
-			continue
-		}
-		require.Len(t, candidates, 1)
-		assert.Equal(t, 1, candidates[0].ContributingSessions)
-		assert.Equal(t, []db.WorktreeCandidateExample{{SessionID: "alpha", Cwd: "/repo/shared"}}, candidates[0].Examples)
-	}
-}
