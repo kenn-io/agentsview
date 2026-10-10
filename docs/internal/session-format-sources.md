@@ -845,28 +845,42 @@ fixtures retain this field; missing identities remain source-local.
 
 ## TraeX (`traex`)
 
-- **Format:** Codex-compatible rollout JSONL under a dated `YYYY/MM/DD` tree,
+- **Format:** Codex-format rollout JSONL under a dated `YYYY/MM/DD` tree,
   written by TRAE CLI 2.0, plus the flat `archived_sessions/` directory that
-  `traex archive <id>` moves a rollout into. The sibling `history.jsonl`
-  carries the same `session_id`/Unix-seconds `ts`/prompt `text` records, and
-  agentsview consumes it as the same live-activity hint. No
-  `session_index.jsonl` sidecar is produced, so titles come from the rollout
-  head alone.
+  `traex archive <id>` moves a rollout into. Some observed rollouts keep the
+  user-facing transcript in Codex-compatible `response_item` rows. Newer
+  observed rollouts keep the same session envelope but carry transcript changes
+  in append-only `history_mutation.payload.items[]`; applied mutations accept
+  version 1 or an absent version and refuse other versions or operations,
+  or a present `items` value that isn't an array.
+  Token deltas appear in `token_usage_record.payload.usage`.
+  The sibling `history.jsonl` carries the
+  same `session_id`/Unix-seconds `ts`/prompt `text` records, and agentsview
+  consumes it as the same live-activity hint. No `session_index.jsonl` sidecar
+  is produced, so titles come from the rollout head alone.
 - **Evidence:** `no-public-source`.
 - **Upstream:** TRAE CLI 2.0 ships only as a closed-source binary; the observed
   builds report themselves as `traecli 0.200.x`. Trae's first-party
   [product site](https://www.trae.ai/) and the official
   `https://github.com/Trae-AI/Trae.git` repository were searched 2026-08-04
-  and publish neither the producer nor a session schema. The equivalence to
-  Codex rests on locally observed rollouts whose `session_meta`, `event_msg`,
-  `response_item`, and `token_count` records are field-for-field the Codex
-  shape -- including `source.subagent.thread_spawn.parent_thread_id` and an
-  `originator` of `codex-tui` -- which identifies it as a fork of the
-  evidenced codex-rs recorder rather than an independent format. A
-  de-identified rollout is retained as a fixture.
-- **Usage and cost:** `token_count` records carry the Codex fields, so
-  normalization and catalog pricing follow the Codex entry above exactly,
-  including the same reasoning-output omission.
+  and publish neither the producer nor a session schema. The first supported
+  fixture is field-for-field Codex-shaped (`session_meta`, `event_msg`,
+  `response_item`, and `token_count`, including
+  `source.subagent.thread_spawn.parent_thread_id` and an `originator` of
+  `codex-tui`). A later de-identified fixture preserves the same envelope while
+  moving message, reasoning, tool call, and tool result items into
+  `history_mutation.payload.items[]`. These fixtures identify TraeX as a Codex
+  format fork with producer-specific transcript extensions, not a fully
+  independent archive format.
+- **Usage and cost:** `token_count` records carry the Codex fields. Newer
+  rollouts can instead write the same per-response usage shape at
+  `token_usage_record.payload.usage`. Both paths use Codex normalization and
+  catalog pricing, including the same reasoning-output omission. Consecutive
+  repeats are suppressed using a single usage digest keyed by `response_id`
+  when present, so equal counts for different responses remain distinct.
+  `cache_creation_input_tokens` is unread on purpose; the only capture has 0
+  and no source shows whether it sits inside `input_tokens`.
+  Empty usage objects leave the response available for a later valid record.
 - **Agentsview:** `internal/parser/traex.go` relabels the shared Codex parser
   (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
   `traex:` ID namespace, and `internal/sync` gates the format-shaped branches

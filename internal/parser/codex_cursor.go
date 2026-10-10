@@ -374,10 +374,14 @@ func (s *codexCursorState) observeTaskEvent(eventType string) {
 
 // observeTokenUsage records the streaming token payload compactly and reports
 // whether it repeats the most recently observed payload.
-func (s *codexCursorState) observeTokenUsage(raw string) bool {
+func (s *codexCursorState) observeTokenUsage(raw, responseID string) bool {
 	canonical := jsontext.Value(raw).Clone()
 	if err := canonical.Canonicalize(jsontext.CanonicalizeRawInts(false)); err != nil {
 		return false
+	}
+	if responseID != "" {
+		// JSON has no literal NUL, so the response ID cannot blur the boundary.
+		canonical = append(append(canonical, 0), responseID...)
 	}
 	digest := sha256.Sum256(canonical)
 	duplicate := s.lastTokenUsageSeen && digest == s.lastTokenUsageDigest

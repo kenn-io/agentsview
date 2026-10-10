@@ -566,7 +566,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // unchanged Claude sources so user-message counts and first messages drop
 // them.)
 // (127: reparse readable sources to classify headless workers as subagents.)
-const dataVersion = 127
+// (128: reparse all sources to recover TraeX mutation rollouts and per-response usage.)
+const dataVersion = 128
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

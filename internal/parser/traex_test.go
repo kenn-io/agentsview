@@ -310,6 +310,65 @@ func TestTraeXProviderParsesDeidentifiedRollout(t *testing.T) {
 	}
 }
 
+func TestTraeXProviderParsesHistoryMutationRollout(t *testing.T) {
+	root := t.TempDir()
+	const uuid = "019fcf70-1111-7000-8000-000000000001"
+	dst := filepath.Join(
+		root, "2026", "09", "01",
+		"rollout-2026-09-01T10-00-00-"+uuid+".jsonl",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+	fixture, err := os.ReadFile(filepath.Join(
+		"testdata", "traex", "history_mutation_session.jsonl",
+	))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(dst, fixture, 0o644))
+
+	provider, ok := NewProvider(AgentTraeX, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
+		Source:  sources[0],
+		Machine: "devbox",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	sess := outcome.Results[0].Result.Session
+	msgs := outcome.Results[0].Result.Messages
+
+	assert.Equal(t, AgentTraeX, sess.Agent)
+	assert.Equal(t, "traex:"+uuid, sess.ID)
+	assert.Equal(t, 4, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Inspect the parser.", sess.FirstMessage)
+	require.Len(t, msgs, 4)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Inspect the parser.", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "I will inspect the parser.", msgs[1].Content)
+	require.Len(t, msgs[2].ToolCalls, 1)
+	call := msgs[2].ToolCalls[0]
+	assert.Equal(t, "call_read", call.ToolUseID)
+	assert.Equal(t, "exec", call.ToolName)
+	assert.Equal(t, "Bash", call.Category)
+	assert.Equal(t, `{"cmd":"ls internal/parser"}`, call.InputJSON)
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t, "codex.go\ntraex.go", call.ResultEvents[0].Content)
+	assert.JSONEq(t, `{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, string(msgs[2].TokenUsage))
+	assert.Equal(t, RoleAssistant, msgs[3].Role)
+	assert.Equal(t,
+		"The parser files are codex.go and traex.go.",
+		msgs[3].Content,
+	)
+}
+
 // TestTraeXAndCodexProvidersKeepSeparateSourceKeys guards the discovery
 // namespace: the two agents share a UUID shape, so a shared source key would
 // let one agent's session resolve to the other's file.
@@ -408,4 +467,276 @@ func TestTraeXRegistryCoversArchivedSessions(t *testing.T) {
 	}, def.DefaultDirs)
 	assert.Nil(t, def.ShallowWatchRootsFunc,
 		"the shallow watch exists for Codex's session_index.jsonl only")
+}
+
+func TestTraeXProviderHistoryMutationUsage(t *testing.T) {
+	const uuid = "019fcf70-1111-7000-8000-000000000002"
+	const reply = `{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Reply"}]}]}}`
+	const usage = `"usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":0,"output_tokens":12}`
+	const record = `{"type":"token_usage_record","payload":{"response_id":"response-1",` + usage + `}}`
+	tests := []struct {
+		name      string
+		rows      string
+		wantUsage []string
+	}{
+		{
+			name:      "empty usage before valid record",
+			rows:      testjsonl.JoinJSONL(reply, `{"type":"token_usage_record","payload":{"response_id":"response-1","usage":{}}}`, record),
+			wantUsage: []string{`{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`},
+		},
+		{
+			name:      "equal usage from distinct responses",
+			rows:      testjsonl.JoinJSONL(reply, record, reply, `{"type":"token_usage_record","payload":{"response_id":"response-2",`+usage+`}}`),
+			wantUsage: []string{`{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, `{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`},
+		},
+		{
+			name:      "repeated response counted once",
+			rows:      testjsonl.JoinJSONL(reply, record, reply, record),
+			wantUsage: []string{`{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, ""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			prefix := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+				testjsonl.CodexMsgJSON("user", "Inspect", tsEarlyS1),
+			)
+			path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+			provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			appendCodexProviderContent(t, path, tt.rows+"\n")
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			msgs := outcome.Results[0].Result.Messages
+			require.Len(t, msgs, 1+len(tt.wantUsage))
+			for i, want := range tt.wantUsage {
+				assert.Equal(t, "Reply", msgs[i+1].Content)
+				if want == "" {
+					assert.Empty(t, msgs[i+1].TokenUsage)
+				} else {
+					assert.JSONEq(t, want, string(msgs[i+1].TokenUsage))
+					assert.Equal(t, 100, msgs[i+1].ContextTokens)
+				}
+			}
+		})
+	}
+}
+
+func TestTraeXProviderHistoryMutationValidation(t *testing.T) {
+	const uuid = "019fcf70-1111-7000-8000-000000000005"
+	tests := []struct {
+		name    string
+		payload string
+		wantErr string
+		mode    string
+	}{
+		{"missing version", `{"operation":"append","items":[]}`, "", "full"},
+		{"missing items", `{"operation":"append"}`, "", "full"},
+		{"string items", `{"operation":"append","items":"invalid"}`, "items", "full"},
+		{"null items", `{"operation":"append","items":null}`, "items", "full"},
+		{"missing operation", `{"items":[]}`, "operation", "full"},
+		{"newer version", `{"version":2,"operation":"append","items":[]}`, "version", "full"},
+		{"seed refusal", `{"operation":"replace","items":[]}`, "operation", "seed"},
+		{"incremental refusal", `{"operation":"replace","items":[]}`, "operation", "incremental"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			prefix := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+				testjsonl.CodexMsgJSON("user", "Inspect", tsEarlyS1),
+			)
+			path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+			provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			appendCodexProviderContent(t, path, `{"type":"history_mutation","payload":`+tt.payload+"}\n")
+			if tt.mode == "full" {
+				_, err = provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			} else {
+				offset := int64(len(prefix))
+				if tt.mode == "seed" {
+					info, statErr := os.Stat(path)
+					require.NoError(t, statErr)
+					offset = info.Size()
+					appendCodexProviderContent(t, path, testjsonl.CodexMsgJSON("assistant", "Reply", tsEarlyS5)+"\n")
+				}
+				fingerprint, fingerprintErr := provider.Fingerprint(t.Context(), sources[0])
+				require.NoError(t, fingerprintErr)
+				_, _, err = provider.ParseIncremental(t.Context(), IncrementalRequest{
+					Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
+					Offset: offset, StartOrdinal: 1,
+				})
+			}
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			wantErr := "invalid TraeX history_mutation: " + tt.wantErr
+			require.ErrorContains(t, err, wantErr)
+		})
+	}
+}
+
+func TestTraeXProviderHistoryMutationReplay(t *testing.T) {
+	const parent = "019fcf70-1111-7000-8000-000000000006"
+	const child = "019fcf70-1111-7000-8000-000000000007"
+	for _, tt := range []struct{ name, lineage string }{
+		{"fork", `"forked_from_id":"` + parent + `"`},
+		{"subagent", `"source":{"subagent":{"thread_spawn":{"parent_thread_id":"` + parent + `"}}}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeCodexProviderSessionContent(t, root, parent, testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(parent, "/workspace/project", "codex-tui", tsEarly),
+				`{"type":"turn_context","payload":{"turn_id":"parent-turn"}}`,
+			))
+			path := writeCodexProviderSessionContent(t, root, child, testjsonl.JoinJSONL(
+				`{"type":"session_meta","payload":{"id":"`+child+`","cwd":"/workspace/project",`+tt.lineage+`}}`,
+				testjsonl.CodexSessionMetaJSON(parent, "/workspace/project", "codex-tui", tsEarly),
+				`{"type":"turn_context","payload":{"turn_id":"parent-turn"}}`,
+				`{"type":"history_mutation","payload":{"operation":"replace","items":[]}}`,
+				`{"type":"history_mutation","payload":{"version":2,"operation":"append","items":[]}}`,
+				`{"type":"turn_context","payload":{"turn_id":"child-turn"}}`,
+				`{"type":"history_mutation","payload":{"version":1,"operation":"append","items":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Child prompt"}]}]}}`,
+			))
+			provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: child, StoredFilePath: path})
+			require.NoError(t, err)
+			require.True(t, found)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			require.Len(t, outcome.Results[0].Result.Messages, 1)
+			assert.Equal(t, "Child prompt", outcome.Results[0].Result.Messages[0].Content)
+		})
+	}
+}
+
+func TestCodexProviderIgnoresHistoryMutation(t *testing.T) {
+	const uuid = "019fcf70-1111-7000-8000-000000000008"
+	root := t.TempDir()
+	path := writeCodexProviderSessionContent(t, root, uuid, testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+		testjsonl.CodexMsgJSON("user", "Inspect", tsEarlyS1),
+		`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Ignore"}]}]}}`,
+		`{"type":"history_mutation","payload":{"version":2,"operation":"replace","items":[]}}`,
+	))
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: uuid, StoredFilePath: path})
+	require.NoError(t, err)
+	require.True(t, found)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	require.Len(t, outcome.Results[0].Result.Messages, 1)
+	assert.Equal(t, "Inspect", outcome.Results[0].Result.Messages[0].Content)
+}
+
+func TestTraeXProviderHistoryMutationIncremental(t *testing.T) {
+	const uuid = "019fcf70-1111-7000-8000-000000000003"
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+		`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect"}]},{"type":"function_call","name":"shell","call_id":"call-late","arguments":"{}"}]}}`,
+	)
+	tail := testjsonl.JoinJSONL(
+		`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"function_call_output","call_id":"call-late","output":[{"type":"text","text":"Done"}]}]}}`,
+		`{"type":"token_usage_record","payload":{"response_id":"response-1","usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":0,"output_tokens":12}}}`,
+	)
+	root := t.TempDir()
+	path := writeCodexProviderSessionContent(t, root, uuid, prefix)
+	provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	appendCodexProviderContent(t, path, tail)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	ordinal := 1
+	outcome, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
+		Source: sources[0], Fingerprint: fingerprint, SessionID: "traex:" + uuid,
+		Offset: int64(len(prefix)), StartOrdinal: 2, StoredPendingUsageOrdinal: &ordinal,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, status)
+	assert.False(t, outcome.ForceReplace)
+	assert.Empty(t, outcome.Messages)
+	require.Len(t, outcome.ToolCallUpdates, 1)
+	update := outcome.ToolCallUpdates[0]
+	assert.Equal(t, "call-late", update.ToolUseID)
+	require.Len(t, update.ResultEvents, 1)
+	assert.Equal(t, "Done", update.ResultEvents[0].Content)
+	require.Len(t, outcome.MessageTokenUsageUpdates, 1)
+	assert.Equal(t, 1, outcome.MessageTokenUsageUpdates[0].Ordinal)
+	assert.JSONEq(t, `{"input_tokens":60,"cache_read_input_tokens":40,"output_tokens":12}`, string(outcome.MessageTokenUsageUpdates[0].TokenUsage))
+	full, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], ForceParse: true})
+	require.NoError(t, err)
+	require.Len(t, full.Results, 1)
+	msgs := full.Results[0].Result.Messages
+	require.Len(t, msgs, 2)
+	assert.Equal(t, string(msgs[1].TokenUsage), string(outcome.MessageTokenUsageUpdates[0].TokenUsage))
+	assert.Equal(t, msgs[1].ToolCalls[0].ResultEvents, update.ResultEvents)
+	appendCodexProviderContent(t, path, testjsonl.JoinJSONL(
+		`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"function_call","name":"wait_agent","call_id":"call-wait","arguments":"{}"}]}}`,
+	))
+	nextFingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	fallback, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
+		Source: sources[0], Fingerprint: nextFingerprint, SessionID: "traex:" + uuid,
+		Offset: fingerprint.Size, StartOrdinal: 2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalNeedsFullParse, status)
+	assert.True(t, fallback.ForceReplace)
+}
+
+func TestTraeXProviderHistoryMutationToolOutputs(t *testing.T) {
+	tests := []struct {
+		name         string
+		tool         string
+		output       string
+		want         string
+		wantSubagent string
+	}{
+		{"split text JSON", "spawn_agent", `[{"type":"text","text":"{\"agent_id\":\"ch"},{"type":"output_text","text":"ild\"}"}]`, `{"agent_id":"child"}`, "traex:child"},
+		{"split text", "shell", `[{"type":"input_text","text":"Do"},{"type":"text","text":"ne\n"},{"type":"output_text","text":"now"}]`, "Done\nnow", ""},
+		{"mixed image", "shell", `[{"type":"text","text":"Done"},{"type":"image","url":"https://example.com/image.png"}]`, `[{"type":"text","text":"Done"},{"type":"image","url":"https://example.com/image.png"}]`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const uuid = "019fcf70-1111-7000-8000-000000000004"
+			root := t.TempDir()
+			writeCodexProviderSessionContent(t, root, uuid, testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "codex-tui", tsEarly),
+				`{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"function_call","name":"`+tt.tool+`","call_id":"call-1","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":`+tt.output+`}]}}`,
+			))
+			provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			msgs := outcome.Results[0].Result.Messages
+			require.Len(t, msgs, 1)
+			require.Len(t, msgs[0].ToolCalls, 1)
+			assert.Equal(t, tt.wantSubagent, msgs[0].ToolCalls[0].SubagentSessionID)
+			if tt.wantSubagent != "" {
+				return
+			}
+			require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
+			assert.Equal(t, tt.want, msgs[0].ToolCalls[0].ResultEvents[0].Content)
+		})
+	}
 }
