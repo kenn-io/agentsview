@@ -46,7 +46,7 @@ func newArchiveCommand() *cobra.Command {
 	captureCmd.Flags().BoolVar(&writersStopped, "writers-stopped", false, "Record that the operator stopped source writers before capture")
 	var specPath string
 	var seed bool
-	importCmd := &cobra.Command{Use: "import", Short: "Import an immutable capture with explicit original device and root identities", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	importCmd := &cobra.Command{Use: "import", Short: "Import a generated capture.json with its recorded device and root identities", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if specPath == "" {
 			return errors.New("--spec is required")
 		}
@@ -73,7 +73,7 @@ func newArchiveCommand() *cobra.Command {
 			return err
 		})
 	}}
-	importCmd.Flags().StringVar(&specPath, "spec", "", "JSON capture root and original device mapping")
+	importCmd.Flags().StringVar(&specPath, "spec", "", "Path to the generated capture.json (required)")
 	importCmd.Flags().BoolVar(&seed, "seed", false, "Preserve the captured database and identity in a new data directory")
 	var all bool
 	var ids []string
