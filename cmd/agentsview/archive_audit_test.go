@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -23,52 +25,102 @@ import (
 // delay doubles and caps at archiveAuditInterval, success returns to the daily
 // cadence, and no in-process sync ever runs.
 func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	database, lock := openTestWriteDB(t, cfg)
-	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
-	t.Cleanup(engine.Close)
-	em := &scopedEmitter{scopes: make(chan string, 8)}
+	for _, first := range []time.Duration{archiveAuditInterval, archiveAuditRetryInitial} {
+		t.Run(first.String(), func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			database, lock := openTestWriteDB(t, cfg)
+			engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+			t.Cleanup(engine.Close)
+			em := &scopedEmitter{scopes: make(chan string, 8)}
 
-	attempts := 0
-	restore := stubLaunchSyncWorker(t, func(
-		_ context.Context, _ config.Config, request syncWorkerRequest, _ func(workerLine),
-	) (workerResult, error) {
-		mode := request.Mode
-		assert.Equal(t, "audit", mode)
-		attempts++
-		if attempts <= 6 {
-			return workerResult{Status: "failed"}, errors.New("audit boom")
-		}
-		return workerResult{Status: "ok", Synced: 1, DiscoveryComplete: true}, nil
-	})
-	defer restore()
+			attempts := 0
+			restore := stubLaunchSyncWorker(t, func(
+				_ context.Context, _ config.Config, request syncWorkerRequest, _ func(workerLine),
+			) (workerResult, error) {
+				mode := request.Mode
+				assert.Equal(t, "audit", mode)
+				attempts++
+				if attempts <= 6 {
+					return workerResult{Status: "failed"}, errors.New("audit boom")
+				}
+				return workerResult{Status: "ok", Synced: 1, DiscoveryComplete: true}, nil
+			})
+			defer restore()
 
-	var delays []time.Duration
-	ctx, cancel := context.WithCancel(t.Context())
-	wait := func(ctx context.Context, d time.Duration) bool {
-		delays = append(delays, d)
-		return ctx.Err() == nil
+			var delays []time.Duration
+			ctx, cancel := context.WithCancel(t.Context())
+			wait := func(ctx context.Context, d time.Duration) bool {
+				delays = append(delays, d)
+				return ctx.Err() == nil
+			}
+			audit := func(ctx context.Context) bool {
+				ok := runArchiveAudit(ctx, cfg, engine, database, lock, em) == nil
+				if attempts >= 7 {
+					cancel()
+				}
+				return ok
+			}
+
+			runArchiveAuditLoop(ctx, first, wait, audit)
+
+			assert.Equal(t, 7, attempts, "the audit obligation is retained across failures")
+			require.GreaterOrEqual(t, len(delays), 8)
+			want := []time.Duration{
+				archiveAuditInterval, // initial daily wait
+				1 * time.Hour, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour,
+				16 * time.Hour, archiveAuditInterval, // backoff doubles then caps at 24h
+				archiveAuditInterval, // success returns to the daily cadence
+			}
+			if first == archiveAuditRetryInitial {
+				want = []time.Duration{first, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour, 16 * time.Hour, archiveAuditInterval, archiveAuditInterval, archiveAuditInterval}
+			}
+			assert.Equal(t, want, delays[:8])
+			assert.True(t, engine.LastSync().IsZero(),
+				"the audit must never run an in-process sync pass")
+		})
 	}
-	audit := func(ctx context.Context) bool {
-		ok := runArchiveAudit(ctx, cfg, engine, database, lock, em) == nil
-		if attempts >= 7 {
-			cancel()
-		}
-		return ok
+}
+
+func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
+	for _, abort := range []bool{false, true} {
+		t.Run(fmt.Sprintf("abort=%t", abort), func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			if abort {
+				cfg.AgentDirs[parser.AgentClaude] = []string{t.TempDir()}
+			}
+			seed := dbtest.OpenTestDBAt(t, cfg.DBPath)
+			missing := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "missing.jsonl")
+			dbtest.SeedSession(t, seed, "existing", "project", func(s *db.Session) { s.FilePath = &missing })
+			require.NoError(t, seed.Close())
+			markArchiveStale(t, cfg.DBPath)
+			database, lock := openTestWriteDB(t, cfg)
+			em := &scopedEmitter{scopes: make(chan string, 8)}
+			engineCfg := workerEngineConfig(cfg)
+			engineCfg.Emitter = em
+			engine := sync.NewEngine(t.Context(), database, engineCfg)
+			t.Cleanup(engine.Close)
+			err := runArchiveAudit(t.Context(), cfg, engine, database, lock, em)
+			if abort {
+				require.ErrorContains(t, err, "required archive rebuild did not complete")
+				assert.True(t, database.NeedsResync())
+			} else {
+				require.NoError(t, err)
+				assert.False(t, database.NeedsResync())
+				imported, err := database.GetSession(t.Context(), "session0")
+				require.NoError(t, err)
+				require.NotNil(t, imported)
+				select {
+				case scope := <-em.scopes:
+					assert.Equal(t, "sync", scope)
+				default:
+					require.FailNow(t, "installed rebuild must notify connected clients")
+				}
+			}
+			preserved, err := database.GetSession(t.Context(), "existing")
+			require.NoError(t, err)
+			require.NotNil(t, preserved)
+		})
 	}
-
-	runArchiveAuditLoop(ctx, wait, audit)
-
-	assert.Equal(t, 7, attempts, "the audit obligation is retained across failures")
-	require.GreaterOrEqual(t, len(delays), 8)
-	assert.Equal(t, []time.Duration{
-		archiveAuditInterval, // initial daily wait
-		1 * time.Hour, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour,
-		16 * time.Hour, archiveAuditInterval, // backoff doubles then caps at 24h
-		archiveAuditInterval, // success returns to the daily cadence
-	}, delays[:8])
-	assert.True(t, engine.LastSync().IsZero(),
-		"the audit must never run an in-process sync pass")
 }
 
 func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
@@ -342,7 +394,7 @@ func TestArchiveAuditLoopSuppressesBackoffLogOnShutdown(t *testing.T) {
 		cancel() // fail this attempt and shut down before the next wait
 		return false
 	}
-	runArchiveAuditLoop(ctx, wait, audit)
+	runArchiveAuditLoop(ctx, archiveAuditInterval, wait, audit)
 	assert.NotContains(t, logs.String(), "next attempt",
 		"shutdown must not emit a backoff line")
 }
@@ -363,7 +415,7 @@ func TestArchiveAuditLoopLogsBackoffWhileRunning(t *testing.T) {
 		}
 		return false // first attempt fails while the context is still live
 	}
-	runArchiveAuditLoop(ctx, wait, audit)
+	runArchiveAuditLoop(ctx, archiveAuditInterval, wait, audit)
 	assert.Contains(t, logs.String(), "next attempt",
 		"a live-run failure must log the backoff line")
 }
@@ -374,7 +426,7 @@ func TestArchiveAuditLoopStopsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	audited := false
-	runArchiveAuditLoop(ctx,
+	runArchiveAuditLoop(ctx, archiveAuditInterval,
 		func(context.Context, time.Duration) bool { return false },
 		func(context.Context) bool { audited = true; return true },
 	)

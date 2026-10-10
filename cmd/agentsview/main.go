@@ -421,7 +421,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			}
 		}
 		if database.NeedsResync() {
-			fatal("required archive rebuild did not complete for data version %d; restart to retry, or run agentsview serve --no-sync to serve the existing archive", db.CurrentDataVersion())
+			log.Printf("ERROR: required archive rebuild did not complete for data version %d; serving the existing archive, retrying in %s", db.CurrentDataVersion(), archiveAuditRetryInitial)
 		}
 
 		// Backfill runs in the background. On a large DB (e.g.
@@ -2971,9 +2971,7 @@ func startPeriodicSync(
 }
 
 // startArchiveAudit drives the daily archive audit with retry-and-backoff
-// scheduling. Each attempt runs entirely in a worker process (via
-// runWorkerWritePass) wrapped in idleTracker.Do; a failed attempt is retained
-// and retried with a growing delay rather than falling back in process.
+// scheduling, retrying a pending rebuild sooner than a routine audit.
 func startArchiveAudit(
 	ctx context.Context,
 	cfg config.Config,
@@ -2983,8 +2981,13 @@ func startArchiveAudit(
 	idleTracker *server.IdleTracker,
 	emitter sync.Emitter,
 ) {
+	first := archiveAuditInterval
+	if database.NeedsResync() {
+		first = archiveAuditRetryInitial
+	}
 	runArchiveAuditLoop(
 		ctx,
+		first,
 		func(ctx context.Context, delay time.Duration) bool {
 			timer := time.NewTimer(delay)
 			defer timer.Stop()
@@ -3032,11 +3035,15 @@ func runArchiveAuditAttempt(
 // attempt succeeded.
 func runArchiveAuditLoop(
 	ctx context.Context,
+	first time.Duration,
 	wait func(context.Context, time.Duration) bool,
 	audit func(context.Context) bool,
 ) {
-	delay := archiveAuditInterval
+	delay := first
 	retry := archiveAuditRetryInitial
+	if first < archiveAuditInterval {
+		retry = min(first*2, archiveAuditInterval)
+	}
 	for {
 		if !wait(ctx, delay) {
 			return
@@ -3054,7 +3061,8 @@ func runArchiveAuditLoop(
 	}
 }
 
-// runArchiveAudit executes one audit attempt: a full authoritative
+// runArchiveAudit retries required rebuilds through the foreground runner,
+// which publishes committed changes. Current archives receive authoritative
 // reconciliation in a worker process via runWorkerWritePass, never in the
 // daemon. It emits "sessions" whenever the terminal result reports committed
 // changes — synced or tombstoned — even when the pass also failed, because the
@@ -3073,6 +3081,16 @@ func runArchiveAudit(
 	lock *writeOwnerLock,
 	emitter sync.Emitter,
 ) error {
+	if database.NeedsResync() {
+		_, err := newForegroundResyncRunner(ctx, cfg, engine, database)(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if database.NeedsResync() {
+			return errors.New("required archive rebuild did not complete")
+		}
+		return nil
+	}
 	result, err := runWorkerWritePass(
 		ctx, ctx, cfg, engine, database, lock, "audit", nil,
 	)

@@ -1507,9 +1507,8 @@ the stored data version is stale, AgentsView preserves the existing database and
 runs a full resync into a fresh temporary database. The resync then copies
 preserved/orphaned session data from the previous database before swapping
 atomically. If the full resync aborts, AgentsView falls back to an incremental
-sync and leaves the data-version marker stale. Startup then exits before serving;
-restart to retry the rebuild, or run `agentsview serve --no-sync` to serve the
-existing archive.
+sync and leaves the data-version marker stale. The running daemon retries the
+rebuild after an hour, backing off to daily; a restart also retries.
 
 ## Sync Behavior
 
