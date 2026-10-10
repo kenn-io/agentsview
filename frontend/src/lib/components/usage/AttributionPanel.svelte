@@ -158,12 +158,11 @@
   }
 
   function handleSelect(id: string) {
-    if (zoomedProject) return;
     usage.toggleSelection(groupBy, id);
   }
 
   function handleOpen(id: string) {
-    if (zoomedProject || groupBy !== "project") return;
+    if (groupBy !== "project") return;
     const project = rows.find((row) => row.id === id);
     if (!project) return;
     usage.setOpenProject(project.id);

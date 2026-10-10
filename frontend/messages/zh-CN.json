@@ -2379,7 +2379,7 @@
   "tool_sequences_full_result_in_message": "完整结果在消息 {ordinal} 中。",
   "tool_sequences_retry": "重试",
   "usage_click_project": "点击聚焦 {label}，双击打开其分组和会话",
-  "usage_click_project_hint": "点击选择，双击或使用打开按钮展开。Enter 和空格键选择。",
+  "usage_click_project_hint": "选择项目以筛选页面，打开项目可查看其分组和会话。",
   "usage_click_to_focus": "点击聚焦 {label}",
   "usage_click_to_focus_hint": "点击聚焦，再次点击清除"
 }

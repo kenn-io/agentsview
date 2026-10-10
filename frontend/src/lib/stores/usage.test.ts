@@ -1635,6 +1635,29 @@ describe("UsageStore time-series range selection", () => {
     expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
   });
 
+  it("slices selected attribution to a new brush before the range request finishes", async () => {
+    const { usage } = await loadStore();
+    usage.applyDateRange("2026-06-04", "2026-06-18");
+    const day = (date: string, project: string, cost: number) => ({
+      date, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalCost: testMoney(cost), modelsUsed: [],
+      projectBreakdowns: [{ project_key: `pl1:sha256:${project}`, project, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, cost: testMoney(cost) }],
+      modelBreakdowns: [], agentBreakdowns: [], machineBreakdowns: [],
+    });
+    const reference = usageSummary(6);
+    reference.daily = [day("2026-06-07", "alpha", 1), day("2026-06-08", "beta", 2), day("2026-06-09", "gamma", 3)];
+    usage.toggles.attribution.groupBy = "project";
+    usage.selectedProjectKey = "pl1:sha256:beta";
+    usage.summary = usageSummary(2);
+    usage.attributionSummary = reference;
+    usage.referenceSummary = reference;
+
+    usage.setTimeRange("2026-06-08", "2026-06-09");
+    expect(usage.attributionSummary?.projectTotals.map((total) => total.project)).toEqual(["gamma", "beta"]);
+    usage.clearTimeRange(false);
+    expect(usage.attributionSummary).toEqual(reference);
+    usage.cancelInFlightReads();
+  });
+
   it("shows locally aggregated daily data before the range request finishes", async () => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");
@@ -2219,8 +2242,11 @@ describe("UsageStore attribution focus", () => {
     usage.setTimeRange("2024-01-08", "2024-01-14");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
     expect(usageChartColorMaps(usage.colorSummary, "matplotlib").project).toEqual(colors);
+    usageServiceMocks.getApiV1UsageSummary.mockClear();
     usage.toggleSelection("project", "pl1:sha256:beta");
     await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    // The unselected full-window context already has the reference scope.
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenCalledTimes(3);
     expect(usage.summary?.projectTotals).toEqual(selected.projectTotals);
     expect(usage.attributionSummary?.projectTotals).toEqual(brushed.projectTotals);
     expect(usageChartColorMaps(usage.colorSummary, "matplotlib").project).toEqual(colors);

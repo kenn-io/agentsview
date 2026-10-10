@@ -2464,7 +2464,7 @@
   "tool_sequences_full_result_in_message": "El resultado completo está en el mensaje {ordinal}.",
   "tool_sequences_retry": "Reintentar",
   "usage_click_project": "Haz clic para enfocar {label}; haz doble clic para abrir sus grupos y sesiones",
-  "usage_click_project_hint": "Haz clic para seleccionar, doble clic o Abrir para abrir. Enter y Espacio seleccionan.",
+  "usage_click_project_hint": "Selecciona un proyecto para filtrar la página o ábrelo para ver sus grupos y sesiones.",
   "usage_click_to_focus": "Haz clic para enfocar {label}",
   "usage_click_to_focus_hint": "Haz clic para enfocar; vuelve a hacer clic para borrar"
 }

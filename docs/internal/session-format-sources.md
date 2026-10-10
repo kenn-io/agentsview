@@ -2941,7 +2941,7 @@ schemas keep their existing ordering behavior.
   `[A-Za-z0-9][A-Za-z0-9._-]*`.
   [cron/scheduler.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/cron/scheduler.py)
   records `source = "cron"` and titles as the job name followed by ` · `
-  and the run timestamp. Reverified on 2026-10-08: `_title_base` falls back to
+  and the run timestamp. `_title_base` falls back to
   `cron {job_id}` for a blank job name. Agentsview treats that generated title
   as unnamed and stores `group_key` as the job ID. Usage groups by project,
   machine and job ID. Names derive from the recorded `session_name` at read
@@ -2954,21 +2954,17 @@ schemas keep their existing ordering behavior.
   recognized. Transcript projects use `platform`. A non-empty `state.db` source
   takes precedence over transcript platform for grouping as well as project.
   Explicit non-cron sources clear the job and its retention flag; absent sources
-  keep transcript evidence. Parser and sync fixtures reverified on 2026-10-09
-  cover cron JSON and JSONL transcripts with CLI state rows for Hermes and Augure
-  Desktop. Cron continuations follow `state.db` parent links with cycle detection;
+  keep transcript evidence. Cron continuations follow `state.db` parent links with cycle detection;
   transcript runs group by their run ID only. All cron runs retain the
   `hermes-cron` project.
-  Reverified on 2026-10-09: `delete_session` in
+  `delete_session` in
   [hermes_state_sessions.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_sessions.py)
   and `prune_sessions` in
   [hermes_state_maintenance.py](https://github.com/NousResearch/hermes-agent/blob/489c1ac298f8ed13ccd688c97e4097f161046c0b/hermes_state_maintenance.py)
   clear surviving children's parent links. A cron continuation whose ancestors
   were pruned keeps its stored job, including transcript-only parses and Augure
-  Desktop. Reverified on 2026-10-09 with parser and sync fixtures for both formats.
-  Cron member fingerprints include the resolved job ID in direct and cached
-  reads for both providers. Parser fixtures reverified on 2026-10-09 cover
-  ancestor restoration and parent-link changes with unchanged continuation rows.
+  Desktop. Cron member fingerprints include the resolved job ID in direct and
+  cached reads for both providers.
 
 ## Forge (`forge`)
 

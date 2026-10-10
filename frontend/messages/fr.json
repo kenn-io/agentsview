@@ -2461,7 +2461,7 @@
   "tool_sequences_full_result_in_message": "Le résultat complet se trouve dans le message {ordinal}.",
   "tool_sequences_retry": "Réessayer",
   "usage_click_project": "Cliquer pour cibler {label}, double-cliquer pour ouvrir ses groupes et sessions",
-  "usage_click_project_hint": "Cliquer pour sélectionner, double-cliquer ou Ouvrir pour ouvrir. Entrée et Espace sélectionnent.",
+  "usage_click_project_hint": "Sélectionnez un projet pour filtrer la page, ou ouvrez-le pour voir ses groupes et sessions.",
   "usage_click_to_focus": "Cliquer pour cibler {label}",
   "usage_click_to_focus_hint": "Cliquer pour cibler, recliquer pour effacer"
 }
