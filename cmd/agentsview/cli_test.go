@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -61,6 +62,46 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 	} {
 		assert.NotContains(t, help, unwanted,
 			"root help should not include serve flag %q", unwanted)
+	}
+}
+
+func TestPruneCommandAgentFilter(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want PruneConfig
+	}{
+		{"combined filters", []string{"--agent", "mimocode", "--project", "project-a", "--max-messages", "0", "--before", "2025-01-01", "--first-message", "hello", "--dry-run", "--yes"}, PruneConfig{Filter: db.PruneFilter{Agent: "mimocode", Project: "project-a", MaxMessages: new(0), Before: "2025-01-01", FirstMessage: "hello"}, DryRun: true, Yes: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []PruneConfig
+			cmd := newPruneCommandWithRunner(func(ctx context.Context, cfg PruneConfig) {
+				got = append(got, cfg)
+			})
+			_, err := executeCommand(cmd, tt.args...)
+			require.NoError(t, err)
+			assert.Equal(t, []PruneConfig{tt.want}, got)
+		})
+	}
+}
+
+func TestPruneCommandRejectsEmptyAgent(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{"agent only", []string{"--agent="}},
+		{"with project", []string{"--agent=", "--project", "project-a"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			cmd := newPruneCommandWithRunner(func(context.Context, PruneConfig) {
+				called = true
+			})
+			_, err := executeCommand(cmd, tt.args...)
+			require.EqualError(t, err, "--agent must not be empty")
+			assert.False(t, called, "runner must not be called")
+		})
 	}
 }
 

@@ -238,7 +238,7 @@ func runPrune(ctx context.Context, cfg PruneConfig) {
 		fatal("max-messages must be >= 0")
 	}
 	if !cfg.Filter.HasFilters() {
-		fatal("at least one filter is required\nuse --project, --max-messages, --before, or --first-message")
+		fatal("at least one filter is required\nuse --agent, --project, --max-messages, --before, or --first-message")
 	}
 
 	appCfg, err := config.LoadMinimal()
