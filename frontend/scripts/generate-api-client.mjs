@@ -194,6 +194,21 @@ const rawOperations = Object.values(apiDocument.paths).flatMap((path) =>
     ]),
 );
 
+// Huma marks file parts `contentEncoding: binary`. Orval reads any
+// contentEncoding as an encoded text string and types the part as `string`.
+// The JSON Schema "binary" encoding means the bytes are unchanged, so dropping
+// it keeps the schema's meaning and lets Orval type file parts as Blob | File.
+function dropBinaryContentEncoding(node) {
+  if (Array.isArray(node)) {
+    node.forEach(dropBinaryContentEncoding);
+    return;
+  }
+  if (node === null || typeof node !== "object") return;
+  if (node.contentEncoding === "binary") delete node.contentEncoding;
+  Object.values(node).forEach(dropBinaryContentEncoding);
+}
+dropBinaryContentEncoding(apiDocument);
+
 rmSync(generatedDir, { recursive: true, force: true });
 await generate(
   {
