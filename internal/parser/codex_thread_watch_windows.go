@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -29,7 +30,7 @@ func (d *codexThreadDirectory) refreshWatch(info os.FileInfo) error {
 		if err != nil {
 			return err
 		}
-		handle, err := windows.FindFirstChangeNotification(path, false,
+		handle, err := windows.FindFirstChangeNotification(codexThreadWatchPath(path), false,
 			windows.FILE_NOTIFY_CHANGE_FILE_NAME|windows.FILE_NOTIFY_CHANGE_DIR_NAME)
 		if err != nil {
 			return &os.PathError{Op: "watch", Path: d.path, Err: err}
@@ -57,6 +58,18 @@ func (d *codexThreadDirectory) refreshWatch(info os.FileInfo) error {
 		return &os.PathError{Op: "watch", Path: d.path, Err: err}
 	}
 	return nil
+}
+
+// The raw Win32 call does not extend long paths as Go's file APIs do.
+// Keep already-qualified paths intact; path must be absolute.
+func codexThreadWatchPath(path string) string {
+	if len(path) < 248 || strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\\.\`) || strings.HasPrefix(path, `\??\`) {
+		return path
+	}
+	if strings.HasPrefix(path, `\\`) {
+		return `\\?\UNC\` + path[2:]
+	}
+	return `\\?\` + path
 }
 
 func (w *codexThreadWatch) close() {

@@ -589,9 +589,11 @@ fixtures retain this field; missing identities remain source-local.
   appear, as observed in the Windows inventory test on 2026-10-10. Each cached
   directory therefore owns a
   [name-change notification](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstchangenotificationw).
-  A signaled notification refreshes only that directory's entries; rearming
-  before enumeration preserves changes during the scan. Microsoft documents
-  that
+  Long drive and UNC paths use extended Windows syntax because this API can
+  retain the `MAX_PATH` limit even when Go's file APIs can read the directory.
+  Rechecked the API's path requirement on 2026-10-10. A signaled notification
+  refreshes only that directory's entries; rearming before enumeration
+  preserves changes during the scan. Microsoft documents that
   [changes before rearming remain recorded](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findnextchangenotification).
   Unchanged directories reuse their filenames, and notification failures
   keep the fork eligible for retry. Handles scale with cached directories and

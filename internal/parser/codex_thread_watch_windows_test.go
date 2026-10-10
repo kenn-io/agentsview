@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -10,6 +11,46 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
 )
+
+func TestCodexThreadWatchPath(t *testing.T) {
+	tail := strings.Repeat(`directory\`, 30)
+	for _, tc := range []struct{ name, path, want string }{
+		{"short", `C:\sessions`, `C:\sessions`},
+		{"drive", `C:\sessions\` + tail, `\\?\C:\sessions\` + tail},
+		{"unc", `\\server\share\` + tail, `\\?\UNC\server\share\` + tail},
+		{"extended", `\\?\C:\sessions\` + tail, `\\?\C:\sessions\` + tail},
+		{"extended unc", `\\?\UNC\server\share\` + tail, `\\?\UNC\server\share\` + tail},
+		{"device", `\\.\C:\sessions\` + tail, `\\.\C:\sessions\` + tail},
+		{"native", `\??\C:\sessions\` + tail, `\??\C:\sessions\` + tail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, codexThreadWatchPath(tc.path))
+		})
+	}
+}
+
+func TestCodexForkInventoryLongWindowsRoot(t *testing.T) {
+	factory, cfg, _ := codexForkInventoryFixture(t, 0)
+	root := filepath.Join(t.TempDir(), strings.Repeat("a", 100), strings.Repeat("b", 100), strings.Repeat("c", 100))
+	require.NoError(t, os.MkdirAll(root, 0o700))
+	entries, err := os.ReadDir(cfg.Roots[0])
+	require.NoError(t, err)
+	for _, entry := range entries {
+		require.NoError(t, os.Rename(filepath.Join(cfg.Roots[0], entry.Name()), filepath.Join(root, entry.Name())))
+	}
+	cfg.Roots = []string{root}
+	t.Cleanup(func() { factory.(*codexProviderFactory).threadFiles.invalidate(cfg.Roots) })
+	provider := factory.NewProvider(cfg)
+	source := requireCodexProviderSource(t, provider, revertOther)
+	out, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
+	result := out.Results[0]
+	assert.Equal(t, DataVersionCurrent, result.DataVersion)
+	assert.Empty(t, result.RetryReason)
+	require.Len(t, result.Result.Messages, 1)
+	assert.Equal(t, "new answer", result.Result.Messages[0].Content)
+}
 
 func TestCodexThreadWatchFindsChangesWithUnchangedDirectoryTimes(t *testing.T) {
 	root := t.TempDir()
