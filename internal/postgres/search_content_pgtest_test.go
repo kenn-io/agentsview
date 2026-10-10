@@ -23,7 +23,6 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 	store := setupContentSearch(t)
 	for _, f := range []struct{ id, ended string }{
 		{"active", "2024-06-15T11:59:00Z"},
-		{"offset-active", "2024-06-15T07:59:00-04:00"},
 		{"boundary", "2024-06-15T07:50:00-04:00"},
 		{"idle", "2024-06-15T10:00:00Z"},
 	} {

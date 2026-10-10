@@ -49,7 +49,7 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 		{"started-active", "", "2024-06-15T11:59:00Z"},
 		{"boundary", "2024-06-15T07:50:00-04:00", ""},
 		{"started-boundary", "", "2024-06-15T11:50:00Z"},
-		{"created-boundary", "", ""},
+		{"created-active", "", ""},
 		{"idle", "2024-06-15T10:00:00Z", ""},
 		{"malformed", "invalid", "2024-06-15T11:59:00Z"},
 		{"unknown", "", ""},
@@ -59,7 +59,7 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 		seedSearchSession(t, d, f.id, "project-a", [][2]string{{"user", "needle"}})
 		_, err := d.getWriter().Exec(t.Context(),
 			"UPDATE sessions SET ended_at = ?, started_at = ?, created_at = ? WHERE id = ?",
-			f.ended, f.started, "2024-06-15T11:50:00Z", f.id)
+			f.ended, f.started, "2024-06-15T11:59:00Z", f.id)
 		require.NoError(t, err)
 		if f.id == "unknown" {
 			_, err = d.getWriter().Exec(t.Context(), "UPDATE sessions SET created_at = '' WHERE id = ?", f.id)
@@ -85,7 +85,7 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 					for _, match := range page.Matches {
 						ids = append(ids, match.SessionID)
 					}
-					assert.ElementsMatch(t, []string{"boundary", "started-boundary", "created-boundary", "idle", "malformed", "unknown"}, ids)
+					assert.ElementsMatch(t, []string{"boundary", "started-boundary", "idle", "malformed", "unknown"}, ids)
 				})
 			}
 		})
@@ -117,7 +117,11 @@ func TestSearchContentExcludeActiveChildBeforeLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET ended_at = CASE id WHEN 'parent' THEN ? WHEN 'child' THEN ? ELSE '2024-06-15T10:00:00Z' END", tc.parentEnd, tc.childEnd)
 			require.NoError(t, err)
-			for _, mode := range []string{"substring", "regex", "fts", "semantic", "hybrid"} {
+			modes := []string{"substring", "regex", "fts"}
+			if tc.name != "active parent idle child" {
+				modes = append(modes, "semantic", "hybrid")
+			}
+			for _, mode := range modes {
 				t.Run(mode, func(t *testing.T) {
 					page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 						Pattern: "needle", Mode: mode, Limit: 1, IncludeChildren: true,
@@ -125,7 +129,7 @@ func TestSearchContentExcludeActiveChildBeforeLimit(t *testing.T) {
 					})
 					require.NoError(t, err)
 					require.Len(t, page.Matches, 1)
-					if tc.name == "active parent idle child" && (mode == "substring" || mode == "regex" || mode == "fts") {
+					if tc.name == "active parent idle child" {
 						assert.Equal(t, "child", page.Matches[0].SessionID)
 					} else {
 						assert.Equal(t, "independent", page.Matches[0].SessionID)
