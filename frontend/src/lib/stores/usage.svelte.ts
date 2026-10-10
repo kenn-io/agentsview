@@ -218,6 +218,10 @@ function samePairwiseSelection(
 
 export type UsageMode = "cost" | "token";
 
+function selectionKey(params: UsageParams): string {
+  return [params.project_key, params.model, params.agent].join("|");
+}
+
 function summaryForDateRange(
   summary: UsageSummaryResponse,
   from: string,
@@ -365,6 +369,8 @@ class UsageStore {
   // The selected-dimension-free summary over the full unbrushed window.
   referenceSummary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
+  // Which selection the shown summary covers, so a failed reselect reports instead of showing old totals.
+  private summarySelection: string | null = null;
   isTimeRangeSummaryProvisional = $state(false);
   pairwiseComparison = $state<ServiceUsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
@@ -1070,8 +1076,8 @@ class UsageStore {
     const referenceParams = attributionParams && options.contextParams ? { ...attributionParams, from: options.contextParams.from, to: options.contextParams.to } : undefined;
     const liveReferenceStep = referenceParams ? this.liveQuery.start("referenceSummary", started) : 0;
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
+    const params = options.params ?? this.baseParams();
     try {
-      const params = options.params ?? this.baseParams();
       const contextParams = options.contextParams;
       let data: UsageSummaryResponse;
       let contextData: UsageSummaryResponse | null = null;
@@ -1089,6 +1095,7 @@ class UsageStore {
       }
       if (this.versions.summary === v) {
         this.summary = data;
+        this.summarySelection = selectionKey(params);
         this.attributionSummary = attributionData;
         if (!attributionParams) this.referenceSummary = null;
         else if (referenceData || !this.selectedTimeRange) this.referenceSummary = referenceData ?? attributionData;
@@ -1196,7 +1203,7 @@ class UsageStore {
               if (!isAbortError(attributionError)) console.warn("usage attribution restore failed:", attributionError);
             }
           }
-        } else if (this.summary === null) {
+        } else if (this.summary === null || (this.summarySelection !== null && selectionKey(params) !== this.summarySelection)) {
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
           console.warn("usage.fetchSummary refetch failed:", e);

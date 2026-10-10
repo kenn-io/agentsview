@@ -2165,6 +2165,17 @@ describe("UsageStore attribution focus", () => {
     usage.cancelInFlightReads();
   });
 
+  it("reports a failed summary after a selection change instead of keeping the old totals", async () => {
+    const { usage } = await loadStore();
+    await usage.fetchAll();
+    expect(usage.errors.summary).toBeNull();
+    usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(new Error("selection failed"));
+    usage.toggleSelection("project", "pl1:sha256:alpha");
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.errors.summary).toBe("selection failed");
+    usage.cancelInFlightReads();
+  });
+
   it("keeps model selection in memory while saving exclusions", async () => {
     localStorage.setItem("usage-filters", JSON.stringify({ selectedModel: "old-model" }));
     const { usage, buildUsageUrlParams } = await loadStore();
