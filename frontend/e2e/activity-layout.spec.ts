@@ -18,6 +18,7 @@ test("keeps the concurrency overlay selector inside its chart card", async ({ pa
 });
 
 test("switches message metrics by keyboard and fits narrow chart cards", async ({ page }) => {
+  // This seeded day includes 750 user messages from the two large sessions.
   const response = await page.request.get("/api/v1/sessions/test-session-xlarge-5500");
   expect(response.ok()).toBe(true);
   const session = await response.json();
