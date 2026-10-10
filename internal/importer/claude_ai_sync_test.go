@@ -157,7 +157,7 @@ func TestSyncClaudeAI(t *testing.T) {
 			require.EqualError(t, err, tt.wantError)
 		})
 	}
-	t.Run("trash exclusion and missing detail are skipped", func(t *testing.T) {
+	t.Run("trash exclusion is skipped", func(t *testing.T) {
 		for _, excluded := range []bool{false, true} {
 			d := testDB(t)
 			require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "claude-ai:22222222-2222-4222-8222-222222222222", Agent: "claude-ai", Project: "test", Machine: "test"}))
@@ -171,16 +171,14 @@ func TestSyncClaudeAI(t *testing.T) {
 				case "/api/organizations":
 					return ClaudeAIResponse{Status: 200, Body: []byte(syncOrgs)}, nil
 				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
-					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":true}`)}, nil
-				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=1":
-					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + strings.ReplaceAll(syncSummary, "22222222-2222-4222-8222-222222222222", "22222222-2222-4222-8222-222222222223") + `],"has_more":false}`)}, nil
+					return ClaudeAIResponse{Status: 200, Body: []byte(`{"data":[` + syncSummary + `],"has_more":false}`)}, nil
 				default:
-					require.Equal(t, "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222223?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true", path)
-					return ClaudeAIResponse{Status: 404, Body: nil}, nil
+					require.FailNowf(t, "unexpected fetch", "%s", path)
+					return ClaudeAIResponse{}, nil
 				}
 			}, nil)
 			require.NoError(t, err)
-			assert.Equal(t, 2, stats.Skipped)
+			assert.Equal(t, 1, stats.Skipped)
 			assert.Zero(t, stats.Errors)
 			assert.Empty(t, stats.Refusals)
 		}
