@@ -11,59 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
-
-func TestCursorS3QueuedParentRepair(t *testing.T) {
-	d := testDB(t)
-	const root = "s3://bucket/host-a/raw/cursor"
-	const baseID = "host-a~cursor:shared"
-	parentPath := root + "/project-b/shared.txt"
-	parentID := parser.AltSessionID(baseID, parentPath)
-	childPath := root + "/project-b/agent-transcripts/shared/subagents/child.txt"
-	insertSession(t, d, baseID, "project-a", func(s *Session) {
-		s.Agent, s.FilePath = "cursor", Ptr(root+"/project-a/shared.txt")
-	})
-	insertSession(t, d, parentID, "project-b", func(s *Session) {
-		s.Agent, s.FilePath = "cursor", &parentPath
-	})
-	insertSession(t, d, "host-a~cursor:child", "project-b", func(s *Session) {
-		s.Agent, s.FilePath, s.ParentSessionID, s.RelationshipType = "cursor", &childPath, Ptr(baseID), "subagent"
-	})
-	_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET parent_session_id = NULL WHERE id = 'host-a~cursor:child'")
-	require.NoError(t, err)
-	require.NoError(t, d.QueueSubagentParentRepairs(t.Context(), []string{parentID}))
-	insertSession(t, d, "spawner", "project-c")
-	insertSession(t, d, "kid", "project-c")
-	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
-	require.NoError(t, d.QueueSubagentParentRepairs(t.Context(), []string{"host-a~cursor:child", "kid"}))
-	count, err := d.RepairQueuedSubagentParentsContext(t.Context(), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count)
-	assert.Equal(t, "spawner", parentOfSession(t, d, "kid"))
-	unlinked, err := d.GetSession(t.Context(), "host-a~cursor:child")
-	require.NoError(t, err)
-	require.NotNil(t, unlinked)
-	assert.Nil(t, unlinked.ParentSessionID)
-	var queued int
-	require.NoError(t, d.Reader().QueryRowContext(t.Context(), "SELECT count(*) FROM subagent_parent_repair_queue").Scan(&queued))
-	assert.Equal(t, 2, queued)
-	count, err = d.RepairQueuedSubagentParentsContext(t.Context(), nil, root)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count)
-	assert.Equal(t, parentID, parentOfSession(t, d, "host-a~cursor:child"))
-	child, err := d.GetSessionFull(t.Context(), "host-a~cursor:child")
-	require.NoError(t, err)
-	assert.Equal(t, baseID, *child.ParserParentSessionID)
-	prefix := root + "/project-b/agent-transcripts/shared/subagents/"
-	plan := queryPlanOf(t, d, cursorS3ParentRepairQuery, parentID, prefix, strings.TrimSuffix(prefix, "/")+"0", parentID)
-	assert.Contains(t, plan, "SEARCH sessions USING INDEX idx_sessions_file_path (file_path>? AND file_path<?)")
-	require.NoError(t, d.QueueSubagentParentRepairs(t.Context(), []string{parentID}))
-	count, err = d.RepairQueuedSubagentParentsContext(t.Context(), nil, root)
-	require.NoError(t, err)
-	assert.Zero(t, count)
-}
 
 // TestLinkSubagentSessionsReParentsNestedGrandchild reproduces the
 // nested-subagent bug: when a subagent spawns its own subagent (depth >= 2),

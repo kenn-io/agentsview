@@ -2171,7 +2171,6 @@ func (db *DB) queueSubagentParentRepairs(ctx context.Context, ids []string, clea
 // clears the queue in the same transaction. A failed link or cleanup rolls
 // back both the hierarchy changes and queue deletion so a later sync retries
 // the exact IDs even when their original spawn edges have disappeared.
-// Cursor S3 directory evidence requires configured roots in the context form.
 func (db *DB) RepairQueuedSubagentParents() error {
 	_, err := db.RepairQueuedSubagentParentsContext(context.Background(), nil)
 	return err
@@ -2185,7 +2184,6 @@ func (db *DB) RepairQueuedSubagentParents() error {
 // The returned count includes session rows changed by committed linking and cleanup.
 func (db *DB) RepairQueuedSubagentParentsContext(
 	ctx context.Context, onProgress func(done, total int),
-	cursorRoots ...string,
 ) (int, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -2213,20 +2211,13 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 	}
 	updated := 0
 	var done, total int
-	queued := `SELECT session_id FROM (
-		SELECT session_id FROM subagent_parent_repair_queue
-		UNION
-		SELECT session_id FROM subagent_parent_cleanup_queue
-	)`
-	if len(cursorRoots) == 0 {
-		// Retain S3 repairs until Cursor roots return, including unchanged sources.
-		queued += ` WHERE NOT EXISTS (
-			SELECT 1 FROM sessions WHERE id = session_id
-			AND agent = 'cursor' AND file_path GLOB 's3://*'
-		)`
-	}
 	if onProgress != nil {
-		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM ("+queued+")").Scan(&total); err != nil {
+		if err := tx.QueryRowContext(ctx, `
+			SELECT count(*) FROM (
+				SELECT session_id FROM subagent_parent_repair_queue
+				UNION
+				SELECT session_id FROM subagent_parent_cleanup_queue
+			)`).Scan(&total); err != nil {
 			return 0, fmt.Errorf("counting queued subagent parent repairs: %w", err)
 		}
 		if total > 0 {
@@ -2235,7 +2226,11 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 	}
 	for {
 		ids, err := func() ([]string, error) {
-			rows, err := tx.QueryContext(ctx, queued+" ORDER BY session_id LIMIT ?", maxSQLVars/2)
+			rows, err := tx.QueryContext(ctx, `
+			SELECT session_id FROM subagent_parent_repair_queue
+			UNION
+			SELECT session_id FROM subagent_parent_cleanup_queue
+			ORDER BY session_id LIMIT ?`, maxSQLVars/2)
 			if err != nil {
 				return nil, fmt.Errorf("listing queued subagent parent repairs: %w", err)
 			}
@@ -2297,11 +2292,6 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 			return 0, fmt.Errorf("counting queued dangling-parent repairs: %w", err)
 		}
 		updated += int(cleared)
-		cursorUpdated, err := repairCursorS3Parents(ctx, tx, chunk, cursorRoots)
-		if err != nil {
-			return 0, fmt.Errorf("repairing Cursor S3 parents: %w", err)
-		}
-		updated += cursorUpdated
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM subagent_parent_cleanup_queue WHERE session_id IN "+ph,
 			args...,
@@ -2327,93 +2317,6 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing queued subagent parent repair: %w", err)
-	}
-	return updated, nil
-}
-
-const cursorS3ParentRepairQuery = `UPDATE sessions INDEXED BY idx_sessions_file_path
-	SET parent_session_id = ?, local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-	WHERE file_path >= ? AND file_path < ? AND agent = 'cursor'
-	AND relationship_type = 'subagent' AND parent_session_id IS NOT ?`
-
-func repairCursorS3Parents(ctx context.Context, tx *sql.Tx, ids, roots []string) (int, error) {
-	if len(roots) == 0 {
-		return 0, nil
-	}
-	ph, args := inPlaceholders(ids)
-	rows, err := tx.QueryContext(ctx, "SELECT file_path FROM sessions WHERE agent = 'cursor' AND id IN "+ph, args...)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	type family struct {
-		baseID   string
-		prefixes []parser.CursorS3ChildPrefix
-	}
-	families := make(map[string]family)
-	for rows.Next() {
-		var uri sql.NullString
-		if err := rows.Scan(&uri); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		key, baseID, prefixes := parser.CursorS3ParentFamily(roots, uri.String)
-		if key != "" {
-			families[key] = family{baseID: baseID, prefixes: prefixes}
-		}
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return 0, err
-	}
-	updated := 0
-	for key, family := range families {
-		records, err := listSessionPathRecords(ctx, tx, family.baseID)
-		if err != nil {
-			return 0, err
-		}
-		var query strings.Builder
-		query.WriteString(cursorS3ParentRepairQuery)
-		var retainedParents []any
-		for _, record := range records {
-			if record.Excluded {
-				continue
-			}
-			sourceKey, _ := parser.CursorS3SourceKey(roots, record.FilePath)
-			if sourceKey == key || (sourceKey == "" && parser.CursorS3ArchivedSourceMatches(key, record.FilePath)) {
-				// Keep verified saved parentage across root and format changes.
-				query.WriteString(" AND parent_session_id IS NOT ?")
-				retainedParents = append(retainedParents, record.ID)
-			}
-		}
-		for _, prefix := range family.prefixes {
-			var parent any
-			bestRank := 0
-			for _, record := range records {
-				sourceKey, sourceRoot := parser.CursorS3SourceKey(roots, record.FilePath)
-				if record.Excluded || sourceKey != key {
-					continue
-				}
-				rank := 1
-				if sourceRoot == prefix.Root {
-					rank = 2
-				}
-				if rank > bestRank {
-					bestRank, parent = rank, record.ID
-				}
-			}
-			args := append([]any{parent, prefix.Path, strings.TrimSuffix(prefix.Path, "/") + "0", parent}, retainedParents...)
-			res, err := tx.ExecContext(ctx, query.String(), args...)
-			if err != nil {
-				return 0, err
-			}
-			count, err := res.RowsAffected()
-			if err != nil {
-				return 0, err
-			}
-			updated += int(count)
-		}
 	}
 	return updated, nil
 }
@@ -4094,13 +3997,9 @@ const sessionPathRecordQuery = "SELECT id, COALESCE(file_path, ''), source_missi
 // ListSessionPathRecords returns the records for baseID and every id
 // parser.AltSessionID derives from it, stored rows first, then deletions.
 func (db *DB) ListSessionPathRecords(ctx context.Context, baseID string) ([]SessionPathRecord, error) {
-	return listSessionPathRecords(ctx, db.getReader(), baseID)
-}
-
-func listSessionPathRecords(ctx context.Context, q messageRowsQuerier, baseID string) ([]SessionPathRecord, error) {
 	const match = "(id = ? OR (id >= ? AND id < ?))"
 	low, high := baseID+"_alt-", baseID+"_alt."
-	return querySessionPathRecords(ctx, q,
+	return db.querySessionPathRecords(ctx,
 		sessionPathRecordQuery+match+
 			" UNION ALL SELECT id, COALESCE(file_path, ''), 0, 1, 0, 0 FROM excluded_sessions WHERE "+match,
 		baseID, low, high, baseID, low, high,
@@ -4117,13 +4016,13 @@ func (db *DB) ListSessionPathRecordsForAgents(ctx context.Context, agents []stri
 	for i, agent := range agents {
 		args[i] = agent
 	}
-	return querySessionPathRecords(ctx, db.getReader(),
+	return db.querySessionPathRecords(ctx,
 		sessionPathRecordQuery+"agent IN (?"+strings.Repeat(",?", len(agents)-1)+")", args...,
 	)
 }
 
-func querySessionPathRecords(ctx context.Context, q messageRowsQuerier, query string, args ...any) ([]SessionPathRecord, error) {
-	rows, err := q.QueryContext(ctx, query, args...)
+func (db *DB) querySessionPathRecords(ctx context.Context, query string, args ...any) ([]SessionPathRecord, error) {
+	rows, err := db.getReader().Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing session path records: %w", err)
 	}

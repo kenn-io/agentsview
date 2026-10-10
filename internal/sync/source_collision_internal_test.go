@@ -2,9 +2,14 @@ package sync
 
 import (
 	"context"
+	"database/sql"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,28 +57,6 @@ func TestSourceCollisionKeepsRetryFlag(t *testing.T) {
 	// when its parser recorded another parent.
 	assert.Equal(t, id, res.results[0].Session.ParentSessionID)
 	assert.Equal(t, parser.RelContinuation, res.results[0].Session.RelationshipType)
-
-	t.Run("local moved owner precedes exact alternate", func(t *testing.T) {
-		cursorRoot := t.TempDir()
-		stored := filepath.Join(cursorRoot, "project-a", "agent-transcripts", "shared.txt")
-		incoming := filepath.Join(cursorRoot, "project-a", "agent-transcripts", "shared", "shared.jsonl")
-		require.NoError(t, os.MkdirAll(filepath.Dir(incoming), 0o755))
-		require.NoError(t, os.WriteFile(incoming, []byte(`{"role":"user","content":"hello"}`), 0o644))
-		const baseID = "cursor:shared"
-		alt := parser.AltSessionID(baseID, incoming)
-		for id, path := range map[string]string{baseID: stored, alt: incoming} {
-			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-				ID: id, Project: "project-a", Machine: "local", Agent: "cursor", FilePath: &path,
-			}))
-		}
-		cursor, ok := parser.NewProvider(parser.AgentCursor, parser.ProviderConfig{Roots: []string{cursorRoot}})
-		require.True(t, ok)
-		session := parser.ParsedSession{ID: baseID, Agent: parser.AgentCursor}
-		id, moved, err := e.sourceCollisionID(t.Context(), cursor, incoming, &session, true, "")
-		require.NoError(t, err)
-		assert.Equal(t, baseID, id)
-		assert.True(t, moved)
-	})
 }
 
 // A failed ownership lookup skips the source this pass so it retries, rather
@@ -125,4 +108,138 @@ func TestChangedPathSyncResetsSourceClaims(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, path, *stored.FilePath)
+}
+
+func TestS3CursorSharedSessionProjects(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		order      []int
+		legacy     bool
+		cachedLost bool
+	}{
+		{name: "A then B", order: []int{0, 1}},
+		{name: "B then A", order: []int{1, 0}},
+		{name: "main dropped object", order: []int{0}, legacy: true},
+		{name: "main overwritten row", order: []int{1}, legacy: true},
+		{name: "main overwritten cached row", order: []int{1}, legacy: true, cachedLost: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const root = "s3://bucket/host-a/raw/cursor"
+			const baseID = "host-a~cursor:shared"
+			paths := []string{root + "/project-a/agent-transcripts/shared.txt", root + "/project-b/agent-transcripts/shared.txt"}
+			bodies := map[string]string{
+				paths[0]: "user:\nProject A\nassistant:\nAnswer A\n",
+				paths[1]: "user:\nProject B\nassistant:\nAnswer B\n",
+			}
+			mtime := time.Unix(100, 0)
+			var fetches atomic.Int32
+			oldFetch := fetchS3Object
+			t.Cleanup(func() { fetchS3Object = oldFetch })
+			fetchS3Object = func(uri string) (io.ReadCloser, error) {
+				body, ok := bodies[uri]
+				require.True(t, ok, "unexpected object %s", uri)
+				fetches.Add(1)
+				return io.NopCloser(strings.NewReader(body)), nil
+			}
+			database := openTestDB(t)
+			def, ok := parser.AgentByType(parser.AgentCursor)
+			require.True(t, ok)
+			provider := &processFixtureProvider{Def: def, Caps: parser.Capabilities{
+				Source: parser.SourceCapabilities{DiscoverSources: parser.CapabilitySupported, SharedSessionIDs: parser.CapabilitySupported},
+			}}
+			source := func(i int) parser.SourceRef {
+				uri := paths[i]
+				return parser.SourceRef{
+					Provider: parser.AgentCursor, Key: uri, DisplayPath: uri, FingerprintKey: uri,
+					ProjectHint: []string{"project-a", "project-b"}[i],
+					Opaque:      parser.S3DiscoveredSource{URI: uri, Machine: "host-a", Size: int64(len(bodies[uri])), MtimeNS: mtime.UnixNano(), Fingerprint: "s3-meta:stable"},
+				}
+			}
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}}, Machine: "local",
+				DisableFilesystemProjectDiscovery: true, ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+			})
+			t.Cleanup(engine.Close)
+			for _, i := range tt.order {
+				provider.discovered = []parser.SourceRef{source(i)}
+				stats := engine.SyncAll(t.Context(), nil)
+				require.Zero(t, stats.Failed)
+			}
+			if tt.legacy {
+				require.NoError(t, database.SetSessionDataVersion(t.Context(), baseID, 128))
+				require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(t.Context(), "PRAGMA user_version = 128")
+					return err
+				}))
+				if tt.cachedLost {
+					// Main cached the first object before the second overwrote its row.
+					engine.cacheSkip(paths[0], mtime.UnixNano(), "s3-meta:stable")
+				}
+			}
+			provider.discovered = []parser.SourceRef{source(0), source(1)}
+			stats := engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+			require.Zero(t, stats.Failed)
+			if tt.cachedLost {
+				missing, err := database.ListSessionIDsByFilePath(t.Context(), paths[0], "cursor")
+				require.NoError(t, err)
+				require.Empty(t, missing, "main's cached overwritten source remains missing after ordinary sync")
+				needsResync, err := db.ArchiveNeedsResync(t.Context(), database.Path())
+				require.NoError(t, err)
+				require.True(t, needsResync, "the data-version bump must schedule recovery")
+				stats = engine.ResyncAll(t.Context(), nil)
+				require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+				require.Zero(t, stats.Failed)
+			}
+			ids := make([]string, 2)
+			verify := func() {
+				t.Helper()
+				for i, uri := range paths {
+					storedIDs, err := database.ListSessionIDsByFilePath(t.Context(), uri, "cursor")
+					require.NoError(t, err)
+					require.Len(t, storedIDs, 1, "both projects must survive")
+					if ids[i] != "" {
+						assert.Equal(t, ids[i], storedIDs[0])
+					}
+					ids[i] = storedIDs[0]
+					session, err := database.GetSessionFull(t.Context(), ids[i])
+					require.NoError(t, err)
+					require.NotNil(t, session)
+					assert.Equal(t, "host-a", session.Machine)
+					assert.Equal(t, uri, derefString(session.FilePath))
+					if ids[i] != baseID {
+						assert.Equal(t, baseID, derefString(session.ParentSessionID))
+						assert.Equal(t, "continuation", session.RelationshipType)
+					}
+					messages, err := database.GetAllMessages(t.Context(), ids[i])
+					require.NoError(t, err)
+					require.Len(t, messages, 2)
+					assert.Equal(t, []string{"Project A", "Project B"}[i], messages[0].Content)
+					assert.Equal(t, []string{"Answer A", "Answer B"}[i], messages[1].Content)
+				}
+			}
+			verify()
+			before := fetches.Load()
+			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+			require.Zero(t, stats.Failed)
+			assert.Equal(t, before, fetches.Load(), "unchanged objects must stay behind the cutoff")
+			stats = engine.SyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			assert.Equal(t, before, fetches.Load(), "unchanged objects must not download without a cutoff")
+			if tt.legacy {
+				return
+			}
+			starred, err := database.StarSession(t.Context(), ids[1])
+			require.NoError(t, err)
+			require.True(t, starred)
+			paths[1] = root + "/project-b/agent-transcripts/shared/shared.jsonl"
+			bodies[paths[1]] = `{"role":"user","message":{"content":"Project B"}}` + "\n" + `{"role":"assistant","message":{"content":"Answer B"}}` + "\n"
+			provider.discovered = []parser.SourceRef{source(0), source(1)}
+			stats = engine.SyncAllSince(t.Context(), mtime.Add(time.Hour), nil)
+			require.Zero(t, stats.Failed)
+			verify()
+			stars, err := database.ListStarredSessionIDs(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, []string{ids[1]}, stars)
+		})
+	}
 }

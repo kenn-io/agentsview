@@ -12,8 +12,7 @@ The latest release is
 **Bug fixes**
 
 - Keep both Cursor conversations when S3 objects in different projects share
-  a session ID. Archive rebuilds recover previously collapsed objects while
-  preserving saved IDs and stars.
+  a session ID.
 
 ## 0.45.0
 

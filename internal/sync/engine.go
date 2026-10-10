@@ -3672,17 +3672,7 @@ func (e *Engine) resyncBuildLocked(
 	// copied spawn edge is present. A failed repair leaves hierarchy state
 	// uncertain and must abort before the replacement can be installed.
 	if err == nil {
-		var cursorOrphans []string
-		for _, id := range orphaned {
-			_, rawID := parser.StripHostPrefix(id)
-			if strings.HasPrefix(rawID, "cursor:") && isS3SourcePath(newDB.GetSessionFilePath(ctx, id)) {
-				cursorOrphans = append(cursorOrphans, id)
-			}
-		}
-		err = newDB.QueueSubagentParentRepairs(ctx, cursorOrphans)
-	}
-	if err == nil {
-		repaired, err = e.repairQueuedSubagentParents(ctx, newDB, func(done, total int) {
+		repaired, err = newDB.RepairQueuedSubagentParentsContext(ctx, func(done, total int) {
 			e.reportSubagentRepairProgress(reportResyncProgress, done, total)
 		})
 		pendingLinksUpdated += repaired
@@ -5102,7 +5092,7 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 			}
 		}
 		if repairEligible {
-			repaired, err := e.repairQueuedSubagentParents(ctx, e.db, nil)
+			repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
 			if err != nil {
 				errs = append(errs, fmt.Errorf(
 					"repair queued subagent parents after grouped reconciliation: %w", err,
@@ -5604,7 +5594,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	// An empty spool never enters collectAndBatch, so its pending durable
 	// repairs must run here too. This touches queued IDs, not the full archive.
 	if eligibility.repair && !passEpilogueDeferred(ctx) {
-		repaired, err := e.repairQueuedSubagentParents(ctx, e.db, nil)
+		repaired, err := e.db.RepairQueuedSubagentParentsContext(ctx, nil)
 		if err != nil {
 			stats.RecordFailed()
 			stats.Aborted = true
@@ -10576,19 +10566,6 @@ func (e *Engine) collectAndBatchWithOptions(
 		// Persist affected IDs before any exclusion or replacement can
 		// cascade their only spawn edge away. The queue is cleared only in
 		// the same transaction that successfully repairs the hierarchy.
-		var cursorIDs []string
-		for i, result := range r.results {
-			if r.agent == parser.AgentCursor && isS3SourcePath(result.Session.File.Path) {
-				cursorIDs = append(cursorIDs, resultIDs[i])
-			}
-		}
-		if err := e.db.QueueSubagentParentRepairs(completionCtx, cursorIDs); err != nil {
-			log.Printf("queue Cursor S3 parent repairs: %v", err)
-			stats.RecordFailed()
-			e.noteSQLiteContainerResult(r.containerResultPath(), false)
-			r.releaseAll()
-			continue
-		}
 		if err := e.db.QueueSubagentParentCleanupRepairs(completionCtx, children); err != nil {
 			log.Printf("queue subagent parent repairs: %v", err)
 			stats.RecordFailed()
@@ -10963,7 +10940,7 @@ flush:
 			e.reportSubagentRepairProgress(onProgress, done, total)
 		}
 	}
-	repaired, err := e.repairQueuedSubagentParents(postWriteCtx, e.db, repairProgress)
+	repaired, err := e.db.RepairQueuedSubagentParentsContext(postWriteCtx, repairProgress)
 	if err != nil {
 		log.Printf("repair queued subagent parents: %v", err)
 		stats.RecordFailed()
@@ -11155,20 +11132,6 @@ func (e *Engine) reconcileSkippedSingleSessionSourceBaselines(
 		return err
 	}
 	return nil
-}
-
-func (e *Engine) repairQueuedSubagentParents(ctx context.Context, archive *db.DB, onProgress func(int, int)) (int, error) {
-	if e.archiveStore != nil {
-		// Rebuild parents may remain in the original archive until orphan copying.
-		return 0, nil
-	}
-	var cursorRoots []string
-	for _, root := range e.sources().agentDirs[parser.AgentCursor] {
-		if isS3SourcePath(root) {
-			cursorRoots = append(cursorRoots, root)
-		}
-	}
-	return archive.RepairQueuedSubagentParentsContext(ctx, onProgress, cursorRoots...)
 }
 
 func (e *Engine) linkSubagentSessions(ctx context.Context) (int, error) {
@@ -18344,24 +18307,6 @@ func (e *Engine) reconcileProviderHistoryContext(
 	}
 	var prior *ingest.PriorSession
 	switch agent {
-	case parser.AgentCursor:
-		path := candidate.Parsed.Session.File.Path
-		if !isS3SourcePath(path) || candidate.Session.RelationshipType != string(parser.RelSubagent) {
-			break
-		}
-		candidate.Session.ParentSessionID = nil
-		store := e.archiveStore
-		if store == nil {
-			store = e.db
-		}
-		stored, err := store.GetSessionFull(ctx, candidate.Session.ID)
-		if err != nil {
-			return ingest.HistoryResult{}, err
-		}
-		if stored != nil && stored.Agent == string(agent) && stored.RelationshipType == string(parser.RelSubagent) &&
-			stored.FilePath != nil && (*stored.FilePath == path || e.cursorS3SourceMatch(*stored.FilePath, path) > 0) {
-			candidate.Session.ParentSessionID = stored.ParentSessionID
-		}
 	case parser.AgentOpenClaw:
 		path := candidate.Parsed.Session.File.Path
 		_, _, sqliteMember := parser.ParseVirtualSourcePathForBase(path, "openclaw-agent.sqlite")
@@ -20891,7 +20836,7 @@ func (e *Engine) processAndWriteSessionFile(
 				"reconcile fresh source baselines: %w", err,
 			)
 		}
-		repaired, err := e.repairQueuedSubagentParents(context.Background(), e.db, nil)
+		repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
 		if err != nil {
 			return false, sessionsChanged, fmt.Errorf(
 				"repair queued subagent parents: %w", err,
@@ -20942,7 +20887,7 @@ func (e *Engine) processAndWriteSessionFile(
 	// A prior sync may have removed an edge and then failed before repairing
 	// its child. Retry that durable work after this sync's read-only capture
 	// but before making any new mutations.
-	repaired, err := e.repairQueuedSubagentParents(context.Background(), e.db, nil)
+	repaired, err := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
 	if err != nil {
 		return false, sessionsChanged, fmt.Errorf(
 			"repair queued subagent parents: %w", err,
@@ -20979,7 +20924,7 @@ func (e *Engine) processAndWriteSessionFile(
 		if !repairQueued {
 			return
 		}
-		repaired, repairErr := e.repairQueuedSubagentParents(context.Background(), e.db, nil)
+		repaired, repairErr := e.db.RepairQueuedSubagentParentsContext(context.Background(), nil)
 		if repairErr != nil {
 			err = errors.Join(err, fmt.Errorf(
 				"repair queued subagent parents: %w", repairErr,

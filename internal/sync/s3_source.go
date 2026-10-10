@@ -141,11 +141,13 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(ctx context.Context,
 func (e *Engine) s3StoredSessionID(ctx context.Context, file parser.DiscoveredFile, p parser.S3Provider) string {
 	baseID := s3DiscoveredSessionIDWithProvider(file, p)
 	if parser.SharesSessionIDs(file.Agent) {
-		if records, err := e.sessionPathRecords(ctx, baseID); err == nil {
-			for _, record := range records {
-				if record.FilePath == file.Path {
-					return record.ID
-				}
+		records, err := e.sessionPathRecords(ctx, baseID)
+		if err != nil {
+			return ""
+		}
+		for _, record := range records {
+			if record.FilePath == file.Path {
+				return record.ID
 			}
 		}
 	}

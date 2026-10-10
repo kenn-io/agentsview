@@ -92,15 +92,7 @@ func cursorS3TranscriptName(name string) bool {
 }
 
 // CursorS3SourceKey identifies alternatives within the broadest accepted scanner root.
-func CursorS3SourceKey(roots []string, uri string) (key, root string) {
-	machine, root, loc, ok := cursorS3Location(roots, uri)
-	if !ok {
-		return "", ""
-	}
-	return machine + "/" + loc.ProjectDir + "/" + loc.RawID, root
-}
-
-func cursorS3Location(roots []string, uri string) (string, string, cursorTranscriptLocation, bool) {
+func CursorS3SourceKey(roots []string, uri string) string {
 	roots = slices.DeleteFunc(slices.Clone(roots), func(root string) bool { return !isS3URI(root) })
 	slices.SortFunc(roots, func(a, b string) int { return len(a) - len(b) })
 	for _, root := range roots {
@@ -108,55 +100,11 @@ func cursorS3Location(roots []string, uri string) (string, string, cursorTranscr
 		if !ok {
 			continue
 		}
-		segs := strings.Split(rel, "/")
-		if loc, ok := cursorS3TranscriptLocation(segs); ok {
-			return s3MachineFromRoot(root, "cursor"), root, loc, true
+		if loc, ok := cursorS3TranscriptLocation(strings.Split(rel, "/")); ok {
+			return s3MachineFromRoot(root, "cursor") + "/" + loc.ProjectDir + "/" + loc.RawID
 		}
 	}
-	return "", "", cursorTranscriptLocation{}, false
-}
-
-// CursorS3ArchivedSourceMatches checks a saved parent's family after its root is removed.
-func CursorS3ArchivedSourceMatches(key, uri string) bool {
-	if key == "" || !isS3URI(uri) {
-		return false
-	}
-	for end := strings.LastIndex(uri, "/"); end > len("s3://"); end = strings.LastIndex(uri[:end], "/") {
-		if sourceKey, _ := CursorS3SourceKey([]string{uri[:end]}, uri); sourceKey == key {
-			return true
-		}
-	}
-	return false
-}
-
-// CursorS3ChildPrefix pairs a child directory with its canonical scanner root.
-type CursorS3ChildPrefix struct {
-	Path string
-	Root string
-}
-
-// CursorS3ParentFamily locates archived children and their parent's ownership family.
-func CursorS3ParentFamily(roots []string, uri string) (key, baseID string, prefixes []CursorS3ChildPrefix) {
-	machine, _, loc, ok := cursorS3Location(roots, uri)
-	if !ok {
-		return "", "", nil
-	}
-	stem := loc.RawID
-	if loc.ParentRawID != "" {
-		stem = loc.ParentRawID
-	}
-	key = machine + "/" + loc.ProjectDir + "/" + stem
-	baseID = cursorSessionIDPrefix + stem
-	if machine != "" {
-		baseID = machine + "~" + baseID
-	}
-	for _, root := range roots {
-		prefix := strings.TrimSuffix(root, "/") + "/" + loc.ProjectDir + "/agent-transcripts/" + stem + "/"
-		if sourceKey, sourceRoot := CursorS3SourceKey(roots, prefix+stem+".jsonl"); sourceKey == key {
-			prefixes = append(prefixes, CursorS3ChildPrefix{Path: prefix + "subagents/", Root: sourceRoot})
-		}
-	}
-	return key, baseID, prefixes
+	return ""
 }
 
 // preferCursorS3Transcripts keeps one object per machine, project and session stem
@@ -172,8 +120,7 @@ func preferCursorS3Transcripts(
 	order := make([]string, 0, len(transcripts))
 	for _, transcript := range transcripts {
 		file := transcript.file
-		_, _, loc, _ := cursorS3Location(roots, file.Path)
-		k := file.Machine + "/" + loc.ProjectDir + "/" + loc.RawID
+		k := CursorS3SourceKey(roots, file.Path)
 		prev, ok := best[k]
 		if !ok {
 			best[k] = transcript

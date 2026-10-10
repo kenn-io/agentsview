@@ -56,29 +56,11 @@ stat, and `s3PrefixScan`. Agent policy does not belong there.
 ## Identity Rules
 
 `S3SessionID` is the session key before the engine prefixes the source machine.
-Providers declaring `SharedSessionIDs` use the local collision policy for S3:
-each distinct source keeps its saved ID, and a new source with an occupied ID
-gets a derived ID. Cursor conversations in different projects keep their parser
-relationships. An omitted remote object keeps its ownership
-because discovery does not prove deletion. Codex does not yet declare this
-capability.
+Providers with `SharedSessionIDs` apply the local collision policy to S3 object URIs, retaining saved IDs across Cursor format and layout changes; omitted objects keep their ownership.
 
 - Keep only paths that are real transcripts for that agent.
-- If `.jsonl` and `.txt` (or any other pair) share a source, keep one. Prefer the
+- If `.jsonl` and `.txt` (or any other pair) share a stem, keep one. Prefer the
   format the local parser prefers.
-- Cursor selects current format and layout alternatives by machine, session
-  stem, and raw project relative to the broadest configured root that accepts
-  the object. Roots without a machine boundary use the local machine label.
-- Archive ownership uses the exact object URI, with Cursor format and layout
-  alternatives sharing the same machine, raw project, and session stem retaining
-  their saved ID and stars. Alternatives under the same canonical root take
-  precedence over other roots. Different projects keep separate conversations.
-- Cursor subagents link to their project's archived parent, including when
-  the child arrives first or the parent's object changes format. Refreshing a
-  saved child after removing a source root keeps its verified same-family parent
-  or unlinked state, including format changes. Wrong-project legacy links are
-  repaired. Unlinked children prefer their own root's parent. Queued repairs
-  wait while no Cursor S3 root is configured.
 - Validate IDs with the same rules the local provider already uses.
 - Do not invent a second discover wrapper that bypasses the scanner. Extra
   post-processing (prefer `.jsonl`, fold sidecars) belongs next to the
