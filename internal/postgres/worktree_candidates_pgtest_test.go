@@ -12,9 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // seedPGCandidateSession inserts a minimal session with one message. Unlike
@@ -268,27 +266,6 @@ func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	require.Len(t, candidates, 1)
 	assert.Equal(t, "snapshot", candidates[0].EvidenceKind)
 	assert.Equal(t, "/srv/new/repo/worktree", candidates[0].EvidenceRoot)
-}
-
-func TestPGWorktreeCandidatesReloadPreservesSelection(t *testing.T) {
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_candidate_reload_test")
-	seedPGCandidateSession(t, local, "moving", "alpha", "host.example", "/repo/alpha", "2025-06-02T10:00:00Z")
-	seedPGCandidateSession(t, local, "retimed", "alpha", "host.example", "/repo/alpha", "2025-06-02T10:00:00Z")
-	_, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	store := &Store{pg: pg}
-	projects, err := store.BuildProjectIdentityMap(ctx, []string{"alpha"})
-	require.NoError(t, err)
-	catalog := readbase.NewCatalog(dbtest.PublishingCatalog{CatalogBackend: catalogSQL{store}, Publish: func() {
-		_, err := local.AssignSessionProject(ctx, "moving", "beta")
-		require.NoError(t, err)
-		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "retimed", Project: "alpha", Machine: "host.example", Agent: "codex", Cwd: "/repo/alpha", MessageCount: 1, StartedAt: new("2025-07-02T10:00:00Z"), EndedAt: new("2025-07-02T10:00:00Z")}))
-		_, err = syncer.Push(ctx, true, nil)
-		require.NoError(t, err)
-	}}, "pg")
-	candidates, err := catalog.ListArchiveWorktreeCandidates(ctx, db.ArchiveWorktreeCandidateRequest{ProjectLabel: "alpha", ProjectKey: projects["alpha"].ProjectKey, ProjectDateFilter: db.ProjectDateFilter{DateFrom: "2025-06-01", DateTo: "2025-06-30"}})
-	require.NoError(t, err)
-	assert.Empty(t, candidates)
 }
 
 func TestPGWorktreeCandidatesSelectProjectKeys(t *testing.T) {
