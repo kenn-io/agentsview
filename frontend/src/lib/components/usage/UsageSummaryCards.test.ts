@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { usage } from "../../stores/usage.svelte.js";
 import { testMoney } from "../../test/money.js";
@@ -256,7 +256,8 @@ describe("UsageSummaryCards", () => {
     expect(cardValue("Total Input")).toBe("505");
   });
 
-  it("renders the total input card in the summary error state", async () => {
+  it("renders the total input card in the summary error state and retries the full refresh", async () => {
+    const refresh = vi.spyOn(usage, "fetchAll").mockResolvedValue();
     usage.summary = issueSummary();
     usage.errors.summary = "boom";
 
@@ -267,5 +268,9 @@ describe("UsageSummaryCards", () => {
 
     expect(document.querySelectorAll(".summary-cards .card")).toHaveLength(10);
     expect(cardValue("Total Input")).toBe("--");
+    // Retry keeps the brush and refetches its full-window context like any refresh.
+    document.querySelector<HTMLButtonElement>(".retry-btn")!.click();
+    expect(refresh).toHaveBeenCalledExactlyOnceWith({ preserveTimeRange: true });
+    refresh.mockRestore();
   });
 });

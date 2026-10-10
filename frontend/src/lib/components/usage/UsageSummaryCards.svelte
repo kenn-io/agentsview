@@ -330,7 +330,7 @@
     <span>{usage.errors.summary}</span>
     <button
       class="retry-btn"
-      onclick={() => usage.fetchSummary()}
+      onclick={() => usage.fetchAll({ preserveTimeRange: true })}
     >
       {m.shared_retry()}
     </button>
