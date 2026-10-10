@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -21,20 +22,28 @@ func (db *DB) GetProviderStatHash(
 	agent parser.AgentType,
 	filePath string,
 ) (uint64, bool, error) {
+	hash, _, found, err := db.GetProviderStatHashWithTime(ctx, agent, filePath)
+	return hash, found, err
+}
+
+// GetProviderStatHashWithTime also returns the original verification time.
+func (db *DB) GetProviderStatHashWithTime(ctx context.Context, agent parser.AgentType, filePath string) (uint64, time.Time, bool, error) {
 	var h int64
+	var stamp string
 	err := db.getReader().QueryRowContext(ctx,
-		"SELECT stat_hash FROM provider_freshness"+
+		"SELECT stat_hash, updated_at FROM provider_freshness"+
 			" WHERE agent = ? AND file_path = ?",
 		string(agent), filePath,
-	).Scan(&h)
+	).Scan(&h, &stamp)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, false, nil
+		return 0, time.Time{}, false, nil
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf(
+		return 0, time.Time{}, false, fmt.Errorf(
 			"reading provider_freshness for %s/%s: %w", agent, filePath, err)
 	}
-	return uint64(h), true, nil
+	updatedAt, _ := time.Parse(time.RFC3339Nano, stamp)
+	return uint64(h), updatedAt, true, nil
 }
 
 // UpsertProviderStatHash records the per-component stat digest against
@@ -47,13 +56,18 @@ func (db *DB) UpsertProviderStatHash(
 	filePath string,
 	hash uint64,
 ) error {
+	return db.UpsertProviderStatHashAt(ctx, agent, filePath, hash, time.Now())
+}
+
+// UpsertProviderStatHashAt preserves a complete verification's original deadline.
+func (db *DB) UpsertProviderStatHashAt(ctx context.Context, agent parser.AgentType, filePath string, hash uint64, verifiedAt time.Time) error {
 	_, err := db.getWriter().ExecContext(ctx,
-		"INSERT INTO provider_freshness (agent, file_path, stat_hash)"+
-			" VALUES (?, ?, ?)"+
+		"INSERT INTO provider_freshness (agent, file_path, stat_hash, updated_at)"+
+			" VALUES (?, ?, ?, ?)"+
 			" ON CONFLICT (agent, file_path) DO UPDATE SET"+
 			"   stat_hash = excluded.stat_hash,"+
 			"   updated_at = excluded.updated_at",
-		string(agent), filePath, int64(hash),
+		string(agent), filePath, int64(hash), verifiedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		return fmt.Errorf(

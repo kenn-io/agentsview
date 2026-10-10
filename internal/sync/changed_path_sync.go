@@ -176,7 +176,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	if ctx.Err() != nil || processErr != nil || !stats.ProcessingComplete() {
 		e.poisonSQLiteContainerPass()
 	}
-	e.finishSQLiteContainerPass(true, false)
+	e.finishSQLiteContainerPass(ctx, true, false)
 	if !e.ephemeral {
 		e.persistSkipCache(ctx)
 	}

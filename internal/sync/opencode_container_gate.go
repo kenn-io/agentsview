@@ -15,18 +15,10 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// The OpenCode-family providers fan one shared SQLite database into one
-// virtual source per session row. Per-session freshness cannot be decided
-// before parsing (a message or part row can change without bumping the
-// session's time_updated, which is why dropUnchangedSharedSQLiteResults
-// compares content fingerprints after the parse), so a periodic sync of an
-// untouched archive used to re-open and re-parse every session on every
-// pass. The gate restores an O(1) answer for the common idle case: when the
-// container file provably has not changed since a pass that verified every
-// one of its sessions — as decided by parser.SQLiteContainerState, which
-// rests on SQLite's own write markers rather than timestamp precision —
-// none of its sessions can have changed either, and they all skip before
-// fingerprinting.
+// OpenCode-family providers expose each shared SQLite session as a virtual source.
+// Complete digest verification authorizes timestamp-first discovery for five
+// minutes. Matching container state restores that deadline after worker restarts;
+// child-only edits reconcile at the next complete verification.
 
 // openCodeFamilySQLiteAgents lists the agents whose sessions live in a
 // shared OpenCode-format SQLite container.
@@ -354,47 +346,21 @@ func storedSessionRowWatermarkNS(
 }
 
 // sqliteContainerListsWatermarkOnly returns discovery's bounded listing policy.
-// An unchanged verified container reuses its state across workers; a recent
+// A recently verified container reuses its deadline across workers; a recent
 // verification permits timestamp-only checks after writes. Missing state and
 // replacement containers fall back to the full composite listing.
 func (e *Engine) sqliteContainerListsWatermarkOnly(
-	preStates map[string]parser.SQLiteContainerState,
+	ctx context.Context, preStates map[string]parser.SQLiteContainerState,
 ) func(string) bool {
 	if len(preStates) == 0 || e.forceParse || e.forceFullParse {
 		return nil
 	}
+	e.restoreSQLiteContainerFreshness(ctx, preStates)
 	return func(dbPath string) bool {
 		dbPath = filepath.Clean(dbPath)
 		state, ok := preStates[dbPath]
 		if !ok {
 			return false
-		}
-		e.containerMu.Lock()
-		verifiedState, exact := e.digestVerifiedState[dbPath]
-		e.containerMu.Unlock()
-		canPersist := e.db != nil && !e.db.ReadOnly() && e.pathRewriter == nil
-		if canPersist && exact && verifiedState == state && parser.SQLiteContainerStateDigest(state) != 0 {
-			return true
-		}
-		if canPersist {
-			digest := parser.SQLiteContainerStateDigest(state)
-			stored, found, err := e.db.GetProviderStatHash(context.Background(), sqliteContainerFreshnessAgent(dbPath), dbPath)
-			if err != nil {
-				log.Printf("reading SQLite container freshness: %v", err)
-			}
-			if digest != 0 && err == nil && found && stored == digest {
-				e.containerMu.Lock()
-				if e.digestVerifiedState == nil {
-					e.digestVerifiedState = make(map[string]parser.SQLiteContainerState)
-				}
-				e.digestVerifiedState[dbPath] = state
-				if e.trustedSQLiteContainers == nil {
-					e.trustedSQLiteContainers = make(map[string]trustedSQLiteContainer)
-				}
-				e.trustedSQLiteContainers[dbPath] = trustedSQLiteContainer{state: state}
-				e.containerMu.Unlock()
-				return true
-			}
 		}
 		e.containerMu.Lock()
 		trusted, ok := e.trustedSQLiteContainers[dbPath]
@@ -403,9 +369,47 @@ func (e *Engine) sqliteContainerListsWatermarkOnly(
 		if !ok || sqliteContainerStateReplaced(trusted.state, state) {
 			return false
 		}
-		return verified && openCodeContainerDigestVerificationCurrent(
-			verifiedAt, openCodeContainerDigestVerifyNow(),
-		)
+		return verified && openCodeContainerDigestVerificationCurrent(verifiedAt, openCodeContainerDigestVerifyNow())
+	}
+}
+
+func (e *Engine) restoreSQLiteContainerFreshness(ctx context.Context, states map[string]parser.SQLiteContainerState) {
+	if e.db == nil || e.db.ReadOnly() || e.pathRewriter != nil {
+		return
+	}
+	for path, state := range states {
+		e.containerMu.Lock()
+		if e.sqliteContainerFreshnessLoaded == nil {
+			e.sqliteContainerFreshnessLoaded = make(map[string]bool)
+		}
+		loaded := e.sqliteContainerFreshnessLoaded[path]
+		e.sqliteContainerFreshnessLoaded[path] = true
+		_, verified := e.digestVerifiedAt[path]
+		e.containerMu.Unlock()
+		if loaded || verified {
+			continue
+		}
+		digest := parser.SQLiteContainerStateDigest(state)
+		if digest == 0 {
+			continue
+		}
+		stored, verifiedAt, found, err := e.db.GetProviderStatHashWithTime(ctx, sqliteContainerFreshnessAgent(path), path)
+		if err != nil {
+			log.Printf("reading SQLite container freshness: %v", err)
+		}
+		if err != nil || !found || stored != digest || !openCodeContainerDigestVerificationCurrent(verifiedAt, openCodeContainerDigestVerifyNow()) {
+			continue
+		}
+		e.containerMu.Lock()
+		if e.trustedSQLiteContainers == nil {
+			e.trustedSQLiteContainers = make(map[string]trustedSQLiteContainer)
+		}
+		if e.digestVerifiedAt == nil {
+			e.digestVerifiedAt = make(map[string]time.Time)
+		}
+		e.trustedSQLiteContainers[path] = trustedSQLiteContainer{state: state}
+		e.digestVerifiedAt[path] = verifiedAt
+		e.containerMu.Unlock()
 	}
 }
 
@@ -644,7 +648,7 @@ func (e *Engine) finishStreamingSQLiteContainerDiscovery() {
 }
 
 // sqliteContainerSourceFresh reports whether a discovered file belongs to a
-// container whose current state matches the last fully verified state AND
+// container whose current state matches the last trusted state AND
 // whose session ID was part of that verified pass, in which case the
 // session is unchanged and skips before fingerprinting. The membership
 // check covers hybrid roots, where the discoverable row set can grow (a
@@ -865,17 +869,35 @@ func (e *Engine) poisonSQLiteContainerPass() {
 // storage JSONs, or gone — loses its trusted entry. Per-session archive-path
 // checks protect newly re-exposed rows; removing the unused container trust
 // here also keeps the compact state map aligned with current discovery.
-func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
+func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, fullDiscovery bool) {
+	persist := make(map[string]uint64)
+	clear := make(map[string]bool)
+	verifiedAt := openCodeContainerDigestVerifyNow()
+	defer func() {
+		if e.db == nil || e.db.ReadOnly() || e.pathRewriter != nil {
+			return
+		}
+		for path := range clear {
+			if err := e.db.DeleteProviderStatHash(ctx, sqliteContainerFreshnessAgent(path), path); err != nil {
+				log.Printf("clearing SQLite container freshness: %v", err)
+			}
+		}
+		for path, digest := range persist {
+			if err := e.db.UpsertProviderStatHashAt(ctx, sqliteContainerFreshnessAgent(path), path, digest, verifiedAt); err != nil {
+				log.Printf("writing SQLite container freshness: %v", err)
+			}
+		}
+	}()
 	e.containerMu.Lock()
 	pass := e.containerPass
 	if incomplete || pass == nil || pass.poisoned {
 		e.containerPass = nil
 		if pass != nil {
 			if pass.poisoned {
-				e.clearDigestVerificationForPass(pass)
+				e.clearDigestVerificationForPass(pass, clear)
 			} else {
 				for dbPath := range pass.failed {
-					e.clearSQLiteContainerDigestVerification(dbPath)
+					e.clearSQLiteContainerDigestVerification(dbPath, clear)
 				}
 			}
 		}
@@ -893,14 +915,14 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 	}
 	e.containerPass = nil
 	if pass.poisoned {
-		e.clearDigestVerificationForPass(pass)
+		e.clearDigestVerificationForPass(pass, clear)
 		return
 	}
 	if fullDiscovery {
 		for dbPath := range e.trustedSQLiteContainers {
 			if pass.discovered[dbPath] == 0 {
 				delete(e.trustedSQLiteContainers, dbPath)
-				e.clearSQLiteContainerDigestVerification(dbPath)
+				e.clearSQLiteContainerDigestVerification(dbPath, clear)
 			}
 		}
 	}
@@ -908,7 +930,7 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 		pass.failed[dbPath] = true
 	}
 	for dbPath := range pass.failed {
-		e.clearSQLiteContainerDigestVerification(dbPath)
+		e.clearSQLiteContainerDigestVerification(dbPath, clear)
 	}
 	for dbPath, state := range pass.captured {
 		if pass.failed[dbPath] {
@@ -930,15 +952,9 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 			if e.digestVerifiedAt == nil {
 				e.digestVerifiedAt = make(map[string]time.Time)
 			}
-			e.digestVerifiedAt[dbPath] = openCodeContainerDigestVerifyNow()
-			if e.digestVerifiedState == nil {
-				e.digestVerifiedState = make(map[string]parser.SQLiteContainerState)
-			}
-			e.digestVerifiedState[dbPath] = state
-			if digest := parser.SQLiteContainerStateDigest(state); digest != 0 && e.db != nil && !e.db.ReadOnly() && e.pathRewriter == nil {
-				if err := e.db.UpsertProviderStatHash(context.Background(), sqliteContainerFreshnessAgent(dbPath), dbPath, digest); err != nil {
-					log.Printf("writing SQLite container freshness: %v", err)
-				}
+			e.digestVerifiedAt[dbPath] = verifiedAt
+			if digest := parser.SQLiteContainerStateDigest(state); digest != 0 {
+				persist[dbPath] = digest
 			}
 		}
 	}
@@ -975,12 +991,12 @@ func (e *Engine) sqliteContainerDigestRevalidationFailures(
 // clearDigestVerificationForPass clears verification age for every container
 // whose capture or discovery was invalid during the pass. Failed discoveries
 // may have no captured entry, so both maps are part of the invalidation set.
-func (e *Engine) clearDigestVerificationForPass(pass *sqliteContainerPass) {
+func (e *Engine) clearDigestVerificationForPass(pass *sqliteContainerPass, clear map[string]bool) {
 	for dbPath := range pass.captured {
-		e.clearSQLiteContainerDigestVerification(dbPath)
+		e.clearSQLiteContainerDigestVerification(dbPath, clear)
 	}
 	for dbPath := range pass.failed {
-		e.clearSQLiteContainerDigestVerification(dbPath)
+		e.clearSQLiteContainerDigestVerification(dbPath, clear)
 	}
 }
 
@@ -992,7 +1008,7 @@ func (e *Engine) clearTrustedSQLiteContainers() {
 	defer e.containerMu.Unlock()
 	e.trustedSQLiteContainers = nil
 	e.digestVerifiedAt = nil
-	e.digestVerifiedState = nil
+	e.sqliteContainerFreshnessLoaded = nil
 	e.containerPass = nil
 }
 
@@ -1005,12 +1021,11 @@ func sqliteContainerFreshnessAgent(path string) parser.AgentType {
 	return parser.AgentOpenCode
 }
 
-func (e *Engine) clearSQLiteContainerDigestVerification(path string) {
+func (e *Engine) clearSQLiteContainerDigestVerification(path string, clear map[string]bool) {
 	delete(e.digestVerifiedAt, path)
-	delete(e.digestVerifiedState, path)
-	if e.db != nil && !e.db.ReadOnly() && e.pathRewriter == nil {
-		if err := e.db.DeleteProviderStatHash(context.Background(), sqliteContainerFreshnessAgent(path), path); err != nil {
-			log.Printf("clearing SQLite container freshness: %v", err)
-		}
+	if e.sqliteContainerFreshnessLoaded == nil {
+		e.sqliteContainerFreshnessLoaded = make(map[string]bool)
 	}
+	e.sqliteContainerFreshnessLoaded[path] = true
+	clear[path] = true
 }

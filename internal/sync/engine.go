@@ -752,13 +752,13 @@ type Engine struct {
 	// maps a container DB path to its state at the end of the last
 	// completed pass; digestVerifiedAt records when that container last
 	// completed a full composite listing. containerPass is the bookkeeping
-	// for the pass currently running (nil outside passes). digestVerifiedState
-	// also persists through provider freshness for unchanged worker restarts.
-	containerMu             gosync.Mutex
-	trustedSQLiteContainers map[string]trustedSQLiteContainer
-	digestVerifiedAt        map[string]time.Time
-	digestVerifiedState     map[string]parser.SQLiteContainerState
-	containerPass           *sqliteContainerPass
+	// for the pass currently running (nil outside passes). Provider freshness
+	// restores recent verification after a restart without renewing its age.
+	containerMu                    gosync.Mutex
+	trustedSQLiteContainers        map[string]trustedSQLiteContainer
+	digestVerifiedAt               map[string]time.Time
+	sqliteContainerFreshnessLoaded map[string]bool
+	containerPass                  *sqliteContainerPass
 
 	// storageTrustMu guards the per-session freshness gate for
 	// OpenCode-family file-backed storage sessions (see
@@ -1870,7 +1870,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 	if !complete || tombstoneErr != nil {
 		e.poisonSQLiteContainerPass()
 	}
-	e.finishSQLiteContainerPass(true, false)
+	e.finishSQLiteContainerPass(ctx, true, false)
 	if tombstoneErr != nil {
 		return stats, tombstoned, fmt.Errorf(
 			"watcher source reconciliation: %w", tombstoneErr,
@@ -5450,7 +5450,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			stats.providerFailures > 0 {
 			e.poisonSQLiteContainerPass()
 		}
-		e.finishSQLiteContainerPass(false, fullCoverage)
+		e.finishSQLiteContainerPass(ctx, false, fullCoverage)
 	}()
 	providers, completedScopes, failedRoots,
 		failures, discoveryErr, err := e.streamReconciliationCandidates(
@@ -6034,7 +6034,7 @@ func (e *Engine) streamReconciliationCandidates(
 	// captures; a container that changes mid-stream fails its recapture
 	// check and its candidates resolve full fingerprints instead.
 	containerListsWatermarkOnly := e.sqliteContainerListsWatermarkOnly(
-		preContainerStates,
+		ctx, preContainerStates,
 	)
 	for _, plan := range plans {
 		agent := plan.agent
@@ -8072,7 +8072,7 @@ func (e *Engine) syncAllLocked(
 	if stats.Aborted || ctx.Err() != nil || providerFailures > 0 {
 		e.poisonSQLiteContainerPass()
 	}
-	e.finishSQLiteContainerPass(false, scope == nil)
+	e.finishSQLiteContainerPass(ctx, false, scope == nil)
 	if verifiedPass != 0 {
 		e.finishVerifiedSourcePass(
 			verifiedPass,
@@ -8266,7 +8266,7 @@ func (e *Engine) discoverProviderSources(
 	var files []parser.DiscoveredFile
 	var failures int
 	containerListsWatermarkOnly := e.sqliteContainerListsWatermarkOnly(
-		preContainerStates,
+		ctx, preContainerStates,
 	)
 
 	agents := make([]parser.AgentType, 0, len(e.sources().providerFactories))

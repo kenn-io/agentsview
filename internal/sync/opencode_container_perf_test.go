@@ -480,25 +480,33 @@ func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
 // remain deferred during the interval. A fresh worker reuses unchanged state,
 // and requires a full digest when the persisted state differs.
 func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
+	for _, n := range []int{5, 2803} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) { testOpenCodeIdleFullPass(t, n) })
+	}
+}
+
+func testOpenCodeIdleFullPass(t *testing.T, n int) {
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj", "/home/user/code/app")
-	for i := range 5 {
-		// Session rows far ahead of every child, so the later child-only
-		// replacement stays below the stored composite.
-		seedOpenCodeSQLiteTextSession(
-			t, oc, "proj", fmt.Sprintf("ses%05d", i),
-			1779012000000, 1779099999000,
-			"prompt", "answer",
-		)
-	}
-	require.Equal(t, 5, env.engine.SyncAll(t.Context(), nil).Synced)
+	oc.inTransaction(t, func(oc *openCodeTestDB) {
+		for i := range n {
+			// Session rows far ahead of every child, so the later child-only
+			// replacement stays below the stored composite.
+			seedOpenCodeSQLiteTextSession(
+				t, oc, "proj", fmt.Sprintf("ses%05d", i),
+				1779012000000, 1779099999000,
+				"prompt", "answer",
+			)
+		}
+	})
+	require.Equal(t, n, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	scansBefore := parser.OpenCodeContainerChildScans()
 	lookupsBefore := parser.OpenCodeSessionChildLookups()
 	stats := env.engine.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Synced)
-	assert.Equal(t, 5, stats.Skipped,
+	assert.Equal(t, n, stats.Skipped,
 		"every session of a trusted container must gate-skip")
 	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 		"an idle full pass must not aggregate the container's child tables")
@@ -508,7 +516,7 @@ func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
 	scansBefore = parser.OpenCodeContainerChildScans()
 	lookupsBefore = parser.OpenCodeSessionChildLookups()
 	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
-	assert.Equal(t, 5, stats.Skipped)
+	assert.Equal(t, n, stats.Skipped)
 	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
 		"a fresh worker must reuse the last verified unchanged container")
 	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore)

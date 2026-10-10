@@ -8,43 +8,12 @@ import (
 	"os"
 )
 
-// SQLiteContainerState captures a shared SQLite container file's
-// change-detection state. Two equal states mean the container provably has
-// not changed between the two captures.
-//
-// "Provably" deliberately does not rest on timestamp equality. Filesystem
-// mtime granularity varies (ns on APFS/ext4, 1s on HFS+, 2s on FAT) and
-// timestamps round-trip through layers with different precisions, so
-// comparisons finer than one second are not meaningful; mtimes here are
-// truncated to whole seconds and act only as coarse extra signal. The real
-// precision comes from SQLite's own write markers, which advance on every
-// committed transaction regardless of any clock:
-//
-//   - the 32-bit file change counter at byte 24 of the database header
-//     (bumped per transaction in rollback-journal mode, and on every
-//     checkpoint in WAL mode), and
-//   - the WAL header's checkpoint sequence number and random salts, plus
-//     the WAL size: between WAL resets commits only append frames ("a WAL
-//     always grows from beginning toward the end", so the size advances),
-//     and frames are only ever overwritten after a reset, whose first
-//     write transaction rewrites the header with an incremented salt-1
-//     and re-randomized salt-2 — the salts are SQLite's own mechanism for
-//     invalidating stale frames. Every committed frame therefore either
-//     grows the WAL or lands behind changed salts; a state that compares
-//     equal cannot hide new frames short of a fresh WAL's two random
-//     salts colliding with the captured ones.
-//
-// A spurious mismatch merely costs one redundant re-read, while a wrong
-// match is what the write markers rule out.
-//
-// Both headers are read per the documented on-disk format, which SQLite
-// pledges to keep backwards compatible through 2050:
-//
-//	https://www.sqlite.org/fileformat2.html (database header
-//	#the_database_header, WAL format #wal_file_format; layouts
-//	unchanged since 3.0.0 and 3.7.0 respectively)
-//	https://www.sqlite.org/lts.html (long-term support and format
-//	stability pledge through 2050)
+// SQLiteContainerState captures SQLite write markers for bounded freshness reuse.
+// Checkpointed WAL writes can preserve every marker within one recorded second,
+// so matching states still require periodic full digest verification.
+// Header counters detect rollback-journal transactions; WAL size and salts detect
+// writes while the WAL retains frames. File identity distinguishes replacements.
+// Header layouts follow https://www.sqlite.org/fileformat2.html.
 type SQLiteContainerState struct {
 	DBSize          int64
 	DBMtimeSec      int64
@@ -52,7 +21,8 @@ type SQLiteContainerState struct {
 	// DBInode and DBDevice distinguish a replaced or restored container
 	// file (new inode) from in-place transaction writes, which the header
 	// markers alone cannot: a byte-identical copy carries the same size,
-	// counter, and salts. Zero when native file identity is unavailable. In-place byte surgery that preserves every marker and
+	// counter, and salts. Zero when native file identity is unavailable.
+	// In-place byte surgery that preserves every marker and
 	// lands within the trusted mtime's second is explicitly out of
 	// scope — the same exposure class every mtime-based sync tool
 	// accepts.
