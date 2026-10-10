@@ -308,9 +308,8 @@ func TestCodexTrashScopeSchemaMigrationKeepsArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "Saved page", messages[0].Content)
-	var ordinaryExcluded, scoped bool
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT true,include_codex_pages FROM excluded_sessions WHERE id='ordinary-exclusion'`).Scan(&ordinaryExcluded, &scoped))
-	assert.True(t, ordinaryExcluded)
+	var scoped bool
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT include_codex_pages FROM excluded_sessions WHERE id='ordinary-exclusion'`).Scan(&scoped))
 	assert.False(t, scoped, "existing per-file exclusions must not widen")
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
