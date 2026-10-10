@@ -55,3 +55,47 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchContentExcludeActiveChildBeforeLimit(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "parent", "project-a", [][2]string{{"user", "parent text"}})
+	seedSearchSession(t, d, "child", "child-project", [][2]string{{"user", "needle"}})
+	seedSearchSession(t, d, "independent", "project-a", [][2]string{{"user", "needle"}})
+	_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET parent_session_id = 'parent', relationship_type = 'subagent' WHERE id = 'child'")
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), "UPDATE messages SET timestamp = '2024-06-15T11:59:00Z' WHERE session_id = 'child'")
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), "UPDATE messages SET timestamp = '2024-06-15T10:00:00Z' WHERE session_id = 'independent'")
+	require.NoError(t, err)
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "child", Ordinal: 0, Score: 0.9, Snippet: "needle"},
+		{SessionID: "independent", Ordinal: 0, Score: 0.8, Snippet: "needle"},
+	}})
+	for _, tc := range []struct {
+		name, parentEnd, childEnd, project string
+	}{
+		{"idle parent active child", "2024-06-15T10:00:00Z", "2024-06-15T11:59:00Z", "project-a"},
+		{"idle parent active child without project", "2024-06-15T10:00:00Z", "2024-06-15T11:59:00Z", ""},
+		{"active parent idle child", "2024-06-15T11:59:00Z", "2024-06-15T10:00:00Z", "project-a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET ended_at = CASE id WHEN 'parent' THEN ? WHEN 'child' THEN ? ELSE '2024-06-15T10:00:00Z' END", tc.parentEnd, tc.childEnd)
+			require.NoError(t, err)
+			for _, mode := range []string{"substring", "regex", "fts", "terms", "semantic", "hybrid"} {
+				t.Run(mode, func(t *testing.T) {
+					page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+						Pattern: "needle", Mode: mode, Limit: 1, IncludeChildren: true,
+						Project: tc.project, ExcludeActiveSince: "2024-06-15T11:50:00Z",
+					})
+					require.NoError(t, err)
+					require.Len(t, page.Matches, 1)
+					if tc.name == "active parent idle child" && (mode == "substring" || mode == "regex" || mode == "fts") {
+						assert.Equal(t, "child", page.Matches[0].SessionID)
+					} else {
+						assert.Equal(t, "independent", page.Matches[0].SessionID)
+					}
+				})
+			}
+		})
+	}
+}

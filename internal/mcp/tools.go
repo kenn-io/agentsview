@@ -775,9 +775,9 @@ type contentMatch struct {
 }
 
 type searchContentOut struct {
-	ExcludedActive int            `json:"excluded_active,omitempty"`
 	Matches        []contentMatch `json:"matches"`
 	NextCursor     *int           `json:"next_cursor,omitempty"`
+	ExcludedActive int            `json:"excluded_active,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
 	// resolved, which the caller cannot see in its own request.
 	EffectiveMode  string                  `json:"effective_mode"`

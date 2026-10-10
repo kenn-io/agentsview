@@ -163,7 +163,14 @@ func BuildContentScopeSQL(
 	if f.SessionID != "" {
 		return BuildSessionBaseFilterSQL(sf, dialect)
 	}
-	return BuildSessionFilterSQL(sf, dialect)
+	// Activity belongs to each candidate, while metadata filters select the parent tree.
+	sf.ExcludeActiveSince = ""
+	b := NewQueryBuilder(dialect, 0)
+	where := buildSessionFilterWithBuilder(sf, b, "")
+	if f.ExcludeActiveSince != "" {
+		where += " AND " + excludeActiveSincePredicate(f.ExcludeActiveSince, b, func(col string) string { return col })
+	}
+	return where, b.Args()
 }
 
 // sessionScopeSubquery returns "session_id IN (SELECT id FROM sessions
