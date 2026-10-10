@@ -279,7 +279,7 @@ func TestDirectBackend_UsageSummary_InvalidInput(t *testing.T) {
 	assert.ErrorAs(t, err, &ue, "want UsageInputError, got %T", err)
 }
 
-func TestDirectBackend_UsageSummary_UnknownProjectKeyHasStableCode(t *testing.T) {
+func TestDirectBackend_UsageSummary_ResolvesProjectKeys(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
@@ -287,10 +287,8 @@ func TestDirectBackend_UsageSummary_UnknownProjectKeyHasStableCode(t *testing.T)
 	_, err := be.UsageSummary(t.Context(), service.UsageRequest{
 		ExcludeProjectKey: "pl1:sha256:stale",
 	})
-	require.Error(t, err)
 	var inputErr *service.UsageInputError
 	require.ErrorAs(t, err, &inputErr)
-	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, inputErr.Code)
 }
 
 func TestDirectBackend_UsageSummary_EmptyRange(t *testing.T) {

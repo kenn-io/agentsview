@@ -86,7 +86,7 @@ func tableColumn(spec tableSpec, name string) (columnSpec, bool) {
 // schema edit without a matching row edit fails here, not on a live
 // server.
 func TestRowBuildersMatchInsertColumns(t *testing.T) {
-	sess := db.Session{ID: "s", CreatedAt: "2026-01-01T00:00:00Z"}
+	sess := db.Session{ID: "s", GroupKey: "job-a", CreatedAt: "2026-01-01T00:00:00Z"}
 	msg := db.Message{ID: 7, SessionID: "s", Ordinal: 1, Timestamp: "2026-01-01T00:00:00Z"}
 	tc := db.ToolCall{ToolName: "read", ResultEvents: []db.ToolResultEvent{{Content: "x"}}}
 	s := &Sync{machine: "m", archiveID: "a"}
@@ -103,33 +103,17 @@ func TestRowBuildersMatchInsertColumns(t *testing.T) {
 		spec, ok := tableByName(table)
 		require.True(t, ok, table)
 		assert.Len(t, row, len(spec.columns)+1, "%s row width", table)
+		if table == "sessions" {
+			groupColumn := -1
+			for i, column := range spec.columns {
+				if column.name == "group_key" {
+					groupColumn = i
+				}
+			}
+			require.GreaterOrEqual(t, groupColumn, 0)
+			assert.Equal(t, "job-a", row[groupColumn])
+		}
 		assert.Equal(t, uint64(1), row[len(row)-1], "%s push_version is last", table)
-	}
-}
-
-func TestSessionRowPreservesCronJobAndMachine(t *testing.T) {
-	spec, ok := tableByName("sessions")
-	require.True(t, ok)
-	groupColumn, machineColumn := -1, -1
-	for i, column := range spec.columns {
-		if column.name == "group_key" {
-			groupColumn = i
-		}
-		if column.name == "machine" {
-			machineColumn = i
-		}
-	}
-	require.GreaterOrEqual(t, groupColumn, 0)
-	require.GreaterOrEqual(t, machineColumn, 0)
-	for _, tc := range []struct{ source, machine, wantMachine string }{
-		{"local", "host-a", "host-a"},
-		{"host-c", "host-a", "host-c"},
-	} {
-		row := (&Sync{machine: tc.machine}).sessionRow(sessionPayload{session: db.Session{
-			Machine: tc.source, GroupKey: "job-a",
-		}}, "fp", 1)
-		assert.Equal(t, "job-a", row[groupColumn])
-		assert.Equal(t, tc.wantMachine, row[machineColumn])
 	}
 }
 

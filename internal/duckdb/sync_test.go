@@ -46,39 +46,18 @@ func TestPushIncrementalReplacesOnlyChangedSessions(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-2", 3)
 }
 
-func TestPushScopesCronGroupsByMachine(t *testing.T) {
-	machine := "host-a"
-	local, path := newPushFixture(t, 2)
-	require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET group_key = 'job-a', machine = CASE id WHEN 'sess-1' THEN 'local' ELSE 'host-c' END`)
-		return err
-	}))
-	_, err := Push(t.Context(), path, local, machine, storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	defer conn.Close()
-	var key, gotMachine string
-	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key, machine FROM sessions WHERE id = 'sess-1'`).Scan(&key, &gotMachine))
-	assert.Equal(t, "job-a", key)
-	assert.Equal(t, machine, gotMachine)
-	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key, machine FROM sessions WHERE id = 'sess-2'`).Scan(&key, &gotMachine))
-	assert.Equal(t, "job-a", key)
-	assert.Equal(t, "host-c", gotMachine)
-}
-
 func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 3)
 	require.NoError(t, local.Update(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			`UPDATE sessions SET machine = ?, group_key = 'job-a' WHERE id = ?`,
 			"source-machine", "sess-2",
 		); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx,
-			`UPDATE sessions SET machine = ? WHERE id = ?`,
+			`UPDATE sessions SET machine = ?, group_key = 'job-a' WHERE id = ?`,
 			" source-machine ", "sess-3",
 		)
 		return err
@@ -88,15 +67,17 @@ func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 
 	conn, err := Open(ctx, path)
 	require.NoError(t, err)
-	var machine string
+	var machine, group string
 	require.NoError(t, conn.QueryRowContext(ctx,
-		`SELECT machine FROM sessions WHERE id = ?`, "sess-2",
-	).Scan(&machine))
+		`SELECT machine, group_key FROM sessions WHERE id = ?`, "sess-2",
+	).Scan(&machine, &group))
 	assert.Equal(t, "source-machine", machine)
+	assert.Equal(t, "job-a", group)
 	require.NoError(t, conn.QueryRowContext(ctx,
-		`SELECT machine FROM sessions WHERE id = ?`, "sess-3",
-	).Scan(&machine))
+		`SELECT machine, group_key FROM sessions WHERE id = ?`, "sess-3",
+	).Scan(&machine, &group))
 	assert.Equal(t, " source-machine ", machine)
+	assert.Equal(t, "job-a", group)
 	require.NoError(t, conn.Close())
 
 	starred, err := local.StarSession(ctx, "sess-2")

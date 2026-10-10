@@ -1432,4 +1432,115 @@ func TestHermesCronStateGroups(t *testing.T) {
 			assert.Equal(t, sessions[0].GroupKey, sessions[1].GroupKey)
 		})
 	}
+	for _, tc := range []struct {
+		id, source, group string
+		keepStored        bool
+	}{
+		{"cron_job-1_20261007_120000", "cron", "job-1", false},
+		{"child", "cron", "", true},
+		{"cron_job-1_20261007_120000", "cli", "", false},
+	} {
+		for _, agent := range []AgentType{AgentHermes, AgentAugureDesktop} {
+			for _, source := range []string{"cron", "cli", ""} {
+				t.Run(string(agent)+"/"+tc.id+"/transcript="+tc.source+"/state="+source, func(t *testing.T) {
+					name := "session_" + tc.id + ".json"
+					body := fmt.Sprintf(`{"platform":%q,"messages":[{"role":"user","content":"hello"}]}`, tc.source)
+					root := t.TempDir()
+					createHermesStateDB(t, root)
+					conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+					require.NoError(t, err)
+					_, err = conn.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions`)
+					require.NoError(t, err)
+					_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, started_at) VALUES (?, ?, 1791374400)`, tc.id, source)
+					require.NoError(t, err)
+					require.NoError(t, conn.Close())
+					sessionsDir := filepath.Join(root, "sessions")
+					require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+					require.NoError(t, os.WriteFile(filepath.Join(sessionsDir, name), []byte(body), 0o644))
+					provider, ok := NewProvider(agent, ProviderConfig{Roots: []string{root}, Machine: "local"})
+					require.True(t, ok)
+					sources, err := provider.Discover(t.Context())
+					require.NoError(t, err)
+					require.Len(t, sources, 1)
+					outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+					require.NoError(t, err)
+					require.Len(t, outcome.Results, 1)
+					parsed := outcome.Results[0].Result
+					assert.Equal(t, string(agent)+":"+tc.id, parsed.Session.ID)
+					require.Len(t, parsed.Messages, 1)
+					assert.Equal(t, "hello", parsed.Messages[0].Content)
+					wantGroup, wantKeep := tc.group, tc.keepStored
+					switch source {
+					case "cli":
+						wantGroup, wantKeep = "", false
+						assert.Equal(t, string(agent)+"-cli", parsed.Session.Project)
+					case "cron":
+						wantGroup, wantKeep = "job-1", false
+						assert.Equal(t, string(agent)+"-cron", parsed.Session.Project)
+						if tc.id == "child" {
+							wantGroup, wantKeep = "", true
+						}
+					default:
+						assert.Equal(t, string(agent)+"-"+tc.source, parsed.Session.Project)
+					}
+					job, _, _ := strings.Cut(parsed.Session.GroupKey, ":")
+					assert.Equal(t, wantGroup, job)
+					assert.Equal(t, wantKeep, parsed.Session.KeepStoredGroupKey)
+				})
+			}
+		}
+	}
+	t.Run("home scopes", func(t *testing.T) {
+		var homeKeys []string
+		for _, profile := range []string{"", "", "profile-a", "profile-a", "profile-b", `remote:C:\profiles\a`, `remote:C:\profiles\b`} {
+			root := t.TempDir()
+			sessionsDir := filepath.Join(root, "sessions")
+			require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+			createHermesStateDB(t, root)
+			conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET id = 'cron_job-1_20261006_120000', source = 'cron', parent_session_id = NULL; UPDATE messages SET session_id = 'cron_job-1_20261006_120000'`)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			for _, transcript := range []struct{ name, body string }{
+				{"session_cron_job-1_20261007_120000.json", `{"platform":"cron","messages":[{"role":"user","content":"hello"}]}`},
+				{"cron_job-1_20261008_120000.jsonl", "{\"role\":\"session_meta\",\"platform\":\"cron\"}\n{\"role\":\"user\",\"content\":\"hello\"}\n"},
+			} {
+				path := filepath.Join(sessionsDir, transcript.name)
+				require.NoError(t, os.WriteFile(path, []byte(transcript.body), 0o644))
+			}
+			provider := newHermesTestProvider(t, root)
+			if profile != "" {
+				provider.Config.PathRewriter = func(path string) string {
+					relative, err := filepath.Rel(root, path)
+					require.NoError(t, err)
+					if strings.HasPrefix(profile, "remote:") {
+						return profile + `\` + strings.ReplaceAll(filepath.ToSlash(relative), "/", `\`)
+					}
+					return "capture://" + profile + "/" + filepath.ToSlash(relative)
+				}
+			}
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			var key string
+			for _, source := range sources {
+				outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
+				require.NoError(t, err)
+				require.Len(t, outcome.Results, 3)
+				for _, result := range outcome.Results {
+					group := result.Result.Session.GroupKey
+					if key == "" {
+						key = group
+					}
+					assert.Equal(t, key, group)
+				}
+			}
+			homeKeys = append(homeKeys, key)
+		}
+		assert.NotEqual(t, homeKeys[0], homeKeys[1])
+		assert.Equal(t, homeKeys[2], homeKeys[3])
+		assert.NotEqual(t, homeKeys[2], homeKeys[4])
+		assert.NotEqual(t, homeKeys[5], homeKeys[6])
+	})
 }
