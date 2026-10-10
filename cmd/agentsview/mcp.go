@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
+	"go.kenn.io/kit/daemon"
 )
 
 func newMCPCommand() *cobra.Command {
@@ -42,9 +44,10 @@ Use --profile memory to advertise only get_memory_status, search_content, and
 get_messages for focused conversation-memory clients. The default full profile
 is unchanged.
 
-The server reuses its connection to the local agentsview daemon. If a read
-loses its connection, it resolves the daemon again, starts it when needed,
-and retries once. Use --server to target an explicit daemon URL.
+The server reuses its connection while the writable daemon runtime record and
+process identity match. If a read loses its connection, it resolves the daemon
+again, starts it when needed, and retries once. Use --server to target an explicit
+daemon URL.
 
 Add to your MCP client config (e.g. Claude Desktop):
   {
@@ -243,6 +246,7 @@ type mcpDaemonService struct {
 	mu      sync.Mutex
 	cfg     config.Config
 	backend service.SessionService
+	runtime *daemon.RuntimeRecord
 }
 
 func newMCPDaemonService(cfg config.Config) service.SessionService {
@@ -266,9 +270,10 @@ func (s *mcpDaemonService) daemonService(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if s.backend != nil {
+	if s.backend != nil && s.cachedDaemonMatches() {
 		return s.backend, nil
 	}
+	s.backend, s.runtime = nil, nil
 	cfg := s.cfg
 	tr, err := ensureTransportContext(
 		ctx, &cfg, transportIntentLongLived, 0,
@@ -282,8 +287,36 @@ func (s *mcpDaemonService) daemonService(
 		)
 	}
 	s.cfg.AuthToken = cfg.AuthToken
-	s.backend = servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL)
-	return s.backend, nil
+	backend := servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL)
+	if tr.Runtime != nil && !tr.ReadOnly && !tr.Runtime.RuntimeFallback {
+		rec := tr.Runtime.Record
+		rec.SourcePath = ""
+		s.runtime = &rec
+		if s.cachedDaemonMatches() {
+			s.backend = backend
+		} else {
+			s.runtime = nil
+		}
+	}
+	return backend, nil
+}
+
+// cachedDaemonMatches requires unchanged evidence before reusing cached credentials.
+func (s *mcpDaemonService) cachedDaemonMatches() bool {
+	if s.runtime == nil {
+		return false
+	}
+	store := runtimeStore(s.cfg.DataDir)
+	path, err := store.Path(s.runtime.PID)
+	if err != nil {
+		return false
+	}
+	rec, err := store.Read(path)
+	if err != nil {
+		return false
+	}
+	rec.SourcePath = ""
+	return reflect.DeepEqual(rec, *s.runtime) && runtimeRecordIdentityState(rec) == processCreateTimeMatch
 }
 
 // mcpDaemonCall retries reads only, since a failed write may have reached the daemon.
@@ -311,7 +344,7 @@ func mcpDaemonCall[T any](
 		}
 		s.mu.Lock()
 		if s.backend == svc {
-			s.backend = nil
+			s.backend, s.runtime = nil, nil
 		}
 		s.mu.Unlock()
 		if !retryRead || attempt > 0 {
