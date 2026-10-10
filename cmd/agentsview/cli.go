@@ -431,6 +431,10 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 }
 
 func newPruneCommand() *cobra.Command {
+	return newPruneCommandWithRunner(runPrune)
+}
+
+func newPruneCommandWithRunner(run func(context.Context, PruneConfig)) *cobra.Command {
 	var agent, project, before, firstMessage string
 	var maxMessages int
 	var dryRun, yes bool
@@ -445,7 +449,7 @@ func newPruneCommand() *cobra.Command {
 			if maxMessages != -1 {
 				mm = &maxMessages
 			}
-			runPrune(cmd.Context(), PruneConfig{
+			run(cmd.Context(), PruneConfig{
 				Filter: db.PruneFilter{
 					Agent:        agent,
 					Project:      project,
@@ -458,7 +462,7 @@ func newPruneCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&agent, "agent", "", "Filter by agent name")
+	cmd.Flags().StringVar(&agent, "agent", "", "Exact agent name; includes matching trash and parents unless needed by surviving descendants")
 	cmd.Flags().StringVar(&project, "project", "", "Sessions whose project contains this substring")
 	cmd.Flags().IntVar(&maxMessages, "max-messages", -1, "Sessions with at most N user messages")
 	cmd.Flags().StringVar(&before, "before", "", "Sessions that ended before this date (YYYY-MM-DD)")

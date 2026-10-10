@@ -27,7 +27,6 @@ type PruneConfig struct {
 
 func parsePruneFlags(args []string) (PruneConfig, error) {
 	fs := flag.NewFlagSet("prune", flag.ContinueOnError)
-	agent := fs.String("agent", "", "Filter by agent name")
 	project := fs.String(
 		"project", "",
 		"Sessions whose project contains this substring",
@@ -68,7 +67,6 @@ func parsePruneFlags(args []string) (PruneConfig, error) {
 
 	cfg := PruneConfig{
 		Filter: db.PruneFilter{
-			Agent:        *agent,
 			Project:      *project,
 			MaxMessages:  mm,
 			Before:       *before,
@@ -80,7 +78,7 @@ func parsePruneFlags(args []string) (PruneConfig, error) {
 
 	if !cfg.Filter.HasFilters() {
 		return PruneConfig{}, errors.New("at least one filter is required\n" +
-			"use --agent, --project, --max-messages, --before," +
+			"use --project, --max-messages, --before," +
 			" or --first-message",
 		)
 	}
