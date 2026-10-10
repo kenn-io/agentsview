@@ -37,7 +37,7 @@ func TestDetectPatterns(t *testing.T) {
 			Detector: "pattern.retry_loop",
 			Label:    "retry_loop",
 			Text:     "retry loop: `Bash` called 4 times with identical arguments",
-			Evidence: "`Bash` x4 identical arguments 09:00-09:03",
+			Evidence: "Bash x4 identical arguments 09:00-09:03",
 			Ordinal:  ord(10), OccurredAt: base,
 		}, got[0])
 	})
@@ -68,7 +68,7 @@ func TestDetectPatterns(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				got := DetectPatterns("s1", false, PatternInput{Calls: calls, CallTimes: tt.times})
 				require.Len(t, got, 1)
-				assert.Equal(t, "`Bash` x3 identical arguments", got[0].Evidence)
+				assert.Equal(t, "Bash x3 identical arguments", got[0].Evidence)
 				assert.Equal(t, tt.at, got[0].OccurredAt)
 			})
 		}
@@ -108,7 +108,7 @@ func TestDetectPatterns(t *testing.T) {
 		got := DetectPatterns("s1", false, patternInput(calls, base))
 		require.Len(t, got, 2)
 		assert.Equal(t, "edit churn: `store.go` edited 3 times within 10 messages", got[0].Text)
-		assert.Equal(t, "`store.go` x3 edits 09:00-09:04", got[0].Evidence)
+		assert.Equal(t, "store.go x3 edits 09:00-09:04", got[0].Evidence)
 		assert.Equal(t, "edit churn: `main.go` edited 3 times within 10 messages", got[1].Text)
 		for _, s := range got {
 			assert.NotContains(t, s.Text+s.Evidence, "/home/")

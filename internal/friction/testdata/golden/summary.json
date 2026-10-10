@@ -1,0 +1,24 @@
+{
+  "corrections": 2,
+  "date": "2026-09-16",
+  "deferrals": 1,
+  "errors": 6,
+  "frustrations": 1,
+  "interruptions": 3,
+  "p0_alerts": {
+    "Bash": [
+      "s-1",
+      "s-2",
+      "s-3"
+    ],
+    "Read": [
+      "s-1",
+      "s-2",
+      "s-3"
+    ]
+  },
+  "patterns": 2,
+  "schema_version": 1,
+  "sessions_scanned": 3,
+  "workarounds": 1
+}
