@@ -123,7 +123,7 @@ type Pruner struct {
 }
 
 // Prune finds matching sessions and deletes them.
-func (p *Pruner) Prune(cfg PruneConfig) error {
+func (p *Pruner) Prune(ctx context.Context, cfg PruneConfig) error {
 	if !cfg.Filter.HasFilters() {
 		return fmt.Errorf(
 			"at least one filter is required " +
@@ -281,7 +281,7 @@ func formatBytes(b int64) string {
 	}
 }
 
-func runPrune(cfg PruneConfig) {
+func runPrune(ctx context.Context, cfg PruneConfig) {
 	if cfg.Filter.MaxMessages != nil && *cfg.Filter.MaxMessages < 0 {
 		fatal("max-messages must be >= 0")
 	}
@@ -294,7 +294,7 @@ func runPrune(cfg PruneConfig) {
 		log.Fatalf("loading config: %v", err)
 	}
 
-	database, writeLock, err := openWriteDB(context.Background(), appCfg)
+	database, writeLock, err := openWriteDB(ctx, appCfg)
 	if err != nil {
 		log.Fatalf("opening database: %v", err)
 	}
@@ -306,7 +306,7 @@ func runPrune(cfg PruneConfig) {
 		In:    os.Stdin,
 		Trash: trash.New(appCfg.DataDir),
 	}
-	if err := pruner.Prune(cfg); err != nil {
+	if err := pruner.Prune(ctx, cfg); err != nil {
 		log.Fatalf("prune: %v", err)
 	}
 }

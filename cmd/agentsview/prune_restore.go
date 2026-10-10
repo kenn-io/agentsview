@@ -37,10 +37,17 @@ func runPruneRestore(cfg PruneRestoreConfig) {
 	deps := pruneRestoreDeps{
 		store: trash.New(appCfg.DataDir),
 		openDB: func() (*db.DB, func(), error) {
-			return openWriteDB(context.Background(), appCfg)
+			database, writeLock, err := openWriteDB(
+				context.Background(), appCfg)
+			if err != nil {
+				return nil, nil, err
+			}
+			return database, func() {
+				closeWriteDB(database, writeLock)
+			}, nil
 		},
 	}
-	if err := pruneRestore(cfg, deps); err != nil {
+	if err := pruneRestore(context.Background(), cfg, deps); err != nil {
 		log.Fatalf("prune restore: %v", err)
 	}
 }
@@ -48,7 +55,7 @@ func runPruneRestore(cfg PruneRestoreConfig) {
 // pruneRestore moves the most recent (or requested) trash batch back
 // to its original locations and un-excludes the archived rows so the
 // next sync re-imports them.
-func pruneRestore(cfg PruneRestoreConfig, deps pruneRestoreDeps) error {
+func pruneRestore(ctx context.Context, cfg PruneRestoreConfig, deps pruneRestoreDeps) error {
 	if !cfg.Yes {
 		if cfg.Batch == "" {
 			fmt.Print("Restore the most recently trashed batch" +
@@ -97,7 +104,7 @@ func pruneRestore(cfg PruneRestoreConfig, deps pruneRestoreDeps) error {
 			return nil
 		}
 		defer closeFn()
-		unexcluded, err = database.UnexcludeSessions(sessionIDs)
+		unexcluded, err = database.UnexcludeSessions(ctx, sessionIDs)
 		if err != nil {
 			fmt.Printf("Restored %d files (un-excluding failed: %v).\n",
 				len(restored), err)

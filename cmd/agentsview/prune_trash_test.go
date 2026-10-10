@@ -88,23 +88,23 @@ func TestPruneTrashesSourcesAndRestores(t *testing.T) {
 
 	cfg, err := parsePruneFlags([]string{"--project", "proj-a", "--yes"})
 	require.NoError(t, err)
-	require.NoError(t, pruner.Prune(cfg))
+	require.NoError(t, pruner.Prune(t.Context(), cfg))
 
 	assert.NoFileExists(t, first, "matching source file must be trashed")
 	assert.FileExists(t, second, "non-matching source stays")
-	assert.True(t, d.IsSessionExcluded("pr-1"), "archived row is excluded")
-	assert.False(t, d.IsSessionExcluded("pr-2"))
+	assert.True(t, d.IsSessionExcluded(t.Context(), "pr-1"), "archived row is excluded")
+	assert.False(t, d.IsSessionExcluded(t.Context(), "pr-2"))
 	assert.Contains(t, out.String(), "trashed 1 source files")
 	assert.Contains(t, out.String(), "prune restore")
 
 	// Restore brings the file back and re-enables the archive row.
-	require.NoError(t, pruneRestore(PruneRestoreConfig{Yes: true},
+	require.NoError(t, pruneRestore(t.Context(), PruneRestoreConfig{Yes: true},
 		pruneRestoreDeps{
 			store:  trashStore,
 			openDB: func() (*db.DB, func(), error) { return d, func() {}, nil },
 		}))
 	assert.FileExists(t, first, "restored from trash")
-	assert.False(t, d.IsSessionExcluded("pr-1"), "row re-importable")
+	assert.False(t, d.IsSessionExcluded(t.Context(), "pr-1"), "row re-importable")
 }
 
 func TestPruneSourceOnlyKeepsArchiveRows(t *testing.T) {
@@ -124,10 +124,10 @@ func TestPruneSourceOnlyKeepsArchiveRows(t *testing.T) {
 		"--project", "proj-so", "--source-only", "--yes",
 	})
 	require.NoError(t, err)
-	require.NoError(t, pruner.Prune(cfg))
+	require.NoError(t, pruner.Prune(t.Context(), cfg))
 
 	assert.NoFileExists(t, src, "source is trashed")
-	assert.False(t, d.IsSessionExcluded("so-1"), "archive row kept")
+	assert.False(t, d.IsSessionExcluded(t.Context(), "so-1"), "archive row kept")
 
 	kept, getErr := d.GetSession(context.Background(), "so-1")
 	require.NoError(t, getErr)
@@ -146,10 +146,10 @@ func TestPruneDryRunLeavesFilesAlone(t *testing.T) {
 	pruner := &Pruner{DB: d, Out: &out, Trash: trash.New(t.TempDir())}
 	cfg, err := parsePruneFlags([]string{"--project", "proj-dry", "--dry-run"})
 	require.NoError(t, err)
-	require.NoError(t, pruner.Prune(cfg))
+	require.NoError(t, pruner.Prune(t.Context(), cfg))
 
 	assert.FileExists(t, src, "dry run never touches files")
-	assert.False(t, d.IsSessionExcluded("dry-1"))
+	assert.False(t, d.IsSessionExcluded(t.Context(), "dry-1"))
 	assert.Contains(t, out.String(), "Dry run")
 }
 
