@@ -100,7 +100,7 @@ func TestPruneCommandRejectsEmptyAgent(t *testing.T) {
 				called = true
 			})
 			_, err := executeCommand(cmd, tt.args...)
-			assert.EqualError(t, err, "--agent must not be empty")
+			require.EqualError(t, err, "--agent must not be empty")
 			assert.False(t, called, "runner must not be called")
 		})
 	}

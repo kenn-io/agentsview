@@ -440,7 +440,7 @@ func newPruneCommandWithRunner(run func(context.Context, PruneConfig)) *cobra.Co
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("agent") && agent == "" {
-				return fmt.Errorf("--agent must not be empty")
+				return errors.New("--agent must not be empty")
 			}
 			var mm *int
 			if maxMessages != -1 {
