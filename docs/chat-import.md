@@ -77,13 +77,12 @@ Set up Chrome once:
 2. Open `chrome://extensions` and turn on **Developer mode**.
 3. Click **Load unpacked** and select the folder printed by the command.
 
-Keep Chrome open during Sync. Re-run setup and reload the extension at
-`chrome://extensions` when the executable path or data directory changes, or
-when Sync asks for it after an upgrade. If the extension is newer than the
-server, upgrade AgentsView. Then click **Sync** again. The extension reconnects
-when AgentsView restarts. Only one Chrome profile connects at a time. The first
-profile to connect keeps the connection; other profiles wait until it
-disconnects.
+Keep Chrome open during Sync. When the executable path or data directory changes,
+rerun setup and reload the extension at `chrome://extensions`. After an upgrade
+mismatch, restart AgentsView if you upgraded it, rerun setup, reload the extension,
+then click **Sync** again. The extension reconnects when AgentsView restarts.
+Registration is per OS user; the last setup wins. The first connected Chrome
+profile is used until it disconnects.
 
 There's no removal command. Remove the extension at `chrome://extensions`, then
 delete `<dataDir>/chrome/extension/` and the launcher,
@@ -107,15 +106,13 @@ error log for a Chrome host endpoint bind failure.
 Open **Import conversations** and select **Claude.ai**. Local web UIs connected
 to a writable archive show a Chrome card; other connections show file upload
 alone. The card checks the connection automatically. **Sync** stays disabled
-until Chrome connects. **Not set up** shows the setup command; **Not connected**
-asks you to open Chrome and offers **Setup steps**. **Connected** enables
-**Sync**, which uses your existing Claude.ai session, including Google sign-in.
+until Chrome connects. **Not connected** asks you to open Chrome and shows the
+setup command and extension loading instructions. **Connected** enables **Sync**,
+which uses your existing Claude.ai session, including Google sign-in.
 
 **Signed out** appears after Sync needs authentication. Click **Sign in**,
-finish in the new tab, then return and click **Sync**. If another Chrome profile
-has the extension, the card identifies that AgentsView uses the first connected
-profile. **Update needed** shows setup and reload instructions for an older
-extension, or asks you to update AgentsView and disables Sync for a newer one.
+finish in the new tab, then return and click **Sync**. **Update needed** keeps
+Sync enabled and shows the restart, setup, and reload sequence above.
 During Sync, **Stop** cancels the run and progress replaces file upload. Results
 show the imported, updated, unchanged, and failed counts. Other failures show
 **Sync failed** with **Retry**.

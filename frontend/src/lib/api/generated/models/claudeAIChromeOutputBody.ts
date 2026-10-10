@@ -4,6 +4,4 @@
 
 export interface ClaudeAIChromeOutputBody {
   connected: boolean;
-  installed: boolean;
-  other_profile: boolean;
 }

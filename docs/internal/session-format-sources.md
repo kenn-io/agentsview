@@ -2792,22 +2792,17 @@ schemas keep their existing ordering behavior.
   oversized serialized replies become status 413. Both peers require protocol
   revision 1 in each message, covering encoding and request shapes.
   `TestRequestShapesVersion` pins the canonical request hash to that revision.
-  `TestChromeHostSignInProfiles` checks sign-in guidance after another profile
-  is refused. `TestChromeSetupWriteFailurePreservesInstall` checks that staged
-  write failures preserve the installed files. `TestChromeHostLocalOnly` refuses
-  remote-auth, bind-all, and forwarded requests before Chrome fetches.
-  `TestChromeHostIncompatibleReply` checks stale unversioned and newer replies
-  during organization, list, and detail fetches before status or body
-  consumption without imports. Sync cancels on compatibility errors and
-  preserves their codes. Stale replies return the
-  SSE code `claude_ai_chrome_host_update_required`; newer replies return
-  `claude_ai_agentsview_update_required` and ask users to upgrade AgentsView.
-  `TestClaudeAIChromeStatus` verifies installation, connection, and
-  refused-profile status through the local-only GET route.
-  `TestChromeHostDisconnectClearsOtherProfile` verifies that disconnecting the
-  active host clears refused-profile status before another host connects. The
-  worker test `refuses before touching tabs` checks
-  absent and unknown request revisions before tab access or fetch.
+  `TestChromeHostLocalOnly` refuses remote-auth, bind-all, and forwarded
+  requests before Chrome fetches. `TestChromeHostIncompatibleReply` checks
+  mismatched replies during organization, list, and detail fetches before
+  status or body consumption without imports. Sync cancels on compatibility
+  errors and returns `claude_ai_chrome_host_update_required`. Recovery is to
+  restart AgentsView if upgraded, rerun setup, reload the extension, then Sync.
+  `TestClaudeAIChromeStatus` verifies live connection status through the
+  local-only GET route. Registration is per OS user; the last setup wins.
+  `TestChromeHostKeepsLiveConnection` checks that a second profile leaves the
+  first profile's fetch working. The worker test `refuses before touching tabs`
+  checks absent and unknown request revisions before tab access or fetch.
   `TestChromeSyncResults` checks the generated CLI operation with a base path,
   Origin, bearer token, partial summaries, and pre-stream error messages,
   including `claude_ai_chrome_host_required` and `claude_ai_sync_running`.

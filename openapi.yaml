@@ -587,14 +587,8 @@ components:
       properties:
         connected:
           type: boolean
-        installed:
-          type: boolean
-        other_profile:
-          type: boolean
       required:
-        - installed
         - connected
-        - other_profile
       type: object
     ClaudeAISyncResultInputBody:
       additionalProperties: false
@@ -13175,7 +13169,6 @@ paths:
         - Import
   /api/v1/import/claude-ai/sync:
     post:
-      description: Before streaming, HTTP 409 with code claude_ai_chrome_host_required reports that the Chrome host is disconnected.
       operationId: post-api-v1-import-claude-ai-sync
       parameters:
         - explode: false
@@ -13190,7 +13183,7 @@ paths:
           content:
             text/event-stream:
               schema:
-                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required or claude_ai_agentsview_update_required."
+                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required."
                 type: string
           description: OK
         "400":
@@ -13222,7 +13215,7 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
-          description: Conflict
+          description: Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running.
         "422":
           content:
             application/json:

@@ -43,9 +43,9 @@ async function request(path = "/api/organizations") {
 
 describe("Chrome native host worker", () => {
   it.each([
-    [undefined, "Upgrade AgentsView, then Sync again"],
-    [0, "Upgrade AgentsView, then Sync again"],
-    [2, "Run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again"],
+    [undefined, "Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again."],
+    [0, "Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again."],
+    [2, "Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again."],
     [1, "Unsupported Claude fetch path"],
   ])("refuses before touching tabs", async (version, error) => {
     message({ id: "a", path: "/api/settings", version });
@@ -65,28 +65,6 @@ describe("Chrome native host worker", () => {
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("reinjects once when navigation removes claudeFetch; retry missing %s", async (stillMissing) => {
-    let probes = 0;
-    chrome.scripting.executeScript.mockImplementation(async (options) => {
-      if (options.files) {
-        if (!stillMissing) vi.stubGlobal("claudeFetch", vi.fn(() => ({ status: 200, body: "retried chats" })));
-        return [];
-      }
-      if (!options.args) {
-        probes++;
-        const result = options.func();
-        expect(result).toBe(probes > 1 && !stillMissing);
-        return [{ result }];
-      }
-      return [{ result: await options.func(options.args[0]) ?? null }];
-    });
-    expect(await request()).toEqual(stillMissing
-      ? { id: "a", version: 1, status: 0, error: "Claude.ai page changed during Sync; try Sync again" }
-      : { id: "a", version: 1, status: 200, body: "retried chats" });
-    expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(stillMissing ? 3 : 4);
-    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(2, { target: { tabId: 7 }, files: ["claude_fetch.js"], world: "ISOLATED" });
-  });
-
   it("injects claudeFetch into a fresh tab and leaves it open", async () => {
     const claudeFetch = vi.fn(() => ({ status: 200, body: "chats" }));
     chrome.scripting.executeScript.mockImplementation(async (options) => {
@@ -100,7 +78,7 @@ describe("Chrome native host worker", () => {
     expect(await request()).toEqual({ id: "a", version: 1, status: 200, body: "chats" });
     expect(chrome.tabs.create).toHaveBeenCalledWith({ url: "https://claude.ai/new", active: false });
     expect(chrome.tabs.remove).not.toHaveBeenCalled();
-    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(2, { target: { tabId: 8 }, files: ["claude_fetch.js"], world: "ISOLATED" });
+    expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, { target: { tabId: 8 }, files: ["claude_fetch.js"], world: "ISOLATED" });
     expect(claudeFetch).toHaveBeenCalledExactlyOnceWith("https://claude.ai/api/organizations");
   });
 
@@ -124,7 +102,7 @@ describe("Chrome native host worker", () => {
 
   it.each([null, {}, { status: "200" }])("rejects a fetch reply without numeric status: %s", async (result) => {
     chrome.scripting.executeScript.mockResolvedValueOnce([{ result: true }]).mockResolvedValueOnce([{ result }]);
-    expect(await request()).toEqual({ id: "a", version: 1, status: 0, error: "Invalid Claude.ai fetch reply; try Sync again" });
+    expect(await request()).toEqual({ id: "a", version: 1, status: 0, error: "Claude.ai page changed during Sync; try Sync again" });
   });
 
   it("reconnects five seconds after disconnect without duplicating startup connections", async () => {

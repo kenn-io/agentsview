@@ -5,14 +5,12 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
-	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -126,67 +124,17 @@ func TestChromeHostAbsent(t *testing.T) {
 
 func TestClaudeAIChromeStatus(t *testing.T) {
 	for _, tt := range []struct {
-		name                               string
-		installed, connected, otherProfile bool
-		want                               string
+		name      string
+		connected bool
+		want      string
 	}{
-		{"not set up", false, false, false, `{"installed":false,"connected":false,"other_profile":false}`},
-		{"registration replaced", true, false, false, `{"installed":false,"connected":false,"other_profile":false}`},
-		{"registration missing", true, false, false, `{"installed":false,"connected":false,"other_profile":false}`},
-		{"disconnected", true, false, false, `{"installed":true,"connected":false,"other_profile":false}`},
-		{"connected", true, true, false, `{"installed":true,"connected":true,"other_profile":false}`},
-		{"other profile", true, true, true, `{"installed":true,"connected":true,"other_profile":true}`},
+		{"disconnected", false, `{"connected":false}`},
+		{"connected", true, `{"connected":true}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
-			if tt.installed {
-				dir := filepath.Join(srv.cfg.DataDir, "chrome", "extension")
-				require.NoError(t, os.MkdirAll(dir, 0o700))
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
-				executable := filepath.Join(t.TempDir(), "bin with spaces' and %", "agentsview")
-				require.NoError(t, os.MkdirAll(filepath.Dir(executable), 0o700))
-				require.NoError(t, os.WriteFile(executable, []byte("program"), 0o700))
-				home := t.TempDir()
-				t.Setenv("HOME", home)
-				t.Setenv("USERPROFILE", home)
-				t.Setenv("CHROME_CONFIG_HOME", "")
-				t.Setenv("XDG_CONFIG_HOME", "")
-				launcher := chromehost.LauncherPath(srv.cfg.DataDir)
-				socket, err := chromehost.SocketPath(srv.cfg.DataDir)
-				require.NoError(t, err)
-				require.NoError(t, os.WriteFile(launcher, []byte(chromehost.BuildLauncher(executable, socket, runtime.GOOS)), 0o700))
-				registered := chromehost.ManifestPath(srv.cfg.DataDir, home)
-				body, err := json.Marshal(map[string]string{"path": launcher})
-				require.NoError(t, err)
-				require.NoError(t, os.MkdirAll(filepath.Dir(registered), 0o700))
-				require.NoError(t, os.WriteFile(registered, body, 0o600))
-				if tt.name == "registration replaced" {
-					otherLauncher := chromehost.LauncherPath(t.TempDir())
-					body, err = json.Marshal(map[string]string{"path": otherLauncher})
-					require.NoError(t, err)
-					if runtime.GOOS == "windows" {
-						registered = filepath.Join(t.TempDir(), chromehost.NativeHost+".json")
-					}
-					require.NoError(t, os.WriteFile(registered, body, 0o600))
-				}
-				if tt.name == "registration missing" {
-					require.NoError(t, os.Remove(registered))
-					registered = ""
-				}
-				if runtime.GOOS == "windows" {
-					srv.chrome.registeredManifest = func(string) (string, error) { return registered, nil }
-				}
-			}
 			if tt.connected {
-				socket, _ := testChromeConnection(t, srv)
-				if tt.otherProfile {
-					second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
-					require.NoError(t, err)
-					defer second.Close()
-					require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
-					_, err = chromehost.ReadFrame(second)
-					require.ErrorIs(t, err, io.EOF)
-				}
+				testChromeConnection(t, srv)
 			}
 			response := httptest.NewRecorder()
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/import/claude-ai/chrome", nil)
@@ -194,55 +142,6 @@ func TestClaudeAIChromeStatus(t *testing.T) {
 			srv.mux.ServeHTTP(response, req)
 			assert.Equal(t, http.StatusOK, response.Code)
 			assert.JSONEq(t, tt.want, response.Body.String())
-		})
-	}
-}
-
-func TestClaudeAIChromeStatusIncompleteInstall(t *testing.T) {
-	for _, state := range []string{"missing launcher", "malformed launcher", "missing executable", "executable is directory", "missing extension"} {
-		t.Run(state, func(t *testing.T) {
-			srv := testServer(t, 5*time.Second)
-			dir := filepath.Join(srv.cfg.DataDir, "chrome", "extension")
-			require.NoError(t, os.MkdirAll(dir, 0o700))
-			if state != "missing extension" {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o600))
-			}
-			executable := filepath.Join(t.TempDir(), "agentsview")
-			switch state {
-			case "executable is directory":
-				require.NoError(t, os.Mkdir(executable, 0o700))
-			case "missing extension":
-				require.NoError(t, os.WriteFile(executable, []byte("program"), 0o700))
-			}
-			launcher := chromehost.LauncherPath(srv.cfg.DataDir)
-			socket, err := chromehost.SocketPath(srv.cfg.DataDir)
-			require.NoError(t, err)
-			command := chromehost.BuildLauncher(executable, socket, runtime.GOOS)
-			if state == "malformed launcher" {
-				command = "invalid"
-			}
-			if state != "missing launcher" {
-				require.NoError(t, os.WriteFile(launcher, []byte(command), 0o700))
-			}
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("USERPROFILE", home)
-			t.Setenv("CHROME_CONFIG_HOME", "")
-			t.Setenv("XDG_CONFIG_HOME", "")
-			registered := chromehost.ManifestPath(srv.cfg.DataDir, home)
-			body, err := json.Marshal(map[string]string{"path": launcher})
-			require.NoError(t, err)
-			require.NoError(t, os.MkdirAll(filepath.Dir(registered), 0o700))
-			require.NoError(t, os.WriteFile(registered, body, 0o600))
-			if runtime.GOOS == "windows" {
-				srv.chrome.registeredManifest = func(string) (string, error) { return registered, nil }
-			}
-			response := httptest.NewRecorder()
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/import/claude-ai/chrome", nil)
-			req.RemoteAddr = "127.0.0.1:1234"
-			srv.mux.ServeHTTP(response, req)
-			assert.Equal(t, http.StatusOK, response.Code)
-			assert.JSONEq(t, `{"installed":false,"connected":false,"other_profile":false}`, response.Body.String())
 		})
 	}
 }
@@ -330,9 +229,9 @@ func TestChromeHostLocalOnly(t *testing.T) {
 }
 
 func TestChromeHostIncompatibleReply(t *testing.T) {
-	for _, reply := range []struct{ name, body, message, code string }{
-		{"stale extension", `{"status":0,"error":"Unsupported Claude fetch path"}`, "run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again", "claude_ai_chrome_host_update_required"},
-		{"newer extension", `{"version":2,"status":600,"body":"private"}`, "upgrade AgentsView, then Sync again", "claude_ai_agentsview_update_required"},
+	for _, reply := range []struct{ name, body string }{
+		{"missing revision", `{"status":0,"error":"Unsupported Claude fetch path"}`},
+		{"wrong revision", `{"version":2,"status":600,"body":"private"}`},
 	} {
 		t.Run(reply.name, func(t *testing.T) {
 			for _, stage := range []string{"organizations", "list", "detail"} {
@@ -375,8 +274,8 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 					case <-time.After(5 * time.Second):
 						require.FailNow(t, "incompatible host did not stop Sync")
 					}
-					assert.Contains(t, response.Body.String(), reply.message)
-					assert.Contains(t, response.Body.String(), `"code":"`+reply.code+`"`)
+					assert.Contains(t, response.Body.String(), "Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again.")
+					assert.Contains(t, response.Body.String(), `"code":"claude_ai_chrome_host_update_required"`)
 					assert.NotContains(t, response.Body.String(), "event: done")
 					assert.NotContains(t, response.Body.String(), "private")
 					stats, err := srv.db.GetStats(t.Context(), false, false)
@@ -452,12 +351,6 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 	second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
 	require.NoError(t, err)
 	defer second.Close()
-	require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
-	_, err = chromehost.ReadFrame(second)
-	require.Error(t, err)
-	if networkErr, ok := errors.AsType[net.Error](err); ok {
-		assert.False(t, networkErr.Timeout(), "the extra connection must close")
-	}
 	writeChromeReply(t, conn, id, 200, "[]")
 	select {
 	case err := <-finished:
@@ -466,91 +359,6 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 		require.FailNow(t, "first fetch did not finish")
 	}
 	assert.True(t, srv.chrome.Connected())
-}
-
-func TestChromeHostDisconnectClearsOtherProfile(t *testing.T) {
-	srv := testServer(t, 5*time.Second)
-	socket, conn := testChromeConnection(t, srv)
-	second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
-	require.NoError(t, err)
-	defer second.Close()
-	require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
-	_, err = chromehost.ReadFrame(second)
-	require.ErrorIs(t, err, io.EOF)
-	status := func() string {
-		response := httptest.NewRecorder()
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/import/claude-ai/chrome", nil)
-		req.RemoteAddr = "127.0.0.1:1234"
-		srv.mux.ServeHTTP(response, req)
-		require.Equal(t, http.StatusOK, response.Code)
-		return response.Body.String()
-	}
-	assert.JSONEq(t, `{"installed":false,"connected":true,"other_profile":true}`, status())
-	require.NoError(t, conn.Close())
-	require.Eventually(t, func() bool { return !srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
-	assert.JSONEq(t, `{"installed":false,"connected":false,"other_profile":false}`, status())
-	assert.Equal(t, "Sign in to Claude.ai, then Sync again", srv.chrome.signInError())
-}
-
-func TestChromeHostSignInProfiles(t *testing.T) {
-	for _, tt := range []struct {
-		name               string
-		refused, reconnect bool
-		status             int
-		want               string
-	}{
-		{"single profile", false, false, 401, "Sign in to Claude.ai, then Sync again"},
-		{"other profile", true, false, 401, "Another Chrome profile also has the extension. Only the first connected profile is used. Sign in to Claude.ai there or disable the extension in the other profile, then Sync again"},
-		{"new connection", true, true, 401, "Sign in to Claude.ai, then Sync again"},
-		{"other error", true, false, 403, "403"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := testServer(t, 5*time.Second)
-			socket, conn := testChromeConnection(t, srv)
-			if tt.refused {
-				second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
-				require.NoError(t, err)
-				defer second.Close()
-				require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
-				_, err = chromehost.ReadFrame(second)
-				require.Error(t, err)
-				if networkErr, ok := errors.AsType[net.Error](err); ok {
-					require.False(t, networkErr.Timeout(), "the extra connection must close")
-				}
-			}
-			if tt.reconnect {
-				require.NoError(t, conn.Close())
-				require.Eventually(t, func() bool { return !srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
-				var err error
-				conn, err = (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
-				require.NoError(t, err)
-				defer conn.Close()
-				require.Eventually(t, func() bool { return srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
-			}
-			response := httptest.NewRecorder()
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/claude-ai/sync?browser=chrome", nil)
-				req.RemoteAddr = "127.0.0.1:1234"
-				srv.mux.ServeHTTP(response, req)
-			}()
-			id, path := readChromeRequest(t, conn)
-			require.Equal(t, "/api/organizations", path)
-			writeChromeReply(t, conn, id, tt.status, "{}")
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				require.FailNow(t, "Sync did not finish")
-			}
-			assert.Contains(t, response.Body.String(), tt.want)
-			if tt.status == 401 {
-				assert.Contains(t, response.Body.String(), `"code":"claude_ai_auth_required"`)
-			} else {
-				assert.NotContains(t, response.Body.String(), "Another Chrome profile")
-			}
-		})
-	}
 }
 
 type chromeAcceptListener struct {

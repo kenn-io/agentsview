@@ -17655,7 +17655,7 @@ type PostAPIV1ExportConversationsInitializeErrorResponseJSON503 = APIErrorRespon
 
 type PostAPIV1ExportConversationsInitializeErrorResponseJSON504 = APIErrorResponse
 
-// PostAPIV1ImportClaudeAiSyncResponse Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required or claude_ai_agentsview_update_required.
+// PostAPIV1ImportClaudeAiSyncResponse Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required.
 type PostAPIV1ImportClaudeAiSyncResponse = []byte
 
 type PostAPIV1ImportClaudeAiSyncErrorResponse = APIErrorResponse

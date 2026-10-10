@@ -25,7 +25,7 @@ vi.mock("../../api/client.js", () => ({
   connectClaudeAI: (browser: typeof host) => browser.connect(), syncClaudeAI,
   importClaudeAI: vi.fn(), importChatGPT: vi.fn(),
 }));
-const ready = { installed: true, connected: true, other_profile: false };
+const ready = { connected: true };
 const stats = { imported: 12, updated: 3, skipped: 297, errors: 0 };
 const props = () => ({ open: true, onclose: vi.fn(), onimported: vi.fn() });
 const syncButton = () => screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement;
@@ -58,27 +58,16 @@ it("disables Sync while checking, then shows the live connection", async () => {
   expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
 });
 
-it.each([false, true])("shows setup instructions for installed=%s", async (installed) => {
-  chromeStatus.mockResolvedValue({ ...ready, installed, connected: false });
+it("shows setup instructions when disconnected", async () => {
+  chromeStatus.mockResolvedValue({ connected: false });
   render(ImportModal, props());
-  await waitFor(() => expect(screen.getByText(installed ? "Not connected" : "Not set up")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Not connected")).toBeTruthy());
   expect(syncButton().disabled).toBe(true);
-  if (installed) {
-    expect(screen.getByText("Open Chrome to connect.")).toBeTruthy();
-    expect(screen.queryByText("agentsview chrome setup")).toBeNull();
-    const toggle = screen.getByRole("button", { name: "Setup steps" });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    await fireEvent.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-  }
+  expect(screen.getByText("Open Chrome to connect.")).toBeTruthy();
   expect(screen.getByText("Terminal")).toBeTruthy();
   expect(screen.getByText("agentsview chrome setup")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
   expect(screen.getByText(m.import_claude_setup_load({ url: "chrome://extensions" }))).toBeTruthy();
-  if (installed) {
-    await fireEvent.click(screen.getByRole("button", { name: "Setup steps" }));
-    expect(screen.queryByText("agentsview chrome setup")).toBeNull();
-  }
 });
 
 it.each(["stop", "cancel"])("shows progress and refreshes completed chats after %s", async (exit) => {
@@ -118,15 +107,13 @@ it("reuses results and returns to Ready with Import more", async () => {
   expect(syncButton().disabled).toBe(false);
 });
 
-it.each([false, true])("offers browser sign-in after auth failure, other_profile=%s", async (other_profile) => {
-  chromeStatus.mockResolvedValue({ ...ready, other_profile });
+it("offers browser sign-in after auth failure", async () => {
   syncClaudeAI.mockRejectedValueOnce(new ApiError(0, "Server auth text", "claude_ai_auth_required"));
   const open = vi.spyOn(window, "open").mockReturnValue(null);
   render(ImportModal, props());
   await clickSync();
   await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
   expect(screen.getByText("Sign in to claude.ai in the Chrome profile with the AgentsView extension.")).toBeTruthy();
-  expect(!!screen.queryByText("Another Chrome profile also has the extension. AgentsView uses the profile that connected first.")).toBe(other_profile);
   expect(screen.queryByText("Server auth text")).toBeNull();
   await fireEvent.click(screen.getByRole("button", { name: "Sign in to claude.ai in the Chrome profile with the AgentsView extension." }));
   expect(open).toHaveBeenCalledExactlyOnceWith("https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
@@ -134,31 +121,29 @@ it.each([false, true])("offers browser sign-in after auth failure, other_profile
   await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
 });
 
-it.each([
-  ["claude_ai_chrome_host_update_required", "Then reload the extension in", false],
-  ["claude_ai_agentsview_update_required", "The extension is newer than this AgentsView. Update AgentsView.", true],
-] as const)("keeps update state for %s when disconnected", async (code, message, disabled) => {
-  syncClaudeAI.mockRejectedValueOnce(new ApiError(0, "Server version text", code));
+it("keeps update instructions and Sync enabled when disconnected", async () => {
+  syncClaudeAI.mockRejectedValueOnce(new ApiError(0, "Server version text", "claude_ai_chrome_host_update_required"));
   render(ImportModal, props());
   await clickSync();
   await waitFor(() => expect(screen.getByText("Update needed")).toBeTruthy());
-  chromeStatus.mockResolvedValue({ ...ready, connected: false });
+  chromeStatus.mockResolvedValue({ connected: false });
   await fireEvent.focus(window);
   await tick();
-  expect(screen.getByText(message, { exact: disabled })).toBeTruthy();
-  expect(syncButton().disabled).toBe(disabled);
-  expect(!!screen.queryByText("agentsview chrome setup")).toBe(!disabled);
+  expect(screen.getByText("Restart AgentsView if you upgraded it.")).toBeTruthy();
+  expect(syncButton().disabled).toBe(false);
+  expect(screen.getByText("agentsview chrome setup")).toBeTruthy();
 });
 
-it.each([false, true])("refetches the disappeared host after 409, installed=%s", async (installed) => {
-  syncClaudeAI.mockRejectedValueOnce(new ApiError(409, "Host gone", "claude_ai_chrome_host_required"));
+it.each(["claude_ai_auth_required", "claude_ai_chrome_host_update_required"])("recovers from %s without a reload", async (code) => {
+  syncClaudeAI.mockRejectedValueOnce(new ApiError(0, "Server error text", code));
   render(ImportModal, props());
-  await waitFor(() => expect(syncButton().disabled).toBe(false));
-  chromeStatus.mockResolvedValue({ ...ready, installed, connected: false });
-  await fireEvent.click(syncButton());
-  await waitFor(() => expect(screen.getByText(installed ? "Not connected" : "Not set up")).toBeTruthy());
-  expect(syncButton().disabled).toBe(true);
-  expect(screen.queryByRole("alert")).toBeNull();
+  await clickSync();
+  await waitFor(() => expect(screen.getByText(code === "claude_ai_auth_required" ? "Signed out" : "Update needed")).toBeTruthy());
+  expect(syncButton().disabled).toBe(false);
+  await clickSync();
+  await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
+  expect(screen.queryByText("Signed out")).toBeNull();
+  expect(screen.queryByText("Update needed")).toBeNull();
 });
 
 it("shows an overlapping Chrome Sync refusal", async () => {
@@ -168,6 +153,23 @@ it("shows an overlapping Chrome Sync refusal", async () => {
   await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Chrome Sync is already running."));
   expect(screen.queryByText("Server conflict text")).toBeNull();
   expect(syncButton().disabled).toBe(false);
+});
+
+it("clears a Sync conflict after closing while status hangs", async () => {
+  syncClaudeAI.mockRejectedValueOnce(new ApiError(409, "Server conflict text", "claude_ai_sync_running"));
+  const p = props();
+  const view = render(ImportModal, p);
+  await waitFor(() => expect(syncButton().disabled).toBe(false));
+  let resolve!: (status: typeof ready) => void;
+  chromeStatus.mockReturnValue(new Promise((r) => { resolve = r; }));
+  await fireEvent.click(syncButton());
+  await waitFor(() => expect(chromeStatus).toHaveBeenCalledTimes(2));
+  await view.rerender({ ...p, open: false });
+  await view.rerender({ ...p, open: true });
+  resolve(ready);
+  await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
+  await tick();
+  expect(screen.queryByText("Chrome Sync is already running.")).toBeNull();
 });
 
 it("shows a sync failure Notice and retries", async () => {

@@ -11,20 +11,7 @@ const FrameLimit = 64 << 20
 // Version covers message encoding and supported request shapes; bump both peers together.
 const Version = 1
 
-var ErrCompatibility = errors.New("run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again")
-
-type VersionError struct {
-	Version int
-}
-
-func (e VersionError) Error() string {
-	if e.Version > Version {
-		return "upgrade AgentsView, then Sync again"
-	}
-	return ErrCompatibility.Error()
-}
-
-func (e VersionError) Unwrap() error { return ErrCompatibility }
+var ErrCompatibility = errors.New("Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again.") //nolint:staticcheck // Recovery instructions appear directly in the UI.
 
 func ReadFrame(reader io.Reader) ([]byte, error) {
 	var header [4]byte
