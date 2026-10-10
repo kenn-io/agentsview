@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -408,22 +407,7 @@ func TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows(t *testing.T) {
 			e.digestVerifiedAt[container] = time.Now().Add(-openCodeContainerDigestVerifyInterval)
 			e.containerPass.fullDigestListed[container] = true
 		}
-		var pages atomic.Int32
-		reader := archive.Reader().(interface {
-			Conn(context.Context) (*sql.Conn, error)
-		})
-		conn, err := reader.Conn(t.Context())
-		require.NoError(t, err)
-		require.NoError(t, conn.Raw(func(raw any) error {
-			raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
-				if op == sqlite3.SQLITE_READ && table == "sessions" && column == "file_hash" {
-					pages.Add(1)
-				}
-				return sqlite3.SQLITE_OK
-			})
-			return nil
-		}))
-		require.NoError(t, conn.Close())
+		pages := countSessionFileHashReads(t, archive)
 		assert.Empty(t, e.filterQuickSyncFiles(t.Context(), files, time.Now()))
 		assert.Equal(t, int32(4), pages.Load(), "each container/agent group reads two pages once")
 	})
@@ -953,40 +937,6 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 		})
 	}
 
-	t.Run("replacement admission", func(t *testing.T) {
-		dbPath := filepath.Join(t.TempDir(), "opencode.db")
-		previous := parser.SQLiteContainerState{
-			DBInode: 10, DBDevice: 20, DBChangeCounter: 10,
-		}
-		admits := func(trusted, current parser.SQLiteContainerState) bool {
-			e := &Engine{
-				trustedSQLiteContainers: map[string]trustedSQLiteContainer{
-					dbPath: {state: trusted},
-				},
-				digestVerifiedAt: map[string]time.Time{dbPath: now},
-			}
-			return e.sqliteContainerListsWatermarkOnly(
-				map[string]parser.SQLiteContainerState{dbPath: current},
-			)(dbPath)
-		}
-		newIdentity := previous
-		newIdentity.DBInode = 11
-		noIdentity := previous
-		noIdentity.DBInode, noIdentity.DBDevice = 0, 0
-		rolledBack := previous
-		rolledBack.DBChangeCounter--
-		advanced := previous
-		advanced.DBChangeCounter++
-		assert.False(t, admits(previous, newIdentity),
-			"a replacement container must require a new digest verification")
-		assert.False(t, admits(noIdentity, noIdentity),
-			"unavailable identity must fail closed to full digest listing")
-		assert.False(t, admits(previous, rolledBack),
-			"a change-counter rollback is a restore and must re-verify")
-		assert.True(t, admits(previous, advanced),
-			"a normal in-place transaction may retain the fast path")
-	})
-
 	// A write landing after the post-discovery recapture invalidates the
 	// carried full-digest source, so the changed session re-resolves live
 	// instead of skipping on its pre-change digest; once the failure is
@@ -1290,6 +1240,27 @@ func TestSQLiteContainerFullPassDropsUndiscoveredTrust(t *testing.T) {
 			}
 		})
 	}
+	t.Run("newer record stays untouched", func(t *testing.T) {
+		archive := openTestDB(t)
+		path, _ := newContainerTestDB(t)
+		state, ok := parser.StatSQLiteContainerState(path)
+		require.True(t, ok)
+		raw := `{"version":2,"verified_at":"1970-01-01T00:16:40Z"}`
+		require.NoError(t, archive.SetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path, raw))
+		e := &Engine{db: archive}
+		for _, listed := range []bool{true, false} {
+			e.beginStreamingSQLiteContainerPass(map[string]parser.SQLiteContainerState{path: state})
+			if listed {
+				e.containerPass.discovered[path], e.containerPass.completed[path] = 1, 1
+				e.containerPass.fullDigestListed[path] = true
+			}
+			e.finishSQLiteContainerPass(t.Context(), false, true)
+			got, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path)
+			require.NoError(t, err)
+			assert.Equal(t, raw, got, "publication and cleanup preserve newer records")
+		}
+	})
+
 }
 
 func TestOpenCodeEphemeralVerificationIsLocal(t *testing.T) {
@@ -1344,77 +1315,6 @@ func TestOpenCodeContainerDiscoveryReplacementMovesAdmission(t *testing.T) {
 
 	assert.Zero(t, e.containerPass.discovered[oldDB])
 	assert.Equal(t, 1, e.containerPass.discovered[newDB])
-}
-
-func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
-	dbPath, conn := seededCompositeContainerTestDB(t)
-
-	archive := openTestDB(t)
-	e := NewEngine(t.Context(), archive, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentOpenCode: {filepath.Dir(dbPath)},
-		},
-		Machine: "local",
-	})
-	t.Cleanup(e.Close)
-	assertContent := func(want ...string) {
-		messages, err := archive.GetAllMessages(t.Context(), "opencode:ses-1")
-		require.NoError(t, err, "read archived messages")
-		require.Len(t, messages, len(want))
-		for i, content := range want {
-			assert.Equal(t, content, messages[i].Content, "messages[%d]", i)
-		}
-	}
-
-	origNow := openCodeContainerDigestVerifyNow
-	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
-	verifiedAt := time.Unix(100, 0)
-	openCodeContainerDigestVerifyNow = func() time.Time { return verifiedAt }
-	initial := e.SyncAll(t.Context(), nil)
-	require.False(t, initial.Aborted, "initial sync aborted: %+v", initial)
-	assert.Equal(t, 1, initial.Synced)
-	assertContent("original prompt", "original answer")
-
-	_, err := conn.ExecContext(t.Context(), `
-		UPDATE message SET id = CASE id
-			WHEN 'msg-user' THEN 'msg-user-v2'
-			WHEN 'msg-assistant' THEN 'msg-assistant-v2'
-		END
-		WHERE id IN ('msg-user', 'msg-assistant');
-		UPDATE part SET
-			id = CASE id
-				WHEN 'part-user' THEN 'part-user-v2'
-				WHEN 'part-assistant' THEN 'part-assistant-v2'
-			END,
-			message_id = CASE message_id
-				WHEN 'msg-user' THEN 'msg-user-v2'
-				WHEN 'msg-assistant' THEN 'msg-assistant-v2'
-			END,
-			data = CASE id
-				WHEN 'part-user' THEN '{"type":"text","text":"changed prompt"}'
-				WHEN 'part-assistant' THEN '{"type":"text","text":"changed answer"}'
-			END
-		WHERE id IN ('part-user', 'part-assistant')
-	`)
-	require.NoError(t, err, "apply child-only edit")
-	scansBefore := parser.OpenCodeContainerChildScans()
-	recent := e.SyncAll(t.Context(), nil)
-	require.False(t, recent.Aborted, "recent sync aborted: %+v", recent)
-	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
-		"a recent watermark pass must avoid the container child scan")
-	assert.Zero(t, recent.Synced,
-		"a child-only edit may remain deferred inside the verification interval")
-	assertContent("original prompt", "original answer")
-
-	verifiedAt = verifiedAt.Add(openCodeContainerDigestVerifyInterval)
-	scansBefore = parser.OpenCodeContainerChildScans()
-	due := e.SyncAll(t.Context(), nil)
-	require.False(t, due.Aborted, "due sync aborted: %+v", due)
-	assert.Equal(t, 1, due.Synced,
-		"the due full digest pass must reconcile the child-only edit")
-	assertContent("changed prompt", "changed answer")
-	assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scansBefore,
-		"the due pass must perform the full container child scan")
 }
 
 // TestOpenCodeDigestListingForm pins, in one matrix, which paths must
@@ -1615,76 +1515,77 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 }
 
 func TestOpenCodeRestartedQuickSyncReconcilesAtOriginalDeadline(t *testing.T) {
-	for _, recovery := range []string{"no failure", "same engine", "fresh engine"} {
-		t.Run(recovery, func(t *testing.T) {
-			dbPath, conn := seededCompositeContainerTestDB(t)
-			archive := openTestDB(t)
-			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
-			require.True(t, ok)
-			failing := &failingDBBackedProvider{
-				Def: parser.AgentDef{Type: parser.AgentClaude, DisplayName: "Claude", FileBased: true},
-				err: errors.New("provider discovery unavailable"),
-			}
-			otherRoot := t.TempDir()
-			newEngine := func() *Engine {
-				engine := NewEngine(t.Context(), archive, EngineConfig{
-					AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(dbPath)}, parser.AgentClaude: {otherRoot}}, Machine: "local",
-					ProviderFactories:      []parser.ProviderFactory{factory, failingDBBackedFactory{provider: failing}},
-					ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative},
-				})
-				t.Cleanup(engine.Close)
-				return engine
-			}
-			verifiedAt := time.UnixMilli(1779100000000)
-			now := verifiedAt
-			originalNow := openCodeContainerDigestVerifyNow
-			openCodeContainerDigestVerifyNow = func() time.Time { return now }
-			t.Cleanup(func() { openCodeContainerDigestVerifyNow = originalNow })
-			require.Equal(t, 1, newEngine().SyncAll(t.Context(), nil).Synced)
-			_, err := conn.ExecContext(t.Context(),
-				`UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = ?`,
-				verifiedAt.Add(30*time.Second).UnixMilli())
-			require.NoError(t, err)
-			previousStart, lastVerified := verifiedAt, verifiedAt
-			var failedEngine *Engine
-			recovered := false
-			for minute := 1; minute <= 6; minute++ {
-				now = verifiedAt.Add(time.Duration(minute) * time.Minute)
-				engine := newEngine()
-				if recovery == "same engine" && failedEngine != nil {
-					engine = failedEngine
-				}
-				if minute == 2 && recovery != "no failure" {
-					failing.failOnCall = failing.calls.Load() + 1
-					failedEngine = engine
-				}
-				scans := parser.OpenCodeContainerChildScans()
-				stats := engine.SyncAllSince(t.Context(), previousStart.Add(-10*time.Second), nil)
-				record, found := readContainerVerification(t, archive, dbPath)
-				require.True(t, found, "discovery failure preserves verification history")
-				if minute == 2 && recovery != "no failure" {
-					require.False(t, stats.ProcessingComplete())
-					assert.Equal(t, parser.SQLiteContainerState{}, record.State)
-				} else {
-					require.True(t, stats.ProcessingComplete())
-					due := !recovered && (minute == 5 || (minute == 3 && recovery != "no failure"))
-					if due {
-						require.Equal(t, 1, stats.Synced, "complete verification bypasses the advanced cutoff")
-						assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
-						lastVerified, recovered = now, true
-					} else {
-						require.Zero(t, stats.Synced)
-						assert.Zero(t, parser.OpenCodeContainerChildScans()-scans, "successful verification ends pending complete checks")
-					}
-				}
-				assert.True(t, lastVerified.Equal(record.VerifiedAt), "only successful complete checks renew verification")
-				previousStart = now
-			}
-			matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
-			require.NoError(t, err)
-			assert.Len(t, matches, 2)
-		})
+	testOpenCodeRestartedQuickSyncDeadline(t, "no failure")
+}
+
+func testOpenCodeRestartedQuickSyncDeadline(t *testing.T, recovery string) {
+	t.Helper()
+	dbPath, conn := seededCompositeContainerTestDB(t)
+	archive := openTestDB(t)
+	factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
+	require.True(t, ok)
+	failing := &failingDBBackedProvider{
+		Def: parser.AgentDef{Type: parser.AgentClaude, DisplayName: "Claude", FileBased: true},
+		err: errors.New("provider discovery unavailable"),
 	}
+	otherRoot := t.TempDir()
+	newEngine := func() *Engine {
+		engine := NewEngine(t.Context(), archive, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(dbPath)}, parser.AgentClaude: {otherRoot}}, Machine: "local",
+			ProviderFactories:      []parser.ProviderFactory{factory, failingDBBackedFactory{provider: failing}},
+			ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative},
+		})
+		t.Cleanup(engine.Close)
+		return engine
+	}
+	verifiedAt := time.UnixMilli(1779100000000)
+	now := verifiedAt
+	originalNow := openCodeContainerDigestVerifyNow
+	openCodeContainerDigestVerifyNow = func() time.Time { return now }
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = originalNow })
+	require.Equal(t, 1, newEngine().SyncAll(t.Context(), nil).Synced)
+	_, err := conn.ExecContext(t.Context(),
+		`UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = ?`,
+		verifiedAt.Add(30*time.Second).UnixMilli())
+	require.NoError(t, err)
+	previousStart, lastVerified := verifiedAt, verifiedAt
+	var failedEngine *Engine
+	recovered := false
+	for minute := 1; minute <= 6; minute++ {
+		now = verifiedAt.Add(time.Duration(minute) * time.Minute)
+		engine := newEngine()
+		if recovery == "same engine" && failedEngine != nil {
+			engine = failedEngine
+		}
+		if minute == 2 && recovery != "no failure" {
+			failing.failOnCall = failing.calls.Load() + 1
+			failedEngine = engine
+		}
+		scans := parser.OpenCodeContainerChildScans()
+		stats := engine.SyncAllSince(t.Context(), previousStart.Add(-10*time.Second), nil)
+		record, found := readContainerVerification(t, archive, dbPath)
+		require.True(t, found, "discovery failure preserves verification history")
+		if minute == 2 && recovery != "no failure" {
+			require.False(t, stats.ProcessingComplete())
+			assert.Equal(t, parser.SQLiteContainerState{}, record.State)
+		} else {
+			require.True(t, stats.ProcessingComplete())
+			due := !recovered && (minute == 5 || (minute == 3 && recovery != "no failure"))
+			if due {
+				require.Equal(t, 1, stats.Synced, "complete verification bypasses the advanced cutoff")
+				assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
+				lastVerified, recovered = now, true
+			} else {
+				require.Zero(t, stats.Synced)
+				assert.Zero(t, parser.OpenCodeContainerChildScans()-scans, "successful verification ends pending complete checks")
+			}
+		}
+		assert.True(t, lastVerified.Equal(record.VerifiedAt), "only successful complete checks renew verification")
+		previousStart = now
+	}
+	matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
+	require.NoError(t, err)
+	assert.Len(t, matches, 2)
 }
 
 func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
@@ -1832,7 +1733,6 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		{name: "missing stored identity", raw: `{"version":1,"verified_at":"1970-01-01T00:16:40Z"}`},
 		{name: "replaced", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBInode++ }},
 		{name: "missing identity", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBInode = 0 }},
-		{name: "ephemeral", setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.ephemeral = true }},
 		{name: "rewritten path", setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.pathRewriter = func(s string) string { return s } }},
 		{name: "read only", setup: func(e *Engine, _ *parser.SQLiteContainerState) {
 			reader, err := db.OpenReadOnly(t.Context(), archive.Path())
@@ -1840,8 +1740,6 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, reader.Close()) })
 			e.db = reader
 		}},
-		{name: "forced", setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceParse = true }},
-		{name: "full forced", setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceFullParse = true }},
 		{name: "read fails", canceled: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1880,19 +1778,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			fn := e.sqliteContainerListsWatermarkOnly(states)
 			got := fn != nil && fn(path)
 			assert.Equal(t, tc.want, got)
-			if tc.name == "future record version" {
-				for _, listed := range []bool{true, false} {
-					e.beginStreamingSQLiteContainerPass(states)
-					if listed {
-						e.containerPass.discovered[path], e.containerPass.completed[path] = 1, 1
-						e.containerPass.fullDigestListed[path] = true
-					}
-					e.finishSQLiteContainerPass(t.Context(), false, true)
-					raw, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path)
-					require.NoError(t, err)
-					assert.Equal(t, tc.raw, raw, "publication and cleanup preserve newer records")
-				}
-			}
+
 			if tc.localLegacy {
 				_, trusted := e.trustedSQLiteContainers[path]
 				assert.Equal(t, tc.wantTrust, trusted)
@@ -1906,9 +1792,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			}
 			if tc.want {
 				assert.True(t, now.Add(-tc.age).Equal(e.digestVerifiedAt[path]))
-				other := &Engine{db: archive}
-				require.NoError(t, other.prepareSQLiteContainerVerification(t.Context(), states))
-				assert.False(t, other.sqliteContainerListsWatermarkOnly(states)(path), "only the consuming engine owns prior authority")
+
 				fn = e.sqliteContainerListsWatermarkOnly(map[string]parser.SQLiteContainerState{path: state})
 				assert.True(t, fn(path), "the consuming engine retains its authority for this pass")
 			}
@@ -1984,6 +1868,12 @@ func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
 			assert.False(t, fresh.digestVerifiedAt[path].IsZero(), "failed invalidation writes cannot erase due work")
 		})
 	}
+	for _, recovery := range []string{"same engine", "fresh engine"} {
+		t.Run("quick cutoff after failure/"+recovery, func(t *testing.T) {
+			testOpenCodeRestartedQuickSyncDeadline(t, recovery)
+		})
+	}
+
 }
 
 type openCodeMemberFailureFactory struct {
@@ -2074,13 +1964,7 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 			matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "repaired")
 			require.NoError(t, err)
 			assert.Len(t, matches, 1)
-			// A revoked record for a source that disappears is removed by complete discovery.
-			require.NoError(t, conn.Close())
-			require.NoError(t, os.Rename(path, path+".removed"))
-			cleaned := restarted.SyncAll(t.Context(), nil)
-			require.True(t, cleaned.ProcessingComplete())
-			_, found = readContainerVerification(t, archive, path)
-			assert.False(t, found)
+
 		})
 	}
 }

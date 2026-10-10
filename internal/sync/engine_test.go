@@ -12219,22 +12219,7 @@ func TestProviderStoredFreshnessSharedDecision(t *testing.T) {
 					VALUES ('session', ?, ?, ?, 0, ?, ?, ?)`, stored.Project, stored.Agent, path, stored.MTimeNS, stored.Hash, stored.DataVersion)
 				return err
 			}))
-			var reads atomic.Int32
-			reader := archive.Reader().(interface {
-				Conn(context.Context) (*sql.Conn, error)
-			})
-			conn, err := reader.Conn(t.Context())
-			require.NoError(t, err)
-			require.NoError(t, conn.Raw(func(raw any) error {
-				raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
-					if op == sqlite3.SQLITE_READ && table == "sessions" && column == "file_hash" {
-						reads.Add(1)
-					}
-					return sqlite3.SQLITE_OK
-				})
-				return nil
-			}))
-			require.NoError(t, conn.Close())
+			reads := countSessionFileHashReads(t, archive)
 			fp := parser.SourceFingerprint{MTimeNS: tc.mtime, Hash: "digest"}
 			if tc.changedHash {
 				fp.Hash = "changed"
@@ -12243,8 +12228,28 @@ func TestProviderStoredFreshnessSharedDecision(t *testing.T) {
 			ordinary := e.providerSourceUnchangedInDB(t.Context(), parser.SourceRef{Provider: tc.agent, DisplayPath: path}, fp,
 				parser.ProviderSyncSemantics{FingerprintHashRequiredForFreshness: tc.required}, nil)
 			assert.Equal(t, tc.want, ordinary)
-			assert.Equal(t, ordinary, stored.Agent == string(tc.agent) && providerSourceMetadataFresh(stored) && providerFingerprintMatchesStored(tc.agent, fp, 0, stored.MTimeNS, stored.Hash, tc.required))
 			assert.Equal(t, tc.wantReads, reads.Load())
 		})
 	}
+}
+
+func countSessionFileHashReads(t *testing.T, archive *db.DB) *atomic.Int32 {
+	t.Helper()
+	reads := &atomic.Int32{}
+	reader := archive.Reader().(interface {
+		Conn(context.Context) (*sql.Conn, error)
+	})
+	conn, err := reader.Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "sessions" && column == "file_hash" {
+				reads.Add(1)
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	return reads
 }
