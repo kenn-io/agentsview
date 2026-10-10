@@ -87,6 +87,8 @@ describe("SettingsPage", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Date ranges");
+    expect(document.body.textContent).not.toContain("Notifications");
+    expect(document.body.querySelector('[aria-label="Enable desktop notifications"]')).toBeNull();
     expect(document.body.textContent).toContain("Link date ranges across pages");
     // The mapping manager moved to Data; Settings keeps only a pointer.
     expect(document.body.textContent).toContain("Worktree mappings");

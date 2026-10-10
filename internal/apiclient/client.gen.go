@@ -16464,6 +16464,9 @@ type GetAPIV1SessionsQuery struct {
 	// Descending Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix
 	Descending *bool `json:"descending,omitempty"`
 
+	// EachRow Apply filters to each session row, children included, without grouping by root
+	EachRow *bool `json:"each_row,omitempty"`
+
 	// Ids Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply.
 	Ids *string `json:"ids,omitempty"`
 }
@@ -19973,6 +19976,7 @@ type DBSession struct {
 	ID                     string            `json:"id" validate:"required"`
 	IsAutomated            bool              `json:"is_automated"`
 	IsTruncated            *bool             `json:"is_truncated,omitempty"`
+	LastReplyID            *string           `json:"last_reply_id,omitempty"`
 	LocalModifiedAt        *string           `json:"local_modified_at,omitempty"`
 	Machine                string            `json:"machine" validate:"required"`
 	MessageCount           int64             `json:"message_count"`
@@ -19999,6 +20003,7 @@ type DBSession struct {
 	TotalOutputTokens      int64             `json:"total_output_tokens"`
 	TranscriptFidelity     *string           `json:"transcript_fidelity,omitempty"`
 	TranscriptRevision     *string           `json:"transcript_revision,omitempty"`
+	TurnOpen               *bool             `json:"turn_open,omitempty"`
 	UserMessageCount       int64             `json:"user_message_count"`
 	WebURL                 *string           `json:"web_url,omitempty"`
 }

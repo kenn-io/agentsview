@@ -281,6 +281,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(updater_builder.build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(init_navigation_guard_plugin())
         .manage(SidecarState::default())

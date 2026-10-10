@@ -77,6 +77,7 @@
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
+  import { startNotificationWatcher } from "./lib/notifications.js";
   import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
   import {
     yokedDates,
@@ -800,6 +801,15 @@
     const saveError = settings.saveError;
     if (saveError) {
       untrack(() => showFlash(saveError, { tone: "danger" }));
+    }
+  });
+
+  const notificationsEnabled = $derived(sync.isDesktop && !settings.readOnly && settings.notifications.enabled);
+  $effect(() => {
+    if (notificationsEnabled) {
+      return startNotificationWatcher(
+        () => router.route === "sessions" ? sessions.activeSessionId : null,
+      );
     }
   });
 

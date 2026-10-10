@@ -2538,6 +2538,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN claude_linear_parse INTEGER",
 		},
 		{
+			"sessions", "turn_open",
+			"ALTER TABLE sessions ADD COLUMN turn_open INTEGER",
+		},
+		{
 			"messages", "thinking_text",
 			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
 		},

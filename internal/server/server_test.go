@@ -625,6 +625,32 @@ func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
 	assert.Contains(t, spec.Paths["/api/v1/session-stats"], "get")
 }
 
+func TestOpenAPIEachRowOnlyOnSessionList(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, "/api/openapi.json")
+	require.Equal(t, http.StatusOK, w.Code)
+	var spec struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name string `json:"name"`
+				In   string `json:"in"`
+			} `json:"parameters"`
+		} `json:"paths"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	var routes []string
+	for path, methods := range spec.Paths {
+		for method, operation := range methods {
+			for _, parameter := range operation.Parameters {
+				if parameter.Name == "each_row" && parameter.In == "query" {
+					routes = append(routes, method+" "+path)
+				}
+			}
+		}
+	}
+	assert.Equal(t, []string{"get /api/v1/sessions"}, routes)
+}
+
 func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
 	te := setup(t)
 
@@ -1608,6 +1634,23 @@ func TestListSessions_ExcludeProjectFilter(t *testing.T) {
 		assert.Failf(t, "test failed", "expected session s1, got %s",
 			resp.Sessions[0].ID)
 	}
+}
+
+func TestListSessions_EachRowActiveSince(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "old-parent", "proj", 5, func(s *db.Session) {
+		s.EndedAt = new("2024-01-01T11:00:00Z")
+	})
+	te.seedSession(t, "recent-fork", "proj", 5, func(s *db.Session) {
+		s.ParentSessionID = new("old-parent")
+		s.RelationshipType = "fork"
+		s.EndedAt = new("2024-06-03T10:00:00Z")
+	})
+	w := te.get(t, "/api/v1/sessions?each_row=true&include_one_shot=true&active_since=2024-06-03T00:00:00Z")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[sessionListResponse](t, w)
+	require.Len(t, resp.Sessions, 1)
+	assert.Equal(t, "recent-fork", resp.Sessions[0].ID)
 }
 
 func TestListSessions_ExcludeOneShotDefault(t *testing.T) {
@@ -5905,4 +5948,27 @@ func TestSettingsProviderChangesApplyThroughIngestionReloader(t *testing.T) {
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
 	require.NoError(t, err)
 	assert.Equal(t, []parser.AgentType{parser.AgentGemini}, persisted.DisabledAgents)
+}
+
+func TestSettingsNotificationsRoundTrip(t *testing.T) {
+	te := setup(t)
+	for _, body := range []string{
+		`{"notifications":{"enabled":true}}`,
+		`{"notifications":{"enabled":false}}`,
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var expected, actual struct {
+			Notifications config.NotificationsConfig `json:"notifications"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(body), &expected))
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &actual))
+		assert.Equal(t, expected, actual)
+		require.NoError(t, json.Unmarshal(te.get(t, "/api/v1/settings").Body.Bytes(), &actual))
+		assert.Equal(t, expected, actual)
+	}
 }

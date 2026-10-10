@@ -49,6 +49,15 @@ func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, digest, got)
 	})
+	t.Run("notification state", func(t *testing.T) {
+		p := clone()
+		p.Session.TurnOpen = true
+		p.Session.TurnOpenUnknown = true
+		p.Session.LastReplyID = "reply-2"
+		got, err := rawContentRevision(p)
+		require.NoError(t, err)
+		assert.Equal(t, digest, got)
+	})
 	t.Run("hidden provider title", func(t *testing.T) {
 		p := clone()
 		p.Session.SessionName = new("changed")

@@ -2460,5 +2460,13 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Preview shows {shownLabel} of {countLabel} byte.","countPlural=other":"Preview shows {shownLabel} of {countLabel} bytes."}}],
   "tool_sequences_full_input_in_message": "Full input is in message {ordinal}.",
   "tool_sequences_full_result_in_message": "Full result is in message {ordinal}.",
-  "tool_sequences_retry": "Try again"
+  "tool_sequences_retry": "Try again",
+  "settings_notifications_title": "Desktop notifications",
+  "settings_notifications_description": "Get notified when an agent finishes its turn",
+  "settings_notifications_keywords": "notifications desktop alerts turn end",
+  "settings_notifications_unavailable": "Desktop notifications are unavailable in this app.",
+  "settings_notifications_enable": "Enable desktop notifications",
+  "settings_notifications_turn_end_hint": "Notifications follow your system's notification settings for AgentsView.",
+  "notification_turn_end_body": "The agent finished this turn and is waiting for you.",
+  "notification_turn_end_title_suffix": "{name}: turn finished"
 }

@@ -19,8 +19,13 @@ func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 	t.Parallel()
 
 	source := testExportDB(t)
-	seedSession(t, source, "one", "project")
-	seedSession(t, source, "two", "project")
+	seedSession(t, source, "one", "project", func(s *db.Session) {
+		s.TerminationStatus = new("awaiting_user")
+		s.TurnOpen = true
+	})
+	seedSession(t, source, "two", "project", func(s *db.Session) {
+		s.TerminationStatus = new("awaiting_user")
+	})
 	cost := &money.Money{Microdollars: 12_345}
 	require.NoError(t, source.ReplaceSessionUsageEvents(t.Context(), "one", []db.UsageEvent{{
 		SessionID: "one", Source: "provider", Model: "model",
@@ -55,6 +60,10 @@ func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 		require.NotNil(t, session)
 		assert.Equal(t, contractOrigin, session.Machine)
 		assert.Nil(t, session.FilePath)
+		assert.Equal(t, nativeID == "one", session.TurnOpen)
+		var turnOpen bool
+		require.NoError(t, destination.Reader().QueryRowContext(t.Context(), "SELECT turn_open FROM sessions WHERE id = ?", importedID).Scan(&turnOpen))
+		assert.Equal(t, nativeID == "one", turnOpen)
 		messages, err := destination.GetMessages(
 			t.Context(), importedID, 0, 10, true,
 		)
@@ -95,6 +104,31 @@ func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
 	require.NoError(t, err)
 	assert.Zero(t, count)
+
+	t.Run("missing completion evidence", func(t *testing.T) {
+		t.Parallel()
+
+		store := newTestArtifactStore(t)
+		m := importTestManifest("legacy")
+		m.Session.TerminationStatus = new("awaiting_user")
+		hash := createImportTestClosure(t, store, &m, []db.Message{{Ordinal: 0, Role: "assistant", Content: "done"}})
+		entry := createImportTestCheckpoint(t, store, contractOrigin, 1, map[string]string{contractOrigin + "~legacy": hash})
+		destination := testDB(t)
+		seedSession(t, destination, contractOrigin+"~legacy", "project", func(s *db.Session) {
+			s.Machine = contractOrigin
+		})
+		coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
+		require.NoError(t, coordinator.RecordChanged(t.Context(), entry))
+		_, err := coordinator.Finalize(t.Context())
+		require.NoError(t, err)
+		var turnOpen *bool
+		require.NoError(t, destination.Reader().QueryRowContext(t.Context(), "SELECT turn_open FROM sessions WHERE id = ?", contractOrigin+"~legacy").Scan(&turnOpen))
+		assert.Nil(t, turnOpen)
+		session, err := destination.GetSessionFull(t.Context(), contractOrigin+"~legacy")
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.True(t, session.TurnOpen)
+	})
 }
 
 func TestStoreImportCoordinatorIgnoresLocalOrigin(t *testing.T) {

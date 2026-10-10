@@ -64,6 +64,7 @@ type manifestSession struct {
 
 	DeletedAt          *string `json:"deleted_at,omitempty"`
 	TerminationStatus  *string `json:"termination_status,omitempty"`
+	TurnOpen           *bool   `json:"turn_open,omitempty"`
 	FilePath           *string `json:"file_path,omitempty"`
 	FileSize           *int64  `json:"file_size,omitempty"`
 	FileMtime          *int64  `json:"file_mtime,omitempty"`
@@ -89,6 +90,10 @@ type manifestQualitySignals struct {
 }
 
 func manifestSessionFromDB(s db.Session) manifestSession {
+	var turnOpen *bool
+	if s.TurnOpen || (s.Agent == "claude" && !s.TurnOpenUnknown) {
+		turnOpen = new(s.TurnOpen)
+	}
 	return manifestSession{
 		ID:                   s.ID,
 		Project:              s.Project,
@@ -137,6 +142,7 @@ func manifestSessionFromDB(s db.Session) manifestSession {
 
 		DeletedAt:          s.DeletedAt,
 		TerminationStatus:  s.TerminationStatus,
+		TurnOpen:           turnOpen,
 		FilePath:           s.FilePath,
 		FileSize:           s.FileSize,
 		FileMtime:          s.FileMtime,
@@ -198,6 +204,8 @@ func (m manifestSession) dbSession() db.Session {
 
 		DeletedAt:          m.DeletedAt,
 		TerminationStatus:  m.TerminationStatus,
+		TurnOpen:           m.TurnOpen != nil && *m.TurnOpen,
+		TurnOpenUnknown:    m.TurnOpen == nil,
 		FilePath:           m.FilePath,
 		FileSize:           m.FileSize,
 		FileMtime:          m.FileMtime,

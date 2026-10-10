@@ -176,6 +176,27 @@ fixtures retain this field; missing identities remain source-local.
   identities and usage, then checks actual parsed counts. These synthetic
   records are a measured subset, not an authoritative or exhaustive schema.
 
+- **Turn completion, reverified 2026-10-09:** Interactive CLI 2.1.259+ writes
+  `system/turn_duration` after Stop hooks. In the installed 2.1.296 bundle,
+  `qkt` builds both the turn's duration and `_flushDeferredSwarmDuration`'s
+  duration; neither includes an owner ID. The deferred writer checks swarm
+  timing and running tasks, rather than the active turn. Stop hooks run before
+  the turn's own duration, and zero pending counts become absent fields.
+  SQLite's `turn_open` follows each branch's last event. A non-sidechain
+  assistant reply opens an interactive CLI 2.1.259+ turn; a duration closes it
+  with zero or absent pending counts. Metadata, including assistant compact
+  summaries, keeps the value. See
+  [notification limits](https://agentsview.io/docs/usage/#settings). `Classify`
+  owns status; incremental reads reuse nonempty, non-truncated stored status for
+  message-free batches and classify the last assistant run when status is missing,
+  truncated, or messages change. Recovery fixtures verify valid progress and
+  duration records clear truncated status without adding messages. The sync
+  upgrade fixture verifies completion when stored status is missing.
+  Rechecked `qkt`,
+  `_flushDeferredSwarmDuration` and `_holdDurationForDetachedToolCalls` in the
+  installed bundle. Deferred-swarm and split-boundary fixtures verify these rules.
+  Public producer source is unavailable.
+
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 

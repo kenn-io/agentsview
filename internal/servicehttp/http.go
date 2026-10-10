@@ -382,6 +382,9 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)
 	}
+	if f.EachRow {
+		q.EachRow = new(true)
+	}
 	if f.IncludeSource {
 		q.IncludeSource = new(true)
 	}

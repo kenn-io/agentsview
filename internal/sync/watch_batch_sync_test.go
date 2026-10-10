@@ -199,7 +199,7 @@ func seedWatchBatchUnrelatedSessions(
 	root := t.TempDir()
 	// These rows supply archive cardinality while changed-source ingestion stays real.
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		stmt, err := tx.PrepareContext(t.Context(), `INSERT INTO sessions (id, agent, project, machine, file_path, message_count, user_message_count) VALUES (?, 'claude', 'cold', 'local', ?, 1, 1)`)
+		stmt, err := tx.PrepareContext(t.Context(), `INSERT INTO sessions (id, agent, project, machine, file_path, message_count, user_message_count, turn_open) VALUES (?, 'claude', 'cold', 'local', ?, 1, 1, 0)`)
 		if err != nil {
 			return err
 		}

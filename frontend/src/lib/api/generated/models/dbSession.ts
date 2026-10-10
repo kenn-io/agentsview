@@ -35,6 +35,7 @@ export interface DbSession {
   id: string;
   is_automated: boolean;
   is_truncated?: boolean;
+  last_reply_id?: string;
   local_modified_at?: string;
   machine: string;
   message_count: number;
@@ -62,6 +63,7 @@ export interface DbSession {
   total_output_tokens: number;
   transcript_fidelity?: string;
   transcript_revision?: string;
+  turn_open?: boolean;
   user_message_count: number;
   web_url?: string;
 }

@@ -30,6 +30,10 @@ agentsview session list --server http://127.0.0.1:8080 --json
 agentsview session search "regression" --pg --json
 ```
 
+`last_reply_id` and `turn_open` are SQLite-only notification fields. Read-only
+mirrors omit them. Legacy Claude rows read NULL `turn_open` as open until the
+next parse writes a verdict.
+
 ## Stability
 
 - **Additive-only.** New fields may appear at any time. Existing fields are
@@ -309,6 +313,7 @@ therefore appear on both dates.
 | `--include-one-shot`  | `include_one_shot`  | bool                                                                                                                                                                              |
 | `--include-automated` | `include_automated` | bool                                                                                                                                                                              |
 | `--include-children`  | `include_children`  | bool                                                                                                                                                                              |
+| —                    | `each_row`          | bool; REST only; apply filters to each session row, including children, without grouping by root                                                                                   |
 | `--include-source`    | `include_source`    | bool; include available source path, size, and archive-row update time, hidden by default                                                                                                                      |
 | `--outcome`           | `outcome`           | comma-separated                                                                                                                                                                   |
 | `--health-grade`      | `health_grade`      | comma-separated                                                                                                                                                                   |

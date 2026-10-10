@@ -202,6 +202,9 @@ cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
 chart_palette = "agentsview"
 zoom_level = 120
+
+[notifications]
+enabled = false
 ```
 
 | Field                               | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -235,8 +238,12 @@ zoom_level = 120
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                          |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                        |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                                                                                                                                                                                                                                           |
+| `[notifications].enabled`           | Desktop toasts while the app runs, when a provider stores `awaiting_user`. Defaults to `false`; Settings changes apply immediately.                                                                                                                                                                                                                                                                                                                                                                                         |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                                                                                                                                                                                                                                              |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/docs/token-usage/#custom-model-pricing)                                                                                                                                                                                                                                                                                                                                                                |
+
+See [desktop notification limits](https://agentsview.io/docs/usage/#settings)
+for completion timing and which sessions stay silent.
 
 The `cursor_secret` is generated automatically on first run. For Gist
 publishing, AgentsView first uses a saved `github_token`. For local browser

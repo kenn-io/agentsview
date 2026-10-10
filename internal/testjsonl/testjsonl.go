@@ -6,8 +6,38 @@ package testjsonl
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"strconv"
 	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+// ClaudeChainJSONL stamps the producer and chains every record, including system lines.
+func ClaudeChainJSONL(tb testing.TB, content, producer string, start int) string {
+	tb.Helper()
+	var result strings.Builder
+	for line := range strings.SplitSeq(strings.TrimSuffix(content, "\n"), "\n") {
+		var record map[string]any
+		require.NoError(tb, json.Unmarshal([]byte(line), &record))
+		require.NotNil(tb, record)
+		record["uuid"] = "line-" + strconv.Itoa(start)
+		if start > 0 {
+			record["parentUuid"] = "line-" + strconv.Itoa(start-1)
+		} else {
+			record["parentUuid"] = nil
+		}
+		result.WriteString(ClaudeProducerJSONL(mustMarshal(record), producer))
+		result.WriteByte('\n')
+		start++
+	}
+	return result.String()
+}
+
+// ClaudeProducerJSONL adds producer fields to each JSONL entry.
+func ClaudeProducerJSONL(content, producer string) string {
+	return "{" + producer + strings.ReplaceAll(content[1:], "\n{", "\n{"+producer)
+}
 
 // ClaudeUserJSON returns a Claude user message as a JSON string.
 func ClaudeUserJSON(
@@ -88,13 +118,16 @@ func ClaudeToolResultUserJSON(
 
 // ClaudeAssistantJSON returns a Claude assistant message as a
 // JSON string.
-func ClaudeAssistantJSON(content any, timestamp string) string {
+func ClaudeAssistantJSON(content any, timestamp string, stopReason ...string) string {
 	m := map[string]any{
 		"type":      "assistant",
 		"timestamp": timestamp,
 		"message": map[string]any{
 			"content": content,
 		},
+	}
+	if len(stopReason) > 0 {
+		m["message"].(map[string]any)["stop_reason"] = stopReason[0]
 	}
 	return mustMarshal(m)
 }

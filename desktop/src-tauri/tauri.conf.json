@@ -18,6 +18,7 @@
         "minHeight": 700,
         "resizable": true,
         "fullscreen": false,
+        "backgroundThrottling": "disabled",
         "zoomHotkeysEnabled": false
       }
     ],

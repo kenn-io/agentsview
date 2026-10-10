@@ -630,6 +630,14 @@ components:
         - machine_name
         - allow_insecure
       type: object
+    ConfigNotificationsConfig:
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+      required:
+        - enabled
+      type: object
     ConfigRemoteHost:
       additionalProperties: false
       properties:
@@ -2502,6 +2510,8 @@ components:
           type: boolean
         is_truncated:
           type: boolean
+        last_reply_id:
+          type: string
         local_modified_at:
           type: string
         machine:
@@ -2566,6 +2576,8 @@ components:
           type: string
         transcript_revision:
           type: string
+        turn_open:
+          type: boolean
         user_message_count:
           format: int64
           type: integer
@@ -6466,6 +6478,8 @@ components:
           type: boolean
         is_truncated:
           type: boolean
+        last_reply_id:
+          type: string
         local_modified_at:
           type: string
         machine:
@@ -6530,6 +6544,8 @@ components:
           type: string
         transcript_revision:
           type: string
+        turn_open:
+          type: boolean
         user_message_count:
           format: int64
           type: integer
@@ -7131,6 +7147,8 @@ components:
         insight_default_agent:
           description: Agent CLI used when an insight generation request does not choose one
           type: string
+        notifications:
+          $ref: "#/components/schemas/ConfigNotificationsConfig"
         port:
           format: int64
           type: integer
@@ -7167,6 +7185,7 @@ components:
             - 200
           type: integer
       required:
+        - notifications
         - agent_dirs
         - session_providers
         - disabled_agents
@@ -7197,6 +7216,8 @@ components:
           items:
             type: string
           type: array
+        notifications:
+          $ref: "#/components/schemas/ConfigNotificationsConfig"
         require_auth:
           type: boolean
         terminal:
@@ -17555,6 +17576,13 @@ paths:
           name: descending
           schema:
             description: Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix
+            type: boolean
+        - description: Apply filters to each session row, children included, without grouping by root
+          explode: false
+          in: query
+          name: each_row
+          schema:
+            description: Apply filters to each session row, children included, without grouping by root
             type: boolean
         - description: Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply.
           explode: false

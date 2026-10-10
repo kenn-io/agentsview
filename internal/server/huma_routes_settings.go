@@ -107,6 +107,7 @@ func (s *Server) humaGetSettings(
 	}
 	githubToken := s.cfg.GithubToken
 	resp := settingsResponse{
+		Notifications:    s.cfg.Notifications,
 		AgentDirs:        dirs,
 		SessionProviders: providers,
 		DisabledAgents:   append([]parser.AgentType{}, s.cfg.DisabledAgents...),
@@ -145,6 +146,9 @@ func (s *Server) humaUpdateSettings(
 			"terminal config must be updated via POST /api/v1/config/terminal")
 	}
 	patch := make(map[string]any)
+	if in.Body.Notifications != nil {
+		patch["notifications"] = *in.Body.Notifications
+	}
 	if in.Body.ChartPalette != nil {
 		palette, err := config.ParseChartPalette(*in.Body.ChartPalette)
 		if err != nil {

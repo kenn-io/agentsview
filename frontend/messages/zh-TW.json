@@ -2377,5 +2377,13 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。","countPlural=other":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。"}}],
   "tool_sequences_full_input_in_message": "完整輸入在訊息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整結果在訊息 {ordinal} 中。",
-  "tool_sequences_retry": "重試"
+  "tool_sequences_retry": "重試",
+  "settings_notifications_title": "桌面通知",
+  "settings_notifications_description": "在 Agent 結束回合時取得通知",
+  "settings_notifications_keywords": "通知 桌面 提醒 回合 結束 notifications",
+  "settings_notifications_unavailable": "此應用程式無法使用桌面通知。",
+  "settings_notifications_enable": "啟用桌面通知",
+  "settings_notifications_turn_end_hint": "通知遵循系統中 AgentsView 的通知設定。",
+  "notification_turn_end_body": "Agent 已完成本回合，正在等待你的輸入。",
+  "notification_turn_end_title_suffix": "{name}: 回合已完成"
 }

@@ -6970,11 +6970,11 @@ func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
 				func(
 					_ string,
 					inc *db.IncrementalInfo,
-				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
+				) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, *bool, []byte, error) {
 					return []parser.ParsedMessage{{
 						Role: parser.RoleAssistant, Content: "appended",
 						Ordinal: inc.NextOrdinal,
-					}}, nil, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil, nil
+					}}, nil, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil, nil, nil
 				},
 				nil, "", nil,
 			)
@@ -7072,9 +7072,9 @@ func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
 		func(
 			_ string,
 			_ *db.IncrementalInfo,
-		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
+		) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, *bool, []byte, error) {
 			parseCalled = true
-			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
+			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil, nil
 		},
 		nil, "", nil,
 	)

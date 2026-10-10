@@ -7,6 +7,21 @@ description: Release history for AgentsView
 The latest release is
 [0.45.0](https://github.com/kenn-io/agentsview/releases/tag/v0.45.0).
 
+## Unreleased
+
+**New features**
+
+- Get a native desktop toast when the turn really ends and the agent waits
+  for you, for providers that store a waiting state, including Claude Code. Enable
+  notifications in Settings.
+  New sessions can toast on their first finished turn. Existing sessions on the
+  first refresh, subagents, automated sessions, and the focused session stay
+  silent. A full re-import that relabels an old session can
+  toast; sessions that finish while trashed can toast after restoration. Missed
+  updates arrive within five minutes while the app runs.
+
+- Claude Code's waiting indicator now updates during incremental sync.
+
 ## 0.45.0
 
 <small>2026-10-09</small>

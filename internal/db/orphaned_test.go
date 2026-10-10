@@ -426,6 +426,7 @@ func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {
 	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "kind-orphan", "proj", func(s *Session) {
 		s.SessionKind = "bg"
+		s.TurnOpen = false
 		s.MessageCount = 2
 	})
 	insertMessages(t, srcDB,
@@ -451,6 +452,7 @@ func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {
 	session, err := dstDB.GetSession(ctx, "kind-orphan")
 	require.NoError(t, err, "get copied session")
 	assert.Equal(t, "bg", session.SessionKind)
+	assert.False(t, session.TurnOpen)
 
 	msgs, err := dstDB.GetMessages(ctx, "kind-orphan", 0, 10, true)
 	require.NoError(t, err, "get copied messages")

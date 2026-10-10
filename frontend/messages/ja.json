@@ -2448,5 +2448,13 @@
   "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"プレビューは {countLabel} バイト中 {shownLabel} バイトを表示しています。","countPlural=other":"プレビューは {countLabel} バイト中 {shownLabel} バイトを表示しています。"}}],
   "tool_sequences_full_input_in_message": "完全な入力はメッセージ {ordinal} にあります。",
   "tool_sequences_full_result_in_message": "完全な結果はメッセージ {ordinal} にあります。",
-  "tool_sequences_retry": "再試行"
+  "tool_sequences_retry": "再試行",
+  "settings_notifications_title": "デスクトップ通知",
+  "settings_notifications_description": "エージェントがターンを終えたときに通知を受け取る",
+  "settings_notifications_keywords": "通知 デスクトップ ターン 終了 notifications",
+  "settings_notifications_unavailable": "このアプリではデスクトップ通知を利用できません。",
+  "settings_notifications_enable": "デスクトップ通知を有効にする",
+  "settings_notifications_turn_end_hint": "通知はシステムの AgentsView の通知設定に従います。",
+  "notification_turn_end_body": "エージェントはこのターンを終え、あなたの入力を待っています。",
+  "notification_turn_end_title_suffix": "{name}: ターンが完了しました"
 }

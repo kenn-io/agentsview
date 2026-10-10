@@ -295,6 +295,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		ExcludeOneShot:       !f.IncludeOneShot,
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
+		EachRow:              f.EachRow,
 		IncludeSource:        f.IncludeSource,
 		Cursor:               f.Cursor,
 		Limit:                f.Limit,

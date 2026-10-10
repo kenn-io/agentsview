@@ -1458,6 +1458,7 @@ type ParsedSession struct {
 	// ended. Empty string = unknown (parser did not classify, or
 	// agent format does not yet support classification).
 	TerminationStatus TerminationStatus
+	TurnOpen          *bool
 
 	// ClaudeLinearParse reports whether the Claude full parser fell
 	// back to linear processing for this session's file (multi-root or

@@ -190,6 +190,109 @@ func TestSessionFilterActiveSince(t *testing.T) {
 	}
 }
 
+func TestSessionFilterEachRowActiveSince(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "old-parent", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-01T11:00:00Z")
+		s.MessageCount = 5
+	})
+	for _, relationship := range []string{"fork", "continuation", "subagent", "deleted"} {
+		insertSession(t, d, relationship, "proj", func(s *Session) {
+			s.ParentSessionID = new("old-parent")
+			s.RelationshipType = relationship
+			s.EndedAt = new("2024-06-03T10:00:00Z")
+			s.MessageCount = 5
+			s.Agent = "claude"
+			s.TurnOpen = relationship == "subagent"
+		})
+		uuid := "reply-" + relationship
+		if relationship == "continuation" {
+			uuid = ""
+		}
+		insertMessages(t, d,
+			Message{SessionID: relationship, Ordinal: 1, Role: "assistant", Content: "earlier", SourceUUID: "old"},
+			Message{SessionID: relationship, Ordinal: 4, Role: "assistant", Content: "done", SourceUUID: uuid},
+			Message{SessionID: relationship, Ordinal: 5, Role: "assistant", Content: "summary", IsSystem: true, SourceUUID: "system"},
+			userMsg(relationship, 6, "continue"),
+		)
+	}
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "deleted"))
+	filter := SessionFilter{EachRow: true, ActiveSince: "2024-06-03T00:00:00Z"}
+	requireSessions(t, d, filter, []string{"fork", "continuation", "subagent"})
+	filter.Limit = 1
+	var ids []string
+	for range 3 {
+		page, err := d.ListSessions(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		assert.Equal(t, 3, page.Total)
+		row := page.Sessions[0]
+		wantID := "reply-" + row.ID
+		if row.ID == "continuation" {
+			assert.Regexp(t, `^row:[0-9a-f]{64}$`, row.LastReplyID)
+		} else {
+			assert.Equal(t, wantID, row.LastReplyID)
+		}
+		assert.Equal(t, row.ID == "subagent", row.TurnOpen)
+		byID, err := d.GetSession(t.Context(), row.ID)
+		require.NoError(t, err)
+		require.NotNil(t, byID)
+		assert.Empty(t, byID.LastReplyID)
+		assert.Equal(t, row.TurnOpen, byID.TurnOpen)
+		ids = append(ids, row.ID)
+		filter.Cursor = page.NextCursor
+		if len(ids) < 3 {
+			require.NotEmpty(t, filter.Cursor)
+		}
+	}
+	assert.Empty(t, filter.Cursor)
+	assert.ElementsMatch(t, []string{"fork", "continuation", "subagent"}, ids)
+
+	t.Run("UUID-less reply rewritten at the same ordinal", func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "codex", "proj", func(s *Session) { s.Agent = "codex" })
+		messages := []Message{{SessionID: "codex", Ordinal: 0, Role: "assistant", Content: "done"}}
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "codex", messages))
+		filter := SessionFilter{EachRow: true}
+		page, err := d.ListSessions(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		original := page.Sessions[0].LastReplyID
+		require.NotEmpty(t, original)
+		var rowID int64
+		require.NoError(t, d.Reader().QueryRow(t.Context(), "SELECT id FROM messages WHERE session_id = 'codex'").Scan(&rowID))
+		insertSession(t, d, "other", "proj")
+		insertMessages(t, d, userMsg("other", 0, "hello"))
+		insertMessages(t, d, Message{SessionID: "codex", Ordinal: 1, Role: "assistant", IsSystem: true, Content: "summary"})
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "codex", messages))
+		var reparsedID int64
+		require.NoError(t, d.Reader().QueryRow(t.Context(), "SELECT id FROM messages WHERE session_id = 'codex'").Scan(&reparsedID))
+		assert.NotEqual(t, rowID, reparsedID, "a full reparse can change the row ID")
+		filter.Agent = "codex"
+		page, err = d.ListSessions(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		assert.Equal(t, original, page.Sessions[0].LastReplyID, "unchanged replies retain identity across full reparses")
+		messages[0].Content = "more"
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "codex", messages))
+		var rewrittenID int64
+		require.NoError(t, d.Reader().QueryRow(t.Context(), "SELECT id FROM messages WHERE session_id = 'codex'").Scan(&rewrittenID))
+		assert.Equal(t, reparsedID, rewrittenID, "a rewritten reply can retain its row ID")
+		page, err = d.ListSessions(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		changed := page.Sessions[0].LastReplyID
+		assert.NotEqual(t, original, changed)
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "codex", messages))
+		messages = append(messages, Message{SessionID: "codex", Ordinal: 1, Role: "assistant", IsSystem: true, Content: "summary"})
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "codex", messages))
+		page, err = d.ListSessions(t.Context(), filter)
+		require.NoError(t, err)
+		require.Len(t, page.Sessions, 1)
+		assert.Equal(t, changed, page.Sessions[0].LastReplyID, "metadata leaves the reply identity alone")
+	})
+}
+
 func TestSessionFilterMinUserMessages(t *testing.T) {
 	d := testDB(t)
 

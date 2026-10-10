@@ -117,6 +117,10 @@ export type GetApiV1SessionsParams = {
    */
   descending?: boolean;
   /**
+   * Apply filters to each session row, children included, without grouping by root
+   */
+  each_row?: boolean;
+  /**
    * Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply.
    */
   ids?: string;

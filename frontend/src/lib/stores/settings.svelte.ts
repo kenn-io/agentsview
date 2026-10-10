@@ -16,6 +16,8 @@ import { DEFAULT_CHART_PALETTE, isChartPalette, type ChartPalette } from "../uti
 import { insights } from "./insights.svelte.js";
 import { ui } from "./ui.svelte.js";
 
+const defaultNotifications = { enabled: false };
+
 export type ToolResultImagesPolicy = "keep" | "drop" | "offload";
 
 type TerminalConfig = TerminalResponse;
@@ -73,6 +75,7 @@ class SettingsStore {
   readOnly: boolean = $state(false);
   chartPalette: ChartPalette = $state(DEFAULT_CHART_PALETTE);
   toolResultImages: ToolResultImagesPolicy = $state("keep");
+  notifications: AppSettings["notifications"] = $state({ ...defaultNotifications });
   loaded: boolean = $state(false);
   loading: boolean = $state(false);
   saving: boolean = $state(false);
@@ -118,6 +121,7 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
+      this.notifications = data.notifications ?? { ...defaultNotifications };
       ui.applyZoomDefault(data.zoom_level);
       // Older servers omit the field; applyDefaultAgent then keeps the
       // built-in agent.
@@ -191,6 +195,7 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
+      this.notifications = data.notifications ?? { ...defaultNotifications };
       // A response without the field, including every fixture that predates
       // it, reads as the default keep policy instead of failing the load.
       this.toolResultImages =
