@@ -424,9 +424,9 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 }
 
 func newPruneCommand() *cobra.Command {
-	var project, before, firstMessage string
+	var project, before, firstMessage, age string
 	var maxMessages int
-	var dryRun, yes bool
+	var dryRun, yes, sourceOnly bool
 	cmd := &cobra.Command{
 		Use:          "prune",
 		Short:        "Delete sessions matching filters",
@@ -445,8 +445,10 @@ func newPruneCommand() *cobra.Command {
 					Before:       before,
 					FirstMessage: firstMessage,
 				},
-				DryRun: dryRun,
-				Yes:    yes,
+				DryRun:     dryRun,
+				Yes:        yes,
+				Age:        age,
+				SourceOnly: sourceOnly,
 			})
 		},
 	}
@@ -454,7 +456,27 @@ func newPruneCommand() *cobra.Command {
 	cmd.Flags().IntVar(&maxMessages, "max-messages", -1, "Sessions with at most N user messages")
 	cmd.Flags().StringVar(&before, "before", "", "Sessions that ended before this date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&firstMessage, "first-message", "", "Sessions whose first message starts with this text")
+	cmd.Flags().StringVar(&age, "age", "", "Sessions older than this age (7d, 30d, 2w, 1y); shorthand for --before")
+	cmd.Flags().BoolVar(&sourceOnly, "source-only", false, "Trash source files but keep archive rows")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be pruned without deleting")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip confirmation prompt")
+	cmd.AddCommand(newPruneRestoreCommand())
+	return cmd
+}
+
+func newPruneRestoreCommand() *cobra.Command {
+	var batch string
+	var yes bool
+	cmd := &cobra.Command{
+		Use:          "restore",
+		Short:        "Restore recently trashed source files",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			runPruneRestore(PruneRestoreConfig{Batch: batch, Yes: yes})
+		},
+	}
+	cmd.Flags().StringVar(&batch, "batch", "", "Restore a specific batch id instead of the most recent one")
 	cmd.Flags().BoolVar(&yes, "yes", false, "Skip confirmation prompt")
 	return cmd
 }

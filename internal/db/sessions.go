@@ -1267,6 +1267,52 @@ func (db *DB) IsSessionExcluded(ctx context.Context, id string) bool {
 	return n == 1
 }
 
+// UnexcludeSessions removes ids from the excluded_sessions guard so
+// the sync engine can re-import their source files (prune restore).
+// It returns how many rows were removed.
+func (db *DB) UnexcludeSessions(
+	ctx context.Context, ids []string,
+) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	removed := 0
+	const chunkSize = 500
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		result, err := db.getWriter().ExecContext(
+			ctx,
+			"DELETE FROM excluded_sessions WHERE id IN ("+placeholders+")",
+			args...,
+		)
+		if err != nil {
+			return removed, fmt.Errorf("unexcluding sessions: %w", err)
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return removed, fmt.Errorf("counting unexcluded sessions: %w", err)
+		}
+		removed += int(n)
+	}
+	return removed, nil
+}
+
 // IsSessionTrashed returns true if the session ID exists in the trash.
 func (db *DB) IsSessionTrashed(ctx context.Context, id string) bool {
 	var n int
