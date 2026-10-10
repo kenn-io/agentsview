@@ -1274,6 +1274,11 @@ func (s *Server) humaEvents(
 		}
 		sub, unsub := s.broadcaster.Subscribe()
 		defer unsub()
+		// Refreshing clients must not read before their subscription exists:
+		// the broadcaster does not replay events from that gap.
+		if !stream.SendJSON("events_ready", struct{}{}) {
+			return
+		}
 		heartbeat := time.NewTicker(
 			sessionwatch.PollInterval * sessionwatch.HeartbeatTicks,
 		)

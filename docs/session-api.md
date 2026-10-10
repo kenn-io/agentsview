@@ -613,7 +613,14 @@ baseline, with the session ID as its data. Proxied CLI watches forward this even
 Clients that refresh on connection should wait for it rather than the HTTP
 connection opening, so changes during reconnection cannot fall between the
 refresh and the watch baseline. A local watch also checks the selected session's
-source on connection to recover changes missed while disconnected.
+source on connection to recover changes missed while disconnected. These passive
+checks retain freshness checks and incremental parsing; they do not force an
+unchanged transcript to be parsed again.
+
+The shared `/api/v1/events` endpoint emits `events_ready` with an empty JSON object
+after subscribing to server changes. Refresh consumers after this event on each
+connection, including reconnects, to cover changes that arrived before the new
+subscription. Later changes arrive as `data_changed` events.
 
 Watch validates the session id before opening the stream. An unknown id fails
 fast with a `watch: session not found: <id>` error and non-zero exit instead of

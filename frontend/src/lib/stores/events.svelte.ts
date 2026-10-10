@@ -170,8 +170,8 @@ class EventsStore {
     }, EVENTS_STORE_HEAL_INTERVAL_MS);
   }
 
-  // Hidden tabs release their stream. Returning tabs refresh once to cover
-  // events missed while paused, and retry any permanently failed connection.
+  // Hidden tabs release their stream. Returning tabs reconnect; watchEvents
+  // refreshes subscribers once the server confirms its subscription is ready.
   // Installed lazily so module import has no global side effect.
   private installVisibilityHandler() {
     if (this.visibilityHandlerInstalled) return;
@@ -193,9 +193,6 @@ class EventsStore {
       this.es = null;
       this.ensureOpen();
       this.ensureHealTimer();
-      if (catchUp) {
-        for (const fn of this.listeners.values()) fn({ scope: "sync" });
-      }
     });
   }
 }

@@ -172,7 +172,7 @@ func (w *Watcher) Events(
 			// provider-aware freshness checks instead of accepting that source
 			// as already archived. Capture mtime first so a concurrent edit is
 			// still detected by subsequent polling.
-			if err := w.engine.SyncSingleSessionContext(ctx, sessionID); err != nil && ctx.Err() == nil {
+			if err := w.engine.ReconcileSessionContext(ctx, sessionID); err != nil && ctx.Err() == nil {
 				log.Printf("watch initial sync error: %v", err)
 			}
 		}
@@ -297,7 +297,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 	if !fileMtimeChangedAt.IsZero() &&
 		time.Since(*fileMtimeChangedAt) >= syncFallbackDelay() {
 		*fileMtimeChangedAt = time.Time{}
-		if err := w.engine.SyncSingleSessionContext(
+		if err := w.engine.ReconcileSessionContext(
 			ctx, sessionID,
 		); err != nil {
 			log.Printf("watch sync error: %v", err)

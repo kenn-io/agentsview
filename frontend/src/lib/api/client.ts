@@ -199,6 +199,14 @@ export function watchEvents(
     consecutiveErrors = 0;
   });
 
+  // Read after the server has subscribed, including automatic reconnects.
+  // An HTTP open alone leaves a gap between the read and subscription.
+  es.addEventListener("events_ready", () => {
+    consecutiveErrors = 0;
+    hasOpened = true;
+    onEvent({ scope: "sync" });
+  });
+
   es.addEventListener("data_changed", (msg) => {
     // Successful delivery also resets the circuit breaker.
     consecutiveErrors = 0;

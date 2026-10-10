@@ -5513,6 +5513,23 @@ func TestFindAvailablePortDoesNotReturnExhaustedCandidate(t *testing.T) {
 		"an exhausted search must report that no candidate is available")
 }
 
+func TestEvents_ReadyAfterSubscription(t *testing.T) {
+	te := setup(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	w := newFlushRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		te.handler.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil))
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	require.Eventually(t, func() bool { return hasSSEEvent(w, "events_ready") }, 5*time.Second, 10*time.Millisecond)
+	// A single publication after readiness must arrive without retrying Emit.
+	te.broadcaster.Emit("messages")
+	require.Eventually(t, func() bool { return hasSSEEvent(w, "data_changed") }, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, "events_ready", parseSSE(w.BodyString())[0].Event)
+}
+
 func TestEvents_StreamsDataChangedAfterSync(t *testing.T) {
 	te := setup(t)
 
