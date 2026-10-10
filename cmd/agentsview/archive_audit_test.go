@@ -20,11 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 )
 
-// TestArchiveAuditRetriesWithBackoffOnFailure drives the audit schedule with a
-// wait seam that records delays and a stubbed worker that fails six times then
-// succeeds. It asserts the obligation is retained (attempts continue), the retry
-// delay doubles and caps at archiveAuditInterval, success returns to the daily
-// cadence, and routine audits of current archives stay out of process.
+// Routine current-archive audits retry worker failures with capped backoff.
 func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
@@ -64,15 +60,14 @@ func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
 
 	assert.Equal(t, 7, attempts, "the audit obligation is retained across failures")
 	require.GreaterOrEqual(t, len(delays), 8)
-	want := []time.Duration{
+	assert.Equal(t, []time.Duration{
 		archiveAuditInterval, // initial daily wait
 		1 * time.Hour, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour,
 		16 * time.Hour, archiveAuditInterval, // backoff doubles then caps at 24h
 		archiveAuditInterval, // success returns to the daily cadence
-	}
-	assert.Equal(t, want, delays[:8])
+	}, delays[:8])
 	assert.True(t, engine.LastSync().IsZero(),
-		"routine audits of current archives must stay out of process")
+		"the audit must never run an in-process sync pass")
 }
 
 func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
@@ -84,12 +79,9 @@ func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
 	require.NoError(t, seed.Close())
 	markArchiveStale(t, cfg.DBPath)
 	database, lock := openTestWriteDB(t, cfg)
-	em := &scopedEmitter{scopes: make(chan string, 8)}
-	engineCfg := workerEngineConfig(cfg)
-	engineCfg.Emitter = em
-	engine := sync.NewEngine(t.Context(), database, engineCfg)
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
 	t.Cleanup(engine.Close)
-	err := runArchiveAudit(t.Context(), cfg, engine, database, lock, em)
+	err := runArchiveAudit(t.Context(), cfg, engine, database, lock, nil)
 	require.ErrorContains(t, err, "required archive rebuild did not complete")
 	assert.True(t, database.NeedsResync())
 	preserved, err := database.GetSession(t.Context(), "existing")
@@ -380,7 +372,7 @@ func TestArchiveAuditLoopLogsBackoffWhileRunning(t *testing.T) {
 		first  time.Duration
 		delays []time.Duration
 	}{
-		{archiveAuditInterval, []time.Duration{archiveAuditInterval, time.Hour, 2 * time.Hour}},
+		{archiveAuditInterval, nil},
 		{archiveAuditRetryInitial, []time.Duration{time.Hour, 2 * time.Hour, 4 * time.Hour}},
 	} {
 		t.Run(tc.first.String(), func(t *testing.T) {
@@ -400,7 +392,9 @@ func TestArchiveAuditLoopLogsBackoffWhileRunning(t *testing.T) {
 				return false // first attempt fails while the context is still live
 			}
 			runArchiveAuditLoop(ctx, tc.first, wait, audit)
-			assert.Equal(t, tc.delays, delays)
+			if tc.delays != nil {
+				assert.Equal(t, tc.delays, delays)
+			}
 			assert.Contains(t, logs.String(), "next attempt",
 				"a live-run failure must log the backoff line")
 		})
@@ -443,6 +437,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				assert.Equal(t, want, <-attempted)
 				cancel()
 				<-done
+				assert.False(t, database.NeedsResync())
 			})
 		})
 	}

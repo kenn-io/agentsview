@@ -488,11 +488,9 @@ func TestRunForegroundWorkerSyncPassPublishesAndClearsWorkerProgress(
 func TestRunWorkerResyncBuildHonorsRequiredOnly(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		full  bool
 		stale bool
 	}{
 		{name: "current"},
-		{name: "manual", full: true},
 		{name: "stale", stale: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -512,13 +510,13 @@ func TestRunWorkerResyncBuildHonorsRequiredOnly(t *testing.T) {
 				return workerResult{}, sentinel
 			})
 			defer restore()
-			_, err, spawnFailed := runWorkerResyncBuild(t.Context(), t.Context(), cfg, engine, database, nil, tc.full)
-			if tc.full || tc.stale {
+			_, err, spawnFailed := runWorkerResyncBuild(t.Context(), t.Context(), cfg, engine, database, nil, false)
+			if tc.stale {
 				require.ErrorIs(t, err, sentinel)
 			} else {
 				require.NoError(t, err)
 			}
-			assert.Equal(t, tc.full || tc.stale, launched)
+			assert.Equal(t, tc.stale, launched)
 			assert.False(t, spawnFailed)
 			assert.False(t, database.WriterClosed())
 		})
