@@ -55,9 +55,10 @@ func TestSearchContentActiveFilterHTTP(t *testing.T) {
 	te := setup(t)
 	for _, id := range []string{"active", "idle", "boundary"} {
 		ended := "2024-06-15T10:00:00Z"
-		if id == "active" {
+		switch id {
+		case "active":
 			ended = "2024-06-15T11:59:00Z"
-		} else if id == "boundary" {
+		case "boundary":
 			ended = "2024-06-15T07:50:00-04:00"
 		}
 		te.seedSession(t, id, "project-a", 3, func(s *db.Session) { s.EndedAt = &ended })
