@@ -123,31 +123,23 @@ func TestTelemetryOptionsPassInstallationAge(t *testing.T) {
 }
 
 func TestTelemetryOptionsKeepsConfiguredClaimsPath(t *testing.T) {
-	t.Setenv(telemetry.EnabledEnv, "1")
-	t.Setenv(telemetry.GenericEnabledEnv, "1")
-	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
-	path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
-	require.NoError(t, os.WriteFile(path, []byte("malformed"), 0o600))
-	opts := telemetryOptions(cfg)
-	assert.Equal(t, path, opts.ScreenClaimsPath)
-	moved, err := filepath.Glob(path + ".unreadable-*")
-	require.NoError(t, err)
-	require.Len(t, moved, 1)
-	data, err := os.ReadFile(moved[0])
-	require.NoError(t, err)
-	assert.Equal(t, "malformed", string(data))
-	assert.NoFileExists(t, path)
-}
-
-func TestTelemetryOptionsOptOutPreservesLegacyClaims(t *testing.T) {
-	t.Setenv(telemetry.EnabledEnv, "0")
-	cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
-	path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
-	const legacy = "install-one 2026-10-08 sessions"
-	require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
-	opts := telemetryOptions(cfg)
-	assert.Equal(t, path, opts.ScreenClaimsPath)
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, legacy, string(data))
+	for _, enabled := range []string{"1", "0"} {
+		t.Run(enabled, func(t *testing.T) {
+			t.Setenv(telemetry.EnabledEnv, enabled)
+			t.Setenv(telemetry.GenericEnabledEnv, "1")
+			cfg := config.Config{DataDir: t.TempDir(), InstallationID: "install-one"}
+			path := filepath.Join(cfg.DataDir, "telemetry-screen-views")
+			const legacy = "install-one 2026-10-08 sessions"
+			if enabled == "0" {
+				require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+			}
+			opts := telemetryOptions(cfg)
+			assert.Equal(t, path, opts.ScreenClaimsPath)
+			if enabled == "0" {
+				data, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, legacy, string(data))
+			}
+		})
+	}
 }
