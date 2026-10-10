@@ -27,11 +27,13 @@ class EventsStore {
   private permanentlyFailed = false;
   private available = false;
   private visibilityHandlerInstalled = false;
+  private pausedForVisibility = false;
 
   /** Enable or disable the live event stream for the current backend mode. */
   setAvailable(available: boolean) {
     this.available = available;
     if (!available) {
+      this.pausedForVisibility = false;
       this.close();
       return;
     }
@@ -51,6 +53,7 @@ class EventsStore {
     return () => {
       this.listeners.delete(key);
       if (this.listeners.size === 0) {
+        this.pausedForVisibility = false;
         this.close();
       }
     };
@@ -85,6 +88,12 @@ class EventsStore {
 
   private ensureOpen() {
     if (!this.available) return;
+    // Each hidden tab would otherwise retain an HTTP/1.1 connection and
+    // eventually starve ordinary API reads in every tab on this origin.
+    if (typeof document !== "undefined" && document.hidden) {
+      this.pausedForVisibility = true;
+      return;
+    }
     // Don't retry once watchEvents has told us the endpoint is
     // permanently unavailable. The safety-net polls on each view
     // still keep data fresh in that mode.
@@ -120,8 +129,7 @@ class EventsStore {
   }
 
   private close() {
-    if (this.es === null) return;
-    this.es.close();
+    this.es?.close();
     this.es = null;
     if (this.healTimer !== null) {
       clearInterval(this.healTimer);
@@ -143,6 +151,7 @@ class EventsStore {
   // permanentlyFailed so this never becomes a retry storm against
   // a known-dead endpoint like PG serve's 503.
   private ensureHealTimer() {
+    if (!this.available || (typeof document !== "undefined" && document.hidden)) return;
     if (this.healTimer !== null) return;
     if (this.permanentlyFailed) return;
     this.healTimer = setInterval(() => {
@@ -161,13 +170,9 @@ class EventsStore {
     }, EVENTS_STORE_HEAL_INTERVAL_MS);
   }
 
-  // installVisibilityHandler wires a one-time document listener
-  // that gives permanently-failed SSE one more retry when the user
-  // refocuses the tab. This absorbs false-positive "permanent"
-  // classifications (slow startup, tunnel handshake, transient
-  // network hiccup at mount time) without running a periodic
-  // retry storm in the background. Installed lazily on first
-  // subscribe so module import has no global side effect.
+  // Hidden tabs release their stream. Returning tabs refresh once to cover
+  // events missed while paused, and retry any permanently failed connection.
+  // Installed lazily so module import has no global side effect.
   private installVisibilityHandler() {
     if (this.visibilityHandlerInstalled) return;
     if (typeof document === "undefined" || typeof document.addEventListener !== "function") {
@@ -175,13 +180,22 @@ class EventsStore {
     }
     this.visibilityHandlerInstalled = true;
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) return;
-      if (!this.permanentlyFailed) return;
-      if (this.listeners.size === 0) return;
+      if (this.listeners.size === 0 || !this.available) return;
+      if (document.hidden) {
+        this.pausedForVisibility = true;
+        this.close();
+        return;
+      }
+      const catchUp = this.pausedForVisibility;
+      if (!catchUp && !this.permanentlyFailed) return;
+      this.pausedForVisibility = false;
       this.permanentlyFailed = false;
       this.es = null;
       this.ensureOpen();
       this.ensureHealTimer();
+      if (catchUp) {
+        for (const fn of this.listeners.values()) fn({ scope: "sync" });
+      }
     });
   }
 }
