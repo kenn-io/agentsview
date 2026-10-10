@@ -13,9 +13,9 @@ import (
 
 	"go.kenn.io/agentsview/internal/assets"
 
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/v2"
+	"github.com/yuin/goldmark/v2/ast"
+	"github.com/yuin/goldmark/v2/text"
 )
 
 // VerifyAssets checks content-addressed image references in retained messages and tool results.
