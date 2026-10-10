@@ -78,7 +78,7 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		return "", err
 	}
 	if _, err := writeOneSessionBatchTx(
-		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(),
+		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(), pins,
 	); err != nil {
 		return "", err
 	}

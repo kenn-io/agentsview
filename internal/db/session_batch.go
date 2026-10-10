@@ -463,6 +463,7 @@ func writeOneSessionBatchTx(
 	write SessionBatchWrite,
 	pendingRecallRevocations *recallEvidenceRevocationEvents,
 	usageOnly bool,
+	savedPins ...[]savedPin,
 ) (int, error) {
 	if write.IdentityObservation.Project != "" {
 		normalized, err := normalizeProjectIdentityObservation(
@@ -567,9 +568,13 @@ func writeOneSessionBatchTx(
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
 		}
-		pins, err = savePinsTx(queries, write.Session.ID)
-		if err != nil {
-			return 0, err
+		if len(savedPins) > 0 {
+			pins = savedPins[0]
+		} else {
+			pins, err = savePinsTx(queries, write.Session.ID)
+			if err != nil {
+				return 0, err
+			}
 		}
 		if err := deleteSessionMessagesTx(queries, write.Session.ID); err != nil {
 			return 0, err
