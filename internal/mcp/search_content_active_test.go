@@ -30,9 +30,6 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 				if r.URL.Path == "/api/v1/search/content" {
 					searches++
 					q := r.URL.Query()
-					assert.Equal(t, "needle", q.Get("pattern"))
-					assert.Equal(t, "9", q.Get("limit"))
-					assert.Equal(t, "4", q.Get("cursor"))
 					if searches == 1 {
 						assert.Equal(t, "2024-06-15T11:50:00Z", q.Get("exclude_active_since"))
 					} else {

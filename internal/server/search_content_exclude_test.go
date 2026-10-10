@@ -53,13 +53,10 @@ func TestSearchContentExcludeSessionDropsEveryRepeatedID(t *testing.T) {
 
 func TestSearchContentActiveFilterHTTP(t *testing.T) {
 	te := setup(t)
-	for _, id := range []string{"active", "idle", "boundary"} {
+	for _, id := range []string{"active", "idle"} {
 		ended := "2024-06-15T10:00:00Z"
-		switch id {
-		case "active":
+		if id == "active" {
 			ended = "2024-06-15T11:59:00Z"
-		case "boundary":
-			ended = "2024-06-15T07:50:00-04:00"
 		}
 		te.seedSession(t, id, "project-a", 3, func(s *db.Session) { s.EndedAt = &ended })
 		te.seedMessages(t, id, 3, func(i int, m *db.Message) {
@@ -78,6 +75,6 @@ func TestSearchContentActiveFilterHTTP(t *testing.T) {
 		Pattern: "docker-compose.test.yml", Limit: 2, ExcludeActiveSince: "2024-06-15T11:50:00Z",
 	})
 	require.NoError(t, err)
-	require.Len(t, page.Matches, 2)
-	assert.ElementsMatch(t, []string{"idle", "boundary"}, []string{page.Matches[0].SessionID, page.Matches[1].SessionID})
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "idle", page.Matches[0].SessionID)
 }

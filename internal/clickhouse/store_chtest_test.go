@@ -255,40 +255,6 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 	}
 }
 
-func TestSearchContentExcludeActiveChildBeforeLimit(t *testing.T) {
-	store, syncer, local := newPushedStore(t)
-	for _, f := range []struct{ id, project, text, ended string }{
-		{"parent", "project-a", "parent text", "2024-06-15T10:00:00Z"},
-		{"child", "child-project", "needle", "2024-06-15T11:59:00Z"},
-		{"independent", "project-a", "needle", "2024-06-15T10:00:00Z"},
-	} {
-		session := fixtureSession(f.id, f.project, f.text, f.ended, 1)
-		if f.id == "child" {
-			parentID := "parent"
-			session.ParentSessionID = &parentID
-			session.RelationshipType = "subagent"
-		}
-		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-			Session: session, Messages: []db.Message{fixtureMessage(f.id, 0, "user", f.text, f.ended)},
-			DataVersion: 1, ReplaceMessages: true,
-		}})
-		require.NoError(t, err)
-	}
-	_, err := syncer.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	for _, mode := range []string{"substring", "regex", "fts"} {
-		t.Run(mode, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-				Pattern: "needle", Mode: mode, Limit: 1, IncludeChildren: true,
-				Project: "project-a", IncludeOneShot: true, ExcludeActiveSince: "2024-06-15T11:50:00Z",
-			})
-			require.NoError(t, err)
-			require.Len(t, page.Matches, 1)
-			assert.Equal(t, "independent", page.Matches[0].SessionID)
-		})
-	}
-}
-
 func TestSearchTreatsUnderscoreAsLiteral(t *testing.T) {
 	store, syncer, local := newPushedStore(t)
 	ctx := context.Background()

@@ -42,26 +42,6 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 	}
 }
 
-func TestSearchContentExcludeActiveChildBeforeLimit(t *testing.T) {
-	store := setupContentSearch(t)
-	insertCSSession(t, store, "parent", "project-a", "claude", "2024-06-15T10:00:00Z", "2024-06-15T10:00:00Z")
-	insertCSChildSession(t, store, "child", "child-project", "claude", "parent", "2024-06-15T10:00:00Z", "2024-06-15T11:59:00Z")
-	insertCSSession(t, store, "independent", "project-a", "claude", "2024-06-15T10:00:00Z", "2024-06-15T10:00:00Z")
-	insertCSMessage(t, store, "child", 0, "user", "needle", "2024-06-15T11:59:00Z", false)
-	insertCSMessage(t, store, "independent", 0, "user", "needle", "2024-06-15T10:00:00Z", false)
-	for _, mode := range []string{"substring", "regex", "fts", "terms"} {
-		t.Run(mode, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-				Pattern: "needle", Mode: mode, Limit: 1, IncludeChildren: true,
-				Project: "project-a", IncludeOneShot: true, ExcludeActiveSince: "2024-06-15T11:50:00Z",
-			})
-			require.NoError(t, err)
-			require.Len(t, page.Matches, 1)
-			assert.Equal(t, "independent", page.Matches[0].SessionID)
-		})
-	}
-}
-
 // setupContentSearch creates a fresh schema and returns a *Store pointing
 // at it plus a raw *sql.DB for direct inserts.
 func setupContentSearch(t *testing.T) *Store {

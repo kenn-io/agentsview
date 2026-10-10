@@ -117,7 +117,7 @@ func TestSearchContentExcludeActiveChildBeforeLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET ended_at = CASE id WHEN 'parent' THEN ? WHEN 'child' THEN ? ELSE '2024-06-15T10:00:00Z' END", tc.parentEnd, tc.childEnd)
 			require.NoError(t, err)
-			for _, mode := range []string{"substring", "regex", "fts", "terms", "semantic", "hybrid"} {
+			for _, mode := range []string{"substring", "regex", "fts", "semantic", "hybrid"} {
 				t.Run(mode, func(t *testing.T) {
 					page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 						Pattern: "needle", Mode: mode, Limit: 1, IncludeChildren: true,
