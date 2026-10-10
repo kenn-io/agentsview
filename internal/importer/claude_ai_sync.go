@@ -133,12 +133,20 @@ func SyncClaudeAI(ctx context.Context, store interface {
 				if err := json.Unmarshal(summary, &marker); err != nil || marker.UUID == "" || marker.UpdatedAt == "" {
 					stats.Errors++
 					cb.progress(stats)
+					if failedLast {
+						return stats, errors.New("invalid claude conversation summary")
+					}
+					failedLast = true
 					continue
 				}
 				var leaf string
 				if err := json.Unmarshal(marker.CurrentLeaf, &leaf); err != nil || leaf == "" && string(marker.CurrentLeaf) != "null" {
 					stats.Errors++
 					cb.progress(stats)
+					if failedLast {
+						return stats, errors.New("invalid claude conversation leaf")
+					}
+					failedLast = true
 					continue
 				}
 				if leaf == "" || leaf == "00000000-0000-4000-8000-000000000000" {
@@ -265,7 +273,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 
 func syncConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
 	id := result.Session.ID
-	existing, err := store.GetSession(ctx, id)
+	existing, err := store.GetSessionFull(ctx, id)
 	if err != nil {
 		return importNew, err
 	}
@@ -284,22 +292,20 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	if err != nil {
 		return importUpdated, err
 	}
-	if sameMessages(archived, storedFormMessages(store, msgs)) {
-		before, err := store.GetSessionFull(ctx, id)
-		if err != nil {
-			return importUpdated, err
-		}
-		status, err := upsertConversation(ctx, store, result, nil)
-		// A usage-only archive can't tell a shorter branch from a shorter export, so it keeps the longer copy.
-		if refusalReason(err) == RefusalShorterExport {
+	usageOnly := storeArchiveContent(store).UsageOnly()
+	if usageOnly || sameMessages(archived, storedFormMessages(store, msgs)) {
+		_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: chatGPTSession(result.Session), Messages: msgs,
+			ReplaceMessages: usageOnly, SkipSignalUpdates: true,
+		}})
+		if errors.Is(err, db.ErrSessionExcluded) {
 			return importSkipped, nil
 		}
-		// Count metadata-only changes as updates so the caller publishes them.
 		s := result.Session
-		if err == nil && status == importSkipped && before != nil && (!ptrEqual(before.SessionName, db.ParsedSessionName(s)) || !ptrEqual(before.FirstMessage, strPtr(s.FirstMessage)) || !ptrEqual(before.StartedAt, timeStr(s.StartedAt)) || !ptrEqual(before.EndedAt, timeStr(s.EndedAt))) {
-			return importUpdated, nil
+		if err != nil || usageOnly || existing.MessageCount != s.MessageCount || existing.UserMessageCount != s.UserMessageCount || !ptrEqual(existing.SessionName, db.ParsedSessionName(s)) || !ptrEqual(existing.FirstMessage, strPtr(s.FirstMessage)) || !ptrEqual(existing.StartedAt, timeStr(s.StartedAt)) || !ptrEqual(existing.EndedAt, timeStr(s.EndedAt)) {
+			return importUpdated, err
 		}
-		return status, err
+		return importSkipped, nil
 	}
 	replacer, ok := store.(sessionReplacer)
 	if !ok {
@@ -309,6 +315,9 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		Session: chatGPTSession(result.Session), Messages: msgs,
 		KeepTrashedCopyOnlyOnPinLoss: true,
 	})
+	if errors.Is(err, db.ErrReplaceUnchanged) {
+		return importSkipped, nil
+	}
 	return importUpdated, err
 }
 

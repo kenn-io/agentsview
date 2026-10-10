@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -55,6 +58,20 @@ func claudeAIRelayBody(t *testing.T, status int, body, retryAfter string) io.Rea
 }
 
 func TestClaudeAISyncRelay(t *testing.T) {
+	fixtures := map[string]string{}
+	for _, name := range []string{"organizations", "list_all", "detail"} {
+		body, err := os.ReadFile(filepath.Join("..", "importer", "testdata", "claude_ai_sync", name+".json"))
+		require.NoError(t, err)
+		fixtures[name] = string(body)
+	}
+	var page struct {
+		Data    []jsontext.Value `json:"data"`
+		HasMore bool             `json:"has_more"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(fixtures["list_all"]), &page))
+	page.Data = page.Data[:1]
+	list, err := json.Marshal(page)
+	require.NoError(t, err)
 	t.Run("Retry-After in JSON", func(t *testing.T) {
 		srv := testServer(t, 5*time.Second)
 		httpServer := httptest.NewServer(srv.mux)
@@ -138,11 +155,11 @@ func TestClaudeAISyncRelay(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(data), &request))
 				switch request.Path {
 				case "/api/organizations":
-					postResult(request.ID, `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`, http.StatusNoContent)
+					postResult(request.ID, fixtures["organizations"], http.StatusNoContent)
 				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
-					postResult(request.ID, `{"data":[{"uuid":"22222222-2222-4222-8222-222222222225","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`, http.StatusNoContent)
-				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222225?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
-					postResult(request.ID, `{"uuid":"22222222-2222-4222-8222-222222222225","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"`+strings.Repeat("x", 2<<20)+`","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Archived relay message","created_at":"2026-03-01T10:00:00Z"}]}`, http.StatusNoContent)
+					postResult(request.ID, string(list), http.StatusNoContent)
+				case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+					postResult(request.ID, strings.Replace(fixtures["detail"], `"Hello"`, `"`+strings.Repeat("x", 2<<20)+`"`, 1), http.StatusNoContent)
 				default:
 					require.FailNowf(t, "unexpected path", "%s", request.Path)
 				}
@@ -154,10 +171,11 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		})
 		assert.Equal(t, 1, stats.Imported)
 		assert.Zero(t, stats.Errors)
-		messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222225")
+		messages, err := srv.db.GetAllMessages(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
 		require.NoError(t, err)
-		require.Len(t, messages, 1)
-		assert.Equal(t, "Archived relay message", messages[0].Content)
+		require.Len(t, messages, 2)
+		assert.Equal(t, strings.Repeat("x", 2<<20), messages[0].Content)
+		assert.Equal(t, "Chosen reply", messages[1].Content)
 	})
 
 	for _, oversized := range []struct {
@@ -193,10 +211,10 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					status := 200
 					switch request.Path {
 					case "/api/organizations":
-						body = `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`
+						body = fixtures["organizations"]
 					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations_v2?limit=50&offset=0":
-						body = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222226","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}],"has_more":false}`
-					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222226?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
+						body = string(list)
+					case "/api/organizations/11111111-1111-4111-8111-111111111111/chat_conversations/22222222-2222-4222-8222-222222222222?tree=True&rendering_mode=messages&consistency=strong&render_all_tools=true&include_inline_comparison=true":
 						status = oversized.status
 						body = oversized.body
 					default:

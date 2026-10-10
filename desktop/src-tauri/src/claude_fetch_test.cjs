@@ -8,7 +8,7 @@ const script = require("node:fs").readFileSync(0, "utf8");
     let cancelled = false;
     let signal;
     const calls = [];
-    const authBody = '{"error":{"details":{"error_code":"account_session_invalid"}}}';
+    const authBody = require("node:fs").readFileSync(process.env.CLAUDE_SIGNED_OUT_FIXTURE, "utf8");
     const chunks = kind === "split utf8"
       ? [Uint8Array.of(0xe2), Uint8Array.of(0x82, 0xac)]
       : [new Uint8Array(limit), Uint8Array.of(65)];

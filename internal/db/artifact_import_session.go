@@ -129,7 +129,7 @@ func (db *DB) applyArtifactImportedSession(
 	ctxTx := contextTransaction{ctx: ctx, tx: tx}
 	messagesWritten, err := writeOneSessionBatchTx(
 		ctx, tx, ctxTx, write, &pendingRecallRevocations,
-		db.usageOnlyStorage(), nil,
+		db.usageOnlyStorage(),
 	)
 	switch {
 	case err == nil:

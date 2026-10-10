@@ -2809,7 +2809,11 @@ schemas keep their existing ordering behavior.
   Organization responses must decode to an array; null and other shapes fail.
   Organization and list failures, cancellation, and an empty page with
   `has_more: true` stop Sync. Null and root-sentinel list leaves skip detail
-  fetches; absent or malformed leaves count as errors.
+  fetches; absent or malformed leaves count toward the two-failure stop.
+  Reverified 2026-10-09 against the reconstructed fixtures and
+  `TestSyncClaudeAIConsecutiveInvalidSummariesStop`. Usage-only Sync replaces
+  counts from shorter selected branches through the projected batch writer;
+  `TestSyncClaudeAIUsageArchiveShorterBranchReplacesCounts` covers repeat Sync.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks
   found `current_leaf_message_uuid` on list items and byte-identical list and
   detail `updated_at` values with microseconds. Branch switches changed the

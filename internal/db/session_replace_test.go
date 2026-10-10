@@ -228,5 +228,6 @@ func TestReplaceSessionKeepingTrashedCopyPinIdentities(t *testing.T) {
 	oldPins, err := d.ListPinnedMessages(t.Context(), copyID, "")
 	require.NoError(t, err)
 	require.Len(t, oldPins, 2)
+	assert.ElementsMatch(t, []int{0, 1}, []int{oldPins[0].Ordinal, oldPins[1].Ordinal})
 	assert.Equal(t, Ptr("saved note"), oldPins[0].Note)
 }

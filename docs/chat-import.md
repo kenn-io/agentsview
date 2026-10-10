@@ -74,7 +74,7 @@ With the desktop app connected to its local archive, open **Import conversations
 
 Sync checks every chat, including archived chats. It fetches new chats and chats whose `updated_at`, visible leaf, or stored transcript changed. A zip re-import that changes text or message count triggers another fetch. Resync clears freshness, so the next Sync fetches each chat once. Search stays available during Sync.
 
-Changed chats show Claude.ai's visible branch, even when it has fewer turns. If a replacement loses a pin or note, Sync keeps the previous version in Trash with its pins and notes. Replacements that preserve every pin and note make no copy. Switching back on Claude.ai restores those turns, but dropped pins and notes stay in the Trash copy. Trashed and permanently deleted chats stay deleted.
+Changed chats show Claude.ai's visible branch, even when it has fewer turns. Usage-only archives update their counts to match that branch. If a replacement loses a pin or note, Sync keeps the previous version in Trash with its pins and notes. Replacements that preserve every pin and note make no copy. Switching back on Claude.ai restores those turns, but dropped pins and notes stay in the Trash copy. Trashed and permanently deleted chats stay deleted.
 
 Each chat has a 32 MiB response limit. Larger chats count as failed while Sync continues. An expired sign-in or two chat failures in a row ends Sync. Closing the dialog cancels it. Completed chats stay imported, and the next Sync fetches unfinished chats.
 

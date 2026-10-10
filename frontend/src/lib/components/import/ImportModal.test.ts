@@ -88,3 +88,29 @@ it("hides browser sync controls for a read-only archive", () => {
   expect(screen.queryByRole("button", { name: m.import_claude_sync() })).toBeNull();
   expect(screen.queryByRole("button", { name: m.import_claude_connect() })).toBeNull();
 });
+
+it.each(["close", "overlay"])("cancels browser sync through %s", async (action) => {
+  let signal!: AbortSignal;
+  syncClaudeAI.mockImplementation(async (_host, _callbacks, runSignal) => {
+    signal = runSignal;
+    return await new Promise((_, reject) => {
+      runSignal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true });
+    });
+  });
+  const onclose = vi.fn();
+  const onimported = vi.fn();
+  render(ImportModal, { open: true, onclose, onimported });
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_sync() }));
+  if (action === "close") {
+    await fireEvent.click(screen.getByRole("button", { name: m.import_close() }));
+  } else {
+    const overlay = screen.getByRole("dialog").parentElement!;
+    await fireEvent.pointerDown(overlay);
+    await fireEvent.pointerUp(overlay);
+    await fireEvent.click(overlay);
+  }
+  expect(signal.aborted).toBe(true);
+  expect(onclose).toHaveBeenCalledOnce();
+  await waitFor(() => expect(onimported).toHaveBeenCalledOnce());
+  expect(screen.queryByRole("dialog")).toBeNull();
+});

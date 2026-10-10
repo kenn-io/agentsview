@@ -611,15 +611,22 @@ func TestSyncClaudeAITitleOnlyChangeCountsAsUpdate(t *testing.T) {
 	assert.Zero(t, stats.Skipped)
 }
 
-func TestSyncClaudeAIUsageArchiveShorterBranchKeepsLonger(t *testing.T) {
+func TestSyncClaudeAIUsageArchiveShorterBranchReplacesCounts(t *testing.T) {
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 	d, err := db.OpenWithArchiveContent(t.Context(), filepath.Join(t.TempDir(), "archive.db"), config.ArchiveContentUsage)
 	require.NoError(t, err)
 	t.Cleanup(func() { d.Close() })
 	selected := "q2"
+	details := 0
 	fetch := func(ctx context.Context, path string) (ClaudeAIResponse, error) {
 		detail := strings.Replace(strings.TrimSuffix(syncDetail, "]}")+`,{"uuid":"q2","parent_message_uuid":"reply","sender":"human","text":"More"}]}`, `"current_leaf_message_uuid":"reply"`, `"current_leaf_message_uuid":"`+selected+`"`, 1)
-		return syncOneFetch(t, strings.Replace(syncSummary, "reply", selected, 1), func() (ClaudeAIResponse, error) {
+		summary := strings.Replace(syncSummary, "reply", selected, 1)
+		if selected == "reply" {
+			detail = strings.Replace(detail, "2026-03-01T10:05:00.123456Z", "2026-03-02T10:05:00Z", 1)
+			summary = strings.Replace(summary, "2026-03-01T10:05:00.123456Z", "2026-03-02T10:05:00Z", 1)
+		}
+		return syncOneFetch(t, summary, func() (ClaudeAIResponse, error) {
+			details++
 			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
 		})(ctx, path)
 	}
@@ -628,12 +635,22 @@ func TestSyncClaudeAIUsageArchiveShorterBranchKeepsLonger(t *testing.T) {
 	selected = "reply"
 	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, 1, stats.Updated)
 	assert.Zero(t, stats.Errors)
 	assert.Empty(t, stats.Refusals)
 	session, err := d.GetSessionFull(t.Context(), id)
 	require.NoError(t, err)
-	assert.Equal(t, 3, session.MessageCount)
+	assert.Equal(t, 2, session.MessageCount)
+	assert.Equal(t, 1, session.UserMessageCount)
+	assert.Equal(t, strPtr("2026-03-02T10:05:00Z"), session.EndedAt)
+	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 2, details)
+	session, err = d.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, 2, session.MessageCount)
 }
 
 type cancelNewSyncStore struct {
@@ -958,6 +975,55 @@ func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSyncClaudeAIConsecutiveInvalidSummariesStop(t *testing.T) {
+	for _, summary := range []string{
+		`{"uuid":42}`,
+		strings.Replace(syncSummary, `"current_leaf_message_uuid":"reply",`, "", 1),
+	} {
+		t.Run(summary, func(t *testing.T) {
+			details := 0
+			stats, err := SyncClaudeAI(t.Context(), testDB(t), syncOneFetch(t, summary+","+summary+","+syncSummary, func() (ClaudeAIResponse, error) {
+				details++
+				return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+			}), nil)
+			require.ErrorContains(t, err, "invalid claude conversation")
+			assert.Equal(t, 2, stats.Errors)
+			assert.Zero(t, details)
+		})
+	}
+}
+
+type unchangedSyncReplacementStore struct{ *db.DB }
+
+func (s unchangedSyncReplacementStore) ReplaceSessionKeepingTrashedCopy(ctx context.Context, write db.SessionBatchWrite) (string, error) {
+	write.ReplaceMessages = true
+	_, err := s.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
+	if err != nil {
+		return "", err
+	}
+	return s.DB.ReplaceSessionKeepingTrashedCopy(ctx, write)
+}
+
+func TestSyncClaudeAIConcurrentUnchangedReplacementIsSkipped(t *testing.T) {
+	d := testDB(t)
+	_, err := ImportClaudeAI(t.Context(), d, strings.NewReader("["+strings.Replace(syncDetail, "Chosen reply", "Previous reply", 1)+"]"), nil)
+	require.NoError(t, err)
+	details := 0
+	fetch := syncOneFetch(t, syncSummary, func() (ClaudeAIResponse, error) {
+		details++
+		return ClaudeAIResponse{Status: 200, Body: []byte(syncDetail)}, nil
+	})
+	for range 2 {
+		stats, err := SyncClaudeAI(t.Context(), unchangedSyncReplacementStore{d}, fetch, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.Skipped)
+		assert.Zero(t, stats.Errors)
+		assert.Empty(t, stats.Refusals)
+	}
+	assert.Equal(t, 1, details)
+	assert.Empty(t, replacedCopies(t, d, "claude-ai:22222222-2222-4222-8222-222222222222"))
 }
 
 func TestSyncClaudeAIInvalidOrganizations(t *testing.T) {
