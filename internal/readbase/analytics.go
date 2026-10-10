@@ -19,7 +19,7 @@ const topSessionsLimit = 10
 type AnalyticsBackend interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	Sessions(ctx context.Context, f db.AnalyticsFilter, includeDate, includeTime bool, extraPred string, extraArgs []any) ([]AnalyticsSession, error)
-	Summary(ctx context.Context, f db.AnalyticsFilter) (db.AnalyticsSummary, bool, error)
+	SummarySQL(f db.AnalyticsFilter) (string, []any)
 	ActivityBucketsSQL(f db.AnalyticsFilter, granularity string) (string, []any)
 	ActivityAgentsSQL(f db.AnalyticsFilter, granularity string) (string, []any)
 	HeatmapSQL(f db.AnalyticsFilter, metric string) (string, []any)
@@ -127,9 +127,6 @@ func (s *Analytics) getAnalyticsFilteredMessageStats(
 	scope, err := s.backend.MessageScope(ctx, sessionIDs, f, false)
 	if err != nil {
 		return nil, err
-	}
-	if scope == nil {
-		return map[string]db.MessageStats{}, nil
 	}
 	return scope.StatsBySession(), nil
 }
@@ -550,9 +547,21 @@ func (s *Analytics) GetAnalyticsSummary(
 	if strings.TrimSpace(f.Model) != "" {
 		return s.getAnalyticsSummaryWithModelCounts(ctx, f)
 	}
-	resp, found, err := s.backend.Summary(ctx, f)
-	if err != nil || !found {
-		return resp, err
+	query, queryArgs := s.backend.SummarySQL(f)
+	rows, err := s.backend.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return db.AnalyticsSummary{}, fmt.Errorf("querying %s analytics summary: %w", s.name, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return db.AnalyticsSummary{}, fmt.Errorf("iterating %s analytics summary: %w", s.name, err)
+		}
+		return db.AnalyticsSummary{}, fmt.Errorf("reading %s analytics summary: %w", s.name, sql.ErrNoRows)
+	}
+	resp, err := ScanAnalyticsSummary(rows, db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, s.name)
+	if err != nil {
+		return db.AnalyticsSummary{}, err
 	}
 
 	agentQuery, agentArgs := s.backend.SummaryAgentsSQL(f)

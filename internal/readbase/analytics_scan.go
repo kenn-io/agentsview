@@ -83,26 +83,26 @@ func ScanAnalyticsVelocityToolCounts(rows *sql.Rows, backend string, out map[str
 	return out, rows.Err()
 }
 
-func ScanAnalyticsTools(rows *sql.Rows, formatTime func(any) string, emit func(sessionID, category, name, timestamp string, count int)) error {
+func ScanAnalyticsTools(rows *sql.Rows, backend string, formatTime func(any) string, emit func(sessionID, category, name, timestamp string, count int)) error {
 	for rows.Next() {
 		var sid, cat, toolName string
 		var ts any
 		var count int
 		if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
-			return err
+			return fmt.Errorf("scanning %s analytics tool: %w", backend, err)
 		}
 		emit(sid, cat, toolName, formatTime(ts), count)
 	}
 	return rows.Err()
 }
 
-func ScanAnalyticsSkills(rows *sql.Rows, formatTime func(any) string, emit func(sessionID, name, timestamp string, count int)) error {
+func ScanAnalyticsSkills(rows *sql.Rows, backend string, formatTime func(any) string, emit func(sessionID, name, timestamp string, count int)) error {
 	for rows.Next() {
 		var sid, skill string
 		var count int
 		var msgTS any
 		if err := rows.Scan(&sid, &skill, &count, &msgTS); err != nil {
-			return err
+			return fmt.Errorf("scanning %s analytics skill: %w", backend, err)
 		}
 		emit(sid, skill, formatTime(msgTS), count)
 	}

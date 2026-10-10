@@ -735,6 +735,8 @@ func TestDuckAnalyticsSummaryScopedModels(t *testing.T) {
 		})
 		require.NoError(t, err, "GetAnalyticsSummary")
 		assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
+		assert.Equal(t, 1, resp.TotalSessions, "TotalSessions")
+		assert.Equal(t, 1, resp.TotalMessages, "TotalMessages")
 	})
 	t.Run("hour", func(t *testing.T) {
 		ctx := t.Context()
@@ -766,6 +768,8 @@ func TestDuckAnalyticsSummaryScopedModels(t *testing.T) {
 		})
 		require.NoError(t, err, "GetAnalyticsSummary")
 		assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
+		assert.Equal(t, 1, resp.TotalSessions, "TotalSessions")
+		assert.Equal(t, 2, resp.TotalMessages, "TotalMessages")
 	})
 	t.Run("model_and_hour", func(t *testing.T) {
 		ctx := t.Context()
@@ -844,6 +848,8 @@ func TestDuckAnalyticsSummaryScopedModels(t *testing.T) {
 		assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
 		assert.Equal(t, 11, resp.TotalOutputTokens, "TotalOutputTokens")
 		assert.Equal(t, 1, resp.TokenReportingSessions, "TokenReportingSessions")
+		assert.Equal(t, 2, resp.TotalSessions, "TotalSessions")
+		assert.Equal(t, 2, resp.TotalMessages, "TotalMessages")
 	})
 }
 

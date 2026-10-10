@@ -33,21 +33,12 @@ func AnalyticsWindowBounds(f db.AnalyticsFilter) (string, string) {
 // PaddedDateBounds expands inclusive UTC dates for timezone filtering.
 func PaddedDateBounds(from, to string) (string, string) {
 	if from != "" {
-		from = PaddedUTCBound(from+"T00:00:00Z", -14)
+		from = db.PaddedUTCBound(from+"T00:00:00Z", -14)
 	}
 	if to != "" {
-		to = PaddedUTCBound(to+"T23:59:59Z", 14)
+		to = db.PaddedUTCBound(to+"T23:59:59Z", 14)
 	}
 	return from, to
-}
-
-// PaddedUTCBound adds hours to a UTC boundary, preserving invalid input.
-func PaddedUTCBound(ts string, hours int) string {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return ts
-	}
-	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
 }
 
 func (s *Analytics) models(ctx context.Context, ids []string) ([]string, error) {
@@ -112,7 +103,7 @@ func (s *Analytics) filteredModels(ctx context.Context, ids []string, f db.Analy
 
 func (s *Analytics) filteredToolCounts(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error) {
 	counts := make(map[string]int, len(ids))
-	if len(ids) == 0 || strings.TrimSpace(f.Model) == "" {
+	if len(ids) == 0 {
 		return counts, nil
 	}
 	filter := f.MessageScopeFilter()

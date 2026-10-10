@@ -25,21 +25,6 @@ func (s analyticsSQL) Sessions(ctx context.Context, f db.AnalyticsFilter, includ
 	return s.store.loadAnalyticsSessions(ctx, f, includeDate, includeTime, extraPred, extraArgs)
 }
 
-func (s analyticsSQL) Summary(ctx context.Context, f db.AnalyticsFilter) (db.AnalyticsSummary, bool, error) {
-	query, queryArgs := s.SummarySQL(f)
-	rows, err := s.QueryContext(ctx, query, queryArgs...)
-	if err != nil {
-		return db.AnalyticsSummary{}, false, fmt.Errorf("querying clickhouse analytics summary: %w", err)
-	}
-	defer rows.Close()
-	resp := db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}
-	if !rows.Next() {
-		return resp, false, rows.Err()
-	}
-	resp, err = readbase.ScanAnalyticsSummary(rows, resp, "clickhouse")
-	return resp, true, err
-}
-
 func (s analyticsSQL) SummarySQL(f db.AnalyticsFilter) (string, []any) {
 	where, args := chBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
@@ -259,7 +244,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		return qErr
 	}
 	defer rows.Close()
-	return readbase.ScanAnalyticsTools(rows, formatDBTime, emit)
+	return readbase.ScanAnalyticsTools(rows, "clickhouse", formatDBTime, emit)
 }
 
 func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error {
@@ -287,7 +272,7 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 		return qErr
 	}
 	defer rows.Close()
-	return readbase.ScanAnalyticsSkills(rows, formatDBTime, emit)
+	return readbase.ScanAnalyticsSkills(rows, "clickhouse", formatDBTime, emit)
 }
 
 func (s analyticsSQL) ToolSessionWindow(f db.AnalyticsFilter) (string, []any) {

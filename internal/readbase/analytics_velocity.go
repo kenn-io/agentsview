@@ -86,8 +86,5 @@ func (s *Analytics) filteredVelocityMessages(
 	if err != nil {
 		return nil, err
 	}
-	if scope == nil {
-		return out, nil
-	}
 	return scope.TimingBySession(), nil
 }

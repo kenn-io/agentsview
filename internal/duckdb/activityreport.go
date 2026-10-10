@@ -10,7 +10,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // GetActivityReport assembles a concurrency- and usage-oriented report
@@ -51,8 +50,8 @@ func (s *Store) BuildActivityReportArtifacts(
 	f.IncludeSubagents = true
 	f.IncludeForks = true
 	rangeStartUTC, rangeEndUTC := db.ActivityReportInstantBoundsUTC(q)
-	lowerBound := readbase.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
-	upperBound := readbase.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+	lowerBound := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
+	upperBound := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
 	sessions, ids, err := s.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC)

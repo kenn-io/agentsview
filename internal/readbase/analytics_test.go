@@ -40,6 +40,10 @@ func (b analyticsFixtureBackend) HeatmapSQL(db.AnalyticsFilter, string) (string,
 	return "heatmap", nil
 }
 
+func (analyticsFixtureBackend) SummarySQL(db.AnalyticsFilter) (string, []any) {
+	return "summary", nil
+}
+
 func (b analyticsFixtureBackend) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if b.err != nil {
 		return nil, b.err
@@ -90,6 +94,22 @@ func TestAnalyticsPropagatesBackendErrors(t *testing.T) {
 }
 
 var errTopSessionsTerminal = errors.New("terminal read failure")
+var errSummaryRead = errors.New("summary read failure")
+
+func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
+	pool := sql.OpenDB(analyticsFixtureDriver{})
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	analytics := NewAnalytics(analyticsFixtureBackend{pool: pool}, "fixture")
+	_, err := analytics.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{})
+	require.ErrorIs(t, err, errSummaryRead)
+	assert.EqualError(t, err, "iterating fixture analytics summary: summary read failure")
+}
+
+type summaryErrorRows struct{}
+
+func (summaryErrorRows) Columns() []string         { return []string{"total_sessions"} }
+func (summaryErrorRows) Close() error              { return nil }
+func (summaryErrorRows) Next([]driver.Value) error { return errSummaryRead }
 
 type analyticsFixtureDriver struct{}
 
@@ -108,6 +128,9 @@ func (analyticsFixtureDriver) Begin() (driver.Tx, error) {
 }
 func (analyticsFixtureDriver) Close() error { return nil }
 func (analyticsFixtureDriver) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if query == "summary" {
+		return summaryErrorRows{}, nil
+	}
 	if query == "model times" {
 		return &modelTimesRows{}, nil
 	}
