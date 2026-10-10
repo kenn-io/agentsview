@@ -149,7 +149,7 @@ func TestHermesArchiveStoresCronGroups(t *testing.T) {
 	stored, err := database.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	assert.Equal(t, "job-a", stored.GroupKey)
+	assert.Regexp(t, `^job-a:[0-9a-f]{8}$`, stored.GroupKey)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET source = 'cli' WHERE id = ?`, id)
 	require.NoError(t, err)
 	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, true))
@@ -193,7 +193,7 @@ func TestHermesCronContinuationKeepsGroupAfterRootPrunedAndResync(t *testing.T) 
 			stored, err := database.GetSession(t.Context(), id)
 			require.NoError(t, err)
 			require.NotNil(t, stored)
-			assert.Equal(t, "job-a", stored.GroupKey, id)
+			assert.Regexp(t, `^job-a:[0-9a-f]{8}$`, stored.GroupKey, id)
 		}
 	}
 	checkGroups()
