@@ -251,7 +251,7 @@
     // A pull-request lookup can take minutes, so refresh keeps its totals;
     // changing the window or filters reloads them through the outcome effect.
     const outcomes = outcomeWindow && !outcomeFiltersUnsupported &&
-      !outcomeTotals.includePullRequests
+      (!outcomeTotals.includePullRequests || outcomeTotals.error !== null)
       ? outcomeTotals.load(outcomeWindow)
       : undefined;
     if (!router.isRootPath && !suppressSessionDateRefresh) {
