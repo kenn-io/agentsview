@@ -38,7 +38,7 @@ func TestRawArchiveAcceptanceAndCopy(t *testing.T) {
 	source := RawArchiveSource{ManifestID: "m1", RootID: root.ID, SourceKey: "session", OriginalPath: "/example/sessions/session.jsonl", CanonicalJSON: []byte(`{"version":1}`)}
 	accepted, err := d.AcceptRawArchiveSource(ctx, source)
 	require.NoError(t, err)
-	assert.Equal(t, "m1", accepted.Receipt)
+	assert.Equal(t, "m1", accepted.ManifestID)
 	_, err = d.AcceptRawArchiveSource(ctx, source)
 	require.NoError(t, err)
 	collision := source
@@ -49,12 +49,9 @@ func TestRawArchiveAcceptanceAndCopy(t *testing.T) {
 	next.ManifestID = "m2"
 	_, err = d.AcceptRawArchiveSource(ctx, next)
 	require.Error(t, err)
-	next.ParentReceipt = "m1"
-	_, err = d.AcceptRawArchiveSource(ctx, next)
-	require.NoError(t, err)
 	_, err = d.AcceptRawArchiveSource(ctx, source)
 	require.NoError(t, err)
-	require.NoError(t, d.RecordRawArchiveParse(ctx, "m2", "v1", "parse failed"))
+	require.NoError(t, d.RecordRawArchiveParse(ctx, "m1", "v1", "parse failed"))
 	require.ErrorIs(t, d.RecordRawArchiveParse(ctx, "missing", "v1", ""), sql.ErrNoRows)
 	target := testDB(t)
 	require.NoError(t, target.CopySyncStateFrom(d.path))
@@ -67,13 +64,13 @@ func TestRawArchiveAcceptanceAndCopy(t *testing.T) {
 	assert.True(t, files[0].Covered)
 	generations, err := target.ListRawArchiveSources(ctx, "", 10)
 	require.NoError(t, err)
-	require.Len(t, generations, 2)
-	head, err := target.RawArchiveHead(ctx, root.ID, "session")
+	require.Len(t, generations, 1)
+	head, err := target.RawArchiveSourceByKey(ctx, root.ID, "session")
 	require.NoError(t, err)
 	require.NotNil(t, head)
-	assert.Equal(t, "m2", head.ManifestID)
+	assert.Equal(t, "m1", head.ManifestID)
 	assert.Equal(t, "parse failed", head.ParseError)
-	head, err = target.RawArchiveHead(ctx, root.ID, "missing")
+	head, err = target.RawArchiveSourceByKey(ctx, root.ID, "missing")
 	require.NoError(t, err)
 	assert.Nil(t, head)
 }
@@ -112,7 +109,7 @@ func TestRawArchiveMigrationAndLegacyCopy(t *testing.T) {
 	ctx := t.Context()
 	legacy := testDB(t)
 	// Simulate an archive written before these additive tables existed.
-	for _, table := range []string{"raw_archive_sessions", "raw_archive_devices", "raw_archive_heads", "raw_archive_sources", "raw_archive_files", "raw_archive_roots"} {
+	for _, table := range []string{"raw_archive_sessions", "raw_archive_devices", "raw_archive_sources", "raw_archive_files", "raw_archive_roots"} {
 		_, err := legacy.getWriter().ExecContext(ctx, "DROP TABLE "+table)
 		require.NoError(t, err)
 	}

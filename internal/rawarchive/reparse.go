@@ -17,7 +17,7 @@ import (
 	syncer "go.kenn.io/agentsview/internal/sync"
 )
 
-// ReparseOptions selects accepted current generations. Empty selection is an
+// ReparseOptions selects accepted sources. Empty selection is an
 // error; All must be explicit. ScratchBytes bounds one source materialization.
 type ReparseOptions struct {
 	ManifestIDs  []string
@@ -50,22 +50,11 @@ func (a *Archive) Reparse(ctx context.Context, opts ReparseOptions) (report Repo
 		return report, err
 	}
 	var selected []db.RawArchiveSource
-	choose := func(source db.RawArchiveSource) error {
-		head, err := a.database.RawArchiveHead(ctx, source.RootID, source.SourceKey)
-		if err != nil {
-			return err
-		}
-		if head == nil || head.ManifestID != source.ManifestID {
-			if opts.All {
-				return nil
-			}
-			return errors.New("selected manifest is not the accepted source head")
-		}
-		selected = append(selected, source)
-		return nil
-	}
 	if opts.All {
-		err = a.sourcePages(ctx, choose)
+		err = a.sourcePages(ctx, func(source db.RawArchiveSource) error {
+			selected = append(selected, source)
+			return nil
+		})
 	} else {
 		seen := map[string]bool{}
 		for _, id := range opts.ManifestIDs {
@@ -77,9 +66,7 @@ func (a *Archive) Reparse(ctx context.Context, opts ReparseOptions) (report Repo
 			if getErr != nil {
 				return report, getErr
 			}
-			if err = choose(source); err != nil {
-				break
-			}
+			selected = append(selected, source)
 		}
 	}
 	if err != nil {

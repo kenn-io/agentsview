@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-func TestRejectedIdentityKeepsHistoryAndChangedImportKeepsHead(t *testing.T) {
+func TestRejectedIdentityKeepsHistoryAndChangedImportKeepsSource(t *testing.T) {
 	ctx := t.Context()
 	root := t.TempDir()
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
@@ -67,7 +67,7 @@ func TestRejectedIdentityKeepsHistoryAndChangedImportKeepsHead(t *testing.T) {
 	report, err = archive.Import(ctx, spec)
 	require.NoError(t, err)
 	require.Len(t, report.Gaps, 1)
-	head, err := database.RawArchiveHead(ctx, source.RootID, source.SourceKey)
+	head, err := database.RawArchiveSourceByKey(ctx, source.RootID, source.SourceKey)
 	require.NoError(t, err)
 	require.NotNil(t, head)
 	assert.Equal(t, source.ManifestID, head.ManifestID)

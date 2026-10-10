@@ -1501,13 +1501,8 @@ CREATE TABLE IF NOT EXISTS raw_archive_files (
 CREATE TABLE IF NOT EXISTS raw_archive_sources (
     manifest_id TEXT PRIMARY KEY, root_id TEXT NOT NULL REFERENCES raw_archive_roots(id),
     source_key TEXT NOT NULL, original_path TEXT NOT NULL, canonical_json BLOB NOT NULL,
-    parent_receipt TEXT NOT NULL, receipt TEXT NOT NULL,
-    parse_error TEXT NOT NULL DEFAULT '', processing_version TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS raw_archive_heads (
-    root_id TEXT NOT NULL REFERENCES raw_archive_roots(id), source_key TEXT NOT NULL,
-    manifest_id TEXT NOT NULL REFERENCES raw_archive_sources(manifest_id),
-    PRIMARY KEY(root_id,source_key)
+    parse_error TEXT NOT NULL DEFAULT '', processing_version TEXT NOT NULL DEFAULT '',
+    UNIQUE(root_id,source_key)
 );
 
 -- Source deletion policy is frozen with the first imported capture. These

@@ -23,9 +23,9 @@ type (
 )
 
 type RawArchiveSource struct {
-	ManifestID, RootID, SourceKey, OriginalPath           string
-	CanonicalJSON                                         []byte
-	ParentReceipt, Receipt, ParseError, ProcessingVersion string
+	ManifestID, RootID, SourceKey, OriginalPath string
+	CanonicalJSON                               []byte
+	ParseError, ProcessingVersion               string
 }
 
 func rawArchiveFields(fields ...string) error {
@@ -145,11 +145,11 @@ func readRawArchiveFiles(rows *sql.Rows, err error) ([]RawArchiveFile, error) {
 	return out, rows.Err()
 }
 
-const rawSourceColumns = `manifest_id,root_id,source_key,original_path,canonical_json,parent_receipt,receipt,parse_error,processing_version`
+const rawSourceColumns = `manifest_id,root_id,source_key,original_path,canonical_json,parse_error,processing_version`
 
 func scanRawSource(row interface{ Scan(...any) error }) (RawArchiveSource, error) {
 	var s RawArchiveSource
-	err := row.Scan(&s.ManifestID, &s.RootID, &s.SourceKey, &s.OriginalPath, &s.CanonicalJSON, &s.ParentReceipt, &s.Receipt, &s.ParseError, &s.ProcessingVersion)
+	err := row.Scan(&s.ManifestID, &s.RootID, &s.SourceKey, &s.OriginalPath, &s.CanonicalJSON, &s.ParseError, &s.ProcessingVersion)
 	return s, err
 }
 
@@ -157,8 +157,8 @@ func (d *DB) GetRawArchiveSource(ctx context.Context, id string) (RawArchiveSour
 	return scanRawSource(d.getReader().QueryRowContext(ctx, `SELECT `+rawSourceColumns+` FROM raw_archive_sources WHERE manifest_id=?`, id))
 }
 
-func (d *DB) RawArchiveHead(ctx context.Context, root, key string) (*RawArchiveSource, error) {
-	s, err := scanRawSource(d.getReader().QueryRowContext(ctx, `SELECT `+rawSourceColumns+` FROM raw_archive_sources WHERE manifest_id=(SELECT manifest_id FROM raw_archive_heads WHERE root_id=? AND source_key=?)`, root, key))
+func (d *DB) RawArchiveSourceByKey(ctx context.Context, root, key string) (*RawArchiveSource, error) {
+	s, err := scanRawSource(d.getReader().QueryRowContext(ctx, `SELECT `+rawSourceColumns+` FROM raw_archive_sources WHERE root_id=? AND source_key=?`, root, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -172,13 +172,9 @@ func (d *DB) AcceptRawArchiveSource(ctx context.Context, s RawArchiveSource) (Ra
 	if err := rawArchiveFields(s.ManifestID, s.RootID, s.SourceKey, s.OriginalPath); err != nil {
 		return s, err
 	}
-	if len(s.CanonicalJSON) == 0 || len(s.CanonicalJSON) > 1<<20 || len(s.ParentReceipt) > 4096 {
+	if len(s.CanonicalJSON) == 0 || len(s.CanonicalJSON) > 1<<20 {
 		return s, errors.New("invalid raw archive source")
 	}
-	if s.Receipt != "" && s.Receipt != s.ManifestID {
-		return s, errors.New("invalid raw archive receipt")
-	}
-	s.Receipt = s.ManifestID
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	tx, err := d.getWriter().BeginTx(ctx, nil)
@@ -188,7 +184,7 @@ func (d *DB) AcceptRawArchiveSource(ctx context.Context, s RawArchiveSource) (Ra
 	defer func() { _ = tx.Rollback() }()
 	got, err := scanRawSource(tx.QueryRowContext(ctx, `SELECT `+rawSourceColumns+` FROM raw_archive_sources WHERE manifest_id=?`, s.ManifestID))
 	if err == nil {
-		if got.RootID != s.RootID || got.SourceKey != s.SourceKey || got.OriginalPath != s.OriginalPath || got.ParentReceipt != s.ParentReceipt || !bytes.Equal(got.CanonicalJSON, s.CanonicalJSON) {
+		if got.RootID != s.RootID || got.SourceKey != s.SourceKey || got.OriginalPath != s.OriginalPath || !bytes.Equal(got.CanonicalJSON, s.CanonicalJSON) {
 			return s, errors.New("raw archive manifest identity conflict")
 		}
 		return got, nil
@@ -196,19 +192,7 @@ func (d *DB) AcceptRawArchiveSource(ctx context.Context, s RawArchiveSource) (Ra
 	if !errors.Is(err, sql.ErrNoRows) {
 		return s, err
 	}
-	var receipt string
-	err = tx.QueryRowContext(ctx, `SELECT manifest_id FROM raw_archive_heads WHERE root_id=? AND source_key=?`, s.RootID, s.SourceKey).Scan(&receipt)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return s, err
-	}
-	if receipt != s.ParentReceipt {
-		return s, errors.New("raw archive parent receipt conflict")
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO raw_archive_sources(manifest_id,root_id,source_key,original_path,canonical_json,parent_receipt,receipt) VALUES(?,?,?,?,?,?,?)`, s.ManifestID, s.RootID, s.SourceKey, s.OriginalPath, s.CanonicalJSON, s.ParentReceipt, s.Receipt)
-	if err != nil {
-		return s, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO raw_archive_heads(root_id,source_key,manifest_id) VALUES(?,?,?) ON CONFLICT(root_id,source_key) DO UPDATE SET manifest_id=excluded.manifest_id`, s.RootID, s.SourceKey, s.ManifestID)
+	_, err = tx.ExecContext(ctx, `INSERT INTO raw_archive_sources(manifest_id,root_id,source_key,original_path,canonical_json) VALUES(?,?,?,?,?)`, s.ManifestID, s.RootID, s.SourceKey, s.OriginalPath, s.CanonicalJSON)
 	if err != nil {
 		return s, err
 	}

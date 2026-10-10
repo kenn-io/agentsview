@@ -429,7 +429,6 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		{"raw_archive_roots", "id,device_id,machine,provider,original_path,configured_root_id"},
 		{"raw_archive_files", "id,root_id,path,sha256,size,mod_time_ns,covered"},
 		{"raw_archive_sources", rawSourceColumns},
-		{"raw_archive_heads", "root_id,source_key,manifest_id"},
 		{"raw_archive_devices", "device_id,suppressions"},
 		{"raw_archive_sessions", "device_id,provider,parser_id,session_id,root_id,source_key"},
 		{"raw_archive_root_aliases", "root_id,alias"},

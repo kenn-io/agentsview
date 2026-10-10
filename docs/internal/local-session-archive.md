@@ -60,7 +60,7 @@ and path checks as other existing sessions.
 
 The offline commands keep original files in a dedicated embedded Docbank vault
 under `raw-archive/artifacts`. `sessions.db` owns original device/root bindings,
-file inventories, immutable source acceptance, current heads, and parse status.
+file inventories, immutable source acceptance, and parse status.
 Those records survive database rebuilds. Moving the capture changes its import
 path, not those identities.
 

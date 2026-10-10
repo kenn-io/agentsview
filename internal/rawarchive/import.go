@@ -292,21 +292,21 @@ func (a *Archive) Import(ctx context.Context, spec ImportSpec) (Report, error) {
 				report.Gaps = append(report.Gaps, fmt.Sprintf("root %s: source retained as supplemental: %v", input.ID, err))
 				continue
 			}
-			head, err := a.database.RawArchiveHead(ctx, archiveRootID(spec.DeviceID, input.Provider, input.ID), sourceKey)
+			accepted, err := a.database.RawArchiveSourceByKey(ctx, archiveRootID(spec.DeviceID, input.Provider, input.ID), sourceKey)
 			if err != nil {
 				return report, err
 			}
-			if head != nil {
-				old, err := rawsync.ParseCanonicalManifest(identity, head.ManifestID, head.CanonicalJSON, rawsync.DefaultManifestLimits())
+			if accepted != nil {
+				old, err := rawsync.ParseCanonicalManifest(identity, accepted.ManifestID, accepted.CanonicalJSON, rawsync.DefaultManifestLimits())
 				if err != nil {
 					return report, err
 				}
-				if !reflect.DeepEqual(old.Manifest.Entries, canonical.Manifest.Entries) || head.OriginalPath != originalPath {
-					// Preserve proposed evidence but never auto-reparent competing imports.
+				if !reflect.DeepEqual(old.Manifest.Entries, canonical.Manifest.Entries) || accepted.OriginalPath != originalPath {
+					// Keep proposed evidence without replacing the accepted source.
 					if _, err := a.objects.PutManifest(ctx, canonical); err != nil {
 						return report, err
 					}
-					report.Gaps = append(report.Gaps, fmt.Sprintf("source conflict: accepted %s, proposed %s", head.ManifestID, canonical.ManifestID))
+					report.Gaps = append(report.Gaps, fmt.Sprintf("source conflict: accepted %s, proposed %s", accepted.ManifestID, canonical.ManifestID))
 					continue
 				}
 			} else {
