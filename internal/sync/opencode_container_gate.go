@@ -415,7 +415,7 @@ func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states 
 			if err != nil {
 				return err
 			}
-			if err := db.UpdateSyncStateTx(ctx, tx, sqliteContainerSyncStatePrefix+path, string(revoked)); err != nil {
+			if err := db.SetSyncStateTx(ctx, tx, sqliteContainerSyncStatePrefix+path, string(revoked)); err != nil {
 				return err
 			}
 		}

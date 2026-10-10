@@ -5511,12 +5511,6 @@ func GetSyncStateTx(ctx context.Context, tx *sql.Tx, key string) (string, error)
 	return scanSyncState(tx.QueryRowContext(ctx, getSyncStateQuery, key))
 }
 
-// UpdateSyncStateTx replaces an existing value without creating a missing key.
-func UpdateSyncStateTx(ctx context.Context, tx *sql.Tx, key, value string) error {
-	_, err := tx.ExecContext(ctx, "UPDATE pg_sync_state SET value = ? WHERE key = ?", value, key)
-	return err
-}
-
 // SetSyncStateTx writes sync metadata inside the caller's transaction.
 func SetSyncStateTx(ctx context.Context, tx *sql.Tx, key, value string) error {
 	_, err := tx.ExecContext(ctx, setSyncStateQuery, key, value)
