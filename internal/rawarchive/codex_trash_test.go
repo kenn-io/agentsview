@@ -52,9 +52,11 @@ func TestReparseSuppressesTrashedCodexSessions(t *testing.T) {
 		name          string
 		seed          bool
 		trashAtSource bool
+		restore       bool
 	}{
 		{name: "source trash in a receiving archive", trashAtSource: true},
 		{name: "source trash in a seeded archive", seed: true, trashAtSource: true},
+		{name: "restored source trash in a seeded archive", seed: true, trashAtSource: true, restore: true},
 		{name: "trash applied in the receiving archive"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -96,6 +98,11 @@ func TestReparseSuppressesTrashedCodexSessions(t *testing.T) {
 			}
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, archive.Close()) })
+			if tt.restore {
+				count, err := database.RestoreSession(ctx, sessionID(trashed))
+				require.NoError(t, err)
+				require.EqualValues(t, 1, count)
+			}
 			if !tt.trashAtSource {
 				_, err = archive.Reparse(ctx, ReparseOptions{All: true, ScratchBytes: 1 << 20})
 				require.NoError(t, err)
@@ -105,11 +112,21 @@ func TestReparseSuppressesTrashedCodexSessions(t *testing.T) {
 			report, err := archive.Reparse(ctx, ReparseOptions{All: true, ScratchBytes: 1 << 20})
 			require.NoError(t, err, "a trashed Codex session must not abort the batch")
 			assert.Equal(t, 2, report.Parsed)
-			assert.Equal(t, 1, report.Suppressed)
+			if tt.restore {
+				assert.Zero(t, report.Suppressed)
+			} else {
+				assert.Equal(t, 1, report.Suppressed)
+			}
 			messages, err := database.GetAllMessages(ctx, sessionID(active))
 			require.NoError(t, err)
 			assert.Len(t, messages, 2, "the unrelated active session publishes")
-			if tt.seed || !tt.trashAtSource {
+			if tt.restore {
+				assert.False(t, database.IsSessionTrashed(ctx, sessionID(trashed)))
+				messages, err := database.GetAllMessages(ctx, sessionID(trashed))
+				require.NoError(t, err)
+				require.Len(t, messages, 2)
+				assert.Equal(t, "history "+trashed, messages[0].Content)
+			} else if tt.seed || !tt.trashAtSource {
 				assert.True(t, database.IsSessionTrashed(ctx, sessionID(trashed)), "the trashed row is preserved")
 			} else {
 				session, err := database.GetSessionFull(ctx, sessionID(trashed))

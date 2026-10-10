@@ -346,7 +346,8 @@ captured schema. An unsupported schema, missing table or missing database is
 reported as unknown and blocks projection until inspected; never report zero on
 query failure. No live database migration is part of preflight.
 
-**Deletion decision:** honor source trash and permanent exclusions by default.
+**Deletion decision:** apply captured trash and permanent exclusions to foreign
+sources. The seed archive's current trash and exclusions govern its own sources.
 Retain the raw bytes and deletion evidence, but do not make those foreign
 sessions browsable. Record their source-qualified parser IDs and deletion kind
 in the capture and durable archive metadata. Apply this suppression before

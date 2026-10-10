@@ -233,7 +233,7 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 		}
 		s.Machine = root.DeviceID
 		seen[s.ID] = true
-		if d, ok := policy[native]; ok && (d.Provider == "" || d.Provider == root.Provider) {
+		if d, ok := policy[native]; root.DeviceID != owner && ok && (d.Provider == "" || d.Provider == root.Provider) {
 			suppressed[s.ID] = true
 			return false, nil
 		}
