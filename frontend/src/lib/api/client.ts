@@ -121,6 +121,13 @@ export function watchSession(
     onUpdate();
   });
 
+  // HTTP `open` precedes the server's watch baseline. Refresh only after
+  // that baseline exists, including on automatic EventSource reconnects.
+  es.addEventListener("session_ready", () => {
+    consecutiveErrors = 0;
+    onUpdate();
+  });
+
   if (onTiming) {
     es.addEventListener("session.timing", (ev: MessageEvent) => {
       try {

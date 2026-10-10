@@ -96,15 +96,16 @@ func New(d db.Store, engine *sync.Engine) *Watcher {
 // DB changes.
 //
 // As a fallback when file watching or incremental sync misses a
-// DB update, it also monitors the source file's mtime and
+// DB update, it reconciles the source on connection, monitors its mtime, and
 // triggers a direct sync when the DB hasn't been updated within
-// SyncFallbackDelay.
+// SyncFallbackDelay. The initial DB baseline is captured before Events returns.
 func (w *Watcher) Events(
 	ctx context.Context, sessionID string,
 ) <-chan struct{} {
 	ch := make(chan struct{})
 	if identity, ok := w.db.(db.SessionWatchStateStore); ok {
 		initial, err := identity.GetSessionWatchState(sessionID)
+		lastCount, lastVersion, _ := w.db.GetSessionVersion(ctx, sessionID)
 		go func() {
 			defer close(ch)
 			if err != nil {
@@ -119,7 +120,6 @@ func (w *Watcher) Events(
 			}
 			ticker := time.NewTicker(pollInterval())
 			defer ticker.Stop()
-			lastCount, lastVersion, _ := w.db.GetSessionVersion(ctx, sessionID)
 			for {
 				select {
 				case <-ctx.Done():
@@ -167,6 +167,14 @@ func (w *Watcher) Events(
 		var fileMtimeChangedAt time.Time
 		if sourcePath != "" {
 			lastFileMtime = w.engine.SourceMtime(ctx, sessionID)
+			// A previous watch may have closed before its fallback ran, or the
+			// source may have changed while disconnected. Reuse the engine's
+			// provider-aware freshness checks instead of accepting that source
+			// as already archived. Capture mtime first so a concurrent edit is
+			// still detected by subsequent polling.
+			if err := w.engine.SyncSingleSessionContext(ctx, sessionID); err != nil && ctx.Err() == nil {
+				log.Printf("watch initial sync error: %v", err)
+			}
 		}
 
 		ticker := time.NewTicker(pollInterval())
@@ -289,8 +297,8 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 	if !fileMtimeChangedAt.IsZero() &&
 		time.Since(*fileMtimeChangedAt) >= syncFallbackDelay() {
 		*fileMtimeChangedAt = time.Time{}
-		if err := w.engine.SyncSingleSession(
-			sessionID,
+		if err := w.engine.SyncSingleSessionContext(
+			ctx, sessionID,
 		); err != nil {
 			log.Printf("watch sync error: %v", err)
 			return false

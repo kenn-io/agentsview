@@ -1209,6 +1209,11 @@ func (s *Server) humaWatchSession(
 		}
 		streamCtx := hctx.Context()
 		updates := s.sessionMonitor(streamCtx, in.ID)
+		// The monitor captures its DB baseline before returning. Clients can
+		// now refresh without losing an update between refresh and subscribe.
+		if !stream.Send("session_ready", in.ID) {
+			return
+		}
 		heartbeat := time.NewTicker(
 			sessionwatch.PollInterval * sessionwatch.HeartbeatTicks,
 		)

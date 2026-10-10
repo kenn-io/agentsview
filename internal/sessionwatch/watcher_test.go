@@ -1,6 +1,8 @@
 package sessionwatch
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +15,52 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
+
+func TestEventsReconcilesSourceChangedBeforeWatchStarts(t *testing.T) {
+	t.Cleanup(SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
+	for _, unrelatedCount := range []int{0, 100} {
+		t.Run(fmt.Sprintf("unrelated=%d", unrelatedCount), func(t *testing.T) {
+			root := t.TempDir()
+			const sessionID = "11111111-1111-4111-8111-111111111111"
+			path := filepath.Join(root, "project", sessionID+".jsonl")
+			initial := `{"type":"user","uuid":"u1","sessionId":"` + sessionID + `","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"First message"}}` + "\n"
+			dbtest.WriteTestFile(t, path, []byte(initial))
+			database := dbtest.OpenTestDB(t)
+			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+				Machine:   "test",
+			})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			for i := range unrelatedCount {
+				dbtest.SeedSession(t, database, fmt.Sprintf("unrelated-%d", i), "other")
+			}
+			beforeCount, beforeVersion, ok := database.GetSessionVersion(t.Context(), sessionID)
+			require.True(t, ok)
+			require.Equal(t, 1, beforeCount)
+			// No native filesystem watcher is running. This edit must be caught
+			// even though its mtime predates the replacement session watch.
+			dbtest.WriteTestFile(t, path, []byte(initial+`{"type":"assistant","uuid":"a1","sessionId":"`+sessionID+`","timestamp":"2026-01-01T00:00:01Z","message":{"role":"assistant","content":"New reply"}}`+"\n"))
+			ctx, cancel := context.WithCancel(t.Context())
+			updates := New(database, engine).Events(ctx, sessionID)
+			t.Cleanup(func() {
+				cancel()
+				for range updates {
+				}
+			})
+			select {
+			case _, open := <-updates:
+				require.True(t, open)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "replacement watch did not reconcile the edited source")
+			}
+			afterCount, afterVersion, ok := database.GetSessionVersion(t.Context(), sessionID)
+			require.True(t, ok)
+			assert.Equal(t, 2, afterCount)
+			assert.NotEqual(t, beforeVersion, afterVersion)
+		})
+	}
+}
 
 // testWatcher creates a Watcher backed by a fresh SQLite database
 // and a minimal sync engine for tests that need checkDBForChanges

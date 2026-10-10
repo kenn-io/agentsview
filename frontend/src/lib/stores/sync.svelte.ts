@@ -318,9 +318,7 @@ class SyncStore {
         this.closeSessionStream();
       } else if (!this.watchEventSource) {
         open();
-        // The new watch provides current timing; refresh messages and metadata
-        // as well because updates may have arrived while the tab was hidden.
-        onUpdate();
+        // watchSession refreshes after the server establishes its baseline.
       }
     };
     document.addEventListener("visibilitychange", this.watchVisibilityHandler);

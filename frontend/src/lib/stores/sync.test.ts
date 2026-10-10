@@ -104,7 +104,7 @@ describe("session watch visibility", () => {
     vi.restoreAllMocks();
   });
 
-  it("closes a hidden session stream and refreshes once on return", () => {
+  it("closes a hidden session stream and waits for its ready update on return", () => {
     const onUpdate = vi.fn();
     const onTiming = vi.fn();
     sync.watchSession("session-a", onUpdate, onTiming);
@@ -117,6 +117,8 @@ describe("session watch visibility", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(api.watchSession).toHaveBeenCalledTimes(2);
     expect(api.watchSession).toHaveBeenLastCalledWith("session-a", onUpdate, onTiming);
+    expect(onUpdate).not.toHaveBeenCalled();
+    api.watchSession.mock.calls[1]![1]();
     expect(onUpdate).toHaveBeenCalledTimes(1);
     document.dispatchEvent(new Event("visibilitychange"));
     expect(api.watchSession).toHaveBeenCalledTimes(2);
@@ -135,6 +137,8 @@ describe("session watch visibility", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(api.watchSession).toHaveBeenCalledExactlyOnceWith("session-b", newUpdate, undefined);
     expect(oldUpdate).not.toHaveBeenCalled();
+    expect(newUpdate).not.toHaveBeenCalled();
+    api.watchSession.mock.calls[0]![1]();
     expect(newUpdate).toHaveBeenCalledTimes(1);
   });
 

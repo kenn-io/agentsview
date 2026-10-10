@@ -578,6 +578,12 @@ describe("watchSession", () => {
       );
     }
 
+    fireReady() {
+      (this.listeners["session_ready"] || []).forEach((cb) =>
+        cb(new MessageEvent("session_ready")),
+      );
+    }
+
     static reset() {
       FakeEventSource.instances = [];
     }
@@ -608,6 +614,23 @@ describe("watchSession", () => {
     }
     es.fireError();
     expect(es.closed).toBe(true);
+  });
+
+  it("catches up after the watcher baseline includes a change made during connection", () => {
+    let archivedVersion = 1;
+    const seen: number[] = [];
+    watchSession("abc", () => seen.push(archivedVersion));
+    const es = FakeEventSource.instances[0]!;
+    es.fireOpen();
+    expect(seen).toEqual([]);
+    archivedVersion = 2;
+    es.fireReady();
+    expect(seen).toEqual([2]);
+    es.fireError();
+    es.fireOpen();
+    archivedVersion = 3;
+    es.fireReady();
+    expect(seen).toEqual([2, 3]);
   });
 
   it("resets the error counter on session_updated or open", () => {

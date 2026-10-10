@@ -54,6 +54,11 @@ func TestHandleSessionTiming_SSEInitialAndUpdate(t *testing.T) {
 	go func() { defer close(done); te.handler.ServeHTTP(w, req) }()
 	t.Cleanup(func() { cancel(); <-done })
 	te.waitForSSEEvent(t, w, "session.timing", 3*time.Second)
+
+	// Headers alone are not readiness: the DB watcher must have its baseline
+	// before the client starts its catch-up read.
+	require.True(t, hasSSEEvent(w, "session_ready"))
+	require.Equal(t, "session_ready", parseSSE(w.BodyString())[0].Event)
 	initial := timingSSEPayloads(w)
 	require.Len(t, initial, 1)
 	assertTimingPayload(t, []byte(initial[0]), sessionID, false)
