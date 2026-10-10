@@ -144,15 +144,16 @@ linters:
           - forbidigo
         path: _test\.go
         text: (exec\.Command|http\.(Get|Post|Head|PostForm)|http\.DefaultClient)
+      # Tests stage fixtures with plain renames.
+      - linters:
+          - forbidigo
+        path: _test\.go
+        text: atomicfile\.Replace
       # A main package owns process exit and may work without a caller context.
       - linters:
           - forbidigo
         path: ^(cmd/|main\.go)
         text: exec\.Command
-      - linters:
-          - forbidigo
-        path: _test\.go
-        text: atomicfile\.Replace
       - linters:
           - modernize
         text: "omitzero:"
@@ -165,9 +166,12 @@ issues:
   max-issues-per-linter: 0
   max-same-issues: 0
 formatters:
+  # No goimports: gofumpt already enforces its std-first import grouping, and
+  # missing or unused imports fail type checking. golangci-lint's goimports
+  # rereads the whole module cache index for every file, and with it enabled
+  # unchanged re-runs re-analyzed everything; it was most of a lint run.
   enable:
     - gofmt
-    - goimports
     - gofumpt
   exclusions:
     generated: lax

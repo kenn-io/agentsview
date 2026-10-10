@@ -11,9 +11,5 @@ linters:
   exclusions:
     rules:
       - linters:
-          - forbidigo
-        path: _test\.go
-        text: atomicfile\.Replace
-      - linters:
           - modernize
         text: "omitzero:"
