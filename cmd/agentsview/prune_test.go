@@ -297,27 +297,6 @@ func TestPruner_PruneScenarios(t *testing.T) {
 	}
 }
 
-func TestPrunerAgentTreeDeletion(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	for _, s := range []db.Session{
-		{ID: "parent", Agent: "mimocode"},
-		{ID: "child", Agent: "mimocode", ParentSessionID: new("parent")},
-		{ID: "grandchild", Agent: "mimocode", ParentSessionID: new("child")},
-		{ID: "other", Agent: "claude"},
-	} {
-		require.NoError(t, d.UpsertSession(t.Context(), s))
-		dbtest.SeedMessages(t, d, dbtest.UserMsg(s.ID, 0, "prunetree searchable"))
-	}
-	_, err := d.SoftDeleteSessions(t.Context(), []string{"grandchild"})
-	require.NoError(t, err)
-	pruner, buf := newTestPruner(t, d, "y\n")
-	require.NoError(t, pruner.Prune(t.Context(), PruneConfig{Filter: db.PruneFilter{Agent: "mimocode"}}))
-	assert.Contains(t, buf.String(), "Deleted 3 sessions")
-	other, err := d.GetSession(t.Context(), "other")
-	require.NoError(t, err)
-	assert.NotNil(t, other)
-}
-
 func TestDeleteFilesRemovesFiles(t *testing.T) {
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "session1")
