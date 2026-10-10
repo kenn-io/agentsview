@@ -1,4 +1,4 @@
-/** Settle virtual-list scrolling only after the exact-offset phase succeeds. */
+/** Settle virtual-list scrolling after measured row offsets stop changing. */
 import { getAlignedOffsetScrollAlign, type ScrollAlign } from "./message-scroll.js";
 
 interface ScrollTarget {
@@ -15,7 +15,7 @@ export interface StagedScrollOptions {
   getVirtualizer(): ScrollTarget | undefined;
   getCount(): number;
   isCurrent(): boolean;
-  nextFrame(): Promise<void>;
+  nextFrame(this: void): Promise<void>;
   waitFrames?: number;
   scrollRetries?: number;
 }
@@ -24,6 +24,8 @@ export interface StagedScrollOptions {
 export async function settleVirtualScroll(options: StagedScrollOptions): Promise<boolean> {
   let waitFrames = options.waitFrames ?? 0;
   let retries = options.scrollRetries ?? 0;
+  let previousOffset: number | undefined;
+  let stablePasses = 0;
   const { index, align } = options;
   for (;;) {
     if (!options.isCurrent()) return false;
@@ -42,15 +44,22 @@ export async function settleVirtualScroll(options: StagedScrollOptions): Promise
     const rendered = virtualizer.getVirtualItems().some((item) => item.index === index);
     const offset = rendered ? virtualizer.getOffsetForIndex(index, align) : undefined;
     if (offset) {
-      virtualizer.scrollToOffset(Math.round(offset[0]), {
+      const measuredOffset = Math.round(offset[0]);
+      virtualizer.scrollToOffset(measuredOffset, {
         align: getAlignedOffsetScrollAlign(align),
       });
-      return true;
+      stablePasses = measuredOffset === previousOffset ? stablePasses + 1 : 0;
+      previousOffset = measuredOffset;
+      if (stablePasses >= 2) return true;
+    } else {
+      stablePasses = 0;
+      previousOffset = undefined;
+      virtualizer.scrollToIndex(index, { align });
     }
 
-    // Estimated scrolling is not completion. ResizeObserver and Svelte need
-    // two frames before the next measured-offset attempt can be trusted.
-    virtualizer.scrollToIndex(index, { align });
+    // Being rendered does not mean preceding row heights are final. Recheck
+    // after ResizeObserver and Svelte have settled, correcting delayed shifts.
+    // Manual scrolling and newer navigation still cancel between frames.
     if (retries >= 15) return false;
     await options.nextFrame();
     if (!options.isCurrent()) return false;
