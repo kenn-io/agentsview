@@ -1,6 +1,7 @@
 package servicehttp
 
 import (
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -197,20 +199,54 @@ func TestStatsUsesLongRunningClient(t *testing.T) {
 
 func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		expected := service.UsagePairwiseComparisonResponse{
+			Left: service.UsagePairwiseComparisonSide{
+				TotalCost:    money.MustParseDollars("1.25"),
+				TotalTokens:  150,
+				SessionCount: 2,
+			},
+			Right: service.UsagePairwiseComparisonSide{
+				TotalCost:    money.MustParseDollars("3.5"),
+				TotalTokens:  420,
+				SessionCount: 5,
+			},
+			Deltas: service.UsagePairwiseComparisonDelta{
+				TotalCostDelta:    money.MustParseDollars("2.25"),
+				TotalTokensDelta:  270,
+				SessionCountDelta: 3,
+			},
+		}
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
+			assert.Equal(t, "2024-06-01", r.URL.Query().Get("from"))
+			assert.Equal(t, "2024-06-07", r.URL.Query().Get("to"))
+			assert.Equal(t, "UTC", r.URL.Query().Get("timezone"))
+			assert.Equal(t, "gpt-4o", r.URL.Query().Get("model"))
+			assert.Equal(t, "model", r.URL.Query().Get("left_dimension"))
+			assert.Equal(t, "claude-sonnet-4-20250514", r.URL.Query().Get("left_value"))
+			assert.Equal(t, "project", r.URL.Query().Get("right_dimension"))
+			assert.Equal(t, "proj-b", r.URL.Query().Get("right_value"))
+			assert.Equal(t, "3", r.URL.Query().Get("min_user_messages"))
+			assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
+			assert.Equal(t, "false", r.URL.Query().Get("include_automated"))
 			time.Sleep(50 * time.Millisecond)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"left":{"totalTokens":42}}`))
+			assert.NoError(t, json.MarshalWrite(w, expected))
 		}))
 		transport := srv.Client().Transport
 		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
 		backend.client.Transport = transport
 		backend.longRunningClient.Transport = transport
 		backend.client.Timeout = 10 * time.Millisecond
-		result, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{})
+		result, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+			From: "2024-06-01", To: "2024-06-07", Timezone: "UTC",
+			MinUserMessages: 3, IncludeOneShot: true, Model: "gpt-4o",
+			LeftDimension: "model", LeftValue: "claude-sonnet-4-20250514",
+			RightDimension: "project", RightValue: "proj-b",
+		})
 		require.NoError(t, err)
-		assert.Equal(t, 42, result.Left.TotalTokens)
+		require.NotNil(t, result)
+		assert.Equal(t, expected, *result)
 	})
 }
 

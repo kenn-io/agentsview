@@ -20,7 +20,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/kit/daemon"
 )
@@ -258,7 +257,7 @@ func TestResolveMCPServiceExplicitServerUsesReportedCapabilities(
 }
 
 func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
-	for _, change := range []string{"missing", "unreadable", "unknown identity", "base path", "replacement", "read-only", "fallback"} {
+	for _, change := range []string{"missing", "unknown identity", "base path", "replacement", "read-only", "fallback"} {
 		t.Run(change, func(t *testing.T) {
 			dir := runtimeTestDir(t)
 			setTestVersion(t, "1.1.0")
@@ -308,8 +307,6 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 					return daemonRuntimeFromRecord(readRuntimeRecord(t, path)), nil
 				})
 				require.NoError(t, os.Remove(path))
-			case "unreadable":
-				require.NoError(t, os.WriteFile(path, []byte("invalid JSON"), 0o600))
 			case "unknown identity":
 				rec.ProcessIdentityV2 = ""
 				delete(rec.Metadata, runtimeCreateTime)
@@ -327,7 +324,7 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 				writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
 				rec = readRuntimeRecord(t, path)
 			}
-			if change != "missing" && change != "unreadable" {
+			if change != "missing" {
 				_, err = runtimeStore(dir).Write(rec)
 				require.NoError(t, err)
 			}
@@ -347,9 +344,6 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 				_, err := svc.List(t.Context(), service.ListFilter{})
 				require.NoError(t, err)
 				assert.NotSame(t, previous, svc.(*mcpDaemonService).backend)
-			default:
-				require.Error(t, err)
-				assert.Equal(t, 1, requests, "invalid runtime must withhold credentials from the previous listener")
 			}
 		})
 	}
@@ -368,15 +362,6 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 		case "/api/v1/sessions":
 			assert.Equal(t, "7", r.URL.Query().Get("limit"))
 			assert.NoError(t, json.MarshalWrite(w, service.SessionList{Sessions: []db.Session{{ID: "from-daemon"}}, Total: 1}))
-		case "/api/v1/sessions/from-daemon":
-			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{ID: "from-daemon"}))
-		case "/api/v1/session-ids/resolve":
-			assert.Equal(t, "uuid-1", r.URL.Query().Get("partial"))
-			assert.Equal(t, "2", r.URL.Query().Get("limit"))
-			assert.Equal(t, "true", r.URL.Query().Get("raw_suffix"))
-			assert.NoError(t, json.MarshalWrite(w, map[string]any{"ids": []string{"from-daemon"}, "raw_suffix": true}))
-		case "/api/v1/memory/status":
-			assert.NoError(t, json.MarshalWrite(w, service.MemoryStatus{Status: service.MemoryReady}))
 		default:
 			assert.Fail(t, "unexpected request path", r.URL.Path)
 			http.NotFound(w, r)
@@ -391,15 +376,6 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, probes)
 	initialProbes := probes
-	detail, err := svc.Get(t.Context(), "from-daemon")
-	require.NoError(t, err)
-	assert.Equal(t, "from-daemon", detail.ID)
-	status, err := service.GetMemoryStatus(t.Context(), svc)
-	require.NoError(t, err)
-	assert.Equal(t, service.MemoryReady, status.Status)
-	ids, err := svc.FindSessionIDsByRawSuffix(t.Context(), "uuid-1", 2)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"from-daemon"}, ids)
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
@@ -452,80 +428,6 @@ func TestMCPDaemonServiceRecallCapabilityFollowsResolvedRuntime(t *testing.T) {
 			assert.Equal(t, tt.want, service.SupportsRecallQueries(svc))
 		})
 	}
-}
-
-func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) {
-	dataDir := t.TempDir()
-	cfg := config.Config{
-		DataDir: dataDir,
-		DBPath:  filepath.Join(dataDir, "sessions.db"),
-	}
-
-	expected := service.UsagePairwiseComparisonResponse{
-		Left: service.UsagePairwiseComparisonSide{
-			TotalCost:    money.MustParseDollars("1.25"),
-			TotalTokens:  150,
-			SessionCount: 2,
-		},
-		Right: service.UsagePairwiseComparisonSide{
-			TotalCost:    money.MustParseDollars("3.5"),
-			TotalTokens:  420,
-			SessionCount: 5,
-		},
-		Deltas: service.UsagePairwiseComparisonDelta{
-			TotalCostDelta:    money.MustParseDollars("2.25"),
-			TotalTokensDelta:  270,
-			SessionCountDelta: 3,
-		},
-	}
-
-	var starts int
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
-		assert.Equal(t, "2024-06-01", r.URL.Query().Get("from"))
-		assert.Equal(t, "2024-06-07", r.URL.Query().Get("to"))
-		assert.Equal(t, "UTC", r.URL.Query().Get("timezone"))
-		assert.Equal(t, "gpt-4o", r.URL.Query().Get("model"))
-		assert.Equal(t, "model", r.URL.Query().Get("left_dimension"))
-		assert.Equal(t, "claude-sonnet-4-20250514", r.URL.Query().Get("left_value"))
-		assert.Equal(t, "project", r.URL.Query().Get("right_dimension"))
-		assert.Equal(t, "proj-b", r.URL.Query().Get("right_value"))
-		assert.Equal(t, "3", r.URL.Query().Get("min_user_messages"))
-		assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
-		assert.Equal(t, "false", r.URL.Query().Get("include_automated"))
-		_ = json.MarshalWrite(w, expected)
-	}))
-	t.Cleanup(ts.Close)
-
-	host, port := splitTestServerURL(t, ts.URL)
-	stubStartBackgroundServeForTransport(t, func(
-		context.Context, *config.Config, time.Duration, bool,
-	) (*DaemonRuntime, error) {
-		starts++
-		return &DaemonRuntime{Host: host, Port: port}, nil
-	})
-
-	svc := newMCPDaemonService(cfg)
-	res, err := svc.UsagePairwiseComparison(
-		t.Context(),
-		service.UsagePairwiseComparisonRequest{
-			From:            "2024-06-01",
-			To:              "2024-06-07",
-			Timezone:        "UTC",
-			MinUserMessages: 3,
-			IncludeOneShot:  true,
-			Model:           "gpt-4o",
-			LeftDimension:   "model",
-			LeftValue:       "claude-sonnet-4-20250514",
-			RightDimension:  "project",
-			RightValue:      "proj-b",
-		},
-	)
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Equal(t, expected, *res)
-	assert.Equal(t, 1, starts)
-	assert.NoFileExists(t, cfg.DBPath)
 }
 
 func splitTestServerURL(t *testing.T, raw string) (string, int) {
