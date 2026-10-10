@@ -584,6 +584,20 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
+  it("hides the home hash in tooltips and shows it only for the same job in two homes", async () => {
+    usage.setOpenProject("pl1:sha256:first");
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    usage.zoomRows = [["job-1:0a1b2c3d", "Digest"], ["job-1:4e5f6a7b", "Digest"], ["job-2:0a1b2c3d", "Backup"]].map(([groupKey, groupLabel]) => ({
+      ...topSessionForRemainder(), groupKey, groupLabel,
+    }));
+    const component = mountPanel();
+    await tick();
+    const rows = document.querySelectorAll<HTMLElement>(".list-row");
+    expect(Array.from(rows, (row) => row.querySelector(".list-label")!.textContent)).toEqual(["Digest · 0a1b2c3d", "Digest · 4e5f6a7b", "Backup"]);
+    expect(Array.from(rows, (row) => row.title)).toEqual(["Digest · job-1", "Digest · job-1", "Backup · job-2"]);
+    await unmount(component);
+  });
+
   it.each(["list", "treemap"] as const)("distinguishes two same-named jobs on two machines in %s", async (view) => {
     usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));

@@ -266,7 +266,7 @@ func (p *hermesProvider) Parse(
 		for i := range outcome.Results {
 			sess := &outcome.Results[i].Result.Session
 			if sess.GroupKey != "" {
-				sess.GroupKey = fmt.Sprintf("%s:%x", sess.GroupKey, hash[:16])
+				sess.GroupKey = fmt.Sprintf("%s:%x", sess.GroupKey, hash[:4])
 			}
 		}
 	}()

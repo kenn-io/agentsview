@@ -47,16 +47,21 @@
 
   function zoomRowText(row: DbTopSessionEntry, rows: DbTopSessionEntry[]): { label: string; title: string } {
     const name = (item: DbTopSessionEntry) => item.groupKey ? item.groupLabel || item.groupKey : item.sessionId ? item.displayName : m.shared_other();
-    const id = row.groupKey || row.sessionId;
+    const key = (item: DbTopSessionEntry) => item.groupKey || item.sessionId;
+    // Cron keys are "<job ID>:<home hash>"; job IDs never contain a colon.
+    const job = (item: DbTopSessionEntry) => item.groupKey ? item.groupKey.split(":")[0]! : item.sessionId;
+    const home = (item: DbTopSessionEntry) => item.groupKey ? item.groupKey.slice(job(item).length + 1) : "";
     const peers = rows.filter((other) => name(other) === name(row));
-    const ids = peers.map((other) => other.groupKey || other.sessionId);
-    const machines = peers.filter((other) => (other.groupKey || other.sessionId) === id).map((other) => other.machine ?? "");
+    const jobs = peers.map(job);
+    const homes = peers.filter((other) => job(other) === job(row)).map(home);
+    const machines = peers.filter((other) => key(other) === key(row)).map((other) => other.machine ?? "");
     const label = [name(row)];
-    if (ids.some((other) => other !== id)) label.push(shortenId(id, ids));
+    if (jobs.some((other) => other !== job(row))) label.push(shortenId(job(row), jobs));
+    if (new Set(homes).size > 1) label.push(shortenId(home(row), homes));
     if (machines.length > 1) label.push(shortenId(row.machine ?? "", machines));
     return {
       label: label.filter(Boolean).join(" · "),
-      title: [name(row), id === name(row) ? "" : id, row.machine].filter(Boolean).join(" · "),
+      title: [name(row), job(row) === name(row) ? "" : job(row), row.machine].filter(Boolean).join(" · "),
     };
   }
 
