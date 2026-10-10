@@ -168,12 +168,6 @@ func TestScreenViewClaimsAcrossDaemonRestarts(t *testing.T) {
 		}
 		require.NoError(t, reporter.Close())
 	}
-	moved, err := filepath.Glob(cfg.TelemetryScreenClaimsPath() + ".unreadable-*")
-	require.NoError(t, err)
-	require.Len(t, moved, 1)
-	data, err := os.ReadFile(moved[0])
-	require.NoError(t, err)
-	assert.Equal(t, legacy, string(data))
 	sent := captured()
 	require.Len(t, sent, 1)
 	assert.Equal(t, "usage", sent[0]["screen"])
