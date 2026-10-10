@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-02
+last_edited: 2026-10-07
 ---
 
 # Session Format Source Inventory
@@ -2785,8 +2785,83 @@ schemas keep their existing ordering behavior.
   publish its complete JSON schema.
 - **Usage and cost:** The export contains conversation content and timestamps,
   not authoritative token, cache, reasoning, credit, or USD accounting.
-- **Agentsview:** `internal/parser/claude_ai.go`; this is an import format, not
-  a live application session store.
+- **Agentsview:** `internal/parser/claude_ai.go` parses exports;
+  `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
+- **Browser sync:** The browser reads organizations, paginated conversation
+  summaries, and selected conversation trees from Claude.ai's private API.
+  Request shapes are shared by Go, Rust, and the Chrome extension in
+  `internal/importer/claude_ai_requests.txt`. Lists use `data` and `has_more`
+  and include active, archived, and starred chats.
+  Details select `current_leaf_message_uuid` and follow string
+  `parent_message_uuid` links to the root sentinel
+  `00000000-0000-4000-8000-000000000000`. Message text comes from
+  `content[].text` and thinking blocks.
+  Malformed selected paths and mismatched conversation UUIDs fail before writes.
+  Exports preserve their original message order.
+- **Chrome transport:** Reverified 2026-10-09 against the canonical request file
+  and reconstructed fixtures in `TestChromeHostSyncPrivateReplies`. Native
+  messaging sends replies through a private Unix socket to the server; Chrome
+  Sync's HTTP stream contains only progress, done, and error events. Setup pins
+  the extension's public-key-derived ID. Native frames are capped at 64 MiB;
+  oversized serialized replies become status 413. Both peers require protocol
+  revision 1 in each message, covering encoding and request shapes.
+  `TestRequestShapesVersion` pins the canonical request hash to that revision.
+  `TestChromeHostLocalOnly` refuses remote-auth, bind-all, and forwarded
+  requests before Chrome fetches. `TestChromeHostIncompatibleReply` checks
+  mismatched replies during organization, list, and detail fetches before
+  status or body consumption without imports. Sync cancels on compatibility
+  errors and returns `claude_ai_chrome_host_update_required`. Recovery is to
+  restart AgentsView if upgraded, rerun setup, reload the extension, then Sync.
+  `TestClaudeAIChromeStatus` verifies live connection status through the
+  local-only GET route. Registration is per OS user; the last setup wins.
+  `TestChromeHostKeepsLiveConnection` checks that a second profile leaves the
+  first profile's fetch working. The worker test `refuses before touching tabs`
+  checks absent and unknown request revisions before tab access or fetch.
+  `TestChromeSyncResults` checks the generated CLI operation with a base path,
+  Origin, bearer token, partial summaries, and pre-stream error messages,
+  including `claude_ai_chrome_host_required` and `claude_ai_sync_running`.
+- **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`,
+  visible leaf, stored message count, and transcript revision in
+  `provider_freshness`, keyed by `claude-ai` and session ID. Resync and
+  `ResetAllMtimes` clear it. A zip re-import that changes stored text or count
+  triggers a detail fetch. Sync stores messages in the same shape as zip import,
+  without source UUIDs. Pins match by role, text, and occurrence rank.
+  Reverified 2026-10-08 against the reconstructed list and detail fixtures and
+  `TestSyncClaudeAIResyncRestoresTranscript`, `TestSyncClaudeAIZipFreshness`,
+  `TestSyncClaudeAIZipSameCountFreshness`, and `TestSyncClaudeAIBranchSwitch`.
+  Shorter zip exports remain refused. See
+  [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
+  for branch updates and Trash copies.
+- **Limits:** Browser reads and decoded relay responses are capped at 32 MiB.
+  The JSON relay body allows twice that size plus 64 KiB for escaping and
+  metadata. Detail 404 responses count as skipped; 401 or
+  `error.details.error_code` equal to `account_session_invalid` in a non-2xx
+  response stop Sync with a sign-in error. Other detail failures stop Sync after
+  two chats fail in a row. Unchanged and skipped chats, successful writes, 404s,
+  and oversized responses reset the streak. See
+  [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
+  for failure handling. Organization responses must decode to an array; null and
+  other shapes fail. Organization and list failures, cancellation, and an empty
+  page with `has_more: true` stop Sync. Null and root-sentinel list leaves skip
+  detail fetches; absent or malformed leaves count as errors.
+- **Observed 2026-10-07:** Authenticated Team and personal account checks
+  found `current_leaf_message_uuid` on list items and byte-identical list and
+  detail `updated_at` values with microseconds. Branch switches changed the
+  leaf without changing that timestamp. `archived=false` returned active chats,
+  `archived=true` returned archived chats, and omitting it returned both.
+  [List](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_sync/list_all.json)
+  and [detail](https://github.com/kenn-io/agentsview/blob/main/internal/importer/testdata/claude_ai_sync/detail.json)
+  are sanitized reconstructions of observed fields with synthetic identities
+  and content.
+- **Observed 2026-10-08:** With `render_all_tools=true`, an artifact's file
+  text arrived only in `tool_use(create_file).input.file_text`. Its
+  `tool_result` and `Artifact` blocks held creation and publication status.
+  The importer, like zip import on main, stores text and thinking blocks only.
+  Signed-out organization, list, and detail requests returned HTTP 403 with
+  `error.details.error_code` equal to `account_session_invalid`.
+- **Evidence limits:** Existing selected-path and Sync fixtures cover these
+  shapes. Multiple chat organizations, web-search blocks, unanswered final
+  prompts, and tree fields in official exports still need live verification.
 
 ## ChatGPT Export (`chatgpt`)
 

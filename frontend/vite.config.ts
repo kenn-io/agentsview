@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { cpSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
@@ -69,6 +70,17 @@ export default defineConfig(({ command }) => {
       exclude: ["@kenn-io/kit-ui"],
     },
     plugins: [
+      {
+        name: "chrome-extension",
+        apply: "build",
+        closeBundle() {
+          cpSync(fileURLToPath(new URL("./chrome-extension/", import.meta.url)), fileURLToPath(new URL("./dist/chrome-extension/", import.meta.url)), {
+            recursive: true,
+            filter: (source) => !source.endsWith(".test.ts"),
+          });
+          cpSync(fileURLToPath(new URL("../internal/importer/claude_ai_requests.txt", import.meta.url)), fileURLToPath(new URL("./dist/chrome-extension/claude_ai_requests.txt", import.meta.url)));
+        },
+      },
       svelte(),
       paraglideVitePlugin({
         project: "./project.inlang",

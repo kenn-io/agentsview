@@ -5,14 +5,250 @@ import {
   watchEvents,
   WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS,
   watchSession,
+  syncClaudeAI,
+  connectClaudeAI,
   WATCH_SESSION_MAX_CONSECUTIVE_ERRORS,
 } from "./client.js";
 import type { SyncHandle } from "./client.js";
 import { ApiError } from "./runtime.js";
 import type { SyncProgress } from "./generated/index.js";
 import * as telemetry from "../utils/telemetry.js";
+import type { BrowserHost } from "./browserHost.js";
 
 vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
+
+describe("syncClaudeAI browser relay", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("uses the native host query and receives only counts without posting results", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(
+      'event: progress\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\nevent: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+    await expect(syncClaudeAI(undefined)).resolves.toMatchObject({ imported: 1 });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/v1/import/claude-ai/sync?browser=chrome", expect.objectContaining({ method: "POST" }));
+  });
+
+  it.each(["claude_ai_auth_required"])("preserves recovery code %s", async (code) => {
+    const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      `event: error\ndata: ${JSON.stringify({ error: "English recovery instruction", code })}\n\n`,
+      { headers: { "Content-Type": "text/event-stream" } },
+    )));
+    await expect(syncClaudeAI(host)).rejects.toMatchObject({ message: "English recovery instruction", code });
+    expect(host.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(["done", "error"])("preserves sync %s when closing the browser fails", async (event) => {
+    const host = { close: vi.fn().mockRejectedValue(new Error("Close failed")) } as unknown as BrowserHost;
+    const data = event === "done"
+      ? { imported: 1, updated: 0, skipped: 0, errors: 0 }
+      : { error: "Sign in required", code: "claude_ai_auth_required" };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+      { headers: { "Content-Type": "text/event-stream" } },
+    )));
+    if (event === "done") {
+      await expect(syncClaudeAI(host)).resolves.toEqual({ imported: 1, updated: 0, skipped: 0, errors: 0 });
+    } else {
+      await expect(syncClaudeAI(host)).rejects.toMatchObject({ message: "Sign in required", code: "claude_ai_auth_required" });
+    }
+    expect(host.close).toHaveBeenCalledOnce();
+  });
+
+  it("returns completed sync while browser cleanup is pending", async () => {
+    let close!: () => void;
+    const host = { close: vi.fn(() => new Promise<void>((resolve) => { close = resolve; })) } as unknown as BrowserHost;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      'event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    )));
+    await expect(syncClaudeAI(host)).resolves.toEqual({ imported: 1, updated: 0, skipped: 0, errors: 0 });
+    expect(host.close).toHaveBeenCalledOnce();
+    close();
+  });
+
+  it("signs in only after the previous browser close finishes", async () => {
+    let close!: () => void;
+    const host = { connect: vi.fn().mockResolvedValue(undefined), close: vi.fn(() => new Promise<void>((resolve) => { close = resolve; })) } as unknown as BrowserHost;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      'event: done\ndata: {"imported":0,"updated":0,"skipped":0,"errors":0}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    )));
+    await syncClaudeAI(host);
+    const connecting = connectClaudeAI(host);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.connect).not.toHaveBeenCalled();
+    close();
+    await connecting;
+    expect(host.connect).toHaveBeenCalledOnce();
+  });
+
+  it("starts a new sync only after the previous browser close finishes", async () => {
+    let close!: () => void;
+    const host = { close: vi.fn(() => new Promise<void>((resolve) => { close = resolve; })) } as unknown as BrowserHost;
+    const fetch = vi.fn(async () => new Response(
+      'event: done\ndata: {"imported":0,"updated":0,"skipped":0,"errors":0}\n\n',
+      { headers: { "Content-Type": "text/event-stream" } },
+    ));
+    vi.stubGlobal("fetch", fetch);
+    await syncClaudeAI(host);
+    const next = syncClaudeAI(host);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetch).toHaveBeenCalledOnce();
+    close();
+    await next;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    close();
+  });
+
+  it("answers fetch events with browser status", async () => {
+    const status = 429;
+    let stream: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          stream = controller;
+        },
+      }),
+      { headers: { "Content-Type": "text/event-stream" } },
+    );
+    const host: BrowserHost = {
+      connect: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      fetch: vi.fn().mockResolvedValue({ status, body: "browser response", retryAfter: "12" }),
+    };
+    const fetch = vi.fn(async (url: string, options: RequestInit) => {
+      if (url === "/api/v1/import/claude-ai/sync") {
+        expect(options.body).toBeUndefined();
+        stream.enqueue(
+          encoder.encode(
+            'event: fetch\ndata: {"id":"request-1","path":"/api/organizations/org/chat_conversations_v2?limit=50&offset=0"}\n\n',
+          ),
+        );
+        return response;
+      }
+      expect(url).toBe("/api/v1/import/claude-ai/sync/results/request-1");
+      expect(JSON.parse(options.body as string)).toEqual({ status: 429, body: "browser response", retry_after: "12" });
+      expect(new Headers(options.headers).get("Content-Type")).toBe("application/json");
+      stream.enqueue(
+        encoder.encode(
+          'event: progress\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\nevent: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
+        ),
+      );
+      stream.close();
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const progress = vi.fn();
+    expect(await syncClaudeAI(host, { onProgress: progress })).toEqual({
+      imported: 1,
+      updated: 0,
+      skipped: 0,
+      errors: 0,
+    });
+    expect(host.fetch).toHaveBeenCalledWith(
+      "/api/organizations/org/chat_conversations_v2?limit=50&offset=0",
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(progress).toHaveBeenCalledWith({ imported: 1, updated: 0, skipped: 0, errors: 0 });
+    expect(host.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(["returned", "thrown"])("relays %s browser errors to the user", async (kind) => {
+    let stream: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const message = "TypeError: Failed to fetch";
+    const host = {
+      close: vi.fn().mockResolvedValue(undefined),
+      fetch:
+        kind === "returned"
+          ? vi.fn().mockResolvedValue({ status: 0, body: "", error: message })
+          : vi.fn().mockRejectedValue(new Error(message)),
+    } as unknown as BrowserHost;
+    const expected = kind === "returned" ? message : "Error: " + message;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, options: RequestInit) => {
+        if (url === "/api/v1/import/claude-ai/sync") {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                stream = controller;
+                stream.enqueue(
+                  encoder.encode(
+                    'event: fetch\ndata: {"id":"failed","path":"/api/organizations/org/chat_conversations_v2"}\n\n',
+                  ),
+                );
+              },
+            }),
+            { headers: { "Content-Type": "text/event-stream" } },
+          );
+        }
+        expect(url).toBe("/api/v1/import/claude-ai/sync/results/failed");
+        expect(JSON.parse(options.body as string)).toEqual({ status: 0, body: "", error: expected });
+        stream.enqueue(
+          encoder.encode(`event: error\ndata: ${JSON.stringify({ error: expected })}\n\n`),
+        );
+        stream.close();
+        return new Response(null, { status: 204 });
+      }),
+    );
+    await expect(syncClaudeAI(host)).rejects.toThrow(expected);
+    expect(host.fetch).toHaveBeenCalledWith("/api/organizations/org/chat_conversations_v2");
+    expect(host.close).toHaveBeenCalledOnce();
+  });
+
+  it("ends the stream when posting a result fails", async () => {
+    let signal!: AbortSignal;
+    const host = {
+      close: vi.fn().mockResolvedValue(undefined),
+      fetch: vi.fn().mockResolvedValue({ status: 200, body: "{}" }),
+    } as unknown as BrowserHost;
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementationOnce(async (_url, options) => {
+          signal = options.signal;
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                signal.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    'event: fetch\ndata: {"id":"expired","path":"/api/organizations/org/chat_conversations_v2"}\n\n',
+                  ),
+                );
+              },
+            }),
+            { headers: { "Content-Type": "text/event-stream" } },
+          );
+        })
+        .mockResolvedValueOnce(new Response("expired", { status: 404 })),
+    );
+    await expect(syncClaudeAI(host)).rejects.toThrow("expired");
+    expect(signal.aborted).toBe(true);
+    expect(host.close).toHaveBeenCalledOnce();
+  });
+
+  it("closes the browser when Sync is cancelled", async () => {
+    const controller = new AbortController();
+    const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
+    vi.stubGlobal("fetch", vi.fn(async (_url, options: RequestInit) => {
+      return new Response(new ReadableStream({
+        start(stream) {
+          options.signal!.addEventListener("abort", () => stream.error(new DOMException("Aborted", "AbortError")), { once: true });
+          controller.abort();
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } });
+    }));
+    await expect(syncClaudeAI(host, undefined, controller.signal)).rejects.toThrow("Aborted");
+    expect(host.close).toHaveBeenCalledOnce();
+  });
+});
 
 /**
  * Create a ReadableStream that yields the given chunks as

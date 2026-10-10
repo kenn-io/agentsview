@@ -29,6 +29,8 @@ type SessionBatchWrite struct {
 	SkipSignalUpdates bool
 	DataVersion       int
 	ReplaceMessages   bool
+	// KeepTrashedCopyOnlyOnPinLoss limits ReplaceSessionKeepingTrashedCopy to replacements that lose a pin or note.
+	KeepTrashedCopyOnlyOnPinLoss bool
 	// CompleteStoredRows lets an append write complete stored rows at stored ordinals: it sets results on stored calls that are still empty and replaces stored text with longer text that starts with it (IsTextExtension). Rows keep their IDs; other stored rows are untouched.
 	// Results come from ToolCall.ResultContent and ResultContentLength; result events are not written.
 	CompleteStoredRows bool
@@ -184,7 +186,7 @@ func (db *DB) WriteSessionBatchContext(
 			ctx, tx, ctxTx,
 			write,
 			&sessionRecallRevocations,
-			db.usageOnlyStorage(),
+			db.usageOnlyStorage(), nil,
 		)
 		switch {
 		case err == nil:
@@ -266,7 +268,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 			context.Background(), tx, tx,
 			write,
 			&pendingRecallRevocations,
-			db.usageOnlyStorage(),
+			db.usageOnlyStorage(), nil,
 		)
 		if err != nil {
 			result.WrittenSessions = 0
@@ -461,6 +463,7 @@ func writeOneSessionBatchTx(
 	write SessionBatchWrite,
 	pendingRecallRevocations *recallEvidenceRevocationEvents,
 	usageOnly bool,
+	pinSnapshot *[]savedPin,
 ) (int, error) {
 	if write.IdentityObservation.Project != "" {
 		normalized, err := normalizeProjectIdentityObservation(
@@ -568,6 +571,9 @@ func writeOneSessionBatchTx(
 		pins, err = savePinsTx(queries, write.Session.ID)
 		if err != nil {
 			return 0, err
+		}
+		if pinSnapshot != nil {
+			*pinSnapshot = pins
 		}
 		if err := deleteSessionMessagesTx(queries, write.Session.ID); err != nil {
 			return 0, err

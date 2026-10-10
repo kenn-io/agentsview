@@ -3,22 +3,26 @@ package parser
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 )
 
 type claudeAIConversation struct {
-	UUID      string            `json:"uuid"`
-	Name      string            `json:"name"`
-	CreatedAt string            `json:"created_at"`
-	UpdatedAt string            `json:"updated_at"`
-	Messages  []claudeAIMessage `json:"chat_messages"`
+	UUID        string            `json:"uuid"`
+	Name        string            `json:"name"`
+	CreatedAt   string            `json:"created_at"`
+	UpdatedAt   string            `json:"updated_at"`
+	Messages    []claudeAIMessage `json:"chat_messages"`
+	CurrentLeaf jsontext.Value    `json:"current_leaf_message_uuid"`
 }
 
 type claudeAIMessage struct {
 	UUID        string               `json:"uuid"`
+	Parent      jsontext.Value       `json:"parent_message_uuid"`
 	Text        string               `json:"text"`
 	Content     []claudeAIBlock      `json:"content"`
 	Sender      string               `json:"sender"`
@@ -99,6 +103,23 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 	return err
 }
 
+// ParseClaudeAIDetail selects the visible branch of a browser-fetched chat.
+func ParseClaudeAIDetail(data []byte) (ParseResult, error) {
+	var conv *claudeAIConversation
+	if err := json.Unmarshal(data, &conv); err != nil {
+		return ParseResult{}, err
+	}
+	if conv == nil || conv.UUID == "" || len(conv.Messages) == 0 {
+		return ParseResult{}, errors.New("expected conversation with chat_messages")
+	}
+	messages, err := selectedClaudeAIPath(*conv)
+	if err != nil {
+		return ParseResult{}, err
+	}
+	conv.Messages = messages
+	return convertClaudeAIConversation(*conv)
+}
+
 // assembleClaudeAIContent builds message content from content
 // blocks. Falls back to the top-level text field when no
 // content blocks have usable text.
@@ -167,6 +188,42 @@ func buildClaudeAttachmentText(
 		parts = append(parts, "[Attachment: "+a.FileName+"]\n"+a.ExtractedContent)
 	}
 	return parts
+}
+
+// selectedClaudeAIPath walks the server leaf's ancestors back to the root.
+func selectedClaudeAIPath(conv claudeAIConversation) ([]claudeAIMessage, error) {
+	const root = "00000000-0000-4000-8000-000000000000"
+	var leaf string
+	if json.Unmarshal(conv.CurrentLeaf, &leaf) != nil || leaf == "" || leaf == root {
+		return nil, errors.New("expected current_leaf_message_uuid string naming a message")
+	}
+	byID := make(map[string]claudeAIMessage, len(conv.Messages))
+	for _, m := range conv.Messages {
+		if _, exists := byID[m.UUID]; exists {
+			return nil, fmt.Errorf("duplicate message uuid %s", m.UUID)
+		}
+		byID[m.UUID] = m
+	}
+	path := []claudeAIMessage{}
+	seen := make(map[string]bool)
+	for id := leaf; id != root; {
+		m, exists := byID[id]
+		if !exists {
+			return nil, fmt.Errorf("message %s is missing", id)
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("cycle at message %s", id)
+		}
+		seen[id] = true
+		var parent string
+		if m.Parent.Kind() != jsontext.KindString || json.Unmarshal(m.Parent, &parent) != nil {
+			return nil, fmt.Errorf("message %s's parent must be a string", m.UUID)
+		}
+		path = append(path, m)
+		id = parent
+	}
+	slices.Reverse(path)
+	return path, nil
 }
 
 func convertClaudeAIConversation(

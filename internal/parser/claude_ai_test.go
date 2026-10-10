@@ -394,3 +394,83 @@ func TestParseClaudeAIExport_InvalidJSON(t *testing.T) {
 	)
 	require.Error(t, err)
 }
+
+func TestParseClaudeAIDetail_SelectedPath(t *testing.T) {
+	const question = `{"uuid":"q","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","content":[{"type":"text","text":"Question"}]}`
+	const first = `{"uuid":"a","parent_message_uuid":"q","sender":"assistant","content":[{"type":"text","text":"First"}]}`
+	const retry = `{"uuid":"retry","parent_message_uuid":"q","sender":"assistant","content":[{"type":"text","text":"Retry"}]}`
+	const more = `{"uuid":"q2","parent_message_uuid":"a","sender":"human","content":[{"type":"text","text":"More"}]},{"uuid":"a2","parent_message_uuid":"q2","sender":"assistant","content":[{"type":"text","text":"Answer"}]}`
+	const edit = `{"uuid":"edited","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","content":[{"type":"text","text":"Edited"}]},{"uuid":"b","parent_message_uuid":"edited","sender":"assistant","content":[{"type":"text","text":"Second"}]}`
+	for _, tt := range []struct {
+		name, leaf string
+		want       []string
+	}{
+		{"edit", "b", []string{"Edited", "Second"}},
+		{"switch back", "a2", []string{"Question", "First", "More", "Answer"}},
+		{"retry", "retry", []string{"Question", "Retry"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"` + tt.leaf + `","chat_messages":[` + edit + "," + more + "," + retry + "," + first + "," + question + `,{"uuid":"orphan","parent_message_uuid":"missing"},{"uuid":"invalid","parent_message_uuid":null}]}`
+			result, err := ParseClaudeAIDetail([]byte(input))
+			require.NoError(t, err)
+			var contents []string
+			for i, m := range result.Messages {
+				contents = append(contents, m.Content)
+				assert.Equal(t, i, m.Ordinal)
+			}
+			assert.Equal(t, tt.want, contents)
+			assert.Equal(t, len(tt.want), result.Session.MessageCount)
+		})
+	}
+}
+
+func TestParseClaudeAIDetail_InvalidTree(t *testing.T) {
+	const question = `{"uuid":"q","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human"}`
+	const answer = `{"uuid":"a","parent_message_uuid":"q","sender":"assistant"}`
+	for _, tt := range []struct{ name, leaf, messages, err string }{
+		{"null leaf", `"current_leaf_message_uuid":null,`, question + "," + answer, "expected current_leaf"},
+		{"absent leaf", "", question + "," + answer, "expected current_leaf"},
+		{"numeric leaf", `"current_leaf_message_uuid":42,`, question + "," + answer, "expected current_leaf"},
+		{"empty leaf", `"current_leaf_message_uuid":"",`, question + "," + answer, "expected current_leaf"},
+		{"root leaf", `"current_leaf_message_uuid":"00000000-0000-4000-8000-000000000000",`, question + "," + answer, "expected current_leaf"},
+		{"missing leaf message", `"current_leaf_message_uuid":"missing",`, question + "," + answer, "message missing is missing"},
+		{"null parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":null}`, "parent must be a string"},
+		{"absent parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a"}`, "parent must be a string"},
+		{"numeric parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":42}`, "parent must be a string"},
+		{"orphan parent", `"current_leaf_message_uuid":"a",`, question + `,{"uuid":"a","parent_message_uuid":"missing"}`, "message missing is missing"},
+		{"cycle", `"current_leaf_message_uuid":"a",`, `{"uuid":"q","parent_message_uuid":"a"},` + answer, "cycle"},
+		{"duplicate", `"current_leaf_message_uuid":"a",`, question + "," + answer + "," + answer, "duplicate message uuid a"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `{"uuid":"tree","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z",` + tt.leaf + `"chat_messages":[` + tt.messages + `]}`
+			result, err := ParseClaudeAIDetail([]byte(input))
+			require.ErrorContains(t, err, tt.err)
+			assert.Empty(t, result.Messages)
+		})
+	}
+}
+
+func TestParseClaudeAIExport_IgnoresTreeFields(t *testing.T) {
+	for _, tt := range []struct {
+		name, messages, leaf string
+		want                 []string
+	}{
+		{"null leaf 1", `{"uuid":"q","sender":"human","text":"Question"},{"uuid":"a","sender":"assistant","text":"Answer"}`, "null", []string{"Question", "Answer"}},
+		{"null leaf 3", `{"sender":"human","text":"Question","parent_message_uuid":null},{"sender":"assistant","text":"Answer","parent_message_uuid":null}`, "null", []string{"Question", "Answer"}},
+		{"tree fields 1", `{"uuid":"q","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Question"},{"uuid":"a","parent_message_uuid":"q","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"q","sender":"assistant","text":"Second"}`, `"a"`, []string{"Question", "First", "Second"}},
+		{"tree fields 2", `{"uuid":"same","sender":"human","text":"Question"},{"uuid":"same","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"missing","sender":"assistant","text":"Second"}`, `"a"`, []string{"Question", "First", "Second"}},
+		{"tree fields 3", `{"uuid":"q","parent_message_uuid":"b","sender":"human","text":"Question"},{"uuid":"a","parent_message_uuid":"q","sender":"assistant","text":"First"},{"uuid":"b","parent_message_uuid":"a","sender":"assistant","text":"Second"}`, `"a"`, []string{"Question", "First", "Second"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `[null,{"uuid":"export","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":` + tt.leaf + `,"chat_messages":[` + tt.messages + `]}]`
+			var results []ParseResult
+			require.NoError(t, parseClaudeAIExport(strings.NewReader(input), func(r ParseResult) error { results = append(results, r); return nil }))
+			require.Len(t, results, 1)
+			require.Len(t, results[0].Messages, len(tt.want))
+			for i, want := range tt.want {
+				assert.Equal(t, want, results[0].Messages[i].Content)
+			}
+			assert.Empty(t, results[0].Messages[len(tt.want)-1].SourceUUID)
+		})
+	}
+}

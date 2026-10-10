@@ -44,6 +44,7 @@ type ImportRefusal struct {
 
 // ImportCallbacks provides optional progress reporting.
 type ImportCallbacks struct {
+	SerializeWrite func(func() error) error
 	// OnProgress fires after each conversation with current
 	// cumulative counts; Refusals is always left empty.
 	OnProgress func(ImportStats)

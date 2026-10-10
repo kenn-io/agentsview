@@ -9,6 +9,9 @@
   },
   "windows": ["main"],
   "permissions": [
+    "allow-claude-auth-connect",
+    "allow-claude-auth-fetch",
+    "allow-claude-auth-close",
     "core:default",
     "core:webview:allow-set-webview-zoom"
   ]
