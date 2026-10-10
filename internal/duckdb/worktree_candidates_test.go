@@ -222,7 +222,7 @@ func TestDuckWorktreeCandidatesReloadPreservesSelection(t *testing.T) {
 		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "retimed", Project: "alpha", Machine: "host.example", Agent: "codex", Cwd: "/repo/alpha", MessageCount: 1, StartedAt: new("2025-07-02T10:00:00Z"), EndedAt: new("2025-07-02T10:00:00Z")}))
 		pushDataReadMirror(t, ctx, syncer)
 	}}, "duckdb")
-	candidates, err := catalog.ListArchiveWorktreeCandidates(ctx, db.ArchiveWorktreeCandidateRequest{ProjectLabel: "alpha", ProjectKey: projects["alpha"].ProjectKey, DateFrom: "2025-06-01", DateTo: "2025-06-30"})
+	candidates, err := catalog.ListArchiveWorktreeCandidates(ctx, db.ArchiveWorktreeCandidateRequest{ProjectLabel: "alpha", ProjectKey: projects["alpha"].ProjectKey, ProjectDateFilter: db.ProjectDateFilter{DateFrom: "2025-06-01", DateTo: "2025-06-30"}})
 	require.NoError(t, err)
 	assert.Empty(t, candidates)
 }
