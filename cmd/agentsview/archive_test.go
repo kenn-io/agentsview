@@ -246,6 +246,15 @@ func TestArchiveMoveAndReparse(t *testing.T) {
 	sourceList, err := executeCommand(newRootCommand(), "archive", "sources")
 	require.NoError(t, err)
 	assert.Contains(t, sourceList, nativeID)
+	for _, line := range bytes.Split(bytes.TrimSpace([]byte(sourceList)), []byte("\n")) {
+		var source map[string]any
+		require.NoError(t, json.Unmarshal(line, &source))
+		assert.Len(t, source, 6)
+		for _, key := range []string{"manifest_id", "root_id", "source_key", "original_path", "parse_error", "processing_version"} {
+			assert.Contains(t, source, key)
+		}
+		assert.NotEmpty(t, source["manifest_id"])
+	}
 	backup := filepath.Join(t.TempDir(), "recovery")
 	report, err = run("backup", backup)
 	require.NoError(t, err)
@@ -259,6 +268,19 @@ func TestArchiveMoveAndReparse(t *testing.T) {
 	assert.Equal(t, repository.ID(), report.RepositoryID)
 	assert.Equal(t, snapshots[0].MinReaderVersion, report.MinReaderVersion)
 	assert.NotEmpty(t, report.Excluded)
+	verified, err := executeCommand(newRootCommand(), "archive", "verify", "--repository", backup, "--snapshot", first)
+	require.NoError(t, err)
+	var verification struct {
+		Snapshots    []string `json:"snapshots"`
+		BlobsChecked int64    `json:"blobs_checked"`
+		BytesRead    int64    `json:"bytes_read"`
+		Problems     []any    `json:"problems"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(verified), &verification))
+	assert.Equal(t, []string{first}, verification.Snapshots)
+	assert.Positive(t, verification.BlobsChecked)
+	assert.Positive(t, verification.BytesRead)
+	assert.Empty(t, verification.Problems)
 	dbtest.WriteTestFile(t, filepath.Join(dataDir, "assets", "example.bin"), []byte("newer asset"))
 	_, err = run("backup", backup)
 	require.NoError(t, err)

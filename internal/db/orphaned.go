@@ -168,7 +168,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 				ON new_s.file_path = old_s.file_path
 			WHERE old_s.agent = 'codex'
 			  AND new_s.agent = 'codex'
-			  AND new_s.deleted_at IS NULL
+			  AND new_s.deleted_at IS NULL -- Copied trash must not suppress a live orphan sharing its Codex source path during resync.
 		  )`,
 	); err != nil {
 		return nil, fmt.Errorf(

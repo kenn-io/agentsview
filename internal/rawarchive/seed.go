@@ -36,8 +36,8 @@ func Seed(ctx context.Context, capturePath, target string, progress func(string)
 	if err != nil {
 		return report, err
 	}
-	if pathsOverlap(source, destination) {
-		return report, errors.New("seed destination must be outside the capture")
+	if err := rejectPathsOverlap(source, destination, "seed destination must be outside the capture"); err != nil {
+		return report, err
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
 		if err != nil {

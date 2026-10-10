@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	syncer "go.kenn.io/agentsview/internal/sync"
@@ -61,8 +62,8 @@ func (a *Archive) Backup(ctx context.Context, target string, settings RecoverySe
 	if err != nil {
 		return report, err
 	}
-	if pathsOverlap(source, destination) {
-		return report, errors.New("backup repository must be outside the archive data directory")
+	if err := rejectPathsOverlap(source, destination, "backup repository must be outside the archive data directory"); err != nil {
+		return report, err
 	}
 	// There is no public stopped-owner API for copying a closed ordinary
 	// Docbank vault. Refuse this input until custody can be held without opening
@@ -144,8 +145,8 @@ func (a *Archive) Backup(ctx context.Context, target string, settings RecoverySe
 			return report, err
 		}
 	}
-	if pathsOverlap(source, repository.Root()) {
-		return report, errors.New("backup repository must be outside the archive data directory")
+	if err := rejectPathsOverlap(source, repository.Root(), "backup repository must be outside the archive data directory"); err != nil {
+		return report, err
 	}
 	snapshot, err := a.repository.CreateBackup(ctx, repository, docbank.BackupOptions{
 		ExtraFiles: extras,
@@ -209,8 +210,8 @@ func Restore(ctx context.Context, source, snapshot, target string, progress func
 	if err != nil {
 		return report, err
 	}
-	if pathsOverlap(repository.Root(), destination) {
-		return report, errors.New("restore destination must be outside the backup repository")
+	if err := rejectPathsOverlap(repository.Root(), destination, "restore destination must be outside the backup repository"); err != nil {
+		return report, err
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
 		if err != nil {
@@ -429,10 +430,15 @@ func verifyRestoredArchive(ctx context.Context, path string, settings RecoverySe
 	return report, nil
 }
 
-func pathsOverlap(a, b string) bool {
-	_, first := containedPath(a, b)
-	_, second := containedPath(b, a)
-	return first == nil || second == nil
+func rejectPathsOverlap(a, b, message string) error {
+	overlap, err := artifact.PathsOverlap(a, b)
+	if err != nil {
+		return err
+	}
+	if overlap {
+		return errors.New(message)
+	}
+	return nil
 }
 
 // Resolve the existing parent before creating a new destination.

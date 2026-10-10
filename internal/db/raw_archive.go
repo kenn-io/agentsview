@@ -23,9 +23,13 @@ type (
 )
 
 type RawArchiveSource struct {
-	ManifestID, RootID, SourceKey, OriginalPath string
-	CanonicalJSON                               []byte
-	ParseError, ProcessingVersion               string
+	ManifestID        string `json:"manifest_id"`
+	RootID            string `json:"root_id"`
+	SourceKey         string `json:"source_key"`
+	OriginalPath      string `json:"original_path"`
+	CanonicalJSON     []byte `json:"-"`
+	ParseError        string `json:"parse_error"`
+	ProcessingVersion string `json:"processing_version"`
 }
 
 func rawArchiveFields(fields ...string) error {

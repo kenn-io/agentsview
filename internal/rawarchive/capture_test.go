@@ -28,6 +28,30 @@ func captureFixture(t *testing.T) CaptureOptions {
 	return CaptureOptions{DataDir: data, Destination: filepath.Join(t.TempDir(), "capture"), Roots: []RootSpec{{Provider: "claude", Path: filepath.Join(root, "projects")}}, Settings: RecoverySettings{LocalMachineName: "source-device"}, ReaderBuild: "test-build"}
 }
 
+func TestCaptureRejectsCaseAliasOverlapBeforeStaging(t *testing.T) {
+	opts := captureFixture(t)
+	parent := t.TempDir()
+	provider := filepath.Join(parent, "Provider")
+	require.NoError(t, os.Mkdir(provider, 0o755))
+	alias := filepath.Join(parent, "provider")
+	aliasInfo, err := os.Stat(alias)
+	if err != nil {
+		t.Skip("test filesystem is case-sensitive")
+	}
+	providerInfo, err := os.Stat(provider)
+	require.NoError(t, err)
+	if !os.SameFile(aliasInfo, providerInfo) {
+		t.Skip("test filesystem does not resolve case aliases")
+	}
+	opts.Roots = []RootSpec{{Provider: "files", Path: provider}}
+	opts.Destination = filepath.Join(alias, "capture")
+	_, err = Capture(t.Context(), opts)
+	require.ErrorContains(t, err, "capture roots must not overlap")
+	entries, err := os.ReadDir(provider)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "rejection must precede staging and copying")
+}
+
 func TestCaptureRejectsNewerCheckpointSchema(t *testing.T) {
 	opts := captureFixture(t)
 	path := filepath.Join(opts.DataDir, "raw-sync", "checkpoint.db")

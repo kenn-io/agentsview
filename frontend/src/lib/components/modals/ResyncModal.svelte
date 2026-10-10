@@ -88,7 +88,6 @@
   {/if}
 {/snippet}
 
-{#if !sync.archiveOnly}
 <Modal
   title={m.resync_title()}
   closeLabel={m.resync_close()}
@@ -143,7 +142,6 @@
     <p class="modal-error-text">{errorMessage}</p>
   {/if}
 </Modal>
-{/if}
 
 <style>
   .confirm-text {

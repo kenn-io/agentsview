@@ -823,6 +823,55 @@ func TestCapturerSnapshotsSQLiteWithOnlineBackup(t *testing.T) {
 	assert.Equal(t, changed.CaptureID, base.CaptureID)
 }
 
+func TestCapturerKeepsReadViewAlongsideWALWriter(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	root := t.TempDir()
+	path := filepath.Join(root, "live.db")
+	writer, err := sql.Open(sqliteSnapshotDriverName, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+	_, err = writer.ExecContext(t.Context(), `PRAGMA journal_mode=WAL;
+CREATE TABLE items (value TEXT NOT NULL);
+INSERT INTO items VALUES ('captured');`)
+	require.NoError(t, err)
+	provider := &captureTestProvider{
+		Def: parser.AgentDef{Type: parser.AgentForge},
+		Caps: parser.Capabilities{RawCapture: parser.RawCaptureCapabilities{
+			Support: parser.CapabilitySupported, Shape: parser.RawCaptureShapeSQLite,
+			Append: parser.RawCaptureAppendReplaceOnly, Snapshot: parser.RawCaptureSnapshotOnlineBackup,
+		}},
+		plan: parser.RawCapturePlan{
+			ConfiguredRoot: root, CaptureRoot: root, SourceKey: "live.db",
+			Entries: []parser.RawCaptureEntry{{Path: "live.db", LocalPath: path}},
+		},
+	}
+	capturer := New(store)
+	capturer.sqliteBackup = func(ctx context.Context, source *sql.Conn, destination string, maxBytes int64) error {
+		// Commit while the Capturer holds its read view, before copying that view.
+		_, err := writer.ExecContext(ctx, `INSERT INTO items VALUES ('later')`)
+		if err != nil {
+			return err
+		}
+		return sqliteOnlineBackup(ctx, source, destination, maxBytes)
+	}
+	result, err := capturer.Capture(t.Context(), provider, parser.SourceRef{Provider: parser.AgentForge, Key: "live.db"})
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
+	generation, ok, err := store.NextGeneration(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, generation.Entries, 1)
+	require.Len(t, generation.Entries[0].Objects, 1)
+	snapshot, err := sql.Open(sqliteSnapshotDriverName, sqliteSnapshotDSN(store.ObjectPath(generation.Entries[0].Objects[0]), true))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, snapshot.Close()) })
+	var values string
+	require.NoError(t, snapshot.QueryRowContext(t.Context(), `SELECT group_concat(value, ',') FROM items`).Scan(&values))
+	assert.Equal(t, "captured", values)
+	require.NoError(t, writer.QueryRowContext(t.Context(), `SELECT group_concat(value, ',') FROM items`).Scan(&values))
+	assert.Equal(t, "captured,later", values)
+}
+
 func TestCapturerRejectsSQLiteSymlinkSwapAfterPlanValidation(t *testing.T) {
 	store, _ := openCapturerTestStore(t, 1<<20)
 	root := t.TempDir()

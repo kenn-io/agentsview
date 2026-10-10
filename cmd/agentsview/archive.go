@@ -120,7 +120,6 @@ func newArchiveCommand() *cobra.Command {
 				return err
 			}
 			for _, source := range page {
-				source.CanonicalJSON = nil
 				if err := writeArchiveJSON(cmd.OutOrStdout(), source); err != nil {
 					return err
 				}
@@ -162,7 +161,13 @@ func newArchiveCommand() *cobra.Command {
 			return verifyLocal(cmd, args)
 		}
 		report, err := rawarchive.VerifyRecovery(cmd.Context(), verifyRepository, verifySnapshot)
-		return errors.Join(err, writeArchiveJSON(cmd.OutOrStdout(), report))
+		problems := make([]archiveBackupVerifyProblem, len(report.Problems))
+		for i, problem := range report.Problems {
+			problems[i] = archiveBackupVerifyProblem(problem)
+		}
+		return errors.Join(err, writeArchiveJSON(cmd.OutOrStdout(), archiveBackupVerifyReport{
+			Snapshots: report.Snapshots, BlobsChecked: report.BlobsChecked, BytesRead: report.BytesRead, Problems: problems,
+		}))
 	}
 	var extractCapture string
 	extractCmd := &cobra.Command{Use: "extract DESTINATION", Short: "Recover retained native files", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -174,6 +179,18 @@ func newArchiveCommand() *cobra.Command {
 	extractCmd.Flags().StringVar(&extractCapture, "capture", "", "Capture ID to recover as a portable capture directory")
 	command.AddCommand(captureCmd, importCmd, reparseCmd, verifyCmd, sourcesCmd, backupCmd, restoreCmd, extractCmd)
 	return command
+}
+
+type archiveBackupVerifyProblem struct {
+	SnapshotID string `json:"snapshot_id"`
+	Detail     string `json:"detail"`
+}
+
+type archiveBackupVerifyReport struct {
+	Snapshots    []string                     `json:"snapshots"`
+	BlobsChecked int64                        `json:"blobs_checked"`
+	BytesRead    int64                        `json:"bytes_read"`
+	Problems     []archiveBackupVerifyProblem `json:"problems"`
 }
 
 func archiveProgress(cmd *cobra.Command) func(string) {

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { sync } from "../../stores/sync.svelte.js";
+import { SyncService } from "../../api/generated/index.js";
 // @ts-ignore
 import ResyncModal from "./ResyncModal.svelte";
 
@@ -37,12 +38,13 @@ describe("ResyncModal", () => {
     await tick();
   }
 
-  it("hides resync in an archive-only database", async () => {
+  it("does not request resync in an archive-only database", async () => {
     sync.serverVersion = { archive_only: true } as NonNullable<typeof sync.serverVersion>;
-    component = mount(ResyncModal, { target: document.body });
-    await tick();
-    expect(document.querySelector("button")).toBeNull();
-    expect(sync.triggerResync).not.toHaveBeenCalled();
+    vi.mocked(sync.triggerResync).mockRestore();
+    const request = vi.spyOn(SyncService, "postApiV1Resync");
+    await openProgress();
+    expect(request).not.toHaveBeenCalled();
+    expect(document.querySelector(".progress-view")).toBeNull();
   });
 
   it("shows an uncounted finalization detail without a zero-value bar", async () => {

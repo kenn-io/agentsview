@@ -665,9 +665,9 @@
     <button
       class="import-btn"
       onclick={() => {
-        if (!sync.readOnly) showImportModal = true;
+        if (!sync.readOnly && !sync.archiveOnly) showImportModal = true;
       }}
-      disabled={sync.readOnly}
+      disabled={sync.readOnly || sync.archiveOnly}
       title={sync.readOnly
         ? m.header_actions_import_unavailable()
         : m.header_actions_import_conversations()}

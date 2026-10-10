@@ -48,8 +48,8 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 	if err != nil {
 		return d, err
 	}
-	if pathsOverlap(source, target) {
-		return d, errors.New("capture destination must be outside source data")
+	if err := rejectPathsOverlap(source, target, "capture destination must be outside source data"); err != nil {
+		return d, err
 	}
 	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
 		return d, errors.New("capture requires a new destination")
@@ -142,8 +142,10 @@ func Capture(ctx context.Context, opts CaptureOptions) (d CaptureDescriptor, ret
 		if err != nil {
 			return d, err
 		}
-		if pathsOverlap(canonicalBase, target) || pathsOverlap(canonicalBase, source) {
-			return d, errors.New("capture roots must not overlap application data or destination")
+		for _, protected := range []string{target, source} {
+			if err := rejectPathsOverlap(canonicalBase, protected, "capture roots must not overlap application data or destination"); err != nil {
+				return d, err
+			}
 		}
 		input.OriginalPath = base
 		input.ConfiguredPath = configured

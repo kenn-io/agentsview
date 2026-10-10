@@ -80,7 +80,7 @@ supplemental.
 | Hosted raw sync      | Canonical manifests, provider plans, object adapter, verified materializer. PostgreSQL leases and server publication remain hosted. |
 | Local sync           | Normal SQLite content policy, conversation identities, signals, secret scanning, and bounded large-Codex parsing.                   |
 | Artifact folder sync | Existing normalized session exchange stays separate from the original-file vault.                                                   |
-| Docbank              | Content retention and exclusive vault ownership. Extraction and automatic garbage collection are not enabled.                       |
+| Docbank              | Content retention, exclusive vault ownership and capture extraction. Automatic garbage collection is not enabled.                    |
 
 The local path shares source discovery and matching with `rawderive` but does
 not use its buffered hosted parse results. `PathRewriter` works independently of

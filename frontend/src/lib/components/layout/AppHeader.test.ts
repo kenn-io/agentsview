@@ -94,6 +94,26 @@ describe("AppHeader export actions", () => {
     settings.error = null;
   });
 
+  it.each([
+    { archive_only: false, read_only: false, importDisabled: false, syncLabel: "Sync sessions" },
+    { archive_only: false, read_only: true, importDisabled: true, syncLabel: "Refresh data" },
+    { archive_only: true, read_only: false, importDisabled: true, syncLabel: null },
+  ])("offers the available actions for archive_only=$archive_only read_only=$read_only", async ({ archive_only, read_only, importDisabled, syncLabel }) => {
+    sync.serverVersion = { archive_only, read_only } as NonNullable<typeof sync.serverVersion>;
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
+    expect(importButton.disabled).toBe(importDisabled);
+    const syncButton = document.querySelector<HTMLButtonElement>(".sync-btn");
+    if (syncLabel) expect(syncButton?.getAttribute("aria-label")).toBe(syncLabel);
+    else expect(syncButton).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Export session"]')?.disabled).toBe(false);
+    importButton.click();
+    await tick();
+    expect(document.querySelector('[role="dialog"]') !== null).toBe(!importDisabled);
+  });
+
   it("copies markdown export link from export menu", async () => {
     component = mount(AppHeader, { target: document.body });
     await tick();

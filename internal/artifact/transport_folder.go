@@ -324,7 +324,7 @@ func rejectFolderTargetOverlap(target string, forbidden []string) error {
 		if err != nil {
 			return fmt.Errorf("resolving protected artifact root: %w", err)
 		}
-		overlap, err := pathsOverlap(target, canonical)
+		overlap, err := PathsOverlap(target, canonical)
 		if err != nil {
 			return fmt.Errorf("checking protected artifact root: %w", err)
 		}
@@ -338,7 +338,8 @@ func rejectFolderTargetOverlap(target string, forbidden []string) error {
 	return nil
 }
 
-func pathsOverlap(left, right string) (bool, error) {
+// PathsOverlap rejects containment and directory aliases, including case aliases.
+func PathsOverlap(left, right string) (bool, error) {
 	if pathContains(left, right) || pathContains(right, left) {
 		return true, nil
 	}

@@ -7,7 +7,7 @@ import { router } from "../stores/router.svelte.js";
 import { messages } from "../stores/messages.svelte.js";
 import { sync } from "../stores/sync.svelte.js";
 import { inSessionSearch } from "../stores/inSessionSearch.svelte.js";
-import { SessionsService } from "../api/generated/index";
+import { SessionsService, SyncService } from "../api/generated/index";
 import { copyToClipboard } from "../utils/clipboard.js";
 import AppHeader from "../components/layout/AppHeader.svelte";
 import SidebarToggleButton from "../components/layout/SidebarToggleButton.svelte";
@@ -72,13 +72,14 @@ describe("registerShortcuts", () => {
 
   it("hides sync and ignores r for an archive-only server", async () => {
     sync.serverVersion = { archive_only: true } as NonNullable<typeof sync.serverVersion>;
-    const trigger = vi.spyOn(sync, "triggerSync");
+    const request = vi.spyOn(SyncService, "postApiV1Sync");
     const header = mount(AppHeader, { target: document.body });
     try {
       await tick();
       expect(document.querySelector(".sync-btn")).toBeNull();
       fireKey("r");
-      expect(trigger).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+      expect(sync.syncing).toBe(false);
     } finally {
       unmount(header);
       sync.serverVersion = null;

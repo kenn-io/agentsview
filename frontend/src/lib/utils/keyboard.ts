@@ -220,7 +220,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
       o: () => ui.toggleSort(),
       l: () => ui.cycleLayout(),
       r: () => {
-        if (!sync.archiveOnly) sync.triggerSync();
+        sync.triggerSync();
       },
       e: () => {
         if (sessions.activeSessionId) {
