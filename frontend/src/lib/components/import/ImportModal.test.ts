@@ -54,7 +54,7 @@ it("disables Sync while checking, then shows the live connection", async () => {
   resolve(ready);
   await waitFor(() => expect(syncButton().disabled).toBe(false));
   expect(screen.getByText("Connected")).toBeTruthy();
-  expect(screen.getByText("Sync opens a background claude.ai tab if none is open.")).toBeTruthy();
+  expect(screen.getByText("Sync opens a background claude.ai tab if none is open. The tab stays open after Sync.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
 });
 
@@ -113,9 +113,9 @@ it("offers browser sign-in after auth failure", async () => {
   render(ImportModal, props());
   await clickSync();
   await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
-  expect(screen.getByText("Sign in to claude.ai in the Chrome profile with the AgentsView extension.")).toBeTruthy();
+  expect(screen.getByText("Sign in to claude.ai in the Chrome profile with the AgentsView extension. Enable the extension in only one Chrome profile. Sync uses the first profile that connects.")).toBeTruthy();
   expect(screen.queryByText("Server auth text")).toBeNull();
-  await fireEvent.click(screen.getByRole("button", { name: "Sign in to claude.ai in the Chrome profile with the AgentsView extension." }));
+  await fireEvent.click(screen.getByRole("button", { name: "Sign in to claude.ai in the Chrome profile with the AgentsView extension. Enable the extension in only one Chrome profile. Sync uses the first profile that connects." }));
   expect(open).toHaveBeenCalledExactlyOnceWith("https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
   await clickSync();
   await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
@@ -183,6 +183,23 @@ it("shows a sync failure Notice and retries", async () => {
   expect(p.onimported).toHaveBeenCalledOnce();
   await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
+});
+
+it.each([new Error("Network interrupted"), new ApiError(0, "Auth required", "claude_ai_auth_required")])("keeps processed counts after a partial Sync fails with %s", async (error) => {
+  syncClaudeAI.mockImplementationOnce(async (_host, callbacks) => {
+    callbacks.onProgress({ imported: 128, updated: 3, skipped: 7, errors: 1 });
+    throw error;
+  });
+  const p = props();
+  render(ImportModal, p);
+  await clickSync();
+  await waitFor(() => expect(screen.getByText("139 conversations processed")).toBeTruthy());
+  if (error instanceof ApiError) expect(screen.getByText("Signed out")).toBeTruthy();
+  else expect(screen.getByRole("alert").textContent).toContain("Network interrupted");
+  expect(p.onimported).toHaveBeenCalledOnce();
+  await clickSync();
+  await waitFor(() => expect(screen.getByText("312 conversations processed")).toBeTruthy());
+  expect(screen.queryByText("139 conversations processed")).toBeNull();
 });
 
 it("uses the desktop account and email-code sign-in without polling Chrome", async () => {
@@ -259,32 +276,22 @@ it("retries transient status failures", async () => {
   expect(chromeStatus).toHaveBeenCalledTimes(2);
 });
 
-it.each([new ApiError(503, "Temporarily unavailable"), new Error("Network interrupted")])("shows a Notice after three consecutive status failures and keeps polling for %s", async (error) => {
+it.each([new ApiError(503, "Temporarily unavailable"), new Error("Network interrupted")])("keeps the last connection state through failed status polls and recovers for %s", async (error) => {
   vi.useFakeTimers();
+  render(ImportModal, props());
+  await tick(); await vi.advanceTimersByTimeAsync(0);
+  expect(screen.getByText("Connected")).toBeTruthy();
   chromeStatus.mockRejectedValue(error);
-  const p = props();
-  const { rerender } = render(ImportModal, p);
-  await tick(); await vi.advanceTimersByTimeAsync(0);
-  expect(screen.queryByRole("alert")).toBeNull();
-  await vi.advanceTimersByTimeAsync(2000);
-  expect(screen.queryByRole("alert")).toBeNull();
-  await vi.advanceTimersByTimeAsync(2000);
-  expect(screen.getByRole("alert").textContent).toContain("Can't read the connection status.");
-  await vi.advanceTimersByTimeAsync(2000);
+  await vi.advanceTimersByTimeAsync(6000);
   expect(chromeStatus).toHaveBeenCalledTimes(4);
-  chromeStatus.mockResolvedValueOnce(ready);
-  await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  await tick(); await vi.advanceTimersByTimeAsync(0);
-  expect(chromeStatus).toHaveBeenCalledTimes(5);
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.getByText("Connected")).toBeTruthy();
-  await vi.advanceTimersByTimeAsync(4000);
-  expect(screen.queryByRole("alert")).toBeNull();
+  expect(syncButton().disabled).toBe(false);
+  chromeStatus.mockResolvedValue({ connected: false });
   await vi.advanceTimersByTimeAsync(2000);
-  expect(screen.getByRole("alert")).toBeTruthy();
-  await rerender({ ...p, open: false });
-  await rerender(p);
-  await vi.advanceTimersByTimeAsync(0);
+  expect(chromeStatus).toHaveBeenCalledTimes(5);
+  expect(screen.getByText("Not connected")).toBeTruthy();
+  expect(syncButton().disabled).toBe(true);
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
@@ -294,7 +301,7 @@ it("localizes auth state from its code", async () => {
   render(ImportModal, props());
   await clickSync();
   await waitFor(() => expect(screen.getByText("Déconnecté")).toBeTruthy());
-  expect(screen.getByText("Connectez-vous à claude.ai dans le profil Chrome avec l'extension AgentsView.")).toBeTruthy();
+  expect(screen.getByText("Connectez-vous à claude.ai dans le profil Chrome avec l'extension AgentsView. Activez l'extension dans un seul profil Chrome. La synchronisation utilise le premier profil qui se connecte.")).toBeTruthy();
   expect(screen.queryByText("English auth message")).toBeNull();
 });
 

@@ -50,7 +50,6 @@
   let chromeRefused = $state(false);
   const canSync = $derived(open && provider === "claude-ai" && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
   let chromeStatus = $state<ClaudeAIChromeOutputBody | null>(null);
-  let chromeStatusFailures = $state(0);
   let syncFlag = $state<string | null>(null);
   let syncError = $state<string | null>(null);
   let signInError = $state<string | null>(null);
@@ -71,12 +70,10 @@
       const status = await ImportService.getApiV1ImportClaudeAiChrome({ signal });
       if (chromeRead.isCurrent(signal)) {
         chromeStatus = status;
-        chromeStatusFailures = 0;
       }
     } catch (e) {
       if (chromeRead.isCurrent(signal)) {
         if (e instanceof ApiError && [403, 501].includes(e.status)) chromeRefused = true;
-        else chromeStatusFailures++;
       }
     } finally {
       chromeRead.finish(signal);
@@ -107,7 +104,6 @@
   $effect(() => {
     if (open) return;
     chromeStatus = null;
-    chromeStatusFailures = 0;
     chromeRefused = false;
     syncFlag = null;
     syncError = null;
@@ -463,11 +459,11 @@
             {#if signInError}
               <Notice tone="error" toneLabel={m.import_claude_sign_in_failed()} message={signInError} />
             {/if}
+            {#if !importing && progressStats && (syncError || syncFlag)}
+              <p class="hint">{m.import_processed({ count: progressStats.imported + progressStats.updated + progressStats.skipped + progressStats.errors })}</p>
+            {/if}
           </div>
         </Card>
-        {#if chromeStatusFailures >= 3}
-          <Notice tone="error" message={m.import_claude_status_failed()} actionLabel={m.shared_retry()} onaction={() => refreshChrome()} />
-        {/if}
       {/if}
 
       {#if !syncController}

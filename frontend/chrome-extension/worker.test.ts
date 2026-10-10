@@ -42,19 +42,20 @@ async function request(path = "/api/organizations") {
 }
 
 describe("Chrome native host worker", () => {
-  it.each([
-    [undefined, "Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again."],
-    [0, "Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again."],
-    [2, "Restart AgentsView if you upgraded it, run agentsview chrome setup, reload the extension at chrome://extensions, then Sync again."],
-    [1, "Unsupported Claude fetch path"],
-  ])("refuses before touching tabs", async (version, error) => {
-    message({ id: "a", path: "/api/settings", version });
+  it("refuses unsupported paths before touching tabs", async () => {
+    message({ id: "a", path: "/api/settings", version: 1 });
     await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
-    expect(port.postMessage).toHaveBeenCalledWith({ id: "a", version: 1, status: 0, error });
+    expect(port.postMessage).toHaveBeenCalledWith({ id: "a", version: 1, status: 0, error: "Unsupported Claude fetch path" });
     expect(chrome.tabs.query).not.toHaveBeenCalled();
     expect(chrome.tabs.create).not.toHaveBeenCalled();
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
-    if (version !== 1) expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, 0, 2])("stamps its own version on replies to peer version %s", async (version) => {
+    message({ id: "a", path: "/api/organizations", version });
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
+    expect(port.postMessage).toHaveBeenCalledWith({ id: "a", version: 1, status: 200, body: "chats" });
+    expect(chrome.scripting.executeScript).toHaveBeenLastCalledWith({ target: { tabId: 7 }, world: "ISOLATED", func: expect.any(Function), args: ["https://claude.ai/api/organizations"] });
   });
 
   it("fetches in an existing Claude tab and replies by id", async () => {

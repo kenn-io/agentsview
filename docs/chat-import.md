@@ -111,7 +111,9 @@ setup command and extension loading instructions. **Connected** enables **Sync**
 which uses your existing Claude.ai session, including Google sign-in.
 
 **Signed out** appears after Sync needs authentication. Click **Sign in**,
-finish in the new tab, then return and click **Sync**. **Update needed** keeps
+finish in the Chrome profile with the AgentsView extension, then return and
+click **Sync**. Enable the extension in only one Chrome profile. Sync uses the
+first profile that connects. **Update needed** keeps
 Sync enabled and shows the restart, setup, and reload sequence above.
 During Sync, **Stop** cancels the run and progress replaces file upload. Results
 show the imported, updated, unchanged, and failed counts. Other failures show
