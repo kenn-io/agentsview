@@ -54,20 +54,18 @@
   let syncFlag = $state<string | null>(null);
   let syncError = $state<string | null>(null);
   let signInError = $state<string | null>(null);
-  let setupExpanded = $state(false);
   const chromeRead = new LatestRead();
   const chromeState = $derived(
     syncController ? "connected" :
-    syncFlag === "claude_ai_agentsview_update_required" ? "app-update" :
     syncFlag === "claude_ai_chrome_host_update_required" ? "extension-update" :
     !host && !chromeStatus ? "checking" :
-    !host && !chromeStatus?.connected ? (chromeStatus?.installed ? "disconnected" : "not-set-up") :
+    !host && !chromeStatus?.connected ? "disconnected" :
     syncFlag === "claude_ai_auth_required" ? "signed-out" : "connected",
   );
-  const syncDisabled = $derived(importing || ["checking", "not-set-up", "disconnected", "app-update"].includes(chromeState));
+  const syncDisabled = $derived(importing || ["checking", "disconnected"].includes(chromeState));
 
-  async function refreshChrome(afterConflict = false) {
-    if (!canSync || host || (syncController && !afterConflict) || document.hidden) return;
+  async function refreshChrome() {
+    if (!canSync || host || syncController || document.hidden) return;
     const signal = chromeRead.begin();
     try {
       const status = await ImportService.getApiV1ImportClaudeAiChrome({ signal });
@@ -114,7 +112,6 @@
     syncFlag = null;
     syncError = null;
     signInError = null;
-    setupExpanded = false;
   });
 
   async function connect() {
@@ -142,12 +139,9 @@
       if (!controller.signal.aborted) result = stats;
     } catch (e) {
       if (controller.signal.aborted) return;
-      if (e instanceof ApiError && e.status === 409) {
-        await refreshChrome(true);
-      }
       if (e instanceof ApiError && e.code === "claude_ai_chrome_host_required") {
         return;
-      } else if (e instanceof ApiError && ["claude_ai_auth_required", "claude_ai_chrome_host_update_required", "claude_ai_agentsview_update_required"].includes(e.code ?? "")) {
+      } else if (e instanceof ApiError && ["claude_ai_auth_required", "claude_ai_chrome_host_update_required"].includes(e.code ?? "")) {
         syncFlag = e.code ?? null;
       } else if (e instanceof ApiError && e.code === "claude_ai_sync_running") {
         syncError = m.import_claude_sync_running();
@@ -429,10 +423,8 @@
           {#snippet actions()}
             {#if chromeState === "signed-out"}
               <Chip size="xs" tone="warning">{m.import_claude_status_signed_out()}</Chip>
-            {:else if chromeState === "app-update" || chromeState === "extension-update"}
+            {:else if chromeState === "extension-update"}
               <Chip size="xs" tone="warning">{m.import_claude_status_update()}</Chip>
-            {:else if chromeState === "not-set-up"}
-              <Chip size="xs" tone="muted">{m.import_claude_status_not_set_up()}</Chip>
             {:else if chromeState === "disconnected"}
               <Chip size="xs" tone="muted">{m.import_claude_status_disconnected()}</Chip>
             {:else if !host && chromeState === "connected"}
@@ -441,9 +433,6 @@
             {#if syncController}
               <Button size="sm" label={m.import_claude_stop()} tone="neutral" surface="outline" onclick={() => syncController?.abort()} />
             {:else}
-              {#if chromeState === "disconnected"}
-                <Button size="sm" label={m.import_claude_setup_steps()} tone="neutral" surface="outline" ariaExpanded={setupExpanded} onclick={() => setupExpanded = !setupExpanded} />
-              {/if}
               {#if host || chromeState === "signed-out"}
                 <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={importing} onclick={connect} />
               {/if}
@@ -459,13 +448,10 @@
               <p class="hint">{m.import_claude_tab_note()}</p>
             {:else if chromeState === "signed-out"}
               <p class="hint">{m.import_claude_signed_out()}</p>
-              {#if chromeStatus?.other_profile}
-                <p class="hint">{m.import_claude_other_profile()}</p>
-              {/if}
-            {:else if chromeState === "app-update"}
+            {:else if chromeState === "extension-update"}
               <p class="hint">{m.import_claude_update_app()}</p>
             {/if}
-            {#if !host && (chromeState === "not-set-up" || chromeState === "extension-update" || (chromeState === "disconnected" && setupExpanded))}
+            {#if !host && (chromeState === "extension-update" || chromeState === "disconnected")}
               <CodeBlock code="agentsview chrome setup" title={m.import_claude_terminal()} wrapToggle={false} copyLabel={m.import_claude_copy_command()} />
               <p class="hint">
                 {chromeState === "extension-update" ? m.import_claude_reload_extension({ url: "chrome://extensions" }) : m.import_claude_setup_load({ url: "chrome://extensions" })}

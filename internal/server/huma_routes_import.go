@@ -48,9 +48,9 @@ func (s *Server) registerImportRoutes() {
 				}
 				next(ctx)
 			})
-			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required or claude_ai_agentsview_update_required."
-			op.Description = "Before streaming, HTTP 409 with code claude_ai_chrome_host_required reports that the Chrome host is disconnected."
+			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required."
 		})
+	s.api.OpenAPI().Paths["/api/v1/import/claude-ai/sync"].Post.Responses["409"].Description = "Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running."
 	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
 		func(ctx context.Context, in *claudeAISyncResultInput) (*struct{}, error) {
 			value, ok := results.LoadAndDelete(in.ID)
@@ -77,9 +77,7 @@ func (s *Server) registerImportRoutes() {
 
 type claudeAIChromeOutput struct {
 	Body struct {
-		Installed    bool `json:"installed"`
-		Connected    bool `json:"connected"`
-		OtherProfile bool `json:"other_profile"`
+		Connected bool `json:"connected"`
 	}
 }
 
@@ -91,18 +89,7 @@ func (s *Server) humaClaudeAIChrome(_ context.Context, _ *struct{}) (*claudeAICh
 		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
 	}
 	out := &claudeAIChromeOutput{}
-	_, err := os.Stat(filepath.Join(s.cfg.DataDir, "chrome", "extension", "manifest.json"))
-	home, homeErr := os.UserHomeDir()
-	readRegistration := s.chrome.registeredManifest
-	if readRegistration == nil {
-		readRegistration = chromehost.RegisteredManifest
-	}
-	registered, registrationErr := readRegistration(home)
-	out.Body.Installed = err == nil && homeErr == nil && registrationErr == nil && chromehost.Installed(s.cfg.DataDir, home, registered)
 	out.Body.Connected = s.chrome.Connected()
-	s.chrome.mu.Lock()
-	out.Body.OtherProfile = s.chrome.refusedProfile
-	s.chrome.mu.Unlock()
 	return out, nil
 }
 
@@ -200,17 +187,10 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 			payload := map[string]string{"error": err.Error()}
 			if errors.Is(err, importer.ErrClaudeAIAuthRequired) {
 				payload["error"] = "Sign in to Claude.ai, then Sync again"
-				if in.Browser == "chrome" {
-					payload["error"] = s.chrome.signInError()
-				}
 				payload["code"] = "claude_ai_auth_required"
 			}
 			if errors.Is(err, chromehost.ErrCompatibility) {
-				if versionErr, ok := errors.AsType[chromehost.VersionError](err); !ok || versionErr.Version <= chromehost.Version {
-					payload["code"] = "claude_ai_chrome_host_update_required"
-				} else {
-					payload["code"] = "claude_ai_agentsview_update_required"
-				}
+				payload["code"] = "claude_ai_chrome_host_update_required"
 			}
 			stream.SendJSON("error", payload)
 			return

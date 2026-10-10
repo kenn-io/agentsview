@@ -2,7 +2,6 @@ package chromehost
 
 import (
 	"crypto/sha256"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -50,35 +49,6 @@ func BuildLauncher(executable, socket, platform string) string {
 	return "#!/bin/sh\nexec " + quote(executable) + " chrome-host --socket " + quote(socket) + "\n"
 }
 
-func ParseLauncher(body, platform string) (executable, socket string, ok bool) {
-	var prefix, separator, suffix string
-	if platform == "windows" {
-		prefix, separator, suffix = "@echo off\r\n\"", "\" chrome-host --socket \"", "\"\r\n"
-	} else {
-		prefix, separator, suffix = "#!/bin/sh\nexec '", "' chrome-host --socket '", "'\n"
-	}
-	command, ok := strings.CutPrefix(body, prefix)
-	if !ok {
-		return "", "", false
-	}
-	executable, socket, ok = strings.Cut(command, separator)
-	if !ok {
-		return "", "", false
-	}
-	socket, ok = strings.CutSuffix(socket, suffix)
-	if !ok {
-		return "", "", false
-	}
-	if platform == "windows" {
-		executable = strings.ReplaceAll(executable, "%%", "%")
-		socket = strings.ReplaceAll(socket, "%%", "%")
-	} else {
-		executable = strings.ReplaceAll(executable, "'\"'\"'", "'")
-		socket = strings.ReplaceAll(socket, "'\"'\"'", "'")
-	}
-	return executable, socket, executable != "" && socket != "" && BuildLauncher(executable, socket, platform) == body
-}
-
 func SocketPath(dataDir string) (string, error) {
 	dir, err := filepath.Abs(dataDir)
 	if err != nil {
@@ -98,46 +68,4 @@ func SocketPath(dataDir string) (string, error) {
 		}
 	}
 	return socket, nil
-}
-
-func RegistrationDataDir(manifestPath string) string {
-	body, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return ""
-	}
-	var manifest struct {
-		Path string `json:"path"`
-	}
-	if json.Unmarshal(body, &manifest) != nil || !filepath.IsAbs(manifest.Path) {
-		return ""
-	}
-	return filepath.Dir(filepath.Dir(manifest.Path))
-}
-
-func Installed(dataDir, home, registered string) bool {
-	dir, err := filepath.Abs(dataDir)
-	if err != nil || registered != ManifestPath(dir, home) {
-		return false
-	}
-	body, err := os.ReadFile(registered)
-	if err != nil {
-		return false
-	}
-	var manifest struct {
-		Path string `json:"path"`
-	}
-	if json.Unmarshal(body, &manifest) != nil || manifest.Path != LauncherPath(dir) {
-		return false
-	}
-	body, err = os.ReadFile(manifest.Path)
-	if err != nil {
-		return false
-	}
-	executable, socket, ok := ParseLauncher(string(body), runtime.GOOS)
-	expectedSocket, err := SocketPath(dir)
-	if !ok || err != nil || socket != expectedSocket {
-		return false
-	}
-	info, err := os.Stat(executable)
-	return err == nil && info.Mode().IsRegular()
 }

@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"time"
 
@@ -27,7 +25,6 @@ func syncClaudeAIChrome(ctx context.Context) error {
 		return errors.New("claude.ai Sync requires a running server")
 	}
 	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
-	httpTransport.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	httpTransport.ResponseHeaderTimeout = 30 * time.Second
 	defer httpTransport.CloseIdleConnections()
 	api, err := apiclient.NewHTTPClient(transport.URL, cfg.AuthToken, &http.Client{Transport: httpTransport})
@@ -53,15 +50,7 @@ func syncClaudeAIChrome(ctx context.Context) error {
 
 func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (importer.ImportStats, error) {
 	if response.StatusCode != http.StatusOK {
-		body := response.Body
-		var failure struct {
-			Code  string `json:"code"`
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(body, &failure) == nil {
-			return importer.ImportStats{}, errors.New(failure.Error)
-		}
-		return importer.ImportStats{}, fmt.Errorf("claude.ai Sync: HTTP %d: %s", response.StatusCode, body)
+		return importer.ImportStats{}, errors.New(daemonErrorMessage(response.StatusCode, response.Body))
 	}
 	var stats importer.ImportStats
 	result, err := consumeDaemonPushEvents[importer.ImportStats](response.Stream200, func(progress importer.ImportStats) {

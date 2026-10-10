@@ -4,7 +4,7 @@ import { SessionsPage } from "./pages/sessions-page";
 test("connects from Chrome status and syncs through Chrome", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("agentsview-locale", "en"));
   await page.route("**/api/v1/import/claude-ai/chrome", (route) => route.fulfill({ json: {
-    installed: true, connected: true, other_profile: false,
+    connected: true,
   } }));
   await page.route("**/api/v1/import/claude-ai/sync**", (route) => route.fulfill({
     contentType: "text/event-stream",
