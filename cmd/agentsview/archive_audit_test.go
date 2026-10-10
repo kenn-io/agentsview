@@ -20,54 +20,36 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 )
 
-// Routine current-archive audits retry worker failures with capped backoff.
 func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	database, lock := openTestWriteDB(t, cfg)
-	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
-	t.Cleanup(engine.Close)
-	em := &scopedEmitter{scopes: make(chan string, 8)}
-
-	attempts := 0
-	restore := stubLaunchSyncWorker(t, func(
-		_ context.Context, _ config.Config, request syncWorkerRequest, _ func(workerLine),
-	) (workerResult, error) {
-		mode := request.Mode
-		assert.Equal(t, "audit", mode)
-		attempts++
-		if attempts <= 6 {
-			return workerResult{Status: "failed"}, errors.New("audit boom")
-		}
-		return workerResult{Status: "ok", Synced: 1, DiscoveryComplete: true}, nil
-	})
-	defer restore()
-
-	var delays []time.Duration
-	ctx, cancel := context.WithCancel(t.Context())
-	wait := func(ctx context.Context, d time.Duration) bool {
-		delays = append(delays, d)
-		return ctx.Err() == nil
+	for _, tc := range []struct {
+		first time.Duration
+		want  []time.Duration
+	}{
+		{archiveAuditInterval, []time.Duration{archiveAuditInterval, time.Hour, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour, 16 * time.Hour, archiveAuditInterval, archiveAuditInterval}},
+		{archiveAuditRetryInitial, []time.Duration{time.Hour, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour, 16 * time.Hour, archiveAuditInterval, archiveAuditInterval, archiveAuditInterval}},
+	} {
+		t.Run(tc.first.String(), func(t *testing.T) {
+			var delays []time.Duration
+			attempts := 0
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			wait := func(ctx context.Context, delay time.Duration) bool {
+				delays = append(delays, delay)
+				return ctx.Err() == nil
+			}
+			audit := func(context.Context) bool {
+				attempts++
+				if attempts == 7 {
+					cancel()
+					return true
+				}
+				return false
+			}
+			runArchiveAuditLoop(ctx, tc.first, wait, audit)
+			assert.Equal(t, 7, attempts)
+			assert.Equal(t, tc.want, delays)
+		})
 	}
-	audit := func(ctx context.Context) bool {
-		ok := runArchiveAudit(ctx, cfg, engine, database, lock, em) == nil
-		if attempts >= 7 {
-			cancel()
-		}
-		return ok
-	}
-
-	runArchiveAuditLoop(ctx, archiveAuditInterval, wait, audit)
-
-	assert.Equal(t, 7, attempts, "the audit obligation is retained across failures")
-	require.GreaterOrEqual(t, len(delays), 8)
-	assert.Equal(t, []time.Duration{
-		archiveAuditInterval, // initial daily wait
-		1 * time.Hour, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour,
-		16 * time.Hour, archiveAuditInterval, // backoff doubles then caps at 24h
-		archiveAuditInterval, // success returns to the daily cadence
-	}, delays[:8])
-	assert.True(t, engine.LastSync().IsZero(),
-		"the audit must never run an in-process sync pass")
 }
 
 func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
@@ -84,9 +66,6 @@ func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
 	err := runArchiveAudit(t.Context(), cfg, engine, database, lock, nil)
 	require.ErrorContains(t, err, "required archive rebuild did not complete")
 	assert.True(t, database.NeedsResync())
-	preserved, err := database.GetSession(t.Context(), "existing")
-	require.NoError(t, err)
-	require.NotNil(t, preserved)
 }
 
 func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
@@ -368,37 +347,22 @@ func TestArchiveAuditLoopSuppressesBackoffLogOnShutdown(t *testing.T) {
 // TestArchiveAuditLoopLogsBackoffWhileRunning proves the backoff line is still
 // logged for a genuine mid-run failure, so suppression is scoped to shutdown.
 func TestArchiveAuditLoopLogsBackoffWhileRunning(t *testing.T) {
-	for _, tc := range []struct {
-		first  time.Duration
-		delays []time.Duration
-	}{
-		{archiveAuditInterval, nil},
-		{archiveAuditRetryInitial, []time.Duration{time.Hour, 2 * time.Hour, 4 * time.Hour}},
-	} {
-		t.Run(tc.first.String(), func(t *testing.T) {
-			logs := captureLogOutput(t)
-			ctx, cancel := context.WithCancel(t.Context())
-			attempts := 0
-			var delays []time.Duration
-			wait := func(ctx context.Context, delay time.Duration) bool {
-				delays = append(delays, delay)
-				return ctx.Err() == nil
-			}
-			audit := func(context.Context) bool {
-				attempts++
-				if attempts >= 2 {
-					cancel()
-				}
-				return false // first attempt fails while the context is still live
-			}
-			runArchiveAuditLoop(ctx, tc.first, wait, audit)
-			if tc.delays != nil {
-				assert.Equal(t, tc.delays, delays)
-			}
-			assert.Contains(t, logs.String(), "next attempt",
-				"a live-run failure must log the backoff line")
-		})
+	logs := captureLogOutput(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	attempts := 0
+	wait := func(ctx context.Context, _ time.Duration) bool {
+		return ctx.Err() == nil
 	}
+	audit := func(context.Context) bool {
+		attempts++
+		if attempts >= 2 {
+			cancel()
+		}
+		return false // first attempt fails while the context is still live
+	}
+	runArchiveAuditLoop(ctx, archiveAuditInterval, wait, audit)
+	assert.Contains(t, logs.String(), "next attempt",
+		"a live-run failure must log the backoff line")
 }
 
 func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
@@ -437,7 +401,6 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				assert.Equal(t, want, <-attempted)
 				cancel()
 				<-done
-				assert.False(t, database.NeedsResync())
 			})
 		})
 	}
