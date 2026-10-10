@@ -184,42 +184,55 @@ describe("AnalyticsPage outcome window", () => {
     },
   );
 
-  it("refresh reloads Git totals after a failed pull request lookup and restores the button", async () => {
-    const initialLoad = await start();
-    initialLoad.mockRestore();
-    const load = vi.spyOn(outcomeTotals, "load");
-    const lookup = vi.spyOn(outcomeTotals, "loadWithPullRequests");
-    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
-      if (String(url).includes("include_github_outcomes=true")) {
-        throw new Error("Pull request lookup failed");
-      }
-      return Response.json({
-        outcome_stats: {
-          repos_active: 1,
-          commits: 2,
-          loc_added: 3,
-          loc_removed: 0,
-          files_changed: 1,
-        },
+  it.each(["transport error", "skipped PR"])(
+    "refresh reloads Git totals after a failed pull request lookup and restores the button (%s)",
+    async (failure) => {
+      const initialLoad = await start();
+      initialLoad.mockRestore();
+      const load = vi.spyOn(outcomeTotals, "load");
+      const lookup = vi.spyOn(outcomeTotals, "loadWithPullRequests");
+      const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+        if (String(url).includes("include_github_outcomes=true")) {
+          if (failure === "transport error") throw new Error("Pull request lookup failed");
+          return Response.json({
+            outcome_stats: {
+              repos_active: 1,
+              commits: 2,
+              loc_added: 3,
+              loc_removed: 0,
+              files_changed: 1,
+              skipped: [{ repo: "example", op: "pr", reason: "GitHub lookup failed" }],
+            },
+          });
+        }
+        return Response.json({
+          outcome_stats: {
+            repos_active: 1,
+            commits: 2,
+            loc_added: 3,
+            loc_removed: 0,
+            files_changed: 1,
+          },
+        });
       });
-    });
-    document.querySelector<HTMLButtonElement>(".outcome-load-prs")!.click();
-    await lookup.mock.results[0]!.value;
-    await flushEffects();
-    expect(outcomeTotals.error).toBe("Pull request lookup failed");
-    expect(document.querySelector(".outcome-load-prs")).toBeNull();
+      document.querySelector<HTMLButtonElement>(".outcome-load-prs")!.click();
+      await lookup.mock.results[0]!.value;
+      await flushEffects();
+      expect(outcomeTotals.error).toBe(failure === "transport error" ? "Pull request lookup failed" : null);
+      expect(document.querySelector(".outcome-load-prs")).toBeNull();
 
-    document.querySelector<HTMLButtonElement>('button[aria-label="Refresh analytics"]')!.click();
-    await flushEffects();
-    expect(load).toHaveBeenCalledTimes(1);
-    await load.mock.results[0]!.value;
-    await flushEffects();
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(String(fetch.mock.calls[1]![0])).toContain("include_github_outcomes=false");
-    expect(outcomeTotals.stats?.commits).toBe(2);
-    expect(outcomeTotals.error).toBeNull();
-    expect(document.querySelector(".outcome-load-prs")).not.toBeNull();
-  });
+      document.querySelector<HTMLButtonElement>('button[aria-label="Refresh analytics"]')!.click();
+      await flushEffects();
+      expect(load).toHaveBeenCalledTimes(1);
+      await load.mock.results[0]!.value;
+      await flushEffects();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(String(fetch.mock.calls[1]![0])).toContain("include_github_outcomes=false");
+      expect(outcomeTotals.stats?.commits).toBe(2);
+      expect(outcomeTotals.error).toBeNull();
+      expect(document.querySelector(".outcome-load-prs")).not.toBeNull();
+    },
+  );
 
   it("uses local days for the range and follows selected days and activity ranges", async () => {
     vi.stubEnv("TZ", "America/New_York");
