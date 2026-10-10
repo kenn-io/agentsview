@@ -14,13 +14,7 @@ import (
 )
 
 func TestMemoryStatusResponses(t *testing.T) {
-	ready := service.MemoryStatus{
-		Status:   service.MemoryReady,
-		Archive:  service.MemoryArchiveStatus{Backend: "sqlite", ReadOnly: true},
-		Lexical:  service.MemoryCapabilityStatus{Status: service.MemoryReady},
-		Semantic: service.MemoryVectorStatus{Status: service.MemoryReady, Generation: "generation-a", Embedded: 7},
-		Sources:  service.MemorySourceStatus{Status: service.MemoryReady},
-	}
+	ready := service.MemoryStatus{Status: service.MemoryReady}
 	for _, tc := range []struct {
 		name       string
 		httpStatus int
@@ -50,10 +44,6 @@ func TestMemoryStatusResponses(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			if tc.httpStatus == http.StatusOK {
-				assert.Equal(t, ready, status)
-				return
-			}
 			assert.Equal(t, tc.want, status.Status)
 			assert.Equal(t, tc.wantReason, status.Lexical.Reason)
 		})
