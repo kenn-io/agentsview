@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-var findCodexS3ParentSessionURI = parser.FindCodexS3ParentSessionURI
+var findCodexS3ParentSessionURIs = parser.FindCodexS3ParentSessionURIs
 
 func s3SessionIDPrefix(machine string) string {
 	if machine == "" {
@@ -131,6 +131,11 @@ func localCodexSessionIndexPath(sessionPath string) string {
 	return ""
 }
 
+// hydrateS3CodexParent downloads every rollout of a fork's replay parent (the
+// thread's own rollout and its revert pages) next to the child, so the parser
+// can recognize replayed turns. A partial set would end the replay early, so
+// any failed download removes the files already written and leaves the parent
+// unresolved.
 func hydrateS3CodexParent(
 	tempDir, childPath, configuredRoot, childURI string,
 	p parser.S3Provider,
@@ -139,39 +144,55 @@ func hydrateS3CodexParent(
 	if !resolutionNeeded {
 		return false
 	}
-	parentURI, ok := findCodexS3ParentSessionURI(
+	var written []string
+	for _, parentURI := range findCodexS3ParentSessionURIs(
 		configuredRoot, childURI, parentID,
-	)
-	if !ok || parentURI == childURI {
-		return false
+	) {
+		if parentURI == childURI {
+			continue
+		}
+		parentPath, ok := hydrateS3CodexParentObject(tempDir, parentURI, p)
+		if !ok {
+			for _, path := range written {
+				_ = os.Remove(path)
+			}
+			return false
+		}
+		written = append(written, parentPath)
 	}
+	return len(written) > 0
+}
+
+func hydrateS3CodexParentObject(
+	tempDir, parentURI string, p parser.S3Provider,
+) (string, bool) {
 	relPath, err := safeS3TempRelPath(parser.DiscoveredFile{
 		Agent: parser.AgentCodex,
 		Path:  parentURI,
 	}, p)
 	if err != nil {
-		return false
+		return "", false
 	}
 	rc, err := fetchS3Object(parentURI)
 	if err != nil {
-		return false
+		return "", false
 	}
 	defer rc.Close()
 	parentPath := filepath.Join(tempDir, filepath.Base(relPath))
 	if err := os.MkdirAll(filepath.Dir(parentPath), 0o755); err != nil {
-		return false
+		return "", false
 	}
 	out, err := os.Create(parentPath)
 	if err != nil {
-		return false
+		return "", false
 	}
 	_, copyErr := io.Copy(out, rc)
 	closeErr := out.Close()
 	if copyErr != nil || closeErr != nil {
 		_ = os.Remove(parentPath)
-		return false
+		return "", false
 	}
-	return true
+	return parentPath, true
 }
 
 // processS3Session reads a session JSONL directly from object

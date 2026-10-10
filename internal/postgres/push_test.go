@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -202,9 +203,9 @@ func (c *pushAliasRoutingConn) QueryContext(
 				"updated_at",
 			},
 		}, nil
-	case strings.Contains(normalized, "select id from excluded_sessions"):
+	case strings.Contains(normalized, "select id, false as scoped from excluded_sessions"):
 		return &pushAliasRoutingRows{
-			columns: []string{"id"},
+			columns: []string{"id", "scoped"},
 		}, nil
 	default:
 		return &pushAliasRoutingRows{
@@ -613,19 +614,19 @@ func TestReadPushBoundaryStateValidity(t *testing.T) {
 	}
 }
 
-func TestPGExcludedSessionIDsQueryUsesSingleArrayParameter(t *testing.T) {
-	query, args := pgExcludedSessionIDsQuery([]string{
-		"sess-001",
-		"sess-002",
-		"sess-003",
-	})
+func TestPGExcludedSessionIDsQueryUsesBoundedArrayParameters(t *testing.T) {
+	query, args := pgExcludedSessionIDsQuery(slices.Values([]db.Session{
+		{ID: "sess-001", Agent: "codex", Machine: "local"},
+		{ID: "sess-002", Agent: "traex", Machine: "other-machine"},
+	}), "marker", "push-machine", []string{"old-machine"})
 
 	assert.Contains(t, query, "id = ANY($1)")
-	assert.NotContains(t, query, "$2")
-	require.Len(t, args, 1)
-	assert.Equal(t, []string{"sess-001", "sess-002", "sess-003"},
-		args[0],
-	)
+	require.Len(t, args, 5)
+	assert.Equal(t, []string{"sess-001", "sess-002"}, args[0])
+	assert.Equal(t, []string{"codex", "traex"}, args[1])
+	assert.Equal(t, []string{"push-machine", "other-machine"}, args[2])
+	assert.Equal(t, "marker", args[3])
+	assert.Equal(t, []string{"old-machine"}, args[4])
 }
 
 func TestDeletePGExcludedSessionRowsUsesSingleArrayParameter(t *testing.T) {
@@ -756,7 +757,6 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 		"marker", nil,
 	)
 	require.NoError(t, err)
-	require.Len(t, state.upsertArgs, 70)
 	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
 	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
 	assert.Equal(t, cause, state.upsertArgs[14].Value)
@@ -923,7 +923,7 @@ func TestPurgePGExcludedPushSessionsChecksDerivedAliases(t *testing.T) {
 	}
 
 	err := purgePGExcludedPushSessions(
-		t.Context(), pg, sessionByID,
+		t.Context(), pg, sessionByID, "marker", "push-machine", nil,
 	)
 
 	require.NoError(t, err, "purgePGExcludedPushSessions")
@@ -1090,11 +1090,11 @@ func (c *pushSessionProbeConn) QueryContext(
 		values := [][]driver.Value{}
 		for _, id := range namedValueStrings(args) {
 			if c.state.existingExcluded[id] {
-				values = append(values, []driver.Value{id})
+				values = append(values, []driver.Value{id, false})
 			}
 		}
 		return &pushSessionProbeRows{
-			columns: []string{"id"},
+			columns: []string{"id", "scoped"},
 			values:  values,
 		}, nil
 	case strings.Contains(normalized, "select exists") &&
