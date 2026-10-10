@@ -1109,3 +1109,40 @@ func TestSearch_DateRange(t *testing.T) {
 		})
 	}
 }
+
+// TestPGSearchContentMessagesMatchDialogue verifies the messages source reads
+// the stored dialogue, falls back to content without one, and that thinking
+// text has its own source.
+func TestPGSearchContentMessagesMatchDialogue(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-d1", "proj", "pi",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "cs-d1", 0, "user",
+		"legacy row mentions quokka", "2026-05-01T10:00:00Z", false)
+	_, err := store.DB().Exec(`
+		INSERT INTO messages
+			(session_id, ordinal, role, content, thinking_text,
+			 dialogue_text, timestamp, content_length)
+		VALUES ('cs-d1', 1, 'assistant', $1, 'weighing zanzibar',
+			'Found the bug.', '2026-05-01T10:00:01Z'::timestamptz, 10)`,
+		"[Thinking]\nweighing zanzibar\n[/Thinking]\nFound the bug.\n[Bash]\n$ grep quokka")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	search := func(pattern string, sources ...string) []db.ContentMatch {
+		t.Helper()
+		got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+			Pattern: pattern, Sources: sources, Limit: 50, IncludeOneShot: true,
+		})
+		require.NoError(t, err)
+		return got.Matches
+	}
+	matches := search("quokka", "messages")
+	require.Len(t, matches, 1)
+	assert.Equal(t, 0, matches[0].Ordinal)
+	assert.Empty(t, search("zanzibar", "messages"))
+	require.Len(t, search("found the bug", "messages"), 1)
+	matches = search("zanzibar")
+	require.Len(t, matches, 1)
+	assert.Equal(t, "thinking", matches[0].Location)
+}

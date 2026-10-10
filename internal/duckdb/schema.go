@@ -19,8 +19,9 @@ import (
 // reasoning effort to messages. v15 adds explicit session-project
 // assignment state. v16 rebuilds after SQLite data version 111 rewrote
 // stored Devin source identities; pre-111 mirrors would otherwise keep
-// serving bare ids that deduplicate across sessions.
-const SchemaVersion = 16
+// serving bare ids that deduplicate across sessions. v17 adds message
+// dialogue text for messages-only search.
+const SchemaVersion = 17
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -273,6 +274,7 @@ var mirrorTables = []tableSpec{
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
 			thinking_text TEXT NOT NULL DEFAULT '',
+			dialogue_text TEXT,
 			timestamp TIMESTAMP,
 			has_thinking BOOLEAN NOT NULL DEFAULT FALSE,
 			has_tool_use BOOLEAN NOT NULL DEFAULT FALSE,
@@ -304,6 +306,7 @@ var mirrorTables = []tableSpec{
 			{"role", "role TEXT NOT NULL DEFAULT ''"},
 			{"content", "content TEXT NOT NULL DEFAULT ''"},
 			{"thinking_text", "thinking_text TEXT NOT NULL DEFAULT ''"},
+			{"dialogue_text", "dialogue_text TEXT"},
 			{"timestamp", "timestamp TIMESTAMP"},
 			{"has_thinking", "has_thinking BOOLEAN NOT NULL DEFAULT FALSE"},
 			{"has_tool_use", "has_tool_use BOOLEAN NOT NULL DEFAULT FALSE"},

@@ -120,6 +120,9 @@ CREATE TABLE IF NOT EXISTS messages (
     role           TEXT NOT NULL,
     content        TEXT NOT NULL,
     thinking_text  TEXT NOT NULL DEFAULT '',
+    -- Content without inlined thinking blocks and tool renderings; NULL when
+    -- identical to content or written before this column existed.
+    dialogue_text  TEXT,
     timestamp      TEXT,
     has_thinking   INTEGER NOT NULL DEFAULT 0,
     has_tool_use   INTEGER NOT NULL DEFAULT 0,

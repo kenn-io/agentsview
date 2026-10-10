@@ -67,6 +67,7 @@ func (s *Sync) PushWithOptions(
 		s.archiveKey(mappingRevisionKeyBase),
 		s.archiveKey(usageSnapshotReadyKeyBase),
 		s.archiveKey(storedCountRepairKeyBase),
+		s.archiveKey(dialogueBackfillKeyBase),
 	)
 	if err != nil {
 		return result, err
@@ -100,6 +101,11 @@ func (s *Sync) PushWithOptions(
 	}
 	if !full && repairing {
 		full, reason = true, "publishing stored message counts"
+	}
+	// dialogue_text was added in place, so rows pushed before it get it
+	// only from one full push.
+	if !full && meta[s.archiveKey(dialogueBackfillKeyBase)] == "" {
+		full, reason = true, "filling message dialogue"
 	}
 	localDeletion, err := s.local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
@@ -216,6 +222,7 @@ func (s *Sync) PushWithOptions(
 			s.archiveKey(deletionRevisionKeyBase): strconv.FormatInt(localDeletion, 10),
 			s.archiveKey(identityRevisionKeyBase): strconv.FormatInt(identityRevision, 10),
 			s.archiveKey(mappingRevisionKeyBase):  strconv.FormatInt(mappingRevision, 10),
+			s.archiveKey(dialogueBackfillKeyBase): "1",
 			schemaVersionKey:                      strconv.Itoa(SchemaVersion),
 			sourceDataVersionKey:                  strconv.Itoa(db.CurrentDataVersion()),
 		}
@@ -838,7 +845,7 @@ func lastMessageAt(msgs []db.Message) *time.Time {
 func messageRow(m db.Message, version uint64) []any {
 	return []any{
 		m.ID, m.SessionID, int64(m.Ordinal), m.Role, m.Content, m.ThinkingText,
-		timeValue(m.Timestamp), m.HasThinking, m.HasToolUse, int64(m.ContentLength),
+		m.DialogueText, timeValue(m.Timestamp), m.HasThinking, m.HasToolUse, int64(m.ContentLength),
 		m.IsSystem, m.Model, m.ReasoningEffort, string(m.TokenUsage),
 		int64(m.ContextTokens), int64(m.OutputTokens), m.ProviderID,
 		m.HasContextTokens, m.HasOutputTokens, m.ClaudeMessageID, m.ClaudeRequestID,

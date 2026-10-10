@@ -455,10 +455,11 @@ func parsePiAssistantMessage(
 	sourceParentUUID, sessionCwd string,
 ) *ParsedMessage {
 	var (
-		parts       []string
-		toolCalls   []ParsedToolCall
-		hasThinking bool
-		hasToolUse  bool
+		parts         []string
+		thinkingParts []string
+		toolCalls     []ParsedToolCall
+		hasThinking   bool
+		hasToolUse    bool
 	)
 
 	msgContent := gjson.Get(line, "message.content")
@@ -479,6 +480,7 @@ func parsePiAssistantMessage(
 				// to mark the message.
 				hasThinking = true
 				if thinking := block.Get("thinking").Str; thinking != "" {
+					thinkingParts = append(thinkingParts, thinking)
 					parts = append(parts,
 						"[Thinking]\n"+thinking+"\n[/Thinking]")
 				}
@@ -518,6 +520,7 @@ func parsePiAssistantMessage(
 		SourceUUID:       sourceUUID,
 		SourceParentUUID: sourceParentUUID,
 		Content:          content,
+		ThinkingText:     strings.Join(thinkingParts, "\n\n"),
 		Timestamp:        ts,
 		HasThinking:      hasThinking,
 		HasToolUse:       hasToolUse,

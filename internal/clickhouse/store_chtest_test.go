@@ -348,3 +348,41 @@ func TestStoreMessageWindowReportsRevisionWithRows(t *testing.T) {
 	assert.Empty(t, msgs)
 	assert.Empty(t, revision, "no rows means no revision to describe them")
 }
+
+func TestSearchContentMessagesMatchDialogue(t *testing.T) {
+	store, syncer, local := newPushedStore(t)
+	ctx := context.Background()
+	sess, err := local.GetSessionFull(ctx, fixtureBetaID)
+	require.NoError(t, err)
+	msgs, err := local.GetAllMessages(ctx, fixtureBetaID)
+	require.NoError(t, err)
+	ts := "2026-01-11T00:00:00.000Z"
+	reply := fixtureMessage(fixtureBetaID, len(msgs), "assistant",
+		"[Thinking]\nweighing zanzibar\n[/Thinking]\nFound the bug.", ts)
+	reply.ThinkingText, reply.HasThinking = "weighing zanzibar", true
+	msgs = append(msgs, reply)
+	sess.MessageCount, sess.EndedAt, sess.LocalModifiedAt = len(msgs), &ts, &ts
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: *sess, Messages: msgs, DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	search := func(mode, pattern string, sources ...string) []db.ContentMatch {
+		t.Helper()
+		got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+			Pattern: pattern, Mode: mode, Sources: sources,
+			IncludeOneShot: true, Limit: 50,
+		})
+		require.NoError(t, err)
+		return got.Matches
+	}
+	for _, mode := range []string{"substring", "regex"} {
+		assert.Empty(t, search(mode, "zanzibar", "messages"), mode)
+		require.Len(t, search(mode, "Found the bug", "messages"), 1, mode)
+		matches := search(mode, "zanzibar")
+		require.Len(t, matches, 1, mode)
+		assert.Equal(t, "thinking", matches[0].Location, mode)
+	}
+}

@@ -55,7 +55,7 @@ func (s *Store) GetMessages(
 }
 
 const pgMessageCols = `session_id, ordinal, role, content, thinking_text,
-	timestamp, has_thinking, has_tool_use,
+	dialogue_text, timestamp, has_thinking, has_tool_use,
 	content_length, is_system, model, reasoning_effort, token_usage,
 	context_tokens, output_tokens, provider_id,
 	has_context_tokens, has_output_tokens,
@@ -722,7 +722,7 @@ func scanPGMessages(rows db.MessageRows) ([]db.Message, error) {
 		var tokenUsage string
 		if err := rows.Scan(
 			&m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &m.ThinkingText, &ts, &m.HasThinking,
+			&m.Content, &m.ThinkingText, &m.DialogueText, &ts, &m.HasThinking,
 			&m.HasToolUse, &m.ContentLength, &m.IsSystem,
 			&m.Model, &m.ReasoningEffort, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,

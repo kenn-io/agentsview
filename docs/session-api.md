@@ -659,7 +659,7 @@ with `--include-one-shot`, `--include-automated`, or `--include-children`.
 | `--hybrid`            | `mode=hybrid`       | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                              |
 | `--scope`             | `scope`             | `top`, `all` (default), or `subordinate` — semantic/hybrid only; supersedes `include_children` in those modes                                                                     |
 | `--context`           | `context`           | int — N messages of context before/after each match (max 10)                                                                                                                      |
-| `--in`                | `in`                | Comma-separated: `messages,tool_input,tool_result` (default all)                                                                                                                  |
+| `--in`                | `in`                | Comma-separated: `messages,thinking,tool_input,tool_result` (default all)                                                                                                         |
 | `--exclude-system`    | `exclude_system`    | Drop system messages from the scan                                                                                                                                                |
 | `--reveal`            | `reveal`            | Show full secret values (localhost-only; warning to stderr)                                                                                                                       |
 | `--project`           | `project`           | string                                                                                                                                                                            |
@@ -686,6 +686,12 @@ substring (the default) and regex modes also walk `tool_calls.input_json`,
 `--hybrid` require an embedding index and return a single ranked page
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
+
+In substring, regex, and terms modes the `messages` source matches what was
+said: the agent's reasoning and the tool-call summaries some agents write into
+message text are left out. Reasoning has its own `thinking` source, which terms
+mode does not search. `--fts`, `--semantic`, and `--hybrid` still match the
+full message text.
 
 Every match, in every mode, carries the conversation-unit citation described in
 [Hit shape](/docs/semantic-search/#hit-shape-ranges-and-anchors):

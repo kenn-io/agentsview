@@ -167,8 +167,8 @@ every literal term to occur within one exchange: a user message and its ensuing
 assistant run on the same main or sidechain branch. Terms can appear on opposite
 sides of that exchange. Assistant messages before a session's first user message
 belong to no exchange and never match. `%`, `_`, and backslashes stay literal;
-tool and system content is outside this mode. The `terms` mode currently
-requires a SQLite or PostgreSQL backend.
+tool, reasoning, and system content is outside this mode. The `terms` mode
+currently requires a SQLite or PostgreSQL backend.
 
 `scope` can be `top`, `all` (default), or `subordinate` for terms, semantic, and
 hybrid searches. The semantic and hybrid modes need the opt-in

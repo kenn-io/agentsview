@@ -2235,6 +2235,10 @@ schemas keep their existing ordering behavior.
   shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
   version 81 reparses existing Pi-family archives after adding the flat
   `cacheWrite` spelling.
+- **Thinking:** Assistant `content` arrays carry `thinking` blocks beside `text`
+  and `toolCall` blocks, per the pinned session format. Data version 129
+  records their text as message thinking text so messages-only search can
+  leave it out.
 - **Directory configuration:** Reverified 2026-09-09 against
   [config.ts](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/config.ts)
   and

@@ -527,3 +527,38 @@ func TestDuckSearchContentMultiRunReducerParity(t *testing.T) {
 		assert.False(t, byOrd[o].Sidechain, "top-level row %d flag", o)
 	}
 }
+
+// TestDuckSearchContentMessagesMatchDialogue pins messages-only search to the
+// stored dialogue and gives thinking text its own source.
+func TestDuckSearchContentMessagesMatchDialogue(t *testing.T) {
+	reply := unitMsg("duck-dialogue", 1, "assistant",
+		"[Thinking]\nweighing zanzibar\n[/Thinking]\nFound the bug.", false, false)
+	reply.ThinkingText = "weighing zanzibar"
+	reply.HasThinking = true
+	store := newUnitsStore(t, []db.SessionBatchWrite{{
+		Session: unitSession("duck-dialogue", 2),
+		Messages: []db.Message{
+			unitMsg("duck-dialogue", 0, "user", "why does it fail", false, false),
+			reply,
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+
+	search := func(mode, pattern string, sources ...string) []db.ContentMatch {
+		t.Helper()
+		got, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+			Pattern: pattern, Mode: mode, Sources: sources,
+			IncludeOneShot: true, Limit: 50,
+		})
+		require.NoError(t, err)
+		return got.Matches
+	}
+	for _, mode := range []string{"substring", "regex"} {
+		assert.Empty(t, search(mode, "zanzibar", "messages"), mode)
+		require.Len(t, search(mode, "Found the bug", "messages"), 1, mode)
+		matches := search(mode, "zanzibar")
+		require.Len(t, matches, 1, mode)
+		assert.Equal(t, "thinking", matches[0].Location, mode)
+	}
+}

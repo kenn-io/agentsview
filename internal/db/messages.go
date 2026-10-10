@@ -21,7 +21,7 @@ import (
 
 const (
 	selectMessageCols = `id, session_id, ordinal, role, content,
-		thinking_text,
+		thinking_text, dialogue_text,
 		COALESCE(timestamp, '') AS timestamp,
 		has_thinking, has_tool_use, content_length,
 		is_system,
@@ -32,7 +32,7 @@ const (
 		source_parent_uuid, is_sidechain, is_compact_boundary`
 
 	insertMessageCols = `session_id, ordinal, role, content,
-		thinking_text,
+		thinking_text, dialogue_text,
 		timestamp, has_thinking, has_tool_use, content_length,
 		is_system,
 		model, reasoning_effort, token_usage, context_tokens, output_tokens, provider_id,
@@ -53,7 +53,7 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 35  // 28 params per row
+	messageInsertRowsPerStmt         = 34  // 29 params per row
 	toolCallInsertRowsPerStmt        = 83  // 12 params per row (999/12 = 83)
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 166 // 6 params per row
@@ -502,7 +502,11 @@ type Message struct {
 	Content   string `json:"content"`
 	// ThinkingText holds the concatenated text of all thinking
 	// blocks for this message; "" if none.
-	ThinkingText      string         `json:"thinking_text"`
+	ThinkingText string `json:"thinking_text"`
+	// DialogueText is content without inline thinking and tool renderings,
+	// nil when they are the same. The storage projection derives it on every
+	// write; replicas copy the value read back from the archive.
+	DialogueText      *string        `json:"-"`
 	Timestamp         string         `json:"timestamp"`
 	HasThinking       bool           `json:"has_thinking"`
 	HasToolUse        bool           `json:"has_tool_use"`
@@ -1227,7 +1231,7 @@ func insertMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*28)
+		args := make([]any, 0, len(batch)*29)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
@@ -1237,7 +1241,7 @@ func insertMessagesTx(
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 28),
+			multiRowPlaceholders(len(batch), 29),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal
@@ -3145,7 +3149,7 @@ func scanMessages(rows MessageRows) ([]Message, error) {
 		var tokenUsage string
 		err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-			&m.Content, &m.ThinkingText, &m.Timestamp,
+			&m.Content, &m.ThinkingText, &m.DialogueText, &m.Timestamp,
 			&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 			&m.IsSystem,
 			&m.Model, &m.ReasoningEffort, &tokenUsage,
@@ -4117,7 +4121,7 @@ func (db *DB) GetMessageByOrdinal(ctx context.Context,
 	var tokenUsage string
 	err := row.Scan(
 		&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
-		&m.Content, &m.ThinkingText, &m.Timestamp,
+		&m.Content, &m.ThinkingText, &m.DialogueText, &m.Timestamp,
 		&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 		&m.IsSystem,
 		&m.Model, &m.ReasoningEffort, &tokenUsage,

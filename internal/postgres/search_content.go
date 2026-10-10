@@ -52,10 +52,10 @@ func (s *Store) SearchContent(
 	}
 
 	if len(f.Sources) == 0 {
-		f.Sources = []string{"messages", "tool_input", "tool_result"}
+		f.Sources = db.ContentSearchSources
 	}
 	for _, src := range f.Sources {
-		if src != "messages" && src != "tool_input" && src != "tool_result" {
+		if !slices.Contains(db.ContentSearchSources, src) {
 			return db.ContentSearchPage{},
 				&db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", src)}
 		}
@@ -144,6 +144,9 @@ func (s *Store) searchContentSubstringPG(
 	if pgHasSource(f, "messages") {
 		branches = append(branches, pgMessagesBranch(f, escapedPat, pb))
 	}
+	if pgHasSource(f, "thinking") {
+		branches = append(branches, pgThinkingBranch(f, escapedPat, pb))
+	}
 	if pgHasSource(f, "tool_input") {
 		branches = append(branches, pgToolInputBranch(f, escapedPat, pb))
 	}
@@ -173,9 +176,17 @@ func (s *Store) searchContentSubstringPG(
 func pgMessagesBranch(
 	f db.ContentSearchFilter, escapedPat string, pb *paramBuilder,
 ) string {
-	contentPred := pgContentSearchPredicate(
-		"m.content", f, escapedPat, pb,
-	)
+	// FTS mode keeps matching full content, as SQLite's FTS index does.
+	body := "m.content"
+	var contentPred string
+	if f.Mode == "fts" {
+		contentPred = pgContentSearchPredicate(body, f, escapedPat, pb)
+	} else {
+		body = db.MessageDialogueSQL("m")
+		contentPred = pgDialogueOrContent(func(col string) string {
+			return pgContentSearchPredicate(col, f, escapedPat, pb)
+		})
+	}
 
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
@@ -190,14 +201,33 @@ func pgMessagesBranch(
 			'message' AS location,
 			m.role AS role, '' AS tool_name, m.ordinal,
 			m.timestamp AS ts,
-			m.content AS snippet, 0 AS src, 0::bigint AS row_id,
+			%s AS snippet, 0 AS src, 0::bigint AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		JOIN scoped sc ON sc.id = m.session_id
 		WHERE %s
 		  AND %s`,
-		contentPred, sysPred)
+		body, contentPred, sysPred)
+}
+
+// pgThinkingBranch builds the thinking source branch SQL.
+func pgThinkingBranch(
+	f db.ContentSearchFilter, escapedPat string, pb *paramBuilder,
+) string {
+	pred := pgContentSearchPredicate("m.thinking_text", f, escapedPat, pb)
+	return `
+		SELECT m.session_id, s.project, s.agent,
+			COALESCE(s.transcript_revision,'') AS transcript_revision,
+			'thinking' AS location,
+			m.role AS role, '' AS tool_name, m.ordinal,
+			m.timestamp AS ts,
+			m.thinking_text AS snippet, 4 AS src, 0::bigint AS row_id,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		JOIN scoped sc ON sc.id = m.session_id
+		WHERE ` + pred
 }
 
 func pgContentSearchPredicate(
@@ -447,6 +477,9 @@ func (s *Store) pgRegexCandidateRows(
 	if pgHasSource(f, "messages") {
 		branches = append(branches, pgMessagesCandidateBranch(f, lit, pb))
 	}
+	if pgHasSource(f, "thinking") {
+		branches = append(branches, pgThinkingCandidateBranch(lit, pb))
+	}
 	if pgHasSource(f, "tool_input") {
 		branches = append(branches, pgToolInputCandidateBranch(f, lit, pb))
 	}
@@ -483,11 +516,25 @@ func pgPrefilterClause(col, lit string, pb *paramBuilder) string {
 	return fmt.Sprintf("%s ILIKE '%%'||%s||'%%' ESCAPE E'\\\\'", col, p)
 }
 
+// pgDialogueOrContent applies pred to dialogue_text, and to content only
+// where no dialogue is stored, testing each column on its own so its
+// trigram index applies.
+func pgDialogueOrContent(pred func(col string) string) string {
+	return "(" + pred("m.dialogue_text") +
+		" OR (m.dialogue_text IS NULL AND " + pred("m.content") + "))"
+}
+
 // pgMessagesCandidateBranch: candidate rows for regex from messages.
 func pgMessagesCandidateBranch(
 	f db.ContentSearchFilter, lit string, pb *paramBuilder,
 ) string {
-	prefilter := pgPrefilterClause("m.content", lit, pb)
+	body := db.MessageDialogueSQL("m")
+	prefilter := "TRUE"
+	if lit != "" {
+		prefilter = pgDialogueOrContent(func(col string) string {
+			return pgPrefilterClause(col, lit, pb)
+		})
+	}
 
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
@@ -501,13 +548,30 @@ func pgMessagesCandidateBranch(
 			'message' AS location,
 			m.role AS role, '' AS tool_name, m.ordinal,
 			m.timestamp AS ts,
-			m.content AS body, 0 AS src, 0::bigint AS row_id,
+			%s AS body, 0 AS src, 0::bigint AS row_id,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		JOIN scoped sc ON sc.id = m.session_id
 		WHERE %s AND %s`,
-		prefilter, sysPred)
+		body, prefilter, sysPred)
+}
+
+// pgThinkingCandidateBranch: candidate rows for regex from thinking text.
+func pgThinkingCandidateBranch(lit string, pb *paramBuilder) string {
+	prefilter := pgPrefilterClause("m.thinking_text", lit, pb)
+	return `
+		SELECT m.session_id, s.project, s.agent,
+			COALESCE(s.transcript_revision,'') AS transcript_revision,
+			'thinking' AS location,
+			m.role AS role, '' AS tool_name, m.ordinal,
+			m.timestamp AS ts,
+			m.thinking_text AS body, 4 AS src, 0::bigint AS row_id,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		JOIN scoped sc ON sc.id = m.session_id
+		WHERE ` + prefilter + ` AND m.thinking_text <> ''`
 }
 
 // pgToolInputCandidateBranch: candidate rows for regex from tool_input.

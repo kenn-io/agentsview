@@ -388,6 +388,7 @@ func (db *DB) replaceSessionContentStaged(
 		}
 		return db.ReplaceSessionContent(ctx, sessionID, msgs, update, findings)
 	}
+	msgs = DeriveSearchText(msgs)
 
 	db.mu.Lock()
 	defer db.mu.Unlock()

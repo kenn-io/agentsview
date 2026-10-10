@@ -7,6 +7,16 @@ description: Release history for AgentsView
 The latest release is
 [0.45.0](https://github.com/kenn-io/agentsview/releases/tag/v0.45.0).
 
+## Unreleased
+
+**Bug fixes**
+
+- Searching only messages no longer matches the agent's reasoning or the tool
+  calls some agents write into message text, and snippets show what was said.
+  Search reasoning with `--in thinking`; default searches include it. Agents
+  that keep reasoning only in message text, such as Pi and Gemini, now record
+  it as thinking text.
+
 ## 0.45.0
 
 <small>2026-10-09</small>

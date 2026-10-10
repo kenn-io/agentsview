@@ -29,7 +29,7 @@ const (
 type ContentSearchFilter struct {
 	Pattern       string
 	Mode          string   // "substring" (default) | "regex" | "fts" | "terms" | "semantic" | "hybrid"
-	Sources       []string // subset of {"messages","tool_input","tool_result"}
+	Sources       []string // subset of {"messages","thinking","tool_input","tool_result"}
 	ExcludeSystem bool
 
 	Project, ExcludeProject, Machine, Agent           string
@@ -72,7 +72,7 @@ type ContentMatch struct {
 	Agent       string  `json:"agent"`
 	Machine     string  `json:"machine"`
 	DisplayName *string `json:"display_name"`
-	Location    string  `json:"location"` // message | tool_input | tool_result
+	Location    string  `json:"location"` // message | thinking | tool_input | tool_result
 	Role        string  `json:"role"`
 	ToolName    string  `json:"tool_name,omitempty"`
 	Ordinal     int     `json:"ordinal"`
@@ -263,10 +263,10 @@ func (db *DB) SearchContent(
 	}
 
 	if len(f.Sources) == 0 {
-		f.Sources = []string{"messages", "tool_input", "tool_result"}
+		f.Sources = ContentSearchSources
 	}
 	for _, s := range f.Sources {
-		if s != "messages" && s != "tool_input" && s != "tool_result" {
+		if !slices.Contains(ContentSearchSources, s) {
 			return ContentSearchPage{}, searchInputErrorf("search: unknown source %q", s)
 		}
 	}
@@ -320,8 +320,24 @@ func (db *DB) searchContentSubstring(
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				0 AS src, m.id AS row_id
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE m.content LIKE ? ESCAPE '\' AND %s AND m.%s`,
-			snippetExpr("m.content"), sysPred, scope))
+			WHERE %s LIKE ? ESCAPE '\' AND %s AND m.%s`,
+			snippetExpr(MessageDialogueSQL("m")), MessageDialogueSQL("m"),
+			sysPred, scope))
+		args = append(args, like)
+		args = append(args, scopeArgs...)
+	}
+	if hasSource(f, "thinking") {
+		branches = append(branches, fmt.Sprintf(`
+			SELECT m.session_id, s.project, s.agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'thinking' AS location,
+				m.role AS role, '' AS tool_name, m.ordinal,
+				COALESCE(m.timestamp,'') AS ts, %s AS snippet,
+				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+				4 AS src, m.id AS row_id
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE m.thinking_text LIKE ? ESCAPE '\' AND m.%s`,
+			snippetExpr("m.thinking_text"), scope))
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 	}
@@ -568,7 +584,7 @@ func (db *DB) regexCandidateRows(
 			sysPred = "m.is_system = 0 AND " +
 				SystemPrefixSQL("m.content", "m.role")
 		}
-		w := prefilterClause("m.content")
+		w := prefilterClause(MessageDialogueSQL("m"))
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
@@ -576,11 +592,28 @@ func (db *DB) regexCandidateRows(
 				'message' AS location,
 				m.role AS role, '' AS tool_name,
 				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
-				m.content AS body,
+				%s AS body,
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				0 AS src, m.id AS row_id
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE %s AND %s AND m.%s`, w, sysPred, scope))
+			WHERE %s AND %s AND m.%s`,
+			MessageDialogueSQL("m"), w, sysPred, scope))
+		args = append(args, scopeArgs...)
+	}
+	if hasSource(f, "thinking") {
+		w := prefilterClause("m.thinking_text")
+		branches = append(branches, fmt.Sprintf(`
+			SELECT m.session_id AS session_id, s.project AS project,
+				s.agent AS agent,
+				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				'thinking' AS location,
+				m.role AS role, '' AS tool_name,
+				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
+				m.thinking_text AS body,
+				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
+				4 AS src, m.id AS row_id
+			FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE %s AND m.thinking_text <> '' AND m.%s`, w, scope))
 		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "tool_input") {

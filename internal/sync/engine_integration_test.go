@@ -13215,6 +13215,39 @@ func TestPiSessionIntegration(t *testing.T) {
 	)
 }
 
+func TestPiMessagesSearchMatchesDialogueOnly(t *testing.T) {
+	env := setupTestEnv(t)
+	env.writeSession(t, env.piDir, filepath.Join("encoded-cwd", "pi-dialogue.jsonl"), strings.Join([]string{
+		`{"type":"session","version":3,"id":"pi-dialogue","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/app"}`,
+		`{"type":"message","id":"msg-1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"Why does parsing fail?"}}`,
+		`{"type":"message","id":"msg-2","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","model":"claude-opus-4-5","content":[` +
+			`{"type":"thinking","thinking":"Maybe the zanzibar flag is unset."},` +
+			`{"type":"text","text":"Found the bug in the tokenizer."},` +
+			`{"type":"toolCall","id":"call-1","name":"bash","arguments":{"command":"grep -rn quokka ."}},` +
+			`{"type":"toolCall","id":"call-2","name":"read","arguments":{"path":"/Users/alice/code/app/walrus.md"}}]}}`,
+	}, "\n"))
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1})
+
+	search := func(pattern string, sources ...string) []db.ContentMatch {
+		t.Helper()
+		page, err := env.db.SearchContent(t.Context(), db.ContentSearchFilter{
+			Pattern: pattern, Sources: sources, IncludeOneShot: true,
+		})
+		require.NoError(t, err)
+		return page.Matches
+	}
+	for _, pattern := range []string{"quokka", "walrus", "zanzibar", "[Thinking]"} {
+		assert.Empty(t, search(pattern, "messages"), pattern)
+	}
+	matches := search("tokenizer", "messages")
+	require.Len(t, matches, 1)
+	assert.NotContains(t, matches[0].Snippet, "[Bash]")
+
+	matches = search("zanzibar")
+	require.Len(t, matches, 1)
+	assert.Equal(t, "thinking", matches[0].Location)
+}
+
 func TestOMPSyncAllAndChangedPathUseProvider(t *testing.T) {
 	env := setupTestEnv(t)
 	path := env.writeSession(
