@@ -11,12 +11,13 @@ The latest release is
 
 **New features**
 
-- Sync Claude.ai chats from the desktop or Chrome Import dialog without downloading an
-  export. Later runs fetch new or changed chats, including branch switches.
-  Run `agentsview chrome setup` once and load the printed folder in Chrome.
-  Chrome Sync also works from `agentsview import --type claude-ai --sync` with no AgentsView tab open.
-  See [Claude.ai Sync](https://agentsview.io/docs/chat-import/#sync-claudeai-chats) for setup, branch
-  updates, Trash copies, and failure handling.
+- Sync Claude.ai chats from the desktop or Chrome Import dialog without
+  downloading an export. Later runs fetch new or changed chats, including branch
+  switches. Run `agentsview chrome setup` once and load the printed folder in
+  Chrome. Chrome Sync also works from
+  `agentsview import --type claude-ai --sync` with no AgentsView tab open. See
+  [Claude.ai Sync](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
+  for setup, branch updates, Trash copies, and failure handling.
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on
