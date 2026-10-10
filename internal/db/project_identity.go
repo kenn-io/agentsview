@@ -1840,7 +1840,7 @@ func (db *DB) ListPublishableSessionProjectIdentitySnapshots(
 	}
 	chunkSize := max(maxSQLVars-len(projects)-len(excludeProjects), 1)
 	var out []export.ProjectIdentityObservation
-	err := queryChunkedSize(sessionIDs, chunkSize, func(ids []string) error {
+	err := QueryChunkedSize(sessionIDs, chunkSize, func(ids []string) error {
 		rows, err := query(ids)
 		if err != nil {
 			return err

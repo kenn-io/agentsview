@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
@@ -18,12 +20,12 @@ func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) 
 	database := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, database))
 
-	// Cross the duckMaxSQLVars chunk boundary with duplicate labels that
+	// Cross the chunk boundary with duplicate labels that
 	// straddle it, and interleave two source archives across the label
 	// range: the ORDER BY leads with source_archive_id, so concatenated
 	// per-chunk (label-range) results are not globally ordered until the
 	// Go re-sort restores the documented ordering.
-	const labelCount = duckMaxSQLVars + 50
+	const labelCount = readbase.MaxSQLVars + 50
 	observedAt := time.Date(2025, 6, 2, 10, 0, 0, 0, time.UTC)
 	labels := make([]string, 0, 2*labelCount)
 	const batch = 200

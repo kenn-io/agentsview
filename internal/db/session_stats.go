@@ -190,7 +190,7 @@ func (db *DB) computeToolAndModelMix(
 func (db *DB) accumulateToolMix(
 	ctx context.Context, stats *SessionStats, sessionIDs []string,
 ) error {
-	ph, args := inPlaceholders(sessionIDs)
+	ph, args := InPlaceholders(sessionIDs)
 	q := `SELECT category, COUNT(*)
 		FROM tool_calls
 		WHERE session_id IN ` + ph + `
@@ -225,7 +225,7 @@ func (db *DB) accumulateToolMix(
 func (db *DB) accumulateModelMix(
 	ctx context.Context, stats *SessionStats, sessionIDs []string,
 ) error {
-	ph, args := inPlaceholders(sessionIDs)
+	ph, args := InPlaceholders(sessionIDs)
 	q := `SELECT model, COALESCE(SUM(output_tokens), 0)
 		FROM messages
 		WHERE session_id IN ` + ph + `
@@ -482,12 +482,12 @@ func (db *DB) loadSessionsInWindow(
 	}
 
 	if len(f.IncludeProjects) > 0 {
-		ph, inArgs := inPlaceholders(f.IncludeProjects)
+		ph, inArgs := InPlaceholders(f.IncludeProjects)
 		preds = append(preds, "project IN "+ph)
 		args = append(args, inArgs...)
 	}
 	if len(f.ExcludeProjects) > 0 {
-		ph, inArgs := inPlaceholders(f.ExcludeProjects)
+		ph, inArgs := InPlaceholders(f.ExcludeProjects)
 		preds = append(preds, "project NOT IN "+ph)
 		args = append(args, inArgs...)
 	}
@@ -1093,7 +1093,7 @@ func (db *DB) accumulateCacheTotals(
 	pricing *export.PricingResolver,
 	perSession map[string]*sessionCacheTotals,
 ) error {
-	ph, args := inPlaceholders(sessionIDs)
+	ph, args := InPlaceholders(sessionIDs)
 	// ORDER BY (session_id, ordinal) so floating-point sums are
 	// reproducible across runs: SQLite is free to return rows in any
 	// physical order otherwise, and (a+b)+c != a+(b+c) in IEEE 754.
@@ -1260,7 +1260,7 @@ func (db *DB) accumulateHourlyUTC(
 	from, to time.Time,
 	perHour map[string]*TemporalHourlyUTCEntry,
 ) error {
-	ph, args := inPlaceholders(sessionIDs)
+	ph, args := InPlaceholders(sessionIDs)
 	args = append(args,
 		from.UTC().Format(time.RFC3339Nano),
 		to.UTC().Format(time.RFC3339Nano),
@@ -1461,7 +1461,7 @@ func (db *DB) accumulateAdoption(
 	skillNames map[string]struct{},
 	totalSubagents *int,
 ) error {
-	ph, args := inPlaceholders(sessionIDs)
+	ph, args := InPlaceholders(sessionIDs)
 	q := `SELECT session_id, tool_name, COALESCE(skill_name, '')
 		FROM tool_calls
 		WHERE session_id IN ` + ph + `

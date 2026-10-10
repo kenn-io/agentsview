@@ -385,6 +385,16 @@ Each session item shows:
   `session_index.jsonl` for both current and archived sessions. Qwen Code,
   Gemini CLI, Kimi CLI, and OpenClaw titles, current Claude Code `/rename`
   names, and keeping titles out of the first message are included in 0.45.0.
+<!-- Modification: 2026-10-10 20:41:14 +08:00; model: unknown (not provided by the session); platform: Codex. Updated title behavior verified against source and isolated tests; live upgrade not performed. -->
+  Antigravity IDE and Qoder native titles are also supported in unreleased
+  builds. Antigravity reads its local conversation summary database. On macOS,
+  Qoder reads sibling session JSON first, then its own local application
+  database. Missing or unreadable title sources keep the stored name; an
+  explicitly empty database title clears the native name. Startup catch-up
+  and a 60-second sweep recover missed changes. Manual AgentsView names still
+  take precedence. The first upgrade reparses existing sources to backfill
+  titles; subsequent title-only refreshes do not rewrite messages or usage.
+
 - **Model name** — the AI model used for the session, shown when available
   (including Codex session models).
 - **Star button** — click the star icon or press `s` to star a session. Starred

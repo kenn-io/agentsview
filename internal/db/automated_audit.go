@@ -170,7 +170,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 	}
 
 	err = queryChunked(unresolved, func(ids []string) error {
-		placeholders, args := inPlaceholders(ids)
+		placeholders, args := InPlaceholders(ids)
 		fullRows, err := w.Query(ctx,
 			`SELECT
 				s.id,

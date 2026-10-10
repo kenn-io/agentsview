@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 var (
@@ -651,8 +652,8 @@ func (s *Store) GetSessionUsageRows(
 	// snapshot and dedup passes below need the complete row set, the same
 	// way the SQLite and PostgreSQL stores chunk this load.
 	var rowsAcc []clickSessionUsageOrderedRow
-	err = chQueryChunked(ids, func(chunk []string) error {
-		inList, inArgs := chInPlaceholders(chunk)
+	err = db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
+		inList, inArgs := db.InPlaceholders(chunk)
 		query := clickUsageNormalizedQuery(
 			chUsageStoredMessageEligibility+" AND s.id IN "+inList,
 			chUsageEventEligibility+" AND s.id IN "+inList,
@@ -1281,7 +1282,7 @@ func (s *Store) scanActivityUsageRows(
 		if r.messageOrdinal.Valid {
 			ordinal = r.messageOrdinal.Int64
 		}
-		parsedTS, ok := parseAnalyticsTime(r.ts)
+		parsedTS, ok := readbase.ParseAnalyticsTime(r.ts)
 		if len(chunk) == chunkRows {
 			chunks = append(chunks, chunk)
 			chunk = make([]clickSessionUsageOrderedRow, 0, chunkRows)

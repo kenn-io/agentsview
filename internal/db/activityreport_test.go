@@ -1638,7 +1638,7 @@ func TestGetActivityReport_ManySessionsWithinSQLiteVarLimit(t *testing.T) {
 
 	// Guard: prove the lowered limit is live on the pool, so a setup that
 	// failed to constrain it cannot mask the regression checked below.
-	overLimitPh, overLimitArgs := inPlaceholders(make([]string, 1001))
+	overLimitPh, overLimitArgs := InPlaceholders(make([]string, 1001))
 	var probe int
 	probeErr := d.getReader().QueryRowContext(
 		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...).Scan(&probe)

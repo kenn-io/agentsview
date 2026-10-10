@@ -329,7 +329,7 @@ func (db *DB) loadWorktreeCandidateSessions(
 ) ([]WorktreeCandidateSession, error) {
 	byID := make(map[string]WorktreeCandidateSession, len(ids))
 	err := queryChunked(ids, func(chunk []string) error {
-		placeholders, args := inPlaceholders(chunk)
+		placeholders, args := InPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT s.id, s.project, s.machine, s.cwd,
 				COALESCE(snap.session_id, ''), COALESCE(snap.project, ''),

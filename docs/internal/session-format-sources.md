@@ -1957,6 +1957,12 @@ schemas keep their existing ordering behavior.
   archive reconciliation fixture. The official support post linked above still
   documents the `agent-transcripts` location; the history documentation link
   now redirects to the Agent overview.
+  Synthetic S3 fixtures verify that discovery preserves same-ID sources in
+  different projects and sync applies the local collision policy, including
+  continuation relationships. These are archive policies, not producer
+  guarantees of globally unique IDs.
+  Reverified 2026-10-10 with synthetic S3 fixtures: separately imported roots
+  retain their saved IDs and stars through same-root format and layout changes.
 
 ## Cursor IDE (`cursor-ide`)
 
@@ -3288,6 +3294,14 @@ schemas keep their existing ordering behavior.
   roots share that ID. An unreadable database still reports an error instead
   of replacing archived content with a potentially incomplete transcript.
 
+<!-- Modification: 2026-10-10 20:41:14 +08:00; model: unknown (not provided by the session); platform: Codex. Updated title behavior verified against source and isolated tests; live upgrade not performed. -->
+- **Title evidence:** Local SQLite schema and ID matching checked 2026-10-10:
+  `conversation_summaries.db`, table `conversation_summaries`, columns
+  `conversation_id` and `title`. IDs match the per-session database basename
+  or brain transcript conversation ID. This is local observation, not a
+  published producer schema. Synthetic parser and sync tests cover missing
+  rows, SQL NULL, explicit blank titles, and read failures.
+
 ## Antigravity CLI (`antigravity-cli`)
 
 - **Format:** Newer per-session SQLite databases or older encrypted protobuf
@@ -3536,6 +3550,16 @@ schemas keep their existing ordering behavior.
   to Agentsview.
 - **Agentsview:** `internal/parser/qoder.go` and
   `internal/parser/qoder_provider.go`.
+
+<!-- Modification: 2026-10-10 20:41:14 +08:00; model: unknown (not provided by the session); platform: Codex. Updated title behavior verified against source and isolated tests; live upgrade not performed. -->
+- **Title evidence:** macOS application SQLite schema and ID matching checked
+  2026-10-10: `~/Library/Application Support/com.qoder.app.stable/main.sqlite`
+  and `com.qodercn.app.stable/main.sqlite`, table `chat_sessions`, columns
+  `session_id` and `title`. IDs match top-level JSONL filenames. This local
+  observation does not establish non-macOS paths. Non-empty sibling JSON
+  titles take precedence; unreadable JSON preserves the existing title and
+  requests a retry. Synthetic tests cover native local roots, source machine
+  ownership, mirrors, explicit blanks, read failures, and JSON recovery.
 
 ## QwenPaw (`qwenpaw`)
 

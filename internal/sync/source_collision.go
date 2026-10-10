@@ -23,11 +23,12 @@ func (e *Engine) sourceCollisionID(
 	lookupPath string,
 	s *parser.ParsedSession,
 	admitted bool,
+	idPrefix string,
 ) (string, bool, error) {
 	if !collisionPolicyApplies(provider) {
 		return s.ID, false, nil
 	}
-	fullID := applyIDPrefixToID(e.idPrefix, s.ID)
+	fullID := applyIDPrefixToID(idPrefix, s.ID)
 	records, err := e.sessionPathRecords(ctx, fullID)
 	if err != nil {
 		return "", false, err
@@ -53,7 +54,7 @@ func (e *Engine) sourceCollisionID(
 	if e.storedSourceLivesAt(ctx, provider, stored, lookupPath) {
 		return s.ID, stored != lookupPath, nil
 	}
-	altID, moved := e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath)
+	altID, moved := e.existingAltID(ctx, provider, records, fullID, s.ID, lookupPath, idPrefix)
 	if altID == "" && !admitted {
 		return s.ID, false, nil
 	}
@@ -78,6 +79,9 @@ func (e *Engine) sourceCollisionID(
 // must resolve inside a complete mirror; absence from a partial import is not
 // evidence that the remote file is gone.
 func (e *Engine) storedSourceGone(ctx context.Context, provider parser.Provider, stored string) bool {
+	if isS3SourcePath(stored) {
+		return false
+	}
 	if e.pathRewriter != nil {
 		if !e.completeSourceMirror || e.storedPathResolver == nil {
 			return false
@@ -164,9 +168,9 @@ func (e *Engine) sessionPathRecords(ctx context.Context, fullID string) ([]db.Se
 // source path. It returns "" when no derived id belongs to this file.
 func (e *Engine) existingAltID(
 	ctx context.Context, provider parser.Provider, records []db.SessionPathRecord,
-	fullID, rawID, lookupPath string,
+	fullID, rawID, lookupPath, idPrefix string,
 ) (string, bool) {
-	minted := applyIDPrefixToID(e.idPrefix, parser.AltSessionID(rawID, lookupPath))
+	minted := applyIDPrefixToID(idPrefix, parser.AltSessionID(rawID, lookupPath))
 	for _, r := range records {
 		if r.ID != fullID && (r.ID == minted || e.storedSourceLivesAt(ctx, provider, r.FilePath, lookupPath)) {
 			return rawID + r.ID[len(fullID):], r.FilePath != "" && r.FilePath != lookupPath
@@ -207,6 +211,19 @@ func (e *Engine) storedSourceLivesAt(
 ) bool {
 	if stored == "" || stored == path {
 		return stored != "" && stored == path
+	}
+	if isS3SourcePath(stored) || isS3SourcePath(path) {
+		if provider.Definition().Type == parser.AgentCursor {
+			roots := parser.CursorS3SourceRoots(e.sources().agentDirs[parser.AgentCursor])
+			for _, root := range roots {
+				key := parser.CursorS3SourceKey([]string{root}, stored)
+				incomingKey := parser.CursorS3SourceKey([]string{root}, path)
+				if key != "" || incomingKey != "" {
+					return key != "" && key == incomingKey
+				}
+			}
+		}
+		return false
 	}
 	if e.pathRewriter != nil {
 		if !e.completeSourceMirror || e.storedPathResolver == nil {

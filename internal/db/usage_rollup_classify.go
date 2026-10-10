@@ -393,7 +393,7 @@ func usageFactIdentitiesForSessions(
 ) (usageDedupIdentitySet, error) {
 	set := newUsageDedupIdentitySet()
 	err := queryChunked(sessionIDs, func(chunk []string) error {
-		placeholders, args := inPlaceholders(chunk)
+		placeholders, args := InPlaceholders(chunk)
 		return scanUsageIdentityFactRows(ctx, runner, `SELECT DISTINCT
 			f.claude_message_id, f.claude_request_id, f.source_uuid,
 			f.usage_dedup_key
@@ -414,7 +414,7 @@ func usageSpoolIdentitiesForSessions(
 ) (usageDedupIdentitySet, error) {
 	set := newUsageDedupIdentitySet()
 	err := queryChunked(sessionIDs, func(chunk []string) error {
-		placeholders, args := inPlaceholders(chunk)
+		placeholders, args := InPlaceholders(chunk)
 		return scanUsageIdentityFactRows(ctx, runner, `SELECT DISTINCT
 			claude_message_id, claude_request_id, source_uuid, usage_dedup_key
 			FROM usage_fill_spool.facts
@@ -530,7 +530,7 @@ func invalidateUsageDedupSharers(
 		return err
 	}
 	return queryChunked(sharers, func(chunk []string) error {
-		placeholders, args := inPlaceholders(chunk)
+		placeholders, args := InPlaceholders(chunk)
 		if _, err := runner.ExecContext(ctx,
 			`DELETE FROM usage_rollup_installs WHERE session_id IN `+placeholders,
 			args...); err != nil {

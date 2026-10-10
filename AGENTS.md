@@ -132,7 +132,7 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
 
 - `cmd/agentsview/`: CLI and server entry points
 - `internal/db/`: SQLite archive and search
-- `internal/readbase/`: shared replica and mirror catalog reads
+- `internal/readbase/`: shared replica and mirror catalog and analytics reads
 - `internal/postgres/`: PostgreSQL sync and read store
 - `internal/duckdb/`: disposable DuckDB mirror and Quack reads
 - `internal/clickhouse/`: ClickHouse remote mirror and read store

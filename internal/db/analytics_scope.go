@@ -22,6 +22,20 @@ func (f AnalyticsFilter) MessageScopeFilter() ScopeFilter {
 // MessageScope groups model-matched messages by session. Nil means no model filter.
 type MessageScope map[string][]ScopedMessage
 
+// UniqueAnalyticsIDs returns IDs in first-seen order, including a non-nil empty result.
+func UniqueAnalyticsIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
+}
+
 // resolveAnalyticsMessageScope streams candidate messages for sessionIDs and
 // reduces them to the model/time-matched set. It returns nil when no model
 // filter is set, signalling the caller to keep its session-grain path.
@@ -36,15 +50,7 @@ func (db *DB) resolveAnalyticsMessageScope(
 		return nil, nil
 	}
 
-	seen := make(map[string]struct{}, len(sessionIDs))
-	unique := make([]string, 0, len(sessionIDs))
-	for _, id := range sessionIDs {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		unique = append(unique, id)
-	}
+	unique := UniqueAnalyticsIDs(sessionIDs)
 
 	flt := f.MessageScopeFilter()
 	loc := f.location()
@@ -60,7 +66,7 @@ func (db *DB) resolveAnalyticsMessageScope(
 
 	if err := queryChunked(unique, func(chunk []string) error {
 		reducer := NewScopeReducer(flt, emit)
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx, `
 			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system, COALESCE(model, ''),
 				has_thinking, has_tool_use, COALESCE(timestamp, ''),

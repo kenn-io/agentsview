@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -57,7 +58,7 @@ func discoverCursorS3ByRoot(
 	}
 
 	byRoot := make(map[string][]DiscoveredFile)
-	for _, transcript := range preferCursorS3Transcripts(candidates) {
+	for _, transcript := range preferCursorS3Transcripts(roots, candidates) {
 		byRoot[transcript.root] = append(
 			byRoot[transcript.root], transcript.file,
 		)
@@ -70,11 +71,17 @@ func discoverCursorS3ByRoot(
 // <project>/agent-transcripts/, including a parent session's subagents
 // directory. Other .jsonl/.txt objects are ignored.
 func keepCursorS3Session(_ string, segs []string) bool {
+	_, ok := cursorS3TranscriptLocation(segs)
+	return ok
+}
+
+func cursorS3TranscriptLocation(segs []string) (cursorTranscriptLocation, bool) {
 	if len(segs) == 2 {
-		return cursorS3TranscriptName(segs[1])
+		loc := cursorTranscriptLocation{ProjectDir: segs[0], RawID: strings.TrimSuffix(segs[1], path.Ext(segs[1]))}
+		return loc, cursorS3TranscriptName(segs[1])
 	}
 	loc, ok := parseCursorTranscriptRelParts(segs)
-	return ok && IsValidSessionID(loc.RawID)
+	return loc, ok && IsValidSessionID(loc.RawID)
 }
 
 func cursorS3TranscriptName(name string) bool {
@@ -85,26 +92,42 @@ func cursorS3TranscriptName(name string) bool {
 	return IsValidSessionID(stem)
 }
 
-// preferCursorS3Transcripts keeps one object per machine and session stem
+// CursorS3SourceRoots orders S3 roots from broadest to narrowest for source lookup.
+func CursorS3SourceRoots(roots []string) []string {
+	roots = slices.DeleteFunc(slices.Clone(roots), func(root string) bool { return !isS3URI(root) })
+	slices.SortFunc(roots, func(a, b string) int { return len(a) - len(b) })
+	return roots
+}
+
+// CursorS3SourceKey identifies alternatives using roots ordered by CursorS3SourceRoots.
+func CursorS3SourceKey(roots []string, uri string) string {
+	for _, root := range roots {
+		rel, ok := s3RelativePath(root, uri)
+		if !ok {
+			continue
+		}
+		if loc, ok := cursorS3TranscriptLocation(strings.Split(rel, "/")); ok {
+			return s3MachineFromRoot(root, "cursor") + "/" + loc.ProjectDir + "/" + loc.RawID
+		}
+	}
+	return ""
+}
+
+// preferCursorS3Transcripts keeps one object per machine, project and session stem
 // across all configured S3 roots. Precedence matches local Cursor discovery: a
 // session's own nested <id>/<id>.ext or flat <id>.ext over a copy in another
 // session's subagents/<id>.ext, then .jsonl over .txt, then nested over flat,
 // then lexical path.
 func preferCursorS3Transcripts(
+	roots []string,
 	transcripts []cursorS3Transcript,
 ) []cursorS3Transcript {
-	type key struct {
-		machine string
-		stem    string
-	}
-	best := make(map[key]cursorS3Transcript, len(transcripts))
-	order := make([]key, 0, len(transcripts))
+	roots = CursorS3SourceRoots(roots)
+	best := make(map[string]cursorS3Transcript, len(transcripts))
+	order := make([]string, 0, len(transcripts))
 	for _, transcript := range transcripts {
 		file := transcript.file
-		k := key{
-			machine: file.Machine,
-			stem:    strings.TrimSuffix(path.Base(file.Path), path.Ext(file.Path)),
-		}
+		k := CursorS3SourceKey(roots, file.Path)
 		prev, ok := best[k]
 		if !ok {
 			best[k] = transcript

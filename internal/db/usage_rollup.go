@@ -461,7 +461,7 @@ func readUsageRollupInstalls(
 		scope = append(scope, version.SessionID)
 	}
 	if len(scope) < maxSQLVars {
-		placeholders, scopeArgs := inPlaceholders(scope)
+		placeholders, scopeArgs := InPlaceholders(scope)
 		query += ` AND i.session_id IN ` + placeholders
 		args = append(args, scopeArgs...)
 	}

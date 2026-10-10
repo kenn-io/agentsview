@@ -18,10 +18,12 @@ test("keeps the concurrency overlay selector inside its chart card", async ({ pa
 });
 
 test("switches message metrics by keyboard and fits narrow chart cards", async ({ page }) => {
-  // The seeded long-running sessions have messages on this day.
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() - 23);
-  await page.goto(`/activity?preset=day&date=${date.toISOString().slice(0, 10)}&timezone=UTC`);
+  // This seeded day includes 750 user messages from the two large sessions.
+  const response = await page.request.get("/api/v1/sessions/test-session-xlarge-5500");
+  expect(response.ok()).toBe(true);
+  const session = await response.json();
+  const date = new Date(session.started_at).toISOString().slice(0, 10);
+  await page.goto(`/activity?preset=day&date=${date}&timezone=UTC`);
   const chart = page.locator(".timeline");
   const user = chart.getByRole("radio", { name: "User messages", exact: true });
   await user.click();

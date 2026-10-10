@@ -9,6 +9,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // ListProjectIdentityObservations returns the mirrored identity
@@ -16,7 +17,7 @@ import (
 // observation when labels is nil. Rows are ordered by (source_archive_id,
 // project, machine, root_path, git_remote). Label lists of any size are
 // supported: labels are sorted, deduplicated, and split into
-// duckMaxSQLVars-sized chunks so the IN list stays within driver
+// bounded chunks so the IN list stays within driver
 // bind-variable limits. source_archive_id leads the ORDER BY, so
 // per-chunk (label-range) results do not concatenate into the global
 // order; when more than one chunk runs, the combined rows are re-sorted
@@ -35,11 +36,11 @@ func (s *Store) ListProjectIdentityObservations(
 	sorted := slices.Clone(labels)
 	slices.Sort(sorted)
 	sorted = slices.Compact(sorted)
-	if len(sorted) <= duckMaxSQLVars {
+	if len(sorted) <= readbase.MaxSQLVars {
 		return s.listProjectIdentityObservationsChunk(ctx, sorted)
 	}
 	var out []export.ProjectIdentityObservation
-	err := duckQueryChunked(sorted, func(chunk []string) error {
+	err := db.QueryChunkedSize(sorted, readbase.MaxSQLVars, func(chunk []string) error {
 		part, err := s.listProjectIdentityObservationsChunk(ctx, chunk)
 		if err != nil {
 			return err

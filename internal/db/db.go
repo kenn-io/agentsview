@@ -567,12 +567,13 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // them.)
 // (127: reparse readable sources to classify headless workers as subagents.)
 // (128: reparse all sources to recover TraeX mutation rollouts and per-response usage.)
-// (129: reparse all sources to backfill session_name for Antigravity and Qoder
+// (129: recover collapsed S3 Cursor conversations, including cached sources.)
+// (130: reparse all sources to backfill session_name for Antigravity and Qoder
 // from their shared title stores -- conversation_summaries.db and the Qoder
 // application main.sqlite. Parsers now read those stores; the one-time reparse
 // fills in titles for sessions imported before the parsers could, and later
 // renames arrive through the title-only refresh path rather than a new bump.)
-const dataVersion = 129
+const dataVersion = 130
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -965,7 +965,7 @@ func loadUsageSourceVersions(
 ) (map[string]usageSourceVersion, error) {
 	current := make(map[string]usageSourceVersion, len(ids))
 	if err := queryChunked(ids, func(chunk []string) error {
-		placeholders, args := inPlaceholders(chunk)
+		placeholders, args := InPlaceholders(chunk)
 		rows, queryErr := tx.QueryContext(ctx, `
 			SELECT id, COALESCE(sync_marker, ''),
 			       COALESCE(transcript_revision, '0')

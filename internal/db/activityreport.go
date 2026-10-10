@@ -152,7 +152,7 @@ func (db *DB) activityReportMessageCounts(
 ) error {
 	counts := activity.NewMessageAccumulator(q, artifacts)
 	return queryChunked(ids, func(chunk []string) error {
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		args = append(args,
 			PaddedUTCBound(q.RangeStart.Format(time.RFC3339Nano), -14),
 			PaddedUTCBound(q.EffectiveEnd.Format(time.RFC3339Nano), 14),
@@ -216,7 +216,7 @@ func (db *DB) GetSessionUsageRows(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		query := usageRowSelect() + ` AND u.session_id IN ` + ph
 		rows, queryErr := db.getReader().QueryContext(ctx, query, args...)
 		if queryErr != nil {
@@ -619,7 +619,7 @@ func (db *DB) activityReportActivityFrom(
 		return out, nil
 	}
 	err := queryChunked(ids, func(chunk []string) error {
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		query := `SELECT session_id, ordinal, role,
 			COALESCE(timestamp, ''), model
 		FROM messages

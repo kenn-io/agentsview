@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/readbase"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
@@ -96,23 +97,9 @@ type chUsageBounds struct {
 	to   string
 }
 
-func chUsagePaddedUTCBound(ts string, hours int) string {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return ts
-	}
-	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
-}
-
 func chUsageBoundsForFilter(f db.UsageFilter) chUsageBounds {
-	var b chUsageBounds
-	if f.From != "" {
-		b.from = chUsagePaddedUTCBound(f.From+"T00:00:00Z", -14)
-	}
-	if f.To != "" {
-		b.to = chUsagePaddedUTCBound(f.To+"T23:59:59Z", 14)
-	}
-	return b
+	from, to := readbase.PaddedDateBounds(f.From, f.To)
+	return chUsageBounds{from: from, to: to}
 }
 
 func appendChUsageColumnBounds(
@@ -1009,7 +996,7 @@ type chSessionUsageRow struct {
 }
 
 func chUsageLookupModel(model, ts string) string {
-	timestamp, _ := parseAnalyticsTime(ts)
+	timestamp, _ := readbase.ParseAnalyticsTime(ts)
 	if canonical := pricingpkg.CanonicalModelForDate(model, timestamp); canonical != "" {
 		return canonical
 	}
@@ -1017,7 +1004,7 @@ func chUsageLookupModel(model, ts string) string {
 }
 
 func chUsagePricingTimestamp(ts string) time.Time {
-	timestamp, _ := parseAnalyticsTime(ts)
+	timestamp, _ := readbase.ParseAnalyticsTime(ts)
 	return timestamp
 }
 
@@ -2478,7 +2465,7 @@ func (s *Store) GetUsageMatchingSessionCount(
 		if err := rows.Scan(&id, &ts); err != nil {
 			return 0, fmt.Errorf("scanning matching usage session: %w", err)
 		}
-		date := analyticsLocalDate(formatDBTime(ts), f.Timezone)
+		date := readbase.AnalyticsLocalDate(formatDBTime(ts), f.Timezone)
 		if date == "" {
 			continue
 		}

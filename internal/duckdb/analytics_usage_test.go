@@ -11,10 +11,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -592,29 +594,36 @@ func TestDuckUsageAutomatedScopeOneShotExemption(t *testing.T) {
 }
 
 func TestDuckSignalMessagesFormatsTimestampValues(t *testing.T) {
-	ctx := t.Context()
-	store, _ := newSyncedStore(t)
-
-	_, err := store.duck.ExecContext(ctx, `
-		INSERT INTO messages (
-			id, session_id, ordinal, role, content, timestamp,
-			is_system, has_tool_use
-		) VALUES
-			(9101, 'signal-time', 0, 'user', 'with timestamp',
-			 CAST('2026-01-20T12:34:56Z' AS TIMESTAMP), FALSE, FALSE),
-			(9102, 'signal-time', 1, 'assistant', 'without timestamp',
-			 NULL, FALSE, FALSE)`)
-	require.NoError(t, err)
-
-	got, err := store.duckSignalMessages(
-		ctx,
-		[]db.SignalRow{{ID: "signal-time"}},
-		db.AnalyticsFilter{},
-	)
-	require.NoError(t, err)
-	require.Len(t, got["signal-time"], 2)
-	assert.Equal(t, "2026-01-20T12:34:56Z", got["signal-time"][0].Timestamp)
-	assert.Empty(t, got["signal-time"][1].Timestamp)
+	const sessionID = "signal-time"
+	for _, tt := range []struct {
+		name      string
+		timestamp string
+		want      string
+		ordinal   int
+	}{
+		{name: "timestamp", timestamp: "2026-01-20T12:00:00Z", want: "add a guard", ordinal: 2},
+		{name: "null timestamp", want: "initial substantive prompt longer than thirty characters", ordinal: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+				Session: syncSession(sessionID, "alpha", "initial", "2026-01-20T12:00:00Z", 3),
+				Messages: []db.Message{
+					syncMessage(sessionID, 0, "user", "initial substantive prompt longer than thirty characters", "2026-01-20T12:00:00Z"),
+					syncMessage(sessionID, 1, "assistant", "response", tt.timestamp),
+					syncMessage(sessionID, 2, "user", "add a guard", "2026-01-20T12:34:56Z"),
+				},
+				Signals:         db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion, ShortPromptCount: 1}},
+				DataVersion:     1,
+				ReplaceMessages: true,
+			}})
+			got, err := store.GetAnalyticsSignalSessions(t.Context(), db.AnalyticsFilter{}, "short_prompt_count", 10)
+			require.NoError(t, err)
+			require.Len(t, got.Sessions, 1)
+			assert.Equal(t, tt.want, got.Sessions[0].Excerpt)
+			require.NotNil(t, got.Sessions[0].MessageOrdinal)
+			assert.Equal(t, tt.ordinal, *got.Sessions[0].MessageOrdinal)
+		})
+	}
 }
 
 func TestDuckAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
@@ -705,35 +714,87 @@ func TestDuckAnalyticsSignalSessionsModelFilterKeepsParserUserEvidence(
 	assert.Equal(t, 0, *resp.Sessions[0].MessageOrdinal)
 }
 
-func TestDuckAnalyticsSummaryModelFilterPopulatesModels(t *testing.T) {
-	ctx := t.Context()
-	start := "2024-06-01T09:00:00Z"
-	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{
-		{
-			Session: syncSession("duck-model-a", "alpha", "gpt", start, 1),
-			Messages: []db.Message{
-				duckModelMessage("duck-model-a", 0, "assistant", "gpt", start, "gpt-4o"),
-			},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-		{
-			Session: syncSession("duck-model-b", "alpha", "claude", start, 1),
-			Messages: []db.Message{
-				duckModelMessage("duck-model-b", 0, "assistant", "claude", start, "claude-3-5-sonnet"),
-			},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-	})
+func TestDuckAnalyticsSummaryScopedModels(t *testing.T) {
+	t.Run("model_and_hour", func(t *testing.T) {
+		ctx := t.Context()
 
-	resp, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
-		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
-		Model: "gpt-4o",
+		mixedSession := syncSession(
+			"duck-summary-output-mixed", "alpha", "mixed",
+			"2024-06-01T10:00:00Z", 2,
+		)
+		mixedSession.TotalOutputTokens = 111
+		mixedSession.HasTotalOutputTokens = true
+		mixedGpt := duckModelMessage(
+			"duck-summary-output-mixed", 0, "assistant", "gpt",
+			"2024-06-01T10:00:00Z", "gpt-4o",
+		)
+		mixedGpt.TokenUsage = []byte(`{"output_tokens":11}`)
+		mixedGpt.OutputTokens = 11
+		mixedGpt.HasOutputTokens = true
+		mixedClaude := duckModelMessage(
+			"duck-summary-output-mixed", 1, "assistant", "claude",
+			"2024-06-01T10:05:00Z", "claude-3-5-sonnet",
+		)
+		mixedClaude.TokenUsage = []byte(`{"output_tokens":100}`)
+		mixedClaude.OutputTokens = 100
+		mixedClaude.HasOutputTokens = true
+
+		uncoveredSession := syncSession(
+			"duck-summary-output-uncovered", "alpha", "mixed",
+			"2024-06-01T10:40:00Z", 2,
+		)
+		uncoveredSession.TotalOutputTokens = 90
+		uncoveredSession.HasTotalOutputTokens = true
+		uncoveredGpt := duckModelMessage(
+			"duck-summary-output-uncovered", 0, "assistant", "gpt",
+			"2024-06-01T10:40:00Z", "gpt-4o",
+		)
+		uncoveredGpt.TokenUsage = nil
+		uncoveredGpt.ContextTokens = 0
+		uncoveredGpt.OutputTokens = 0
+		uncoveredGpt.HasContextTokens = false
+		uncoveredGpt.HasOutputTokens = false
+		uncoveredClaude := duckModelMessage(
+			"duck-summary-output-uncovered", 1, "assistant", "claude",
+			"2024-06-01T10:45:00Z", "claude-3-5-sonnet",
+		)
+		uncoveredClaude.TokenUsage = []byte(`{"output_tokens":90}`)
+		uncoveredClaude.OutputTokens = 90
+		uncoveredClaude.HasOutputTokens = true
+
+		store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{
+			{
+				Session: mixedSession,
+				Messages: []db.Message{
+					mixedGpt,
+					mixedClaude,
+				},
+				DataVersion:     1,
+				ReplaceMessages: true,
+			},
+			{
+				Session: uncoveredSession,
+				Messages: []db.Message{
+					uncoveredGpt,
+					uncoveredClaude,
+				},
+				DataVersion:     1,
+				ReplaceMessages: true,
+			},
+		})
+
+		hour := 10
+		resp, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
+			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+			Model: "gpt-4o", Hour: &hour,
+		})
+		require.NoError(t, err, "GetAnalyticsSummary")
+		assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
+		assert.Equal(t, 11, resp.TotalOutputTokens, "TotalOutputTokens")
+		assert.Equal(t, 1, resp.TokenReportingSessions, "TokenReportingSessions")
+		assert.Equal(t, 2, resp.TotalSessions, "TotalSessions")
+		assert.Equal(t, 2, resp.TotalMessages, "TotalMessages")
 	})
-	require.NoError(t, err, "GetAnalyticsSummary")
-	assert.Equal(t, 1, resp.TotalSessions, "TotalSessions")
-	assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
 }
 
 func TestDuckAnalyticsMixedModelFilters(t *testing.T) {
@@ -785,122 +846,6 @@ func assertDuckAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(
 	for _, summary := range resp.Agents {
 		assert.Equal(t, 1, summary.Messages, "AgentMessages")
 	}
-}
-
-func TestDuckAnalyticsSummaryModelsUseMatchingHourRowsOnly(t *testing.T) {
-	ctx := t.Context()
-	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{
-		{
-			Session: syncSession(
-				"duck-summary-hour-mixed", "alpha", "mixed",
-				"2024-06-01T09:00:00Z", 2,
-			),
-			Messages: []db.Message{
-				duckModelMessage(
-					"duck-summary-hour-mixed", 0, "assistant", "gpt",
-					"2024-06-01T09:05:00Z", "gpt-4o",
-				),
-				duckModelMessage(
-					"duck-summary-hour-mixed", 1, "assistant", "claude",
-					"2024-06-01T10:05:00Z", "claude-3-5-sonnet",
-				),
-			},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-	})
-
-	hour := 9
-	resp, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
-		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
-		Hour: &hour,
-	})
-	require.NoError(t, err, "GetAnalyticsSummary")
-	assert.Equal(t, 1, resp.TotalSessions, "TotalSessions")
-	assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
-}
-
-func TestDuckAnalyticsSummaryModelFilterUsesFilteredOutputTokens(
-	t *testing.T,
-) {
-	ctx := t.Context()
-
-	mixedSession := syncSession(
-		"duck-summary-output-mixed", "alpha", "mixed",
-		"2024-06-01T10:00:00Z", 2,
-	)
-	mixedSession.TotalOutputTokens = 111
-	mixedSession.HasTotalOutputTokens = true
-	mixedGpt := duckModelMessage(
-		"duck-summary-output-mixed", 0, "assistant", "gpt",
-		"2024-06-01T10:00:00Z", "gpt-4o",
-	)
-	mixedGpt.TokenUsage = []byte(`{"output_tokens":11}`)
-	mixedGpt.OutputTokens = 11
-	mixedGpt.HasOutputTokens = true
-	mixedClaude := duckModelMessage(
-		"duck-summary-output-mixed", 1, "assistant", "claude",
-		"2024-06-01T10:05:00Z", "claude-3-5-sonnet",
-	)
-	mixedClaude.TokenUsage = []byte(`{"output_tokens":100}`)
-	mixedClaude.OutputTokens = 100
-	mixedClaude.HasOutputTokens = true
-
-	uncoveredSession := syncSession(
-		"duck-summary-output-uncovered", "alpha", "mixed",
-		"2024-06-01T10:40:00Z", 2,
-	)
-	uncoveredSession.TotalOutputTokens = 90
-	uncoveredSession.HasTotalOutputTokens = true
-	uncoveredGpt := duckModelMessage(
-		"duck-summary-output-uncovered", 0, "assistant", "gpt",
-		"2024-06-01T10:40:00Z", "gpt-4o",
-	)
-	uncoveredGpt.TokenUsage = nil
-	uncoveredGpt.ContextTokens = 0
-	uncoveredGpt.OutputTokens = 0
-	uncoveredGpt.HasContextTokens = false
-	uncoveredGpt.HasOutputTokens = false
-	uncoveredClaude := duckModelMessage(
-		"duck-summary-output-uncovered", 1, "assistant", "claude",
-		"2024-06-01T10:45:00Z", "claude-3-5-sonnet",
-	)
-	uncoveredClaude.TokenUsage = []byte(`{"output_tokens":90}`)
-	uncoveredClaude.OutputTokens = 90
-	uncoveredClaude.HasOutputTokens = true
-
-	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{
-		{
-			Session: mixedSession,
-			Messages: []db.Message{
-				mixedGpt,
-				mixedClaude,
-			},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-		{
-			Session: uncoveredSession,
-			Messages: []db.Message{
-				uncoveredGpt,
-				uncoveredClaude,
-			},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-	})
-
-	hour := 10
-	resp, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
-		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
-		Model: "gpt-4o", Hour: &hour,
-	})
-	require.NoError(t, err, "GetAnalyticsSummary")
-	assert.Equal(t, 2, resp.TotalSessions, "TotalSessions")
-	assert.Equal(t, 2, resp.TotalMessages, "TotalMessages")
-	assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
-	assert.Equal(t, 11, resp.TotalOutputTokens, "TotalOutputTokens")
-	assert.Equal(t, 1, resp.TokenReportingSessions, "TokenReportingSessions")
 }
 
 func assertDuckAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
@@ -2039,7 +1984,7 @@ func TestDuckAnalyticsToolsWindowsMessagesInSQL(t *testing.T) {
 	resp, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	assert.Equal(t, 3, resp.TotalCalls)
-	from, to := duckAnalyticsWindowBounds(f)
+	from, to := readbase.AnalyticsWindowBounds(f)
 	pred, _ := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
 	require.NotEmpty(t, observedQuery, "production tool query was not observed")
 	assert.Contains(t, observedQuery, pred,
