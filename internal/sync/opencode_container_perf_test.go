@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 
@@ -52,7 +53,7 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 
 	scansBefore := parser.OpenCodeContainerChildScans()
 	lookupsBefore := parser.OpenCodeSessionChildLookups()
-	second := env.engine.SyncAll(t.Context(), nil)
+	second := newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
 	scans := parser.OpenCodeContainerChildScans() - scansBefore
 	lookups := parser.OpenCodeSessionChildLookups() - lookupsBefore
 
@@ -63,8 +64,8 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 		"unchanged sessions must be skipped")
 	assert.Zero(t, scans,
 		"a changed full pass must not scan every child row")
-	assert.LessOrEqual(t, lookups, int64(1),
-		"the changed session's child lookup must stay bounded")
+	assert.Equal(t, int64(1), lookups,
+		"a fresh worker resolves only the changed session's child digest")
 	assertMessageContent(
 		t, env.db, "opencode:ses00000", "changed prompt", "changed answer",
 	)
@@ -526,6 +527,7 @@ func testOpenCodeIdleFullPass(t *testing.T, n int) {
 	oc.replaceTextContent(
 		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
 	)
+	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), db.SQLiteContainerSyncStatePrefix))
 	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
 	assert.Equal(t, 1, stats.Synced,
 		"the ordinary full digest pass must reconcile the child-only edit")
@@ -541,7 +543,7 @@ func testOpenCodeIdleFullPass(t *testing.T, n int) {
 // highest timestamp, and counts or extrema are preserved where noted — so
 // only the complete child identity carried in the stored digest can catch
 // it on the next ordinary full pass (run on a fresh engine, whose missing
-// verification stamp makes the digest listing due immediately).
+// persisted verification is cleared to make the digest listing due immediately).
 func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 	deleteAssistant := func(t *testing.T, oc *openCodeTestDB) {
 		t.Helper()
@@ -685,6 +687,7 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 					t.Context(), []string{env.opencodeDir}, false,
 				))
 			}
+			require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), db.SQLiteContainerSyncStatePrefix))
 			stats := newOpenCodeTestEngine(t, env).SyncAll(
 				t.Context(), nil,
 			)

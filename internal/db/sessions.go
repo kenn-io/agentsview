@@ -5392,6 +5392,9 @@ func (db *DB) GetDataVersionByAgentPath(ctx context.Context, path, agent string)
 	return v
 }
 
+// SQLiteContainerSyncStatePrefix identifies bounded shared-container verification records.
+const SQLiteContainerSyncStatePrefix = "sqlite-container:"
+
 // ResetAllMtimes zeroes file_mtime for every session, forcing
 // the next sync to re-process all files regardless of whether
 // their size+mtime matches what was previously stored. It also
@@ -5403,7 +5406,7 @@ func (db *DB) GetDataVersionByAgentPath(ctx context.Context, path, agent string)
 func (db *DB) ResetAllMtimes(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	// Both statements run in one transaction: a failure between them
+	// These statements run in one transaction: a failure between them
 	// would otherwise leave mtimes zeroed with digests intact,
 	// letting the stat-digest shortcut defeat the forced re-sync.
 	tx, err := db.getWriter().Begin(ctx)
@@ -5423,6 +5426,9 @@ func (db *DB) ResetAllMtimes(ctx context.Context) error {
 		"DELETE FROM provider_freshness",
 	); err != nil {
 		return fmt.Errorf("clearing provider_freshness: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM pg_sync_state WHERE key LIKE ?", SQLiteContainerSyncStatePrefix+"%"); err != nil {
+		return fmt.Errorf("clearing SQLite container verification: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing mtime reset: %w", err)

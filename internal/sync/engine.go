@@ -752,7 +752,7 @@ type Engine struct {
 	// maps a container DB path to its state at the end of the last
 	// completed pass; digestVerifiedAt records when that container last
 	// completed a full composite listing. containerPass is the bookkeeping
-	// for the pass currently running (nil outside passes). Provider freshness
+	// for the pass currently running (nil outside passes). Persisted sync state
 	// restores recent verification after a restart without renewing its age.
 	containerMu                    gosync.Mutex
 	trustedSQLiteContainers        map[string]trustedSQLiteContainer

@@ -2,7 +2,6 @@ package db
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,6 +26,8 @@ func TestResetAllMtimes_ZeroesMtimesAndClearsFreshness(t *testing.T) {
 	require.NoError(t, d.UpsertProviderStatHash(
 		ctx, parser.AgentCodebuff, chatPath, 42))
 
+	require.NoError(t, d.SetSyncState(ctx, SQLiteContainerSyncStatePrefix+"opencode.db", "verification"))
+	require.NoError(t, d.SetSyncState(ctx, "unrelated-metadata", "keep"))
 	_, mtime, ok := d.GetSessionFileInfo(ctx, sessionID)
 	require.True(t, ok)
 	require.Equal(t, int64(1704067200), mtime,
@@ -49,6 +50,12 @@ func TestResetAllMtimes_ZeroesMtimesAndClearsFreshness(t *testing.T) {
 	assert.False(t, present,
 		"provider_freshness must be cleared so the stat-digest "+
 			"shortcut cannot defeat the forced re-sync")
+	value, err := d.GetSyncState(ctx, SQLiteContainerSyncStatePrefix+"opencode.db")
+	require.NoError(t, err)
+	assert.Empty(t, value)
+	value, err = d.GetSyncState(ctx, "unrelated-metadata")
+	require.NoError(t, err)
+	assert.Equal(t, "keep", value)
 }
 
 func TestRestoreSessionStalesSourceAndClearsFreshness(t *testing.T) {
@@ -115,31 +122,4 @@ func TestGetSessionFilePathNotSourceMissing(t *testing.T) {
 			assert.Equal(t, tt.want, d.GetSessionFilePathNotSourceMissing(ctx, tt.id))
 		})
 	}
-}
-
-func TestProviderStatHashPreservesVerificationTime(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	const path = "/sessions/opencode.db"
-	const hash = uint64(1)<<63 | 17
-	verifiedAt := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
-	require.NoError(t, d.UpsertProviderStatHashAt(ctx, parser.AgentOpenCode, path, hash, verifiedAt))
-	got, stamp, found, err := d.GetProviderStatHashWithTime(ctx, parser.AgentOpenCode, path)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, hash, got)
-	assert.Equal(t, verifiedAt, stamp)
-	got, found, err = d.GetProviderStatHash(ctx, parser.AgentOpenCode, path)
-	require.NoError(t, err)
-	assert.True(t, found)
-	assert.Equal(t, hash, got)
-	_, err = d.getWriter().ExecContext(ctx, "UPDATE provider_freshness SET updated_at = 'malformed'")
-	require.NoError(t, err)
-	_, stamp, found, err = d.GetProviderStatHashWithTime(ctx, parser.AgentOpenCode, path)
-	require.NoError(t, err)
-	assert.True(t, found)
-	assert.True(t, stamp.IsZero(), "an invalid timestamp grants no bounded freshness")
-	_, _, found, err = d.GetProviderStatHashWithTime(ctx, parser.AgentOpenCode, path+"-missing")
-	require.NoError(t, err)
-	assert.False(t, found)
 }

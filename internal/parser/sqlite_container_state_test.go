@@ -95,8 +95,6 @@ func TestSQLiteContainerStateDetectsFileReplacement(t *testing.T) {
 	require.True(t, ok, "state must be readable after replacement")
 	assert.NotEqual(t, before, after,
 		"a replaced container file must change the state")
-	assert.NotZero(t, SQLiteContainerStateDigest(before))
-	assert.NotEqual(t, SQLiteContainerStateDigest(before), SQLiteContainerStateDigest(after))
 }
 
 // TestSQLiteContainerStateRejectsUnknownWALFormat pins that the WAL fields

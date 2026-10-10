@@ -57,23 +57,3 @@ func fileStatTupleDigestWithChangeTime(
 	}
 	return h.Sum64()
 }
-
-// SQLiteContainerStateDigest identifies a fully verified container across workers.
-// Device changes after remounting safely require another complete verification.
-func SQLiteContainerStateDigest(state SQLiteContainerState) uint64 {
-	if state.DBInode == 0 || state.DBDevice == 0 {
-		return 0
-	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte("opencode-container:v2:"))
-	var buf [8]byte
-	for _, value := range []uint64{
-		uint64(state.DBSize), uint64(state.DBMtimeSec), uint64(state.DBChangeCounter),
-		state.DBInode, state.DBDevice, uint64(state.WALSize), uint64(state.WALMtimeSec),
-		uint64(state.WALCkptSeq), uint64(state.WALSalt1), uint64(state.WALSalt2),
-	} {
-		binary.LittleEndian.PutUint64(buf[:], value)
-		_, _ = h.Write(buf[:])
-	}
-	return h.Sum64()
-}

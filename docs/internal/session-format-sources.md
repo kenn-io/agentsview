@@ -1618,12 +1618,13 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   directory, worktree rename) whose stamp lands below that child maximum. A
   session or project row that advances past its own stored metadata watermark
   is always a candidate, wherever other sessions' watermarks or its own child
-  timestamps sit. Periodic full passes and streamed reconciliation passes over
-  a recently verified container reuse its versioned SQLite-state digest and
-  original verification time in `provider_freshness` after a worker restart.
-  Reuse requires matching state and expires at the original five-minute
-  deadline. Windows captures native file identity from the same open handle
-  as the database header. A container whose last complete digest verification
+  timestamps sit. Periodic full passes and streamed reconciliation restore a
+  recently verified container's prior SQLite state and original verification
+  time from the archive's sync metadata after a worker restart. Native identity
+  and counter rollback checks reject replacements and restores. Ordinary changed
+  containers can use timestamp-first discovery until the original five-minute
+  deadline. Windows captures native file identity from the same open handle as
+  the database header. A container whose last complete digest verification
   is less than five minutes old may list the watermark form
   (`SQLiteContainerListsWatermarkOnly`): every member gate-skips before
   fingerprinting, so the child identity scan would be archive-sized work
