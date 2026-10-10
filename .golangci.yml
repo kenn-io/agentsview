@@ -161,7 +161,6 @@ linters:
       - builtin$
       - examples$
       - testdata$
-      - ^frontend/node_modules/
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
