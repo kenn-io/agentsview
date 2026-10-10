@@ -1,8 +1,10 @@
 package config
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -43,12 +45,17 @@ func (c *Config) TelemetryScreenClaimsPath() string {
 
 // MigrateTelemetryScreenClaims converts legacy claims and moves unreadable claims aside.
 func (c *Config) MigrateTelemetryScreenClaims() error {
-	path := c.TelemetryScreenClaimsPath()
-	lock := flock.New(path + ".lock")
-	if err := lock.Lock(); err != nil {
+	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
 		return err
 	}
-	defer lock.Unlock()
+	path := c.TelemetryScreenClaimsPath()
+	lock := flock.New(path + ".lock")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := lock.TryLockContext(ctx, 10*time.Millisecond); err != nil {
+		return fmt.Errorf("locking telemetry screen claims: %w", err)
+	}
+	defer func() { _ = lock.Unlock() }()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -65,11 +72,11 @@ func (c *Config) MigrateTelemetryScreenClaims() error {
 		return err
 	}
 	if err := backup.Close(); err != nil {
-		os.Remove(backup.Name())
+		_ = os.Remove(backup.Name())
 		return err
 	}
 	if err := atomicfile.Replace(path, backup.Name()); err != nil {
-		os.Remove(backup.Name())
+		_ = os.Remove(backup.Name())
 		return err
 	}
 	log.Printf("moved unreadable telemetry screen claims to %s", backup.Name())
