@@ -146,6 +146,8 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
   different sizes without scanning every old message to map its session ID.
 - `BenchmarkCopyMixedLegacyPageOrphans` — upgrade archived Codex pages alongside
   other orphans without scanning the entire orphan inventory for each page.
+- `BenchmarkCopySessionMetadataPins` — copy sparse pins from analyzed archives
+  without checking every unpinned message against its transcript.
 - `BenchmarkResyncBulkContributorIngest` — the same archive entering the atomic
   rebuild through a contributor engine.
 - `BenchmarkSearchContentSubstringPage` / `BenchmarkSearchContentFTSPage` — one

@@ -1372,6 +1372,9 @@ func (d *DB) CopySessionMetadataFrom(
 			ctx, tx, "messages", "source_uuid",
 		)
 		if hasSourceUUID {
+			// Visit saved pins before their source messages. With populated
+			// archive statistics, SQLite can otherwise check UUID uniqueness
+			// for every unpinned message, even when there are no pins.
 			if _, err := tx.ExecContext(ctx, `
 				INSERT OR IGNORE INTO main.pinned_messages
 					(session_id, message_id, ordinal, note, created_at)
@@ -1379,7 +1382,7 @@ func (d *DB) CopySessionMetadataFrom(
 					new_m.session_id, new_m.id, new_m.ordinal,
 					op.note, op.created_at
 				FROM old_db.pinned_messages op
-				JOIN old_db.messages old_m
+				CROSS JOIN old_db.messages old_m
 					ON old_m.id = op.message_id
 				LEFT JOIN _codex_page_metadata mapped
 					ON mapped.source_id = old_m.session_id
