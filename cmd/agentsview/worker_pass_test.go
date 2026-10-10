@@ -144,7 +144,7 @@ func TestRunWorkerResyncBuildRecoversWriterWhenCloseFails(t *testing.T) {
 	defer restoreLaunch()
 
 	_, err, spawnFailed := runWorkerResyncBuild(
-		t.Context(), t.Context(), cfg, engine, database, nil,
+		t.Context(), t.Context(), cfg, engine, database, nil, true,
 	)
 	require.False(t, spawnFailed,
 		"a close failure is not a spawn failure and must not trigger the in-process fallback")
@@ -485,6 +485,46 @@ func TestRunForegroundWorkerSyncPassPublishesAndClearsWorkerProgress(
 		"completed worker pass must clear daemon-visible progress")
 }
 
+func TestRunWorkerResyncBuildHonorsRequiredOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		full  bool
+		stale bool
+	}{
+		{name: "current"},
+		{name: "manual", full: true},
+		{name: "stale", stale: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			seed := dbtest.OpenTestDBAt(t, cfg.DBPath)
+			require.NoError(t, seed.Close())
+			if tc.stale {
+				markArchiveStale(t, cfg.DBPath)
+			}
+			database, _ := openTestWriteDB(t, cfg)
+			engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+			t.Cleanup(engine.Close)
+			launched := false
+			sentinel := errors.New("build stopped")
+			restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
+				launched = true
+				return workerResult{}, sentinel
+			})
+			defer restore()
+			_, err, spawnFailed := runWorkerResyncBuild(t.Context(), t.Context(), cfg, engine, database, nil, tc.full)
+			if tc.full || tc.stale {
+				require.ErrorIs(t, err, sentinel)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.full || tc.stale, launched)
+			assert.False(t, spawnFailed)
+			assert.False(t, database.WriterClosed())
+		})
+	}
+}
+
 func TestRunWorkerResyncBuildPublishesAndClearsWorkerProgress(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database, _ := openTestWriteDB(t, cfg)
@@ -527,7 +567,7 @@ func TestRunWorkerResyncBuildPublishesAndClearsWorkerProgress(t *testing.T) {
 	done := make(chan buildResult, 1)
 	go func() {
 		_, err, spawnFailed := runWorkerResyncBuild(
-			t.Context(), t.Context(), cfg, engine, database, nil,
+			t.Context(), t.Context(), cfg, engine, database, nil, true,
 		)
 		done <- buildResult{err: err, spawnFailed: spawnFailed}
 	}()
@@ -1242,7 +1282,7 @@ func TestRunWorkerResyncBuildDropsTombstonesWhenSwapFailsBeforeInstall(
 	defer restore()
 
 	result, err, spawnFailed := runWorkerResyncBuild(
-		t.Context(), t.Context(), cfg, engine, database, nil,
+		t.Context(), t.Context(), cfg, engine, database, nil, true,
 	)
 	require.False(t, spawnFailed)
 	require.ErrorContains(t, err, "swap resync database")
@@ -1297,7 +1337,7 @@ func TestWorkerResyncNotifiesInstalledRepairAfterCancellation(t *testing.T) {
 		return result, nil
 	})
 	defer restore()
-	result, err, spawnFailed := runWorkerResyncBuild(ctx, t.Context(), cfg, engine, database, nil)
+	result, err, spawnFailed := runWorkerResyncBuild(ctx, t.Context(), cfg, engine, database, nil, true)
 	require.False(t, spawnFailed)
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorContains(t, err, "reloading skip cache after swap")

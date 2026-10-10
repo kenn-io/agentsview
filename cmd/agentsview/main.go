@@ -556,7 +556,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			newForegroundSyncRunner(ctx, cfg, engine, database, writeLock),
 		))
 		srvOpts = append(srvOpts, server.WithLocalResyncRunner(
-			newForegroundResyncRunner(ctx, cfg, engine, database),
+			newForegroundResyncRunner(ctx, cfg, engine, database, true),
 		))
 	}
 	if memoryRefresh != nil {
@@ -1093,13 +1093,14 @@ func newForegroundSyncRunner(
 func newForegroundResyncRunner(
 	daemonCtx context.Context,
 	cfg config.Config, engine *sync.Engine, database *db.DB,
+	full bool,
 ) server.LocalResyncRunner {
 	return func(
 		ctx context.Context, progress func(sync.Progress),
 	) (sync.SyncStats, error) {
 		if !testing.Testing() {
 			result, err, spawnFailed := runWorkerResyncBuild(
-				ctx, daemonCtx, cfg, engine, database, progress,
+				ctx, daemonCtx, cfg, engine, database, progress, full,
 			)
 			if !spawnFailed {
 				if result.Status == "aborted" && ctx.Err() == nil {
@@ -1134,7 +1135,7 @@ func newForegroundResyncRunner(
 		// startup maintenance on success, matching the handler's no-runner
 		// arm (runResyncWithFallback) and the sync runner's fallback above.
 		return engine.SyncThenRun(
-			ctx, true, progress, func(bool) error { return nil },
+			ctx, full, progress, func(bool) error { return nil },
 		)
 	}
 }
@@ -1194,11 +1195,15 @@ func runWorkerResyncBuild(
 	engine *sync.Engine,
 	database *db.DB,
 	progress func(sync.Progress),
+	full bool,
 ) (workerResult, error, bool) {
 	var result workerResult
 	var launchErr error
 	var doneStats sync.SyncStats
 	barrierErr := engine.RunExclusive(func() (err error) {
+		if !full && !database.NeedsResync() {
+			return nil
+		}
 		engine.UpdateProgress(sync.Progress{
 			Phase:  sync.PhasePreparingResync,
 			Detail: "Starting resync worker",
@@ -3072,7 +3077,7 @@ func runArchiveAudit(
 	emitter sync.Emitter,
 ) error {
 	if database.NeedsResync() {
-		_, err := newForegroundResyncRunner(ctx, cfg, engine, database)(ctx, nil)
+		_, err := newForegroundResyncRunner(ctx, cfg, engine, database, false)(ctx, nil)
 		if err != nil {
 			return err
 		}

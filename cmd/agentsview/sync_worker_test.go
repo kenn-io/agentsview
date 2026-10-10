@@ -640,7 +640,7 @@ func TestWorkerParentLinkHandoff(t *testing.T) {
 					case "audit":
 						err = runArchiveAudit(ctx, cfg, engine, database, lock, em)
 					case "resync-build":
-						_, err, _ = runWorkerResyncBuild(ctx, t.Context(), cfg, engine, database, nil)
+						_, err, _ = runWorkerResyncBuild(ctx, t.Context(), cfg, engine, database, nil, true)
 					}
 					switch {
 					case tc.failSource:
