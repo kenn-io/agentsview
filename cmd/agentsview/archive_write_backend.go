@@ -347,7 +347,7 @@ func configuredWatchPathRelevanceProviders(
 }
 
 func watchBatchNeedsPushAck(batch syncpkg.WatchBatch) bool {
-	if batch.FullSync || len(batch.ReconcileRoots) > 0 {
+	if batch.RequiresAcknowledgement() || batch.FullSync || len(batch.ReconcileRoots) > 0 {
 		return true
 	}
 	for _, rename := range batch.Renames {

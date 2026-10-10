@@ -788,11 +788,13 @@ func watchRootMetadata(roots []WatchRoot) []WatchRoot {
 	out := make([]WatchRoot, 0, len(roots))
 	for _, root := range roots {
 		out = append(out, WatchRoot{
-			Path:             root.Path,
-			Recursive:        root.Recursive,
-			MaxDepth:         root.MaxDepth,
-			ExtraDirectories: append([]string(nil), root.ExtraDirectories...),
-			DebounceKey:      root.DebounceKey,
+			Path:                         root.Path,
+			Recursive:                    root.Recursive,
+			MaxDepth:                     root.MaxDepth,
+			ExtraDirectories:             append([]string(nil), root.ExtraDirectories...),
+			DebounceKey:                  root.DebounceKey,
+			SourceFileGlobs:              append([]string(nil), root.SourceFileGlobs...),
+			FollowChildDirectorySymlinks: root.FollowChildDirectorySymlinks,
 		})
 	}
 	return out
@@ -817,9 +819,14 @@ type WatchRoot struct {
 	// Files in an intermediate directory are not. An empty list leaves
 	// MaxDepth as the whole limit.
 	ExtraDirectories []string
-	IncludeGlobs     []string
-	ExcludeGlobs     []string
-	DebounceKey      string
+	// SourceFileGlobs declares physical files for shared metadata coverage.
+	// These filename patterns are independent of parser discovery filters.
+	SourceFileGlobs []string
+	// FollowChildDirectorySymlinks follows project links directly under Path.
+	FollowChildDirectorySymlinks bool
+	IncludeGlobs                 []string
+	ExcludeGlobs                 []string
+	DebounceKey                  string
 }
 
 // ActivityHintSource is one bounded append-only signal a provider exposes to
