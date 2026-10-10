@@ -264,6 +264,13 @@ func upsertConversation(
 	}
 	db.ApplyParsedSessionIdentity(&sess, s)
 
+	if freshness, ok := store.(interface {
+		DeleteProviderStatHash(context.Context, parser.AgentType, string) error
+	}); ok && s.Agent == parser.AgentClaudeAI {
+		if err := freshness.DeleteProviderStatHash(ctx, parser.AgentClaudeAI, s.ID); err != nil {
+			return importNew, fmt.Errorf("clearing Claude.ai freshness: %w", err)
+		}
+	}
 	if err := store.UpsertSession(ctx, sess); err != nil {
 		if errors.Is(err, db.ErrSessionExcluded) {
 			return importSkipped, nil
@@ -277,9 +284,6 @@ func upsertConversation(
 	if localDB, ok := store.(*db.DB); ok {
 		if err := localDB.BumpLocalModifiedAt(ctx, s.ID); err != nil {
 			log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
-		}
-		if err := localDB.DeleteProviderStatHash(ctx, parser.AgentClaudeAI, s.ID); err != nil {
-			log.Printf("import: clearing Claude.ai freshness: %v", err)
 		}
 	}
 

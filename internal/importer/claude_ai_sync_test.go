@@ -664,14 +664,16 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 	const id = "claude-ai:22222222-2222-4222-8222-222222222222"
 	const watermark = "2026-03-02T00:00:00.000Z"
 	for _, tt := range []struct {
-		name, exported string
-		options        ImportOptions
+		name, exported   string
+		options          ImportOptions
+		cancelAfterWrite bool
 	}{
 		{name: "zip touches unchanged chat", exported: syncDetail},
 		{name: "zip changes stored count", exported: strings.TrimSuffix(syncDetail, "]}") + `,{"sender":"human","text":"Other branch"}]}`},
 		{name: "zip changes content at same count", exported: strings.Replace(syncDetail, "Chosen reply", "Zip reply", 1)},
 		{name: "zip changes title", exported: strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)},
 		{name: "zip replaces chat", exported: `{"uuid":"22222222-2222-4222-8222-222222222222","name":"Chat","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00.123456Z","chat_messages":[{"sender":"human","text":"Hello"}]}`, options: ImportOptions{Replace: []string{id}}},
+		{name: "zip replacement cancelled after write", exported: `{"uuid":"22222222-2222-4222-8222-222222222222","name":"Chat","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00.123456Z","chat_messages":[{"sender":"human","text":"Hello"}]}`, options: ImportOptions{Replace: []string{id}}, cancelAfterWrite: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -682,12 +684,23 @@ func TestSyncClaudeAIZipFreshness(t *testing.T) {
 			})
 			_, err := SyncClaudeAI(t.Context(), d, fetch, nil)
 			require.NoError(t, err)
-			stats, err := ImportClaudeAIWithOptions(t.Context(), d, strings.NewReader("["+tt.exported+"]"), nil, tt.options)
-			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var store db.Store = d
+			if tt.cancelAfterWrite {
+				store = cancelAfterReplacementSyncStore{d, cancel}
+			}
+			stats, err := ImportClaudeAIWithOptions(ctx, store, strings.NewReader("["+tt.exported+"]"), nil, tt.options)
+			if tt.cancelAfterWrite {
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NoError(t, err)
+			}
 			if tt.name != "zip changes title" && tt.name != "zip touches unchanged chat" {
 				require.Equal(t, 1, stats.Updated)
 			}
-			if tt.name == "zip replaces chat" {
+			if len(tt.options.Replace) > 0 {
 				messages, err := d.GetAllMessages(t.Context(), id)
 				require.NoError(t, err)
 				require.Equal(t, []string{"Hello"}, messageContents(messages))
