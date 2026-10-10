@@ -1514,7 +1514,6 @@ func TestSearchContent_RecallContractMapping(t *testing.T) {
 	assert.Equal(t, "older", fake.lastReq.SessionID)
 	assert.Equal(t, "feature/memory", fake.lastReq.GitBranchExact)
 	assert.Equal(t, []string{"current"}, fake.lastReq.ExcludeSessionIDs)
-	assert.Empty(t, fake.lastReq.ExcludeActiveSince)
 	assert.Equal(t, 50, fake.lastReq.Limit)
 	assert.Equal(t, "terms", out.EffectiveMode)
 	assert.Equal(t, "subordinate", out.EffectiveScope)
@@ -1527,29 +1526,34 @@ func TestSearchContent_RecallContractMapping(t *testing.T) {
 	require.Len(t, out.Matches, 1)
 }
 
-func TestSearchContent_BlankCurrentSessionKeepsRecentActiveGuard(t *testing.T) {
-	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
-	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "needle", CurrentSessionID: "   ",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "2024-06-15T11:50:00Z", fake.lastReq.ExcludeActiveSince)
-	assert.Empty(t, fake.lastReq.ExcludeSessionIDs,
-		"whitespace-only current_session_id excludes nothing")
-	assert.Empty(t, out.Exclusions.CurrentSessionID,
-		"the reported exclusion must be normalized")
-	assert.True(t, out.Exclusions.RecentActive,
-		"a blank current_session_id must not disable the recent-active guard")
-	assert.Equal(t, 1, fake.calls)
-	assert.Zero(t, out.ExcludedActive)
-
-	_, out, err = ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "needle", IncludeActive: true,
-	})
-	require.NoError(t, err)
-	assert.Empty(t, fake.lastReq.ExcludeActiveSince)
-	assert.False(t, out.Exclusions.RecentActive)
+func TestSearchContent_ActiveCutoffDerivation(t *testing.T) {
+	for _, tc := range []struct {
+		name, current, cutoff string
+		includeActive         bool
+	}{
+		{"blank current session", "   ", "2024-06-15T11:50:00Z", false},
+		{"current session", "current", "", false},
+		{"include active", "", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
+				Pattern: "needle", CurrentSessionID: tc.current, IncludeActive: tc.includeActive,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.cutoff, fake.lastReq.ExcludeActiveSince)
+			assert.Equal(t, tc.cutoff != "", out.Exclusions.RecentActive)
+			assert.Equal(t, 1, fake.calls)
+			if tc.current == "current" {
+				assert.Equal(t, []string{"current"}, fake.lastReq.ExcludeSessionIDs)
+				assert.Equal(t, "current", out.Exclusions.CurrentSessionID)
+			} else {
+				assert.Empty(t, fake.lastReq.ExcludeSessionIDs)
+				assert.Empty(t, out.Exclusions.CurrentSessionID)
+			}
+		})
+	}
 }
 
 func TestSearchContent_OutOfRangeLimitUsesDefault(t *testing.T) {
