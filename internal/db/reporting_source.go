@@ -328,7 +328,7 @@ func reportingCreatedAtFrom(
 	rawValues := make(map[string]string, len(ids))
 	parsedValues := make(map[string]time.Time, len(ids))
 	if err := queryChunked(ids, func(chunk []string) error {
-		placeholders, args := inPlaceholders(chunk)
+		placeholders, args := InPlaceholders(chunk)
 		rows, err := q.QueryContext(
 			ctx,
 			`SELECT id, created_at FROM sessions WHERE id IN `+placeholders,
@@ -366,7 +366,7 @@ func reportingTerminalTimestampsFrom(
 ) (map[string]string, error) {
 	out := make(map[string]string, len(ids))
 	err := queryChunked(ids, func(chunk []string) error {
-		placeholders, args := inPlaceholders(chunk)
+		placeholders, args := InPlaceholders(chunk)
 		args = append(args, lowerBound)
 		rows, err := q.QueryContext(ctx, `
 			SELECT session_id, MAX(timestamp)

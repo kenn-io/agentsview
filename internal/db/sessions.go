@@ -2070,8 +2070,8 @@ func (db *DB) LinkSubagentSessionsForSessions(ctx context.Context, ids []string)
 
 	// Each id binds twice (once per UNION branch), so halve the chunk to
 	// stay within SQLite's bind-variable limit.
-	err = queryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
-		ph, args := inPlaceholders(chunk)
+	err = QueryChunkedSize(ids, maxSQLVars/2, func(chunk []string) error {
+		ph, args := InPlaceholders(chunk)
 		allArgs := append(append([]any{}, args...), args...)
 		res, err := tx.ExecContext(ctx,
 			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
@@ -2259,7 +2259,7 @@ func (db *DB) RepairQueuedSubagentParentsContext(
 		}
 
 		chunk := ids
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		allArgs := append(append([]any{}, args...), args...)
 		res, err := tx.ExecContext(ctx,
 			linkSubagentSessionsForSessionsQuery(ph), allArgs...,
@@ -2391,7 +2391,7 @@ func (db *DB) SubagentChildSessionIDs(ctx context.Context, ids []string) ([]stri
 	}
 	var children []string
 	err := queryChunked(ids, func(chunk []string) error {
-		ph, args := inPlaceholders(chunk)
+		ph, args := InPlaceholders(chunk)
 		rows, err := db.getReader().Query(ctx, `
 			SELECT DISTINCT tc.subagent_session_id
 			FROM tool_calls tc
@@ -3528,7 +3528,7 @@ func (db *DB) RecentSessionSources(ctx context.Context,
 	if len(machines) == 0 {
 		return nil, nil
 	}
-	machineList, machineArgs := inPlaceholders(machines)
+	machineList, machineArgs := InPlaceholders(machines)
 	args := append([]any{agent}, machineArgs...)
 	args = append(args, since.UTC().Format(time.RFC3339Nano), limit)
 	rows, err := db.getReader().Query(ctx,
@@ -6598,7 +6598,7 @@ func (db *DB) SessionProjectsByIDs(
 		return out, nil
 	}
 	err := queryChunked(ids, func(chunk []string) error {
-		placeholders, args := inPlaceholders(chunk)
+		placeholders, args := InPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx,
 			"SELECT id, project FROM sessions WHERE id IN "+placeholders, args...)
 		if err != nil {

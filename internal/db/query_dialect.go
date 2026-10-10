@@ -72,6 +72,22 @@ type QueryDialect struct {
 	orphanPredicate func(sessionAlias, parentAlias string) string
 }
 
+// SignedAggregate keeps ClickHouse aggregate counts scannable as Go integers.
+func (d QueryDialect) SignedAggregate(expr string) string {
+	if d.signedWindowCounts {
+		return "toInt64(" + expr + ")"
+	}
+	return expr
+}
+
+func (d QueryDialect) TrueLiteral() string {
+	return d.trueLiteral
+}
+
+func (d QueryDialect) FalseLiteral() string {
+	return d.falseLiteral
+}
+
 func (d QueryDialect) recursiveUnionSQL() string {
 	if d.recursiveUnion == "" {
 		return "UNION"

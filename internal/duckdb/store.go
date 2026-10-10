@@ -20,6 +20,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // Compile-time check: *Store satisfies db.Store.
@@ -1589,7 +1590,7 @@ func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error
 		}
 		candidate.match.Timestamp = formatDBTime(ts)
 		candidate.sortTS = formatDBTime(sortTS)
-		candidate.sortTime, candidate.hasSort = parseAnalyticsTime(candidate.sortTS)
+		candidate.sortTime, candidate.hasSort = readbase.ParseAnalyticsTime(candidate.sortTS)
 		candidate.match.Snippet = candidate.body
 		out = append(out, candidate)
 	}

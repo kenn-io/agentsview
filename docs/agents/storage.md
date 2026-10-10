@@ -240,8 +240,9 @@ timestamp parsing, UTC padding, or output formats stay in their backend.
    two worked examples. The push returns `storage.PushResult` and reports
    progress as `storage.PushProgress`; a backend without a vector phase sets
    `Vectors.Skipped`. Route catalog reads through `readbase.NewCatalog` with
-   an adapter implementing every `readbase.CatalogBackend` method. Forward
-   common SQL to the shared builders; keep specialized SQL and typed loaders
+   an adapter implementing every `readbase.CatalogBackend` method; route
+   DuckDB- or ClickHouse-style analytics through `readbase.NewAnalytics`.
+   Forward common SQL to the shared builders; keep specialized SQL and typed loaders
    in the backend.
 1. Add the config section and its resolvers in `internal/config` the way
    `[pg]`/`[pg.NAME]` and `[clickhouse]` work: a struct, `Resolve<Name>`,
@@ -325,6 +326,8 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   `internal/readbase.Catalog`. Shared query builders own SQL that differs only
   in syntax. Each backend explicitly supplies every required SQL operation and
   its typed timestamp, observation and snapshot loaders.
+- DuckDB and ClickHouse share report orchestration in `internal/readbase.Analytics`.
+  Backends supply every required SQL operation and retain typed loaders and caches.
 
 ### Usage cache divergence
 
@@ -574,7 +577,7 @@ own metadata, which is why the docs below call the database a mirror.
   build an `IN (...)` list from a set the database already selected, such as
   the sessions matching a filter or the Claude snapshot keys of those
   sessions. Embed the selecting predicate as a subquery (`chSessionSet`) or
-  derive the keys in a CTE instead. Chunked lists (`chQueryChunked`) are for
+  derive the keys in a CTE instead. Chunked lists (`db.QueryChunkedSize`) are for
   sets that arrive from outside the database, and they bound entry count, not
   bytes.
 - Tests use the `chtest` build tag. Run `make test-clickhouse` against a

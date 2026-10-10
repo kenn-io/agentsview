@@ -28,6 +28,7 @@ func TestStoreAnalyticsReads(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 3, summary.TotalSessions)
 		assert.Equal(t, 4, summary.TotalMessages)
+		assert.Equal(t, 1, summary.MedianMessages)
 	})
 
 	t.Run("activity_day_buckets", func(t *testing.T) {
@@ -110,48 +111,34 @@ func TestStoreAnalyticsReads(t *testing.T) {
 
 func TestGetAnalyticsSummaryEmptyMedian(t *testing.T) {
 	ctx := context.Background()
-	filter := db.AnalyticsFilter{
-		From: "2026-01-01",
-		To:   "2026-01-31",
-	}
-
-	t.Run("empty_mirror", func(t *testing.T) {
-		dsn, database := chtest.FreshDatabase(t)
-		require.NoError(t, EnsureSchema(ctx, Target{URL: dsn, Database: database}))
-		store, err := NewStore(ctx, Target{URL: dsn, Database: database})
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, store.Close()) })
-
-		summary, err := store.GetAnalyticsSummary(ctx, filter)
-		require.NoError(t, err)
-		assert.Equal(t, 0, summary.TotalSessions)
-		assert.Equal(t, 0, summary.TotalMessages)
-		assert.Equal(t, 0, summary.MedianMessages)
-		assert.Equal(t, 0.0, summary.AvgMessages)
-	})
-
-	t.Run("unmatched_filter", func(t *testing.T) {
-		store, _, _ := newPushedStore(t)
-		summary, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
-			From: "2025-01-01",
-			To:   "2025-01-31",
+	for _, tc := range []struct {
+		name      string
+		populated bool
+		filter    db.AnalyticsFilter
+	}{
+		{"empty_mirror", false, db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-31"}},
+		{"unmatched_filter", true, db.AnalyticsFilter{From: "2025-01-01", To: "2025-01-31"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var store *Store
+			if tc.populated {
+				store, _, _ = newPushedStore(t)
+			} else {
+				dsn, database := chtest.FreshDatabase(t)
+				require.NoError(t, EnsureSchema(ctx, Target{URL: dsn, Database: database}))
+				var err error
+				store, err = NewStore(ctx, Target{URL: dsn, Database: database})
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, store.Close()) })
+			}
+			summary, err := store.GetAnalyticsSummary(ctx, tc.filter)
+			require.NoError(t, err)
+			assert.Equal(t, 0, summary.TotalSessions)
+			assert.Equal(t, 0, summary.TotalMessages)
+			assert.Equal(t, 0, summary.MedianMessages)
+			assert.Equal(t, 0.0, summary.AvgMessages)
 		})
-		require.NoError(t, err)
-		assert.Equal(t, 0, summary.TotalSessions)
-		assert.Equal(t, 0, summary.TotalMessages)
-		assert.Equal(t, 0, summary.MedianMessages)
-		assert.Equal(t, 0.0, summary.AvgMessages)
-	})
-
-	t.Run("populated_median", func(t *testing.T) {
-		store, _, _ := newPushedStore(t)
-		summary, err := store.GetAnalyticsSummary(ctx, filter)
-		require.NoError(t, err)
-		assert.Equal(t, 3, summary.TotalSessions)
-		assert.Equal(t, 4, summary.TotalMessages)
-		// Sorted message counts: 1, 1, 2.
-		assert.Equal(t, 1, summary.MedianMessages)
-	})
+	}
 }
 
 // TestAnalyticsSessionSetQueriesMatchSQLite covers the reads that select

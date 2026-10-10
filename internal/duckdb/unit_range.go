@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // DuckDB implementation of the conversation-unit seam. Orchestration —
@@ -21,12 +22,12 @@ var _ db.UnitBoundsQuerier = (*Store)(nil)
 // duckUnitSessionChunk caps sessions per NearestUserBoundaries statement,
 // matching SQLite's unitSessionChunk semantics: a session binds 2 variables
 // (idx, session_id).
-const duckUnitSessionChunk = duckMaxSQLVars / 2
+const duckUnitSessionChunk = readbase.MaxSQLVars / 2
 
 // duckUnitExtentChunk caps extent probes per RunExtents statement, matching
 // SQLite's unitExtentChunk semantics: a probe binds 6 variables (idx,
 // session_id, o, lo, hi, sc).
-const duckUnitExtentChunk = duckMaxSQLVars / 6
+const duckUnitExtentChunk = readbase.MaxSQLVars / 6
 
 // duckEmbeddableUserSQL is the DuckDB predicate matching an embeddable user
 // row under the given alias: user role, is_system = FALSE, and the DuckDB
@@ -158,7 +159,7 @@ func (s *Store) lookupDuckRunExtentChunk(
 
 // duckAnchorMetaChunk caps (session_id, ordinal) refs per anchor-meta lookup,
 // matching internal/db's enrichHitsChunk semantics (2 binds per ref).
-const duckAnchorMetaChunk = duckMaxSQLVars / 2
+const duckAnchorMetaChunk = readbase.MaxSQLVars / 2
 
 // duckAnchorKey identifies one (session_id, ordinal) anchor ref.
 type duckAnchorKey struct {

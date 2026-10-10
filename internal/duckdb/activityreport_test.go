@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -460,7 +461,7 @@ func TestDuckGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 }
 
 func TestDuckGetActivityReportSelectsPeersForLargeSnapshotKeySet(t *testing.T) {
-	const pairCount = duckMaxSQLVars + 1
+	const pairCount = readbase.MaxSQLVars + 1
 	ctx := t.Context()
 	candidate := syncSession(
 		"large-candidate", "included-project", "candidate",

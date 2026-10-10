@@ -1273,7 +1273,7 @@ func (db *DB) listRecallEntriesByIDs(
 	var entries []RecallEntry
 	err := queryChunked(ids, func(chunk []string) error {
 		where, filterArgs := buildRecallEntryWhere(q, false)
-		placeholders, idArgs := inPlaceholders(chunk)
+		placeholders, idArgs := InPlaceholders(chunk)
 		args := slices.Concat(idArgs, filterArgs)
 		rows, err := db.getReader().QueryContext(ctx,
 			"SELECT "+recallBaseCols+" FROM recall_entries WHERE id IN "+

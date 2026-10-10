@@ -924,6 +924,23 @@ func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	assert.Equal(t, 2, shape.Count)
 	assert.Equal(t, 1, distributionCount(shape.AutonomyDistribution, "1-2"))
 	assert.Equal(t, 1, distributionCount(shape.AutonomyDistribution, "<0.5"))
+	for _, tc := range []struct {
+		project string
+		bucket  string
+	}{
+		{"alpha", "1-2"},
+		{"beta", "<0.5"},
+	} {
+		t.Run("autonomy_project_"+tc.project, func(t *testing.T) {
+			selected := filter
+			selected.Project = tc.project
+			shape, err := store.GetAnalyticsSessionShape(ctx, selected)
+			require.NoError(t, err)
+			assert.Equal(t, 1, shape.Count)
+			assert.Equal(t, 1, distributionCount(shape.AutonomyDistribution, tc.bucket))
+			assert.Len(t, shape.AutonomyDistribution, 1)
+		})
+	}
 
 	tools, err := store.GetAnalyticsTools(ctx, filter)
 	require.NoError(t, err)
@@ -1370,7 +1387,8 @@ func TestAnalyticsTopSessionsFiltersMetricEligibility(t *testing.T) {
 
 	_, err = syncer.DB().ExecContext(ctx, `
 		UPDATE sessions
-		SET total_output_tokens = 25, has_total_output_tokens = TRUE
+		SET total_output_tokens = 25, has_total_output_tokens = TRUE,
+			display_name = 'Saved output title'
 		WHERE id = 'duck-top-valid-output'`)
 	require.NoError(t, err)
 	_, err = syncer.DB().ExecContext(ctx, `
@@ -1396,6 +1414,9 @@ func TestAnalyticsTopSessionsFiltersMetricEligibility(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "output_tokens", output.Metric)
 	require.NotEmpty(t, output.Sessions)
+	assert.Equal(t, "duck-top-valid-output", output.Sessions[0].ID)
+	// Preserve the SQL-ranked omission even when the stored session has a name.
+	assert.Nil(t, output.Sessions[0].DisplayName)
 	assert.NotEqual(t, "duck-top-untracked-output", output.Sessions[0].ID)
 	for _, session := range output.Sessions {
 		assert.NotEqual(t, "duck-top-untracked-output", session.ID)
@@ -1583,6 +1604,14 @@ func TestAnalyticsVelocityUsesMessageCyclesAndBreakdowns(t *testing.T) {
 		},
 		DataVersion:     1,
 		ReplaceMessages: true,
+	}, {
+		Session: syncSession("duck-velocity-second", "beta", "second", "2026-01-22T00:00:00.000Z", 2),
+		Messages: []db.Message{
+			syncMessage("duck-velocity-second", 0, "user", "second user", "2026-01-22T00:00:00.000Z"),
+			syncMessage("duck-velocity-second", 1, "assistant", "second response", "2026-01-22T00:00:30.000Z", call),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
 
@@ -1593,8 +1622,9 @@ func TestAnalyticsVelocityUsesMessageCyclesAndBreakdowns(t *testing.T) {
 	store := NewStoreFromDB(syncer.DB())
 
 	got, err := store.GetAnalyticsVelocity(ctx, db.AnalyticsFilter{
-		From: "2026-01-01",
-		To:   "2026-01-31",
+		From:    "2026-01-01",
+		To:      "2026-01-31",
+		Project: "alpha",
 	})
 	require.NoError(t, err)
 	assert.InDelta(t, 30.0, got.Overall.TurnCycleSec.P50, 0)
@@ -1607,6 +1637,27 @@ func TestAnalyticsVelocityUsesMessageCyclesAndBreakdowns(t *testing.T) {
 	assert.Equal(t, 1, got.ByAgent[0].Sessions)
 	require.Len(t, got.ByComplexity, 1)
 	assert.Equal(t, "1-15", got.ByComplexity[0].Label)
+	t.Run("captured session IDs across chunks", func(t *testing.T) {
+		ids := make([]string, 901)
+		for i := range ids {
+			ids[i] = fmt.Sprintf("absent-%d", i)
+		}
+		ids[0] = sessionID
+		ids[900] = "duck-velocity-second"
+		filter := db.AnalyticsFilter{Project: "changed-after-selection"}
+		backend := analyticsSQL{store}
+		autonomy, err := backend.Autonomy(ctx, ids, filter)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]int{"0.5-1": 1, "1-2": 1}, autonomy)
+		messages, err := backend.VelocityMessages(ctx, ids, filter, time.UTC)
+		require.NoError(t, err)
+		require.Len(t, messages, 2)
+		assert.Len(t, messages[sessionID], 4)
+		assert.Len(t, messages["duck-velocity-second"], 2)
+		tools, err := backend.VelocityToolCounts(ctx, ids, filter)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]int{sessionID: 1, "duck-velocity-second": 1}, tools)
+	})
 }
 
 func TestAnalyticsVelocitySingleMessageSessionsReturnArrays(t *testing.T) {
