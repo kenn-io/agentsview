@@ -207,7 +207,7 @@ func (s analyticsSQL) HourOfWeekSQL(f db.AnalyticsFilter) (string, []any) {
 }
 
 func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, category, name, timestamp string, count int)) error {
-	err := db.QueryChunkedSize(ids, readbase.AnalyticsMaxSQLVars, func(chunk []string) error {
+	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
 		modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect())
 		args = append(args, modelArgs...)
@@ -245,7 +245,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 }
 
 func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error {
-	err := db.QueryChunkedSize(ids, readbase.AnalyticsMaxSQLVars, func(chunk []string) error {
+	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
 		modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect())
 		args = append(args, modelArgs...)

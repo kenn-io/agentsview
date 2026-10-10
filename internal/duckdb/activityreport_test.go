@@ -461,7 +461,7 @@ func TestDuckGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 }
 
 func TestDuckGetActivityReportSelectsPeersForLargeSnapshotKeySet(t *testing.T) {
-	const pairCount = readbase.AnalyticsMaxSQLVars + 1
+	const pairCount = readbase.MaxSQLVars + 1
 	ctx := t.Context()
 	candidate := syncSession(
 		"large-candidate", "included-project", "candidate",

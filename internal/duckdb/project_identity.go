@@ -36,11 +36,11 @@ func (s *Store) ListProjectIdentityObservations(
 	sorted := slices.Clone(labels)
 	slices.Sort(sorted)
 	sorted = slices.Compact(sorted)
-	if len(sorted) <= readbase.AnalyticsMaxSQLVars {
+	if len(sorted) <= readbase.MaxSQLVars {
 		return s.listProjectIdentityObservationsChunk(ctx, sorted)
 	}
 	var out []export.ProjectIdentityObservation
-	err := db.QueryChunkedSize(sorted, readbase.AnalyticsMaxSQLVars, func(chunk []string) error {
+	err := db.QueryChunkedSize(sorted, readbase.MaxSQLVars, func(chunk []string) error {
 		part, err := s.listProjectIdentityObservationsChunk(ctx, chunk)
 		if err != nil {
 			return err

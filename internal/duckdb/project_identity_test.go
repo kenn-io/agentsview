@@ -25,7 +25,7 @@ func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) 
 	// range: the ORDER BY leads with source_archive_id, so concatenated
 	// per-chunk (label-range) results are not globally ordered until the
 	// Go re-sort restores the documented ordering.
-	const labelCount = readbase.AnalyticsMaxSQLVars + 50
+	const labelCount = readbase.MaxSQLVars + 50
 	observedAt := time.Date(2025, 6, 2, 10, 0, 0, 0, time.UTC)
 	labels := make([]string, 0, 2*labelCount)
 	const batch = 200

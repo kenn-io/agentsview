@@ -9,8 +9,8 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// AnalyticsMaxSQLVars bounds mirror ID batches below driver parameter limits.
-const AnalyticsMaxSQLVars = 900
+// MaxSQLVars bounds mirror ID batches below driver parameter limits.
+const MaxSQLVars = 900
 
 func AnalyticsLocalTime(ts string, loc *time.Location) (time.Time, bool) {
 	t, ok := ParseAnalyticsTime(ts)
@@ -46,7 +46,7 @@ func (s *Analytics) models(ctx context.Context, ids []string) ([]string, error) 
 		return []string{}, nil
 	}
 	models := map[string]bool{}
-	err := db.QueryChunkedSize(ids, AnalyticsMaxSQLVars, func(chunk []string) error {
+	err := db.QueryChunkedSize(ids, MaxSQLVars, func(chunk []string) error {
 		query, args := AnalyticsModelsSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -86,7 +86,7 @@ func (s *Analytics) filteredModels(ctx context.Context, ids []string, f db.Analy
 			models[model] = true
 		}
 	}
-	err := db.QueryChunkedSize(unique, AnalyticsMaxSQLVars, func(chunk []string) error {
+	err := db.QueryChunkedSize(unique, MaxSQLVars, func(chunk []string) error {
 		query, args := AnalyticsModelTimesSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
@@ -116,7 +116,7 @@ func (s *Analytics) filteredToolCounts(ctx context.Context, ids []string, f db.A
 			counts[id] += count
 		}
 	}
-	err := db.QueryChunkedSize(ids, AnalyticsMaxSQLVars, func(chunk []string) error {
+	err := db.QueryChunkedSize(ids, MaxSQLVars, func(chunk []string) error {
 		query, args := s.backend.ToolCountsSQL(chunk)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {

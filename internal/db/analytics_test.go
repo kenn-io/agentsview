@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -152,6 +153,26 @@ func mustProjects(
 	r, err := d.GetAnalyticsProjects(ctx, f)
 	require.NoError(t, err, "GetAnalyticsProjects")
 	return r
+}
+
+func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "summary", "project", func(s *Session) {
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+	})
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	// Fail during SQLite row evaluation, after QueryContext has returned rows.
+	require.NoError(t, conn.Raw(func(driverConn any) error {
+		return driverConn.(*sqlite3.SQLiteConn).RegisterFunc("strftime", func(...any) (string, error) {
+			return "", errors.New("summary read failure")
+		}, false)
+	}))
+	require.NoError(t, conn.Close())
+
+	_, err = d.GetAnalyticsSummary(t.Context(), baseFilter())
+	require.EqualError(t, err, "summary read failure")
 }
 
 func TestGetAnalyticsSummary(t *testing.T) {

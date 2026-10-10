@@ -46,9 +46,11 @@ func (s *Analytics) GetAnalyticsVelocity(
 
 	var sessionMsgs map[string][]db.TimingMessage
 	if strings.TrimSpace(f.Model) != "" {
-		sessionMsgs, err = s.filteredVelocityMessages(
-			ctx, sessionIDs, f,
-		)
+		scope, err := s.ResolveMessageScope(ctx, sessionIDs, f, false)
+		if err != nil {
+			return db.VelocityResponse{}, err
+		}
+		sessionMsgs = scope.TimingBySession()
 	} else {
 		sessionMsgs, err = s.backend.VelocityMessages(
 			ctx, f, AnalyticsLocation(f.Timezone),
@@ -70,21 +72,4 @@ func (s *Analytics) GetAnalyticsVelocity(
 	}
 
 	return db.BuildVelocityResponse(sessionIDs, sessionInfo, sessionMsgs, toolCounts), nil
-}
-
-func (s *Analytics) filteredVelocityMessages(
-	ctx context.Context,
-	sessionIDs []string,
-	f db.AnalyticsFilter,
-) (map[string][]db.TimingMessage, error) {
-	out := make(map[string][]db.TimingMessage, len(sessionIDs))
-	if len(sessionIDs) == 0 {
-		return out, nil
-	}
-
-	scope, err := s.ResolveMessageScope(ctx, sessionIDs, f, false)
-	if err != nil {
-		return nil, err
-	}
-	return scope.TimingBySession(), nil
 }

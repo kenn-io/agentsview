@@ -98,7 +98,7 @@ func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
 		analytics := NewAnalytics(analyticsFixtureBackend{pool: pool}, "fixture")
 		result, err := analytics.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{})
 		require.NoError(t, err)
-		assert.Equal(t, db.AnalyticsSummary{}, result)
+		assert.Equal(t, db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, result)
 	})
 }
 

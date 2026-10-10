@@ -28,7 +28,7 @@ func (s *Analytics) ResolveMessageScope(
 		bySession[m.SessionID] = append(bySession[m.SessionID], m)
 	}
 
-	if err := db.QueryChunkedSize(unique, AnalyticsMaxSQLVars, func(chunk []string) error {
+	if err := db.QueryChunkedSize(unique, MaxSQLVars, func(chunk []string) error {
 		reducer := db.NewScopeReducer(flt, emit)
 		ph, args := db.InPlaceholders(chunk)
 		query := AnalyticsCandidateMessagesSQL(ph, includeContent)

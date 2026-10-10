@@ -956,7 +956,7 @@ func (db *DB) GetAnalyticsSummary(
 	}
 	if !rows.Next() {
 		rows.Close()
-		return s, nil
+		return s, rows.Err()
 	}
 	if err := rows.Scan(
 		&s.TotalSessions,

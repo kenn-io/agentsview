@@ -86,7 +86,6 @@ type AnalyticsSession struct {
 	DuplicatePromptCount        int
 	NoCodeContextCount          int
 	RunawayToolLoopCount        int
-	FrustrationMarkerCount      int
 	PushVersion                 uint64 // ClickHouse cache version; zero for DuckDB.
 }
 
@@ -194,14 +193,7 @@ func (s *Analytics) getAnalyticsSummaryWithModelCounts(
 		resp.Agents[session.Agent].Messages += session.MessageCount
 	}
 
-	var models []string
-	if strings.TrimSpace(f.Model) != "" {
-		models, err = s.filteredModels(
-			ctx, sessionIDs, f,
-		)
-	} else {
-		models, err = s.models(ctx, sessionIDs)
-	}
+	models, err := s.filteredModels(ctx, sessionIDs, f)
 	if err != nil {
 		return db.AnalyticsSummary{}, err
 	}
@@ -552,7 +544,7 @@ func (s *Analytics) GetAnalyticsSummary(
 		if err := rows.Err(); err != nil {
 			return db.AnalyticsSummary{}, fmt.Errorf("iterating %s analytics summary: %w", s.name, err)
 		}
-		return db.AnalyticsSummary{}, nil
+		return db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, nil
 	}
 	resp, err := ScanAnalyticsSummary(rows, db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}, s.name)
 	if err != nil {
@@ -1072,7 +1064,6 @@ func signalRowsFromSessions(
 			DuplicatePromptCount:        r.DuplicatePromptCount,
 			NoCodeContextCount:          r.NoCodeContextCount,
 			RunawayToolLoopCount:        r.RunawayToolLoopCount,
-			FrustrationMarkerCount:      r.FrustrationMarkerCount,
 		})
 	}
 	return rows
