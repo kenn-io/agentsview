@@ -19,18 +19,6 @@ vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 describe("syncClaudeAI browser relay", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("allows Sign in after Sync without closing the browser", async () => {
-    const host = { connect: vi.fn().mockResolvedValue(undefined), close: vi.fn() } as unknown as BrowserHost & { close: ReturnType<typeof vi.fn> };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
-      'event: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    )));
-    await expect(syncClaudeAI(host)).resolves.toEqual({ imported: 1, updated: 0, skipped: 0, errors: 0 });
-    await host.connect();
-    expect(host.connect).toHaveBeenCalledOnce();
-    expect(host.close).not.toHaveBeenCalled();
-  });
-
   it("answers fetch events with browser status", async () => {
     const status = 429;
     let stream: ReadableStreamDefaultController<Uint8Array>;

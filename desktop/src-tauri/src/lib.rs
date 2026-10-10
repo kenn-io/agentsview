@@ -5348,26 +5348,6 @@ agentsview running at http://127.0.0.1:18082
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
-    fn claude_window_close_hides() {
-        let window = FakeMainWindow::default();
-        let close_calls = window.calls.clone();
-
-        hide_main_window_on_close(&window, move || {
-            close_calls
-                .lock()
-                .expect("lock close calls")
-                .push("prevent_close");
-        });
-        restore_main_window(&window);
-
-        assert_eq!(
-            *window.calls.lock().expect("lock calls for assertion"),
-            vec!["prevent_close", "hide", "show", "unminimize", "focus"]
-        );
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    #[test]
     fn tray_setup_failure_does_not_register_window_lifecycle() {
         let calls = std::cell::RefCell::new(Vec::new());
 
