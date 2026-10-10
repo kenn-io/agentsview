@@ -420,6 +420,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				return
 			}
 		}
+		if database.NeedsResync() {
+			log.Printf("ERROR: required archive rebuild did not complete for data version %d; serving the existing archive, retrying in %s", db.CurrentDataVersion(), archiveAuditRetryInitial)
+		}
 
 		// Backfill runs in the background. On a large DB (e.g.
 		// after copying tens of thousands of orphaned sessions
@@ -553,7 +556,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			newForegroundSyncRunner(ctx, cfg, engine, database, writeLock),
 		))
 		srvOpts = append(srvOpts, server.WithLocalResyncRunner(
-			newForegroundResyncRunner(ctx, cfg, engine, database),
+			newForegroundResyncRunner(ctx, cfg, engine, database, true),
 		))
 	}
 	if memoryRefresh != nil {
@@ -1090,13 +1093,14 @@ func newForegroundSyncRunner(
 func newForegroundResyncRunner(
 	daemonCtx context.Context,
 	cfg config.Config, engine *sync.Engine, database *db.DB,
+	full bool,
 ) server.LocalResyncRunner {
 	return func(
 		ctx context.Context, progress func(sync.Progress),
 	) (sync.SyncStats, error) {
 		if !testing.Testing() {
 			result, err, spawnFailed := runWorkerResyncBuild(
-				ctx, daemonCtx, cfg, engine, database, progress,
+				ctx, daemonCtx, cfg, engine, database, progress, full,
 			)
 			if !spawnFailed {
 				if result.Status == "aborted" && ctx.Err() == nil {
@@ -1131,7 +1135,7 @@ func newForegroundResyncRunner(
 		// startup maintenance on success, matching the handler's no-runner
 		// arm (runResyncWithFallback) and the sync runner's fallback above.
 		return engine.SyncThenRun(
-			ctx, true, progress, func(bool) error { return nil },
+			ctx, full, progress, func(bool) error { return nil },
 		)
 	}
 }
@@ -1191,11 +1195,15 @@ func runWorkerResyncBuild(
 	engine *sync.Engine,
 	database *db.DB,
 	progress func(sync.Progress),
+	full bool,
 ) (workerResult, error, bool) {
 	var result workerResult
 	var launchErr error
 	var doneStats sync.SyncStats
 	barrierErr := engine.RunExclusive(func() (err error) {
+		if !full && !database.NeedsResync() {
+			return nil
+		}
 		engine.UpdateProgress(sync.Progress{
 			Phase:  sync.PhasePreparingResync,
 			Detail: "Starting resync worker",
@@ -2941,9 +2949,7 @@ func startPeriodicSync(
 		}
 	}
 
-	// The daily archive audit runs on its own cadence in a worker process; it
-	// must never run the archive-scale pass in the daemon. Its own loop keeps the
-	// scheduled reconcile below (Task 5) untouched.
+	// Archive audits and rebuild retries run on a separate cadence from provider reconciliation.
 	go startArchiveAudit(ctx, cfg, engine, database, lock, idleTracker, emitter)
 
 	ticker := time.NewTicker(periodicSyncInterval)
@@ -2968,9 +2974,7 @@ func startPeriodicSync(
 }
 
 // startArchiveAudit drives the daily archive audit with retry-and-backoff
-// scheduling. Each attempt runs entirely in a worker process (via
-// runWorkerWritePass) wrapped in idleTracker.Do; a failed attempt is retained
-// and retried with a growing delay rather than falling back in process.
+// scheduling, retrying a pending rebuild sooner than a routine audit.
 func startArchiveAudit(
 	ctx context.Context,
 	cfg config.Config,
@@ -2980,8 +2984,13 @@ func startArchiveAudit(
 	idleTracker *server.IdleTracker,
 	emitter sync.Emitter,
 ) {
+	first := archiveAuditInterval
+	if database.NeedsResync() {
+		first = archiveAuditRetryInitial
+	}
 	runArchiveAuditLoop(
 		ctx,
+		first,
 		func(ctx context.Context, delay time.Duration) bool {
 			timer := time.NewTimer(delay)
 			defer timer.Stop()
@@ -3029,11 +3038,15 @@ func runArchiveAuditAttempt(
 // attempt succeeded.
 func runArchiveAuditLoop(
 	ctx context.Context,
+	first time.Duration,
 	wait func(context.Context, time.Duration) bool,
 	audit func(context.Context) bool,
 ) {
-	delay := archiveAuditInterval
+	delay := first
 	retry := archiveAuditRetryInitial
+	if first < archiveAuditInterval {
+		retry = min(first*2, archiveAuditInterval)
+	}
 	for {
 		if !wait(ctx, delay) {
 			return
@@ -3051,17 +3064,10 @@ func runArchiveAuditLoop(
 	}
 }
 
-// runArchiveAudit executes one audit attempt: a full authoritative
-// reconciliation in a worker process via runWorkerWritePass, never in the
-// daemon. It emits "sessions" whenever the terminal result reports committed
-// changes — synced or tombstoned — even when the pass also failed, because the
-// retry sees those rows as already synchronized and would never re-notify SSE
-// clients or the embedding scheduler. It returns an error on any failure —
-// spawn, pre-launch handoff, or a ran-and-failed worker — so the caller
-// retries with backoff; it never falls back to an in-process pass. The
-// daemon's in-memory skip cache is reloaded by runWorkerWritePass inside the
-// pass's own exclusive section, so no queued sync can re-persist stale
-// entries the audit worker removed.
+// runArchiveAudit retries required rebuilds through the foreground runner,
+// which publishes committed changes. Current archives use the audit worker;
+// committed changes emit "sessions" even when the worker also fails, since
+// retries won't repeat those writes. Errors retain the retry obligation.
 func runArchiveAudit(
 	ctx context.Context,
 	cfg config.Config,
@@ -3070,6 +3076,16 @@ func runArchiveAudit(
 	lock *writeOwnerLock,
 	emitter sync.Emitter,
 ) error {
+	if database.NeedsResync() {
+		_, err := newForegroundResyncRunner(ctx, cfg, engine, database, false)(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if database.NeedsResync() {
+			return errors.New("required archive rebuild did not complete")
+		}
+		return nil
+	}
 	result, err := runWorkerWritePass(
 		ctx, ctx, cfg, engine, database, lock, "audit", nil,
 	)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -20,21 +21,29 @@ import (
 // flag. The worker build-and-swap mechanism is covered by the engine split tests
 // and the resync-build worker mode test.
 func TestForegroundResyncRunnerFallsBackInProcess(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	database, err := db.Open(t.Context(), cfg.DBPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
-	t.Cleanup(engine.Close)
-	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
+	for _, full := range []bool{false, true} {
+		t.Run(strconv.FormatBool(full), func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			database, err := db.Open(t.Context(), cfg.DBPath)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+			t.Cleanup(engine.Close)
+			require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 
-	runner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
-	stats, err := runner(t.Context(), nil)
+			runner := newForegroundResyncRunner(t.Context(), cfg, engine, database, full)
+			stats, err := runner(t.Context(), nil)
 
-	require.NoError(t, err)
-	assert.False(t, stats.Aborted)
-	assert.Equal(t, 3, stats.Synced, "in-process resync fallback rebuilds the archive")
-	assert.False(t, database.NeedsResync())
+			require.NoError(t, err)
+			assert.False(t, stats.Aborted)
+			if full {
+				assert.Equal(t, 3, stats.Synced, "manual resync rebuilds a current archive")
+			} else {
+				assert.Zero(t, stats.Synced, "a required-only retry skips rebuilding a current archive")
+			}
+			assert.False(t, database.NeedsResync())
+		})
+	}
 }
 
 // requireStartupMaintenanceReleased asserts that RunStartupMaintenance is no
@@ -75,7 +84,7 @@ func TestForegroundResyncRunnerReleasesStartupMaintenance(t *testing.T) {
 	engine := sync.NewEngine(t.Context(), database, engineCfg)
 	t.Cleanup(engine.Close)
 
-	runner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
+	runner := newForegroundResyncRunner(t.Context(), cfg, engine, database, true)
 	_, err = runner(t.Context(), nil)
 
 	require.NoError(t, err)
@@ -101,7 +110,7 @@ func TestForegroundResyncRunnerAbortedResyncFallsBackIncremental(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	runner := newForegroundResyncRunner(
-		t.Context(), config.Config{}, engine, database,
+		t.Context(), config.Config{}, engine, database, true,
 	)
 	stats, err := runner(t.Context(), nil)
 
