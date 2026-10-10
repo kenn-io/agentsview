@@ -88,6 +88,7 @@ func (c *Config) MigrateTelemetryScreenClaims() error {
 		}
 		encoded, err := json.Marshal(state)
 		if err != nil {
+			log.Printf("skipping legacy telemetry screen claims: encoding claims: %v", err)
 			return nil
 		}
 		return c.writeInstallationFile(telemetryScreensFilename, string(encoded))
@@ -100,6 +101,7 @@ func addLegacyScreenClaims(days map[string][]string, fields []string) bool {
 	for _, screen := range fields[2:] {
 		key, err := json.Marshal([]string{fields[0], "screen_viewed", screen})
 		if err != nil {
+			log.Printf("skipping legacy telemetry screen claims: encoding claim key: %v", err)
 			return false
 		}
 		days[string(key)] = []string{fields[1]}
