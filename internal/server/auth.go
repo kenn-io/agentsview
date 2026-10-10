@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/rawsync"
 )
@@ -41,7 +42,7 @@ func isRemoteAuth(r *http.Request) bool {
 // genuinely local attacker spoofing these headers only denies themselves, so
 // the check fails closed.
 func isLocalhostRequest(r *http.Request) bool {
-	if hasForwardingHeader(r) {
+	if restrictedIngress(r.Context()) || hasForwardingHeader(r) {
 		return false
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -78,6 +79,10 @@ func (s *Server) protectedPath(path string) bool {
 // when require_auth is on. Non-protected routes such as static
 // assets are never gated.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return s.authMiddlewareRequired(next, false)
+}
+
+func (s *Server) authMiddlewareRequired(next http.Handler, force bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Static assets are always served.
 		if !s.protectedPath(r.URL.Path) {
@@ -88,16 +93,19 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Read config once for all checks below.
 		s.mu.RLock()
 		token := s.cfg.AuthToken
-		authRequired := s.cfg.RequireAuth
+		authRequired := force || s.cfg.RequireAuth
 		writeTimeout := s.cfg.WriteTimeout
 		s.mu.RUnlock()
+		if force && (writeTimeout <= 0 || writeTimeout > 5*time.Second) {
+			writeTimeout = 5 * time.Second
+		}
 
 		// CORS preflight requests (OPTIONS) never include credentials.
 		// Let them through so the browser can negotiate CORS before
 		// sending the authenticated request. When auth is required,
 		// mark OPTIONS as authenticated so the CORS middleware
 		// allows the preflight for cross-origin clients.
-		if r.Method == http.MethodOptions {
+		if r.Method == http.MethodOptions && !force {
 			if s.isRawSyncOwnAuthPath(r.URL.Path) || authRequired && token != "" {
 				ctx := context.WithValue(r.Context(), ctxKeyRemoteAuth, true)
 				next.ServeHTTP(w, r.WithContext(ctx))
@@ -134,10 +142,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				return
 			}
 			handlerCtx := authCtx
-			if r.Method == http.MethodPatch && isRawSyncUploadPath(r.URL.Path) {
-				// Upload authentication stays bounded by WriteTimeout, but body
-				// transfer and checksum finalization use the client's request
-				// lifetime plus the route's extended transport read deadline.
+			if force || (r.Method == http.MethodPatch && isRawSyncUploadPath(r.URL.Path)) {
+				// Authentication stays bounded, while request processing uses the
+				// request lifetime. Uploads need it for body transfer and checksum;
+				// restricted raw-sync handlers may perform longer custody work.
 				cancel()
 				handlerCtx = baseCtx
 			}
@@ -165,6 +173,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				http.Error(w,
 					"server misconfiguration: auth token required for machine API",
 					http.StatusInternalServerError)
+				return
+			}
+			if force {
+				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}
 			http.Error(w,

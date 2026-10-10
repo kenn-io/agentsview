@@ -186,7 +186,7 @@ func humaRequestInfoMiddleware(ctx huma.Context, next func(huma.Context)) {
 
 func isLocalhostContext(ctx context.Context) bool {
 	info, _ := ctx.Value(ctxKeyHumaRequestInfo).(requestInfo)
-	if info.Forwarded {
+	if restrictedIngress(ctx) || info.Forwarded {
 		return false
 	}
 	host, _, err := net.SplitHostPort(info.RemoteAddr)

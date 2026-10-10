@@ -214,10 +214,18 @@ func e2EObjectFor(t *testing.T, body []byte) rawsync.ObjectRef {
 // newE2ERawSyncServer mounts the real huma server with real rawsync
 // services: device authentication, custody, resumable uploads, and the
 // verified artifact ledger backed by a throwaway repository.
-func newE2ERawSyncServer(
+func newE2ERawSyncServer(t *testing.T, uploads *e2EUploadSessionStore) (*httptest.Server, *rawsync.DeviceAuthService) {
+	t.Helper()
+	srv, auth := newE2ERawSyncApplication(t, uploads)
+	httpServer := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpServer.Close)
+	return httpServer, auth
+}
+
+func newE2ERawSyncApplication(
 	t *testing.T,
 	uploads *e2EUploadSessionStore,
-) (*httptest.Server, *rawsync.DeviceAuthService) {
+) (*server.Server, *rawsync.DeviceAuthService) {
 	t.Helper()
 
 	repository, err := artifact.OpenRepository(t.Context(), t.TempDir())
@@ -250,9 +258,7 @@ func newE2ERawSyncServer(
 		server.WithRawSyncServices(auth, custody),
 		server.WithRawSyncUploads(uploadService),
 	)
-	httpServer := httptest.NewServer(srv.Handler())
-	t.Cleanup(httpServer.Close)
-	return httpServer, auth
+	return srv, auth
 }
 
 // e2EDeviceAuthStore is an in-memory DeviceAuthStore backed by maps. It

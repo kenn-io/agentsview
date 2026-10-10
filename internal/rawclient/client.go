@@ -17,6 +17,7 @@ import (
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/rawsync"
+	"go.kenn.io/agentsview/internal/requestsign"
 )
 
 // Error codes produced by the raw-sync HTTP surface.
@@ -151,6 +152,10 @@ func newClient(cfg Config, scopes []string) (*Client, error) {
 		enforced := *httpClient
 		enforced.CheckRedirect = refuseRedirects
 		httpClient = &enforced
+	}
+	httpClient, err = requestsign.ClientFromEnvironment(cfg.BaseURL, httpClient)
+	if err != nil {
+		return nil, err
 	}
 	chunkBytes := cfg.ChunkBytes
 	if chunkBytes <= 0 {

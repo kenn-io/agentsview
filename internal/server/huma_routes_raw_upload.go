@@ -77,7 +77,11 @@ func (s *Server) humaRawSyncUploadStart(
 	}
 	location := ""
 	if session.ID != "" {
-		location = s.basePath + "/api/v1/raw-sync/uploads/" + session.ID
+		prefix := s.basePath
+		if restrictedIngress(ctx) {
+			prefix = restrictedIngressPrefix(ctx)
+		}
+		location = prefix + "/api/v1/raw-sync/uploads/" + session.ID
 	}
 	return &rawSyncUploadStartOutput{
 		Location: location,
