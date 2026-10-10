@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -304,12 +304,11 @@ func TestMCPDaemonServiceReconnectsAfterDaemonStops(t *testing.T) {
 	starts := 0
 	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
 		starts++
-		return &DaemonRuntime{Host: host, Port: port, ReadOnly: starts == 2}, nil
+		return &DaemonRuntime{Host: host, Port: port}, nil
 	})
 	svc := newMCPDaemonService(cfg)
 	_, err := svc.List(t.Context(), service.ListFilter{})
 	require.NoError(t, err)
-	assert.True(t, service.SupportsRecallQueries(svc))
 	server.Close()
 	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.NoError(t, json.MarshalWrite(w, service.SessionList{Total: 9}))
@@ -320,7 +319,6 @@ func TestMCPDaemonServiceReconnectsAfterDaemonStops(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 9, result.Total)
 	assert.Equal(t, 2, starts)
-	assert.False(t, service.SupportsRecallQueries(svc))
 }
 
 func TestMCPDaemonServiceConcurrentReadsShareDiscovery(t *testing.T) {
@@ -346,19 +344,31 @@ func TestMCPDaemonServiceConcurrentReadsShareDiscovery(t *testing.T) {
 	assert.Equal(t, 1, starts)
 }
 
-func TestMCPDaemonServiceDoesNotReplayRejectedReadOrFailedWrite(t *testing.T) {
-	for _, write := range []bool{false, true} {
-		t.Run(fmt.Sprintf("write %t", write), func(t *testing.T) {
+func TestMCPDaemonServiceRetryClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		operation    string
+		wantRequests int
+		wantCached   bool
+	}{
+		{"rejected read", "search", 1, true},
+		{"failed write", "sync", 1, false},
+		{"recall read", "recall read", 2, true},
+		{"recall write", "recall write", 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			requests := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
-				if write {
+				if tc.operation == "search" {
+					http.Error(w, "invalid search", http.StatusBadRequest)
+				} else if requests == 1 {
 					conn, _, err := w.(http.Hijacker).Hijack()
 					require.NoError(t, err)
 					assert.NoError(t, conn.Close())
-					return
+				} else {
+					assert.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{Mode: "text"}))
 				}
-				http.Error(w, "invalid search", http.StatusBadRequest)
 			}))
 			t.Cleanup(server.Close)
 			host, port := splitTestServerURL(t, server.URL)
@@ -369,32 +379,45 @@ func TestMCPDaemonServiceDoesNotReplayRejectedReadOrFailedWrite(t *testing.T) {
 			})
 			svc := newMCPDaemonService(config.Config{DataDir: t.TempDir()})
 			var err error
-			if write {
+			switch tc.operation {
+			case "sync":
 				_, err = svc.Sync(t.Context(), service.SyncInput{})
-			} else {
+			case "search":
 				_, err = svc.Search(t.Context(), service.SearchRequest{Query: "invalid"})
+			default:
+				_, err = svc.QueryRecallEntries(t.Context(), service.RecallQuery{Query: "test", Mode: "text", SkipRecording: tc.operation == "recall read"})
 			}
-			require.Error(t, err)
-			assert.Equal(t, 1, requests)
-			assert.Equal(t, 1, starts)
-			assert.Nil(t, svc.(*mcpDaemonService).backend)
+			if tc.wantRequests == 2 {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			assert.Equal(t, tc.wantRequests, requests)
+			assert.Equal(t, tc.wantRequests, starts)
+			assert.Equal(t, tc.wantCached, svc.(*mcpDaemonService).backend != nil)
 		})
 	}
 }
 
-func TestMCPDaemonCallPreservesReplacementAndCanceledBackend(t *testing.T) {
-	for _, canceled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("canceled %t", canceled), func(t *testing.T) {
+func TestMCPDaemonCallPreservesHealthyOrReplacementBackend(t *testing.T) {
+	for _, outcome := range []string{"replacement", "canceled", "timeout"} {
+		t.Run(outcome, func(t *testing.T) {
 			old := servicehttp.NewHTTPBackend("http://127.0.0.1", "", false, "")
 			replacement := servicehttp.NewHTTPBackend("http://127.0.0.1", "", false, "")
 			svc := &mcpDaemonService{backend: old}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			failure := &url.Error{Op: "Get", Err: errors.New("connection lost")}
-			_, err := mcpDaemonCall(ctx, svc, false, func(service.SessionService) (int, error) {
-				if canceled {
+			failure := &url.Error{Op: "Get", Err: io.EOF}
+			if outcome == "timeout" {
+				failure.Err = context.DeadlineExceeded
+			}
+			calls := 0
+			_, err := mcpDaemonCall(ctx, svc, outcome == "timeout", func(service.SessionService) (int, error) {
+				calls++
+				switch outcome {
+				case "canceled":
 					cancel()
-				} else {
+				case "replacement":
 					svc.mu.Lock()
 					svc.backend = replacement
 					svc.mu.Unlock()
@@ -402,10 +425,11 @@ func TestMCPDaemonCallPreservesReplacementAndCanceledBackend(t *testing.T) {
 				return 0, failure
 			})
 			require.ErrorIs(t, err, failure)
-			if canceled {
-				assert.Same(t, old, svc.backend)
-			} else {
+			assert.Equal(t, 1, calls)
+			if outcome == "replacement" {
 				assert.Same(t, replacement, svc.backend)
+			} else {
+				assert.Same(t, old, svc.backend)
 			}
 		})
 	}

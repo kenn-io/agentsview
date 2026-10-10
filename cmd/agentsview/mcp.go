@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -43,10 +42,9 @@ Use --profile memory to advertise only get_memory_status, search_content, and
 get_messages for focused conversation-memory clients. The default full profile
 is unchanged.
 
-The server reads through the daemon path. By default each tool call talks to
-the local agentsview daemon, starting it when needed so a long-lived MCP server
-can recover after the daemon exits due to idleness. Use --server to target an
-explicit daemon URL.
+The server reuses its connection to the local agentsview daemon. If a read
+loses its connection, it resolves the daemon again, starts it when needed,
+and retries once. Use --server to target an explicit daemon URL.
 
 Add to your MCP client config (e.g. Claude Desktop):
   {
@@ -255,9 +253,6 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.backend != nil {
-		return service.SupportsRecallQueries(s.backend)
-	}
 	runtime := FindDaemonRuntime(s.cfg.DataDir, s.cfg.AuthToken)
 	return runtime == nil || !runtime.ReadOnly
 }
@@ -306,13 +301,20 @@ func mcpDaemonCall[T any](
 		if err == nil || ctx.Err() != nil {
 			return result, err
 		}
+		if timeout, ok := errors.AsType[net.Error](err); ok && timeout.Timeout() {
+			return result, err
+		}
+		_, networkFailure := errors.AsType[*net.OpError](err)
+		connectionFailure := networkFailure || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+		if !connectionFailure {
+			return result, err
+		}
 		s.mu.Lock()
 		if s.backend == svc {
 			s.backend = nil
 		}
 		s.mu.Unlock()
-		_, transportFailure := errors.AsType[*url.Error](err)
-		if !retryRead || attempt > 0 || !(transportFailure || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+		if !retryRead || attempt > 0 {
 			return result, err
 		}
 	}
