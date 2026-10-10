@@ -102,3 +102,23 @@ func uniqueNonEmptyStrings(values []string) []string {
 	}
 	return out
 }
+
+// Record thread scope before exact aliases, so a later per-file tombstone
+// cannot narrow an existing permanent whole-thread exclusion.
+func insertPGTrashedSessionExclusions(ctx context.Context, tx *sql.Tx, ids, scopedIDs []string) error {
+	if len(scopedIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO excluded_sessions (id, include_codex_pages, owner_marker, machine, agent)
+			SELECT id, TRUE, owner_marker, machine, agent FROM sessions WHERE id = ANY($1)
+			ON CONFLICT (id) DO UPDATE SET
+				owner_marker = CASE WHEN excluded_sessions.include_codex_pages
+					THEN excluded_sessions.owner_marker ELSE EXCLUDED.owner_marker END,
+				machine = CASE WHEN excluded_sessions.include_codex_pages
+					THEN excluded_sessions.machine ELSE EXCLUDED.machine END,
+				agent = CASE WHEN excluded_sessions.include_codex_pages
+					THEN excluded_sessions.agent ELSE EXCLUDED.agent END,
+				include_codex_pages = TRUE`, scopedIDs); err != nil {
+			return fmt.Errorf("recording excluded Codex threads: %w", err)
+		}
+	}
+	return insertPGExcludedSessionIDs(ctx, tx, ids)
+}

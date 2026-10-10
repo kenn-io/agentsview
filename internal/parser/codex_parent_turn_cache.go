@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -18,47 +19,23 @@ type codexParentTurnCacheKey struct {
 }
 
 type codexParentTurnCacheEntry struct {
-	key     codexParentTurnCacheKey
+	files   []codexParentTurnCacheKey
 	turnIDs map[string]struct{}
 }
 
 type codexParentTurnCache struct {
 	mu         sync.Mutex
 	maxEntries int
-	entries    map[codexParentTurnCacheKey]*list.Element
-	parents    map[string]codexParentTurnCacheKey
+	entries    map[string]*list.Element
 	recent     *list.List
 }
 
 func newCodexParentTurnCache(maxEntries int) *codexParentTurnCache {
 	return &codexParentTurnCache{
 		maxEntries: maxEntries,
-		entries:    make(map[codexParentTurnCacheKey]*list.Element),
-		parents:    make(map[string]codexParentTurnCacheKey),
+		entries:    make(map[string]*list.Element),
 		recent:     list.New(),
 	}
-}
-
-func (c *codexParentTurnCache) GetParent(
-	parentKey string,
-) (map[string]struct{}, bool) {
-	if c == nil {
-		return nil, false
-	}
-	c.mu.Lock()
-	key, ok := c.parents[parentKey]
-	c.mu.Unlock()
-	if !ok {
-		return nil, false
-	}
-	info, err := os.Stat(key.path)
-	if err != nil || codexParentTurnCacheKeyFor(key.path, info) != key {
-		c.mu.Lock()
-		delete(c.parents, parentKey)
-		c.mu.Unlock()
-		return nil, false
-	}
-	return c.Get(key)
 }
 
 func newCodexProductionParentTurnCache() *codexParentTurnCache {
@@ -79,16 +56,19 @@ func codexParentTurnCacheKeyFor(
 	}
 }
 
+// Get and Put use the first rollout's path to locate an inventory. Every
+// file identity must match before reusing its immutable combined turn set.
+// Inventories are nonempty and remain unchanged after Put.
 func (c *codexParentTurnCache) Get(
-	key codexParentTurnCacheKey,
+	files []codexParentTurnCacheKey,
 ) (map[string]struct{}, bool) {
 	if c == nil {
 		return nil, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	elem, ok := c.entries[key]
-	if !ok {
+	elem, ok := c.entries[files[0].path]
+	if !ok || !slices.Equal(elem.Value.(codexParentTurnCacheEntry).files, files) {
 		return nil, false
 	}
 	c.recent.MoveToFront(elem)
@@ -96,7 +76,7 @@ func (c *codexParentTurnCache) Get(
 }
 
 func (c *codexParentTurnCache) Put(
-	key codexParentTurnCacheKey,
+	files []codexParentTurnCacheKey,
 	turnIDs map[string]struct{},
 ) {
 	if c == nil || c.maxEntries <= 0 {
@@ -104,40 +84,20 @@ func (c *codexParentTurnCache) Put(
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	key := files[0].path
 	if elem, ok := c.entries[key]; ok {
-		elem.Value = codexParentTurnCacheEntry{key: key, turnIDs: turnIDs}
+		elem.Value = codexParentTurnCacheEntry{files: files, turnIDs: turnIDs}
 		c.recent.MoveToFront(elem)
 		return
 	}
 	elem := c.recent.PushFront(codexParentTurnCacheEntry{
-		key: key, turnIDs: turnIDs,
+		files: files, turnIDs: turnIDs,
 	})
 	c.entries[key] = elem
 	for len(c.entries) > c.maxEntries {
 		oldest := c.recent.Back()
 		entry := oldest.Value.(codexParentTurnCacheEntry)
-		delete(c.entries, entry.key)
-		for parentKey, key := range c.parents {
-			if key == entry.key {
-				delete(c.parents, parentKey)
-			}
-		}
+		delete(c.entries, entry.files[0].path)
 		c.recent.Remove(oldest)
-	}
-}
-
-func (c *codexParentTurnCache) PutParent(
-	parentKey string,
-	key codexParentTurnCacheKey,
-	turnIDs map[string]struct{},
-) {
-	c.Put(key, turnIDs)
-	if c == nil || c.maxEntries <= 0 {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.entries[key]; ok {
-		c.parents[parentKey] = key
 	}
 }

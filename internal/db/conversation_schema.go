@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // This additive migration owns only local conversation export state. Historical
@@ -229,7 +230,7 @@ func refreshConversationMessagesFromArchiveTx(ctx context.Context, tx *sql.Tx, w
 // copyConversationRowsTx copies conversation state between archives in the
 // same cold or active state. A rebuild takes its source's state from
 // CopyArchiveIdentityFrom before any copy, so a mismatch is a caller bug.
-func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where string) error {
+func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where, sessionID string) error {
 	var initialized bool
 	if oldDBHasTable(ctx, tx, "conversation_messages") {
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&initialized); err != nil {
@@ -246,22 +247,22 @@ func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where string) error
 	if !active {
 		// Session evidence outlives the messages a later scan rebuilds from.
 		if oldDBHasTable(ctx, tx, "conversation_session_changes") {
-			return copyConversationSessionStatesTx(ctx, tx, where)
+			return copyConversationSessionStatesTx(ctx, tx, where, sessionID)
 		}
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.conversation_messages (`+conversationCopyColumns+`) SELECT `+conversationCopyColumns+` FROM old_db.conversation_messages WHERE `+where)
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.conversation_messages (`+conversationCopyColumns+`) SELECT `+sessionID+strings.TrimPrefix(conversationCopyColumns, "session_id")+` FROM old_db.conversation_messages WHERE `+where)
 	if err != nil {
 		return err
 	}
-	return copyConversationSessionStatesTx(ctx, tx, where)
+	return copyConversationSessionStatesTx(ctx, tx, where, sessionID)
 }
 
 func retainConversationTombstonesTx(ctx context.Context, tx *sql.Tx) error {
 	if !oldDBHasTable(ctx, tx, "conversation_messages") {
 		return nil
 	}
-	if err := copyConversationRowsTx(ctx, tx, "session_id NOT IN (SELECT id FROM main.sessions)"); err != nil {
+	if err := copyConversationRowsTx(ctx, tx, "session_id NOT IN (SELECT id FROM main.sessions) AND session_id NOT IN (SELECT source_id FROM _codex_page_metadata)", "session_id"); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE main.conversation_messages SET deleted=1,removed=1,body=NULL
@@ -269,9 +270,9 @@ func retainConversationTombstonesTx(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
-func copyConversationSessionStatesTx(ctx context.Context, tx *sql.Tx, where string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT session_id,gap,
-	 COALESCE((SELECT deleted_at IS NOT NULL FROM main.sessions WHERE id=s.session_id),1)
+func copyConversationSessionStatesTx(ctx context.Context, tx *sql.Tx, where, sessionID string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT `+sessionID+`,gap,
+	 COALESCE((SELECT deleted_at IS NOT NULL FROM main.sessions WHERE id=`+sessionID+`),1)
 	 FROM old_db.conversation_session_changes s WHERE `+where)
 	if err != nil {
 		return err
@@ -325,6 +326,14 @@ func conversationMessagesTx(ctx context.Context, tx *sql.Tx, sessionID string) (
 // Rebuilt archives preserve opaque IDs from the old projection before matching
 // freshly parsed messages. The new database keeps its own publication counter.
 func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bool) error {
+	if oldDBHasTable(ctx, tx, "conversation_session_changes") {
+		if err := copyConversationSessionStatesTx(ctx, tx,
+			"session_id IN (SELECT source_id FROM _codex_page_metadata)",
+			"(SELECT target_id FROM _codex_page_metadata WHERE source_id=s.session_id)"); err != nil {
+			return err
+		}
+	}
+
 	if active, err := conversationExportActiveTx(contextTransaction{ctx: ctx, tx: tx}); err != nil || !active {
 		return err
 	}
@@ -332,16 +341,20 @@ func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bo
 		return nil
 	}
 	// Trash was copied without reparsing, so keep its original projection and gaps.
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM main.sessions s WHERE deleted_at IS NULL
-	 AND EXISTS (SELECT 1 FROM old_db.conversation_messages c WHERE c.session_id=s.id)`)
+	rows, err := tx.QueryContext(ctx, `SELECT s.id, COALESCE(mapped.source_id, s.id) FROM main.sessions s
+	 LEFT JOIN _codex_page_metadata mapped ON mapped.target_id = s.id
+	 WHERE deleted_at IS NULL
+	 AND EXISTS (SELECT 1 FROM old_db.conversation_messages c WHERE c.session_id=COALESCE(mapped.source_id, s.id))
+	 AND NOT EXISTS (SELECT 1 FROM _codex_session_ids old WHERE old.source_id=s.id AND old.is_page=1)`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	var ids []string
+	type mappedSession struct{ id, sourceID string }
+	var ids []mappedSession
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var id mappedSession
+		if err := rows.Scan(&id.id, &id.sourceID); err != nil {
 			return err
 		}
 		ids = append(ids, id)
@@ -349,7 +362,8 @@ func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bo
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
-	for _, id := range ids {
+	for _, mapped := range ids {
+		id := mapped.id
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -360,7 +374,7 @@ func reconcileConversationResyncTx(ctx context.Context, tx *sql.Tx, usageOnly bo
 		if _, err := tx.ExecContext(ctx, `DELETE FROM main.conversation_messages WHERE session_id=?`, id); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO main.conversation_messages (`+conversationCopyColumns+`) SELECT `+conversationCopyColumns+` FROM old_db.conversation_messages WHERE session_id=?`, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO main.conversation_messages (`+conversationCopyColumns+`) SELECT ?`+strings.TrimPrefix(conversationCopyColumns, "session_id")+` FROM old_db.conversation_messages WHERE session_id=?`, id, mapped.sourceID); err != nil {
 			return err
 		}
 		if err := reconcileConversationMessagesTx(tx, id, msgs, true, usageOnly); err != nil {

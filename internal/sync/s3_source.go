@@ -260,7 +260,7 @@ func (e *Engine) s3CodexIndexNeedsRefreshSince(
 		return false
 	}
 
-	title, ok := snapshot.titles[uuid]
+	title, ok := snapshot.titles[parser.CodexThreadIDFromSessionKey(uuid)]
 	if !ok {
 		return false
 	}
@@ -284,7 +284,7 @@ func (e *Engine) s3CodexIndexSessionNameChanged(
 	if !snapshot.statOK || !snapshot.titlesLoaded {
 		return false, nil
 	}
-	title, ok := snapshot.titles[uuid]
+	title, ok := snapshot.titles[parser.CodexThreadIDFromSessionKey(uuid)]
 	if !ok {
 		return false, nil
 	}

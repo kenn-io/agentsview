@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 const (
 	tokenCoverageRepairMetadataKey        = "token_coverage_repair_v1"
 	sourceCurationBackfillMetadataKey     = "source_curation_baseline_backfill_v1"
+	codexThreadScopeMetadataKey           = "codex_thread_scope_v1"
 	projectIdentityRemoteScrubMetadataKey = "git_remote_credentials_scrub_v1"
 	tokenCoverageBackfillBatchSize        = 1000
 )
@@ -152,6 +154,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at           TIMESTAMPTZ,
     deleted_at         TIMESTAMPTZ,
     source_deleted_at  TIMESTAMPTZ,
+    trash_includes_codex_pages BOOLEAN NOT NULL DEFAULT FALSE,
+    source_trash_includes_codex_pages BOOLEAN NOT NULL DEFAULT FALSE,
     deletion_cause     TEXT,
     message_count      INT NOT NULL DEFAULT 0,
     user_message_count INT NOT NULL DEFAULT 0,
@@ -305,6 +309,10 @@ CREATE TABLE IF NOT EXISTS starred_sessions (
 
 CREATE TABLE IF NOT EXISTS excluded_sessions (
     id         TEXT PRIMARY KEY,
+    include_codex_pages BOOLEAN NOT NULL DEFAULT FALSE,
+    owner_marker TEXT,
+    machine TEXT,
+    agent TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -987,7 +995,6 @@ func EnsureSchema(
 	}
 	step = time.Now()
 	tokenCoverageColumnsAdded := false
-	sourceCurationColumnsAdded := false
 	addedColumns, err := ensureColumns(ctx, db, existingColumns, alters)
 	if err != nil {
 		return err
@@ -997,8 +1004,6 @@ func EnsureSchema(
 		case "has_total_output_tokens", "has_peak_context_tokens",
 			"has_context_tokens", "has_output_tokens":
 			tokenCoverageColumnsAdded = true
-		case "source_display_name", "source_deleted_at":
-			sourceCurationColumnsAdded = true
 		}
 	}
 	log.Printf(
@@ -1007,26 +1012,6 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 		len(addedColumns),
 	)
-	step = time.Now()
-	sourceBackfilled, err := runSourceCurationBackfill(
-		ctx, db, sourceCurationColumnsAdded,
-	)
-	if err != nil {
-		return err
-	}
-	if sourceBackfilled {
-		log.Printf(
-			"pg schema: source curation baseline backfill"+
-				" completed in %s",
-			time.Since(step).Round(time.Millisecond),
-		)
-	} else {
-		log.Printf(
-			"pg schema: source curation baseline backfill"+
-				" check completed in %s (repair skipped)",
-			time.Since(step).Round(time.Millisecond),
-		)
-	}
 	if err := repairLegacySourceMissingDeletionPG(ctx, db); err != nil {
 		return err
 	}
@@ -1271,6 +1256,9 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 	if _, err := runSourceCurationBackfill(ctx, db, false); err != nil {
 		return err
 	}
+	if err := backfillCodexThreadScopePG(ctx, db); err != nil {
+		return err
+	}
 	if err := repairLegacySourceMissingDeletionPG(ctx, db); err != nil {
 		return err
 	}
@@ -1288,6 +1276,31 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	return markTokenCoverageRepairDone(ctx, db)
+}
+
+// Backfill only thread deletion decisions present before per-file identities.
+// The marker and updates share one statement so retries cannot widen subsequent
+// per-file actions. Hosted raw curation uses separate tables and identities.
+func backfillCodexThreadScopePG(ctx context.Context, pg pgSessionExecer) error {
+	_, err := pg.ExecContext(ctx, `
+		WITH migration AS (
+			INSERT INTO sync_metadata (key, value) VALUES ($1, '1')
+			ON CONFLICT (key) DO NOTHING RETURNING key
+		), exclusions AS (
+			UPDATE excluded_sessions SET include_codex_pages = TRUE
+			WHERE id ~ $2 AND EXISTS (SELECT 1 FROM migration)
+		)
+		UPDATE sessions SET trash_includes_codex_pages = TRUE,
+			source_trash_includes_codex_pages = (source_deleted_at IS NOT NULL)
+		WHERE id ~ $2 AND agent IN ('codex', 'traex', 'augure-code')
+		  AND provenance_kind = 'legacy' AND deleted_at IS NOT NULL
+		  AND deletion_cause IS DISTINCT FROM 'source_missing'
+		  AND EXISTS (SELECT 1 FROM migration)`, codexThreadScopeMetadataKey,
+		`(^|~)(codex|traex|augure-code):[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	if err != nil {
+		return fmt.Errorf("preserving legacy Codex deletion scope: %w", err)
+	}
+	return nil
 }
 
 // repairLegacySourceMissingDeletionPG restores mirror rows written while
@@ -1308,7 +1321,7 @@ func repairLegacySourceMissingDeletionPG(ctx context.Context, pg *sql.DB) error 
 }
 
 func backfillSourceCurationBaselines(
-	ctx context.Context, pg *sql.DB,
+	ctx context.Context, pg pgSessionExecer,
 ) error {
 	if _, err := pg.ExecContext(ctx,
 		`UPDATE sessions
@@ -1332,7 +1345,7 @@ func backfillSourceCurationBaselines(
 }
 
 func runSourceCurationBackfill(
-	ctx context.Context, db *sql.DB, sourceCurationColumnsAdded bool,
+	ctx context.Context, db pgProjectIdentityExecer, sourceCurationColumnsAdded bool,
 ) (bool, error) {
 	runRepair, err := shouldRunSourceCurationBackfill(
 		ctx, db, sourceCurationColumnsAdded,
@@ -1353,7 +1366,7 @@ func runSourceCurationBackfill(
 }
 
 func shouldRunSourceCurationBackfill(
-	ctx context.Context, db *sql.DB, sourceCurationColumnsAdded bool,
+	ctx context.Context, db pgProjectIdentityExecer, sourceCurationColumnsAdded bool,
 ) (bool, error) {
 	if sourceCurationColumnsAdded {
 		return true, nil
@@ -1375,7 +1388,7 @@ func shouldRunSourceCurationBackfill(
 }
 
 func markSourceCurationBackfillDone(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, db pgSessionExecer,
 ) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
@@ -1623,7 +1636,7 @@ func loadExistingColumns(
 }
 
 func ensureColumns(
-	ctx context.Context, db pgSessionExecer,
+	ctx context.Context, db pgProjectIdentityExecer,
 	existing map[string]map[string]bool,
 	migrations []columnMigration,
 ) ([]string, error) {
@@ -1681,6 +1694,35 @@ func ensureColumns(
 		for _, migration := range adds.migrations {
 			existing[adds.table][migration.column] = true
 			added = append(added, migration.column)
+		}
+	}
+	if existing["excluded_sessions"]["include_codex_pages"] {
+		// Thread scope compares the source deletion baseline, including on
+		// hosted upgrades that do not call EnsureSchema.
+		sourceCurationColumnsAdded := slices.Contains(added, "source_display_name") ||
+			slices.Contains(added, "source_deleted_at")
+		step := time.Now()
+		sourceBackfilled, err := runSourceCurationBackfill(
+			ctx, db, sourceCurationColumnsAdded,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if sourceBackfilled {
+			log.Printf(
+				"pg schema: source curation baseline backfill"+
+					" completed in %s",
+				time.Since(step).Round(time.Millisecond),
+			)
+		} else {
+			log.Printf(
+				"pg schema: source curation baseline backfill"+
+					" check completed in %s (repair skipped)",
+				time.Since(step).Round(time.Millisecond),
+			)
+		}
+		if err := backfillCodexThreadScopePG(ctx, db); err != nil {
+			return nil, err
 		}
 	}
 	return added, nil
@@ -2067,7 +2109,7 @@ func CheckSchemaCompat(
 	}
 
 	_, err = db.ExecContext(ctx,
-		`SELECT source_display_name, source_deleted_at, deletion_cause
+		`SELECT source_display_name, source_deleted_at, deletion_cause, source_trash_includes_codex_pages, owner_marker
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -2076,7 +2118,7 @@ func CheckSchemaCompat(
 	}
 
 	_, err = db.ExecContext(ctx,
-		`SELECT id FROM excluded_sessions LIMIT 0`)
+		`SELECT id, include_codex_pages, owner_marker, machine, agent FROM excluded_sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"excluded_sessions table missing required columns: %w", err,
@@ -2321,22 +2363,22 @@ func CheckSchemaCompat(
 	return nil
 }
 
-// checkPushSchemaCompat verifies session ownership columns used only by push.
+// checkPushSchemaCompat verifies columns used only by push.
 // CheckSchemaCompat also checks sync_metadata because PG serve reads machine
 // display labels from it.
 func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx,
-		`SELECT owner_marker, prompt_evidence_discarded FROM sessions LIMIT 0`)
+		`SELECT prompt_evidence_discarded FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
-			"sessions table missing push ownership columns: %w", err)
+			"sessions table missing push columns: %w", err)
 	}
 	return nil
 }
 
 // pushSchemaCurrent reports whether the PG schema has everything a push
 // needs. CheckSchemaCompat covers the read and PG serve write paths but does
-// not require push-only sessions.owner_marker (verified by
+// not require push-only sessions.prompt_evidence_discarded (verified by
 // checkPushSchemaCompat), model_pricing (always queried by syncModelPricing)
 // or cursor_usage_events (written by syncCursorUsageEvents), so probe those
 // explicitly. It also requires the cursor dedup index, which the cursor usage

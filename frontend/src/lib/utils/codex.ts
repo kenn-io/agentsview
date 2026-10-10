@@ -1,4 +1,4 @@
-import { stripIdPrefix } from "./resume.js";
+import { codexThreadId, stripIdPrefix } from "./resume.js";
 
 /**
  * Build the URL understood by the Codex Desktop application for a local
@@ -7,7 +7,7 @@ import { stripIdPrefix } from "./resume.js";
 export function codexDesktopLink(agent: string, sessionId: string): string | null {
   if (agent !== "codex" || sessionId.includes("~")) return null;
 
-  const threadId = stripIdPrefix(sessionId, agent);
+  const threadId = codexThreadId(stripIdPrefix(sessionId, agent));
   if (!threadId) return null;
 
   return `codex://threads/${encodeURIComponent(threadId)}`;

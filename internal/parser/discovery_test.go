@@ -469,12 +469,48 @@ func TestExtractUUIDFromRollout(t *testing.T) {
 			"rollout-20240115-abc12345-1234-5678-9abc-def012345678-suffix.jsonl",
 			"",
 		},
+		{
+			// A thread/revert page keys on <thread>_<rollout>.
+			"rollout-2026-09-01T11-00-00-11111111-1111-4111-8111-111111111111_22222222-2222-4222-8222-222222222222.jsonl",
+			"11111111-1111-4111-8111-111111111111_22222222-2222-4222-8222-222222222222",
+		},
+		{
+			"rollout-20240115-ABC12345-1234-5678-9ABC-DEF012345678.jsonl",
+			"ABC12345-1234-5678-9ABC-DEF012345678",
+		},
+		{
+			"rollout-20240115-abc12345-1234-5678-9abc-def012345678_notauuid.jsonl",
+			"",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.filename, func(t *testing.T) {
 			got := extractUUIDFromRollout(tt.filename)
 			assert.Equalf(t, tt.want, got, "extractUUID(%q)", tt.filename)
+		})
+	}
+}
+
+func TestCodexThreadIDFromSessionKey(t *testing.T) {
+	const (
+		thread  = "11111111-1111-4111-8111-111111111111"
+		rollout = "22222222-2222-4222-8222-222222222222"
+	)
+	tests := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{"revert page", thread + "_" + rollout, thread},
+		{"plain thread", thread, thread},
+		{"underscore id", "run_1", "run_1"},
+		{"empty", "", ""},
+		{"thread with non-uuid suffix", thread + "_x", thread + "_x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, CodexThreadIDFromSessionKey(tt.key))
 		})
 	}
 }

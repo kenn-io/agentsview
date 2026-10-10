@@ -889,16 +889,24 @@ func (hs HTTPSync) prepareMirror(
 		}
 		parser.EvictCodexSessionIndex(indexPath)
 		for uuid := range parser.CodexSessionIndexTitles(indexPath) {
-			storedPath := hs.DB.GetSessionFilePath(ctx, hs.Host+"~codex:"+uuid)
-			remotePath, ok := strings.CutPrefix(storedPath, hs.Host+":")
-			if !ok {
-				continue
-			}
-			path, err := mirrorRelativeRemoteChangePath(mirrorRoot, remotePath)
+			threadID := hs.Host + "~codex:" + uuid
+			// Revert pages (codex:<thread>_<rollout>) carry the thread's title.
+			pageIDs, err := hs.DB.CodexRevertPageSessionIDs(ctx, threadID)
 			if err != nil {
 				return nil, err
 			}
-			observed = append(observed, path)
+			for _, id := range append([]string{threadID}, pageIDs...) {
+				storedPath := hs.DB.GetSessionFilePath(ctx, id)
+				remotePath, ok := strings.CutPrefix(storedPath, hs.Host+":")
+				if !ok {
+					continue
+				}
+				path, err := mirrorRelativeRemoteChangePath(mirrorRoot, remotePath)
+				if err != nil {
+					return nil, err
+				}
+				observed = append(observed, path)
+			}
 		}
 	}
 	journal, mergeStats, err := mergeMirrorChangesWithForce(

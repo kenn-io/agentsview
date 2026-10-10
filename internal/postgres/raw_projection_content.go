@@ -184,8 +184,10 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 		out := map[string]any{}
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
-			// Empty fields added after hashing began, such as GroupKey, are omitted so existing revisions stay stable.
-			if !f.IsExported() || f.Name == "UsageAutomationProjected" || (v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) {
+			// Projection bookkeeping and inherited trash scope add no content.
+			// Omit empty GroupKey values so existing revisions stay stable.
+			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "TrashIncludesCodexPages" ||
+				(v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) {
 				continue
 			}
 			value, err := rawCanonicalValue(v.Field(i), f.Name)

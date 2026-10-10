@@ -65,6 +65,10 @@ func resumeCommand(agent, tmpl, rawID, model string) string {
 		// A second file sharing a session id is stored under a derived id; the CLI resumes the original.
 		rawID = parser.BaseSessionID(rawID)
 	}
+	if agent == "codex" || agent == "traex" || agent == "augure-code" {
+		// Codex stores a revert page as <thread>_<rollout>; the CLI resumes the thread.
+		rawID = parser.CodexThreadIDFromSessionKey(rawID)
+	}
 	cmd := fmt.Sprintf(tmpl, shellQuote(rawID))
 	if !resumeAgentNeedsModel(agent) {
 		return cmd

@@ -236,6 +236,11 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		_, _ = conn.ExecContext(ctx, "DETACH DATABASE old_db")
 	}()
 
+	if _, err := prepareCodexSessionIDMap(ctx, conn, false); err != nil {
+		return err
+	}
+	defer func() { _, _ = conn.ExecContext(ctx, dropCodexSessionIDMapSQL) }()
+
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin recall copy: %w", err)
@@ -273,12 +278,13 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		SELECT
 			id, type, scope, status, review_state, title, body, trigger,
 			confidence, uncertainty, project, cwd, git_branch, agent,
-			source_session_id, source_episode_id, source_run_id,
+			COALESCE(mapped.target_id, source_session_id), source_episode_id, source_run_id,
 			extractor_method, model, transferable, provenance_ok,
 			supersedes_entry_id, superseded_by_entry_id,
 			created_at, updated_at
 		FROM old_db.recall_entries
-		WHERE source_session_id IN (SELECT id FROM main.sessions)`)
+		LEFT JOIN _codex_page_metadata mapped ON mapped.source_id = source_session_id
+		WHERE COALESCE(mapped.target_id, source_session_id) IN (SELECT id FROM main.sessions)`)
 	if err != nil {
 		return fmt.Errorf("copying entries: %w", err)
 	}
@@ -301,12 +307,13 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 			message_end_source_uuid, content_digest, tool_use_id, snippet
 		)
 		SELECT
-			entry_id, session_id, message_start_ordinal,
+			entry_id, COALESCE(mapped.target_id, session_id), message_start_ordinal,
 			message_end_ordinal, message_start_source_uuid,
 			message_end_source_uuid, content_digest, tool_use_id, snippet
 		FROM old_db.recall_evidence
+		LEFT JOIN _codex_page_metadata mapped ON mapped.source_id = session_id
 		WHERE entry_id IN (SELECT id FROM main.recall_entries)
-		  AND session_id IN (SELECT id FROM main.sessions)`); err != nil {
+		  AND COALESCE(mapped.target_id, session_id) IN (SELECT id FROM main.sessions)`); err != nil {
 		return fmt.Errorf("copying recall evidence: %w", err)
 	}
 	if err := revokeRecallEntriesWithDroppedEvidenceTx(

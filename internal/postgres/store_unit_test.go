@@ -373,7 +373,7 @@ func (c *emptyTrashProbeConn) QueryContext(
 	}
 	return &emptyTrashProbeRows{
 		columns: []string{
-			"id", "alias_id", "session_id", "alias_id",
+			"id", "alias_id", "session_id", "alias_id", "trash_includes_codex_pages",
 		},
 		values: values,
 	}, nil
@@ -412,7 +412,7 @@ func (s *emptyTrashProbeState) trashedSessionAliasRowsLocked(
 		if len(reverseAliases) == 0 {
 			for _, aliasID := range directAliases {
 				values = append(values, []driver.Value{
-					id, nullableDriverString(aliasID), nil, nil,
+					id, nullableDriverString(aliasID), nil, nil, false,
 				})
 			}
 			continue
@@ -423,7 +423,7 @@ func (s *emptyTrashProbeState) trashedSessionAliasRowsLocked(
 					id,
 					nullableDriverString(aliasID),
 					reverseAlias[0],
-					nullableDriverString(reverseAlias[1]),
+					nullableDriverString(reverseAlias[1]), false,
 				})
 			}
 		}

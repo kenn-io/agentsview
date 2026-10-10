@@ -34,6 +34,7 @@ func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 		p.Session.Machine = "other"
 		p.Session.FilePath = new("capture.jsonl")
 		p.Session.FileMtime = new(int64(99))
+		p.Session.TrashIncludesCodexPages = true
 		p.Messages[0].ToolCalls[0].ResultEvents[0].RawContentDigest = []byte("other transport")
 		p.Messages[0].ToolCalls[0].InputJSON = `{ "b": 2, "a": 1 }`
 		got, err := rawContentRevision(p)

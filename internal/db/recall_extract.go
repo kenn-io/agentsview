@@ -1217,10 +1217,11 @@ func copyRecallExtractStateFromAttachedTx(
 			session_id, generation_fingerprint, unit_cursor, units_total,
 			state, content_digest, content_stamped_at, last_error, updated_at
 		)
-		SELECT session_id, generation_fingerprint, unit_cursor, units_total,
+		SELECT COALESCE(mapped.target_id, session_id), generation_fingerprint, unit_cursor, units_total,
 		       state, content_digest, `+stampSource+`, last_error, updated_at
 		FROM old_db.recall_extract_progress
-		WHERE session_id IN (SELECT id FROM main.sessions)`); err != nil {
+		LEFT JOIN _codex_page_metadata mapped ON mapped.source_id = session_id
+		WHERE COALESCE(mapped.target_id, session_id) IN (SELECT id FROM main.sessions)`); err != nil {
 		return fmt.Errorf("copying extract progress: %w", err)
 	}
 	return nil

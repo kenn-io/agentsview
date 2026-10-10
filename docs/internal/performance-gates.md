@@ -75,6 +75,15 @@ runner noise and fail loudly:
 - `TestCodexCursorCache`, `TestCodexCursorWarmColdParity`, and the cursor
   boundary tests in `internal/parser` — continuation state stays bounded and
   warm/cold parsing remains equivalent at safe offsets.
+- `TestCodexForkInventoryDoesNotAllocatePerUnchangedFile` (`internal/parser`) —
+  parsing another fork through the same provider factory must not enumerate
+  all unchanged rollout filenames again. Page creation and archival moves
+  still refresh the inventory through directory identity and modification
+  time.
+- `TestCodexForkParentTurnsReuseCombinedSet` (`internal/parser`) — parsing
+  another fork reuses the combined turn IDs from unchanged parent rollouts.
+  Allocation growth stays bounded as turns increase, including a parent with
+  more than 64 rollouts. `BenchmarkCodexForkParentTurns` measures that parse.
 - `TestIncrementalSync_CodexAppend`,
   `TestIncrementalSync_CodexLifecycleTailUpdatesTermination`, the partial-tail
   tests, the late tool-result append test
@@ -133,6 +142,8 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
 - `BenchmarkReplaceSessionMessagesStreamingMerge` — the streaming chunk-merge
   diff path (one UPDATE, not a full delete+reinsert).
 - `BenchmarkInsertMessagesBatch` — multi-row batched ingest.
+- `BenchmarkCopySparseOrphan` — retain one missing session from archives of
+  different sizes without scanning every old message to map its session ID.
 - `BenchmarkResyncBulkContributorIngest` — the same archive entering the atomic
   rebuild through a contributor engine.
 - `BenchmarkSearchContentSubstringPage` / `BenchmarkSearchContentFTSPage` — one

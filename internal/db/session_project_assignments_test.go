@@ -182,3 +182,134 @@ func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, "temporary", cleared.Project)
 }
+
+func TestCodexPageUpgradePreservesProjectAssignment(t *testing.T) {
+	const thread = "codex:11111111-1111-4111-8111-111111111111"
+	const page = thread + "_22222222-2222-4222-8222-222222222222"
+	for _, tc := range []struct {
+		name       string
+		reparsed   bool
+		headExists bool
+		trashed    bool
+	}{
+		{name: "reparsed_page", reparsed: true},
+		{name: "archived_page"},
+		{name: "trashed_page", trashed: true},
+		{name: "surviving_original", reparsed: true, headExists: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			dir := t.TempDir()
+			sourcePath := filepath.Join(dir, "old.db")
+			source := testDBAtPath(t, sourcePath, "source")
+			t.Cleanup(func() { _ = source.Close() })
+			pagePath := filepath.Join(dir, "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
+			withSource := func(session *Session) {
+				session.Agent, session.Machine = "codex", "host-a.example"
+				session.FilePath, session.Cwd = &pagePath, "/work/project/run"
+			}
+			insertSession(t, source, thread, "automatic_project", withSource)
+			observation := export.ProjectIdentityObservation{
+				SessionID: thread, Project: "automatic_project", Machine: "host-a.example",
+				RootPath: "/work/project", GitRemote: "https://example.com/repository.git",
+				ObservedAt: time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC),
+			}
+			require.NoError(t, source.UpsertProjectIdentityObservation(ctx, observation))
+			_, err := source.AssignSessionProject(ctx, thread, "saved_project")
+			require.NoError(t, err)
+			const created = "2026-09-25T12:00:00.000Z"
+			const updated = "2026-09-26T12:00:00.000Z"
+			_, err = source.getWriter().Exec(ctx, `UPDATE session_project_assignments SET created_at=?, updated_at=? WHERE session_id=?`, created, updated, thread)
+			require.NoError(t, err)
+			if tc.trashed {
+				require.NoError(t, source.SoftDeleteSession(ctx, thread))
+			}
+			_, err = source.getWriter().Exec(ctx, "PRAGMA user_version=126")
+			require.NoError(t, err)
+			require.NoError(t, source.Close())
+
+			destination := testDB(t)
+			require.NoError(t, destination.CopyArchiveIdentityFrom(sourcePath))
+			_, err = destination.CopyTrashedDataFrom(sourcePath)
+			require.NoError(t, err)
+			if tc.headExists {
+				insertSession(t, destination, thread, "head_project", func(session *Session) {
+					session.Agent = "codex"
+					session.FilePath = new(filepath.Join(dir, "rollout-2026-09-25T11-00-00-"+thread[len("codex:"):]+".jsonl"))
+				})
+			}
+			if tc.reparsed {
+				insertSession(t, destination, page, "reparsed_project", withSource)
+				observation.SessionID, observation.Project = page, "reparsed_project"
+				require.NoError(t, destination.UpsertProjectIdentityObservation(ctx, observation))
+			}
+			_, err = destination.CopyOrphanedDataFromExcluding(sourcePath, nil)
+			require.NoError(t, err)
+			require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+			assignedID := page
+			if tc.headExists {
+				assignedID = thread
+			}
+			var assignment SessionProjectAssignment
+			require.NoError(t, destination.getReader().QueryRowContext(ctx, `
+				SELECT session_id, project, original_project, created_at, updated_at
+				FROM session_project_assignments WHERE session_id=?`, assignedID).Scan(
+				&assignment.SessionID, &assignment.Project, &assignment.OriginalProject,
+				&assignment.CreatedAt, &assignment.UpdatedAt,
+			))
+			assert.Equal(t, SessionProjectAssignment{
+				SessionID: assignedID, Project: "saved_project", OriginalProject: "automatic_project",
+				CreatedAt: created, UpdatedAt: updated,
+			}, assignment)
+			stored, err := destination.GetSessionFull(ctx, assignedID)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Equal(t, "saved_project", stored.Project)
+			assert.True(t, stored.ProjectAssigned)
+			if tc.headExists {
+				storedPage, err := destination.GetSession(ctx, page)
+				require.NoError(t, err)
+				require.NotNil(t, storedPage)
+				assert.False(t, storedPage.ProjectAssigned, "a surviving original keeps its own assignment")
+				return
+			}
+			head, err := destination.GetSessionFull(ctx, thread)
+			require.NoError(t, err)
+			if tc.trashed {
+				require.NotNil(t, head)
+				assert.Nil(t, head.FilePath, "the surviving thread ID is only an empty trash anchor")
+				assert.False(t, head.ProjectAssigned)
+			} else {
+				assert.Nil(t, head)
+			}
+			observations, err := destination.ListProjectIdentityObservations(ctx,
+				[]string{"automatic_project", "reparsed_project", "saved_project"})
+			require.NoError(t, err)
+			if tc.trashed {
+				assert.Empty(t, observations, "a trashed page must not contribute active project evidence")
+				restored, err := destination.RestoreSession(ctx, page)
+				require.NoError(t, err)
+				require.EqualValues(t, 1, restored)
+			} else {
+				require.Len(t, observations, 1, "the obsolete automatic project must lose the page's evidence")
+				assert.Equal(t, "saved_project", observations[0].Project)
+			}
+
+			// Resync restores source identities after copying metadata, then later
+			// parsing and folder rules must still honor the explicit assignment.
+			_, err = destination.RestoreSessionProjectsFromIdentitySnapshots(ctx)
+			require.NoError(t, err)
+			assertSessionProject(t, destination, page, "saved_project")
+			insertSession(t, destination, page, "reparsed_project", withSource)
+			_, err = destination.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+				Machine: "host-a.example", PathPrefix: "/work/project",
+				Project: "folder_project", Enabled: true,
+			})
+			require.NoError(t, err)
+			applied, err := destination.ApplyWorktreeProjectMappings(ctx, "host-a.example")
+			require.NoError(t, err)
+			assert.Zero(t, applied.MatchedSessions)
+			assertSessionProject(t, destination, page, "saved_project")
+		})
+	}
+}
