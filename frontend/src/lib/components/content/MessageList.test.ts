@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 import { messages } from "../../stores/messages.svelte.js";
@@ -86,6 +86,7 @@ describe("MessageList follow cancellation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    virtualizerMock.getOffsetForIndex.mockReset();
     virtualizerMock.scrollOffset = 0;
     virtualizerMock.scrollRect.height = 200;
     messages.clear();
@@ -113,18 +114,98 @@ describe("MessageList follow cancellation", () => {
       });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     setLocale("en");
     if (component) {
-      unmount(component);
+      await unmount(component);
       component = undefined;
     }
     rafSpy.mockRestore();
+    vi.restoreAllMocks();
     messages.clear();
     sessions.activeSessionId = null;
     ui.followLatest = false;
     readProgress.reset();
     document.body.innerHTML = "";
+  });
+
+  function controlFrames() {
+    let callbacks: FrameRequestCallback[] = [];
+    rafSpy.mockImplementation((cb: FrameRequestCallback) => {
+      callbacks.push(cb);
+      return callbacks.length;
+    });
+    return async () => {
+      const pending = callbacks;
+      callbacks = [];
+      for (const cb of pending) cb(performance.now());
+      await tick();
+    };
+  }
+
+  it("keeps an ordinal jump on its message when older rows are prepended", async () => {
+    const frame = controlFrames();
+    ui.followLatest = false;
+    messages.messages = [makeMessage(10), makeMessage(11)];
+    setVirtualRows(2);
+    virtualizerMock.getOffsetForIndex.mockImplementation((index: number) => [index * 100, "start"]);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    component.scrollToOrdinal(11);
+    expect(virtualizerMock.scrollToOffset).toHaveBeenLastCalledWith(100, { align: "start" });
+    messages.messages = [makeMessage(8), makeMessage(9), ...messages.messages];
+    setVirtualRows(4);
+    await tick();
+    for (let i = 0; i < 8; i++) await frame();
+
+    expect(virtualizerMock.scrollToOffset).toHaveBeenLastCalledWith(300, { align: "start" });
+  });
+
+  it("cancels an ordinal jump when the active session changes between measured passes", async () => {
+    const frame = controlFrames();
+    ui.followLatest = false;
+    virtualizerMock.getOffsetForIndex.mockReturnValue([100, "start"]);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    component.scrollToOrdinal(10);
+    expect(virtualizerMock.scrollToOffset).toHaveBeenCalled();
+
+    sessions.activeSessionId = "s2";
+    messages.sessionId = "s2";
+    messages.messages = [{ ...makeMessage(10), session_id: "s2" }];
+    await tick();
+    virtualizerMock.scrollToOffset.mockClear();
+    virtualizerMock.scrollToIndex.mockClear();
+    for (let i = 0; i < 8; i++) await frame();
+
+    expect(virtualizerMock.scrollToOffset).not.toHaveBeenCalled();
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("does not start an old ordinal jump after loading finishes in another session", async () => {
+    const frame = controlFrames();
+    ui.followLatest = false;
+    const loading = deferred<void>();
+    const ensure = vi.spyOn(messages, "ensureOrdinalLoaded").mockReturnValue(loading.promise);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    component.scrollToOrdinal(0);
+    expect(ensure).toHaveBeenCalledWith(0);
+
+    sessions.activeSessionId = "s2";
+    messages.sessionId = "s2";
+    messages.messages = [{ ...makeMessage(0), session_id: "s2" }];
+    virtualizerMock.getOffsetForIndex.mockReturnValue([400, "start"]);
+    loading.resolve();
+    await tick();
+    virtualizerMock.scrollToOffset.mockClear();
+    virtualizerMock.scrollToIndex.mockClear();
+    for (let i = 0; i < 8; i++) await frame();
+
+    expect(virtualizerMock.scrollToOffset).not.toHaveBeenCalled();
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+    ensure.mockRestore();
   });
 
   it("renders empty and loading states in Simplified Chinese", async () => {

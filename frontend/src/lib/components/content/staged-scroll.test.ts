@@ -58,6 +58,25 @@ describe("settleVirtualScroll", () => {
     expect(virtualizer.scrollToOffset).toHaveBeenCalledTimes(1);
   });
 
+  it("restarts settling when the target moves to another row at the same offset", async () => {
+    const { options, virtualizer } = setup();
+    let index = 1;
+    options.getIndex = () => index;
+    virtualizer.getVirtualItems.mockReturnValue([{ index: 1 }, { index: 2 }]);
+    virtualizer.getOffsetForIndex.mockReturnValue([120, "start"]);
+    let frame = 0;
+    options.nextFrame = vi.fn(async () => {
+      if (++frame === 4) index = 2;
+    });
+
+    expect(await settleVirtualScroll(options)).toBe(true);
+    expect(virtualizer.getOffsetForIndex).toHaveBeenNthCalledWith(1, 1, "start");
+    expect(virtualizer.getOffsetForIndex).toHaveBeenNthCalledWith(2, 1, "start");
+    expect(virtualizer.getOffsetForIndex).toHaveBeenNthCalledWith(3, 2, "start");
+    expect(virtualizer.getOffsetForIndex).toHaveBeenNthCalledWith(5, 2, "start");
+    expect(options.nextFrame).toHaveBeenCalledTimes(8);
+  });
+
   it("does not report an estimated scroll as completion", async () => {
     const { options, virtualizer } = setup();
     let frame = 0;

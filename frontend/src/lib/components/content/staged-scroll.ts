@@ -11,6 +11,7 @@ interface ScrollTarget {
 
 export interface StagedScrollOptions {
   index: number;
+  getIndex?(): number;
   align: ScrollAlign;
   getVirtualizer(): ScrollTarget | undefined;
   getCount(): number;
@@ -25,10 +26,17 @@ export async function settleVirtualScroll(options: StagedScrollOptions): Promise
   let waitFrames = options.waitFrames ?? 0;
   let retries = options.scrollRetries ?? 0;
   let previousOffset: number | undefined;
+  let previousIndex: number | undefined;
   let stablePasses = 0;
-  const { index, align } = options;
+  const { align } = options;
   for (;;) {
     if (!options.isCurrent()) return false;
+    const index = options.getIndex?.() ?? options.index;
+    if (index !== previousIndex) {
+      stablePasses = 0;
+      previousOffset = undefined;
+      previousIndex = index;
+    }
     const virtualizer = options.getVirtualizer();
     const count = options.getCount();
     if (

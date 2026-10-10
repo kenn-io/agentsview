@@ -502,12 +502,15 @@
     reqId = lastScrollRequest,
     align: ScrollAlign = "start",
     stillValid: () => boolean = () => true,
+    getIndex?: () => number,
   ): Promise<boolean> {
+    const sessionId = messages.sessionId;
     return settleVirtualScroll({
-      index, align, waitFrames, scrollRetries,
+      index, getIndex, align, waitFrames, scrollRetries,
       getVirtualizer: () => virtualizer.instance,
       getCount: () => displayItemsAsc.length,
-      isCurrent: () => !destroyed && reqId === lastScrollRequest && stillValid(),
+      isCurrent: () => !destroyed && reqId === lastScrollRequest &&
+        messages.sessionId === sessionId && sessions.activeSessionId === sessionId && stillValid(),
       nextFrame: raf,
     });
   }
@@ -518,6 +521,9 @@
 
   async function scrollToOrdinalInternal(ordinal: number, call?: ScrollCall) {
     const reqId = ++lastScrollRequest;
+    const sessionId = messages.sessionId;
+    const isCurrent = () => !destroyed && reqId === lastScrollRequest &&
+      messages.sessionId === sessionId && sessions.activeSessionId === sessionId;
     activeFollowScrollRequest = null;
     // A rewrite can renumber messages, so a jump to a tool call stops once its ordinal holds a different message.
     const targetHolds = () => {
@@ -534,23 +540,26 @@
     const abandon = () => {
       if (ui.selectedOrdinal === ordinal) ui.selectedOrdinal = null;
     };
+    if (!isCurrent()) return;
     if (!targetHolds()) return abandon();
 
-    const idxAsc = displayItemsAsc.findIndex((item) =>
-      item.ordinals.includes(ordinal),
-    );
-    if (idxAsc >= 0) {
-      const idx = ui.sortNewestFirst
-        ? displayItemsAsc.length - 1 - idxAsc
-        : idxAsc;
-      void scrollToDisplayIndex(idx, 0, 0, reqId, "start", targetHolds).then(() => {
-        if (reqId === lastScrollRequest && !targetHolds()) abandon();
+    // Loading older rows or changing the display order can move an ordinal.
+    // Resolve it again on each measured pass instead of retaining a row index.
+    const getIndex = () => {
+      const idxAsc = displayItemsAsc.findIndex((item) => item.ordinals.includes(ordinal));
+      if (idxAsc < 0) return -1;
+      return ui.sortNewestFirst ? displayItemsAsc.length - 1 - idxAsc : idxAsc;
+    };
+    const idx = getIndex();
+    if (idx >= 0) {
+      void scrollToDisplayIndex(idx, 0, 0, reqId, "start", targetHolds, getIndex).then(() => {
+        if (isCurrent() && !targetHolds()) abandon();
       });
       return;
     }
 
     await messages.ensureOrdinalLoaded(ordinal);
-    if (reqId !== lastScrollRequest) return;
+    if (!isCurrent()) return;
     if (!targetHolds()) return abandon();
 
     // Let Svelte re-derive displayItemsAsc and the
@@ -558,19 +567,15 @@
     // Two frames: one for Svelte reactivity, one for
     // virtualizer resize observation.
     await raf();
+    if (!isCurrent()) return;
     await raf();
-    if (reqId !== lastScrollRequest) return;
+    if (!isCurrent()) return;
     if (!targetHolds()) return abandon();
 
-    const loadedIdxAsc = displayItemsAsc.findIndex(
-      (item) => item.ordinals.includes(ordinal),
-    );
-    if (loadedIdxAsc < 0) return;
-    const loadedIdx = ui.sortNewestFirst
-      ? displayItemsAsc.length - 1 - loadedIdxAsc
-      : loadedIdxAsc;
-    void scrollToDisplayIndex(loadedIdx, 0, 0, reqId, "start", targetHolds).then(() => {
-      if (reqId === lastScrollRequest && !targetHolds()) abandon();
+    const loadedIdx = getIndex();
+    if (loadedIdx < 0) return;
+    void scrollToDisplayIndex(loadedIdx, 0, 0, reqId, "start", targetHolds, getIndex).then(() => {
+      if (isCurrent() && !targetHolds()) abandon();
     });
   }
 
