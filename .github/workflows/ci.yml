@@ -171,7 +171,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
 
       - name: Install docs check tools
         run: |
@@ -230,7 +230,7 @@ jobs:
         if: runner.os == 'Windows'
         id: setup_mingw
         continue-on-error: true
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
         with:
           msystem: MINGW64
           update: false
@@ -239,7 +239,7 @@ jobs:
 
       - name: Setup MinGW (Windows, retry on transient failure)
         if: runner.os == 'Windows' && steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
         with:
           msystem: MINGW64
           update: false
@@ -358,7 +358,7 @@ jobs:
       - name: Setup MinGW
         id: setup_mingw
         continue-on-error: true
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
         with:
           msystem: MINGW64
           update: false
@@ -367,7 +367,7 @@ jobs:
 
       - name: Setup MinGW (retry on transient failure)
         if: steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
         with:
           msystem: MINGW64
           update: false
@@ -528,7 +528,7 @@ jobs:
       - name: Setup MinGW
         id: setup_mingw
         continue-on-error: true
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
         with:
           msystem: MINGW64
           update: false
@@ -537,7 +537,7 @@ jobs:
 
       - name: Setup MinGW (retry on transient failure)
         if: steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2
         with:
           msystem: MINGW64
           update: false
