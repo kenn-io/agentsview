@@ -3062,17 +3062,9 @@ func runArchiveAuditLoop(
 }
 
 // runArchiveAudit retries required rebuilds through the foreground runner,
-// which publishes committed changes. Current archives receive authoritative
-// reconciliation in a worker process via runWorkerWritePass, never in the
-// daemon. It emits "sessions" whenever the terminal result reports committed
-// changes — synced or tombstoned — even when the pass also failed, because the
-// retry sees those rows as already synchronized and would never re-notify SSE
-// clients or the embedding scheduler. It returns an error on any failure —
-// spawn, pre-launch handoff, or a ran-and-failed worker — so the caller
-// retries with backoff; it never falls back to an in-process pass. The
-// daemon's in-memory skip cache is reloaded by runWorkerWritePass inside the
-// pass's own exclusive section, so no queued sync can re-persist stale
-// entries the audit worker removed.
+// which publishes committed changes. Current archives use the audit worker;
+// committed changes emit "sessions" even when the worker also fails, since
+// retries won't repeat those writes. Errors retain the retry obligation.
 func runArchiveAudit(
 	ctx context.Context,
 	cfg config.Config,

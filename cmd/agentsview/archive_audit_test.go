@@ -23,7 +23,7 @@ import (
 // wait seam that records delays and a stubbed worker that fails six times then
 // succeeds. It asserts the obligation is retained (attempts continue), the retry
 // delay doubles and caps at archiveAuditInterval, success returns to the daily
-// cadence, and no in-process sync ever runs.
+// cadence, and routine audits of current archives stay out of process.
 func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
 	for _, first := range []time.Duration{archiveAuditInterval, archiveAuditRetryInitial} {
 		t.Run(first.String(), func(t *testing.T) {
@@ -76,7 +76,7 @@ func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
 			}
 			assert.Equal(t, want, delays[:8])
 			assert.True(t, engine.LastSync().IsZero(),
-				"the audit must never run an in-process sync pass")
+				"routine audits of current archives must stay out of process")
 		})
 	}
 }
