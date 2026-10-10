@@ -1748,10 +1748,15 @@ type preparedChangedPathSync struct {
 	missingPaths       []string
 	preContainerStates map[string]parser.SQLiteContainerState
 	classificationErr  error
+	// sharedTitleTasks are planned title refreshes for shared databases that
+	// changed. They are executed under the sync lock; the planning pass itself
+	// writes nothing.
+	sharedTitleTasks []parser.SharedTitleDatabase
 }
 
 func (p preparedChangedPathSync) empty() bool {
-	return len(p.files) == 0 && len(p.missingPaths) == 0
+	return len(p.files) == 0 && len(p.missingPaths) == 0 &&
+		len(p.sharedTitleTasks) == 0
 }
 
 func (e *Engine) prepareChangedPathSync(
@@ -1768,7 +1773,8 @@ func (e *Engine) prepareChangedPathSync(
 	// Capture container states before classifyPaths lists any session rows,
 	// matching the capture-before-discovery ordering of full syncs.
 	prepared.preContainerStates = e.captureSQLiteContainerStates(paths)
-	prepared.files, prepared.classificationErr = e.classifyPaths(ctx, paths)
+	prepared.files, prepared.sharedTitleTasks, prepared.classificationErr =
+		e.classifyChangedPaths(ctx, paths)
 	prepared.missingPaths = omitMissingPersistentContainerPaths(
 		prepared.missingPaths, prepared.files,
 	)
@@ -1826,6 +1832,27 @@ func (e *Engine) applyChangedPathSyncLocked(
 	e.resetS3CodexIndexCache()
 	e.resetSourceClaims()
 	e.anomalies.reset()
+	// Shared title refreshes run first, under the sync lock the caller holds,
+	// and never write session files. Counting them here is what lets a
+	// title-only pass notify clients even though no session was synced.
+	var stats SyncStats
+	if len(prepared.sharedTitleTasks) > 0 {
+		updated, titleErr := e.refreshSharedTitleDatabasesLocked(
+			ctx, prepared.sharedTitleTasks,
+		)
+		stats.RecordTitlesUpdated(updated)
+		if titleErr != nil {
+			// The stored names stay; a later pass retries. A title refresh
+			// failure must not fail the body sync that follows.
+			log.Printf("sync: shared title refresh: %v", titleErr)
+		}
+	}
+	// A title-only pass has nothing left to do. Missing paths still have to
+	// reach the tombstone step below, so the early exit needs both lists
+	// empty: a pure deletion event carries no files and must not be skipped.
+	if len(prepared.files) == 0 && len(prepared.missingPaths) == 0 {
+		return stats, 0, prepared.classificationErr
+	}
 	// Begin a container pass so an already-trusted, unchanged container
 	// still gates its fan-out, but never promote from a changed-path subset.
 	e.beginSQLiteContainerPass(prepared.files, prepared.preContainerStates)
@@ -1837,7 +1864,8 @@ func (e *Engine) applyChangedPathSyncLocked(
 	processingCtx := context.WithValue(ctx, deferGlobalLinkContextKey{}, true)
 	results := e.startWorkers(processingCtx, prepared.files)
 	affectedSessionIDs := make(changedSessionLinks)
-	stats := e.collectAndBatchWithOptions(
+	titleUpdates := stats.TitlesUpdated
+	stats = e.collectAndBatchWithOptions(
 		processingCtx, results, len(prepared.files), len(prepared.files), nil,
 		syncWriteDefault, collectAndBatchOptions{
 			observeResult: func(job syncJob) {
@@ -1845,6 +1873,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 			},
 		},
 	)
+	stats.TitlesUpdated += titleUpdates
 	linkErr := affectedSessionIDs.link(ctx, e, &stats)
 	if linkErr != nil {
 		stats.RecordFailed()
@@ -1990,10 +2019,30 @@ func (e *Engine) classifyPaths(
 	ctx context.Context,
 	paths []string,
 ) ([]parser.DiscoveredFile, error) {
+	files, _, err := e.classifyChangedPaths(ctx, paths)
+	return files, err
+}
+
+// classifyChangedPaths is classifyPaths plus the shared-title projection. A
+// shared title database path is claimed here (never handed to a provider) and
+// returned as a refresh task; it contributes no DiscoveredFile, so startWorkers
+// never parses a session because of a title write.
+func (e *Engine) classifyChangedPaths(
+	ctx context.Context,
+	paths []string,
+) ([]parser.DiscoveredFile, []parser.SharedTitleDatabase, error) {
 	seen := make(map[string]int, len(paths))
 	files := make([]parser.DiscoveredFile, 0, len(paths))
+	var titles []parser.SharedTitleDatabase
 	var classificationErr error
 	for _, p := range paths {
+		if e.isConfiguredSharedTitleSHMPath(p) {
+			continue
+		}
+		if database, ok := parser.SharedTitleDatabaseForChangedPath(p); ok {
+			titles = append(titles, database)
+			continue
+		}
 		// Codex resolved-index events map to potentially several session
 		// sources and must classify even when the event path was deleted, so
 		// they are handled by classifyCodexIndexPath. All other changed paths,
@@ -2025,7 +2074,8 @@ func (e *Engine) classifyPaths(
 		classificationErr = errors.Join(classificationErr, err)
 	}
 	files = dedupeDiscoveredFiles(files)
-	return e.dedupeClaudeDiscoveredFiles(ctx, files), classificationErr
+	files = e.dedupeClaudeDiscoveredFiles(ctx, files)
+	return files, dedupeSharedTitleDatabases(titles), classificationErr
 }
 
 func mergeChangedPathDiscoveredFile(
@@ -2051,7 +2101,15 @@ func (e *Engine) classifyProviderChangedPath(
 	ctx context.Context,
 	path string,
 ) ([]parser.DiscoveredFile, error) {
+	if e.isConfiguredSharedTitleSHMPath(path) {
+		return nil, nil
+	}
 	eventKind := providerChangedPathEventKind(path)
+	// A shared title database is never a session source. Claim it here too so
+	// no provider can turn a title write into a fallback import.
+	if _, ok := parser.SharedTitleDatabaseForChangedPath(path); ok {
+		return nil, nil
+	}
 	var files []parser.DiscoveredFile
 	var classificationErr error
 	seen := map[string]struct{}{}
@@ -6974,6 +7032,7 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	dst.cwdFilteredFiles += src.cwdFilteredFiles
 	dst.CwdUpdated += src.CwdUpdated
 	dst.LinksUpdated += src.LinksUpdated
+	dst.TitlesUpdated += src.TitlesUpdated
 	dst.Aborted = dst.Aborted || src.Aborted
 	if !dst.deferredRetryOverflow {
 		deferred := dst.Deferred
@@ -17588,10 +17647,14 @@ func (e *Engine) normalizePendingWriteMachines(
 				batch[i].sess.Machine = stored.Machine
 				// A rebuild writes into a fresh database, so the upsert cannot
 				// preserve a title from the destination row. Carry the archived
-				// nullable title into index-less Codex parses; an explicitly
-				// present blank remains authoritative and bypasses this path.
+				// nullable title into index-less Codex parses, and into
+				// Antigravity and Qoder parses whose provider title store had
+				// no row for this session; an explicitly present blank remains
+				// authoritative and bypasses this path.
 				if e.archiveStore != nil &&
-					batch[i].sess.Agent == parser.AgentCodex &&
+					(batch[i].sess.Agent == parser.AgentCodex ||
+						batch[i].sess.Agent == parser.AgentAntigravity ||
+						batch[i].sess.Agent == parser.AgentQoder) &&
 					!batch[i].sess.SessionNamePresent {
 					batch[i].sess.SessionName = ""
 					if stored.SessionName != nil {

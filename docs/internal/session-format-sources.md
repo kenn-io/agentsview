@@ -3299,6 +3299,18 @@ schemas keep their existing ordering behavior.
   roots share that ID. An unreadable database still reports an error instead
   of replacing archived content with a potentially incomplete transcript.
 
+<!-- Modification: 2026-10-10 20:41:14 +08:00; model: unknown (not provided by the session); platform: Codex. Updated title behavior verified against source and isolated tests; live upgrade not performed. -->
+- **Title evidence:** Local SQLite schema and ID matching checked 2026-10-10:
+  `conversation_summaries.db`, table `conversation_summaries`, columns
+  `conversation_id` and `title`. IDs match the per-session database basename
+  or brain transcript conversation ID. This is local observation, not a
+  published producer schema. Synthetic parser and sync tests cover missing
+  rows, SQL NULL, explicit blank titles, and read failures.
+  Verified remote summary stores refresh titles through their configured IDE
+  roots and source machines. Transported paths must resolve and round-trip
+  through the import mapping. Title-only delta tests cover database and WAL
+  renames, clears, unchanged messages, notifications, and retained failures.
+
 ## Antigravity CLI (`antigravity-cli`)
 
 - **Format:** Newer per-session SQLite databases or older encrypted protobuf
@@ -3547,6 +3559,27 @@ schemas keep their existing ordering behavior.
   to Agentsview.
 - **Agentsview:** `internal/parser/qoder.go` and
   `internal/parser/qoder_provider.go`.
+
+<!-- Modification: 2026-10-10 20:41:14 +08:00; model: unknown (not provided by the session); platform: Codex. Updated title behavior verified against source and isolated tests; live upgrade not performed. -->
+- **Title evidence:** macOS application SQLite schema and ID matching checked
+  2026-10-10: `~/Library/Application Support/com.qoder.app.stable/main.sqlite`
+  and `com.qodercn.app.stable/main.sqlite`, table `chat_sessions`, columns
+  `session_id` and `title`. IDs match top-level JSONL filenames. This local
+  observation does not establish non-macOS paths. Non-empty sibling JSON
+  titles take precedence; unreadable JSON preserves the existing title and
+  requests a retry. When neither sibling JSON nor the application database
+  supplies a title, a non-empty `custom-title` or a `/rename` command in the
+  transcript is an explicit title, and an empty `/rename` clears it. A title
+  refresh updates every active session stored from that same file, including
+  an in-file fork; a subagent file is left alone. `Library/Application
+  Support/Qoder/SharedClientCache/cli/projects` stays unbound: the installed
+  app names `SharedClientCache/cache/db/local.db` for a different store, which
+  does not establish that those transcripts use `chat_sessions`. Synthetic
+  tests cover native local roots, source machine ownership, mirrors, explicit
+  blanks, read failures, and JSON recovery. For overlapping roots, the most
+  specific configured owner controls application database access; a local
+  ancestor cannot authorize a foreign child. Subagent tests use a corrupt
+  native application database to prove the lookup is skipped entirely.
 
 ## QwenPaw (`qwenpaw`)
 
@@ -4052,3 +4085,5 @@ schemas keep their existing ordering behavior.
 [evener-source-5]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/fork.go
 [omo-configuration-paths]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/config.ts
 [omo-session-manager]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/core/session-manager.ts
+
+<!-- Modification: 2026-10-10 22:36:37 +0800; model: unknown (not provided by the session); platform: Codex. Remote title behavior and nested-root ownership verified against source and isolated tests; Windows runtime and production upgrade not performed. -->

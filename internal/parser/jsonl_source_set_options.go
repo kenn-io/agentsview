@@ -161,3 +161,14 @@ func WithCompanionTranscript(
 ) JSONLOption {
 	return func(o *JSONLSourceSetOptions) { o.CompanionTranscript = fn }
 }
+
+// WithExtraWatchRoots adds watch roots outside the session roots. They are
+// appended to both WatchPlan and WatchRoots so a shared database such as a
+// title store is actually scheduled, but Discover still scans only the session
+// roots: an extra root is not a session directory and must never contribute
+// discovered sources.
+func WithExtraWatchRoots(roots ...WatchRoot) JSONLOption {
+	return func(o *JSONLSourceSetOptions) {
+		o.ExtraWatchRoots = append(o.ExtraWatchRoots, roots...)
+	}
+}

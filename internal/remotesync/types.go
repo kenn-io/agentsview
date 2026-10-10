@@ -18,6 +18,9 @@ import (
 
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type SyncStats struct {
+	// TitlesUpdated carries title-only changes to the server broadcaster.
+	// It is internal state, not a count of reparsed sessions.
+	TitlesUpdated        int              `json:"-"`
 	SessionsSynced       int              `json:"sessions_synced"`
 	SessionsTotal        int              `json:"sessions_total"`
 	Skipped              int              `json:"skipped"`

@@ -50,6 +50,13 @@ const (
 	watcherSyncMinInterval         = 5 * time.Second
 	deferredStartupSyncGracePeriod = 30 * time.Second
 	recursiveWatchBudget           = 8192
+	// sharedTitleSweepInterval bounds how long a renamed conversation can stay
+	// invisible when its filesystem event was missed -- a rename that happened
+	// while the process was stopped, a title database created after the
+	// watcher was armed, or a read that failed earlier. The sweep only reads
+	// two small tables per client and never re-parses a transcript, so a short
+	// cycle is cheap.
+	sharedTitleSweepInterval = 60 * time.Second
 )
 
 const (
@@ -449,6 +456,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			ctx, cfg, ingestion.Config, engine, database, writeLock, idleTracker,
 			validRemotes, emitter,
 		)
+		// Title catch-up runs independently of the watcher and the scheduled
+		// reconcile: the watcher only sees a rename that happens while it is
+		// running, so this pass covers a rename that landed while AgentsView
+		// was stopped or a title database that appeared afterwards.
+		go startSharedTitleSweep(ctx, engine)
 		memoryRefresh = newMemoryRefreshQueue()
 		go runMemoryRefreshScheduler(
 			ctx, memoryRefresh.requests, memoryRefreshDebounce,
@@ -3080,14 +3092,17 @@ func runArchiveAudit(
 }
 
 // workerResultHasSessionChanges reports whether a worker pass changed rows
-// clients must refetch. Cwd-only changes and parent-link repairs ride the
-// serialized SyncStats payload rather than the summary counters, so the audit
-// emit must consult it or a metadata-only pass would leave the UI stale.
+// clients must refetch. Cwd-only and title-only changes and parent-link
+// repairs ride the serialized SyncStats payload rather than the summary
+// counters, so the audit emit must consult it or a metadata-only pass would
+// leave the UI stale.
 func workerResultHasSessionChanges(result workerResult) bool {
 	if result.Synced > 0 || result.Tombstoned > 0 {
 		return true
 	}
-	return result.Stats != nil && (result.Stats.CwdUpdated > 0 || result.Stats.LinksUpdated > 0)
+	return result.Stats != nil &&
+		(result.Stats.CwdUpdated > 0 || result.Stats.LinksUpdated > 0 ||
+			result.Stats.TitlesUpdated > 0)
 }
 
 // scheduledSyncEngine is the reconciliation surface the scheduled pass needs.
@@ -3150,6 +3165,45 @@ func scheduledReconcileTargets(cfg config.Config) []scheduledReconcileTarget {
 		targets = append(targets, scheduledReconcileTarget{Agent: def.Type, Roots: dirs})
 	}
 	return targets
+}
+
+// startSharedTitleSweep runs the title catch-up once at startup and then on a
+// fixed cycle until ctx is cancelled.
+//
+// A shared title database lives outside every session root and is written by
+// the client whenever the user renames a conversation, so a filesystem event
+// is the fast path and this sweep is the safety net. It never re-reads a
+// transcript: the engine compares each stored session_name with the row in the
+// title database and updates only the rows that actually differ.
+//
+// The first sweep is deliberately not gated on the startup sync finishing --
+// the engine serializes it behind any in-flight sync -- and an import that
+// lands after this pass is covered by the next cycle.
+func startSharedTitleSweep(ctx context.Context, engine *sync.Engine) {
+	sweep := func() {
+		started := time.Now()
+		err := engine.SyncSharedTitlesContext(ctx)
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		// A read failure keeps every stored name; the next cycle retries.
+		log.Printf(
+			"shared title sweep failed: duration=%s error=%v",
+			time.Since(started).Round(time.Millisecond), err,
+		)
+	}
+	sweep()
+
+	ticker := time.NewTicker(sharedTitleSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweep()
+		}
+	}
 }
 
 // runScheduledSyncPass reconciles each opted-in provider within its own scope.

@@ -934,6 +934,7 @@ func (s *Server) runRemoteSyncHosts(
 			ctx, ingestionCfg, local, rh, full, progress,
 		)
 		totals.SessionsSynced += stats.SessionsSynced
+		totals.TitlesUpdated += stats.TitlesUpdated
 		totals.SessionsTotal += stats.SessionsTotal
 		totals.Skipped += stats.Skipped
 		totals.Failed += stats.Failed
@@ -1029,7 +1030,7 @@ func remoteSyncFailureHost(rh config.RemoteHost) config.RemoteHost {
 }
 
 func (s *Server) emitRemoteSyncChanged(stats remotesync.SyncStats) {
-	if s.broadcaster == nil || stats.SessionsSynced == 0 {
+	if s.broadcaster == nil || (stats.SessionsSynced == 0 && stats.TitlesUpdated == 0) {
 		return
 	}
 	s.broadcaster.Emit("sessions")

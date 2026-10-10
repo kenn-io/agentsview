@@ -1869,6 +1869,13 @@ type ParseResult struct {
 	// checkpoint so it never re-reads the source after a full parse.
 	CheckpointHashState    []byte
 	CheckpointAnchorDigest string
+	// TitleRetryReason is non-empty when the body parsed successfully but a
+	// shared title database could not be read. The result is still a valid
+	// parse; JSONLSourceSet.Parse (and the providers that build outcomes
+	// directly) turn a non-empty reason into DataVersionNeedsRetry so the
+	// engine retries instead of recording a clean skip. Empty for every agent
+	// that does not read a shared title database.
+	TitleRetryReason string
 }
 
 // PromoteParentlessWorker classifies workers without an existing parent or relationship.

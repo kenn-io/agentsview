@@ -13,9 +13,18 @@ import (
 
 // ChangedPathPlan is the bounded import projection for a set of physical
 // mirror paths. Attribution remains private because paths are debug-only data.
+//
+// SharedTitleTasks is the separate, non-import projection: a shared title
+// database (Antigravity conversation_summaries.db, Qoder main.sqlite) is never
+// projected as a DiscoveredFile, because both providers force-replace on parse
+// and treating the shared file as a session source would rewrite every
+// session's messages and token rows. Planning only records which database
+// needs a title refresh; the write happens later, under the sync lock, and
+// only for rows whose title actually differs.
 type ChangedPathPlan struct {
 	Files             []parser.DiscoveredFile
 	FallbackProviders []parser.AgentType
+	SharedTitleTasks  []parser.SharedTitleDatabase
 	attribution       map[string]changedPathAttribution
 }
 
@@ -23,6 +32,9 @@ type changedPathAttribution struct {
 	files             []parser.DiscoveredFile
 	fallbackProviders []parser.AgentType
 	provenIrrelevant  bool
+	// sharedTitle marks a path claimed as a shared title database. Such a path
+	// contributes no import files and never a fallback provider.
+	sharedTitle *parser.SharedTitleDatabase
 }
 
 // ChangedPathPruneScope is the cache-invalidation projection of a plan.
@@ -44,6 +56,18 @@ func (e *Engine) PlanChangedPathsContext(
 			return ChangedPathPlan{}, err
 		}
 		if _, exists := plan.attribution[path]; exists {
+			continue
+		}
+		if e.isConfiguredSharedTitleSHMPath(path) {
+			plan.attribution[path] = changedPathAttribution{provenIrrelevant: true}
+			continue
+		}
+		// A shared title database is claimed before any provider runs. It is
+		// not a session source: classifying it through a provider would either
+		// match nothing (and widen into a fallback import of that provider) or,
+		// worse, be treated as an importable session file.
+		if database, ok := parser.SharedTitleDatabaseForChangedPath(path); ok {
+			plan.attribution[path] = changedPathAttribution{sharedTitle: &database}
 			continue
 		}
 		attribution, claimed, err := e.planOneChangedPath(ctx, path)
@@ -472,15 +496,47 @@ func (a *changedPathAttribution) normalize() {
 func (plan *ChangedPathPlan) rebuildAggregates() {
 	var files []parser.DiscoveredFile
 	var providers []parser.AgentType
+	var titles []parser.SharedTitleDatabase
 	for _, attribution := range plan.attribution {
 		files = append(files, attribution.files...)
 		providers = append(providers, attribution.fallbackProviders...)
+		if attribution.sharedTitle != nil {
+			titles = append(titles, *attribution.sharedTitle)
+		}
 	}
 	plan.Files = dedupeDiscoveredFiles(sortAndDedupeChangedPathFiles(files))
 	slices.SortFunc(providers, func(a, b parser.AgentType) int {
 		return strings.Compare(string(a), string(b))
 	})
 	plan.FallbackProviders = slices.Compact(providers)
+	plan.SharedTitleTasks = dedupeSharedTitleDatabases(titles)
+}
+
+// dedupeSharedTitleDatabases collapses repeated databases (an event burst plus
+// its WAL) into one refresh task per physical database, preserving order.
+func dedupeSharedTitleDatabases(
+	databases []parser.SharedTitleDatabase,
+) []parser.SharedTitleDatabase {
+	if len(databases) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(databases))
+	out := make([]parser.SharedTitleDatabase, 0, len(databases))
+	for _, database := range databases {
+		key := string(database.Agent) + "\x00" + database.DBPath
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, database)
+	}
+	slices.SortFunc(out, func(a, b parser.SharedTitleDatabase) int {
+		if a.Agent != b.Agent {
+			return strings.Compare(string(a.Agent), string(b.Agent))
+		}
+		return strings.Compare(a.DBPath, b.DBPath)
+	})
+	return out
 }
 
 func sortAndDedupeChangedPathFiles(files []parser.DiscoveredFile) []parser.DiscoveredFile {

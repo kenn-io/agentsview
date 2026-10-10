@@ -7423,6 +7423,9 @@ components:
         synced:
           format: int64
           type: integer
+        titles_updated:
+          format: int64
+          type: integer
         tombstoned:
           format: int64
           type: integer

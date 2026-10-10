@@ -48,8 +48,15 @@ func ConvertSessionContext(
 		session.FirstMessage = &parsed.FirstMessage
 	}
 	session.SessionName = db.ParsedSessionName(parsed)
-	session.PreserveSessionName = parsed.Agent == parser.AgentCodex &&
-		!parsed.SessionNamePresent
+	// Codex, Antigravity, and Qoder all read their title from a store that
+	// can be absent for a given session (an index entry that was never
+	// written, a summaries row that does not exist). When the parser reports
+	// no title signal at all, keep whatever name is already stored instead of
+	// clearing it; an explicitly present blank (SessionNamePresent) stays
+	// authoritative and clears the name.
+	session.PreserveSessionName = (parsed.Agent == parser.AgentCodex ||
+		parsed.Agent == parser.AgentAntigravity ||
+		parsed.Agent == parser.AgentQoder) && !parsed.SessionNamePresent
 	if !parsed.StartedAt.IsZero() {
 		session.StartedAt = timeutil.Ptr(parsed.StartedAt)
 	}

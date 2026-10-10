@@ -2485,6 +2485,22 @@ func (db *DB) GetSessionFilePath(ctx context.Context, id string) string {
 	return fp.String
 }
 
+// GetSessionTitleSource returns the active source path and its owning machine
+// without loading messages. Unknown sources carry no title write authority.
+func (db *DB) GetSessionTitleSource(ctx context.Context, id string) (path, machine string, err error) {
+	var fp, owner sql.NullString
+	err = db.getReader().QueryRowContext(ctx,
+		"SELECT file_path, machine FROM sessions WHERE id = ? AND deleted_at IS NULL", id,
+	).Scan(&fp, &owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return fp.String, owner.String, nil
+}
+
 // BumpLocalModifiedAt stamps the current time as local_modified_at so
 // incremental PG push picks up metadata changes (e.g. session_name updates
 // on the importer skip path) that don't go through the file-based sync path.
