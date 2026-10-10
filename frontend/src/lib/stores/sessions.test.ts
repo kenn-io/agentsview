@@ -3541,6 +3541,95 @@ describe("SessionsStore live refresh", () => {
     vi.useRealTimers();
   });
 
+  it.each(["sync", "sessions"])(
+    "%s events catch up after a pre-event sidebar request settles",
+    async (scope) => {
+      vi.useFakeTimers();
+      const { events } = await import("./events.svelte.js");
+      let registered!: (e: { scope: string }) => void;
+      const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
+        registered = fn as typeof registered;
+        return () => {};
+      });
+      let resolveOld!: (value: { sessions: SkinnySessionRow[]; total: number }) => void;
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockReturnValueOnce(
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+        )
+        .mockResolvedValue({ sessions: [makeSkinnyRow({ id: "new" })], total: 1 });
+      const sessions = createSessionsStore();
+      const detach = sessions.attachSidebar();
+      try {
+        const oldLoad = sessions.load();
+        registered({ scope });
+        await vi.advanceTimersByTimeAsync(300);
+        registered({ scope });
+        await vi.advanceTimersByTimeAsync(300);
+
+        // Keep one request in flight while coalescing later invalidations.
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+        resolveOld({ sessions: [makeSkinnyRow({ id: "old" })], total: 1 });
+        await oldLoad;
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+        expect(sessions.sessions.map((session) => session.id)).toEqual(["new"]);
+      } finally {
+        detach();
+        spy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["detach", "change filters"])(
+    "does not replay a queued sidebar refresh after %s",
+    async (action) => {
+      vi.useFakeTimers();
+      const { events } = await import("./events.svelte.js");
+      let registered!: (e: { scope: string }) => void;
+      const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
+        registered = fn as typeof registered;
+        return () => {};
+      });
+      let resolveOld!: (value: { sessions: SkinnySessionRow[]; total: number }) => void;
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockReturnValueOnce(
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+        )
+        .mockResolvedValue({ sessions: [makeSkinnyRow({ id: "filtered" })], total: 1 });
+      const sessions = createSessionsStore();
+      const detach = sessions.attachSidebar();
+      try {
+        const oldLoad = sessions.load();
+        registered({ scope: "sync" });
+        await vi.advanceTimersByTimeAsync(300);
+        if (action === "detach") {
+          detach();
+        } else {
+          sessions.filters.project = "changed";
+          await sessions.load();
+        }
+        resolveOld({ sessions: [makeSkinnyRow({ id: "old" })], total: 1 });
+        await oldLoad;
+        await vi.advanceTimersByTimeAsync(300);
+
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(action === "detach" ? 1 : 2);
+        expect(sessions.sessions.map((session) => session.id)).toEqual(
+          action === "detach" ? [] : ["filtered"],
+        );
+      } finally {
+        detach();
+        spy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("sessions events replace cached project filter options", async () => {
     const { events } = await import("./events.svelte.js");
     let registered: ((e: { scope: string }) => void) | null = null;
