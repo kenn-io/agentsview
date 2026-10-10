@@ -26,8 +26,6 @@ func TestResetAllMtimes_ZeroesMtimesAndClearsFreshness(t *testing.T) {
 	require.NoError(t, d.UpsertProviderStatHash(
 		ctx, parser.AgentCodebuff, chatPath, 42))
 
-	require.NoError(t, d.SetSyncState(ctx, SQLiteContainerSyncStatePrefix+"opencode.db", "verification"))
-	require.NoError(t, d.SetSyncState(ctx, "unrelated-metadata", "keep"))
 	_, mtime, ok := d.GetSessionFileInfo(ctx, sessionID)
 	require.True(t, ok)
 	require.Equal(t, int64(1704067200), mtime,
@@ -50,12 +48,6 @@ func TestResetAllMtimes_ZeroesMtimesAndClearsFreshness(t *testing.T) {
 	assert.False(t, present,
 		"provider_freshness must be cleared so the stat-digest "+
 			"shortcut cannot defeat the forced re-sync")
-	value, err := d.GetSyncState(ctx, SQLiteContainerSyncStatePrefix+"opencode.db")
-	require.NoError(t, err)
-	assert.Empty(t, value)
-	value, err = d.GetSyncState(ctx, "unrelated-metadata")
-	require.NoError(t, err)
-	assert.Equal(t, "keep", value)
 }
 
 func TestRestoreSessionStalesSourceAndClearsFreshness(t *testing.T) {

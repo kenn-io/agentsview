@@ -16,6 +16,9 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+// SQLiteContainerSyncStatePrefix identifies bounded shared-container verification records.
+const SQLiteContainerSyncStatePrefix = "sqlite-container:"
+
 // OpenCode-family providers expose each shared SQLite session as a virtual source.
 // Complete digest verification authorizes timestamp-first discovery for five
 // minutes. Worker restarts restore that original deadline for the same database;
@@ -386,7 +389,7 @@ func (e *Engine) restoreSQLiteContainerFreshness(
 	if e.db == nil || e.db.ReadOnly() || e.pathRewriter != nil {
 		return
 	}
-	for path := range states {
+	for path, state := range states {
 		e.containerMu.Lock()
 		loaded := e.sqliteContainerFreshnessLoaded[path]
 		_, verified := e.digestVerifiedAt[path]
@@ -394,7 +397,7 @@ func (e *Engine) restoreSQLiteContainerFreshness(
 		if loaded || verified {
 			continue
 		}
-		raw, err := e.db.GetSyncState(ctx, db.SQLiteContainerSyncStatePrefix+path)
+		raw, err := e.db.GetSyncState(ctx, SQLiteContainerSyncStatePrefix+path)
 		if err != nil {
 			log.Printf("reading SQLite container verification: %v", err)
 			continue
@@ -414,7 +417,6 @@ func (e *Engine) restoreSQLiteContainerFreshness(
 			continue
 		}
 		if record.Version != 1 ||
-			record.State.DBInode == 0 || record.State.DBDevice == 0 ||
 			record.VerifiedAt.IsZero() || record.VerifiedAt.After(openCodeContainerDigestVerifyNow()) {
 			continue
 		}
@@ -426,7 +428,9 @@ func (e *Engine) restoreSQLiteContainerFreshness(
 		if e.digestVerifiedAt == nil {
 			e.digestVerifiedAt = make(map[string]time.Time)
 		}
-		e.trustedSQLiteContainers[path] = trustedSQLiteContainer{state: record.State}
+		if !sqliteContainerStateReplaced(record.State, state) {
+			e.trustedSQLiteContainers[path] = trustedSQLiteContainer{state: record.State}
+		}
 		e.digestVerifiedAt[path] = record.VerifiedAt
 		e.containerMu.Unlock()
 	}
@@ -438,7 +442,7 @@ func openCodeContainerDigestVerificationCurrent(verifiedAt, now time.Time) bool 
 }
 
 // filterQuickSyncFiles applies the quick-sync mtime cutoff, exempting the
-// sessions of containers whose digest verification has lapsed. A lapsed
+// sessions of containers whose verification is due or authority was revoked. A lapsed
 // container's due pass already paid the full digest listing, and the stamp
 // can only refresh when every discovered session completes; filtering its
 // old-composite sessions would discard the listing's findings and leave the
@@ -466,8 +470,8 @@ func (e *Engine) filterQuickSyncFiles(
 }
 
 // lapsedDigestVerificationContainers returns the containers among the
-// discovered files whose verification stamp exists but has aged past the
-// interval, and whose current pass carried the full digest listing. The
+// discovered files whose verification history requires a complete check after
+// authority was revoked or the deadline expired, and whose pass listed full digests. The
 // listing requirement keeps the exemption consistent with what discovery
 // produced: a pass that crossed the interval boundary after listing
 // watermark-only has no digest findings to process and could not refresh
@@ -495,8 +499,8 @@ func (e *Engine) lapsedDigestVerificationContainers(
 			continue
 		}
 		verifiedAt, stamped := e.digestVerifiedAt[dbPath]
-		if !stamped ||
-			openCodeContainerDigestVerificationCurrent(verifiedAt, now) {
+		_, authority := e.trustedSQLiteContainers[dbPath]
+		if !stamped || (authority && openCodeContainerDigestVerificationCurrent(verifiedAt, now)) {
 			continue
 		}
 		if due == nil {
@@ -889,22 +893,20 @@ func (e *Engine) poisonSQLiteContainerPass() {
 // checks protect newly re-exposed rows; removing the unused container trust
 // here also keeps the compact state map aligned with current discovery.
 func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, fullDiscovery bool) {
-	persist := make(map[string]parser.SQLiteContainerState)
-	clearPaths := make(map[string]bool)
+	records := make(map[string]sqliteContainerVerification)
 	verifiedAt := openCodeContainerDigestVerifyNow()
 	defer func() {
 		if e.db == nil || e.db.ReadOnly() || e.pathRewriter != nil {
 			return
 		}
-		for path := range clearPaths {
-			if err := e.db.DeleteSyncState(context.WithoutCancel(ctx), db.SQLiteContainerSyncStatePrefix+path); err != nil {
-				log.Printf("clearing SQLite container verification: %v", err)
+		for path, record := range records {
+			writeCtx := ctx
+			if record.State == (parser.SQLiteContainerState{}) {
+				writeCtx = context.WithoutCancel(ctx)
 			}
-		}
-		for path, state := range persist {
-			raw, err := json.Marshal(sqliteContainerVerification{Version: 1, State: state, VerifiedAt: verifiedAt})
+			raw, err := json.Marshal(record)
 			if err == nil {
-				err = e.db.SetSyncState(ctx, db.SQLiteContainerSyncStatePrefix+path, string(raw))
+				err = e.db.SetSyncState(writeCtx, SQLiteContainerSyncStatePrefix+path, string(raw))
 			}
 			if err != nil {
 				log.Printf("writing SQLite container verification: %v", err)
@@ -917,10 +919,10 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 		e.containerPass = nil
 		if pass != nil {
 			if pass.poisoned {
-				e.clearDigestVerificationForPass(pass, clearPaths)
+				e.clearDigestVerificationForPass(pass, records)
 			} else {
 				for dbPath := range pass.failed {
-					e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
+					e.clearSQLiteContainerDigestVerification(dbPath, records)
 				}
 			}
 		}
@@ -938,14 +940,14 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 	}
 	e.containerPass = nil
 	if pass.poisoned {
-		e.clearDigestVerificationForPass(pass, clearPaths)
+		e.clearDigestVerificationForPass(pass, records)
 		return
 	}
 	if fullDiscovery {
 		for dbPath := range e.trustedSQLiteContainers {
 			if pass.discovered[dbPath] == 0 {
 				delete(e.trustedSQLiteContainers, dbPath)
-				e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
+				e.clearSQLiteContainerDigestVerification(dbPath, records)
 			}
 		}
 	}
@@ -953,7 +955,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 		pass.failed[dbPath] = true
 	}
 	for dbPath := range pass.failed {
-		e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
+		e.clearSQLiteContainerDigestVerification(dbPath, records)
 	}
 	for dbPath, state := range pass.captured {
 		if pass.failed[dbPath] {
@@ -977,7 +979,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 			}
 			e.digestVerifiedAt[dbPath] = verifiedAt
 			if state.DBInode != 0 && state.DBDevice != 0 {
-				persist[dbPath] = state
+				records[dbPath] = sqliteContainerVerification{Version: 1, State: state, VerifiedAt: verifiedAt}
 			}
 		}
 	}
@@ -1011,15 +1013,15 @@ func (e *Engine) sqliteContainerDigestRevalidationFailures(
 	return failures
 }
 
-// clearDigestVerificationForPass clears verification age for every container
-// whose capture or discovery was invalid during the pass. Failed discoveries
+// clearDigestVerificationForPass revokes skip authority while preserving history
+// for containers whose capture or discovery was invalid. Failed discoveries
 // may have no captured entry, so both maps are part of the invalidation set.
-func (e *Engine) clearDigestVerificationForPass(pass *sqliteContainerPass, clearPaths map[string]bool) {
+func (e *Engine) clearDigestVerificationForPass(pass *sqliteContainerPass, records map[string]sqliteContainerVerification) {
 	for dbPath := range pass.captured {
-		e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
+		e.clearSQLiteContainerDigestVerification(dbPath, records)
 	}
 	for dbPath := range pass.failed {
-		e.clearSQLiteContainerDigestVerification(dbPath, clearPaths)
+		e.clearSQLiteContainerDigestVerification(dbPath, records)
 	}
 }
 
@@ -1035,11 +1037,13 @@ func (e *Engine) clearTrustedSQLiteContainers() {
 	e.containerPass = nil
 }
 
-func (e *Engine) clearSQLiteContainerDigestVerification(path string, clearPaths map[string]bool) {
-	delete(e.digestVerifiedAt, path)
+func (e *Engine) clearSQLiteContainerDigestVerification(path string, records map[string]sqliteContainerVerification) {
+	delete(e.trustedSQLiteContainers, path)
 	if e.sqliteContainerFreshnessLoaded == nil {
 		e.sqliteContainerFreshnessLoaded = make(map[string]bool)
 	}
 	e.sqliteContainerFreshnessLoaded[path] = true
-	clearPaths[path] = true
+	if verifiedAt, ok := e.digestVerifiedAt[path]; ok {
+		records[path] = sqliteContainerVerification{Version: 1, VerifiedAt: verifiedAt}
+	}
 }

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/sync"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -467,8 +467,7 @@ func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
 // tables at all: the container gate will skip every member before
 // fingerprinting, so discovery lists the bounded watermark form instead of
 // computing archive-sized child identities nothing reads. Child-only edits
-// remain deferred during the interval. A fresh worker reuses unchanged state,
-// and requires a full digest when the persisted state differs.
+// remain deferred during the interval, including after worker restarts.
 func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
 	for _, n := range []int{5, 2803} {
 		t.Run(fmt.Sprint(n), func(t *testing.T) { testOpenCodeIdleFullPass(t, n) })
@@ -518,7 +517,7 @@ func testOpenCodeIdleFullPass(t *testing.T, n int) {
 	oc.replaceTextContent(
 		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
 	)
-	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), db.SQLiteContainerSyncStatePrefix))
+	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), sync.SQLiteContainerSyncStatePrefix))
 	unverified := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
 	t.Cleanup(unverified.Close)
 	stats = unverified.SyncAll(t.Context(), nil)
@@ -679,7 +678,7 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 					t.Context(), []string{env.opencodeDir}, false,
 				))
 			}
-			require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), db.SQLiteContainerSyncStatePrefix))
+			require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), sync.SQLiteContainerSyncStatePrefix))
 			unverified := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
 			t.Cleanup(unverified.Close)
 			stats := unverified.SyncAll(

@@ -797,7 +797,7 @@ func TestCachedOpenCodeFailureDoesNotVerifyContainer(t *testing.T) {
 		`UPDATE session_message SET data = '!', time_updated = 1900000000000 WHERE session_id = ? AND type = 'user'`, sessionID)
 	require.NoError(t, err)
 	// Clear recent verification so the corrupt child exercises failure caching.
-	require.NoError(t, archive.DeleteSyncStateByPrefix(t.Context(), db.SQLiteContainerSyncStatePrefix))
+	require.NoError(t, archive.DeleteSyncStateByPrefix(t.Context(), SQLiteContainerSyncStatePrefix))
 	engine := NewEngine(t.Context(), archive, cfg)
 	t.Cleanup(engine.Close)
 	failed := engine.SyncAll(t.Context(), nil)

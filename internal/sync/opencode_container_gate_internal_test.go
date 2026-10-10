@@ -577,7 +577,7 @@ func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *tes
 // "kept the prior state" and "promoted the capture" are distinguishable
 // outcomes. Every row also scripts a sibling container where the invariant is
 // per-container: attributed evidence clears only its own container, while a
-// poisoned pass clears every captured one.
+// poisoned pass revokes every captured one while retaining verification history.
 func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 	type captureKind int
 	const (
@@ -669,19 +669,16 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			priorStamp:       true,
 			capture:          captureStale,
 			probeMemberStale: true,
-			wantTrust:        wantPrior,
-			wantStamp:        wantAbsent,
+			wantTrust:        wantAbsent,
+			wantStamp:        wantPrior,
 		},
 		{
-			// With trust equal to the capture, only the mismatch-failed flag
-			// can block the gate skip, so this row pins the guard itself; the
-			// sentinel row above pins state retention. The retained trust
-			// equals the capture here, so wantFresh reads as retention.
+			// Matching trust must be revoked when discovery observes a stale capture.
 			name:              "capture-discovery mismatch blocks gate skip under matching trust",
 			priorTrustCapture: true,
 			capture:           captureStale,
 			probeMemberStale:  true,
-			wantTrust:         wantFresh,
+			wantTrust:         wantAbsent,
 			wantStamp:         wantAbsent,
 		},
 		{
@@ -689,8 +686,8 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			priorTrust: true,
 			priorStamp: true,
 			capture:    captureMissing,
-			wantTrust:  wantPrior,
-			wantStamp:  wantAbsent,
+			wantTrust:  wantAbsent,
+			wantStamp:  wantPrior,
 		},
 		{
 			name:              "post-discovery write is caught at finalization, per container",
@@ -701,20 +698,20 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			lateWrite:         true,
 			sibling:           true,
 			siblingDiscovered: true,
-			wantTrust:         wantPrior,
-			wantStamp:         wantAbsent,
+			wantTrust:         wantAbsent,
+			wantStamp:         wantPrior,
 			wantSiblingTrust:  wantFresh,
 			wantSiblingStamp:  wantFresh,
 		},
 		{
-			name:       "failed digest pass clears the stamp",
+			name:       "failed digest pass revokes authority and preserves history",
 			priorTrust: true,
 			priorStamp: true,
 			capture:    captureLive,
 			digestList: true,
 			result:     resultFailed,
-			wantTrust:  wantPrior,
-			wantStamp:  wantAbsent,
+			wantTrust:  wantAbsent,
+			wantStamp:  wantPrior,
 		},
 		{
 			name:       "clean incomplete pass preserves verification without promoting",
@@ -731,18 +728,18 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			result:           resultFailed,
 			finish:           finishIncomplete,
 			sibling:          true,
-			wantStamp:        wantAbsent,
+			wantStamp:        wantPrior,
 			wantSiblingStamp: wantPrior,
 		},
 		{
-			name:             "poisoned incomplete pass clears every captured verification",
+			name:             "poisoned incomplete pass revokes every captured authority",
 			priorStamp:       true,
 			capture:          captureLive,
 			result:           resultPoisoned,
 			finish:           finishIncomplete,
 			sibling:          true,
-			wantStamp:        wantAbsent,
-			wantSiblingStamp: wantAbsent,
+			wantStamp:        wantPrior,
+			wantSiblingStamp: wantPrior,
 		},
 		{
 			name:             "poisoned complete pass clears instead of promoting",
@@ -753,8 +750,8 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			finish:           finishFull,
 			sibling:          true,
 			wantTrust:        wantAbsent,
-			wantStamp:        wantAbsent,
-			wantSiblingStamp: wantAbsent,
+			wantStamp:        wantPrior,
+			wantSiblingStamp: wantPrior,
 		},
 		{
 			name:             "clean scoped pass preserves uncovered verification",
@@ -1553,47 +1550,76 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 }
 
 func TestOpenCodeRestartedQuickSyncReconcilesAtOriginalDeadline(t *testing.T) {
-	dbPath, conn := seededCompositeContainerTestDB(t)
-	archive := openTestDB(t)
-	newEngine := func() *Engine {
-		engine := NewEngine(t.Context(), archive, EngineConfig{
-			AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(dbPath)}}, Machine: "local",
+	for _, recovery := range []string{"no failure", "same engine", "fresh engine"} {
+		t.Run(recovery, func(t *testing.T) {
+			dbPath, conn := seededCompositeContainerTestDB(t)
+			archive := openTestDB(t)
+			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
+			require.True(t, ok)
+			failing := &failingDBBackedProvider{
+				Def: parser.AgentDef{Type: parser.AgentClaude, DisplayName: "Claude", FileBased: true},
+				err: errors.New("provider discovery unavailable"),
+			}
+			otherRoot := t.TempDir()
+			newEngine := func() *Engine {
+				engine := NewEngine(t.Context(), archive, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(dbPath)}, parser.AgentClaude: {otherRoot}}, Machine: "local",
+					ProviderFactories:      []parser.ProviderFactory{factory, failingDBBackedFactory{provider: failing}},
+					ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative},
+				})
+				t.Cleanup(engine.Close)
+				return engine
+			}
+			verifiedAt := time.UnixMilli(1779100000000)
+			now := verifiedAt
+			originalNow := openCodeContainerDigestVerifyNow
+			openCodeContainerDigestVerifyNow = func() time.Time { return now }
+			t.Cleanup(func() { openCodeContainerDigestVerifyNow = originalNow })
+			require.Equal(t, 1, newEngine().SyncAll(t.Context(), nil).Synced)
+			_, err := conn.ExecContext(t.Context(),
+				`UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = ?`,
+				verifiedAt.Add(30*time.Second).UnixMilli())
+			require.NoError(t, err)
+			previousStart, lastVerified := verifiedAt, verifiedAt
+			var failedEngine *Engine
+			recovered := false
+			for minute := 1; minute <= 6; minute++ {
+				now = verifiedAt.Add(time.Duration(minute) * time.Minute)
+				engine := newEngine()
+				if recovery == "same engine" && failedEngine != nil {
+					engine = failedEngine
+				}
+				if minute == 2 && recovery != "no failure" {
+					failing.failOnCall = failing.calls.Load() + 1
+					failedEngine = engine
+				}
+				scans := parser.OpenCodeContainerChildScans()
+				stats := engine.SyncAllSince(t.Context(), previousStart.Add(-10*time.Second), nil)
+				record, found := readContainerVerification(t, archive, dbPath)
+				require.True(t, found, "discovery failure preserves verification history")
+				if minute == 2 && recovery != "no failure" {
+					require.False(t, stats.ProcessingComplete())
+					assert.Equal(t, parser.SQLiteContainerState{}, record.State)
+				} else {
+					require.True(t, stats.ProcessingComplete())
+					due := !recovered && (minute == 5 || (minute == 3 && recovery != "no failure"))
+					if due {
+						require.Equal(t, 1, stats.Synced, "complete verification bypasses the advanced cutoff")
+						assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
+						lastVerified, recovered = now, true
+					} else {
+						require.Zero(t, stats.Synced)
+						assert.Zero(t, parser.OpenCodeContainerChildScans()-scans, "successful verification ends pending complete checks")
+					}
+				}
+				assert.True(t, lastVerified.Equal(record.VerifiedAt), "only successful complete checks renew verification")
+				previousStart = now
+			}
+			matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
+			require.NoError(t, err)
+			assert.Len(t, matches, 2)
 		})
-		t.Cleanup(engine.Close)
-		return engine
 	}
-	verifiedAt := time.UnixMilli(1779100000000)
-	now := verifiedAt
-	originalNow := openCodeContainerDigestVerifyNow
-	openCodeContainerDigestVerifyNow = func() time.Time { return now }
-	t.Cleanup(func() { openCodeContainerDigestVerifyNow = originalNow })
-	require.Equal(t, 1, newEngine().SyncAll(t.Context(), nil).Synced)
-	_, err := conn.ExecContext(t.Context(),
-		`UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = ?`,
-		verifiedAt.Add(30*time.Second).UnixMilli())
-	require.NoError(t, err)
-	previousStart := verifiedAt
-	for minute := 1; minute <= 5; minute++ {
-		now = verifiedAt.Add(time.Duration(minute) * time.Minute)
-		scans := parser.OpenCodeContainerChildScans()
-		stats := newEngine().SyncAllSince(t.Context(), previousStart.Add(-10*time.Second), nil)
-		require.True(t, stats.ProcessingComplete())
-		record, found := readContainerVerification(t, archive, dbPath)
-		require.True(t, found)
-		if minute < 5 {
-			require.Zero(t, stats.Synced)
-			assert.Zero(t, parser.OpenCodeContainerChildScans()-scans)
-			assert.True(t, verifiedAt.Equal(record.VerifiedAt), "quick syncs preserve the original deadline")
-		} else {
-			require.Equal(t, 1, stats.Synced, "expiry bypasses the cutoff advanced past the deferred child edit")
-			assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
-			assert.True(t, now.Equal(record.VerifiedAt), "complete verification stores the new deadline")
-		}
-		previousStart = now
-	}
-	matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
-	require.NoError(t, err)
-	assert.Len(t, matches, 2)
 }
 
 func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
@@ -1755,7 +1781,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 				writeContainerVerification(t, archive, path, state, now.Add(-tc.age))
 			}
 			if tc.raw != "" {
-				require.NoError(t, archive.SetSyncState(t.Context(), db.SQLiteContainerSyncStatePrefix+path, tc.raw))
+				require.NoError(t, archive.SetSyncState(t.Context(), SQLiteContainerSyncStatePrefix+path, tc.raw))
 			}
 			e := &Engine{db: archive}
 			if tc.setup != nil {
@@ -1775,7 +1801,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			}
 			if tc.want {
 				assert.True(t, now.Add(-tc.age).Equal(e.digestVerifiedAt[path]))
-				require.NoError(t, archive.DeleteSyncState(t.Context(), db.SQLiteContainerSyncStatePrefix+path))
+				require.NoError(t, archive.DeleteSyncState(t.Context(), SQLiteContainerSyncStatePrefix+path))
 				fn = e.sqliteContainerListsWatermarkOnly(t.Context(), map[string]parser.SQLiteContainerState{path: state})
 				assert.True(t, fn(path), "restoration is attempted only once per engine")
 			}
@@ -1784,8 +1810,8 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 }
 
 func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
-	for _, deleteFails := range []bool{false, true} {
-		t.Run(map[bool]string{false: "deleted", true: "delete fails"}[deleteFails], func(t *testing.T) {
+	for _, writeFails := range []bool{false, true} {
+		t.Run(map[bool]string{false: "written", true: "write fails"}[writeFails], func(t *testing.T) {
 			archive := openTestDB(t)
 			path, _ := newContainerTestDB(t)
 			state, ok := parser.StatSQLiteContainerState(path)
@@ -1800,11 +1826,11 @@ func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
 			require.True(t, e.sqliteContainerListsWatermarkOnly(t.Context(), states)(path))
 			e.beginStreamingSQLiteContainerPass(states)
 			e.poisonSQLiteContainerPass()
-			if deleteFails {
+			if writeFails {
 				raw, err := sql.Open("sqlite3", archive.Path())
 				require.NoError(t, err)
 				defer raw.Close()
-				_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER block_verification_delete BEFORE DELETE ON pg_sync_state WHEN OLD.key LIKE 'sqlite-container:%' BEGIN SELECT RAISE(ABORT, 'blocked verification delete'); END`)
+				_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER block_verification_write BEFORE INSERT ON pg_sync_state WHEN NEW.key LIKE 'sqlite-container:%' BEGIN SELECT RAISE(ABORT, 'blocked verification write'); END`)
 				require.NoError(t, err)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
@@ -1812,15 +1838,18 @@ func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
 			e.finishSQLiteContainerPass(ctx, true, false)
 			assert.False(t, e.sqliteContainerListsWatermarkOnly(t.Context(), states)(path), "failed invalidation cannot reload authority in the same engine")
 			record, found := readContainerVerification(t, archive, path)
-			assert.Equal(t, deleteFails, found)
-			if deleteFails {
-				assert.True(t, now.Equal(record.VerifiedAt), "failed deletion cannot extend the deadline")
-				restarted := &Engine{db: archive}
-				assert.True(t, restarted.sqliteContainerListsWatermarkOnly(t.Context(), states)(path))
-				now = now.Add(openCodeContainerDigestVerifyInterval)
-				fresh := &Engine{db: archive}
-				assert.False(t, fresh.sqliteContainerListsWatermarkOnly(t.Context(), states)(path))
+			require.True(t, found)
+			assert.True(t, now.Equal(record.VerifiedAt), "invalidation preserves the original deadline")
+			if !writeFails {
+				assert.Equal(t, parser.SQLiteContainerState{}, record.State)
 			}
+			restarted := &Engine{db: archive}
+			assert.Equal(t, writeFails, restarted.sqliteContainerListsWatermarkOnly(t.Context(), states)(path))
+			assert.True(t, now.Equal(restarted.digestVerifiedAt[path]))
+			now = now.Add(openCodeContainerDigestVerifyInterval)
+			fresh := &Engine{db: archive}
+			assert.False(t, fresh.sqliteContainerListsWatermarkOnly(t.Context(), states)(path))
+			assert.False(t, fresh.digestVerifiedAt[path].IsZero(), "failed invalidation writes cannot erase due work")
 		})
 	}
 }
@@ -1856,12 +1885,12 @@ func writeContainerVerification(t *testing.T, archive *db.DB, path string, state
 	t.Helper()
 	raw, err := json.Marshal(sqliteContainerVerification{Version: 1, State: state, VerifiedAt: at})
 	require.NoError(t, err)
-	require.NoError(t, archive.SetSyncState(t.Context(), db.SQLiteContainerSyncStatePrefix+path, string(raw)))
+	require.NoError(t, archive.SetSyncState(t.Context(), SQLiteContainerSyncStatePrefix+path, string(raw)))
 }
 
 func readContainerVerification(t *testing.T, archive *db.DB, path string) (sqliteContainerVerification, bool) {
 	t.Helper()
-	raw, err := archive.GetSyncState(t.Context(), db.SQLiteContainerSyncStatePrefix+path)
+	raw, err := archive.GetSyncState(t.Context(), SQLiteContainerSyncStatePrefix+path)
 	require.NoError(t, err)
 	var record sqliteContainerVerification
 	if raw == "" {

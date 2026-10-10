@@ -1625,15 +1625,18 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   a worker restart. Native identity and counter rollback checks reject
   replacements and restores. Windows captures native file identity from the
   same open handle as the database header. A container verified less than five
-  minutes ago can use timestamp-first discovery (`SQLiteContainerListsWatermarkOnly`)
-  after ordinary writes and across restarts. Child-only edits that leave session
+  minutes ago can use timestamp-first discovery
+  (`SQLiteContainerListsWatermarkOnly`) after ordinary writes and across restarts.
+  Child-only edits that leave session
   timestamps unchanged wait for the next complete pass after the original
   deadline. Cheap passes preserve that deadline. Expired verification times
   also survive restarts so the due pass can reconcile deferred edits that have
-  fallen behind a quick-sync cutoff. Every member of an unchanged container
+  fallen behind a quick-sync cutoff. A failed pass revokes skip authority but
+  preserves verification history so complete recovery remains eligible until
+  a successful complete pass finishes it. Every member of an unchanged container
   gate-skips before fingerprinting, so a child identity scan would do
-  archive-sized work nothing reads. Watermark-only skips require the pass's container
-  capture to still be valid (`sqliteContainerPassCaptureValid`) — a container
+  archive-sized work nothing reads. Watermark-only skips require the pass's
+  container capture to still be valid (`sqliteContainerPassCaptureValid`) — a container
   that changes between listing and the recapture check resolves full per-session
   digests instead, so a concurrent child-only write cannot hide beneath an
   unchanged metadata watermark. The trade is explicit: any child-only write that
