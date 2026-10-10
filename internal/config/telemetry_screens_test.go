@@ -13,7 +13,9 @@ import (
 )
 
 func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
+	const readable = `{ "version": 1, "days": {"[\"install-one\",\"screen_viewed\",\"usage\"]": ["2026-10-08"]} }`
 	for _, tc := range []struct{ name, stored, want string }{
+		{"unchanged, no backup", readable, readable},
 		{"two screens", "install-one 2026-10-08 sessions usage", `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"sessions\"]":["2026-10-08"],"[\"install-one\",\"screen_viewed\",\"usage\"]":["2026-10-08"]}}`},
 		{"short fields", "install-one", ""},
 		{"invalid date", "install-one broken sessions", ""},
@@ -60,7 +62,11 @@ func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
 				assert.Equal(t, tc.stored, string(data))
 				assert.Contains(t, filepath.ToSlash(logs.String()), "moved unreadable telemetry screen claims to "+filepath.ToSlash(movedPath))
 			}
-			assert.Equal(t, 1, copies)
+			if tc.name == "unchanged, no backup" {
+				assert.Empty(t, moved)
+			} else {
+				assert.Equal(t, 1, copies)
+			}
 			if tc.name == "existing backup" {
 				assert.Contains(t, moved, olderPath)
 			}
@@ -70,21 +76,13 @@ func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			if tc.name == "unchanged, no backup" {
+				assert.Equal(t, tc.stored, string(data))
+			}
 			assert.JSONEq(t, tc.want, string(data))
 			var claims screenClaims
 			require.NoError(t, json.Unmarshal(data, &claims))
 			assert.True(t, claims.readable())
 		})
 	}
-}
-
-func TestTelemetryScreenClaimsMigrationKeepsReadableClaims(t *testing.T) {
-	c := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
-	path := c.TelemetryScreenClaimsPath()
-	const stored = `{ "version": 1, "days": {"[\"install-one\",\"screen_viewed\",\"usage\"]": ["2026-10-08"]} }`
-	require.NoError(t, os.WriteFile(path, []byte(stored), 0o600))
-	require.NoError(t, c.MigrateTelemetryScreenClaims())
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, stored, string(data))
 }
