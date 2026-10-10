@@ -4,6 +4,7 @@
 
 export interface VersionInfo {
   api_version: number;
+  archive_only?: boolean;
   build_date: string;
   commit: string;
   data_version: number;

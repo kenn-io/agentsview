@@ -308,7 +308,7 @@ func TestPathsOverlapRejectsCaseAliasesOnEveryPlatform(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	overlap, err := pathsOverlap(
+	overlap, err := PathsOverlap(
 		filepath.Join(root, "Provider", "artifacts"),
 		filepath.Join(root, "provider"),
 	)

@@ -95,6 +95,7 @@
   "header_actions_refresh": "Actualizar",
   "header_actions_sync": "Sincronizar",
   "header_actions_import_unavailable": "Importación no disponible en modo de solo lectura",
+  "header_actions_import_archive_only": "Importación no disponible en modo de solo archivo",
   "header_actions_import_conversations": "Importar conversaciones",
   "header_actions_import": "Importar",
   "header_actions_toggle_theme": "Cambiar el tema",

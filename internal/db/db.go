@@ -570,6 +570,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (129: recover collapsed S3 Cursor conversations, including cached sources.)
 const dataVersion = 129
 
+const archiveOnlyVersionBase = 1 << 20
+
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
 const toolCallFieldBackfillStatsKey = "tool_call_field_backfill_v1"
@@ -1227,6 +1229,15 @@ func OpenIsolated(ctx context.Context, path string) (*DB, error) {
 // database initialization phases. The returned database must be closed.
 func OpenIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	return open(ctx, path, false, config.ArchiveContentFull, nil)
+}
+
+// OpenIsolatedWithArchiveContent is OpenIsolatedContext under a storage
+// policy. The policy is active before startup migrations run, so a usage-only
+// archive keeps classifications whose source text was discarded.
+func OpenIsolatedWithArchiveContent(
+	ctx context.Context, path string, policy config.ArchiveContent,
+) (*DB, error) {
+	return open(ctx, path, false, policy, nil)
 }
 
 // OpenFreshIsolatedContext initializes a current-schema archive in an empty,
@@ -2114,7 +2125,10 @@ func needsSchemaRepair(ctx context.Context, conn *sql.DB) (bool, error) {
 	return false, nil
 }
 
-func readUserVersion(ctx context.Context, conn *sql.DB) (int, error) {
+func readUserVersion(ctx context.Context, conn interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+},
+) (int, error) {
 	var version int
 	err := conn.QueryRowContext(ctx,
 		"PRAGMA user_version",
@@ -2124,7 +2138,34 @@ func readUserVersion(ctx context.Context, conn *sql.DB) (int, error) {
 			"probing data version: %w", err,
 		)
 	}
+	version, _ = DecodeUserVersion(version)
 	return version, nil
+}
+
+// DecodeUserVersion returns the parser version and permanent archive-only mode.
+func DecodeUserVersion(version int) (int, bool) {
+	if version >= archiveOnlyVersionBase {
+		return version - archiveOnlyVersionBase, true
+	}
+	return version, false
+}
+
+func writeUserVersion(ctx context.Context, tx *sql.Tx, version int) error {
+	var metadataExists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_metadata')`).Scan(&metadataExists); err != nil {
+		return err
+	}
+	if metadataExists {
+		var archiveOnly bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM archive_metadata WHERE key = 'archive_only' AND value = '1')`).Scan(&archiveOnly); err != nil {
+			return err
+		}
+		if archiveOnly {
+			version += archiveOnlyVersionBase
+		}
+	}
+	_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", version))
+	return err
 }
 
 type schemaColumnMigration struct {
@@ -2762,14 +2803,12 @@ func repairLegacySchemaBeforeInit(ctx context.Context, w *writerHandle, progress
 	); err != nil {
 		return err
 	}
-	var version int
-	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+	version, err := readUserVersion(ctx, tx)
+	if err != nil {
 		return fmt.Errorf("reading repaired archive version: %w", err)
 	}
 	if version >= dataVersion {
-		if _, err := tx.ExecContext(ctx,
-			fmt.Sprintf("PRAGMA user_version = %d", dataVersion-1),
-		); err != nil {
+		if err := writeUserVersion(ctx, tx, dataVersion-1); err != nil {
 			return fmt.Errorf("marking repaired archive stale: %w", err)
 		}
 	}
@@ -4800,26 +4839,16 @@ func (db *DB) HasCJKFTS(ctx context.Context) (available bool) {
 // current (not stale), so the marker survives until
 // ResyncAll completes.
 func (db *DB) setDataVersion(ctx context.Context) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	var current int
-	if err := db.getWriter().QueryRowContext(ctx,
-		"PRAGMA user_version",
-	).Scan(&current); err != nil {
-		return fmt.Errorf("reading data version: %w", err)
-	}
-	if current >= dataVersion {
+	return db.Update(ctx, func(tx *sql.Tx) error {
+		current, err := readUserVersion(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("reading data version: %w", err)
+		}
+		if err := writeUserVersion(ctx, tx, max(current, dataVersion)); err != nil {
+			return fmt.Errorf("setting data version: %w", err)
+		}
 		return nil
-	}
-
-	_, err := db.getWriter().ExecContext(ctx,
-		fmt.Sprintf("PRAGMA user_version = %d", dataVersion),
-	)
-	if err != nil {
-		return fmt.Errorf("setting data version: %w", err)
-	}
-	return nil
+	})
 }
 
 func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {

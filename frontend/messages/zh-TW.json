@@ -93,6 +93,7 @@
   "header_actions_refresh": "重新整理",
   "header_actions_sync": "同步",
   "header_actions_import_unavailable": "唯讀模式下無法匯入",
+  "header_actions_import_archive_only": "僅封存模式下無法匯入",
   "header_actions_import_conversations": "匯入對話",
   "header_actions_import": "匯入",
   "header_actions_toggle_theme": "切換主題",

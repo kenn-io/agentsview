@@ -228,6 +228,7 @@
         {/each}
       {/snippet}
       {#snippet footer()}
+        {#if !sync.archiveOnly}
         <Button
           onclick={() => {
             if (!sync.readOnly) ui.activeModal = "resync";
@@ -244,6 +245,7 @@
             ? m.settings_resync_unavailable_hint()
             : m.settings_resync_hint()}
         </span>
+        {/if}
       {/snippet}
     </SettingsLayout>
   {/if}

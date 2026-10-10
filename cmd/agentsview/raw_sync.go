@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/rawcheckpoint"
@@ -129,6 +130,13 @@ func runRawSyncWatch(ctx context.Context, watchCfg rawSyncWatchConfig) error {
 	appCfg, err := config.LoadReadOnly()
 	if err != nil {
 		return err
+	}
+	archiveOnly, err := archiveModeAfterRecovery(ctx, appCfg)
+	if err != nil {
+		return err
+	}
+	if archiveOnly {
+		return db.ErrArchiveOnly
 	}
 	providers, roots, err := rawSyncProvidersAndRoots(ctx, appCfg)
 	if err != nil {

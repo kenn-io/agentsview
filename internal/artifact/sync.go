@@ -49,6 +49,9 @@ func Sync(
 	if database == nil {
 		return SyncResult{}, errors.New("artifact sync database is required")
 	}
+	if err := database.RequireSourceSync(ctx); err != nil {
+		return SyncResult{}, err
+	}
 	if err := validateArtifactSyncOptions(opts); err != nil {
 		return SyncResult{}, err
 	}
@@ -79,6 +82,9 @@ func SyncWithRepository(
 	}
 	if database == nil {
 		return SyncResult{}, errors.New("artifact sync database is required")
+	}
+	if err := database.RequireSourceSync(ctx); err != nil {
+		return SyncResult{}, err
 	}
 	if err := validateArtifactSyncOptions(opts); err != nil {
 		return SyncResult{}, err

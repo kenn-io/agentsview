@@ -56,6 +56,13 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
+	archiveOnly, err := archiveModeAfterRecovery(context.Background(), appCfg)
+	if err != nil {
+		fatal("reading archive mode: %v", err)
+	}
+	if archiveOnly {
+		fatal("%v", db.ErrArchiveOnly)
+	}
 
 	remoteHosts := appCfg.RemoteHosts
 	includeLocal := cfg.Host == ""

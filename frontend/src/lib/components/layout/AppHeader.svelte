@@ -644,6 +644,7 @@
       </div>
     {/if}
 
+    {#if !sync.archiveOnly}
     <button
       class="header-btn sync-btn"
       class:syncing={sync.syncing}
@@ -659,14 +660,17 @@
       {/if}
       <span class="sync-label" class:collapsed={navCollapsed}>{sync.readOnly ? m.header_actions_refresh() : m.header_actions_sync()}</span>
     </button>
+    {/if}
 
     <button
       class="import-btn"
       onclick={() => {
-        if (!sync.readOnly) showImportModal = true;
+        if (!sync.readOnly && !sync.archiveOnly) showImportModal = true;
       }}
-      disabled={sync.readOnly}
-      title={sync.readOnly
+      disabled={sync.readOnly || sync.archiveOnly}
+      title={sync.archiveOnly
+        ? m.header_actions_import_archive_only()
+        : sync.readOnly
         ? m.header_actions_import_unavailable()
         : m.header_actions_import_conversations()}
       aria-label={m.header_actions_import_conversations()}

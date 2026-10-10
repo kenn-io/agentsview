@@ -36,6 +36,9 @@ func (s *Server) humaRemoteSyncTargets(
 	ctx context.Context,
 	in *remoteSyncTargetsInput,
 ) (*remoteSyncTargetsOutput, error) {
+	if err := s.requireSourceSync(ctx); err != nil {
+		return nil, err
+	}
 	requestHeader := make(http.Header)
 	requestHeader.Set(remotesync.ProtocolHeader, in.ProtocolVersion)
 	if err := remotesync.ValidateProtocolHeader(requestHeader); err != nil {

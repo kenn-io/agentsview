@@ -416,6 +416,20 @@ func resolveArchiveWriteBackend(
 	}, nil
 }
 
+// requireDaemonSourceSync refuses a daemon-backed watch before it watches
+// receiving-host source roots. Archive-only mode is permanent, so retrying
+// the daemon's rejection could never succeed.
+func requireDaemonSourceSync(ctx context.Context, cfg config.Config) error {
+	archiveOnly, err := db.ArchiveOnlyAt(ctx, cfg.DBPath)
+	if err != nil {
+		return fmt.Errorf("reading archive mode: %w", err)
+	}
+	if archiveOnly {
+		return db.ErrArchiveOnly
+	}
+	return nil
+}
+
 type daemonArchiveWriteBackend struct {
 	appCfg     config.Config
 	tr         transport
@@ -548,6 +562,9 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 	debounce time.Duration,
 	interval time.Duration,
 ) error {
+	if err := requireDaemonSourceSync(ctx, b.appCfg); err != nil {
+		return err
+	}
 	if interval <= 0 {
 		interval = defaultWatchInterval
 	}
@@ -683,6 +700,9 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 	debounce time.Duration,
 	interval time.Duration,
 ) error {
+	if err := requireDaemonSourceSync(ctx, b.appCfg); err != nil {
+		return err
+	}
 	if interval <= 0 {
 		interval = defaultWatchInterval
 	}
@@ -812,6 +832,9 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 	projects []string,
 	excludeProjects []string,
 ) (storage.PushResult, error) {
+	if err := b.database.RequireSourceSync(ctx); err != nil {
+		return storage.PushResult{}, err
+	}
 	display := backend.DisplayName()
 	didResync, err := runLocalSyncAuthoritative(
 		ctx, b.appCfg, b.database, cfg.Full,
@@ -892,6 +915,9 @@ func (b *localArchiveWriteBackend) duckDBPush(
 	projects []string,
 	excludeProjects []string,
 ) (storage.MirrorPushResult, error) {
+	if err := b.database.RequireSourceSync(ctx); err != nil {
+		return storage.MirrorPushResult{}, err
+	}
 	if err := mirrorBackend.ValidatePushTarget(duckCfg); err != nil {
 		return storage.MirrorPushResult{}, err
 	}
@@ -984,6 +1010,12 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	debounce time.Duration,
 	interval time.Duration,
 ) error {
+	if err := b.database.RequireSourceSync(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
 	if interval <= 0 {
 		interval = defaultWatchInterval
 	}
@@ -1118,6 +1150,12 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 	debounce time.Duration,
 	interval time.Duration,
 ) error {
+	if err := b.database.RequireSourceSync(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
 	if interval <= 0 {
 		interval = defaultWatchInterval
 	}

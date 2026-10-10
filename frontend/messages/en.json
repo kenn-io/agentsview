@@ -93,6 +93,7 @@
   "header_actions_refresh": "Refresh",
   "header_actions_sync": "Sync",
   "header_actions_import_unavailable": "Import unavailable in read-only mode",
+  "header_actions_import_archive_only": "Import unavailable in archive-only mode",
   "header_actions_import_conversations": "Import conversations",
   "header_actions_import": "Import",
   "header_actions_toggle_theme": "Toggle theme",

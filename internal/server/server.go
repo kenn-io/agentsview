@@ -43,6 +43,7 @@ type VersionInfo struct {
 	Commit                     string `json:"commit"`
 	BuildDate                  string `json:"build_date"`
 	ReadOnly                   bool   `json:"read_only,omitempty"`
+	ArchiveOnly                bool   `json:"archive_only,omitempty"`
 	InsightGenerationAvailable bool   `json:"insight_generation_available"`
 	SessionStatsAvailable      bool   `json:"session_stats_available"`
 	APIVersion                 int    `json:"api_version"`

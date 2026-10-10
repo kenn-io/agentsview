@@ -40,6 +40,23 @@ func (s uploadCommitFailStore) WriteSessionBatchAtomic(ctx context.Context,
 	return db.SessionBatchResult{}, s.err
 }
 
+func TestUploadSession_ArchiveOnly(t *testing.T) {
+	te := setup(t)
+	require.NoError(t, te.db.EnableArchiveOnly(t.Context()))
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T10:00:00Z", "hello").
+		AddClaudeAssistant("2024-01-01T10:00:05Z", "hi").
+		String()
+
+	w := te.upload(t, "incoming.jsonl", content, "project=myproj")
+	assertStatus(t, w, http.StatusForbidden)
+	assertErrorResponse(t, w, db.ErrArchiveOnly.Error())
+	sess, err := te.db.GetSessionFull(t.Context(), "incoming")
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+	assert.NoDirExists(t, filepath.Join(te.dataDir, "uploads"))
+}
+
 func TestUploadSession_SaveFailure(t *testing.T) {
 	te := setup(t)
 
@@ -58,13 +75,14 @@ func TestUploadSession_SaveFailure(t *testing.T) {
 func TestUploadSession_DBFailure(t *testing.T) {
 	te := setup(t)
 
-	// Close DB to force saveSessionToDB to fail
+	// A closed database prevents checking archive mode, before staging files.
 	te.db.Close()
 
 	content := `{"type":"user","timestamp":"2024-01-01T10:00:00Z","message":{"content":"Hello"}}`
 	w := te.upload(t, "test.jsonl", content, "project=myproj")
 	assertStatus(t, w, http.StatusInternalServerError)
-	assertErrorResponse(t, w, "failed to save session to database")
+	assert.Contains(t, w.Body.String(), "reading archive mode")
+	assert.NoDirExists(t, filepath.Join(te.dataDir, "uploads"))
 }
 
 func TestUploadSession_CommitFailureDoesNotWriteDB(t *testing.T) {

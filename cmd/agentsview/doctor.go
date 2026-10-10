@@ -37,6 +37,7 @@ type doctorDBInspection struct {
 	DBExists                 bool
 	DBReadable               bool
 	DBError                  error
+	ArchiveOnly              bool
 	UserVersion              *int
 	SessionCounts            []doctorDataVersionCount
 	SessionCountsErr         error
@@ -142,6 +143,7 @@ func inspectDoctorDB(ctx context.Context, path string) doctorDBInspection {
 		insp.DBError = err
 		return insp
 	}
+	version, insp.ArchiveOnly = db.DecodeUserVersion(version)
 	insp.DBReadable = true
 	insp.UserVersion = &version
 
@@ -330,6 +332,9 @@ func writeDoctorSyncReport(w io.Writer, report doctorSyncReport) {
 	} else {
 		fmt.Fprintf(w, "SQLite user_version: %d\n", *report.UserVersion)
 	}
+	if report.ArchiveOnly {
+		fmt.Fprintln(w, "Archive mode: archive-only")
+	}
 	fmt.Fprintf(w, "Binary data version: %d\n", currentVersion)
 	fmt.Fprintf(w, "Startup sync decision: %s\n",
 		doctorStartupDecision(report, currentVersion))
@@ -380,6 +385,9 @@ func doctorStartupDecision(
 	}
 	if *report.UserVersion > currentVersion {
 		return "refuse startup (database requires newer agentsview)"
+	}
+	if report.ArchiveOnly {
+		return "archive-only; source sync is disabled"
 	}
 	return "normal initial sync (no data-version resync)"
 }
@@ -525,6 +533,9 @@ func doctorLikelyCause(
 			"SQLite user_version is newer than this binary. Use an AgentsView build with data version %d or newer, or restore an archive backup compatible with data version %d",
 			*report.UserVersion, currentVersion,
 		)
+	}
+	if report.ArchiveOnly {
+		return "archive-only; source sync is disabled"
 	}
 	return "data-version resync is not expected; Running initial sync... is normal incremental startup work"
 }

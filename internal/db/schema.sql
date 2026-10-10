@@ -1484,3 +1484,41 @@ CREATE TABLE IF NOT EXISTS conversation_session_changes (
     gap TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_session_changes_revision ON conversation_session_changes(revision);
+
+-- Durable local raw archive identity, inventory and accepted generations.
+CREATE TABLE IF NOT EXISTS raw_archive_roots (
+    id TEXT PRIMARY KEY, device_id TEXT NOT NULL, machine TEXT NOT NULL,
+    provider TEXT NOT NULL, original_path TEXT NOT NULL, configured_root_id TEXT NOT NULL,
+    UNIQUE(device_id,provider,configured_root_id)
+);
+CREATE TABLE IF NOT EXISTS raw_archive_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_id TEXT NOT NULL REFERENCES raw_archive_roots(id), path TEXT NOT NULL,
+    sha256 TEXT NOT NULL, size INTEGER NOT NULL, mod_time_ns INTEGER NOT NULL,
+    covered INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(root_id,path,sha256)
+);
+CREATE TABLE IF NOT EXISTS raw_archive_sources (
+    manifest_id TEXT PRIMARY KEY, root_id TEXT NOT NULL REFERENCES raw_archive_roots(id),
+    source_key TEXT NOT NULL, original_path TEXT NOT NULL, canonical_json BLOB NOT NULL,
+    parse_error TEXT NOT NULL DEFAULT '', processing_version TEXT NOT NULL DEFAULT '',
+    UNIQUE(root_id,source_key)
+);
+
+-- Source deletion policy is frozen with the first imported capture. These
+-- records and mappings survive a projection rebuild independently of sessions.
+CREATE TABLE IF NOT EXISTS raw_archive_devices (
+    device_id TEXT PRIMARY KEY, suppressions BLOB NOT NULL
+);
+-- Other spellings of a root's original path, verified at capture time, that
+-- seeded sessions may store for the same transcripts.
+CREATE TABLE IF NOT EXISTS raw_archive_root_aliases (
+    root_id TEXT NOT NULL REFERENCES raw_archive_roots(id), alias TEXT NOT NULL,
+    PRIMARY KEY(root_id,alias)
+);
+CREATE TABLE IF NOT EXISTS raw_archive_sessions (
+    device_id TEXT NOT NULL, provider TEXT NOT NULL, parser_id TEXT NOT NULL,
+    session_id TEXT NOT NULL UNIQUE,
+    root_id TEXT NOT NULL REFERENCES raw_archive_roots(id), source_key TEXT NOT NULL,
+    PRIMARY KEY(device_id,provider,parser_id)
+);

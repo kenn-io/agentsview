@@ -28,8 +28,7 @@ func (c *Config) readInstallationID() error {
 		return err
 	}
 	id := strings.TrimSpace(string(data))
-	decoded, err := hex.DecodeString(id)
-	if err != nil || len(decoded) != 16 {
+	if err := ValidateInstallationID(id); err != nil {
 		return fmt.Errorf("invalid installation identity in %q: installation ID must contain 32 hexadecimal characters; restore the original file to preserve identity, or remove it to create a new identity", path)
 	}
 	c.InstallationID = id
@@ -63,11 +62,10 @@ func (c *Config) ensureInstallationID() error {
 		if err := c.readInstallationID(); !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		var random [16]byte
-		if _, err := rand.Read(random[:]); err != nil {
-			return fmt.Errorf("generating installation ID: %w", err)
+		id, err := NewInstallationID()
+		if err != nil {
+			return err
 		}
-		id := hex.EncodeToString(random[:])
 		createdAt := time.Now().UTC()
 		// Record the time before publishing the ID so a published ID always has one.
 		if err := c.writeInstallationFile(installationCreatedFilename, id+" "+createdAt.Format(time.RFC3339Nano)); err != nil {
@@ -96,4 +94,22 @@ func (c *Config) writeInstallationFile(name, content string) error {
 		return err
 	}
 	return atomicfile.Replace(file.Name(), filepath.Join(c.DataDir, name))
+}
+
+// ValidateInstallationID checks a 128-bit hexadecimal identity.
+func ValidateInstallationID(id string) error {
+	decoded, err := hex.DecodeString(id)
+	if err != nil || len(decoded) != 16 {
+		return errors.New("installation ID must contain 32 hexadecimal characters")
+	}
+	return nil
+}
+
+// NewInstallationID generates a random 128-bit hexadecimal identity.
+func NewInstallationID() (string, error) {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", fmt.Errorf("generating installation ID: %w", err)
+	}
+	return hex.EncodeToString(random[:]), nil
 }

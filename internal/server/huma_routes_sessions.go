@@ -1297,6 +1297,9 @@ func (s *Server) humaUploadSession(
 		return nil, apiError(http.StatusNotImplemented,
 			"uploads are not available in read-only mode")
 	}
+	if err := s.requireSourceSync(ctx); err != nil {
+		return nil, err
+	}
 	project := strings.TrimSpace(in.Project)
 	if project == "" {
 		return nil, apiError(http.StatusBadRequest, "project required")

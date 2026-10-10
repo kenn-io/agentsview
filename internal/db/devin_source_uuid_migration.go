@@ -52,6 +52,7 @@ func scopeLegacyDevinSourceUUIDsLocked(
 	).Scan(&version); err != nil {
 		return fmt.Errorf("probing data version: %w", err)
 	}
+	version, _ = DecodeUserVersion(version)
 	if version >= devinSourceUUIDScopeVersion {
 		return nil
 	}

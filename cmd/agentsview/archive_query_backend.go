@@ -120,11 +120,17 @@ func resolveArchiveQueryBackendWithConfig(
 		return nil, nil, err
 	}
 	cleanup := func() { closeWriteDB(database, writeLock) }
+	archiveOnly, err := database.IsArchiveOnly(ctx)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+
 	return localArchiveQueryBackend{
 		cfg:           cfg,
 		database:      database,
 		offline:       policy.Offline,
-		skipFreshData: policy.NoSync || policy.Offline,
+		skipFreshData: policy.NoSync || policy.Offline || archiveOnly,
 	}, cleanup, nil
 }
 

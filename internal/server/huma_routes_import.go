@@ -53,6 +53,9 @@ func (s *Server) humaImportClaudeAI(
 	if err := s.rejectWriterClosedWrite(); err != nil {
 		return nil, err
 	}
+	if err := s.requireSourceSync(ctx); err != nil {
+		return nil, err
+	}
 	file := in.RawBody.Data().File
 	if !file.IsSet {
 		return nil, apiError(http.StatusBadRequest,
@@ -178,6 +181,9 @@ func (s *Server) humaImportChatGPT(
 			"import not available in read-only mode")
 	}
 	if err := s.rejectWriterClosedWrite(); err != nil {
+		return nil, err
+	}
+	if err := s.requireSourceSync(ctx); err != nil {
 		return nil, err
 	}
 	file := in.RawBody.Data().File

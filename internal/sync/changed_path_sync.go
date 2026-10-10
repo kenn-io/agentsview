@@ -51,6 +51,9 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	options ChangedPathSyncOptions,
 	onProgress ProgressFunc,
 ) (ChangedPathSyncResult, error) {
+	if e.sourceSyncErr != nil {
+		return ChangedPathSyncResult{}, e.sourceSyncErr
+	}
 	ctx = e.parsePolicyContext(ctx)
 	result := ChangedPathSyncResult{
 		CachedSourceKeys:        make(map[string]struct{}),

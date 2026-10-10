@@ -93,6 +93,7 @@
   "header_actions_refresh": "刷新",
   "header_actions_sync": "同步",
   "header_actions_import_unavailable": "只读模式下无法导入",
+  "header_actions_import_archive_only": "仅归档模式下无法导入",
   "header_actions_import_conversations": "导入对话",
   "header_actions_import": "导入",
   "header_actions_toggle_theme": "切换主题",

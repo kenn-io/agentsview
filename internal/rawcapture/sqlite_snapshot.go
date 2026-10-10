@@ -59,6 +59,7 @@ func (c *Capturer) snapshotSQLitePlan(
 type sqliteSnapshotSource struct {
 	database         *sql.DB
 	connection       *sql.Conn
+	transaction      *sql.Tx
 	pathPin          *os.File
 	path             string
 	expectedInfo     os.FileInfo
@@ -131,6 +132,16 @@ func openSQLiteSnapshotSource(
 	if err := source.verifyCurrent(); err != nil {
 		return nil, errors.Join(err, source.Close())
 	}
+	// Keep one read view across backup steps. Otherwise a busy WAL writer can
+	// restart the backup after every commit until its deadline expires.
+	source.transaction, err = connection.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, errors.Join(err, source.Close())
+	}
+	var tables int
+	if err := source.transaction.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema`).Scan(&tables); err != nil {
+		return nil, errors.Join(err, source.Close())
+	}
 	return source, nil
 }
 
@@ -160,7 +171,14 @@ func (s *sqliteSnapshotSource) Close() error {
 	if s == nil {
 		return nil
 	}
-	return errors.Join(s.connection.Close(), s.database.Close(), s.pathPin.Close())
+	var rollbackErr error
+	if s.transaction != nil {
+		rollbackErr = s.transaction.Rollback()
+		if errors.Is(rollbackErr, sql.ErrTxDone) {
+			rollbackErr = nil
+		}
+	}
+	return errors.Join(rollbackErr, s.connection.Close(), s.database.Close(), s.pathPin.Close())
 }
 
 func pinSQLiteSnapshotPath(path string, expected os.FileInfo) (*os.File, error) {
@@ -284,4 +302,45 @@ func sqliteSnapshotReservationBytes(snapshotBytes int64) int64 {
 		return math.MaxInt64
 	}
 	return snapshotBytes + metadata
+}
+
+// SnapshotSQLite makes a standalone online backup without the upload spool.
+// The caller owns a private destination directory. Existing files are refused.
+func SnapshotSQLite(ctx context.Context, sourcePath, destination string, expected os.FileInfo) (retErr error) {
+	info, err := os.Lstat(sourcePath)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("SQLite source must be a regular file")
+	}
+	source, err := openSQLiteSnapshotSource(ctx, sourcePath, expected)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, source.Close()) }()
+	f, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			_ = os.Remove(destination)
+		}
+	}()
+	if err := sqliteOnlineBackup(ctx, source.connection, destination, math.MaxInt64); err != nil {
+		return err
+	}
+	standalone, err := sql.Open(sqliteSnapshotDriverName, sqliteSnapshotDSN(destination, false))
+	if err != nil {
+		return err
+	}
+	_, err = standalone.ExecContext(ctx, "PRAGMA journal_mode=DELETE")
+	if err = errors.Join(err, standalone.Close()); err != nil {
+		return err
+	}
+	return source.verifyCurrent()
 }

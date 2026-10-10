@@ -12,6 +12,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCopyOrphanedDataCodexTrashIsNotAReparse(t *testing.T) {
+	for _, trash := range []bool{false, true} {
+		t.Run(fmt.Sprintf("trash=%t", trash), func(t *testing.T) {
+			ctx := t.Context()
+			source := testDB(t)
+			path := "/history/rollout.jsonl"
+			insertSession(t, source, "old", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.FilePath = &path
+			})
+			require.NoError(t, source.InsertMessages(ctx, []Message{{SessionID: "old", Ordinal: 0, Role: "user", Content: "retained history"}}))
+			destination := testDB(t)
+			insertSession(t, destination, "new", "project", func(s *Session) {
+				s.Agent = "codex"
+				s.FilePath = &path
+			})
+			if trash {
+				require.NoError(t, destination.SoftDeleteSession(ctx, "new"))
+			}
+			sourcePath := source.Path()
+			require.NoError(t, source.Close())
+			copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+			require.NoError(t, err)
+			if trash {
+				assert.Equal(t, 1, copied)
+				messages, err := destination.GetAllMessages(ctx, "old")
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				assert.Equal(t, "retained history", messages[0].Content)
+			} else {
+				assert.Zero(t, copied)
+				session, err := destination.GetSessionFull(ctx, "old")
+				require.NoError(t, err)
+				assert.Nil(t, session)
+			}
+		})
+	}
+}
+
 func TestCopySyncStateQueuesBothRecordedLocalArtifactIdentities(t *testing.T) {
 	ctx := t.Context()
 	source := testDB(t)
@@ -537,6 +576,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		"PRAGMA user_version = %d", sanitizedSourceDataVersion-1,
 	))
 	require.NoError(t, err, "downgrade source data version")
+	require.NoError(t, srcDB.EnableArchiveOnly(ctx))
 	require.NoError(t, srcDB.Close(), "close source")
 
 	dstPath := filepath.Join(dir, "new.db")

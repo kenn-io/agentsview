@@ -1,10 +1,208 @@
 ---
-last_edited: 2026-09-30
+last_edited: 2026-10-04
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
 
 ## Commands
+
+### `agentsview archive`
+
+These commands are under development and are not in the latest release. They
+retain closed captures from several machines, recover their original files, and
+reparse Claude and Codex sessions after the original directories are gone.
+`capture` can snapshot live SQLite databases. Regular files must stay unchanged
+while copied; a changing transcript aborts the capture. Stop source writers for
+the final retirement capture. Stop the destination daemon before import,
+reparse, backup or extraction. Those archive writes refuse to run while another
+process owns the database.
+
+Use an isolated data directory for the receiving archive. Seed it from the
+capture of the installation being retired, as shown below. Older or alternate
+databases remain supplemental files; these commands do not merge databases.
+After a rehearsal, assemble the final archive in a new directory from final
+captures. Later imports retain changed versions for recovery, but do not update
+already accepted browsable sessions or deletion policy. Ongoing collection and
+source advancement are outside this workflow.
+
+Create a capture on the source machine. Select roots explicitly; `files` retains
+supplemental trees without parsing them:
+
+```bash
+agentsview archive capture /media/backup/source-capture \
+  --root claude="$HOME/.claude/projects" \
+  --root codex="$HOME/.codex/sessions" \
+  --root files=/path/to/supplemental-history
+```
+
+The standard Claude `projects` and Codex `sessions`/`archived_sessions` roots
+include their parent directory to retain companion files. Only the selected
+session directory is parsed. Selecting a provider home includes its existing
+conventional session directories. No other home-directory scanning occurs. Capture also records other spellings
+of each root that the captured database uses, such as a path through a
+symlink, after checking that they resolve to the same directory. Reparse then
+recognizes those seeded sessions after the originals are gone.
+
+Capture reads the installation ID without creating one in the source. It reuses
+known raw-sync root IDs. When it generates identities, the JSON report lists
+them under `new_identities`; pass `--identity-from PREVIOUS/capture.json` on
+subsequent captures to reuse them. A previous descriptor from another
+installation, or conflicting checkpoint identities, causes an error.
+The descriptor alone is sufficient for identity reuse; the older captured files
+are not read. If the source AgentsView data directory moved, identity reuse
+preserves its original application-root binding and records its current
+location separately. Import still requires the complete capture directory.
+
+Regular files are streamed and checked. SQLite databases use online backups,
+including committed WAL contents. Symlinks, special files and recognized
+credential/settings files are omitted and listed. Original application config
+is replaced by allowlisted recovery settings. This does not redact transcripts
+or database content. Exclusions include `.git-credentials` and Claude's `ide/`
+runtime metadata. An ordinary artifact vault currently prevents capture;
+its stopped-owner copying support is still required.
+If the source already contains a raw archive, use `archive backup` to preserve
+its vault as well as its database; `capture` refuses that input.
+
+`--writers-stopped` records your attestation that source writers were stopped;
+it does not stop them. A rolling capture is not a final retirement cutoff.
+The destination must be new and outside the selected inputs. Failed captures
+are not published. The completed directory contains `capture.json`, a hashed
+inventory and root-relative files; move the directory as a whole. Import
+rejects any file the inventory does not list. On macOS, copy with `rsync -a`
+or `COPYFILE_DISABLE=1 tar`, because plain `tar` adds `._*` metadata files.
+
+Import verifies the generated descriptor and every file before accepting
+sources. Handwritten import specifications are no longer accepted. The capture
+and import reports include counts from the captured database. Missing or
+unsupported preflight data, artifact origins/imports or qualified session IDs
+block assembly pending identity integration.
+
+To preserve existing history and curation, create the archive with `--seed`:
+
+```bash
+AGENTSVIEW_DATA_DIR=/new/archive agentsview archive import --seed \
+  --spec /media/backup/source-capture/capture.json
+```
+
+The target must not exist and must be outside the capture. Seed import preserves
+the captured database, installation identity and assets, including session and
+message IDs, stars, pins, names, trash and permanent exclusions. It also retains
+the raw files. It checks the assembled archive before publishing the directory;
+a failed assembly leaves no partial destination. Allow space for the database,
+retained raw files and a temporary database copy if a rebuild is needed.
+
+Seed import enables archive-only mode before any rebuild or startup. It does
+not reparse sources or adopt historical machine names. The report's
+`unowned_machines` lists unresolved machine keys with session and worktree-rule
+counts; use `db adopt-machine` only for keys you explicitly own. An existing raw
+archive in the seed is refused; use its `archive backup` recovery point instead.
+Empty and `local` machine labels already denote the seed's own installation and
+are recognized during reparse. Other named machines still require proven
+ownership.
+
+Add another machine's capture with `archive import --spec OTHER/capture.json`,
+then explicitly reparse its accepted sources. A hard import failure can leave
+retained raw objects and already accepted sources in the target. Retrying the
+same capture is safe and reuses that evidence. Sessions remain attributed to the
+source installation even if the archive moves or a display label changes.
+These commands require an archive-only destination created by seed import or
+restore. They refuse an everyday database instead of converting it.
+Foreign session IDs include that installation ID; equal native IDs or paths on
+different machines remain separate observations. The seed keeps its existing
+session IDs. Unrelated identity collisions stop the reparse without publishing
+its scratch database.
+
+Foreign stars, pins, names and project rules are retained in the captured
+database but are not merged. Source trash and permanent deletions suppress
+publication of those sessions; their original files remain recoverable. Reparse
+reports the intentional skips as `suppressed`. Deletion evidence with unresolved
+machine ownership blocks regular import; adopt only proven ownership on the
+source and recapture. The first import freezes its deletion policy. A later
+capture with changed deletion state retains the new files as evidence and
+reports a conflict; it does not change the accepted projection.
+
+```bash
+export AGENTSVIEW_DATA_DIR=/new/archive
+agentsview archive sources
+agentsview archive verify
+agentsview archive backup /media/backup/repository
+# Use snapshot_id from the backup report for both commands:
+agentsview archive verify --repository /media/backup/repository --snapshot SNAPSHOT_ID
+agentsview archive restore /media/backup/repository /restored/archive --snapshot SNAPSHOT_ID
+AGENTSVIEW_DATA_DIR=/restored/archive agentsview archive verify
+AGENTSVIEW_DATA_DIR=/restored/archive agentsview archive reparse --all
+# Use capture_id from the capture or import report to recover one version:
+AGENTSVIEW_DATA_DIR=/restored/archive agentsview archive extract /new/capture --capture CAPTURE_ID
+```
+
+Restore and extract require new destinations. Backup creates a repository or adds
+a snapshot to an existing one. Backup and restore reject overlapping source and
+destination directories. `extract --capture ID` recovers that capture's exact
+files, including supplemental files and versions that conflicted on import. It
+recreates `capture.json`, `inventory.json` and `roots/` under the original
+configured root IDs. The result passes the same complete-file verification as
+the original capture and can be imported using `--spec /new/capture/capture.json`.
+Extraction does not change accepted sources or browsable history.
+
+Without `--capture`, extraction writes all retained native files under their
+archive root IDs. These IDs distinguish installations and providers. If any
+path has different retained versions, this mode fails before creating output or
+reading content. Repeated captures normally have different database and report
+files, so use `--capture` to choose a complete version. Failed extraction removes
+its partial output.
+
+Import reports retained files and bytes separately from accepted provider
+sources. Files outside Claude and Codex capture plans remain supplemental. A
+conflicting source is retained as evidence and reported as a coverage gap; it
+never replaces the accepted source automatically. An import with gaps exits
+unsuccessfully after printing its report. No files are pruned automatically.
+
+`reparse --manifest ID` selects specific accepted sources; repeat the flag or
+supply comma-separated IDs. `--all` must be explicit. Reparse applies the
+receiving archive's `result_content_blocked_categories`. Reparsing clones SQLite
+once for the batch and uses the normal sync engine, including its large-Codex
+streaming path. It installs the replacement only after all selected sources
+succeed. Failed work leaves the previous browsable archive in place and records
+an error. Session ownership conflicts are reported without merging identities.
+Allow scratch space for the full database, its WAL, and materialized source
+files. `--scratch-bytes` limits each materialized source to 16 GiB by default;
+it does not cap total scratch usage.
+
+`verify` reads every retained object and accepted manifest. Backup verifies that
+closure, holds the writer and raw-vault locks, and creates a consistent SQLite
+snapshot through Docbank's portable backup API. It retains assets, installation
+identity, content/image retention policy and the original machine label. An
+existing ordinary artifact vault is currently rejected because its stopped-owner
+capture is not implemented; it is never silently omitted.
+
+Keep the backup report's repository ID, snapshot ID, application build and minimum
+reader version. Restore and repository verification require `--snapshot ID` even
+when the repository contains only one snapshot. Application extras over 64 MiB
+require Kit reader version 6; older binaries cannot use any part of that
+repository after it contains such a snapshot.
+
+Restore stages the selected snapshot and checks SQLite integrity, every
+accepted source object, and referenced message/tool images before publishing a
+new directory. Missing or corrupt referenced images also prevent backup. An older database is
+rebuilt from its stored sessions with all live providers disabled. Allow space
+for the restored data and temporary complete copies of large extras.
+
+Original runtime configuration and connection credentials are not copied from
+configuration. Seed import and restore generate fresh local authentication and loopback settings.
+Previously retained raw files are preserved without redaction and may contain
+credentials. Seeded and restored databases are permanently archive-only: foreground starts,
+background starts and restarts do not scan the receiving machine. Ordinary sync,
+source transfers, ChatGPT, Claude.ai and Gemini Apps imports, artifact exchange,
+mirror publication and raw-sync watch are refused. Browsing, curation, archive
+import, verification, extraction, backup and explicit reparse remain available. Use a separate data directory to collect new
+local sessions; no runtime flag or config setting disables archive-only mode.
+
+Startup resync keeps archive-only sessions and their acceptance records without
+opening the raw vault. Reparsing them always requires an explicit command.
+Continuous capture, cross-device merging, team permissions, cloud storage, and
+online backup are outside this first implementation.
+
+______________________________________________________________________
 
 ### `agentsview capture`
 

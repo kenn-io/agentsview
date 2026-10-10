@@ -93,6 +93,7 @@
   "header_actions_refresh": "リフレッシュ",
   "header_actions_sync": "同期",
   "header_actions_import_unavailable": "読み取り専用モードではインポートできません",
+  "header_actions_import_archive_only": "アーカイブ専用モードではインポートできません",
   "header_actions_import_conversations": "会話をインポートする",
   "header_actions_import": "インポート",
   "header_actions_toggle_theme": "テーマの切り替え",

@@ -272,6 +272,27 @@ func TestDirectBackend_Stats_CursorAttributionReportsMissingDB(t *testing.T) {
 		"Cursor attribution database is unavailable")
 }
 
+func TestDirectBackend_Stats_ArchiveOnlySkipsCursorAttribution(t *testing.T) {
+	svc, env := newDirectTestSvc(t)
+	committed := time.Now().Add(-2 * time.Hour)
+	path := seedCursorAttributionDB(t, []cursorCommitFixture{{
+		commitHash: "receiving-host", scoredAt: committed.UnixMilli(),
+		commitDate: formatCursorCommitDate(committed), linesAdded: 100,
+	}}, nil)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
+	ordinary, err := svc.Stats(t.Context(), service.StatsFilter{Since: "28d", Agent: "cursor"})
+	require.NoError(t, err)
+	require.Equal(t, "available", requireCursorAttributionSource(t, ordinary).Status)
+	assert.EqualValues(t, 100, requireCursorAttributionSource(t, ordinary).Metrics.LinesAdded)
+	require.NoError(t, env.db.EnableArchiveOnly(t.Context()))
+	archived, err := svc.Stats(t.Context(), service.StatsFilter{Since: "28d", Agent: "cursor"})
+	require.NoError(t, err)
+	source := requireCursorAttributionSource(t, archived)
+	assert.Equal(t, "unavailable", source.Status)
+	assert.Nil(t, source.Metrics)
+	assert.Contains(t, source.Warnings, "Cursor attribution is unavailable in an archive-only database")
+}
+
 func TestDirectBackend_Stats_CursorAttributionReportsLoadError(t *testing.T) {
 	svc, _ := newDirectTestSvc(t)
 	badPath := filepath.Join(t.TempDir(), "ai-code-tracking.db")
@@ -1651,4 +1672,23 @@ func TestDirectBackendSyncVisualStudioCopilotByIDFollowsConversationToSibling(
 	assert.Nil(t, other,
 		"a scoped single-session sync must not insert unrelated conversations "+
 			"from the same trace file")
+}
+
+func TestDirectBackend_Stats_ArchiveOnlyHostOutcomesUnavailable(t *testing.T) {
+	svc, env := newDirectTestSvc(t)
+	require.NoError(t, env.db.EnableArchiveOnly(t.Context()))
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
+		Since: "28d", Agent: "claude", IncludeGitOutcomes: true, IncludeGitHubOutcomes: true,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, stats.OutcomeStats)
+	require.NotNil(t, stats.CodeAttribution)
+	require.Len(t, stats.CodeAttribution.Sources, 2)
+	for i, provider := range []string{"git", "github"} {
+		source := stats.CodeAttribution.Sources[i]
+		assert.Equal(t, provider, source.Provider)
+		assert.Equal(t, "unavailable", source.Status)
+		assert.Nil(t, source.Metrics)
+		assert.Contains(t, source.Warnings, provider+" outcomes are unavailable in an archive-only database")
+	}
 }

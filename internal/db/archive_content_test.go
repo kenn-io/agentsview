@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,27 +16,34 @@ import (
 )
 
 func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sessions.db")
-	database, err := OpenWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
-	require.NoError(t, err)
+	for name, reopen := range map[string]func(context.Context, string, config.ArchiveContent) (*DB, error){
+		"maintained": OpenWithArchiveContent,
+		"isolated":   OpenIsolatedWithArchiveContent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sessions.db")
+			database, err := OpenWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
+			require.NoError(t, err)
 
-	prompt := "You are a code reviewer. Review the code changes shown below."
-	startedAt := "2026-08-31T10:00:00Z"
-	require.NoError(t, database.UpsertSession(t.Context(), Session{
-		ID: "automated", Project: "project", Agent: "claude", Machine: "local",
-		FirstMessage: &prompt, StartedAt: &startedAt, UserMessageCount: 1,
-	}))
-	require.NoError(t, database.Close())
+			prompt := "You are a code reviewer. Review the code changes shown below."
+			startedAt := "2026-08-31T10:00:00Z"
+			require.NoError(t, database.UpsertSession(t.Context(), Session{
+				ID: "automated", Project: "project", Agent: "claude", Machine: "local",
+				FirstMessage: &prompt, StartedAt: &startedAt, UserMessageCount: 1,
+			}))
+			require.NoError(t, database.Close())
 
-	reopened, err := OpenWithArchiveContent(t.Context(), path, config.ArchiveContentUsage)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-	stored, err := reopened.GetSessionFull(t.Context(), "automated")
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.True(t, stored.IsAutomated,
-		"startup migrations cannot reclassify discarded transcript text")
-	assert.Nil(t, stored.FirstMessage)
+			reopened, err := reopen(t.Context(), path, config.ArchiveContentUsage)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+			stored, err := reopened.GetSessionFull(t.Context(), "automated")
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.True(t, stored.IsAutomated,
+				"startup migrations cannot reclassify discarded transcript text")
+			assert.Nil(t, stored.FirstMessage)
+		})
+	}
 }
 
 func TestUsageOnlyAuditPreservesLegacyHeadlessAutomation(t *testing.T) {

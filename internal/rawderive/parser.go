@@ -84,46 +84,10 @@ func (p *ProviderParser) Parse(
 	// server's filesystem or read its .git metadata from an attacker-chosen
 	// cwd.
 	ctx = parser.WithoutFilesystemProjectDiscovery(ctx)
-	factory, ok := p.factories[manifest.Manifest.Provider]
-	if !ok {
-		return ParsedManifest{}, fmt.Errorf(
-			"%w: provider %q is not registered", rawsync.ErrInvalid, manifest.Manifest.Provider,
-		)
-	}
-	// A manifest is provider-owned custody data, but the factory registry
-	// is this worker's: only a factory that explicitly advertises raw-capture
-	// support may construct a provider for hosted derivation. Rejecting
-	// earlier keeps unvetted discovery code off the materialized tree.
-	if factory.Capabilities().RawCapture.Support != parser.CapabilitySupported {
-		return ParsedManifest{}, fmt.Errorf(
-			"%w: provider %q does not support %s", rawsync.ErrInvalid,
-			manifest.Manifest.Provider, parser.ProviderFeatureRawCapture,
-		)
-	}
-	paths := newStablePathMap(manifest, materialized)
-	roots := materializedProviderRoots(manifest, materialized)
-	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:                 roots,
-		MetadataDirs:          materializedProviderMetadataDirs(manifest, materialized, roots),
-		Machine:               p.machine,
-		StableSourceSnapshots: true,
-		PathRewriter:          paths.rewrite,
-	})
-	if provider == nil {
-		return ParsedManifest{}, fmt.Errorf("%w: provider construction failed", rawsync.ErrInvalid)
-	}
-	discovery, err := parser.DiscoverRawCaptureSources(ctx, provider)
-	if err != nil {
-		return ParsedManifest{}, redactMaterializedError("discovering provider source", err, materialized.Root())
-	}
-	if !discovery.Complete {
-		return ParsedManifest{}, errors.New("provider raw-capture discovery is incomplete")
-	}
-	source, err := matchProviderSource(ctx, provider, discovery.Sources, manifest, materialized)
+	provider, source, _, _, paths, err := p.prepareSource(ctx, manifest, materialized, false)
 	if err != nil {
 		return ParsedManifest{}, err
 	}
-	paths.bindSource(source, manifest.Manifest.SourceKey)
 	sessions, fanOut, err := parser.ResolveRawSnapshotSessions(ctx, provider, source)
 	if err != nil {
 		return ParsedManifest{}, redactMaterializedError(
@@ -162,6 +126,52 @@ func (p *ProviderParser) Parse(
 	}
 	rewriteParseOutcome(&outcome, paths, materialized.Root())
 	return ParsedManifest{Outcome: outcome}, nil
+}
+
+func (p *ProviderParser) prepareSource(
+	ctx context.Context, manifest rawsync.CanonicalManifest, materialized *Materialization, localArchive bool,
+) (parser.Provider, parser.SourceRef, []parser.SourceRef, []parser.SourceRef, *stablePathMap, error) {
+	factory, ok := p.factories[manifest.Manifest.Provider]
+	if !ok {
+		return nil, parser.SourceRef{}, nil, nil, nil, fmt.Errorf(
+			"%w: provider %q is not registered", rawsync.ErrInvalid, manifest.Manifest.Provider,
+		)
+	}
+	// A manifest is provider-owned custody data, but the factory registry
+	// is this worker's: only a factory that explicitly advertises raw-capture
+	// support may construct a provider for hosted derivation. Rejecting
+	// earlier keeps unvetted discovery code off the materialized tree.
+	if factory.Capabilities().RawCapture.Support != parser.CapabilitySupported {
+		return nil, parser.SourceRef{}, nil, nil, nil, fmt.Errorf(
+			"%w: provider %q does not support %s", rawsync.ErrInvalid,
+			manifest.Manifest.Provider, parser.ProviderFeatureRawCapture,
+		)
+	}
+	paths := newStablePathMap(manifest, materialized)
+	roots := materializedProviderRoots(manifest, materialized)
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:                 roots,
+		MetadataDirs:          materializedProviderMetadataDirs(manifest, materialized, roots),
+		Machine:               p.machine,
+		StableSourceSnapshots: true,
+		PathRewriter:          paths.rewrite,
+	})
+	if provider == nil {
+		return nil, parser.SourceRef{}, nil, nil, nil, fmt.Errorf("%w: provider construction failed", rawsync.ErrInvalid)
+	}
+	discovery, err := parser.DiscoverRawCaptureSources(ctx, provider)
+	if err != nil {
+		return nil, parser.SourceRef{}, nil, nil, nil, redactMaterializedError("discovering provider source", err, materialized.Root())
+	}
+	if !discovery.Complete {
+		return nil, parser.SourceRef{}, nil, nil, nil, errors.New("provider raw-capture discovery is incomplete")
+	}
+	source, members, err := matchProviderSource(ctx, provider, discovery.Sources, manifest, materialized, localArchive)
+	if err != nil {
+		return nil, parser.SourceRef{}, nil, nil, nil, err
+	}
+	paths.bindSource(source, manifest.Manifest.SourceKey)
+	return provider, source, discovery.Sources, members, paths, nil
 }
 
 // materializedProviderRoots reconstructs provider discovery roots inside the
@@ -373,7 +383,8 @@ func matchProviderSource(
 	sources []parser.SourceRef,
 	manifest rawsync.CanonicalManifest,
 	materialized *Materialization,
-) (parser.SourceRef, error) {
+	localArchive bool,
+) (parser.SourceRef, []parser.SourceRef, error) {
 	wantPaths := make([]string, 0, len(manifest.Manifest.Entries))
 	// The manifest's primary entry is the relative entry its source key ends
 	// with. Sibling lineage plans can share the same entries, so select the
@@ -383,11 +394,24 @@ func matchProviderSource(
 		wantPaths = append(wantPaths, entry.Path)
 	}
 	slices.Sort(wantPaths)
-	var matches, primaryMatches []parser.SourceRef
+	type match struct {
+		source  parser.SourceRef
+		members []parser.SourceRef
+	}
+	var matches, primaryMatches []match
 	for _, source := range sources {
-		plan, supported, err := parser.ResolveRawCapturePlan(ctx, provider, source)
+		var members []parser.SourceRef
+		var plan parser.RawCapturePlan
+		var supported bool
+		var err error
+		if localArchive {
+			plan, members, err = PlanLocalCapture(ctx, provider, source, sources)
+			supported = err == nil
+		} else {
+			plan, supported, err = parser.ResolveRawCapturePlan(ctx, provider, source)
+		}
 		if err != nil {
-			return parser.SourceRef{}, redactMaterializedError(
+			return parser.SourceRef{}, nil, redactMaterializedError(
 				"resolving provider raw-capture plan", err, materialized.Root(),
 			)
 		}
@@ -416,21 +440,21 @@ func matchProviderSource(
 		}
 		slices.Sort(gotPaths)
 		if valid && slices.Equal(gotPaths, wantPaths) {
-			matches = append(matches, source)
+			matches = append(matches, match{source, members})
 			if sourceEntry != "" && primaryEntry == sourceEntry {
-				primaryMatches = append(primaryMatches, source)
+				primaryMatches = append(primaryMatches, match{source, members})
 			}
 		}
 	}
 	if len(primaryMatches) == 1 {
-		return primaryMatches[0], nil
+		return primaryMatches[0].source, primaryMatches[0].members, nil
 	}
 	if len(primaryMatches) > 1 || len(matches) != 1 {
-		return parser.SourceRef{}, fmt.Errorf(
+		return parser.SourceRef{}, nil, fmt.Errorf(
 			"%w: manifest matched %d provider sources", rawsync.ErrInvalid, len(matches),
 		)
 	}
-	return matches[0], nil
+	return matches[0].source, matches[0].members, nil
 }
 
 // rawCaptureSourceIdentityMatches validates the provider-owned logical source

@@ -189,7 +189,27 @@ func (s *Server) syncStatusEngine() *syncpkg.Engine {
 	return s.onDemandEngine
 }
 
+// requireSourceSync also covers --no-sync daemons, which otherwise create an
+// on-demand engine for a manual request. Archive custody has no such override.
+func (s *Server) requireSourceSync(ctx context.Context) error {
+	if local, ok := s.db.(*db.DB); ok {
+		if err := local.RequireSourceSync(ctx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			if errors.Is(err, db.ErrArchiveOnly) {
+				return apiError(http.StatusForbidden, err.Error())
+			}
+			return apiError(http.StatusInternalServerError, err.Error())
+		}
+	}
+	return nil
+}
+
 func (s *Server) syncEngineForRequest(ctx context.Context) (*syncpkg.Engine, error) {
+	if err := s.requireSourceSync(ctx); err != nil {
+		return nil, err
+	}
 	if s.engine != nil {
 		return s.engine, nil
 	}
@@ -426,6 +446,9 @@ func (s *Server) humaSyncRemotes(
 	ctx context.Context,
 	in *remoteSyncInput,
 ) (*huma.StreamResponse, error) {
+	if err := s.requireSourceSync(ctx); err != nil {
+		return nil, err
+	}
 	local, ok := s.db.(*db.DB)
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
@@ -1027,6 +1050,12 @@ func (s *Server) humaSyncSession(
 	ctx context.Context,
 	in *sessionSyncInput,
 ) (*jsonOutput[*service.SessionDetail], error) {
+	if err := s.requireSourceSync(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, nil
+		}
+		return nil, err
+	}
 	if (in.Body.Path == "" && in.Body.ID == "") ||
 		(in.Body.Path != "" && in.Body.ID != "") {
 		return nil, apiError(http.StatusBadRequest, "exactly one of 'path' or 'id' is required")

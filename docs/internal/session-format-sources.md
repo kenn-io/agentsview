@@ -196,7 +196,12 @@ fixtures retain this field; missing identities remain source-local.
   recorded contributor paths preserve archived messages across missing files,
   restarts, and rebuilds. Restoring the files permits readable corrections to
   replace the saved transcript. This verifies Agentsview behavior, not
-  Claude's persistence format.
+  Claude's persistence format. Rechecked 2026-10-06 with the archive reparse
+  fixtures: local archive capture groups the native parser's verified
+  continuations and their companions into one source. Reparse preserves either
+  seed transcript's stored path and refuses replacement if a recorded
+  contributor is absent. Hosted capture plans and watcher discovery are
+  unchanged.
 
 - **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
   found 12,261 `ai-title` records, with a mean of 15.96 records per file and a

@@ -95,6 +95,7 @@
   "header_actions_refresh": "Yenilə",
   "header_actions_sync": "Sinxronlaşdır",
   "header_actions_import_unavailable": "Yalnız oxumaq üçün nəzərdə tutulmuş rejimdə idxal əlçatan deyil",
+  "header_actions_import_archive_only": "Yalnız arxiv rejimində idxal mümkün deyil",
   "header_actions_import_conversations": "Söhbətləri idxal et",
   "header_actions_import": "İdxal et",
   "header_actions_toggle_theme": "Temanı dəyişdir",

@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 const testConversationsJSON = `[
@@ -1427,30 +1428,14 @@ func TestImportChatGPTFailedFillKeepsSessionRow(t *testing.T) {
 }
 
 func TestImportChatGPTReimportRestoresExportImage(t *testing.T) {
-	var conversations []map[string]any
-	require.NoError(t, json.Unmarshal([]byte(testChatGPTConvWithAppend()), &conversations))
-	mapping := conversations[0]["mapping"].(map[string]any)
-	second := mapping["n2"].(map[string]any)["message"].(map[string]any)
-	second["content"] = map[string]any{
-		"content_type": "multimodal_text",
-		"parts": []any{"See this:", map[string]any{
-			"content_type":  "image_asset_pointer",
-			"asset_pointer": "file-service://file-img1",
-		}},
-	}
-	encoded, err := json.Marshal(conversations)
-	require.NoError(t, err)
-
 	d := testDB(t)
 	ctx := t.Context()
 	dir := t.TempDir()
-	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dir, "file-img1-aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.png"), png, 0o644,
-	))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations-000.json"), encoded, 0o644))
+	for name, data := range testjsonl.ChatGPTImageExport() {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644))
+	}
 	assetsDir := filepath.Join(t.TempDir(), "assets")
-	_, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
 	require.NoError(t, err)
 	entries, err := os.ReadDir(assetsDir)
 	require.NoError(t, err)

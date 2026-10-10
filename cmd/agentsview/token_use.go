@@ -84,6 +84,12 @@ func resolveRawSessionID(
 		return matches[0], true
 	}
 
+	// An archive-only database resolves IDs from its stored history. A mode
+	// lookup failure also leaves receiving-host sources untouched.
+	if err := database.RequireSourceSync(ctx); err != nil {
+		return input, false
+	}
+
 	// Canonical disk probe: if the input starts with a known
 	// agent prefix, trust that interpretation first and strip
 	// before resolving the source (which rejects IDs with

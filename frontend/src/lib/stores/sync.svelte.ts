@@ -57,6 +57,10 @@ class SyncStore {
     return this.serverVersion?.read_only === true;
   }
 
+  get archiveOnly(): boolean {
+    return this.serverVersion?.archive_only === true;
+  }
+
   private watchEventSource: EventSource | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastStatsParams: {
@@ -224,6 +228,7 @@ class SyncStore {
   }
 
   triggerSync(onComplete?: () => void) {
+    if (this.archiveOnly) return;
     if (this.readOnly) {
       void this.refreshReadOnly(onComplete);
       return;
@@ -232,6 +237,7 @@ class SyncStore {
   }
 
   triggerResync(onComplete?: () => void, onError?: (err: Error) => void): boolean {
+    if (this.archiveOnly) return false;
     if (this.readOnly) {
       onError?.(new Error("Full resync is unavailable for read-only backends."));
       return false;
