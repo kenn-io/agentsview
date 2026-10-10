@@ -1057,7 +1057,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 				trusted.state = state
 				e.trustedSQLiteContainers[dbPath] = trusted
 			}
-			if at := e.digestVerifiedAt[dbPath]; !at.IsZero() {
+			if at := e.digestVerifiedAt[dbPath]; !at.IsZero() && trusted.state.DBInode != 0 && trusted.state.DBDevice != 0 {
 				records[dbPath] = sqliteContainerVerification{Version: 1, State: trusted.state, VerifiedAt: at}
 			}
 			continue

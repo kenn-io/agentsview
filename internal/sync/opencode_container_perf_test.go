@@ -2,7 +2,6 @@ package sync_test
 
 import (
 	"database/sql"
-	"encoding/json/v2"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +10,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/sync"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -459,9 +459,7 @@ func testOpenCodeIdleFullPass(t *testing.T, n int) {
 		}))
 		state, ok := parser.StatSQLiteContainerState(oc.path)
 		require.True(t, ok)
-		raw, err := json.Marshal(map[string]any{"version": 1, "state": state, "verified_at": time.Now()})
-		require.NoError(t, err)
-		require.NoError(t, env.db.SetSyncState(t.Context(), "sqlite-container:"+oc.path, string(raw)))
+		sync.WriteContainerVerification(t, env.db, oc.path, state, time.Now())
 	}
 
 	scansBefore := parser.OpenCodeContainerChildScans()
