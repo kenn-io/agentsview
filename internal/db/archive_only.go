@@ -13,9 +13,17 @@ var ErrArchiveOnly = errors.New("archive-only database: source sync and publicat
 // EnableArchiveOnly permanently marks a stopped or staged archive before its
 // first startup. There is deliberately no runtime or configuration override.
 func (db *DB) EnableArchiveOnly(ctx context.Context) error {
-	_, err := db.getWriter().Exec(ctx, `INSERT INTO archive_metadata (key, value)
- VALUES ('archive_only', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`)
-	return err
+	return db.Update(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO archive_metadata (key, value)
+ VALUES ('archive_only', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`); err != nil {
+			return err
+		}
+		version, err := readUserVersion(ctx, tx)
+		if err != nil {
+			return err
+		}
+		return writeUserVersion(ctx, tx, version)
+	})
 }
 
 func (db *DB) IsArchiveOnly(ctx context.Context) (bool, error) {

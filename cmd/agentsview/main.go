@@ -276,8 +276,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		preserve := sync.NewEngine(ctx, database, sync.EngineConfig{Ephemeral: true, ArchiveContent: cfg.ArchiveContent})
 		stats, err := preserve.ResyncAllWithOptions(ctx, nil, sync.RebuildOptions{})
 		preserve.Close()
-		if err != nil || !stats.ArchiveRebuilt {
+		if err != nil {
 			fatal("preserving archive after parser upgrade: %v", err)
+		}
+		if !stats.ArchiveRebuilt {
+			fatal("preserving archive after parser upgrade: rebuild aborted")
 		}
 	}
 

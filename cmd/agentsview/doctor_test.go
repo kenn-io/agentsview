@@ -359,3 +359,16 @@ func TestDoctorSyncReportStatErrorDoesNotRenderAsMissingDatabase(t *testing.T) {
 	assert.NotContains(t, got, "database will be created")
 	assert.NotContains(t, got, "database does not exist yet")
 }
+
+func TestDoctorSyncArchiveOnlyReportsDecodedVersion(t *testing.T) {
+	dataDir := testDataDir(t)
+	database, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, database.EnableArchiveOnly(t.Context()))
+	require.NoError(t, database.Close())
+	out, err := executeCommand(newRootCommand(), "doctor", "sync")
+	require.NoError(t, err)
+	assert.Contains(t, out, "SQLite user_version: 128\n")
+	assert.Contains(t, out, "Archive mode: archive-only")
+	assert.Contains(t, out, "Startup sync decision: archive-only; source sync is disabled")
+}

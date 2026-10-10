@@ -1428,6 +1428,13 @@ func (d *DB) CopySessionMetadataFrom(
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying archive metadata: %w", err)
 		}
+		version, err := readUserVersion(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if err := writeUserVersion(ctx, tx, version); err != nil {
+			return fmt.Errorf("preserving archive-only version: %w", err)
+		}
 	}
 
 	// The session_deletion_changes journal is deliberately NOT copied from
@@ -2203,6 +2210,7 @@ func copiedSourceDataVersion(ctx context.Context, tx *sql.Tx) int {
 		log.Printf("resync: reading source data version: %v", err)
 		return 0
 	}
+	version, _ = DecodeUserVersion(version)
 	return version
 }
 

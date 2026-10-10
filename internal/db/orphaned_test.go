@@ -537,6 +537,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		"PRAGMA user_version = %d", sanitizedSourceDataVersion-1,
 	))
 	require.NoError(t, err, "downgrade source data version")
+	require.NoError(t, srcDB.EnableArchiveOnly(ctx))
 	require.NoError(t, srcDB.Close(), "close source")
 
 	dstPath := filepath.Join(dir, "new.db")

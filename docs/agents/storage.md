@@ -20,6 +20,13 @@ transaction or a pinned reader can push the WAL past it (249 MiB was observed).
 Before closing the replacement, the build runs a checked truncate checkpoint.
 The swap installs only the main file, so a failed checkpoint or close aborts it.
 
+The `raw_archive_*` tables record retained captures, root identities, accepted
+sources and deletion evidence. Seed import and restore permanently enable
+archive-only mode, which disables source sync and publication. These archives
+store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
+builds refuse them. This build decodes that range and preserves pending rebuilds;
+ordinary archives keep their parser version unchanged.
+
 ### Artifact checkpoint landings
 
 Land artifact checkpoints only through

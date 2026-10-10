@@ -188,6 +188,8 @@ func TestArchiveMoveAndReparse(t *testing.T) {
 	require.NoError(t, err)
 	archiveID, err := database.GetOrCreateArchiveID(ctx)
 	require.NoError(t, err)
+	originalGeneration, err := database.GetOrCreateDatabaseID(ctx)
+	require.NoError(t, err)
 	require.Len(t, initialExport.Changes, 4)
 	wantMessageIDs := make([]string, 0, 4)
 	for _, change := range initialExport.Changes {
@@ -318,6 +320,9 @@ func TestArchiveMoveAndReparse(t *testing.T) {
 	restoredArchiveID, err := database.GetOrCreateArchiveID(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, archiveID, restoredArchiveID)
+	rebuiltGeneration, err := database.GetOrCreateDatabaseID(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, originalGeneration, rebuiltGeneration)
 	assert.False(t, database.NeedsResync())
 	check := func() {
 		for _, id := range ids {
@@ -420,6 +425,8 @@ func TestArchiveRestorePreservesCodexSharedPath(t *testing.T) {
 		require.NoError(t, database.InsertMessages(ctx, []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: id}}))
 	}
 	require.NoError(t, database.SoftDeleteSession(ctx, "codex:trashed-parent"))
+	originalGeneration, err := database.GetOrCreateDatabaseID(ctx)
+	require.NoError(t, err)
 	require.NoError(t, database.EnableArchiveOnly(ctx))
 	archive, err := rawarchive.Open(ctx, database, data, nil)
 	require.NoError(t, err)
@@ -446,6 +453,9 @@ func TestArchiveRestorePreservesCodexSharedPath(t *testing.T) {
 	got, err := db.OpenReadOnly(ctx, filepath.Join(restored, "sessions.db"))
 	require.NoError(t, err)
 	defer got.Close()
+	rebuiltGeneration, err := got.GetOrCreateDatabaseID(ctx)
+	require.NoError(t, err)
+	assert.NotEqual(t, originalGeneration, rebuiltGeneration)
 	session, err := got.GetSessionFull(ctx, "codex:active-fork")
 	require.NoError(t, err)
 	require.NotNil(t, session, "archive-only restore must retain the active row beside its historical trashed same-path row")

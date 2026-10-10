@@ -191,3 +191,22 @@ func TestOpenScopesLegacyDevinSourceUUIDs(t *testing.T) {
 	assert.Equal(t, revisionAfter, *s.TranscriptRevision,
 		"repeated migration must be a no-op")
 }
+
+func TestOpenScopesArchiveOnlyLegacyDevinSourceUUIDs(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	insertSession(t, d, "devin:session-a", "project-a", func(s *Session) { s.Agent = "devin" })
+	insertMessages(t, d, Message{SessionID: "devin:session-a", Ordinal: 0, Role: "user", Content: "task", SourceUUID: "2"})
+	_, err := d.getWriter().Exec(ctx, "PRAGMA user_version = 110")
+	require.NoError(t, err)
+	require.NoError(t, d.EnableArchiveOnly(ctx))
+	path := d.Path()
+	require.NoError(t, d.Close())
+	reopened, err := OpenIsolatedContext(ctx, path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	messages, err := reopened.GetAllMessages(ctx, "devin:session-a")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "session-a:2", messages[0].SourceUUID)
+}
