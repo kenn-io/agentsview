@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -958,6 +959,79 @@ func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
 			assert.LessOrEqual(t, large, small*2,
 				"peak retained ID bytes must not scale with Hermes archive cardinality")
 		})
+	}
+}
+
+// The reconciliation seed resolves cron ancestry per member on a shared
+// connection. Its digests must match the bulk parse, which resolves every
+// member against one in-memory parent map, including deep chains, cycles,
+// pruned parents, and non-cron members whose parent is a cron run.
+func TestHermesMemberCoreSeedMatchesBulkCronAncestry(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	stateDB := filepath.Join(root, "state.db")
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	defer conn.Close()
+	insert := func(id, source, parent string) {
+		t.Helper()
+		_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions
+			(id, source, parent_session_id, started_at, title)
+			VALUES (?, ?, NULLIF(?, ''), 1, 'Daily digest · Oct 07')`, id, source, parent)
+		require.NoError(t, err)
+	}
+	_, err = conn.ExecContext(t.Context(), "DELETE FROM messages; DELETE FROM sessions")
+	require.NoError(t, err)
+	insert("cron_job-a_20261007_120000", "cron", "")
+	parent := "cron_job-a_20261007_120000"
+	for i := range 300 {
+		id := fmt.Sprintf("hop-%03d", i)
+		insert(id, "cron", parent)
+		parent = id
+	}
+	insert("pruned-run-child", "cron", "cron_job-gone_20261001_120000")
+	insert("missing", "cron", "pruned")
+	insert("cycle", "cron", "cycle")
+	insert("loop-a", "cron", "loop-b")
+	insert("loop-b", "cron", "loop-a")
+	insert("ordinary", "cli", "cron_job-a_20261007_120000")
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages(session_id, role, content, timestamp)
+		SELECT id, 'user', 'run message', started_at FROM sessions`)
+	require.NoError(t, err)
+
+	sessions, err := readHermesStateSessions(t.Context(), conn)
+	require.NoError(t, err)
+	messages, err := readHermesStateMessages(t.Context(), conn)
+	require.NoError(t, err)
+	parents := make(map[string]string, len(sessions))
+	for _, ss := range sessions {
+		parents[ss.id] = ss.parentSessionID
+	}
+	bulkJobs := make(map[string]string, len(sessions))
+	bulkDigests := make(map[string][]byte, len(sessions))
+	for _, ss := range sessions {
+		require.NoError(t, resolveHermesStateCronJob(&ss, func(id string) (string, error) { return parents[id], nil }))
+		bulkJobs[ss.id] = ss.cronJob
+		h := sha256.New()
+		require.NoError(t, addHermesStateSessionFingerprint(h, ss, messages[ss.id]))
+		bulkDigests[ss.id] = h.Sum(nil)
+	}
+	for id, job := range map[string]string{
+		"hop-299": "job-a", "pruned-run-child": "job-gone",
+		"missing": "", "cycle": "", "loop-a": "", "ordinary": "",
+	} {
+		assert.Equal(t, job, bulkJobs[id], id)
+	}
+
+	ctx, cleanup, err := WithReconciliationCache(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+	require.NoError(t, seedHermesMemberCoresLocked(ctx, stateDB))
+	require.Len(t, bulkDigests, 307)
+	for id, want := range bulkDigests {
+		h, _, ok := cachedHermesMemberCore(ctx, hermesSource{Path: VirtualSourcePath(stateDB, id)})
+		require.True(t, ok, id)
+		assert.Equal(t, want, h.Sum(nil), id)
 	}
 }
 

@@ -28,7 +28,16 @@ const hermesIDPrefix = string(AgentHermes) + ":"
 
 var hermesCronSessionID = regexp.MustCompile(`^cron_([A-Za-z0-9][A-Za-z0-9._-]*)_\d{8}_\d{6}$`)
 
-const hermesCronParentQuery = `SELECT COALESCE(parent_session_id, '') FROM sessions WHERE id = ?`
+// hermesCronAncestorsQuery returns every ancestor row reachable from one
+// session ID. UNION drops a repeated (id, parent) row, which ends the walk
+// on a parent cycle.
+const hermesCronAncestorsQuery = `WITH RECURSIVE chain(id, parent) AS (
+	SELECT id, COALESCE(parent_session_id, '') FROM sessions WHERE id = ?
+	UNION
+	SELECT s.id, COALESCE(s.parent_session_id, '')
+	FROM chain JOIN sessions s ON s.id = chain.parent
+)
+SELECT id, parent FROM chain`
 
 type hermesStateSession struct {
 	id               string
@@ -1548,13 +1557,45 @@ func resolveHermesStateCronJob(ss *hermesStateSession, parent func(string) (stri
 	return lookupErr
 }
 
-func hermesCronParent(ctx context.Context, conn *sql.DB, id string) (string, error) {
-	var parent string
-	err := conn.QueryRowContext(ctx, hermesCronParentQuery, id).Scan(&parent)
-	if err == sql.ErrNoRows {
-		err = nil
+// resolveHermesStateCronJobConn resolves a cron member's job from state.db.
+// It loads the member's whole ancestry in one query on the first lookup, so
+// the walk costs at most one query per member instead of one per hop.
+// Missing IDs resolve to an empty parent, as in the bulk parse.
+func resolveHermesStateCronJobConn(
+	ctx context.Context, conn *sql.DB, ss *hermesStateSession,
+) error {
+	var parents map[string]string
+	return resolveHermesStateCronJob(ss, func(id string) (string, error) {
+		if parents == nil {
+			var err error
+			if parents, err = hermesCronAncestors(ctx, conn, id); err != nil {
+				return "", err
+			}
+		}
+		return parents[id], nil
+	})
+}
+
+func hermesCronAncestors(
+	ctx context.Context, conn *sql.DB, id string,
+) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx, hermesCronAncestorsQuery, id)
+	if err != nil {
+		return nil, fmt.Errorf("query hermes cron ancestors: %w", err)
 	}
-	return parent, err
+	defer rows.Close()
+	parents := make(map[string]string)
+	for rows.Next() {
+		var child, parent string
+		if err := rows.Scan(&child, &parent); err != nil {
+			return nil, fmt.Errorf("scan hermes cron ancestor: %w", err)
+		}
+		parents[child] = parent
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read hermes cron ancestors: %w", err)
+	}
+	return parents, nil
 }
 
 // HermesCronJobName strips the run timestamp from a recorded job title.

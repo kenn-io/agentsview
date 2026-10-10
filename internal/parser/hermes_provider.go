@@ -359,7 +359,7 @@ func (p *hermesProvider) parseStateMember(
 		return ParseOutcome{ResultSetComplete: true, ForceReplace: true, SkipReason: SkipNoSession}, nil
 	}
 
-	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) }); err != nil {
+	if err := resolveHermesStateCronJobConn(ctx, conn, &ss); err != nil {
 		return ParseOutcome{}, err
 	}
 	messages, err := readHermesStateMessagesForSession(ctx, conn, src.SessionID)
@@ -1632,7 +1632,7 @@ func hermesStateMemberFingerprint(
 		}
 		return SourceFingerprint{}, err
 	}
-	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) }); err != nil {
+	if err := resolveHermesStateCronJobConn(ctx, conn, &ss); err != nil {
 		return SourceFingerprint{}, err
 	}
 	h := sha256.New()
@@ -1750,7 +1750,7 @@ func cacheHermesMemberCore(
 	if err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
-	if err := resolveHermesStateCronJob(&ss, func(id string) (string, error) { return hermesCronParent(ctx, conn, id) }); err != nil {
+	if err := resolveHermesStateCronJobConn(ctx, conn, &ss); err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	h := sha256.New()
