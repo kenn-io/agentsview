@@ -2944,9 +2944,7 @@ func startPeriodicSync(
 		}
 	}
 
-	// The daily archive audit runs on its own cadence in a worker process; it
-	// must never run the archive-scale pass in the daemon. Its own loop keeps the
-	// scheduled reconcile below (Task 5) untouched.
+	// Archive audits and rebuild retries run on a separate cadence from provider reconciliation.
 	go startArchiveAudit(ctx, cfg, engine, database, lock, idleTracker, emitter)
 
 	ticker := time.NewTicker(periodicSyncInterval)
