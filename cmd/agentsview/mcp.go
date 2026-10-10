@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -338,8 +339,8 @@ func mcpDaemonCall[T any](
 			return result, err
 		}
 		_, networkFailure := errors.AsType[*net.OpError](err)
-		connectionFailure := networkFailure || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
-		if !connectionFailure {
+		_, requestFailure := errors.AsType[*url.Error](err)
+		if !networkFailure && !requestFailure {
 			return result, err
 		}
 		s.mu.Lock()

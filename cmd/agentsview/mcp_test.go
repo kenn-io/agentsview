@@ -454,9 +454,13 @@ func TestMCPDaemonServiceRetryClassification(t *testing.T) {
 }
 
 func TestMCPDaemonCallRetryClassification(t *testing.T) {
-	for _, outcome := range []string{"replacement", "canceled", "timeout", "rejected", "refused"} {
+	for _, outcome := range []string{"replacement", "canceled", "timeout", "rejected", "empty", "refused"} {
 		t.Run(outcome, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if outcome == "empty" {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
 				assert.NoError(t, json.MarshalWrite(w, service.SessionList{}))
 			}))
 			t.Cleanup(server.Close)
@@ -492,10 +496,12 @@ func TestMCPDaemonCallRetryClassification(t *testing.T) {
 				failure = &url.Error{Op: "Get", Err: context.DeadlineExceeded}
 			case "rejected":
 				failure = errors.New("HTTP 400: invalid search")
+			case "empty":
+				failure = io.ErrUnexpectedEOF
 			}
 			retry := outcome == "refused"
 			calls := 0
-			_, err = mcpDaemonCall(ctx, svc, retry || outcome == "timeout" || outcome == "rejected", func(backend service.SessionService) (int, error) {
+			_, err = mcpDaemonCall(ctx, svc, retry || outcome == "timeout" || outcome == "rejected" || outcome == "empty", func(backend service.SessionService) (int, error) {
 				calls++
 				switch outcome {
 				case "canceled":
@@ -504,9 +510,9 @@ func TestMCPDaemonCallRetryClassification(t *testing.T) {
 					svc.mu.Lock()
 					svc.backend = replacement
 					svc.mu.Unlock()
-				case "refused":
+				case "refused", "empty":
 					_, err := backend.List(ctx, service.ListFilter{})
-					if err != nil {
+					if outcome == "refused" && err != nil {
 						assert.NoError(t, os.Remove(path))
 					}
 					return 0, err
