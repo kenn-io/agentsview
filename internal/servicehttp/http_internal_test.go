@@ -199,13 +199,6 @@ func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
-			assert.Equal(t, "2024-06-01", r.URL.Query().Get("from"))
-			assert.Equal(t, "2024-06-07", r.URL.Query().Get("to"))
-			assert.Equal(t, "UTC", r.URL.Query().Get("timezone"))
-			assert.Equal(t, "gpt-4o", r.URL.Query().Get("model"))
-			assert.Equal(t, "3", r.URL.Query().Get("min_user_messages"))
-			assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
-			assert.Equal(t, "false", r.URL.Query().Get("include_automated"))
 			time.Sleep(50 * time.Millisecond)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"left":{"totalTokens":42}}`))
@@ -215,10 +208,7 @@ func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
 		backend.client.Transport = transport
 		backend.longRunningClient.Transport = transport
 		backend.client.Timeout = 10 * time.Millisecond
-		result, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
-			From: "2024-06-01", To: "2024-06-07", Timezone: "UTC",
-			MinUserMessages: 3, IncludeOneShot: true, Model: "gpt-4o",
-		})
+		result, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{})
 		require.NoError(t, err)
 		assert.Equal(t, 42, result.Left.TotalTokens)
 	})

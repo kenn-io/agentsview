@@ -740,6 +740,13 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			queryValues = map[string]string{
+				"from":                r.URL.Query().Get("from"),
+				"to":                  r.URL.Query().Get("to"),
+				"timezone":            r.URL.Query().Get("timezone"),
+				"model":               r.URL.Query().Get("model"),
+				"min_user_messages":   r.URL.Query().Get("min_user_messages"),
+				"include_one_shot":    r.URL.Query().Get("include_one_shot"),
+				"include_automated":   r.URL.Query().Get("include_automated"),
 				"left_dimension":      r.URL.Query().Get("left_dimension"),
 				"left_value":          r.URL.Query().Get("left_value"),
 				"right_dimension":     r.URL.Query().Get("right_dimension"),
@@ -757,6 +764,12 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	res, err := svc.UsagePairwiseComparison(
 		t.Context(),
 		service.UsagePairwiseComparisonRequest{
+			From:              "2024-06-01",
+			To:                "2024-06-07",
+			Timezone:          "UTC",
+			Model:             "gpt-4o",
+			MinUserMessages:   3,
+			IncludeOneShot:    true,
 			GitBranch:         "alpha/main",
 			ExcludeProjectKey: "pl1:sha256:hidden",
 			LeftDimension:     "project",
@@ -767,6 +780,13 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, res)
+	assert.Equal(t, "2024-06-01", queryValues["from"])
+	assert.Equal(t, "2024-06-07", queryValues["to"])
+	assert.Equal(t, "UTC", queryValues["timezone"])
+	assert.Equal(t, "gpt-4o", queryValues["model"])
+	assert.Equal(t, "3", queryValues["min_user_messages"])
+	assert.Equal(t, "true", queryValues["include_one_shot"])
+	assert.Equal(t, "false", queryValues["include_automated"])
 	assert.Equal(t, "project", queryValues["left_dimension"])
 	assert.Equal(t, "alpha", queryValues["left_value"])
 	assert.Equal(t, "model", queryValues["right_dimension"])

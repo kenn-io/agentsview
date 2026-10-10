@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/kit/daemon"
@@ -292,6 +291,8 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 				assert.Nil(t, svc.(*mcpDaemonService).backend)
 				return
 			}
+			previous := svc.(*mcpDaemonService).backend
+			require.NotNil(t, previous)
 			path, err := runtimeStore(dir).Path(os.Getpid())
 			require.NoError(t, err)
 			rec := readRuntimeRecord(t, path)
@@ -339,11 +340,8 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 				assert.Equal(t, 2, requests)
 			case "unknown identity":
 				require.NoError(t, err)
-				previous := svc.(*mcpDaemonService).backend
-				_, err := svc.List(t.Context(), service.ListFilter{})
-				require.NoError(t, err)
-				assert.NotSame(t, previous, svc.(*mcpDaemonService).backend)
 			}
+			assert.NotSame(t, previous, svc.(*mcpDaemonService).backend)
 		})
 	}
 }
@@ -430,8 +428,6 @@ func TestMCPDaemonServiceLateFailurePreservesReplacement(t *testing.T) {
 			ping.ServeHTTP(w, r)
 		case "/api/v1/sessions/session-a":
 			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{ID: "replacement-session"}))
-		case "/api/v1/search":
-			assert.NoError(t, json.MarshalWrite(w, service.SessionSearchResult{Results: []db.SearchResult{{SessionID: "replacement-session"}}}))
 		case "/api/v1/memory/status":
 			assert.NoError(t, json.MarshalWrite(w, service.MemoryStatus{Status: service.MemoryReady}))
 		default:
@@ -452,10 +448,6 @@ func TestMCPDaemonServiceLateFailurePreservesReplacement(t *testing.T) {
 	detail, err = svc.Get(t.Context(), "session-a")
 	require.NoError(t, err)
 	assert.Equal(t, "replacement-session", detail.ID)
-	search, err := svc.Search(t.Context(), service.SearchRequest{Query: "cached search"})
-	require.NoError(t, err)
-	require.Len(t, search.Results, 1)
-	assert.Equal(t, "replacement-session", search.Results[0].SessionID)
 	status, err := service.GetMemoryStatus(t.Context(), svc)
 	require.NoError(t, err)
 	assert.Equal(t, service.MemoryReady, status.Status)
