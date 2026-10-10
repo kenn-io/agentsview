@@ -142,26 +142,6 @@ afterEach(() => {
 });
 
 describe("AttributionPanel selection", () => {
-  it("reveals Clear selection in the actions and clears the row", async () => {
-    const full = summaryWithModels();
-    usage.summary = full;
-    usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(full);
-    usage.toggles.attribution.groupBy = "model";
-    usage.toggles.attribution.view = "list";
-    const component = mountPanel();
-    await tick();
-    const actions = document.querySelector<HTMLElement>(".selection-actions")!;
-    expect(actions.classList.contains("inactive")).toBe(true);
-    document.querySelector<HTMLElement>(".list-row")!.click();
-    await tick();
-    expect(actions.classList.contains("inactive")).toBe(false);
-    [...actions.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Clear selection")!.click();
-    await tick();
-    expect(actions.classList.contains("inactive")).toBe(true);
-    await unmount(component);
-    usage.cancelInFlightReads();
-  });
-
   it("highlights both agents picked in the header", async () => {
     usage.summary = summaryWithAgents(["claude", "codex"]);
     sessions.filters.agent = "claude,codex";
@@ -242,19 +222,24 @@ describe("AttributionPanel selection", () => {
     const component = mountPanel();
     await tick();
     const openButton = () => [...document.querySelectorAll<HTMLButtonElement>(".selection-actions:not(.inactive) span:not(.inactive) button")].find((button) => button.textContent?.trim() === "Open");
+    const actions = document.querySelector<HTMLElement>(".selection-actions")!;
+    expect(actions.classList.contains("inactive")).toBe(true);
     const row = document.querySelectorAll(".list-row")[1]!;
     row.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
     if (by === "agent") await usage.fetchAll({ preserveTimeRange: true });
     await vi.waitFor(() => expect(usage.attributionSummary).toEqual(full));
     await tick();
     expect(row.getAttribute("aria-pressed")).toBe("true");
+    expect(actions.classList.contains("inactive")).toBe(false);
     expect(usage.zoomedProject).toBeNull();
     if (by !== "project") {
-      // Open appears only for projects, and a quick second click clears instead of opening.
+      // Open appears only for projects; models clear through Clear selection, agents through a quick second click.
       expect(openButton()).toBeUndefined();
-      row.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+      if (by === "model") [...actions.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Clear selection")!.click();
+      else row.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
       await tick();
       expect(row.getAttribute("aria-pressed")).toBe("false");
+      expect(actions.classList.contains("inactive")).toBe(true);
     } else {
       expect(openButton()).toBeDefined();
       usage.attributionSummary = { ...full, projectTotals: [full.projectTotals[0]!] };
@@ -505,27 +490,24 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
-  it("clears zoom when switching attribution dimensions", async () => {
+  it.each(["switching attribution dimensions", "the project leaving the refreshed summary"])("handles zoom after %s", async (event) => {
     usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    const switching = event === "switching attribution dimensions";
+    if (!switching) {
+      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+      usage.zoomRows = [];
+      usage.summary = summaryWithAgents([]);
+    }
     const component = mountPanel();
     await tick();
-    [...document.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Agent")!
-      .click();
-    expect(usage.zoomedProject).toBeNull();
-    unmount(component);
-  });
-  it("keeps zoom when the project leaves the refreshed summary", async () => {
-    usage.setOpenProject("pl1:sha256:first");
-    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
-    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-    usage.zoomRows = [];
-    usage.summary = summaryWithAgents([]);
-    const component = mountPanel();
-    await tick();
-    expect(document.querySelector(".panel-header")?.textContent).toContain("hermes-cron");
-    expect(document.querySelector(".empty")?.textContent).toBe("No data for this period");
+    if (switching) {
+      [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Agent")!.click();
+      expect(usage.zoomedProject).toBeNull();
+    } else {
+      expect(document.querySelector(".panel-header")?.textContent).toContain("hermes-cron");
+      expect(document.querySelector(".empty")?.textContent).toBe("No data for this period");
+    }
     unmount(component);
   });
 });

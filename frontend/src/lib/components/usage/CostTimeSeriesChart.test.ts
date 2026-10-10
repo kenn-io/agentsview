@@ -495,25 +495,12 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  it.each([
-    ["selected", [["single-model", false], ["total", true]]],
-    ["unselected", []],
-  ] as const)("draws a single %s model series in the first usage color", async (state, legend) => {
+  it("draws a single unselected series in the first usage color without a legend", async () => {
     usage.toggles.timeSeries.groupBy = "model";
-    usage.toggles.attribution.groupBy = "model";
     usage.summary = usageSummary([
       modelDailyEntry(0, [{ modelName: "single-model", cost: testMoney(6) }]),
       modelDailyEntry(1, [{ modelName: "single-model", cost: testMoney(3) }]),
     ]);
-    if (state === "selected") {
-      usage.selectedModel = "single-model";
-      usage.referenceSummary = usageSummary([
-        modelDailyEntry(0, [
-          { modelName: "single-model", cost: testMoney(6) },
-          { modelName: "total", cost: testMoney(4) },
-        ]),
-      ]);
-    }
 
     const component = mountChart();
     await tick();
@@ -521,8 +508,7 @@ describe("CostTimeSeriesChart", () => {
     const paths = document.querySelectorAll<SVGPathElement>("path.lc-area-path");
     expect(paths).toHaveLength(1);
     expect(paths[0]!.getAttribute("fill")).toBe("var(--accent-blue)");
-    // A selection keeps the unselected view's entries and dims hidden ones; one unselected series shows no legend.
-    expect(Array.from(document.querySelectorAll(".legend-item"), (item) => [item.textContent?.trim(), item.classList.contains("dimmed")])).toEqual(legend);
+    expect(document.querySelector(".legend")).toBeNull();
     unmount(component);
   });
 
@@ -537,6 +523,11 @@ describe("CostTimeSeriesChart", () => {
   };
 
   it.each<{ name: string; by: "model" | "agent"; selected: string; reference?: string[]; brushed?: string[]; plotted: string[]; legend: string[]; lit: string[] }>([
+    {
+      name: "keeps the unselected entries of a single selected series and dims them",
+      by: "model", selected: "model-0", reference: names("model", 0, 2), plotted: ["model-0"],
+      legend: ["model-0", "model-1"], lit: ["model-0"],
+    },
     {
       name: "lists a selected series outside the unselected top ten before Other",
       by: "model", selected: "model-11", reference: names("model", 0, 12), plotted: ["model-11"],

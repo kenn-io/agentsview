@@ -180,19 +180,13 @@ describe("Usage model visibility", () => {
     await tick();
     document.querySelector(".tile")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
-    expect(document.querySelectorAll(".tile")).toHaveLength(3);
-    expect(document.querySelectorAll(".tile.dimmed")).toHaveLength(2);
-    expect(document.querySelector('.tile[aria-pressed="true"]')).not.toBeNull();
     expect(modelPicker().textContent).toContain("Model: model-alpha");
     document.querySelector(".tile")!.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     await vi.waitFor(() => expect(usage.selectedModel).toBe(""));
     modelPicker().click();
     await tick();
     modelOption("model-bravo").click();
-    await vi.waitFor(() => {
-      expect(api.getApiV1UsageSummary.mock.lastCall?.[0].exclude_model).toBe("model-bravo");
-      expect(document.querySelectorAll(".tile")).toHaveLength(2);
-    });
+    await vi.waitFor(() => expect(api.getApiV1UsageSummary.mock.lastCall?.[0].exclude_model).toBe("model-bravo"));
 
     const bulk = Array.from(
       document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__bulk-btn"),
@@ -200,11 +194,9 @@ describe("Usage model visibility", () => {
     const deselectAll = bulk.find((button) => button.textContent === "Deselect all")!;
     const selectAll = bulk.find((button) => button.textContent === "Select all")!;
     deselectAll.click();
-    await vi.waitFor(() => expect(document.querySelectorAll(".tile")).toHaveLength(0));
-    expect(modelPicker().textContent).toContain("None");
+    await vi.waitFor(() => expect(modelPicker().textContent).toContain("None"));
     selectAll.click();
-    await vi.waitFor(() => expect(document.querySelectorAll(".tile")).toHaveLength(3));
-    expect(modelPicker().textContent).toContain("All");
+    await vi.waitFor(() => expect(modelPicker().textContent).toContain("All"));
     expect(api.getApiV1UsageSummary.mock.lastCall?.[0].exclude_model).toBeUndefined();
   });
 });

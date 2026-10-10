@@ -74,7 +74,7 @@ test.describe("Usage attribution selection", () => {
     });
   }
 
-  test("panel actions share styling and chart clear stays compact", async ({ page }, testInfo) => {
+  test("panel actions share styling and chart clear stays compact", async ({ page }) => {
     await page.goto("/usage");
     const panel = page.locator(".attribution-panel");
     await expect(panel.locator(".tile").first()).toBeVisible();
@@ -97,20 +97,6 @@ test.describe("Usage attribution selection", () => {
     };
     expect(await chart.getByRole("button", { name: "Clear selection", exact: true }).evaluate(style)).toEqual(expect.objectContaining({ height: "22px", padding: "0px 8px" }));
     expect(await panel.getByRole("button", { name: "Open", exact: true }).evaluate(style)).toEqual(await panelClear.evaluate(style));
-    await page.evaluate(() => {
-      const comparison = document.createElement("div");
-      comparison.id = "header-comparison";
-      comparison.className = "usage-page";
-      comparison.style.cssText = "position:fixed;inset:0 auto auto 0;width:1600px;display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;background:var(--bg-surface);z-index:10000";
-      for (const [parentClass, headerSelector] of [["chart-container", ".chart-header"], ["attribution-panel", ".panel-header"]]) {
-        const wrapper = document.createElement("div");
-        wrapper.className = parentClass!;
-        wrapper.append(document.querySelector(headerSelector!)!.cloneNode(true));
-        comparison.append(wrapper);
-      }
-      document.body.append(comparison);
-    });
-    await page.locator("#header-comparison").screenshot({ path: testInfo.outputPath("usage-panel-and-chart-headers.png") });
   });
 
   test("Back and Forward follow page history and retain populated project rows", async ({ page }) => {

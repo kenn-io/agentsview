@@ -1633,30 +1633,7 @@ describe("UsageStore time-series range selection", () => {
     expect(usageServiceMocks.getApiV1UsageSummary).not.toHaveBeenCalled();
   });
 
-  it("slices selected attribution to a new brush before the range request finishes", async () => {
-    const { usage } = await loadStore();
-    usage.applyDateRange("2026-06-04", "2026-06-18");
-    const day = (date: string, project: string, cost: number) => ({
-      date, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalCost: testMoney(cost), modelsUsed: [],
-      projectBreakdowns: [{ project_key: `pl1:sha256:${project}`, project, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, cost: testMoney(cost) }],
-      modelBreakdowns: [], agentBreakdowns: [], machineBreakdowns: [],
-    });
-    const reference = usageSummary(6);
-    reference.daily = [day("2026-06-07", "alpha", 1), day("2026-06-08", "beta", 2), day("2026-06-09", "gamma", 3)];
-    usage.toggles.attribution.groupBy = "project";
-    usage.selectedProjectKey = "pl1:sha256:beta";
-    usage.summary = usageSummary(2);
-    usage.attributionSummary = reference;
-    usage.referenceSummary = reference;
-
-    usage.setTimeRange("2026-06-08", "2026-06-09");
-    expect(usage.attributionSummary?.projectTotals.map((total) => total.project)).toEqual(["gamma", "beta"]);
-    usage.clearTimeRange(false);
-    expect(usage.attributionSummary).toEqual(reference);
-    usage.cancelInFlightReads();
-  });
-
-  it("shows locally aggregated daily data before the range request finishes", async () => {
+  it.each([false, true])("shows locally aggregated daily data before the range request finishes, project selected=%s", async (selected) => {
     const { usage } = await loadStore();
     usage.applyDateRange("2026-06-04", "2026-06-18");
     const context = usageSummary(6);
@@ -1732,9 +1709,16 @@ describe("UsageStore time-series range selection", () => {
       },
     ];
     usage.summary = context;
+    if (selected) {
+      usage.toggles.attribution.groupBy = "project";
+      usage.selectedProjectKey = "pl1:sha256:beta";
+      usage.attributionSummary = context;
+      usage.referenceSummary = context;
+    }
 
     usage.setTimeRange("2026-06-08", "2026-06-09");
 
+    if (selected) expect(usage.attributionSummary?.projectTotals.map((total) => total.project)).toEqual(["beta", "alpha"]);
     expect(usage.timeSeriesSummary).toEqual(context);
     expect(usage.summary).toMatchObject({
       from: "2026-06-08",
@@ -1758,6 +1742,11 @@ describe("UsageStore time-series range selection", () => {
       ],
     });
     expect(usage.summary?.daily.map((day) => day.date)).toEqual(["2026-06-08", "2026-06-09"]);
+    if (selected) {
+      usage.clearTimeRange(false);
+      expect(usage.attributionSummary).toEqual(context);
+    }
+    usage.cancelInFlightReads();
   });
 
   it("restores the parent summary when the selected-range request fails", async () => {
@@ -2455,24 +2444,6 @@ describe("UsageStore project zoom", () => {
     await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(9)]));
   });
 
-  it("drops stale results and clears loading when returning to projects", async () => {
-    const { usage } = await loadStore();
-    let resolveOld!: (rows: DbTopSessionEntry[]) => void;
-    usageServiceMocks.getUsageZoom.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveOld = resolve;
-        }),
-    );
-    usage.setOpenProject("pl1:sha256:beta");
-    usage.backToProjects();
-    expect(usage.loading.zoom).toBe(false);
-    resolveOld([group(1)]);
-    await Promise.resolve();
-    expect(usage.zoomRows).toBeNull();
-    expect(usage.zoomedProject).toBeNull();
-  });
-
   it("clears old range rows and refreshes zoom even when top sessions fail", async () => {
     const { usage } = await loadStore();
     usage.mergeKnownProjects(usageSummary().projectTotals, {});
@@ -2510,13 +2481,22 @@ describe("UsageStore project zoom", () => {
     expect(usage.zoomRows).toEqual([]);
   });
 
-  it("refreshes zoom for metric and token selection changes", async () => {
+  it.each(["returning to projects", "metric and token selection changes"])("drops stale zoom results after %s", async (event) => {
     const { usage } = await loadStore();
     const pending: Array<(rows: DbTopSessionEntry[]) => void> = [];
     usageServiceMocks.getUsageZoom.mockImplementation(
       () => new Promise((resolve) => pending.push(resolve)),
     );
     usage.setOpenProject("pl1:sha256:alpha");
+    if (event === "returning to projects") {
+      usage.backToProjects();
+      expect(usage.loading.zoom).toBe(false);
+      pending[0]!([group(1)]);
+      await Promise.resolve();
+      expect(usage.zoomRows).toBeNull();
+      expect(usage.zoomedProject).toBeNull();
+      return;
+    }
     const firstSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
     usage.setMode("token");
     const secondSignal = usageServiceMocks.getUsageZoom.mock.lastCall?.[1].signal as AbortSignal;
