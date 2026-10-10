@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"go.kenn.io/agentsview/internal/ctxio"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -135,7 +136,7 @@ func (hs HTTPSync) downloadArchive(
 	total := positiveContentLength(resp.ContentLength)
 	hs.report(syncpkg.Progress{Detail: label, BytesTotal: total})
 	reader := &progressReader{
-		r:     &contextReader{ctx: ctx, r: resp.Body},
+		r:     ctxio.Reader{Context: ctx, Reader: resp.Body},
 		total: total,
 		report: func(done, total int64) {
 			hs.report(syncpkg.Progress{
@@ -159,20 +160,6 @@ func (hs HTTPSync) downloadArchive(
 		return nil, fmt.Errorf("close archive spool: %w", closeErr)
 	}
 	return owned, nil
-}
-
-type contextReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (r *contextReader) Read(p []byte) (int, error) {
-	select {
-	case <-r.ctx.Done():
-		return 0, r.ctx.Err()
-	default:
-		return r.r.Read(p)
-	}
 }
 
 func (a *downloadedArchive) extract(
@@ -226,7 +213,7 @@ func (a *downloadedArchive) extractWithSelection(
 		defer func() { err = errors.Join(err, gz.Close()) }()
 		stream = gz
 	}
-	stream = &contextReader{ctx: ctx, r: stream}
+	stream = ctxio.Reader{Context: ctx, Reader: stream}
 	if _, err := extractTarStream(ctx, stream, dst, selected); err != nil {
 		return fmt.Errorf("extract archive: %w", err)
 	}
