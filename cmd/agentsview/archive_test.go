@@ -246,7 +246,7 @@ func TestArchiveMoveAndReparse(t *testing.T) {
 	sourceList, err := executeCommand(newRootCommand(), "archive", "sources")
 	require.NoError(t, err)
 	assert.Contains(t, sourceList, nativeID)
-	for _, line := range bytes.Split(bytes.TrimSpace([]byte(sourceList)), []byte("\n")) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace([]byte(sourceList)), []byte("\n")) {
 		var source map[string]any
 		require.NoError(t, json.Unmarshal(line, &source))
 		assert.Len(t, source, 6)

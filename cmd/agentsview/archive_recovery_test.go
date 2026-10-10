@@ -38,9 +38,10 @@ func TestArchiveModeRecoversInterruptedCompaction(t *testing.T) {
 				inspection, err := sql.Open("sqlite3", cfg.DBPath)
 				require.NoError(t, err)
 				var version int
-				require.NoError(t, inspection.QueryRow("PRAGMA user_version").Scan(&version))
-				rows, err := inspection.Query(`SELECT type, name, COALESCE(sql, '') FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`)
+				require.NoError(t, inspection.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version))
+				rows, err := inspection.QueryContext(t.Context(), `SELECT type, name, COALESCE(sql, '') FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`)
 				require.NoError(t, err)
+				defer rows.Close()
 				schema := sha256.New()
 				for rows.Next() {
 					var kind, name, statement string
@@ -48,11 +49,10 @@ func TestArchiveModeRecoversInterruptedCompaction(t *testing.T) {
 					fmt.Fprintf(schema, "%s\x00%s\x00%s\n", kind, name, statement)
 				}
 				require.NoError(t, rows.Err())
-				require.NoError(t, rows.Close())
 				counts := map[string]int64{}
 				for _, table := range []string{"sessions", "messages", "tool_calls", "tool_result_events", "recall_entries", "recall_evidence"} {
 					var count int64
-					require.NoError(t, inspection.QueryRow("SELECT count(*) FROM "+table).Scan(&count))
+					require.NoError(t, inspection.QueryRowContext(t.Context(), "SELECT count(*) FROM "+table).Scan(&count))
 					counts[table] = count
 				}
 				require.NoError(t, inspection.Close())
@@ -78,18 +78,19 @@ func TestArchiveModeRecoversInterruptedCompaction(t *testing.T) {
 				} else {
 					require.NoError(t, os.WriteFile(cfg.DBPath, []byte("interrupted install"), 0o600))
 				}
-				if entry == "serve" {
+				switch entry {
+				case "serve":
 					enabled, err := archiveModeAfterRecovery(t.Context(), cfg)
 					require.NoError(t, err)
 					assert.True(t, enabled)
-				} else if entry == "archive" {
+				case "archive":
 					called := false
 					cmd := &cobra.Command{}
 					cmd.SetContext(t.Context())
 					err = withRawArchive(cmd, func(*rawarchive.Archive) error { called = true; return nil })
 					require.NoError(t, err)
 					assert.True(t, called)
-				} else if entry == "sync" {
+				case "sync":
 					var requests atomic.Int32
 					remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 						requests.Add(1)
@@ -105,7 +106,7 @@ func TestArchiveModeRecoversInterruptedCompaction(t *testing.T) {
 					assert.Equal(t, 1, exitErr.ExitCode())
 					assert.Contains(t, string(out), db.ErrArchiveOnly.Error())
 					assert.Zero(t, requests.Load(), "rejection must precede remote transfer")
-				} else {
+				default:
 					err = runRawSyncWithoutHostWork(t, cfg, entry)
 					require.ErrorIs(t, err, db.ErrArchiveOnly)
 				}

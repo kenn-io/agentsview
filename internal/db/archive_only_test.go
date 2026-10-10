@@ -42,7 +42,7 @@ func TestArchiveOnlyPreservesPendingRebuild(t *testing.T) {
 			require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
 			assert.Equal(t, tc.wantRaw, raw)
 			if tc.archiveOnly {
-				assert.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
+				require.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
 				assert.Greater(t, raw, 128, "the pre-merge reader rejects user_version above 128")
 			} else {
 				assert.NoError(t, reopened.RequireSourceSync(ctx))
@@ -64,7 +64,7 @@ func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
 	require.NoError(t, err)
 	defer reopened.Close()
 	assert.False(t, reopened.NeedsResync())
-	assert.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
+	require.ErrorIs(t, reopened.RequireSourceSync(ctx), ErrArchiveOnly)
 	var raw int
 	require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
 	assert.Equal(t, 1048704, raw)

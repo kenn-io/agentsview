@@ -2126,7 +2126,8 @@ func needsSchemaRepair(ctx context.Context, conn *sql.DB) (bool, error) {
 
 func readUserVersion(ctx context.Context, conn interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
-}) (int, error) {
+},
+) (int, error) {
 	var version int
 	err := conn.QueryRowContext(ctx,
 		"PRAGMA user_version",

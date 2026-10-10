@@ -104,8 +104,8 @@ func TestExtractCaseCollisionsBeforeReadingContent(t *testing.T) {
 	target := filepath.Join(parent, "extracted")
 	_, err = archive.Extract(ctx, target, "")
 	require.ErrorContains(t, err, "case-folding collision")
-	assert.ErrorContains(t, err, "Session.jsonl")
-	assert.ErrorContains(t, err, "session.jsonl")
+	require.ErrorContains(t, err, "Session.jsonl")
+	require.ErrorContains(t, err, "session.jsonl")
 	assert.Zero(t, reads.copies)
 	assert.NoDirExists(t, target)
 }

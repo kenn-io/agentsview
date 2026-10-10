@@ -334,12 +334,13 @@ func TestCaptureDoesNotPublishFailure(t *testing.T) {
 			}
 			_, err := Capture(ctx, opts)
 			require.Error(t, err)
-			if condition == "case-alias-overlap" {
+			switch condition {
+			case "case-alias-overlap":
 				require.ErrorContains(t, err, "capture roots must not overlap")
 				entries, err := os.ReadDir(opts.Roots[0].Path)
 				require.NoError(t, err)
 				assert.Empty(t, entries, "rejection must precede staging and copying")
-			} else if condition == "newer-checkpoint" {
+			case "newer-checkpoint":
 				require.ErrorContains(t, err, "newer than supported")
 			}
 			if condition == "existing" {
