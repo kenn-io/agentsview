@@ -158,7 +158,11 @@ func TestChromeHostRelayRefusesLoosePermissions(t *testing.T) {
 	}
 	for _, mode := range []os.FileMode{0o750, 0o707} {
 		t.Run(mode.String(), func(t *testing.T) {
-			dir := t.TempDir()
+			// t.TempDir embeds the test and subtest names, which pushes the
+			// socket past macOS's 104-byte path limit.
+			dir, err := os.MkdirTemp("", "av")
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
 			require.NoError(t, os.Chmod(dir, mode))
 			socket := filepath.Join(dir, "host.sock")
 			listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
