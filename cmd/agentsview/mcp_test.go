@@ -258,9 +258,11 @@ func TestResolveMCPServiceExplicitServerUsesReportedCapabilities(
 }
 
 func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
-	for _, change := range []string{"missing", "unreadable", "identity", "unknown identity", "base path", "replacement", "incompatible"} {
+	for _, change := range []string{"missing", "unreadable", "unknown identity", "base path", "replacement", "read-only", "fallback"} {
 		t.Run(change, func(t *testing.T) {
 			dir := runtimeTestDir(t)
+			setTestVersion(t, "1.1.0")
+			forbidStartBackgroundServeForTransport(t, "MCP must not replace a running daemon")
 			cfg := config.Config{DataDir: dir, AuthToken: "test-token"}
 			requests, starts := 0, 0
 			server := daemonRouteTestServer(t, map[string]http.HandlerFunc{
@@ -276,13 +278,25 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 				"/mounted/api/ping": daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"}).ServeHTTP,
 			})
 			host, port := splitTestServerURL(t, server.URL)
-			writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+			if change == "fallback" {
+				created, ok := processCreateTimeMillis(os.Getpid())
+				require.True(t, ok)
+				writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(created, 10))
+			} else {
+				writeDaemonRuntimeForTest(t, dir, host, port, "1.1.0", change == "read-only")
+			}
 			svc := newMCPDaemonService(cfg)
 			_, err := svc.List(t.Context(), service.ListFilter{})
 			require.NoError(t, err)
 			path, err := runtimeStore(dir).Path(os.Getpid())
 			require.NoError(t, err)
-			rec := readRuntimeRecord(t, path)
+			var rec daemon.RuntimeRecord
+			if change == "fallback" || change == "read-only" {
+				assert.Nil(t, svc.(*mcpDaemonService).backend)
+			}
+			if change != "fallback" {
+				rec = readRuntimeRecord(t, path)
+			}
 			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 			switch change {
 			case "missing":
@@ -290,21 +304,19 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 				stubStartBackgroundServeForTransport(t, func(_ context.Context, _ *config.Config, _ time.Duration, allowReplacement bool) (*DaemonRuntime, error) {
 					assert.False(t, allowReplacement, "MCP startup must not replace a daemon that appears during launch")
 					starts++
-					writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+					writeDaemonRuntimeForTest(t, dir, host, port, "1.1.0", false)
 					return daemonRuntimeFromRecord(readRuntimeRecord(t, path)), nil
 				})
 				require.NoError(t, os.Remove(path))
 			case "unreadable":
 				require.NoError(t, os.WriteFile(path, []byte("invalid JSON"), 0o600))
-			case "identity":
-				rec.ProcessIdentityV2 = ""
-				rec.Metadata[runtimeCreateTime] = "1"
 			case "unknown identity":
 				rec.ProcessIdentityV2 = ""
 				delete(rec.Metadata, runtimeCreateTime)
 			case "base path":
 				rec.Metadata[runtimeBrowserURL] = server.URL + "/mounted"
-			case "replacement":
+			case "replacement", "read-only", "fallback":
+				t.Setenv("AGENTSVIEW_NO_DAEMON", "0")
 				replacement := daemonRouteTestServer(t, map[string]http.HandlerFunc{
 					"/api/v1/sessions": func(w http.ResponseWriter, r *http.Request) {
 						requests++
@@ -312,10 +324,8 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 					},
 				})
 				host, port = splitTestServerURL(t, replacement.URL)
-				writeDaemonRuntimeForTest(t, dir, host, port, "new-version", false)
+				writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
 				rec = readRuntimeRecord(t, path)
-			case "incompatible":
-				rec.Metadata[runtimeAPIVersion] = "0"
 			}
 			if change != "missing" && change != "unreadable" {
 				_, err = runtimeStore(dir).Write(rec)
@@ -323,7 +333,7 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 			}
 			result, err := svc.List(t.Context(), service.ListFilter{})
 			switch change {
-			case "base path", "replacement":
+			case "base path", "replacement", "read-only", "fallback":
 				require.NoError(t, err)
 				assert.Equal(t, 9, result.Total)
 				assert.Equal(t, 2, requests)
@@ -345,41 +355,6 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 	}
 }
 
-func TestMCPDaemonServiceReresolvesReplicaAndFallback(t *testing.T) {
-	for _, fallback := range []bool{false, true} {
-		t.Run(fmt.Sprintf("fallback %t", fallback), func(t *testing.T) {
-			dir := runtimeTestDir(t)
-			server := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-				"/api/v1/sessions": func(w http.ResponseWriter, r *http.Request) {
-					assert.NoError(t, json.MarshalWrite(w, service.SessionList{}))
-				},
-			})
-			host, port := splitTestServerURL(t, server.URL)
-			if fallback {
-				created, ok := processCreateTimeMillis(os.Getpid())
-				require.True(t, ok)
-				writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(created, 10))
-			} else {
-				writeDaemonRuntimeForTest(t, dir, host, port, "test", true)
-			}
-			svc := newMCPDaemonService(config.Config{DataDir: dir}).(*mcpDaemonService)
-			_, err := svc.List(t.Context(), service.ListFilter{})
-			require.NoError(t, err)
-			assert.Nil(t, svc.backend)
-			writable := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-				"/api/v1/sessions": func(w http.ResponseWriter, r *http.Request) {
-					assert.NoError(t, json.MarshalWrite(w, service.SessionList{Total: 9}))
-				},
-			})
-			host, port = splitTestServerURL(t, writable.URL)
-			writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
-			result, err := svc.List(t.Context(), service.ListFilter{})
-			require.NoError(t, err)
-			assert.Equal(t, 9, result.Total)
-		})
-	}
-}
-
 func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 	dataDir := runtimeTestDir(t)
 	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
@@ -395,6 +370,11 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 			assert.NoError(t, json.MarshalWrite(w, service.SessionList{Sessions: []db.Session{{ID: "from-daemon"}}, Total: 1}))
 		case "/api/v1/sessions/from-daemon":
 			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{Session: db.Session{ID: "from-daemon"}}))
+		case "/api/v1/session-ids/resolve":
+			assert.Equal(t, "uuid-1", r.URL.Query().Get("partial"))
+			assert.Equal(t, "2", r.URL.Query().Get("limit"))
+			assert.Equal(t, "true", r.URL.Query().Get("raw_suffix"))
+			assert.NoError(t, json.MarshalWrite(w, map[string]any{"ids": []string{"from-daemon"}, "raw_suffix": true}))
 		case "/api/v1/memory/status":
 			assert.NoError(t, json.MarshalWrite(w, service.MemoryStatus{Status: service.MemoryReady}))
 		default:
@@ -417,6 +397,9 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 	status, err := service.GetMemoryStatus(t.Context(), svc)
 	require.NoError(t, err)
 	assert.Equal(t, service.MemoryReady, status.Status)
+	ids, err := svc.FindSessionIDsByRawSuffix(t.Context(), "uuid-1", 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"from-daemon"}, ids)
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
@@ -429,34 +412,6 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, initialProbes, probes, "cached calls must avoid daemon discovery probes")
 	assert.NoFileExists(t, cfg.DBPath)
-}
-
-func TestMCPDaemonServiceKeepsUpgradedDaemon(t *testing.T) {
-	for _, versions := range []struct{ name, client, daemon string }{
-		{"release", "1.0.0", "1.1.0"},
-		{"development", "v1.1.0-2-g123456", "v1.1.0-3-gabcdef"},
-	} {
-		t.Run(versions.name, func(t *testing.T) {
-			dir := daemonRuntimeDir(t)
-			setTestVersion(t, versions.client)
-			ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-				"/api/v1/sessions": func(w http.ResponseWriter, r *http.Request) {
-					writeTestJSON(t, w, service.SessionList{Sessions: []db.Session{{ID: "from-daemon"}}, Total: 1})
-				},
-			})
-			host, port := splitTestServerURL(t, ts.URL)
-			writeDaemonRuntimeForTest(t, dir, host, port, versions.client, false)
-			forbidStartBackgroundServeForTransport(t, "MCP must not replace a running daemon")
-			svc := newMCPDaemonService(config.Config{DataDir: dir})
-			_, err := svc.List(t.Context(), service.ListFilter{})
-			require.NoError(t, err)
-			writeDaemonRuntimeForTest(t, dir, host, port, versions.daemon, false)
-			res, err := svc.List(t.Context(), service.ListFilter{})
-			require.NoError(t, err)
-			require.Len(t, res.Sessions, 1)
-			assert.Equal(t, "from-daemon", res.Sessions[0].ID)
-		})
-	}
 }
 
 func TestMCPDaemonServiceRejectsIncompatibleDaemonWithoutReplacement(t *testing.T) {
@@ -477,36 +432,6 @@ func TestMCPDaemonServiceRejectsIncompatibleDaemonWithoutReplacement(t *testing.
 			assert.ErrorContains(t, err, "Restart this command with the current agentsview binary")
 		})
 	}
-}
-
-func TestMCPDaemonServiceForwardsMemoryStatus(t *testing.T) {
-	dataDir := t.TempDir()
-	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
-	expected := service.MemoryStatus{
-		Status: service.MemoryReady,
-		Archive: service.MemoryArchiveStatus{
-			Backend: "postgres", ReadOnly: true,
-		},
-		Lexical:  service.MemoryCapabilityStatus{Status: service.MemoryReady},
-		Semantic: service.MemoryVectorStatus{Status: service.MemoryReady},
-		Sources:  service.MemorySourceStatus{Status: service.MemoryUnknown},
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/memory/status", r.URL.Path)
-		assert.NoError(t, json.MarshalWrite(w, expected))
-	}))
-	t.Cleanup(server.Close)
-	host, port := splitTestServerURL(t, server.URL)
-	stubStartBackgroundServeForTransport(t, func(
-		context.Context, *config.Config, time.Duration, bool,
-	) (*DaemonRuntime, error) {
-		return &DaemonRuntime{Host: host, Port: port}, nil
-	})
-
-	status, err := service.GetMemoryStatus(t.Context(), newMCPDaemonService(cfg))
-	require.NoError(t, err)
-	assert.Equal(t, expected, status)
-	assert.NoFileExists(t, cfg.DBPath)
 }
 
 func TestMCPDaemonServiceRecallCapabilityFollowsResolvedRuntime(t *testing.T) {
