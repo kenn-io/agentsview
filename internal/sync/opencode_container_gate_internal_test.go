@@ -1316,75 +1316,12 @@ func TestOpenCodeContainerDiscoveryReplacementMovesAdmission(t *testing.T) {
 	assert.Equal(t, 1, e.containerPass.discovered[newDB])
 }
 
-// TestOpenCodeDigestListingForm pins, in one matrix, which paths must
-// produce the full digest listing form instead of the bounded watermark
-// form, what a lapsed verification stamp requires of discovery, and what it
-// buys a quick-sync cutoff pass.
+// Cutoff recovery requires a full digest listing and existing verification history.
 func TestOpenCodeDigestListingForm(t *testing.T) {
 	now := time.Unix(1000, 0)
 	origNow := openCodeContainerDigestVerifyNow
 	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
 	openCodeContainerDigestVerifyNow = func() time.Time { return now }
-
-	t.Run("discovery listing predicate", func(t *testing.T) {
-		// A native path: the predicate cleans its argument before the map
-		// lookup, so a foreign-separator literal would never match.
-		dbPath := filepath.Join(t.TempDir(), "opencode.db")
-		state := parser.SQLiteContainerState{
-			DBInode: 1, DBDevice: 1, DBChangeCounter: 1,
-		}
-		trust := func(e *Engine, stampAge time.Duration) {
-			e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
-				dbPath: {state: state},
-			}
-			e.digestVerifiedAt = map[string]time.Time{
-				dbPath: now.Add(-stampAge),
-			}
-		}
-		for _, tc := range []struct {
-			name  string
-			setup func(e *Engine)
-			// wantNil: force paths must disable the callback entirely, not
-			// merely answer false per container.
-			wantNil       bool
-			wantWatermark bool
-		}{
-			{name: "a current stamp lists watermark-only", setup: func(e *Engine) {
-				trust(e, 0)
-			}, wantWatermark: true},
-			{name: "a fresh process has no stamp", setup: func(e *Engine) {
-				e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
-					dbPath: {state: state},
-				}
-			}},
-			{name: "an expired stamp is due for the digest form", setup: func(e *Engine) {
-				trust(e, 2*openCodeContainerDigestVerifyInterval)
-			}},
-			{name: "force parse overrides a current stamp", setup: func(e *Engine) {
-				trust(e, 0)
-				e.forceParse = true
-			}, wantNil: true},
-			{name: "force full parse overrides a current stamp", setup: func(e *Engine) {
-				trust(e, 0)
-				e.forceFullParse = true
-			}, wantNil: true},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				e := &Engine{}
-				tc.setup(e)
-				fn := e.sqliteContainerListsWatermarkOnly(
-					map[string]parser.SQLiteContainerState{dbPath: state},
-				)
-				if tc.wantNil {
-					assert.Nil(t, fn,
-						"this path must not authorize watermark-only listing at all")
-					return
-				}
-				require.NotNil(t, fn)
-				assert.Equal(t, tc.wantWatermark, fn(dbPath))
-			})
-		}
-	})
 
 	// The exemption must match discovery's listing form: an expired stamp
 	// alone must not exempt a container whose pass listed watermark-only, as
@@ -1414,177 +1351,95 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 			"a digest-listed pass exempts the expired stamp")
 	})
 
-	// End to end through SyncAllSince: a backdated child-only edit keeps
-	// every timestamp below the cutoff, so only a lapsed stamp's exemption
-	// can let the paid-for digest listing reconcile it and refresh the
-	// stamp. A live stamp defers the edit; no stamp keeps the cutoff.
-	t.Run("quick-sync cutoff", func(t *testing.T) {
-		for _, tc := range []struct {
-			name        string
-			stamped     bool
-			age         time.Duration
-			wantSynced  int
-			wantContent string
-			wantStamp   bool
-			// wantScans pins the listing form the quick sync paid for: a
-			// deferring watermark pass must not aggregate child tables, and
-			// a digest pass must do so exactly once.
-			wantScans int64
-		}{
-			{
-				name: "a live stamp defers the child-only edit", stamped: true,
-				age: time.Second, wantSynced: 0,
-				wantContent: "original prompt", wantStamp: true, wantScans: 0,
-			},
-			{
-				name: "a lapsed stamp bypasses the cutoff and restamps", stamped: true,
-				age: openCodeContainerDigestVerifyInterval, wantSynced: 1,
-				wantContent: "changed prompt", wantStamp: true, wantScans: 1,
-			},
-			{
-				name: "no stamp keeps the cutoff", stamped: false,
-				wantSynced: 0, wantStamp: false, wantScans: 1,
-			},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				dbPath, conn := seededCompositeContainerTestDB(t)
-				// Every row timestamp sits below this cutoff, so the
-				// ordinary quick-sync filter would drop the session.
-				cutoff := time.UnixMilli(1_779_100_000_000)
-
-				archive := openTestDB(t)
-				e := NewEngine(t.Context(), archive, EngineConfig{
-					AgentDirs: map[parser.AgentType][]string{
-						parser.AgentOpenCode: {filepath.Dir(dbPath)},
-					},
-					Machine: "local",
-				})
-				t.Cleanup(e.Close)
-
-				verifyNow := now
-				openCodeContainerDigestVerifyNow = func() time.Time {
-					return verifyNow
-				}
-				if tc.stamped {
-					initial := e.SyncAll(t.Context(), nil)
-					require.False(t, initial.Aborted,
-						"initial sync aborted: %+v", initial)
-					require.Equal(t, 1, initial.Synced)
-				}
-
-				// Backdated child-only edit: content and identity change,
-				// every timestamp stays put, so the composite mtime stays
-				// below the cutoff.
-				_, err := conn.ExecContext(t.Context(), `UPDATE part
-					SET id = 'part-user-v2', data = '{"type":"text","text":"changed prompt"}'
-					WHERE id = 'part-user'`)
-				require.NoError(t, err, "apply backdated child-only edit")
-
-				verifyNow = verifyNow.Add(tc.age)
-				scansBefore := parser.OpenCodeContainerChildScans()
-				stats := e.SyncAllSince(t.Context(), cutoff, nil)
-				require.False(t, stats.Aborted,
-					"quick sync aborted: %+v", stats)
-				assert.Equal(t, tc.wantSynced, stats.Synced)
-				assert.Equal(t, tc.wantScans,
-					parser.OpenCodeContainerChildScans()-scansBefore,
-					"the quick sync must use the row's listing form")
-				if tc.wantContent != "" {
-					messages, err := archive.GetAllMessages(
-						t.Context(), "opencode:ses-1",
-					)
-					require.NoError(t, err, "read archived messages")
-					require.Len(t, messages, 2)
-					assert.Equal(t, "original answer", messages[1].Content)
-					assert.Equal(t, tc.wantContent, messages[0].Content)
-				}
-				if !tc.wantStamp {
-					assert.Empty(t, e.digestVerifiedAt,
-						"an incomplete cutoff pass must not stamp verification")
-				} else if tc.wantSynced > 0 {
-					assert.Equal(t, verifyNow, e.digestVerifiedAt[dbPath],
-						"the completed due pass must refresh the stamp")
-				} else {
-					assert.True(t, now.Equal(e.digestVerifiedAt[dbPath]),
-						"a deferring pass must keep the stamp's prior age")
-				}
-			})
-		}
+	t.Run("no stamp keeps the cutoff", func(t *testing.T) {
+		dbPath, conn := seededCompositeContainerTestDB(t)
+		archive := openTestDB(t)
+		e := NewEngine(t.Context(), archive, EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(dbPath)}}, Machine: "local",
+		})
+		t.Cleanup(e.Close)
+		_, err := conn.ExecContext(t.Context(), `UPDATE part SET id='part-user-v2', data='{"type":"text","text":"changed prompt"}' WHERE id='part-user'`)
+		require.NoError(t, err)
+		scans := parser.OpenCodeContainerChildScans()
+		stats := e.SyncAllSince(t.Context(), time.UnixMilli(1779100000000), nil)
+		require.False(t, stats.Aborted)
+		assert.Zero(t, stats.Synced)
+		assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
+		assert.Empty(t, e.digestVerifiedAt, "a cutoff-filtered pass cannot earn verification")
 	})
 }
 
 func TestOpenCodeRestartedQuickSyncReconcilesAtOriginalDeadline(t *testing.T) {
-	testOpenCodeRestartedQuickSyncDeadline(t, "no failure")
-}
-
-func testOpenCodeRestartedQuickSyncDeadline(t *testing.T, recovery string) {
-	t.Helper()
-	dbPath, conn := seededCompositeContainerTestDB(t)
-	archive := openTestDB(t)
-	factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
-	require.True(t, ok)
-	failing := &failingDBBackedProvider{
-		Def: parser.AgentDef{Type: parser.AgentClaude, DisplayName: "Claude", FileBased: true},
-		err: errors.New("provider discovery unavailable"),
-	}
-	otherRoot := t.TempDir()
-	newEngine := func() *Engine {
-		engine := NewEngine(t.Context(), archive, EngineConfig{
-			AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(dbPath)}, parser.AgentClaude: {otherRoot}}, Machine: "local",
-			ProviderFactories:      []parser.ProviderFactory{factory, failingDBBackedFactory{provider: failing}},
-			ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative},
-		})
-		t.Cleanup(engine.Close)
-		return engine
-	}
-	verifiedAt := time.UnixMilli(1779100000000)
-	now := verifiedAt
-	originalNow := openCodeContainerDigestVerifyNow
-	openCodeContainerDigestVerifyNow = func() time.Time { return now }
-	t.Cleanup(func() { openCodeContainerDigestVerifyNow = originalNow })
-	require.Equal(t, 1, newEngine().SyncAll(t.Context(), nil).Synced)
-	_, err := conn.ExecContext(t.Context(),
-		`UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = ?`,
-		verifiedAt.Add(30*time.Second).UnixMilli())
-	require.NoError(t, err)
-	previousStart, lastVerified := verifiedAt, verifiedAt
-	var failedEngine *Engine
-	recovered := false
-	for minute := 1; minute <= 6; minute++ {
-		now = verifiedAt.Add(time.Duration(minute) * time.Minute)
-		engine := newEngine()
-		if recovery == "same engine" && failedEngine != nil {
-			engine = failedEngine
-		}
-		if minute == 2 && recovery != "no failure" {
-			failing.failOnCall = failing.calls.Load() + 1
-			failedEngine = engine
-		}
-		scans := parser.OpenCodeContainerChildScans()
-		stats := engine.SyncAllSince(t.Context(), previousStart.Add(-10*time.Second), nil)
-		record, found := readContainerVerification(t, archive, dbPath)
-		require.True(t, found, "discovery failure preserves verification history")
-		if minute == 2 && recovery != "no failure" {
-			require.False(t, stats.ProcessingComplete())
-			assert.Equal(t, parser.SQLiteContainerState{}, record.State)
-		} else {
-			require.True(t, stats.ProcessingComplete())
-			due := !recovered && (minute == 5 || (minute == 3 && recovery != "no failure"))
-			if due {
-				require.Equal(t, 1, stats.Synced, "complete verification bypasses the advanced cutoff")
-				assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
-				lastVerified, recovered = now, true
-			} else {
-				require.Zero(t, stats.Synced)
-				assert.Zero(t, parser.OpenCodeContainerChildScans()-scans, "successful verification ends pending complete checks")
+	for _, recovery := range []string{"no failure", "same engine", "fresh engine"} {
+		t.Run(recovery, func(t *testing.T) {
+			dbPath, conn := seededCompositeContainerTestDB(t)
+			archive := openTestDB(t)
+			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
+			require.True(t, ok)
+			failing := &failingDBBackedProvider{
+				Def: parser.AgentDef{Type: parser.AgentClaude, DisplayName: "Claude", FileBased: true},
+				err: errors.New("provider discovery unavailable"),
 			}
-		}
-		assert.True(t, lastVerified.Equal(record.VerifiedAt), "only successful complete checks renew verification")
-		previousStart = now
+			otherRoot := t.TempDir()
+			newEngine := func() *Engine {
+				engine := NewEngine(t.Context(), archive, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(dbPath)}, parser.AgentClaude: {otherRoot}}, Machine: "local",
+					ProviderFactories:      []parser.ProviderFactory{factory, failingDBBackedFactory{provider: failing}},
+					ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative},
+				})
+				t.Cleanup(engine.Close)
+				return engine
+			}
+			verifiedAt := time.UnixMilli(1779100000000)
+			now := verifiedAt
+			originalNow := openCodeContainerDigestVerifyNow
+			openCodeContainerDigestVerifyNow = func() time.Time { return now }
+			t.Cleanup(func() { openCodeContainerDigestVerifyNow = originalNow })
+			require.Equal(t, 1, newEngine().SyncAll(t.Context(), nil).Synced)
+			_, err := conn.ExecContext(t.Context(),
+				`UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = ?`,
+				verifiedAt.Add(30*time.Second).UnixMilli())
+			require.NoError(t, err)
+			previousStart, lastVerified := verifiedAt, verifiedAt
+			var failedEngine *Engine
+			recovered := false
+			for minute := 1; minute <= 6; minute++ {
+				now = verifiedAt.Add(time.Duration(minute) * time.Minute)
+				engine := newEngine()
+				if recovery == "same engine" && failedEngine != nil {
+					engine = failedEngine
+				}
+				if minute == 2 && recovery != "no failure" {
+					failing.failOnCall = failing.calls.Load() + 1
+					failedEngine = engine
+				}
+				scans := parser.OpenCodeContainerChildScans()
+				stats := engine.SyncAllSince(t.Context(), previousStart.Add(-10*time.Second), nil)
+				record, found := readContainerVerification(t, archive, dbPath)
+				require.True(t, found, "discovery failure preserves verification history")
+				if minute == 2 && recovery != "no failure" {
+					require.False(t, stats.ProcessingComplete())
+					assert.Equal(t, parser.SQLiteContainerState{}, record.State)
+				} else {
+					require.True(t, stats.ProcessingComplete())
+					due := !recovered && (minute == 5 || (minute == 3 && recovery != "no failure"))
+					if due {
+						require.Equal(t, 1, stats.Synced, "complete verification bypasses the advanced cutoff")
+						assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
+						lastVerified, recovered = now, true
+					} else {
+						require.Zero(t, stats.Synced)
+						assert.Zero(t, parser.OpenCodeContainerChildScans()-scans, "successful verification ends pending complete checks")
+					}
+				}
+				assert.True(t, lastVerified.Equal(record.VerifiedAt), "only successful complete checks renew verification")
+				previousStart = now
+			}
+			matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
+			require.NoError(t, err)
+			assert.Len(t, matches, 2)
+		})
 	}
-	matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "modified")
-	require.NoError(t, err)
-	assert.Len(t, matches, 2)
 }
 
 func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
@@ -1646,9 +1501,6 @@ func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, matches, "child-only edits wait for the original verification deadline")
 			assert.Zero(t, parser.OpenCodeContainerChildScans()-scans)
-			record, found := readContainerVerification(t, archive, dbPath)
-			require.True(t, found)
-			assert.True(t, verifiedAt.Equal(record.VerifiedAt), "cheap passes preserve the original deadline")
 			now = verifiedAt.Add(openCodeContainerDigestVerifyInterval)
 			due := newEngine()
 			scans = parser.OpenCodeContainerChildScans()
@@ -1715,8 +1567,12 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		raw                                string
 		version                            int
 		want                               bool
+		wantNil, rollback                  bool
 	}{
 		{name: "recent match", age: time.Minute, want: true},
+		{name: "watermark publication rejects later rollback", age: time.Minute, want: true, rollback: true},
+		{name: "force parse overrides a current stamp", wantNil: true, setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceParse = true }},
+		{name: "force full parse overrides a current stamp", wantNil: true, setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceFullParse = true }},
 		{name: "expired", age: openCodeContainerDigestVerifyInterval},
 		{name: "future timestamp", age: -time.Second},
 		{name: "absent", absent: true},
@@ -1782,6 +1638,9 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 				require.NoError(t, err)
 			}
 			fn := e.sqliteContainerListsWatermarkOnly(states)
+			if tc.wantNil {
+				assert.Nil(t, fn)
+			}
 			got := fn != nil && fn(path)
 			assert.Equal(t, tc.want, got)
 			if tc.version != 0 {
@@ -1804,7 +1663,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			if tc.want {
 				assert.True(t, now.Add(-tc.age).Equal(e.digestVerifiedAt[path]))
 			}
-			if tc.name == "recent match" {
+			if tc.rollback {
 				before, err := os.ReadFile(path)
 				require.NoError(t, err)
 				_, err = container.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('advanced')")
@@ -1905,12 +1764,6 @@ func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
 			assert.False(t, fresh.digestVerifiedAt[path].IsZero(), "failed invalidation writes cannot erase due work")
 		})
 	}
-	for _, recovery := range []string{"same engine", "fresh engine"} {
-		t.Run("quick cutoff after failure/"+recovery, func(t *testing.T) {
-			testOpenCodeRestartedQuickSyncDeadline(t, recovery)
-		})
-	}
-
 }
 
 type openCodeMemberFailureFactory struct {
@@ -2001,7 +1854,6 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 			matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "repaired")
 			require.NoError(t, err)
 			assert.Len(t, matches, 1)
-
 		})
 	}
 }

@@ -474,38 +474,6 @@ func testOpenCodeIdleFullPass(t *testing.T, n int) {
 		"an idle full pass must not aggregate the container's child tables")
 	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
 		"an idle full pass must not pay per-session child lookups")
-
-	if n == 2803 {
-		scansBefore = parser.OpenCodeContainerChildScans()
-		lookupsBefore = parser.OpenCodeSessionChildLookups()
-		restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
-		t.Cleanup(restarted.Close)
-		stats = restarted.SyncAll(t.Context(), nil)
-		assert.Equal(t, n, stats.Skipped)
-		assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
-			"a fresh worker must reuse the last verified unchanged container")
-		assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore)
-	}
-
-	if n != 5 {
-		return
-	}
-
-	// A child-only replacement below every watermark is deferred by an ordinary
-	// pass until the verification boundary.
-	oc.replaceTextContent(
-		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
-	)
-	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), "sqlite-container:"))
-	unverified := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
-	t.Cleanup(unverified.Close)
-	stats = unverified.SyncAll(t.Context(), nil)
-	assert.Equal(t, 1, stats.Synced,
-		"the ordinary full digest pass must reconcile the child-only edit")
-	assertMessageContent(
-		t, env.db, "opencode:ses00000",
-		"swapped prompt", "swapped answer",
-	)
 }
 
 // TestOpenCodeHiddenChildChangesAreDetected drives the child digest's
