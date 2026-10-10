@@ -369,7 +369,7 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 			assert.Equal(t, "7", r.URL.Query().Get("limit"))
 			assert.NoError(t, json.MarshalWrite(w, service.SessionList{Sessions: []db.Session{{ID: "from-daemon"}}, Total: 1}))
 		case "/api/v1/sessions/from-daemon":
-			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{Session: db.Session{ID: "from-daemon"}}))
+			assert.NoError(t, json.MarshalWrite(w, service.SessionDetail{ID: "from-daemon"}))
 		case "/api/v1/session-ids/resolve":
 			assert.Equal(t, "uuid-1", r.URL.Query().Get("partial"))
 			assert.Equal(t, "2", r.URL.Query().Get("limit"))
@@ -378,7 +378,7 @@ func TestMCPDaemonServiceReusesDaemonForEachOperation(t *testing.T) {
 		case "/api/v1/memory/status":
 			assert.NoError(t, json.MarshalWrite(w, service.MemoryStatus{Status: service.MemoryReady}))
 		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
 			http.NotFound(w, r)
 		}
 	}))
