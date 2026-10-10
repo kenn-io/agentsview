@@ -17,6 +17,3 @@ func SetParseAdmissionObserver(e *Engine, fn func(yielded, retained int)) {
 func SetChangedPathListedHook(e *Engine, fn func(path string)) {
 	e.changedPathListedHook = fn
 }
-
-// WriteContainerVerification seeds versioned container state in external tests.
-var WriteContainerVerification = writeContainerVerification

@@ -773,6 +773,10 @@ func (e *Engine) sqliteContainerSourceFresh(ctx context.Context, file parser.Dis
 		e.containerMu.Unlock()
 		return false
 	}
+	if verifiedAt, timed := e.digestVerifiedAt[dbPath]; timed && !openCodeContainerDigestVerificationCurrent(verifiedAt, openCodeContainerDigestVerifyNow()) {
+		e.containerMu.Unlock()
+		return false
+	}
 	trusted, ok := e.trustedSQLiteContainers[dbPath]
 	e.containerMu.Unlock()
 	if !ok || current != trusted.state {

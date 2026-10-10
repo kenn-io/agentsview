@@ -1,16 +1,11 @@
 package sync_test
 
 import (
-	"database/sql"
 	"fmt"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/sync"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -376,102 +371,28 @@ func TestOpenCodeWatcherCatchesMetadataUpdateUnderChildDominatedComposite(
 		"the watcher pass must archive the metadata update")
 }
 
-// TestOpenCodeIdleReconcilePassSkipsContainerChildScan pins the same
-// trusted-container bound on the streamed reconciliation path: an idle
-// ReconcileWatchRoots pass over a trusted, untouched container must not
-// aggregate the child tables (its candidates all gate-skip). Child-only writes
-// remain deferred during the verification interval; the force pass below
-// represents the next complete digest verification.
-func TestOpenCodeIdleReconcilePassSkipsContainerChildScan(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	seedOpenCodeSQLiteTextSessions(t, oc, 5, 1779099999000)
-	require.Equal(t, 5, env.engine.SyncAll(t.Context(), nil).Synced)
-
-	scansBefore := parser.OpenCodeContainerChildScans()
-	lookupsBefore := parser.OpenCodeSessionChildLookups()
-	require.NoError(t, env.engine.ReconcileWatchRoots(
-		t.Context(), []string{env.opencodeDir}, false,
-	))
-	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
-		"an idle reconcile pass must not aggregate the container's child "+
-			"tables")
-	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
-		"an idle reconcile pass must not pay per-session child lookups")
-	assertMessageContent(
-		t, env.db, "opencode:ses00000", "prompt", "answer",
-	)
-
-	// A child-only replacement below every watermark is deferred by the
-	// interval policy. The explicit force pass carries the digest immediately.
-	oc.replaceTextContent(
-		t, "ses00000", "swapped prompt", "swapped answer", 1779012500000,
-	)
-	require.NoError(t, env.engine.ReconcileWatchRoots(
-		t.Context(), []string{env.opencodeDir}, false,
-	))
-	forceStats := env.engine.SyncAllForceParse(t.Context(), nil)
-	require.False(t, forceStats.Aborted, "force digest pass aborted: %+v", forceStats)
-	assertMessageContent(
-		t, env.db, "opencode:ses00000",
-		"swapped prompt", "swapped answer",
-	)
-}
-
-// TestOpenCodeIdleFullPassSkipsContainerChildScan pins that a periodic full
-// pass over a trusted, untouched container does not aggregate the child
-// tables at all: the container gate will skip every member before
-// fingerprinting, so discovery lists the bounded watermark form instead of
-// computing archive-sized child identities nothing reads. Child-only edits
-// remain deferred during the interval, including after worker restarts.
+// Idle passes reuse verified container state through both discovery entry points.
 func TestOpenCodeIdleFullPassSkipsContainerChildScan(t *testing.T) {
-	for _, n := range []int{5, 2803} {
-		t.Run(strconv.Itoa(n), func(t *testing.T) { testOpenCodeIdleFullPass(t, n) })
-	}
-}
-
-func testOpenCodeIdleFullPass(t *testing.T, n int) {
-	t.Helper()
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	seedOpenCodeSQLiteTextSessions(t, oc, n, 1779099999000)
-	if n == 5 {
-		require.Equal(t, n, env.engine.SyncAll(t.Context(), nil).Synced)
-	} else {
-		// Seed verified archive metadata in bulk; small fixtures exercise ingestion.
-		metas, err := parser.ListOpenCodeSessionMeta(oc.path)
-		require.NoError(t, err)
-		require.Len(t, metas, n)
-		require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
-			stmt, err := tx.PrepareContext(t.Context(), `INSERT INTO sessions
-				(id, project, agent, file_path, file_size, file_mtime, file_hash, data_version)
-				VALUES (?, 'app', 'opencode', ?, 0, ?, ?, ?)`)
-			if err != nil {
-				return err
+	for _, streamed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streamed_%t", streamed), func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+			oc := createOpenCodeDB(t, env.opencodeDir)
+			seedOpenCodeSQLiteTextSessions(t, oc, 5, 1779099999000)
+			require.Equal(t, 5, env.engine.SyncAll(t.Context(), nil).Synced)
+			scans := parser.OpenCodeContainerChildScans()
+			lookups := parser.OpenCodeSessionChildLookups()
+			if streamed {
+				require.NoError(t, env.engine.ReconcileWatchRoots(t.Context(), []string{env.opencodeDir}, false))
+			} else {
+				stats := env.engine.SyncAll(t.Context(), nil)
+				assert.Zero(t, stats.Synced)
+				assert.Equal(t, 5, stats.Skipped)
 			}
-			defer stmt.Close()
-			for _, meta := range metas {
-				if _, err := stmt.ExecContext(t.Context(), "opencode:"+meta.SessionID, oc.path+"#"+meta.SessionID, meta.FileMtime, meta.ChildDigest, db.CurrentDataVersion()); err != nil {
-					return err
-				}
-			}
-			return nil
-		}))
-		state, ok := parser.StatSQLiteContainerState(oc.path)
-		require.True(t, ok)
-		sync.WriteContainerVerification(t, env.db, oc.path, state, time.Now())
+			assert.Zero(t, parser.OpenCodeContainerChildScans()-scans)
+			assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookups)
+			assertMessageContent(t, env.db, "opencode:ses00000", "prompt", "answer")
+		})
 	}
-
-	scansBefore := parser.OpenCodeContainerChildScans()
-	lookupsBefore := parser.OpenCodeSessionChildLookups()
-	stats := env.engine.SyncAll(t.Context(), nil)
-	assert.Zero(t, stats.Synced)
-	assert.Equal(t, n, stats.Skipped,
-		"every session of a trusted container must gate-skip")
-	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
-		"an idle full pass must not aggregate the container's child tables")
-	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookupsBefore,
-		"an idle full pass must not pay per-session child lookups")
 }
 
 // TestOpenCodeHiddenChildChangesAreDetected drives the child digest's

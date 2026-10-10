@@ -1032,9 +1032,11 @@ func TestSyncEngineOpenCodeSQLiteCutoffPassMustNotTrustContainer(
 	)
 
 	future := time.Now().Add(24 * time.Hour)
+	scans := parser.OpenCodeContainerChildScans()
 	stats := env.engine.SyncAllSince(t.Context(), future, nil)
 	require.False(t, stats.Aborted, "cutoff sync aborted: %+v", stats)
 	assert.Equal(t, 0, stats.Synced, "future cutoff filters every source")
+	assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
 
 	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "full sync aborted: %+v", stats)
