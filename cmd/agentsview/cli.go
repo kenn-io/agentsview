@@ -438,7 +438,10 @@ func newPruneCommandWithRunner(run func(context.Context, PruneConfig)) *cobra.Co
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("agent") && agent == "" {
+				return fmt.Errorf("--agent must not be empty")
+			}
 			var mm *int
 			if maxMessages != -1 {
 				mm = &maxMessages
@@ -454,6 +457,7 @@ func newPruneCommandWithRunner(run func(context.Context, PruneConfig)) *cobra.Co
 				DryRun: dryRun,
 				Yes:    yes,
 			})
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&agent, "agent", "", "Exact agent name; includes matching trash and parents unless needed by surviving descendants")

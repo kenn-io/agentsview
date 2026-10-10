@@ -86,6 +86,26 @@ func TestPruneCommandAgentFilter(t *testing.T) {
 	}
 }
 
+func TestPruneCommandRejectsEmptyAgent(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{"agent only", []string{"--agent="}},
+		{"with project", []string{"--agent=", "--project", "project-a"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			cmd := newPruneCommandWithRunner(func(context.Context, PruneConfig) {
+				called = true
+			})
+			_, err := executeCommand(cmd, tt.args...)
+			assert.EqualError(t, err, "--agent must not be empty")
+			assert.False(t, called, "runner must not be called")
+		})
+	}
+}
+
 func TestRootHelpShowsDuckDBEnvironment(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "--help")
 	require.NoError(t, err, "Execute")

@@ -664,20 +664,21 @@ ______________________________________________________________________
 ### `agentsview prune`
 
 Delete sessions matching one or more filters. At least one filter is required.
+Prune deletes source transcript files, and `--agent` includes matching trash.
 
 ```bash
 agentsview prune [flags]
 ```
 
-| Flag              | Default | Description                                        |
-| ----------------- | ------- | -------------------------------------------------- |
+| Flag              | Default | Description                                         |
+| ----------------- | ------- | --------------------------------------------------- |
 | `--agent`         |         | Exact agent name, including matching trash          |
-| `--project`       |         | Sessions whose project contains this substring     |
+| `--project`       |         | Sessions whose project contains this substring      |
 | `--max-messages`  | `-1`    | Sessions with at most N messages                    |
 | `--before`        |         | Sessions that ended before this date (`YYYY-MM-DD`) |
-| `--first-message` |         | Sessions whose first message starts with this text |
+| `--first-message` |         | Sessions whose first message starts with this text  |
 | `--dry-run`       | `false` | Show what would be pruned without deleting          |
-| `--yes`           | `false` | Skip confirmation prompt                           |
+| `--yes`           | `false` | Skip confirmation prompt                            |
 
 Filters combine with AND. With `--agent`, one prune removes matching parents
 and descendants, including matching trash. A descendant outside any supplied
