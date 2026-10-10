@@ -2157,7 +2157,7 @@ func (e *Engine) classifyProviderChangedPath(
 			}
 			if watermarkContainer != "" && watermarkPreStateOK &&
 				!e.forceParse && e.pathRewriter == nil {
-				request.StoredMemberFreshnessPage = e.storedMemberFreshnessPager(watermarkContainer, def.IDPrefix)
+				request.StoredMemberFreshnessPage = e.storedMemberFreshnessPager(watermarkContainer, def.IDPrefix, nil)
 			}
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
 				if resolver, ok := provider.(parser.StoredSourceHintScopeProvider); ok {
@@ -15107,21 +15107,19 @@ func (e *Engine) providerSourceUnchangedInDB(
 	}
 	project, _ := e.db.GetProjectByAgentPath(ctx, lookupPath, string(agent))
 	stored := db.VirtualContainerMemberFreshness{
-		Agent: string(agent), Project: project, MTimeNS: storedMtime, Hash: storedHash,
+		Agent: string(agent), Project: project,
 		DataVersion: e.db.GetDataVersionByAgentPath(ctx, lookupPath, string(agent)),
 	}
-	fresh := providerSourceMatchesStored(agent, fingerprint, storedSize, stored, semantics.FingerprintHashRequiredForFreshness)
+	fresh := providerSourceMetadataFresh(agent, stored)
 	if fresh {
 		e.stampProviderStatHashForConfirmedSource(ctx, preParseStatHash)
 	}
 	return fresh
 }
 
-func providerSourceMatchesStored(agent parser.AgentType, fingerprint parser.SourceFingerprint, size int64, stored db.VirtualContainerMemberFreshness, required bool) bool {
-	return (fingerprint.MTimeNS != 0 || fingerprint.Size != 0) &&
-		stored.Agent == string(agent) && stored.DataVersion >= db.CurrentDataVersion() &&
-		!parser.NeedsProjectReparse(stored.Project) &&
-		providerFingerprintMatchesStored(agent, fingerprint, size, stored.MTimeNS, stored.Hash, required)
+func providerSourceMetadataFresh(agent parser.AgentType, stored db.VirtualContainerMemberFreshness) bool {
+	return stored.Agent == string(agent) && stored.DataVersion >= db.CurrentDataVersion() &&
+		!parser.NeedsProjectReparse(stored.Project)
 }
 
 func providerFingerprintMatchesStored(agent parser.AgentType, fingerprint parser.SourceFingerprint, size, mtime int64, hash string, required bool) bool {

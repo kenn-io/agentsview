@@ -15,9 +15,9 @@ import (
 // writes while the WAL retains frames. File identity distinguishes replacements.
 // Header layouts follow https://www.sqlite.org/fileformat2.html.
 type SQLiteContainerState struct {
-	DBSize          int64
-	DBMtimeSec      int64
-	DBChangeCounter uint32
+	DBSize          int64  `json:"DBSize"`
+	DBMtimeSec      int64  `json:"DBMtimeSec"`
+	DBChangeCounter uint32 `json:"DBChangeCounter"`
 	// DBInode and DBDevice distinguish a replaced or restored container
 	// file (new inode) from in-place transaction writes, which the header
 	// markers alone cannot: a byte-identical copy carries the same size,
@@ -26,14 +26,14 @@ type SQLiteContainerState struct {
 	// lands within the trusted mtime's second is explicitly out of
 	// scope — the same exposure class every mtime-based sync tool
 	// accepts.
-	DBInode  uint64
-	DBDevice uint64
+	DBInode  uint64 `json:"DBInode"`
+	DBDevice uint64 `json:"DBDevice"`
 
-	WALSize     int64
-	WALMtimeSec int64
-	WALCkptSeq  uint32
-	WALSalt1    uint32
-	WALSalt2    uint32
+	WALSize     int64  `json:"WALSize"`
+	WALMtimeSec int64  `json:"WALMtimeSec"`
+	WALCkptSeq  uint32 `json:"WALCkptSeq"`
+	WALSalt1    uint32 `json:"WALSalt1"`
+	WALSalt2    uint32 `json:"WALSalt2"`
 }
 
 // sqliteHeaderProbeSize covers the 100-byte SQLite database header; the

@@ -18,13 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// SQLiteContainerSyncStatePrefix identifies bounded shared-container verification records.
-const SQLiteContainerSyncStatePrefix = "sqlite-container:"
-
-// OpenCode-family providers expose each shared SQLite session as a virtual source.
-// Complete digest verification authorizes timestamp-first discovery for five
-// minutes. Worker restarts restore that original deadline for the same database;
-// child-only edits reconcile at the next complete verification, even after restart.
+const sqliteContainerSyncStatePrefix = "sqlite-container:"
 
 // openCodeFamilySQLiteAgents lists the agents whose sessions live in a
 // shared OpenCode-format SQLite container.
@@ -272,16 +266,21 @@ func openCodeContainerPathForChangedPathEvent(
 // invisible to the session-row watermark wherever its timestamps land —
 // above or below the stored composite alike. Detecting it per event would
 // require reading child rows, which is exactly the archive-sized work this
-// path exists to avoid. Such writes reconcile on the next full-discovery
-// pass, whose digest still catches them (the write itself broke container
-// trust, so that pass carries the full digest); actively watched sessions
+// path exists to avoid. Such writes reconcile at the next complete digest
+// verification once the original deadline is due; actively watched sessions
 // bypass this path entirely via the per-session composite poll. The
 // contract is documented in docs/internal/session-format-sources.md and
 // pinned by TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery.
 func (e *Engine) storedMemberFreshnessPager(
 	container, idPrefix string,
+	coverage func(db.VirtualContainerMemberFreshness) (int64, bool),
 ) parser.StoredMemberFreshnessPager {
-	current := db.CurrentDataVersion()
+	if coverage == nil {
+		current := db.CurrentDataVersion()
+		coverage = func(row db.VirtualContainerMemberFreshness) (int64, bool) {
+			return storedSessionRowWatermarkNS(row), row.DataVersion >= current
+		}
+	}
 	return func(
 		ctx context.Context, afterPath string, limit int,
 	) ([]parser.StoredMemberFreshness, bool, error) {
@@ -307,15 +306,14 @@ func (e *Engine) storedMemberFreshnessPager(
 					})
 					continue
 				}
-				if row.DataVersion < current {
+				coveredThrough, eligible := coverage(row.VirtualContainerMemberFreshness)
+				if !eligible {
 					continue
 				}
 				rows = append(rows, parser.StoredMemberFreshness{
-					Path: row.Path,
-					CoveredThroughNS: storedSessionRowWatermarkNS(
-						row.VirtualContainerMemberFreshness,
-					),
-					FingerprintHash: row.Hash,
+					Path:             row.Path,
+					CoveredThroughNS: coveredThrough,
+					FingerprintHash:  row.Hash,
 				})
 			}
 			if done || len(rows) > 0 {
@@ -392,12 +390,12 @@ func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states 
 	err := e.db.Update(ctx, func(tx *sql.Tx) error {
 		for path := range states {
 			var record sqliteContainerVerification
-			var raw string
-			if err := tx.QueryRowContext(ctx, "SELECT value FROM pg_sync_state WHERE key = ?", SQLiteContainerSyncStatePrefix+path).Scan(&raw); err != nil {
-				if err == sql.ErrNoRows {
-					continue
-				}
+			raw, err := db.GetSyncStateTx(ctx, tx, sqliteContainerSyncStatePrefix+path)
+			if err != nil {
 				return err
+			}
+			if raw == "" {
+				continue
 			}
 			if err := json.Unmarshal([]byte(raw), &record); err != nil {
 				log.Printf("decoding SQLite container verification: %v", err)
@@ -414,7 +412,7 @@ func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states 
 			if err != nil {
 				return err
 			}
-			if _, err = tx.ExecContext(ctx, "UPDATE pg_sync_state SET value = ? WHERE key = ?", string(revoked), SQLiteContainerSyncStatePrefix+path); err != nil {
+			if err := db.UpdateSyncStateTx(ctx, tx, sqliteContainerSyncStatePrefix+path, string(revoked)); err != nil {
 				return err
 			}
 		}
@@ -479,13 +477,19 @@ func (e *Engine) filterQuickSyncFiles(
 	}
 	slices.SortFunc(candidates, func(a, b parser.DiscoveredFile) int { return strings.Compare(a.Path, b.Path) })
 	var container, afterPath string
-	var page []db.VirtualContainerMemberFreshnessRow
+	var agent parser.AgentType
+	var page []parser.StoredMemberFreshness
+	var pager parser.StoredMemberFreshnessPager
 	var pageIndex int
 	var done, pageFailed bool
 	for _, f := range candidates {
 		dbPath, _, _ := sqliteContainerSourceForFile(f)
-		if container != dbPath {
+		if container != dbPath || agent != f.Agent {
+			agent = f.Agent
 			container, afterPath, page, pageIndex, done, pageFailed = dbPath, "", nil, 0, false, false
+			pager = e.storedMemberFreshnessPager(dbPath, e.idPrefix+string(f.Agent)+":", func(row db.VirtualContainerMemberFreshness) (int64, bool) {
+				return row.MTimeNS, providerSourceMetadataFresh(f.Agent, row)
+			})
 		}
 		for !pageFailed && (pageIndex >= len(page) || page[pageIndex].Path < f.Path) {
 			if pageIndex < len(page) {
@@ -496,7 +500,7 @@ func (e *Engine) filterQuickSyncFiles(
 				break
 			}
 			var err error
-			page, done, err = e.db.ListVirtualContainerMemberFreshnessPage(ctx, dbPath, e.idPrefix+string(f.Agent)+":", afterPath, 256)
+			page, done, err = pager(ctx, afterPath, 256)
 			pageIndex = 0
 			if err != nil {
 				pageFailed = true
@@ -512,7 +516,7 @@ func (e *Engine) filterQuickSyncFiles(
 			!e.forceParseRequested(f) && e.pathRewriter == nil && e.sqliteContainerPassCaptureValid(dbPath) {
 			row := page[pageIndex]
 			fingerprint, complete := parser.OpenCodeCompositeFingerprint(*f.ProviderSource)
-			if row.Excluded || row.Trashed || (complete && providerSourceMatchesStored(f.Agent, fingerprint, 0, row.VirtualContainerMemberFreshness, true)) {
+			if row.Suppressed || (complete && fingerprint.MTimeNS != 0 && providerFingerprintMatchesStored(f.Agent, fingerprint, 0, row.CoveredThroughNS, row.FingerprintHash, true)) {
 				e.noteSQLiteContainerResult(f.Path, true)
 				continue
 			}
@@ -946,29 +950,15 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 		}
 		err := e.db.Update(ctx, func(tx *sql.Tx) error {
 			if discovered != nil {
-				rows, err := tx.QueryContext(ctx, "SELECT key FROM pg_sync_state WHERE key LIKE ?", SQLiteContainerSyncStatePrefix+"%")
+				keys, err := db.ListSyncStateKeysByPrefixTx(ctx, tx, sqliteContainerSyncStatePrefix)
 				if err != nil {
 					return err
 				}
-				defer rows.Close()
-				var removed []string
-				for rows.Next() {
-					var key string
-					if err := rows.Scan(&key); err != nil {
-						return err
-					}
-					if discovered[strings.TrimPrefix(key, SQLiteContainerSyncStatePrefix)] == 0 {
-						removed = append(removed, key)
-					}
-				}
-				err = rows.Err()
-				rows.Close()
-				if err != nil {
-					return err
-				}
-				for _, key := range removed {
-					if _, err := tx.ExecContext(ctx, "DELETE FROM pg_sync_state WHERE key = ?", key); err != nil {
-						return err
+				for _, key := range keys {
+					if discovered[strings.TrimPrefix(key, sqliteContainerSyncStatePrefix)] == 0 {
+						if err := db.DeleteSyncStateTx(ctx, tx, key); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -977,7 +967,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 				if err != nil {
 					return err
 				}
-				if _, err := tx.ExecContext(ctx, "INSERT INTO pg_sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", SQLiteContainerSyncStatePrefix+path, string(raw)); err != nil {
+				if err := db.SetSyncStateTx(ctx, tx, sqliteContainerSyncStatePrefix+path, string(raw)); err != nil {
 					return err
 				}
 			}
@@ -1028,7 +1018,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 		pass.failed[dbPath] = true
 	}
 	for dbPath := range pass.failed {
-		e.clearSQLiteContainerDigestVerification(dbPath)
+		e.revokeSQLiteContainerTrust(dbPath)
 	}
 	for dbPath, state := range pass.captured {
 		if pass.failed[dbPath] {
@@ -1089,10 +1079,10 @@ func (e *Engine) sqliteContainerDigestRevalidationFailures(
 // may have no captured entry, so both maps are part of the invalidation set.
 func (e *Engine) clearDigestVerificationForPass(pass *sqliteContainerPass) {
 	for dbPath := range pass.captured {
-		e.clearSQLiteContainerDigestVerification(dbPath)
+		e.revokeSQLiteContainerTrust(dbPath)
 	}
 	for dbPath := range pass.failed {
-		e.clearSQLiteContainerDigestVerification(dbPath)
+		e.revokeSQLiteContainerTrust(dbPath)
 	}
 }
 
@@ -1107,6 +1097,6 @@ func (e *Engine) clearTrustedSQLiteContainers() {
 	e.containerPass = nil
 }
 
-func (e *Engine) clearSQLiteContainerDigestVerification(path string) {
+func (e *Engine) revokeSQLiteContainerTrust(path string) {
 	delete(e.trustedSQLiteContainers, path)
 }

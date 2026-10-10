@@ -5448,12 +5448,21 @@ func (db *DB) Reader() Reader {
 	return db.getReader()
 }
 
+const (
+	getSyncStateQuery = "SELECT value FROM pg_sync_state WHERE key = ?"
+	setSyncStateQuery = `INSERT INTO pg_sync_state (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+	deleteSyncStateQuery = "DELETE FROM pg_sync_state WHERE key = ?"
+)
+
 // GetSyncState reads a value from the pg_sync_state table.
 func (db *DB) GetSyncState(ctx context.Context, key string) (string, error) {
+	return scanSyncState(db.getReader().QueryRow(ctx, getSyncStateQuery, key))
+}
+
+func scanSyncState(row *sql.Row) (string, error) {
 	var value string
-	err := db.getReader().QueryRow(ctx,
-		"SELECT value FROM pg_sync_state WHERE key = ?", key,
-	).Scan(&value)
+	err := row.Scan(&value)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -5465,9 +5474,7 @@ func (db *DB) SetSyncState(ctx context.Context, key, value string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	_, err := db.getWriter().Exec(ctx,
-		`INSERT INTO pg_sync_state (key, value)
-		 VALUES (?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		setSyncStateQuery,
 		key, value,
 	)
 	return err
@@ -5481,9 +5488,7 @@ func (db *DB) SetSyncState(ctx context.Context, key, value string) error {
 func (db *DB) DeleteSyncStateByPrefix(ctx context.Context, prefix string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	escaped := strings.NewReplacer(
-		"\\", "\\\\", "%", "\\%", "_", "\\_",
-	).Replace(prefix)
+	escaped := escapeSyncStatePrefix(prefix)
 	_, err := db.getWriter().Exec(ctx,
 		"DELETE FROM pg_sync_state WHERE key LIKE ? ESCAPE '\\'",
 		escaped+"%",
@@ -5496,9 +5501,54 @@ func (db *DB) DeleteSyncState(ctx context.Context, key string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	_, err := db.getWriter().Exec(ctx,
-		"DELETE FROM pg_sync_state WHERE key = ?", key,
+		deleteSyncStateQuery, key,
 	)
 	return err
+}
+
+// GetSyncStateTx reads sync metadata inside the caller's transaction.
+func GetSyncStateTx(ctx context.Context, tx *sql.Tx, key string) (string, error) {
+	return scanSyncState(tx.QueryRowContext(ctx, getSyncStateQuery, key))
+}
+
+// UpdateSyncStateTx replaces an existing value without creating a missing key.
+func UpdateSyncStateTx(ctx context.Context, tx *sql.Tx, key, value string) error {
+	_, err := tx.ExecContext(ctx, "UPDATE pg_sync_state SET value = ? WHERE key = ?", value, key)
+	return err
+}
+
+// SetSyncStateTx writes sync metadata inside the caller's transaction.
+func SetSyncStateTx(ctx context.Context, tx *sql.Tx, key, value string) error {
+	_, err := tx.ExecContext(ctx, setSyncStateQuery, key, value)
+	return err
+}
+
+// DeleteSyncStateTx removes exactly one key inside the caller's transaction.
+func DeleteSyncStateTx(ctx context.Context, tx *sql.Tx, key string) error {
+	_, err := tx.ExecContext(ctx, deleteSyncStateQuery, key)
+	return err
+}
+
+// ListSyncStateKeysByPrefixTx returns literal-prefix matches in the caller's transaction.
+func ListSyncStateKeysByPrefixTx(ctx context.Context, tx *sql.Tx, prefix string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT key FROM pg_sync_state WHERE key LIKE ? ESCAPE '\\'", escapeSyncStatePrefix(prefix)+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
+func escapeSyncStatePrefix(prefix string) string {
+	return strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(prefix)
 }
 
 // GetOrCreateSyncState returns a sync-state value, atomically creating it

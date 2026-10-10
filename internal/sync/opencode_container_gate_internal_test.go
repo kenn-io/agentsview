@@ -361,7 +361,7 @@ func TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows(t *testing.T) {
 	}))
 
 	e := &Engine{db: database, machine: "local"}
-	rows, done, err := e.storedMemberFreshnessPager(container, "opencode:")(
+	rows, done, err := e.storedMemberFreshnessPager(container, "opencode:", nil)(
 		t.Context(), "", 10,
 	)
 	require.NoError(t, err)
@@ -399,7 +399,7 @@ func TestStoredMemberFreshnessPagerAdvancesPastAllStalePages(t *testing.T) {
 	seedCoveredVirtualMember(t, database, "opencode:c", container+"#c", 500)
 
 	e := &Engine{db: database, machine: "local"}
-	rows, done, err := e.storedMemberFreshnessPager(container, "opencode:")(
+	rows, done, err := e.storedMemberFreshnessPager(container, "opencode:", nil)(
 		t.Context(), "", 2,
 	)
 	require.NoError(t, err)
@@ -1231,7 +1231,7 @@ func TestSQLiteContainerFullPassDropsUndiscoveredTrust(t *testing.T) {
 			assert.Equal(t, !tc.removed, len(e.trustedSQLiteContainers) != 0)
 			assert.Equal(t, !tc.removed, len(e.digestVerifiedAt) != 0)
 			for _, p := range []string{path, unloaded} {
-				raw, err := archive.GetSyncState(t.Context(), SQLiteContainerSyncStatePrefix+p)
+				raw, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+p)
 				require.NoError(t, err)
 				assert.Equal(t, !tc.removed, raw != "")
 			}
@@ -1249,7 +1249,7 @@ func TestOpenCodeEphemeralVerificationIsLocal(t *testing.T) {
 				require.True(t, ok)
 				writeContainerVerification(t, archive, path, state, time.Now())
 			}
-			raw, err := archive.GetSyncState(t.Context(), SQLiteContainerSyncStatePrefix+path)
+			raw, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path)
 			require.NoError(t, err)
 			e := NewEngine(t.Context(), archive, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(path)}},
@@ -1261,7 +1261,7 @@ func TestOpenCodeEphemeralVerificationIsLocal(t *testing.T) {
 			require.False(t, stats.Aborted)
 			assert.Equal(t, 1, stats.Synced)
 			assert.Greater(t, parser.OpenCodeContainerChildScans(), scans, "ephemeral discovery must not restore durable trust")
-			after, err := archive.GetSyncState(t.Context(), SQLiteContainerSyncStatePrefix+path)
+			after, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path)
 			require.NoError(t, err)
 			assert.Equal(t, raw, after, "ephemeral verification must leave durable state untouched")
 		})
@@ -1794,7 +1794,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 				writeContainerVerification(t, archive, path, state, now.Add(-tc.age))
 			}
 			if tc.raw != "" {
-				require.NoError(t, archive.SetSyncState(t.Context(), SQLiteContainerSyncStatePrefix+path, tc.raw))
+				require.NoError(t, archive.SetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path, tc.raw))
 			}
 			e := &Engine{db: archive}
 			if tc.setup != nil {
@@ -2069,12 +2069,12 @@ func writeContainerVerification(t *testing.T, archive *db.DB, path string, state
 	t.Helper()
 	raw, err := json.Marshal(sqliteContainerVerification{Version: 1, State: state, VerifiedAt: at})
 	require.NoError(t, err)
-	require.NoError(t, archive.SetSyncState(t.Context(), SQLiteContainerSyncStatePrefix+path, string(raw)))
+	require.NoError(t, archive.SetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path, string(raw)))
 }
 
 func readContainerVerification(t *testing.T, archive *db.DB, path string) (sqliteContainerVerification, bool) {
 	t.Helper()
-	raw, err := archive.GetSyncState(t.Context(), SQLiteContainerSyncStatePrefix+path)
+	raw, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path)
 	require.NoError(t, err)
 	var record sqliteContainerVerification
 	if raw == "" {

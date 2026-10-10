@@ -833,7 +833,7 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 	)
 
 	// Clear recent verification to exercise complete fingerprint discovery.
-	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), sync.SQLiteContainerSyncStatePrefix))
+	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), "sqlite-container:"))
 	restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
 	t.Cleanup(restarted.Close)
 	stats = restarted.SyncAll(t.Context(), nil)
@@ -945,7 +945,7 @@ func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
 	setFileMtime(t, dbPath, before.ModTime().UnixNano())
 
 	// Clear recent verification to exercise complete fingerprint discovery.
-	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), sync.SQLiteContainerSyncStatePrefix))
+	require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), "sqlite-container:"))
 	restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
 	t.Cleanup(restarted.Close)
 	stats = restarted.SyncAll(t.Context(), nil)
