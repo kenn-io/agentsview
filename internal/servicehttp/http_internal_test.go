@@ -25,6 +25,39 @@ func TestNewHTTPBackendUsesLongRunningClient(t *testing.T) {
 	assert.Zero(t, backend.longRunningClient.Timeout)
 }
 
+func TestHTTPContentSearchActiveFilterCompatibility(t *testing.T) {
+	for _, supported := range []bool{true, false} {
+		t.Run(map[bool]string{true: "supported", false: "older server"}[supported], func(t *testing.T) {
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				assert.Equal(t, "/api/v1/search/content", r.URL.Path)
+				assert.Equal(t, "2024-06-15T11:50:00Z", r.URL.Query().Get("exclude_active_since"))
+				if supported {
+					w.Header().Set("X-AgentsView-Active-Filter", "true")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(`{"matches":[{"session_id":"idle"}],"revision_bound":true,"coverage":{}}`))
+				assert.NoError(t, err)
+			}))
+			defer srv.Close()
+			svc := NewHTTPBackend(srv.URL, "", false, "")
+			out, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
+				Pattern: "needle", ExcludeActiveSince: "2024-06-15T11:50:00Z",
+			})
+			assert.Equal(t, 1, requests)
+			if supported {
+				require.NoError(t, err)
+				require.Len(t, out.Matches, 1)
+				assert.Equal(t, "idle", out.Matches[0].SessionID)
+			} else {
+				require.ErrorIs(t, err, service.ErrActiveFilterUnavailable)
+				assert.Nil(t, out)
+			}
+		})
+	}
+}
+
 func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

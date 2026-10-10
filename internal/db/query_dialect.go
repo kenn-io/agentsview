@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 type placeholderStyle int
@@ -776,6 +778,9 @@ func sessionFilterPredicates(
 		preds = append(preds, b.dialect.dateEndExpr(q)+" >= "+
 			b.dialect.dateParam(b.Add(f.ActiveSince)))
 	}
+	if f.ExcludeActiveSince != "" {
+		preds = append(preds, excludeActiveSincePredicate(f.ExcludeActiveSince, b, q))
+	}
 	if f.MinMessages > 0 {
 		preds = append(preds,
 			q("message_count")+" >= "+b.Add(f.MinMessages))
@@ -821,6 +826,18 @@ func sessionFilterPredicates(
 		preds = append(preds, b.dialect.starredPredicateSQL(q("id")))
 	}
 	return preds, oneShotPred
+}
+
+func excludeActiveSincePredicate(cutoff string, b *QueryBuilder, q func(string) string) string {
+	if parsed, err := time.Parse(time.RFC3339, cutoff); err == nil {
+		cutoff = timeutil.Format(parsed)
+	}
+	activity := "COALESCE(" + b.dialect.timestampExpr(q("ended_at")) + ", " +
+		b.dialect.timestampExpr(q("started_at")) + ", " + q("created_at") + ")"
+	if b.dialect.name == "sqlite" || b.dialect.name == "duckdb" {
+		activity = b.dialect.dateParam(activity)
+	}
+	return "COALESCE(" + activity + " <= " + b.dialect.dateParam(b.Add(cutoff)) + ", " + b.dialect.trueLiteral + ")"
 }
 
 func appendSessionVisibilityPredicates(

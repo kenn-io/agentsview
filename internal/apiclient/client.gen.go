@@ -11238,6 +11238,9 @@ func (c *Client) GetAPIV1SearchContentWithResponse(ctx context.Context, options 
 				}
 			}
 		}
+		out.Headers200 = &GetAPIV1SearchContentResp200Headers{
+			XAgentsViewActiveFilter: resp.Headers.Get("X-AgentsView-Active-Filter"),
+		}
 		return out, nil
 	case 400:
 		out.JSON400 = new(GetAPIV1SearchContentErrorResponse)
@@ -16157,6 +16160,9 @@ type GetAPIV1SearchContentQuery struct {
 	// ActiveSince Filter sessions active since this RFC3339 timestamp
 	ActiveSince *time.Time `json:"active_since,omitempty"`
 
+	// ExcludeActiveSince Keep sessions whose ended_at, started_at, or created_at activity is at or before this RFC3339 timestamp
+	ExcludeActiveSince *time.Time `json:"exclude_active_since,omitempty"`
+
 	// IncludeChildren Include child sessions
 	IncludeChildren *bool `json:"include_children,omitempty"`
 
@@ -18717,11 +18723,16 @@ type GetAPIV1SearchResp struct {
 	JSON504      *GetAPIV1SearchErrorResponseJSON504
 }
 
+type GetAPIV1SearchContentResp200Headers struct {
+	XAgentsViewActiveFilter string `header:"X-AgentsView-Active-Filter"`
+}
+
 type GetAPIV1SearchContentResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
 	StatusCode   int
 	JSON200      *GetAPIV1SearchContentResponse
+	Headers200   *GetAPIV1SearchContentResp200Headers
 	JSON400      *GetAPIV1SearchContentErrorResponse
 	JSON401      *GetAPIV1SearchContentErrorResponseJSON
 	JSON403      *GetAPIV1SearchContentErrorResponseJSON403

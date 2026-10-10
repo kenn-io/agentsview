@@ -174,6 +174,7 @@ type ContentSearchRequest struct {
 	Project, ExcludeProject, Machine, Agent           string
 	SessionID, GitBranchExact                         string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
+	ExcludeActiveSince                                string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	ExcludeSessionIDs                                 []string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
@@ -471,6 +472,9 @@ var ErrSourceChanged = errors.New("source_changed")
 // ErrRevisionBoundReadUnavailable marks a backend that cannot provide stable
 // transcript revisions for evidence reads.
 var ErrRevisionBoundReadUnavailable = errors.New("revision-bound reads unavailable")
+
+// ErrActiveFilterUnavailable marks a backend that cannot exclude activity before pagination.
+var ErrActiveFilterUnavailable = errors.New("active-session filter unavailable")
 
 // ToolCall mirrors a flattened tool call with its enclosing message's
 // ordinal/timestamp attached. Serialized from parser.ParsedToolCall.

@@ -35,6 +35,7 @@ type ContentSearchFilter struct {
 	Project, ExcludeProject, Machine, Agent           string
 	SessionID, GitBranchExact                         string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
+	ExcludeActiveSince                                string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	// ExcludeSessionIDs drops matches from these session IDs before LIMIT,
 	// so a live conversation cannot fill the result page. Empty entries are
@@ -138,11 +139,12 @@ func ContentSessionFilter(f ContentSearchFilter) SessionFilter {
 		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
 		SessionID: f.SessionID, GitBranchExact: f.GitBranchExact,
 		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
-		Timezone:         f.Timezone,
-		ActiveSince:      f.ActiveSince,
-		ExcludeOneShot:   !f.IncludeOneShot,
-		ExcludeAutomated: !f.IncludeAutomated,
-		IncludeChildren:  f.IncludeChildren,
+		Timezone:           f.Timezone,
+		ActiveSince:        f.ActiveSince,
+		ExcludeActiveSince: f.ExcludeActiveSince,
+		ExcludeOneShot:     !f.IncludeOneShot,
+		ExcludeAutomated:   !f.IncludeAutomated,
+		IncludeChildren:    f.IncludeChildren,
 	}
 }
 
@@ -161,7 +163,14 @@ func BuildContentScopeSQL(
 	if f.SessionID != "" {
 		return BuildSessionBaseFilterSQL(sf, dialect)
 	}
-	return BuildSessionFilterSQL(sf, dialect)
+	// Activity belongs to each candidate, while metadata filters select the parent tree.
+	sf.ExcludeActiveSince = ""
+	b := NewQueryBuilder(dialect, 0)
+	where := buildSessionFilterWithBuilder(sf, b, "")
+	if f.ExcludeActiveSince != "" {
+		where += " AND " + excludeActiveSincePredicate(f.ExcludeActiveSince, b, func(col string) string { return col })
+	}
+	return where, b.Args()
 }
 
 // sessionScopeSubquery returns "session_id IN (SELECT id FROM sessions

@@ -419,6 +419,41 @@ func TestStoreSearchesMessagesContentAndSecrets(t *testing.T) {
 	assert.Equal(t, "secret token sk-duckdb", source)
 }
 
+func TestSearchContentExcludeActiveSince(t *testing.T) {
+	store, fixture := newSyncedStore(t)
+	for _, mode := range []string{"substring", "regex", "fts"} {
+		t.Run(mode, func(t *testing.T) {
+			cases := []struct {
+				cutoff string
+				count  int
+			}{
+				{"2026-01-10T00:00:00Z", 1},
+				{"2026-01-09T23:00:00Z", 0},
+				{"2026-01-10T02:00:00+02:00", 1},
+				{"2026-01-09T19:00:00-05:00", 1},
+				{"2026-01-10T01:00:00+02:00", 0},
+				{"2026-01-09T18:00:00-05:00", 0},
+			}
+			if mode != "substring" {
+				cases = cases[:2]
+			}
+			for _, tc := range cases {
+				t.Run(tc.cutoff, func(t *testing.T) {
+					page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+						Pattern: "first", Mode: mode, Limit: 1, IncludeOneShot: true,
+						ExcludeActiveSince: tc.cutoff,
+					})
+					require.NoError(t, err)
+					require.Len(t, page.Matches, tc.count)
+					if tc.count > 0 {
+						assert.Equal(t, fixture.alphaID, page.Matches[0].SessionID)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestSearchContentFTSSingleTermFallback(t *testing.T) {
 	ctx := t.Context()
 	store, fixture := newSyncedStore(t)

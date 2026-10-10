@@ -546,17 +546,18 @@ type SessionFilter struct {
 	GitBranch string
 	// GitBranchExact matches one raw branch name in any project. It is ANDed
 	// with GitBranch when both are set.
-	GitBranchExact  string
-	Agent           string
-	Date            string // date overlapped by session activity, YYYY-MM-DD
-	DateFrom        string // activity range start (inclusive)
-	DateTo          string // activity range end (inclusive)
-	Timezone        string // IANA timezone for date filters; empty means UTC
-	ActiveSince     string // ISO-8601 timestamp; filters on most recent activity
-	MinMessages     int    // message_count >= N (0 = no filter)
-	MaxMessages     int    // message_count <= N (0 = no filter)
-	MinUserMessages int    // user_message_count >= N (0 = no filter)
-	ExcludeOneShot  bool   // exclude sessions with user_message_count <= 1
+	GitBranchExact     string
+	Agent              string
+	Date               string // date overlapped by session activity, YYYY-MM-DD
+	DateFrom           string // activity range start (inclusive)
+	DateTo             string // activity range end (inclusive)
+	Timezone           string // IANA timezone for date filters; empty means UTC
+	ActiveSince        string // ISO-8601 timestamp; filters on most recent activity
+	ExcludeActiveSince string // RFC3339; keep session activity at or before this cutoff
+	MinMessages        int    // message_count >= N (0 = no filter)
+	MaxMessages        int    // message_count <= N (0 = no filter)
+	MinUserMessages    int    // user_message_count >= N (0 = no filter)
+	ExcludeOneShot     bool   // exclude sessions with user_message_count <= 1
 	// ChildExemptOneShot carves child sessions (a sidebar-child
 	// relationship_type or a non-empty parent_session_id) out of the
 	// ExcludeOneShot gate. Set only by the semantic/hybrid content-search

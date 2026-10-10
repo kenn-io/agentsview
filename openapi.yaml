@@ -16693,6 +16693,14 @@ paths:
             description: Filter sessions active since this RFC3339 timestamp
             format: date-time
             type: string
+        - description: Keep sessions whose ended_at, started_at, or created_at activity is at or before this RFC3339 timestamp
+          explode: false
+          in: query
+          name: exclude_active_since
+          schema:
+            description: Keep sessions whose ended_at, started_at, or created_at activity is at or before this RFC3339 timestamp
+            format: date-time
+            type: string
         - description: Include child sessions
           explode: false
           in: query
@@ -16756,6 +16764,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ServiceContentSearchResult"
           description: OK
+          headers:
+            X-AgentsView-Active-Filter:
+              schema:
+                type: string
         "400":
           content:
             application/json:

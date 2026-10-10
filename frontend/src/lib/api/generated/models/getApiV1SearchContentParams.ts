@@ -78,6 +78,10 @@ export type GetApiV1SearchContentParams = {
    */
   active_since?: string;
   /**
+   * Keep sessions whose ended_at, started_at, or created_at activity is at or before this RFC3339 timestamp
+   */
+  exclude_active_since?: string;
+  /**
    * Include child sessions
    */
   include_children?: boolean;

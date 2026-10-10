@@ -1105,19 +1105,30 @@ func TestHTTPSearchContent_ExcludeSession(t *testing.T) {
 	dbtest.SeedSessionWithMessages(t, env.DB, "keep", "search-proj", []db.Message{
 		dbtest.UserMsg("keep", 0, "needle in keep"),
 		dbtest.AsstMsg("keep", 1, "here it is"),
-	}, dbtest.WithMessageCounts(3, 2))
+	}, dbtest.WithMessageCounts(3, 2), func(s *db.Session) { s.EndedAt = new("2024-06-15T10:00:00Z") })
 	dbtest.SeedSessionWithMessages(t, env.DB, "drop", "search-proj", []db.Message{
 		dbtest.UserMsg("drop", 0, "needle in drop"),
 		dbtest.AsstMsg("drop", 1, "here it is"),
-	}, dbtest.WithMessageCounts(3, 2))
+	}, dbtest.WithMessageCounts(3, 2), func(s *db.Session) { s.EndedAt = new("2024-06-15T11:59:00Z") })
 
 	svc := env.Backend("", true)
-	res, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
-		Pattern: "needle", Limit: 10, ExcludeSessionIDs: []string{"drop"},
-	})
-	require.NoError(t, err)
-	require.Len(t, res.Matches, 1)
-	assert.Equal(t, "keep", res.Matches[0].SessionID)
+	for _, tc := range []struct {
+		name   string
+		ids    []string
+		cutoff string
+	}{
+		{"session ID", []string{"drop"}, ""},
+		{"recent activity", nil, "2024-06-15T11:50:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
+				Pattern: "needle", Limit: 10, ExcludeSessionIDs: tc.ids, ExcludeActiveSince: tc.cutoff,
+			})
+			require.NoError(t, err)
+			require.Len(t, res.Matches, 1)
+			assert.Equal(t, "keep", res.Matches[0].SessionID)
+		})
+	}
 }
 
 // TestHTTPSearchContent_501PreservesCauseDetail asserts that a 501 response
