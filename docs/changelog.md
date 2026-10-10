@@ -7,6 +7,14 @@ description: Release history for AgentsView
 The latest release is
 [0.45.0](https://github.com/kenn-io/agentsview/releases/tag/v0.45.0).
 
+## Unreleased
+
+**Bug fixes**
+
+- Keep both Cursor conversations when S3 objects in different projects share
+  a session ID. A one-time archive rebuild recovers overwritten Cursor S3
+  conversations while preserving archived sessions and stars.
+
 ## 0.45.0
 
 <small>2026-10-09</small>

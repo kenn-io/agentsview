@@ -567,7 +567,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // them.)
 // (127: reparse readable sources to classify headless workers as subagents.)
 // (128: reparse all sources to recover TraeX mutation rollouts and per-response usage.)
-const dataVersion = 128
+// (129: recover collapsed S3 Cursor conversations, including cached sources.)
+const dataVersion = 129
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

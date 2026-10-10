@@ -48,15 +48,18 @@ custom implementations:
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Claude | Sidecar fold, subagent paths, transcript keep rules                                                                                                                                                                                                                                                                                                                                                                            |
 | Codex  | `rollout-*.jsonl` keep, `codex:` UUID IDs, sessions/archived rewrite, parent and `session_index` locate. TraeX shares the type and must not enable S3.                                                                                                                                                                                                                                                                         |
-| Cursor | Harvest `<project>/<id>.{jsonl,txt}` plus local `agent-transcripts` layouts, including a parent session's `subagents` directory; decode encoded project dirs only for the local layout; deduplicate a session stem across configured roots by source machine, preferring a session's own nested or flat object over a copy in another session's `subagents` directory, then `.jsonl`, then nested over flat, then lexical path |
+| Cursor | Harvest `<project>/<id>.{jsonl,txt}` plus local `agent-transcripts` layouts, including a parent session's `subagents` directory; decode encoded project dirs only for the local layout; deduplicate a session stem across configured roots by source machine and raw project directory, preferring a session's own nested or flat object over a copy in another session's `subagents` directory, then `.jsonl`, then nested over flat, then lexical path |
 
 `internal/parser/s3source.go` stays generic transport: client, list, fetch,
 stat, and `s3PrefixScan`. Agent policy does not belong there.
 
 ## Identity Rules
 
-`S3SessionID` is the durable session key before the engine prefixes the source
-machine. Two kept objects that share an ID will overwrite each other.
+`S3SessionID` is the session key before the engine prefixes the source machine.
+Providers with `SharedSessionIDs` apply the local collision policy to S3 object
+URIs. S3 ownership lookup supports Cursor only, retaining saved IDs across
+format and layout changes; omitted objects keep their ownership. Codex ownership
+lookup is deferred.
 
 - Keep only paths that are real transcripts for that agent.
 - If `.jsonl` and `.txt` (or any other pair) share a stem, keep one. Prefer the

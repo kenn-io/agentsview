@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -140,25 +141,61 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 	assert.ElementsMatch(t, []string{jsonlURI, otherURI}, streamed)
 }
 
-func TestCursorS3DiscoverDeduplicatesSameStemAcrossProjectsDeterministically(t *testing.T) {
-	oldList := listS3Objects
-	t.Cleanup(func() { listS3Objects = oldList })
-
-	root := "s3://bucket/archive/agent-transcripts/laptop/raw/cursor"
-	firstURI := root + "/project-one/11111111-1111-4111-8111-111111111111.jsonl"
-	secondURI := root + "/project-two/11111111-1111-4111-8111-111111111111.jsonl"
-	listS3Objects = func(got string) ([]S3Object, error) {
-		require.Equal(t, root, got)
-		return []S3Object{
-			{URI: secondURI, LastModified: time.Unix(200, 0)},
-			{URI: firstURI, LastModified: time.Unix(100, 0)},
-		}, nil
+func TestCursorS3DiscoverPreservesSameStemAcrossProjects(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		root     string
+		roots    []string
+		projects [2]string
+		harvest  bool
+	}{
+		{name: "archive", root: "s3://bucket/archive", roots: []string{"s3://bucket/archive"}, projects: [2]string{"project-one", "project-two"}},
+		{name: "broad root first", root: "s3://bucket/laptop/raw/cursor", roots: []string{"s3://bucket/laptop/raw/cursor", "s3://bucket/laptop/raw/cursor/project-one/agent-transcripts"}, projects: [2]string{"project-one", "project-two"}},
+		{name: "nested root first", root: "s3://bucket/laptop/raw/cursor", roots: []string{"s3://bucket/laptop/raw/cursor/project-one/agent-transcripts", "s3://bucket/laptop/raw/cursor"}, projects: [2]string{"project-one", "project-two"}},
+		{name: "harvest", root: "s3://bucket/host-a/raw/cursor", roots: []string{"s3://bucket/host-a/raw/cursor"}, projects: [2]string{"agent-transcripts", "cursor"}, harvest: true},
+	} {
+		roots := tt.roots
+		projects := tt.projects
+		root := tt.root
+		t.Run(tt.name, func(t *testing.T) {
+			oldList := listS3Objects
+			t.Cleanup(func() { listS3Objects = oldList })
+			firstURI := root + "/" + projects[0] + "/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl"
+			secondURI := root + "/" + projects[1] + "/agent-transcripts/11111111-1111-4111-8111-111111111111/11111111-1111-4111-8111-111111111111.jsonl"
+			otherURI := root + "/" + projects[0] + "/other.txt"
+			if tt.harvest {
+				firstURI = root + "/" + projects[0] + "/11111111-1111-4111-8111-111111111111.txt"
+				secondURI = root + "/" + projects[1] + "/11111111-1111-4111-8111-111111111111.txt"
+			}
+			listS3Objects = func(got string) ([]S3Object, error) {
+				require.Contains(t, roots, got)
+				objects := []S3Object{
+					{URI: secondURI, LastModified: time.Unix(200, 0)},
+					{URI: firstURI, LastModified: time.Unix(100, 0)},
+					{URI: otherURI, LastModified: time.Unix(100, 0)},
+				}
+				var listed []S3Object
+				for _, object := range objects {
+					if strings.HasPrefix(object.URI, got+"/") {
+						listed = append(listed, object)
+					}
+				}
+				return listed, nil
+			}
+			sourceSet := newCursorSourceSet(roots)
+			sources, err := sourceSet.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 3)
+			for _, source := range sources {
+				if source.DisplayPath == firstURI {
+					assert.Equal(t, roots[0], source.ConfiguredRoot)
+				} else {
+					assert.Equal(t, root, source.ConfiguredRoot)
+				}
+			}
+			assert.ElementsMatch(t, []string{firstURI, secondURI, otherURI}, []string{sources[0].DisplayPath, sources[1].DisplayPath, sources[2].DisplayPath})
+		})
 	}
-
-	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, firstURI, sources[0].DisplayPath)
 }
 
 func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) {
@@ -170,7 +207,7 @@ func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) 
 	laptopJSONLRoot := "s3://bucket-b/archive/laptop/raw/cursor"
 	desktopRoot := "s3://bucket-c/archive/desktop/raw/cursor"
 	laptopTxtURI := laptopTxtRoot + "/project-a/" + stem + ".txt"
-	laptopJSONLURI := laptopJSONLRoot + "/project-b/" + stem + ".jsonl"
+	laptopJSONLURI := laptopJSONLRoot + "/project-a/" + stem + ".jsonl"
 	desktopURI := desktopRoot + "/project-c/" + stem + ".jsonl"
 	objectsByRoot := map[string][]S3Object{
 		laptopTxtRoot: {
