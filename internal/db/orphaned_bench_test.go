@@ -49,3 +49,49 @@ func BenchmarkCopySparseOrphan(b *testing.B) {
 		})
 	}
 }
+
+// A legacy page must be checked against ordinary orphans without scanning
+// the entire orphan inventory once for every page.
+func BenchmarkCopyMixedLegacyPageOrphans(b *testing.B) {
+	for _, sessionsPerAgent := range []int{100, 10000} {
+		b.Run(strconv.Itoa(sessionsPerAgent), func(b *testing.B) {
+			ctx := b.Context()
+			source := testDB(b)
+			_, err := source.getWriter().Exec(ctx, `
+				WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x+1 < ?)
+				INSERT INTO sessions(id, project, agent, file_path)
+				SELECT 'claude:'||x, 'sample', 'claude', NULL FROM n
+				UNION ALL
+				SELECT 'codex:'||printf('%08x-1111-4111-8111-111111111111',x), 'sample', 'codex',
+					'rollout-2026-09-01T00-00-00-'||printf('%08x-1111-4111-8111-111111111111',x)||
+					'_22222222-2222-4222-8222-222222222222.jsonl' FROM n;
+				INSERT INTO messages(session_id, ordinal, role, content)
+				SELECT id, 0, 'assistant', 'Saved reply' FROM sessions;
+				PRAGMA user_version=130`, sessionsPerAgent)
+			require.NoError(b, err)
+			path := source.Path()
+			require.NoError(b, source.Close())
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
+			for range b.N {
+				destination := testDB(b)
+				b.StartTimer()
+				copied, err := destination.CopyOrphanedDataFrom(path)
+				b.StopTimer()
+				require.NoError(b, err)
+				require.Equal(b, 2*sessionsPerAgent, copied)
+				for _, id := range []string{
+					"claude:0",
+					"codex:00000000-1111-4111-8111-111111111111_22222222-2222-4222-8222-222222222222",
+				} {
+					messages, err := destination.GetAllMessages(ctx, id)
+					require.NoError(b, err)
+					require.Len(b, messages, 1)
+					require.Equal(b, "Saved reply", messages[0].Content)
+				}
+				require.NoError(b, destination.Close())
+			}
+		})
+	}
+}

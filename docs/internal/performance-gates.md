@@ -144,6 +144,8 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
 - `BenchmarkInsertMessagesBatch` — multi-row batched ingest.
 - `BenchmarkCopySparseOrphan` — retain one missing session from archives of
   different sizes without scanning every old message to map its session ID.
+- `BenchmarkCopyMixedLegacyPageOrphans` — upgrade archived Codex pages alongside
+  other orphans without scanning the entire orphan inventory for each page.
 - `BenchmarkResyncBulkContributorIngest` — the same archive entering the atomic
   rebuild through a contributor engine.
 - `BenchmarkSearchContentSubstringPage` / `BenchmarkSearchContentFTSPage` — one

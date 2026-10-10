@@ -192,9 +192,11 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if sourceVersion < codexRevertPageDataVersion {
 		// A parsed head can occupy the old page's ID. Keep the mapping even
 		// when the page was reparsed; export reconciliation needs it too.
+		// Index the remaining orphan IDs before checking them once per page.
 		if _, err := conn.ExecContext(ctx, `
 			DELETE FROM _orphaned_ids WHERE id = source_id AND source_id IN
 				(SELECT source_id FROM _codex_session_ids WHERE is_page = 1);
+			CREATE INDEX _orphaned_target_ids ON _orphaned_ids(id);
 			INSERT INTO _orphaned_ids (id, source_id)
 			SELECT mapped.target_id, mapped.source_id FROM _codex_session_ids mapped
 			WHERE mapped.is_page = 1
