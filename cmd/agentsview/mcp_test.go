@@ -284,6 +284,15 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 			} else {
 				writeDaemonRuntimeForTest(t, dir, host, port, "1.1.0", change == "read-only")
 			}
+			if change == "unknown identity" {
+				path, err := runtimeStore(dir).Path(os.Getpid())
+				require.NoError(t, err)
+				rec := readRuntimeRecord(t, path)
+				rec.ProcessIdentityV2 = ""
+				delete(rec.Metadata, runtimeCreateTime)
+				_, err = runtimeStore(dir).Write(rec)
+				require.NoError(t, err)
+			}
 			svc := newMCPDaemonService(cfg)
 			_, err := svc.List(t.Context(), service.ListFilter{})
 			require.NoError(t, err)
@@ -307,9 +316,6 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 					return daemonRuntimeFromRecord(readRuntimeRecord(t, path)), nil
 				})
 				require.NoError(t, os.Remove(path))
-			case "unknown identity":
-				rec.ProcessIdentityV2 = ""
-				delete(rec.Metadata, runtimeCreateTime)
 			case "base path":
 				rec.Metadata[runtimeBrowserURL] = server.URL + "/mounted"
 			case "replacement":
@@ -324,7 +330,7 @@ func TestMCPDaemonServiceRevalidatesRuntime(t *testing.T) {
 				writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
 				rec = readRuntimeRecord(t, path)
 			}
-			if change != "missing" {
+			if change != "missing" && change != "unknown identity" {
 				_, err = runtimeStore(dir).Write(rec)
 				require.NoError(t, err)
 			}
