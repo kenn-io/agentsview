@@ -25,6 +25,34 @@ func TestNewHTTPBackendUsesLongRunningClient(t *testing.T) {
 	assert.Zero(t, backend.longRunningClient.Timeout)
 }
 
+func TestHTTPContentSearchActiveFilterCompatibility(t *testing.T) {
+	for _, supported := range []bool{true, false} {
+		t.Run(map[bool]string{true: "supported", false: "older server"}[supported], func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "2024-06-15T11:50:00Z", r.URL.Query().Get("exclude_active_since"))
+				if supported {
+					w.Header().Set("X-AgentsView-Active-Filter", "true")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(`{"matches":[],"revision_bound":true,"coverage":{}}`))
+				assert.NoError(t, err)
+			}))
+			defer srv.Close()
+			svc := NewHTTPBackend(srv.URL, "", false, "")
+			out, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
+				Pattern: "needle", ExcludeActiveSince: "2024-06-15T11:50:00Z",
+			})
+			if supported {
+				require.NoError(t, err)
+				assert.Empty(t, out.Matches)
+			} else {
+				require.ErrorContains(t, err, "upgrade the server")
+				assert.Nil(t, out)
+			}
+		})
+	}
+}
+
 func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

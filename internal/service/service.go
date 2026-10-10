@@ -174,6 +174,7 @@ type ContentSearchRequest struct {
 	Project, ExcludeProject, Machine, Agent           string
 	SessionID, GitBranchExact                         string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
+	ExcludeActiveSince                                string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	ExcludeSessionIDs                                 []string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).

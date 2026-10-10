@@ -765,7 +765,7 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Matches, 1)
 	assert.Equal(t, "idle", out.Matches[0].SessionID)
-	assert.Equal(t, 1, out.ExcludedActive)
+	assert.True(t, out.Exclusions.RecentActive)
 
 	// include_active=true returns both, excluding nothing.
 	_, all, err := ts.searchContent(t.Context(), nil, searchContentIn{
@@ -773,7 +773,6 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Len(t, all.Matches, 2)
-	assert.Equal(t, 0, all.ExcludedActive)
 }
 
 // A freshly created/synced session can have no parsed ended_at or started_at
@@ -800,7 +799,7 @@ func TestSearchContent_TimestamplessSessionExcludedByCreatedAt(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, out.Matches)
-	assert.Equal(t, 1, out.ExcludedActive)
+	assert.True(t, out.Exclusions.RecentActive)
 
 	// include_active=true surfaces it.
 	_, all, err := ts.searchContent(t.Context(), nil, searchContentIn{
@@ -951,7 +950,7 @@ func TestSearchContent_OneShotOptInKeepsActiveGuard(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, excluded.Matches)
-	assert.Equal(t, 1, excluded.ExcludedActive)
+	assert.True(t, excluded.Exclusions.RecentActive)
 
 	_, included, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "active one-shot marker", Mode: "substring",
@@ -959,7 +958,6 @@ func TestSearchContent_OneShotOptInKeepsActiveGuard(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Len(t, included.Matches, 1)
-	assert.Zero(t, included.ExcludedActive)
 }
 
 // search_content must surface the conversation-unit citation fields
@@ -1624,6 +1622,7 @@ func TestSearchContent_RecallContractMapping(t *testing.T) {
 	assert.Equal(t, "older", fake.lastReq.SessionID)
 	assert.Equal(t, "feature/memory", fake.lastReq.GitBranchExact)
 	assert.Equal(t, []string{"current"}, fake.lastReq.ExcludeSessionIDs)
+	assert.Empty(t, fake.lastReq.ExcludeActiveSince)
 	assert.Equal(t, 50, fake.lastReq.Limit)
 	assert.Equal(t, "terms", out.EffectiveMode)
 	assert.Equal(t, "subordinate", out.EffectiveScope)
@@ -1643,6 +1642,7 @@ func TestSearchContent_BlankCurrentSessionKeepsRecentActiveGuard(t *testing.T) {
 		Pattern: "needle", CurrentSessionID: "   ",
 	})
 	require.NoError(t, err)
+	assert.Equal(t, "2024-06-15T11:50:00Z", fake.lastReq.ExcludeActiveSince)
 	assert.Empty(t, fake.lastReq.ExcludeSessionIDs,
 		"whitespace-only current_session_id excludes nothing")
 	assert.Empty(t, out.Exclusions.CurrentSessionID,

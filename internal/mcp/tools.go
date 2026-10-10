@@ -775,9 +775,8 @@ type contentMatch struct {
 }
 
 type searchContentOut struct {
-	Matches        []contentMatch `json:"matches"`
-	NextCursor     *int           `json:"next_cursor,omitempty"`
-	ExcludedActive int            `json:"excluded_active,omitempty"`
+	Matches    []contentMatch `json:"matches"`
+	NextCursor *int           `json:"next_cursor,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
 	// resolved, which the caller cannot see in its own request.
 	EffectiveMode  string                  `json:"effective_mode"`
@@ -837,34 +836,31 @@ func (t *toolset) searchContent(
 	}
 	currentSession := strings.TrimSpace(in.CurrentSessionID)
 	excludeSessions := db.NormalizeExcludeSessionIDs([]string{currentSession})
+	cutoff := ""
+	if currentSession == "" && !in.IncludeActive {
+		cutoff = t.clock().Add(-activeExclusionWindow).UTC().Format(time.RFC3339Nano)
+	}
 	res, err := t.svc.SearchContent(ctx, service.ContentSearchRequest{
-		Pattern:           in.Pattern,
-		Mode:              in.Mode,
-		Scope:             in.Scope,
-		Project:           in.Project,
-		Agent:             in.Agent,
-		SessionID:         in.SessionID,
-		GitBranchExact:    in.GitBranch,
-		DateFrom:          in.DateFrom,
-		DateTo:            in.DateTo,
-		Limit:             clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit),
-		Cursor:            in.Cursor,
-		Context:           in.Context,
-		IncludeOneShot:    in.IncludeOneShot,
-		IncludeAutomated:  in.IncludeAutomated,
-		ExcludeSessionIDs: excludeSessions,
+		Pattern:            in.Pattern,
+		Mode:               in.Mode,
+		Scope:              in.Scope,
+		Project:            in.Project,
+		Agent:              in.Agent,
+		SessionID:          in.SessionID,
+		GitBranchExact:     in.GitBranch,
+		DateFrom:           in.DateFrom,
+		DateTo:             in.DateTo,
+		Limit:              clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit),
+		Cursor:             in.Cursor,
+		Context:            in.Context,
+		IncludeOneShot:     in.IncludeOneShot,
+		IncludeAutomated:   in.IncludeAutomated,
+		ExcludeSessionIDs:  excludeSessions,
+		ExcludeActiveSince: cutoff,
 	})
 	if err != nil {
 		return nil, searchContentOut{}, err
 	}
-	now := t.clock()
-	// The self-reference guard excludes matches from sessions active in the
-	// last 10 minutes. A match carries only its own timestamp, but a
-	// long-running session can match on an old message while still being
-	// active now, so exclude by the session's activity (ended_at, falling
-	// back to started_at) like search_sessions does -- not by the match
-	// timestamp. Activity is looked up once per session and cached.
-	activity := make(map[string]string, len(res.Matches))
 	out := searchContentOut{
 		Matches:       make([]contentMatch, 0, len(res.Matches)),
 		EffectiveMode: cmp.Or(in.Mode, "substring"),
@@ -880,18 +876,6 @@ func (t *toolset) searchContent(
 		out.EffectiveScope = cmp.Or(in.Scope, "all")
 	}
 	for _, m := range res.Matches {
-		if currentSession == "" && !in.IncludeActive {
-			ts, ok := t.lookupActivity(ctx, m.SessionID, activity)
-			if !ok {
-				// Lookup failed: fall back to the match timestamp so the
-				// guard degrades to its prior behavior rather than erroring.
-				ts = m.Timestamp
-			}
-			if isActiveSince(ts, now) {
-				out.ExcludedActive++
-				continue
-			}
-		}
 		out.Matches = append(out.Matches, contentMatch{
 			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
 			Location: m.Location, Role: m.Role, Ordinal: m.Ordinal,

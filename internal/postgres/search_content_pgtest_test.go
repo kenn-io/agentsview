@@ -19,6 +19,29 @@ import (
 // they don't interfere with other pgtest suites that reuse testSchema.
 const contentSearchSchema = "agentsview_content_search_test"
 
+func TestSearchContentExcludeActiveSince(t *testing.T) {
+	store := setupContentSearch(t)
+	for _, f := range []struct{ id, ended string }{
+		{"active", "2024-06-15T11:59:00Z"},
+		{"offset-active", "2024-06-15T07:59:00-04:00"},
+		{"boundary", "2024-06-15T07:50:00-04:00"},
+		{"idle", "2024-06-15T10:00:00Z"},
+	} {
+		insertCSSession(t, store, f.id, "project-a", "claude", "2024-06-15T10:00:00Z", f.ended)
+		insertCSMessage(t, store, f.id, 0, "user", "needle", "2024-06-15T11:59:00Z", false)
+	}
+	for _, mode := range []string{"substring", "regex", "fts", "terms"} {
+		t.Run(mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+				Pattern: "needle", Mode: mode, Limit: 2, ExcludeActiveSince: "2024-06-15T11:50:00Z",
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 2)
+			assert.ElementsMatch(t, []string{"boundary", "idle"}, []string{page.Matches[0].SessionID, page.Matches[1].SessionID})
+		})
+	}
+}
+
 // setupContentSearch creates a fresh schema and returns a *Store pointing
 // at it plus a raw *sql.DB for direct inserts.
 func setupContentSearch(t *testing.T) *Store {

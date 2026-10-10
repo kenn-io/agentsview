@@ -776,6 +776,15 @@ func sessionFilterPredicates(
 		preds = append(preds, b.dialect.dateEndExpr(q)+" >= "+
 			b.dialect.dateParam(b.Add(f.ActiveSince)))
 	}
+	if f.ExcludeActiveSince != "" {
+		activity := "COALESCE(" + b.dialect.timestampExpr(q("ended_at")) + ", " +
+			b.dialect.timestampExpr(q("started_at")) + ", " + q("created_at") + ")"
+		if b.dialect.name == "sqlite" || b.dialect.name == "duckdb" {
+			activity = b.dialect.dateParam(activity)
+		}
+		preds = append(preds, "COALESCE("+activity+" <= "+
+			b.dialect.dateParam(b.Add(f.ExcludeActiveSince))+", "+b.dialect.trueLiteral+")")
+	}
 	if f.MinMessages > 0 {
 		preds = append(preds,
 			q("message_count")+" >= "+b.Add(f.MinMessages))

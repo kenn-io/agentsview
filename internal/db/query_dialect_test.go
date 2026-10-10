@@ -18,6 +18,27 @@ func encodeBranchFilterTokensForTest(branches ...BranchInfo) string {
 	return strings.Join(tokens, branchListSep)
 }
 
+func TestBuildContentScopeExcludeActiveSinceDialects(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		dialect QueryDialect
+		want    string
+	}{
+		{"sqlite", SQLiteQueryDialect(), "COALESCE(julianday(COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)) <= julianday(?), 1)"},
+		{"postgres", PostgresQueryDialect(), "COALESCE(COALESCE(ended_at, started_at, created_at) <= $1::timestamptz, TRUE)"},
+		{"duckdb", DuckDBQueryDialect(), "COALESCE(CAST(COALESCE(ended_at, started_at, created_at) AS TIMESTAMP) <= CAST(? AS TIMESTAMP), TRUE)"},
+		{"clickhouse", ClickHouseQueryDialect(), "COALESCE(COALESCE(ended_at, started_at, created_at) <= parseDateTime64BestEffort(?, 6, 'UTC'), true)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			where, args := BuildContentScopeSQL(ContentSearchFilter{
+				ExcludeActiveSince: "2024-06-15T11:50:00Z", IncludeOneShot: true, IncludeAutomated: true,
+			}, tt.dialect)
+			assert.Contains(t, where, tt.want)
+			assert.Equal(t, []any{"2024-06-15T11:50:00Z"}, args)
+		})
+	}
+}
+
 func TestBuildSessionFilterSQLRendersEquivalentDialectFilters(t *testing.T) {
 	minToolFailures := 2
 	filter := SessionFilter{

@@ -765,6 +765,13 @@ func (b *httpBackend) SearchContent(
 		}
 		q.ActiveSince = &parsedActiveSince
 	}
+	if req.ExcludeActiveSince != "" {
+		cutoff, err := time.Parse(time.RFC3339, req.ExcludeActiveSince)
+		if err != nil {
+			return nil, err
+		}
+		q.ExcludeActiveSince = &cutoff
+	}
 	if req.Scope != "" {
 		q.Scope = new(apiclient.GetAPIV1SearchContentQueryScope(req.Scope))
 	}
@@ -814,6 +821,9 @@ func (b *httpBackend) SearchContent(
 			return nil, wrapSemanticUnavailable(notImpl.message)
 		}
 		return nil, err
+	}
+	if req.ExcludeActiveSince != "" && response.HTTPResponse.Header.Get("X-AgentsView-Active-Filter") != "true" {
+		return nil, errors.New("server does not support excluding active sessions before the search limit; upgrade the server")
 	}
 	for i := range out.Matches {
 		out.Matches[i].WebURL = b.sessionWebURL(out.Matches[i].SessionID)

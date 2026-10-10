@@ -959,6 +959,9 @@ const maxContentSearchContext = 10
 func (b *directBackend) SearchContent(
 	ctx context.Context, req ContentSearchRequest,
 ) (*ContentSearchResult, error) {
+	if req.ExcludeActiveSince != "" && !timeutil.IsValidTimestamp(req.ExcludeActiveSince) {
+		return nil, &db.SearchInputError{Msg: "search: invalid exclude_active_since: use RFC3339"}
+	}
 	if req.Mode == "fts" || req.Mode == "terms" {
 		for _, s := range req.Sources {
 			if s != "messages" {
@@ -987,27 +990,28 @@ func (b *directBackend) SearchContent(
 		return nil, err
 	}
 	page, err := b.db.SearchContent(ctx, db.ContentSearchFilter{
-		Pattern:           req.Pattern,
-		Mode:              req.Mode,
-		Sources:           req.Sources,
-		ExcludeSystem:     req.ExcludeSystem,
-		Project:           req.Project,
-		ExcludeProject:    req.ExcludeProject,
-		Machine:           req.Machine,
-		GitBranch:         req.GitBranch,
-		SessionID:         req.SessionID,
-		GitBranchExact:    req.GitBranchExact,
-		Agent:             req.Agent,
-		Date:              req.Date,
-		DateFrom:          req.DateFrom,
-		DateTo:            req.DateTo,
-		Timezone:          req.Timezone,
-		ActiveSince:       req.ActiveSince,
-		IncludeChildren:   req.IncludeChildren,
-		IncludeAutomated:  req.IncludeAutomated,
-		IncludeOneShot:    req.IncludeOneShot,
-		ExcludeSessionIDs: req.ExcludeSessionIDs,
-		Scope:             req.Scope,
+		Pattern:            req.Pattern,
+		Mode:               req.Mode,
+		Sources:            req.Sources,
+		ExcludeSystem:      req.ExcludeSystem,
+		Project:            req.Project,
+		ExcludeProject:     req.ExcludeProject,
+		Machine:            req.Machine,
+		GitBranch:          req.GitBranch,
+		SessionID:          req.SessionID,
+		GitBranchExact:     req.GitBranchExact,
+		Agent:              req.Agent,
+		Date:               req.Date,
+		DateFrom:           req.DateFrom,
+		DateTo:             req.DateTo,
+		Timezone:           req.Timezone,
+		ActiveSince:        req.ActiveSince,
+		ExcludeActiveSince: req.ExcludeActiveSince,
+		IncludeChildren:    req.IncludeChildren,
+		IncludeAutomated:   req.IncludeAutomated,
+		IncludeOneShot:     req.IncludeOneShot,
+		ExcludeSessionIDs:  req.ExcludeSessionIDs,
+		Scope:              req.Scope,
 		// The store builds snippets from the full source field and redacts
 		// secrets (including ones straddling the snippet window) unless reveal
 		// is set. Redacting the pre-truncated snippet here would miss those.
