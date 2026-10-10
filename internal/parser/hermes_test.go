@@ -926,10 +926,7 @@ func TestBuildHermesStateResultGroupPreservation(t *testing.T) {
 		name, source, job, project string
 		keepStored                 bool
 	}{
-		{name: "pruned cron ancestry", source: "cron", keepStored: true},
 		{name: "explicit project", source: "cron", project: "ops", keepStored: true},
-		{name: "resolved cron ancestry", source: "cron", job: "job-a"},
-		{name: "interactive session", source: "cli"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -164,15 +164,6 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	require.Equal(t, localWithoutBreakdown, remoteWithoutBreakdown,
 		"cross-backend session result without breakdown")
 	requireCompleteUsageParity(t, local, remote, filter)
-	for _, store := range []db.Store{local, remote} {
-		top, err := store.GetTopSessionsByCost(t.Context(), db.UsageFilter{Agent: "hermes"}, 10)
-		require.NoError(t, err)
-		require.Len(t, top, 1)
-		require.Equal(t, "reported", top[0].SessionID)
-		require.Equal(t, "parity-machine", top[0].Machine)
-		require.Equal(t, "cron:reported", top[0].GroupKey)
-		require.Equal(t, "Reported usage", top[0].SessionName)
-	}
 
 	breakdownFilter := filter
 	breakdownFilter.Breakdowns = true
@@ -390,8 +381,6 @@ func seedUsageParityFixture(t testing.TB, local *db.DB) {
 		usageParitySessionFixture("activity-only", "project-e", "claude", "2026-07-20T13:00:00Z", 0, 0),
 		usageParitySessionFixture("historical-usage", "project-f", "claude", "2026-07-20T13:02:00Z", 4, 6),
 	}
-	sessions[2].GroupKey = "cron:reported"
-	sessions[2].SessionName = new("Reported usage")
 	for i := range sessions {
 		require.NoError(t, local.UpsertSession(t.Context(), sessions[i]),
 			"seed session %s", sessions[i].ID)

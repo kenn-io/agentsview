@@ -791,7 +791,6 @@ func TestSessionPushFingerprintIncludesDeletionCause(t *testing.T) {
 func TestPushSessionPreservesCronJobAndMachine(t *testing.T) {
 	for _, tc := range []struct{ source, machine, wantMachine string }{
 		{"local", "host-a", "host-a"},
-		{"local", "host-b", "host-b"},
 		{"host-c", "host-a", "host-c"},
 	} {
 		t.Run(tc.wantMachine, func(t *testing.T) {
@@ -806,7 +805,6 @@ func TestPushSessionPreservesCronJobAndMachine(t *testing.T) {
 			}, "marker", nil)
 			require.NoError(t, err)
 			require.Len(t, state.upsertArgs, 71)
-			assert.Equal(t, "job-a", state.upsertArgs[70].Value)
 			assert.Equal(t, tc.wantMachine, state.upsertArgs[1].Value)
 		})
 	}

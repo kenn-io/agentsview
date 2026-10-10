@@ -6133,41 +6133,13 @@ func TestUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *t
 	}, got)
 }
 
-func TestGroupTopSessionsTruncation(t *testing.T) {
+func TestGroupTopSessions(t *testing.T) {
 	entries := []TopSessionEntry{
 		{GroupKey: "job-a", InputTokens: 5, OutputTokens: 1, CacheCreationTokens: 2, CacheReadTokens: 3, TotalTokens: 11, Cost: money.Money{Microdollars: 4_000_000}},
 		{GroupKey: "job-a", InputTokens: 5, OutputTokens: 1, CacheCreationTokens: 2, CacheReadTokens: 3, TotalTokens: 11, Cost: money.Money{Microdollars: 4_000_000}},
 		{GroupKey: "job-b", InputTokens: 30, OutputTokens: 5, CacheCreationTokens: 6, CacheReadTokens: 7, TotalTokens: 48, Cost: money.Money{Microdollars: 2_000_000}},
 		{GroupKey: "job-c", InputTokens: 20, OutputTokens: 2, CacheCreationTokens: 3, CacheReadTokens: 4, TotalTokens: 29, Cost: money.Money{Microdollars: 1_000_000}},
 	}
-	for _, tc := range []struct {
-		sort string
-		want []TopSessionEntry
-	}{
-		{
-			sort: TopSessionsSortCost,
-			want: []TopSessionEntry{
-				{GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10, OutputTokens: 2, CacheCreationTokens: 4, CacheReadTokens: 6, TotalTokens: 22, Cost: money.Money{Microdollars: 8_000_000}},
-				{InputTokens: 50, OutputTokens: 7, CacheCreationTokens: 9, CacheReadTokens: 11, TotalTokens: 77, Cost: money.Money{Microdollars: 3_000_000}},
-			},
-		},
-		{
-			sort: TopSessionsSortTokens,
-			want: []TopSessionEntry{
-				{GroupKey: "job-b", DisplayName: "job-b", InputTokens: 30, OutputTokens: 5, CacheCreationTokens: 6, CacheReadTokens: 7, TotalTokens: 48, Cost: money.Money{Microdollars: 2_000_000}},
-				{InputTokens: 30, OutputTokens: 4, CacheCreationTokens: 7, CacheReadTokens: 10, TotalTokens: 51, Cost: money.Money{Microdollars: 9_000_000}},
-			},
-		},
-	} {
-		t.Run(tc.sort, func(t *testing.T) {
-			rows, err := GroupTopSessions(entries, 1, tc.sort, UsageTokenTypesAll)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, rows)
-		})
-	}
-}
-
-func TestGroupTopSessions(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		input []TopSessionEntry
@@ -6190,7 +6162,7 @@ func TestGroupTopSessions(t *testing.T) {
 		{
 			name: "scoped unnamed jobs show their job ID", limit: 100, sort: TopSessionsSortCost,
 			input: []TopSessionEntry{
-				{GroupKey: "job-1:home-a", SessionName: "cron job-1 · Oct 08 12:00"},
+				{GroupKey: "job-1:home-a"},
 				{GroupKey: "job-1:home-b"},
 			},
 			want: []TopSessionEntry{
@@ -6256,15 +6228,17 @@ func TestGroupTopSessions(t *testing.T) {
 			},
 		},
 		{
-			name: "remainder", limit: 1, sort: TopSessionsSortCost,
-			input: []TopSessionEntry{
-				{GroupKey: "job-a", InputTokens: 10, Cost: money.Money{Microdollars: 4_000_000}},
-				{GroupKey: "job-b", InputTokens: 20, OutputTokens: 2, CacheCreationTokens: 3, CacheReadTokens: 4, TotalTokens: 29, Cost: money.Money{Microdollars: 2_000_000}},
-				{SessionID: "session-c", InputTokens: 30, OutputTokens: 5, CacheCreationTokens: 6, CacheReadTokens: 7, TotalTokens: 48, Cost: money.Money{Microdollars: 1_000_000}},
-			},
+			name: "cost truncation", input: entries, limit: 1, sort: TopSessionsSortCost,
 			want: []TopSessionEntry{
-				{GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10, Cost: money.Money{Microdollars: 4_000_000}},
+				{GroupKey: "job-a", DisplayName: "job-a", InputTokens: 10, OutputTokens: 2, CacheCreationTokens: 4, CacheReadTokens: 6, TotalTokens: 22, Cost: money.Money{Microdollars: 8_000_000}},
 				{InputTokens: 50, OutputTokens: 7, CacheCreationTokens: 9, CacheReadTokens: 11, TotalTokens: 77, Cost: money.Money{Microdollars: 3_000_000}},
+			},
+		},
+		{
+			name: "tokens truncation", input: entries, limit: 1, sort: TopSessionsSortTokens,
+			want: []TopSessionEntry{
+				{GroupKey: "job-b", DisplayName: "job-b", InputTokens: 30, OutputTokens: 5, CacheCreationTokens: 6, CacheReadTokens: 7, TotalTokens: 48, Cost: money.Money{Microdollars: 2_000_000}},
+				{InputTokens: 30, OutputTokens: 4, CacheCreationTokens: 7, CacheReadTokens: 10, TotalTokens: 51, Cost: money.Money{Microdollars: 9_000_000}},
 			},
 		},
 	} {

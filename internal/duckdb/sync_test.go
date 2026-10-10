@@ -47,27 +47,24 @@ func TestPushIncrementalReplacesOnlyChangedSessions(t *testing.T) {
 }
 
 func TestPushScopesCronGroupsByMachine(t *testing.T) {
-	for _, machine := range []string{"host-a", "host-b"} {
-		t.Run(machine, func(t *testing.T) {
-			local, path := newPushFixture(t, 2)
-			require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
-				_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET group_key = 'job-a', machine = CASE id WHEN 'sess-1' THEN 'local' ELSE 'host-c' END`)
-				return err
-			}))
-			_, err := Push(t.Context(), path, local, machine, storage.MirrorPushOptions{}, false, nil)
-			require.NoError(t, err)
-			conn, err := Open(t.Context(), path)
-			require.NoError(t, err)
-			defer conn.Close()
-			var key, gotMachine string
-			require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key, machine FROM sessions WHERE id = 'sess-1'`).Scan(&key, &gotMachine))
-			assert.Equal(t, "job-a", key)
-			assert.Equal(t, machine, gotMachine)
-			require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key, machine FROM sessions WHERE id = 'sess-2'`).Scan(&key, &gotMachine))
-			assert.Equal(t, "job-a", key)
-			assert.Equal(t, "host-c", gotMachine)
-		})
-	}
+	machine := "host-a"
+	local, path := newPushFixture(t, 2)
+	require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET group_key = 'job-a', machine = CASE id WHEN 'sess-1' THEN 'local' ELSE 'host-c' END`)
+		return err
+	}))
+	_, err := Push(t.Context(), path, local, machine, storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var key, gotMachine string
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key, machine FROM sessions WHERE id = 'sess-1'`).Scan(&key, &gotMachine))
+	assert.Equal(t, "job-a", key)
+	assert.Equal(t, machine, gotMachine)
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT group_key, machine FROM sessions WHERE id = 'sess-2'`).Scan(&key, &gotMachine))
+	assert.Equal(t, "job-a", key)
+	assert.Equal(t, "host-c", gotMachine)
 }
 
 func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {

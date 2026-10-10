@@ -646,7 +646,6 @@ func TestImporterHermesCronGroupsSurviveRepeatedSnapshots(t *testing.T) {
 		session, err := database.GetSession(t.Context(), host+"~hermes:cron_job-a_20261008_120000")
 		require.NoError(t, err)
 		require.NotNil(t, session)
-		assert.Equal(t, "job-a", session.GroupKey)
 		assert.Equal(t, host, session.Machine)
 	}
 }

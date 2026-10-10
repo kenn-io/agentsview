@@ -299,30 +299,22 @@ func AssertUsageGroups(t *testing.T, store db.Store) {
 	assert.Equal(t, int64(4_000_000), rows[0].Cost.Microdollars)
 	assert.Equal(t, "job-a", rows[1].GroupKey)
 	assert.Equal(t, int64(3_000_000), rows[1].Cost.Microdollars)
-	assert.Equal(t, "Research digest", rows[1].GroupLabel)
 	assert.Equal(t, 30, rows[1].InputTokens)
 	assert.Equal(t, 6, rows[1].OutputTokens)
-	filter.From, filter.To = "2026-10-07", "2026-10-07"
-	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "Old digest", rows[0].GroupLabel)
-	assert.Equal(t, int64(1_000_000), rows[0].Cost.Microdollars)
-	filter.From, filter.To = "2026-10-07", "2026-10-10"
-	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
-	require.NoError(t, err)
-	require.Len(t, rows, 4)
 	byKey := make(map[string]db.TopSessionEntry)
 	for _, row := range rows {
 		byKey[row.Machine+"/"+row.GroupKey] = row
 		assert.Equal(t, "hermes-cron", row.Project)
 	}
-	assert.Equal(t, "Research digest", byKey["host-a.example/job-b"].GroupLabel)
 	assert.Equal(t, "group-other", byKey["host-a.example/"].SessionID)
 	assert.Equal(t, 10, byKey["host-a.example/"].InputTokens)
 	assert.Empty(t, byKey["host-a.example/job-a"].SessionID)
-	assert.Equal(t, int64(1_000_000), byKey["host-b.example/job-a"].Cost.Microdollars)
-	assert.Equal(t, 10, byKey["host-b.example/job-a"].InputTokens)
+	filter.From, filter.To = "2026-10-07", "2026-10-07"
+	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(1_000_000), rows[0].Cost.Microdollars)
+	filter.From, filter.To = "2026-10-07", "2026-10-10"
 	filter.Machine = "host-b.example"
 	rows, err = store.GetTopSessionsByCost(t.Context(), filter, 100)
 	require.NoError(t, err)

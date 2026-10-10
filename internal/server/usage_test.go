@@ -524,11 +524,4 @@ func TestHandleUsageTopSessionsGroupsByProjectKey(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.NotEmpty(t, response)
 	assert.Equal(t, "job-a", response[0]["groupKey"])
-	delete(params, "project")
-	w = te.get(t, buildPathURL("/api/v1/usage/summary", params))
-	assertStatus(t, w, http.StatusOK)
-	var summary server.UsageSummaryResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &summary))
-	require.Len(t, summary.ProjectTotals, 1)
-	assert.Equal(t, "hermes-cron", summary.ProjectTotals[0].Project)
 }

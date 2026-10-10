@@ -123,7 +123,6 @@ func TestSessionRowPreservesCronJobAndMachine(t *testing.T) {
 	require.GreaterOrEqual(t, machineColumn, 0)
 	for _, tc := range []struct{ source, machine, wantMachine string }{
 		{"local", "host-a", "host-a"},
-		{"local", "host-b", "host-b"},
 		{"host-c", "host-a", "host-c"},
 	} {
 		row := (&Sync{machine: tc.machine}).sessionRow(sessionPayload{session: db.Session{

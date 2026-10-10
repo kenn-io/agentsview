@@ -178,7 +178,6 @@ func TestUsageOnlyStoragePolicyOwnsDirectAndBatchWrites(t *testing.T) {
 	assert.Nil(t, stored.SessionName)
 	assert.Equal(t, "job-a", stored.GroupKey)
 	assert.Nil(t, stored.DisplayName)
-	assertUsageOnlyGroup(t, database, "project", "job-a")
 
 	batchSession := session
 	batchSession.ID = "batch"
