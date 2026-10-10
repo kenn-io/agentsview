@@ -15,21 +15,44 @@ func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
 		{"short fields", "install-one", empty},
 		{"invalid date", "install-one broken sessions", empty},
 		{"future date", "install-one 2099-10-08 sessions", `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"sessions\"]":["2099-10-08"]}}`},
-		{"newer version", `{"version":2,"claims":[]}`, empty},
-		{"truncated JSON", `{"version":1,"days":{`, empty},
-		{"null days", `{"version":1,"days":null}`, empty},
-		{"invalid stored date", `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"usage\"]":["10/08/2026"]}}`, empty},
+		{"newer version", `{"version":2,"claims":[]}`, ""},
+		{"truncated JSON", `{"version":1,"days":{`, ""},
+		{"null days", `{"version":1,"days":null}`, ""},
+		{"invalid stored date", `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"usage\"]":["10/08/2026"]}}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
 			path := c.TelemetryScreenClaimsPath()
 			require.NoError(t, os.WriteFile(path, []byte(tc.stored), 0o600))
+			if tc.want == "" {
+				require.NoError(t, os.WriteFile(path+".unreadable", []byte("older claims"), 0o600))
+			}
 			require.NoError(t, c.MigrateTelemetryScreenClaims())
+			if tc.want == "" {
+				data, err := os.ReadFile(path + ".unreadable")
+				require.NoError(t, err)
+				assert.Equal(t, tc.stored, string(data))
+				_, err = os.Stat(path)
+				assert.ErrorIs(t, err, os.ErrNotExist)
+				return
+			}
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.JSONEq(t, tc.want, string(data))
 		})
 	}
+}
+
+func TestTelemetryScreenClaimsMigrationKeepsFileWhenMoveFails(t *testing.T) {
+	c := Config{DataDir: t.TempDir(), InstallationID: "install-one"}
+	path := c.TelemetryScreenClaimsPath()
+	const stored = `{"version":2,"claims":[]}`
+	require.NoError(t, os.WriteFile(path, []byte(stored), 0o600))
+	require.NoError(t, os.Mkdir(path+".unreadable", 0o700))
+	require.Error(t, c.MigrateTelemetryScreenClaims())
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, stored, string(data))
 }
 
 func TestTelemetryScreenClaimsMigrationKeepsReadableClaims(t *testing.T) {

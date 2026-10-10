@@ -38,8 +38,7 @@ func (c *Config) TelemetryScreenClaimsPath() string {
 	return filepath.Join(c.DataDir, telemetryScreensFilename)
 }
 
-// MigrateTelemetryScreenClaims converts legacy claims and replaces claims kit
-// cannot read, before kit owns the file.
+// MigrateTelemetryScreenClaims converts legacy claims and moves unreadable claims aside.
 func (c *Config) MigrateTelemetryScreenClaims() error {
 	return c.withConfigLock(func() error {
 		path := c.TelemetryScreenClaimsPath()
@@ -56,7 +55,12 @@ func (c *Config) MigrateTelemetryScreenClaims() error {
 			if json.Unmarshal(data, &current) == nil && current.readable() {
 				return nil
 			}
-			log.Printf("resetting unreadable telemetry screen claims in %s", path)
+			unreadablePath := path + ".unreadable"
+			if err := os.Rename(path, unreadablePath); err != nil {
+				return err
+			}
+			log.Printf("moved unreadable telemetry screen claims to %s", unreadablePath)
+			return nil
 		} else if err := addLegacyScreenClaims(state.Days, strings.Fields(string(data))); err != nil {
 			return err
 		}
