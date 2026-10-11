@@ -27,7 +27,7 @@ func testChromeConnection(t *testing.T, srv *Server) (string, net.Conn) {
 	t.Helper()
 	// t.TempDir embeds the test and subtest names, which pushes the socket
 	// past macOS's 104-byte path limit.
-	dir, err := os.MkdirTemp("", "av")
+	dir, err := os.MkdirTemp("", "av") //nolint:usetesting // Keep the socket path below macOS's limit.
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
 	socket := filepath.Join(dir, "chrome", "host.sock")
