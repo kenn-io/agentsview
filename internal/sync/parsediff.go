@@ -136,6 +136,7 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	runCtx = parser.WithProjectRootMemo(runCtx)
+	runCtx = parser.WithCodexParentInventoryBatch(runCtx)
 	results := e.startWorkers(runCtx, files)
 	for i := range total {
 		var r syncJob

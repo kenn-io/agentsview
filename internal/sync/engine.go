@@ -1812,6 +1812,7 @@ func (e *Engine) syncChangedPathsLocked(
 		Detail: "Preparing changed session paths",
 	})
 	ctx = parser.WithProjectRootMemo(ctx)
+	ctx = parser.WithCodexParentInventoryBatch(ctx)
 	return e.applyChangedPathSyncLocked(
 		ctx, e.prepareChangedPathSync(ctx, paths),
 	)
@@ -5416,6 +5417,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		return stats, metrics, 0, eligibility, err
 	}
 	ctx = parser.WithProjectRootMemo(ctx)
+	ctx = parser.WithCodexParentInventoryBatch(ctx)
 	defer func() {
 		if cleanupErr := closeProviderCache(); cleanupErr != nil {
 			stats.Aborted = true
@@ -7922,6 +7924,7 @@ func (e *Engine) syncAllLocked(
 	}
 	ctx = e.parsePolicyContext(ctx)
 	ctx = parser.WithProjectRootMemo(ctx)
+	ctx = parser.WithCodexParentInventoryBatch(ctx)
 
 	if recordSyncState {
 		e.recordSyncStarted(ctx)

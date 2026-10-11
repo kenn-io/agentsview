@@ -56,7 +56,7 @@ func TestCodexThreadWatchFindsChangesWithUnchangedDirectoryTimes(t *testing.T) {
 	root := t.TempDir()
 	var cache codexThreadFileCache
 	t.Cleanup(func() { cache.invalidate([]string{root}) })
-	paths, err := cache.find(root, revertThread)
+	paths, err := cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
 	require.Empty(t, paths)
 
@@ -81,7 +81,7 @@ func TestCodexThreadWatchFindsChangesWithUnchangedDirectoryTimes(t *testing.T) {
 		// of the filesystem's timestamp update timing.
 		require.NoError(t, windows.SetFileInformationByHandle(handle, windows.FileBasicInfo,
 			(*byte)(unsafe.Pointer(&before)), uint32(unsafe.Sizeof(before))))
-		paths, err = cache.find(root, revertThread)
+		paths, err = cache.find(t.Context(), root, revertThread)
 		require.NoError(t, err)
 		assert.Contains(t, paths, file)
 	}
@@ -93,7 +93,7 @@ func TestCodexThreadWatchClosesInvalidatedRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "2026", "09", "01"), 0o700))
 	var cache codexThreadFileCache
 	t.Cleanup(func() { cache.invalidate([]string{root}) })
-	_, err := cache.find(root, revertThread)
+	_, err := cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
 	directory := cache.roots[root].Value.(*codexThreadDirectory)
 	handles := []windows.Handle{directory.watch.handle, directory.children["2026"].children["09"].children["01"].watch.handle}
@@ -104,7 +104,7 @@ func TestCodexThreadWatchClosesInvalidatedRoot(t *testing.T) {
 	}
 	file := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
-	paths, err := cache.find(root, revertThread)
+	paths, err := cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
 	assert.Equal(t, []string{file}, paths)
 }
@@ -113,16 +113,16 @@ func TestCodexThreadWatchRecoversAfterNotificationFailure(t *testing.T) {
 	root := t.TempDir()
 	var cache codexThreadFileCache
 	t.Cleanup(func() { cache.invalidate([]string{root}) })
-	_, err := cache.find(root, revertThread)
+	_, err := cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
 	handle := cache.roots[root].Value.(*codexThreadDirectory).watch.handle
 	require.NoError(t, windows.FindCloseChangeNotification(handle))
-	paths, err := cache.find(root, revertThread)
+	paths, err := cache.find(t.Context(), root, revertThread)
 	require.ErrorIs(t, err, windows.ERROR_INVALID_HANDLE)
 	assert.Empty(t, paths)
 	file := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
-	paths, err = cache.find(root, revertThread)
+	paths, err = cache.find(t.Context(), root, revertThread)
 	require.NoError(t, err)
 	assert.Equal(t, []string{file}, paths)
 }

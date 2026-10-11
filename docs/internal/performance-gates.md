@@ -84,6 +84,11 @@ runner noise and fail loudly:
   another fork reuses the combined turn IDs from unchanged parent rollouts.
   Allocation growth stays bounded as turns increase, including a parent with
   more than 64 rollouts. `BenchmarkCodexForkParentTurns` measures that parse.
+- `TestCodexForkInventoryBatchDoesNotAllocatePerUnchangedDirectory`
+  (`internal/parser`) — warm forks in a sync batch must not walk unrelated
+  dated directories. `BenchmarkCodexForkParentDatedDirectories` compares 10
+  and 1,000 directories; parent file changes still invalidate cached turns,
+  and the next batch discovers new pages.
 - `TestIncrementalSync_CodexAppend`,
   `TestIncrementalSync_CodexLifecycleTailUpdatesTermination`, the partial-tail
   tests, the late tool-result append test

@@ -2,6 +2,7 @@ package parser
 
 import (
 	"container/list"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,9 +26,23 @@ type codexThreadDirectory struct {
 	children   map[string]*codexThreadDirectory
 	threads    map[string][]string
 	watch      codexThreadWatch
+	batch      *codexThreadInventoryBatch
+	inventory  map[string][]string
 }
 
-func (c *codexThreadFileCache) find(root, threadID string) ([]string, error) {
+type codexThreadInventoryContextKey struct{}
+
+// A nonzero size gives every processing batch a distinct pointer identity.
+type codexThreadInventoryBatch struct{ _ byte }
+
+// WithCodexParentInventoryBatch refreshes each root's parent-file inventory
+// once during a sync batch. Individual parent files are still checked on every
+// parse. Callers must start a new batch for the next sync or watcher event.
+func WithCodexParentInventoryBatch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, codexThreadInventoryContextKey{}, new(codexThreadInventoryBatch))
+}
+
+func (c *codexThreadFileCache) find(ctx context.Context, root, threadID string) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	root = filepath.Clean(root)
@@ -46,11 +61,31 @@ func (c *codexThreadFileCache) find(root, threadID string) ([]string, error) {
 		}
 	}
 	c.recent.MoveToFront(elem)
+	directory := elem.Value.(*codexThreadDirectory)
+	batch, _ := ctx.Value(codexThreadInventoryContextKey{}).(*codexThreadInventoryBatch)
+	if batch != nil && directory.batch == batch {
+		return slices.Clone(directory.inventory[threadID]), nil
+	}
+	directory.batch, directory.inventory = nil, nil
+	lookupID := threadID
+	if batch != nil {
+		lookupID = ""
+	}
 	var paths []string
-	if err := elem.Value.(*codexThreadDirectory).collect(threadID, 0, &paths); err != nil {
+	if err := directory.collect(lookupID, 0, &paths); err != nil {
 		return nil, err
 	}
 	slices.Sort(paths)
+	if batch != nil {
+		inventory := make(map[string][]string)
+		for _, path := range paths {
+			key := CodexSessionUUIDFromFilename(filepath.Base(path))
+			id := CodexThreadIDFromSessionKey(key)
+			inventory[id] = append(inventory[id], path)
+		}
+		directory.batch, directory.inventory = batch, inventory
+		return slices.Clone(inventory[threadID]), nil
+	}
 	return paths, nil
 }
 
@@ -128,7 +163,13 @@ func (d *codexThreadDirectory) collect(threadID string, depth int, paths *[]stri
 		d.info, d.children, d.threads = info, children, threads
 		d.changeTime = changeTime
 	}
-	*paths = append(*paths, d.threads[threadID]...)
+	if threadID == "" {
+		for _, files := range d.threads {
+			*paths = append(*paths, files...)
+		}
+	} else {
+		*paths = append(*paths, d.threads[threadID]...)
+	}
 	for _, child := range d.children {
 		if err := child.collect(threadID, depth+1, paths); err != nil {
 			return err

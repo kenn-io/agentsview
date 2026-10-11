@@ -400,7 +400,7 @@ func (p *codexProvider) PlanRawCapture(
 			}
 			// Match parentTurnResolver: a fork can replay turns from the
 			// original rollout and any page in any configured root.
-			parentPaths, err := p.sources.findThreadSourceFiles(root, parentID)
+			parentPaths, err := p.sources.findThreadSourceFiles(ctx, root, parentID)
 			if err != nil {
 				return RawCapturePlan{}, invalidRawCapturePlan(
 					"find Codex replay parent: %s", rawCaptureFilesystemError(err),
@@ -1014,11 +1014,11 @@ func (s codexSourceSet) findSourceFile(sessionsDir, sessionID string) string {
 
 // findThreadSourceFiles returns every rollout of a thread under sessionsDir,
 // live or archived: its own file and each revert page (<thread>_<rollout>).
-func (s codexSourceSet) findThreadSourceFiles(sessionsDir, threadID string) ([]string, error) {
+func (s codexSourceSet) findThreadSourceFiles(ctx context.Context, sessionsDir, threadID string) ([]string, error) {
 	if !IsValidSessionID(threadID) {
 		return nil, nil
 	}
-	return s.threadFiles.find(sessionsDir, threadID)
+	return s.threadFiles.find(ctx, sessionsDir, threadID)
 }
 
 func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {

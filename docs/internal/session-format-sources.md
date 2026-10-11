@@ -582,12 +582,16 @@ fixtures retain this field; missing identities remain source-local.
   including nested custom roots, so hosted parsing also drops copied messages
   and usage. Reverified these producer paths on 2026-09-30 at the same commit.
   Parent lookup shares a file inventory across providers from the same
-  factory. Directory identity, modification time, and metadata change time
-  refresh changed folders when pages appear or move, while file identity still
-  validates cached turn IDs. On Windows, directory metadata comes from one
-  open handle, but both timestamps can remain unchanged after entries move or
-  appear, as observed in the Windows inventory test on 2026-10-10. Each cached
-  directory therefore owns a
+  factory. Sync batches refresh each root's inventory once; warm fork parses
+  check only their parent's files, avoiding a directory walk per fork.
+  Standalone parses refresh the inventory on every lookup. Directory identity,
+  modification time, and metadata change time refresh changed folders when
+  pages appear or move, while file identity still validates cached turn IDs.
+  Reverified on 2026-10-10 with 10 and 1,000 unrelated dated directories, page
+  discovery across batches, and parent edits and removal within a batch. On
+  Windows, directory metadata comes from one open handle, but both timestamps
+  can remain unchanged after entries move or appear, as observed in the Windows
+  inventory test on 2026-10-10. Each cached directory therefore owns a
   [name-change notification](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstchangenotificationw).
   Long drive and UNC paths use extended Windows syntax because this API can
   retain the `MAX_PATH` limit even when Go's file APIs can read the directory.

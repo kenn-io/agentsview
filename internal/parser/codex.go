@@ -1723,8 +1723,9 @@ func (p *codexProvider) parseSessionWithCursor(
 // parentTurnResolver returns the turn ids of a replay parent thread. A fork
 // copies the thread's live history, which spans its own rollout and every
 // revert page (<thread>_<rollout>), so the ids come from all of those files.
-// Directory identities validate the file inventory so an undo added between
-// parses is visible without listing every unchanged day's files again.
+// Directory identities validate the file inventory once per sync batch (or
+// per standalone parse), so later batches discover new undo pages. Warm
+// parses only check this parent's files, not every unrelated directory.
 // Cache the combined set by the inventory's file identities so each fork
 // avoids copying every parent turn and large inventories do not evict
 // their own rollout entries before the next fork uses them.
@@ -1738,7 +1739,7 @@ func (p *codexProvider) parentTurnResolver(
 			if ctx.Err() != nil {
 				return nil, false
 			}
-			parentPaths, err := p.sources.findThreadSourceFiles(root, parentID)
+			parentPaths, err := p.sources.findThreadSourceFiles(ctx, root, parentID)
 			if err != nil {
 				return nil, false
 			}

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -106,10 +107,11 @@ func TestCodexForkInventoryChangedDayDoesNotScanOtherDays(t *testing.T) {
 func TestCodexForkInventoryConcurrentProviders(t *testing.T) {
 	t.Parallel()
 	factory, cfg, source := codexParentTurnsFixture(t, 80, 2)
+	ctx := WithCodexParentInventoryBatch(t.Context())
 	for i := range 8 {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			t.Parallel()
-			out, err := factory.NewProvider(cfg).Parse(t.Context(), ParseRequest{Source: source})
+			out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
 			require.NoError(t, err)
 			require.Len(t, out.Results, 1)
 			require.Len(t, out.Results[0].Result.Messages, 1)
@@ -208,7 +210,8 @@ func TestCodexForkInventoryFindsNewAndMovedPages(t *testing.T) {
 			require.NoError(t, os.WriteFile(source.Opaque.(codexSource).Path, []byte(fork), 0o600))
 			parse := func() ParseResultOutcome {
 				t.Helper()
-				out, err := factory.NewProvider(cfg).Parse(t.Context(), ParseRequest{Source: source})
+				ctx := WithCodexParentInventoryBatch(t.Context())
+				out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
 				require.NoError(t, err)
 				require.Len(t, out.Results, 1)
 				return out.Results[0]
@@ -289,6 +292,43 @@ func TestCodexForkInventoryFindsNewAndMovedPages(t *testing.T) {
 	}
 }
 
+func TestCodexForkInventoryBatchRechecksParentFiles(t *testing.T) {
+	factory, cfg, source := codexForkInventoryFixture(t, 0)
+	ctx := WithCodexParentInventoryBatch(t.Context())
+	parse := func() ParseResultOutcome {
+		t.Helper()
+		out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
+		require.NoError(t, err)
+		require.Len(t, out.Results, 1)
+		return out.Results[0]
+	}
+	first := parse()
+	require.Equal(t, DataVersionCurrent, first.DataVersion)
+	require.Len(t, first.Result.Messages, 1)
+	require.Equal(t, "new answer", first.Result.Messages[0].Content)
+	head := filepath.Join(cfg.Roots[0], "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
+	original, err := os.ReadFile(head)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(head, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(revertThread, "/work/project", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "replacement-turn", tsEarly),
+	)), 0o600))
+	changed := parse()
+	require.Equal(t, DataVersionCurrent, changed.DataVersion)
+	require.Len(t, changed.Result.Messages, 2)
+	assert.Equal(t, "copied answer", changed.Result.Messages[0].Content)
+	assert.Equal(t, "new answer", changed.Result.Messages[1].Content)
+	require.NoError(t, os.Remove(head))
+	missing := parse()
+	assert.Equal(t, DataVersionNeedsRetry, missing.DataVersion)
+	require.Len(t, missing.Result.Messages, 2)
+	require.NoError(t, os.WriteFile(head, original, 0o600))
+	restored := parse()
+	assert.Equal(t, DataVersionCurrent, restored.DataVersion)
+	require.Len(t, restored.Result.Messages, 1)
+	assert.Equal(t, "new answer", restored.Result.Messages[0].Content)
+}
+
 func BenchmarkCodexForkParentInventory(b *testing.B) {
 	for _, files := range []int{10, 1000} {
 		b.Run(strconv.Itoa(files), func(b *testing.B) {
@@ -304,6 +344,57 @@ func BenchmarkCodexForkParentInventory(b *testing.B) {
 				require.NoError(b, err)
 				require.Len(b, out.Results, 1)
 				require.Len(b, out.Results[0].Result.Messages, 1)
+			}
+		})
+	}
+}
+
+func codexForkDatedDirectoryFixture(tb testing.TB, days int) (ProviderFactory, ProviderConfig, SourceRef) {
+	tb.Helper()
+	factory, cfg, source := codexForkInventoryFixture(tb, 0)
+	start := time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for i := range days {
+		day := start.AddDate(0, 0, i).Format("2006/01/02")
+		require.NoError(tb, os.MkdirAll(filepath.Join(cfg.Roots[0], day), 0o700))
+	}
+	return factory, cfg, source
+}
+
+func TestCodexForkInventoryBatchDoesNotAllocatePerUnchangedDirectory(t *testing.T) {
+	var allocations []float64
+	for _, days := range []int{10, 1000} {
+		factory, cfg, source := codexForkDatedDirectoryFixture(t, days)
+		ctx := WithCodexParentInventoryBatch(t.Context())
+		allocations = append(allocations, testing.AllocsPerRun(5, func() {
+			out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, out.Results, 1)
+			result := out.Results[0]
+			require.Equal(t, DataVersionCurrent, result.DataVersion)
+			require.Len(t, result.Result.Messages, 1)
+			require.Equal(t, "new answer", result.Result.Messages[0].Content)
+		}))
+	}
+	assert.Less(t, allocations[1], 2*allocations[0], "warm forks must not stat unrelated dated directories")
+}
+
+func BenchmarkCodexForkParentDatedDirectories(b *testing.B) {
+	for _, days := range []int{10, 1000} {
+		b.Run(strconv.Itoa(days), func(b *testing.B) {
+			factory, cfg, source := codexForkDatedDirectoryFixture(b, days)
+			ctx := WithCodexParentInventoryBatch(b.Context())
+			parse := func() {
+				out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
+				require.NoError(b, err)
+				require.Len(b, out.Results, 1)
+				require.Len(b, out.Results[0].Result.Messages, 1)
+				require.Equal(b, "new answer", out.Results[0].Result.Messages[0].Content)
+			}
+			parse()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				parse()
 			}
 		})
 	}
