@@ -896,6 +896,8 @@ func insightTypeLabel(insightType string) string {
 		return "Daily Activity"
 	case "agent_analysis":
 		return "Agent Analysis"
+	case "tool_effectiveness":
+		return "Tool Effectiveness"
 	default:
 		return strings.ReplaceAll(insightType, "_", " ")
 	}

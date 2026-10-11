@@ -8,4 +8,5 @@ export const GetApiV1InsightsType = {
   daily_activity: "daily_activity",
   agent_analysis: "agent_analysis",
   llm_canned: "llm_canned",
+  tool_effectiveness: "tool_effectiveness",
 } as const;

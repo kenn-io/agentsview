@@ -6,6 +6,7 @@ import { messages } from "../../stores/messages.svelte.js";
 import { readProgress } from "../../stores/read-progress.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { ui, type ScrollCall } from "../../stores/ui.svelte.js";
+import { toolCallFingerprint } from "../../utils/tool-call-fingerprint.js";
 import { setLocale } from "../../i18n/index.js";
 
 const virtualizerMock = vi.hoisted(() => ({
@@ -182,10 +183,12 @@ describe("MessageList follow cancellation", () => {
     });
   });
 
-  function withCall(message: Message, toolUseId: string): Message {
+  function withCall(message: Message, toolUseId: string, inputJson?: string): Message {
     return {
       ...message,
-      tool_calls: [{ tool_name: "Grep", category: "Search", tool_use_id: toolUseId }],
+      tool_calls: [
+        { tool_name: "Grep", category: "Search", tool_use_id: toolUseId, input_json: inputJson },
+      ],
     } as Message;
   }
 
@@ -209,6 +212,54 @@ describe("MessageList follow cancellation", () => {
     expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
   });
 
+  // Roo Code builds tool IDs from the tool name and message ordinal, so a rewrite can reuse one for another call.
+  it("drops a jump when a rewrite reuses the tool ID for a call with other input", async () => {
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      messages.messages = [
+        withCall(makeMessage(0), "roocode:Grep:0", '{"pattern":"other"}'),
+        makeMessage(10),
+      ];
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    ui.setFollowLatest(false);
+    ui.selectedOrdinal = 0;
+    (component as JumpList).scrollToOrdinal(0, {
+      index: 0,
+      toolUseId: "roocode:Grep:0",
+      fingerprint: toolCallFingerprint("Grep", '{"pattern":"config"}'),
+    });
+    await vi.waitFor(() => expect(ui.selectedOrdinal).toBeNull());
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("keeps a fingerprinted jump to the same call after messages are appended", async () => {
+    messages.loadedRevision = "r2";
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      messages.messages = [
+        withCall(makeMessage(0), "roocode:Grep:0", '{"pattern":"config"}'),
+        makeMessage(10),
+      ];
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    ui.setFollowLatest(false);
+    ui.selectedOrdinal = 0;
+    (component as JumpList).scrollToOrdinal(0, {
+      index: 0,
+      toolUseId: "roocode:Grep:0",
+      fingerprint: toolCallFingerprint("Grep", '{"pattern":"config"}'),
+    });
+    await vi.waitFor(() => {
+      expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" });
+    });
+    expect(ui.selectedOrdinal).toBe(0);
+  });
+
   it("drops a jump to a call with no tool ID once a rewrite moves the transcript revision", async () => {
     messages.loadedRevision = "r1";
     vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
@@ -225,6 +276,41 @@ describe("MessageList follow cancellation", () => {
     (component as JumpList).scrollToOrdinal(0, { index: 0, toolUseId: "", revision: "r1" });
     await vi.waitFor(() => expect(ui.selectedOrdinal).toBeNull());
     expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("drops a jump to a whole message once a rewrite moves the transcript revision", async () => {
+    messages.loadedRevision = "r1";
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      messages.messages = [makeMessage(0), makeMessage(10)];
+      messages.loadedRevision = "r2";
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    ui.setFollowLatest(false);
+    ui.selectedOrdinal = 0;
+    (component as JumpList).scrollToOrdinal(0, { toolUseId: "", revision: "r1" });
+    await vi.waitFor(() => expect(ui.selectedOrdinal).toBeNull());
+    expect(virtualizerMock.scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("keeps a jump to a whole message while the revision still matches", async () => {
+    messages.loadedRevision = "r1";
+    vi.spyOn(messages, "ensureOrdinalLoaded").mockImplementation(async () => {
+      messages.messages = [makeMessage(0), makeMessage(10)];
+    });
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    ui.setFollowLatest(false);
+    ui.selectedOrdinal = 0;
+    (component as JumpList).scrollToOrdinal(0, { toolUseId: "", revision: "r1" });
+    await vi.waitFor(() => {
+      expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, { align: "start" });
+    });
+    expect(ui.selectedOrdinal).toBe(0);
   });
 
   it("keeps a jump to a call with no tool ID while the revision still matches", async () => {

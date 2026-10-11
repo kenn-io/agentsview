@@ -469,6 +469,7 @@ type sessionToolSequenceCall struct {
 	Ordinal              int    `json:"ordinal"`
 	CallIndex            int    `json:"call_index"`
 	ToolUseID            string `json:"tool_use_id"`
+	CallFingerprint      string `json:"call_fingerprint" doc:"Tool name and input fingerprint a jump checks, since some agents derive tool IDs from position"`
 	ToolName             string `json:"tool_name"`
 	Outcome              string `json:"outcome" enum:"errored,empty,content,unknown"`
 	Repeat               string `json:"repeat" enum:"none,identical,near_identical"`
@@ -522,7 +523,7 @@ func buildSessionToolSequences(
 	session *db.Session,
 	rows []signals.ToolCallRow,
 ) sessionToolSequencesResponse {
-	extracted := signals.ExtractToolSequences(rows, session.TerminationStatus != nil && (*session.TerminationStatus == string(parser.TerminationClean) || *session.TerminationStatus == string(parser.TerminationAwaitingUser)))
+	extracted := signals.ExtractToolSequences(rows, parser.TerminationComplete(session.TerminationStatus))
 	response := sessionToolSequencesResponse{
 		SessionID:      session.ID,
 		TotalToolCalls: len(extracted.Calls),
@@ -574,6 +575,7 @@ func projectSessionToolSequenceCall(
 		Ordinal:              outcome.MessageOrdinal,
 		CallIndex:            outcome.CallIndex,
 		ToolUseID:            outcome.ToolUseID,
+		CallFingerprint:      row.Fingerprint(),
 		ToolName:             outcome.ToolName,
 		Outcome:              string(outcome.Outcome),
 		Repeat:               string(outcome.Repeat),

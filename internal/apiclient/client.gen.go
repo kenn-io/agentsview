@@ -21398,6 +21398,8 @@ func (s SessionToolSequence) Validate() error {
 }
 
 type SessionToolSequenceCall struct {
+	// CallFingerprint Tool name and input fingerprint a jump checks, since some agents derive tool IDs from position
+	CallFingerprint      string                         `json:"call_fingerprint" validate:"required"`
 	CallIndex            int64                          `json:"call_index"`
 	InputBytes           int64                          `json:"input_bytes"`
 	InputOmittedBytes    int64                          `json:"input_omitted_bytes"`
@@ -21416,6 +21418,9 @@ type SessionToolSequenceCall struct {
 
 func (s SessionToolSequenceCall) Validate() error {
 	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(s.CallFingerprint, "required"); err != nil {
+		errors = errors.Append("CallFingerprint", err)
+	}
 	if v, ok := any(s.Outcome).(runtime.Validator); ok {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("Outcome", err)

@@ -5,6 +5,8 @@ import type { SessionToolSequenceCallOutcome } from "./sessionToolSequenceCallOu
 import type { SessionToolSequenceCallRepeat } from "./sessionToolSequenceCallRepeat.ts";
 
 export interface SessionToolSequenceCall {
+  /** Tool name and input fingerprint a jump checks, since some agents derive tool IDs from position */
+  call_fingerprint: string;
   call_index: number;
   input_bytes: number;
   input_omitted_bytes: number;

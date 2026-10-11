@@ -6873,6 +6873,9 @@ components:
     SessionToolSequenceCall:
       additionalProperties: false
       properties:
+        call_fingerprint:
+          description: Tool name and input fingerprint a jump checks, since some agents derive tool IDs from position
+          type: string
         call_index:
           format: int64
           type: integer
@@ -6924,6 +6927,7 @@ components:
         - ordinal
         - call_index
         - tool_use_id
+        - call_fingerprint
         - tool_name
         - outcome
         - repeat
@@ -13094,6 +13098,7 @@ paths:
               - daily_activity
               - agent_analysis
               - llm_canned
+              - tool_effectiveness
             type: string
         - description: Filter by project
           explode: false

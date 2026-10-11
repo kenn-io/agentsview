@@ -210,6 +210,60 @@ describe("GeneratedInsightsPanel", () => {
     expect(router.params).toEqual({ tab: "generated" });
   });
 
+  it("renders canned reports as Markdown and routes tool-effectiveness reports to their view", async () => {
+    state.store.selectedItem = {
+      ...state.store.items[0]!,
+      schema_version: "llm_insight.v1",
+      structured_json: JSON.stringify({
+        schema_version: "llm_insight.v1",
+        summary: "s",
+        recommendations: [],
+      }),
+    } as typeof state.store.selectedItem;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    expect(document.querySelector("[data-testid=tool-effectiveness-unavailable]")).toBeNull();
+    expect(document.querySelector(".generated-detail .markdown-body")?.textContent).toContain(
+      "# Generated report",
+    );
+    expect(document.querySelector(".tool-effectiveness-report")).toBeNull();
+    await unmount(component);
+
+    state.store.selectedItem = {
+      ...state.store.items[0]!,
+      type: "tool_effectiveness",
+      kind: "",
+      content: "saved tool report",
+    };
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    expect(document.querySelector("[data-testid=tool-effectiveness-unavailable]")).not.toBeNull();
+    expect(document.body.textContent).toContain("saved tool report");
+    expect(document.querySelector(".generated-badge")?.textContent?.trim()).toBe(
+      "Tool Effectiveness",
+    );
+    expect(document.body.textContent).not.toContain("calls judged");
+    await unmount(component);
+
+    state.store.selectedItem = {
+      ...state.store.items[0]!,
+      type: "tool_effectiveness",
+      kind: "",
+      schema_version: "tool_effectiveness.v1",
+      structured_json: JSON.stringify({
+        session_id: "s1",
+        call_count: 1234,
+        conclusions: [{ assessment: "helped", text: "Read found it", ordinals: [1], calls: [] }],
+        omissions: [],
+      }),
+    } as typeof state.store.selectedItem;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    expect(document.querySelector(".tool-effectiveness-report")).not.toBeNull();
+    const chips = [...document.querySelectorAll(".generated-meta-chip")].map((c) => c.textContent?.trim());
+    expect(chips).toContain("1,234 calls judged");
+  });
+
   it("cancels archive reads without canceling generation tasks", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();

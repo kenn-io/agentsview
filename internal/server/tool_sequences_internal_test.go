@@ -45,6 +45,9 @@ func TestBuildSessionToolSequences_UTF8AndCallCap(t *testing.T) {
 	assert.Len(t, inputCall.InputPreview, 512)
 	assert.True(t, utf8.ValidString(inputCall.InputPreview))
 	assert.Equal(t, len(input)-512, inputCall.InputOmittedBytes)
+	// The fingerprint covers the full input, not the preview, so a rewrite past the preview still changes it.
+	assert.Equal(t, rows[0].Fingerprint(), inputCall.CallFingerprint)
+	assert.NotEqual(t, signals.ToolCallRow{ToolName: "Grep", InputJSON: inputCall.InputPreview}.Fingerprint(), inputCall.CallFingerprint)
 	resultCall := sequence.Calls[9]
 	assert.LessOrEqual(t, len(resultCall.ResultPreview), 1024)
 	assert.True(t, utf8.ValidString(resultCall.ResultPreview))
