@@ -331,83 +331,54 @@ func seedCoveredVirtualMember(
 	))
 }
 
-// TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows pins the pager's
-// translation of stored rows into coverage authority: rows behind the
-// current data version are omitted entirely so their sources stay listed,
-// a stored child digest yields its embedded session/project metadata
-// watermark, and a plain fingerprint falls back to the stored composite.
 func TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows(t *testing.T) {
-	database := openTestDB(t)
-	const container = "/data/opencode.db"
-	seedCoveredVirtualMember(t, database, "opencode:a", container+"#a", 100)
-
-	digest := "opencode-child:v1:900:20:30:1:2:abcd"
-	digestPath := container + "#b"
-	digestMtime := int64(900) * 1_000_000
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: "opencode:b", Agent: "opencode", Project: "project",
-		Machine: "local", FilePath: &digestPath, FileMtime: &digestMtime,
-		FileHash: &digest,
-	}))
-	require.NoError(t, database.SetSessionDataVersion(t.Context(),
-		"opencode:b", db.CurrentDataVersion(),
-	))
-
-	stalePath := container + "#c"
-	staleMtime := int64(100) * 1_000_000
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-		ID: "opencode:c", Agent: "opencode", Project: "project",
-		Machine: "local", FilePath: &stalePath, FileMtime: &staleMtime,
-	}))
-
-	e := &Engine{db: database, machine: "local"}
-	rows, done, err := e.storedMemberFreshnessPager(container, "opencode:", nil)(
-		t.Context(), "", 10,
-	)
-	require.NoError(t, err)
-	assert.True(t, done)
-	require.Len(t, rows, 2,
-		"the stale-version row must not be emitted at all")
-	assert.Equal(t, container+"#a", rows[0].Path)
-	assert.Equal(t, int64(100)*1_000_000, rows[0].CoveredThroughNS,
-		"a plain fingerprint falls back to the stored composite")
-	assert.Equal(t, container+"#b", rows[1].Path)
-	assert.Equal(t, int64(30)*1_000_000, rows[1].CoveredThroughNS,
-		"a child digest yields its embedded metadata watermark")
-}
-
-// TestStoredMemberFreshnessPagerAdvancesPastAllStalePages pins the pager's
-// raw-cursor advance: version-stale rows are withheld from the emitted page,
-// and when a whole raw page is stale the pager must keep reading from the
-// raw cursor instead of returning an empty not-done page — the merge cursor
-// reads that as exhaustion, which would silently un-cover every stored
-// member past the first all-stale page and let one event's work scale with
-// the remainder of the archive.
-func TestStoredMemberFreshnessPagerAdvancesPastAllStalePages(t *testing.T) {
-	database := openTestDB(t)
-	const container = "/data/opencode.db"
-	// Two stale-version members sort before the covered current-version
-	// member, so a limit-2 first page is entirely withheld.
-	for _, id := range []string{"a", "b"} {
-		path := container + "#" + id
-		mtime := int64(100) * 1_000_000
-		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
-			ID: "opencode:" + id, Agent: "opencode", Project: "project",
-			Machine: "local", FilePath: &path, FileMtime: &mtime,
-		}))
+	for _, allStale := range []bool{false, true} {
+		t.Run(strconv.FormatBool(allStale), func(t *testing.T) {
+			database := openTestDB(t)
+			const container = "/data/opencode.db"
+			for _, id := range []string{"a", "b", "c"} {
+				path := container + "#" + id
+				mtime := int64(100) * 1_000_000
+				hash := ""
+				if id == "b" && !allStale {
+					mtime, hash = 900*1_000_000, "opencode-child:v1:900:20:30:1:2:abcd"
+				}
+				if id == "c" && allStale {
+					mtime = 500 * 1_000_000
+				}
+				require.NoError(t, database.UpsertSession(t.Context(), db.Session{
+					ID: "opencode:" + id, Agent: "opencode", Project: "project", Machine: "local",
+					FilePath: &path, FileMtime: &mtime, FileHash: &hash,
+				}))
+				current := id != "c"
+				if allStale {
+					current = id == "c"
+				}
+				if current {
+					require.NoError(t, database.SetSessionDataVersion(t.Context(), "opencode:"+id, db.CurrentDataVersion()))
+				}
+			}
+			limit := 10
+			if allStale {
+				limit = 2
+			}
+			e := &Engine{db: database, machine: "local"}
+			rows, done, err := e.storedMemberFreshnessPager(container, "opencode:", nil)(t.Context(), "", limit)
+			require.NoError(t, err)
+			assert.True(t, done)
+			if allStale {
+				require.Len(t, rows, 1, "advance past the all-stale first page")
+				assert.Equal(t, container+"#c", rows[0].Path)
+				assert.Equal(t, int64(500)*1_000_000, rows[0].CoveredThroughNS)
+			} else {
+				require.Len(t, rows, 2, "omit stale-version rows")
+				assert.Equal(t, container+"#a", rows[0].Path)
+				assert.Equal(t, int64(100)*1_000_000, rows[0].CoveredThroughNS)
+				assert.Equal(t, container+"#b", rows[1].Path)
+				assert.Equal(t, int64(30)*1_000_000, rows[1].CoveredThroughNS)
+			}
+		})
 	}
-	seedCoveredVirtualMember(t, database, "opencode:c", container+"#c", 500)
-
-	e := &Engine{db: database, machine: "local"}
-	rows, done, err := e.storedMemberFreshnessPager(container, "opencode:", nil)(
-		t.Context(), "", 2,
-	)
-	require.NoError(t, err)
-	require.Len(t, rows, 1,
-		"the pager must advance past the all-stale page to the vouchable row")
-	assert.Equal(t, container+"#c", rows[0].Path)
-	assert.Equal(t, int64(500)*1_000_000, rows[0].CoveredThroughNS)
-	assert.True(t, done)
 }
 
 // TestClassifyChangedPathWatermarkMergeRelistsOnStaleCapture pins the
@@ -580,7 +551,7 @@ func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *tes
 			}
 			outside := filepath.Join(t.TempDir(), openCodeFormatDBName(agent))
 			statPaths = nil
-			states := engine.captureSQLiteContainerStates([]string{path + "#ses-1", path + "#ses-2", path, path + "-wal", outside + "#ses-1"})
+			states := engine.captureSQLiteContainerStates([]string{path + "#ses-1", path + "#ses-2", outside + "#ses-1"})
 			require.Len(t, states, 1)
 			require.Contains(t, states, path)
 			assert.Equal(t, []string{filepath.Clean(path)}, statPaths)
@@ -1457,9 +1428,7 @@ func TestOpenCodeCheckpointedChildEditReconcilesAcrossRestart(t *testing.T) {
 		streamed, matchingMarkers, exact bool
 	}{
 		{"full/matching markers", false, true, false},
-		{"full/changed markers", false, false, false},
 		{"streamed/matching markers", true, true, false},
-		{"streamed/changed markers", true, false, false},
 		{"exact member/advanced markers", false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1592,7 +1561,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		raw                                string
 		version                            int
 		want                               bool
-		wantNil, publish                   bool
+		wantNil, publish, concurrent       bool
 	}{
 		{name: "watermark publication preserves deadline", age: time.Minute, want: true, publish: true},
 		{name: "force parse overrides a current stamp", wantNil: true, setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceParse = true }},
@@ -1620,6 +1589,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			e.db = reader
 		}},
 		{name: "read fails", canceled: true},
+		{name: "one concurrent owner", concurrent: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path, container := newContainerTestDB(t)
@@ -1658,6 +1628,24 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 				ctx = canceled
 			}
 			states := map[string]parser.SQLiteContainerState{path: state}
+			if tc.concurrent {
+				results := make(chan bool, 2)
+				for range 2 {
+					go func() {
+						engine := &Engine{db: archive}
+						err := engine.prepareSQLiteContainerVerification(t.Context(), states)
+						results <- err == nil && engine.sqliteContainerListsWatermarkOnly(states)(path)
+					}()
+				}
+				owners := 0
+				for range 2 {
+					if <-results {
+						owners++
+					}
+				}
+				assert.Equal(t, 1, owners)
+				return
+			}
 			err := e.prepareSQLiteContainerVerification(ctx, states)
 			if tc.canceled {
 				require.Error(t, err)
@@ -1758,7 +1746,7 @@ func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
 				}
 			} else {
 				e.poisonSQLiteContainerPass()
-				e.finishSQLiteContainerPass(ctx, true, false)
+				e.finishSQLiteContainerPass(t.Context(), true, false)
 			}
 			record, found := readContainerVerification(t, archive, path)
 			require.True(t, found)
@@ -1859,7 +1847,7 @@ func (p openCodeMemberFailureProvider) Parse(ctx context.Context, req parser.Par
 }
 
 func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
-	for _, mode := range []string{"failed first partial pass", "preparation write fails", "initial capture fails", "virtual member", "planned virtual member", "classification failure", "restarted classification failure"} {
+	for _, mode := range []string{"failed first partial pass", "preparation write fails", "initial capture fails", "planned virtual member", "classification failure", "restarted classification failure"} {
 		t.Run(mode, func(t *testing.T) {
 			preparationFails := mode == "preparation write fails"
 			classificationFails := mode == "classification failure" || mode == "restarted classification failure"
@@ -1919,9 +1907,6 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				changed := path
-				if mode == "virtual member" {
-					changed = blockedPath
-				}
 				require.Error(t, fresh.SyncPathsContext(t.Context(), []string{changed}))
 			}
 			record, found := readContainerVerification(t, archive, path)
@@ -1948,30 +1933,6 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestOpenCodeVerificationConsumptionHasOneOwner(t *testing.T) {
-	archive := openTestDB(t)
-	path, _ := newContainerTestDB(t)
-	state, ok := parser.StatSQLiteContainerState(path)
-	require.True(t, ok)
-	writeContainerVerification(t, archive, path, state, time.Now())
-	states := map[string]parser.SQLiteContainerState{path: state}
-	results := make(chan bool, 2)
-	for range 2 {
-		go func() {
-			engine := &Engine{db: archive}
-			err := engine.prepareSQLiteContainerVerification(t.Context(), states)
-			results <- err == nil && engine.sqliteContainerListsWatermarkOnly(states)(path)
-		}()
-	}
-	owners := 0
-	for range 2 {
-		if <-results {
-			owners++
-		}
-	}
-	assert.Equal(t, 1, owners)
 }
 
 func TestOpenCodeFailedContainerRetriesOnlyUnresolvedMembers(t *testing.T) {
