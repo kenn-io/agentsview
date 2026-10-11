@@ -22,10 +22,9 @@ func (d *codexThreadDirectory) refreshWatch(info os.FileInfo) error {
 	defer runtime.KeepAlive(d)
 	if d.watch.handle != 0 && !os.SameFile(info, d.watch.info) {
 		d.closeWatches()
-		d.children = nil
 	}
 	if d.watch.handle == 0 {
-		d.info, d.threads = nil, nil
+		d.info = nil
 		path, err := filepath.Abs(d.path)
 		if err != nil {
 			return err
@@ -45,7 +44,7 @@ func (d *codexThreadDirectory) refreshWatch(info os.FileInfo) error {
 	if err == nil && status == uint32(windows.WAIT_TIMEOUT) {
 		return nil
 	}
-	d.info, d.threads = nil, nil
+	d.info = nil
 	if err == nil && status != windows.WAIT_OBJECT_0 {
 		err = fmt.Errorf("unexpected notification wait status %d", status)
 	}

@@ -1846,6 +1846,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 			},
 		},
 	)
+	inventoryErr := e.finishCodexParentInventoryBatch(processingCtx, &stats)
 	linkErr := affectedSessionIDs.link(ctx, e, &stats)
 	if linkErr != nil {
 		stats.RecordFailed()
@@ -1883,7 +1884,7 @@ func (e *Engine) applyChangedPathSyncLocked(
 	if stats.Synced > 0 {
 		log.Printf("sync: %d file(s) updated", stats.Synced)
 	}
-	if err := errors.Join(prepared.classificationErr, linkErr, ctx.Err()); err != nil {
+	if err := errors.Join(prepared.classificationErr, inventoryErr, linkErr, ctx.Err()); err != nil {
 		if stats.Deferred > 0 {
 			return stats, tombstoned, &incompleteReconciliationError{
 				deferred: stats.Deferred,
@@ -5627,6 +5628,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		e.promoteSkipCacheWrites(eligibleCacheWrites)
 		cursor = page[len(page)-1].Cursor()
 	}
+	retErr = errors.Join(retErr, e.finishCodexParentInventoryBatch(ctx, &stats))
 	// Pending linking depends only on committed archive rows. Unrelated source
 	// failures must not suppress it; full reconciliation without pending work
 	// still requires a completed pass. Grouped callers consume this eligibility
@@ -8063,6 +8065,9 @@ func (e *Engine) syncAllLocked(
 	stats = e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
+	if err := e.finishCodexParentInventoryBatch(ctx, &stats); err != nil {
+		log.Printf("%v", err)
+	}
 	stats.providerFailures = providerFailures
 	for range providerFailures {
 		stats.RecordFailed()

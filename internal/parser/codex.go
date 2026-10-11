@@ -1743,6 +1743,7 @@ func (p *codexProvider) parentTurnResolver(
 			if err != nil {
 				return nil, false
 			}
+			p.sources.threadFiles.recordParent(ctx, root, parentID, parentPaths, CodexParentInventorySource{Agent: p.spec.agent, Path: childPath})
 			for _, path := range parentPaths {
 				if filepath.Clean(path) != filepath.Clean(childPath) {
 					paths = append(paths, path)

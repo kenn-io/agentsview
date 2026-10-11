@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 // Providers are constructed per source. Share the inventory on their factory,
@@ -32,26 +33,52 @@ type codexThreadDirectory struct {
 
 type codexThreadInventoryContextKey struct{}
 
-// A nonzero size gives every processing batch a distinct pointer identity.
-type codexThreadInventoryBatch struct{ _ byte }
+type codexThreadInventoryBatch struct {
+	mu     sync.Mutex
+	closed atomic.Bool
+	roots  map[codexParentInventoryRoot]map[string]*codexParentInventoryDependency
+}
 
-// WithCodexParentInventoryBatch refreshes each root's parent-file inventory
-// once during a sync batch. Individual parent files are still checked on every
-// parse. Callers must start a new batch for the next sync or watcher event.
+type codexParentInventoryRoot struct {
+	cache *codexThreadFileCache
+	path  string
+}
+
+type codexParentInventoryDependency struct {
+	paths   []string
+	changed bool
+	sources map[CodexParentInventorySource]struct{}
+}
+
+// CodexParentInventorySource identifies a fork whose parent files changed
+// during a batch and whose stored result must remain eligible for retry.
+type CodexParentInventorySource struct {
+	Agent AgentType
+	Path  string
+}
+
+// WithCodexParentInventoryBatch checks each root once while parsing a batch.
+// Call ValidateCodexParentInventoryBatch after all workers finish, before
+// treating their results as current. Parent files are checked on every parse.
 func WithCodexParentInventoryBatch(ctx context.Context) context.Context {
 	return context.WithValue(ctx, codexThreadInventoryContextKey{}, new(codexThreadInventoryBatch))
 }
 
-func (c *codexThreadFileCache) find(ctx context.Context, root, threadID string) ([]string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	root = filepath.Clean(root)
+func codexParentInventoryBatch(ctx context.Context) *codexThreadInventoryBatch {
+	batch, _ := ctx.Value(codexThreadInventoryContextKey{}).(*codexThreadInventoryBatch)
+	if batch != nil && batch.closed.Load() {
+		return nil
+	}
+	return batch
+}
+
+func (c *codexThreadFileCache) directory(root string) *codexThreadDirectory {
 	if c.roots == nil {
 		c.roots = make(map[string]*list.Element)
 	}
-	elem, ok := c.roots[root]
-	if !ok {
-		elem = c.recent.PushFront(&codexThreadDirectory{path: root})
+	elem := c.roots[root]
+	if elem == nil {
+		elem = c.recent.PushFront(&codexThreadDirectory{path: root, inventory: make(map[string][]string)})
 		c.roots[root] = elem
 		if len(c.roots) > codexParentTurnCacheMaxEntries {
 			oldest := c.recent.Back()
@@ -61,32 +88,87 @@ func (c *codexThreadFileCache) find(ctx context.Context, root, threadID string) 
 		}
 	}
 	c.recent.MoveToFront(elem)
-	directory := elem.Value.(*codexThreadDirectory)
-	batch, _ := ctx.Value(codexThreadInventoryContextKey{}).(*codexThreadInventoryBatch)
-	if batch != nil && directory.batch == batch {
-		return slices.Clone(directory.inventory[threadID]), nil
-	}
-	directory.batch, directory.inventory = nil, nil
-	lookupID := threadID
-	if batch != nil {
-		lookupID = ""
-	}
-	var paths []string
-	if err := directory.collect(lookupID, 0, &paths); err != nil {
-		return nil, err
-	}
-	slices.Sort(paths)
-	if batch != nil {
-		inventory := make(map[string][]string)
-		for _, path := range paths {
-			key := CodexSessionUUIDFromFilename(filepath.Base(path))
-			id := CodexThreadIDFromSessionKey(key)
-			inventory[id] = append(inventory[id], path)
+	return elem.Value.(*codexThreadDirectory)
+}
+
+func (c *codexThreadFileCache) find(ctx context.Context, root, threadID string) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	directory := c.directory(filepath.Clean(root))
+	batch := codexParentInventoryBatch(ctx)
+	if batch == nil || directory.batch != batch {
+		directory.batch = nil
+		if err := directory.refresh(0, directory.inventory); err != nil {
+			return nil, err
 		}
-		directory.batch, directory.inventory = batch, inventory
-		return slices.Clone(inventory[threadID]), nil
+		directory.batch = batch
 	}
-	return paths, nil
+	return slices.Clone(directory.inventory[threadID]), nil
+}
+
+func (c *codexThreadFileCache) recordParent(ctx context.Context, root, threadID string, paths []string, source CodexParentInventorySource) {
+	batch := codexParentInventoryBatch(ctx)
+	if batch == nil {
+		return
+	}
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
+	if batch.closed.Load() {
+		return
+	}
+	if batch.roots == nil {
+		batch.roots = make(map[codexParentInventoryRoot]map[string]*codexParentInventoryDependency)
+	}
+	key := codexParentInventoryRoot{cache: c, path: filepath.Clean(root)}
+	parents := batch.roots[key]
+	if parents == nil {
+		parents = make(map[string]*codexParentInventoryDependency)
+		batch.roots[key] = parents
+	}
+	parent := parents[threadID]
+	if parent == nil {
+		parent = &codexParentInventoryDependency{paths: slices.Clone(paths), sources: make(map[CodexParentInventorySource]struct{})}
+		parents[threadID] = parent
+	} else if !slices.Equal(parent.paths, paths) {
+		parent.changed = true
+	}
+	parent.sources[source] = struct{}{}
+}
+
+// ValidateCodexParentInventoryBatch closes the batch and returns forks whose
+// parent inventory changed or could not be checked. Later parses on this
+// context use standalone lookups. Call only after the batch's workers finish.
+func ValidateCodexParentInventoryBatch(ctx context.Context) ([]CodexParentInventorySource, error) {
+	batch := codexParentInventoryBatch(ctx)
+	if batch == nil {
+		return nil, nil
+	}
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
+	batch.closed.Store(true)
+	affected := make(map[CodexParentInventorySource]struct{})
+	var validationErr error
+	for root, parents := range batch.roots {
+		root.cache.mu.Lock()
+		directory := root.cache.directory(root.path)
+		directory.batch = nil
+		err := directory.refresh(0, directory.inventory)
+		validationErr = errors.Join(validationErr, err)
+		for id, parent := range parents {
+			if err != nil || parent.changed || !slices.Equal(parent.paths, directory.inventory[id]) {
+				for source := range parent.sources {
+					affected[source] = struct{}{}
+				}
+			}
+		}
+		root.cache.mu.Unlock()
+	}
+	batch.roots = nil
+	sources := make([]CodexParentInventorySource, 0, len(affected))
+	for source := range affected {
+		sources = append(sources, source)
+	}
+	return sources, validationErr
 }
 
 func (c *codexThreadFileCache) invalidate(roots []string) {
@@ -109,9 +191,10 @@ func (d *codexThreadDirectory) closeWatches() {
 	}
 }
 
-func (d *codexThreadDirectory) collect(threadID string, depth int, paths *[]string) error {
+func (d *codexThreadDirectory) refresh(depth int, inventory map[string][]string) error {
 	info, changeTime, err := statCodexThreadDirectory(d.path)
 	if err != nil || !info.IsDir() {
+		d.removeInventory(inventory)
 		d.closeWatches()
 		d.info, d.children, d.threads = nil, nil, nil
 		if errors.Is(err, os.ErrNotExist) {
@@ -125,6 +208,7 @@ func (d *codexThreadDirectory) collect(threadID string, depth int, paths *[]stri
 	if d.info == nil || !os.SameFile(info, d.info) || !info.ModTime().Equal(d.info.ModTime()) || changeTime != d.changeTime {
 		entries, err := os.ReadDir(d.path)
 		if err != nil {
+			d.removeInventory(inventory)
 			d.closeWatches()
 			d.info, d.children, d.threads = nil, nil, nil
 			if errors.Is(err, os.ErrNotExist) {
@@ -157,25 +241,56 @@ func (d *codexThreadDirectory) collect(threadID string, depth int, paths *[]stri
 		}
 		for name, child := range d.children {
 			if children[name] == nil {
+				child.removeInventory(inventory)
 				child.closeWatches()
+			}
+		}
+		for id, old := range d.threads {
+			if !slices.Equal(old, threads[id]) {
+				replaceCodexInventoryPaths(inventory, id, old, threads[id])
+			}
+		}
+		for id, paths := range threads {
+			if _, existed := d.threads[id]; !existed {
+				replaceCodexInventoryPaths(inventory, id, nil, paths)
 			}
 		}
 		d.info, d.children, d.threads = info, children, threads
 		d.changeTime = changeTime
 	}
-	if threadID == "" {
-		for _, files := range d.threads {
-			*paths = append(*paths, files...)
-		}
-	} else {
-		*paths = append(*paths, d.threads[threadID]...)
-	}
 	for _, child := range d.children {
-		if err := child.collect(threadID, depth+1, paths); err != nil {
+		if err := child.refresh(depth+1, inventory); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// Replace only a changed directory's contribution; unchanged thread slices
+// remain reusable across batches without flattening the entire filename tree.
+func replaceCodexInventoryPaths(inventory map[string][]string, id string, old, current []string) {
+	paths := make([]string, 0, len(inventory[id])+len(current))
+	for _, path := range inventory[id] {
+		if !slices.Contains(old, path) {
+			paths = append(paths, path)
+		}
+	}
+	paths = append(paths, current...)
+	slices.Sort(paths)
+	if len(paths) == 0 {
+		delete(inventory, id)
+	} else {
+		inventory[id] = paths
+	}
+}
+
+func (d *codexThreadDirectory) removeInventory(inventory map[string][]string) {
+	for id, paths := range d.threads {
+		replaceCodexInventoryPaths(inventory, id, paths, nil)
+	}
+	for _, child := range d.children {
+		child.removeInventory(inventory)
+	}
 }
 
 func statCodexThreadDirectory(path string) (os.FileInfo, int64, error) {

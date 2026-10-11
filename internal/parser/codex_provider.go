@@ -503,6 +503,10 @@ func (p *codexProvider) Parse(
 	if err := ctx.Err(); err != nil {
 		return ParseOutcome{}, err
 	}
+	// Materialized roots are removed before the engine batch completes.
+	if _, materialized := req.Source.Opaque.(MaterializedFileSource); materialized {
+		ctx = context.WithValue(ctx, codexThreadInventoryContextKey{}, (*codexThreadInventoryBatch)(nil))
+	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
 		return ParseOutcome{}, errors.New("codex source path unavailable")

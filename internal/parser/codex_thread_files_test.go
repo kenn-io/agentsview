@@ -63,6 +63,77 @@ func TestCodexForkInventoryDoesNotAllocatePerUnchangedFile(t *testing.T) {
 	assert.Less(t, allocations[1], 2*allocations[0], "unchanged filenames must not be enumerated per fork")
 }
 
+func TestCodexForkInventoryFreshBatchDoesNotAllocatePerUnchangedFile(t *testing.T) {
+	var allocations []float64
+	for _, files := range []int{10, 1000} {
+		factory, cfg, source := codexForkInventoryFixture(t, files)
+		allocations = append(allocations, testing.AllocsPerRun(5, func() {
+			ctx := WithCodexParentInventoryBatch(t.Context())
+			out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, out.Results, 1)
+			require.Len(t, out.Results[0].Result.Messages, 1)
+			require.Equal(t, "new answer", out.Results[0].Result.Messages[0].Content)
+			affected, err := ValidateCodexParentInventoryBatch(ctx)
+			require.NoError(t, err)
+			require.Empty(t, affected)
+		}))
+	}
+	t.Logf("fresh batch allocations: %v", allocations)
+	assert.Less(t, allocations[1], 2*allocations[0], "fresh batches must reuse unchanged filenames")
+}
+
+func TestCodexForkInventoryCompletionChecksOnlyUsedParents(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		thread string
+		retry  bool
+	}{
+		{name: "parent page", thread: revertThread, retry: true},
+		{name: "unrelated page", thread: "55555555-5555-4555-8555-555555555555"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			factory, cfg, source := codexForkInventoryFixture(t, 0)
+			ctx := WithCodexParentInventoryBatch(t.Context())
+			provider := factory.NewProvider(cfg)
+			out, err := provider.Parse(ctx, ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, out.Results, 1)
+			page := filepath.Join(cfg.Roots[0], "rollout-2026-09-01T12-00-00-"+tc.thread+"_"+revertRollout+".jsonl")
+			require.NoError(t, os.WriteFile(page, []byte(testjsonl.CodexTurnContextWithIDJSON("gpt-5", "page-turn", tsEarly)), 0o600))
+			affected, err := ValidateCodexParentInventoryBatch(ctx)
+			require.NoError(t, err)
+			if tc.retry {
+				assert.Equal(t, []CodexParentInventorySource{{Agent: AgentCodex, Path: source.Opaque.(codexSource).Path}}, affected)
+			} else {
+				assert.Empty(t, affected)
+			}
+			// A completed context must not retain its earlier warm inventory.
+			head := filepath.Join(cfg.Roots[0], "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
+			require.NoError(t, os.Remove(head))
+			out, err = provider.Parse(ctx, ParseRequest{Source: source})
+			require.NoError(t, err)
+			require.Len(t, out.Results, 1)
+			assert.Equal(t, DataVersionNeedsRetry, out.Results[0].DataVersion)
+		})
+	}
+}
+
+func TestCodexMaterializedForkDoesNotTrackTemporaryRoot(t *testing.T) {
+	factory, cfg, source := codexForkInventoryFixture(t, 0)
+	source.Opaque = MaterializedFileSource{Path: source.Opaque.(codexSource).Path}
+	ctx := WithCodexParentInventoryBatch(t.Context())
+	out, err := factory.NewProvider(cfg).Parse(ctx, ParseRequest{Source: source})
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
+	require.Equal(t, DataVersionCurrent, out.Results[0].DataVersion)
+	require.Len(t, out.Results[0].Result.Messages, 1)
+	require.NoError(t, os.RemoveAll(cfg.Roots[0]))
+	affected, err := ValidateCodexParentInventoryBatch(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, affected, "materialization cleanup must not create retry work")
+}
+
 func TestCodexForkInventoryChangedDayDoesNotScanOtherDays(t *testing.T) {
 	var allocations []float64
 	for _, files := range []int{10, 1000} {

@@ -179,6 +179,14 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		}
 	}
 
+	changedParents, err := parser.ValidateCodexParentInventoryBatch(runCtx)
+	if err != nil {
+		return nil, fmt.Errorf("parse-diff: validate Codex parent inventory: %w", err)
+	}
+	if len(changedParents) > 0 {
+		return nil, fmt.Errorf("parse-diff: parent files changed for %d Codex forks; retry the comparison", len(changedParents))
+	}
+
 	// Presence sweep after all files: stored sessions under a
 	// successfully parsed file that no parse result or exclusion
 	// accounted for were silently dropped by the current parser.
