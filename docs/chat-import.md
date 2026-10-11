@@ -131,7 +131,8 @@ window supports email codes only.
 
 Sync checks every chat, including archived chats. It fetches new chats and chats
 whose `updated_at`, visible leaf, or stored transcript changed. A zip re-import
-that changes text or message count triggers another fetch. Resync clears
+that changes text, message count, or title triggers another fetch. Title-only
+changes count as updates and refresh open session lists. Resync clears
 freshness, so the next Sync fetches each chat once. Search stays available
 during Sync.
 

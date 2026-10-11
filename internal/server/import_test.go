@@ -730,7 +730,8 @@ func TestHandleImportReplaceQuery(t *testing.T) {
 }
 
 func TestClaudeAISyncMutationNotifications(t *testing.T) {
-	for _, ending := range []string{"done", "two detail errors", "cancel"} {
+	const detail = `{"uuid":"22222222-2222-4222-8222-222222222222","name":"Current title","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Committed chat"}]}`
+	for _, ending := range []string{"done", "title only", "two detail errors", "cancel"} {
 		t.Run(ending, func(t *testing.T) {
 			mutations := make(chan struct{}, 2)
 			recall := make(chan struct{}, 2)
@@ -738,6 +739,11 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 				WithSessionMutationNotifier(func() { mutations <- struct{}{} }),
 				WithRecallCorpusMutationNotifier(func() { recall <- struct{}{} }),
 			)
+			if ending == "title only" {
+				exported := strings.Replace(detail, "Current title", "Old title", 1)
+				_, err := importer.ImportClaudeAI(t.Context(), srv.db, strings.NewReader("["+exported+"]"), nil)
+				require.NoError(t, err)
+			}
 			srv.broadcaster = NewBroadcaster(0)
 			events, unsubscribe := srv.broadcaster.Subscribe()
 			defer unsubscribe()
@@ -752,10 +758,14 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 			defer response.Body.Close()
 			scanner := bufio.NewScanner(response.Body)
 			terminal := ""
+			var done importer.ImportStats
 			for scanner.Scan() {
 				line := scanner.Text()
 				if line == "event: done" || line == "event: error" {
 					terminal = strings.TrimPrefix(line, "event: ")
+				}
+				if terminal == "done" && strings.HasPrefix(line, "data: ") {
+					require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &done))
 				}
 				if !strings.HasPrefix(line, "data: ") || !strings.Contains(line, `"path"`) {
 					continue
@@ -771,7 +781,7 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 					body = `[{"uuid":"11111111-1111-4111-8111-111111111111","capabilities":["chat"]}]`
 				case strings.Contains(fetch.Path, "chat_conversations_v2"):
 					body = `{"data":[{"uuid":"22222222-2222-4222-8222-222222222222","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
-					if ending != "done" {
+					if ending == "two detail errors" || ending == "cancel" {
 						body += `,{"uuid":"22222222-2222-4222-8222-222222222223","current_leaf_message_uuid":"m","updated_at":"2026-03-01T10:05:00Z"}`
 					}
 					if ending == "two detail errors" {
@@ -779,7 +789,7 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 					}
 					body += `],"has_more":false}`
 				case strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222222?"):
-					body = `{"uuid":"22222222-2222-4222-8222-222222222222","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","current_leaf_message_uuid":"m","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Committed chat"}]}`
+					body = detail
 				case strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222223?"), strings.Contains(fetch.Path, "/22222222-2222-4222-8222-222222222224?"):
 					if ending == "cancel" {
 						cancel()
@@ -802,6 +812,14 @@ func TestClaudeAISyncMutationNotifications(t *testing.T) {
 				require.NoError(t, answer.Body.Close())
 			}
 			wantTerminal := ending
+			if ending == "title only" {
+				wantTerminal = "done"
+				assert.Equal(t, importer.ImportStats{Updated: 1}, done)
+				session, err := srv.db.GetSessionFull(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222222")
+				require.NoError(t, err)
+				require.NotNil(t, session.SessionName)
+				assert.Equal(t, "Current title", *session.SessionName)
+			}
 			if ending == "two detail errors" {
 				wantTerminal = "error"
 			}

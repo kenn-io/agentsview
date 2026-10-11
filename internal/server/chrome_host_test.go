@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -316,26 +317,33 @@ func TestChromeHostFrameReply(t *testing.T) {
 func TestChromeHostKeepsLiveConnection(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
 	socket, conn := testChromeConnection(t, srv)
-	finished := make(chan error, 1)
-	go func() {
-		response, err := srv.chrome.fetch(t.Context(), "/api/organizations")
-		if err == nil {
-			assert.Equal(t, "[]", string(response.Body))
+	for attempt := range 2 {
+		finished := make(chan error, 1)
+		go func() {
+			response, err := srv.chrome.fetch(t.Context(), "/api/organizations")
+			if err == nil {
+				assert.Equal(t, "[]", string(response.Body))
+			}
+			finished <- err
+		}()
+		id, path := readChromeRequest(t, conn)
+		require.Equal(t, "/api/organizations", path)
+		if attempt == 0 {
+			second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
+			require.NoError(t, err)
+			defer second.Close()
+			require.NoError(t, second.SetReadDeadline(time.Now().Add(5*time.Second)))
+			_, err = chromehost.ReadFrame(second)
+			require.ErrorIs(t, err, io.EOF)
 		}
-		finished <- err
-	}()
-	id, _ := readChromeRequest(t, conn)
-	second, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
-	require.NoError(t, err)
-	defer second.Close()
-	writeChromeReply(t, conn, id, 200, "[]")
-	select {
-	case err := <-finished:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "first fetch did not finish")
+		writeChromeReply(t, conn, id, 200, "[]")
+		select {
+		case err := <-finished:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "fetch did not finish", "attempt %d", attempt+1)
+		}
 	}
-	assert.True(t, srv.chrome.Connected())
 }
 
 type chromeAcceptListener struct {

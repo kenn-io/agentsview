@@ -265,7 +265,7 @@ func SyncClaudeAI(ctx context.Context, store interface {
 
 func syncConversation(ctx context.Context, store db.Store, result parser.ParseResult) (importStatus, error) {
 	id := result.Session.ID
-	existing, err := store.GetSession(ctx, id)
+	existing, err := store.GetSessionFull(ctx, id)
 	if err != nil {
 		return importNew, err
 	}
@@ -289,6 +289,17 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 		// A usage-only archive can't tell a shorter branch from a shorter export, so it keeps the longer copy.
 		if refusalReason(err) == RefusalShorterExport {
 			return importSkipped, nil
+		}
+		if err == nil && status == importSkipped {
+			// Message equality can still hide a title repair. Compare stored
+			// names so titles discarded by archive policy remain unchanged.
+			stored, readErr := store.GetSessionFull(ctx, id)
+			if readErr != nil {
+				return status, readErr
+			}
+			if stored != nil && !ptrEqual(existing.SessionName, stored.SessionName) {
+				status = importUpdated
+			}
 		}
 		return status, err
 	}

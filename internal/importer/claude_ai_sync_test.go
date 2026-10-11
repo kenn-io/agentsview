@@ -580,13 +580,18 @@ func TestSyncClaudeAIZipTitleFreshness(t *testing.T) {
 	exported := strings.Replace(syncDetail, `"name":"Chat"`, `"name":"Old title"`, 1)
 	_, err = ImportClaudeAI(t.Context(), d, strings.NewReader("["+exported+"]"), nil)
 	require.NoError(t, err)
-	_, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	stats, err := SyncClaudeAI(t.Context(), d, fetch, nil)
 	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Updated: 1}, stats)
 	assert.Equal(t, 2, calls)
 	session, err := d.GetSessionFull(t.Context(), id)
 	require.NoError(t, err)
 	require.NotNil(t, session.SessionName)
 	assert.Equal(t, "Chat", *session.SessionName)
+	stats, err = SyncClaudeAI(t.Context(), d, fetch, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{Skipped: 1}, stats)
+	assert.Equal(t, 2, calls)
 }
 
 func TestSyncClaudeAIUsageArchiveShorterBranchKeepsLonger(t *testing.T) {
