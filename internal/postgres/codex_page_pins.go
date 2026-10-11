@@ -71,7 +71,9 @@ func (s *Sync) migrateCodexPages(
 		return err
 	}
 	for _, old := range pages {
-		if old.dataVersion >= 131 || old.path == "" {
+		syncScope := s.isFiltered() && !slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == old.id })
+		migratePage := old.dataVersion < 131 && old.path != ""
+		if !syncScope && !migratePage {
 			continue
 		}
 		if !sameSessionOwner(
@@ -80,14 +82,31 @@ func (s *Sync) migrateCodexPages(
 		) {
 			continue
 		}
+		head, err := s.local.GetArtifactExportSession(ctx, old.id)
+		if err != nil {
+			return fmt.Errorf("reading original Codex rollout: %w", err)
+		}
+		if syncScope && head != nil && head.Agent == old.agent && threads[old.id].Agent == old.agent &&
+			(old.archive == "" || old.archive == s.archiveID) && projectFailsFilter(head.Project, s.projects, s.excludeProjects) {
+			// A filtered page restore still ends its source's thread scope.
+			// Publish that dependency without the excluded project's content.
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET
+				trash_includes_codex_pages = CASE
+					WHEN deleted_at IS DISTINCT FROM source_deleted_at
+						OR trash_includes_codex_pages IS DISTINCT FROM source_trash_includes_codex_pages
+					THEN trash_includes_codex_pages ELSE $2 END,
+				source_trash_includes_codex_pages = $2, updated_at = NOW()
+				WHERE id = $1 AND source_trash_includes_codex_pages IS DISTINCT FROM $2`, old.id, head.TrashIncludesCodexPages); err != nil {
+				return fmt.Errorf("publishing Codex source trash scope: %w", err)
+			}
+		}
+		if !migratePage {
+			continue
+		}
 		prefixEnd := strings.LastIndex(old.id, ":") + 1
 		key := parser.CodexSessionUUIDFromFilename(old.path[strings.LastIndexAny(old.path, `/\`)+1:])
 		if key == "" || key == old.id[prefixEnd:] || parser.CodexThreadIDFromSessionKey(key) != old.id[prefixEnd:] {
 			continue
-		}
-		head, err := s.local.GetArtifactExportSession(ctx, old.id)
-		if err != nil {
-			return fmt.Errorf("reading original Codex rollout: %w", err)
 		}
 		pins, err := snapshotPinnedMessages(ctx, tx, old.id)
 		if err != nil {

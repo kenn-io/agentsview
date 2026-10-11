@@ -37,12 +37,22 @@ func TestCodexPagePublicationDuringThreadPurge(t *testing.T) {
 						_, err := syncer.Push(ctx, true, nil)
 						require.NoError(t, err)
 					}
-					// Retirement retains this fileless version-131 thread as the
-					// scope anchor. The returning page does not yet exist remotely.
-					_, err := writer.ExecContext(ctx, `UPDATE sessions SET data_version=131 WHERE id=$1`, codexTrashThread)
+					_, err := local.RestoreSession(ctx, codexTrashThread)
 					require.NoError(t, err)
-					_, err = local.RestoreSession(ctx, codexTrashThread)
+					_, err = syncer.Push(ctx, true, nil)
 					require.NoError(t, err)
+					require.NoError(t, (&Store{pg: writer}).SoftDeleteSession(ctx, codexTrashThread))
+					// Upgrade a PostgreSQL-only legacy trash action. Its independent
+					// scope must survive source metadata published with the new page.
+					_, err = observer.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key=$1`, codexThreadScopeMetadataKey)
+					require.NoError(t, err)
+					require.NoError(t, backfillCodexThreadScopePG(ctx, writer))
+					// Retirement retains this fileless version-131 thread as the anchor.
+					_, err = writer.ExecContext(ctx, `UPDATE sessions SET data_version=131 WHERE id=$1`, codexTrashThread)
+					require.NoError(t, err)
+					var remoteScope bool
+					require.NoError(t, writer.QueryRowContext(ctx, `SELECT trash_includes_codex_pages AND deleted_at IS NOT NULL AND source_deleted_at IS NULL FROM sessions WHERE id=$1`, codexTrashThread).Scan(&remoteScope))
+					require.True(t, remoteScope)
 					require.NoError(t, local.UpsertSession(ctx, db.Session{ID: codexTrashReturning, Agent: "codex", Project: "returning", Machine: "machine", ParentSessionID: new(codexTrashThread), RelationshipType: "continuation"}))
 					require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: codexTrashReturning, Role: "user", Content: "Returning page"}}))
 					page, err := (&Store{pg: writer}).GetSessionFull(ctx, codexTrashReturning)
