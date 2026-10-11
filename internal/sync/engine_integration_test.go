@@ -1463,6 +1463,10 @@ func TestSyncEngineOpenCodeStorageSameMtimeContentChangeUsesFingerprint(
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the storage session")
 	sessionID := "opencode:same-mtime-hash"
+	require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET local_modified_at = ? WHERE id = ?", "2000-01-01T00:00:00.000Z", sessionID)
+		return err
+	}))
 	assertMessageContent(
 		t, env.db, sessionID, "original prompt", "original answer",
 	)

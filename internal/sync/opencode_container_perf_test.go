@@ -53,11 +53,12 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 				}
 				assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore)
 				lookups := parser.OpenCodeSessionChildLookups() - lookupsBefore
-				if mode == "watcher" {
+				switch mode {
+				case "watcher":
 					watcherLookups[n] = lookups
-				} else if mode == "streamed" {
+				case "streamed":
 					assert.LessOrEqual(t, lookups, int64(1))
-				} else {
+				default:
 					assert.Equal(t, int64(1), lookups)
 				}
 				assertMessageContent(t, env.db, "opencode:ses00000", "changed prompt", "changed answer")
