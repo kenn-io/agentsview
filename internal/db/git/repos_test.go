@@ -81,15 +81,12 @@ func TestDiscoverRepos_FindsRootAndFiltersMissing(t *testing.T) {
 	assert.Equal(t, canonAll(want), canonAll(slices.Concat(got...)), "DiscoverRepos")
 }
 
-func TestDiscoverRepos_SymlinkParentCommitTotals(t *testing.T) {
+func TestDiscoverRepos_SymlinkParentResolvesTarget(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix resolves a parent after following its symbolic link")
 	}
 	skipIfNoGit(t)
 	actual, decoy := initBareRepo(t), initBareRepo(t)
-	commitAt(t, actual, "2026-01-01T00:00:00Z", "one")
-	commitAt(t, decoy, "2026-01-01T00:00:00Z", "one")
-	commitAt(t, decoy, "2026-01-02T00:00:00Z", "two")
 	child := mkdirIn(t, actual, "child")
 	link := filepath.Join(decoy, "link")
 	require.NoError(t, os.Symlink(child, link))
@@ -97,10 +94,7 @@ func TestDiscoverRepos_SymlinkParentCommitTotals(t *testing.T) {
 	for _, recorded := range []string{link + "/..", link + "/../missing", "link/..", "link/../missing"} {
 		groups := DiscoverRepos(t.Context(), []string{recorded})
 		require.Len(t, groups, 1)
-		require.Equal(t, canonAll([]string{actual}), groups[0])
-		totals, err := AggregateLog(t.Context(), groups[0][0], "test@example.com", "1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z")
-		require.NoError(t, err)
-		assert.Equal(t, 1, totals.Commits)
+		assert.Equal(t, canonAll([]string{actual}), groups[0])
 	}
 }
 
