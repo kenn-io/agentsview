@@ -26,7 +26,7 @@ func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
 		{"empty file", "", ""},
 		{"whitespace only", " \t\r\n", ""},
 		{"future date", "install-one 2099-10-08 sessions", `{"version":1,"days":{"[\"install-one\",\"screen_viewed\",\"sessions\"]":["2099-10-08"]}}`},
-		{"newer version", `{"version":2,"claims":[]}`, ""},
+		{"newer version", `{"version":2,"days":{}}`, ""},
 		{"truncated JSON", `{"version":1,"days":{`, ""},
 		{"damaged JSON without brace", `"version":1,"days":{}}`, ""},
 		{"null days", `{"version":1,"days":null}`, ""},
