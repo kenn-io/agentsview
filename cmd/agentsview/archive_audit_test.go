@@ -53,8 +53,9 @@ func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
 }
 
 // TestArchiveAuditRetriesRequiredRebuild runs the stale-archive audit against
-// the real resync build behind the worker-launch seam. A spawn failure must
-// stay a retryable error rather than rebuild the archive in the daemon.
+// the real resync build behind the worker-launch seam. An aborted build or a
+// spawn failure must stay a retryable error and never start an archive-wide
+// pass in the daemon.
 func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -68,7 +69,7 @@ func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
 		{
 			name:       "rebuild aborts",
 			missingSrc: true,
-			wantErr:    "required archive rebuild did not complete",
+			wantErr:    "resync-build: aborted",
 		},
 		{name: "worker cannot start", spawnFails: true, wantErrIs: errWorkerSpawn},
 	} {
@@ -121,6 +122,10 @@ func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
 			assert.Equal(t, []string{"resync-build"}, modes)
 			assert.Equal(t, !tc.wantRebuilt, database.NeedsResync())
 			assert.False(t, database.WriterClosed())
+			if !tc.wantRebuilt {
+				assert.True(t, engine.LastSync().IsZero(),
+					"a failed rebuild retry must not sync in the daemon")
+			}
 		})
 	}
 }
