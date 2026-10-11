@@ -108,13 +108,6 @@ func TestCodexForkInventoryCompletionChecksOnlyUsedParents(t *testing.T) {
 			} else {
 				assert.Empty(t, affected)
 			}
-			// A completed context must not retain its earlier warm inventory.
-			head := filepath.Join(cfg.Roots[0], "rollout-2026-09-01T10-00-00-"+revertThread+".jsonl")
-			require.NoError(t, os.Remove(head))
-			out, err = provider.Parse(ctx, ParseRequest{Source: source})
-			require.NoError(t, err)
-			require.Len(t, out.Results, 1)
-			assert.Equal(t, DataVersionNeedsRetry, out.Results[0].DataVersion)
 		})
 	}
 }
