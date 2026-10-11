@@ -2,6 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 
 const SESSION_ID = "test-session-tool-sequences";
 
+// The layout fixture names a long made-up MCP tool to test row widths, so its citations aren't
+// tied to the seeded transcript. The navigation test builds an accurate report instead.
 const report = {
   id: 77,
   type: "tool_effectiveness",
@@ -43,23 +45,45 @@ const report = {
   created_at: "2026-04-26T12:00:00Z",
 };
 
-async function openReport(page: Page, width: number) {
+// The seeded calls, with fingerprints of each call's tool name and input.
+const SEEDED_CALLS = [
+  { ordinal: 1, tool_use_id: "grep-1", call_fingerprint: "a82053b1", tool_name: "Grep", input_preview: '{"pattern":"config"}', outcome: "empty", result_bytes: 16 },
+  { ordinal: 2, tool_use_id: "grep-2", call_fingerprint: "a82053b1", tool_name: "Grep", input_preview: '{"pattern":"config"}', outcome: "empty", result_bytes: 16 },
+  { ordinal: 3, tool_use_id: "read-1", call_fingerprint: "7111f37f", tool_name: "Read", input_preview: '{"file_path":"app/config.json"}', outcome: "content", result_bytes: 16 },
+];
+
+/** A report whose citations name the seeded calls and the transcript revision they came from. */
+function seededReport(transcriptRevision: string) {
+  const structured = JSON.parse(report.structured_json);
+  return {
+    ...report,
+    id: 78,
+    structured_json: JSON.stringify({
+      ...structured,
+      omissions: [],
+      transcript_revision: transcriptRevision,
+      termination_status: "clean",
+      cited_calls: SEEDED_CALLS.map((call) => ({ ...call, call_index: 0, message_calls: 1 })),
+    }),
+  };
+}
+
+function serveReports(page: Page, reports: object[]) {
+  return page.route("**/api/v1/insights", (route) => route.fulfill({ json: { insights: reports } }));
+}
+
+async function openReport(page: Page, width: number, id = report.id) {
   await page.setViewportSize({ width, height: 900 });
-  await page.goto(`/recall?tab=generated&insight=${report.id}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`/recall?tab=generated&insight=${id}`, { waitUntil: "domcontentloaded" });
   const detail = page.locator(".generated-detail");
   await expect(detail.locator(".tool-sequences-panel")).toBeVisible({ timeout: 10_000 });
   return detail;
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.route("**/api/v1/insights", (route) =>
-    route.fulfill({ json: { insights: [report] } }),
-  );
-});
-
 test("saved tool-effectiveness report keeps conclusions, sequences, and omissions at each width", async ({
   page,
 }, testInfo) => {
+  await serveReports(page, [report]);
   for (const width of [1280, 768, 400]) {
     const detail = await openReport(page, width);
     // Text doesn't change with width, so check it once; layout is checked at every width.
@@ -103,34 +127,55 @@ test("saved tool-effectiveness report keeps conclusions, sequences, and omission
   }
 });
 
-test("cited calls and sequence calls open the transcript at the cited message", async ({
-  page,
-}) => {
-  let detail = await openReport(page, 1280);
+test("cited calls and sequence calls open the transcript at the cited call", async ({ page }) => {
+  const session = await (await page.request.get(`/api/v1/sessions/${SESSION_ID}`)).json();
+  const seeded = seededReport(session.transcript_revision);
+  await serveReports(page, [seeded]);
+
+  let detail = await openReport(page, 1280, seeded.id);
+  // The report matches the transcript it cites, so nothing reads as stale.
+  await expect(detail.locator("[data-testid=tool-effectiveness-session-changed]")).toHaveCount(0);
   const conclusion = detail.locator(".conclusion").nth(1);
   await conclusion.locator(".citation").click();
   await expect(conclusion).toHaveClass(/open/);
-  await conclusion.getByRole("link", { name: /^Message 3: open the .+ call in the transcript$/ }).click();
-  await expect(page).toHaveURL(new RegExp(`/sessions/${SESSION_ID}[?](.*&)?msg=3`));
-  const scroller = page.locator(".message-list-scroll");
-  const selected = scroller.locator(".virtual-row.selected");
+  await conclusion.getByRole("link", { name: "Message 3: open the Read call in the transcript", exact: true }).click();
+  // The link names the call by tool ID and fingerprint, so the transcript can check it.
+  await expect(page).toHaveURL(new RegExp(`/sessions/${SESSION_ID}[?](.*&)?msg=3(&|$)`));
+  const url = new URL(page.url());
+  expect(url.searchParams.get("tool_use_id")).toBe("read-1");
+  expect(url.searchParams.get("fp")).toBe("7111f37f");
+  const selected = page.locator(".message-list-scroll .virtual-row.selected");
   await expect(selected).toHaveAttribute("data-index", "3");
   await expect(selected).toBeInViewport({ timeout: 10_000 });
+  await expect(selected).toContainText("app/config.json");
 
+  // A reload reads the call back from the URL and checks it again.
   await page.reload({ waitUntil: "domcontentloaded" });
-  await expect(page.locator(".message-list-scroll .virtual-row.selected")).toHaveAttribute(
-    "data-index",
-    "3",
-  );
+  await expect(selected).toHaveAttribute("data-index", "3");
+  await expect(selected).toContainText("app/config.json");
 
-  detail = await openReport(page, 1280);
+  detail = await openReport(page, 1280, seeded.id);
   const sequence = detail.locator(".tool-sequences-panel .sequence").first();
   await sequence.locator(".sequence-row").click();
   await expect(sequence.locator(".sequence-row")).toHaveAttribute("aria-expanded", "true");
   await sequence.getByRole("link", { name: "Message 1: open the Grep call in the transcript", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/sessions/${SESSION_ID}[?](.*&)?msg=1`));
-  await expect(page.locator(".message-list-scroll .virtual-row.selected")).toHaveAttribute(
-    "data-index",
-    "1",
-  );
+  await expect(page).toHaveURL(new RegExp(`/sessions/${SESSION_ID}[?](.*&)?msg=1(&|$)`));
+  expect(new URL(page.url()).searchParams.get("fp")).toBe("a82053b1");
+  await expect(selected).toHaveAttribute("data-index", "1");
+});
+
+test("a link whose call no longer matches its fingerprint selects nothing", async ({ page }) => {
+  const selected = page.locator(".message-list-scroll .virtual-row.selected");
+  // The matching fingerprint opens the call, so the refusal below comes from the check.
+  await page.goto(`/sessions/${SESSION_ID}?msg=3&call=0&tool_use_id=read-1&fp=7111f37f`, {
+    waitUntil: "domcontentloaded",
+  });
+  await expect(selected).toHaveAttribute("data-index", "3", { timeout: 10_000 });
+
+  // read-1 is still at message 3, but its tool name and input differ from what the link recorded.
+  await page.goto(`/sessions/${SESSION_ID}?msg=3&call=0&tool_use_id=read-1&fp=00000000`, {
+    waitUntil: "domcontentloaded",
+  });
+  await expect(page.locator(".message-list-scroll .virtual-row").first()).toBeVisible({ timeout: 10_000 });
+  await expect(selected).toHaveCount(0);
 });
