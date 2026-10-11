@@ -1001,13 +1001,13 @@ func TestSyncCursorIDEDataVersionUpgradeRefreshesSessionStart(t *testing.T) {
 	require.NotNil(t, synced.StartedAt)
 	require.Equal(t, wantStart, *synced.StartedAt)
 
-	current := strconv.Itoa(db.CurrentDataVersion())
-	previous := strconv.Itoa(db.CurrentDataVersion() - 1)
+	current := strconv.Itoa(db.AgentDataVersion(parser.AgentCursorIDE))
+	previous := strconv.Itoa(db.AgentDataVersion(parser.AgentCursorIDE) - 1)
 	var rewound int64
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET started_at = ?, data_version = ? WHERE id = ?",
-			"2026-06-14T09:00:00.000Z", db.CurrentDataVersion()-1, id,
+			"2026-06-14T09:00:00.000Z", db.AgentDataVersion(parser.AgentCursorIDE)-1, id,
 		); err != nil {
 			return err
 		}

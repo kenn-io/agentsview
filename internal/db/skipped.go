@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+const ProviderAgentSkipMarker = "?agent="
+
 // LoadSkippedFiles returns all persisted skip cache entries
 // as a map from file_path to file_mtime.
 func (db *DB) LoadSkippedFiles(ctx context.Context) (map[string]int64, error) {

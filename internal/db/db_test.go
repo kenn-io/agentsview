@@ -750,29 +750,6 @@ func TestOpenDataVersionBump_PreservesData(t *testing.T) {
 	).Scan(&ver)
 	requireNoError(t, err, "read version")
 	require.Equal(t, 0, ver, "expected user_version=0 (stale)")
-}
-
-func TestOpenDataVersionBump_SurvivesRestart(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.db")
-
-	// Create a DB and downgrade its version.
-	d, err := Open(t.Context(), path)
-	requireNoError(t, err, "initial open")
-	insertSession(t, d, "s1", "proj")
-	d.Close()
-
-	conn, err := sql.Open("sqlite3", path)
-	requireNoError(t, err, "raw open")
-	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 0")
-	requireNoError(t, err, "reset version")
-	conn.Close()
-
-	// First reopen: detects stale, does NOT bump version.
-	d2, err := Open(t.Context(), path)
-	requireNoError(t, err, "reopen 1")
-	require.True(t, d2.NeedsResync(),
-		"first reopen: expected NeedsResync=true")
 	d2.Close() // simulate process exit without resync
 
 	// Second reopen: must still detect stale because the

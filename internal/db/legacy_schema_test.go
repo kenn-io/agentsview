@@ -128,15 +128,21 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 		name            string
 		schema          string
 		wantInsightDate string
+		userVersion     int
+		wantVersion     int
 	}{
 		{
-			name:   "pre-parent-link archive",
-			schema: preParentLegacySchema,
+			name:        "pre-parent-link archive",
+			schema:      preParentLegacySchema,
+			userVersion: archiveOnlyVersionBase + 125,
+			wantVersion: 125,
 		},
 		{
 			name:            "v0.6 archive with range insight",
 			schema:          v06LegacySchema,
 			wantInsightDate: "2026-02-23",
+			userVersion:     dataVersion,
+			wantVersion:     dataVersion - 1,
 		},
 	}
 
@@ -164,14 +170,23 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 				require.NoError(t, err)
 			}
 			_, err = conn.ExecContext(t.Context(), fmt.Sprintf(
-				"PRAGMA user_version = %d", dataVersion,
+				"PRAGMA user_version = %d", tc.userVersion,
 			))
 			require.NoError(t, err)
+			if tc.userVersion >= archiveOnlyVersionBase {
+				_, err = conn.ExecContext(t.Context(), `CREATE TABLE archive_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL, created_at TEXT, updated_at TEXT); INSERT INTO archive_metadata(key,value) VALUES ('archive_only','1')`)
+				require.NoError(t, err)
+			}
 			require.NoError(t, conn.Close())
 
 			d, err := Open(t.Context(), path)
 			require.NoError(t, err)
 			assert.True(t, d.NeedsResync())
+			version, only, err := readUserVersion(t.Context(), d.getReader())
+			require.NoError(t, err)
+			_, archiveOnly := DecodeUserVersion(tc.userVersion)
+			assert.Equal(t, tc.wantVersion, version, "repair preserves source-version provenance")
+			assert.Equal(t, archiveOnly, only)
 
 			session := requireSessionExists(t, d, "legacy-session")
 			assert.Equal(t, "project-a", session.Project)

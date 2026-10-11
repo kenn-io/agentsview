@@ -8466,7 +8466,7 @@ func TestProviderProcessCacheKeyOmnigentContainerIncludesDataVersion(t *testing.
 
 	legacy := container + "?agent=omnigent?source_hash=container-content-hash"
 	assert.Equal(t,
-		legacy+"&data_version="+strconv.Itoa(db.CurrentDataVersion()),
+		legacy+"&data_version="+strconv.Itoa(db.AgentDataVersion(parser.AgentOmnigent)),
 		containerKey,
 		"whole-container cache identity must include the parser data version",
 	)

@@ -1499,7 +1499,7 @@ The report distinguishes parser drift from comparison-basis skew:
     append-path metadata. It is also reported but excluded from
     `--fail-on-change`.
 - `pending_resync` means the stored data version is behind the running binary;
-    the next data-version resync rewrites those rows.
+    sync reparses available stale sources, rebuilding the archive when required.
 
 If the report includes `incremental_skew`, run a full resync before treating the
 archive as a clean parser-drift baseline. A full resync rewrites those rows

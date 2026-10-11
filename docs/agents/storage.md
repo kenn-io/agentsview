@@ -8,10 +8,39 @@ ClickHouse, archive resync, or storage queries.
 SQLite is the persistent archive. Never delete, drop, truncate, or recreate it
 to handle a data-version change.
 
-Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`. A
-parser change that needs a full resync must build a fresh database, sync source
-files, copy orphaned sessions from the old database, and swap the files
-atomically. Preserve sessions even when their source files no longer exist.
+Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`.
+
+A parser upgrade normally requires a full resync. A parser change that needs a
+full resync must build a fresh database, sync source files, copy orphaned
+sessions from the old database, and swap the files atomically. Preserve sessions
+even when their source files no longer exist. Schema repairs also require a full
+resync. Archive-only archives use the preservation rebuild, which does not read
+source files on the receiving host.
+
+A parser upgrade can instead reparse only the affected providers in place.
+Declare it in `dataVersionScopes` in `internal/db/data_version_scope.go`:
+
+- Declare a version only when the reparse keeps source and session identities.
+  Add a regression test that proves it.
+- List every provider whose stored output changes, including each provider that
+  shares the changed parser. A provider left out keeps stale output marked as
+  current.
+- Declare only versions from 131. Released binaries treated earlier versions as
+  full rebuilds, and their retry rows cannot be told apart from complete rows.
+  `TestValidateDataVersionScopes` enforces these limits.
+
+When a writable open applies a declared upgrade, one transaction stamps
+unaffected sessions with the new version and deletes the affected providers'
+skip and failure cache entries. Rows of affected providers stay at their old
+version, so ordinary sync reparses them and retries failures. Rows already below
+the archive version are retry markers and also stay stale. Sessions whose
+sources are gone keep their old parser version.
+
+The open also sets the `scoped_upgrade_pending` key in the `stats` table. While
+that key is set, startup runs its initial sync and read-only opens report that
+the archive needs a resync. A full, authoritative sync pass deletes the key,
+even when individual sources failed to parse. Incremental passes, aborted
+passes, and passes with provider failures or deferred sources leave it in place.
 
 The replacement archive's writer raises `wal_autocheckpoint` to 128 MiB of pages
 for the bulk load; the live writer keeps SQLite's 1,000-page default. The
@@ -24,8 +53,8 @@ The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
 store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
-builds refuse them. This build decodes that range and preserves pending rebuilds;
-ordinary archives keep their parser version unchanged.
+builds refuse them. This build decodes that range and preserves pending
+rebuilds; ordinary archives keep their parser version unchanged.
 
 ### Artifact checkpoint landings
 
@@ -231,9 +260,10 @@ mirror is a disposable local derived file. A new remote SQL backend is a
 replica. Do not model it on DuckDB, and do not add a fourth role.
 
 Common pure storage helpers live in `internal/db`; every backend calls that
-owner. `BuildAnalyticsWhere`, `BuildUsageSourceFilter`, `BuildUsageSessionFilter`,
-and `BuildRecentEditsQuery` own shared reporting SQL. Helpers with different
-timestamp parsing, UTC padding, or output formats stay in their backend.
+owner. `BuildAnalyticsWhere`, `BuildUsageSourceFilter`,
+`BuildUsageSessionFilter`, and `BuildRecentEditsQuery` own shared reporting SQL.
+Helpers with different timestamp parsing, UTC padding, or output formats stay in
+their backend.
 
 ### How to add a replica backend
 
@@ -249,8 +279,8 @@ timestamp parsing, UTC padding, or output formats stay in their backend.
    `Vectors.Skipped`. Route catalog reads through `readbase.NewCatalog` with
    an adapter implementing every `readbase.CatalogBackend` method; route
    DuckDB- or ClickHouse-style analytics through `readbase.NewAnalytics`.
-   Forward common SQL to the shared builders; keep specialized SQL and typed loaders
-   in the backend.
+   Forward common SQL to the shared builders; keep specialized SQL and typed
+   loaders in the backend.
 1. Add the config section and its resolvers in `internal/config` the way
    `[pg]`/`[pg.NAME]` and `[clickhouse]` work: a struct, `Resolve<Name>`,
    `Resolve<Name>Target`, and `<Name>TargetNames`. `Backend.Targets` and
@@ -333,8 +363,9 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   `internal/readbase.Catalog`. Shared query builders own SQL that differs only
   in syntax. Each backend explicitly supplies every required SQL operation and
   its typed timestamp, observation and snapshot loaders.
-- DuckDB and ClickHouse share report orchestration in `internal/readbase.Analytics`.
-  Backends supply every required SQL operation and retain typed loaders and caches.
+- DuckDB and ClickHouse share report orchestration in
+  `internal/readbase.Analytics`. Backends supply every required SQL operation
+  and retain typed loaders and caches.
 
 ### Usage cache divergence
 
@@ -584,9 +615,9 @@ own metadata, which is why the docs below call the database a mirror.
   build an `IN (...)` list from a set the database already selected, such as
   the sessions matching a filter or the Claude snapshot keys of those
   sessions. Embed the selecting predicate as a subquery (`chSessionSet`) or
-  derive the keys in a CTE instead. Chunked lists (`db.QueryChunkedSize`) are for
-  sets that arrive from outside the database, and they bound entry count, not
-  bytes.
+  derive the keys in a CTE instead. Chunked lists (`db.QueryChunkedSize`) are
+  for sets that arrive from outside the database, and they bound entry count,
+  not bytes.
 - Tests use the `chtest` build tag. Run `make test-clickhouse` against a
   dedicated test server (`TEST_CLICKHOUSE_URL` or the compose service). Do not
   point those tests at a live mirror.

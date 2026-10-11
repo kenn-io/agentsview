@@ -122,11 +122,11 @@ func devinSourceFingerprint(t *testing.T, root string) parser.SourceFingerprint 
 const staleStartedAt = "1970-01-20T16:13:20Z"
 
 // staleUserVersion picks the archive user_version to stamp: one below the
-// current data version to demand a resync, or the current version to model an
+// Devin parser version to demand a resync, or the archive-wide version to model an
 // archive that a bump never reached.
 func staleUserVersion(demandResync bool) int {
 	if demandResync {
-		return db.CurrentDataVersion() - 1
+		return db.AgentDataVersion(parser.AgentDevin) - 1
 	}
 	return db.CurrentDataVersion()
 }
@@ -228,7 +228,7 @@ func TestDevinMessageNodeSessionResyncsDespiteUnchangedFingerprint(t *testing.T)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, reopened.Close()) }()
 	require.True(t, reopened.NeedsResync(),
-		"an archive below the current data version must ask for a resync")
+		"an archive predating the Devin parser fix must ask for a resync")
 
 	upgraded := NewEngine(t.Context(), reopened, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentDevin: {root}},

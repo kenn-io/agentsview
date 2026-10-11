@@ -8258,6 +8258,13 @@ func (e *Engine) syncAllLocked(
 		stats.ProcessingComplete() {
 		e.recordSyncFinished(ctx)
 	}
+	// Only a full, authoritative pass has visited every affected source.
+	if recordSyncState && since.IsZero() && !e.ephemeral &&
+		startupReconciliationSucceeded(ctx, stats, nil) {
+		if err := e.db.CompleteScopedUpgrade(ctx); err != nil {
+			log.Printf("persist scoped upgrade completion: %v", err)
+		}
+	}
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.
 	return stats
@@ -13714,7 +13721,7 @@ func (e *Engine) claudeRowlessFreshnessCacheKey(
 	filterHash := sha256.Sum256([]byte(strings.Join(prefixes, "\x00")))
 	return providerAgentSkipCacheKey(path, parser.AgentClaude) +
 		sourceHashSkipMarker + contentHash +
-		"&data_version=" + strconv.Itoa(db.CurrentDataVersion()) +
+		"&data_version=" + strconv.Itoa(db.AgentDataVersion(parser.AgentClaude)) +
 		"&cwd_filter=" + hex.EncodeToString(filterHash[:])
 }
 
@@ -14435,12 +14442,10 @@ func providerProcessCacheKey(
 		if strings.Contains(key, "?") {
 			separator = "&"
 		}
-		key += separator + "data_version=" + strconv.Itoa(db.CurrentDataVersion())
+		key += separator + "data_version=" + strconv.Itoa(db.AgentDataVersion(agent))
 	}
 	return key
 }
-
-const providerAgentSkipMarker = "?agent="
 
 // providerAgentSkipCacheKey prevents providers with overlapping roots or a
 // shared on-disk format from inheriting another agent's cached source state.
@@ -14449,18 +14454,18 @@ func providerAgentSkipCacheKey(key string, agent parser.AgentType) string {
 	if key == "" || agent == "" {
 		return key
 	}
-	return key + providerAgentSkipMarker + string(agent)
+	return key + db.ProviderAgentSkipMarker + string(agent)
 }
 
 // SplitProviderSkipCachePath separates the filesystem path from the provider
 // qualifier carried by a skip-cache identity. Remote import translates only
 // the path and reattaches the suffix after the path mapping succeeds.
 func SplitProviderSkipCachePath(key string) (path, suffix string) {
-	path, qualified, ok := strings.Cut(key, providerAgentSkipMarker)
+	path, qualified, ok := strings.Cut(key, db.ProviderAgentSkipMarker)
 	if !ok {
 		return key, ""
 	}
-	return path, providerAgentSkipMarker + qualified
+	return path, db.ProviderAgentSkipMarker + qualified
 }
 
 // legacyProviderSkipCacheKey removes the agent qualifier from a provider cache
@@ -14468,7 +14473,7 @@ func SplitProviderSkipCachePath(key string) (path, suffix string) {
 // clears this predecessor alongside the scoped key so upgrades do not retain
 // dead path-only cache entries.
 func legacyProviderSkipCacheKey(key string) string {
-	base, qualified, ok := strings.Cut(key, providerAgentSkipMarker)
+	base, qualified, ok := strings.Cut(key, db.ProviderAgentSkipMarker)
 	if !ok {
 		return ""
 	}
@@ -15462,19 +15467,6 @@ func (e *Engine) providerStatDigestEligible(agent parser.AgentType) bool {
 	return agent != parser.AgentClaude && agent != parser.AgentEvener && !isCodexFormatAgent(agent)
 }
 
-// providerFreshnessAgents returns the stored-agent labels a provider's
-// sessions may carry for digest-currency checks. Codebuff relabels
-// free-tier sessions to Freebuff while discovery and the
-// provider_freshness side-table stay keyed on Codebuff, so both labels
-// are this provider's own rows; every other hasher stores under its
-// discovery label.
-func providerFreshnessAgents(agent parser.AgentType) []parser.AgentType {
-	if agent == parser.AgentCodebuff {
-		return []parser.AgentType{parser.AgentCodebuff, parser.AgentFreebuff}
-	}
-	return []parser.AgentType{agent}
-}
-
 // providerFreshDigestSourceCurrentInDB reports whether the active stored
 // sessions for a digest-matched source are still current. User-trashed rows
 // are resolved until restoration invalidates the digest and marks the row
@@ -15490,7 +15482,7 @@ func (e *Engine) providerFreshDigestSourceCurrentInDB(ctx context.Context,
 	agent parser.AgentType, lookupPath string,
 ) bool {
 	rowFound := false
-	for _, owned := range providerFreshnessAgents(agent) {
+	for _, owned := range parser.ProviderStoredAgents(agent) {
 		if _, _, ok := e.db.GetFileInfoByAgentPath(ctx,
 			lookupPath, string(owned),
 		); !ok {

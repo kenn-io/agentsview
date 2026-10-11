@@ -6,7 +6,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -262,8 +261,7 @@ func TestOmnigentWholeContainerCachePromotesAfterSuccessfulWrite(
 		require.NoError(t, err)
 		assert.NotNil(t, stored)
 	}
-	wantKey := container + "?agent=omnigent?source_hash=container-hash&data_version=" +
-		strconv.Itoa(db.CurrentDataVersion())
+	wantKey := providerProcessCacheKey(file, source, fingerprint, provider.Capabilities().Sync)
 	assert.Equal(t, map[string]int64{wantKey: fingerprint.MTimeNS},
 		engine.SnapshotSkipCache())
 }

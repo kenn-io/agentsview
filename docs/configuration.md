@@ -1509,13 +1509,15 @@ its triggers.
 | `messages_fts`       | FTS5 virtual table for full-text search                                      |
 | `messages_cjk_fts`   | Optional CJK FTS5 index using the `simple` character tokenizer               |
 
-The database is automatically migrated on startup when the schema changes. When
-the stored data version is stale, AgentsView preserves the existing database and
-runs a full resync into a fresh temporary database. The resync then copies
-preserved/orphaned session data from the previous database before swapping
-atomically. If the full resync aborts, AgentsView falls back to an incremental
-sync and leaves the data-version marker stale. The running daemon retries the
-rebuild after an hour, backing off to daily; a restart also retries.
+The database is automatically migrated on startup when the schema changes.
+When a parser upgrade affects only some agents and the archive syncs source
+files, AgentsView reparses those agents' sessions in place; failed sources
+retry on later syncs. Other stale data versions require a full resync into a
+fresh temporary database. The resync then copies preserved/orphaned session data
+from the previous database before swapping atomically. If the full resync
+aborts, AgentsView falls back to an incremental sync and leaves the
+data-version marker stale. The running daemon retries the rebuild after an hour,
+backing off to daily; a restart also retries.
 
 ## Sync Behavior
 

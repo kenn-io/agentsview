@@ -18,7 +18,7 @@ func (db *DB) EnableArchiveOnly(ctx context.Context) error {
  VALUES ('archive_only', '1') ON CONFLICT(key) DO UPDATE SET value = '1'`); err != nil {
 			return err
 		}
-		version, err := readUserVersion(ctx, tx)
+		version, _, err := readUserVersion(ctx, tx)
 		if err != nil {
 			return err
 		}

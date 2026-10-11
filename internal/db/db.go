@@ -47,12 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
     ON provider_freshness(updated_at);
 `
 
-// dataVersion tracks parser changes that require a full
-// re-sync. Increment this when parsing logic changes in ways
-// that affect stored data (e.g. new fields extracted, content
-// formatting changes). Old databases with a lower user_version
-// trigger a non-destructive re-sync (mtime reset + skip cache
-// clear) so existing session data is preserved.
+// Increment dataVersion for parser changes; declare safe scopes in data_version_scope.go.
 //
 // Bumped to 63: the Codex parser now persists current subagent lineage,
 // links spawn events, restores plaintext agent messages, suppresses opaque
@@ -814,7 +809,7 @@ type DB struct {
 	// worker maintenance pass (CloseWriter). It lets write attempts report
 	// ErrWriterClosed instead of the generic read-only error.
 	writerClosed atomic.Bool
-	dataStale    atomic.Bool // set by Open when user_version < dataVersion
+	dataStale    atomic.Bool // see NeedsResync
 	// extractAllowCandidateFindings narrows the recall-extraction secret
 	// gate to definite-confidence findings. Set by the extraction manager
 	// from [recall.extract] candidate_findings; false (every recorded
@@ -1311,7 +1306,7 @@ func open(
 		return nil, err
 	}
 	progress.report("Opening database")
-	schemaRepairNeeded, dataStale, err := probeDatabase(ctx, path)
+	schemaRepairNeeded, dataStale, err := probeDatabase(ctx, path, false)
 	if err != nil {
 		return nil, fmt.Errorf("checking database: %w", err)
 	}
@@ -1374,10 +1369,7 @@ func open(
 			"database upgrade requires full resync",
 		)
 	} else {
-		// Only stamp user_version when data is current.
-		// When data is stale, preserve the old version so
-		// the "needs resync" state survives process restarts
-		// until ResyncAll completes successfully.
+		// Scoped upgrades leave affected rows stale for ordinary sync retries.
 		if err := ctx.Err(); err != nil {
 			return closeOnError(err)
 		}
@@ -1800,7 +1792,11 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 		return nil, fmt.Errorf("opening read-only reader: %w", err)
 	}
 
-	schemaStale, dataStale, err := probeDatabaseConn(ctx, reader)
+	if err := checkReadOnlySchemaCompatibility(ctx, reader); err != nil {
+		reader.Close()
+		return nil, err
+	}
+	schemaStale, dataStale, err := probeDatabaseConn(ctx, reader, true)
 	if err != nil {
 		reader.Close()
 		return nil, fmt.Errorf(
@@ -1811,11 +1807,6 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 		reader.Close()
 		return nil, errors.New("opening read-only database: schema is stale or incomplete")
 	}
-	if err := checkReadOnlySchemaCompatibility(ctx, reader); err != nil {
-		reader.Close()
-		return nil, err
-	}
-
 	db := &DB{
 		path: path, readOnly: true,
 		usageCache: newUsageCacheManager(path),
@@ -2040,24 +2031,22 @@ func (db *DB) hasCursorUsageTable(ctx context.Context) bool {
 // written by a newer agentsview binary. Older data versions are compatible
 // with startup because callers can run the normal non-destructive resync path.
 func CheckDataVersion(ctx context.Context, path string) error {
-	_, _, err := probeDatabase(ctx, path)
+	_, _, err := probeDatabase(ctx, path, false)
 	return err
 }
 
-// ArchiveNeedsResync probes an existing archive without modifying it. A
-// required schema repair or data reparse cannot be deferred to a live sync
-// worker, which is not allowed to replace the daemon's open archive.
+// ArchiveNeedsResync reports whether startup must run its initial sync.
 func ArchiveNeedsResync(ctx context.Context, path string) (bool, error) {
-	schemaStale, dataStale, err := probeDatabase(ctx, path)
+	schemaStale, dataStale, err := probeDatabase(ctx, path, true)
 	return schemaStale || dataStale, err
 }
 
 // probeDatabase checks an existing database for schema and data staleness.
 // It returns (schemaRepairNeeded, dataStale, err). A writable Open repairs
 // missing legacy columns before initializing schema indexes, then requires a
-// non-destructive resync. dataStale means user_version < dataVersion.
+// non-destructive resync. Startup and cold reads also check scoped readiness.
 func probeDatabase(ctx context.Context,
-	path string,
+	path string, includeScoped bool,
 ) (schemaRepairNeeded, dataStale bool, err error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
@@ -2075,13 +2064,13 @@ func probeDatabase(ctx context.Context,
 	}
 	defer conn.Close()
 
-	return probeDatabaseConn(ctx, conn)
+	return probeDatabaseConn(ctx, conn, includeScoped)
 }
 
 func probeDatabaseConn(ctx context.Context,
-	conn *sql.DB,
+	conn *sql.DB, includeScoped bool,
 ) (schemaRepairNeeded, dataStale bool, err error) {
-	version, err := readUserVersion(ctx, conn)
+	version, archiveOnly, err := readUserVersion(ctx, conn)
 	if err != nil {
 		return false, false, err
 	}
@@ -2099,8 +2088,23 @@ func probeDatabaseConn(ctx context.Context,
 	if schema {
 		return true, false, nil
 	}
-
-	return false, version < dataVersion, nil
+	// Archive-only archives cannot reparse sources, so any stale version
+	// needs their preservation rebuild.
+	countScoped := includeScoped || archiveOnly
+	if countScoped {
+		var pending bool
+		if err := conn.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM stats WHERE key = ? AND value > 0)",
+			scopedUpgradePendingKey,
+		).Scan(&pending); err != nil || pending {
+			return false, pending, err
+		}
+	}
+	if version >= dataVersion {
+		return false, false, nil
+	}
+	return false, countScoped ||
+		len(ScopedDataVersionProviders(version, dataVersion)) == 0, nil
 }
 
 // needsSchemaRepair probes for required legacy columns that may be missing in
@@ -2130,18 +2134,18 @@ func needsSchemaRepair(ctx context.Context, conn *sql.DB) (bool, error) {
 func readUserVersion(ctx context.Context, conn interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 },
-) (int, error) {
+) (int, bool, error) {
 	var version int
 	err := conn.QueryRowContext(ctx,
 		"PRAGMA user_version",
 	).Scan(&version)
 	if err != nil {
-		return 0, fmt.Errorf(
+		return 0, false, fmt.Errorf(
 			"probing data version: %w", err,
 		)
 	}
-	version, _ = DecodeUserVersion(version)
-	return version, nil
+	version, archiveOnly := DecodeUserVersion(version)
+	return version, archiveOnly, nil
 }
 
 // DecodeUserVersion returns the parser version and permanent archive-only mode.
@@ -2809,14 +2813,12 @@ func repairLegacySchemaBeforeInit(ctx context.Context, w *writerHandle, progress
 	); err != nil {
 		return err
 	}
-	version, err := readUserVersion(ctx, tx)
+	version, _, err := readUserVersion(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("reading repaired archive version: %w", err)
 	}
-	if version >= dataVersion {
-		if err := writeUserVersion(ctx, tx, dataVersion-1); err != nil {
-			return fmt.Errorf("marking repaired archive stale: %w", err)
-		}
+	if err := writeUserVersion(ctx, tx, min(version, fullRebuildDataVersion()-1)); err != nil {
+		return fmt.Errorf("marking repaired archive stale: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing schema repair: %w", err)
@@ -4416,10 +4418,11 @@ func (db *DB) applySessionCoverageUpdates(ctx context.Context,
 	return len(updates), nil
 }
 
-// NeedsResync reports whether the database was opened with a
-// stale data version, indicating the caller should trigger a
-// full resync (build fresh DB, copy orphaned data, swap)
-// rather than an incremental sync.
+// NeedsResync reports whether the archive needs parser work before use. A
+// writable open sets it only when a full rebuild is required; scoped upgrades
+// are promoted during the open and reparsed by ordinary sync. A read-only open
+// also sets it while a scoped upgrade waits for its first full sync pass,
+// because a read-only caller cannot run that pass.
 func (db *DB) NeedsResync() bool {
 	return db.dataStale.Load()
 }
@@ -4840,21 +4843,9 @@ func (db *DB) HasCJKFTS(ctx context.Context) (available bool) {
 	return err == nil
 }
 
-// setDataVersion stamps the current dataVersion into
-// user_version, but never downgrades a higher version left
-// by a newer build. Called by Open() only when data is
-// current (not stale), so the marker survives until
-// ResyncAll completes.
 func (db *DB) setDataVersion(ctx context.Context) error {
 	return db.Update(ctx, func(tx *sql.Tx) error {
-		current, err := readUserVersion(ctx, tx)
-		if err != nil {
-			return fmt.Errorf("reading data version: %w", err)
-		}
-		if err := writeUserVersion(ctx, tx, max(current, dataVersion)); err != nil {
-			return fmt.Errorf("setting data version: %w", err)
-		}
-		return nil
+		return advanceDataVersion(ctx, tx, dataVersion)
 	})
 }
 

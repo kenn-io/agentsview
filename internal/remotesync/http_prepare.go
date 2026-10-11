@@ -928,17 +928,24 @@ func (hs HTTPSync) prepareMirror(
 		return nil, err
 	}
 	dataRebuildRequested := hs.forceFullParseAfterCacheRequested()
+	scopedProviders := db.ScopedDataVersionProviders(
+		importedDataVersion, currentDataVersion,
+	)
+	if bootstrap || hs.Full || fullReason != "" || journal.FullImport {
+		scopedProviders = nil
+	}
 	dataRebuildPending := importedDataVersion != currentDataVersion ||
 		dataRebuildRequested || journal.RequiredDataVersion != 0
 	if dataRebuildPending && journal.RequiredDataVersion != currentDataVersion {
-		if bootstrap && !dataRebuildRequested && !journal.FullImport {
+		if len(scopedProviders) > 0 ||
+			bootstrap && !dataRebuildRequested && !journal.FullImport {
 			journal.RequiredDataVersion = currentDataVersion
 			journal.DataRebuildCacheVersion = 0
 		} else {
 			journal = requireMirrorDataVersionImport(journal, currentDataVersion)
 		}
 	}
-	if journal.RequiredDataVersion != 0 && fullReason == "" {
+	if journal.RequiredDataVersion != 0 && fullReason == "" && len(scopedProviders) == 0 {
 		fullReason = FullImportDataRebuild
 		if bootstrap {
 			fullReason = FullImportBootstrap
@@ -963,8 +970,8 @@ func (hs HTTPSync) prepareMirror(
 	} else if fullReason == "" && bootstrap {
 		fullReason = FullImportBootstrap
 	}
-	hasPending := journal.FullImport || len(journal.Entries) > 0 ||
-		fullReason != "" || hs.Full
+	hasPending := journal.FullImport || journal.RequiredDataVersion != 0 ||
+		len(journal.Entries) > 0 || fullReason != "" || hs.Full
 	if !mutatesMirror && !hasPending {
 		return nil, nil
 	}
@@ -1019,6 +1026,7 @@ func (hs HTTPSync) prepareMirror(
 		applyRemoteSkippedChanges: prepared.applyRemoteSkippedChanges,
 	}).PreparePending(ctx, DeltaImportRequest{
 		Journal: journal, FullReason: fullReason,
+		ScopedProviders:          scopedProviders,
 		ForceParse:               hs.forceParseRequested(),
 		ForceFullParseAfterCache: dataRebuild,
 		ResetAttemptCache: dataRebuild &&

@@ -39,6 +39,7 @@ func (outcome JournalOutcome) Valid() bool {
 }
 
 type DeltaImportRequest struct {
+	ScopedProviders          []parser.AgentType
 	Journal                  MirrorChangeJournal
 	FullReason               FullImportReason
 	ForceParse               bool
@@ -143,11 +144,19 @@ func (im Importer) PreparePending(
 	if err != nil {
 		return nil, err
 	}
+	for _, agent := range request.ScopedProviders {
+		if len(layout.engineDirs[agent]) > 0 {
+			plan.FallbackProviders = append(plan.FallbackProviders, agent)
+		}
+	}
 	stats.ExactSources = len(plan.Files)
 	stats.FallbackProviders = len(plan.FallbackProviders)
 	forceScope := plan.PruneScope(forceFullParseJournalPhysicalPaths(
 		layout, request.Journal,
 	))
+	forceScope.FallbackProviders = append(
+		forceScope.FallbackProviders, request.ScopedProviders...,
+	)
 
 	full := request.Journal.FullImport || request.FullReason != "" || im.Full
 	ensureVisualStudioCopilotRemoteSkipMigration(ctx, im.DB, im.Host)
@@ -158,10 +167,14 @@ func (im Importer) PreparePending(
 		return nil, fmt.Errorf("load skip cache: %w", err)
 	}
 	pruningStart := time.Now()
-	pruned, pruneStats := pruneRemoteSkipCache(
-		remoteCache, layout, plan, request.Journal,
-	)
+	var invalidateProviders []parser.AgentType
 	if request.ResetAttemptCache {
+		invalidateProviders = request.ScopedProviders
+	}
+	pruned, pruneStats := pruneRemoteSkipCache(
+		remoteCache, layout, plan, request.Journal, invalidateProviders...,
+	)
+	if request.ResetAttemptCache && len(request.ScopedProviders) == 0 {
 		pruned = make(map[string]int64)
 		pruneStats = CachePruneStats{
 			HostWideScope: true,
@@ -187,7 +200,8 @@ func (im Importer) PreparePending(
 	deleted := removedRemoteSkipCacheKeys(remoteCache, pruned)
 	var persistErr error
 	if len(deleted) > 0 {
-		if request.Journal.InvalidateAll || request.ResetAttemptCache {
+		if request.Journal.InvalidateAll ||
+			request.ResetAttemptCache && len(request.ScopedProviders) == 0 {
 			persistErr = replace(ctx, im.Host, pruned)
 		} else {
 			persistErr = apply(ctx, im.Host, deleted, nil)
@@ -453,7 +467,7 @@ func loadPlannedRemoteSkipCache(
 			}
 		}
 		for fallbackAgent, roots := range scope.fallback {
-			if agent != "" && agent != fallbackAgent {
+			if agent != "" && !slices.Contains(parser.ProviderStoredAgents(fallbackAgent), agent) {
 				continue
 			}
 			if remotePathWithinAnyRoot(path, roots) {
@@ -547,6 +561,7 @@ func pruneRemoteSkipCache(
 	layout importLayout,
 	plan syncpkg.ChangedPathPlan,
 	journal MirrorChangeJournal,
+	providers ...parser.AgentType,
 ) (map[string]int64, CachePruneStats) {
 	stats := CachePruneStats{}
 	if journal.InvalidateAll {
@@ -558,6 +573,7 @@ func pruneRemoteSkipCache(
 	maps.Copy(pruned, cache)
 	armed := cacheInvalidationJournalPhysicalPaths(layout, journal)
 	scope := plan.PruneScope(armed)
+	scope.FallbackProviders = append(scope.FallbackProviders, providers...)
 	stats.ExactScopes = len(scope.Files)
 	stats.ProviderScopes = len(scope.FallbackProviders)
 	exact := make(map[string]map[parser.AgentType]struct{}, len(scope.Files))
@@ -596,7 +612,7 @@ func pruneRemoteSkipCache(
 			}
 		}
 		for fallbackAgent, roots := range fallback {
-			if agent != "" && agent != fallbackAgent {
+			if agent != "" && !slices.Contains(parser.ProviderStoredAgents(fallbackAgent), agent) {
 				continue
 			}
 			if remotePathWithinAnyRoot(path, roots) {
@@ -653,7 +669,7 @@ func remoteCacheFamily(key string) (string, parser.AgentType) {
 	if suffix == "" {
 		return path, ""
 	}
-	agent := strings.TrimPrefix(suffix, "?agent=")
+	agent := strings.TrimPrefix(suffix, db.ProviderAgentSkipMarker)
 	if before, _, ok := strings.Cut(agent, "?"); ok {
 		agent = before
 	}

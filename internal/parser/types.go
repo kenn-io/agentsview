@@ -1291,6 +1291,17 @@ func StripHostPrefix(id string) (host, rawID string) {
 	return "", id
 }
 
+// ProviderStoredAgents returns the session agent labels a provider may store.
+// Codebuff relabels free-tier sessions as Freebuff while discovery, caches, and
+// the provider_freshness table stay keyed on Codebuff, so both labels belong to
+// the Codebuff provider. Every other provider stores its own label.
+func ProviderStoredAgents(agent AgentType) []AgentType {
+	if agent == AgentCodebuff {
+		return []AgentType{AgentCodebuff, AgentFreebuff}
+	}
+	return []AgentType{agent}
+}
+
 // AgentByPrefix returns the AgentDef whose IDPrefix matches
 // the session ID. For Claude (empty prefix), the match
 // succeeds only when no other prefix matches and the ID

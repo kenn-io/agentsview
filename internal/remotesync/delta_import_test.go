@@ -328,7 +328,7 @@ func TestPreparedDeltaImportPrepareDoesNotProcess(t *testing.T) {
 	assert.Equal(t, JournalAbortedBeforeProcessing, pending.Stats.JournalOutcome)
 }
 
-func TestPreparePendingExactChangeLoadsOnlyRelevantSkipCache(t *testing.T) {
+func TestPreparePendingPreservesCacheBoundariesAcrossParserUpgrades(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	const host = "remote"
 	require.NoError(t, database.SetSyncState(t.Context(),
@@ -349,22 +349,28 @@ func TestPreparePendingExactChangeLoadsOnlyRelevantSkipCache(t *testing.T) {
 	cache := map[string]int64{
 		remoteDir + "/project/changed.jsonl": 42,
 	}
+	unaffected := make(map[string]int64, 256)
 	for i := range 256 {
-		cache[fmt.Sprintf("%s/unrelated/session-%03d.jsonl", remoteDir, i)] = int64(i)
+		key := fmt.Sprintf("%s/unrelated/session-%03d.jsonl?agent=codex", remoteDir, i)
+		cache[key] = int64(i)
+		unaffected[key] = int64(i)
 	}
 	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(), host, cache))
 	replaceCalls := 0
 	type mutationCount struct{ deletes, upserts int }
 	var mutations []mutationCount
 
-	pending, err := (Importer{
+	importer := Importer{
 		Host: host, DB: database, Root: root,
 		Targets: TargetSet{Dirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {remoteDir},
+			parser.AgentClaude:   {remoteDir},
+			parser.AgentCodebuff: {"/srv/agent/codebuff"},
 		}},
-		replaceRemoteSkippedFiles: func(context.Context, string, map[string]int64) error {
+		replaceRemoteSkippedFiles: func(
+			ctx context.Context, host string, cache map[string]int64,
+		) error {
 			replaceCalls++
-			return nil
+			return database.ReplaceRemoteSkippedFiles(ctx, host, cache)
 		},
 		applyRemoteSkippedChanges: func(ctx context.Context,
 			host string, deletes []string, upserts map[string]int64,
@@ -372,7 +378,8 @@ func TestPreparePendingExactChangeLoadsOnlyRelevantSkipCache(t *testing.T) {
 			mutations = append(mutations, mutationCount{len(deletes), len(upserts)})
 			return database.ApplyRemoteSkippedFileChanges(t.Context(), host, deletes, upserts)
 		},
-	}).PreparePending(t.Context(), DeltaImportRequest{
+	}
+	pending, err := importer.PreparePending(t.Context(), DeltaImportRequest{
 		Journal: MirrorChangeJournal{
 			Version: mirrorJournalVersion,
 			Entries: []MirrorChangeEntry{{Path: journalPath}},
@@ -394,6 +401,50 @@ func TestPreparePendingExactChangeLoadsOnlyRelevantSkipCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, persisted, 256)
 	assert.NotContains(t, persisted, remoteDir+"/project/changed.jsonl")
+	brokenPath := remappedRemotePath(root,
+		"/srv/agent/codebuff/project/chats/broken/chat-messages.json")
+	dbtest.WriteTestFile(t, brokenPath, []byte("{"))
+	affectedKey := "/srv/agent/codebuff/project/chats/stale/chat-messages.json?agent=codebuff"
+	changedInfo, err := os.Stat(changedPath)
+	require.NoError(t, err)
+	unaffected[remoteDir+"/project/changed.jsonl"] = changedInfo.ModTime().UnixNano()
+	require.NoError(t, database.ApplyRemoteSkippedFileChanges(t.Context(), host,
+		nil, map[string]int64{
+			affectedKey:                          7,
+			remoteDir + "/project/changed.jsonl": changedInfo.ModTime().UnixNano(),
+		},
+	))
+	journal := MirrorChangeJournal{
+		Version:             mirrorJournalVersion,
+		RequiredDataVersion: db.CurrentDataVersion(),
+		Entries:             pending.DisarmedJournal.Entries,
+	}
+	for attempt, wantVersion := range []int{0, db.CurrentDataVersion()} {
+		pending, err = importer.PreparePending(t.Context(), DeltaImportRequest{
+			Journal:                 journal,
+			ScopedProviders:         []parser.AgentType{parser.AgentCodebuff},
+			ResetAttemptCache:       journal.DataRebuildCacheVersion == 0,
+			AttemptCacheDataVersion: db.CurrentDataVersion(),
+		})
+		require.NoError(t, err)
+		journal = pending.DisarmedJournal
+		_, err = pending.Execute(t.Context())
+		if attempt == 0 {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+		version, err := database.RemoteImportDataVersion(t.Context(), host)
+		require.NoError(t, err)
+		assert.Equal(t, wantVersion, version)
+		dbtest.WriteTestFile(t, brokenPath, []byte("[]"))
+	}
+	assert.Zero(t, replaceCalls, "a scoped reset must not rewrite the host cache")
+	persisted, err = database.LoadRemoteSkippedFiles(t.Context(), host)
+	require.NoError(t, err)
+	assert.NotContains(t, persisted, affectedKey,
+		"a scoped reset must drop the affected provider's skips")
+	assert.Subset(t, persisted, unaffected, "unaffected provider skips survive scoped retries")
 }
 
 func TestPreparePendingPersistenceFailureAbortsBeforeProcessing(t *testing.T) {
