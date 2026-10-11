@@ -1318,59 +1318,6 @@ func TestSyncEngineOpenCodeStorageStatIdenticalEventStillReemits(
 	)
 }
 
-func TestSyncEngineOpenCodeSQLiteSameMtimeMetadataChangeUsesFingerprint(
-	t *testing.T,
-) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/original-app")
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "same-mtime-metadata",
-		1779012000000, 1779012030000,
-		"stable prompt", "stable answer",
-	)
-
-	stats := env.engine.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
-	assert.Equal(t, 1, stats.Synced, "first sync writes the SQLite session")
-	sessionID := "opencode:same-mtime-metadata"
-	before := openCodeStoredSession(t, env.db, sessionID)
-	require.NotNil(t, before.FileMtime, "file_mtime before rewrite")
-	require.NotNil(t, before.FileHash, "file_hash before rewrite")
-	require.NotNil(t, before.LocalModifiedAt,
-		"local_modified_at before rewrite")
-	assert.Equal(t, "/home/user/code/original-app", before.Cwd)
-	assert.Equal(t, "original_app", before.Project)
-
-	oc.updateProjectWorktree(
-		t, "proj", "/home/user/code/renamed-app", 1779015630000,
-	)
-
-	stats = env.engine.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
-	assert.Equal(t, 1, stats.Synced,
-		"same-mtime SQLite metadata changes must be rewritten")
-	assertMessageContent(
-		t, env.db, sessionID, "stable prompt", "stable answer",
-	)
-	after := openCodeStoredSession(t, env.db, sessionID)
-	require.NotNil(t, after.FileMtime, "file_mtime after rewrite")
-	require.NotNil(t, after.FileHash, "file_hash after rewrite")
-	require.NotNil(t, after.LocalModifiedAt,
-		"local_modified_at after rewrite")
-	assert.Greater(t, *after.FileMtime, *before.FileMtime,
-		"a project worktree rename must advance the session's composite "+
-			"mtime: project.time_updated is part of the per-session change "+
-			"signal, which is what re-resolves cwd without the shared "+
-			"container's stat invalidating every unrelated session")
-	assert.NotEqual(t, *before.FileHash, *after.FileHash,
-		"changed SQLite metadata must change the storage fingerprint")
-	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
-		"successful rewrite must bump local_modified_at for push windows")
-	assert.Equal(t, "/home/user/code/renamed-app", after.Cwd)
-	assert.Equal(t, "renamed_app", after.Project)
-}
-
 func TestSyncEngineOpenCodeStorageSameMtimeContentChangeUsesFingerprint(
 	t *testing.T,
 ) {

@@ -614,6 +614,7 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 		// lateWrite mutates the container after discovery's recapture, so
 		// only finalization revalidation can observe it.
 		lateWrite bool
+		durable   bool
 		result    resultKind
 		finish    finishKind
 		// sibling adds a second captured, stamped container; discovered
@@ -727,6 +728,7 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 		},
 		{
 			name:              "poisoned incomplete pass revokes every captured authority",
+			durable:           true,
 			priorTrustCapture: true,
 			priorStamp:        true,
 			capture:           captureLive,
@@ -806,6 +808,13 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 				e.digestVerifiedAt[siblingPath] = prior
 			}
 
+			if tc.durable {
+				e.db = openTestDB(t)
+				for path, state := range states {
+					writeContainerVerification(t, e.db, path, state, prior)
+				}
+				require.NoError(t, e.prepareSQLiteContainerVerification(t.Context(), states))
+			}
 			fileA := parser.DiscoveredFile{
 				Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
 			}
@@ -852,6 +861,20 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 				e.finishSQLiteContainerPass(t.Context(), true, false)
 			}
 
+			if tc.durable {
+				for path := range states {
+					record, found := readContainerVerification(t, e.db, path)
+					require.True(t, found)
+					assert.Zero(t, record.State)
+					assert.True(t, prior.Equal(record.VerifiedAt))
+				}
+				restarted := &Engine{db: e.db}
+				require.NoError(t, restarted.prepareSQLiteContainerVerification(t.Context(), states))
+				for path := range states {
+					assert.False(t, restarted.sqliteContainerListsWatermarkOnly(states)(path))
+					assert.True(t, prior.Equal(restarted.digestVerifiedAt[path]))
+				}
+			}
 			assertTrust := func(path string, want stateWant, label string) {
 				t.Helper()
 
@@ -1350,9 +1373,18 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 }
 
 func TestOpenCodeRestartedQuickSyncReconcilesAtOriginalDeadline(t *testing.T) {
-	for _, recovery := range []string{"no failure", "same engine", "fresh engine"} {
+	for _, recovery := range []string{"no failure", "same engine", "fresh engine", "no native identity"} {
 		t.Run(recovery, func(t *testing.T) {
 			dbPath, conn := seededCompositeContainerTestDB(t)
+			if recovery == "no native identity" {
+				originalStat := statSQLiteContainerState
+				statSQLiteContainerState = func(path string) (parser.SQLiteContainerState, bool) {
+					state, ok := originalStat(path)
+					state.DBDevice = 0
+					return state, ok
+				}
+				t.Cleanup(func() { statSQLiteContainerState = originalStat })
+			}
 			archive := openTestDB(t)
 			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
 			require.True(t, ok)
@@ -1375,11 +1407,46 @@ func TestOpenCodeRestartedQuickSyncReconcilesAtOriginalDeadline(t *testing.T) {
 			originalNow := openCodeContainerDigestVerifyNow
 			openCodeContainerDigestVerifyNow = func() time.Time { return now }
 			t.Cleanup(func() { openCodeContainerDigestVerifyNow = originalNow })
-			require.Equal(t, 1, newEngine().SyncAll(t.Context(), nil).Synced)
+			initial := newEngine()
+			require.Equal(t, 1, initial.SyncAll(t.Context(), nil).Synced)
+			childUpdated := verifiedAt.Add(30 * time.Second).UnixMilli()
+			if recovery == "no native identity" {
+				childUpdated = 1779012500001
+				now = verifiedAt.Add(30 * time.Second)
+				require.NoError(t, initial.SyncPathsContext(t.Context(), []string{dbPath + "#ses-1"}))
+				record, found := readContainerVerification(t, archive, dbPath)
+				require.True(t, found)
+				assert.True(t, verifiedAt.Equal(record.VerifiedAt), "partial work preserves verification age")
+			}
 			_, err := conn.ExecContext(t.Context(),
 				`UPDATE part SET data = replace(data, 'original', 'modified'), time_updated = ?`,
-				verifiedAt.Add(30*time.Second).UnixMilli())
+				childUpdated)
 			require.NoError(t, err)
+			if recovery == "no native identity" {
+				record, found := readContainerVerification(t, archive, dbPath)
+				assert.True(t, found, "complete checks retain history without native identity")
+				assert.Zero(t, record.State)
+				engine := initial
+				for pass := range 2 {
+					if pass == 1 {
+						_, err := conn.ExecContext(t.Context(), `UPDATE part SET data=replace(data, 'modified', 'repaired'), time_updated=time_updated+1`)
+						require.NoError(t, err)
+						engine = newEngine()
+					}
+					now = verifiedAt.Add(time.Duration(pass+1) * time.Minute)
+					scans := parser.OpenCodeContainerChildScans()
+					require.Equal(t, 1, engine.SyncAllSince(t.Context(), now.Add(-10*time.Second), nil).Synced)
+					assert.Equal(t, int64(1), parser.OpenCodeContainerChildScans()-scans)
+					record, found = readContainerVerification(t, archive, dbPath)
+					require.True(t, found)
+					assert.Zero(t, record.State)
+					assert.True(t, now.Equal(record.VerifiedAt))
+				}
+				matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "repaired")
+				require.NoError(t, err)
+				assert.Len(t, matches, 2)
+				return
+			}
 			previousStart, lastVerified := verifiedAt, verifiedAt
 			var failedEngine *Engine
 			recovered := false
@@ -1702,7 +1769,6 @@ func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
 		name                      string
 		writeFails, canceledWrite bool
 	}{
-		{"failed pass", false, false},
 		{"completion write fails", true, false},
 		{"expired completion canceled", false, true},
 	} {
@@ -1735,18 +1801,12 @@ func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
-			if tc.writeFails || tc.canceledWrite {
-				e.containerPass.discovered[path] = 1
-				e.containerPass.completed[path] = 1
-				if tc.canceledWrite {
-					e.containerPass.fullDigestListed[path] = true
-					e.finishSQLiteContainerPass(ctx, false, false)
-				} else {
-					e.finishSQLiteContainerPass(t.Context(), false, false)
-				}
+			e.containerPass.discovered[path], e.containerPass.completed[path] = 1, 1
+			if tc.canceledWrite {
+				e.containerPass.fullDigestListed[path] = true
+				e.finishSQLiteContainerPass(ctx, false, false)
 			} else {
-				e.poisonSQLiteContainerPass()
-				e.finishSQLiteContainerPass(t.Context(), true, false)
+				e.finishSQLiteContainerPass(t.Context(), false, false)
 			}
 			record, found := readContainerVerification(t, archive, path)
 			require.True(t, found)

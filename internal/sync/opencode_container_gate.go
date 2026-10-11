@@ -1092,7 +1092,10 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 			}
 			e.digestVerifiedAt[dbPath] = verifiedAt
 		}
-		if at, ok := e.digestVerifiedAt[dbPath]; ok && state.DBInode != 0 && state.DBDevice != 0 {
+		if at, ok := e.digestVerifiedAt[dbPath]; ok {
+			if state.DBInode == 0 || state.DBDevice == 0 {
+				state = parser.SQLiteContainerState{}
+			}
 			records[dbPath] = sqliteContainerVerification{Version: 1, State: state, VerifiedAt: at}
 		}
 	}

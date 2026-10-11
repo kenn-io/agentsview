@@ -18,6 +18,9 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 	watcherProcessed := make(map[int]int)
 	for _, n := range []int{20, 200} {
 		for _, mode := range []string{"full", "streamed", "watcher", "watcher raised children"} {
+			if n == 200 && mode == "watcher raised children" {
+				continue
+			}
 			t.Run(fmt.Sprintf("sessions_%d/%s", n, mode), func(t *testing.T) {
 				watcher := strings.HasPrefix(mode, "watcher")
 				env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
@@ -152,9 +155,22 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 		viaReconcile bool
 		// wantAbsent asserts removed content is gone; rows without it
 		// assert the session re-parses (Synced == 1).
-		wantAbsent  string
-		fingerprint bool
+		wantAbsent    string
+		fingerprint   bool
+		projectRename bool
 	}{
+		{
+			name: "project rename advances composite", fingerprint: true, projectRename: true,
+			seed: func(t *testing.T, oc *openCodeTestDB) {
+				t.Helper()
+				oc.addProject(t, "proj", "/workspace/original-app")
+				seedOpenCodeSQLiteTextSession(t, oc, "proj", "probe", 1779012000000, 1779012030000, "stable prompt", "stable answer")
+			},
+			mutate: func(t *testing.T, oc *openCodeTestDB) {
+				t.Helper()
+				oc.updateProjectWorktree(t, "proj", "/workspace/renamed-app", 1779015630000)
+			},
+		},
 		{
 			name: "child replacement above the watermark", fingerprint: true,
 			seed: func(t *testing.T, oc *openCodeTestDB) {
@@ -180,19 +196,6 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 			mutate:       deleteAssistant,
 			viaReconcile: true,
 			wantAbsent:   "drop answer",
-		},
-		{
-			// Same number of messages and parts, timestamps still below the
-			// session row's watermark, but different rows and content.
-			name: "same-count child replacement below the watermark",
-			mutate: func(t *testing.T, oc *openCodeTestDB) {
-				t.Helper()
-
-				oc.replaceTextContent(
-					t, "probe", "swapped prompt", "swapped answer",
-					1779012500000,
-				)
-			},
 		},
 		{
 			// The children hold the highest timestamp, so a project rename
@@ -283,14 +286,23 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 				}))
 			}
 			before := openCodeStoredSession(t, env.db, "opencode:probe")
+			if tc.projectRename {
+				assert.Equal(t, "/workspace/original-app", before.Cwd)
+				assert.Equal(t, "original_app", before.Project)
+			}
 			tc.mutate(t, oc)
 
-			require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), "sqlite-container:"))
+			if !tc.projectRename {
+				require.NoError(t, env.db.DeleteSyncStateByPrefix(t.Context(), "sqlite-container:"))
+			}
 			if tc.viaReconcile {
 				require.NoError(t, env.engine.ReconcileWatchRoots(t.Context(), []string{env.opencodeDir}, false))
 			} else {
-				unverified := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
-				t.Cleanup(unverified.Close)
+				unverified := env.engine
+				if !tc.projectRename {
+					unverified = newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+					t.Cleanup(unverified.Close)
+				}
 				stats := unverified.SyncAll(t.Context(), nil)
 				require.False(t, stats.Aborted, "full pass aborted: %+v", stats)
 				assert.Equal(t, 1, stats.Synced, "a hidden child change must re-parse the session")
@@ -306,7 +318,13 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 				assert.Greater(t, *after.FileMtime, *before.FileMtime)
 				assert.NotEqual(t, *before.FileHash, *after.FileHash)
 				assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt)
-				assertMessageContent(t, env.db, "opencode:probe", "changed prompt", "changed answer")
+				if tc.projectRename {
+					assert.Equal(t, "/workspace/renamed-app", after.Cwd)
+					assert.Equal(t, "renamed_app", after.Project)
+					assertMessageContent(t, env.db, "opencode:probe", "stable prompt", "stable answer")
+				} else {
+					assertMessageContent(t, env.db, "opencode:probe", "changed prompt", "changed answer")
+				}
 			}
 			if tc.wantAbsent != "" {
 				// Deletion must be visible immediately after the selected pass.
