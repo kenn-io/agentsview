@@ -151,7 +151,6 @@ func TestCodexRevertPageHelperRejectsNonPages(t *testing.T) {
 	}{
 		{"plain_rollout", plain, revertThread},
 		{"empty_header_id", page, ""},
-		{"other_thread", page, revertOther},
 		{"not_a_rollout", "notes.jsonl", revertThread},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -110,20 +110,22 @@ per-file.
 PostgreSQL mirrors this scope and keeps a separate source baseline for it, so
 restoring a page in PostgreSQL survives later pushes even when its thread row
 stays trashed. Restoring a page locally also advances the thread row's sync
-marker. PostgreSQL upgrades existing Codex thread trash and permanent exclusions
-to thread-wide scope once; later deletions remain per-file. Pages pushed from
-the same source inherit a trashed PostgreSQL thread's scope until a member is
-restored or purged. PostgreSQL purge retains thread-wide exclusions for later
-pushes; the hosted legacy routes use the same behavior without removing raw
-projections. Page publication locks the retained thread row through commit and
-checks exclusions after acquiring that lock, so a concurrent purge either
-removes the new page or prevents its publication. Thread-wide restore, purge,
-and new exclusions use the same owner and agent checks as inherited trash. Old
-permanent exclusions that have no recorded owner retain their existing global
-scope. Exact-session exclusions remain unchanged. PostgreSQL restore and purge
-retry complete transactions on deadlocks or serialization conflicts, including
-hosted legacy writes. Retries stop after five attempts or when the request is
-canceled.
+marker. A filtered page push synchronizes the owning archive's thread trash
+scope even when the thread's project is excluded. It preserves independent
+remote trash decisions and does not publish the excluded transcript. PostgreSQL
+upgrades existing Codex thread trash and permanent exclusions to thread-wide
+scope once; later deletions remain per-file. Pages pushed from the same source
+inherit a trashed PostgreSQL thread's scope until a member is restored or
+purged. PostgreSQL purge retains thread-wide exclusions for later pushes; the
+hosted legacy routes use the same behavior without removing raw projections.
+Page publication locks the retained thread row through commit and checks
+exclusions after acquiring that lock, so a concurrent purge either removes the
+new page or prevents its publication. Thread-wide restore, purge, and new
+exclusions use the same owner and agent checks as inherited trash. Old permanent
+exclusions that have no recorded owner retain their existing global scope.
+Exact-session exclusions remain unchanged. PostgreSQL restore and purge retry
+complete transactions on deadlocks or serialization conflicts, including hosted
+legacy writes. Retries stop after five attempts or when the request is canceled.
 
 When an old PostgreSQL thread row held a revert page, the next push moves its
 remote pins and notes to that page before replacing the original thread. Both

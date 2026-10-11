@@ -582,16 +582,22 @@ fixtures retain this field; missing identities remain source-local.
   including nested custom roots, so hosted parsing also drops copied messages
   and usage. Reverified these producer paths on 2026-09-30 at the same commit.
   Parent lookup shares a file inventory across providers from the same
-  factory. Sync batches refresh each root's inventory once; warm fork parses
-  check only their parent's files, avoiding a directory walk per fork.
+  factory. Sync batches refresh each root's inventory at the start and end;
+  warm fork parses check only their parent's files, avoiding a directory walk
+  per fork. The thread index survives across batches, and only changed
+  directories replace their contributions. If parent pages appear or move
+  during a batch, affected forks lose their stored freshness and retry on the
+  next sync, including after restart. Temporary materializations use
+  standalone lookups, so removing downloaded files does not create retry work.
   Standalone parses refresh the inventory on every lookup. Directory identity,
   modification time, and metadata change time refresh changed folders when
   pages appear or move, while file identity still validates cached turn IDs.
-  Reverified on 2026-10-10 with 10 and 1,000 unrelated dated directories, page
-  discovery across batches, and parent edits and removal within a batch. On
-  Windows, directory metadata comes from one open handle, but both timestamps
-  can remain unchanged after entries move or appear, as observed in the Windows
-  inventory test on 2026-10-10. Each cached directory therefore owns a
+  Reverified on 2026-10-11 with 10 and 1,000 unrelated files and dated
+  directories, page discovery across batches, and parent edits and removal
+  within a batch. On Windows, directory metadata comes from one open handle,
+  but both timestamps can remain unchanged after entries move or appear, as
+  observed in the Windows inventory test on 2026-10-10. Each cached directory
+  therefore owns a
   [name-change notification](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstchangenotificationw).
   Long drive and UNC paths use extended Windows syntax because this API can
   retain the `MAX_PATH` limit even when Go's file APIs can read the directory.
@@ -603,39 +609,44 @@ fixtures retain this field; missing identities remain source-local.
   keep the fork eligible for retry. Handles scale with cached directories and
   close when directories disappear or their roots are evicted or invalidated;
   abandoned factories release them through runtime cleanup. The producer's
-  archival rename path was reverified at the pinned commit on 2026-10-10;
-  native Windows validation of the notification implementation remains
-  pending. A bounded cache retains the combined turn IDs for each parent
-  inventory, so forks reuse the set even when the parent has more than 64
-  rollouts. Any changed file identity rebuilds that set. This avoids listing
-  every unchanged rollout or rebuilding its turn set for each fork. Verified
-  page creation, archival moves, and removal of the original on 2026-10-02. If
-  only pages remain and the parent's original rollout is missing, the fork
-  keeps its retry marker and drops the inventories so the next parse rediscovers
-  an original restored within the same filesystem timestamp tick. Directory
-  read failures also keep the fork eligible for retry, and raw capture rejects
-  an incomplete parent inventory. Reverified cold and warm inventories through
-  denied and restored directory access on 2026-10-09. If the original exists
-  but an archived parent page is missing, copied turns from that page can still
-  be imported and counted again; turn IDs are read from files, not retained in
-  the archive. When upgrading an archive older than data version 131, newly
-  split pages inherit the thread's permanent deletion or trash state.
-  Permanent deletions and trash retain their whole-thread scope, including
-  pages whose files return at another path after the upgrade. Restoring a
-  thread or one of its pages clears the inherited trash scope; purging the
-  thread transfers it to permanent exclusions. New deletions affect only the
-  selected file. Pins follow the page named by the old row's file. PostgreSQL
-  also moves remote-only pins and notes before replacing the thread's
-  messages. When the original rollout is absent, PostgreSQL retires its
-  duplicate transcript and usage after preserving page curation; an empty
-  thread row retains any inherited trash scope. Empty thread rows preserve
-  page curation across push batch boundaries, including when a local restore
-  has already cleared their trash scope. Verified through a real archive
-  upgrade, repeated pushes, and trash restore/purge on 2026-10-06. PostgreSQL
-  initializes source deletion baselines before legacy trash scope, so
-  restoring locally before the first upgraded push keeps later trash and purge
-  actions per-file. Reverified older schemas and unfinished baseline
-  initialization through repeated pushes and local or remote trash on
+  archival rename path was reverified at the pinned commit on 2026-10-10.
+  Native Windows CI passed the notification, long-path, page-move, and
+  inventory scaling tests on 2026-10-11. A bounded cache retains the combined
+  turn IDs for each parent inventory, so forks reuse the set even when the
+  parent has more than 64 rollouts. Any changed file identity rebuilds that
+  set. This avoids listing every unchanged rollout or rebuilding its turn set
+  for each fork. Verified page creation, archival moves, and removal of the
+  original on 2026-10-02. If only pages remain and the parent's original
+  rollout is missing, the fork keeps its retry marker and drops the
+  inventories so the next parse rediscovers an original restored within the
+  same filesystem timestamp tick. Directory read failures also keep the fork
+  eligible for retry, and raw capture rejects an incomplete parent inventory.
+  Reverified cold and warm inventories through denied and restored directory
+  access on 2026-10-09. If the original exists but an archived parent page is
+  missing, copied turns from that page can still be imported and counted
+  again; turn IDs are read from files, not retained in the archive. When
+  upgrading an archive older than data version 131, newly split pages inherit
+  the thread's permanent deletion or trash state. Permanent deletions and
+  trash retain their whole-thread scope, including pages whose files return at
+  another path after the upgrade. Restoring a thread or one of its pages
+  clears the inherited trash scope; purging the thread transfers it to
+  permanent exclusions. New deletions affect only the selected file. Pins
+  follow the page named by the old row's file. PostgreSQL also moves remote-only
+  pins and notes before replacing the thread's messages. When the original
+  rollout is absent, PostgreSQL retires its duplicate transcript and usage after
+  preserving page curation; an empty thread row retains any inherited trash
+  scope. Empty thread rows preserve page curation across push batch
+  boundaries, including when a local restore has already cleared their trash
+  scope. Verified through a real archive upgrade, repeated pushes, and trash
+  restore/purge on 2026-10-06. PostgreSQL also synchronizes an owned thread's
+  source trash scope when a filtered push includes its restored page but
+  excludes the thread's project. It preserves independent remote trash
+  decisions and leaves the excluded transcript untouched. Reverified filtered
+  restores, later unfiltered pushes, purge, and archive ownership on
+  2026-10-11. PostgreSQL initializes source deletion baselines before legacy
+  trash scope, so restoring locally before the first upgraded push keeps later
+  trash and purge actions per-file. Reverified older schemas and unfinished
+  baseline initialization through repeated pushes and local or remote trash on
   2026-10-09. PostgreSQL purge and restore apply the same owner and agent
   checks as inherited trash. New thread-wide exclusions retain that identity.
   Pages with different recorded owners keep their own trash and import state;
@@ -644,28 +655,28 @@ fixtures retain this field; missing identities remain source-local.
   including hosted legacy operations. Reverified both request orders against
   real PostgreSQL transactions on 2026-10-10. Reverified purge, empty trash,
   restore, and later pushes across two archives and legacy machine renames on
-  2026-10-09. Saved names and stars follow the page when the original thread row
-  is gone. Explicit project assignments also follow the retained page when the
-  original is absent, including when an empty thread row holds trash scope.
-  Reverified assignment persistence through identity restoration, later syncs,
-  and folder rules on 2026-10-06. Saved parser-source project identities
-  follow their page without overwriting the original thread's identity.
-  Archived pages whose files are absent keep their messages, tool results,
-  usage, and export identities under the page ID, even if the original file is
-  reparsed. Trashed archived pages move the same way, retaining their saved
-  names, stars, and pins; an empty thread row holds the inherited trash scope.
-  Reverified upgrade, restore, and rebuild with an absent page on 2026-10-04.
-  Their base cannot be recovered from disk, so they link to the thread. Recall
-  entries, evidence, extraction progress, and conversation export identities
-  and session state move to the page even when its file was reparsed. The
-  upgrade batches these ID mappings before joining them to retained data. A
-  Codex rollout with no UUID in its filename still uses its file path to
-  exclude a stale parent-ID row after the fork is reparsed. Later rebuilds keep
-  metadata scoped to each file. Activity hints still find the newest surviving
-  page without an original thread row. Reverified these archive and activity
-  paths on 2026-10-02. Other Codex versions may differ. Tests:
-  `TestCodexRevertPageSessionsThroughAPI`, `TestCodexRevertPagesFormATree`,
-  `TestCodexRevertPagesRetainDailyUsage`,
+  2026-10-09. Saved names and stars follow the page when the original thread
+  row is gone. Explicit project assignments also follow the retained page when
+  the original is absent, including when an empty thread row holds trash
+  scope. Reverified assignment persistence through identity restoration, later
+  syncs, and folder rules on 2026-10-06. Saved parser-source project
+  identities follow their page without overwriting the original thread's
+  identity. Archived pages whose files are absent keep their messages, tool
+  results, usage, and export identities under the page ID, even if the
+  original file is reparsed. Trashed archived pages move the same way, retaining
+  their saved names, stars, and pins; an empty thread row holds the inherited
+  trash scope. Reverified upgrade, restore, and rebuild with an absent page
+  on 2026-10-04. Their base cannot be recovered from disk, so they link to the
+  thread. Recall entries, evidence, extraction progress, and conversation
+  export identities and session state move to the page even when its file was
+  reparsed. The upgrade batches these ID mappings before joining them to
+  retained data. A Codex rollout with no UUID in its filename still uses its
+  file path to exclude a stale parent-ID row after the fork is reparsed. Later
+  rebuilds keep metadata scoped to each file. Activity hints still find the
+  newest surviving page without an original thread row. Reverified these
+  archive and activity paths on 2026-10-02. Other Codex versions may differ.
+  Tests: `TestCodexRevertPageSessionsThroughAPI`,
+  `TestCodexRevertPagesFormATree`, `TestCodexRevertPagesRetainDailyUsage`,
   `TestCodexRevertPageUpgradeReplacesStaleThreadRow`,
   `TestCopySessionMetadataFrom_CodexPagePins`,
   `TestCodexPageUpgradePreservesPostgresPins`,
