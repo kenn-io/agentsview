@@ -614,10 +614,14 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 		digestList        bool
 		// lateWrite mutates the container after discovery's recapture, so
 		// only finalization revalidation can observe it.
-		lateWrite bool
-		durable   bool
-		result    resultKind
-		finish    finishKind
+		lateWrite        bool
+		durable          bool
+		writeFails       bool
+		canceledWrite    bool
+		watermarkAdvance bool
+		unloaded         bool
+		result           resultKind
+		finish           finishKind
 		// sibling adds a second captured, stamped container; discovered
 		// siblings are digest-listed and complete cleanly.
 		sibling           bool
@@ -628,6 +632,32 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 		wantSiblingTrust  stateWant
 		wantSiblingStamp  stateWant
 	}{
+		{
+			name: "completion write fails", durable: true, priorTrustCapture: true, priorStamp: true,
+			writeFails: true, capture: captureLive, finish: finishScoped, wantTrust: wantFresh, wantStamp: wantPrior,
+		},
+		{
+			name: "expired completion canceled", durable: true, priorTrustCapture: true, priorStamp: true,
+			canceledWrite: true, capture: captureLive, digestList: true, finish: finishScoped, wantTrust: wantFresh, wantStamp: wantFresh,
+		},
+		{
+			name: "watermark publication preserves deadline", durable: true, priorTrustCapture: true, priorStamp: true,
+			watermarkAdvance: true, capture: captureLive, finish: finishScoped, wantTrust: wantFresh, wantStamp: wantPrior,
+		},
+		{
+			name: "full pass drops the undiscovered container", durable: true, priorTrustCapture: true, priorStamp: true,
+			unloaded: true, sibling: true, capture: captureLive, digestList: true, wantTrust: wantFresh, wantStamp: wantFresh,
+		},
+		{
+			name: "scoped pass keeps the entry", durable: true, priorTrustCapture: true, priorStamp: true,
+			unloaded: true, sibling: true, capture: captureLive, finish: finishScoped, wantTrust: wantFresh, wantStamp: wantPrior,
+			wantSiblingTrust: wantFresh, wantSiblingStamp: wantPrior,
+		},
+		{
+			name: "incomplete pass keeps the entry", durable: true, priorTrustCapture: true, priorStamp: true,
+			unloaded: true, sibling: true, capture: captureLive, finish: finishIncomplete, wantTrust: wantFresh, wantStamp: wantPrior,
+			wantSiblingTrust: wantFresh, wantSiblingStamp: wantPrior,
+		},
 		{
 			// A capture taken after discovery could be newer than the listed
 			// session set; promoting it would gate-skip an unparsed write.
@@ -747,6 +777,10 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			now = time.Unix(200, 0)
+			if tc.canceledWrite {
+				now = prior.Add(openCodeContainerDigestVerifyInterval)
+			}
 			dbPath, conn := newContainerTestDB(t)
 			capture, ok := parser.StatSQLiteContainerState(dbPath)
 			require.True(t, ok, "container state must be readable")
@@ -798,6 +832,19 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 				}
 				require.NoError(t, e.prepareSQLiteContainerVerification(t.Context(), states))
 			}
+			const unloaded = "/data/legacy/opencode.db"
+			if tc.unloaded {
+				writeContainerVerification(t, e.db, unloaded, parser.SQLiteContainerState{}, prior)
+				e.digestVerifiedAt[unloaded] = prior
+			}
+			if tc.watermarkAdvance {
+				_, err := conn.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('advanced')")
+				require.NoError(t, err)
+				advanced, ok := parser.StatSQLiteContainerState(dbPath)
+				require.True(t, ok)
+				require.Greater(t, advanced.DBChangeCounter, capture.DBChangeCounter)
+				states[dbPath] = advanced
+			}
 			fileA := parser.DiscoveredFile{
 				Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
 			}
@@ -835,16 +882,41 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			if tc.siblingDiscovered {
 				e.noteSQLiteContainerResult(fileB.Path, true)
 			}
+			if tc.writeFails {
+				raw, err := sql.Open("sqlite3", e.db.Path())
+				require.NoError(t, err)
+				defer raw.Close()
+				_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER block_verification_write BEFORE INSERT ON pg_sync_state WHEN NEW.key LIKE 'sqlite-container:%' BEGIN SELECT RAISE(ABORT, 'blocked verification write'); END`)
+				require.NoError(t, err)
+			}
+			ctx := t.Context()
+			if tc.canceledWrite {
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceled
+			}
 			switch tc.finish {
 			case finishFull:
-				e.finishSQLiteContainerPass(t.Context(), false, true)
+				e.finishSQLiteContainerPass(ctx, false, true)
 			case finishScoped:
-				e.finishSQLiteContainerPass(t.Context(), false, false)
+				e.finishSQLiteContainerPass(ctx, false, false)
 			case finishIncomplete:
-				e.finishSQLiteContainerPass(t.Context(), true, false)
+				e.finishSQLiteContainerPass(ctx, true, false)
 			}
 
-			if tc.durable {
+			if tc.unloaded {
+				for _, path := range []string{siblingPath, unloaded} {
+					_, found := readContainerVerification(t, e.db, path)
+					assert.Equal(t, tc.finish != finishFull, found)
+				}
+				_, stamped := e.digestVerifiedAt[unloaded]
+				assert.Equal(t, tc.finish != finishFull, stamped)
+			} else if tc.watermarkAdvance {
+				record, found := readContainerVerification(t, e.db, dbPath)
+				require.True(t, found)
+				assert.Equal(t, states[dbPath], record.State)
+				assert.True(t, prior.Equal(record.VerifiedAt), "watermark passes preserve the original deadline")
+			} else if tc.durable {
 				for path := range states {
 					record, found := readContainerVerification(t, e.db, path)
 					require.True(t, found)
@@ -856,6 +928,13 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 				for path := range states {
 					assert.False(t, restarted.sqliteContainerListsWatermarkOnly(states)(path))
 					assert.True(t, prior.Equal(restarted.digestVerifiedAt[path]))
+				}
+				if tc.writeFails {
+					now = prior.Add(openCodeContainerDigestVerifyInterval)
+					fresh := &Engine{db: e.db}
+					require.NoError(t, fresh.prepareSQLiteContainerVerification(t.Context(), states))
+					assert.False(t, fresh.sqliteContainerListsWatermarkOnly(states)(dbPath))
+					assert.False(t, fresh.digestVerifiedAt[dbPath].IsZero(), "failed invalidation writes cannot erase due work")
 				}
 			}
 			assertTrust := func(path string, want stateWant, label string) {
@@ -1111,37 +1190,6 @@ func TestSQLiteContainerGateUsesCarriedSourcePath(t *testing.T) {
 // only a subset of roots, so absence there proves nothing and the entry
 // must survive.
 func TestSQLiteContainerFullPassDropsUndiscoveredTrust(t *testing.T) {
-	for _, tc := range []struct {
-		name                      string
-		incomplete, full, removed bool
-	}{
-		{"full pass drops the undiscovered container", false, true, true},
-		{"scoped pass keeps the entry", false, false, false},
-		{"incomplete pass keeps the entry", true, true, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			archive := openTestDB(t)
-			const path = "/data/opencode.db"
-			const unloaded = "/data/legacy/opencode.db"
-			now := time.Now()
-			writeContainerVerification(t, archive, path, parser.SQLiteContainerState{}, now)
-			writeContainerVerification(t, archive, unloaded, parser.SQLiteContainerState{}, now)
-			e := &Engine{
-				db:                      archive,
-				trustedSQLiteContainers: map[string]trustedSQLiteContainer{path: {}},
-				digestVerifiedAt:        map[string]time.Time{unloaded: now},
-			}
-			e.beginSQLiteContainerPass(nil, nil)
-			e.finishSQLiteContainerPass(t.Context(), tc.incomplete, tc.full)
-			assert.Equal(t, !tc.removed, len(e.trustedSQLiteContainers) != 0)
-			assert.Equal(t, !tc.removed, len(e.digestVerifiedAt) != 0)
-			for _, p := range []string{path, unloaded} {
-				raw, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+p)
-				require.NoError(t, err)
-				assert.Equal(t, !tc.removed, raw != "")
-			}
-		})
-	}
 	t.Run("newer record stays untouched", func(t *testing.T) {
 		archive := openTestDB(t)
 		path, _ := newContainerTestDB(t)
@@ -1548,9 +1596,9 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		raw                                string
 		version                            int
 		want                               bool
-		wantNil, publish, concurrent       bool
+		wantNil, concurrent                bool
 	}{
-		{name: "watermark publication preserves deadline", age: time.Minute, want: true, publish: true},
+		{name: "watermark publication preserves deadline", age: time.Minute, want: true},
 		{name: "force parse overrides a current stamp", wantNil: true, setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceParse = true }},
 		{name: "force full parse overrides a current stamp", wantNil: true, setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceFullParse = true }},
 		{name: "expired", age: openCodeContainerDigestVerifyInterval},
@@ -1579,7 +1627,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		{name: "one concurrent owner", concurrent: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path, container := newContainerTestDB(t)
+			path, _ := newContainerTestDB(t)
 			state, ok := parser.StatSQLiteContainerState(path)
 			require.True(t, ok)
 			if !tc.absent {
@@ -1665,82 +1713,6 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			if tc.want {
 				assert.True(t, now.Add(-tc.age).Equal(e.digestVerifiedAt[path]))
 			}
-			if tc.publish {
-				_, err := container.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('advanced')")
-				require.NoError(t, err)
-				advanced, ok := parser.StatSQLiteContainerState(path)
-				require.True(t, ok)
-				require.Greater(t, advanced.DBChangeCounter, state.DBChangeCounter)
-				e.beginStreamingSQLiteContainerPass(map[string]parser.SQLiteContainerState{path: advanced})
-				e.containerPass.discovered[path], e.containerPass.completed[path] = 1, 1
-				e.finishSQLiteContainerPass(t.Context(), false, false)
-				record, found := readContainerVerification(t, archive, path)
-				require.True(t, found)
-				assert.Equal(t, advanced, e.trustedSQLiteContainers[path].state)
-				assert.Equal(t, advanced, record.State)
-				assert.True(t, now.Add(-tc.age).Equal(record.VerifiedAt), "watermark passes preserve the original deadline")
-			}
-		})
-	}
-}
-
-func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
-	for _, tc := range []struct {
-		name                      string
-		writeFails, canceledWrite bool
-	}{
-		{"completion write fails", true, false},
-		{"expired completion canceled", false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			archive := openTestDB(t)
-			path, _ := newContainerTestDB(t)
-			state, ok := parser.StatSQLiteContainerState(path)
-			require.True(t, ok)
-			original := time.Unix(1000, 0)
-			now := original
-			if tc.canceledWrite {
-				now = now.Add(openCodeContainerDigestVerifyInterval)
-			}
-			origNow := openCodeContainerDigestVerifyNow
-			t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
-			openCodeContainerDigestVerifyNow = func() time.Time { return now }
-			writeContainerVerification(t, archive, path, state, original)
-			e := &Engine{db: archive}
-			states := map[string]parser.SQLiteContainerState{path: state}
-			require.NoError(t, e.prepareSQLiteContainerVerification(t.Context(), states))
-			require.Equal(t, !tc.canceledWrite, e.sqliteContainerListsWatermarkOnly(states)(path))
-			e.beginStreamingSQLiteContainerPass(states)
-
-			if tc.writeFails {
-				raw, err := sql.Open("sqlite3", archive.Path())
-				require.NoError(t, err)
-				defer raw.Close()
-				_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER block_verification_write BEFORE INSERT ON pg_sync_state WHEN NEW.key LIKE 'sqlite-container:%' BEGIN SELECT RAISE(ABORT, 'blocked verification write'); END`)
-				require.NoError(t, err)
-			}
-			ctx, cancel := context.WithCancel(t.Context())
-			cancel()
-			e.containerPass.discovered[path], e.containerPass.completed[path] = 1, 1
-			if tc.canceledWrite {
-				e.containerPass.fullDigestListed[path] = true
-				e.finishSQLiteContainerPass(ctx, false, false)
-			} else {
-				e.finishSQLiteContainerPass(t.Context(), false, false)
-			}
-			record, found := readContainerVerification(t, archive, path)
-			require.True(t, found)
-			assert.True(t, original.Equal(record.VerifiedAt), "invalidation preserves the original deadline")
-			assert.Equal(t, parser.SQLiteContainerState{}, record.State)
-			restarted := &Engine{db: archive}
-			require.NoError(t, restarted.prepareSQLiteContainerVerification(t.Context(), states))
-			assert.False(t, restarted.sqliteContainerListsWatermarkOnly(states)(path))
-			assert.True(t, original.Equal(restarted.digestVerifiedAt[path]))
-			now = now.Add(openCodeContainerDigestVerifyInterval)
-			fresh := &Engine{db: archive}
-			require.NoError(t, fresh.prepareSQLiteContainerVerification(t.Context(), states))
-			assert.False(t, fresh.sqliteContainerListsWatermarkOnly(states)(path))
-			assert.False(t, fresh.digestVerifiedAt[path].IsZero(), "failed invalidation writes cannot erase due work")
 		})
 	}
 }
