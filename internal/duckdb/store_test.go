@@ -424,14 +424,14 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 	for _, mode := range []string{"substring", "regex", "fts"} {
 		t.Run(mode, func(t *testing.T) {
 			for _, tc := range []struct {
-				cutoff string
+				cutoff time.Time
 				count  int
 			}{
-				{"2026-01-10T00:00:00Z", 1},
-				{"2026-01-09T23:00:00Z", 0},
-				{"0001-01-01T00:00:00Z", 0},
+				{time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC), 1},
+				{time.Date(2026, 1, 9, 23, 0, 0, 0, time.UTC), 0},
+				{time.Unix(0, 0), 0},
 			} {
-				t.Run(tc.cutoff, func(t *testing.T) {
+				t.Run(tc.cutoff.UTC().Format(time.RFC3339), func(t *testing.T) {
 					page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 						Pattern: "first", Mode: mode, Limit: 1, IncludeOneShot: true,
 						ExcludeActiveSince: tc.cutoff,

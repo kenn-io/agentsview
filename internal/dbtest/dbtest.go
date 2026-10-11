@@ -330,3 +330,16 @@ func AssertUsageGroups(t *testing.T, store db.Store) {
 	require.NoError(t, err)
 	assert.Empty(t, rows)
 }
+
+// SemanticSearch prepares s for query and fetches one page of up to limit
+// hits, for tests that exercise a searcher outside db.SearchContent.
+func SemanticSearch(
+	ctx context.Context, s db.VectorSearcher, query string, limit int,
+) ([]db.VectorHit, error) {
+	search, _, err := s.PrepareSemanticSearch(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	hits, _, err := search(ctx, limit)
+	return hits, err
+}

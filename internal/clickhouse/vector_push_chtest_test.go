@@ -13,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -467,7 +468,7 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	}, gens)
 
 	searcher := NewVectorSearcher(store.DB(), vectorFixtureFP, vectorFixtureDim, 20, fixedEncoder(vecAlpha0a))
-	hits, err := searcher.SemanticSearch(ctx, "alpha", 10)
+	hits, err := dbtest.SemanticSearch(ctx, searcher, "alpha", 10)
 	require.NoError(t, err)
 	require.Len(t, hits, 4, "one hit per document: both alpha chunks roll up to alpha-d0")
 	assert.Equal(t, fixtureAlphaID, hits[0].SessionID)
@@ -483,7 +484,7 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 			assert.Equal(t, "alpha", query)
 			return vecAlpha0a, nil
 		})
-		search, _, err := prepared.(db.PreparedVectorSearcher).PrepareSemanticSearch(ctx, "alpha")
+		search, _, err := prepared.PrepareSemanticSearch(ctx, "alpha")
 		require.NoError(t, err)
 		for _, tc := range []struct {
 			k         int

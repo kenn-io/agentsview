@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -141,7 +142,7 @@ func TestPGVectorSearcher(t *testing.T) {
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
 
 	t.Run("ranking rollup hydration tombstone", func(t *testing.T) {
-		hits, err := searcher.SemanticSearch(ctx, "query", 10)
+		hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
 		require.NoError(t, err, "SemanticSearch")
 
 		keys := make([]string, len(hits))
@@ -179,7 +180,7 @@ func TestPGVectorSearcher(t *testing.T) {
 			assert.Equal(t, "query", query)
 			return []float32{1, 0, 0, 0}, nil
 		})
-		search, _, err := prepared.(db.PreparedVectorSearcher).PrepareSemanticSearch(ctx, "query")
+		search, _, err := prepared.PrepareSemanticSearch(ctx, "query")
 		require.NoError(t, err)
 		for _, tc := range []struct {
 			k         int
@@ -193,7 +194,7 @@ func TestPGVectorSearcher(t *testing.T) {
 	})
 
 	t.Run("limit truncates documents", func(t *testing.T) {
-		hits, err := searcher.SemanticSearch(ctx, "query", 1)
+		hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 1)
 		require.NoError(t, err)
 		require.Len(t, hits, 1)
 		assert.Equal(t, 5, hits[0].Ordinal, "only top-ranked u1")
@@ -204,7 +205,7 @@ func TestPGVectorSearcher(t *testing.T) {
 			func(context.Context, string) ([]float32, error) {
 				return nil, errors.New("embeddings endpoint down")
 			})
-		_, err := bad.SemanticSearch(ctx, "query", 5)
+		_, err := dbtest.SemanticSearch(ctx, bad, "query", 5)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, db.ErrSemanticTransient),
 			"encoder failure surfaces db.ErrSemanticTransient")
@@ -213,7 +214,7 @@ func TestPGVectorSearcher(t *testing.T) {
 	t.Run("dimension mismatch is rejected", func(t *testing.T) {
 		wrongDim := NewVectorSearcher(pg, genID, 4, searchMaxInputChars,
 			fixedEncoder([]float32{1, 0, 0}))
-		_, err := wrongDim.SemanticSearch(ctx, "query", 5)
+		_, err := dbtest.SemanticSearch(ctx, wrongDim, "query", 5)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "dimensions")
 	})
@@ -296,7 +297,7 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 
 	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
-	hits, err := searcher.SemanticSearch(ctx, "query", 2)
+	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 2)
 	require.NoError(t, err, "SemanticSearch")
 	require.Len(t, hits, 1, "both top-2 chunks belong to multi -> one rolled-up doc")
 	assert.Equal(t, 1, hits[0].Ordinal, "only multi survives; outside sits beyond k")
@@ -332,7 +333,7 @@ func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
 
 	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
-	hits, err := searcher.SemanticSearch(ctx, "query", docCount)
+	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", docCount)
 	require.NoError(t, err, "SemanticSearch")
 	assert.Len(t, hits, docCount,
 		"ef_search raised to k returns all %d docs, not the ~40 default cap", docCount)

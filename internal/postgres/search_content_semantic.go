@@ -103,12 +103,12 @@ func (s *Store) semanticAllowedSessionIDsPG(
 		return nil, nil
 	}
 	sessionFilter := db.SemanticContentSessionFilter(f)
-	sessionFilter.ExcludeActiveSince = ""
+	sessionFilter.ExcludeActiveSince = time.Time{}
 	where, args := buildPGSessionBaseFilter(sessionFilter)
 	where, args = appendExcludeSessionIDsPG(where, args, "id", f.ExcludeSessionIDs)
 	b := db.NewQueryBuilder(db.PostgresQueryDialect(), len(args))
 	activity := "TRUE"
-	if f.ExcludeActiveSince != "" {
+	if !f.ExcludeActiveSince.IsZero() {
 		activity = b.ExcludeActiveSincePredicate(f.ExcludeActiveSince)
 	}
 	args = append(args, b.Args()...)

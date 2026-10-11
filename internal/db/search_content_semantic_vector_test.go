@@ -24,26 +24,32 @@ type vectorIndexSearcher struct {
 	enc kitvec.EncodeFunc
 }
 
-func (s vectorIndexSearcher) SemanticSearch(
-	ctx context.Context, query string, limit int,
-) ([]db.VectorHit, error) {
-	hits, err := s.ix.Search(ctx, s.enc, query, limit)
+func (s vectorIndexSearcher) PrepareSemanticSearch(
+	ctx context.Context, query string,
+) (db.VectorSearchPage, int, error) {
+	search, err := s.ix.PrepareSearch(ctx, s.enc, query)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	out := make([]db.VectorHit, len(hits))
-	for i, h := range hits {
-		out[i] = db.VectorHit{
-			SessionID:    h.SessionID,
-			Ordinal:      h.Ordinal,
-			OrdinalStart: h.OrdinalStart,
-			OrdinalEnd:   h.OrdinalEnd,
-			Subordinate:  h.Subordinate,
-			Score:        h.Score,
-			Snippet:      h.Snippet,
+	return func(ctx context.Context, limit int) ([]db.VectorHit, bool, error) {
+		hits, exhausted, err := search(ctx, limit)
+		if err != nil {
+			return nil, false, err
 		}
-	}
-	return out, nil
+		out := make([]db.VectorHit, len(hits))
+		for i, h := range hits {
+			out[i] = db.VectorHit{
+				SessionID:    h.SessionID,
+				Ordinal:      h.Ordinal,
+				OrdinalStart: h.OrdinalStart,
+				OrdinalEnd:   h.OrdinalEnd,
+				Subordinate:  h.Subordinate,
+				Score:        h.Score,
+				Snippet:      h.Snippet,
+			}
+		}
+		return out, exhausted, nil
+	}, s.ix.MaxSearchCandidates(), nil
 }
 
 func (s vectorIndexSearcher) ResolveMessageUnits(

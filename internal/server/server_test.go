@@ -913,10 +913,10 @@ func TestSearchContentSemanticModeUnavailable(t *testing.T) {
 // vector.QueryEncodeError this way).
 type fakeTransientVectorSearcher struct{}
 
-func (fakeTransientVectorSearcher) SemanticSearch(
-	_ context.Context, _ string, _ int,
-) ([]db.VectorHit, error) {
-	return nil, fmt.Errorf("%w: dial tcp: connection refused", db.ErrSemanticTransient)
+func (fakeTransientVectorSearcher) PrepareSemanticSearch(
+	context.Context, string,
+) (db.VectorSearchPage, int, error) {
+	return nil, 0, fmt.Errorf("%w: dial tcp: connection refused", db.ErrSemanticTransient)
 }
 
 func (fakeTransientVectorSearcher) ResolveMessageUnits(

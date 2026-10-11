@@ -88,9 +88,11 @@ type UnitRef struct {
 // helpers). The concrete implementation is internal/vector's Index, wired in
 // at startup via SetVectorSearcher.
 type VectorSearcher interface {
-	// SemanticSearch embeds query and returns up to limit unit-level hits,
-	// best first.
-	SemanticSearch(ctx context.Context, query string, limit int) ([]VectorHit, error)
+	// PrepareSemanticSearch embeds query once for this request. The returned
+	// page function fetches up to limit unit-level hits, best first, and can
+	// run again with a larger limit. The int is the engine's KNN candidate
+	// ceiling, or zero when the engine has none.
+	PrepareSemanticSearch(ctx context.Context, query string) (VectorSearchPage, int, error)
 	// ResolveMessageUnits maps each ref to the unit containing it. The
 	// result is parallel to refs; a ref with no containing unit yields a
 	// zero UnitRef (DocKey == "").
@@ -99,11 +101,6 @@ type VectorSearcher interface {
 
 // VectorSearchPage returns exhaustion measured before chunk rollup and hydration.
 type VectorSearchPage func(context.Context, int) ([]VectorHit, bool, error)
-
-// PreparedVectorSearcher encodes once per request and reports its engine ceiling, or zero for none.
-type PreparedVectorSearcher interface {
-	PrepareSemanticSearch(context.Context, string) (VectorSearchPage, int, error)
-}
 
 // SemanticReadiness is a bounded, read-only snapshot of the semantic search
 // index. It deliberately contains no filesystem paths or provider secrets.

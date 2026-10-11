@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -35,8 +36,10 @@ type ContentSearchFilter struct {
 	Project, ExcludeProject, Machine, Agent           string
 	SessionID, GitBranchExact                         string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
-	ExcludeActiveSince                                string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
+	// ExcludeActiveSince drops sessions whose last activity is after this
+	// instant before LIMIT. The zero time disables the filter.
+	ExcludeActiveSince time.Time
 	// ExcludeSessionIDs drops matches from these session IDs before LIMIT,
 	// so a live conversation cannot fill the result page. Empty entries are
 	// ignored; unknown IDs are a no-op.
@@ -164,11 +167,11 @@ func BuildContentScopeSQL(
 		return BuildSessionBaseFilterSQL(sf, dialect)
 	}
 	// Activity belongs to each candidate, while metadata filters select the parent tree.
-	sf.ExcludeActiveSince = ""
+	sf.ExcludeActiveSince = time.Time{}
 	b := NewQueryBuilder(dialect, 0)
 	where := buildSessionFilterWithBuilder(sf, b, "")
-	if f.ExcludeActiveSince != "" {
-		where += " AND " + excludeActiveSincePredicate(f.ExcludeActiveSince, b, func(col string) string { return col })
+	if !f.ExcludeActiveSince.IsZero() {
+		where += " AND " + b.ExcludeActiveSincePredicate(f.ExcludeActiveSince)
 	}
 	return where, b.Args()
 }
@@ -899,33 +902,32 @@ func classifyFTSError(err error) error {
 // than will ultimately be returned.
 const SemanticOverfetchMin = 200
 
-// SelectSurvivingVectorHits expands activity-filtered rankings until exhaustion or the request budget.
-// The lookup includes otherwise eligible sessions, with false marking activity rejection.
+// maxActivityExpansionCandidates caps the candidate count when an activity
+// cutoff makes SelectSurvivingVectorHits double its fetch. Starting from
+// SemanticOverfetchMin, the cap allows at most six fetches. It equals
+// sqlite-vec's KNN ceiling, and it also bounds the KNN and hydration work
+// that PostgreSQL and ClickHouse would otherwise do for large limits.
+const maxActivityExpansionCandidates = 4096
+
+// SelectSurvivingVectorHits returns the ranked vector hits that pass the
+// filter's session scope. When an activity cutoff rejects hits and leaves
+// fewer than f.Limit units, it fetches again with twice the candidates, until
+// the engine is exhausted or the candidate cap is reached. allowedSessions
+// returns an entry for each otherwise eligible session; false marks a
+// session that the activity cutoff rejects.
 func SelectSurvivingVectorHits(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
 	allowedSessions func(context.Context, ContentSearchFilter, []string) (map[string]bool, error),
 ) ([]VectorHit, error) {
-	if err := ctx.Err(); err != nil {
+	search, ceiling, err := searcher.PrepareSemanticSearch(ctx, f.Pattern)
+	if err != nil {
 		return nil, err
 	}
-	search := VectorSearchPage(func(ctx context.Context, k int) ([]VectorHit, bool, error) {
-		hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
-		return hits, false, err
-	})
-	ceiling := 0
-	if prepared, ok := searcher.(PreparedVectorSearcher); ok {
-		var err error
-		search, ceiling, err = prepared.PrepareSemanticSearch(ctx, f.Pattern)
-		if err != nil {
-			return nil, err
-		}
+	if ceiling <= 0 || ceiling > maxActivityExpansionCandidates {
+		ceiling = maxActivityExpansionCandidates
 	}
 	k = clampRecallVectorCandidates(k, ceiling)
-	// Keep the previous six-fetch budget to bound filtering work on engines without a KNN ceiling.
-	for attempt := 0; ; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
+	for {
 		hits, exhausted, err := search(ctx, k)
 		if err != nil {
 			return nil, err
@@ -934,33 +936,40 @@ func SelectSurvivingVectorHits(
 		if err != nil {
 			return nil, err
 		}
-		surviving := make([]VectorHit, 0, len(hits))
-		units := make(map[string]struct{})
-		activityRejected := false
-		for _, h := range hits {
-			activityAllowed, eligible := allowed[h.SessionID]
-			if !eligible || ScopeExcludes(f.Scope, h.Subordinate) {
-				continue
-			}
-			if activityAllowed {
-				surviving = append(surviving, h)
-				units[UnitFusionKey(h.SessionID, h.OrdinalStart)] = struct{}{}
-			} else {
-				activityRejected = true
-			}
-		}
+		surviving, units, activityRejected := filterVectorHits(hits, allowed, f.Scope)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if f.ExcludeActiveSince == "" || !activityRejected || len(units) >= f.Limit || exhausted || attempt >= 5 {
-			return surviving, nil
-		}
 		next := clampRecallVectorCandidates(k*2, ceiling)
-		if next <= k {
+		if !activityRejected || units >= f.Limit || exhausted || next <= k {
 			return surviving, nil
 		}
 		k = next
 	}
+}
+
+// filterVectorHits keeps hits from allowed sessions inside scope. It reports
+// the number of distinct surviving units and whether the activity cutoff
+// rejected any otherwise eligible hit.
+func filterVectorHits(
+	hits []VectorHit, allowed map[string]bool, scope string,
+) ([]VectorHit, int, bool) {
+	surviving := make([]VectorHit, 0, len(hits))
+	units := make(map[string]struct{})
+	activityRejected := false
+	for _, h := range hits {
+		activityAllowed, eligible := allowed[h.SessionID]
+		if !eligible || ScopeExcludes(scope, h.Subordinate) {
+			continue
+		}
+		if !activityAllowed {
+			activityRejected = true
+			continue
+		}
+		surviving = append(surviving, h)
+		units[UnitFusionKey(h.SessionID, h.OrdinalStart)] = struct{}{}
+	}
+	return surviving, len(units), activityRejected
 }
 
 // validateSemanticSources returns a SearchInputError unless f.Sources is
@@ -1525,10 +1534,10 @@ func (db *DB) semanticAllowedSessionIDs(
 		return nil, nil
 	}
 	sessionFilter := SemanticContentSessionFilter(f)
-	sessionFilter.ExcludeActiveSince = ""
+	sessionFilter.ExcludeActiveSince = time.Time{}
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	activity := "1"
-	if f.ExcludeActiveSince != "" {
+	if !f.ExcludeActiveSince.IsZero() {
 		activity = b.ExcludeActiveSincePredicate(f.ExcludeActiveSince)
 	}
 	where, filterArgs := buildSessionBaseFilter(sessionFilter)

@@ -17,10 +17,12 @@ type readinessVectorSearcher struct {
 	calls  int
 }
 
-func (s *readinessVectorSearcher) SemanticSearch(
-	context.Context, string, int,
-) ([]db.VectorHit, error) {
-	return nil, nil
+func (s *readinessVectorSearcher) PrepareSemanticSearch(
+	context.Context, string,
+) (db.VectorSearchPage, int, error) {
+	return func(context.Context, int) ([]db.VectorHit, bool, error) {
+		return nil, true, nil
+	}, 0, nil
 }
 
 func (s *readinessVectorSearcher) ResolveMessageUnits(

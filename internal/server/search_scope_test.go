@@ -18,10 +18,12 @@ import (
 // fake, so hybrid requests do not error.
 type fakeHitsVectorSearcher struct{ hits []db.VectorHit }
 
-func (f fakeHitsVectorSearcher) SemanticSearch(
-	_ context.Context, _ string, _ int,
-) ([]db.VectorHit, error) {
-	return f.hits, nil
+func (f fakeHitsVectorSearcher) PrepareSemanticSearch(
+	context.Context, string,
+) (db.VectorSearchPage, int, error) {
+	return func(context.Context, int) ([]db.VectorHit, bool, error) {
+		return f.hits, true, nil
+	}, 0, nil
 }
 
 func (f fakeHitsVectorSearcher) ResolveMessageUnits(

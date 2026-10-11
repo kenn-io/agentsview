@@ -26,14 +26,16 @@ type hybridFakeSearcher struct {
 	units []db.UnitRef
 }
 
-func (f *hybridFakeSearcher) SemanticSearch(
-	_ context.Context, _ string, limit int,
-) ([]db.VectorHit, error) {
-	hits := f.hits
-	if limit > 0 && limit < len(hits) {
-		hits = hits[:limit]
-	}
-	return hits, nil
+func (f *hybridFakeSearcher) PrepareSemanticSearch(
+	context.Context, string,
+) (db.VectorSearchPage, int, error) {
+	return func(_ context.Context, limit int) ([]db.VectorHit, bool, error) {
+		hits := f.hits
+		if limit > 0 && limit < len(hits) {
+			hits = hits[:limit]
+		}
+		return hits, len(f.hits) < limit, nil
+	}, 0, nil
 }
 
 func (f *hybridFakeSearcher) ResolveMessageUnits(

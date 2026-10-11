@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -90,10 +91,10 @@ func (s *Store) semanticAllowedSessionIDs(
 		return allowed, nil
 	}
 	sessionFilter := db.SemanticContentSessionFilter(f)
-	sessionFilter.ExcludeActiveSince = ""
+	sessionFilter.ExcludeActiveSince = time.Time{}
 	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
 	activity := "1"
-	if f.ExcludeActiveSince != "" {
+	if !f.ExcludeActiveSince.IsZero() {
 		activity = b.ExcludeActiveSincePredicate(f.ExcludeActiveSince)
 	}
 	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(sessionFilter, db.ClickHouseQueryDialect())

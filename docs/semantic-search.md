@@ -968,13 +968,12 @@ keyword leg is the mirror's recency-ordered term match, as on PostgreSQL.
   over-fetch candidates from the vector index (4x the requested limit, or a
   fixed minimum if that's larger), then drop hits whose session fails
   `--project`/`--agent`/`--date*`/etc., then truncate to the requested limit.
-  When activity rejects otherwise eligible hits, semantic and hybrid searches
-  double the candidate count for up to six fetches, starting at
-  `max(4 * limit, 200)` and reaching at most 32x that initial count. SQLite
-  also caps candidates at 4096 chunks. PostgreSQL and ClickHouse use the
-  six-fetch bound. Other queries use a single candidate batch. Narrow filters
-  or scope can still return fewer than `--limit` results when eligible matches
-  lie beyond that budget. The hybrid keyword leg retains its separate bounded
+  When the recent-activity cutoff rejects otherwise eligible hits, semantic
+  and hybrid searches fetch again with twice as many candidates. They start at
+  `max(4 * limit, 200)` and stop at 4096 chunks on every store, which allows
+  at most six fetches. Other queries use a single candidate batch. Narrow
+  filters or scope can still return fewer than `--limit` results when eligible
+  matches lie beyond that budget. The hybrid keyword leg keeps its own bounded
   search budget.
 - **Legacy no-`source_uuid` rows re-embed on ordinal shifts.** Each embedded
   document is keyed by its first message's stable per-message UUID when the

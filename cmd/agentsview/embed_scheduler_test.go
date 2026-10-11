@@ -832,7 +832,7 @@ func TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable(t *test
 		cfg.Vector.Embeddings, vectorGeneration(cfg.Vector.Embeddings),
 	))
 
-	_, err = adapter.SemanticSearch(t.Context(), "any query", 5)
+	_, err = dbtest.SemanticSearch(t.Context(), adapter, "any query", 5)
 	require.Error(t, err)
 	require.ErrorIs(t, err, db.ErrSemanticUnavailable,
 		"a version-mismatched index must surface the semantic-unavailable taxonomy")
@@ -862,7 +862,7 @@ func TestSearcherAdapterActivityCandidateExpansion(t *testing.T) {
 	t.Run("engine ceiling", func(t *testing.T) {
 		encodes = 0
 		hits, err := db.SelectSurvivingVectorHits(t.Context(), db.ContentSearchFilter{
-			Pattern: "query", Limit: 4, ExcludeActiveSince: "2024-01-01T00:00:00Z",
+			Pattern: "query", Limit: 4, ExcludeActiveSince: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 		}, adapter, 5000, func(_ context.Context, _ db.ContentSearchFilter, ids []string) (map[string]bool, error) {
 			allowed := make(map[string]bool, len(ids))
 			for _, id := range ids {

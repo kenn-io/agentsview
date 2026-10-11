@@ -26,9 +26,16 @@ type fakeVectorSearcher struct {
 	calls      int
 }
 
-func (f *fakeVectorSearcher) SemanticSearch(
-	_ context.Context, _ string, limit int,
-) ([]VectorHit, error) {
+func (f *fakeVectorSearcher) PrepareSemanticSearch(
+	context.Context, string,
+) (VectorSearchPage, int, error) {
+	return func(_ context.Context, limit int) ([]VectorHit, bool, error) {
+		hits, err := f.page(limit)
+		return hits, len(f.hits) < limit, err
+	}, 0, nil
+}
+
+func (f *fakeVectorSearcher) page(limit int) ([]VectorHit, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err

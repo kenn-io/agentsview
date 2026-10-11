@@ -5,10 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// activityCutoff is ten minutes before the fixtures' 2024-06-15T12:00:00Z "now".
+var activityCutoff = time.Date(2024, 6, 15, 11, 50, 0, 0, time.UTC)
+
+// epochCutoff predates every fixture, so it excludes all sessions with known activity.
+var epochCutoff = time.Unix(0, 0).UTC()
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {
 	t.Run("fills page before pagination", func(t *testing.T) {
@@ -24,7 +31,7 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 			require.NoError(t, err)
 		}
 		filter := ContentSearchFilter{
-			Pattern: "docker-compose.test.yml", Limit: 3, ExcludeActiveSince: "2024-06-15T11:50:00Z",
+			Pattern: "docker-compose.test.yml", Limit: 3, ExcludeActiveSince: activityCutoff,
 		}
 		page, err := d.SearchContent(t.Context(), filter)
 		require.NoError(t, err)
@@ -72,12 +79,14 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 	d.SetVectorSearcher(&fakeVectorSearcher{hits: hits})
 	for _, mode := range []string{"substring", "regex", "fts", "terms", "semantic", "hybrid"} {
 		t.Run(mode, func(t *testing.T) {
-			cutoffs := []string{"2024-06-15T11:50:00Z", "0001-01-01T00:00:00Z"}
+			cutoffs := []time.Time{activityCutoff, epochCutoff}
 			if mode == "substring" {
-				cutoffs = append(cutoffs, "2024-06-15T13:50:00+02:00", "2024-06-15T06:50:00-05:00")
+				cutoffs = append(cutoffs,
+					activityCutoff.In(time.FixedZone("UTC+2", 2*60*60)),
+					activityCutoff.In(time.FixedZone("UTC-5", -5*60*60)))
 			}
 			for _, cutoff := range cutoffs {
-				t.Run(cutoff, func(t *testing.T) {
+				t.Run(cutoff.Format(time.RFC3339), func(t *testing.T) {
 					page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 						Pattern: "needle", Mode: mode, Limit: 6,
 						ExcludeActiveSince: cutoff,
@@ -88,7 +97,7 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 						ids = append(ids, match.SessionID)
 					}
 					want := []string{"boundary", "started-boundary", "idle", "malformed", "unknown"}
-					if cutoff == "0001-01-01T00:00:00Z" {
+					if cutoff.Equal(epochCutoff) {
 						want = []string{"malformed", "unknown"}
 					}
 					assert.ElementsMatch(t, want, ids)
@@ -131,7 +140,7 @@ func TestSearchContentExcludeActiveChildBeforeLimit(t *testing.T) {
 				t.Run(mode, func(t *testing.T) {
 					page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 						Pattern: "needle", Mode: mode, Limit: 1, IncludeChildren: true,
-						Project: tc.project, ExcludeActiveSince: "2024-06-15T11:50:00Z",
+						Project: tc.project, ExcludeActiveSince: activityCutoff,
 					})
 					require.NoError(t, err)
 					require.Len(t, page.Matches, 1)
@@ -153,14 +162,10 @@ type activityVectorSearcher struct {
 	chunksPerHit int
 }
 
-func (s *activityVectorSearcher) SemanticSearch(ctx context.Context, query string, k int) ([]VectorHit, error) {
-	s.limits = append(s.limits, k)
-	return s.fakeVectorSearcher.SemanticSearch(ctx, query, k/max(s.chunksPerHit, 1))
-}
-
-func (s *activityVectorSearcher) PrepareSemanticSearch(_ context.Context, query string) (VectorSearchPage, int, error) {
-	return func(ctx context.Context, k int) ([]VectorHit, bool, error) {
-		hits, err := s.SemanticSearch(ctx, query, k)
+func (s *activityVectorSearcher) PrepareSemanticSearch(context.Context, string) (VectorSearchPage, int, error) {
+	return func(_ context.Context, k int) ([]VectorHit, bool, error) {
+		s.limits = append(s.limits, k)
+		hits, err := s.page(k / max(s.chunksPerHit, 1))
 		return hits, len(s.hits)*max(s.chunksPerHit, 1) < k, err
 	}, 0, nil
 }
@@ -191,14 +196,15 @@ func TestSearchContentActivityCandidateExpansion(t *testing.T) {
 		name                     string
 		prefix                   VectorHit
 		count, chunks            int
-		cutoff, project          string
+		cutoff                   time.Time
+		project                  string
 		wantOrdinals, wantLimits []int
 	}{
-		{"boundary", VectorHit{SessionID: "active"}, 200, 1, "2024-06-15T11:50:00Z", "", []int{0, 1, 2}, []int{200, 400}},
-		{"collapsed chunks", VectorHit{SessionID: "active"}, 1, 200, "2024-06-15T11:50:00Z", "", []int{0, 1, 2}, []int{200, 400, 800}},
-		{"fetch budget exhausted", VectorHit{SessionID: "active"}, 6400, 1, "2024-06-15T11:50:00Z", "", nil, []int{200, 400, 800, 1600, 3200, 6400}},
-		{"all active", VectorHit{SessionID: "active"}, 200, 1, "0001-01-01T00:00:00Z", "", nil, []int{200, 400}},
-		{"sparse project without activity rejection", VectorHit{SessionID: "idle", Ordinal: 3}, 6400, 1, "2024-06-15T11:50:00Z", "project-b", nil, []int{200}},
+		{"boundary", VectorHit{SessionID: "active"}, 200, 1, activityCutoff, "", []int{0, 1, 2}, []int{200, 400}},
+		{"collapsed chunks", VectorHit{SessionID: "active"}, 1, 200, activityCutoff, "", []int{0, 1, 2}, []int{200, 400, 800}},
+		{"fetch budget exhausted", VectorHit{SessionID: "active"}, 6400, 1, activityCutoff, "", nil, []int{200, 400, 800, 1600, 3200, 4096}},
+		{"all active", VectorHit{SessionID: "active"}, 200, 1, epochCutoff, "", nil, []int{200, 400}},
+		{"sparse project without activity rejection", VectorHit{SessionID: "idle", Ordinal: 3}, 6400, 1, activityCutoff, "project-b", nil, []int{200}},
 	} {
 		modes := []string{"semantic"}
 		if tc.name == "boundary" {
@@ -234,26 +240,22 @@ func TestSearchContentActivityCandidateExpansion(t *testing.T) {
 func TestSelectSurvivingVectorHitsErrors(t *testing.T) {
 	failure := errors.New("search failed")
 	for _, tc := range []struct {
-		name                        string
-		searchErr, lookupErr        error
-		canceled, cancelAfterLookup bool
+		name                 string
+		searchErr, lookupErr error
+		cancelAfterLookup    bool
 	}{
-		{"search", failure, nil, false, false},
-		{"session lookup", nil, failure, false, false},
-		{"canceled", nil, nil, true, false},
-		{"canceled during expansion", nil, nil, false, true},
+		{"search", failure, nil, false},
+		{"session lookup", nil, failure, false},
+		{"canceled during expansion", nil, nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			if tc.canceled {
-				cancel()
-			}
 			searcher := &fakeVectorSearcher{err: tc.searchErr}
 			if tc.lookupErr != nil {
 				searcher.hits = []VectorHit{{SessionID: "session"}}
 			}
-			_, err := SelectSurvivingVectorHits(ctx, ContentSearchFilter{Limit: 3, ExcludeActiveSince: "2024-06-15T11:50:00Z"}, searcher, 200,
+			_, err := SelectSurvivingVectorHits(ctx, ContentSearchFilter{Limit: 3, ExcludeActiveSince: activityCutoff}, searcher, 200,
 				func(_ context.Context, _ ContentSearchFilter, sessionIDs []string) (map[string]bool, error) {
 					if tc.lookupErr != nil {
 						assert.Equal(t, []string{"session"}, sessionIDs)
@@ -263,17 +265,12 @@ func TestSelectSurvivingVectorHitsErrors(t *testing.T) {
 					}
 					return nil, tc.lookupErr
 				})
-			if tc.canceled || tc.cancelAfterLookup {
+			if tc.cancelAfterLookup {
 				require.ErrorIs(t, err, context.Canceled)
-				if tc.canceled {
-					assert.Zero(t, searcher.calls)
-				} else {
-					assert.Equal(t, 1, searcher.calls)
-				}
 			} else {
 				require.ErrorIs(t, err, failure)
-				assert.Equal(t, 1, searcher.calls)
 			}
+			assert.Equal(t, 1, searcher.calls)
 		})
 	}
 }

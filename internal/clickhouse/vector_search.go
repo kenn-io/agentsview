@@ -90,23 +90,12 @@ func NewVectorSearcher(
 	}
 }
 
-// SemanticSearch embeds query, ranks the generation's chunks by cosine
-// distance, rolls chunks up to one hit per document (best chunk wins, order
-// preserved), truncates to limit documents, and hydrates each against
-// vector_documents. An encoder failure is wrapped in db.ErrSemanticTransient;
-// a document that vanished between ranking and hydration is dropped.
-func (v *vectorSearcher) SemanticSearch(
-	ctx context.Context, query string, limit int,
-) ([]db.VectorHit, error) {
-	search, _, err := v.PrepareSemanticSearch(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	hits, _, err := search(ctx, limit)
-	return hits, err
-}
-
-// PrepareSemanticSearch retains one validated query embedding for this request.
+// PrepareSemanticSearch implements db.VectorSearcher. It embeds query once.
+// Each page call ranks the generation's chunks by cosine distance, rolls
+// chunks up to one hit per document (best chunk wins, order preserved),
+// truncates to limit documents, and hydrates each against vector_documents.
+// An encoder failure is wrapped in db.ErrSemanticTransient; a document that
+// vanished between ranking and hydration is dropped.
 func (v *vectorSearcher) PrepareSemanticSearch(
 	ctx context.Context, query string,
 ) (db.VectorSearchPage, int, error) {

@@ -529,22 +529,11 @@ func (a searcherAdapter) SemanticReadiness(
 	}, nil
 }
 
-// SemanticSearch implements db.VectorSearcher. A stale active generation
-// (the configured model/dimension no longer matches what was last built)
-// is a hard error checked before querying at all, rather than silently
-// searching the mismatched old generation.
-func (a searcherAdapter) SemanticSearch(
-	ctx context.Context, query string, limit int,
-) ([]db.VectorHit, error) {
-	search, _, err := a.PrepareSemanticSearch(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	hits, _, err := search(ctx, limit)
-	return hits, err
-}
-
-// PrepareSemanticSearch validates the index and retains one query embedding for this request.
+// PrepareSemanticSearch implements db.VectorSearcher and embeds query once
+// per request. A stale active generation (the configured model/dimension no
+// longer matches what was last built) is a hard error checked before
+// querying at all, rather than silently searching the mismatched old
+// generation.
 func (a searcherAdapter) PrepareSemanticSearch(
 	ctx context.Context, query string,
 ) (db.VectorSearchPage, int, error) {
@@ -592,9 +581,9 @@ func (a searcherAdapter) PrepareSemanticSearch(
 // ResolveMessageUnits implements db.VectorSearcher by delegating to the
 // index's resolver, translating its error taxonomy (notably
 // vector.ErrMirrorVersionMismatch from a version-mismatched read-only
-// vectors.db) the same way SemanticSearch does. It needs no staleness gate
-// of its own: the hybrid path always calls SemanticSearch — which enforces
-// the gate — before resolving FTS hits.
+// vectors.db) the same way PrepareSemanticSearch does. It needs no staleness
+// gate of its own: the hybrid path always calls PrepareSemanticSearch, which
+// enforces the gate, before resolving FTS hits.
 func (a searcherAdapter) ResolveMessageUnits(
 	ctx context.Context, refs []db.MessageRef,
 ) ([]db.UnitRef, error) {

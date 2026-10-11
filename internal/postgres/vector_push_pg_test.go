@@ -15,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -2394,7 +2395,7 @@ func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
 			require.NoError(t, err)
 			for _, generation := range generations {
 				searcher := NewVectorSearcher(pg, generation, 4, 100, fixedEncoder([]float32{1, 0, 0, 0}))
-				hits, err := searcher.SemanticSearch(t.Context(), "transcript", 10)
+				hits, err := dbtest.SemanticSearch(t.Context(), searcher, "transcript", 10)
 				require.NoError(t, err)
 				require.Len(t, hits, 1)
 				assert.Equal(t, "other-owner", hits[0].SessionID)

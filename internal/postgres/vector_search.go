@@ -69,25 +69,14 @@ func (v *vectorSearcher) resolveExtSchema(ctx context.Context) (string, error) {
 	return v.extSchema, nil
 }
 
-// SemanticSearch embeds query, runs chunk-level KNN over the generation's
-// chunk table, rolls chunks up to one hit per document (best chunk wins,
-// score order preserved), truncates to limit documents, and hydrates each
-// against vector_documents. It mirrors vector.Index.Search + searcherAdapter:
-// an encoder failure is wrapped in db.ErrSemanticTransient; a document that
-// vanished (or was parked at a negative-ordinal tombstone) between KNN and
-// hydration is dropped rather than erroring.
-func (v *vectorSearcher) SemanticSearch(
-	ctx context.Context, query string, limit int,
-) ([]db.VectorHit, error) {
-	search, _, err := v.PrepareSemanticSearch(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	hits, _, err := search(ctx, limit)
-	return hits, err
-}
-
-// PrepareSemanticSearch retains one validated query embedding for this request.
+// PrepareSemanticSearch implements db.VectorSearcher. It embeds query once.
+// Each page call runs chunk-level KNN over the generation's chunk table,
+// rolls chunks up to one hit per document (best chunk wins, score order
+// preserved), truncates to limit documents, and hydrates each against
+// vector_documents. It mirrors the SQLite searcherAdapter: an encoder failure
+// is wrapped in db.ErrSemanticTransient; a document that vanished (or was
+// parked at a negative-ordinal tombstone) between KNN and hydration is
+// dropped rather than erroring.
 func (v *vectorSearcher) PrepareSemanticSearch(
 	ctx context.Context, query string,
 ) (db.VectorSearchPage, int, error) {

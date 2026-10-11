@@ -776,7 +776,7 @@ func sessionFilterPredicates(
 		preds = append(preds, b.dialect.dateEndExpr(q)+" >= "+
 			b.dialect.dateParam(b.Add(f.ActiveSince)))
 	}
-	if f.ExcludeActiveSince != "" {
+	if !f.ExcludeActiveSince.IsZero() {
 		preds = append(preds, excludeActiveSincePredicate(f.ExcludeActiveSince, b, q))
 	}
 	if f.MinMessages > 0 {
@@ -826,20 +826,19 @@ func sessionFilterPredicates(
 	return preds, oneShotPred
 }
 
-// ExcludeActiveSincePredicate returns activity eligibility for a session.
-func (b *QueryBuilder) ExcludeActiveSincePredicate(cutoff string) string {
+// ExcludeActiveSincePredicate returns a boolean expression that is true when
+// a session's last activity is at or before cutoff, or unknown.
+func (b *QueryBuilder) ExcludeActiveSincePredicate(cutoff time.Time) string {
 	return excludeActiveSincePredicate(cutoff, b, func(col string) string { return col })
 }
 
-func excludeActiveSincePredicate(cutoff string, b *QueryBuilder, q func(string) string) string {
-	if parsed, err := time.Parse(time.RFC3339, cutoff); err == nil {
-		cutoff = parsed.UTC().Format(time.RFC3339Nano)
-	}
+func excludeActiveSincePredicate(cutoff time.Time, b *QueryBuilder, q func(string) string) string {
 	activity := b.activityExpr(q(""))
 	if b.dialect.name == "sqlite" || b.dialect.name == "duckdb" {
 		activity = b.dialect.dateParam(activity)
 	}
-	return "COALESCE(" + activity + " <= " + b.dialect.dateParam(b.Add(cutoff)) + ", " + b.dialect.trueLiteral + ")"
+	param := b.dialect.dateParam(b.Add(cutoff.UTC().Format(time.RFC3339Nano)))
+	return "COALESCE(" + activity + " <= " + param + ", " + b.dialect.trueLiteral + ")"
 }
 
 func appendSessionVisibilityPredicates(

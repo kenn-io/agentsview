@@ -959,8 +959,13 @@ const maxContentSearchContext = 10
 func (b *directBackend) SearchContent(
 	ctx context.Context, req ContentSearchRequest,
 ) (*ContentSearchResult, error) {
-	if req.ExcludeActiveSince != "" && !timeutil.IsValidTimestamp(req.ExcludeActiveSince) {
-		return nil, &db.SearchInputError{Msg: "search: invalid exclude_active_since: use RFC3339"}
+	var excludeActiveSince time.Time
+	if req.ExcludeActiveSince != "" {
+		var err error
+		excludeActiveSince, err = time.Parse(time.RFC3339, req.ExcludeActiveSince)
+		if err != nil || excludeActiveSince.IsZero() {
+			return nil, &db.SearchInputError{Msg: "search: invalid exclude_active_since: use RFC3339"}
+		}
 	}
 	if req.Mode == "fts" || req.Mode == "terms" {
 		for _, s := range req.Sources {
@@ -1006,7 +1011,7 @@ func (b *directBackend) SearchContent(
 		DateTo:             req.DateTo,
 		Timezone:           req.Timezone,
 		ActiveSince:        req.ActiveSince,
-		ExcludeActiveSince: req.ExcludeActiveSince,
+		ExcludeActiveSince: excludeActiveSince,
 		IncludeChildren:    req.IncludeChildren,
 		IncludeAutomated:   req.IncludeAutomated,
 		IncludeOneShot:     req.IncludeOneShot,
@@ -1048,7 +1053,7 @@ func (b *directBackend) SearchContent(
 		}
 	}
 	return &ContentSearchResult{
-		ActiveFilterApplied: req.ExcludeActiveSince != "",
+		ActiveFilterApplied: !excludeActiveSince.IsZero(),
 		Matches:             page.Matches,
 		NextCursor:          page.NextCursor,
 		RevisionBound:       revisionBound,

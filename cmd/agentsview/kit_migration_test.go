@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
@@ -159,7 +160,7 @@ func TestKitMigrationReusesExistingGenerationForIndexingAndSearch(t *testing.T) 
 	queryEncoder, err := newVectorQueryEncoder(cfg.Vector.Embeddings, "")
 	require.NoError(t, err)
 	searcher := newSearcherAdapter(ix, queryEncoder, space)
-	hits, err := searcher.SemanticSearch(ctx, "hello", 10)
+	hits, err := dbtest.SemanticSearch(ctx, searcher, "hello", 10)
 	require.NoError(t, err, "the stored generation is not reported stale")
 	assert.Len(t, hits, 3)
 	assert.Equal(t, []string{"hello"}, provider.received(), "only the query is embedded")
@@ -173,7 +174,7 @@ func TestKitMigrationReusesExistingGenerationForIndexingAndSearch(t *testing.T) 
 	assert.Equal(t, []string{"hello", "hello again"}, provider.received(),
 		"only the edited document is re-embedded")
 
-	hits, err = searcher.SemanticSearch(ctx, "hello", 10)
+	hits, err = dbtest.SemanticSearch(ctx, searcher, "hello", 10)
 	require.NoError(t, err)
 	sessions := make([]string, 0, len(hits))
 	for _, hit := range hits {

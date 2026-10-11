@@ -32,13 +32,13 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 	for _, mode := range []string{"substring", "regex", "fts", "terms"} {
 		t.Run(mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-				Pattern: "needle", Mode: mode, Limit: 2, ExcludeActiveSince: "2024-06-15T11:50:00Z",
+				Pattern: "needle", Mode: mode, Limit: 2, ExcludeActiveSince: time.Date(2024, 6, 15, 11, 50, 0, 0, time.UTC),
 			})
 			require.NoError(t, err)
 			require.Len(t, page.Matches, 2)
 			assert.ElementsMatch(t, []string{"boundary", "idle"}, []string{page.Matches[0].SessionID, page.Matches[1].SessionID})
 			page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{
-				Pattern: "needle", Mode: mode, Limit: 2, ExcludeActiveSince: "0001-01-01T00:00:00Z",
+				Pattern: "needle", Mode: mode, Limit: 2, ExcludeActiveSince: time.Unix(0, 0),
 			})
 			require.NoError(t, err)
 			assert.Empty(t, page.Matches)
@@ -50,12 +50,12 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 	}})
 	for _, mode := range []string{"semantic", "hybrid"} {
 		t.Run(mode, func(t *testing.T) {
-			filter := db.ContentSearchFilter{Pattern: "absent keyword", Mode: mode, Limit: 1, ExcludeActiveSince: "2024-06-15T11:50:00Z"}
+			filter := db.ContentSearchFilter{Pattern: "absent keyword", Mode: mode, Limit: 1, ExcludeActiveSince: time.Date(2024, 6, 15, 11, 50, 0, 0, time.UTC)}
 			page, err := store.SearchContent(t.Context(), filter)
 			require.NoError(t, err)
 			require.Len(t, page.Matches, 1)
 			assert.Equal(t, "idle", page.Matches[0].SessionID)
-			filter.ExcludeActiveSince = "0001-01-01T00:00:00Z"
+			filter.ExcludeActiveSince = time.Unix(0, 0)
 			page, err = store.SearchContent(t.Context(), filter)
 			require.NoError(t, err)
 			assert.Empty(t, page.Matches)
