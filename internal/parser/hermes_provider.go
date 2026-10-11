@@ -360,7 +360,7 @@ func (p *hermesProvider) parseStateMember(
 	// unchanged member while the container is untouched. The stat is shared
 	// by every member, so after any sibling change the engine falls back to
 	// the per-member content hash stored above to keep unchanged members
-	// from reparsing (providerSourceHashFreshDespiteStat); without either
+	// from reparsing; without either
 	// identity every pass reparses every member and reconciliation work
 	// scales with total member count.
 	if fingerprint.Size > 0 {
