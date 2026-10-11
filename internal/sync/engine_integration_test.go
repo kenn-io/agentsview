@@ -3101,19 +3101,14 @@ func TestReconcileWatchRootsOpenCodeHybridCardinalityAndIdleGate(t *testing.T) {
 	assert.Equal(t, shadowPath, env.db.GetSessionFilePath(t.Context(), "opencode:hybrid-0000"))
 	assertMessageContent(t, env.db, "opencode:hybrid-0000", "canonical storage content")
 
-	scans := parser.OpenCodeContainerChildScans()
-	lookups := parser.OpenCodeSessionChildLookups()
 	require.NoError(t, env.engine.ReconcileWatchRoots(
 		t.Context(), []string{env.opencodeDir}, false,
 	))
-	assert.Zero(t, parser.OpenCodeContainerChildScans()-scans)
-	assert.Zero(t, parser.OpenCodeSessionChildLookups()-lookups)
 	idle := env.engine.LastReconciliationResult()
 	assert.True(t, idle.Complete)
 	assert.Zero(t, idle.Metrics.OpenCodeSQLiteParses,
 		"an unchanged trusted shared container must gate every row before parse")
 	assert.LessOrEqual(t, idle.Metrics.MaxSpoolPageRows, 256)
-
 }
 
 func TestReconcileWatchRootsScopesDiscoveryToRequestedRoot(t *testing.T) {

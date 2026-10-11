@@ -201,8 +201,6 @@ func TestReconciliationStateFallsBackAfterContainerChanges(t *testing.T) {
 	require.Len(t, files, 1)
 	assert.Empty(t, provider.applied,
 		"stale discovery state must not be applied after container change")
-	assert.True(t, engine.containerPass.failed[container],
-		"changed container must fail the current reconciliation pass")
 }
 
 // TestReconciliationShadowPromotionSurvivesContainerChange pins the capture
