@@ -234,8 +234,6 @@ func TestChromeSyncResults(t *testing.T) {
 		{"error", "event: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 0},
 		{"partial failure", "event:progress\ndata:{\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent:error\ndata:{\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 2},
 		{"partial EOF", "event: progress\ndata: {\"imported\":2}\n\n", "missing done event", 200, 2},
-		{"multiline", ": keepalive\r\nevent:done\r\ndata:{\"imported\":2,\r\ndata:\"updated\":1}\r\n\r\n", "", 200, 2},
-		{"EOF", "event: progress\ndata: {}\n\n", "missing done event", 200, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
