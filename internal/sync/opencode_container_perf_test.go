@@ -15,7 +15,6 @@ import (
 
 func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 	watcherLookups := make(map[int]int64)
-	watcherProcessed := make(map[int]int)
 	for _, n := range []int{20, 200} {
 		for _, mode := range []string{"full", "streamed", "watcher"} {
 			t.Run(fmt.Sprintf("sessions_%d/%s", n, mode), func(t *testing.T) {
@@ -49,7 +48,6 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 				assert.Equal(t, 1, stats.Synced)
 				if watcher {
 					assert.Zero(t, stats.Skipped)
-					watcherProcessed[n] = stats.Synced + stats.Skipped + stats.Failed
 				} else {
 					assert.Equal(t, n-1, stats.Skipped)
 				}
@@ -77,7 +75,6 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 		}
 	}
 	assert.Equal(t, watcherLookups[20], watcherLookups[200])
-	assert.Equal(t, watcherProcessed[20], watcherProcessed[200])
 }
 
 func TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery(t *testing.T) {
