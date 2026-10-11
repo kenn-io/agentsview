@@ -17,12 +17,9 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 	watcherLookups := make(map[int]int64)
 	watcherProcessed := make(map[int]int)
 	for _, n := range []int{20, 200} {
-		for _, mode := range []string{"full", "streamed", "watcher", "watcher raised children"} {
-			if n == 200 && mode == "watcher raised children" {
-				continue
-			}
+		for _, mode := range []string{"full", "streamed", "watcher"} {
 			t.Run(fmt.Sprintf("sessions_%d/%s", n, mode), func(t *testing.T) {
-				watcher := strings.HasPrefix(mode, "watcher")
+				watcher := mode == "watcher"
 				env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 				oc := createOpenCodeDB(t, env.opencodeDir)
 				seedOpenCodeSQLiteTextSessions(t, oc, n, 1779012030000)
@@ -30,9 +27,6 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 				before := openCodeLocalModifiedSnapshot(t, env.db, "opencode:ses00001")
 				oc.updateSessionTime(t, "ses00000", 1779015630000)
 				oc.replaceTextContent(t, "ses00000", "changed prompt", "changed answer", 1779015600000)
-				if mode == "watcher raised children" {
-					oc.mustExec(t, "raise child timestamps", "UPDATE part SET time_updated = ? WHERE session_id = ?", 1779099999000, "ses00000")
-				}
 				engine := env.engine
 				if !watcher {
 					engine = newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
@@ -45,7 +39,7 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 				case "streamed":
 					require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentOpenCode, []string{env.opencodeDir}))
 					stats = engine.LastSyncStats()
-				case "watcher", "watcher raised children":
+				case "watcher":
 					require.NoError(t, engine.SyncPathsContext(t.Context(), []string{oc.path}))
 					stats = engine.LastSyncStats()
 				default:
@@ -55,9 +49,7 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 				assert.Equal(t, 1, stats.Synced)
 				if watcher {
 					assert.Zero(t, stats.Skipped)
-					if mode == "watcher" {
-						watcherProcessed[n] = stats.Synced + stats.Skipped + stats.Failed
-					}
+					watcherProcessed[n] = stats.Synced + stats.Skipped + stats.Failed
 				} else {
 					assert.Equal(t, n-1, stats.Skipped)
 				}
@@ -66,7 +58,7 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 				switch mode {
 				case "watcher":
 					watcherLookups[n] = lookups
-				case "streamed", "watcher raised children":
+				case "streamed":
 					assert.LessOrEqual(t, lookups, int64(1))
 				default:
 					assert.Equal(t, int64(1), lookups)

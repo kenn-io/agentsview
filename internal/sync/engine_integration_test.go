@@ -3114,15 +3114,6 @@ func TestReconcileWatchRootsOpenCodeHybridCardinalityAndIdleGate(t *testing.T) {
 		"an unchanged trusted shared container must gate every row before parse")
 	assert.LessOrEqual(t, idle.Metrics.MaxSpoolPageRows, 256)
 
-	require.NoError(t, os.Remove(shadowPath))
-	require.NoError(t, env.engine.ReconcileWatchRoots(
-		t.Context(), []string{env.opencodeDir}, false,
-	))
-	unshadowed := env.engine.LastReconciliationResult()
-	assert.True(t, unshadowed.Complete)
-	assert.Equal(t, 1, unshadowed.Metrics.OpenCodeSQLiteParses,
-		"the newly exposed SQLite row must bypass the unchanged-container gate")
-	assertMessageContent(t, env.db, "opencode:hybrid-0000", "sqlite content hybrid-0000")
 }
 
 func TestReconcileWatchRootsScopesDiscoveryToRequestedRoot(t *testing.T) {

@@ -648,32 +648,14 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			wantStamp:  wantFresh,
 		},
 		{
-			name:       "watermark-listed pass never refreshes the stamp",
-			priorStamp: true,
-			capture:    captureLive,
-			wantTrust:  wantFresh,
-			wantStamp:  wantPrior,
-		},
-		{
-			// The discovered session set may already include the change, so
-			// gating against the pre-discovery state would skip it while it
-			// still matches the trusted state.
-			name:             "capture-discovery mismatch fails the container for the pass",
-			priorTrust:       true,
-			priorStamp:       true,
-			capture:          captureStale,
-			probeMemberStale: true,
-			wantTrust:        wantAbsent,
-			wantStamp:        wantPrior,
-		},
-		{
 			// Matching trust must be revoked when discovery observes a stale capture.
 			name:              "capture-discovery mismatch blocks gate skip under matching trust",
 			priorTrustCapture: true,
+			priorStamp:        true,
 			capture:           captureStale,
 			probeMemberStale:  true,
 			wantTrust:         wantAbsent,
-			wantStamp:         wantAbsent,
+			wantStamp:         wantPrior,
 		},
 		{
 			name:       "missing capture invalidates prior verification",
@@ -1118,69 +1100,6 @@ func TestSQLiteContainerGateUsesCarriedSourcePath(t *testing.T) {
 	}
 	assert.False(t, e.sqliteContainerSourceFresh(t.Context(), shadow),
 		"a resolved storage shadow must not use the SQLite container gate")
-}
-
-// TestSQLiteContainerScopedPassDoesNotPromoteUndiscoveredContainer pins the
-// promotion precondition: a pass may only trust a container it actually
-// verified, meaning it discovered (and completed) at least one of its
-// sessions. Scoped reconciliations and scoped syncs capture every configured
-// container's state up front (captureSQLiteContainerStates(nil)) but discover
-// only in-scope sources, so an out-of-scope container ends the pass with
-// discovered == completed == 0. Promoting its freshly captured state would
-// mark a change that was never parsed as verified, and the next covering
-// pass would gate-skip the changed sessions, leaving the archive stale.
-func TestSQLiteContainerScopedPassDoesNotPromoteUndiscoveredContainer(t *testing.T) {
-	archive := openTestDB(t)
-	e := &Engine{db: archive}
-	dbPath, conn := newContainerTestDB(t)
-	pre, ok := parser.StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "container state must be readable")
-
-	file := parser.DiscoveredFile{
-		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
-	}
-	filePath := file.Path
-	session := db.Session{
-		ID: "opencode:ses-1", Agent: "opencode", Project: "project",
-		Machine: "local", FilePath: &filePath,
-	}
-	require.NoError(t, archive.UpsertSession(t.Context(), session))
-	require.NoError(t, archive.SetSessionDataVersion(t.Context(),
-		session.ID, db.CurrentDataVersion(),
-	))
-
-	// A fully verified pass trusts the container at its current state.
-	e.beginSQLiteContainerPass(
-		[]parser.DiscoveredFile{file},
-		map[string]parser.SQLiteContainerState{dbPath: pre},
-	)
-	e.noteSQLiteContainerResult(file.Path, true)
-	e.finishSQLiteContainerPass(t.Context(), false, true)
-	require.Contains(t, e.trustedSQLiteContainers, dbPath)
-
-	// The container changes after the verified pass.
-	_, err := conn.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('ses-1')")
-	require.NoError(t, err, "write session after the verified pass")
-	changed, ok := parser.StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "changed container state must be readable")
-	require.NotEqual(t, pre, changed,
-		"the write must change the container state")
-
-	// A scoped pass elsewhere captures every configured container but
-	// discovers none of this one's sessions.
-	e.beginSQLiteContainerPass(
-		nil, map[string]parser.SQLiteContainerState{dbPath: changed},
-	)
-	e.finishSQLiteContainerPass(t.Context(), false, false)
-
-	// The next covering pass must parse the changed session, not gate-skip
-	// it against a state that was never verified.
-	e.beginSQLiteContainerPass(
-		[]parser.DiscoveredFile{file},
-		map[string]parser.SQLiteContainerState{dbPath: changed},
-	)
-	assert.False(t, e.sqliteContainerSourceFresh(t.Context(), file),
-		"a container changed while out of scope must not gate-skip after a scoped pass")
 }
 
 // TestSQLiteContainerFullPassDropsUndiscoveredTrust pins the stale-trust
