@@ -16158,6 +16158,9 @@ type GetAPIV1SearchContentQuery struct {
 	// ActiveSince Filter sessions active since this RFC3339 timestamp
 	ActiveSince *time.Time `json:"active_since,omitempty"`
 
+	// ExcludeActiveSince Keep sessions whose ended_at, started_at, or created_at activity is at or before this RFC3339 timestamp
+	ExcludeActiveSince *time.Time `json:"exclude_active_since,omitempty"`
+
 	// IncludeChildren Include child sessions
 	IncludeChildren *bool `json:"include_children,omitempty"`
 

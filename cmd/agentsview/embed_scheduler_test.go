@@ -840,6 +840,42 @@ func TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable(t *test
 		"the error must tell the user to rebuild the index")
 }
 
+func TestSearcherAdapterActivityCandidateExpansion(t *testing.T) {
+	cfg := enabledVectorConfig(t)
+	ix, err := vector.Open(t.Context(), cfg.Vector.ResolvedDBPath(cfg.DataDir), false, cfg.Vector.Embeddings.MaxInputChars)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ix.Close()) })
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 4}
+	_, err = ix.Build(t.Context(), testPushUnitSource(), fakePushEncoder(), gen, vector.BuildOptions{})
+	require.NoError(t, err)
+	encodes := 0
+	adapter := newSearcherAdapter(ix, func(ctx context.Context, texts []string) ([][]float32, error) {
+		encodes++
+		assert.Equal(t, []string{"query"}, texts)
+		return fakePushEncoder()(ctx, texts)
+	}, generationSpace(gen))
+	search, _, err := adapter.PrepareSemanticSearch(t.Context(), "query")
+	require.NoError(t, err)
+	_, exhausted, err := search(t.Context(), 200)
+	require.NoError(t, err)
+	assert.True(t, exhausted)
+	t.Run("engine ceiling", func(t *testing.T) {
+		encodes = 0
+		hits, err := db.SelectSurvivingVectorHits(t.Context(), db.ContentSearchFilter{
+			Pattern: "query", Limit: 4, ExcludeActiveSince: "2024-01-01T00:00:00Z",
+		}, adapter, 5000, func(_ context.Context, _ db.ContentSearchFilter, ids []string) (map[string]bool, error) {
+			allowed := make(map[string]bool, len(ids))
+			for _, id := range ids {
+				allowed[id] = false
+			}
+			return allowed, nil
+		})
+		require.NoError(t, err)
+		assert.Empty(t, hits)
+		assert.Equal(t, 1, encodes)
+	})
+}
+
 func TestSearcherAdapterSemanticReadinessCoverageAndCompatibility(t *testing.T) {
 	cfg := enabledVectorConfig(t)
 	path := cfg.Vector.ResolvedDBPath(cfg.DataDir)

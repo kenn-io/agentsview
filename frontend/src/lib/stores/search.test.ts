@@ -25,6 +25,7 @@ const DEBOUNCE_MS = 300;
 function contentResult(matches: DbContentMatch[]): ServiceContentSearchResult {
   return {
     matches,
+    active_filter_applied: false,
     revision_bound: false,
     coverage: {
       status: "ready",

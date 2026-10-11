@@ -172,6 +172,26 @@ func TestPGVectorSearcher(t *testing.T) {
 		}
 	})
 
+	t.Run("prepared expansion and exhaustion", func(t *testing.T) {
+		encodes := 0
+		prepared := NewVectorSearcher(pg, genID, 4, searchMaxInputChars, func(_ context.Context, query string) ([]float32, error) {
+			encodes++
+			assert.Equal(t, "query", query)
+			return []float32{1, 0, 0, 0}, nil
+		})
+		search, _, err := prepared.(db.PreparedVectorSearcher).PrepareSemanticSearch(ctx, "query")
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			k         int
+			exhausted bool
+		}{{1, false}, {200, true}} {
+			_, exhausted, err := search(ctx, tc.k)
+			require.NoError(t, err)
+			assert.Equal(t, tc.exhausted, exhausted)
+			assert.Equal(t, 1, encodes)
+		}
+	})
+
 	t.Run("limit truncates documents", func(t *testing.T) {
 		hits, err := searcher.SemanticSearch(ctx, "query", 1)
 		require.NoError(t, err)

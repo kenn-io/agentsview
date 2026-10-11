@@ -110,16 +110,24 @@ func TestSearchPageExhaustionUsesChunkCandidatesBeforeDocumentRollup(t *testing.
 	_, err := ix.Build(ctx, src, fakeSearchEncoder(), gen, BuildOptions{})
 	require.NoError(t, err)
 
-	hits, exhausted, err := ix.SearchPage(ctx, fakeSearchEncoder(), "alpha", 2)
+	encodes := 0
+	search, err := ix.PrepareSearch(ctx, func(ctx context.Context, texts []string) ([][]float32, error) {
+		encodes++
+		assert.Equal(t, []string{"alpha"}, texts)
+		return fakeSearchEncoder()(ctx, texts)
+	}, "alpha")
+	require.NoError(t, err)
+	hits, exhausted, err := search(ctx, 2)
 	require.NoError(t, err)
 	require.Len(t, hits, 1,
 		"two chunk candidates from one document must roll up to one hit")
 	assert.False(t, exhausted,
 		"a short rolled-up page does not prove the vector candidates were exhausted")
 
-	_, exhausted, err = ix.SearchPage(ctx, fakeSearchEncoder(), "alpha", 100)
+	_, exhausted, err = search(ctx, 100)
 	require.NoError(t, err)
 	assert.True(t, exhausted)
+	assert.Equal(t, 1, encodes)
 }
 
 func TestSearchRejectsCandidateCountAboveEngineKMax(t *testing.T) {

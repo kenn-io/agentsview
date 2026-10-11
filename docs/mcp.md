@@ -143,11 +143,14 @@ bare UUID lookup requires AgentsView 0.44.0 or later on the server. Use an exact
 full stored ID with an older server.
 
 `search_sessions` and `search_content` exclude sessions active in the last ten
-minutes by default, including the current conversation. Set
-`include_active: true` when you need that recent work. For recall from a known
-conversation, pass its full ID as `current_session_id`; `search_content` then
-excludes only that session before applying the result limit and does not hide
-other recent work.
+minutes by default, including the current conversation. `search_content` applies
+this exclusion before the result limit so older matches fill the page. It
+reports the guard in `exclusions.recent_active`. Older servers retain the guard
+after pagination and report dropped matches in `excluded_active`, so their pages
+can still be short or empty with a `next_cursor`. Set `include_active: true`
+when you need that recent work. For recall from a known conversation, pass its
+full ID as `current_session_id`; `search_content` then excludes only that
+session before applying the result limit and does not hide other recent work.
 
 `search_content` also excludes one-shot and automated sessions by default. Set
 `include_one_shot: true` or `include_automated: true` to include those classes.
@@ -189,7 +192,13 @@ Every match carries a conversation-unit citation: an `ordinal_range` of
 runs and subagent or fork sessions. The response also reports the
 `effective_mode`, the `effective_scope` for modes that support scope, and the
 `exclusions` that applied by default. `next_cursor` is present when another page
-exists.
+exists. To continue `search_content`, pass `next_cursor` as the numeric `cursor`
+and echo the returned RFC3339 `activity_cutoff` unchanged. The cutoff keeps the
+recent-activity exclusion fixed across pages of an unchanged archive, including
+on older servers. A positive cursor without the cutoff returns a restart error
+when that exclusion applies. Restart without a cursor to obtain both fields.
+`include_active: true` or an explicit `current_session_id` allows numeric-only
+continuation. Archive edits retain the existing offset-pagination behavior.
 
 SQLite and PostgreSQL search matches also carry `transcript_revision`, captured
 by the same storage query as the evidence. A `revision_bound` response flag says

@@ -536,40 +536,57 @@ func (a searcherAdapter) SemanticReadiness(
 func (a searcherAdapter) SemanticSearch(
 	ctx context.Context, query string, limit int,
 ) ([]db.VectorHit, error) {
+	search, _, err := a.PrepareSemanticSearch(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	hits, _, err := search(ctx, limit)
+	return hits, err
+}
+
+// PrepareSemanticSearch validates the index and retains one query embedding for this request.
+func (a searcherAdapter) PrepareSemanticSearch(
+	ctx context.Context, query string,
+) (db.VectorSearchPage, int, error) {
 	stale, err := a.ix.StaleActive(ctx, a.space, "")
 	if err != nil {
 		// StaleActive shares Search's error taxonomy (notably
 		// vector.ErrMirrorVersionMismatch from a version-mismatched
 		// read-only vectors.db), so it is translated the same way;
 		// errors outside the taxonomy pass through with this context.
-		return nil, translateSearchError(
+		return nil, 0, translateSearchError(
 			fmt.Errorf("checking embedding index staleness: %w", err))
 	}
 	if stale {
-		return nil, fmt.Errorf(
+		return nil, 0, fmt.Errorf(
 			"%w: index is stale (embedding config changed): run "+
 				"'agentsview embeddings build --full-rebuild'",
 			db.ErrSemanticUnavailable)
 	}
 
-	hits, err := a.ix.Search(ctx, a.enc, query, limit)
+	search, err := a.ix.PrepareSearch(ctx, a.enc, query)
 	if err != nil {
-		return nil, translateSearchError(err)
+		return nil, 0, translateSearchError(err)
 	}
-
-	out := make([]db.VectorHit, len(hits))
-	for i, h := range hits {
-		out[i] = db.VectorHit{
-			SessionID:    h.SessionID,
-			Ordinal:      h.Ordinal,
-			OrdinalStart: h.OrdinalStart,
-			OrdinalEnd:   h.OrdinalEnd,
-			Subordinate:  h.Subordinate,
-			Score:        h.Score,
-			Snippet:      h.Snippet,
+	return func(ctx context.Context, limit int) ([]db.VectorHit, bool, error) {
+		hits, exhausted, err := search(ctx, limit)
+		if err != nil {
+			return nil, false, translateSearchError(err)
 		}
-	}
-	return out, nil
+		out := make([]db.VectorHit, len(hits))
+		for i, h := range hits {
+			out[i] = db.VectorHit{
+				SessionID:    h.SessionID,
+				Ordinal:      h.Ordinal,
+				OrdinalStart: h.OrdinalStart,
+				OrdinalEnd:   h.OrdinalEnd,
+				Subordinate:  h.Subordinate,
+				Score:        h.Score,
+				Snippet:      h.Snippet,
+			}
+		}
+		return out, exhausted, nil
+	}, a.ix.MaxSearchCandidates(), nil
 }
 
 // ResolveMessageUnits implements db.VectorSearcher by delegating to the

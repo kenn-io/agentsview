@@ -97,6 +97,14 @@ type VectorSearcher interface {
 	ResolveMessageUnits(ctx context.Context, refs []MessageRef) ([]UnitRef, error)
 }
 
+// VectorSearchPage returns exhaustion measured before chunk rollup and hydration.
+type VectorSearchPage func(context.Context, int) ([]VectorHit, bool, error)
+
+// PreparedVectorSearcher encodes once per request and reports its engine ceiling, or zero for none.
+type PreparedVectorSearcher interface {
+	PrepareSemanticSearch(context.Context, string) (VectorSearchPage, int, error)
+}
+
 // SemanticReadiness is a bounded, read-only snapshot of the semantic search
 // index. It deliberately contains no filesystem paths or provider secrets.
 type SemanticReadiness struct {

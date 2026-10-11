@@ -98,30 +98,46 @@ func NewVectorSearcher(
 func (v *vectorSearcher) SemanticSearch(
 	ctx context.Context, query string, limit int,
 ) ([]db.VectorHit, error) {
-	vec, err := v.encode(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", db.ErrSemanticTransient, err)
-	}
-	if len(vec) != v.dimension {
-		return nil, fmt.Errorf(
-			"query embedding has %d dimensions, generation expects %d",
-			len(vec), v.dimension)
-	}
-	chunks, err := v.nearestChunks(ctx, vec, limit)
+	search, _, err := v.PrepareSemanticSearch(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	docs, err := kitvec.RollupByDocument(chunks)
+	hits, _, err := search(ctx, limit)
+	return hits, err
+}
+
+// PrepareSemanticSearch retains one validated query embedding for this request.
+func (v *vectorSearcher) PrepareSemanticSearch(
+	ctx context.Context, query string,
+) (db.VectorSearchPage, int, error) {
+	vec, err := v.encode(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("rolling up vector hits: %w", err)
+		return nil, 0, fmt.Errorf("%w: %w", db.ErrSemanticTransient, err)
 	}
-	if limit >= 0 && len(docs) > limit {
-		docs = docs[:limit]
+	if len(vec) != v.dimension {
+		return nil, 0, fmt.Errorf(
+			"query embedding has %d dimensions, generation expects %d",
+			len(vec), v.dimension)
 	}
-	if len(docs) == 0 {
-		return nil, nil
-	}
-	return v.hydrateHits(ctx, docs)
+	return func(ctx context.Context, limit int) ([]db.VectorHit, bool, error) {
+		chunks, err := v.nearestChunks(ctx, vec, limit)
+		if err != nil {
+			return nil, false, err
+		}
+		exhausted := len(chunks) < limit
+		docs, err := kitvec.RollupByDocument(chunks)
+		if err != nil {
+			return nil, false, fmt.Errorf("rolling up vector hits: %w", err)
+		}
+		if limit >= 0 && len(docs) > limit {
+			docs = docs[:limit]
+		}
+		if len(docs) == 0 {
+			return nil, exhausted, nil
+		}
+		hits, err := v.hydrateHits(ctx, docs)
+		return hits, exhausted, err
+	}, 0, nil
 }
 
 // chunkHit is one ranked chunk: its document, which chunk matched, and its

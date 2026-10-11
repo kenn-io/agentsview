@@ -765,6 +765,13 @@ func (b *httpBackend) SearchContent(
 		}
 		q.ActiveSince = &parsedActiveSince
 	}
+	if req.ExcludeActiveSince != "" {
+		cutoff, err := time.Parse(time.RFC3339, req.ExcludeActiveSince)
+		if err != nil {
+			return nil, err
+		}
+		q.ExcludeActiveSince = &cutoff
+	}
 	if req.Scope != "" {
 		q.Scope = new(apiclient.GetAPIV1SearchContentQueryScope(req.Scope))
 	}

@@ -476,6 +476,26 @@ func TestVectorSearcherServesSemanticAndHybrid(t *testing.T) {
 	assert.Equal(t, "alpha first", hits[0].Snippet)
 	assert.Greater(t, hits[0].Score, hits[1].Score)
 
+	t.Run("prepared expansion and exhaustion", func(t *testing.T) {
+		encodes := 0
+		prepared := NewVectorSearcher(store.DB(), vectorFixtureFP, vectorFixtureDim, 20, func(_ context.Context, query string) ([]float32, error) {
+			encodes++
+			assert.Equal(t, "alpha", query)
+			return vecAlpha0a, nil
+		})
+		search, _, err := prepared.(db.PreparedVectorSearcher).PrepareSemanticSearch(ctx, "alpha")
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			k         int
+			exhausted bool
+		}{{1, false}, {200, true}} {
+			_, exhausted, err := search(ctx, tc.k)
+			require.NoError(t, err)
+			assert.Equal(t, tc.exhausted, exhausted)
+			assert.Equal(t, 1, encodes)
+		}
+	})
+
 	units, err := searcher.ResolveMessageUnits(ctx, []db.MessageRef{
 		{SessionID: fixtureAlphaID, Ordinal: 1},
 		{SessionID: fixtureBetaID, Ordinal: 7},

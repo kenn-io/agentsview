@@ -174,6 +174,7 @@ type ContentSearchRequest struct {
 	Project, ExcludeProject, Machine, Agent           string
 	SessionID, GitBranchExact                         string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
+	ExcludeActiveSince                                string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	ExcludeSessionIDs                                 []string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
@@ -190,10 +191,11 @@ type ContentSearchRequest struct {
 
 // ContentSearchResult mirrors db.ContentSearchPage for transport.
 type ContentSearchResult struct {
-	Matches       []db.ContentMatch `json:"matches"`
-	NextCursor    int               `json:"next_cursor,omitempty"`
-	RevisionBound bool              `json:"revision_bound"`
-	Coverage      MemoryCoverage    `json:"coverage"`
+	ActiveFilterApplied bool              `json:"active_filter_applied"`
+	Matches             []db.ContentMatch `json:"matches"`
+	NextCursor          int               `json:"next_cursor,omitempty"`
+	RevisionBound       bool              `json:"revision_bound"`
+	Coverage            MemoryCoverage    `json:"coverage"`
 }
 
 // RecallFilter mirrors GET /api/v1/recall/entries query parameters.

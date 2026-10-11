@@ -776,6 +776,9 @@ func sessionFilterPredicates(
 		preds = append(preds, b.dialect.dateEndExpr(q)+" >= "+
 			b.dialect.dateParam(b.Add(f.ActiveSince)))
 	}
+	if f.ExcludeActiveSince != "" {
+		preds = append(preds, excludeActiveSincePredicate(f.ExcludeActiveSince, b, q))
+	}
 	if f.MinMessages > 0 {
 		preds = append(preds,
 			q("message_count")+" >= "+b.Add(f.MinMessages))
@@ -821,6 +824,22 @@ func sessionFilterPredicates(
 		preds = append(preds, b.dialect.starredPredicateSQL(q("id")))
 	}
 	return preds, oneShotPred
+}
+
+// ExcludeActiveSincePredicate returns activity eligibility for a session.
+func (b *QueryBuilder) ExcludeActiveSincePredicate(cutoff string) string {
+	return excludeActiveSincePredicate(cutoff, b, func(col string) string { return col })
+}
+
+func excludeActiveSincePredicate(cutoff string, b *QueryBuilder, q func(string) string) string {
+	if parsed, err := time.Parse(time.RFC3339, cutoff); err == nil {
+		cutoff = parsed.UTC().Format(time.RFC3339Nano)
+	}
+	activity := b.activityExpr(q(""))
+	if b.dialect.name == "sqlite" || b.dialect.name == "duckdb" {
+		activity = b.dialect.dateParam(activity)
+	}
+	return "COALESCE(" + activity + " <= " + b.dialect.dateParam(b.Add(cutoff)) + ", " + b.dialect.trueLiteral + ")"
 }
 
 func appendSessionVisibilityPredicates(

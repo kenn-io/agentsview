@@ -5964,6 +5964,8 @@ components:
     ServiceContentSearchResult:
       additionalProperties: false
       properties:
+        active_filter_applied:
+          type: boolean
         coverage:
           $ref: "#/components/schemas/ServiceMemoryCoverage"
         matches:
@@ -5976,6 +5978,7 @@ components:
         revision_bound:
           type: boolean
       required:
+        - active_filter_applied
         - matches
         - revision_bound
         - coverage
@@ -16701,6 +16704,14 @@ paths:
           name: active_since
           schema:
             description: Filter sessions active since this RFC3339 timestamp
+            format: date-time
+            type: string
+        - description: Keep sessions whose ended_at, started_at, or created_at activity is at or before this RFC3339 timestamp
+          explode: false
+          in: query
+          name: exclude_active_since
+          schema:
+            description: Keep sessions whose ended_at, started_at, or created_at activity is at or before this RFC3339 timestamp
             format: date-time
             type: string
         - description: Include child sessions

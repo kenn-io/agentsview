@@ -648,36 +648,41 @@ search mode and source. `display_name` uses the user title, falls back to the
 provider session name, and is `null` when neither exists. Session search at
 `GET /api/v1/search` also includes `machine` alongside its existing `name`.
 
+The content-search response includes `active_filter_applied`, which is true when
+`exclude_active_since` was applied before pagination. All current stores support
+this filter. Older servers may omit the field.
+
 One-shot, automated, and subagent sessions are excluded by default; opt back in
 with `--include-one-shot`, `--include-automated`, or `--include-children`.
 
-| Flag                  | HTTP param          | Notes                                                                                                                                                                             |
-| --------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--regex`             | `mode=regex`        | Treat pattern as an RE2 regex                                                                                                                                                     |
-| `--fts`               | `mode=fts`          | Tokenized FTS5 search; messages-only                                                                                                                                              |
-| `--semantic`          | `mode=semantic`     | Vector search over user/assistant messages; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                         |
-| `--hybrid`            | `mode=hybrid`       | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                              |
-| `--scope`             | `scope`             | `top`, `all` (default), or `subordinate` — semantic/hybrid only; supersedes `include_children` in those modes                                                                     |
-| `--context`           | `context`           | int — N messages of context before/after each match (max 10)                                                                                                                      |
-| `--in`                | `in`                | Comma-separated: `messages,tool_input,tool_result` (default all)                                                                                                                  |
-| `--exclude-system`    | `exclude_system`    | Drop system messages from the scan                                                                                                                                                |
-| `--reveal`            | `reveal`            | Show full secret values (localhost-only; warning to stderr)                                                                                                                       |
-| `--project`           | `project`           | string                                                                                                                                                                            |
-| `--exclude-project`   | `exclude_project`   | string                                                                                                                                                                            |
-| `--machine`           | `machine`           | string                                                                                                                                                                            |
-| —                     | `git_branch`        | opaque token from `GET /api/v1/branches`                                                                                                                                          |
-| `--agent`             | `agent`             | string                                                                                                                                                                            |
-| `--date`              | `date`              | `YYYY-MM-DD`                                                                                                                                                                      |
-| `--date-from`         | `date_from`         | `YYYY-MM-DD`                                                                                                                                                                      |
-| `--date-to`           | `date_to`           | `YYYY-MM-DD`                                                                                                                                                                      |
-| `--active-since`      | `active_since`      | RFC3339 timestamp                                                                                                                                                                 |
-| `--since`             | `active_since`      | Relative — `Nh` hours, `Nd` days, `Nw` weeks, `Nm` calendar months (not minutes), `Ny` years — or `YYYY-MM-DD`; resolved against now and mutually exclusive with `--active-since` |
-| `--include-children`  | `include_children`  | bool                                                                                                                                                                              |
-| `--include-automated` | `include_automated` | bool                                                                                                                                                                              |
-| `--include-one-shot`  | `include_one_shot`  | bool                                                                                                                                                                              |
-| `--exclude-session`   | `exclude_session`   | repeatable session ID to drop before `--limit`                                                                                                                                    |
-| `--limit`             | `limit`             | int; default 50, max 500                                                                                                                                                          |
-| `--cursor`            | `cursor`            | int — pagination cursor from a previous response                                                                                                                                  |
+| Flag                  | HTTP param             | Notes                                                                                                                                                                             |
+| --------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--regex`             | `mode=regex`           | Treat pattern as an RE2 regex                                                                                                                                                     |
+| `--fts`               | `mode=fts`             | Tokenized FTS5 search; messages-only                                                                                                                                              |
+| `--semantic`          | `mode=semantic`        | Vector search over user/assistant messages; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                         |
+| `--hybrid`            | `mode=hybrid`          | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                              |
+| `--scope`             | `scope`                | `top`, `all` (default), or `subordinate` — semantic/hybrid only; supersedes `include_children` in those modes                                                                     |
+| `--context`           | `context`              | int — N messages of context before/after each match (max 10)                                                                                                                      |
+| `--in`                | `in`                   | Comma-separated: `messages,tool_input,tool_result` (default all)                                                                                                                  |
+| `--exclude-system`    | `exclude_system`       | Drop system messages from the scan                                                                                                                                                |
+| `--reveal`            | `reveal`               | Show full secret values (localhost-only; warning to stderr)                                                                                                                       |
+| `--project`           | `project`              | string                                                                                                                                                                            |
+| `--exclude-project`   | `exclude_project`      | string                                                                                                                                                                            |
+| `--machine`           | `machine`              | string                                                                                                                                                                            |
+| —                     | `git_branch`           | opaque token from `GET /api/v1/branches`                                                                                                                                          |
+| `--agent`             | `agent`                | string                                                                                                                                                                            |
+| `--date`              | `date`                 | `YYYY-MM-DD`                                                                                                                                                                      |
+| `--date-from`         | `date_from`            | `YYYY-MM-DD`                                                                                                                                                                      |
+| `--date-to`           | `date_to`              | `YYYY-MM-DD`                                                                                                                                                                      |
+| `--active-since`      | `active_since`         | RFC3339 timestamp                                                                                                                                                                 |
+| `--since`             | `active_since`         | Relative — `Nh` hours, `Nd` days, `Nw` weeks, `Nm` calendar months (not minutes), `Ny` years — or `YYYY-MM-DD`; resolved against now and mutually exclusive with `--active-since` |
+| `--include-children`  | `include_children`     | bool                                                                                                                                                                              |
+| `--include-automated` | `include_automated`    | bool                                                                                                                                                                              |
+| `--include-one-shot`  | `include_one_shot`     | bool                                                                                                                                                                              |
+| `--exclude-session`   | `exclude_session`      | repeatable session ID to drop before `--limit`                                                                                                                                    |
+| —                     | `exclude_active_since` | RFC3339 cutoff; exclude sessions active after it before pagination, using `ended_at`, then `started_at`, then `created_at`; keep unknown or malformed activity                    |
+| `--limit`             | `limit`                | int; default 50, max 500                                                                                                                                                          |
+| `--cursor`            | `cursor`               | int — pagination cursor from a previous response                                                                                                                                  |
 
 `--regex`, `--fts`, `--semantic`, and `--hybrid` are mutually exclusive. `--fts`
 is the fastest mode on large archives but only searches message bodies;

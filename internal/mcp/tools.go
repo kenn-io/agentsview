@@ -721,7 +721,8 @@ type searchContentIn struct {
 	DateFrom         string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit            int    `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
-	Cursor           int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
+	Cursor           int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
+	ActivityCutoff   string `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
 	IncludeActive    bool   `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
 	IncludeOneShot   bool   `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
 	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
@@ -777,6 +778,7 @@ type contentMatch struct {
 type searchContentOut struct {
 	Matches        []contentMatch `json:"matches"`
 	NextCursor     *int           `json:"next_cursor,omitempty"`
+	ActivityCutoff string         `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
 	ExcludedActive int            `json:"excluded_active,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
 	// resolved, which the caller cannot see in its own request.
@@ -835,39 +837,56 @@ func (t *toolset) searchContent(
 	if err := validateSearchDates(in.DateFrom, in.DateTo); err != nil {
 		return nil, searchContentOut{}, err
 	}
+	var cutoffTime time.Time
+	if in.ActivityCutoff != "" {
+		var err error
+		cutoffTime, err = time.Parse(time.RFC3339, in.ActivityCutoff)
+		if err != nil {
+			return nil, searchContentOut{}, errors.New("invalid activity_cutoff: use RFC3339")
+		}
+	}
 	currentSession := strings.TrimSpace(in.CurrentSessionID)
 	excludeSessions := db.NormalizeExcludeSessionIDs([]string{currentSession})
-	res, err := t.svc.SearchContent(ctx, service.ContentSearchRequest{
-		Pattern:           in.Pattern,
-		Mode:              in.Mode,
-		Scope:             in.Scope,
-		Project:           in.Project,
-		Agent:             in.Agent,
-		SessionID:         in.SessionID,
-		GitBranchExact:    in.GitBranch,
-		DateFrom:          in.DateFrom,
-		DateTo:            in.DateTo,
-		Limit:             clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit),
-		Cursor:            in.Cursor,
-		Context:           in.Context,
-		IncludeOneShot:    in.IncludeOneShot,
-		IncludeAutomated:  in.IncludeAutomated,
-		ExcludeSessionIDs: excludeSessions,
-	})
+	cutoff := ""
+	if currentSession == "" && !in.IncludeActive {
+		cutoff = in.ActivityCutoff
+		if cutoff == "" {
+			if in.Cursor > 0 {
+				return nil, searchContentOut{}, errors.New("activity_cutoff is required with a positive cursor: restart search_content without a cursor, then pass both next_cursor as cursor and activity_cutoff")
+			}
+			cutoffTime = t.clock().Add(-activeExclusionWindow)
+			cutoff = cutoffTime.UTC().Format(time.RFC3339Nano)
+		} else if cutoffTime.After(t.clock().Add(-activeExclusionWindow)) {
+			return nil, searchContentOut{}, errors.New("activity_cutoff must not be later than the recent-activity boundary: restart search_content without a cursor or activity_cutoff")
+		}
+	}
+	req := service.ContentSearchRequest{
+		Pattern:            in.Pattern,
+		Mode:               in.Mode,
+		Scope:              in.Scope,
+		Project:            in.Project,
+		Agent:              in.Agent,
+		SessionID:          in.SessionID,
+		GitBranchExact:     in.GitBranch,
+		DateFrom:           in.DateFrom,
+		DateTo:             in.DateTo,
+		Limit:              clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit),
+		Cursor:             in.Cursor,
+		Context:            in.Context,
+		IncludeOneShot:     in.IncludeOneShot,
+		IncludeAutomated:   in.IncludeAutomated,
+		ExcludeSessionIDs:  excludeSessions,
+		ExcludeActiveSince: cutoff,
+	}
+	res, err := t.svc.SearchContent(ctx, req)
 	if err != nil {
 		return nil, searchContentOut{}, err
 	}
-	now := t.clock()
-	// The self-reference guard excludes matches from sessions active in the
-	// last 10 minutes. A match carries only its own timestamp, but a
-	// long-running session can match on an old message while still being
-	// active now, so exclude by the session's activity (ended_at, falling
-	// back to started_at) like search_sessions does -- not by the match
-	// timestamp. Activity is looked up once per session and cached.
-	activity := make(map[string]string, len(res.Matches))
+	legacy := cutoff != "" && !res.ActiveFilterApplied
 	out := searchContentOut{
-		Matches:       make([]contentMatch, 0, len(res.Matches)),
-		EffectiveMode: cmp.Or(in.Mode, "substring"),
+		Matches:        make([]contentMatch, 0, len(res.Matches)),
+		ActivityCutoff: cutoff,
+		EffectiveMode:  cmp.Or(in.Mode, "substring"),
 		Exclusions: searchContentExclusions{
 			CurrentSessionID: currentSession,
 			RecentActive:     currentSession == "" && !in.IncludeActive,
@@ -879,15 +898,14 @@ func (t *toolset) searchContent(
 	if db.ContentSearchModeSupportsScope(in.Mode) {
 		out.EffectiveScope = cmp.Or(in.Scope, "all")
 	}
+	activity := make(map[string]string)
 	for _, m := range res.Matches {
-		if currentSession == "" && !in.IncludeActive {
+		if legacy {
 			ts, ok := t.lookupActivity(ctx, m.SessionID, activity)
 			if !ok {
-				// Lookup failed: fall back to the match timestamp so the
-				// guard degrades to its prior behavior rather than erroring.
 				ts = m.Timestamp
 			}
-			if isActiveSince(ts, now) {
+			if isActiveSince(ts, cutoffTime.Add(activeExclusionWindow)) {
 				out.ExcludedActive++
 				continue
 			}

@@ -76,31 +76,10 @@ func (s *Store) searchContentSemantic(
 func (s *Store) survivingVectorHits(
 	ctx context.Context, f db.ContentSearchFilter, searcher db.VectorSearcher, k int,
 ) ([]db.VectorHit, error) {
-	hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
-	if err != nil {
-		return nil, err
-	}
-	if len(hits) == 0 {
-		return nil, nil
-	}
-	ids := make([]string, 0, len(hits))
-	for _, h := range hits {
-		ids = append(ids, h.SessionID)
-	}
-	allowed, err := s.semanticAllowedSessionIDs(ctx, f, uniqueIDs(ids))
-	if err != nil {
-		return nil, err
-	}
-	surviving := make([]db.VectorHit, 0, len(hits))
-	for _, h := range hits {
-		if allowed[h.SessionID] && !db.ScopeExcludes(f.Scope, h.Subordinate) {
-			surviving = append(surviving, h)
-		}
-	}
-	return surviving, nil
+	return db.SelectSurvivingVectorHits(ctx, f, searcher, k, s.semanticAllowedSessionIDs)
 }
 
-// semanticAllowedSessionIDs returns the subset of ids whose session passes
+// semanticAllowedSessionIDs returns activity eligibility for ids passing
 // the filter's metadata scope, reusing the shared session filter SQL so this
 // path cannot drift from the substring and regex scope.
 func (s *Store) semanticAllowedSessionIDs(
@@ -110,13 +89,21 @@ func (s *Store) semanticAllowedSessionIDs(
 	if len(ids) == 0 {
 		return allowed, nil
 	}
-	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(db.SemanticContentSessionFilter(f), db.ClickHouseQueryDialect())
+	sessionFilter := db.SemanticContentSessionFilter(f)
+	sessionFilter.ExcludeActiveSince = ""
+	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+	activity := "1"
+	if f.ExcludeActiveSince != "" {
+		activity = b.ExcludeActiveSincePredicate(f.ExcludeActiveSince)
+	}
+	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(sessionFilter, db.ClickHouseQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
+	scopeArgs = append(b.Args(), scopeArgs...)
 	for batch := range idBatches(ids) {
 		placeholders, args := inArgs(batch)
 		if err := func() error {
 			rows, err := s.queryContext(ctx,
-				"SELECT id FROM sessions WHERE "+scopeWhere+" AND id IN ("+placeholders+")",
+				"SELECT id, "+activity+" FROM sessions WHERE "+scopeWhere+" AND id IN ("+placeholders+")",
 				append(append([]any{}, scopeArgs...), args...)...)
 			if err != nil {
 				return fmt.Errorf("clickhouse semantic search session scope: %w", err)
@@ -124,10 +111,11 @@ func (s *Store) semanticAllowedSessionIDs(
 			defer rows.Close()
 			for rows.Next() {
 				var id string
-				if err := rows.Scan(&id); err != nil {
+				var activityAllowed uint8
+				if err := rows.Scan(&id, &activityAllowed); err != nil {
 					return fmt.Errorf("scanning clickhouse semantic session id: %w", err)
 				}
-				allowed[id] = true
+				allowed[id] = activityAllowed != 0
 			}
 			return rows.Err()
 		}(); err != nil {

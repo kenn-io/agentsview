@@ -108,38 +108,51 @@ func (ix *Index) Search(
 func (ix *Index) SearchPage(
 	ctx context.Context, enc kitvec.EncodeFunc, query string, limit int,
 ) ([]Hit, bool, error) {
+	search, err := ix.PrepareSearch(ctx, enc, query)
+	if err != nil {
+		return nil, false, err
+	}
+	return search(ctx, limit)
+}
+
+// PrepareSearch pins the active generation and encodes once for candidate expansion within a request.
+func (ix *Index) PrepareSearch(
+	ctx context.Context, enc kitvec.EncodeFunc, query string,
+) (func(context.Context, int) ([]Hit, bool, error), error) {
 	if ix.versionMismatch {
-		return nil, false, ErrMirrorVersionMismatch
+		return nil, ErrMirrorVersionMismatch
 	}
 
 	active, hasActive, err := ix.ActiveFingerprint(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if !hasActive {
-		return nil, false, ix.noActiveGenerationError(ctx)
+		return nil, ix.noActiveGenerationError(ctx)
 	}
 
 	queryVector, err := kitvec.EncodeOne(ctx, enc, query)
 	if err != nil {
-		return nil, false, &QueryEncodeError{Err: err}
+		return nil, &QueryEncodeError{Err: err}
 	}
 
-	hits, err := ix.store.QueryGeneration(ctx, active, queryVector, limit)
-	if err != nil {
-		return nil, false, fmt.Errorf("search: %w", err)
-	}
-	exhausted := len(hits) < limit
-	hits, err = kitvec.RollupByDocument(hits)
-	if err != nil {
-		return nil, false, fmt.Errorf("search: %w", err)
-	}
-	if len(hits) > limit {
-		hits = hits[:limit]
-	}
+	return func(ctx context.Context, limit int) ([]Hit, bool, error) {
+		hits, err := ix.store.QueryGeneration(ctx, active, queryVector, limit)
+		if err != nil {
+			return nil, false, fmt.Errorf("search: %w", err)
+		}
+		exhausted := len(hits) < limit
+		hits, err = kitvec.RollupByDocument(hits)
+		if err != nil {
+			return nil, false, fmt.Errorf("search: %w", err)
+		}
+		if len(hits) > limit {
+			hits = hits[:limit]
+		}
 
-	hydrated, err := ix.hydrateHits(ctx, hits)
-	return hydrated, exhausted, err
+		hydrated, err := ix.hydrateHits(ctx, hits)
+		return hydrated, exhausted, err
+	}, nil
 }
 
 // MaxSearchCandidates reports the largest KNN candidate count accepted by

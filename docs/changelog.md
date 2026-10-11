@@ -38,6 +38,11 @@ The latest release is
 
 - DeepSeek Harness v4 sessions now appear after sync, with tool results and
   recorded token usage.
+- Fill MCP content-search pages with older matches by excluding recent sessions
+  before the limit. Cutoffs preserve their UTC instant across time zones. Older
+  daemons keep the previous guard after pagination and can return short pages.
+  Default MCP continuations must echo the returned `activity_cutoff` with the
+  numeric cursor; restart searches begun before upgrading.
 - Keep both Cursor conversations when S3 objects in different projects share
   a session ID. A one-time archive rebuild recovers overwritten Cursor S3
   conversations while preserving archived sessions and stars.

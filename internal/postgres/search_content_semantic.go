@@ -84,28 +84,11 @@ func (s *Store) searchContentSemanticPG(
 func (s *Store) survivingVectorHitsPG(
 	ctx context.Context, f db.ContentSearchFilter, searcher db.VectorSearcher, k int,
 ) ([]db.VectorHit, error) {
-	hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
-	if err != nil {
-		return nil, err
-	}
-	if len(hits) == 0 {
-		return nil, nil
-	}
-	allowed, err := s.semanticAllowedSessionIDsPG(ctx, f, db.UniqueSessionIDs(hits))
-	if err != nil {
-		return nil, err
-	}
-	surviving := make([]db.VectorHit, 0, len(hits))
-	for _, h := range hits {
-		if allowed[h.SessionID] && !db.ScopeExcludes(f.Scope, h.Subordinate) {
-			surviving = append(surviving, h)
-		}
-	}
-	return surviving, nil
+	return db.SelectSurvivingVectorHits(ctx, f, searcher, k, s.semanticAllowedSessionIDsPG)
 }
 
-// semanticAllowedSessionIDsPG returns the subset of ids whose session passes
-// the ContentSearchFilter's metadata scope (project, agent, date range,
+// semanticAllowedSessionIDsPG returns activity eligibility for ids passing
+// the other metadata filters (project, agent, date range,
 // one-shot/automated, ...), reusing buildPGSessionBaseFilter so this path
 // cannot drift from the substring/regex scope subquery. Like SQLite's
 // semanticAllowedSessionIDs it omits the sidebar-child exclusion and exempts
@@ -119,10 +102,18 @@ func (s *Store) semanticAllowedSessionIDsPG(
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	where, args := buildPGSessionBaseFilter(db.SemanticContentSessionFilter(f))
+	sessionFilter := db.SemanticContentSessionFilter(f)
+	sessionFilter.ExcludeActiveSince = ""
+	where, args := buildPGSessionBaseFilter(sessionFilter)
 	where, args = appendExcludeSessionIDsPG(where, args, "id", f.ExcludeSessionIDs)
+	b := db.NewQueryBuilder(db.PostgresQueryDialect(), len(args))
+	activity := "TRUE"
+	if f.ExcludeActiveSince != "" {
+		activity = b.ExcludeActiveSincePredicate(f.ExcludeActiveSince)
+	}
+	args = append(args, b.Args()...)
 	query := fmt.Sprintf(
-		"SELECT id FROM sessions WHERE %s AND id = ANY($%d)", where, len(args)+1)
+		"SELECT id, %s FROM sessions WHERE %s AND id = ANY($%d)", activity, where, len(args)+1)
 	args = append(args, ids)
 
 	rows, err := s.pg.QueryContext(ctx, query, args...)
@@ -135,10 +126,11 @@ func (s *Store) semanticAllowedSessionIDsPG(
 	allowed := make(map[string]bool, len(ids))
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var activityAllowed bool
+		if err := rows.Scan(&id, &activityAllowed); err != nil {
 			return nil, fmt.Errorf("scan pg semantic session id: %w", err)
 		}
-		allowed[id] = true
+		allowed[id] = activityAllowed
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

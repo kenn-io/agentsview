@@ -608,6 +608,15 @@ func TestDirectBackend_List_InvalidActiveSince(t *testing.T) {
 	assert.Contains(t, err.Error(), "RFC3339")
 }
 
+func TestDirectBackend_SearchContent_InvalidExcludeActiveSince(t *testing.T) {
+	svc, _ := newDirectTestSvc(t)
+	page, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
+		Pattern: "needle", ExcludeActiveSince: "yesterday",
+	})
+	require.ErrorContains(t, err, "invalid exclude_active_since")
+	assert.Nil(t, page)
+}
+
 func TestDirectBackend_List_ValidDatesAccepted(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)

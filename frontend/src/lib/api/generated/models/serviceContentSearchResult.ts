@@ -5,6 +5,7 @@ import type { DbContentMatch } from "./dbContentMatch.ts";
 import type { ServiceMemoryCoverage } from "./serviceMemoryCoverage.ts";
 
 export interface ServiceContentSearchResult {
+  active_filter_applied: boolean;
   coverage: ServiceMemoryCoverage;
   matches: DbContentMatch[];
   next_cursor?: number;
