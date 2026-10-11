@@ -210,13 +210,21 @@ short page can have a `next_from` and should be continued.
 
 ## Daemon-Backed Reads
 
-Local MCP mode reuses its connection while the writable daemon runtime record
-and process identity match. After the daemon exits, the next call finds it again
-and starts it when needed.
-Failed operations discard the cached selection. The next operation discovers
-the daemon again; the failed operation is returned without replay.
-Read-only daemons, startup fallbacks, and daemons whose process identity cannot
-be verified use full discovery for each call.
+Local MCP mode talks to the AgentsView daemon. The first tool call finds the
+daemon and starts it when needed. Later calls reuse that connection while the
+daemon's runtime record is unchanged and the same daemon process is still
+running. If the daemon exits or another daemon replaces it, the next call finds
+the daemon again.
+
+A failed tool call returns its error to the client and is not retried. The next
+call finds the daemon again, unless the daemon rejected the failed call with a
+4xx error or the client canceled it. Both cases show that the daemon is still
+serving.
+
+The MCP server finds the daemon again on every call when the daemon is
+read-only, could not write its runtime record, or runs as a process whose
+identity cannot be checked. This lets a writable daemon take over as soon as one
+is available.
 
 The MCP server does not open the local SQLite archive directly. This keeps MCP
 reads on the same daemon policy as the desktop app and avoids a long-running MCP

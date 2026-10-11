@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -44,11 +45,9 @@ Use --profile memory to advertise only get_memory_status, search_content, and
 get_messages for focused conversation-memory clients. The default full profile
 is unchanged.
 
-The server reuses its connection while the writable daemon runtime record and
-process identity match. After the daemon exits, the next call finds it again
-and starts it when needed. Use --server to target an explicit daemon URL.
-Failed operations discard the cached selection. The next operation discovers
-the daemon again; the failed operation is returned without replay.
+The server talks to the local agentsview daemon, starting it when needed, and
+reuses the connection until the daemon restarts or a call fails. A failed call
+is not retried. Use --server to target an explicit daemon URL.
 
 Add to your MCP client config (e.g. Claude Desktop):
   {
@@ -244,10 +243,16 @@ func resolveMCPService(
 }
 
 type mcpDaemonService struct {
-	mu      sync.Mutex
-	cfg     config.Config
+	mu       sync.Mutex // serializes daemon discovery and guards cfg
+	cfg      config.Config
+	selected atomic.Pointer[mcpDaemonSelection]
+}
+
+// mcpDaemonSelection is a resolved daemon backend. runtime is the record that
+// proved the daemon's identity when the selection was cached.
+type mcpDaemonSelection struct {
 	backend service.SessionService
-	runtime *daemon.RuntimeRecord
+	runtime daemon.RuntimeRecord
 }
 
 func newMCPDaemonService(cfg config.Config) service.SessionService {
@@ -262,16 +267,16 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	return runtime == nil || !runtime.ReadOnly
 }
 
-func (s *mcpDaemonService) daemonService(
+func (s *mcpDaemonService) daemonSelection(
 	ctx context.Context,
-) (service.SessionService, error) {
+) (*mcpDaemonSelection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.backend != nil && s.cachedDaemonMatches() {
-		return s.backend, nil
+	if sel := s.selected.Load(); sel != nil && sel.daemonUnchanged(s.cfg.DataDir) {
+		return sel, nil
 	}
-	s.backend, s.runtime = nil, nil
+	s.selected.Store(nil)
 	cfg := s.cfg
 	tr, err := ensureTransportContext(
 		ctx, &cfg, transportIntentLongLived, 0,
@@ -285,23 +290,33 @@ func (s *mcpDaemonService) daemonService(
 		)
 	}
 	s.cfg.AuthToken = cfg.AuthToken
-	backend := servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL)
-	if tr.Runtime != nil && !tr.ReadOnly && !tr.Runtime.RuntimeFallback {
-		rec := tr.Runtime.Record
-		rec.SourcePath = ""
-		s.runtime = &rec
-		s.backend = backend
+	sel := &mcpDaemonSelection{
+		backend: servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 	}
-	return backend, nil
+	if rec, ok := verifiedWritableDaemonRecord(tr); ok {
+		sel.runtime = rec
+		s.selected.Store(sel)
+	}
+	return sel, nil
 }
 
-// cachedDaemonMatches requires unchanged evidence before reusing cached credentials.
-func (s *mcpDaemonService) cachedDaemonMatches() bool {
-	if s.runtime == nil {
-		return false
+// verifiedWritableDaemonRecord returns the runtime record of a writable daemon
+// whose process identity matches. Only such a daemon can be checked cheaply on
+// later calls, so read-only daemons, startup fallbacks, and unverifiable
+// processes get full discovery on every call.
+func verifiedWritableDaemonRecord(tr transport) (daemon.RuntimeRecord, bool) {
+	if tr.Runtime == nil || tr.ReadOnly || tr.Runtime.RuntimeFallback {
+		return daemon.RuntimeRecord{}, false
 	}
-	store := runtimeStore(s.cfg.DataDir)
-	path, err := store.Path(s.runtime.PID)
+	rec := tr.Runtime.Record
+	rec.SourcePath = ""
+	return rec, runtimeRecordIdentityState(rec) == processCreateTimeMatch
+}
+
+// daemonUnchanged requires unchanged evidence before reusing cached credentials.
+func (sel *mcpDaemonSelection) daemonUnchanged(dataDir string) bool {
+	store := runtimeStore(dataDir)
+	path, err := store.Path(sel.runtime.PID)
 	if err != nil {
 		return false
 	}
@@ -310,23 +325,29 @@ func (s *mcpDaemonService) cachedDaemonMatches() bool {
 		return false
 	}
 	rec.SourcePath = ""
-	return reflect.DeepEqual(rec, *s.runtime) && runtimeRecordIdentityState(rec) == processCreateTimeMatch
+	return reflect.DeepEqual(rec, sel.runtime) &&
+		runtimeRecordIdentityState(rec) == processCreateTimeMatch
 }
 
-func mcpDaemonCall[T any](ctx context.Context, s *mcpDaemonService, call func(service.SessionService) (T, error)) (T, error) {
-	svc, err := s.daemonService(ctx)
+// mcpDaemonCall runs one operation on the selected daemon. A failure clears
+// the selection so the next call rediscovers the daemon, unless the failure
+// shows the daemon is still serving: the caller gave up, or the daemon
+// rejected the request with a 4xx answer.
+func mcpDaemonCall[T any](
+	ctx context.Context,
+	s *mcpDaemonService,
+	call func(service.SessionService) (T, error),
+) (T, error) {
+	sel, err := s.daemonSelection(ctx)
 	if err != nil {
 		var zero T
 		return zero, err
 	}
-	result, err := call(svc)
-	if err != nil {
-		s.mu.Lock()
-		// A late failure must preserve a replacement selected by another call.
-		if s.backend == svc {
-			s.backend, s.runtime = nil, nil
-		}
-		s.mu.Unlock()
+	result, err := call(sel.backend)
+	if err != nil && ctx.Err() == nil && !servicehttp.IsRequestRejected(err) {
+		// Compare-and-swap keeps a replacement that another call selected
+		// while this one was failing, and never waits for that discovery.
+		s.selected.CompareAndSwap(sel, nil)
 	}
 	return result, err
 }

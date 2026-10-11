@@ -1911,14 +1911,11 @@ local MCP clients such as Claude Desktop, Claude Code, and Codex.
 bind to `127.0.0.1`; non-loopback binds require `--http-allow-insecure` plus a
 configured bearer token.
 
-Local MCP mode reuses its connection while the writable daemon runtime record
-and process identity match. After the daemon exits, the next call finds it again
-and starts it when needed. The MCP server does not open the local SQLite archive
-directly.
-Failed operations discard the cached selection. The next operation discovers
-the daemon again; the failed operation is returned without replay.
-Read-only daemons, startup fallbacks, and daemons whose process identity cannot
-be verified use full discovery for each call.
+Local MCP mode reads through the AgentsView daemon, starts it when needed, and
+reuses the connection between tool calls. The MCP server does not open the local
+SQLite archive directly. See
+[daemon-backed reads](/docs/mcp/#daemon-backed-reads) for when it finds the
+daemon again.
 
 Use `--profile memory` when the client should discover only the
 `get_memory_status`, `search_content`, and `get_messages` conversation-memory

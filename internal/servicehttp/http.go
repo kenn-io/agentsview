@@ -1482,6 +1482,17 @@ func (b *httpBackend) apiClient(client *http.Client) (*apiclient.Client, error) 
 	return apiclient.NewHTTPClient(b.baseURL, b.token, client)
 }
 
+// IsRequestRejected reports whether err is a daemon's 4xx answer to a request.
+// Such an answer shows the daemon is reachable and serving, unlike a
+// connection failure, a timeout, or a 5xx error.
+func IsRequestRejected(err error) bool {
+	if errors.Is(err, errHTTPNotFound) || errors.Is(err, service.ErrSourceChanged) {
+		return true
+	}
+	statusErr, ok := errors.AsType[*httpStatusError](err)
+	return ok && statusErr.statusCode >= 400 && statusErr.statusCode < 500
+}
+
 func serviceResponseError(response *http.Response, body []byte, err error) error {
 	switch response.StatusCode {
 	case http.StatusNotFound:
