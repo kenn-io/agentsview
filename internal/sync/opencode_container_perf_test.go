@@ -13,9 +13,11 @@ import (
 )
 
 func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
+	watcherLookups := make(map[int]int64)
+	watcherProcessed := make(map[int]int)
 	for _, n := range []int{20, 200} {
-		for _, streamed := range []bool{false, true} {
-			t.Run(fmt.Sprintf("sessions_%d/streamed_%t", n, streamed), func(t *testing.T) {
+		for _, mode := range []string{"full", "streamed", "watcher"} {
+			t.Run(fmt.Sprintf("sessions_%d/%s", n, mode), func(t *testing.T) {
 				env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 				oc := createOpenCodeDB(t, env.opencodeDir)
 				seedOpenCodeSQLiteTextSessions(t, oc, n, 1779012030000)
@@ -23,23 +25,37 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 				before := openCodeLocalModifiedSnapshot(t, env.db, "opencode:ses00001")
 				oc.updateSessionTime(t, "ses00000", 1779015630000)
 				oc.replaceTextContent(t, "ses00000", "changed prompt", "changed answer", 1779015600000)
-				restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
-				t.Cleanup(restarted.Close)
+				engine := env.engine
+				if mode != "watcher" {
+					engine = newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+					t.Cleanup(engine.Close)
+				}
 				scansBefore := parser.OpenCodeContainerChildScans()
 				lookupsBefore := parser.OpenCodeSessionChildLookups()
 				var stats sync.SyncStats
-				if streamed {
-					require.NoError(t, restarted.ReconcileProviderRoots(t.Context(), parser.AgentOpenCode, []string{env.opencodeDir}))
-					stats = restarted.LastSyncStats()
-				} else {
-					stats = restarted.SyncAll(t.Context(), nil)
+				switch mode {
+				case "streamed":
+					require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentOpenCode, []string{env.opencodeDir}))
+					stats = engine.LastSyncStats()
+				case "watcher":
+					require.NoError(t, engine.SyncPathsContext(t.Context(), []string{oc.path}))
+					stats = engine.LastSyncStats()
+				default:
+					stats = engine.SyncAll(t.Context(), nil)
 				}
 				require.False(t, stats.Aborted)
 				assert.Equal(t, 1, stats.Synced)
-				assert.Equal(t, n-1, stats.Skipped)
+				if mode == "watcher" {
+					assert.Zero(t, stats.Skipped)
+					watcherProcessed[n] = stats.Synced + stats.Skipped + stats.Failed
+				} else {
+					assert.Equal(t, n-1, stats.Skipped)
+				}
 				assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore)
 				lookups := parser.OpenCodeSessionChildLookups() - lookupsBefore
-				if streamed {
+				if mode == "watcher" {
+					watcherLookups[n] = lookups
+				} else if mode == "streamed" {
 					assert.LessOrEqual(t, lookups, int64(1))
 				} else {
 					assert.Equal(t, int64(1), lookups)
@@ -50,65 +66,8 @@ func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
 			})
 		}
 	}
-}
-
-// TestOpenCodeWatcherEventIsWatermarkBounded pins the same rule for the
-// watcher's changed-path pass, one level deeper: a one-session write must
-// not read the container's child tables at all, and must not even
-// materialize the unchanged sessions. Changed-path classification lists
-// candidates through the bounded session-row watermark (no message/part
-// aggregation) filtered by the container's newest stored watermark, so the
-// sources processed and the child rows examined per event both scale with
-// the changed batch and not with the archive.
-func TestOpenCodeWatcherEventIsWatermarkBounded(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-
-	lookups := make(map[int]int64)
-	processed := make(map[int]int)
-	for _, n := range []int{20, 200} {
-		t.Run(fmt.Sprintf("sessions_%d", n), func(t *testing.T) {
-			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-			oc := createOpenCodeDB(t, env.opencodeDir)
-			seedOpenCodeSQLiteTextSessions(t, oc, n, 1779012030000)
-			require.Equal(t, n,
-				env.engine.SyncAll(t.Context(), nil).Synced)
-
-			oc.updateSessionTime(t, "ses00000", 1779015630000)
-			oc.replaceTextContent(
-				t, "ses00000", "changed prompt", "changed answer",
-				1779015600000,
-			)
-
-			scansBefore := parser.OpenCodeContainerChildScans()
-			lookupsBefore := parser.OpenCodeSessionChildLookups()
-			require.NoError(t, env.engine.SyncPathsContext(
-				t.Context(), []string{oc.path},
-			))
-			stats := env.engine.LastSyncStats()
-			assert.Equal(t, 1, stats.Synced,
-				"only the changed session may be rewritten")
-			assert.Zero(t, stats.Skipped,
-				"unchanged sessions must not even be materialized as sources")
-			assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
-				"a watcher event must not aggregate the whole container's "+
-					"child tables")
-			lookups[n] = parser.OpenCodeSessionChildLookups() - lookupsBefore
-			processed[n] = stats.Synced + stats.Skipped + stats.Failed
-			assertMessageContent(
-				t, env.db, "opencode:ses00000",
-				"changed prompt", "changed answer",
-			)
-		})
-	}
-
-	assert.Equal(t, lookups[20], lookups[200],
-		"per-session child lookups for one changed session must not grow "+
-			"with container size")
-	assert.Equal(t, processed[20], processed[200],
-		"sources processed for one changed session must not grow with "+
-			"container size")
+	assert.Equal(t, watcherLookups[20], watcherLookups[200])
+	assert.Equal(t, watcherProcessed[20], watcherProcessed[200])
 }
 
 // TestOpenCodeWatcherPassDefersChildOnlyEditToFullDiscovery documents the

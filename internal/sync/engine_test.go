@@ -12185,7 +12185,7 @@ func TestReconcileWatchRootsAfterConstructorCancellation(t *testing.T) {
 	assert.True(t, engine.LastReconciliationResult().Complete)
 }
 
-func TestProviderStoredFreshnessSharedDecision(t *testing.T) {
+func TestProviderStoredFreshnessDecision(t *testing.T) {
 	for _, tc := range []struct {
 		name                         string
 		agent                        parser.AgentType
@@ -12225,9 +12225,9 @@ func TestProviderStoredFreshnessSharedDecision(t *testing.T) {
 				fp.Hash = "changed"
 			}
 			e := &Engine{db: archive}
-			ordinary := e.providerSourceUnchangedInDB(t.Context(), parser.SourceRef{Provider: tc.agent, DisplayPath: path}, fp,
+			unchanged := e.providerSourceUnchangedInDB(t.Context(), parser.SourceRef{Provider: tc.agent, DisplayPath: path}, fp,
 				parser.ProviderSyncSemantics{FingerprintHashRequiredForFreshness: tc.required}, nil)
-			assert.Equal(t, tc.want, ordinary)
+			assert.Equal(t, tc.want, unchanged)
 			assert.Equal(t, tc.wantReads, reads.Load())
 		})
 	}
