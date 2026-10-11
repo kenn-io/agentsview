@@ -1626,11 +1626,14 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   from the same handle. Verification permits timestamp-first discovery for
   five minutes, including after ordinary writes and restarts. Child-only edits
   wait for a complete pass after that original deadline. Each pass atomically
-  consumes durable authority before processing; preparation errors abort the
-  pass, cheap successes restore the original deadline, and failures leave
-  authority revoked. Expired and failed verification history survives restarts
-  so deferred edits remain eligible despite advancing quick-sync cutoffs until
-  complete recovery succeeds. Due quick syncs compare full fingerprints with
+  consumes durable authority before processing, opening a write transaction
+  only when a record still holds authority. Preparation errors abort the pass,
+  cheap successes restore the original deadline, and failures leave authority
+  revoked. A container write during a pass blocks promotion and advancement
+  but restores the prior authority, so active use keeps timestamp-first
+  discovery until the original deadline. Expired and failed verification
+  history survives restarts so deferred edits remain eligible despite advancing
+  quick-sync cutoffs until complete recovery succeeds. Due quick syncs compare full fingerprints with
   paged archive freshness: unchanged members finish before workers, while
   changed or unresolved members retry. Ephemeral engines leave durable records
   untouched. Every member of an unchanged container

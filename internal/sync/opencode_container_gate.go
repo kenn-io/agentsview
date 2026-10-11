@@ -385,46 +385,101 @@ type sqliteContainerVerification struct {
 	VerifiedAt            time.Time                   `json:"verified_at"`
 }
 
+// prepareSQLiteContainerVerification consumes each captured container's
+// durable authority before the pass processes it, so an interrupted or failed
+// pass leaves the record revoked. Reads use the reader; a write transaction
+// opens only when some record still holds authority to consume.
 func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states map[string]parser.SQLiteContainerState) error {
 	if len(states) == 0 || e.db == nil || e.ephemeral || e.db.ReadOnly() || e.pathRewriter != nil {
 		return nil
 	}
-	records := make(map[string]sqliteContainerVerification, len(states))
-	err := e.db.Update(ctx, func(tx *sql.Tx) error {
-		for path := range states {
-			var record sqliteContainerVerification
-			raw, err := db.GetSyncStateTx(ctx, tx, sqliteContainerSyncStatePrefix+path)
-			if err != nil {
-				return err
-			}
-			if raw == "" {
-				continue
-			}
-			records[path] = record
-			if err := json.Unmarshal([]byte(raw), &record); err != nil {
-				log.Printf("decoding SQLite container verification: %v", err)
-				continue
-			}
-			if record.Version != 1 || record.VerifiedAt.IsZero() || record.VerifiedAt.After(openCodeContainerDigestVerifyNow()) {
-				continue
-			}
-			records[path] = record
-			if record.State == (parser.SQLiteContainerState{}) {
-				continue
-			}
-			revoked, err := json.Marshal(sqliteContainerVerification{Version: 1, VerifiedAt: record.VerifiedAt})
-			if err != nil {
-				return err
-			}
-			if err := db.SetSyncStateTx(ctx, tx, sqliteContainerSyncStatePrefix+path, string(revoked)); err != nil {
-				return err
-			}
-		}
-		return nil
+	records, consumable, err := loadSQLiteContainerVerifications(states, func(key string) (string, error) {
+		return e.db.GetSyncState(ctx, key)
 	})
+	if err == nil && consumable {
+		err = e.db.Update(ctx, func(tx *sql.Tx) error {
+			var loadErr error
+			records, _, loadErr = loadSQLiteContainerVerifications(states, func(key string) (string, error) {
+				return db.GetSyncStateTx(ctx, tx, key)
+			})
+			if loadErr != nil {
+				return loadErr
+			}
+			for path, record := range records {
+				if record.State == (parser.SQLiteContainerState{}) {
+					continue
+				}
+				revoked, err := json.Marshal(sqliteContainerVerification{Version: 1, VerifiedAt: record.VerifiedAt})
+				if err != nil {
+					return err
+				}
+				if err := db.SetSyncStateTx(ctx, tx, sqliteContainerSyncStatePrefix+path, string(revoked)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("preparing SQLite container verification: %w", err)
 	}
+	e.applySQLiteContainerVerifications(states, records)
+	return nil
+}
+
+// revokeSQLiteContainerVerification withdraws skip authority for the captured
+// containers without running a pass, keeping their verification history.
+func (e *Engine) revokeSQLiteContainerVerification(ctx context.Context, states map[string]parser.SQLiteContainerState) error {
+	err := e.prepareSQLiteContainerVerification(ctx, states)
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	for path := range states {
+		delete(e.trustedSQLiteContainers, path)
+	}
+	return err
+}
+
+// loadSQLiteContainerVerifications returns a record for every captured
+// container with stored verification. Unusable records load as the zero
+// record, which grants nothing. consumable reports whether any record still
+// holds skip authority.
+func loadSQLiteContainerVerifications(
+	states map[string]parser.SQLiteContainerState,
+	get func(key string) (string, error),
+) (map[string]sqliteContainerVerification, bool, error) {
+	records := make(map[string]sqliteContainerVerification, len(states))
+	consumable := false
+	for path := range states {
+		raw, err := get(sqliteContainerSyncStatePrefix + path)
+		if err != nil {
+			return nil, false, err
+		}
+		if raw == "" {
+			continue
+		}
+		records[path] = sqliteContainerVerification{}
+		var record sqliteContainerVerification
+		if err := json.Unmarshal([]byte(raw), &record); err != nil {
+			log.Printf("decoding SQLite container verification for %s: %v", path, err)
+			continue
+		}
+		if record.Version != 1 || record.VerifiedAt.IsZero() || record.VerifiedAt.After(openCodeContainerDigestVerifyNow()) {
+			continue
+		}
+		records[path] = record
+		if record.State != (parser.SQLiteContainerState{}) {
+			consumable = true
+		}
+	}
+	return records, consumable, nil
+}
+
+// applySQLiteContainerVerifications replaces in-memory trust for the captured
+// containers with what their durable records allow.
+func (e *Engine) applySQLiteContainerVerifications(
+	states map[string]parser.SQLiteContainerState,
+	records map[string]sqliteContainerVerification,
+) {
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()
 	for path, state := range states {
@@ -447,7 +502,6 @@ func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states 
 			}
 		}
 	}
-	return nil
 }
 
 func openCodeContainerDigestVerificationCurrent(verifiedAt, now time.Time) bool {
@@ -474,32 +528,34 @@ func (e *Engine) filterQuickSyncFiles(
 
 	kept := make([]parser.DiscoveredFile, 0, len(files))
 	filterable := make([]parser.DiscoveredFile, 0, len(files))
-	var candidates []parser.DiscoveredFile
+	type dueMember struct {
+		file      parser.DiscoveredFile
+		container string
+	}
+	var candidates []dueMember
 	for _, f := range files {
 		path, _, ok := sqliteContainerSourceForFile(f)
 		if ok && due[path] {
-			candidates = append(candidates, f)
+			candidates = append(candidates, dueMember{file: f, container: path})
 		} else {
 			filterable = append(filterable, f)
 		}
 	}
-	slices.SortFunc(candidates, func(a, b parser.DiscoveredFile) int {
-		aContainer, _, _ := sqliteContainerSourceForFile(a)
-		bContainer, _, _ := sqliteContainerSourceForFile(b)
-		if c := strings.Compare(aContainer, bContainer); c != 0 {
+	slices.SortFunc(candidates, func(a, b dueMember) int {
+		if c := strings.Compare(a.container, b.container); c != 0 {
 			return c
 		}
-		if c := strings.Compare(string(a.Agent), string(b.Agent)); c != 0 {
+		if c := strings.Compare(string(a.file.Agent), string(b.file.Agent)); c != 0 {
 			return c
 		}
-		return strings.Compare(a.Path, b.Path)
+		return strings.Compare(a.file.Path, b.file.Path)
 	})
 	var container string
 	var agent parser.AgentType
 	var cursor *parser.StoredMemberFreshnessCursor
 	var pageFailed bool
-	for _, f := range candidates {
-		dbPath, _, _ := sqliteContainerSourceForFile(f)
+	for _, candidate := range candidates {
+		f, dbPath := candidate.file, candidate.container
 		if cursor == nil || container != dbPath || agent != f.Agent {
 			agent, container, pageFailed = f.Agent, dbPath, false
 			cursor = parser.NewStoredMemberFreshnessCursor(e.storedMemberFreshnessPager(dbPath, e.idPrefix+string(f.Agent)+":", func(row db.VirtualContainerMemberFreshness) (int64, bool) {
@@ -511,7 +567,10 @@ func (e *Engine) filterQuickSyncFiles(
 		if !pageFailed {
 			var err error
 			row, found, err = cursor.Lookup(ctx, f.Path)
-			pageFailed = err != nil
+			if err != nil {
+				pageFailed = true
+				log.Printf("quick sync: reading stored %s freshness for %s: %v; workers check its remaining members", agent, dbPath, err)
+			}
 		}
 		if found && !pageFailed && f.ProviderSource != nil &&
 			!e.forceParseRequested(f) && e.pathRewriter == nil && e.sqliteContainerPassCaptureValid(dbPath) {
@@ -1025,7 +1084,14 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 	}
 	e.containerMu.Unlock()
 
-	digestFailures := e.sqliteContainerDigestRevalidationFailures(pass)
+	// A write after capture only blocks promotion or advancement. Prior
+	// trust stays valid: its state no longer matches the container, so it
+	// cannot gate-skip, and the next preparation still checks identity and
+	// counter rollback. Incomplete passes never promote, so skip the re-stat.
+	var changedDuringPass map[string]struct{}
+	if !incomplete {
+		changedDuringPass = e.sqliteContainerChangedDuringPass(pass)
+	}
 
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()
@@ -1050,9 +1116,6 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 			}
 		}
 	}
-	for dbPath := range digestFailures {
-		pass.failed[dbPath] = true
-	}
 	for dbPath := range pass.failed {
 		delete(e.trustedSQLiteContainers, dbPath)
 	}
@@ -1060,8 +1123,10 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 		if pass.failed[dbPath] {
 			continue
 		}
-		if trusted, ok := e.trustedSQLiteContainers[dbPath]; ok && (incomplete || !pass.fullDigestListed[dbPath]) {
-			if !incomplete && pass.discovered[dbPath] > 0 && pass.completed[dbPath] == pass.discovered[dbPath] {
+		_, changed := changedDuringPass[dbPath]
+		settled := !incomplete && !changed
+		if trusted, ok := e.trustedSQLiteContainers[dbPath]; ok && (!settled || !pass.fullDigestListed[dbPath]) {
+			if settled && pass.discovered[dbPath] > 0 && pass.completed[dbPath] == pass.discovered[dbPath] {
 				trusted.state = state
 				e.trustedSQLiteContainers[dbPath] = trusted
 			}
@@ -1071,7 +1136,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 			}
 			continue
 		}
-		if incomplete {
+		if !settled {
 			continue
 		}
 		if pass.discovered[dbPath] == 0 ||
@@ -1086,7 +1151,7 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 		e.trustedSQLiteContainers[dbPath] = trustedSQLiteContainer{
 			state: state,
 		}
-		if !incomplete && pass.fullDigestListed[dbPath] {
+		if pass.fullDigestListed[dbPath] {
 			if e.digestVerifiedAt == nil {
 				e.digestVerifiedAt = make(map[string]time.Time)
 			}
@@ -1101,9 +1166,9 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 	}
 }
 
-// sqliteContainerDigestRevalidationFailures rechecks captured containers
-// without holding containerMu during filesystem I/O.
-func (e *Engine) sqliteContainerDigestRevalidationFailures(
+// sqliteContainerChangedDuringPass rechecks captured containers without
+// holding containerMu during filesystem I/O.
+func (e *Engine) sqliteContainerChangedDuringPass(
 	pass *sqliteContainerPass,
 ) map[string]struct{} {
 	e.containerMu.Lock()

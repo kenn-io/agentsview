@@ -558,6 +558,91 @@ func TestCaptureSQLiteContainerStatesScopesChangedPathToImpactedContainer(t *tes
 	}
 }
 
+// A write during a pass blocks promotion but keeps prior authority, so active
+// use does not force the next worker into a full child scan.
+func TestOpenCodeWriteDuringPassKeepsVerification(t *testing.T) {
+	now := time.Unix(1000, 0)
+	prior := now.Add(-time.Minute)
+	origNow := openCodeContainerDigestVerifyNow
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
+	openCodeContainerDigestVerifyNow = func() time.Time { return now }
+
+	for _, tc := range []struct {
+		name                   string
+		incomplete, digestList bool
+	}{
+		{name: "watcher pass", incomplete: true},
+		{name: "watermark pass"},
+		{name: "digest pass", digestList: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath, conn := newContainerTestDB(t)
+			capture, ok := parser.StatSQLiteContainerState(dbPath)
+			require.True(t, ok)
+			states := map[string]parser.SQLiteContainerState{dbPath: capture}
+			e := &Engine{db: openTestDB(t)}
+			writeContainerVerification(t, e.db, dbPath, capture, prior)
+			require.NoError(t, e.prepareSQLiteContainerVerification(t.Context(), states))
+			file := parser.DiscoveredFile{Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1"}
+			e.beginSQLiteContainerPass([]parser.DiscoveredFile{file}, states)
+			e.containerPass.fullDigestListed[dbPath] = tc.digestList
+			e.noteSQLiteContainerResult(file.Path, true)
+			_, err := conn.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('during')")
+			require.NoError(t, err)
+			e.finishSQLiteContainerPass(t.Context(), tc.incomplete, false)
+
+			record, found := readContainerVerification(t, e.db, dbPath)
+			require.True(t, found)
+			assert.Equal(t, capture, record.State, "a write during the pass must not advance trust")
+			assert.True(t, prior.Equal(record.VerifiedAt), "a write during the pass must not renew verification")
+			current, ok := parser.StatSQLiteContainerState(dbPath)
+			require.True(t, ok)
+			require.NotEqual(t, capture, current)
+			next := map[string]parser.SQLiteContainerState{dbPath: current}
+			restarted := &Engine{db: e.db}
+			require.NoError(t, restarted.prepareSQLiteContainerVerification(t.Context(), next))
+			assert.True(t, restarted.sqliteContainerListsWatermarkOnly(next)(dbPath),
+				"the next worker keeps timestamp-first discovery within the original window")
+		})
+	}
+}
+
+// Preparation needs the writer only to consume live authority, so passes
+// during a writer handoff still run when every record is already revoked.
+func TestOpenCodePrepareWritesOnlyToConsumeAuthority(t *testing.T) {
+	now := time.Unix(1000, 0)
+	prior := now.Add(-time.Minute)
+	origNow := openCodeContainerDigestVerifyNow
+	t.Cleanup(func() { openCodeContainerDigestVerifyNow = origNow })
+	openCodeContainerDigestVerifyNow = func() time.Time { return now }
+
+	for _, authority := range []bool{false, true} {
+		t.Run(strconv.FormatBool(authority), func(t *testing.T) {
+			dbPath, _ := newContainerTestDB(t)
+			capture, ok := parser.StatSQLiteContainerState(dbPath)
+			require.True(t, ok)
+			stored := parser.SQLiteContainerState{}
+			if authority {
+				stored = capture
+			}
+			archive := openTestDB(t)
+			writeContainerVerification(t, archive, dbPath, stored, prior)
+			require.NoError(t, archive.CloseWriter())
+			t.Cleanup(func() { require.NoError(t, archive.ReopenWriter()) })
+
+			e := &Engine{db: archive}
+			err := e.prepareSQLiteContainerVerification(t.Context(), map[string]parser.SQLiteContainerState{dbPath: capture})
+			if authority {
+				require.ErrorIs(t, err, db.ErrWriterClosed)
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, prior.Equal(e.digestVerifiedAt[dbPath]), "revoked records still restore verification history")
+			assert.NotContains(t, e.trustedSQLiteContainers, dbPath)
+		})
+	}
+}
+
 // TestSQLiteContainerTrustLifecycle drives the gate's one trust invariant
 // through a matrix: trust — promotion, verification stamps, gate skips,
 // carried provider sources — is granted only by a pass that observed the
@@ -694,7 +779,7 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			wantStamp:  wantPrior,
 		},
 		{
-			name:              "post-discovery write is caught at finalization, per container",
+			name:              "post-discovery write blocks promotion, per container",
 			priorTrust:        true,
 			priorStamp:        true,
 			capture:           captureLive,
@@ -702,7 +787,7 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			lateWrite:         true,
 			sibling:           true,
 			siblingDiscovered: true,
-			wantTrust:         wantAbsent,
+			wantTrust:         wantPrior,
 			wantStamp:         wantPrior,
 			wantSiblingTrust:  wantFresh,
 			wantSiblingStamp:  wantFresh,
@@ -1335,6 +1420,11 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 		pages := countSessionFileHashReads(t, archive)
 		assert.Empty(t, e.filterQuickSyncFiles(t.Context(), files, now))
 		assert.Equal(t, int32(4), pages.Load(), "each container/agent group reads two pages once")
+
+		canceled, cancel := context.WithCancel(t.Context())
+		cancel()
+		assert.Len(t, e.filterQuickSyncFiles(canceled, files, now), len(files),
+			"unreadable stored freshness leaves every due member for workers")
 	})
 }
 
@@ -1877,6 +1967,7 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 			}
 			assert.Equal(t, parser.SQLiteContainerState{}, record.State, "first partial failure cannot leave durable authority")
 			if classificationFails {
+				assert.Zero(t, fresh.LastSync(), "a failed classification is not a completed sync")
 				_, err := conn.ExecContext(t.Context(), `UPDATE part SET data=replace(data, 'original', 'repaired'), time_updated=time_updated+1`)
 				require.NoError(t, err)
 				blockedPath = ""

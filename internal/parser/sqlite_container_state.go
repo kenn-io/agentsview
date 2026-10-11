@@ -8,12 +8,28 @@ import (
 	"os"
 )
 
-// SQLiteContainerState captures SQLite write markers for bounded freshness reuse.
-// Checkpointed WAL writes can preserve every marker within one recorded second,
-// so matching states still require periodic full digest verification.
-// Header counters detect rollback-journal transactions; WAL size and salts detect
-// writes while the WAL retains frames. File identity distinguishes replacements.
-// Header layouts follow https://www.sqlite.org/fileformat2.html.
+// SQLiteContainerState captures SQLite write markers for bounded freshness
+// reuse. A mismatch costs one redundant re-read; a false match hides a write,
+// so callers bound how long a matching state may be trusted.
+//
+// The markers come from SQLite rather than the clock, because filesystem
+// mtime precision varies (1s on HFS+, 2s on FAT) and mtimes here are truncated
+// to whole seconds:
+//
+//   - The database header's change counter (byte 24) advances on every
+//     rollback-journal transaction and on every WAL checkpoint.
+//   - Between WAL resets, commits only append frames, so the WAL size grows.
+//     A reset rewrites the WAL header with new salts and checkpoint sequence.
+//   - File identity distinguishes a replaced or restored file from in-place
+//     writes, which a byte-identical copy would otherwise match.
+//
+// Matching states are not proof of no change: a same-size write checkpointed
+// and truncated within one recorded second can preserve every marker. That is
+// why matching states still require periodic full digest verification.
+//
+// Both headers follow the documented on-disk format, which SQLite commits to
+// keeping compatible through 2050: https://www.sqlite.org/fileformat2.html and
+// https://www.sqlite.org/lts.html.
 type SQLiteContainerState struct {
 	DBSize          int64  `json:"DBSize"`
 	DBMtimeSec      int64  `json:"DBMtimeSec"`

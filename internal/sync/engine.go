@@ -1820,8 +1820,13 @@ func (e *Engine) syncChangedPathsLocked(
 func (e *Engine) applyChangedPathSyncLocked(
 	ctx context.Context, prepared preparedChangedPathSync,
 ) (SyncStats, int, error) {
-	if prepared.empty() && prepared.classificationErr == nil {
-		return SyncStats{}, 0, prepared.classificationErr
+	if prepared.empty() {
+		if prepared.classificationErr == nil {
+			return SyncStats{}, 0, nil
+		}
+		// Unclassified changes may hide member edits, so withdraw authority.
+		revokeErr := e.revokeSQLiteContainerVerification(ctx, prepared.preContainerStates)
+		return SyncStats{}, 0, errors.Join(prepared.classificationErr, revokeErr)
 	}
 	e.resetS3CodexIndexCache()
 	e.resetSourceClaims()
