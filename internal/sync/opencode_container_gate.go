@@ -379,9 +379,10 @@ func (e *Engine) sqliteContainerListsWatermarkOnly(
 }
 
 type sqliteContainerVerification struct {
-	Version    int                         `json:"version"`
-	State      parser.SQLiteContainerState `json:"state"`
-	VerifiedAt time.Time                   `json:"verified_at"`
+	Version               int                         `json:"version"`
+	State                 parser.SQLiteContainerState `json:"state"`
+	ObservedChangeCounter uint32                      `json:"observed_change_counter,omitzero"`
+	VerifiedAt            time.Time                   `json:"verified_at"`
 }
 
 func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states map[string]parser.SQLiteContainerState) error {
@@ -438,7 +439,7 @@ func (e *Engine) prepareSQLiteContainerVerification(ctx context.Context, states 
 				e.digestVerifiedAt = make(map[string]time.Time)
 			}
 			e.digestVerifiedAt[path] = record.VerifiedAt
-			if !sqliteContainerStateReplaced(record.State, state) {
+			if !sqliteContainerStateReplaced(record.State, state) && state.DBChangeCounter >= record.ObservedChangeCounter {
 				if e.trustedSQLiteContainers == nil {
 					e.trustedSQLiteContainers = make(map[string]trustedSQLiteContainer)
 				}
@@ -1065,7 +1066,8 @@ func (e *Engine) finishSQLiteContainerPass(ctx context.Context, incomplete, full
 				e.trustedSQLiteContainers[dbPath] = trusted
 			}
 			if at := e.digestVerifiedAt[dbPath]; !at.IsZero() && trusted.state.DBInode != 0 && trusted.state.DBDevice != 0 {
-				records[dbPath] = sqliteContainerVerification{Version: 1, State: trusted.state, VerifiedAt: at}
+				// Partial passes record writes without granting whole-container skip authority.
+				records[dbPath] = sqliteContainerVerification{Version: 1, State: trusted.state, ObservedChangeCounter: state.DBChangeCounter, VerifiedAt: at}
 			}
 			continue
 		}

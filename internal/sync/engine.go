@@ -1820,7 +1820,7 @@ func (e *Engine) syncChangedPathsLocked(
 func (e *Engine) applyChangedPathSyncLocked(
 	ctx context.Context, prepared preparedChangedPathSync,
 ) (SyncStats, int, error) {
-	if prepared.empty() {
+	if prepared.empty() && prepared.classificationErr == nil {
 		return SyncStats{}, 0, prepared.classificationErr
 	}
 	e.resetS3CodexIndexCache()

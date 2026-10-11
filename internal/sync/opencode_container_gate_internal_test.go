@@ -1608,7 +1608,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		{name: "counter rollback", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBChangeCounter-- }},
 		{name: "malformed record", raw: "{"},
 		{name: "malformed timestamp", raw: `{"version":1,"verified_at":"invalid"}`},
-		{name: "missing timestamp", raw: `{"version":1,"state":{"DBDevice":1,"DBInode":1}}`},
+		{name: "missing timestamp", version: 1},
 		{name: "future record version", age: time.Minute, version: 2},
 		{name: "replaced", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBInode++ }},
 		{name: "missing identity", setup: func(_ *Engine, s *parser.SQLiteContainerState) { s.DBInode = 0 }},
@@ -1632,7 +1632,11 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 				require.NoError(t, archive.SetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path, tc.raw))
 			}
 			if tc.version != 0 {
-				raw, err := json.Marshal(sqliteContainerVerification{Version: tc.version, State: state, VerifiedAt: now.Add(-tc.age)})
+				at := now.Add(-tc.age)
+				if tc.name == "missing timestamp" {
+					at = time.Time{}
+				}
+				raw, err := json.Marshal(sqliteContainerVerification{Version: tc.version, State: state, VerifiedAt: at})
 				require.NoError(t, err)
 				tc.raw = string(raw)
 				require.NoError(t, archive.SetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path, tc.raw))
@@ -1666,7 +1670,7 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			}
 			got := fn != nil && fn(path)
 			assert.Equal(t, tc.want, got)
-			if tc.version != 0 {
+			if tc.version > 1 {
 				raw, err := archive.GetSyncState(t.Context(), sqliteContainerSyncStatePrefix+path)
 				require.NoError(t, err)
 				assert.Equal(t, tc.raw, raw, "admission leaves unsupported records unchanged")
@@ -1770,7 +1774,6 @@ func TestOpenCodeFailedPassInvalidatesPersistedVerification(t *testing.T) {
 				e.poisonSQLiteContainerPass()
 				e.finishSQLiteContainerPass(ctx, true, false)
 			}
-			require.NoError(t, e.prepareSQLiteContainerVerification(t.Context(), states))
 			record, found := readContainerVerification(t, archive, path)
 			require.True(t, found)
 			assert.True(t, original.Equal(record.VerifiedAt), "invalidation preserves the original deadline")
@@ -1801,6 +1804,99 @@ func (f openCodeMemberFailureFactory) NewProvider(cfg parser.ProviderConfig) par
 type openCodeMemberFailureProvider struct {
 	failureFingerprintProvider
 	blockedPath *string
+}
+
+func (p openCodeMemberFailureProvider) SourcesForChangedPath(ctx context.Context, req parser.ChangedPathRequest) ([]parser.SourceRef, error) {
+	if req.Path == *p.blockedPath {
+		return nil, errors.New("container classification failed")
+	}
+	return p.Provider.SourcesForChangedPath(ctx, req)
+}
+
+func TestOpenCodePartialVerificationRejectsRollbackAcrossRestart(t *testing.T) {
+	for _, mode := range []string{"partial", "cutoff"} {
+		t.Run(mode, func(t *testing.T) {
+			path, conn := seededCompositeContainerTestDB(t)
+			_, err := conn.ExecContext(t.Context(), `INSERT INTO session SELECT 'ses-2', project_id, parent_id, title, time_created, time_updated FROM session;
+				INSERT INTO message SELECT 'msg-2', 'ses-2', data, time_created, time_updated FROM message WHERE id='msg-user';
+				INSERT INTO part SELECT 'part-2', 'ses-2', 'msg-2', data, time_created, time_updated FROM part WHERE id='part-user'`)
+			require.NoError(t, err)
+			archive := openTestDB(t)
+			cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(path)}}, Machine: "local"}
+			engine := NewEngine(t.Context(), archive, cfg)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+			original, found := readContainerVerification(t, archive, path)
+			require.True(t, found)
+			before, err := os.ReadFile(path)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), `UPDATE session SET time_updated=time_updated+1000 WHERE id='ses-1'; UPDATE part SET data=replace(data, 'original', 'modified'), time_updated=time_updated+1 WHERE session_id='ses-1'`)
+			require.NoError(t, err)
+			if mode == "partial" {
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path + "#ses-1"}))
+			} else {
+				stats := engine.SyncAllSince(t.Context(), time.UnixMilli(1779099999500), nil)
+				require.True(t, stats.ProcessingComplete())
+			}
+			require.Equal(t, 1, engine.LastSyncStats().Synced)
+			advanced, ok := parser.StatSQLiteContainerState(path)
+			require.True(t, ok)
+			require.Greater(t, advanced.DBChangeCounter, original.State.DBChangeCounter)
+			record, found := readContainerVerification(t, archive, path)
+			require.True(t, found)
+			assert.Equal(t, original.State, record.State, "partial work cannot authorize skipping untouched members")
+			assert.True(t, original.VerifiedAt.Equal(record.VerifiedAt))
+			require.NoError(t, conn.Close())
+			require.NoError(t, os.WriteFile(path, before, 0o600))
+			restored, ok := parser.StatSQLiteContainerState(path)
+			require.True(t, ok)
+			require.Equal(t, advanced.DBInode, restored.DBInode)
+			require.Less(t, restored.DBChangeCounter, advanced.DBChangeCounter)
+			restarted := NewEngine(t.Context(), archive, cfg)
+			t.Cleanup(restarted.Close)
+			require.Equal(t, 1, restarted.SyncAllSince(t.Context(), time.Now(), nil).Synced)
+			messages, err := archive.GetAllMessages(t.Context(), "opencode:ses-1")
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			assert.Equal(t, "original prompt", messages[0].Content)
+		})
+	}
+}
+
+func TestOpenCodeClassificationFailureRevokesVerification(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		t.Run(strconv.FormatBool(restart), func(t *testing.T) {
+			path, conn := seededCompositeContainerTestDB(t)
+			archive := openTestDB(t)
+			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
+			require.True(t, ok)
+			var calls atomic.Int32
+			blocked := ""
+			cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(path)}}, Machine: "local", ProviderFactories: []parser.ProviderFactory{openCodeMemberFailureFactory{factory, &calls, &blocked}}}
+			engine := NewEngine(t.Context(), archive, cfg)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			original, found := readContainerVerification(t, archive, path)
+			require.True(t, found)
+			blocked = path
+			require.Error(t, engine.SyncPathsContext(t.Context(), []string{path}))
+			record, found := readContainerVerification(t, archive, path)
+			require.True(t, found)
+			assert.Zero(t, record.State)
+			assert.True(t, original.VerifiedAt.Equal(record.VerifiedAt))
+			_, err := conn.ExecContext(t.Context(), `UPDATE part SET data=replace(data, 'original', 'repaired'), time_updated=time_updated+1`)
+			require.NoError(t, err)
+			blocked = ""
+			if restart {
+				engine = NewEngine(t.Context(), archive, cfg)
+				t.Cleanup(engine.Close)
+			}
+			require.Equal(t, 1, engine.SyncAllSince(t.Context(), time.Now(), nil).Synced)
+			matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "repaired")
+			require.NoError(t, err)
+			assert.Len(t, matches, 2)
+		})
+	}
 }
 
 func (p openCodeMemberFailureProvider) Parse(ctx context.Context, req parser.ParseRequest) (parser.ParseOutcome, error) {
