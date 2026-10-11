@@ -556,7 +556,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			newForegroundSyncRunner(ctx, cfg, engine, database, writeLock),
 		))
 		srvOpts = append(srvOpts, server.WithLocalResyncRunner(
-			newForegroundResyncRunner(ctx, cfg, engine, database, true),
+			newForegroundResyncRunner(ctx, cfg, engine, database),
 		))
 	}
 	if memoryRefresh != nil {
@@ -1093,37 +1093,16 @@ func newForegroundSyncRunner(
 func newForegroundResyncRunner(
 	daemonCtx context.Context,
 	cfg config.Config, engine *sync.Engine, database *db.DB,
-	full bool,
 ) server.LocalResyncRunner {
 	return func(
 		ctx context.Context, progress func(sync.Progress),
 	) (sync.SyncStats, error) {
 		if !testing.Testing() {
-			result, err, spawnFailed := runWorkerResyncBuild(
-				ctx, daemonCtx, cfg, engine, database, progress, full,
+			stats, err := runWorkerResync(
+				ctx, daemonCtx, cfg, engine, database, progress, true,
 			)
-			if !spawnFailed {
-				if result.Status == "aborted" && ctx.Err() == nil {
-					// Mirror syncThenRunLocked: a safety-aborted resync still
-					// catches up incrementally so safely applicable updates
-					// land instead of surfacing the bare abort. The worker
-					// "sync" mode refuses stale archives, so this warm,
-					// skip-cache-bounded pass runs in process like the
-					// pre-worker path it preserves. Only the worker's explicit
-					// "aborted" verdict takes this path: operational build
-					// failures report "failed" and must surface their error
-					// rather than masquerade as a successful incremental sync.
-					//
-					// The worker reset its own failure cache. That copy died
-					// with the discarded rebuild, so forget the parent's copy
-					// too. Otherwise previously failed sources stay skipped
-					// and a parser upgrade cannot reach them.
-					engine.ResetFailureCache(ctx)
-					return syncAllReleasingStartupMaintenance(
-						ctx, engine, progress,
-					), nil
-				}
-				return statsFromWorkerResult(result), err
+			if !errors.Is(err, errWorkerSpawn) {
+				return stats, err
 			}
 			log.Printf(
 				"foreground resync worker spawn failed: %v "+
@@ -1135,9 +1114,45 @@ func newForegroundResyncRunner(
 		// startup maintenance on success, matching the handler's no-runner
 		// arm (runResyncWithFallback) and the sync runner's fallback above.
 		return engine.SyncThenRun(
-			ctx, full, progress, func(bool) error { return nil },
+			ctx, true, progress, func(bool) error { return nil },
 		)
 	}
+}
+
+// runWorkerResync rebuilds the archive in a worker process and never falls
+// back to an in-process rebuild; a spawn failure returns an error wrapping
+// errWorkerSpawn. With full false it rebuilds only an archive that still
+// needs a resync once the write barrier is held.
+func runWorkerResync(
+	ctx context.Context,
+	daemonCtx context.Context,
+	cfg config.Config,
+	engine *sync.Engine,
+	database *db.DB,
+	progress func(sync.Progress),
+	full bool,
+) (sync.SyncStats, error) {
+	result, err, spawnFailed := runWorkerResyncBuild(
+		ctx, daemonCtx, cfg, engine, database, progress, full,
+	)
+	if !spawnFailed && result.Status == "aborted" && ctx.Err() == nil {
+		// Mirror syncThenRunLocked: a safety-aborted resync still catches up
+		// incrementally so safely applicable updates land instead of
+		// surfacing the bare abort. The worker "sync" mode refuses stale
+		// archives, so this warm, skip-cache-bounded pass runs in process
+		// like the pre-worker path it preserves. Only the worker's explicit
+		// "aborted" verdict takes this path: operational build failures
+		// report "failed" and must surface their error rather than
+		// masquerade as a successful incremental sync.
+		//
+		// The worker reset its own failure cache. That copy died with the
+		// discarded rebuild, so forget the parent's copy too. Otherwise
+		// previously failed sources stay skipped and a parser upgrade cannot
+		// reach them.
+		engine.ResetFailureCache(ctx)
+		return syncAllReleasingStartupMaintenance(ctx, engine, progress), nil
+	}
+	return statsFromWorkerResult(result), err
 }
 
 // newForegroundCompactRunner keeps archive compaction behind the same
@@ -2949,7 +2964,8 @@ func startPeriodicSync(
 		}
 	}
 
-	// Archive audits and rebuild retries run on a separate cadence from provider reconciliation.
+	// Archive audits and rebuild retries run in worker processes, never in the
+	// daemon, on a cadence separate from provider reconciliation.
 	go startArchiveAudit(ctx, cfg, engine, database, lock, idleTracker, emitter)
 
 	ticker := time.NewTicker(periodicSyncInterval)
@@ -3064,10 +3080,11 @@ func runArchiveAuditLoop(
 	}
 }
 
-// runArchiveAudit retries required rebuilds through the foreground runner,
-// which publishes committed changes. Current archives use the audit worker;
-// committed changes emit "sessions" even when the worker also fails, since
-// retries won't repeat those writes. Errors retain the retry obligation.
+// runArchiveAudit retries a required rebuild in a resync worker, which
+// publishes committed changes. Like the audit itself, the rebuild never falls
+// back to an archive-scale pass in the daemon. Current archives use the audit
+// worker; committed changes emit "sessions" even when the worker also fails,
+// since retries won't repeat those writes. Errors retain the retry obligation.
 func runArchiveAudit(
 	ctx context.Context,
 	cfg config.Config,
@@ -3077,7 +3094,7 @@ func runArchiveAudit(
 	emitter sync.Emitter,
 ) error {
 	if database.NeedsResync() {
-		_, err := newForegroundResyncRunner(ctx, cfg, engine, database, false)(ctx, nil)
+		_, err := runWorkerResync(ctx, ctx, cfg, engine, database, nil, false)
 		if err != nil {
 			return err
 		}

@@ -14,6 +14,10 @@ The latest release is
 - Keep both Cursor conversations when S3 objects in different projects share
   a session ID. A one-time archive rebuild recovers overwritten Cursor S3
   conversations while preserving archived sessions and stars.
+- Retry a required archive rebuild automatically when it fails at startup. The
+  daemon keeps serving the existing archive, retries after an hour, and backs
+  off to once a day. Before, the rebuild waited for a restart or a manual
+  resync.
 
 ## 0.45.0
 

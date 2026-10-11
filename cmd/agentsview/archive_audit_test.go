@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -52,20 +52,77 @@ func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
 	}
 }
 
+// TestArchiveAuditRetriesRequiredRebuild runs the stale-archive audit against
+// the real resync build behind the worker-launch seam. A spawn failure must
+// stay a retryable error rather than rebuild the archive in the daemon.
 func TestArchiveAuditRetriesRequiredRebuild(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	cfg.AgentDirs[parser.AgentClaude] = []string{t.TempDir()}
-	seed := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	missing := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "missing.jsonl")
-	dbtest.SeedSession(t, seed, "existing", "project", func(s *db.Session) { s.FilePath = &missing })
-	require.NoError(t, seed.Close())
-	markArchiveStale(t, cfg.DBPath)
-	database, lock := openTestWriteDB(t, cfg)
-	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
-	t.Cleanup(engine.Close)
-	err := runArchiveAudit(t.Context(), cfg, engine, database, lock, nil)
-	require.ErrorContains(t, err, "required archive rebuild did not complete")
-	assert.True(t, database.NeedsResync())
+	for _, tc := range []struct {
+		name        string
+		missingSrc  bool
+		spawnFails  bool
+		wantErr     string
+		wantErrIs   error
+		wantRebuilt bool
+	}{
+		{name: "rebuild completes", wantRebuilt: true},
+		{
+			name:       "rebuild aborts",
+			missingSrc: true,
+			wantErr:    "required archive rebuild did not complete",
+		},
+		{name: "worker cannot start", spawnFails: true, wantErrIs: errWorkerSpawn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			seed := dbtest.OpenTestDBAt(t, cfg.DBPath)
+			if tc.missingSrc {
+				cfg.AgentDirs[parser.AgentClaude] = []string{t.TempDir()}
+				missing := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "missing.jsonl")
+				dbtest.SeedSession(t, seed, "existing", "project", func(s *db.Session) {
+					s.FilePath = &missing
+				})
+			}
+			require.NoError(t, seed.Close())
+			markArchiveStale(t, cfg.DBPath)
+			database, lock := openTestWriteDB(t, cfg)
+			engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+			t.Cleanup(engine.Close)
+			var modes []string
+			restore := stubLaunchSyncWorker(t, func(
+				_ context.Context, c config.Config, request syncWorkerRequest, _ func(workerLine),
+			) (workerResult, error) {
+				modes = append(modes, request.Mode)
+				if tc.spawnFails {
+					return workerResult{}, fmt.Errorf("%w: test", errWorkerSpawn)
+				}
+				var result workerResult
+				err := runSyncWorkerResyncBuild(t.Context(), c, request.Mode, func(line workerLine) {
+					if line.Result != nil {
+						result = *line.Result
+					}
+				}, func(sync.Progress) {})
+				if err == nil && result.Status != "ok" {
+					err = fmt.Errorf("worker reported %s", result.Status)
+				}
+				return result, err
+			})
+			defer restore()
+
+			err := runArchiveAudit(t.Context(), cfg, engine, database, lock, nil)
+
+			switch {
+			case tc.wantErrIs != nil:
+				require.ErrorIs(t, err, tc.wantErrIs)
+			case tc.wantErr != "":
+				require.ErrorContains(t, err, tc.wantErr)
+			default:
+				require.NoError(t, err)
+			}
+			assert.Equal(t, []string{"resync-build"}, modes)
+			assert.Equal(t, !tc.wantRebuilt, database.NeedsResync())
+			assert.False(t, database.WriterClosed())
+		})
+	}
 }
 
 func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
@@ -365,40 +422,50 @@ func TestArchiveAuditLoopLogsBackoffWhileRunning(t *testing.T) {
 		"a live-run failure must log the backoff line")
 }
 
+// TestStartArchiveAuditSelectsFirstDelay checks that a stale archive schedules
+// its first rebuild worker after an hour, while a current archive waits a day
+// for the routine audit worker.
 func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
-	for _, stale := range []bool{false, true} {
-		t.Run(strconv.FormatBool(stale), func(t *testing.T) {
+	type attempt struct {
+		delay time.Duration
+		mode  string
+	}
+	for _, tc := range []struct {
+		name  string
+		stale bool
+		want  attempt
+	}{
+		{name: "current", want: attempt{archiveAuditInterval, "audit"}},
+		{name: "stale", stale: true, want: attempt{archiveAuditRetryInitial, "resync-build"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				cfg := testConfigWithClaudeFixture(t)
 				seed := dbtest.OpenTestDBAt(t, cfg.DBPath)
 				require.NoError(t, seed.Close())
-				if stale {
+				if tc.stale {
 					markArchiveStale(t, cfg.DBPath)
 				}
 				database, lock := openTestWriteDB(t, cfg)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				started := time.Now()
-				attempted := make(chan time.Duration, 1)
-				restore := stubLaunchSyncWorker(t, func(context.Context, config.Config, syncWorkerRequest, func(workerLine)) (workerResult, error) {
-					attempted <- time.Since(started)
-					return workerResult{}, errors.New("audit stopped")
+				attempts := make(chan attempt, 1)
+				restore := stubLaunchSyncWorker(t, func(
+					_ context.Context, _ config.Config, request syncWorkerRequest, _ func(workerLine),
+				) (workerResult, error) {
+					attempts <- attempt{time.Since(started), request.Mode}
+					return workerResult{}, errors.New("worker stopped")
 				})
 				defer restore()
-				engineCfg := workerEngineConfig(cfg)
-				engineCfg.OnStartupReconciled = func(sync.SyncStats, error) { attempted <- time.Since(started) }
-				engine := sync.NewEngine(ctx, database, engineCfg)
+				engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 				defer engine.Close()
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
 					startArchiveAudit(ctx, cfg, engine, database, lock, nil, nil)
 				}()
-				want := archiveAuditInterval
-				if stale {
-					want = archiveAuditRetryInitial
-				}
-				assert.Equal(t, want, <-attempted)
+				assert.Equal(t, tc.want, <-attempts)
 				cancel()
 				<-done
 			})
