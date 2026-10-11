@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -1253,28 +1254,32 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 }
 
 func TestWaitForBackgroundServeReadyTimesOutWithoutNewStartupProgress(t *testing.T) {
-	setStartProbeTickForTest(t, 5*time.Millisecond)
-	dir := runtimeTestDir(t)
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	data, err := json.Marshal(startupState{
-		PID:       321,
-		StartedAt: time.Now(),
-		Phase:     "initial sync",
-		Detail:    "1/2 sessions",
-		UpdatedAt: time.Now(),
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
-	MarkDaemonStarting(dir)
-	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	synctest.Test(t, func(t *testing.T) {
+		setStartProbeTickForTest(t, 5*time.Millisecond)
+		dir := runtimeTestDir(t)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		data, err := json.Marshal(startupState{
+			PID:       321,
+			StartedAt: time.Now(),
+			Phase:     "initial sync",
+			Detail:    "1/2 sessions",
+			UpdatedAt: time.Now(),
+		})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
+		MarkDaemonStarting(dir)
+		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
-	startedAt := time.Now()
-	rt, err := waitForBackgroundServeReady(
-		t.Context(), dir, "", make(chan error), 40*time.Millisecond,
-	)
-	require.NoError(t, err)
-	assert.Nil(t, rt)
-	assert.Less(t, time.Since(startedAt), 200*time.Millisecond)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		startedAt := time.Now()
+		rt, err := waitForBackgroundServeReady(
+			ctx, dir, "", make(chan error), 40*time.Millisecond,
+		)
+		require.NoError(t, err)
+		assert.Nil(t, rt)
+		assert.Equal(t, 40*time.Millisecond, time.Since(startedAt))
+	})
 }
 
 func TestWaitForBackgroundServeReadyReprobesRuntimeAtTimeout(t *testing.T) {
