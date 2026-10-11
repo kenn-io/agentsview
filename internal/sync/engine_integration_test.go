@@ -741,60 +741,6 @@ func TestSyncEngineOpenCodeFamilySQLiteDropsUnchangedContainerSessions(
 	}
 }
 
-func TestSyncEngineOpenCodeSQLiteDropsOnlyUnchangedContainerRows(
-	t *testing.T,
-) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/opencode-app")
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "changed-session",
-		1779012000000, 1779012030000,
-		"original prompt", "original answer",
-	)
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "stable-session",
-		1779012100000, 1779012130000,
-		"stable prompt", "stable answer",
-	)
-
-	stats := env.engine.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
-	assert.Equal(t, 2, stats.Synced, "first sync writes both sessions")
-
-	changedID := "opencode:changed-session"
-	stableID := "opencode:stable-session"
-	before := openCodeLocalModifiedSnapshot(
-		t, env.db, changedID, stableID,
-	)
-
-	oc.updateSessionTime(t, "changed-session", 1779015630000)
-	oc.replaceTextContent(
-		t, "changed-session",
-		"changed prompt", "changed answer",
-		1779015600000,
-	)
-
-	stats = env.engine.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
-	assert.Equal(t, 1, stats.Synced,
-		"only the changed OpenCode SQLite row should be rewritten")
-	assertMessageContent(
-		t, env.db, changedID, "changed prompt", "changed answer",
-	)
-
-	after := openCodeLocalModifiedSnapshot(
-		t, env.db, changedID, stableID,
-	)
-	assert.NotEqual(t, before[changedID], after[changedID],
-		"changed row must be rewritten")
-	assert.Equal(t, before[stableID], after[stableID],
-		"unchanged sibling row must not be rewritten")
-	assertMessageContent(
-		t, env.db, stableID, "stable prompt", "stable answer",
-	)
-}
-
 func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 	t *testing.T,
 ) {
@@ -859,48 +805,6 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 		"changed SQLite child content must change the storage fingerprint")
 	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
 		"successful rewrite must bump local_modified_at for push windows")
-}
-
-// TestSyncEngineOpenCodeSQLiteUntouchedContainerSkipsReparse pins the
-// container-level freshness gate: when the shared opencode.db file is
-// completely untouched since the last verified sync, its sessions must be
-// counted as skipped (no per-session fingerprint, no parse) instead of
-// being re-parsed and dropped as unchanged after the fact.
-func TestSyncEngineOpenCodeSQLiteUntouchedContainerSkipsReparse(
-	t *testing.T,
-) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj", "/home/user/code/opencode-app")
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "gated-one",
-		1779012000000, 1779012030000,
-		"first prompt", "first answer",
-	)
-	seedOpenCodeSQLiteTextSession(
-		t, oc, "proj", "gated-two",
-		1779012100000, 1779012130000,
-		"second prompt", "second answer",
-	)
-
-	stats := env.engine.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
-	assert.Equal(t, 2, stats.Synced, "first sync writes both sessions")
-
-	stats = env.engine.SyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
-	assert.Equal(t, 0, stats.Synced,
-		"untouched container must not re-emit sessions")
-	assert.Equal(t, 2, stats.Skipped,
-		"untouched container sessions must skip before parse")
-	assertMessageContent(
-		t, env.db, "opencode:gated-one",
-		"first prompt", "first answer",
-	)
-	assertMessageContent(
-		t, env.db, "opencode:gated-two",
-		"second prompt", "second answer",
-	)
 }
 
 // TestSyncEngineOpenCodeSQLiteWALOnlyChangeStillReemits pins the gate's WAL

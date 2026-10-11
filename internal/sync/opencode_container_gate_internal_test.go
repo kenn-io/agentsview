@@ -1592,9 +1592,9 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 		raw                                string
 		version                            int
 		want                               bool
-		wantNil, rollback                  bool
+		wantNil, publish                   bool
 	}{
-		{name: "watermark publication rejects later rollback", age: time.Minute, want: true, rollback: true},
+		{name: "watermark publication preserves deadline", age: time.Minute, want: true, publish: true},
 		{name: "force parse overrides a current stamp", wantNil: true, setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceParse = true }},
 		{name: "force full parse overrides a current stamp", wantNil: true, setup: func(e *Engine, _ *parser.SQLiteContainerState) { e.forceFullParse = true }},
 		{name: "expired", age: openCodeContainerDigestVerifyInterval},
@@ -1690,10 +1690,8 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 			if tc.want {
 				assert.True(t, now.Add(-tc.age).Equal(e.digestVerifiedAt[path]))
 			}
-			if tc.rollback {
-				before, err := os.ReadFile(path)
-				require.NoError(t, err)
-				_, err = container.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('advanced')")
+			if tc.publish {
+				_, err := container.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('advanced')")
 				require.NoError(t, err)
 				advanced, ok := parser.StatSQLiteContainerState(path)
 				require.True(t, ok)
@@ -1706,18 +1704,6 @@ func TestOpenCodePersistedVerificationAdmission(t *testing.T) {
 				assert.Equal(t, advanced, e.trustedSQLiteContainers[path].state)
 				assert.Equal(t, advanced, record.State)
 				assert.True(t, now.Add(-tc.age).Equal(record.VerifiedAt), "watermark passes preserve the original deadline")
-				require.NoError(t, container.Close())
-				require.NoError(t, os.WriteFile(path, before, 0o600))
-				restored, ok := parser.StatSQLiteContainerState(path)
-				require.True(t, ok)
-				require.Equal(t, advanced.DBInode, restored.DBInode)
-				require.Less(t, restored.DBChangeCounter, advanced.DBChangeCounter)
-				for _, engine := range []*Engine{e, {db: archive}} {
-					writeContainerVerification(t, archive, path, record.State, record.VerifiedAt)
-					states[path] = restored
-					require.NoError(t, engine.prepareSQLiteContainerVerification(t.Context(), states))
-					assert.False(t, engine.sqliteContainerListsWatermarkOnly(states)(path), "rollback refuses prior authority in current and restarted workers")
-				}
 			}
 		})
 	}
@@ -1863,42 +1849,6 @@ func TestOpenCodePartialVerificationRejectsRollbackAcrossRestart(t *testing.T) {
 	}
 }
 
-func TestOpenCodeClassificationFailureRevokesVerification(t *testing.T) {
-	for _, restart := range []bool{false, true} {
-		t.Run(strconv.FormatBool(restart), func(t *testing.T) {
-			path, conn := seededCompositeContainerTestDB(t)
-			archive := openTestDB(t)
-			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
-			require.True(t, ok)
-			var calls atomic.Int32
-			blocked := ""
-			cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {filepath.Dir(path)}}, Machine: "local", ProviderFactories: []parser.ProviderFactory{openCodeMemberFailureFactory{factory, &calls, &blocked}}}
-			engine := NewEngine(t.Context(), archive, cfg)
-			t.Cleanup(engine.Close)
-			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-			original, found := readContainerVerification(t, archive, path)
-			require.True(t, found)
-			blocked = path
-			require.Error(t, engine.SyncPathsContext(t.Context(), []string{path}))
-			record, found := readContainerVerification(t, archive, path)
-			require.True(t, found)
-			assert.Zero(t, record.State)
-			assert.True(t, original.VerifiedAt.Equal(record.VerifiedAt))
-			_, err := conn.ExecContext(t.Context(), `UPDATE part SET data=replace(data, 'original', 'repaired'), time_updated=time_updated+1`)
-			require.NoError(t, err)
-			blocked = ""
-			if restart {
-				engine = NewEngine(t.Context(), archive, cfg)
-				t.Cleanup(engine.Close)
-			}
-			require.Equal(t, 1, engine.SyncAllSince(t.Context(), time.Now(), nil).Synced)
-			matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "repaired")
-			require.NoError(t, err)
-			assert.Len(t, matches, 2)
-		})
-	}
-}
-
 func (p openCodeMemberFailureProvider) Parse(ctx context.Context, req parser.ParseRequest) (parser.ParseOutcome, error) {
 	if req.Source.DisplayPath == *p.blockedPath {
 		var data any
@@ -1909,9 +1859,10 @@ func (p openCodeMemberFailureProvider) Parse(ctx context.Context, req parser.Par
 }
 
 func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
-	for _, mode := range []string{"failed first partial pass", "preparation write fails", "initial capture fails", "virtual member", "planned virtual member"} {
+	for _, mode := range []string{"failed first partial pass", "preparation write fails", "initial capture fails", "virtual member", "planned virtual member", "classification failure", "restarted classification failure"} {
 		t.Run(mode, func(t *testing.T) {
 			preparationFails := mode == "preparation write fails"
+			classificationFails := mode == "classification failure" || mode == "restarted classification failure"
 			path, conn := seededCompositeContainerTestDB(t)
 			archive := openTestDB(t)
 			factory, ok := parser.ProviderFactoryByType(parser.AgentOpenCode)
@@ -1927,8 +1878,10 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 			require.Equal(t, 1, first.SyncAll(t.Context(), nil).Synced)
 			original, found := readContainerVerification(t, archive, path)
 			require.True(t, found)
-			_, err := conn.ExecContext(t.Context(), `UPDATE session SET time_updated=time_updated+1; UPDATE part SET data=replace(data, 'original', 'modified'), time_updated=time_updated+1 WHERE id='part-user'`)
-			require.NoError(t, err)
+			if !classificationFails {
+				_, err := conn.ExecContext(t.Context(), `UPDATE session SET time_updated=time_updated+1; UPDATE part SET data=replace(data, 'original', 'modified'), time_updated=time_updated+1 WHERE id='part-user'`)
+				require.NoError(t, err)
+			}
 			if preparationFails {
 				raw, err := sql.Open("sqlite3", archive.Path())
 				require.NoError(t, err)
@@ -1937,6 +1890,9 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 				require.NoError(t, err)
 			}
 			blockedPath = path + "#ses-1"
+			if classificationFails {
+				blockedPath = path
+			}
 			fresh := NewEngine(t.Context(), archive, cfg)
 			t.Cleanup(fresh.Close)
 			calls.Store(0)
@@ -1977,6 +1933,19 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 				return
 			}
 			assert.Equal(t, parser.SQLiteContainerState{}, record.State, "first partial failure cannot leave durable authority")
+			if classificationFails {
+				_, err := conn.ExecContext(t.Context(), `UPDATE part SET data=replace(data, 'original', 'repaired'), time_updated=time_updated+1`)
+				require.NoError(t, err)
+				blockedPath = ""
+				if mode == "restarted classification failure" {
+					fresh = NewEngine(t.Context(), archive, cfg)
+					t.Cleanup(fresh.Close)
+				}
+				require.Equal(t, 1, fresh.SyncAllSince(t.Context(), time.Now(), nil).Synced)
+				matches, err := archive.SearchSession(t.Context(), "opencode:ses-1", "repaired")
+				require.NoError(t, err)
+				assert.Len(t, matches, 2)
+			}
 		})
 	}
 }

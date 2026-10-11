@@ -6,136 +6,50 @@ import (
 	"testing"
 
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/sync"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestOpenCodeSessionPrefilterIssue1557 reproduces the archive-wide child scan
-// caused by one changed session in a changed OpenCode container.
 func TestOpenCodeSessionPrefilterIssue1557(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	seedOpenCodeSQLiteTextSessions(t, oc, 123, 1779012030000)
-	first := env.engine.SyncAll(t.Context(), nil)
-	require.False(t, first.Aborted, "initial sync aborted: %+v", first)
-	require.Equal(t, 123, first.Synced)
-
-	oc.updateSessionTime(t, "ses00000", 1779015630000)
-	oc.replaceTextContent(
-		t, "ses00000", "changed prompt", "changed answer",
-		1779015600000,
-	)
-
-	scansBefore := parser.OpenCodeContainerChildScans()
-	lookupsBefore := parser.OpenCodeSessionChildLookups()
-	restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
-	t.Cleanup(restarted.Close)
-	second := restarted.SyncAll(t.Context(), nil)
-	scans := parser.OpenCodeContainerChildScans() - scansBefore
-	lookups := parser.OpenCodeSessionChildLookups() - lookupsBefore
-
-	require.False(t, second.Aborted, "changed sync aborted: %+v", second)
-	assert.Equal(t, 1, second.Synced,
-		"the changed session must be archived")
-	assert.Equal(t, 122, second.Skipped,
-		"unchanged sessions must be skipped")
-	assert.Zero(t, scans,
-		"a changed full pass must not scan every child row")
-	assert.Equal(t, int64(1), lookups,
-		"a fresh worker resolves only the changed session's child digest")
-	assertMessageContent(
-		t, env.db, "opencode:ses00000", "changed prompt", "changed answer",
-	)
-}
-
-func TestOpenCodeChangedContainerStreamRehydratesWatermarkMetadata(
-	t *testing.T,
-) {
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	seedOpenCodeSQLiteTextSessions(t, oc, 123, 1779012030000)
-	require.Equal(t, 123, env.engine.SyncAll(t.Context(), nil).Synced)
-
-	oc.updateSessionTime(t, "ses00000", 1779015630000)
-	oc.replaceTextContent(
-		t, "ses00000", "changed prompt", "changed answer", 1779015600000,
-	)
-	scansBefore := parser.OpenCodeContainerChildScans()
-	lookupsBefore := parser.OpenCodeSessionChildLookups()
-	require.NoError(t, env.engine.ReconcileProviderRoots(
-		t.Context(), parser.AgentOpenCode, []string{env.opencodeDir},
-	))
-	stats := env.engine.LastSyncStats()
-	assert.Equal(t, 1, stats.Synced)
-	assert.Equal(t, 122, stats.Skipped)
-	assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore,
-		"streamed changed-container reconciliation must avoid a full child scan")
-	assert.LessOrEqual(t, parser.OpenCodeSessionChildLookups()-lookupsBefore, int64(1),
-		"only the changed streamed member may resolve its child digest")
-	assertMessageContent(
-		t, env.db, "opencode:ses00000", "changed prompt", "changed answer",
-	)
-}
-
-// TestOpenCodeSharedContainerChangeIsPerSessionBounded pins the "background
-// sync work is bounded by the changed batch, not total archive size" rule for
-// shared SQLite containers.
-//
-// Every session in an OpenCode root lives in one physical opencode.db. Stamping
-// that container's size onto each session's fingerprint made any single
-// session's write change every other session's fingerprint, so one changed
-// session re-parsed the whole root — on a production container that is
-// thousands of sessions re-read out of a multi-GB database every time the
-// watcher fires. The per-session composite mtime (session, project, and child
-// message/part time_updated) replaces it, so a one-session change must leave
-// every other session skipped regardless of how many there are.
-func TestOpenCodeSharedContainerChangeIsPerSessionBounded(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-
-	rewritten := make(map[int]int)
-	childScans := make(map[int]int64)
-	childLookups := make(map[int]int64)
 	for _, n := range []int{20, 200} {
-		t.Run(fmt.Sprintf("sessions_%d", n), func(t *testing.T) {
-			env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-			oc := createOpenCodeDB(t, env.opencodeDir)
-			seedOpenCodeSQLiteTextSessions(t, oc, n, 1779012030000)
-			require.Equal(t, n,
-				env.engine.SyncAll(t.Context(), nil).Synced)
-
-			// Change exactly one session. This also grows the shared
-			// container file, which is precisely the signal that used to
-			// invalidate every other session in it.
-			oc.updateSessionTime(t, "ses00000", 1779015630000)
-			oc.replaceTextContent(
-				t, "ses00000", "changed prompt", "changed answer",
-				1779015600000,
-			)
-
-			scansBefore := parser.OpenCodeContainerChildScans()
-			lookupsBefore := parser.OpenCodeSessionChildLookups()
-			stats := env.engine.SyncAll(t.Context(), nil)
-			childScans[n] = parser.OpenCodeContainerChildScans() - scansBefore
-			childLookups[n] = parser.OpenCodeSessionChildLookups() - lookupsBefore
-			require.False(t, stats.Aborted, "sync aborted: %+v", stats)
-			assert.Equal(t, 1, stats.Synced,
-				"only the changed session may be rewritten")
-			assert.Equal(t, n-1, stats.Skipped,
-				"every unchanged session in the shared container must skip")
-			rewritten[n] = stats.Synced
-		})
+		for _, streamed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("sessions_%d/streamed_%t", n, streamed), func(t *testing.T) {
+				env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+				oc := createOpenCodeDB(t, env.opencodeDir)
+				seedOpenCodeSQLiteTextSessions(t, oc, n, 1779012030000)
+				require.Equal(t, n, env.engine.SyncAll(t.Context(), nil).Synced)
+				before := openCodeLocalModifiedSnapshot(t, env.db, "opencode:ses00001")
+				oc.updateSessionTime(t, "ses00000", 1779015630000)
+				oc.replaceTextContent(t, "ses00000", "changed prompt", "changed answer", 1779015600000)
+				restarted := newOpenCodeFamilySQLiteTestEngine(t, parser.AgentOpenCode, env.opencodeDir, env.db)
+				t.Cleanup(restarted.Close)
+				scansBefore := parser.OpenCodeContainerChildScans()
+				lookupsBefore := parser.OpenCodeSessionChildLookups()
+				var stats sync.SyncStats
+				if streamed {
+					require.NoError(t, restarted.ReconcileProviderRoots(t.Context(), parser.AgentOpenCode, []string{env.opencodeDir}))
+					stats = restarted.LastSyncStats()
+				} else {
+					stats = restarted.SyncAll(t.Context(), nil)
+				}
+				require.False(t, stats.Aborted)
+				assert.Equal(t, 1, stats.Synced)
+				assert.Equal(t, n-1, stats.Skipped)
+				assert.Zero(t, parser.OpenCodeContainerChildScans()-scansBefore)
+				lookups := parser.OpenCodeSessionChildLookups() - lookupsBefore
+				if streamed {
+					assert.LessOrEqual(t, lookups, int64(1))
+				} else {
+					assert.Equal(t, int64(1), lookups)
+				}
+				assertMessageContent(t, env.db, "opencode:ses00000", "changed prompt", "changed answer")
+				assert.Equal(t, before, openCodeLocalModifiedSnapshot(t, env.db, "opencode:ses00001"))
+				assertMessageContent(t, env.db, "opencode:ses00001", "prompt", "answer")
+			})
+		}
 	}
-
-	assert.Equal(t, rewritten[20], rewritten[200],
-		"sessions rewritten for one changed session must not grow with "+
-			"container size")
-	assert.Equal(t, childScans[20], childScans[200],
-		"container child scans must not grow with container size")
-	assert.Equal(t, childLookups[20], childLookups[200],
-		"changed-session child lookups must not grow with container size")
 }
 
 // TestOpenCodeWatcherEventIsWatermarkBounded pins the same rule for the
