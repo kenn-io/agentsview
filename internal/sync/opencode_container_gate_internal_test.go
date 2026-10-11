@@ -1756,11 +1756,12 @@ func TestOpenCodePartialVerificationRejectsRollbackAcrossRestart(t *testing.T) {
 			require.NoError(t, err)
 			_, err = conn.ExecContext(t.Context(), `UPDATE session SET time_updated=time_updated+1000 WHERE id='ses-1'; UPDATE part SET data=replace(data, 'original', 'modified'), time_updated=time_updated+1 WHERE session_id='ses-1'`)
 			require.NoError(t, err)
-			if mode == "partial" {
+			switch mode {
+			case "partial":
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path + "#ses-1"}))
-			} else if mode == "single session" {
+			case "single session":
 				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "opencode:ses-1"))
-			} else {
+			default:
 				stats := engine.SyncAllSince(t.Context(), time.UnixMilli(1779099999500), nil)
 				require.True(t, stats.ProcessingComplete())
 			}
