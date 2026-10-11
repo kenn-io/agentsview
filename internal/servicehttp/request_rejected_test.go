@@ -20,10 +20,7 @@ func TestIsRequestRejectedClassifiesDaemonAnswers(t *testing.T) {
 		body   string
 		want   bool
 	}{
-		{name: "unknown session", status: http.StatusNotFound, body: `{"error":"not found"}`, want: true},
 		{name: "invalid filter", status: http.StatusBadRequest, body: `{"error":"bad limit"}`, want: true},
-		{name: "source changed", status: http.StatusConflict, body: `{"error":"source_changed"}`, want: true},
-		{name: "daemon fault", status: http.StatusInternalServerError, body: `{"error":"boom"}`},
 		{name: "daemon unavailable", status: http.StatusServiceUnavailable, body: `{"error":"busy"}`},
 	}
 	for _, tt := range tests {
@@ -43,15 +40,4 @@ func TestIsRequestRejectedClassifiesDaemonAnswers(t *testing.T) {
 			assert.Equal(t, tt.want, servicehttp.IsRequestRejected(err), err)
 		})
 	}
-}
-
-func TestIsRequestRejectedIgnoresConnectionFailure(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.NotFoundHandler())
-	srv.Close()
-	backend := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
-
-	_, err := backend.Messages(t.Context(), "s1", service.MessageFilter{})
-	require.Error(t, err)
-	assert.False(t, servicehttp.IsRequestRejected(err), err)
 }

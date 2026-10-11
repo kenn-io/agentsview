@@ -283,6 +283,7 @@ func newMCPCacheDaemon(
 }
 
 func sessionTotalHandler(t *testing.T, total int) http.HandlerFunc {
+	t.Helper()
 	return func(w http.ResponseWriter, _ *http.Request) {
 		assert.NoError(t, json.MarshalWrite(w, service.SessionList{Total: total}))
 	}
@@ -316,12 +317,14 @@ func TestMCPDaemonServiceDiscoversEachCallWithoutVerifiedDaemon(t *testing.T) {
 		{
 			name: "read-only daemon",
 			setup: func(t *testing.T, dir, host string, port int) {
+				t.Helper()
 				writeDaemonRuntimeForTest(t, dir, host, port, "test", true)
 			},
 		},
 		{
 			name: "startup fallback",
 			setup: func(t *testing.T, dir, host string, port int) {
+				t.Helper()
 				created, ok := processCreateTimeMillis(os.Getpid())
 				require.True(t, ok)
 				writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(created, 10))
@@ -330,6 +333,7 @@ func TestMCPDaemonServiceDiscoversEachCallWithoutVerifiedDaemon(t *testing.T) {
 		{
 			name: "unknown process identity",
 			setup: func(t *testing.T, dir, host string, port int) {
+				t.Helper()
 				writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
 				path, err := runtimeStore(dir).Path(os.Getpid())
 				require.NoError(t, err)
