@@ -158,10 +158,12 @@ func TestOpenCodeHiddenChildChangesAreDetected(t *testing.T) {
 		{
 			name: "child replacement above the watermark", fingerprint: true,
 			seed: func(t *testing.T, oc *openCodeTestDB) {
+				t.Helper()
 				oc.addProject(t, "proj", "/workspace/app")
 				seedOpenCodeSQLiteTextSession(t, oc, "proj", "probe", 1779012000000, 1779012030000, "original prompt", "original answer")
 			},
 			mutate: func(t *testing.T, oc *openCodeTestDB) {
+				t.Helper()
 				oc.replaceTextContent(t, "probe", "changed prompt", "changed answer", 1779012600000)
 			},
 		},
