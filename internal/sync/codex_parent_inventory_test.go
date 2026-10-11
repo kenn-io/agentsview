@@ -67,7 +67,7 @@ func TestCodexParentInventoryBatchRetriesUnchangedForks(t *testing.T) {
 			)), 0o600))
 			pagePath := filepath.Join(root, "rollout-2026-09-01T10-01-00-"+parent+"_"+page+".jsonl")
 			pageContent := testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON(page, "/work/project", "user", timestamp),
+				testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
 				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "page-turn", timestamp),
 			)
 			delegate, ok := parser.ProviderFactoryByType(parser.AgentCodex)
