@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -902,11 +903,11 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 					assert.False(t, ok, "%s: stamp must be cleared", label)
 				case wantPrior:
 					require.True(t, ok, "%s: stamp must survive", label)
-					assert.Equal(t, prior, got,
+					assert.True(t, prior.Equal(got),
 						"%s: stamp must keep its prior age", label)
 				case wantFresh:
 					require.True(t, ok, "%s: stamp must be written", label)
-					assert.Equal(t, now, got,
+					assert.True(t, now.Equal(got),
 						"%s: stamp must be refreshed", label)
 				}
 			}
@@ -1848,7 +1849,7 @@ func (p openCodeMemberFailureProvider) SourcesForChangedPath(ctx context.Context
 }
 
 func TestOpenCodePartialVerificationRejectsRollbackAcrossRestart(t *testing.T) {
-	for _, mode := range []string{"partial", "cutoff"} {
+	for _, mode := range []string{"partial", "cutoff", "single session"} {
 		t.Run(mode, func(t *testing.T) {
 			path, conn := seededCompositeContainerTestDB(t)
 			_, err := conn.ExecContext(t.Context(), `INSERT INTO session SELECT 'ses-2', project_id, parent_id, title, time_created, time_updated FROM session;
@@ -1868,11 +1869,16 @@ func TestOpenCodePartialVerificationRejectsRollbackAcrossRestart(t *testing.T) {
 			require.NoError(t, err)
 			if mode == "partial" {
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path + "#ses-1"}))
+			} else if mode == "single session" {
+				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), "opencode:ses-1"))
 			} else {
 				stats := engine.SyncAllSince(t.Context(), time.UnixMilli(1779099999500), nil)
 				require.True(t, stats.ProcessingComplete())
 			}
-			require.Equal(t, 1, engine.LastSyncStats().Synced)
+			messages, err := archive.GetAllMessages(t.Context(), "opencode:ses-1")
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			require.Equal(t, "modified prompt", messages[0].Content)
 			advanced, ok := parser.StatSQLiteContainerState(path)
 			require.True(t, ok)
 			require.Greater(t, advanced.DBChangeCounter, original.State.DBChangeCounter)
@@ -1889,7 +1895,7 @@ func TestOpenCodePartialVerificationRejectsRollbackAcrossRestart(t *testing.T) {
 			restarted := NewEngine(t.Context(), archive, cfg)
 			t.Cleanup(restarted.Close)
 			require.Equal(t, 1, restarted.SyncAllSince(t.Context(), time.Now(), nil).Synced)
-			messages, err := archive.GetAllMessages(t.Context(), "opencode:ses-1")
+			messages, err = archive.GetAllMessages(t.Context(), "opencode:ses-1")
 			require.NoError(t, err)
 			require.Len(t, messages, 2)
 			assert.Equal(t, "original prompt", messages[0].Content)
@@ -1907,9 +1913,9 @@ func (p openCodeMemberFailureProvider) Parse(ctx context.Context, req parser.Par
 }
 
 func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
-	for _, mode := range []string{"failed first partial pass", "preparation write fails", "initial capture fails", "planned virtual member", "classification failure", "restarted classification failure"} {
+	for _, mode := range []string{"failed first partial pass", "preparation write fails", "initial capture fails", "planned virtual member", "classification failure", "restarted classification failure", "single session failure", "single session preparation write fails"} {
 		t.Run(mode, func(t *testing.T) {
-			preparationFails := mode == "preparation write fails"
+			preparationFails := mode == "preparation write fails" || mode == "single session preparation write fails"
 			classificationFails := mode == "classification failure" || mode == "restarted classification failure"
 			path, conn := seededCompositeContainerTestDB(t)
 			archive := openTestDB(t)
@@ -1965,6 +1971,8 @@ func TestOpenCodePartialPassConsumesVerification(t *testing.T) {
 					Agent: parser.AgentOpenCode, Path: blockedPath, ProviderSource: &source, ProviderProcess: true,
 				}}}, ChangedPathSyncOptions{}, nil)
 				require.Error(t, err)
+			} else if strings.HasPrefix(mode, "single session") {
+				require.Error(t, fresh.SyncSingleSessionContext(t.Context(), "opencode:ses-1"))
 			} else {
 				changed := path
 				require.Error(t, fresh.SyncPathsContext(t.Context(), []string{changed}))

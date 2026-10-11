@@ -20839,6 +20839,17 @@ func (e *Engine) SyncSingleSessionContext(
 		// Other providers determine their project during parsing.
 	}
 
+	if _, _, ok := sqliteContainerSourceForFile(file); ok {
+		states := e.captureSQLiteContainerStates([]string{file.Path})
+		if err := e.prepareSQLiteContainerVerification(ctx, states); err != nil {
+			return err
+		}
+		e.beginSQLiteContainerPass([]parser.DiscoveredFile{file}, states)
+		defer func() {
+			e.noteSQLiteContainerResult(file.Path, err == nil && ctx.Err() == nil)
+			e.finishSQLiteContainerPass(ctx, true, false)
+		}()
+	}
 	preserved, sessionsChanged, err = e.processAndWriteSessionFile(
 		ctx, file, sessionID,
 	)
