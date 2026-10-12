@@ -255,13 +255,16 @@ build must never replace a newer one between them. The lock is a numbered
 `prepared_usage_rebuild_lock_<n>` table. A push takes it by creating the table
 with the next number, which only one push can do, and drops the older ones; the
 newest stays after release so numbers never repeat. A lock held for over an hour
-belongs to a killed push, and the next push takes the next number. A push whose
-lock was taken that way discards its build instead of publishing it. A push that
-finds the lock held, or finds the stored stamp equal to the current one, skips
-its rebuild. Build and probe tables that a killed push left behind are dropped
-once they are an hour old. Without the view, nothing refreshes on a schedule,
-and a failed rebuild waits for the next push. Because `prepared_usage` is then
-not a refreshable view's target, native backups include its rows without
+belongs to a killed push, and the next push takes the next number. Only a lock
+holder creates a build table, so a new holder drops every build table it finds:
+a publish still reading one finishes before the drop returns, and a later one
+fails without its table, so older rows never land after newer ones. A push that
+finds a newer lock before publishing discards its build. A push that finds the
+lock held, or finds the stored stamp equal to the current one, skips its
+rebuild. Probe tables that a killed push left behind are dropped once they are
+an hour old. Without the view, nothing refreshes on a schedule, and a failed
+rebuild waits for the next push. Because `prepared_usage` is then not a
+refreshable view's target, native backups include its rows without
 `backup_data_from_refreshable_materialized_view_targets`.
 
 **Currency is proven per read.** A read uses prepared rows only when every

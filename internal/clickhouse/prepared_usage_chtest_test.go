@@ -731,11 +731,22 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{usagePriceRoundID}, state.changed)
 	// A lock held for more than an hour belongs to a killed push. The next
-	// push takes over, and one released lock table remains.
+	// push takes over, and one released lock table remains. The holder that
+	// overran may have passed its ownership check with its build filled;
+	// after the takeover it can no longer publish the older rows.
 	_, err = store.DB().ExecContext(ctx, fmt.Sprintf(
 		"ALTER TABLE prepared_usage_rebuild_lock_100 MODIFY COMMENT 'held %d'", now-2*60*60))
 	require.NoError(t, err)
+	for _, stmt := range []string{
+		"CREATE TABLE prepared_usage_build_overran AS prepared_usage",
+		"INSERT INTO prepared_usage_build_overran SELECT * FROM prepared_usage",
+	} {
+		_, err = store.DB().ExecContext(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
 	push()
+	_, err = store.DB().ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM prepared_usage_build_overran")
+	require.True(t, isMissingTableError(err), "the overran holder must not publish after a takeover: %v", err)
 	var locks []string
 	rows, err := store.DB().QueryContext(ctx, `SELECT name || ' ' || comment FROM system.tables
 		WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_rebuild_lock')`)

@@ -547,7 +547,9 @@ func dropPreparedUsageView(ctx context.Context, conn *sql.DB) error {
 // database, so it renames files in the same metadata directory a refresh
 // does; where the tables keep their data does not matter.
 func chExchangeSupported(ctx context.Context, conn *sql.DB) (supported bool, err error) {
-	if err := dropAbandonedTables(ctx, conn, "^"+chExchangeProbePrefix+"[a-z0-9]+_[ab]$"); err != nil {
+	// A probe takes milliseconds, so probe tables an hour old belong to a
+	// push that was killed during one.
+	if err := dropTables(ctx, conn, "^"+chExchangeProbePrefix+"[a-z0-9]+_[ab]$", time.Hour); err != nil {
 		return false, err
 	}
 	probe := chExchangeProbePrefix + strings.ToLower(rand.Text())
@@ -615,9 +617,13 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 	if err != nil || !acquired {
 		return err
 	}
-	// A build table older than the lock timeout belongs to a push that was
-	// killed, or that lost its lock and will not publish.
-	if err := dropAbandonedTables(ctx, conn, "^"+chPreparedUsageBuildPrefix+"[a-z0-9]+$"); err != nil {
+	// Only a lock holder creates a build table, so every build table left
+	// belongs to a push that was killed or lost its lock. Dropping them
+	// fences that push off: a publish already reading its build table holds
+	// it, so DROP ... SYNC waits for the publish to finish before this
+	// rebuild starts, and a later publish fails for lack of its table. Either
+	// way the older rows never land after this rebuild's rows.
+	if err := dropTables(ctx, conn, "^"+chPreparedUsageBuildPrefix+"[a-z0-9]+$", 0); err != nil {
 		return err
 	}
 	current, err := preparedUsageCurrent(ctx, conn)
@@ -642,9 +648,9 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 		return fmt.Errorf("filling prepared usage build table: %w", err)
 	}
 	// A push that held the lock past its timeout may have lost it to a newer
-	// rebuild, which must not be overwritten. The check and the replacement
-	// are separate statements, so this fences off a rebuild that overran by
-	// the timeout, not one that loses the lock in the instant between them.
+	// rebuild before it created its build table, which that rebuild's drop
+	// then missed. If the takeover comes after this check instead, the new
+	// holder drops the build table and fences the publish off.
 	superseded, err := rebuildLockSuperseded(ctx, conn, generation)
 	if err != nil {
 		return err
@@ -767,32 +773,31 @@ func preparedUsageCurrent(ctx context.Context, conn *sql.DB) (bool, error) {
 	return stored == live, nil
 }
 
-// dropAbandonedTables drops the tables whose names match pattern and whose
-// metadata is older than the rebuild lock timeout: tables a push stopped by
-// a crash or a kill left behind. Callers pass patterns that match only names
-// they make, which need no quoting.
-func dropAbandonedTables(ctx context.Context, conn *sql.DB, pattern string) error {
+// dropTables drops the tables whose names match pattern and whose metadata
+// is at least minAge old. Callers pass patterns that match only names they
+// make, which need no quoting.
+func dropTables(ctx context.Context, conn *sql.DB, pattern string, minAge time.Duration) error {
 	rows, err := conn.QueryContext(ctx, `SELECT name FROM system.tables
 		WHERE database = currentDatabase() AND match(name, ?)
-		AND metadata_modification_time < now() - toIntervalSecond(?)`, pattern, int64(chRebuildLockTimeout/time.Second))
+		AND metadata_modification_time <= now() - toIntervalSecond(?)`, pattern, int64(minAge/time.Second))
 	if err != nil {
-		return fmt.Errorf("listing abandoned tables: %w", err)
+		return fmt.Errorf("listing tables to drop: %w", err)
 	}
 	defer rows.Close()
-	var abandoned []string
+	var names []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return fmt.Errorf("scanning abandoned table: %w", err)
+			return fmt.Errorf("scanning table to drop: %w", err)
 		}
-		abandoned = append(abandoned, name)
+		names = append(names, name)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("listing abandoned tables: %w", err)
+		return fmt.Errorf("listing tables to drop: %w", err)
 	}
-	for _, name := range abandoned {
+	for _, name := range names {
 		if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS "+name+" SYNC"); err != nil {
-			return fmt.Errorf("dropping abandoned table %s: %w", name, err)
+			return fmt.Errorf("dropping table %s: %w", name, err)
 		}
 	}
 	return nil
