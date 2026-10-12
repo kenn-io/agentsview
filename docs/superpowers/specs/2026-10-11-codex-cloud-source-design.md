@@ -919,23 +919,37 @@ records every token update, and leaves when the turn ends.
   a non-integral value is a protocol change that stops live capture for the
   account. Synthetic fixtures use the `.0` form.
 - Each token update becomes a token usage record with the time it was observed,
-  `turnId`, `total`, `last`, `modelContextWindow`, and the current model: the
-  model from the `thread/resume` response, updated by `model/rerouted`. The
-  monitor buffers records in memory and appends them to the thread's mirror
-  file as one frame at most once a minute, when the turn completes, and when
-  it leaves the thread. A crash loses at most the buffered records; because
-  totals are cumulative, the next update recovers the counts. Writes from the
-  monitor and the fetcher to one mirror file are serialized.
+  a join ID (a random ID per joined connection, also written on that
+  connection's turn-completion records), `turnId`, `total`, `last`,
+  `modelContextWindow`, and the current model: the model from the
+  `thread/resume` response, updated by `model/rerouted`. The monitor buffers
+  records in memory and appends them to the thread's mirror file as one frame
+  at most once a minute, when the turn completes, and when it leaves the
+  thread. A crash loses at most the buffered records; because totals are
+  cumulative, the next update recovers the counts. Writes from the monitor and
+  the fetcher to one mirror file are serialized.
 - The provider turns these records into usage events (`ParsedUsageEvent`, stored
   in `usage_events`, declared through the `AggregateUsageEvents` capability),
   the same kind other agents produce, so they reach replicas, the DuckDB
   mirror, and cost views without new tables.
-- Each event leaves `MessageOrdinal` nil. An event with an ordinal is priced as
-  one request (`FromEvent` in `internal/usagefacts/fact.go`), which would pick
-  a price band from the thread-total increase.
-- Each event has `Source: "session"`, the value other providers use for
-  thread-level totals. The engine skips `session` events when it derives a
-  session's own token fields (`internal/ingest/prepare.go`), so, as Cline
+- Price bands: GPT-6 models cost more above 272,000 input tokens per request
+  (`docs/internal/session-format-sources.md`), and bands apply only to
+  request-scoped events (`CostForTokensScoped` in
+  `internal/export/pricing.go`). When an update's `total` increase equals its
+  `last` exactly, the increase is one model call: the provider emits it as a
+  request-scoped event (a new source the builder adds to
+  `SourceIsRequestScoped` in `internal/usagefacts`), so the band applies. Any
+  other increase spans several calls (the first record of a join, or updates
+  missed while not joined) and is emitted as a thread-level event with
+  `MessageOrdinal` nil, priced at base rates, because a band chosen from a
+  multi-call increase would be wrong. Session token fields count each increase
+  once, whichever kind of event carries it. A multi-call increase can
+  understate the cost of long-context calls inside it; that is a documented
+  limit.
+- Each thread-level event has `Source: "session"`, the value other providers use
+  for thread-level totals; a request-scoped event holds one call, well under
+  the 2,000,000 clamp below. The engine skips `session` events when it derives
+  a session's own token fields (`internal/ingest/prepare.go`), so, as Cline
   does, the provider sets `TotalOutputTokens` to the sum of output increases
   across baselines and `PeakContextTokens` from the largest `last` input
   count, with their `Has*` flags. Events with other sources are clamped at
@@ -986,18 +1000,19 @@ records every token update, and leaves when the turn ends.
   finished turns not captured. A finished turn is captured when the mirror
   holds a token record for a later turn of the same thread (totals are
   cumulative and cover every earlier turn), or a token record for that turn
-  followed by that turn's turn-completion record from the same join. A
-  turn-completion record alone does not count: with `excludeTurns: true` the
-  server sends no token update on join for a thread with
-  `historyMode: "legacy"`, as every probed thread had (`thread_processor.rs`,
-  the cheap resume path), so a join that lands after a turn's last model call
-  sees `turn/completed` with no counts. No clock comparison is involved.
-  Otherwise, for example after the 6-hour leave or a dropped connection with
-  no later capture, it is not captured. A token record that arrives right
-  after the resume response (open-source Codex replays one for paginated-history
-  threads) is recorded like any other, even when its `turnId` names an
-  earlier, finished turn. It stores both in the new per-session table (see Plan
-  usage), so every backend can query them.
+  followed by that turn's turn-completion record with the same join ID. A join
+  that drops and a later join that sees only `turn/completed` carry different
+  join IDs, so the gap shows as not captured. A turn-completion record alone
+  does not count: with `excludeTurns: true` the server sends no token update
+  on join for a thread with `historyMode: "legacy"`, as every probed thread
+  had (`thread_processor.rs`, the cheap resume path), so a join that lands
+  after a turn's last model call sees `turn/completed` with no counts. No
+  clock comparison is involved. Otherwise, for example after the 6-hour leave
+  or a dropped connection with no later capture, it is not captured. A token
+  record that arrives right after the resume response (open-source Codex
+  replays one for paginated-history threads) is recorded like any other, even
+  when its `turnId` names an earlier, finished turn. It stores both in the new
+  per-session table (see Plan usage), so every backend can query them.
 - Session details say "Tokens captured live, as of T". When finished turns are
   not captured, they add "N turns not captured", followed by "plan usage
   covers them" only when the session has a usable plan usage row.
@@ -1059,8 +1074,11 @@ one group.
 - Each pass sends at most 5 requests, shared by pending roots and the refresh
   set: pending roots first, oldest first, then refresh roots by next attempt.
   Requests follow the desktop app's limits: at most 100 groups and 1,000
-  thread IDs each. Roots left over wait for the next pass, so a large backlog
-  never makes one pass unbounded.
+  thread IDs each. A root whose group alone has more than 1,000 IDs is never
+  sent; it settles at once with a "too many sub-agent threads for OpenAI's
+  usage report" outcome record, and session details show that message. Roots
+  left over wait for the next pass, so a large backlog never makes one pass
+  unbounded.
 - A group sends the root's `thread_id` and `created_at`, and its descendants in
   `descendant_thread_ids`.
 - HTTP 429 from `query_v2` pauses plan usage for that account for the
@@ -1119,7 +1137,11 @@ coverage fields, and records the root as its parser session ID
 root is a session reference: on a hosted hub, where sessions are stored under
 raw projection IDs (`internal/postgres/raw_projection.go`), it is mapped to the
 public ID like other session references
-(`internal/postgres/hosted_session_ids.go`), so the parent link works there. The
+(`internal/postgres/hosted_session_ids.go`). That mapper resolves a reference
+only through a link edge, and `writeRawLinks`
+(`internal/postgres/raw_projection_links.go`) writes only the direct parent and
+tool targets, so for a grandchild the root would be cleared. The builder adds a
+usage-root link kind there, so the root reference resolves at any depth. The
 same per-session table holds the live-capture coverage described under Live
 token capture, so descendants and sessions without plan usage still have a row.
 The builder chooses the table and follows `docs/agents/storage.md`, including
@@ -1206,15 +1228,17 @@ same outcome kind and time, and the same totals.
   `wss://codex-cloud-backend.chatgpt.com/`), `usage_endpoint` (default
   `https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2`), and
   `live_tokens` (default `true`). The endpoint overrides exist for tests and
-  future moves. They must use `wss` and `https`; `ws` and `http` are accepted
-  only for loopback addresses, so a typo can never send the token in clear
-  text. Neither client follows redirects: `coder/websocket` and Go's
-  `http.Client` follow them by default, a redirect would carry the subprotocol
-  (and with it the token) or the `Authorization` header to a URL the allowlist
-  never checked, so both set `CheckRedirect` to refuse, and any 3xx reply is
-  "Handshake refused or reply not understood". `live_tokens = false` turns off
-  live token capture, and with it the only request that touches a thread on
-  OpenAI's side.
+  future moves. A non-loopback override must name a host that is
+  `chatgpt.com`, `openai.com`, or a subdomain of either, so a misconfigured
+  override can never send the real token to another host. They must use `wss`
+  and `https`; `ws` and `http` are accepted only for loopback addresses, so a
+  typo can never send the token in clear text. Neither client follows
+  redirects: `coder/websocket` and Go's `http.Client` follow them by default,
+  a redirect would carry the subprotocol (and with it the token) or the
+  `Authorization` header to a URL the allowlist never checked, so both set
+  `CheckRedirect` to refuse, and any 3xx reply is "Handshake refused or reply
+  not understood". `live_tokens = false` turns off live token capture, and
+  with it the only request that touches a thread on OpenAI's side.
 - The shared `[agents.<id>]` reader (`applyAgentDirectories`) parses only `dirs`
   and `homes` and silently ignores other keys. It must skip the
   `[agents.codex-cloud]` table entirely, because it would otherwise treat
@@ -1609,6 +1633,22 @@ double-count its tokens.
 - Login key: two homes signed in as the same user, one whose ID token carries
   `chatgpt_account_user_id` and one whose older token does not, get one key
   and sync once.
+
+- Price bands: an update whose `total` increase equals `last` with more than
+  272,000 input tokens is priced at the band rate; the first record of a join
+  is priced at base rates; session output totals count each increase once.
+
+- Coverage join IDs: join A records a token update and drops, join B sees only
+  `turn/completed`; that turn counts as not captured.
+
+- Endpoint overrides: an `https` override on a host outside `chatgpt.com` and
+  `openai.com` is a config error and no request is sent.
+
+- Oversized usage group: a root with 1,001 descendant IDs is never sent and
+  settles with the "too many sub-agent threads" outcome.
+
+- Hosted usage root: a grandchild's usage root resolves to the root's public ID
+  on a hosted hub.
 
 - Token canary: with a unique fake access token and ID token, a run of sync,
   plan usage, a warm join, a refresh request, and 401, 403, and 5xx failures
