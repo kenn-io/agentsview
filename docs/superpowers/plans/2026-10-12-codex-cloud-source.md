@@ -730,18 +730,20 @@ Spec: Incremental sync (listings, steps 1 to 5, watermarks).
 - Produces:
 
     - `type ListedThread struct { ID string; UpdatedAt int64; Status string; Raw jsontext.Value }`
-    - `func listChanged(ctx context.Context, c *Conn, id ListingID, watermark int64, stored func(threadID string) (int64, bool)) (changed []ListedThread, newest int64, err error)`:
+    - `type ListingResult struct { Changed []ListedThread; Active []string; Newest int64 }`
+      and `var Listings` (the four `ListingID`s in pass order).
+    - `func listChanged(ctx context.Context, c *Conn, id ListingID, watermark int64, stored func(threadID string) (int64, bool, error)) (ListingResult, error)`:
       `sortKey: "updated_at"`, `sortDirection: "desc"`, `modelProviders: []`,
       `sourceKinds` only for sub-agent listings, `archived` per listing; stops
       after the first page holding a thread strictly older than the watermark; a
-      page whose `updatedAt` increases between rows returns a
-      `CatProtocolChange` error.
-    - `func buildSelection(now time.Time, acct *AccountState, changed []ListedThread, active map[string]bool) []string`
-      unions changed threads, unfinished entries not stalled, `active` threads
-      not stalled, check-again flags, due retry entries; removes retry entries
-      not yet due; each thread once.
+      row whose `updatedAt` is newer than the row before it, on the same page or
+      the previous one, returns an `ErrProtocolChange` error.
+    - `func buildSelection(now time.Time, acct *AccountState, changed []ListedThread, active []string) []string`
+      unions changed threads, listed-active and unfinished threads not stalled,
+      check-again flags, due retry entries; removes retry entries not yet due;
+      each thread once.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
     - `TestListingParams`: default listings send no `sourceKinds`; sub-agent
       listings send exactly the five sub-agent kinds; every call sends
@@ -753,13 +755,13 @@ Spec: Incremental sync (listings, steps 1 to 5, watermarks).
     - `TestSelectionUnionOnce` (a thread in two listings and the unfinished set is
       selected once), `TestSelectionBackoff`, `TestStallOverridesActive`.
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): list and select changed threads"`
 
 ### Task 13: Fetch a thread, resume point, durable append
