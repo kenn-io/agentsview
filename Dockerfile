@@ -13,7 +13,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM golang:1.27.0-bookworm AS build
+FROM golang:1.27.2-bookworm AS build
 
 ENV GOPROXY="https://proxy.golang.org|direct"
 

@@ -109,7 +109,7 @@ standalone install directory first in `PATH` to select it.
 
 ### Build from source
 
-Requires Go 1.27+ with CGO and Node.js 24.11+:
+Requires Go 1.27.2+ with CGO and Node.js 24.11+:
 
 ```bash
 git clone https://github.com/kenn-io/agentsview.git
