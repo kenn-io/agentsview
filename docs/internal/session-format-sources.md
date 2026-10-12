@@ -3247,7 +3247,9 @@ schemas keep their existing ordering behavior.
   tool-result content. Source changes cannot remove an archived call or change
   its result just because the message count remains equal. Previously unanswered
   calls can acquire results while call identity, arguments and existing nonempty
-  results remain protected. Answer text and reasoning are compared separately,
+  results remain protected. Comparison preserves the retained message sequence
+  independently of source ordinals, so filtering a newly completed tool-result
+  carrier does not block an already archived follow-up. Answer text and reasoning are compared separately,
   so previously absent reasoning can be added without replacing the answer;
   existing reasoning remains protected. Image projection applies to both sides during
   comparison, including ordinary sync under the offload policy.

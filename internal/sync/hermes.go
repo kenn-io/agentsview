@@ -89,21 +89,21 @@ func (e *Engine) validateHermesReplacement(ctx context.Context, result parser.Pa
 }
 
 func hermesReplacementIncludesArchived(incoming, archived []db.Message) bool {
-	byOrdinal := make(map[int]hermesArchivedMessage, len(incoming))
-	for _, message := range incoming {
-		byOrdinal[message.Ordinal] = normalizedHermesMessage(message)
-	}
+	next := 0
 	for _, message := range archived {
-		candidate, ok := byOrdinal[message.Ordinal]
-		if !ok || !candidate.includes(normalizedHermesMessage(message)) {
+		previous := normalizedHermesMessage(message)
+		for next < len(incoming) && !normalizedHermesMessage(incoming[next]).includes(previous) {
+			next++
+		}
+		if next == len(incoming) {
 			return false
 		}
+		next++
 	}
 	return true
 }
 
 type hermesArchivedMessage struct {
-	Ordinal      int
 	Role         string
 	Content      string
 	ThinkingText string
@@ -170,7 +170,7 @@ func normalizedHermesMessage(message db.Message) hermesArchivedMessage {
 		}
 	}
 	return hermesArchivedMessage{
-		Ordinal: message.Ordinal, Role: message.Role, Content: message.Content,
+		Role: message.Role, Content: message.Content,
 		ThinkingText: message.ThinkingText, IsSystem: message.IsSystem,
 		ToolCalls: message.ToolCalls,
 	}

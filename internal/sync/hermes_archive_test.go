@@ -2067,7 +2067,7 @@ func TestHermesUnreadableMemberPreservesArchivedUsage(t *testing.T) {
 
 func TestHermesFallbackPreservesIndividualToolsAndResults(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
-		for _, change := range []string{"unchanged", "complete result", "remove call", "change result", "large argument"} {
+		for _, change := range []string{"unchanged", "complete result", "complete before follow-up", "remove call", "change result", "large argument"} {
 			t.Run(string(agent)+"/"+change, func(t *testing.T) {
 				root := t.TempDir()
 				stateDB := writeHermesArchiveStateDB(t, root)
@@ -2095,8 +2095,11 @@ func TestHermesFallbackPreservesIndividualToolsAndResults(t *testing.T) {
 				content := `{"role":"user","content":"same","timestamp":"2026-05-14T14:00:10Z"}` + "\n" +
 					`{"role":"assistant","content":"tools","timestamp":"2026-05-14T14:00:11Z","tool_calls":` + originalCalls + "}\n" +
 					`{"role":"tool","content":"old result","tool_call_id":"call-a","timestamp":"2026-05-14T14:00:12Z"}` + "\n"
-				if change == "complete result" {
+				if strings.HasPrefix(change, "complete") {
 					content = strings.Join(strings.Split(content, "\n")[:2], "\n") + "\n"
+				}
+				if change == "complete before follow-up" {
+					content += `{"role":"user","content":"archived follow-up","timestamp":"2026-05-14T14:00:13Z"}` + "\n"
 				}
 				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 				database := dbtest.OpenTestDB(t)
@@ -2113,13 +2116,29 @@ func TestHermesFallbackPreservesIndividualToolsAndResults(t *testing.T) {
 				require.NoError(t, err)
 				_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (session_id, role, content, timestamp) VALUES ('child', 'user', 'same', 1778767210); INSERT INTO messages (session_id, role, content, tool_calls, timestamp) VALUES ('child', 'assistant', 'tools', ?, 1778767211); INSERT INTO messages (session_id, role, content, tool_call_id, timestamp) VALUES ('child', 'tool', ?, 'call-a', 1778767212)`, calls, result)
 				require.NoError(t, err)
+				if change == "complete before follow-up" {
+					_, err = conn.ExecContext(t.Context(), `INSERT INTO messages(session_id,role,content,timestamp) VALUES('child','user','archived follow-up',1778767213),('child','assistant','new response',1778767214); UPDATE sessions SET input_tokens=100, output_tokens=73`)
+					require.NoError(t, err)
+				}
 				require.NoError(t, conn.Close())
 				require.NoError(t, os.Remove(path))
 				engine.SyncAll(t.Context(), nil)
 				after, err := database.GetAllMessages(t.Context(), id)
 				require.NoError(t, err)
-				if change == "complete result" {
-					require.Len(t, after, 2)
+				if strings.HasPrefix(change, "complete") {
+					wantContents := []string{"same", "tools"}
+					if change == "complete before follow-up" {
+						wantContents = append(wantContents, "archived follow-up", "new response")
+						usage, err := database.GetUsageEvents(t.Context(), id)
+						require.NoError(t, err)
+						assert.Equal(t, []db.UsageEvent{{ID: 1, SessionID: id, Source: "session", Model: "gpt-5.4", InputTokens: 100, OutputTokens: 73, OccurredAt: "2026-05-14T14:10:00Z", DedupKey: "session:hermes:child"}}, usage)
+					}
+					contents := make([]string, len(after))
+					for i, message := range after {
+						contents[i] = message.Content
+					}
+					assert.Equal(t, wantContents, contents)
+					require.GreaterOrEqual(t, len(after), 2)
 					require.Len(t, after[1].ToolCalls, 1)
 					call := after[1].ToolCalls[0]
 					type completedCall struct {
