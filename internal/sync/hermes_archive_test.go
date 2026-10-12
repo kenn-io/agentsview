@@ -1743,3 +1743,40 @@ func TestHermesSingleSessionResyncUsesTranscriptAfterDatabaseFailure(t *testing.
 		}
 	}
 }
+
+func TestHermesTranscriptOnlySnapshotEventPrefersJSONL(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, layout := range []string{"flat", "sessions child"} {
+			t.Run(string(agent)+"/"+layout, func(t *testing.T) {
+				root := t.TempDir()
+				dir := root
+				if layout == "sessions child" {
+					dir = filepath.Join(root, "sessions")
+				}
+				writeHermesTranscriptFile(t, dir, "standalone")
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+				})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":standalone"
+				before, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, before)
+				messagesBefore, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				path := filepath.Join(dir, "session_standalone.json")
+				require.NoError(t, os.WriteFile(path, []byte(`{"messages":[{"role":"user","content":"stale prompt"}]}`), 0o600))
+				require.NoError(t, engine.syncPathsContext(t.Context(), []string{path}, false))
+				after, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				after.LocalModifiedAt = before.LocalModifiedAt
+				assert.Equal(t, before, after)
+				messagesAfter, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				assert.Equal(t, messagesBefore, messagesAfter)
+			})
+		}
+	}
+}

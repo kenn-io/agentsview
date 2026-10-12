@@ -1163,6 +1163,14 @@ func (s hermesSourceSet) changedPathSources(
 			return []SourceRef{source}, lookupErr
 		}
 	}
+	transcriptRoot := hermesTranscriptRoot(root)
+	if hermesPathInTranscriptDir(transcriptRoot, path) {
+		selected := findHermesSourceFile(transcriptRoot, HermesSessionID(filepath.Base(path)))
+		if selected != "" {
+			source, _ := s.transcriptSourceRef(root, selected)
+			return []SourceRef{source}, nil
+		}
+	}
 	source, ok := s.sourceForChangedPath(root, path, allowMissing)
 	if !ok {
 		return nil, nil
