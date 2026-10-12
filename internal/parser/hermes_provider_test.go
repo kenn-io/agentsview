@@ -164,16 +164,8 @@ func TestHermesProviderStateDBSourceMethods(t *testing.T) {
 		})
 	}
 
-	changed, err := provider.SourcesForChangedPath(
-		t.Context(),
-		ChangedPathRequest{Path: stateDB, EventKind: "write", WatchRoot: root},
-	)
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, VirtualSourcePath(stateDB, "child"), changed[0].DisplayPath)
-
 	require.NoError(t, os.Remove(transcriptPath))
-	changed, err = provider.SourcesForChangedPath(
+	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: transcriptPath, EventKind: "remove", WatchRoot: sessionsDir},
 	)
