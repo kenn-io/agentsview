@@ -1170,6 +1170,18 @@ describe("hasVisibleSegments", () => {
     expect(hasVisibleSegments(m, onlyCode)).toBe(true);
   });
 
+  it("fx tool results follow tool visibility", () => {
+    const m = makeMsg({
+      session_id: "fx:session-a",
+      content: "",
+      has_tool_use: true,
+      tool_calls: [{ tool_name: "read_file", category: "Read", input_json: "{}", result_content: "File contents", result_content_length: 13 }],
+    });
+    expect(hasVisibleSegments(m, allBlocksVisible)).toBe(true);
+    const noTool = visibilityFrom(new Set(["user", "assistant", "thinking", "code"]));
+    expect(hasVisibleSegments(m, noTool)).toBe(false);
+  });
+
   it("everything hidden returns false for all segment types", () => {
     const m = makeMsg({
       content: "Hello\n[Thinking]\nhmm\n[Bash]\n$ ls",

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -39,8 +38,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	if err != nil {
 		return nil, nil, err
 	}
-	if metadata.Get("schema_version").Int() != 4 {
-		slog.DebugContext(ctx, "skipping fx session: unsupported session.json schema_version", "schema_version", metadata.Get("schema_version").Int())
+	if fxUnsupportedSchema(metadata, 4, 4, "session.json") {
 		return nil, nil, nil
 	}
 	rawID := filepath.Base(dir)
@@ -66,7 +64,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	if err != nil {
 		return nil, nil, err
 	}
-	if fxUnsupportedSchema(owner, 1, "owner.json") {
+	if fxUnsupportedSchema(owner, 0, 1, "owner.json") {
 		return nil, nil, nil
 	}
 	if parent := owner.Get("parent_id").Str; IsValidSessionID(parent) {
@@ -90,17 +88,15 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 			continue
 		}
 		if !gjson.Valid(line) {
-			session.MalformedLines++
-			continue
+			return nil, nil, fmt.Errorf("invalid fx events.jsonl JSON frame")
 		}
 		frame := gjson.Parse(line)
-		if fxUnsupportedSchema(frame, 3, "events.jsonl frame") {
+		if fxUnsupportedSchema(frame, 0, 3, "events.jsonl frame") {
 			return nil, nil, nil
 		}
 		event := frame.Get("event")
 		if !event.IsObject() {
-			session.MalformedLines++
-			continue
+			return nil, nil, fmt.Errorf("invalid fx events.jsonl frame: event must be an object")
 		}
 		timestamp := time.UnixMilli(frame.Get("timestamp_ms").Int()).UTC()
 		if timestamp.After(latestEventTime) {
@@ -133,7 +129,15 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	if err != nil {
 		return nil, nil, err
 	}
-	if fxUnsupportedSchema(usage, 1, "usage-v2.json") || fxUnsupportedSchema(usage.Get("snapshot"), 3, "usage-v2.json snapshot") {
+	if usage.Raw != "" {
+		if !usage.IsObject() || !usage.Get("snapshot").IsObject() || !usage.Get("snapshot.models").IsArray() {
+			return nil, nil, fmt.Errorf("invalid fx usage-v2.json: expected an object with snapshot object and models array")
+		}
+		if id := usage.Get("session_id"); id.Exists() && id.Str != rawID {
+			return nil, nil, fmt.Errorf("fx usage-v2.json session_id does not match session folder")
+		}
+	}
+	if fxUnsupportedSchema(usage, 0, 1, "usage-v2.json") || fxUnsupportedSchema(usage.Get("snapshot"), 0, 3, "usage-v2.json snapshot") {
 		return nil, nil, nil
 	}
 	session.UsageEvents = fxUsageEvents(session, usage, latestEventTime)
@@ -142,12 +146,16 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	return session, messages, nil
 }
 
-func fxUnsupportedSchema(value gjson.Result, supported int64, source string) bool {
+func fxUnsupportedSchema(value gjson.Result, minimum, maximum int64, source string) bool {
 	version := value.Get("schema_version").Int()
-	if version <= supported {
+	if version >= minimum && version <= maximum {
 		return false
 	}
-	log.Printf("skipping fx session: unsupported %s schema_version %d (maximum %d)", source, version, supported)
+	direction, supported := "newer", maximum
+	if version < minimum {
+		direction, supported = "older", minimum
+	}
+	log.Printf("skipping fx session: unsupported %s schema_version %d is %s than supported %d", source, version, direction, supported)
 	return true
 }
 
@@ -170,15 +178,20 @@ func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time
 			Category:  NormalizeToolCategory(call.Get("tool_name").Str),
 		}
 		if tool.ToolName == "skill" {
+			tool.SkillName = gjson.Get(tool.InputJSON, "name").Str
 			location := gjson.Get(tool.InputJSON, "location").Str
-			if location != "" {
+			if tool.SkillName == "" && location != "" {
 				tool.SkillName = path.Base(location)
 			}
 		}
 		if len(*messages) == 0 || (*messages)[len(*messages)-1].Role != RoleAssistant {
 			model, provider := metadata.Get("model").Str, metadata.Get("provider").Str
 			for i := len(*messages) - 1; i >= 0; i-- {
-				if previous := (*messages)[i]; previous.Role == RoleAssistant {
+				previous := (*messages)[i]
+				if previous.Role == RoleUser && len(previous.ToolResults) == 0 {
+					break
+				}
+				if previous.Role == RoleAssistant {
 					model, provider = previous.Model, previous.ProviderID
 					break
 				}
@@ -191,7 +204,7 @@ func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time
 		return
 	case event.Get("tool_result").Exists():
 		result := event.Get("tool_result")
-		message.Role, message.Content = RoleTool, result.Get("preview").Str
+		message.Role = RoleUser
 		status := ""
 		switch result.Get("status").Str {
 		case "success":
@@ -199,7 +212,7 @@ func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time
 		case "failure":
 			status = "errored"
 		}
-		message.ToolResults = []ParsedToolResult{{ToolUseID: result.Get("call_id").Str, Status: status, ContentLength: len(message.Content), ContentRaw: result.Get("preview").Raw}}
+		message.ToolResults = []ParsedToolResult{{ToolUseID: result.Get("call_id").Str, Source: "tool_result", Status: status, ContentLength: len(result.Get("preview").Str), ContentRaw: result.Get("preview").Raw}}
 	case event.Get("context_checkpoint").Exists():
 		message.Role, message.Content = RoleSystem, event.Get("context_checkpoint.summary").Str
 		message.IsSystem, message.IsCompactBoundary = true, true
@@ -226,14 +239,18 @@ func fxUsageEvents(session *ParsedSession, usage gjson.Result, latestEventTime t
 		cacheRead := max(0, int(model.Get("cache_read_tokens").Int()))
 		cacheWrite := max(0, int(model.Get("cache_write_tokens").Int()))
 		name := model.Get("model").Str
+		provider, normalized, prefixed := strings.Cut(name, "/")
+		if !prefixed {
+			provider, normalized = "", name
+		}
 		events = append(events, ParsedUsageEvent{
-			SessionID: session.ID, Source: "session", Model: name,
+			SessionID: session.ID, Source: "session", Model: normalized, ProviderID: provider,
 			DedupKey:             "session:" + session.ID + "|" + name,
 			OccurredAt:           timeString(latestEventTime, session.StartedAt),
 			InputTokens:          max(0, int(model.Get("input_tokens").Int())-cacheRead-cacheWrite),
-			OutputTokens:         max(0, int(model.Get("output_tokens").Int())),
+			OutputTokens:         int(model.Get("output_tokens").Int()),
 			CacheReadInputTokens: cacheRead, CacheCreationInputTokens: cacheWrite,
-			ReasoningTokens: max(0, int(model.Get("reasoning_tokens").Int())),
+			ReasoningTokens: int(model.Get("reasoning_tokens").Int()),
 		})
 	}
 	return events

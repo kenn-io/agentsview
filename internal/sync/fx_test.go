@@ -39,10 +39,15 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 	assert.Equal(t, 1, session.UserMessageCount)
 	messages, err := database.GetAllMessages(t.Context(), "fx:sync-session")
 	require.NoError(t, err)
-	require.Len(t, messages, 3)
+	require.Len(t, messages, 2)
+	assert.Equal(t, 2, session.MessageCount)
 	require.Len(t, messages[1].ToolCalls, 1)
 	assert.Equal(t, "read-1", messages[1].ToolCalls[0].ToolUseID)
 	assert.Equal(t, "File contents", messages[1].ToolCalls[0].ResultContent)
+	require.Len(t, messages[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "completed", messages[1].ToolCalls[0].ResultEvents[0].Status)
+	assert.Equal(t, "tool_result", messages[1].ToolCalls[0].ResultEvents[0].Source)
+	assert.Equal(t, "File contents", messages[1].ToolCalls[0].ResultEvents[0].Content)
 
 	require.NoError(t, os.WriteFile(metadataPath, []byte(`{"schema_version":4,"title":"After rename","created_at_ms":1735689601000,"updated_at_ms":1735689602000}`), 0o600))
 	engine.SyncAll(t.Context(), nil)
@@ -74,6 +79,33 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 	assert.Equal(t, 15, usage[0].InputTokens)
 	assert.Equal(t, 5, usage[0].CacheReadInputTokens)
 	assert.Equal(t, 7, usage[0].OutputTokens)
+
+	transcript, err := os.ReadFile(path)
+	require.NoError(t, err)
+	usagePath := filepath.Join(dir, "usage-v2.json")
+	usageData, err := os.ReadFile(usagePath)
+	require.NoError(t, err)
+	for _, test := range []struct{ name, file, content string }{
+		{"broken frame", path, string(transcript) + "{broken\n"},
+		{"null usage", usagePath, `null`},
+		{"missing snapshot", usagePath, `{}`},
+		{"wrong session", usagePath, `{"session_id":"other-session","snapshot":{"models":[]}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, os.WriteFile(test.file, []byte(test.content), 0o600))
+			engine.SyncAll(t.Context(), nil)
+			stored, err := database.GetAllMessages(t.Context(), "fx:sync-session")
+			require.NoError(t, err)
+			require.Len(t, stored, 2)
+			assert.Equal(t, "Answer", stored[1].Content)
+			storedUsage, err := database.GetUsageEvents(t.Context(), "fx:sync-session")
+			require.NoError(t, err)
+			require.Len(t, storedUsage, 1)
+			assert.Equal(t, 7, storedUsage[0].OutputTokens)
+			require.NoError(t, os.WriteFile(path, transcript, 0o600))
+			require.NoError(t, os.WriteFile(usagePath, usageData, 0o600))
+		})
+	}
 
 	require.NoError(t, os.WriteFile(path, []byte(`{"seq":6,"timestamp_ms":1735689604000,"event":{"context_checkpoint":{"summary":"Compacted work"}}}`+"\n"), 0o600))
 	engine.SyncAll(t.Context(), nil)
@@ -121,4 +153,41 @@ func TestFxSyncChildBeforeParent(t *testing.T) {
 	assert.Equal(t, string(parser.RelSubagent), child.RelationshipType)
 	require.NotNil(t, child.FirstMessage)
 	assert.Equal(t, "Child task", *child.FirstMessage)
+}
+
+func TestFxSyncFixtureToolResults(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "parent-session")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	for _, name := range []string{"session.json", "events.jsonl", "usage-v2.json"} {
+		data, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "fx", "parent-session", name))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
+	}
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentFx: {root}},
+		Machine:   "local", DisableSignalRecomputation: true,
+	})
+	t.Cleanup(engine.Close)
+	engine.SyncAllForceParse(t.Context(), nil)
+	messages, err := database.GetAllMessages(t.Context(), "fx:parent-session")
+	require.NoError(t, err)
+	require.Len(t, messages, 11)
+	var statuses []string
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			require.Len(t, call.ResultEvents, 1)
+			statuses = append(statuses, call.ResultEvents[0].Status)
+			assert.Equal(t, "tool_result", call.ResultEvents[0].Source)
+		}
+	}
+	assert.Equal(t, []string{"completed", "completed", "errored", "completed", "completed", "completed", "completed", "completed", "completed", "errored"}, statuses)
+	usage, err := database.GetUsageEvents(t.Context(), "fx:parent-session")
+	require.NoError(t, err)
+	require.Len(t, usage, 1)
+	assert.Equal(t, "gpt-6.1-sol", usage[0].Model)
+	assert.Equal(t, "codex", usage[0].ProviderID)
+	assert.Equal(t, usage[0].Model, messages[1].Model)
+	assert.Equal(t, usage[0].ProviderID, messages[1].ProviderID)
 }

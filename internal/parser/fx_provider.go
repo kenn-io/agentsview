@@ -26,7 +26,7 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 				return filepath.Dir(path) == filepath.Clean(root) && IsValidSessionID(filepath.Base(path))
 			}),
 			WithIncludePath(func(_, path string) bool {
-				return filepath.Base(path) == "events.jsonl" && IsValidSessionID(filepath.Base(filepath.Dir(path)))
+				return filepath.Base(path) == "events.jsonl"
 			}),
 			WithSessionIDFromPath(func(_, path string) string { return filepath.Base(filepath.Dir(path)) }),
 			WithProjectHint(func(_, _ string) string { return "" }),

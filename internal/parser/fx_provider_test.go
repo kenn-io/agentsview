@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFxProviderDiscoveryAndCompanions(t *testing.T) {
+func TestFxProviderDiscoveryAndParse(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "session-a", "events.jsonl")
 	writeSourceFile(t, path, `{"event":{"user":{"text":"Hello"}}}`)
@@ -25,29 +25,9 @@ func TestFxProviderDiscoveryAndCompanions(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, path, located.DisplayPath)
-	companions := []struct{ path, content string }{
-		{filepath.Join(root, "session-a", "session.json"), `{"schema_version":4,"title":"Before","workspace_root":"/tmp/demo","created_at_ms":1000,"updated_at_ms":2000}`},
-		{filepath.Join(root, "session-a", "usage-v2.json"), `{"snapshot":{"models":[{"model":"test","input_tokens":5,"output_tokens":2}]}}`},
-		{filepath.Join(root, "session-a", "subagent", "owner.json"), `{"parent_id":"parent-a"}`},
-	}
-	for _, companion := range companions {
-		t.Run(filepath.Base(companion.path), func(t *testing.T) {
-			before, err := provider.Fingerprint(t.Context(), sources[0])
-			require.NoError(t, err)
-			writeSourceFile(t, companion.path, companion.content)
-			after, err := provider.Fingerprint(t.Context(), sources[0])
-			require.NoError(t, err)
-			assert.NotEqual(t, before, after)
-			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: companion.path})
-			require.NoError(t, err)
-			require.Len(t, changed, 1)
-			assert.Equal(t, path, changed[0].DisplayPath)
-			writeSourceFile(t, companion.path, companion.content+"\n")
-			updated, err := provider.Fingerprint(t.Context(), sources[0])
-			require.NoError(t, err)
-			assert.NotEqual(t, after, updated)
-		})
-	}
+	writeSourceFile(t, filepath.Join(root, "session-a", "session.json"), `{"schema_version":4,"title":"Before","workspace_root":"/tmp/demo","created_at_ms":1000,"updated_at_ms":2000}`)
+	writeSourceFile(t, filepath.Join(root, "session-a", "usage-v2.json"), `{"snapshot":{"models":[{"model":"test","input_tokens":5,"output_tokens":2}]}}`)
+	writeSourceFile(t, filepath.Join(root, "session-a", "subagent", "owner.json"), `{"parent_id":"parent-a"}`)
 	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], Fingerprint: fingerprint})

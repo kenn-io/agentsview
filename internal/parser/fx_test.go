@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func TestFxFixture(t *testing.T) {
 	assert.Equal(t, "Read widget.go, rename helper to buildWidget there and in README.md, then print the output of seq 1 3000 using the shell.", session.FirstMessage)
 	require.Len(t, messages, 21)
 	assert.Equal(t, len(messages), session.MessageCount)
-	wantRoles := []RoleType{RoleUser, RoleAssistant, RoleTool, RoleTool, RoleTool, RoleAssistant, RoleTool, RoleTool, RoleAssistant, RoleTool, RoleAssistant, RoleUser, RoleAssistant, RoleTool, RoleAssistant, RoleTool, RoleAssistant, RoleTool, RoleAssistant, RoleTool, RoleAssistant}
+	wantRoles := []RoleType{RoleUser, RoleAssistant, RoleUser, RoleUser, RoleUser, RoleAssistant, RoleUser, RoleUser, RoleAssistant, RoleUser, RoleAssistant, RoleUser, RoleAssistant, RoleUser, RoleAssistant, RoleUser, RoleAssistant, RoleUser, RoleAssistant, RoleUser, RoleAssistant}
 	// Consecutive tool calls share prose; calls after a result need an empty assistant row.
 	var roles []RoleType
 	var calls []ParsedToolCall
@@ -58,14 +59,16 @@ func TestFxFixture(t *testing.T) {
 			status = "errored"
 		}
 		assert.Equal(t, status, results[i].Status)
+		assert.Equal(t, "tool_result", results[i].Source)
 		assert.NotEmpty(t, results[i].ContentRaw)
 	}
 	assert.Equal(t, `{"path":"widget.go"}`, calls[0].InputJSON)
-	assert.Contains(t, messages[2].Content, "func helper()")
+	assert.Empty(t, messages[2].Content)
+	assert.Contains(t, results[0].ContentRaw, "func helper()")
 	assert.Contains(t, messages[len(messages)-1].Content, "Added `func Name()")
 	require.Len(t, session.UsageEvents, 1)
 	assert.Equal(t, ParsedUsageEvent{
-		SessionID: "fx:parent-session", Source: "session", Model: "codex/gpt-6.1-sol",
+		SessionID: "fx:parent-session", Source: "session", Model: "gpt-6.1-sol", ProviderID: "codex",
 		InputTokens: 29248, OutputTokens: 647, CacheReadInputTokens: 72320,
 		OccurredAt: "2026-10-12T21:07:21.056Z", DedupKey: "session:fx:parent-session|codex/gpt-6.1-sol",
 	}, session.UsageEvents[0])
@@ -90,7 +93,6 @@ func TestFxEventVariants(t *testing.T) {
 	writeSourceFile(t, filePath, `{"schema_version":3,"seq":1,"timestamp_ms":2000,"event":{"steering":{"text":"Use the skill"}}}
 {"seq":2,"timestamp_ms":3000,"event":{"tool_call":{"call_id":"skill-1","tool_name":"skill","arguments_json":"{\"location\":\"/tmp/demo/skills/review\"}"}}}
 {"seq":3,"timestamp_ms":4000,"event":{"tool_result":{"call_id":"skill-1","status":"success","preview":"loaded"}}}
-{broken
 {"seq":4,"timestamp_ms":5000,"event":{"context_checkpoint":{"summary":"Earlier work"}}}
 {"seq":5,"timestamp_ms":6000,"event":{"interrupted":{"partial_text":"Half an answer"}}}
 {"seq":6,"timestamp_ms":7000,"event":{"interrupted":{"partial_text":null}}}
@@ -101,7 +103,7 @@ func TestFxEventVariants(t *testing.T) {
 	session, messages, err := parseFxSession(t.Context(), filePath, "local")
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	assert.Equal(t, 1, session.MalformedLines)
+	assert.Zero(t, session.MalformedLines)
 	assert.Equal(t, 1, session.UserMessageCount)
 	assert.Equal(t, "Use the skill", session.SessionName)
 	assert.Equal(t, time.UnixMilli(9000).UTC(), session.EndedAt)
@@ -176,10 +178,14 @@ func TestFxToolCallsKeepAssistantModel(t *testing.T) {
 {"event":{"tool_call":{"call_id":"three","tool_name":"read_file","arguments_json":"{}"}}}
 {"event":{"tool_result":{"call_id":"three","status":"success","preview":"read"}}}
 {"event":{"tool_call":{"call_id":"four","tool_name":"shell","arguments_json":"{}"}}}
+{"event":{"user":{"text":"New turn"}}}
+{"event":{"tool_call":{"call_id":"five","tool_name":"shell","arguments_json":"{}"}}}
+{"event":{"steering":{"text":"Another turn"}}}
+{"event":{"tool_call":{"call_id":"six","tool_name":"shell","arguments_json":"{}"}}}
 `)
 	_, messages, err := parseFxSession(t.Context(), filePath, "local")
 	require.NoError(t, err)
-	require.Len(t, messages, 7)
+	require.Len(t, messages, 11)
 	for _, row := range []int{0, 2} {
 		assert.Equal(t, "earlier-model", messages[row].Model)
 		assert.Equal(t, "earlier-provider", messages[row].ProviderID)
@@ -192,6 +198,10 @@ func TestFxToolCallsKeepAssistantModel(t *testing.T) {
 	assert.Equal(t, "two", messages[2].ToolCalls[0].ToolUseID)
 	require.Len(t, messages[6].ToolCalls, 1)
 	assert.Equal(t, "four", messages[6].ToolCalls[0].ToolUseID)
+	for _, row := range []int{8, 10} {
+		assert.Equal(t, "current-model", messages[row].Model)
+		assert.Equal(t, "current-provider", messages[row].ProviderID)
+	}
 }
 
 func TestFxToolResultWithoutPreview(t *testing.T) {
@@ -207,10 +217,10 @@ func TestFxToolResultWithoutPreview(t *testing.T) {
 			_, messages, err := parseFxSession(t.Context(), filePath, "local")
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
-			assert.Equal(t, RoleTool, messages[0].Role)
+			assert.Equal(t, RoleUser, messages[0].Role)
 			assert.Empty(t, messages[0].Content)
 			require.Len(t, messages[0].ToolResults, 1)
-			assert.Equal(t, ParsedToolResult{ToolUseID: "read-1", Status: "completed", ContentRaw: test.raw}, messages[0].ToolResults[0])
+			assert.Equal(t, ParsedToolResult{ToolUseID: "read-1", Source: "tool_result", Status: "completed", ContentRaw: test.raw}, messages[0].ToolResults[0])
 		})
 	}
 }
@@ -222,6 +232,8 @@ func TestFxFutureArtifactVersions(t *testing.T) {
 		{"usage", "usage-v2.json", `{"schema_version":2,"snapshot":{"schema_version":3,"models":[{"model":"test","input_tokens":5}]}}`, "usage-v2.json schema_version 2"},
 		{"snapshot", "usage-v2.json", `{"schema_version":1,"snapshot":{"schema_version":4,"models":[{"model":"test","input_tokens":5}]}}`, "usage-v2.json snapshot schema_version 4"},
 		{"owner", "subagent/owner.json", `{"schema_version":2,"parent_id":"parent-a"}`, "owner.json schema_version 2"},
+		{"older session", "session.json", `{"schema_version":3}`, "session.json schema_version 3 is older than supported 4"},
+		{"newer session", "session.json", `{"schema_version":5}`, "session.json schema_version 5 is newer than supported 4"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -251,4 +263,74 @@ func TestFxMalformedOwner(t *testing.T) {
 	require.ErrorContains(t, err, "invalid fx metadata")
 	assert.Nil(t, session)
 	assert.Empty(t, messages)
+}
+
+func TestFxSkillNames(t *testing.T) {
+	for _, test := range []struct{ name, arguments, want string }{
+		{"explicit", `{"name":"review","location":"/tmp/skills/other"}`, "review"},
+		{"name only", `{"name":"review"}`, "review"},
+		{"location", `{"location":"/tmp/skills/review"}`, "review"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
+			writeSourceFile(t, filepath.Join(dir, "events.jsonl"), fmt.Sprintf(`{"event":{"tool_call":{"call_id":"skill-1","tool_name":"skill","arguments_json":%q}}}`, test.arguments))
+			_, messages, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			require.Len(t, messages[0].ToolCalls, 1)
+			assert.Equal(t, test.want, messages[0].ToolCalls[0].SkillName)
+		})
+	}
+}
+
+func TestFxInvalidFrames(t *testing.T) {
+	for _, frame := range []string{`{broken`, `null`, `{}`, `{"event":null}`, `{"event":[]}`} {
+		t.Run(frame, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
+			writeSourceFile(t, filepath.Join(dir, "events.jsonl"), "{\"event\":{\"user\":{\"text\":\"Hello\"}}}\n"+frame)
+			session, messages, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
+			require.ErrorContains(t, err, "invalid fx events.jsonl")
+			assert.Nil(t, session)
+			assert.Empty(t, messages)
+		})
+	}
+}
+
+func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
+	for _, test := range []struct{ name, usage, wantError string }{
+		{"absent", "", ""},
+		{"empty models", `{"snapshot":{"models":[]}}`, ""},
+		{"matching session", `{"session_id":"session-a","snapshot":{"models":[]}}`, ""},
+		{"other session", `{"session_id":"session-b","snapshot":{"models":[]}}`, "session_id does not match"},
+		{"malformed", `{broken`, "invalid fx metadata"},
+		{"null envelope", `null`, "snapshot object and models array"},
+		{"array envelope", `[]`, "snapshot object and models array"},
+		{"missing snapshot", `{}`, "snapshot object and models array"},
+		{"null snapshot", `{"snapshot":null}`, "snapshot object and models array"},
+		{"array snapshot", `{"snapshot":[]}`, "snapshot object and models array"},
+		{"missing models", `{"snapshot":{}}`, "snapshot object and models array"},
+		{"null models", `{"snapshot":{"models":null}}`, "snapshot object and models array"},
+		{"object models", `{"snapshot":{"models":{}}}`, "snapshot object and models array"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "session-a")
+			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
+			writeSourceFile(t, filepath.Join(dir, "events.jsonl"), `{"event":{"user":{"text":"Hello"}}}`)
+			if test.usage != "" {
+				writeSourceFile(t, filepath.Join(dir, "usage-v2.json"), test.usage)
+			}
+			session, messages, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
+			if test.wantError != "" {
+				require.ErrorContains(t, err, test.wantError)
+				assert.Nil(t, session)
+				assert.Empty(t, messages)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Empty(t, session.UsageEvents)
+		})
+	}
 }
