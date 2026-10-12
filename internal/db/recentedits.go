@@ -67,6 +67,11 @@ func (db *DB) RecentEdits(
 	ctx context.Context, p RecentEditsParams,
 ) (RecentEditsResult, error) {
 	p = NormalizeRecentEditsParams(p)
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return RecentEditsResult{}, err
+	}
+	defer release()
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	query := BuildRecentEditsQuery(p, b, "m.id = tc.message_id")
 	rows, err := db.getReader().QueryContext(ctx, query, b.Args()...)

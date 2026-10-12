@@ -29,7 +29,10 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 	database := usageCandidateFixture(t)
 	message := asstMsgAt("inside-message", 1, "skill call", "2026-08-10T10:01:00Z")
 	message.HasToolUse = true
-	message.ToolCalls = []ToolCall{{SessionID: "inside-message", ToolName: "Skill", Category: "Skill", SkillName: "review-code"}}
+	message.ToolCalls = []ToolCall{
+		{SessionID: "inside-message", ToolName: "Skill", Category: "Skill", SkillName: "review-code"},
+		{SessionID: "inside-message", ToolName: "Edit", Category: "Edit", FilePath: "example.go", CallIndex: 1},
+	}
 	insertMessages(t, database, message)
 	database.rawReader().SetMaxOpenConns(1)
 	filter := AnalyticsFilter{From: "2026-08-01", To: "2026-08-20", Timezone: "UTC"}
@@ -110,6 +113,22 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			_, err := database.GetSessionStats(ctx, StatsFilter{Since: "2026-08-01", Until: "2026-08-21", Timezone: "UTC"})
 			return err
 		}, ""},
+		{"archive regex search", func(ctx context.Context) error {
+			page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: `[a-z]+ call`, Mode: "regex"})
+			if !blocked {
+				require.Len(t, page.Matches, 1)
+				assert.Equal(t, "inside-message", page.Matches[0].SessionID)
+			}
+			return err
+		}, ""},
+		{"recent edits", func(ctx context.Context) error {
+			page, err := database.RecentEdits(ctx, RecentEditsParams{})
+			if !blocked {
+				require.Len(t, page.Files, 1)
+				assert.Equal(t, "example.go", page.Files[0].FilePath)
+			}
+			return err
+		}, ""},
 		{"trends", func(ctx context.Context) error {
 			_, err := database.GetTrendsTerms(ctx, filter, []TrendTermInput{{Term: "test"}}, "week")
 			return err
@@ -186,6 +205,18 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 				require.NoError(t, err, "bulk holder must complete with one reader connection")
 				assert.NoError(t, ctx.Err())
 			}
+			assert.Zero(t, database.rawReader().Stats().InUse)
+		})
+	}
+	for _, mode := range []string{"fts", "regex", "substring"} {
+		t.Run(mode+" literal search bypasses lane", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: mode, Sources: []string{"messages"}})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, "inside-message", page.Matches[0].SessionID)
+			assert.NoError(t, ctx.Err())
 			assert.Zero(t, database.rawReader().Stats().InUse)
 		})
 	}

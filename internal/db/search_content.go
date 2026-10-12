@@ -500,6 +500,13 @@ func (db *DB) searchContentRegex(
 		return ContentSearchPage{}, searchInputErrorf("search: invalid regex: %v", err)
 	}
 	lit := LiteralPrefix(f.Pattern)
+	if lit == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
+	}
 
 	rows, err := db.regexCandidateRows(ctx, f, lit)
 	if err != nil {
