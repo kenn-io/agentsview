@@ -98,6 +98,7 @@ func TestFxEventVariants(t *testing.T) {
 {"seq":6,"timestamp_ms":7000,"event":{"interrupted":{"partial_text":null}}}
 {"seq":7,"timestamp_ms":8000,"event":{"turn_completed":{}}}
 {"seq":8,"timestamp_ms":8000,"event":{"assistant":{"text":"Reply","provider_replay":{"source":{"model":"actual","provider":"codex"}}}}}
+{"seq":9,"timestamp_ms":8000,"event":{"future_event":{"new_field":"value"}}}
 `)
 	writeSourceFile(t, filepath.Join(dir, "usage-v2.json"), `{"snapshot":{"models":[{"model":"gateway/one","input_tokens":20,"output_tokens":4,"cache_read_tokens":8,"cache_write_tokens":3,"reasoning_tokens":2,"total_cost":0},{"model":"codex/two","input_tokens":1,"output_tokens":6,"cache_read_tokens":5}]}}`)
 	session, messages, err := parseFxSession(t.Context(), filePath, "local")
@@ -232,15 +233,25 @@ func TestFxToolResultWithoutPreview(t *testing.T) {
 	}
 }
 
-func TestFxFutureArtifactVersions(t *testing.T) {
-	for _, test := range []struct{ name, path, content, reason string }{
+func TestFxRejectedArtifacts(t *testing.T) {
+	for _, test := range []struct{ name, path, content, reason, wantError string }{
 		{"events", "events.jsonl", `{"schema_version":3,"event":{"user":{"text":"Supported"}}}
-{"schema_version":4,"event":{"assistant":{"text":"Future"}}}`, "events.jsonl frame schema_version 4"},
-		{"usage", "usage-v2.json", `{"schema_version":2,"snapshot":{"schema_version":3,"models":[{"model":"test","input_tokens":5}]}}`, "usage-v2.json schema_version 2"},
-		{"snapshot", "usage-v2.json", `{"schema_version":1,"snapshot":{"schema_version":4,"models":[{"model":"test","input_tokens":5}]}}`, "usage-v2.json snapshot schema_version 4"},
-		{"owner", "subagent/owner.json", `{"schema_version":2,"parent_id":"parent-a"}`, "owner.json schema_version 2"},
-		{"older session", "session.json", `{"schema_version":3}`, "session.json schema_version 3 is older than supported 4"},
-		{"newer session", "session.json", `{"schema_version":5}`, "session.json schema_version 5 is newer than supported 4"},
+{"schema_version":4,"event":{"assistant":{"text":"Future"}}}`, "events.jsonl frame schema_version 4", ""},
+		{"usage", "usage-v2.json", `{"schema_version":2,"snapshot":{"schema_version":3,"models":[{"model":"test","input_tokens":5}]}}`, "usage-v2.json schema_version 2", ""},
+		{"snapshot", "usage-v2.json", `{"schema_version":1,"snapshot":{"schema_version":4,"models":[{"model":"test","input_tokens":5}]}}`, "usage-v2.json snapshot schema_version 4", ""},
+		{"owner", "subagent/owner.json", `{"schema_version":2,"parent_id":"parent-a"}`, "owner.json schema_version 2", ""},
+		{"older session", "session.json", `{"schema_version":3}`, "session.json schema_version 3 is older than supported 4", ""},
+		{"newer session", "session.json", `{"schema_version":5}`, "session.json schema_version 5 is newer than supported 4", ""},
+		{"malformed owner", "subagent/owner.json", `{broken`, "", "invalid fx metadata"},
+		{"broken frame", "events.jsonl", "{broken\n", "", "invalid fx events.jsonl"},
+		{"null frame", "events.jsonl", "null\n", "", "invalid fx events.jsonl"},
+		{"missing event", "events.jsonl", "{}\n", "", "invalid fx events.jsonl"},
+		{"null event", "events.jsonl", "{\"event\":null}\n", "", "invalid fx events.jsonl"},
+		{"array event", "events.jsonl", "{\"event\":[]}\n", "", "invalid fx events.jsonl"},
+		{"empty event", "events.jsonl", "{\"event\":{}}\n", "", "invalid fx events.jsonl"},
+		{"empty event type", "events.jsonl", "{\"event\":{\"\":{}}}\n", "", "invalid fx events.jsonl"},
+		{"null user", "events.jsonl", "{\"event\":{\"user\":null}}\n", "", "invalid fx events.jsonl"},
+		{"null turn completed", "events.jsonl", "{\"event\":{\"turn_completed\":null}}\n", "", "invalid fx events.jsonl"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -253,23 +264,16 @@ func TestFxFutureArtifactVersions(t *testing.T) {
 			log.SetOutput(&logs)
 			t.Cleanup(func() { log.SetOutput(previous) })
 			session, messages, err := parseFxSession(t.Context(), filePath, "local")
-			require.NoError(t, err)
+			if test.wantError != "" {
+				require.ErrorContains(t, err, test.wantError)
+			} else {
+				require.NoError(t, err)
+				assert.Contains(t, logs.String(), test.reason)
+			}
 			assert.Nil(t, session)
 			assert.Empty(t, messages)
-			assert.Contains(t, logs.String(), test.reason)
 		})
 	}
-}
-
-func TestFxMalformedOwner(t *testing.T) {
-	dir := t.TempDir()
-	writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
-	writeSourceFile(t, filepath.Join(dir, "events.jsonl"), `{"event":{"user":{"text":"Hello"}}}`)
-	writeSourceFile(t, filepath.Join(dir, "subagent", "owner.json"), `{broken`)
-	session, messages, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
-	require.ErrorContains(t, err, "invalid fx metadata")
-	assert.Nil(t, session)
-	assert.Empty(t, messages)
 }
 
 func TestFxSkillNames(t *testing.T) {
@@ -289,20 +293,6 @@ func TestFxSkillNames(t *testing.T) {
 			require.Len(t, messages, 1)
 			require.Len(t, messages[0].ToolCalls, 1)
 			assert.Equal(t, test.want, messages[0].ToolCalls[0].SkillName)
-		})
-	}
-}
-
-func TestFxInvalidFrames(t *testing.T) {
-	for _, frame := range []string{`{broken`, `null`, `{}`, `{"event":null}`, `{"event":[]}`} {
-		t.Run(frame, func(t *testing.T) {
-			dir := t.TempDir()
-			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
-			writeSourceFile(t, filepath.Join(dir, "events.jsonl"), "{\"event\":{\"user\":{\"text\":\"Hello\"}}}\n"+frame+"\n")
-			session, messages, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
-			require.ErrorContains(t, err, "invalid fx events.jsonl")
-			assert.Nil(t, session)
-			assert.Empty(t, messages)
 		})
 	}
 }
@@ -360,7 +350,9 @@ func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 		{"empty model entry", `{"snapshot":{"models":[{}]}}`, "model entry"},
 		{"negative count", `{"snapshot":{"models":[{"model":"test","input_tokens":-1}]}}`, "negative fx token count"},
 		{"fractional count", `{"snapshot":{"models":[{"model":"test","output_tokens":1.5}]}}`, "invalid fx"},
-		{"null count", `{"snapshot":{"models":[{"model":"test","cache_read_tokens":null}]}}`, "null fx token count"},
+		{"negative request count", `{"snapshot":{"models":[{"model":"test","request_count":-1}]}}`, "negative fx token count"},
+		{"fractional reasoning count", `{"snapshot":{"models":[{"model":"test","reasoning_tokens":1.5}]}}`, "invalid fx"},
+		{"null count", `{"snapshot":{"models":[{"model":"test","cache_read_tokens":null}]}}`, ""},
 		{"null models", `{"snapshot":{"models":null}}`, "invalid fx"},
 		{"object models", `{"snapshot":{"models":{}}}`, "invalid fx"},
 	} {
@@ -380,7 +372,12 @@ func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.NotNil(t, session)
-			assert.Empty(t, session.UsageEvents)
+			if test.name == "null count" {
+				require.Len(t, session.UsageEvents, 1)
+				assert.Zero(t, session.UsageEvents[0].CacheReadInputTokens)
+			} else {
+				assert.Empty(t, session.UsageEvents)
+			}
 		})
 	}
 }

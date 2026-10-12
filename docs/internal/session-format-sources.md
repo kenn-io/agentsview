@@ -4366,8 +4366,8 @@ schemas keep their existing ordering behavior.
   timestamps. `events.jsonl` stores version 3 frames. The
   [event union](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_event.zig)
   defines prompts, replies, steering, tool calls and results, interruptions,
-  and context checkpoints. Result text uses the stored preview. Only assistant
-  replay records supply historical model and provider identities.
+  and context checkpoints. Result text uses the stored preview, up to 4 KB.
+  Only assistant replay records supply historical model and provider identities.
   Tool calls share them when attached to that assistant row; separate tool-call
   rows and interrupted text leave those identities unknown.
   [Provider IDs](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/config/model_provider.zig)
@@ -4383,6 +4383,9 @@ schemas keep their existing ordering behavior.
   [Child state](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/subagent/child_state.zig)
   records `subagent/owner.json` with `parent_id`. AgentsView imports that link
   as a child session.
+  [Session layout](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_layout.zig)
+  allows 1 to 255 ASCII letters, digits, dots, underscores, or hyphens in session
+  and parent IDs, excluding `.` and `..` and the reserved `v2` name in any case.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/vercel-labs/fx.git` at
   `b9ca60d0102cf84cea061456c41206f66149b311`. Reverified 2026-10-12.
@@ -4395,16 +4398,18 @@ schemas keep their existing ordering behavior.
   fx's reported cost, which can be zero for subscription runs. Cumulative totals
   leave peak context unknown. Usage dates follow the latest transcript event
   because preference changes also advance metadata timestamps.
+  Optional counts can be null, which AgentsView treats as unknown with zero tokens.
 - **Agentsview:** Sessions require schema 4. Event frames support up to schema 3,
   usage envelopes and owner markers schema 1, and usage snapshots schema 3.
   Newer versions skip the source. Full tool-result artifacts and encrypted
   reasoning are excluded. Changes to `session.json`,
   `usage-v2.json`, or `subagent/owner.json` refresh their owning transcript.
   Companion content hashes detect equal-length rewrites.
-  A torn final line without a newline is ignored. Other invalid frames or usage
-  structures and mismatched usage session IDs fail parsing, preserving the
-  stored session for retry. Tool previews and status attach to calls without
-  separate transcript rows.
+  A torn final line without a newline is ignored. Empty events and null known event
+  types fail parsing; named unknown event types are skipped.
+  Other invalid frames or usage structures and mismatched usage session IDs fail
+  parsing, preserving the stored session for retry. Tool previews and status
+  attach to calls without separate transcript rows.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go

@@ -3,7 +3,20 @@ package parser
 import (
 	"context"
 	"path/filepath"
+	"strings"
 )
+
+func fxSessionIDValid(id string) bool {
+	if len(id) == 0 || len(id) > 255 || id == "." || id == ".." || strings.EqualFold(id, "v2") {
+		return false
+	}
+	for _, c := range []byte(id) {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
 
 func newFxProviderFactory(def AgentDef) ProviderFactory {
 	caps := Capabilities{
@@ -24,12 +37,13 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 	return NewSourceSetFactory(def, caps, func(cfg ProviderConfig) SourceSet {
 		return NewDirectoryJSONLSourceSet(AgentFx, cfg.Roots,
 			WithDescendPath(func(root, path string) bool {
-				return filepath.Dir(path) == filepath.Clean(root) && IsValidSessionID(filepath.Base(path)) ||
+				return filepath.Dir(path) == filepath.Clean(root) && fxSessionIDValid(filepath.Base(path)) ||
 					filepath.Dir(filepath.Dir(path)) == filepath.Clean(root) && filepath.Base(path) == "subagent"
 			}),
-			WithIncludePath(func(root, path string) bool {
-				return filepath.Base(path) == "events.jsonl" && filepath.Dir(filepath.Dir(path)) == filepath.Clean(root)
+			WithIncludePath(func(_, path string) bool {
+				return filepath.Base(path) == "events.jsonl" && fxSessionIDValid(filepath.Base(filepath.Dir(path)))
 			}),
+			WithLookupIDValid(fxSessionIDValid),
 			WithSessionIDFromPath(func(_, path string) string { return filepath.Base(filepath.Dir(path)) }),
 			WithProjectHint(func(_, _ string) string { return "" }),
 			WithCompanionFiles(fxCompanionFiles),

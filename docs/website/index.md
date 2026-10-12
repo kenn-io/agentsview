@@ -36,7 +36,7 @@ Cline CLI, Crush, CodeBuddy CN, Gemini, Copilot (CLI, VS Code, and Visual
 Studio), Cursor, Cursor IDE, IcodeMate, Qwen Code, DeepSeek TUI and Harness,
 Mistral Vibe, Zed, Warp, OpenCode, Positron, Posit Assistant, Claude Cowork,
 Aider, Antigravity, gptme, Junie, OMO, StepCode, Kilo, Kimi, Kiro, OpenHands,
-Goose, Grok, RooCode, Trae, Windsurf, and dozens more. Every supported source is
+Goose, Grok, RooCode, Trae, Windsurf, fx, and dozens more. Every supported source is
 listed in [session discovery](/docs/configuration/#session-discovery).
 
 - **60+** agent formats parsed

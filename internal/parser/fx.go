@@ -18,13 +18,11 @@ import (
 )
 
 type fxMetadata struct {
-	Version  int        `json:"schema_version"`
-	Title    string     `json:"title"`
-	Cwd      string     `json:"workspace_root"`
-	Created  int64      `json:"created_at_ms"`
-	Updated  int64      `json:"updated_at_ms"`
-	Model    string     `json:"model"`
-	Provider fxProvider `json:"provider"`
+	Version int    `json:"schema_version"`
+	Title   string `json:"title"`
+	Cwd     string `json:"workspace_root"`
+	Created int64  `json:"created_at_ms"`
+	Updated int64  `json:"updated_at_ms"`
 }
 type fxOwner struct {
 	Version int    `json:"schema_version"`
@@ -91,13 +89,43 @@ type fxEvent struct {
 	Interrupted *struct {
 		Text string `json:"partial_text"`
 	} `json:"interrupted"`
+	TurnCompleted *struct{} `json:"turn_completed"`
 }
+
+func (e *fxEvent) UnmarshalJSON(data []byte) error {
+	type eventFields fxEvent
+	var fields eventFields
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return err
+	}
+	if len(keys) != 1 {
+		return fmt.Errorf("fx event must contain one event type")
+	}
+	for key, value := range keys {
+		switch key {
+		case "user", "steering", "assistant", "tool_call", "tool_result", "context_checkpoint", "interrupted", "turn_completed":
+			if string(value) == "null" {
+				return fmt.Errorf("fx %s event must be an object", key)
+			}
+		case "":
+			return fmt.Errorf("fx event type must be non-empty")
+		}
+	}
+	*e = fxEvent(fields)
+	return nil
+}
+
 type fxCount int
 
 func (c *fxCount) UnmarshalJSON(data []byte) error {
 	var count int
 	if string(data) == "null" {
-		return fmt.Errorf("null fx token count")
+		*c = 0
+		return nil
 	}
 	if err := json.Unmarshal(data, &count); err != nil {
 		return err
@@ -116,6 +144,7 @@ type fxUsageModel struct {
 	CacheRead  fxCount `json:"cache_read_tokens"`
 	CacheWrite fxCount `json:"cache_write_tokens"`
 	Reasoning  fxCount `json:"reasoning_tokens"`
+	Requests   fxCount `json:"request_count"`
 }
 type fxUsage struct {
 	Version   int     `json:"schema_version"`
@@ -144,11 +173,7 @@ func readFxMetadata[T any](path string) (*T, error) {
 	return value, nil
 }
 
-func fxSchemaOK(version, max int, session, file string) bool {
-	min := 0
-	if max == 4 {
-		min = 4
-	}
+func fxSchemaOK(version, min, max int, session, file string) bool {
 	if version >= min && version <= max {
 		return true
 	}
@@ -174,7 +199,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		log.Printf("skipping fx session %s: missing session.json", rawID)
 		return nil, nil, nil
 	}
-	if !fxSchemaOK(metadata.Version, 4, rawID, "session.json") {
+	if !fxSchemaOK(metadata.Version, 4, 4, rawID, "session.json") {
 		return nil, nil, nil
 	}
 	f, err := os.Open(filePath)
@@ -200,10 +225,10 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		return nil, nil, err
 	}
 	if owner != nil {
-		if !fxSchemaOK(owner.Version, 1, rawID, "owner.json") {
+		if !fxSchemaOK(owner.Version, 0, 1, rawID, "owner.json") {
 			return nil, nil, nil
 		}
-		if IsValidSessionID(owner.Parent) {
+		if fxSessionIDValid(owner.Parent) {
 			session.ParentSessionID, session.RelationshipType = "fx:"+owner.Parent, RelSubagent
 		}
 	}
@@ -238,7 +263,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		if frame == nil || frame.Event == nil {
 			return nil, nil, fmt.Errorf("invalid fx events.jsonl frame: event must be an object")
 		}
-		if !fxSchemaOK(frame.Version, 3, rawID, "events.jsonl frame") {
+		if !fxSchemaOK(frame.Version, 0, 3, rawID, "events.jsonl frame") {
 			return nil, nil, nil
 		}
 		timestamp := time.UnixMilli(frame.Timestamp).UTC()
@@ -281,7 +306,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		if usage.SessionID != nil && *usage.SessionID != rawID {
 			return nil, nil, fmt.Errorf("fx usage-v2.json session_id does not match session folder")
 		}
-		if !fxSchemaOK(usage.Version, 1, rawID, "usage-v2.json") || !fxSchemaOK(usage.Snapshot.Version, 3, rawID, "usage-v2.json snapshot") {
+		if !fxSchemaOK(usage.Version, 0, 1, rawID, "usage-v2.json") || !fxSchemaOK(usage.Snapshot.Version, 0, 3, rawID, "usage-v2.json snapshot") {
 			return nil, nil, nil
 		}
 		for _, model := range usage.Snapshot.Models {
@@ -356,8 +381,13 @@ func fxAppendEvent(messages *[]ParsedMessage, event *fxEvent, timestamp time.Tim
 		message.Role, message.Content = RoleSystem, event.Checkpoint.Summary
 		message.IsSystem, message.IsCompactBoundary = true, true
 		message.SourceSubtype = "compact_boundary"
-	case event.Interrupted != nil && event.Interrupted.Text != "":
+	case event.Interrupted != nil:
+		if event.Interrupted.Text == "" {
+			return
+		}
 		message.Role, message.Content = RoleAssistant, event.Interrupted.Text
+	case event.TurnCompleted != nil:
+		return
 	default:
 		return
 	}

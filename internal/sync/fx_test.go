@@ -121,7 +121,7 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 	require.NotNil(t, session.SessionName)
 	assert.Equal(t, "After rename", *session.SessionName)
 
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "usage-v2.json"), []byte(`{"snapshot":{"models":[{"model":"gpt-6.1-sol","input_tokens":20,"cache_read_tokens":5,"output_tokens":7}]}}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "usage-v2.json"), []byte(`{"snapshot":{"models":[{"model":"gpt-6.1-sol","input_tokens":20,"cache_read_tokens":5,"cache_write_tokens":null,"output_tokens":7,"reasoning_tokens":null,"request_count":null}]}}`), 0o600))
 	engine.SyncAll(t.Context(), nil)
 	session, err = database.GetSessionFull(t.Context(), "fx:sync-session")
 	require.NoError(t, err)
@@ -143,6 +143,8 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 	assert.Equal(t, 15, usage[0].InputTokens)
 	assert.Equal(t, 5, usage[0].CacheReadInputTokens)
 	assert.Equal(t, 7, usage[0].OutputTokens)
+	assert.Zero(t, usage[0].ReasoningTokens)
+	assert.Zero(t, usage[0].CacheCreationInputTokens)
 
 	transcript, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -151,6 +153,9 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 	require.NoError(t, err)
 	for _, test := range []struct{ name, file, content string }{
 		{"broken frame", path, string(transcript) + "{broken\n"},
+		{"empty event", path, "{\"event\":{}}\n"},
+		{"empty event type", path, "{\"event\":{\"\":{}}}\n"},
+		{"null recognized event", path, "{\"event\":{\"assistant\":null}}\n"},
 		{"null usage", usagePath, `null`},
 		{"missing snapshot", usagePath, `{}`},
 		{"null snapshot", usagePath, `{"snapshot":null}`},
@@ -193,11 +198,11 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 
 func TestFxSyncChildBeforeParent(t *testing.T) {
 	root := t.TempDir()
-	childDir := filepath.Join(root, "a-child")
+	childDir := filepath.Join(root, "a.child")
 	require.NoError(t, os.MkdirAll(filepath.Join(childDir, "subagent"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(childDir, "session.json"), []byte(`{"schema_version":4,"created_at_ms":1000,"updated_at_ms":2000}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(childDir, "events.jsonl"), []byte(`{"schema_version":3,"timestamp_ms":2000,"event":{"user":{"text":"Child task"}}}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(childDir, "subagent", "owner.json"), []byte(`{"schema_version":1,"parent_id":"z-parent"}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(childDir, "subagent", "owner.json"), []byte(`{"schema_version":1,"parent_id":"z.parent"}`), 0o600))
 	database := openTestDB(t)
 	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentFx: {root}},
@@ -205,22 +210,22 @@ func TestFxSyncChildBeforeParent(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	engine.SyncAllForceParse(t.Context(), nil)
-	child, err := database.GetSessionFull(t.Context(), "fx:a-child")
+	child, err := database.GetSessionFull(t.Context(), "fx:a.child")
 	require.NoError(t, err)
 	require.NotNil(t, child)
 	require.NotNil(t, child.ParentSessionID)
-	assert.Equal(t, "fx:z-parent", *child.ParentSessionID)
+	assert.Equal(t, "fx:z.parent", *child.ParentSessionID)
 	assert.Equal(t, string(parser.RelSubagent), child.RelationshipType)
 
-	parentDir := filepath.Join(root, "z-parent")
+	parentDir := filepath.Join(root, "z.parent")
 	require.NoError(t, os.MkdirAll(parentDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(parentDir, "session.json"), []byte(`{"schema_version":4,"created_at_ms":1000,"updated_at_ms":2000}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(parentDir, "events.jsonl"), []byte(`{"schema_version":3,"timestamp_ms":1000,"event":{"user":{"text":"Parent task"}}}`), 0o600))
 	engine.SyncAllForceParse(t.Context(), nil)
-	parent, err := database.GetSessionFull(t.Context(), "fx:z-parent")
+	parent, err := database.GetSessionFull(t.Context(), "fx:z.parent")
 	require.NoError(t, err)
 	require.NotNil(t, parent)
-	child, err = database.GetSessionFull(t.Context(), "fx:a-child")
+	child, err = database.GetSessionFull(t.Context(), "fx:a.child")
 	require.NoError(t, err)
 	require.NotNil(t, child)
 	require.NotNil(t, child.ParentSessionID)
