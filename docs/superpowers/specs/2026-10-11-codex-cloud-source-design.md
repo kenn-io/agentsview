@@ -988,7 +988,10 @@ records every token update, and leaves when the turn ends.
   dated when it was observed, even when earlier turns ran on an earlier day.
   The user-facing docs state this limit.
 - Because totals cover the thread from its start, one capture covers every turn
-  that finished before it was observed.
+  that finished before it was observed, within one baseline. After a new
+  baseline, the first record's total starts from the fresh counter, so it does
+  not cover turns that finished after the last record of the previous
+  baseline.
 
 **How it shows up.**
 
@@ -998,20 +1001,21 @@ records every token update, and leaves when the turn ends.
 - The provider computes each session's capture coverage from the mirror's turn
   and token usage records: the time of the last capture and the number of
   finished turns not captured. A finished turn is captured when the mirror
-  holds a token record for a later turn of the same thread (totals are
-  cumulative and cover every earlier turn), or a token record for that turn
-  followed by that turn's turn-completion record with the same join ID. A join
-  that drops and a later join that sees only `turn/completed` carry different
-  join IDs, so the gap shows as not captured. A turn-completion record alone
-  does not count: with `excludeTurns: true` the server sends no token update
-  on join for a thread with `historyMode: "legacy"`, as every probed thread
-  had (`thread_processor.rs`, the cheap resume path), so a join that lands
-  after a turn's last model call sees `turn/completed` with no counts. No
-  clock comparison is involved. Otherwise, for example after the 6-hour leave
-  or a dropped connection with no later capture, it is not captured. A token
-  record that arrives right after the resume response (open-source Codex
-  replays one for paginated-history threads) is recorded like any other, even
-  when its `turnId` names an earlier, finished turn. It stores both in the new
+  holds a token record for a later turn of the same thread in the same
+  baseline (totals are cumulative and cover every earlier turn of that
+  baseline), or a token record for that turn followed by that turn's
+  turn-completion record with the same join ID. A join that drops and a later
+  join that sees only `turn/completed` carry different join IDs, so the gap
+  shows as not captured. A turn-completion record alone does not count: with
+  `excludeTurns: true` the server sends no token update on join for a thread
+  with `historyMode: "legacy"`, as every probed thread had
+  (`thread_processor.rs`, the cheap resume path), so a join that lands after a
+  turn's last model call sees `turn/completed` with no counts. No clock
+  comparison is involved. Otherwise, for example after the 6-hour leave or a
+  dropped connection with no later capture, it is not captured. A token record
+  that arrives right after the resume response (open-source Codex replays one
+  for paginated-history threads) is recorded like any other, even when its
+  `turnId` names an earlier, finished turn. It stores both in the new
   per-session table (see Plan usage), so every backend can query them.
 - Session details say "Tokens captured live, as of T". When finished turns are
   not captured, they add "N turns not captured", followed by "plan usage
@@ -1637,6 +1641,9 @@ double-count its tokens.
 - Price bands: an update whose `total` increase equals `last` with more than
   272,000 input tokens is priced at the band rate; the first record of a join
   is priced at base rates; session output totals count each increase once.
+
+- Coverage across a reset: turn A captured, turn B finishes while not joined,
+  the counters reset, and turn C is captured; B counts as not captured.
 
 - Coverage join IDs: join A records a token update and drops, join B sees only
   `turn/completed`; that turn counts as not captured.
