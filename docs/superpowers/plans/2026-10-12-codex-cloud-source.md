@@ -531,8 +531,7 @@ Authentication (identity, redaction).
 
 - Modify: `go.mod` (make `github.com/coder/websocket` direct)
 - Create: `internal/codexcloud/client.go`, `rpc.go`, `client_test.go`
-- Create: `internal/codexcloud/codexcloudtest/host.go` (fake durable host),
-  `codexcloudtest/usage.go` (fake `query_v2`)
+- Create: `internal/codexcloud/codexcloudtest/host.go` (fake durable host)
 
 **Interfaces:**
 
@@ -559,21 +558,25 @@ Authentication (identity, redaction).
       closed and set when the connection ends, so a monitor reading only
       notifications learns about a refresh request or a read-limit overflow.
     - `type Notification struct { Method string; Params jsontext.Value }`
-    - `var ErrRefreshRequested`, `ErrNotAllowed`, `ErrReplyTooLarge`. A server
-      request for `account/chatgptAuthTokens/refresh` closes the connection and
-      sets `Err` to `ErrRefreshRequested`; every other server request is
-      ignored, never answered. A message over the read limit closes the
-      connection with `ErrReplyTooLarge`.
+    - `var ErrRefreshRequested`, `ErrNotAllowed`, `ErrReplyTooLarge`,
+      `ErrProtocolChange` (the server selected a subprotocol other than
+      `codex-app-server` or none; the gate may pin this further), `ErrClosed`. A
+      server request for `account/chatgptAuthTokens/refresh` closes the
+      connection and sets `Err` to `ErrRefreshRequested`; every other server
+      request is ignored, never answered. A message over the read limit closes
+      the connection with `ErrReplyTooLarge`.
     - `type RPCError struct { Code int; Message string; Data jsontext.Value }`
     - `type HTTPError struct { Status int; RetryAfter time.Duration }` for a
       refused handshake (401, 403, 429, 5xx, any 3xx).
     - `func DecodeCount(v jsontext.Value) (int64, error)` accepts `4603049.0`,
       rejects `1.5`.
-    - `codexcloudtest.Host` with scripted threads, turns, items, notifications,
-      recorded requests and handshake headers, `ServerRequest(method)`,
-      `Redirect()`, `RefuseHandshake(status)`, `OversizeNext()`.
+    - `codexcloudtest.Host`: `Handle(method, Handler)`, `Notify`, `ServerRequest`,
+      `Requests`, `Methods`, `Handshakes`, `SelectSubprotocol`, `Redirect`,
+      `RefuseHandshake(status, header, body)`, `EchoSubprotocols`. Later tasks
+      script threads, turns, and items through `Handle`; an oversized reply is a
+      handler returning a large result.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
     - `TestDialHandshake`: subprotocols in order; headers; token only in the
       subprotocol; `initialize` then `initialized`.
@@ -590,13 +593,13 @@ Authentication (identity, redaction).
       returns `ErrReplyTooLarge`.
     - `TestDecodeCount`.
 
-- [ ] **Step 2: Run** `go test ./internal/codexcloud/...`; FAIL.
+- [x] **Step 2: Run** `go test ./internal/codexcloud/...`; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS. `go mod tidy` leaves `coder/websocket` direct.
+- [x] **Step 4: Run**; PASS. `go mod tidy` leaves `coder/websocket` direct.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): add app-server client"`
 
 ### Task 10: Fetcher state store
@@ -1097,6 +1100,7 @@ waiting files).
 
 - Create: `internal/codexcloud/usage_client.go`, `roots.go`,
   `usage_client_test.go`, `roots_test.go`,
+  `internal/codexcloud/codexcloudtest/usage.go` (fake `query_v2`),
   `internal/codexcloud/mirror/plan.go` (row and outcome bodies)
 
 **Interfaces:**
