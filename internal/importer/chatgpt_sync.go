@@ -59,8 +59,8 @@ func chatGPTFreshness(updatedAt string, session *db.Session) uint64 {
 }
 
 // chatGPTDetailGap spaces conversation detail requests. hstry's extension
-// used 1.5 s plus jitter to stay under ChatGPT's rate limit; tests set it to 0.
-var chatGPTDetailGap = 1500 * time.Millisecond
+// used 1.5 s; the first live run uses 3 s for a wider margin. Tests set it to 0.
+var chatGPTDetailGap = 3 * time.Second
 
 func waitChatGPTDetailGap(ctx context.Context) error {
 	if chatGPTDetailGap <= 0 {
