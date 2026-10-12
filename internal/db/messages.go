@@ -892,6 +892,12 @@ func (db *DB) ScanEmbeddableUnits(
 	ctx context.Context, since string, includeAutomated bool,
 	fn func(EmbeddableUnit) error,
 ) (maxEnded string, err error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
 	return db.scanEmbeddableUnits(ctx, since, "", includeAutomated, fn)
 }
 

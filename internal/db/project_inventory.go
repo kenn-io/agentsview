@@ -69,6 +69,12 @@ func (db *DB) GetProjectInventory(ctx context.Context, filter ProjectDateFilter)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return ProjectInventory{}, err
+	}
+	defer release()
+
 	agg, err := db.projectInventoryAggregate(ctx, filter)
 	if err != nil {
 		return ProjectInventory{}, err

@@ -73,6 +73,13 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			_, err := database.GetAnalyticsProjects(ctx, filter)
 			return err
 		}, ""},
+		{"project inventory", func(ctx context.Context) error {
+			inventory, err := database.GetProjectInventory(ctx, ProjectDateFilter{})
+			if !blocked {
+				assert.Equal(t, 9, inventory.TotalSessions)
+			}
+			return err
+		}, ""},
 		{"hour of week", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsHourOfWeek(ctx, filter)
 			return err
@@ -118,6 +125,43 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			if !blocked {
 				require.Len(t, page.Matches, 1)
 				assert.Equal(t, "inside-message", page.Matches[0].SessionID)
+			}
+			return err
+		}, ""},
+		{"prefixed regex search", func(ctx context.Context) error {
+			page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "regex"})
+			if !blocked {
+				require.Len(t, page.Matches, 1)
+				assert.Equal(t, "inside-message", page.Matches[0].SessionID)
+			}
+			return err
+		}, ""},
+		{"substring search", func(ctx context.Context) error {
+			page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "substring"})
+			if !blocked {
+				require.Len(t, page.Matches, 1)
+				assert.Equal(t, "inside-message", page.Matches[0].SessionID)
+			}
+			return err
+		}, ""},
+		{"terms search", func(ctx context.Context) error {
+			page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "question", Mode: "terms", IncludeOneShot: true})
+			if !blocked {
+				require.Len(t, page.Matches, 1)
+				assert.Equal(t, "user-only", page.Matches[0].SessionID)
+			}
+			return err
+		}, ""},
+		{"embeddable units", func(ctx context.Context) error {
+			var units []EmbeddableUnit
+			_, err := database.ScanEmbeddableUnits(ctx, "", false, func(unit EmbeddableUnit) error {
+				units = append(units, unit)
+				return nil
+			})
+			if blocked {
+				assert.Empty(t, units)
+			} else {
+				assert.Contains(t, units, EmbeddableUnit{Kind: "user", SessionID: "user-only", Content: "question"})
 			}
 			return err
 		}, ""},
@@ -185,6 +229,18 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			_, err := database.GetSessionStats(ctx, StatsFilter{Since: "2026-08-11", Until: "2026-08-10"})
 			return err
 		}, "window since (2026-08-11T00:00:00Z) must precede until (2026-08-10T00:00:00Z)"},
+		{"invalid regex", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "[", Mode: "regex"})
+			return err
+		}, "search: invalid regex: error parsing regexp: missing closing ]: `[`"},
+		{"invalid terms scope", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "question", Mode: "terms", Scope: "invalid"})
+			return err
+		}, "search: invalid scope \"invalid\""},
+		{"invalid substring source", func(ctx context.Context) error {
+			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "substring", Sources: []string{"invalid"}})
+			return err
+		}, "search: unknown source \"invalid\""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			budget := 2 * time.Second
@@ -208,18 +264,16 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			assert.Zero(t, database.rawReader().Stats().InUse)
 		})
 	}
-	for _, mode := range []string{"fts", "regex", "substring"} {
-		t.Run(mode+" literal search bypasses lane", func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-			defer cancel()
-			page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: mode, Sources: []string{"messages"}})
-			require.NoError(t, err)
-			require.Len(t, page.Matches, 1)
-			assert.Equal(t, "inside-message", page.Matches[0].SessionID)
-			assert.NoError(t, ctx.Err())
-			assert.Zero(t, database.rawReader().Stats().InUse)
-		})
-	}
+	t.Run("fts search bypasses lane", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "fts", Sources: []string{"messages"}})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "inside-message", page.Matches[0].SessionID)
+		assert.NoError(t, ctx.Err())
+		assert.Zero(t, database.rawReader().Stats().InUse)
+	})
 }
 
 func TestUsageCacheFillInstallsCompleteSessionFacts(t *testing.T) {
