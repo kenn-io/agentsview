@@ -218,6 +218,12 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	if data == "" {
 		return
 	}
+	t.Setenv("PATH", "")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_CONFIG_DIR", t.TempDir())
+	localTransport := http.DefaultTransport
+	withPricingCatalogTransport(t, pricingCatalogTransport{requests: make(chan *http.Request, 16)})
 	var cfg config.Config
 	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
@@ -239,22 +245,18 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 			}
 			var output bytes.Buffer
 			err := runSyncWorkerContext(ctx, cfg, request, &output)
-			var result workerResult
-			for data := range bytes.SplitSeq(bytes.TrimSpace(output.Bytes()), []byte("\n")) {
-				var line workerLine
-				require.NoError(t, json.Unmarshal(data, &line))
-				if line.Result != nil {
-					result = *line.Result
-				}
-			}
+			require.NoError(t, err, output.String())
+			result := decodeSingleResult(t, &output)
+			require.Equal(t, "ok", result.Status)
+			require.True(t, result.DiscoveryComplete)
 			return result, err
 		})
 	}
 	original := writeDaemonRuntimeWithAuthAndNoSync
 	writeDaemonRuntimeWithAuthAndNoSync = func(dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
+		base := fmt.Sprintf("http://%s:%d", host, port)
+		client := &http.Client{Timeout: 10 * time.Second, Transport: localTransport}
 		if kind != "" {
-			base := fmt.Sprintf("http://%s:%d", host, port)
-			client := &http.Client{Timeout: 10 * time.Second}
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/retained/messages", nil)
 			require.NoError(t, err)
 			resp, err := client.Do(req)
@@ -278,22 +280,37 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 			}
 			close(release)
 			<-rebuilt
-			if kind == "" {
-				base := fmt.Sprintf("http://%s:%d", host, port)
-				require.Eventually(t, func() bool {
-					req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sync/status", nil)
-					require.NoError(t, err)
-					resp, err := http.DefaultClient.Do(req)
-					if err != nil {
-						return false
-					}
-					defer resp.Body.Close()
-					var status struct {
-						Progress *agentsync.Progress `json:"progress"`
-					}
-					return json.UnmarshalRead(resp.Body, &status) == nil && status.Progress == nil
-				}, 20*time.Second, 10*time.Millisecond)
-			}
+			require.Eventually(t, func() bool {
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sync/status", nil)
+				require.NoError(t, err)
+				resp, err := client.Do(req)
+				if err != nil {
+					return false
+				}
+				defer resp.Body.Close()
+				var status struct {
+					Progress *agentsync.Progress `json:"progress"`
+				}
+				if json.UnmarshalRead(resp.Body, &status) != nil || status.Progress != nil {
+					return false
+				}
+				stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+				return err == nil && !stale
+			}, 20*time.Second, 10*time.Millisecond, "replacement archive must be installed and fresh")
+		}
+		stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+		require.NoError(t, err)
+		require.False(t, stale, "startup reconciliation must finish before readiness")
+		if kind == "data version" || kind == "scoped pending" || kind == "schema repair" {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/session0/messages", nil)
+			require.NoError(t, err)
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			require.Contains(t, string(body), "hello")
 		}
 		fmt.Println("archive rebuild complete")
 		return original(dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)
