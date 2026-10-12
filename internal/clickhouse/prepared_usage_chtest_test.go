@@ -806,8 +806,9 @@ func TestEnsurePreparedUsageDropsRebuildTablesWithTableExchange(t *testing.T) {
 }
 
 // A renewed rebuild lock stays held past its timeout. A push that stopped
-// renewing must not publish once another push has taken a newer lock, and
-// renewing or releasing a lock a successor already dropped changes nothing.
+// renewing must not publish once another push has taken a newer lock,
+// renewing or releasing a lock a successor already dropped changes nothing,
+// and a push that paused before taking a lock cannot take a retired one.
 func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
@@ -842,6 +843,19 @@ func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 	err = renewRebuildLock(ctx, conn, generation)
 	require.True(t, isMissingTableError(err), "a superseded holder cannot renew: %v", err)
 	require.NoError(t, releaseRebuildLock(ctx, conn, generation))
+	acquired, err = takeRebuildLock(ctx, conn, generation, 1)
+	require.NoError(t, err)
+	require.False(t, acquired, "a retired generation must not be taken again")
+	var retired uint64
+	require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(`SELECT count() FROM system.tables
+		WHERE database = currentDatabase() AND name = 'prepared_usage_rebuild_lock_%d'`, generation)).Scan(&retired))
+	require.Zero(t, retired)
+
+	// A takeover dropped the build table the superseded holder publishes.
+	_, err = conn.ExecContext(ctx, "CREATE TABLE prepared_usage (x UInt8) ENGINE = MergeTree ORDER BY x")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM prepared_usage_build_9")
+	require.ErrorIs(t, supersededBuildError(ctx, conn, "prepared_usage_build_9", err), errRebuildSuperseded)
 
 	_, acquired, err = acquireRebuildLock(ctx, conn)
 	require.NoError(t, err)

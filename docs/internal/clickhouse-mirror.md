@@ -254,25 +254,26 @@ do: a read checks freshness and fetches rows in separate queries, so an older
 build must never replace a newer one between them. The lock is a numbered
 `prepared_usage_rebuild_lock_<n>` table, and the build table carries the same
 number. A push takes the lock by creating the table with the next number, which
-only one push can do, and drops the older ones; the newest stays after release,
-so one lock table persists and numbers never repeat. The holder renews the
-lock's timestamp every ten minutes. A lock not renewed for an hour belongs to a
-stopped push, and the next push takes the next number. Only a lock holder
-creates a build table, so a new holder drops every build table with a lower
-number: a publish still reading one finishes before the drop returns, and a
-later one fails without its table, so older rows never land after newer ones. A
-push also drops its own build table when it finishes, so a leftover exists only
-between a killed push and the next rebuild. A push that finds a newer lock
-before publishing discards its build. A push skips its rebuild when the stored
-stamp equals the current one, before and after it takes the lock, or when it
-finds the lock held; reads then prepare the changed sessions themselves. After
-publishing, the holder rebuilds once more if a skipped push changed the
-snapshots meanwhile. Probe tables that a killed push left behind are dropped
-once they are an hour old. When a later schema step finds that the database can
-exchange tables, it creates the view and drops the leftover lock and build
-tables. Without the view, nothing refreshes on a schedule, and a failed rebuild
-waits for the next push. Because `prepared_usage` is then not a refreshable
-view's target, native backups include its rows without
+only one push can do, then gives the number up if a newer lock already exists,
+so a push that paused before creating its lock never reuses a retired number. It
+drops the older ones; the newest stays after release, so one lock table persists
+and numbers never repeat. The holder renews the lock's timestamp every ten
+minutes. A lock not renewed for an hour belongs to a stopped push, and the next
+push takes the next number. Only a lock holder creates a build table, so a new
+holder drops every build table with a lower number: a publish still reading one
+finishes before the drop returns, and a later one fails without its table, so
+older rows never land after newer ones. A push also drops its own build table
+when it finishes, so a leftover exists only between a killed push and the next
+rebuild. A push that finds a newer lock before publishing discards its build. A
+push skips its rebuild when the stored stamp equals the current one, before and
+after it takes the lock, or when it finds the lock held; reads then prepare the
+changed sessions themselves. After publishing, the holder rebuilds once more if
+a skipped push changed the snapshots meanwhile. Probe tables that a killed push
+left behind are dropped once they are an hour old. When a later schema step
+finds that the database can exchange tables, it creates the view and drops the
+leftover lock and build tables. Without the view, nothing refreshes on a
+schedule, and a failed rebuild waits for the next push. Because `prepared_usage`
+is then not a refreshable view's target, native backups include its rows without
 `backup_data_from_refreshable_materialized_view_targets`.
 
 **Currency is proven per read.** A read uses prepared rows only when every

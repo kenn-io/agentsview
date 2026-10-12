@@ -698,7 +698,7 @@ func publishPreparedUsageBuild(ctx context.Context, conn *sql.DB, generation uin
 	// from this query, so the columns match by position.
 	if _, err := conn.ExecContext(ctx, "INSERT INTO "+build+" "+chPreparedUsageQuery()+
 		" SETTINGS "+chPreparedUsageRefreshSettings); err != nil {
-		return fmt.Errorf("filling prepared usage build table: %w", err)
+		return supersededBuildError(ctx, conn, build, fmt.Errorf("filling prepared usage build table: %w", err))
 	}
 	// A push whose lock expired may have lost it to a newer rebuild before
 	// it created its build table, which that rebuild's drop then missed. If
@@ -709,13 +709,32 @@ func publishPreparedUsageBuild(ctx context.Context, conn *sql.DB, generation uin
 		return err
 	}
 	if superseded {
-		return errors.New("this rebuild outlasted its lock and a newer rebuild took over; discarding it")
+		return errRebuildSuperseded
 	}
 	if _, err := conn.ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM "+build); err != nil {
-		return fmt.Errorf("replacing prepared usage rows: %w", err)
+		return supersededBuildError(ctx, conn, build, fmt.Errorf("replacing prepared usage rows: %w", err))
 	}
 	log.Printf("clickhouse push: rebuilt prepared usage in %s", time.Since(started).Round(time.Millisecond))
 	return nil
+}
+
+// errRebuildSuperseded reports a rebuild that a newer rebuild took over
+// from after this one outlasted its lock.
+var errRebuildSuperseded = errors.New("this rebuild outlasted its lock and a newer rebuild took over; discarding it")
+
+// supersededBuildError returns errRebuildSuperseded when err comes from a
+// missing table and the build table is gone, which means a newer rebuild
+// took over and dropped it. Otherwise it returns err.
+func supersededBuildError(ctx context.Context, conn *sql.DB, build string, err error) error {
+	if !isMissingTableError(err) {
+		return err
+	}
+	var exists uint8
+	if checkErr := conn.QueryRowContext(context.WithoutCancel(ctx), `SELECT count() > 0 FROM system.tables
+		WHERE database = currentDatabase() AND name = ?`, build).Scan(&exists); checkErr != nil || exists != 0 {
+		return errors.Join(err, checkErr)
+	}
+	return errRebuildSuperseded
 }
 
 // keepRebuildLock renews the lock generation every chRebuildLockRenewal
@@ -801,14 +820,9 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 		generation = generations[len(generations)-1]
 	}
 	generation++
-	_, err = conn.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s%d (x UInt8) ENGINE = Memory COMMENT 'held %d'",
-		chPreparedUsageRebuildLockPrefix, generation, now))
-	if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
-		log.Print("clickhouse push: skipping the prepared usage rebuild: another push took the rebuild lock first")
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, fmt.Errorf("locking prepared usage rebuild: %w", err)
+	acquired, err = takeRebuildLock(ctx, conn, generation, now)
+	if err != nil || !acquired {
+		return 0, false, err
 	}
 	for _, g := range generations {
 		if _, err := conn.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s%d SYNC", chPreparedUsageRebuildLockPrefix, g)); err != nil {
@@ -816,6 +830,34 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 		}
 	}
 	return generation, true, nil
+}
+
+// takeRebuildLock creates the lock table of generation, which succeeds for
+// only one push. A push that read the locks before a long pause can create a
+// generation a newer holder already dropped; it finds the newer lock and
+// gives the generation up, so a retired generation and its build table name
+// are never used again.
+func takeRebuildLock(ctx context.Context, conn *sql.DB, generation uint64, now int64) (bool, error) {
+	lock := fmt.Sprintf("%s%d", chPreparedUsageRebuildLockPrefix, generation)
+	_, err := conn.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s (x UInt8) ENGINE = Memory COMMENT 'held %d'", lock, now))
+	if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
+		log.Print("clickhouse push: skipping the prepared usage rebuild: another push took the rebuild lock first")
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("locking prepared usage rebuild: %w", err)
+	}
+	superseded, err := rebuildLockSuperseded(ctx, conn, generation)
+	if err == nil && !superseded {
+		return true, nil
+	}
+	if _, dropErr := conn.ExecContext(context.WithoutCancel(ctx), "DROP TABLE IF EXISTS "+lock+" SYNC"); dropErr != nil {
+		err = errors.Join(err, fmt.Errorf("dropping prepared usage rebuild lock: %w", dropErr))
+	}
+	if err == nil {
+		log.Print("clickhouse push: skipping the prepared usage rebuild: a newer push holds the rebuild lock")
+	}
+	return false, err
 }
 
 // rebuildLockSuperseded reports whether a push took a newer rebuild lock
