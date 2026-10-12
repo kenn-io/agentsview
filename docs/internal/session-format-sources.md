@@ -3220,80 +3220,55 @@ schemas keep their existing ordering behavior.
   `hermes_state.py`: session rows have no modification watermark. Message
   contents, titles and usage can change independently of `ended_at`.
   Discovery and database/WAL events use virtual `state.db#<session ID>`
-  sources and compare member fingerprints before parsing. Transcript events
-  resolve only their indexed member or standalone transcript, with JSONL
-  preferred over JSON snapshots. The pinned source enables SQLite WAL mode;
-  member freshness includes committed WAL data for timestamp cutoffs.
-  Transcript fallback also applies when session IDs can be listed but member
-  content cannot be read. The pinned schema requires session metadata and
-  message columns as well as IDs; an ID query alone does not establish that
-  a member can be imported. Discovery remains incomplete after database read
-  failures. Single-session lookup validates stored member paths and selects
-  the preferred transcript when a member cannot be read. Processing keeps
-  that transcript selection, so resync does not import sibling sessions.
-  Empty standalone transcripts preserve archived history. Malformed or oversized
-  JSONL records reject the parse, preserve archived content and remain
-  retryable. State-member fingerprinting and parsing propagate those errors, so
-  damaged transcripts cannot select a shorter database fallback. Transcript
-  validation failures remain distinct from database read failures during
-  discovery, changed-path resolution and single-session lookup. Raw export
-  selects readable source data separately from replacement validation.
-  Transcript-only watcher events also prefer JSONL over JSON snapshots. After a
-  preferred standalone JSONL disappears, a JSON snapshot cannot replace its
-  archived history, including during full rebuilds and imports with Windows or
-  UNC paths. State-database fallback also preserves richer archived messages
-  when a selected transcript has disappeared or become empty. The comparison
-  includes message text, thinking, individual tool calls, exact arguments and
-  tool-result content. Source changes cannot remove an archived call or change
-  its result just because the message count remains equal. Previously unanswered
-  calls can acquire results while call identity, arguments and existing nonempty
-  results remain protected. Comparison preserves the retained message sequence
-  independently of source ordinals, so filtering a newly completed tool-result
-  carrier does not block an already archived follow-up. Answer text and reasoning are compared separately,
-  so previously absent reasoning can be added without replacing the answer;
-  existing reasoning remains protected. Image projection applies to both sides during
-  comparison, including ordinary sync under the offload policy.
-  Standalone transcript
-  fallback preserves archived state-derived usage when the database cannot
-  supply accounting. Selected JSON snapshots receive the same protection as
-  JSONL when they disappear or become empty. Aggregate archive parsing propagates
-  transcript validation failures, and discovery retains all member errors and
-  membership checks after mixed failures. Raw export uses export-specific
-  selection even when resolving another configured root. Standalone raw export
-  prefers JSONL and copies readable bytes without parser validation, so an
-  unfinished record remains exportable. State-backed raw export compares source
-  quality with a tolerant JSONL read and copies the selected transcript verbatim,
-  including unfinished or malformed records. Preservation compares the sanitised
-  storage projection under the configured archive policy. Database-origin
-  exemptions apply only while the database supplies authoritative member data;
-  standalone fallback after database loss must preserve archived content.
-  Aggregate parsing also marks unindexed transcripts as content and accounting
-  fallbacks. Complete edits to an existing JSON snapshot remain replaceable. Agentsview records the
-  selected encoding in `source_version` as `hermes-state-v1`, `hermes-json-v1`
-  or `hermes-jsonl-v1`. These are Agentsview format labels. A fingerprint
-  generation marker makes existing members and standalone transcripts reparse
-  once to record the label.
-  Database-only sessions with known provenance keep accepting complete edits.
-  Legacy `hermes-state-db` labels do not identify whether messages came from the
-  database or a transcript. Matching archived content can acquire a current
-  label; conflicting content remains archived until its source can be
-  established. Empty legacy standalone labels can be resolved from the stored
-  transcript path; complete edits from that same file remain replaceable.
-  Logical session lookup checks for a readable database member after a
-  previously selected standalone fallback, so database recovery refreshes
-  messages, metadata and usage. Direct fallback processing keeps its resolved
-  transcript source. Ambiguous state-backed provenance can defer a genuine
-  database edit during upgrade because
-  the legacy metadata cannot distinguish that edit from transcript loss.
-  Discovery, member
-  fingerprints and lookups accept dotted cron job IDs from the documented
-  producer format. Remote path and skip-cache translation preserve the physical
-  database identity and virtual member suffix separately. Planned remote
-  changed-path execution also creates a shared member fingerprint cache for
-  the workers and closes it after processing, so unchanged siblings do not
-  each reopen the database. Existing archive-level
-  paths migrate during ordinary sync; historical sessions remain in SQLite when
-  their source disappears. Augure Desktop uses the same member selection.
+  sources. Member fingerprints cover state, accounting and selected transcript
+  content before the provider parses changed members. Shared fingerprint caches
+  remain active through local sync and planned remote imports, so unchanged
+  siblings do not each reopen the database. The source enables SQLite WAL mode;
+  committed WAL data contributes to freshness for timestamp cutoffs.
+- **Content replacement:** Agentsview records the selected content encoding in
+  `source_version`: `hermes-state-v1`, `hermes-json-v1` or `hermes-jsonl-v1`.
+  These are Agentsview format labels. The encoding and physical source path
+  identify the content source, including transcripts selected through virtual
+  database members. Complete edits from the same known source can replace its
+  archived conversation. A different or ambiguous source must include the
+  archived conversation in order. Comparison uses the sanitised storage
+  projection, configured image policy, answer text, reasoning, individual tool
+  calls, exact arguments and tool results. Previously absent reasoning and tool
+  results can be added. Existing content remains protected independently of raw
+  message ordinals. Reconciliation runs in the shared write preparation path
+  after remote identity rewriting and reads the original archive during rebuilds.
+  A rejected replacement remains retryable and does not block healthy batch
+  members. Database accounting does not grant authority to replace content from
+  another source. Standalone transcripts preserve archived accounting when the
+  database cannot supply complete usage.
+- **Upgrade provenance:** A fingerprint generation marker makes existing
+  members and standalone transcripts reparse once to record the selected
+  encoding. Legacy `hermes-state-db` labels do not distinguish database messages
+  from selected transcripts. Matching content can acquire a current label;
+  conflicting content remains archived. This can defer a genuine database edit
+  because the legacy metadata cannot establish its origin. Empty legacy
+  standalone labels can be resolved from the stored transcript path, so complete
+  edits from that same file remain replaceable. Existing archive-level paths
+  migrate during ordinary sync. Historical sessions remain in SQLite after their
+  source disappears.
+- **Discovery and recovery:** Transcript events resolve their indexed database
+  member or preferred standalone JSONL, including dotted cron IDs. Database read
+  failures produce incomplete discovery while readable transcripts and healthy
+  roots remain processable. Full sync, watchers and planned remote imports retain
+  that status without granting deletion authority; remote imports also retain
+  the retry journal. Transcript validation failures remain distinct from database
+  read failures. Empty standalone transcripts preserve history. Malformed,
+  unfinished or oversized records reject replacement and remain retryable.
+  Logical single-session lookup checks for a readable database member after a
+  previous transcript fallback, so database recovery refreshes content, metadata
+  and usage. Direct fallback processing retains its selected source. Remote path
+  and skip-cache translation preserve the physical database path and virtual
+  member suffix separately. Augure Desktop uses the same rules.
+- **Raw source export:** Source export resolves readable files separately from
+  replacement validation, including configured-root fallback. Standalone export
+  prefers JSONL and copies bytes without requiring a complete parse. State-backed
+  export compares source quality with a tolerant JSONL read and copies the
+  selected transcript verbatim, including unfinished or malformed records.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it

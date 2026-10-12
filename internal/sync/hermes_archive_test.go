@@ -1289,6 +1289,11 @@ func TestHermesIncrementalSyncBoundsSiblingWrites(t *testing.T) {
 								(session_id, role, content, timestamp) VALUES (?, 'user', 'hello', 1778767210)`, id)
 							require.NoError(t, err)
 						}
+						if mode == "transcript event" {
+							transcript := filepath.Join(root, "sessions", "child.jsonl")
+							require.NoError(t, os.MkdirAll(filepath.Dir(transcript), 0o755))
+							require.NoError(t, os.WriteFile(transcript, []byte(`{"role":"user","content":"state db message","timestamp":"2026-05-14T10:01:00Z"}`+"\n"), 0o600))
+						}
 						database := dbtest.OpenTestDB(t)
 						engine := NewEngine(t.Context(), database, EngineConfig{
 							AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
@@ -1800,6 +1805,64 @@ func TestHermesTranscriptOnlySnapshotEventPrefersJSONL(t *testing.T) {
 				messagesAfter, err := database.GetAllMessages(t.Context(), id)
 				require.NoError(t, err)
 				assert.Equal(t, messagesBefore, messagesAfter)
+			})
+		}
+	}
+}
+
+func TestHermesSnapshotAccountingCannotAuthorizeContentReplacement(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, mode := range []string{"full sync", "transcript event", "single session", "full resync"} {
+			t.Run(string(agent)+"/"+mode, func(t *testing.T) {
+				root := t.TempDir()
+				stateDB := writeHermesArchiveStateDB(t, root)
+				conn, err := sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET input_tokens = 100, output_tokens = 73")
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":child"
+				before, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				require.Len(t, before, 1)
+				require.Equal(t, "state db message", before[0].Content)
+				usageBefore, err := database.GetUsageEvents(t.Context(), id)
+				require.NoError(t, err)
+				require.Len(t, usageBefore, 1)
+				snapshot := filepath.Join(root, "sessions", "session_child.json")
+				require.NoError(t, os.MkdirAll(filepath.Dir(snapshot), 0o755))
+				require.NoError(t, os.WriteFile(snapshot, []byte(`{"messages":[{"role":"user","content":"conflicting snapshot content"}]}`), 0o600))
+				switch mode {
+				case "full sync":
+					assert.Positive(t, engine.SyncAll(t.Context(), nil).Failed)
+				case "transcript event":
+					require.Error(t, engine.syncPathsContext(t.Context(), []string{snapshot}, false))
+				case "single session":
+					require.Error(t, engine.SyncSingleSessionContext(t.Context(), id))
+				case "full resync":
+					assert.Positive(t, engine.ResyncAll(t.Context(), nil).Failed)
+				}
+				after, err := engine.db.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				assert.Equal(t, before, after)
+				usageAfter, err := engine.db.GetUsageEvents(t.Context(), id)
+				require.NoError(t, err)
+				assert.Equal(t, usageBefore, usageAfter)
+				require.NoError(t, os.WriteFile(snapshot, []byte(`{"messages":[{"role":"user","content":"state db message"},{"role":"assistant","content":"safe new response"}]}`), 0o600))
+				stats := engine.SyncAll(t.Context(), nil)
+				require.Zero(t, stats.Failed)
+				assert.Equal(t, 1, stats.Synced)
+				messages, err := engine.db.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				contents := make([]string, len(messages))
+				for i, message := range messages {
+					contents[i] = message.Content
+				}
+				assert.Equal(t, []string{"state db message", "safe new response"}, contents)
 			})
 		}
 	}

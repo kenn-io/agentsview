@@ -12,9 +12,10 @@ import (
 
 // ContentOptions defines the content policies applied during preparation.
 type ContentOptions struct {
-	BlockedResultCategories map[string]bool
-	ToolResultImages        config.ToolResultImages
-	ArchiveContent          config.ArchiveContent
+	BlockedResultCategories  map[string]bool
+	ToolResultImages         config.ToolResultImages
+	ArchiveContent           config.ArchiveContent
+	ToolResultImageAssetsDir string
 }
 
 // Candidate is normalized parser output before caller-owned identity,

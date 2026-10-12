@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,98 @@ func TestRawProjectionPreservesAbsentProviderTitleFromSameSource(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT session_name FROM sessions WHERE id=$1`, identity.SessionID).Scan(&title))
 	assert.Nil(t, title)
+}
+
+func TestRawProjectionHermesFallbackPreservesUsage(t *testing.T) {
+	f := newProjectionFixture(t)
+	manifest, accepted := f.accept(t, "device-a", "hermes-state", "", parser.AgentHermes)
+	outcome := projectionOutcome("original prompt")
+	result := &outcome.Outcome.Results[0].Result
+	result.Session.ID = "hermes:portable"
+	result.Session.Agent = parser.AgentHermes
+	result.Session.SourceVersion = parser.HermesStateSourceVersion
+	result.Session.File.Path = "/archive/state.db#portable"
+	result.UsageEvents[0].Source = "session"
+	result.UsageEvents[0].DedupKey = "session:hermes:portable"
+	result.Replacement = parser.ArchiveReplacementPolicy{Content: parser.ContentReplaceSameSource}
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, manifest), manifest, outcome))
+	first, err := f.sink.Resolve(t.Context(), "hermes:portable")
+	require.NoError(t, err)
+	store := &Store{pg: f.runtime}
+	before, err := store.GetSessionUsageRows(t.Context(), []string{first.SessionID})
+	require.NoError(t, err)
+	require.Len(t, before.Rows, 1)
+
+	next, _ := f.accept(t, "device-a", "hermes-transcript", accepted.Receipt, parser.AgentHermes)
+	result.Session.SourceVersion = "hermes-jsonl-v1"
+	result.Session.File.Path = "/archive/sessions/portable.jsonl"
+	result.Messages = append(result.Messages, parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "new transcript message"})
+	result.UsageEvents = nil
+	result.Replacement.Usage = parser.UsagePreserveArchived
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, next), next, outcome))
+	current, err := f.sink.Resolve(t.Context(), "hermes:portable")
+	require.NoError(t, err)
+	usage, err := store.GetSessionUsageRows(t.Context(), []string{current.SessionID})
+	require.NoError(t, err)
+	for i := range before.Rows {
+		before.Rows[i].SessionID = current.SessionID
+		before.Rows[i].SourceSessionID = current.SessionID
+		before.Rows[i].UsageDedupKey = strings.Replace(before.Rows[i].UsageDedupKey, first.SessionID, current.SessionID, 1)
+	}
+	assert.Equal(t, before.Rows, usage.Rows)
+	messages, err := store.GetMessages(t.Context(), current.SessionID, 0, 10, true)
+	require.NoError(t, err)
+	contents := make([]string, len(messages))
+	for i, message := range messages {
+		contents[i] = message.Content
+	}
+	assert.Equal(t, []string{"original prompt", "checking", "new transcript message"}, contents)
+}
+
+func TestRawProjectionHermesBlockedMemberDoesNotBlockHealthyMember(t *testing.T) {
+	f := newProjectionFixture(t)
+	manifest, accepted := f.accept(t, "device-a", "hermes-original", "", parser.AgentHermes)
+	outcome := projectionOutcome("original blocked prompt")
+	blocked := &outcome.Outcome.Results[0].Result
+	blocked.Session.ID = "hermes:blocked"
+	blocked.Session.SourceSessionID = "blocked"
+	blocked.Session.Agent = parser.AgentHermes
+	blocked.Session.SourceVersion = parser.HermesStateSourceVersion
+	blocked.Session.File.Path = "/archive/state.db#blocked"
+	blocked.Replacement = parser.ArchiveReplacementPolicy{Content: parser.ContentReplaceSameSource}
+	healthy := outcome.Outcome.Results[0]
+	healthy.Result.Session.ID = "hermes:healthy"
+	healthy.Result.Session.SourceSessionID = "healthy"
+	healthy.Result.Session.File.Path = "/archive/state.db#healthy"
+	healthy.Result.Messages = []parser.ParsedMessage{{Role: parser.RoleUser, Content: "initial healthy prompt"}}
+	outcome.Outcome.Results = append(outcome.Outcome.Results, healthy)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, manifest), manifest, outcome))
+	first, err := f.sink.Resolve(t.Context(), "hermes:blocked")
+	require.NoError(t, err)
+	store := &Store{pg: f.runtime}
+	before, err := store.GetMessages(t.Context(), first.SessionID, 0, 10, true)
+	require.NoError(t, err)
+
+	next, _ := f.accept(t, "device-a", "hermes-conflict", accepted.Receipt, parser.AgentHermes)
+	blocked = &outcome.Outcome.Results[0].Result
+	blocked.Session.SourceVersion = "hermes-json-v1"
+	blocked.Messages = []parser.ParsedMessage{{Role: parser.RoleUser, Content: "conflicting snapshot prompt"}}
+	outcome.Outcome.Results[1].Result.Messages = []parser.ParsedMessage{{Role: parser.RoleUser, Content: "healthy updated prompt"}}
+	require.ErrorIs(t, f.sink.Project(t.Context(), f.lease(t, next), next, outcome), rawderive.ErrProjectionRetrying)
+	retained, err := f.sink.Resolve(t.Context(), "hermes:blocked")
+	require.NoError(t, err)
+	after, err := store.GetMessages(t.Context(), retained.SessionID, 0, 10, true)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	updated, err := f.sink.Resolve(t.Context(), "hermes:healthy")
+	require.NoError(t, err)
+	messages, err := store.GetMessages(t.Context(), updated.SessionID, 0, 10, true)
+	require.NoError(t, err)
+	contents := make([]string, len(messages))
+	for i, message := range messages {
+		contents[i] = message.Content
+	}
+	assert.Equal(t, []string{"healthy updated prompt"}, contents)
 }
 
 func TestRawProjectionEqualSourcesNoOpAndRemoval(t *testing.T) {

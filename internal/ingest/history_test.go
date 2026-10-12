@@ -71,6 +71,46 @@ func TestReconcileProviderHistoryHermesGroupKey(t *testing.T) {
 	}
 }
 
+func TestReconcileProviderHistoryHermesReplacementAuthority(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, tt := range []struct {
+			name                           string
+			storedVersion, incomingVersion string
+			storedPath, incomingPath       string
+			wantError                      bool
+		}{
+			{name: "same database edit", storedVersion: parser.HermesStateSourceVersion, incomingVersion: parser.HermesStateSourceVersion, storedPath: "/archive/state.db#session", incomingPath: "/archive/state.db#session"},
+			{name: "same indexed transcript edit", storedVersion: "hermes-jsonl-v1", incomingVersion: "hermes-jsonl-v1", storedPath: "/archive/state.db#session", incomingPath: "/archive/state.db#session"},
+			{name: "same transcript after database loss", storedVersion: "hermes-jsonl-v1", incomingVersion: "hermes-jsonl-v1", storedPath: "/archive/state.db#session", incomingPath: "/archive/sessions/session.jsonl"},
+			{name: "legacy standalone edit", incomingVersion: "hermes-jsonl-v1", storedPath: "/archive/sessions/session.jsonl", incomingPath: "/archive/sessions/session.jsonl"},
+			{name: "database accounting does not authorize snapshot content", storedVersion: parser.HermesStateSourceVersion, incomingVersion: "hermes-json-v1", storedPath: "/archive/state.db#session", incomingPath: "/archive/state.db#session", wantError: true},
+			{name: "legacy aggregate is ambiguous", storedVersion: "hermes-state-db", incomingVersion: parser.HermesStateSourceVersion, storedPath: "/archive/state.db", incomingPath: "/archive/state.db#session", wantError: true},
+			{name: "same encoding in another archive", storedVersion: "hermes-jsonl-v1", incomingVersion: "hermes-jsonl-v1", storedPath: "/old/state.db#session", incomingPath: "/new/state.db#session", wantError: true},
+			{name: "Windows transcript after database loss", storedVersion: "hermes-jsonl-v1", incomingVersion: "hermes-jsonl-v1", storedPath: `C:\archive\state.db#session`, incomingPath: `C:\archive\sessions\session.jsonl`},
+		} {
+			t.Run(string(agent)+"/"+tt.name, func(t *testing.T) {
+				id := "remote~" + string(agent) + ":session"
+				candidate := ingest.Candidate{
+					Session:  db.Session{ID: id, Agent: string(agent), SourceVersion: tt.incomingVersion, FilePath: &tt.incomingPath},
+					Messages: []db.Message{{SessionID: id, Role: "user", Content: "edited", ContentLength: 6}},
+					Parsed:   parser.ParseResult{Session: parser.ParsedSession{ID: string(agent) + ":session", Agent: agent}, Replacement: parser.ArchiveReplacementPolicy{Content: parser.ContentReplaceSameSource}},
+				}
+				prior := &ingest.PriorSession{
+					Session:  db.Session{ID: id, Agent: string(agent), SourceVersion: tt.storedVersion, FilePath: &tt.storedPath},
+					Messages: []db.Message{{SessionID: id, Role: "user", Content: "original", ContentLength: 8}},
+				}
+				result, err := ingest.ReconcileProviderHistory(t.Context(), candidate, prior, ingest.ContentOptions{})
+				if tt.wantError {
+					require.ErrorContains(t, err, "cannot replace archived content")
+					return
+				}
+				require.NoError(t, err)
+				assert.Equal(t, ingest.HistoryResult{Candidate: candidate, Action: ingest.HistoryReplace}, result)
+			})
+		}
+	}
+}
+
 func TestReconcileProviderHistoryOpenCodeFingerprintAndContent(t *testing.T) {
 	const storedFingerprint = `opencode-storage:v1:{"messages":[{"id":"message-1","time":1,"hash":"old"}]}`
 	const currentFingerprint = `opencode-storage:v1:{"messages":[{"id":"message-1","time":1,"hash":"new"}]}`

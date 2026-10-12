@@ -159,7 +159,7 @@ func (p *hermesProvider) parseTranscriptArchive(
 		if sess != nil {
 			results = append(results, ParseResult{
 				Session: *sess, Messages: msgs,
-				ContentReplacement: ContentPreserveRicherArchive, PreserveArchivedUsage: true,
+				Replacement: ArchiveReplacementPolicy{Content: ContentReplaceSameSource, Usage: UsagePreserveArchived},
 			})
 		}
 	}
@@ -679,7 +679,7 @@ func (p *hermesProvider) parseStateDB(ctx context.Context,
 		if sess != nil {
 			results = append(results, ParseResult{
 				Session: *sess, Messages: msgs,
-				ContentReplacement: ContentPreserveRicherArchive, PreserveArchivedUsage: true,
+				Replacement: ArchiveReplacementPolicy{Content: ContentReplaceSameSource, Usage: UsagePreserveArchived},
 			})
 		}
 	}
@@ -1028,10 +1028,10 @@ func buildHermesStateResult(
 		}
 	}
 	return ParseResult{
-		Session:            *sess,
-		Messages:           msgs,
-		UsageEvents:        usageEvents,
-		ContentReplacement: ContentPreserveRicherArchive,
+		Session:     *sess,
+		Messages:    msgs,
+		UsageEvents: usageEvents,
+		Replacement: ArchiveReplacementPolicy{Content: ContentReplaceSameSource},
 	}, true, nil
 }
 

@@ -150,6 +150,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 	changed := false
 	derivedChanged := false
+	blockedReplacements := 0
 	for _, group := range ordered {
 		c, ok := candidates[group]
 		if !ok {
@@ -168,10 +169,15 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				return decodeErr
 			}
 			old.Session = metadata.Session
-			history = &ingest.PriorSession{Session: old.Session, Messages: old.Messages}
+			history = &ingest.PriorSession{Session: old.Session, Messages: old.Messages, UsageEvents: old.UsageEvents}
 		}
 		decision, err := ingest.ReconcileProviderHistory(ctx, c, history, s.options.Content)
 		if err != nil {
+			if errors.Is(err, ingest.ErrArchiveContentLoss) {
+				complete = false
+				blockedReplacements++
+				continue
+			}
 			return err
 		}
 		var prepared ingest.PreparedSession
@@ -280,6 +286,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	}
 
 	diagnostics := fmt.Sprintf("results=%d errors=%d complete=%t", len(parsed.Outcome.Results), len(parsed.Outcome.SourceErrors), complete)
+	if blockedReplacements > 0 {
+		diagnostics += fmt.Sprintf(" blocked_replacements=%d", blockedReplacements)
+	}
 	if parsed.Tombstone {
 		diagnostics = "tombstone"
 	}

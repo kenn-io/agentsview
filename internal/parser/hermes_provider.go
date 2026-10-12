@@ -341,7 +341,7 @@ func (p *hermesProvider) Parse(
 		sess.File.Hash = req.Fingerprint.Hash
 	}
 	if p.spec.relabel != nil {
-		result := ParseResult{Session: *sess, Messages: msgs, ContentReplacement: ContentPreserveRicherArchive, PreserveArchivedUsage: true}
+		result := ParseResult{Session: *sess, Messages: msgs, Replacement: ArchiveReplacementPolicy{Content: ContentReplaceSameSource, Usage: UsagePreserveArchived}}
 		p.spec.relabel(&result)
 		return ParseOutcome{
 			Results: []ParseResultOutcome{{
@@ -355,9 +355,9 @@ func (p *hermesProvider) Parse(
 	return ParseOutcome{
 		Results: []ParseResultOutcome{{
 			Result: ParseResult{
-				Session:            *sess,
-				Messages:           msgs,
-				ContentReplacement: ContentPreserveRicherArchive, PreserveArchivedUsage: true,
+				Session:     *sess,
+				Messages:    msgs,
+				Replacement: ArchiveReplacementPolicy{Content: ContentReplaceSameSource, Usage: UsagePreserveArchived},
 			},
 			DataVersion: DataVersionCurrent,
 		}},

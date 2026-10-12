@@ -9866,6 +9866,7 @@ func (e *Engine) syncProviderDBBacked(
 				sess:        result.Result.Session,
 				msgs:        result.Result.Messages,
 				usageEvents: result.Result.UsageEvents,
+				replacement: result.Result.Replacement,
 				needsRetry:  !complete,
 			})
 		}
@@ -10920,6 +10921,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sess:                    pr.Session,
 					msgs:                    pr.Messages,
 					usageEvents:             pr.UsageEvents,
+					replacement:             pr.Replacement,
 					sourceBytes:             r.sourceBytes,
 					checkpoint:              pr.Checkpoint,
 					checkpointHashState:     pr.CheckpointHashState,
@@ -17506,6 +17508,7 @@ type pendingWrite struct {
 	sess        parser.ParsedSession
 	msgs        []parser.ParsedMessage
 	usageEvents []parser.ParsedUsageEvent
+	replacement parser.ArchiveReplacementPolicy
 	// sourceBytes is the physical source size carried from the parse result;
 	// collectAndBatch uses it to flush batches on estimated bytes as well as
 	// session count.
@@ -18106,8 +18109,11 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			ctx, pw, resolveWorktreeProject, true,
 		)
 		if prepErr != nil {
-			outcome.err = prepErr
+			outcome.err = errors.Join(outcome.err, prepErr)
 			outcome.failedSessions++
+			if errors.Is(prepErr, ingest.ErrArchiveContentLoss) {
+				continue
+			}
 			return outcome
 		}
 		if verdict != sessionWriteOK {
@@ -18355,7 +18361,7 @@ func (e *Engine) prepareSessionNormalizedContext(
 	derive bool,
 ) (ingest.PreparedSession, sessionWriteVerdict, error) {
 	candidate, err := ingest.PrepareCandidate(ctx, parser.ParseResult{
-		Session: pw.sess, Messages: pw.msgs, UsageEvents: pw.usageEvents,
+		Session: pw.sess, Messages: pw.msgs, UsageEvents: pw.usageEvents, Replacement: pw.replacement,
 	}, ingest.ContentOptions{
 		BlockedResultCategories: e.blockedResultCategories,
 		ToolResultImages:        e.toolResultImages,
@@ -18475,6 +18481,10 @@ func (e *Engine) reconcileProviderHistoryContext(
 		return ingest.ReconcileProviderHistory(
 			ctx, candidate, nil, options,
 		)
+	}
+	if (agent == parser.AgentHermes || agent == parser.AgentAugureDesktop) &&
+		candidate.Parsed.Replacement != (parser.ArchiveReplacementPolicy{}) {
+		return e.reconcileHermesHistoryContext(ctx, candidate, options)
 	}
 	var prior *ingest.PriorSession
 	if candidate.Parsed.Session.KeepStoredGroupKey {
@@ -18739,8 +18749,11 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			ctx, pw, resolveWorktreeProject, true,
 		)
 		if prepErr != nil {
-			outcome.err = prepErr
+			outcome.err = errors.Join(outcome.err, prepErr)
 			outcome.failedSessions++
+			if errors.Is(prepErr, ingest.ErrArchiveContentLoss) {
+				continue
+			}
 			return outcome
 		}
 		e.phaseStats.PrepNanos.Add(int64(time.Since(tPrep)))
@@ -21232,6 +21245,7 @@ func (e *Engine) processAndWriteSessionFile(
 			sess:                   pr.Session,
 			msgs:                   pr.Messages,
 			usageEvents:            pr.UsageEvents,
+			replacement:            pr.Replacement,
 			checkpoint:             pr.Checkpoint,
 			checkpointHashState:    pr.CheckpointHashState,
 			checkpointAnchorDigest: pr.CheckpointAnchorDigest,

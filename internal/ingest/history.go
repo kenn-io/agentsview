@@ -8,8 +8,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// HistoryAction describes how a candidate relates to its same-source prior
-// projection.
+// HistoryAction describes how a candidate relates to its prior projection.
 type HistoryAction uint8
 
 const (
@@ -18,11 +17,12 @@ const (
 	HistoryMerge
 )
 
-// PriorSession is the normalized state previously accepted from this exact
-// source member. Callers own loading it and surfacing any read error.
+// PriorSession is the normalized state previously accepted for this session.
+// Callers load prior rows and report any read error.
 type PriorSession struct {
-	Session  db.Session
-	Messages []db.Message
+	Session     db.Session
+	Messages    []db.Message
+	UsageEvents []db.UsageEvent
 }
 
 // HistoryResult contains the effective rows and the decision a storage caller
@@ -35,7 +35,7 @@ type HistoryResult struct {
 }
 
 // ReconcileProviderHistory applies provider-specific archive preservation to
-// explicitly supplied current and same-source prior rows. It performs no
+// explicitly supplied current and prior rows. It performs no
 // storage or filesystem reads.
 func ReconcileProviderHistory(
 	ctx context.Context,
@@ -76,6 +76,8 @@ func ReconcileProviderHistory(
 	}
 
 	switch agent {
+	case parser.AgentHermes, parser.AgentAugureDesktop:
+		return reconcileHermesHistory(ctx, result, *prior, options)
 	case parser.AgentRooCode, parser.AgentKiloLegacy, parser.AgentCline:
 		if len(candidate.Messages) == 0 && len(prior.Messages) > 0 {
 			result.Candidate.Session = prior.Session
