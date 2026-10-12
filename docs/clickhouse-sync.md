@@ -504,6 +504,10 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   `this database cannot exchange tables`. Each push then rebuilds the prepared
   usage table before it returns instead of leaving the rebuild to the server,
   and logs how long the rebuild took. A push that changed nothing skips the
-  rebuild, and so does a push that finds another push rebuilding. A failed
-  rebuild does not fail the push: usage reads stay correct but slower, and the
-  next push tries again.
+  rebuild. A push that finds another push rebuilding also skips it and logs
+  which lock that push holds. The running rebuild checks once more after it
+  publishes and rebuilds again for data that arrived meanwhile. A lock whose
+  push stopped expires an hour after its last renewal. A skipped or failed
+  rebuild does not fail the push: usage reads stay correct but slower until a
+  later rebuild succeeds, and the next push tries again. The mirror database
+  keeps one small `prepared_usage_rebuild_lock_<n>` table between pushes.

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -180,24 +181,33 @@ const chPreparedUsageRefresh = "EVERY 15 MINUTE"
 const chPreparedUsageRefreshSettings = "final=1,max_threads=4"
 
 // chPreparedUsageBuildPrefix names the tables a push fills before it moves
-// their rows into prepared_usage; see rebuildPreparedUsage.
+// their rows into prepared_usage. Each carries the number of the rebuild
+// lock its push holds; see rebuildPreparedUsage.
 const chPreparedUsageBuildPrefix = "prepared_usage_build_"
 
 // chPreparedUsageRebuildLockPrefix names the numbered tables that lock
 // prepared_usage rebuilds; see acquireRebuildLock.
 const chPreparedUsageRebuildLockPrefix = "prepared_usage_rebuild_lock_"
 
-// chPreparedUsageRebuildLockPattern matches the names of the rebuild lock
-// tables; chRebuildLockGenerationSQL reads their numbers.
-const chPreparedUsageRebuildLockPattern = "^" + chPreparedUsageRebuildLockPrefix + "[0-9]+$"
+// chPreparedUsageRebuildLockPattern and chPreparedUsageBuildPattern match
+// the names of the rebuild lock and build tables; chTableNumberSQL reads
+// their numbers.
+const (
+	chPreparedUsageRebuildLockPattern = "^" + chPreparedUsageRebuildLockPrefix + "[0-9]+$"
+	chPreparedUsageBuildPattern       = "^" + chPreparedUsageBuildPrefix + "[0-9]+$"
+)
 
-// chRebuildLockGenerationSQL reads a rebuild lock table's number from its
-// name.
-const chRebuildLockGenerationSQL = "toUInt64OrZero(extract(name, '([0-9]+)$'))"
+// chTableNumberSQL reads the number at the end of a table's name.
+const chTableNumberSQL = "toUInt64OrZero(extract(name, '([0-9]+)$'))"
 
-// chRebuildLockTimeout is how long a held rebuild lock lasts before another
-// push treats its holder as killed and takes the next lock.
-const chRebuildLockTimeout = time.Hour
+// chRebuildLockTimeout is how long a rebuild lock lasts after its holder
+// last renewed it. After that, another push treats the holder as stopped and
+// takes the next lock. A rebuilding push renews its lock every
+// chRebuildLockRenewal.
+const (
+	chRebuildLockTimeout = time.Hour
+	chRebuildLockRenewal = 10 * time.Minute
+)
 
 // chExchangeProbePrefix names the scratch tables chExchangeSupported
 // exchanges.
@@ -490,9 +500,16 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 		// Every refresh of the view would fail at its exchange, so each
 		// push rebuilds the table instead, including the push that runs
 		// this schema step.
-		log.Print("ClickHouse: this database cannot exchange tables, which happens when its data directory " +
+		log.Print("ClickHouse: this database cannot exchange tables, usually because its data directory " +
 			"is on NFS; each push rebuilds prepared usage before it returns")
 		return dropPreparedUsageView(ctx, conn)
+	}
+	// The view refreshes the table from here on, so no push rebuilds it
+	// again and nothing else would drop what an earlier push left from its
+	// rebuilds, as when the data directory moved off NFS.
+	if err := dropTables(ctx, conn, "match(name, ?) OR match(name, ?)",
+		chPreparedUsageBuildPattern, chPreparedUsageRebuildLockPattern); err != nil {
+		return err
 	}
 	if _, err := conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage REFRESH `+chPreparedUsageRefresh+`
 		TO prepared_usage EMPTY AS `+prepared+" SETTINGS "+chPreparedUsageRefreshSettings); err != nil {
@@ -549,7 +566,8 @@ func dropPreparedUsageView(ctx context.Context, conn *sql.DB) error {
 func chExchangeSupported(ctx context.Context, conn *sql.DB) (supported bool, err error) {
 	// A probe takes milliseconds, so probe tables an hour old belong to a
 	// push that was killed during one.
-	if err := dropTables(ctx, conn, "^"+chExchangeProbePrefix+"[a-z0-9]+_[ab]$", time.Hour); err != nil {
+	if err := dropTables(ctx, conn, "match(name, ?) AND metadata_modification_time <= now() - INTERVAL 1 HOUR",
+		"^"+chExchangeProbePrefix+"[a-z0-9]+_[ab]$"); err != nil {
 		return false, err
 	}
 	probe := chExchangeProbePrefix + strings.ToLower(rand.Text())
@@ -586,10 +604,13 @@ func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
 		return err
 	}
 	if !hasView {
-		return rebuildPreparedUsage(ctx, conn)
+		if err := rebuildPreparedUsage(ctx, conn); err != nil {
+			return fmt.Errorf("rebuilding prepared usage (the next push retries): %w", err)
+		}
+		return nil
 	}
 	if _, err := conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage"); err != nil {
-		return fmt.Errorf("starting prepared usage refresh: %w", err)
+		return fmt.Errorf("starting prepared usage refresh (the view's next scheduled refresh retries): %w", err)
 	}
 	return nil
 }
@@ -605,9 +626,14 @@ func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
 // and fetches rows in separate queries, so a build that read older snapshots
 // must not replace a newer one between them: the read would trust the newer
 // stamp and serve the older rows. A push that finds another rebuild running
-// skips its own; reads prepare its sessions from their snapshots until the
-// next rebuild.
+// skips its own. The running rebuild checks once more after it publishes and
+// rebuilds again for snapshots that arrived meanwhile, as the view queues one
+// more refresh for a request that arrives during a refresh.
 func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
+	current, err := preparedUsageCurrent(ctx, conn)
+	if err != nil || current {
+		return err
+	}
 	generation, acquired, err := acquireRebuildLock(ctx, conn)
 	if acquired {
 		defer func() {
@@ -617,22 +643,49 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 	if err != nil || !acquired {
 		return err
 	}
-	// Only a lock holder creates a build table, so every build table left
-	// belongs to a push that was killed or lost its lock. Dropping them
-	// fences that push off: a publish already reading its build table holds
-	// it, so DROP ... SYNC waits for the publish to finish before this
+	// Deferred after the release, so this runs first: a renewal must not
+	// mark the lock held again after its release.
+	renewCtx, stopRenewing := context.WithCancel(ctx)
+	var renewing sync.WaitGroup
+	renewing.Go(func() { keepRebuildLock(renewCtx, conn, generation) })
+	defer func() {
+		stopRenewing()
+		renewing.Wait()
+	}()
+	// Only a lock holder creates a build table, so a build table with a
+	// lower number belongs to a push that was stopped or lost its lock.
+	// Dropping it fences that push off: a publish already reading the table
+	// holds it, so DROP ... SYNC waits for the publish to finish before this
 	// rebuild starts, and a later publish fails for lack of its table. Either
-	// way the older rows never land after this rebuild's rows.
-	if err := dropTables(ctx, conn, "^"+chPreparedUsageBuildPrefix+"[a-z0-9]+$", 0); err != nil {
+	// way the older rows never land after this rebuild's rows. A build table
+	// with a higher number belongs to a successor and is left alone.
+	if err := dropTables(ctx, conn, "match(name, ?) AND "+chTableNumberSQL+" < ?",
+		chPreparedUsageBuildPattern, generation); err != nil {
 		return err
 	}
-	current, err := preparedUsageCurrent(ctx, conn)
-	if err != nil || current {
-		return err
+	// The first pass checks again because the previous holder may have
+	// published these snapshots while this push waited for the lock.
+	for pass := range 2 {
+		current, err := preparedUsageCurrent(ctx, conn)
+		if err != nil || current {
+			return err
+		}
+		if pass > 0 {
+			log.Print("clickhouse push: snapshots changed during the rebuild; rebuilding prepared usage once more")
+		}
+		if err := publishPreparedUsageBuild(ctx, conn, generation); err != nil {
+			return err
+		}
 	}
+	return nil
+}
+
+// publishPreparedUsageBuild fills the build table of the lock generation
+// with the view's query and moves its parts into prepared_usage.
+func publishPreparedUsageBuild(ctx context.Context, conn *sql.DB, generation uint64) (err error) {
 	log.Print("clickhouse push: rebuilding prepared usage")
 	started := time.Now()
-	build := chPreparedUsageBuildPrefix + strings.ToLower(rand.Text())
+	build := fmt.Sprintf("%s%d", chPreparedUsageBuildPrefix, generation)
 	if _, err := conn.ExecContext(ctx, "CREATE TABLE "+build+" AS prepared_usage"); err != nil {
 		return fmt.Errorf("creating prepared usage build table: %w", err)
 	}
@@ -647,16 +700,16 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 		" SETTINGS "+chPreparedUsageRefreshSettings); err != nil {
 		return fmt.Errorf("filling prepared usage build table: %w", err)
 	}
-	// A push that held the lock past its timeout may have lost it to a newer
-	// rebuild before it created its build table, which that rebuild's drop
-	// then missed. If the takeover comes after this check instead, the new
-	// holder drops the build table and fences the publish off.
+	// A push whose lock expired may have lost it to a newer rebuild before
+	// it created its build table, which that rebuild's drop then missed. If
+	// the takeover comes after this check instead, the new holder drops the
+	// build table and fences the publish off.
 	superseded, err := rebuildLockSuperseded(ctx, conn, generation)
 	if err != nil {
 		return err
 	}
 	if superseded {
-		return errors.New("a newer prepared usage rebuild took over the lock; discarding this build")
+		return errors.New("this rebuild outlasted its lock and a newer rebuild took over; discarding it")
 	}
 	if _, err := conn.ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM "+build); err != nil {
 		return fmt.Errorf("replacing prepared usage rows: %w", err)
@@ -665,10 +718,45 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 	return nil
 }
 
+// keepRebuildLock renews the lock generation every chRebuildLockRenewal
+// until ctx ends, so a rebuild that runs longer than chRebuildLockTimeout
+// keeps its lock. It stops when the lock is gone, which means a newer
+// holder took over.
+func keepRebuildLock(ctx context.Context, conn *sql.DB, generation uint64) {
+	ticker := time.NewTicker(chRebuildLockRenewal)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		err := renewRebuildLock(ctx, conn, generation)
+		if isMissingTableError(err) {
+			return
+		}
+		if err != nil && ctx.Err() == nil {
+			log.Printf("clickhouse push: renewing prepared usage rebuild lock: %v", err)
+		}
+	}
+}
+
+// renewRebuildLock marks the lock generation held as of the server's
+// current time.
+func renewRebuildLock(ctx context.Context, conn *sql.DB, generation uint64) error {
+	var now int64
+	if err := conn.QueryRowContext(ctx, "SELECT toUnixTimestamp(now())").Scan(&now); err != nil {
+		return fmt.Errorf("reading server time: %w", err)
+	}
+	_, err := conn.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s%d MODIFY COMMENT 'held %d'",
+		chPreparedUsageRebuildLockPrefix, generation, now))
+	return err
+}
+
 // acquireRebuildLock takes the next prepared usage rebuild lock. The locks
 // are tables numbered in the order pushes took them, and the newest one
 // decides: it is held until its holder marks it released in its comment, or
-// until it is older than chRebuildLockTimeout. To take the lock, a push
+// until its holder has not renewed it for chRebuildLockTimeout. To take the lock, a push
 // creates the table with the next number. CREATE TABLE fails when the name
 // exists, so of two pushes that read the same newest lock only one gets the
 // next number. Numbers never repeat, so a push that lost its lock cannot
@@ -680,7 +768,7 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 	if err := conn.QueryRowContext(ctx, "SELECT toUnixTimestamp(now())").Scan(&now); err != nil {
 		return 0, false, fmt.Errorf("reading server time: %w", err)
 	}
-	rows, err := conn.QueryContext(ctx, `SELECT `+chRebuildLockGenerationSQL+` AS generation, comment
+	rows, err := conn.QueryContext(ctx, `SELECT `+chTableNumberSQL+` AS generation, comment
 		FROM system.tables WHERE database = currentDatabase() AND match(name, ?)
 		ORDER BY generation`, chPreparedUsageRebuildLockPattern)
 	if err != nil {
@@ -703,7 +791,10 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 		if since, held := strings.CutPrefix(newestComment, "held "); held {
 			heldAt, err := strconv.ParseInt(since, 10, 64)
 			if err == nil && now-heldAt < int64(chRebuildLockTimeout/time.Second) {
-				log.Print("clickhouse push: another push is rebuilding prepared usage; skipping this rebuild")
+				log.Printf("clickhouse push: skipping the prepared usage rebuild: another push holds %s%d, "+
+					"last renewed %s; a lock its push stops renewing expires after %s",
+					chPreparedUsageRebuildLockPrefix, generations[len(generations)-1],
+					time.Unix(heldAt, 0).Format(time.RFC3339), chRebuildLockTimeout)
 				return 0, false, nil
 			}
 		}
@@ -713,7 +804,7 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 	_, err = conn.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s%d (x UInt8) ENGINE = Memory COMMENT 'held %d'",
 		chPreparedUsageRebuildLockPrefix, generation, now))
 	if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
-		log.Print("clickhouse push: another push is rebuilding prepared usage; skipping this rebuild")
+		log.Print("clickhouse push: skipping the prepared usage rebuild: another push took the rebuild lock first")
 		return 0, false, nil
 	}
 	if err != nil {
@@ -732,7 +823,7 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 func rebuildLockSuperseded(ctx context.Context, conn *sql.DB, generation uint64) (bool, error) {
 	var superseded uint8
 	if err := conn.QueryRowContext(ctx, `SELECT count() > 0 FROM system.tables
-		WHERE database = currentDatabase() AND match(name, ?) AND `+chRebuildLockGenerationSQL+` > ?`,
+		WHERE database = currentDatabase() AND match(name, ?) AND `+chTableNumberSQL+` > ?`,
 		chPreparedUsageRebuildLockPattern, generation).Scan(&superseded); err != nil {
 		return false, fmt.Errorf("checking prepared usage rebuild lock: %w", err)
 	}
@@ -773,13 +864,12 @@ func preparedUsageCurrent(ctx context.Context, conn *sql.DB) (bool, error) {
 	return stored == live, nil
 }
 
-// dropTables drops the tables whose names match pattern and whose metadata
-// is at least minAge old. Callers pass patterns that match only names they
-// make, which need no quoting.
-func dropTables(ctx context.Context, conn *sql.DB, pattern string, minAge time.Duration) error {
+// dropTables drops the tables of the current database that the condition
+// on system.tables selects. Callers select only names they make, which need
+// no quoting.
+func dropTables(ctx context.Context, conn *sql.DB, condition string, args ...any) error {
 	rows, err := conn.QueryContext(ctx, `SELECT name FROM system.tables
-		WHERE database = currentDatabase() AND match(name, ?)
-		AND metadata_modification_time <= now() - toIntervalSecond(?)`, pattern, int64(minAge/time.Second))
+		WHERE database = currentDatabase() AND `+condition, args...)
 	if err != nil {
 		return fmt.Errorf("listing tables to drop: %w", err)
 	}

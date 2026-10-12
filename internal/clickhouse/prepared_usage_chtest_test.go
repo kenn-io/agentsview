@@ -699,6 +699,21 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 		require.NoError(t, rows.Err())
 		return names
 	}
+	locks := func() []string {
+		t.Helper()
+		var names []string
+		rows, err := store.DB().QueryContext(ctx, `SELECT name || ' ' || comment FROM system.tables
+			WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_rebuild_lock')`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var lock string
+			require.NoError(t, rows.Scan(&lock))
+			names = append(names, lock)
+		}
+		require.NoError(t, rows.Err())
+		return names
+	}
 	push()
 	built := parts()
 	require.NotEmpty(t, built)
@@ -706,6 +721,8 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
 	require.Equal(t, built, parts(), "a push that changed nothing must keep the prepared rows")
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_1 released"}, locks(),
+		"a push that changed nothing must not take the rebuild lock")
 
 	session, err := local.GetSessionFull(ctx, usagePriceRoundID)
 	require.NoError(t, err)
@@ -730,35 +747,28 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	state, err := store.preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{usagePriceRoundID}, state.changed)
-	// A lock held for more than an hour belongs to a killed push. The next
-	// push takes over, and one released lock table remains. The holder that
-	// overran may have passed its ownership check with its build filled;
-	// after the takeover it can no longer publish the older rows.
+	// A lock not renewed for more than an hour belongs to a stopped push.
+	// The next push takes over, and one released lock table remains. The
+	// holder that overran may have passed its ownership check with its build
+	// filled; after the takeover it can no longer publish the older rows. A
+	// build of a newer lock belongs to a successor and stays.
 	_, err = store.DB().ExecContext(ctx, fmt.Sprintf(
 		"ALTER TABLE prepared_usage_rebuild_lock_100 MODIFY COMMENT 'held %d'", now-2*60*60))
 	require.NoError(t, err)
 	for _, stmt := range []string{
-		"CREATE TABLE prepared_usage_build_overran AS prepared_usage",
-		"INSERT INTO prepared_usage_build_overran SELECT * FROM prepared_usage",
+		"CREATE TABLE prepared_usage_build_100 AS prepared_usage",
+		"INSERT INTO prepared_usage_build_100 SELECT * FROM prepared_usage",
+		"CREATE TABLE prepared_usage_build_102 AS prepared_usage",
 	} {
 		_, err = store.DB().ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)
 	}
 	push()
-	_, err = store.DB().ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM prepared_usage_build_overran")
+	_, err = store.DB().ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM prepared_usage_build_100")
 	require.True(t, isMissingTableError(err), "the overran holder must not publish after a takeover: %v", err)
-	var locks []string
-	rows, err := store.DB().QueryContext(ctx, `SELECT name || ' ' || comment FROM system.tables
-		WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_rebuild_lock')`)
-	require.NoError(t, err)
-	defer rows.Close()
-	for rows.Next() {
-		var lock string
-		require.NoError(t, rows.Scan(&lock))
-		locks = append(locks, lock)
-	}
-	require.NoError(t, rows.Err())
-	require.Equal(t, []string{"prepared_usage_rebuild_lock_101 released"}, locks)
+	_, err = store.DB().ExecContext(ctx, "DROP TABLE prepared_usage_build_102 SYNC")
+	require.NoError(t, err, "a rebuild must leave a newer holder's build table alone")
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_101 released"}, locks())
 	prepared := read()
 	var roundRows []activity.UsageRow
 	for _, row := range prepared {
@@ -777,9 +787,27 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	require.Equal(t, read(), prepared, "prepared usage must match the raw rows it replaces")
 }
 
-// A push that held the rebuild lock past its timeout must not publish once
-// another push has taken a newer lock, and releasing a lock a successor
-// already dropped is not an error.
+// A database that can exchange tables refreshes prepared usage with its
+// view, so the schema step drops what rebuilds left behind, such as after
+// the data directory moved off NFS.
+func TestEnsurePreparedUsageDropsRebuildTablesWithTableExchange(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	conn := chtest.Open(t, target.URL, target.Database)
+	_, err := conn.ExecContext(ctx, "CREATE TABLE prepared_usage_rebuild_lock_7 (x UInt8) ENGINE = Memory COMMENT 'released'")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "CREATE TABLE prepared_usage_build_7 (x UInt8) ENGINE = Memory")
+	require.NoError(t, err)
+	newTestSync(t, local, target, storage.PusherOptions{})
+	var left uint64
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT count() FROM system.tables
+		WHERE database = currentDatabase() AND name IN ('prepared_usage_rebuild_lock_7', 'prepared_usage_build_7')`).Scan(&left))
+	require.Zero(t, left)
+}
+
+// A renewed rebuild lock stays held past its timeout. A push that stopped
+// renewing must not publish once another push has taken a newer lock, and
+// renewing or releasing a lock a successor already dropped changes nothing.
 func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
@@ -791,9 +819,19 @@ func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, superseded)
 
-	_, err = conn.ExecContext(ctx, fmt.Sprintf(
-		"ALTER TABLE prepared_usage_rebuild_lock_%d MODIFY COMMENT 'held 1'", generation))
+	expire := func() {
+		t.Helper()
+		_, err := conn.ExecContext(ctx, fmt.Sprintf(
+			"ALTER TABLE prepared_usage_rebuild_lock_%d MODIFY COMMENT 'held 1'", generation))
+		require.NoError(t, err)
+	}
+	expire()
+	require.NoError(t, renewRebuildLock(ctx, conn, generation))
+	_, acquired, err = acquireRebuildLock(ctx, conn)
 	require.NoError(t, err)
+	require.False(t, acquired, "a renewed lock is still held")
+
+	expire()
 	successor, acquired, err := acquireRebuildLock(ctx, conn)
 	require.NoError(t, err)
 	require.True(t, acquired)
@@ -801,6 +839,8 @@ func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 	superseded, err = rebuildLockSuperseded(ctx, conn, generation)
 	require.NoError(t, err)
 	require.True(t, superseded)
+	err = renewRebuildLock(ctx, conn, generation)
+	require.True(t, isMissingTableError(err), "a superseded holder cannot renew: %v", err)
 	require.NoError(t, releaseRebuildLock(ctx, conn, generation))
 
 	_, acquired, err = acquireRebuildLock(ctx, conn)
