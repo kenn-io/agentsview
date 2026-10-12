@@ -1424,8 +1424,8 @@ class UsageStore {
     if (panel === "zoom") {
       // Rows from another range or scope are wrong, so clear them. A metric or
       // token-type change, a refresh, or a remount keeps them, even if it fails.
-      // active_since moves on every call, so skip it.
-      const scope = JSON.stringify({ ...query, active_since: undefined });
+      // active_since moves on every call, so key on whether it is set.
+      const scope = JSON.stringify({ ...query, active_since: query.active_since !== undefined });
       if (scope !== this.zoomScope) this.zoomRows = null;
       this.zoomScope = scope;
     }

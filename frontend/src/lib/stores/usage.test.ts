@@ -2588,6 +2588,37 @@ describe("UsageStore project zoom", () => {
     },
   );
 
+  it("drops zoom rows when Recently active toggles, but keeps them when only its cutoff moves", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-08T12:00:00Z"));
+    usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
+    usage.setOpenProject("pl1:sha256:alpha");
+    await vi.waitFor(() => expect(usage.zoomRows).toEqual([group(1)]));
+
+    sessions.filters.recentlyActive = true;
+    usageServiceMocks.getUsageZoom.mockRejectedValueOnce(new Error("zoom failed"));
+    await usage.fetchAll({ preserveTimeRange: true });
+    expect(usage.zoomRows).toBeNull();
+    expect(usage.errors.zoom).toBe("zoom failed");
+
+    usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(2)]);
+    await usage.fetchAll({ preserveTimeRange: true });
+    expect(usage.zoomRows).toEqual([group(2)]);
+
+    now.mockReturnValue(Date.parse("2026-10-08T12:05:00Z"));
+    usageServiceMocks.getUsageZoom.mockRejectedValueOnce(new Error("zoom failed"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await usage.fetchAll({ preserveTimeRange: true });
+    expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ active_since: "2026-10-07T12:05:00.000Z" }),
+    );
+    expect(usage.zoomRows).toEqual([group(2)]);
+    expect(usage.errors.zoom).toBeNull();
+    warn.mockRestore();
+    now.mockRestore();
+  });
+
   it.each(["returning to projects", "metric and token selection changes"])(
     "drops stale zoom results after %s",
     async (event) => {
