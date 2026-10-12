@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-const source = readFileSync(new URL("./chatgpt_fetch.js", import.meta.url), "utf8");
+const source = readFileSync("chrome-extension/chatgpt_fetch.js", "utf8");
 
 function loadFetch(fetch: typeof globalThis.fetch) {
   const context: Record<string, unknown> = {
