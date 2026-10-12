@@ -702,7 +702,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	locks := func() []string {
 		t.Helper()
 		var names []string
-		rows, err := store.DB().QueryContext(ctx, `SELECT name || ' ' || comment FROM system.tables
+		rows, err := store.DB().QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
 			WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_rebuild_lock')`)
 		require.NoError(t, err)
 		defer rows.Close()
@@ -721,7 +721,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
 	require.Equal(t, built, parts(), "a push that changed nothing must keep the prepared rows")
-	require.Equal(t, []string{"prepared_usage_rebuild_lock_1 released"}, locks(),
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_2 released"}, locks(),
 		"a push that changed nothing must not take the rebuild lock")
 
 	session, err := local.GetSessionFull(ctx, usagePriceRoundID)
@@ -737,9 +737,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	// place, and reads prepare the republished session themselves.
 	var now int64
 	require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT toUnixTimestamp(now())").Scan(&now))
-	_, err = store.DB().ExecContext(ctx, fmt.Sprintf(
-		"CREATE TABLE prepared_usage_rebuild_lock_100 (x UInt8) ENGINE = Memory COMMENT 'held %d'", now))
-	require.NoError(t, err)
+	require.NoError(t, createRebuildLock(ctx, store.DB(), 100, rebuildLockState{Status: rebuildLockHeld, RenewedAt: now}))
 	result, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
@@ -752,9 +750,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	// holder that overran may have passed its ownership check with its build
 	// filled; after the takeover it can no longer publish the older rows. A
 	// build of a newer lock belongs to a successor and stays.
-	_, err = store.DB().ExecContext(ctx, fmt.Sprintf(
-		"ALTER TABLE prepared_usage_rebuild_lock_100 MODIFY COMMENT 'held %d'", now-2*60*60))
-	require.NoError(t, err)
+	require.NoError(t, setRebuildLock(ctx, store.DB(), 100, rebuildLockState{Status: rebuildLockHeld, RenewedAt: now - 2*60*60}))
 	for _, stmt := range []string{
 		"CREATE TABLE prepared_usage_build_100 AS prepared_usage",
 		"INSERT INTO prepared_usage_build_100 SELECT * FROM prepared_usage",
@@ -800,7 +796,7 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 	rebuildTables := func() []string {
 		t.Helper()
 		var names []string
-		rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || comment FROM system.tables
+		rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
 			WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_') AND name != 'prepared_usage'
 			ORDER BY name`)
 		require.NoError(t, err)
@@ -816,14 +812,10 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 	newTestSync(t, local, target, storage.PusherOptions{})
 	require.Empty(t, rebuildTables())
 
-	for _, stmt := range []string{
-		"CREATE TABLE prepared_usage_rebuild_lock_6 (x UInt8) ENGINE = Memory COMMENT 'released'",
-		"CREATE TABLE prepared_usage_rebuild_lock_7 (x UInt8) ENGINE = Memory COMMENT 'held 1'",
-		"CREATE TABLE prepared_usage_build_7 AS prepared_usage",
-	} {
-		_, err := conn.ExecContext(ctx, stmt)
-		require.NoError(t, err, stmt)
-	}
+	require.NoError(t, createRebuildLock(ctx, conn, 6, rebuildLockState{Status: rebuildLockReleased}))
+	require.NoError(t, createRebuildLock(ctx, conn, 7, rebuildLockState{Status: rebuildLockHeld, RenewedAt: 1}))
+	_, err := conn.ExecContext(ctx, "CREATE TABLE prepared_usage_build_7 AS prepared_usage")
+	require.NoError(t, err)
 	newTestSync(t, local, target, storage.PusherOptions{})
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_8 retired"}, rebuildTables())
 	superseded, err := rebuildLockSuperseded(ctx, conn, 7)
@@ -838,21 +830,40 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_8 retired"}, rebuildTables())
 }
 
-// A push that found no view and took the lock after the schema step
-// created the view, with no lock to retire yet, stands down and leaves its
-// lock retired.
-func TestRebuildLockStandsDownWhenViewExists(t *testing.T) {
+// A database that can swap tables has no rebuild lock, so a push that finds
+// the view missing, as while a schema step recreates it, does not rebuild.
+// One that finds the newest lock retired but no view finishes the switch to
+// the view that a schema step left halfway.
+func TestRefreshPreparedUsageWithoutViewFollowsRebuildLock(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	conn := chtest.Open(t, target.URL, target.Database)
 	newTestSync(t, local, target, storage.PusherOptions{})
-	_, acquired, err := acquireRebuildLock(ctx, conn)
+	tables := func() []string {
+		t.Helper()
+		var names []string
+		rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
+			WHERE database = currentDatabase() AND startsWith(name, 'prepare') AND name != 'prepared_usage'
+			ORDER BY name`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			require.NoError(t, rows.Scan(&name))
+			names = append(names, name)
+		}
+		require.NoError(t, rows.Err())
+		return names
+	}
+	require.NoError(t, dropPreparedUsageView(ctx, conn))
+	require.NoError(t, refreshPreparedUsage(ctx, conn))
+	require.Empty(t, tables(), "a push must not rebuild or take a lock without one")
+
+	require.NoError(t, createRebuildLock(ctx, conn, 3, rebuildLockState{Status: rebuildLockRetired}))
+	_, err := conn.ExecContext(ctx, "CREATE TABLE prepared_usage_build_2 AS prepared_usage")
 	require.NoError(t, err)
-	require.False(t, acquired)
-	var comment string
-	require.NoError(t, conn.QueryRowContext(ctx, `SELECT comment FROM system.tables
-		WHERE database = currentDatabase() AND name = 'prepared_usage_rebuild_lock_1'`).Scan(&comment))
-	require.Equal(t, "retired", comment)
+	require.NoError(t, refreshPreparedUsage(ctx, conn))
+	require.Equal(t, []string{"prepare_usage ", "prepared_usage_rebuild_lock_3 retired"}, tables())
 }
 
 // A database that loses the ability to exchange tables again lets pushes
@@ -863,8 +874,7 @@ func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T)
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
 	target := Target{URL: dsn, Database: database}
 	conn := chtest.Open(t, dsn, database)
-	_, err := conn.ExecContext(ctx, "CREATE TABLE prepared_usage_rebuild_lock_5 (x UInt8) ENGINE = Memory COMMENT 'retired'")
-	require.NoError(t, err)
+	require.NoError(t, createRebuildLock(ctx, conn, 5, rebuildLockState{Status: rebuildLockRetired}))
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -873,7 +883,7 @@ func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, ready, "the push must rebuild prepared usage")
 	var locks []string
-	rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || comment FROM system.tables
+	rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
 		WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_rebuild_lock')`)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -894,6 +904,10 @@ func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)
+	_, acquired, err := acquireRebuildLock(ctx, conn)
+	require.NoError(t, err)
+	require.False(t, acquired, "a database without a rebuild lock refreshes with its view")
+	require.NoError(t, openRebuildLocks(ctx, conn))
 	generation, acquired, err := acquireRebuildLock(ctx, conn)
 	require.NoError(t, err)
 	require.True(t, acquired)
@@ -903,9 +917,7 @@ func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 
 	expire := func() {
 		t.Helper()
-		_, err := conn.ExecContext(ctx, fmt.Sprintf(
-			"ALTER TABLE prepared_usage_rebuild_lock_%d MODIFY COMMENT 'held 1'", generation))
-		require.NoError(t, err)
+		require.NoError(t, setRebuildLock(ctx, conn, generation, rebuildLockState{Status: rebuildLockHeld, RenewedAt: 1}))
 	}
 	expire()
 	require.NoError(t, renewRebuildLock(ctx, conn, generation))

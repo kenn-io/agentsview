@@ -244,15 +244,20 @@ refresh stopped, and always starts it again.
 Filesystems without that flag, such as NFS, fail every refresh with
 `UNSUPPORTED_METHOD`, and the table is never filled. The schema step therefore
 exchanges two empty scratch tables in the mirror database. When that fails, it
-does not create the view and drops one an earlier version created. Probe tables
-that a killed push left behind are dropped once they are an hour old.
+does not create the view, drops one an earlier version created, and creates the
+first rebuild lock if none exists. Probe tables that a killed push left behind
+are dropped once they are an hour old.
 
-Each push then rebuilds the table itself before it returns. It runs the view's
-query into a new `prepared_usage_build_<n>` table and moves that table's parts
-into `prepared_usage` with `REPLACE PARTITION`, which replaces all the parts at
-once. Readers see the previous rows or the new ones, never a mix, and read them
-as they read rows the view prepared. A push skips its rebuild when the stored
-stamp equals the current one, both before and after it takes the lock. After
+The lock table is what tells pushes to rebuild. A push without the view rebuilds
+only while a lock exists and the newest one is not retired. A database that can
+swap tables has no lock, so a push that finds the view missing, as while a
+schema step recreates it, never rebuilds. Each push in rebuild mode rebuilds the
+table itself before it returns. It runs the view's query into a new
+`prepared_usage_build_<n>` table and moves that table's parts into
+`prepared_usage` with `REPLACE PARTITION`, which replaces all the parts at once.
+Readers see the previous rows or the new ones, never a mix, and read them as
+they read rows the view prepared. A push skips its rebuild when the stored stamp
+equals the current one, both before and after it takes the lock. After
 publishing, the holder rebuilds once more if the snapshots changed meanwhile. If
 they changed again, it logs that and leaves the rest to the next push. Without
 the view, nothing refreshes on a schedule, and a failed rebuild waits for the
@@ -262,12 +267,14 @@ native backups include its rows without
 
 Rebuilds take turns, as the view's refreshes do. A read checks freshness and
 fetches rows in separate queries, so an older build must never replace a newer
-one between them. The lock is a numbered `prepared_usage_rebuild_lock_<n>`
-table. A push takes it by creating the table with the next number, which only
-one push can do. The push drops the older lock tables; the newest stays after
-release, so one lock table persists and numbers never repeat. A push that finds
-the lock held skips its rebuild, and reads prepare the changed sessions
-themselves meanwhile.
+one between them. The lock is a numbered `prepared_usage_rebuild_lock_<n>` table
+whose comment holds its state as JSON: `status` is `held`, `released`, or
+`retired`, and a held lock carries `renewed_at`, the ClickHouse server's Unix
+time. ClickHouse changes a comment atomically. A push takes the lock by creating
+the table with the next number, which only one push can do. The push drops the
+older lock tables; the newest stays after release, so one lock table persists
+and numbers never repeat. A push that finds the lock held skips its rebuild, and
+reads prepare the changed sessions themselves meanwhile.
 
 A lock can outlive its holder:
 
@@ -284,21 +291,20 @@ A lock can outlive its holder:
   a newer lock before publishing and discards its build if one exists.
 - A push drops its own build table when it finishes, so a leftover exists only
   between a killed push and the next rebuild.
-- When a later schema step finds that the database can exchange tables, as when
-  the data directory moved off NFS, it first creates one more lock number
-  marked `retired` and drops the older locks and every build table. A rebuild
+- When a later schema step finds that the database can swap tables, as when the
+  data directory moved off NFS, it first creates one more lock number with
+  status `retired` and drops the older locks and every build table. A rebuild
   that already took a lock finds the newer lock and discards its build;
   dropping its build table waits for a publish already running and fails a
-  later one. Only then does the schema step create the view.
-- A push that decided to rebuild before the view existed skips when it finds the
-  newest lock retired.
-- With no lock to retire, a push could take the first lock between the fence and
-  the view. The schema step retires again after creating the view, before it
-  starts the first refresh. A push that took a lock also checks for the view
-  right after and retires its own lock when the view exists. A database that
-  never rebuilt this way gets no lock table.
-- If the database later loses the ability to exchange tables again, the schema
-  step marks the retired lock released, and pushes rebuild again.
+  later one. A push that tries to take the lock afterwards finds it retired
+  and skips. Only then does the schema step create the view. Because a push
+  rebuilds only while a lock exists, a database with no lock has no rebuild to
+  fence.
+- If the schema step stops after retiring the lock but before creating the view,
+  a push that finds the newest lock retired and no view retires again, creates
+  the view, and starts its refresh.
+- If the database later loses the ability to swap tables again, the schema step
+  marks the retired lock released, and pushes rebuild again.
 
 **Currency is proven per read.** A read uses prepared rows only when every
 session has a current snapshot. Sessions pushed since the last refresh form a

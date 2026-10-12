@@ -498,30 +498,33 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   Putting `FINAL` in query text is rejected by this design.
 - **Lightweight deletes** need ClickHouse 23.3+; the integration suite pins
   `clickhouse/clickhouse-server:26.8`.
-- **Data directory on NFS.** ClickHouse cannot exchange tables when its data
-  directory is on a filesystem without atomic rename exchange, such as NFS.
-  The schema step detects this and logs
-  `this database cannot exchange tables`. Each push then rebuilds the prepared
-  usage table before it returns instead of leaving the rebuild to the server,
+- **Data directory on NFS.** ClickHouse cannot swap tables (`EXCHANGE TABLES`)
+  when its data directory is on a filesystem without atomic rename exchange,
+  such as NFS. The `prepare_usage` view needs that swap for every scheduled
+  refresh. The schema step detects this, logs
+  `this database cannot swap tables (EXCHANGE TABLES)`, drops the view, and
+  creates a `prepared_usage_rebuild_lock_<n>` table. While that lock table
+  exists, each push rebuilds the prepared usage table itself before it returns
   and logs how long the rebuild took. A push that changed nothing skips the
   rebuild. A push that finds another push rebuilding also skips it and logs
   which lock that push holds. The running rebuild checks once more after it
   publishes and rebuilds again for data that arrived meanwhile. A skipped or
   failed rebuild does not fail the push: usage reads stay correct but slower
   until a later rebuild succeeds, and the next push tries again. The mirror
-  database keeps one small `prepared_usage_rebuild_lock_<n>` table between
-  pushes.
+  database keeps one small lock table between pushes.
 - **Lock of a stopped push.** A lock expires an hour after its push last renewed
   it, so a push stopped mid-rebuild makes later pushes skip their rebuilds for
   up to an hour. If the skip message names a held lock and you know no push is
   running, end that wait by marking that lock released. Run this in the mirror
   database:
-  `ALTER TABLE prepared_usage_rebuild_lock_<n> MODIFY COMMENT 'released'`. Do
-  not drop the lock table; the next push would reuse its number. Leave a lock
-  marked `retired` alone.
-- **Moving off NFS.** When the schema step finds that the database can exchange
-  tables again, it creates a new lock table marked `retired`, drops the older
-  lock tables, and creates the refreshing view. Do not drop the retired lock:
-  it stops a push that started before the switch from overwriting the view's
-  rows. If the database later loses table exchange again, the schema step
-  marks it released and pushes rebuild again.
+  `ALTER TABLE prepared_usage_rebuild_lock_<n> MODIFY COMMENT '{"status":"released"}'`.
+  Do not drop the lock table; the next push would reuse its number. Leave a
+  lock whose status is `retired` alone.
+- **Moving off NFS.** When the schema step finds that the database can swap
+  tables again, it creates a new lock table with status `retired`, drops the
+  older lock tables, and then creates the `prepare_usage` view. Do not drop
+  the retired lock: it stops a push that started before the switch from
+  overwriting the view's rows. If the database later loses table swapping
+  again, the schema step marks the retired lock released, and pushes rebuild
+  again. If the schema step stops between retiring the lock and creating the
+  view, the next push creates the view.
