@@ -34,7 +34,14 @@ func (e *Engine) validateHermesReplacement(ctx context.Context, result parser.Pa
 	if stored == nil {
 		return nil
 	}
-	needsContentCheck := stored.SourceVersion != session.SourceVersion &&
+	incomingPath := session.File.Path
+	if e.pathRewriter != nil {
+		incomingPath = e.pathRewriter(incomingPath)
+	}
+	legacyStandalone := stored.SourceVersion == "" && stored.FilePath != nil &&
+		(filepath.Ext(session.File.Path) == ".jsonl" || filepath.Ext(session.File.Path) == ".json") &&
+		filepath.Clean(*stored.FilePath) == filepath.Clean(incomingPath)
+	needsContentCheck := !legacyStandalone && stored.SourceVersion != session.SourceVersion &&
 		(result.PreserveArchivedUsage || stored.SourceVersion != parser.HermesStateSourceVersion)
 	if result.ContentReplacement == parser.ContentPreserveRicherArchive && needsContentCheck {
 		archived, err := store.GetAllMessages(ctx, id)

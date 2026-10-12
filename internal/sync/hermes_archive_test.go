@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -1914,11 +1916,6 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 						assert.Equal(t, usageBefore, usageAfter)
 						engine.SyncAll(t.Context(), nil)
 					}
-					if strings.Contains(damage, "JSON snapshot") {
-						require.NoError(t, os.WriteFile(filepath.Join(dir, "session_child.json"), []byte(`{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"Done."},{"role":"user","content":"follow-up"}]}`), 0o600))
-					}
-					writeHermesTranscriptFile(t, dir, "child")
-					engine.SyncAll(t.Context(), nil)
 				})
 			}
 		}
@@ -2304,5 +2301,118 @@ func TestHermesProvenanceMigrationUsesStorageProjection(t *testing.T) {
 				assert.Equal(t, "hermes-jsonl-v1", row.SourceVersion)
 			})
 		}
+	}
+}
+
+func TestHermesLegacyStandaloneUpgradeAcceptsSameSource(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, format := range []string{"jsonl", "json"} {
+			for _, change := range []string{"unchanged", "shortened"} {
+				t.Run(string(agent)+"/"+format+"/"+change, func(t *testing.T) {
+					root := t.TempDir()
+					writeHermesTranscriptFile(t, root, "standalone")
+					path := filepath.Join(root, "standalone.jsonl")
+					if format == "json" {
+						require.NoError(t, os.Remove(path))
+						path = filepath.Join(root, "session_standalone.json")
+						require.NoError(t, os.WriteFile(path, []byte(`{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"Done."}]}`), 0o600))
+					}
+					database := dbtest.OpenTestDB(t)
+					cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local", Ephemeral: true}
+					engine := NewEngine(t.Context(), database, cfg)
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					id := string(agent) + ":standalone"
+					row, err := database.GetSessionFull(t.Context(), id)
+					require.NoError(t, err)
+					content, err := os.ReadFile(path)
+					require.NoError(t, err)
+					row.SourceVersion = ""
+					row.FileHash = new(fmt.Sprintf("%x", sha256.Sum256(content)))
+					require.NoError(t, database.UpsertSession(t.Context(), *row))
+					engine.Close()
+					engine = NewEngine(t.Context(), database, cfg)
+					t.Cleanup(engine.Close)
+					want := []string{"hello", "Done."}
+					if change == "shortened" {
+						content = []byte(`{"role":"user","content":"short"}` + "\n")
+						if format == "json" {
+							content = []byte(`{"messages":[{"role":"user","content":"short"}]}`)
+						}
+						require.NoError(t, os.WriteFile(path, content, 0o600))
+						want = []string{"short"}
+					}
+					stats := engine.SyncAll(t.Context(), nil)
+					require.Zero(t, stats.Failed)
+					assert.Equal(t, 1, stats.Synced)
+					row, err = database.GetSessionFull(t.Context(), id)
+					require.NoError(t, err)
+					assert.Equal(t, "hermes-"+format+"-v1", row.SourceVersion)
+					messages, err := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					contents := make([]string, len(messages))
+					for i, message := range messages {
+						contents[i] = message.Content
+					}
+					assert.Equal(t, want, contents)
+					assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+				})
+			}
+		}
+	}
+}
+
+func TestHermesSingleSessionResyncReturnsToRecoveredDatabase(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			dir := filepath.Join(root, "sessions")
+			writeHermesTranscriptFile(t, dir, "child")
+			writeHermesTranscriptFile(t, dir, "sibling")
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			id := string(agent) + ":child"
+			require.NoError(t, os.WriteFile(stateDB, []byte("not a SQLite database"), 0o600))
+			require.NoError(t, engine.SyncSingleSessionContext(t.Context(), id))
+			assert.Equal(t, filepath.Join(dir, "child.jsonl"), database.GetSessionFilePath(t.Context(), id))
+			require.NoError(t, os.Remove(stateDB))
+			writeHermesArchiveStateDB(t, root)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET title='recovered title', input_tokens=100, output_tokens=73, estimated_cost_usd=0.5, cost_status='estimated', message_count=3;
+				DELETE FROM messages;
+				INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','user','hello',1778767210),('child','assistant','Done.',1778767211),('child','user','new database message',1778767212)`)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "sibling.jsonl"), []byte(`{"role":"user","content":"unrequested edit"}`+"\n"), 0o600))
+			siblingBefore, err := database.GetAllMessages(t.Context(), string(agent)+":sibling")
+			require.NoError(t, err)
+			require.NoError(t, engine.SyncSingleSessionContext(t.Context(), id))
+			row, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, new("recovered title"), row.SessionName)
+			assert.Equal(t, 73, row.TotalOutputTokens)
+			usage, err := database.GetUsageEvents(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, []db.UsageEvent{{
+				ID: 1, SessionID: id, Source: "session", Model: "gpt-5.4",
+				InputTokens: 100, OutputTokens: 73, Cost: &money.Money{Microdollars: 500000},
+				CostStatus: "estimated", OccurredAt: "2026-05-14T14:10:00Z",
+				DedupKey: "session:hermes:child",
+			}}, usage)
+			messages, err := database.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			contents := make([]string, len(messages))
+			for i, message := range messages {
+				contents[i] = message.Content
+			}
+			assert.Equal(t, []string{"hello", "Done.", "new database message"}, contents)
+			assert.Equal(t, parser.VirtualSourcePath(stateDB, "child"), database.GetSessionFilePath(t.Context(), id))
+			siblingAfter, err := database.GetAllMessages(t.Context(), string(agent)+":sibling")
+			require.NoError(t, err)
+			assert.Equal(t, siblingBefore, siblingAfter)
+		})
 	}
 }

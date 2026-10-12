@@ -1238,6 +1238,18 @@ func (s hermesSourceSet) FindSource(
 			}
 			src := source.Opaque.(hermesSource)
 			if src.SessionID == "" {
+				if isValidHermesSessionID(req.RawSessionID) && filepath.Base(src.Path) != "state.db" {
+					if stateDB, _, ok := hermesStatePaths(root); ok {
+						member := s.stateMemberSourceRef(root, stateDB, req.RawSessionID)
+						resolved, found, err := s.findReadableMemberSource(ctx, member)
+						if err != nil {
+							return SourceRef{}, false, err
+						}
+						if found {
+							return resolved, true, nil
+						}
+					}
+				}
 				return source, true, nil
 			}
 			resolved, found, err := s.findReadableMemberSource(ctx, source)
@@ -1395,7 +1407,7 @@ func (s hermesSourceSet) Fingerprint(
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
 		Size:    info.Size(),
 		MTimeNS: info.ModTime().UnixNano(),
-		Hash:    hash,
+		Hash:    fmt.Sprintf("%x", sha256.Sum256([]byte("hermes-transcript-source-v1\x00"+hash))),
 	}, nil
 }
 
