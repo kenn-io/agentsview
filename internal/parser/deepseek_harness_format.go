@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/ctxio"
 
 	"github.com/klauspost/compress/zstd"
+	"go.kenn.io/agentsview/internal/zstdframe"
 )
 
 const (
@@ -31,8 +32,6 @@ const (
 	deepSeekHarnessOldestFormatVersion = 0
 	deepSeekHarnessNewestFormatVersion = 4
 	deepSeekHarnessMaxSafeInt          = int64(1<<53 - 1)
-	deepSeekHarnessMaxWindow           = 8 << 20
-	deepSeekHarnessDecoderMemory       = 64 << 20
 )
 
 type deepSeekHarnessHeader struct {
@@ -288,13 +287,7 @@ func scanDeepSeekHarnessLog(
 }
 
 func newDeepSeekHarnessZstdDecoder(r io.Reader) (*zstd.Decoder, error) {
-	return zstd.NewReader(
-		r,
-		zstd.WithDecoderConcurrency(1),
-		zstd.WithDecoderLowmem(true),
-		zstd.WithDecoderMaxMemory(deepSeekHarnessDecoderMemory),
-		zstd.WithDecoderMaxWindow(deepSeekHarnessMaxWindow),
-	)
+	return zstdframe.NewDecoder(r)
 }
 
 func inspectDeepSeekHarnessZstdFrames(
@@ -304,133 +297,29 @@ func inspectDeepSeekHarnessZstdFrames(
 	if err != nil {
 		return deepSeekHarnessZstdLayout{}, err
 	}
-	size := info.Size()
-	layout := deepSeekHarnessZstdLayout{Size: size}
-	for offset := int64(0); offset < size; {
-		start := offset
-		magic, complete, err := deepSeekHarnessReadUintAt(f, size, offset, 4)
-		if err != nil {
-			return deepSeekHarnessZstdLayout{}, err
-		}
-		if !complete {
-			layout.Torn = true
-			break
-		}
-		if magic != 0xfd2fb528 {
+	layout, err := zstdframe.Inspect(f, info.Size(), 0)
+	if formatErr, ok := errors.AsType[*zstdframe.FormatError](err); ok {
+		if formatErr.Unsupported {
 			return deepSeekHarnessZstdLayout{}, fmt.Errorf(
-				"corrupt DeepSeek Harness zstd log: invalid frame magic at byte %d", offset,
+				"unsupported DeepSeek Harness zstd %w", formatErr,
 			)
 		}
-		offset += 4
-		descriptor, complete, err := deepSeekHarnessReadUintAt(f, size, offset, 1)
-		if err != nil {
-			return deepSeekHarnessZstdLayout{}, err
-		}
-		if !complete {
-			layout.Torn = true
-			break
-		}
-		offset++
-		if descriptor&0x18 != 0 {
-			return deepSeekHarnessZstdLayout{}, fmt.Errorf(
-				"corrupt DeepSeek Harness zstd log: reserved frame-header bit at byte %d",
-				offset-1,
-			)
-		}
-		if descriptor&0x04 == 0 {
-			return deepSeekHarnessZstdLayout{}, fmt.Errorf(
-				"unsupported DeepSeek Harness zstd frame without checksum at byte %d", start,
-			)
-		}
-		contentSizeFlag := descriptor >> 6
-		singleSegment := descriptor&0x20 != 0
-		dictionaryFlag := descriptor & 0x03
-		dictionaryBytes := dictionaryFlag
-		if dictionaryFlag == 3 {
-			dictionaryBytes = 4
-		}
-		contentSizeBytes := uint64(0)
-		if contentSizeFlag == 0 {
-			if singleSegment {
-				contentSizeBytes = 1
-			}
-		} else {
-			contentSizeBytes = 1 << contentSizeFlag
-		}
-		remainingHeader := int64(dictionaryBytes + contentSizeBytes)
-		if !singleSegment {
-			remainingHeader++
-		}
-		if remainingHeader > size-offset {
-			layout.Torn = true
-			break
-		}
-		offset += remainingHeader
-
-		frameComplete := false
-		for {
-			blockHeader, complete, err := deepSeekHarnessReadUintAt(f, size, offset, 3)
-			if err != nil {
-				return deepSeekHarnessZstdLayout{}, err
-			}
-			if !complete {
-				layout.Torn = true
-				break
-			}
-			offset += 3
-			lastBlock := blockHeader&1 != 0
-			blockType := (blockHeader >> 1) & 0x03
-			blockSize := blockHeader >> 3
-			if blockType == 0x03 {
-				return deepSeekHarnessZstdLayout{}, fmt.Errorf(
-					"corrupt DeepSeek Harness zstd log: reserved block type at byte %d", offset-3,
-				)
-			}
-			payloadBytes := int64(blockSize)
-			if blockType == 0x01 {
-				payloadBytes = 1
-			}
-			if payloadBytes > size-offset {
-				layout.Torn = true
-				break
-			}
-			offset += payloadBytes
-			if lastBlock {
-				frameComplete = true
-				break
-			}
-		}
-		if !frameComplete {
-			break
-		}
-		if 4 > size-offset {
-			layout.Torn = true
-			break
-		}
-		offset += 4
-		layout.CompleteFrames++
-		if layout.CompleteFrames == 1 {
-			layout.FirstFrameEnd = offset
-		}
+		return deepSeekHarnessZstdLayout{}, fmt.Errorf(
+			"corrupt DeepSeek Harness zstd log: %w", formatErr,
+		)
 	}
-	return layout, nil
-}
-
-func deepSeekHarnessReadUintAt(
-	f *os.File, size, offset int64, width int,
-) (uint64, bool, error) {
-	if offset < 0 || int64(width) > size-offset {
-		return 0, false, nil
+	if err != nil {
+		return deepSeekHarnessZstdLayout{}, err
 	}
-	var data [8]byte
-	if _, err := f.ReadAt(data[:width], offset); err != nil {
-		return 0, false, err
+	result := deepSeekHarnessZstdLayout{
+		CompleteFrames: layout.CompleteFrames,
+		Size:           layout.Size,
+		Torn:           layout.Torn,
 	}
-	var value uint64
-	for index := range width {
-		value |= uint64(data[index]) << (8 * index)
+	if len(layout.FrameEnds) > 0 {
+		result.FirstFrameEnd = layout.FrameEnds[0]
 	}
-	return value, true, nil
+	return result, nil
 }
 
 func validateDeepSeekHarnessZstdHeaderFrame(
