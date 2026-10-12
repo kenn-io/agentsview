@@ -152,7 +152,6 @@ func newClient(cfg Config, scopes []string) (*Client, error) {
 		enforced.CheckRedirect = refuseRedirects
 		httpClient = &enforced
 	}
-	httpClient = apiclient.NewArchiveHTTPClient(httpClient)
 	chunkBytes := cfg.ChunkBytes
 	if chunkBytes <= 0 {
 		chunkBytes = defaultChunkBytes

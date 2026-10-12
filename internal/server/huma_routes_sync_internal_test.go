@@ -2324,24 +2324,8 @@ func TestOnDemandSyncEngineKeepsStartupProvidersUntilRestart(t *testing.T) {
 		engine.ReconciliationRootsForAgent(string(parser.AgentGemini)))
 }
 
-// newStartupRebuildFixture serves a stale archive with a daemon engine whose
-// startup attempt has not completed, as runServe does while it rebuilds.
-func newStartupRebuildFixture(t *testing.T) (*syncRouteFixture, *syncpkg.Engine) {
-	t.Helper()
-	f := newSyncRouteFixture(t, withStaleDB(), withRemoteHosts(config.RemoteHost{
-		Host: "alpha", URL: "https://alpha.example.test", Token: "remote-token",
-	}))
-	engine := syncpkg.NewEngine(t.Context(), f.db, syncpkg.EngineConfig{DeferStartupMaintenance: true})
-	t.Cleanup(engine.Close)
-	f.srv.engine = engine
-	f.srv.localSyncRunner = func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
-		return syncpkg.SyncStats{}, errors.New("startup-only wait repeated ingestion")
-	}
-	return f, engine
-}
-
 func TestStartupRebuildWriteGate(t *testing.T) {
-	f, _ := newStartupRebuildFixture(t)
+	f := newSyncRouteFixture(t, withStaleDB())
 	dbtest.SeedSessionWithMessages(t, f.db, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript")}, func(session *db.Session) { session.Cwd = "/work/branch" })
 	f.srv.memoryRefreshRequest = func() {}
 	f.srv.telemetryCapture = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
@@ -2390,8 +2374,9 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				assert.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 				assert.Equal(t, writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))
 				assert.Equal(t, "true", w.Header().Get("X-Agentsview-Archive-Stale"))
-				assert.Contains(t, w.Body.String(), "read-only")
+				assert.Contains(t, w.Body.String(), "archive is read-only while it rebuilds")
 			} else {
+				assert.NotEqual(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 				assert.NotEqual(t, http.StatusMethodNotAllowed, w.Code)
 				assert.NotEqual(t, http.StatusNotFound, w.Code, w.Body.String())
 				assert.Equal(t, "true", w.Header().Get("X-Agentsview-Archive-Stale"))
@@ -2399,4 +2384,22 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCurrentArchiveSyncWaitsDuringMaintenance(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	require.NoError(t, f.db.CloseWriter())
+	calls := 0
+	f.srv.localSyncRunner = func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+		calls++
+		if calls == 1 {
+			return syncpkg.SyncStats{}, syncpkg.ErrSyncInProgress
+		}
+		return syncpkg.SyncStats{}, f.db.ReopenWriter()
+	}
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "event: done")
+	assert.Equal(t, 2, calls)
+	assert.Empty(t, w.Header().Get("X-Agentsview-Archive-Stale"))
 }

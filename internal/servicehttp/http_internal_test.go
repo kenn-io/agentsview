@@ -1,10 +1,8 @@
 package servicehttp
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -12,8 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/apiclient"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -25,60 +21,8 @@ func TestNewHTTPBackendUsesLongRunningClient(t *testing.T) {
 	require.NotNil(t, backend.client)
 	require.NotNil(t, backend.longRunningClient)
 
-	assert.Zero(t, backend.client.Timeout)
+	assert.Equal(t, 30*time.Second, backend.client.Timeout)
 	assert.Zero(t, backend.longRunningClient.Timeout)
-}
-
-func TestImportRecallEntriesReplay(t *testing.T) {
-	for _, replay := range []bool{true, false} {
-		t.Run(map[bool]string{true: "seekable import retries", false: "streaming import fails without replay"}[replay], func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				const jsonl = "{\"candidate_id\":\"imported-entry\",\"body\":\"Check the working directory.\"}\n"
-				calls := 0
-				var firstBody []byte
-				srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					assert.Equal(t, "/api/v1/recall/import", r.URL.Path)
-					body, err := io.ReadAll(r.Body)
-					if !assert.NoError(t, err) {
-						return
-					}
-					assert.Equal(t, jsonl, string(body))
-					calls++
-					if calls == 1 {
-						firstBody = body
-						w.Header().Set("X-Agentsview-Archive-Stale", "true")
-						w.Header().Set("Retry-After", "1")
-						w.WriteHeader(http.StatusServiceUnavailable)
-						return
-					}
-					assert.Equal(t, firstBody, body)
-					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(`{"imported":1,"skipped":0}`))
-				}))
-				backend := NewHTTPBackend("http://example.com", "", false, "").(*httpBackend)
-				client := *srv.Client()
-				client.Timeout = 30 * time.Second
-				backend.client = apiclient.NewArchiveHTTPClient(&client)
-				reader := strings.NewReader("prefix" + jsonl)
-				_, err := reader.Seek(6, io.SeekStart)
-				require.NoError(t, err)
-				var input io.Reader = reader
-				if !replay {
-					input = struct{ io.Reader }{reader}
-				}
-				result, err := backend.ImportRecallEntries(t.Context(), input, db.RecallImportOptions{})
-				if replay {
-					require.NoError(t, err)
-					require.NotNil(t, result)
-					assert.Equal(t, 1, result.Imported)
-					assert.Equal(t, 2, calls)
-				} else {
-					require.Error(t, err)
-					assert.Equal(t, 1, calls)
-				}
-			})
-		})
-	}
 }
 
 func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {

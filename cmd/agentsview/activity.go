@@ -126,7 +126,7 @@ func fetchHTTPActivityReport(
 		}
 		q.Date = &runtime.Date{Time: date}
 	}
-	api, err := newDaemonAPIClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return activity.Report{}, err
 	}
@@ -211,7 +211,7 @@ func fetchHTTPActivitySessionPage(
 	if cfg.SessionsReportID != "" {
 		query.IncludeReport = new(true)
 	}
-	api, err := newDaemonAPIClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return activity.Report{}, err
 	}

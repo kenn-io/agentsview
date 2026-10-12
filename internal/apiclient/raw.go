@@ -18,7 +18,7 @@ func RawRequest(baseURL string, httpClient *http.Client, operation func(*Client)
 	if err != nil {
 		return nil, err
 	}
-	transport := &rawTransport{APIClient: builder, client: NewArchiveHTTPClient(httpClient)}
+	transport := &rawTransport{APIClient: builder, client: httpClient}
 	err = operation(NewClient(transport))
 	// Generated envelopes may report an HTTP status error. The raw consumer
 	// interprets that status and reads the original error body itself.
@@ -39,6 +39,7 @@ func (t *rawTransport) ExecuteRequest(ctx context.Context, req *http.Request, _ 
 	if err != nil {
 		return nil, err
 	}
+	ObserveArchiveFreshness(ctx, response)
 	t.response = response
 	return &runtime.Response{StatusCode: response.StatusCode, Headers: response.Header, Raw: response}, nil
 }

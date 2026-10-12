@@ -27,7 +27,7 @@ func syncClaudeAIChrome(ctx context.Context) error {
 	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
 	httpTransport.ResponseHeaderTimeout = 30 * time.Second
 	defer httpTransport.CloseIdleConnections()
-	api, err := newDaemonAPIClient(transport.URL, cfg.AuthToken, &http.Client{Transport: httpTransport})
+	api, err := apiclient.NewHTTPClient(transport.URL, cfg.AuthToken, &http.Client{Transport: httpTransport})
 	if err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -127,7 +128,7 @@ func initializeConversationExport(command *cobra.Command) error {
 	// archive, so it is treated like no daemon; openWriteDB still refuses when
 	// a writable daemon holds the archive.
 	if tr.Mode == transportHTTP && !tr.ReadOnly {
-		api, err := newDaemonAPIClient(tr.URL, cfg.AuthToken, &http.Client{Timeout: 0})
+		api, err := apiclient.NewHTTPClient(tr.URL, cfg.AuthToken, &http.Client{Timeout: 0})
 		if err != nil {
 			return err
 		}

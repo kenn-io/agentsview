@@ -50,7 +50,7 @@ func fetchHTTPProjects(
 	excludeOneShot bool,
 	excludeAutomated bool,
 ) ([]db.ProjectInfo, error) {
-	api, err := newDaemonAPIClient(tr.URL, authToken, projectsHTTPClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, projectsHTTPClient)
 	if err != nil {
 		return nil, err
 	}

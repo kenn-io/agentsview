@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -35,8 +34,8 @@ func handleReadOnly(w http.ResponseWriter, err error) bool {
 		return true
 	}
 	if errors.Is(err, db.ErrWriterClosed) {
-		response := writerClosedResponse(w.Header().Add)
-		writeError(w, response.GetStatus(), response.Error())
+		w.Header().Set("Retry-After", writerClosedRetryAfterSeconds)
+		writeError(w, http.StatusServiceUnavailable, writerClosedError().Error())
 		return true
 	}
 	return false
@@ -773,10 +772,6 @@ func (s *Server) handleImportRecallEntries(
 		)
 		return
 	}
-	if s.rejectWriterClosedWrite() != nil {
-		handleReadOnly(w, db.ErrWriterClosed)
-		return
-	}
 	result, err := s.db.ImportAcceptedRecallEntriesJSONLWithOptions(
 		r.Context(),
 		r.Body,
@@ -790,13 +785,6 @@ func (s *Server) handleImportRecallEntries(
 		s.notifyRecallCorpusMutation()
 	}
 	if err != nil {
-		if result.Imported > 0 && errors.Is(err, db.ErrWriterClosed) {
-			writeJSON(w, http.StatusConflict, struct {
-				db.RecallImportResult
-				Error string `json:"error"`
-			}{result, fmt.Sprintf("recall import interrupted by archive rebuild after %d imported and %d skipped entries; rerun the import after the rebuild completes", result.Imported, result.Skipped)})
-			return
-		}
 		if handleContextError(w, err) {
 			return
 		}

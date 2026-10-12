@@ -18,7 +18,6 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
 	"go.kenn.io/agentsview/internal/db"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -110,11 +109,9 @@ func configureHuma() {
 			message string,
 			errs ...error,
 		) huma.StatusError {
-			if status == http.StatusInternalServerError {
-				for _, err := range errs {
-					if errors.Is(err, db.ErrWriterClosed) {
-						return writerClosedResponse(ctx.AppendHeader)
-					}
+			for _, err := range errs {
+				if errors.Is(err, db.ErrWriterClosed) {
+					return writerClosedResponse(ctx.AppendHeader)
 				}
 			}
 			return huma.NewError(status, message, errs...)
@@ -500,7 +497,7 @@ func handleHumaReadOnly(err error) error {
 		return apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
 	if errors.Is(err, db.ErrWriterClosed) {
-		return writerClosedError()
+		return err
 	}
 	return nil
 }
@@ -562,14 +559,11 @@ func (s *Server) tryArchiveWrite(ctx context.Context, work func() error) error {
 	return work()
 }
 
-func (s *Server) archiveMaintenanceError(err error) error {
-	if !errors.Is(err, syncpkg.ErrSyncInProgress) && !errors.Is(err, db.ErrCompactInProgress) {
-		return nil
+func (s *Server) rejectRebuildWrite() error {
+	if s.archiveStale() {
+		return s.rejectWriterClosedWrite()
 	}
-	if closed := s.rejectWriterClosedWrite(); closed != nil {
-		return closed
-	}
-	return apiError(http.StatusConflict, "another archive maintenance operation is already running")
+	return nil
 }
 
 type handlerError struct {

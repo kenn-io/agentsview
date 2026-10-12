@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 
 	"github.com/danielgtaylor/huma/v2"
 )
@@ -225,7 +227,7 @@ func (s *Server) humaDataCandidates(
 func (s *Server) humaDataCompact(
 	ctx context.Context, in *dataCompactInput,
 ) (*jsonOutput[db.CompactResult], error) {
-	if err := s.rejectWriterClosedWrite(); err != nil {
+	if err := s.rejectRebuildWrite(); err != nil {
 		return nil, err
 	}
 	if !isLocalhostContext(ctx) {
@@ -256,8 +258,12 @@ func (s *Server) humaDataCompact(
 			return err
 		})
 	}
-	if busy := s.archiveMaintenanceError(err); busy != nil {
-		return nil, busy
+	if errors.Is(err, syncpkg.ErrSyncInProgress) ||
+		errors.Is(err, db.ErrCompactInProgress) {
+		return nil, apiError(
+			http.StatusConflict,
+			"another archive maintenance operation is already running",
+		)
 	}
 	if handled := handleHumaContextError(err); handled != nil {
 		return nil, handled
@@ -350,8 +356,12 @@ func (s *Server) humaDataStripImages(
 		}
 		return stripErr
 	})
-	if busy := s.archiveMaintenanceError(err); busy != nil {
-		return nil, busy
+	if errors.Is(err, syncpkg.ErrSyncInProgress) ||
+		errors.Is(err, db.ErrCompactInProgress) {
+		return nil, apiError(
+			http.StatusConflict,
+			"another archive maintenance operation is already running",
+		)
 	}
 	if handled := handleHumaContextError(err); handled != nil {
 		return nil, handled

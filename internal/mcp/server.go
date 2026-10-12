@@ -99,7 +99,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			if method != "tools/call" {
 				return next(ctx, method, request)
 			}
-			ctx, stale := apiclient.TrackArchiveFreshness(ctx, nil)
+			ctx, stale := apiclient.TrackArchiveFreshness(ctx)
 			result, err := next(ctx, method, request)
 			if call, ok := result.(*mcp.CallToolResult); ok && call != nil && stale() {
 				call.Content = append(call.Content, &mcp.TextContent{Text: "Warning: " + apiclient.ArchiveStaleWarning})

@@ -189,7 +189,7 @@ func runDBCompactDirect(
 func requestDBCompact(
 	ctx context.Context, tr transport, authToken string, options db.CompactOptions,
 ) (db.CompactResult, error) {
-	api, err := newDaemonAPIClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return db.CompactResult{}, err
 	}

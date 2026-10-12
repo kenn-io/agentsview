@@ -957,7 +957,7 @@ func runDaemonSync(
 	full bool,
 	onProgress sync.ProgressFunc,
 ) (sync.SyncStats, error) {
-	api, err := newDaemonAPIClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return sync.SyncStats{}, err
 	}
@@ -1011,7 +1011,7 @@ func runDaemonRemoteSync(
 	includeLocal bool,
 	onProgress sync.ProgressFunc,
 ) ([]remoteHostFailure, error) {
-	api, err := newDaemonAPIClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return nil, err
 	}

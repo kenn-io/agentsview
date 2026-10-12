@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1684,19 +1683,14 @@ func TestListRecallEntriesRejectsInvalidTrustedOnly(t *testing.T) {
 	assertBodyContains(t, w, "invalid trusted_only parameter")
 }
 
-type recallImportReadFunc func([]byte) (int, error)
-
-func (f recallImportReadFunc) Read(p []byte) (int, error) { return f(p) }
-
 func TestImportRecallEntriesJSONL(t *testing.T) {
-	te := setup(t, withWriteTimeout(0))
+	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallImportEvidence(t, te)
 
-	const input = `
+	w := te.post(t, "/api/v1/recall/import", `
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
-`
-	w := te.post(t, "/api/v1/recall/import", input)
+`)
 	assertStatus(t, w, http.StatusOK)
 
 	got := decode[db.RecallImportResult](t, w)
@@ -1706,52 +1700,6 @@ func TestImportRecallEntriesJSONL(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	recall := decode[db.RecallEntry](t, w)
 	assert.Equal(t, "Check cwd before file reads", recall.Title)
-
-	t.Run("writer closes between committed entries", func(t *testing.T) {
-		require.NoError(t, te.db.CloseWriter())
-		t.Cleanup(func() { require.NoError(t, te.db.ReopenWriter()) })
-		second := strings.NewReader(strings.ReplaceAll(input, "m1", "m3"))
-		reads := 0
-		body := io.MultiReader(strings.NewReader(input+strings.ReplaceAll(input, "m1", "m2")), recallImportReadFunc(func(p []byte) (int, error) {
-			if reads == 0 {
-				entry := te.get(t, "/api/v1/recall/entries/m2")
-				assert.Equal(t, http.StatusOK, entry.Code, entry.Body.String())
-				require.NoError(t, te.db.CloseWriter())
-			}
-			reads++
-			return second.Read(p)
-		}))
-		bodyReads := 0
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "http://127.0.0.1:0/api/v1/recall/import", recallImportReadFunc(func(p []byte) (int, error) {
-			bodyReads++
-			return body.Read(p)
-		}))
-		req.Header.Set("Origin", "http://127.0.0.1:0")
-		refused := httptest.NewRecorder()
-		te.handler.ServeHTTP(refused, req)
-		require.Equal(t, http.StatusServiceUnavailable, refused.Code, refused.Body.String())
-		assert.Equal(t, "5", refused.Header().Get("Retry-After"))
-		assert.Zero(t, bodyReads, "a refusal before import must leave the stream unread")
-		assertStatus(t, te.get(t, "/api/v1/recall/entries/m2"), http.StatusNotFound)
-
-		require.NoError(t, te.db.ReopenWriter())
-		partial := httptest.NewRecorder()
-		te.handler.ServeHTTP(partial, req)
-		require.Equal(t, http.StatusConflict, partial.Code, partial.Body.String())
-		assert.Empty(t, partial.Header().Get("Retry-After"))
-		got := decode[struct {
-			db.RecallImportResult
-			Error string `json:"error"`
-		}](t, partial)
-		assert.Equal(t, 1, got.Imported)
-		assert.Equal(t, 1, got.Skipped)
-		require.Len(t, got.ImportedEntries, 1)
-		assert.Equal(t, "m2", got.ImportedEntries[0].CandidateID)
-		assert.Contains(t, got.Error, "interrupted by archive rebuild after 1 imported and 1 skipped entries")
-		assert.Contains(t, got.Error, "rerun the import after the rebuild completes")
-		assertStatus(t, te.get(t, "/api/v1/recall/entries/m2"), http.StatusOK)
-		assertStatus(t, te.get(t, "/api/v1/recall/entries/m3"), http.StatusNotFound)
-	})
 }
 
 func TestImportRecallEntriesNotifiesOnlyWhenAcceptedCorpusChanges(t *testing.T) {

@@ -260,7 +260,7 @@ func (s *Server) humaTriggerSync(
 	ctx context.Context,
 	in *syncInput,
 ) (*huma.StreamResponse, error) {
-	if err := s.rejectWriterClosedWrite(); err != nil {
+	if err := s.rejectRebuildWrite(); err != nil {
 		return nil, err
 	}
 	engine := s.engine
@@ -401,7 +401,7 @@ func (s *Server) humaTriggerResync(
 	ctx context.Context,
 	_ *emptyInput,
 ) (*huma.StreamResponse, error) {
-	if err := s.rejectWriterClosedWrite(); err != nil {
+	if err := s.rejectRebuildWrite(); err != nil {
 		return nil, err
 	}
 	engine, err := s.syncEngineForRequest(ctx)
@@ -462,7 +462,7 @@ func (s *Server) humaSyncRemotes(
 	ctx context.Context,
 	in *remoteSyncInput,
 ) (*huma.StreamResponse, error) {
-	if err := s.rejectWriterClosedWrite(); err != nil {
+	if err := s.rejectRebuildWrite(); err != nil {
 		return nil, err
 	}
 	if err := s.requireSourceSync(ctx); err != nil {
@@ -1069,7 +1069,7 @@ func (s *Server) humaSyncSession(
 	ctx context.Context,
 	in *sessionSyncInput,
 ) (*jsonOutput[*service.SessionDetail], error) {
-	if err := s.rejectWriterClosedWrite(); err != nil {
+	if err := s.rejectRebuildWrite(); err != nil {
 		return nil, err
 	}
 	if err := s.requireSourceSync(ctx); err != nil {

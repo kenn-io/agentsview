@@ -345,7 +345,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	var engine *sync.Engine
 	var reloadIngestion server.IngestionReloader
 	var completeWorkerStartup func()
-	var startAudit func()
 	var memoryRefresh *memoryRefreshQueue
 	if !cfg.NoSync {
 		var onStartupReconciled func(sync.SyncStats, error)
@@ -372,33 +371,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			ctx, cfg, engine, database, idleTracker, opts.ReloadConfig,
 		)
 		defer ingestion.Stop()
-		auditCtx, cancelAudit := context.WithCancel(ctx)
-		auditDone := make(chan struct{})
-		auditStarted := false
-		defer func() {
-			cancelAudit()
-			if auditStarted {
-				<-auditDone
-			}
-		}()
-		startAudit = func() {
-			auditStarted = true
-			var startupReady chan struct{}
-			if startupRebuild {
-				startupReady = make(chan struct{})
-			}
-			go func() {
-				defer close(auditDone)
-				startArchiveAudit(auditCtx, cfg, engine, database, writeLock, idleTracker, emitter, startupReady)
-			}()
-			if startupRebuild {
-				select {
-				case <-startupReady:
-				case <-ctx.Done():
-				}
-			}
-		}
-
 		if opts.ReloadConfig != nil {
 			reloadIngestion = ingestion.Reload
 		}
@@ -607,8 +579,24 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	))
 	srv := server.New(cfg, database, engine, srvOpts...)
 
-	if startAudit != nil {
-		startAudit()
+	if engine != nil {
+		auditCtx, cancelAudit := context.WithCancel(ctx)
+		auditDone := make(chan struct{})
+		defer func() { cancelAudit(); <-auditDone }()
+		var startupReady chan struct{}
+		if startupRebuild {
+			startupReady = make(chan struct{})
+		}
+		go func() {
+			defer close(auditDone)
+			startArchiveAudit(auditCtx, cfg, engine, database, writeLock, idleTracker, emitter, startupReady)
+		}()
+		if startupRebuild {
+			select {
+			case <-startupReady:
+			case <-ctx.Done():
+			}
+		}
 	}
 	if ctx.Err() != nil {
 		return

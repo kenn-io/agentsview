@@ -610,7 +610,7 @@ func fetchHTTPDailyUsage(
 	if filter.MinUserMessages > 0 {
 		q.MinUserMessages = new(int64(filter.MinUserMessages))
 	}
-	api, err := newDaemonAPIClient(tr.URL, authToken, &http.Client{Timeout: 0})
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}

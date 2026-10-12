@@ -106,7 +106,7 @@ func postDaemonPush[T, P any](
 	body = daemonPushRequestForCapabilities(tr, body)
 	fallbackAttempted := false
 	for {
-		api, err := newDaemonAPIClient(tr.URL, authToken, &http.Client{Timeout: 0})
+		api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 		if err != nil {
 			return zero, err
 		}

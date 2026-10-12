@@ -981,7 +981,7 @@ type daemonAPIError struct {
 func (e *daemonAPIError) Error() string { return e.message }
 
 func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) error {
-	api, err := newDaemonAPIClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return err
 	}
@@ -998,7 +998,7 @@ func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.Build
 
 func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus, error) {
 	var out vector.BuildStatus
-	api, err := newDaemonAPIClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return out, err
 	}
@@ -1020,7 +1020,7 @@ func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus,
 }
 
 func (c embeddingsDaemonClient) generations(ctx context.Context) ([]vector.GenerationInfo, error) {
-	api, err := newDaemonAPIClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return nil, err
 	}
@@ -1042,7 +1042,7 @@ func (c embeddingsDaemonClient) generations(ctx context.Context) ([]vector.Gener
 }
 
 func (c embeddingsDaemonClient) activate(ctx context.Context, id int64, force bool) error {
-	api, err := newDaemonAPIClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return err
 	}
@@ -1061,7 +1061,7 @@ func (c embeddingsDaemonClient) activate(ctx context.Context, id int64, force bo
 }
 
 func (c embeddingsDaemonClient) retire(ctx context.Context, id int64, force bool) error {
-	api, err := newDaemonAPIClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return err
 	}

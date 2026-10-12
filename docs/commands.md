@@ -427,8 +427,9 @@ On startup, the server:
 1. Serves the Svelte SPA and REST API
 
 During a full parser rebuild, the daemon serves the retained archive with stale
-warnings. Archive writes return HTTP 503 with `Retry-After`; the CLI waits and
-retries. Scoped upgrades and schema repairs finish before the daemon listens.
+warnings. Archive writes return HTTP 503 with `Retry-After`; the CLI reports the
+server's message and exits. Scoped upgrades and schema repairs finish before the
+daemon listens.
 
 The server shuts down cleanly on `Ctrl+C`, flushing the database and stopping
 file watchers.
