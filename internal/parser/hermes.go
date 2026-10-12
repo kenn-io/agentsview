@@ -188,6 +188,10 @@ func (p *hermesProvider) parseSession(path, project, machine string) (*ParsedSes
 
 // parseHermesJSONLSession parses a Hermes Agent JSONL session file.
 func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+	return parseHermesJSONLSessionForPurpose(path, project, machine, hermesSourceReplacement)
+}
+
+func parseHermesJSONLSessionForPurpose(path, project, machine string, purpose hermesSourcePurpose) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -224,7 +228,10 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 			continue
 		}
 		if !gjson.Valid(line) || !gjson.Parse(line).IsObject() {
-			return nil, nil, fmt.Errorf("invalid JSONL record in %s", path)
+			if purpose == hermesSourceReplacement {
+				return nil, nil, fmt.Errorf("invalid JSONL record in %s", path)
+			}
+			continue
 		}
 
 		role := gjson.Get(line, "role").Str
@@ -358,7 +365,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		return nil, nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	if lr.skippedOversized {
+	if lr.skippedOversized && purpose == hermesSourceReplacement {
 		return nil, nil, fmt.Errorf("JSONL record exceeds size limit in %s", path)
 	}
 
@@ -1053,7 +1060,7 @@ func chooseHermesStateSessionSource(
 		return jsonPath, jsonSession, jsonMessages, nil
 	}
 	if IsRegularFile(jsonlPath) {
-		jsonlSession, jsonlMessages, jsonlErr = parseHermesJSONLSession(jsonlPath, project, machine)
+		jsonlSession, jsonlMessages, jsonlErr = parseHermesJSONLSessionForPurpose(jsonlPath, project, machine, purpose)
 	}
 	if err := errors.Join(jsonErr, jsonlErr); err != nil && purpose == hermesSourceReplacement {
 		return "", nil, nil, hermesTranscriptValidationError{err: err}

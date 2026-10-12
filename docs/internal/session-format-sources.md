@@ -3253,7 +3253,9 @@ schemas keep their existing ordering behavior.
   membership checks after mixed failures. Raw export uses export-specific
   selection even when resolving another configured root. Standalone raw export
   prefers JSONL and copies readable bytes without parser validation, so an
-  unfinished record remains exportable. Preservation compares the sanitised
+  unfinished record remains exportable. State-backed raw export compares source
+  quality with a tolerant JSONL read and copies the selected transcript verbatim,
+  including unfinished or malformed records. Preservation compares the sanitised
   storage projection under the configured archive policy. Database-origin
   exemptions apply only while the database supplies authoritative member data;
   standalone fallback after database loss must preserve archived content.
@@ -3261,12 +3263,19 @@ schemas keep their existing ordering behavior.
   fallbacks. Complete edits to an existing JSON snapshot remain replaceable. Agentsview records the
   selected encoding in `source_version` as `hermes-state-v1`, `hermes-json-v1`
   or `hermes-jsonl-v1`. These are Agentsview format labels. A fingerprint
-  generation marker makes existing members reparse once to record the label.
+  generation marker makes existing members and standalone transcripts reparse
+  once to record the label.
   Database-only sessions with known provenance keep accepting complete edits.
   Legacy `hermes-state-db` labels do not identify whether messages came from the
   database or a transcript. Matching archived content can acquire a current
   label; conflicting content remains archived until its source can be
-  established. This can defer a genuine database edit during upgrade because
+  established. Empty legacy standalone labels can be resolved from the stored
+  transcript path; complete edits from that same file remain replaceable.
+  Logical session lookup checks for a readable database member after a
+  previously selected standalone fallback, so database recovery refreshes
+  messages, metadata and usage. Direct fallback processing keeps its resolved
+  transcript source. Ambiguous state-backed provenance can defer a genuine
+  database edit during upgrade because
   the legacy metadata cannot distinguish that edit from transcript loss.
   Discovery, member
   fingerprints and lookups accept dotted cron job IDs from the documented

@@ -2245,3 +2245,15 @@ func TestWriteHermesSessionJSONLStandaloneConfiguredRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteHermesSessionJSONLStateBackedUnfinishedTranscript(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	dir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	content := `{"role":"user","content":"richer prompt"}` + "\n" + `{"role":"assistant","content":"richer response"}` + "\n" + `{"role":"user","content":`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "child.jsonl"), []byte(content), 0o600))
+	var output strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(), &output, filepath.Join(root, "state.db"), []string{root}, "child"))
+	assert.Equal(t, content, output.String())
+}
