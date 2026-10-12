@@ -50,12 +50,12 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	plan ChangedPathPlan,
 	options ChangedPathSyncOptions,
 	onProgress ProgressFunc,
-) (ChangedPathSyncResult, error) {
+) (result ChangedPathSyncResult, retErr error) {
 	if e.sourceSyncErr != nil {
 		return ChangedPathSyncResult{}, e.sourceSyncErr
 	}
 	ctx = e.parsePolicyContext(ctx)
-	result := ChangedPathSyncResult{
+	result = ChangedPathSyncResult{
 		CachedSourceKeys:        make(map[string]struct{}),
 		CachedFallbackProviders: make(map[parser.AgentType]int),
 	}
@@ -130,8 +130,14 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 
 	physicalPaths := make([]string, 0, len(files))
 	for _, file := range files {
-		physicalPaths = append(physicalPaths, file.Path)
+		physicalPaths = append(physicalPaths, parser.ResolveSourceFilePath(file.Path))
 	}
+	ctx, closeProviderCache, err := e.withProviderFingerprintCache(ctx, physicalPaths)
+	if err != nil {
+		result.Stats = SyncStats{Aborted: true}
+		return result, err
+	}
+	defer func() { retErr = errors.Join(retErr, closeProviderCache()) }()
 	preContainerStates := e.captureSQLiteContainerStates(physicalPaths)
 	if err := e.prepareSQLiteContainerVerification(ctx, preContainerStates); err != nil {
 		result.Stats = SyncStats{Aborted: true}

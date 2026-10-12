@@ -3247,7 +3247,9 @@ schemas keep their existing ordering behavior.
   tool-result content. Source changes cannot remove an archived call or change
   its result just because the message count remains equal. Previously unanswered
   calls can acquire results while call identity, arguments and existing nonempty
-  results remain protected. Image projection applies to both sides during
+  results remain protected. Answer text and reasoning are compared separately,
+  so previously absent reasoning can be added without replacing the answer;
+  existing reasoning remains protected. Image projection applies to both sides during
   comparison, including ordinary sync under the offload policy.
   Standalone transcript
   fallback preserves archived state-derived usage when the database cannot
@@ -3284,7 +3286,10 @@ schemas keep their existing ordering behavior.
   Discovery, member
   fingerprints and lookups accept dotted cron job IDs from the documented
   producer format. Remote path and skip-cache translation preserve the physical
-  database identity and virtual member suffix separately. Existing archive-level
+  database identity and virtual member suffix separately. Planned remote
+  changed-path execution also creates a shared member fingerprint cache for
+  the workers and closes it after processing, so unchanged siblings do not
+  each reopen the database. Existing archive-level
   paths migrate during ordinary sync; historical sessions remain in SQLite when
   their source disappears. Augure Desktop uses the same member selection.
 - **Usage and cost:** State records distinguish input, output, cache-read,
