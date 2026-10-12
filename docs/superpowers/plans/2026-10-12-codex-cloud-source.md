@@ -1446,11 +1446,11 @@ Spec: Replicas and mirror (left-out and partly-captured counts), Display.
 - [ ] **Step 1: Write** the sections the spec's Documentation list names,
   including every listed limit, the one-machine recommendation, and how
   ClickHouse and a hosted hub handle one session pushed from two machines
-  (from Task 24's test and the hosted projection). `docs/configuration.md` and
-  `docs/commands.md` are generated-checked pages excluded from the mdformat
-  hook; follow their own generators.
+  (from Task 24's test and the hosted projection). `docs/configuration.md`,
+  `docs/commands.md`, and `docs/changelog.md` are excluded from the mdformat
+  hook (`prek.toml`); do not reformat them.
 
-- [ ] **Step 2: Run** `mdformat --wrap 80` on the changed files and the
+- [ ] **Step 2: Run** the mdformat hook on the other changed files and the
   private-data scrub.
 
 - [ ] **Step 3: Commit** `git commit -m "docs: document the codex-cloud source"`
