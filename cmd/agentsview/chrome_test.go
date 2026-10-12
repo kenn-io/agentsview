@@ -439,7 +439,7 @@ func TestChatGPTChromeSyncCommand(t *testing.T) {
 		cmd.SetArgs([]string{"--type", "chatgpt", "--sync"})
 		require.NoError(t, cmd.Execute())
 	})
-	assert.Contains(t, output, "Done: 1 processed (1 new, 0 updated, 0 skipped)")
+	assert.Contains(t, output, "Done: 1 processed (1 new)")
 }
 
 func TestChromeImportArguments(t *testing.T) {

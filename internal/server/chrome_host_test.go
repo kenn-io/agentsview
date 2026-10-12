@@ -293,7 +293,7 @@ func TestChromeHostLocalOnly(t *testing.T) {
 func TestChromeHostIncompatibleReply(t *testing.T) {
 	for _, reply := range []struct{ name, body string }{
 		{"missing revision", `{"status":0,"error":"Unsupported Claude fetch path"}`},
-		{"wrong revision", `{"version":2,"status":600,"body":"private"}`},
+		{"wrong revision", `{"version":1,"status":600,"body":"private"}`},
 	} {
 		t.Run(reply.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
@@ -342,7 +342,7 @@ func TestChromeHostDisconnect(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			_, conn := testChromeConnection(t, srv)
 			finished := make(chan error, 1)
-			go func() { _, err := srv.chrome.fetch(t.Context(), "/api/organizations"); finished <- err }()
+			go func() { _, err := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations"); finished <- err }()
 			_, path := readChromeRequest(t, conn)
 			require.Equal(t, "/api/organizations", path)
 			switch mode {
@@ -372,7 +372,7 @@ func TestChromeHostFrameReply(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
 	_, conn := testChromeConnection(t, srv)
 	finished := make(chan importer.ClaudeAIResponse, 1)
-	go func() { response, _ := srv.chrome.fetch(t.Context(), "/api/organizations"); finished <- response }()
+	go func() { response, _ := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations"); finished <- response }()
 	id, _ := readChromeRequest(t, conn)
 	writeChromeReply(t, conn, "foreign-id", 200, "private")
 	writeChromeReply(t, conn, id, 413, "")
@@ -391,7 +391,7 @@ func TestChromeHostKeepsLiveConnection(t *testing.T) {
 	for attempt := range 2 {
 		finished := make(chan error, 1)
 		go func() {
-			response, err := srv.chrome.fetch(t.Context(), "/api/organizations")
+			response, err := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations")
 			if err == nil {
 				assert.Equal(t, "[]", string(response.Body))
 			}
