@@ -8,9 +8,10 @@ ChatGPT agent that stays signed in to the user's account and runs Codex work on
 OpenAI's cloud computer or on a personal computer the user connected. Each
 thread becomes a browsable, searchable session with its full trace (messages,
 reasoning, shell commands, MCP and other tool calls with output, exit status,
-and timing) and its token usage and estimated cost. Sessions sync in the
-background like every other agent and ship to the usual replicas (PostgreSQL,
-DuckDB, ClickHouse) without extra work.
+and timing) and the plan usage OpenAI reports for it: the share of the weekly
+and five-hour limits it used and the credits it spent, split by model. Sessions
+sync in the background like every other agent and ship to the usual replicas
+(PostgreSQL, DuckDB, ClickHouse) without extra work.
 
 Today none of this is visible. Dot work runs on OpenAI's cloud computer or
 drives a connected personal computer, but the thread that records it stays on
@@ -59,36 +60,6 @@ What the probe saw:
   `imageGeneration`, `hookPrompt`, `sleep`, and review-mode markers.
 - Stored history has no per-turn token usage. Per-turn usage exists only as live
   `thread/tokenUsage/updated` notifications.
-- The durable host rejects `account/usage/read` ("unsupported app-server
-  method"). A local Codex app-server answers that method by calling a ChatGPT
-  HTTPS endpoint (`codex-rs/backend-client/src/client/thread_usage.rs`):
-  `POST https://chatgpt.com/backend-api/wham/usage/thread_usage/query` with
-  body `{"thread_ids": [...]}`, 1 to 100 distinct IDs per call, the same
-  ChatGPT token as an `Authorization: Bearer` header, and
-  `ChatGPT-Account-Id`. Each returned row has `thread_id`,
-  `estimated_usage_credits_micros`, `estimated_usage_usd_micros`,
-  `native_usage_usd_micros`, and `groups` of
-  `{model, reasoning_effort, speed, estimated_usage_credits_micros, native_usage_usd_micros, input_tokens, cached_input_tokens, net_new_input_tokens, output_tokens, total_tokens}`.
-  Omitted threads are "unavailable, not zero".
-
-Usage checks, 2026-10-12, on a personal Pro account whose owner ran them:
-
-- The thread-usage query above returns HTTP 403 for every thread ID tried, with
-  both AgentsView's identity and the desktop app's. The per-turn query the
-  desktop app uses (`POST /backend-api/wham/usage/thread-estimates/query`)
-  also returns 403. `GET /backend-api/wham/usage` and
-  `GET /backend-api/wham/accounts/check` return 200 with the same token, so
-  the token and account are valid; neither response contains per-thread usage.
-- OpenAI's own Codex CLI (0.162.1) answers `account/usage/read` for these
-  threads with `threadUsage: null`.
-- Unverified: the desktop app may attach device attestation headers
-  (`X-OpenAI-Attach-DeviceCheck-Token`, `X-OpenAI-Attach-Integrity-State`)
-  that a third-party client cannot produce. No test has confirmed or ruled
-  this out.
-- `thread/resume` on the durable host sends `thread/tokenUsage/updated` with
-  running totals, but it reattaches the thread's cloud environment. On an
-  archived thread it failed with `environment_terminated`. Resume can change
-  state on OpenAI's side, so the fetcher never calls it.
 
 Second probe, 2026-10-12, with AgentsView's own `User-Agent` and `originator`:
 
@@ -100,12 +71,53 @@ Second probe, 2026-10-12, with AgentsView's own `User-Agent` and `originator`:
   82 agent messages, 11 function call outputs, 7 MCP calls, 3 compactions, and
   1 user message.
 
+Usage checks, 2026-10-12, on a personal Pro account whose owner ran them:
+
+- The durable host rejects `account/usage/read` ("unsupported app-server
+  method").
+- `POST https://chatgpt.com/backend-api/wham/usage/thread_usage/query`, the
+  endpoint a local Codex app-server calls for that method, is the only one
+  found whose response has per-thread token counts and US dollar estimates. It
+  returns HTTP 403 for this account with both AgentsView's identity and the
+  desktop app's. The per-turn query (`thread-estimates/query`) also returns
+  403\. The desktop app's own code treats 401, 403, 404, and 503 from the
+  per-thread query as "no data" and shows nothing, so the 403 is an expected
+  answer for some accounts, not a client fault. Unverified: it may be open
+  only to accounts billed per token.
+- OpenAI's own Codex CLI (0.162.1) answers `account/usage/read` for these
+  threads with `threadUsage: null`.
+- `POST https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2`, which
+  the desktop app's Usage & billing page uses for its Top chats list, returns
+  200 with AgentsView's identity:
+    - Request body
+      `{"threads": [{thread_id, created_at, descendant_thread_ids}]}`. The app
+      sends at most 100 groups and 1,000 thread IDs per request, and puts each
+      thread's sub-agent threads in `descendant_thread_ids` so their usage
+      counts toward the parent.
+    - Response `{data_as_of, comparison_plan, threads}`. Each row has `thread_id`,
+      `data_status` (`available`, `partial`, or `unavailable`), `usage_source`
+      (for example `included_plan`), `weekly_limit_percent`,
+      `five_hour_limit_percent`, `balance_usage_credits` (a decimal string), and
+      `groups` of
+      `{model, reasoning_effort, speed, product_experience, weekly_limit_percent, five_hour_limit_percent, balance_usage_credits}`.
+    - 25 of 34 threads were `available`, 1 `partial`, and 8 `unavailable`,
+      including the newest dot thread. Usage appears after a delay.
+    - It has no token counts and no dollar amounts.
+- `GET /wham/usage/daily-token-usage-breakdown` also reports percentages only
+  (`units: percent`), per day, split by thread source, trigger, model, and
+  surface.
+- `thread/resume` on the durable host sends `thread/tokenUsage/updated` with
+  running token totals, but it reattaches the thread's cloud environment. On
+  an archived thread it failed with `environment_terminated`. Resume can
+  change state on OpenAI's side, so the fetcher never calls it.
+
 ## Goals
 
 - Import every thread the account can list on the durable host, including
   archived threads, and keep them current.
 - Preserve the full trace with per-item timing.
-- Show per-thread token usage and cost, grouped by model.
+- Show each thread's plan usage as OpenAI reports it: share of the weekly and
+  five-hour limits, and credits, split by model, reasoning effort, and speed.
 - Label each session's origin: dot, Codex web, or Codex cloud.
 - Link a session to its working folder through `environments[].cwd`.
 - Keep a local copy of the fetched records so sessions can be reparsed offline,
@@ -115,7 +127,12 @@ Second probe, 2026-10-12, with AgentsView's own `User-Agent` and `originator`:
 ## Non-goals
 
 - Starting, steering, or changing anything on OpenAI's side.
-- Per-turn token usage or cost. The server does not keep it.
+- Token counts or dollar costs for these threads. OpenAI does not return them
+  for plan-billed accounts (see Background).
+- Token estimates computed from the trace text. The trace leaves out system
+  prompts, tool definitions, and the history each turn rereads, and these
+  models have no public tokenizer, so an estimate would be far off.
+- Per-turn usage. The server does not keep it.
 - Live streaming of in-progress turns. Background sync is enough.
 - The dot's own chat in ChatGPT, Slack, or Teams. It is not listable on the
   durable host.
@@ -133,6 +150,7 @@ These would make the feature a failure even if it worked:
   thread's length.
 - AgentsView refreshing the ChatGPT token itself, which would rotate the refresh
   token the Codex CLI depends on.
+- A cloud session with no token data looking free in cost views.
 
 ## Design
 
@@ -141,14 +159,15 @@ These would make the feature a failure even if it worked:
 ```
 durable host --(fetcher, poller job)--> mirror files --(provider)--> SQLite --> UI, replicas
   wss                                    {dataDir}/sources/codex-cloud/
+query_v2 --(fetcher)--> plan usage records in the same mirror files
 ```
 
 1. **Fetcher.** A new package containing a minimal app-server websocket client:
-   handshake, JSON-RPC requests, paging, plus one HTTPS call for usage. An
-   allowlist enforced in the client permits only `initialize`, the
+   handshake, JSON-RPC requests, paging, plus one HTTPS call for plan usage.
+   An allowlist enforced in the client permits only `initialize`, the
    `initialized` notification, `thread/list`, `thread/read`,
    `thread/items/list`, and `thread/turns/list` on the websocket, and only the
-   thread-usage query URL over HTTPS. Anything else fails before it is sent.
+   `query_v2` URL over HTTPS. Anything else fails before it is sent.
    Server-initiated requests, such as a token refresh, are answered with a
    JSON-RPC error. Notifications are ignored.
 1. **Scheduler.** A `poller.Job`, which `docs/agents/background-work.md`
@@ -175,16 +194,19 @@ durable host --(fetcher, poller job)--> mirror files --(provider)--> SQLite --> 
 - At the start of each fetch, read `tokens.access_token` and `tokens.account_id`
   from that home's `auth.json`. Hold them in memory for that fetch only. Sync
   errors name the Codex home they affect, never the token.
-- Never refresh. On HTTP 401 or 403, or a missing token, record a fetch error
-  that tells the user to run `codex login`, and back off through the poller.
+- Never refresh. A missing token or HTTP 401 is a signed-out error that tells
+  the user to run `codex login`. HTTP 403 is an access-denied error: the login
+  is valid but OpenAI refused this request, so `codex login` is not offered as
+  the fix. Both back off through the poller.
 - Make fetch results visible, as described under Status and errors.
 - Redact the token from every error string before it leaves the fetcher,
   including echoed handshake headers. The subprotocol carries the token, so
   any handshake error formatting must be treated as sensitive.
 - Identify the client honestly: send a `User-Agent` naming AgentsView and its
   version, and an `originator` naming AgentsView. The second probe confirmed
-  the server accepts this. If a later server release refuses it, stop and ask
-  the user; never fall back to the desktop app's identity on your own.
+  the durable host and `query_v2` both accept this. If a later server release
+  refuses it, stop and ask the user; never fall back to the desktop app's
+  identity on your own.
 
 ### Incremental sync
 
@@ -195,13 +217,19 @@ run of finished items from the start of the thread. Everything after it, the
 finishes. Every step is bounded by what changed since the last pass, never by
 the total size of the archive or of a thread.
 
-An item counts as finished when its turn has ended (turn status `completed`,
-`interrupted`, or `failed`, from `thread/turns/list`), or when `completedAtMs`
-is set and, for items with a `status`, that status is terminal. Using the turn
-status keeps an item that never reports its own final status from pinning the
-resume point. The resume point stops at the first unfinished item, because Codex
-runs tool calls in parallel and a later command can finish before an earlier
-one; skipping past an unfinished item would lose its final output.
+An item counts as finished when any of these holds:
+
+- its turn has ended: turn status `completed`, `interrupted`, or `failed`, from
+  `thread/turns/list`;
+- a later turn in the same thread has started, so a turn that never reports a
+  final status cannot pin the resume point forever;
+- the thread is archived;
+- `completedAtMs` is set and, for items with a `status`, that status is
+  terminal.
+
+The resume point stops at the first unfinished item, because Codex runs tool
+calls in parallel and a later command can finish before an earlier one; skipping
+past an unfinished item would lose its final output.
 
 Per account, the fetcher stores:
 
@@ -209,11 +237,11 @@ Per account, the fetcher stores:
   newest `updatedAt` that listing returned in its last complete pass. The two
   are separate, so an update that lands between the two listings is never
   hidden by the other listing's newer timestamps;
-- a **retry set**: threads whose last fetch failed, each with an attempt count
-  and a next-attempt time;
-- for each thread: its last mirrored `updatedAt`, its resume point, when its
-  last turn ended, the verified end offset of its mirror file (see Mirror
-  format), and whether it is still present at the source.
+- a **retry set**: threads whose last fetch failed, each with an attempt count,
+  a next-attempt time, and the time of the first failure;
+- for each thread: its last mirrored `updatedAt`, its resume point, the verified
+  end offset of its mirror file (see Mirror format), and a **check-again
+  flag** (below).
 
 Each pass, for each listing separately:
 
@@ -224,25 +252,38 @@ Each pass, for each listing separately:
    thread strictly older than the listing watermark, and finish that whole
    page. With no watermark (first run, or a backfill that never finished),
    page through everything. An unchanged account costs one call per listing.
-1. **Recent threads.** Also include threads that have a turn still running, or
-   whose last turn ended less than two minutes ago, even if `updatedAt` looks
-   unchanged. This catches a second change within the same second.
-1. **Retries.** Add retry-set threads whose next-attempt time has passed.
-1. **Fetch items.** For each selected thread, call `thread/items/list` from its
-   resume point, using an item anchor `{type: "item", itemId}` plus its
-   `turnId`, and `thread/turns/list` for the turn statuses.
+1. **Check-again threads.** Also include every thread whose check-again flag is
+   set. A fetch sets the flag; it is cleared only by a later fetch that starts
+   at least one second after the thread's stored `updatedAt` and finds no
+   change. A second update within the same second as the first is therefore
+   always fetched, however long the poll interval.
+1. **Retry set.** Add retry-set threads whose next-attempt time has passed.
+1. **Apply backoff.** Remove from the selection every thread in the retry set
+   whose next-attempt time has not passed, however it was selected. A failing
+   thread that stays at the top of the listing still waits out its backoff.
+1. **Fetch.** For each selected thread, first call `thread/turns/list` for the
+   turn statuses, then `thread/items/list` from the resume point, using an
+   item anchor `{type: "item", itemId}` plus its `turnId`. Reading turn
+   statuses first means a turn that ends between the two calls is not yet
+   treated as ended, so the items it finalizes are fetched again on the next
+   pass.
 1. **Make it durable, then advance.** Append the fetched records to the mirror,
    fsync the file (and its directory when the file is new), and only then save
-   the thread's new `updatedAt`, resume point, and mirror offset. A crash
-   before the save repeats the fetch; it never skips records.
-1. **Failures.** A thread whose fetch fails joins the retry set with exponential
-   backoff, capped at one hour, and the pass goes on. If the server reports
-   the thread no longer exists, mark it missing at the source, keep everything
-   already stored, and stop fetching it.
+   the thread's new `updatedAt`, resume point, and mirror offset, and remove
+   it from the retry set. A crash before the save repeats the fetch; it never
+   skips records.
+1. **Failures.** A thread whose fetch fails joins or stays in the retry set with
+   exponential backoff, capped at one hour, and the pass goes on. If the
+   server reports that the thread no longer exists, everything already stored
+   stays.
 1. **Advance the listing watermark** to the newest `updatedAt` that listing
    returned, once the listing finished and every changed thread from it is
    either mirrored or recorded in the persisted retry set. A thread that keeps
    failing therefore never holds the watermark back.
+
+AgentsView does not track whether a thread still exists on OpenAI's side. An
+unchanged thread is never fetched again, so a deletion would go unnoticed, and
+stored sessions are kept either way.
 
 Known limit: the protocol has no "items updated since" query. The open-source
 thread store supports `after_updated_at_ordinal`, but the app-server's
@@ -256,18 +297,24 @@ later protocol exposes update-ordinal paging, switch to it.
   `{dataDir}/sources/codex-cloud/<accountId>/<threadId>.jsonl.zstd`.
 - Each fetch appends one complete zstd frame containing JSONL records: thread
   metadata from `thread/list` or `thread/read`, item records exactly as
-  returned, and the latest usage response. Each record carries a small
+  returned, and plan usage rows from `query_v2`. Each record carries a small
   envelope naming its kind and fetch time.
 - Compression is zstd only, using `github.com/klauspost/compress/zstd` (already
   a direct dependency; the Go standard library has no zstd encoder). No other
   codec, and no option to choose one.
 - Every frame carries a zstd content checksum. There is no header frame.
 - The fetcher stores the verified end offset of the last complete, checksummed
-  frame with the thread's sync state. Before appending, the writer inspects
-  only the bytes after that offset and truncates them if present: they are a
-  torn frame from an interrupted append, and are discarded, never built upon,
-  so later frames stay readable. The writer scans the whole file only when the
-  stored offset is missing or lies past the end of the file.
+  frame with the thread's sync state. Before appending, the writer checks only
+  the bytes after that offset:
+    - complete, checksummed frames there are kept. They come from an append that
+      finished before a crash prevented the state save, and the provider may
+      already have parsed them. The writer moves the stored offset past them.
+      Their records repeat in the next fetch, which is harmless because the
+      newest record for an item wins;
+    - an incomplete frame at the very end is a torn append. The writer truncates
+      it and never builds on it.
+- The writer scans the whole file only when the stored offset is missing or lies
+  past the end of the file.
 - After appending, the writer fsyncs the file, and the directory when the file
   is new, before the new offset is saved.
 - Readers decode only complete frames and never keep records from a torn frame.
@@ -283,7 +330,9 @@ later protocol exposes update-ordinal paging, switch to it.
 ### Incremental parsing
 
 - The provider resumes from the end of the last frame it parsed, never from a
-  byte offset inside a frame.
+  byte offset inside a frame. Because the writer only truncates an incomplete
+  final frame, a frame the provider already parsed is never removed or
+  replaced.
 - Each item's `(turnId, item.id)` is its stable identity in the archive. A new
   record for an item already stored updates that item's message or tool call
   in place: final output, exit status, duration, status. It never adds a
@@ -321,47 +370,59 @@ Session fields:
   falling back to `cwd`.
 - **Parent:** from `forkedFromId` or `parentThreadId` when present.
 
-### Usage and cost
+### Plan usage
 
-**On hold.** Every usage source tried so far is closed to AgentsView (see
-Background). This section stays as written until a working source is found, and
-will be rewritten against that source. Any rewrite must respect that
-`SanitizeUsageEvent` clamps negative token counts to zero
-(`internal/db/validate.go`), so the negative-entry rule below cannot work as
-stated.
+OpenAI reports usage for these threads as a share of the plan's limits and as
+credits, not as tokens or dollars. AgentsView stores and shows exactly that.
 
-- The usage endpoint returns running totals per thread and model group. Each
-  pass compares them with the last totals mirrored for that thread and records
-  only the increase, as a usage entry dated at the newest item timestamp seen
-  in that pass. Cost therefore lands on the day the work was observed, and
-  past days never change as a thread grows.
-- The first fetch of a thread has no earlier totals, so its whole total is dated
-  at the thread's last activity. The user-facing docs state this limit.
-- A decrease in a running total (a server-side correction) is recorded as a
-  negative entry dated the same way, so the sum of entries always equals the
-  server's latest total.
-- Entries show up in AgentsView's existing usage and cost views, split by model.
-- Cost: use the endpoint's US dollar estimate when present and label it as
-  OpenAI's estimate. Otherwise price the token counts with the pricing
-  catalog. Models missing from the catalog show tokens without cost, as other
-  agents already do.
-- A thread the endpoint omits has unknown usage, not zero. Keep its last entries
-  and retry on the next pass.
-- Never invent a per-turn split.
+**Fetching.**
+
+- Plan usage is a separate step that runs after the thread step in each pass.
+  Its failures never change thread sync status, its backoff, or the listing
+  watermarks.
+- Each pass queries `query_v2` for threads fetched in that pass, threads whose
+  last usage row was `partial` or `unavailable`, and threads whose last usage
+  row is older than one day while the thread changed in the past week.
+  Requests follow the desktop app's limits: at most 100 groups and 1,000
+  thread IDs each.
+- Each group sends the thread's `created_at` and, in `descendant_thread_ids`,
+  every known thread whose `parentThreadId` names it, so sub-agent usage
+  counts toward its parent as it does in the desktop app. A thread sent as a
+  descendant is not also sent as its own group.
+- The response rows are appended to the thread's mirror file with `data_as_of`.
+
+**Storage.** Usage rows are running totals for the thread, not increments, and a
+percentage of a weekly limit does not add up across weeks. So AgentsView keeps
+the latest row per thread, replacing the previous one, with its `data_as_of`,
+`data_status`, `usage_source`, the thread-level percentages and credits, and the
+per-group values. It does not create token usage events. The builder chooses the
+table and follows `docs/agents/storage.md`.
+
+**Display.**
+
+- Session details show "Plan usage": the share of the weekly limit, the share of
+  the five-hour limit when present, and credits, split by model, reasoning
+  effort, and speed, with "as of T" in local time. A `partial` row is labeled
+  "Partial, still updating". An `unavailable` row, or no row yet, shows "Usage
+  not reported yet".
+- Token and cost views leave these sessions out of their totals. Where a view
+  lists sessions or totals by agent, it shows the source as "Plan usage, not
+  priced" with a note that OpenAI reports this work as a share of the plan, so
+  totals do not include it. These sessions never appear with zero tokens or
+  zero cost.
 
 ### Configuration
 
 - Settings live in the existing per-agent table, `[agents.codex-cloud]`:
   `enabled` (default `false`), `endpoint` (default
   `wss://codex-cloud-backend.chatgpt.com/`), and `usage_endpoint` (default
-  `https://chatgpt.com/backend-api/wham/usage/thread_usage/query`). The
+  `https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2`). The
   endpoint overrides exist for tests and future moves.
 - The shared `[agents.<id>]` reader (`applyAgentDirectories`) parses only `dirs`
   and `homes` and silently ignores other keys. Add parsing and validation for
-  these three keys. An unknown key in `[agents.codex-cloud]` is a config error
-  that names the key and the config file. It appears at startup and in the
-  status area, this source stays off until it is fixed, and every other agent
-  still loads.
+  these three keys. An unknown key in `[agents.codex-cloud]` is a config
+  error. It appears at startup and in the status area (see Status and errors),
+  this source stays off until it is fixed, and every other agent still loads.
 - Unlike other agents, which are on unless listed in `disabled_agents`, this
   source is off until the user sets `enabled = true`, because it uses a
   private, undocumented endpoint as the user's ChatGPT account.
@@ -376,31 +437,44 @@ stated.
 ### Status and errors
 
 Poller status lives only in memory, and AgentsView has no general sync-error
-display today. This source adds one for itself. For each Codex home, the daemon
-status API, the UI's sync status area, and `agentsview serve status` show one
-of:
+display today. This source adds one for itself, shown in the daemon status API,
+the UI's sync status area, and `agentsview serve status`. All times are in the
+computer's local time.
 
-- **Off:** disabled in config or listed in `disabled_agents`.
-- **Not synced yet:** enabled, no fetch has finished.
-- **Importing N of M threads:** during the first backfill, or a later one after
-  a cleared watermark.
-- **Up to date as of T:** the last successful pass, in local time.
-- **Error:** a short message and the action to take, plus when the last success
-  was.
+The source appears only when the user has configured it: `[agents.codex-cloud]`
+exists in `config.toml`, or `codex-cloud` is in `disabled_agents`. Users who
+never set it up see nothing.
 
-Error messages:
+Each Codex home shows one state:
 
-| Cause                                      | Message and action                                                                                 |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| Missing token, HTTP 401 or 403             | Signed out of ChatGPT in this Codex home. Run `codex login`.                                       |
-| Network failure                            | Can't reach OpenAI. Retrying automatically.                                                        |
-| HTTP 429                                   | OpenAI is rate-limiting this account. Retrying after T.                                            |
-| HTTP 5xx                                   | OpenAI's server returned an error. Retrying automatically.                                         |
-| Handshake or response shape not understood | OpenAI changed the protocol. AgentsView needs an update. Sessions already stored are not affected. |
-| Config error (see Configuration)           | Names the key and the config file.                                                                 |
+- **Off:** `enabled` is false, or `codex-cloud` is in `disabled_agents`.
+- **Waiting for first sync:** enabled, no pass has finished.
+- **Importing, found N threads so far:** during a first backfill, until both
+  listings have been read. After that: **Importing N of M threads.**
+- **Up to date as of T:** the last pass succeeded and no thread is waiting to be
+  retried.
+- **N threads could not be imported:** the last pass succeeded but threads are
+  in the retry set. Shows the count, the oldest failure time, and "AgentsView
+  keeps retrying them."
+- **Error:** the whole pass failed. Shows the message below and when the last
+  successful pass finished.
 
-Raw error details go to the daemon log, with the token redacted. The next
-successful pass clears the error.
+Plan usage has its own line under the home's state, so a usage problem never
+hides or replaces thread status: "Plan usage as of T", or a usage error from the
+table below.
+
+| Cause                                     | Message                                                                                                                                                       |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No token, or HTTP 401                     | Signed out of ChatGPT in this Codex home. Run `codex login`, then AgentsView picks up the new login on its next sync.                                         |
+| HTTP 403                                  | OpenAI refused access for this account. Your login still works. AgentsView retries automatically; if this persists, OpenAI may have changed who can use this. |
+| Network failure                           | Can't reach OpenAI. AgentsView retries automatically.                                                                                                         |
+| HTTP 429                                  | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                                       |
+| HTTP 5xx                                  | OpenAI's service had an error. AgentsView retries automatically.                                                                                              |
+| Handshake refused or reply not understood | OpenAI changed its service in a way this version of AgentsView can't read. Update AgentsView. Sessions already imported are safe.                             |
+| Unknown key in `[agents.codex-cloud]`     | `config.toml` has an unknown setting `<key>` under `[agents.codex-cloud]`. Cloud import is off until it is removed or fixed.                                  |
+
+Raw error details go to the daemon log, with the token redacted and the endpoint
+named (thread host or plan usage). The next successful pass clears the error.
 
 ### Several machines
 
@@ -413,11 +487,12 @@ only one machine.
 
 ## Testing
 
-- A fake durable host on a local websocket server, built from synthetic
-  fixtures. The fixtures contain no private names, paths, IDs, or tokens.
+- A fake durable host on a local websocket server and a fake `query_v2` HTTPS
+  server, built from synthetic fixtures. The fixtures contain no private
+  names, paths, IDs, or tokens.
 - Handshake: the token is sent only as the subprotocol, and handshake errors
   never contain it.
-- Allowlist: a non-allowlisted method fails without being sent.
+- Allowlist: a non-allowlisted method or URL fails without being sent.
 - Incremental behavior: an unchanged account costs one `thread/list` call per
   listing. A thread that grows by k items transfers about k items plus its
   unfinished items, not the whole thread. Add the cardinality-scaling
@@ -427,58 +502,75 @@ only one machine.
   update to an active thread is found even when the archived listing holds
   newer timestamps, and the reverse. Several threads sharing one `updatedAt`
   second across a page boundary are all fetched.
-- Failures: a thread that keeps failing backs off to the one-hour cap, does not
-  hold back the listing watermark, and is fetched once it recovers. A thread
-  the server no longer has keeps its stored session.
+- Same-second update: a thread changes twice within one second, the first pass
+  sees only the first change, and the next pass, five minutes later, fetches
+  the second.
+- Failures: a thread that keeps failing and stays at the top of the listing is
+  not fetched again before its next-attempt time, backs off to the one-hour
+  cap, does not hold back the listing watermark, and is fetched once it
+  recovers. A thread the server no longer has keeps its stored session.
 - Resume point: parallel tool calls that finish out of order all end with their
-  final output. An item without a terminal status in a finished turn does not
-  pin the resume point.
+  final output. An item without a terminal status in a finished turn, or in a
+  turn followed by a later turn, does not pin the resume point. A turn that
+  ends between the turn-status call and the item call does not mark its items
+  finished.
 - Durability: a crash between the mirror append and the state save repeats the
   fetch and leaves no gap and no duplicate session item.
 - Mirror: an interrupted append followed by a restart and a successful append
   leaves every complete frame readable; torn frames contribute no records. A
-  normal append inspects only the bytes after the stored offset; a missing or
-  too-large offset triggers a full scan.
+  complete frame written after the saved offset, and already parsed by the
+  provider, survives recovery, and the provider keeps parsing from where it
+  was. A normal append checks only the bytes after the stored offset; a
+  missing or too-large offset triggers a full scan.
 - Parsing: an item that finishes after a resume point updates its stored message
   in place without a full reparse or a duplicate.
 - Mapping: every item type in the protocol schema, plus an unknown type.
-- Config: an unknown key in `[agents.codex-cloud]` produces an error naming the
-  key and file, the source stays off, and local agents still load.
-- Status: each state under Status and errors appears in the status API and
-  `agentsview serve status`. A login failure names the Codex home and the
-  `codex login` action, and clears after a successful pass. Backfill progress
-  counts up to the thread total.
+- Plan usage: a newer row replaces the older one; `partial` and `unavailable`
+  rows are queried again; sub-agent threads are sent as descendants of their
+  parent and never as their own group; a 403 or 5xx from `query_v2` leaves
+  thread sync status unchanged; sessions with plan usage are left out of token
+  and cost totals and never show zero cost.
+- Config: an unknown key in `[agents.codex-cloud]` produces the message above,
+  the source stays off, and local agents still load.
+- Status: each state appears in the status API and `agentsview serve status`. A
+  401 shows the `codex login` message and a 403 with a valid login does not. A
+  permanently failing thread shows "N threads could not be imported", never
+  "Up to date". Backfill shows "found N so far" until both listings are read.
+  A user who never configured the source sees no row.
 
 ## Documentation
 
-- Add an evidence entry for this format and handshake to
+- Add an evidence entry for this format, the handshake, and `query_v2` to
   `docs/internal/session-format-sources.md`, as `AGENTS.md` requires for new
   providers.
-- Document the setting, what it does with the user's ChatGPT login, and the
-  private-endpoint caveat in the user-facing docs.
+- Document the setting, what it does with the user's ChatGPT login, the
+  private-endpoint caveat, and why these sessions show plan usage instead of
+  tokens and cost, in the user-facing docs.
 
 ## Open questions
 
-The second probe settled archived threads, the dot's own conversation, and the
-client identity (see Background). One question remains:
+1. **Live token counts.** While a dot is working, the durable host may send
+   `thread/tokenUsage/updated` notifications (input, cached input, output, and
+   reasoning token totals) to a client that only listens, without calling
+   `thread/resume`. A 10-minute listening test caught nothing because no
+   thread was running. A test during an active dot task settles it. If they
+   arrive, a later version can record real token counts for work AgentsView
+   sees live; finished threads would still have plan usage only.
+1. **Descendant threads.** The desktop app finds a thread's sub-agent threads
+   with a local discovery step. No listed thread had a `parentThreadId`, so
+   whether `parentThreadId` finds them all is unverified. The builder checks
+   this against a thread that used sub-agents.
 
-1. **Usage source for cloud threads.** The user needs usage and cost. Every
-   source tried so far is closed (see Background). Not yet settled: whether
-   `thread/tokenUsage/updated` arrives for a running thread without calling
-   `thread/resume`, and whether the desktop app shows per-thread usage for dot
-   threads at all. The Usage and cost section is rewritten once a source is
-   found.
-
-Only the user runs the probe, because it uses their ChatGPT login; whoever
+Only the user runs probes, because they use their ChatGPT login; whoever
 executes the plan never reads the token. Test fixtures are synthetic: modeled on
-the shapes the probe returned, with every value replaced.
+the shapes the probes returned, with every value replaced.
 
 ## Risks
 
-- The endpoint is private and undocumented. Any desktop app release may change
-  the handshake or the protocol. Failures must surface as clear sync errors
-  and must never damage stored sessions.
-- OpenAI may treat third-party clients on this endpoint differently from their
+- The endpoints are private and undocumented. Any desktop app release may change
+  the handshake, the protocol, or `query_v2`. Failures must surface as clear
+  sync errors and must never damage stored sessions.
+- OpenAI may treat third-party clients on these endpoints differently from their
   own apps.
 - Re-fetching only unfinished items misses edits to items that already looked
   finished.
@@ -488,5 +580,5 @@ the shapes the probe returned, with every value replaced.
 - Package and type names, file layout, and how the fetcher hands newly mirrored
   threads to the sync engine.
 - Exact page sizes within protocol limits.
-- How the usage groups map onto existing usage storage, within the rules under
-  Usage and cost.
+- The table for plan usage rows and how session details and cost views render
+  them, within the rules under Plan usage.
