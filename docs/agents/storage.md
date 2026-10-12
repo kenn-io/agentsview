@@ -590,7 +590,9 @@ content clears them for a fresh scan.
 
 PostgreSQL push compares usage timestamps in UTC at microsecond precision,
 matching PostgreSQL storage and the existing message and tool-result
-comparisons. SQLite retains the original timestamp text and precision.
+comparisons. Both sides sort the encoded usage records after normalisation, so
+event order does not depend on timestamp text or database row IDs. SQLite
+retains the original timestamp text, precision and raw fingerprint order.
 Metadata-only pushes preserve unchanged messages, tool calls and usage events;
 changes to the accounting fields still replace the session's mirrored data.
 

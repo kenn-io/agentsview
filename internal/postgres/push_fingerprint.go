@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -774,7 +775,7 @@ func loadPushUsageEventFingerprints(
 	}
 	defer rows.Close()
 
-	builders := make(map[string]*strings.Builder, len(sessionIDs))
+	records := make(map[string][]string, len(sessionIDs))
 	for rows.Next() {
 		var sessionID string
 		var ordinal sql.NullInt64
@@ -794,17 +795,11 @@ func loadPushUsageEventFingerprints(
 		); err != nil {
 			return err
 		}
-		b := builders[sessionID]
-		if b == nil {
-			b = &strings.Builder{}
-			builders[sessionID] = b
-		}
 		occurred := ""
 		if occurredAt.Valid {
 			occurred = FormatISO8601(occurredAt.Time)
 		}
-		fmt.Fprintf(
-			b,
+		record := fmt.Sprintf(
 			"%t|%d|%d:%s|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,
 			ordinal.Int64,
@@ -823,12 +818,14 @@ func loadPushUsageEventFingerprints(
 			len(occurred), occurred,
 			len(dedupKey.String), dedupKey.String,
 		)
+		records[sessionID] = append(records[sessionID], record)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for sessionID, b := range builders {
-		out[sessionID] = b.String()
+	for sessionID, events := range records {
+		slices.Sort(events)
+		out[sessionID] = strings.Join(events, "")
 	}
 	return nil
 }

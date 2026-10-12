@@ -3638,3 +3638,79 @@ func TestSessionProvenanceBackfillCompletesPerFilterScope(t *testing.T) {
 	assert.Equal(t, "1", marker,
 		"unfiltered push must complete the provenance marker")
 }
+
+func TestPGPushMetadataChangesPreserveMessagesWithMultipleUsageEvents(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		timestamps []string
+	}{
+		{name: "whole and fractional seconds", timestamps: []string{
+			"2026-07-01T12:00:00Z", "2026-07-01T12:00:00.5Z",
+		}},
+		{name: "different offsets", timestamps: []string{
+			"2026-07-01T13:00:00+01:00", "2026-07-01T12:30:00Z",
+		}},
+		{name: "microsecond ties", timestamps: []string{
+			"2026-07-01T12:00:00.123456900Z", "2026-07-01T12:00:00.123456100Z",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			pgURL := testPGURL(t)
+			const schema = "agentsview_usage_order_test"
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			local := testDB(t)
+			const id = "hermes:usage-order"
+			session := db.Session{
+				ID: id, Project: "project", Machine: "machine", Agent: "hermes",
+				MessageCount: 1, FileMtime: new(time.Now().Add(time.Hour).UnixNano()), FileHash: new("first-source"),
+			}
+			require.NoError(t, local.UpsertSession(ctx, session))
+			require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+				SessionID: id, Ordinal: 0, Role: "user", Content: "unchanged message", ContentLength: 17,
+			}}))
+			events := make([]db.UsageEvent, len(test.timestamps))
+			for i, timestamp := range test.timestamps {
+				events[i] = db.UsageEvent{
+					SessionID: id, Source: "session", Model: "model",
+					InputTokens: i + 1, OccurredAt: timestamp, DedupKey: fmt.Sprintf("event-%d", i),
+				}
+			}
+			require.NoError(t, local.ReplaceSessionUsageEvents(ctx, id, events))
+			rawBefore, err := local.UsageEventFingerprints([]string{id})
+			require.NoError(t, err)
+			pusher, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = pusher.Close() })
+			_, err = pusher.Push(ctx, false, nil)
+			require.NoError(t, err)
+			var originalVersion string
+			require.NoError(t, pusher.DB().QueryRowContext(ctx, "SELECT xmin::text FROM messages WHERE session_id = $1", id).Scan(&originalVersion))
+			localFP, err := local.UsageEventFingerprintsWithTimestampNormalizer(ctx, []string{id}, pgUsageEventTimestampFingerprintText)
+			require.NoError(t, err)
+			tx, err := pusher.DB().BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer tx.Rollback()
+			pgFP, err := pgUsageEventFingerprint(ctx, tx, id)
+			require.NoError(t, err)
+			assert.Equal(t, localFP[id], pgFP, "single-session comparisons must match")
+			batched := map[string]string{}
+			require.NoError(t, loadPushUsageEventFingerprints(ctx, tx, []string{id}, batched))
+			assert.Equal(t, localFP, batched, "batched comparisons must match")
+			require.NoError(t, tx.Rollback())
+			session.SessionName = new("Renamed session")
+			session.FileHash = new("second-source")
+			require.NoError(t, local.UpsertSession(ctx, session))
+			result, err := pusher.Push(ctx, false, nil)
+			require.NoError(t, err)
+			assert.Zero(t, result.MessagesPushed)
+			var currentVersion string
+			require.NoError(t, pusher.DB().QueryRowContext(ctx, "SELECT xmin::text FROM messages WHERE session_id = $1", id).Scan(&currentVersion))
+			assert.Equal(t, originalVersion, currentVersion, "metadata changes must not replace messages")
+			rawAfter, err := local.UsageEventFingerprints([]string{id})
+			require.NoError(t, err)
+			assert.Equal(t, rawBefore, rawAfter)
+		})
+	}
+}

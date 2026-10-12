@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/money"
@@ -196,9 +197,9 @@ func usageEventFingerprintsWithQuerier(
 	return usageEventFingerprintsWithTimestampNormalizer(ctx, q, sessionIDs, nil)
 }
 
-// UsageEventFingerprintsWithTimestampNormalizer returns ordered fingerprints
-// after applying normalizeTimestamp to each occurred_at value. SQLite keeps
-// the original timestamps and the usage cache uses their full precision.
+// UsageEventFingerprintsWithTimestampNormalizer sorts encoded usage records
+// after applying normalizeTimestamp to each occurred_at value. A nil normalizer
+// preserves the raw timestamp and row-ID order used by the usage cache.
 func (db *DB) UsageEventFingerprintsWithTimestampNormalizer(
 	ctx context.Context, sessionIDs []string, normalizeTimestamp func(string) string,
 ) (map[string]string, error) {
@@ -266,6 +267,7 @@ func appendUsageEventFingerprintsWithTimestampNormalizer(
 	defer rows.Close()
 
 	builders := make(map[string]*strings.Builder)
+	canonicalRecords := make(map[string][]string)
 	for rows.Next() {
 		var sessionID string
 		var ordinal sql.NullInt64
@@ -285,7 +287,7 @@ func appendUsageEventFingerprintsWithTimestampNormalizer(
 			return err
 		}
 		b := builders[sessionID]
-		if b == nil {
+		if b == nil || normalizeTimestamp != nil {
 			b = &strings.Builder{}
 			builders[sessionID] = b
 		}
@@ -324,12 +326,21 @@ func appendUsageEventFingerprintsWithTimestampNormalizer(
 			len(occurred), occurred,
 			len(dedupKey.String), dedupKey.String,
 		)
+		if normalizeTimestamp != nil {
+			canonicalRecords[sessionID] = append(canonicalRecords[sessionID], b.String())
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 	for id, b := range builders {
-		out[id] += b.String()
+		if normalizeTimestamp == nil {
+			out[id] += b.String()
+			continue
+		}
+		records := canonicalRecords[id]
+		slices.Sort(records)
+		out[id] += strings.Join(records, "")
 	}
 	return nil
 }

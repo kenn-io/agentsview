@@ -3698,66 +3698,11 @@ func pgToolCallFingerprint(
 func pgUsageEventFingerprint(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) (string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT message_ordinal, source, model, provider_id,
-			input_tokens, output_tokens,
-			cache_creation_input_tokens, cache_read_input_tokens,
-			reasoning_tokens, cost_microdollars, cost_status, cost_source,
-			occurred_at, dedup_key
-		 FROM usage_events
-		 WHERE session_id = $1
-		 ORDER BY occurred_at NULLS FIRST, id`,
-		sessionID,
-	)
-	if err != nil {
+	fingerprints := make(map[string]string, 1)
+	if err := loadPushUsageEventFingerprints(ctx, tx, []string{sessionID}, fingerprints); err != nil {
 		return "", err
 	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var ordinal sql.NullInt64
-		var source, model, providerID, costStatus, costSource string
-		var inputTokens, outputTokens int
-		var cacheCreationInputTokens, cacheReadInputTokens int
-		var reasoningTokens int
-		var cost sql.NullInt64
-		var occurredAt sql.NullTime
-		var dedupKey sql.NullString
-		if err := rows.Scan(
-			&ordinal, &source, &model, &providerID,
-			&inputTokens, &outputTokens,
-			&cacheCreationInputTokens, &cacheReadInputTokens,
-			&reasoningTokens, &cost, &costStatus, &costSource,
-			&occurredAt, &dedupKey,
-		); err != nil {
-			return "", err
-		}
-		occurred := ""
-		if occurredAt.Valid {
-			occurred = FormatISO8601(occurredAt.Time)
-		}
-		fmt.Fprintf(&b,
-			"%t|%d|%d:%s|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%d|%d:%s|%d:%s|%d:%s|%d:%s;",
-			ordinal.Valid,
-			ordinal.Int64,
-			len(source), source,
-			len(model), model,
-			len(providerID), providerID,
-			inputTokens,
-			outputTokens,
-			cacheCreationInputTokens,
-			cacheReadInputTokens,
-			reasoningTokens,
-			cost.Valid,
-			cost.Int64,
-			len(costStatus), costStatus,
-			len(costSource), costSource,
-			len(occurred), occurred,
-			len(dedupKey.String), dedupKey.String,
-		)
-	}
-	return b.String(), rows.Err()
+	return fingerprints[sessionID], nil
 }
 
 const msgInsertBatch = 100

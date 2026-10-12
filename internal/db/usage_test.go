@@ -6280,3 +6280,33 @@ func TestUsageEventFingerprintNormalizationPreservesArchivePrecision(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, raw, after)
 }
+
+func TestUsageEventNormalizedFingerprintOrdersCanonicalRecords(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	const id = "hermes:usage-order"
+	insertSession(t, database, id, "project")
+	require.NoError(t, database.ReplaceSessionUsageEvents(ctx, id, []UsageEvent{
+		{SessionID: id, Source: "session", Model: "model", InputTokens: 10, OccurredAt: "2026-07-01T12:00:00Z"},
+		{SessionID: id, Source: "session", Model: "model", InputTokens: 20, OccurredAt: "2026-07-01T12:00:00.5Z"},
+		{SessionID: id, Source: "session", Model: "model", InputTokens: 5, OccurredAt: "2026-07-01T12:00:00.000Z"},
+	}))
+	const whole = "false|0|7:session|5:model|0:|10|0|0|0|0|false|0|0:|0:|20:2026-07-01T12:00:00Z|0:;"
+	const fractional = "false|0|7:session|5:model|0:|20|0|0|0|0|false|0|0:|0:|22:2026-07-01T12:00:00.5Z|0:;"
+	const trailing = "false|0|7:session|5:model|0:|5|0|0|0|0|false|0|0:|0:|24:2026-07-01T12:00:00.000Z|0:;"
+	const normalizedTrailing = "false|0|7:session|5:model|0:|5|0|0|0|0|false|0|0:|0:|20:2026-07-01T12:00:00Z|0:;"
+	raw, err := database.UsageEventFingerprints([]string{id})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{id: trailing + fractional + whole}, raw)
+	normalized, err := database.UsageEventFingerprintsWithTimestampNormalizer(ctx, []string{id}, func(value string) string {
+		if value == "2026-07-01T12:00:00.000Z" {
+			return "2026-07-01T12:00:00Z"
+		}
+		return value
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{id: whole + fractional + normalizedTrailing}, normalized)
+	after, err := database.UsageEventFingerprints([]string{id})
+	require.NoError(t, err)
+	assert.Equal(t, raw, after)
+}
