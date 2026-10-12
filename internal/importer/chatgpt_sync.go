@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -55,6 +56,25 @@ func chatGPTFreshness(updatedAt string, session *db.Session) uint64 {
 		}
 	}
 	return hash.Sum64()
+}
+
+// chatGPTDetailGap spaces conversation detail requests. hstry's extension
+// used 1.5 s plus jitter to stay under ChatGPT's rate limit; tests set it to 0.
+var chatGPTDetailGap = 1500 * time.Millisecond
+
+func waitChatGPTDetailGap(ctx context.Context) error {
+	if chatGPTDetailGap <= 0 {
+		return nil
+	}
+	jitter := time.Duration(rand.Int64N(int64(800*time.Millisecond))) - 400*time.Millisecond
+	timer := time.NewTimer(chatGPTDetailGap + jitter)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 type chatGPTHTTPError struct{ status int }
@@ -128,6 +148,9 @@ func SyncChatGPT(ctx context.Context, store interface {
 				ctx, store, parser.AgentChatGPT, id,
 				func(session *db.Session) uint64 { return chatGPTFreshness(updatedAt, session) },
 				func(ctx context.Context) ([]byte, error) {
+					if err := waitChatGPTDetailGap(ctx); err != nil {
+						return nil, err
+					}
 					return fetchChatGPT(ctx, fetch, chatGPTRequest(chatGPTDetailRequest, marker.ID, 0))
 				},
 			)
@@ -147,6 +170,10 @@ func SyncChatGPT(ctx context.Context, store interface {
 					return stats, fetchErr
 				}
 				detailError, _ := errors.AsType[*chatGPTHTTPError](fetchErr)
+				if detailError != nil && detailError.status == http.StatusTooManyRequests {
+					// Continuing would only deepen the rate limit; the next Sync picks up the rest.
+					return stats, fmt.Errorf("ChatGPT rate limited; sync stopped early, run Sync again later: %w", fetchErr)
+				}
 				if detailError != nil && detailError.status == http.StatusNotFound {
 					stats.Skipped++
 					cb.progress(stats)
