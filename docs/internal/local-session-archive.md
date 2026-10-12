@@ -3,11 +3,12 @@
 Status: implemented on this branch; not yet released. User instructions and
 command limits live in [the CLI reference](../commands.md#agentsview-archive).
 
-Portable capture, seed assembly, multi-machine source identity mapping,
-recovery and persisted archive-only mode are implemented here. This delivery
-was reviewed against [PR #2036](https://github.com/kenn-io/agentsview/pull/2036);
-approval of that review does not mean every retirement acceptance criterion has
-been exercised end to end.
+Portable capture, seed assembly, multi-machine source identity mapping, recovery
+and persisted archive-only mode are implemented here. This delivery was reviewed
+against [PR #2036](https://github.com/kenn-io/agentsview/pull/2036); approval of
+that review does not mean every
+[retirement acceptance criterion](#pending-verification-before-retiring-a-computer)
+has been exercised end to end.
 
 ## Outcome and limits
 
@@ -39,13 +40,13 @@ retention, garbage collection and disaster rebuild remain tracked under
 Several existing identities have different jobs. None of them is replaced by a
 new universal ID:
 
-| Record                       | Meaning and rule                                                                                                                                                          |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Source installation ID       | Identifies the original installation, independent of its display label. Reused from `telemetry-install-id` when available, or generated once in the capture descriptor. |
-| Artifact origin              | Identifies an artifact publisher. Bound explicitly to the source installation; never regenerated or adopted as the collector's own publisher.                            |
-| Hosted tenant and device ID  | Identify an authenticated sender within a tenant. An explicit binding records the relationship; importing it does not grant upload authority.                            |
-| Configured root ID           | Identifies a provider root on a source. Existing checkpoint IDs are preserved; a capture path is only that root's current location.                                      |
-| Archive ID                   | Identifies the archive that owns SQLite state. A whole-archive restore preserves it; collecting another source into that archive does not replace it.                    |
+| Record                      | Meaning and rule                                                                                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source installation ID      | Identifies the original installation, independent of its display label. Reused from `telemetry-install-id` when available, or generated once in the capture descriptor. |
+| Artifact origin             | Identifies an artifact publisher. Bound explicitly to the source installation; never regenerated or adopted as the collector's own publisher.                           |
+| Hosted tenant and device ID | Identify an authenticated sender within a tenant. An explicit binding records the relationship; importing it does not grant upload authority.                           |
+| Configured root ID          | Identifies a provider root on a source. Existing checkpoint IDs are preserved; a capture path is only that root's current location.                                     |
+| Archive ID                  | Identifies the archive that owns SQLite state. A whole-archive restore preserves it; collecting another source into that archive does not replace it.                   |
 
 Root records are namespaced by source installation and provider as well as root
 ID, since two machines may use the same root name. A session from a foreign
@@ -53,8 +54,8 @@ installation uses `installation~parser-id` identity and keeps its original
 machine attribution; namespace collisions are refused rather than silently
 merged. Collection into an existing archive preserves that archive's own owner
 and publisher — the retiring installation's captured database is never adopted
-as the receiving host's identity, and the receiving host's own sessions remain
-a separate source.
+as the receiving host's identity, and the receiving host's own sessions remain a
+separate source.
 
 ## Source capture
 
@@ -107,9 +108,9 @@ and path checks as other existing sessions.
 
 The offline commands keep original files in a dedicated embedded Docbank vault
 under `raw-archive/artifacts`. `sessions.db` owns original device/root bindings,
-file inventories, immutable source acceptance, and parse status.
-Those records survive database rebuilds. Moving the capture changes its import
-path, not those identities.
+file inventories, immutable source acceptance, and parse status. Those records
+survive database rebuilds. Moving the capture changes its import path, not those
+identities.
 
 The importer requires a validated capture. After whole-package verification, it
 streams each file into the vault using the inventory's hash and size. The vault
@@ -123,11 +124,11 @@ object references, and 16 GiB per logical source file; larger retained files are
 supplemental.
 
 | Existing subsystem   | Reuse and boundary                                                                                                                  |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Hosted raw sync      | Canonical manifests, provider plans, object adapter, verified materializer. PostgreSQL leases and server publication remain hosted. |
 | Local sync           | Normal SQLite content policy, conversation identities, signals, secret scanning, and bounded large-Codex parsing.                   |
 | Artifact folder sync | Existing normalized session exchange stays separate from the original-file vault.                                                   |
-| Docbank              | Content retention, exclusive vault ownership and capture extraction. Automatic garbage collection is not enabled.                    |
+| Docbank              | Content retention, exclusive vault ownership and capture extraction. Automatic garbage collection is not enabled.                   |
 
 The local path shares source discovery and matching with `rawderive` but does
 not use its buffered hosted parse results. `PathRewriter` works independently of
@@ -220,14 +221,76 @@ reader version 6. Once such a snapshot exists, older readers cannot use the
 repository, including its older snapshots. Existing experimental filesystem
 recovery points require their saved readers and are left untouched.
 
+## Pending verification before retiring a computer
+
+These are completion requirements, not a record of checks already run. Use a
+fresh isolated deployment on the receiving computer and protected copies from
+four real source machines. Keep existing services, binaries, databases, vaults,
+credentials and provider roots untouched. Record the exact build, descriptor and
+inventory hashes, source cutoffs, input counts and commands in a private
+runbook.
+
+1. Capture on both macOS and Linux. Read the source's actual installation ID,
+   reuse root IDs on a second capture, include live SQLite WAL content in a
+   consistent snapshot, and report symlink and credential omissions. Failed or
+   changing inputs must not publish a complete capture. Run preflight on all
+   four closed databases before collection; record counts and unknowns.
+1. Import all four eligible sources. Browse and filter sessions by original
+   machine, including sessions created on the receiving host. Rename a label,
+   relocate a capture, and repeat import after restart. Stable identities,
+   accepted heads and counts must remain unchanged.
+1. Start the collector in the foreground, through the config-only background
+   path, and after restart with receiving-host provider files available. Try
+   ordinary sync and artifact exchange explicitly. Persisted archive-only mode
+   must prevent discovery and publication after rehearsal and final assembly.
+1. Compare the seed database's session IDs, message IDs, stored content,
+   curation, trash and assets before and after collection, backup, restore and
+   full resync. Record the limit on other machines' curation. Include nonzero
+   foreign trash and permanent exclusions: raw bytes must remain extractable,
+   while deleted sessions stay out of browsable history after reparse, resync
+   and restore. Preserve unsupported provider data.
+1. Back up, make the source trees and original vault unavailable, then restore
+   on the receiver using only the repository and an explicit snapshot ID, even
+   if a newer snapshot exists. Extract and hash every captured file against
+   its selected capture inventory, including conflicting versions and a file
+   over 4 GiB. Include a backup application extra over 4 GiB; large raw
+   content alone does not exercise that contract.
+1. Reparse selected Claude and Codex sessions, a large Codex transcript, and a
+   fork with its parent. Prove the parser ran; carried-forward SQLite rows
+   alone are insufficient. Claude forks and subagents must remain distinct
+   parser sessions. Compare the allowlisted recovery settings and confirm
+   omitted credentials do not reappear in the restored runtime configuration.
+1. Interrupt import and reparse, then retry without duplicate acceptance or
+   partial publication. A missing blob, corrupt backup extra or identity
+   conflict must leave the previous browsable archive intact. Startup after a
+   parser data-version change must carry archived-only sessions forward
+   without scanning the vault.
+1. Stop source writers and establish the final capture cutoff, including work
+   since the rehearsal. Assemble the final archive afresh, including a session
+   changed after rehearsal, and verify its final accepted bytes can be
+   reparsed. Verify two independent copies on different physical storage, at
+   least one off the retiring computer, and a cold restore from the final
+   recovery point. Both copies must survive erasing that computer. Record
+   covered sessions and files, exclusions, recovery command, repository ID,
+   snapshot ID and reader version. Confirm that a changed shared Codex index
+   produces a conflict during rehearsal; it must not be mistaken for ongoing
+   source refresh support.
+
+Successful import or backup verification alone does not establish readiness to
+erase the source computer. Require the final cutoff, complete extraction
+comparison, preserved curation, stable attribution and independent-copy restore.
+Deletion remains an explicit user action. Keep readable formats and periodically
+check both copies; this delivery does not promise permanent storage without that
+maintenance.
+
 ## Relationship to other raw-history work
 
 [Hosted raw sync](../hosted-raw-sync.md) retains originals and authenticated
 source generations on a server. [Artifact folder sync](../artifact-sync.md)
-exchanges normalized sessions without the original files or curation. Neither
-is a substitute for a complete offline archive recovery point, and this
-delivery does not make an offline capture or import equivalent to a hosted
-acceptance receipt.
+exchanges normalized sessions without the original files or curation. Neither is
+a substitute for a complete offline archive recovery point, and this delivery
+does not make an offline capture or import equivalent to a hosted acceptance
+receipt.
 
 [PR #1741](https://github.com/kenn-io/agentsview/pull/1741) and
 [PR #1751](https://github.com/kenn-io/agentsview/pull/1751) extract shared raw
