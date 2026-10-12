@@ -618,7 +618,9 @@ Spec: Fetcher state, Failure timing (persisted account wait).
       `{dataDir}/sources/codex-cloud`).
     - `func (s *Store) Lock(key AccountKey) (unlock func())` (one mutex per
       account, shared by the sync job and the monitor).
-    - `func (s *Store) MirrorPath(key AccountKey, threadID string) string`
+    - `func (s *Store) MirrorPath(key AccountKey, threadID string) (string, error)`:
+      thread IDs come from the server, so every path helper rejects an ID that
+      is not a plain file name.
     - `type TurnState struct { ID, Status string; FirstSeen, EndedFirstSeen time.Time; CompletedAt, StartedAt *time.Time; Digest string }`
     - `type ThreadState struct { UpdatedAt int64; ResumeTurnID, ResumeItemID string; Offset int64; ResolvedParent string; Turns []TurnState; LastProgress time.Time; MetaDigest string; ItemDigests map[string]string; CreatedAt int64; LastPlanRecordDigest, LastPlanRecordKind string; CountedUnder string; LastHandledTurnID string; IsSubAgent bool; ArchivedFirstSeen time.Time }`
     - `type WaitState struct { Failure string; Attempts int; Until time.Time }`
@@ -630,23 +632,25 @@ Spec: Fetcher state, Failure timing (persisted account wait).
     - `type UnfinishedEntry struct { InProgress, Stalled, SubAgent bool }`
     - `type ListingID string` with `ListDefaultActive`, `ListDefaultArchived`,
       `ListSubAgentActive`, `ListSubAgentArchived`.
-    - Load/Save for thread, account, descendants (`[]string`), waiting
-      (`[]string`); atomic write (temp file, fsync, rename, fsync dir); missing
-      file loads as zero value; files `0o600`, directories `0o700`.
+    - `LoadThread`/`SaveThread`, `LoadAccount`/`SaveAccount` (every set allocated
+      on load), `LoadDescendants`/`SaveDescendants` and
+      `LoadWaiting`/`SaveWaiting` (`[]string`; an empty list removes the file);
+      atomic write through `go.kenn.io/kit/atomicfile`; missing file loads as
+      zero value; files `0o600`, directories `0o700`.
 
-- [ ] **Step 1: Write failing tests** `TestStateRoundTrip`,
+- [x] **Step 1: Write failing tests** `TestStateRoundTrip`,
   `TestStateAtomicWrite` (a leftover temp file never replaces the old file),
   `TestLockSerializesWriters` (two goroutines updating different fields under
   the lock lose neither change), `TestLostThreadStateLoadsZero` (offset 0, so
   the next append recovers every frame).
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): persist fetcher state"`
 
 ### Task 11: Error classification, waits, and the status board
