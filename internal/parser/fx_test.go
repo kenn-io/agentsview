@@ -251,6 +251,8 @@ func TestFxRejectedArtifacts(t *testing.T) {
 		{"empty event", "events.jsonl", "{\"event\":{}}\n", "", "invalid fx events.jsonl"},
 		{"empty event type", "events.jsonl", "{\"event\":{\"\":{}}}\n", "", "invalid fx events.jsonl"},
 		{"null user", "events.jsonl", "{\"event\":{\"user\":null}}\n", "", "invalid fx events.jsonl"},
+		{"multiple event types", "events.jsonl", "{\"event\":{\"user\":{},\"assistant\":{}}}\n", "", "invalid fx events.jsonl"},
+		{"wrong payload type", "events.jsonl", "{\"event\":{\"tool_call\":[]}}\n", "", "invalid fx events.jsonl"},
 		{"null turn completed", "events.jsonl", "{\"event\":{\"turn_completed\":null}}\n", "", "invalid fx events.jsonl"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -350,7 +352,6 @@ func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 		{"empty model entry", `{"snapshot":{"models":[{}]}}`, "model entry"},
 		{"negative count", `{"snapshot":{"models":[{"model":"test","input_tokens":-1}]}}`, "negative fx token count"},
 		{"fractional count", `{"snapshot":{"models":[{"model":"test","output_tokens":1.5}]}}`, "invalid fx"},
-		{"negative request count", `{"snapshot":{"models":[{"model":"test","request_count":-1}]}}`, "negative fx token count"},
 		{"fractional reasoning count", `{"snapshot":{"models":[{"model":"test","reasoning_tokens":1.5}]}}`, "invalid fx"},
 		{"null count", `{"snapshot":{"models":[{"model":"test","cache_read_tokens":null}]}}`, ""},
 		{"null models", `{"snapshot":{"models":null}}`, "invalid fx"},

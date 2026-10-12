@@ -38,8 +38,7 @@ func (p *fxProvider) UnmarshalJSON(data []byte) error {
 		}
 	} else {
 		var provider *struct {
-			Name    string `json:"name"`
-			Binding string `json:"binding"`
+			Name string `json:"name"`
 		}
 		if err := json.Unmarshal(data, &provider); err != nil {
 			return err
@@ -93,11 +92,6 @@ type fxEvent struct {
 }
 
 func (e *fxEvent) UnmarshalJSON(data []byte) error {
-	type eventFields fxEvent
-	var fields eventFields
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(data, &keys); err != nil {
 		return err
@@ -105,17 +99,39 @@ func (e *fxEvent) UnmarshalJSON(data []byte) error {
 	if len(keys) != 1 {
 		return fmt.Errorf("fx event must contain one event type")
 	}
+	var fields fxEvent
 	for key, value := range keys {
+		var target any
 		switch key {
-		case "user", "steering", "assistant", "tool_call", "tool_result", "context_checkpoint", "interrupted", "turn_completed":
-			if string(value) == "null" {
-				return fmt.Errorf("fx %s event must be an object", key)
-			}
+		case "user":
+			target = &fields.User
+		case "steering":
+			target = &fields.Steering
+		case "assistant":
+			target = &fields.Assistant
+		case "tool_call":
+			target = &fields.ToolCall
+		case "tool_result":
+			target = &fields.ToolResult
+		case "context_checkpoint":
+			target = &fields.Checkpoint
+		case "interrupted":
+			target = &fields.Interrupted
+		case "turn_completed":
+			target = &fields.TurnCompleted
 		case "":
 			return fmt.Errorf("fx event type must be non-empty")
 		}
+		if target != nil {
+			if string(value) == "null" {
+				return fmt.Errorf("fx %s event must be an object", key)
+			}
+			if err := json.Unmarshal(value, target); err != nil {
+				return err
+			}
+		}
 	}
-	*e = fxEvent(fields)
+	*e = fields
 	return nil
 }
 
@@ -144,7 +160,6 @@ type fxUsageModel struct {
 	CacheRead  fxCount `json:"cache_read_tokens"`
 	CacheWrite fxCount `json:"cache_write_tokens"`
 	Reasoning  fxCount `json:"reasoning_tokens"`
-	Requests   fxCount `json:"request_count"`
 }
 type fxUsage struct {
 	Version   int     `json:"schema_version"`
@@ -249,14 +264,13 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		}
 		var frame *fxFrame
 		if err := json.Unmarshal([]byte(line), &frame); err != nil {
-			var tail [1]byte
-			if !json.Valid([]byte(line)) {
+			if !json.Valid([]byte(line)) && !fileEndsWithNewline(f, reader.bytesRead) {
+				// The newline helper also returns false on read errors.
+				var tail [1]byte
 				if _, err := f.ReadAt(tail[:], reader.bytesRead-1); err != nil {
 					return nil, nil, err
 				}
-				if tail[0] != '\n' {
-					break
-				}
+				break
 			}
 			return nil, nil, fmt.Errorf("invalid fx events.jsonl frame: %w", err)
 		}
@@ -386,8 +400,6 @@ func fxAppendEvent(messages *[]ParsedMessage, event *fxEvent, timestamp time.Tim
 			return
 		}
 		message.Role, message.Content = RoleAssistant, event.Interrupted.Text
-	case event.TurnCompleted != nil:
-		return
 	default:
 		return
 	}

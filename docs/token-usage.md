@@ -50,7 +50,8 @@ model, so it does not provide a model-by-model account of a session that
 switched models.
 
 fx contributes cumulative totals per model from `usage-v2.json`, dated at the
-session's last event. Costs use AgentsView's pricing catalog.
+session's latest event. As a session grows, its earlier usage moves to the
+latest day. Costs use AgentsView's pricing catalog.
 
 Augure Code and Augure Desktop retain recorded usage. Proprietary Augure models
 have no catalog price, so token-based cost estimates remain unpriced unless you

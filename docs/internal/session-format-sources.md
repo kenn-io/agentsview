@@ -4374,6 +4374,9 @@ schemas keep their existing ordering behavior.
   are strings for built-in providers or objects with `name` and `binding` for
   configured providers. Model names retain publisher prefixes for pricing.
   Skill names percent-decode the location leaf.
+  [Built-in tools](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/builtins/tools.zig)
+  define the native names mapped to shared tool categories, including
+  `grep_files` as Grep and `glob_files` as Glob.
   [Context compaction](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_log.zig)
   appends a `context_checkpoint` frame and preserves earlier messages.
   [Log-size compaction](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_compaction.zig)

@@ -6,6 +6,32 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestNormalizeFxToolCategory(t *testing.T) {
+	for _, test := range []struct{ name, category string }{
+		{"glob_files", "Glob"},
+		{"grep_files", "Grep"},
+		{"read_file", "Read"},
+		{"write_file", "Write"},
+		{"edit_file", "Edit"},
+		{"web_fetch", "Tool"},
+		{"web_search", "Tool"},
+		{"shell", "Bash"},
+		{"capability_search", "Tool"},
+		{"skill", "Tool"},
+		{"install_skill", "Tool"},
+		{"subagent", "Task"},
+		{"mcp_select_tool", "Tool"},
+		{"mcp_features", "Tool"},
+		{"ask_user_question", "Tool"},
+		{"vision", "Read"},
+		{"read_tool_result", "Read"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.category, NormalizeToolCategory(test.name))
+		})
+	}
+}
+
 func TestNormalizeToolCategory(t *testing.T) {
 	tests := []struct {
 		toolName string

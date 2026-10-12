@@ -315,6 +315,16 @@ func NormalizeToolCategory(rawName string) string {
 	case "todos":
 		return "Tool"
 
+	// fx tools (only names not already handled above).
+	case "grep_files":
+		return "Grep"
+	case "glob_files":
+		return "Glob"
+	case "vision", "read_tool_result":
+		return "Read"
+	case "capability_search", "install_skill", "mcp_select_tool", "mcp_features", "ask_user_question":
+		return "Tool"
+
 	default:
 		// MCP tools may carry a server prefix (e.g.
 		// "Zencoder_subagent__ZencoderSubagent") or use
