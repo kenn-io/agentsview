@@ -113,6 +113,10 @@ type hermesArchivedMessage struct {
 
 func (message hermesArchivedMessage) includes(archived hermesArchivedMessage) bool {
 	incomingCalls, archivedCalls := message.ToolCalls, archived.ToolCalls
+	if archived.ThinkingText != "" && message.ThinkingText != archived.ThinkingText {
+		return false
+	}
+	message.ThinkingText, archived.ThinkingText = "", ""
 	message.ToolCalls, archived.ToolCalls = nil, nil
 	if !reflect.DeepEqual(message, archived) || len(incomingCalls) < len(archivedCalls) {
 		return false
@@ -145,6 +149,15 @@ func hermesToolCallIncludesArchived(incoming, archived db.ToolCall) bool {
 }
 
 func normalizedHermesMessage(message db.Message) hermesArchivedMessage {
+	if message.Role == "assistant" && message.HasThinking && strings.HasPrefix(message.Content, "[Thinking]\n") {
+		reasoning, answer, ok := strings.Cut(strings.TrimPrefix(message.Content, "[Thinking]\n"), "\n[/Thinking]\n")
+		if ok {
+			message.Content = answer
+			if message.ThinkingText == "" {
+				message.ThinkingText = reasoning
+			}
+		}
+	}
 	message.ToolCalls = append([]db.ToolCall(nil), message.ToolCalls...)
 	for i := range message.ToolCalls {
 		call := &message.ToolCalls[i]

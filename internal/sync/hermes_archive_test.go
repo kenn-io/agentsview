@@ -2493,3 +2493,66 @@ func TestHermesSourceMigrationComparesOffloadedImages(t *testing.T) {
 		}
 	}
 }
+
+func TestHermesSourceSwitchCanAddReasoning(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, change := range []string{"added", "changed", "removed"} {
+			t.Run(string(agent)+"/"+change, func(t *testing.T) {
+				root := t.TempDir()
+				stateDB := writeHermesArchiveStateDB(t, root)
+				conn, err := sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), "DELETE FROM messages; UPDATE sessions SET input_tokens=100, output_tokens=73")
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				dir := filepath.Join(root, "sessions")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				path := filepath.Join(dir, "child.jsonl")
+				reasoning := ""
+				if change != "added" {
+					reasoning = `,"reasoning":"original reasoning"`
+				}
+				content := `{"role":"user","content":"hello"}` + "\n" + `{"role":"assistant","content":"Done."` + reasoning + "}\n"
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":child"
+				before, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				usageBefore, err := database.GetUsageEvents(t.Context(), id)
+				require.NoError(t, err)
+				conn, err = sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				newReasoning := "new reasoning"
+				if change == "removed" {
+					newReasoning = ""
+				}
+				_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET output_tokens=90;
+					INSERT INTO messages(session_id,role,content,timestamp) VALUES('child','user','hello',1778767210);
+					INSERT INTO messages(session_id,role,content,reasoning_content,timestamp) VALUES('child','assistant','Done.',?,1778767211);
+					INSERT INTO messages(session_id,role,content,timestamp) VALUES('child','user','next',1778767212)`, newReasoning)
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				require.NoError(t, os.Remove(path))
+				engine.SyncAll(t.Context(), nil)
+				after, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				usageAfter, err := database.GetUsageEvents(t.Context(), id)
+				require.NoError(t, err)
+				if change != "added" {
+					assert.Equal(t, before, after)
+					assert.Equal(t, usageBefore, usageAfter)
+					return
+				}
+				contents := make([]string, len(after))
+				for i, message := range after {
+					contents[i] = message.Content
+				}
+				assert.Equal(t, []string{"hello", "[Thinking]\nnew reasoning\n[/Thinking]\nDone.", "next"}, contents)
+				assert.Equal(t, []db.UsageEvent{{ID: 1, SessionID: id, Source: "session", Model: "gpt-5.4", InputTokens: 100, OutputTokens: 90, OccurredAt: "2026-05-14T14:10:00Z", DedupKey: "session:hermes:child"}}, usageAfter)
+			})
+		}
+	}
+}
