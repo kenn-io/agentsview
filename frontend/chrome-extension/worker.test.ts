@@ -18,7 +18,7 @@ const port = {
 };
 const chrome = {
   runtime: {
-    getURL: vi.fn((file) => `chrome-extension://test/${file}`),
+    getURL: vi.fn((file: string) => `chrome-extension://test/${file}`),
     connectNative: vi.fn(() => port),
     onStartup: { addListener: vi.fn() },
     onInstalled: { addListener: vi.fn() },
