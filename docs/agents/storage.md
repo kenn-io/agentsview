@@ -17,6 +17,10 @@ even when their source files no longer exist. Schema repairs also require a full
 resync. Archive-only archives use the preservation rebuild, which does not read
 source files on the receiving host.
 
+Full parser rebuilds serve the old archive while writes receive a retryable HTTP
+503. Scoped upgrades and schema repairs still block startup. A failed rebuild
+keeps serving with writes allowed and retries on the archive audit cadence.
+
 A parser upgrade can instead reparse only the affected providers in place.
 Declare it in `dataVersionScopes` in `internal/db/data_version_scope.go`:
 

@@ -90,7 +90,7 @@ func (s *Server) handleReviewRecallEntry(
 	w http.ResponseWriter, r *http.Request,
 ) {
 	if s.db.ReadOnly() {
-		handleReadOnly(w, db.ErrReadOnly)
+		s.handleReadOnly(w, db.ErrReadOnly)
 		return
 	}
 	var req reviewRecallEntryRequest
@@ -115,7 +115,7 @@ func (s *Server) handleReviewRecallEntry(
 }
 
 func (s *Server) handleRecallReviewError(w http.ResponseWriter, err error) {
-	if handleContextError(w, err) || handleReadOnly(w, err) {
+	if handleContextError(w, err) || s.handleReadOnly(w, err) {
 		return
 	}
 	switch {

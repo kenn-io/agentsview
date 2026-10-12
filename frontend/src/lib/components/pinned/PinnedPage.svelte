@@ -8,6 +8,7 @@
     XIcon,
   } from "../../icons.js";
   import { pins } from "../../stores/pins.svelte.js";
+  import { generatedErrorMessage } from "../../api/runtime.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -24,6 +25,17 @@
 
   /** Set of expanded pin IDs. */
   let expanded: Set<number> = $state(new Set());
+  let pinError = $state("");
+
+  async function unpin(pin: import("../../api/generated/index.js").DbPinnedMessage) {
+    pinError = "";
+    try {
+      if (pin.message_key) await pins.removeReference(pin);
+      else await pins.unpin(pin.session_id, pin.message_id);
+    } catch (error) {
+      pinError = generatedErrorMessage(error);
+    }
+  }
 
   function toggleExpand(pinId: number) {
     const next = new Set(expanded);
@@ -93,6 +105,7 @@
 </script>
 
 <div class="pinned-page">
+  {#if pinError}<p role="alert">{pinError}</p>{/if}
   <div class="pinned-header">
     <PinIcon size="18" strokeWidth="2" class="pin-icon" aria-hidden="true" />
     <h2>{m.pinned_title()}</h2>
@@ -187,7 +200,7 @@
               <button
                 class="unpin-btn"
                 title={m.pinned_unpin()}
-                onclick={() => pin.message_key ? pins.removeReference(pin) : pins.unpin(pin.session_id, pin.message_id)}
+                onclick={() => unpin(pin)}
               >
                 <XIcon size="12" strokeWidth="2.4" aria-hidden="true" />
               </button>

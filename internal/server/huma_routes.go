@@ -111,7 +111,8 @@ func configureHuma() {
 		) huma.StatusError {
 			for _, err := range errs {
 				if errors.Is(err, db.ErrWriterClosed) {
-					return writerClosedResponse(ctx.AppendHeader)
+					server, ok := ctx.Context().Value(ctxKeyHumaServer).(*Server)
+					return writerClosedResponse(ctx.AppendHeader, ok && server.archiveStale())
 				}
 			}
 			return huma.NewError(status, message, errs...)
@@ -177,15 +178,19 @@ func optionalBoolValue(p optionalBoolParam) *bool {
 	return &p.Value
 }
 
-const ctxKeyHumaRequestInfo contextKey = 100
+const (
+	ctxKeyHumaRequestInfo contextKey = 100
+	ctxKeyHumaServer      contextKey = 101
+)
 
-func humaRequestInfoMiddleware(ctx huma.Context, next func(huma.Context)) {
+func (s *Server) humaRequestInfoMiddleware(ctx huma.Context, next func(huma.Context)) {
 	info := requestInfo{
 		RemoteAddr: ctx.RemoteAddr(),
 		Forwarded: ctx.Header("X-Forwarded-For") != "" ||
 			ctx.Header("X-Real-IP") != "" ||
 			ctx.Header("Forwarded") != "",
 	}
+	ctx = huma.WithValue(ctx, ctxKeyHumaServer, s)
 	next(huma.WithValue(ctx, ctxKeyHumaRequestInfo, info))
 }
 
@@ -504,17 +509,21 @@ func handleHumaReadOnly(err error) error {
 
 // writerClosedError is the 503 + Retry-After response for a write rejected while
 // the archive writer is closed for a maintenance pass.
-func writerClosedError() error {
+func writerClosedError(stale bool) error {
 	headers := http.Header{}
-	response := writerClosedResponse(headers.Add)
+	response := writerClosedResponse(headers.Add, stale)
 	return huma.ErrorWithHeaders(response, headers)
 }
 
-func writerClosedResponse(appendHeader func(string, string)) *apiResponseError {
+func writerClosedResponse(appendHeader func(string, string), stale bool) *apiResponseError {
 	appendHeader("Retry-After", writerClosedRetryAfterSeconds)
+	message := "archive is briefly read-only for a maintenance pass; retry shortly"
+	if stale {
+		message = "archive is read-only while it rebuilds"
+	}
 	return &apiResponseError{
 		Status:  http.StatusServiceUnavailable,
-		Message: "archive is read-only while it rebuilds",
+		Message: message,
 	}
 }
 
@@ -524,7 +533,7 @@ func writerClosedResponse(appendHeader func(string, string)) *apiResponseError {
 // 500 (mirrors the push handlers' pre-stream gate).
 func (s *Server) rejectWriterClosedWrite() error {
 	if local, ok := s.db.(*db.DB); ok && local.WriterClosed() {
-		return writerClosedError()
+		return writerClosedError(s.archiveStale())
 	}
 	return nil
 }
@@ -559,21 +568,6 @@ func (s *Server) tryArchiveWrite(ctx context.Context, work func() error) error {
 	return work()
 }
 
-func (s *Server) rejectRebuildWrite() error {
-	if s.archiveStale() {
-		return s.rejectWriterClosedWrite()
-	}
-	return nil
-}
-
-type handlerError struct {
-	message string
-	cause   error
-}
-
-func (e *handlerError) Error() string { return e.message }
-func (e *handlerError) Unwrap() error { return e.cause }
-
 func serverError(err error) error {
 	if handled := hostedIdentityHTTPError(err); handled != nil {
 		return handled
@@ -584,7 +578,10 @@ func serverError(err error) error {
 	if handled := handleHumaContextError(err); handled != nil {
 		return handled
 	}
-	return &handlerError{message: err.Error(), cause: err}
+	if errors.Is(err, db.ErrWriterClosed) {
+		return err
+	}
+	return apiError(http.StatusInternalServerError, err.Error())
 }
 
 func internalError(logPrefix string, err error) error {
@@ -600,7 +597,10 @@ func internalError(logPrefix string, err error) error {
 	if err != nil {
 		log.Printf("%s: %v", logPrefix, err)
 	}
-	return &handlerError{message: "internal error", cause: err}
+	if errors.Is(err, db.ErrWriterClosed) {
+		return err
+	}
+	return apiError(http.StatusInternalServerError, "internal error")
 }
 
 type idPathInput struct {

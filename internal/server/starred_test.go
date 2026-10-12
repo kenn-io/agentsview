@@ -54,6 +54,7 @@ func TestStarSessionReturns503WhileWriterClosed(t *testing.T) {
 		"body: %s", w.Body.String())
 	assert.Equal(t, "5", w.Header().Get("Retry-After"),
 		"a writer-closed write must advertise Retry-After")
+	assert.Contains(t, w.Body.String(), "archive is briefly read-only for a maintenance pass; retry shortly")
 }
 
 func TestStarredHandlers(t *testing.T) {

@@ -11,7 +11,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
-  import { isRemoteConnection } from "../../api/runtime.js";
+  import { generatedErrorMessage, isRemoteConnection } from "../../api/runtime.js";
   import { SessionsService, type ResumeRequest, type ResumeResponse } from "../../api/generated/index";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
@@ -118,6 +118,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   let roleBg = $derived(isUser ? "var(--user-bg)" : "var(--assistant-bg)");
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
+  let pinFailed = $state(false);
   let forkFeedback = $state("");
   let turnByMessage = $derived.by(() => {
     const map = new Map<number, TurnTiming>();
@@ -165,6 +166,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   });
   let copyTimer: ReturnType<typeof setTimeout>;
   let pinTimer: ReturnType<typeof setTimeout>;
+  let pinPending = $state(false);
   let forkTimer: ReturnType<typeof setTimeout>;
   async function handleCopy() {
     const ok = await copyToClipboard(formatMessageForCopy(message));
@@ -174,13 +176,23 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     }
   }
   async function handleTogglePin() {
+    if (pinPending) return;
+    pinPending = true;
+    clearTimeout(pinTimer);
+    pinFeedback = "";
+    pinFailed = false;
     const wasPinned = pinned;
     try {
-      await pins.togglePin(message.session_id, message.id, message.ordinal);
+      if (!await pins.togglePin(message.session_id, message.id, message.ordinal)) return;
       clearTimeout(pinTimer);
       pinFeedback = wasPinned ? m.message_content_unpinned() : m.message_content_pinned();
       pinTimer = setTimeout(() => { pinFeedback = ""; }, 1500);
-    } catch { /* Preserve the existing non-blocking pin interaction. */ }
+    } catch (error) {
+      pinFailed = true;
+      pinFeedback = generatedErrorMessage(error);
+    } finally {
+      pinPending = false;
+    }
   }
   let canForkFromMessage = $derived(allowMutations && owningSession?.agent === "claude" &&
     !(owningSession?.id ?? "").includes("~") && !(sync.readOnly && isRemoteConnection()));
@@ -231,7 +243,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
         <CirclePlayIcon size="14" strokeWidth="1.8" aria-hidden="true" />
       </button>
     {/if}
-    {#if pinFeedback}<span class="pin-feedback">{pinFeedback}</span>{/if}
+    {#if pinFeedback}<span class="pin-feedback" role={pinFailed ? "alert" : undefined}>{pinFeedback}</span>{/if}
     {#if forkFeedback}<span class="fork-feedback">{forkFeedback}</span>{/if}
     <div class="header-meta">
       {#if tokenSummary}<span class="message-tokens">{tokenSummary}</span>{/if}
@@ -365,6 +377,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .pin-btn.pinned { color: var(--accent-blue); }
   .pin-btn:active { transform: var(--press-transform); }
   .pin-feedback, .fork-feedback { font-size: 11px; color: var(--text-muted); animation: fade-in-out 1.5s ease-in-out; }
+  .pin-feedback[role="alert"] { animation: none; }
   @keyframes fade-in-out { 0% { opacity: 0; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
   .text-content { font-size: 14px; line-height: 1.7; color: var(--text-primary); word-wrap: break-word; }
   .code-fence-block {

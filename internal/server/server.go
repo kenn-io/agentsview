@@ -917,10 +917,40 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			if !archiveFreshnessProbe(r.URL.Path) && s.archiveStale() {
 				w.Header().Set(apiclient.ArchiveStaleHeader, "true")
+				if archiveWriteRequest(r) {
+					if local, ok := s.db.(*db.DB); ok && local.WriterClosed() {
+						response := writerClosedResponse(w.Header().Add, true)
+						writeError(w, response.Status, response.Message)
+						return
+					}
+				}
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Read-style POSTs and writes outside SQLite remain available during a rebuild.
+func archiveWriteRequest(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	default:
+		return false
+	}
+	path := r.URL.Path
+	switch path {
+	case "/api/v1/settings", "/api/v1/recall/query", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
+		return false
+	}
+	for _, prefix := range []string{"/api/v1/config/", "/api/v1/telemetry/", "/api/v1/remote-sync/", "/api/v1/embeddings/", "/api/v1/raw-sync/uploads", "/api/v1/import/claude-ai/sync/results/"} {
+		if strings.HasPrefix(path, prefix) {
+			return false
+		}
+	}
+	if strings.HasSuffix(path, "/publish") && (strings.HasPrefix(path, "/api/v1/sessions/") || strings.HasPrefix(path, "/api/v1/insights/")) {
+		return false
+	}
+	return !strings.HasPrefix(path, "/api/v1/sessions/") || (!strings.HasSuffix(path, "/resume") && !strings.HasSuffix(path, "/open"))
 }
 
 // cspMiddleware sets a Content-Security-Policy header on non-API

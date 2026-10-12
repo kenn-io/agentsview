@@ -21,6 +21,7 @@ const pinsService = PinsService as unknown as {
   getApiV1SessionsByIdPins: ReturnType<typeof vi.fn>;
   postApiV1SessionsByIdMessagesByMessageIdPin: ReturnType<typeof vi.fn>;
   deleteApiV1SessionsByIdMessagesByMessageIdPin: ReturnType<typeof vi.fn>;
+  deleteApiV1SessionsByIdPinReferencesByMessageKey: ReturnType<typeof vi.fn>;
 };
 
 const PIN_ALPHA = {
@@ -49,6 +50,33 @@ const PIN_BETA = {
   session_project: "beta",
   session_title: "beta session",
 };
+
+describe("PinsStore mutations", () => {
+  it("propagates retained pin removal failure and keeps the card", async () => {
+    const store = createPinsStore();
+    const pin = { ...PIN_ALPHA, message_key: "message-10" };
+    store.pins = [pin];
+    pinsService.getApiV1Pins.mockResolvedValueOnce({ pins: [pin] });
+    const error = new Error("archive is read-only while it rebuilds");
+    pinsService.deleteApiV1SessionsByIdPinReferencesByMessageKey.mockRejectedValueOnce(error);
+    await expect(store.removeReference(pin)).rejects.toBe(error);
+    expect(store.pins).toEqual([pin]);
+  });
+
+  it.each([false, true])("propagates failure with pinned=%s and keeps persisted state", async (pinned) => {
+    const store = createPinsStore();
+    await store.loadForSession("s1");
+    store.sessionPinIds = new Set(pinned ? [10] : []);
+    store.pins = pinned ? [PIN_ALPHA] : [];
+    pinsService.getApiV1SessionsByIdPins.mockResolvedValueOnce({ pins: pinned ? [PIN_ALPHA] : [] });
+    const error = new Error("archive is read-only while it rebuilds");
+    const write = pinned ? pinsService.deleteApiV1SessionsByIdMessagesByMessageIdPin : pinsService.postApiV1SessionsByIdMessagesByMessageIdPin;
+    write.mockRejectedValueOnce(error);
+    await expect(store.togglePin("s1", 10, 1)).rejects.toBe(error);
+    expect(store.isPinned(10)).toBe(pinned);
+    expect(store.pins).toEqual(pinned ? [PIN_ALPHA] : []);
+  });
+});
 
 describe("PinsStore.loadAll project filtering", () => {
   let store: ReturnType<typeof createPinsStore>;

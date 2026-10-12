@@ -28,14 +28,14 @@ func handleContextError(w http.ResponseWriter, err error) bool {
 	return false
 }
 
-func handleReadOnly(w http.ResponseWriter, err error) bool {
+func (s *Server) handleReadOnly(w http.ResponseWriter, err error) bool {
 	if errors.Is(err, db.ErrReadOnly) {
 		writeError(w, http.StatusNotImplemented, "not available in remote mode")
 		return true
 	}
 	if errors.Is(err, db.ErrWriterClosed) {
-		w.Header().Set("Retry-After", writerClosedRetryAfterSeconds)
-		writeError(w, http.StatusServiceUnavailable, writerClosedError().Error())
+		response := writerClosedResponse(w.Header().Add, s.archiveStale())
+		writeError(w, response.Status, response.Message)
 		return true
 	}
 	return false
@@ -135,7 +135,7 @@ func (s *Server) handleListRecallEntries(
 		if handleInvalidRecallQuery(w, err) {
 			return
 		}
-		if handleReadOnly(w, err) {
+		if s.handleReadOnly(w, err) {
 			return
 		}
 		if errors.Is(err, errStaleRecallPagination) {
@@ -471,7 +471,7 @@ func (s *Server) handleRecallExtractionRetire(
 func (s *Server) handleRecallExtractionLifecycleError(
 	w http.ResponseWriter, err error,
 ) {
-	if handleContextError(w, err) || handleReadOnly(w, err) {
+	if handleContextError(w, err) || s.handleReadOnly(w, err) {
 		return
 	}
 	if errors.Is(err, db.ErrExtractActivationBlocked) ||
@@ -683,7 +683,7 @@ func (s *Server) handleGetRecallEntry(
 		if handleContextError(w, err) {
 			return
 		}
-		if handleReadOnly(w, err) {
+		if s.handleReadOnly(w, err) {
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -728,7 +728,7 @@ func (s *Server) handleQueryRecallEntries(
 		if handleInvalidRecallQuery(w, err) {
 			return
 		}
-		if handleReadOnly(w, err) {
+		if s.handleReadOnly(w, err) {
 			return
 		}
 		if errors.Is(err, db.ErrSemanticTransient) {
@@ -788,7 +788,7 @@ func (s *Server) handleImportRecallEntries(
 		if handleContextError(w, err) {
 			return
 		}
-		if handleReadOnly(w, err) {
+		if s.handleReadOnly(w, err) {
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())

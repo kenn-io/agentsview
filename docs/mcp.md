@@ -10,6 +10,8 @@ assistant clients can use it to search prior sessions, inspect a session before
 opening it, fetch message slices, search raw content, and summarize token usage
 without leaving the assistant.
 
+MCP tool results warn when the archive is stale during a full parser rebuild.
+
 ## When To Use It
 
 Use the MCP server when you want a coding assistant to answer questions such as:

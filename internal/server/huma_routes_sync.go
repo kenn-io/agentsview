@@ -260,9 +260,6 @@ func (s *Server) humaTriggerSync(
 	ctx context.Context,
 	in *syncInput,
 ) (*huma.StreamResponse, error) {
-	if err := s.rejectRebuildWrite(); err != nil {
-		return nil, err
-	}
 	engine := s.engine
 	if !in.StartupOnly {
 		var err error
@@ -355,9 +352,6 @@ func (s *Server) rejectStaleArchiveForSync() error {
 	if !ok || !local.NeedsResync() {
 		return nil
 	}
-	if local.WriterClosed() {
-		return writerClosedError()
-	}
 	return huma.ErrorWithHeaders(
 		apiError(
 			http.StatusConflict,
@@ -401,9 +395,6 @@ func (s *Server) humaTriggerResync(
 	ctx context.Context,
 	_ *emptyInput,
 ) (*huma.StreamResponse, error) {
-	if err := s.rejectRebuildWrite(); err != nil {
-		return nil, err
-	}
 	engine, err := s.syncEngineForRequest(ctx)
 	if err != nil {
 		return nil, err
@@ -462,9 +453,6 @@ func (s *Server) humaSyncRemotes(
 	ctx context.Context,
 	in *remoteSyncInput,
 ) (*huma.StreamResponse, error) {
-	if err := s.rejectRebuildWrite(); err != nil {
-		return nil, err
-	}
 	if err := s.requireSourceSync(ctx); err != nil {
 		return nil, err
 	}
@@ -1069,9 +1057,6 @@ func (s *Server) humaSyncSession(
 	ctx context.Context,
 	in *sessionSyncInput,
 ) (*jsonOutput[*service.SessionDetail], error) {
-	if err := s.rejectRebuildWrite(); err != nil {
-		return nil, err
-	}
 	if err := s.requireSourceSync(ctx); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, nil

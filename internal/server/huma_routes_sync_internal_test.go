@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/clickhouse"
@@ -2326,11 +2327,22 @@ func TestOnDemandSyncEngineKeepsStartupProvidersUntilRestart(t *testing.T) {
 
 func TestStartupRebuildWriteGate(t *testing.T) {
 	f := newSyncRouteFixture(t, withStaleDB())
-	dbtest.SeedSessionWithMessages(t, f.db, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript")}, func(session *db.Session) { session.Cwd = "/work/branch" })
+	dbtest.SeedSessionWithMessages(t, f.db, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript"), dbtest.UserMsg("retained", 1, "follow-up")}, dbtest.WithMessageCounts(2, 2), func(session *db.Session) { session.Cwd = "/work/branch" })
 	f.srv.memoryRefreshRequest = func() {}
 	f.srv.telemetryCapture = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
 	f.srv.registerTelemetryCaptureRoute()
 	require.NoError(t, f.db.CloseWriter())
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- engine.RunExclusive(func() error { close(locked); <-release; return nil })
+	}()
+	t.Cleanup(func() { close(release); require.NoError(t, <-done) })
+	<-locked
+	direct := serveJSON(t, f.srv.mux, http.MethodPatch, "/api/v1/sessions/retained/rename", map[string]any{"display_name": "renamed"})
+	require.Equal(t, http.StatusServiceUnavailable, direct.Code, direct.Body.String())
+	assert.Equal(t, writerClosedRetryAfterSeconds, direct.Header().Get("Retry-After"))
+	assert.Contains(t, direct.Body.String(), "archive is read-only while it rebuilds")
 	for _, tc := range []struct {
 		method, path, body string
 		blocked, probe     bool
@@ -2344,13 +2356,19 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 		{http.MethodDelete, "/api/v1/sessions/retained", "", true, false},
 		{http.MethodPost, "/api/v1/settings/worktree-mappings", `{"machine":"local","path_prefix":"/work","project":"project"}`, true, false},
 		{http.MethodPost, "/api/v1/data/compact", `{}`, true, false},
+		{http.MethodPost, "/api/v1/data/strip-images", `{"confirmed":true}`, true, false},
+		{http.MethodPut, "/api/v1/settings/session-project-assignments/retained", `{"project":"new-project"}`, true, false},
+		{http.MethodDelete, "/api/v1/settings/session-project-assignments/retained", "", true, false},
+		{http.MethodPost, "/api/v1/settings/worktree-mappings/apply", `{}`, true, false},
+		{http.MethodPost, "/api/v1/settings/worktree-mappings/reclassify", `{}`, true, false},
 		{http.MethodPost, "/api/v1/config/github", `{}`, false, false},
+		{http.MethodPost, "/api/v1/sessions/retained/publish", `{}`, false, false},
 		{http.MethodPost, "/api/v1/sessions/retained/resume", `{"command_only":true}`, false, false},
 		{http.MethodPost, "/api/v1/sessions/retained/open", `{}`, false, false},
 		{http.MethodPost, "/api/v1/telemetry/events", `{}`, false, false},
 		{http.MethodPost, "/api/v1/settings/worktree-mappings/preview", `{"machine":"local","path_prefix":"/work","project":"new-project","enabled":true}`, false, false},
 		{http.MethodPost, "/api/v1/memory/refresh", "", false, false},
-		{http.MethodPost, "/api/v1/recall/query", `{}`, false, false},
+		{http.MethodPost, "/api/v1/recall/query", `{"query":"retained transcript"}`, false, false},
 		{http.MethodGet, "/api/v1/sessions", "", false, false},
 		{http.MethodGet, "/api/ping", "", false, true},
 		{http.MethodGet, "/api/v1/version", "", false, true},
@@ -2362,6 +2380,18 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(tc.body), &body))
 			}
 			w := serveJSON(t, f.handler, tc.method, tc.path, body)
+			if tc.path == "/api/v1/sessions" {
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				var page service.SessionList
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &page))
+				require.Len(t, page.Sessions, 1)
+				assert.Equal(t, "retained", page.Sessions[0].ID)
+			}
+			if tc.path == "/api/v1/recall/query" {
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				assert.Contains(t, w.Body.String(), `"miss_reason":"no_results"`)
+				assert.Contains(t, w.Body.String(), `"query_id":""`)
+			}
 			if tc.path == "/api/v1/settings/worktree-mappings/preview" {
 				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				assert.Equal(t, "true", w.Header().Get("X-Agentsview-Archive-Stale"))
@@ -2402,4 +2432,17 @@ func TestCurrentArchiveSyncWaitsDuringMaintenance(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "event: done")
 	assert.Equal(t, 2, calls)
 	assert.Empty(t, w.Header().Get("X-Agentsview-Archive-Stale"))
+}
+
+func TestHandlerErrorsPreserveOnlyWriterClosedCause(t *testing.T) {
+	for _, convert := range []func(error) error{
+		serverError,
+		func(err error) error { return internalError("test", err) },
+	} {
+		wrappedStatus := fmt.Errorf("write failed: %w", apiError(http.StatusConflict, "conflict"))
+		status, ok := errors.AsType[huma.StatusError](convert(wrappedStatus))
+		require.True(t, ok)
+		assert.Equal(t, http.StatusInternalServerError, status.GetStatus())
+		assert.ErrorIs(t, convert(fmt.Errorf("write failed: %w", db.ErrWriterClosed)), db.ErrWriterClosed)
+	}
 }

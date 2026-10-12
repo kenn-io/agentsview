@@ -227,9 +227,6 @@ func (s *Server) humaDataCandidates(
 func (s *Server) humaDataCompact(
 	ctx context.Context, in *dataCompactInput,
 ) (*jsonOutput[db.CompactResult], error) {
-	if err := s.rejectRebuildWrite(); err != nil {
-		return nil, err
-	}
 	if !isLocalhostContext(ctx) {
 		return nil, apiError(
 			http.StatusForbidden,

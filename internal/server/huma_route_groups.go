@@ -3,7 +3,7 @@ package server
 import "github.com/danielgtaylor/huma/v2"
 
 func (s *Server) registerTypedAPIRoutes() {
-	s.api.UseMiddleware(humaRequestInfoMiddleware)
+	s.api.UseMiddleware(s.humaRequestInfoMiddleware)
 
 	s.registerHealthRoutes()
 	s.registerSessionRoutes()
