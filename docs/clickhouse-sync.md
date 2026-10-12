@@ -518,13 +518,20 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   running, end that wait by marking that lock released. Run this in the mirror
   database:
   `ALTER TABLE prepared_usage_rebuild_lock_<n> MODIFY COMMENT '{"status":"released"}'`.
-  Do not drop the lock table; the next push would reuse its number. Leave a
-  lock whose status is `retired` alone.
+  The comment must be exactly that JSON; anything else stops rebuilds until
+  it is fixed, and the error repeats the statement. Do not drop the lock
+  table; the next push would reuse its number. Leave a lock whose status is
+  `retired` alone.
 - **Moving off NFS.** When the schema step finds that the database can swap
   tables again, it creates a new lock table with status `retired`, drops the
   older lock tables, and then creates the `prepare_usage` view. Do not drop
   the retired lock: it stops a push that started before the switch from
   overwriting the view's rows. If the database later loses table swapping
   again, the schema step marks the retired lock released, and pushes rebuild
-  again. If the schema step stops between retiring the lock and creating the
-  view, the next push creates the view.
+  again.
+- **Half-finished switch.** If the schema step stops between retiring the lock
+  and creating the view, the next push creates the view.
+- **Missing view.** If a push logs that the `prepare_usage` view is missing,
+  usage reads stay correct but slower until it exists. Another client may be
+  recreating it. If the message repeats, restart agentsview; its schema step
+  recreates the view.

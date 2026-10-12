@@ -876,6 +876,27 @@ func TestRefreshPreparedUsageWithoutViewFollowsRebuildLock(t *testing.T) {
 	require.Equal(t, []string{"prepare_usage ", "prepared_usage_rebuild_lock_3 retired"}, tables())
 }
 
+// A lock comment that a manual edit left unreadable stops rebuilds with an
+// error that names the lock and the statement that repairs it.
+func TestRebuildLockRejectsUnreadableComment(t *testing.T) {
+	ctx := t.Context()
+	dsn, database := chtest.FreshDatabase(t)
+	conn := chtest.Open(t, dsn, database)
+	for _, comment := range []string{"released", `{"status":"relased"}`} {
+		_, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS prepared_usage_rebuild_lock_4 SYNC")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "CREATE TABLE prepared_usage_rebuild_lock_4 (x UInt8) ENGINE = Memory COMMENT "+
+			chSQLString(comment))
+		require.NoError(t, err)
+		_, acquired, err := acquireRebuildLock(ctx, conn)
+		require.False(t, acquired)
+		require.ErrorContains(t, err,
+			`ALTER TABLE prepared_usage_rebuild_lock_4 MODIFY COMMENT '{"status":"released"}'`, comment)
+		_, _, _, err = newestRebuildLock(ctx, conn)
+		require.ErrorContains(t, err, "prepared_usage_rebuild_lock_4", comment)
+	}
+}
+
 // A database that loses the ability to exchange tables again lets pushes
 // take the rebuild lock that an earlier switch to the view retired.
 func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T) {

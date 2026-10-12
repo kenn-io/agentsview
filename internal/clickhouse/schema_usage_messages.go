@@ -6,7 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -216,7 +216,7 @@ type rebuildLockState struct {
 	Status rebuildLockStatus `json:"status"`
 	// RenewedAt is the ClickHouse server's Unix time when the holder last
 	// renewed a held lock, so every client compares it with one clock.
-	RenewedAt int64 `json:"renewed_at,omitempty"`
+	RenewedAt int64 `json:"renewed_at,omitzero"`
 }
 
 type rebuildLockStatus string
@@ -240,13 +240,23 @@ func (s rebuildLockState) commentSQL() string {
 	return chSQLString(string(encoded))
 }
 
-// parseRebuildLockState reads a rebuild lock's state from its comment.
-func parseRebuildLockState(comment string) (rebuildLockState, error) {
+// parseRebuildLockState reads the state of the lock table of generation
+// from its comment. Only a manual edit can make the comment unreadable, so
+// the error names the table and the statement that repairs it.
+func parseRebuildLockState(generation uint64, comment string) (rebuildLockState, error) {
 	var state rebuildLockState
-	if err := json.Unmarshal([]byte(comment), &state); err != nil {
-		return rebuildLockState{}, fmt.Errorf("reading prepared usage rebuild lock state %q: %w", comment, err)
+	err := json.Unmarshal([]byte(comment), &state)
+	if err == nil {
+		switch state.Status {
+		case rebuildLockHeld, rebuildLockReleased, rebuildLockRetired:
+			return state, nil
+		}
+		err = fmt.Errorf("unknown status %q", state.Status)
 	}
-	return state, nil
+	lock := fmt.Sprintf("%s%d", chPreparedUsageRebuildLockPrefix, generation)
+	return rebuildLockState{}, fmt.Errorf("prepared usage rebuild lock %s has comment %q, which is not a lock "+
+		"state; repair it in the mirror database with: ALTER TABLE %s MODIFY COMMENT %s: %w",
+		lock, comment, lock, rebuildLockState{Status: rebuildLockReleased}.commentSQL(), err)
 }
 
 // createRebuildLock creates the lock table of generation with state.
@@ -268,8 +278,9 @@ func setRebuildLock(ctx context.Context, conn *sql.DB, generation uint64, state 
 // chNoLockSkipMessage explains why a push without the view skips its
 // rebuild when the database has no rebuild lock: only the schema step of a
 // database that cannot swap tables creates one; see openRebuildLocks.
-const chNoLockSkipMessage = "clickhouse push: skipping the prepared usage rebuild: the prepare_usage view is " +
-	"missing, but this database can swap tables, so the next schema step creates the view"
+const chNoLockSkipMessage = "clickhouse push: the prepare_usage view is missing, so usage reads are slower " +
+	"until it exists; another client may be recreating it, and if this message repeats, restarting " +
+	"agentsview recreates it"
 
 // chRetiredSkipMessage explains why a push skips its rebuild once the
 // newest rebuild lock is retired.
@@ -935,7 +946,7 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 		log.Print(chNoLockSkipMessage)
 		return 0, false, nil
 	}
-	newest, err := parseRebuildLockState(comment)
+	newest, err := parseRebuildLockState(generations[len(generations)-1], comment)
 	if err != nil {
 		return 0, false, err
 	}
@@ -1127,7 +1138,7 @@ func newestRebuildLock(ctx context.Context, conn *sql.DB) (locks, newest uint64,
 	if locks == 0 {
 		return 0, 0, rebuildLockState{}, nil
 	}
-	state, err = parseRebuildLockState(comment)
+	state, err = parseRebuildLockState(newest, comment)
 	return locks, newest, state, err
 }
 

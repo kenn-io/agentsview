@@ -250,31 +250,36 @@ are dropped once they are an hour old.
 
 The lock table is what tells pushes to rebuild. A push without the view rebuilds
 only while a lock exists and the newest one is not retired. A database that can
-swap tables has no lock, so a push that finds the view missing, as while a
-schema step recreates it, never rebuilds. Each push in rebuild mode rebuilds the
-table itself before it returns. It runs the view's query into a new
-`prepared_usage_build_<n>` table and moves that table's parts into
-`prepared_usage` with `REPLACE PARTITION`, which replaces all the parts at once.
-Readers see the previous rows or the new ones, never a mix, and read them as
-they read rows the view prepared. A push skips its rebuild when the stored stamp
-equals the current one, both before and after it takes the lock. After
-publishing, the holder rebuilds once more if the snapshots changed meanwhile. If
-they changed again, it logs that and leaves the rest to the next push. Without
-the view, nothing refreshes on a schedule, and a failed rebuild waits for the
-next push. Because `prepared_usage` is then not a refreshable view's target,
-native backups include its rows without
+swap tables has no lock. A push there that finds the view missing, as while a
+schema step recreates it, never rebuilds.
+
+Each push in rebuild mode rebuilds the table itself before it returns. It runs
+the view's query into a new `prepared_usage_build_<n>` table and moves that
+table's parts into `prepared_usage` with `REPLACE PARTITION`, which replaces all
+the parts at once. Readers see the previous rows or the new ones, never a mix,
+and read them as they read rows the view prepared. A push skips its rebuild when
+the stored stamp equals the current one, both before and after it takes the
+lock. After publishing, the holder rebuilds once more if the snapshots changed
+meanwhile. If they changed again, it logs that and leaves the rest to the next
+push. Without the view, nothing refreshes on a schedule, and a failed rebuild
+waits for the next push. Because `prepared_usage` is then not a refreshable
+view's target, native backups include its rows without
 `backup_data_from_refreshable_materialized_view_targets`.
 
 Rebuilds take turns, as the view's refreshes do. A read checks freshness and
 fetches rows in separate queries, so an older build must never replace a newer
-one between them. The lock is a numbered `prepared_usage_rebuild_lock_<n>` table
-whose comment holds its state as JSON: `status` is `held`, `released`, or
-`retired`, and a held lock carries `renewed_at`, the ClickHouse server's Unix
-time. ClickHouse changes a comment atomically. A push takes the lock by creating
-the table with the next number, which only one push can do. The push drops the
-older lock tables; the newest stays after release, so one lock table persists
-and numbers never repeat. A push that finds the lock held skips its rebuild, and
-reads prepare the changed sessions themselves meanwhile.
+one between them. The lock is a numbered `prepared_usage_rebuild_lock_<n>`
+table. A push takes the lock by creating the table with the next number, which
+only one push can do. The push drops the older lock tables; the newest stays
+after release, so one lock table persists and numbers never repeat. A push that
+finds the lock held skips its rebuild, and reads prepare the changed sessions
+themselves meanwhile.
+
+A lock's comment holds its state as JSON, which ClickHouse changes atomically.
+`status` is `held`, `released`, or `retired`. A held lock also carries
+`renewed_at`, the ClickHouse server's Unix time when its holder last renewed it.
+A comment that is not valid JSON or has another status stops rebuilds with an
+error that names the lock and the statement that repairs it.
 
 A lock can outlive its holder:
 
