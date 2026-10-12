@@ -53,13 +53,25 @@ func (e *passEndError) Unwrap() error { return e.err }
 // that account's state and status, never returned, because the scheduler's
 // backoff would delay every other account too.
 func (s *Syncer) Run(ctx context.Context) error {
-	if s.NoSync {
-		return nil
-	}
 	gates := s.Gates()
-	if !gates.Fetching() {
+	if !gates.Configured() {
+		s.Status.Keep(nil)
 		return nil
 	}
+	shown := map[string]bool{}
+	if row, ok := gates.readErrRow(); ok && !s.NoSync {
+		s.Status.Set(row)
+		shown[row.Key] = true
+	}
+	if row, off := gates.offRow(s.NoSync); off {
+		if !shown[row.Key] {
+			s.Status.Set(row)
+		}
+		s.Status.Keep(map[string]bool{row.Key: true})
+		return nil
+	}
+	// Rows for homes and accounts gone from the config drop at the end.
+	defer func() { s.Status.Keep(shown) }()
 	var usable []Login
 	for _, home := range gates.Homes {
 		login, state, err := s.ReadLogin(home)
@@ -75,10 +87,19 @@ func (s *Syncer) Run(ctx context.Context) error {
 			s.homeRow(home, FailSignedOut)
 		case !s.Waits.HomeReady(home, login.AuthModTime):
 		default:
+			// The home's row, if any, is stale; a failed dial sets it again.
+			s.Status.Delete(home)
 			usable = append(usable, login)
 		}
+		shown[home] = true
 	}
 	groups, order := GroupByKey(usable)
+	for _, key := range order {
+		shown[string(key)] = true
+		if _, ok := s.Status.Row(string(key)); !ok {
+			s.Status.Set(HomeStatus{Key: string(key), Homes: loginHomes(groups[key]), State: StateWaiting})
+		}
+	}
 	for _, key := range order {
 		if err := s.runAccount(ctx, gates, key, groups[key]); err != nil {
 			if ctx.Err() != nil {
@@ -88,6 +109,14 @@ func (s *Syncer) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func loginHomes(logins []Login) []string {
+	homes := make([]string, 0, len(logins))
+	for _, login := range logins {
+		homes = append(homes, login.Home)
+	}
+	return homes
 }
 
 func (s *Syncer) homeRow(home string, f Failure) {
@@ -115,10 +144,7 @@ type listedInfo struct {
 // runAccount runs one account's thread step. Only a local failure, such as
 // a state file that cannot be written, is returned.
 func (s *Syncer) runAccount(ctx context.Context, gates Gates, key AccountKey, logins []Login) error {
-	p := &pass{Syncer: s, key: key, gates: gates, now: s.Now(), listed: map[string]listedInfo{}}
-	for _, login := range logins {
-		p.homes = append(p.homes, login.Home)
-	}
+	p := &pass{Syncer: s, key: key, gates: gates, now: s.Now(), listed: map[string]listedInfo{}, homes: loginHomes(logins)}
 	acct, err := p.account()
 	if err != nil {
 		return err

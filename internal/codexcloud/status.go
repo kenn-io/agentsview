@@ -1,7 +1,9 @@
 package codexcloud
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -59,7 +61,8 @@ func (b *StatusBoard) Set(row HomeStatus) {
 	if _, ok := b.rows[row.Key]; !ok {
 		b.order = append(b.order, row.Key)
 	}
-	row.Homes = slices.Clone(row.Homes)
+	// A source row has no homes; the API still sends a list.
+	row.Homes = append([]string{}, row.Homes...)
 	b.rows[row.Key] = row
 }
 
@@ -115,4 +118,77 @@ func Message(f Failure, retryAt time.Time) string {
 	default:
 		return ""
 	}
+}
+
+// Delete drops the row with key.
+func (b *StatusBoard) Delete(key string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.rows[key]; ok {
+		delete(b.rows, key)
+		b.order = slices.DeleteFunc(b.order, func(k string) bool { return k == key })
+	}
+}
+
+// Keep drops every row whose key is not in keys.
+func (b *StatusBoard) Keep(keys map[string]bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.order = slices.DeleteFunc(b.order, func(key string) bool {
+		if keys[key] {
+			return false
+		}
+		delete(b.rows, key)
+		return true
+	})
+}
+
+// StatusLines renders a row for `serve status`: one line for the state,
+// then the live token and plan usage lines when set. Times are local.
+func StatusLines(row HomeStatus) []string {
+	label := strings.Join(row.Homes, ", ")
+	if label == "" {
+		label = row.Key
+	}
+	lines := []string{"codex-cloud " + label + ": " + stateText(row)}
+	if row.Live != "" {
+		lines = append(lines, "  "+row.Live)
+	}
+	if row.PlanUsage != "" {
+		lines = append(lines, "  "+row.PlanUsage)
+	}
+	return lines
+}
+
+func stateText(row HomeStatus) string {
+	switch row.State {
+	case StateWaiting:
+		return "Waiting for first sync"
+	case StateImporting:
+		if row.Total == 0 {
+			return fmt.Sprintf("Importing, found %d threads so far", row.Found)
+		}
+		return fmt.Sprintf("Importing %d of %d threads", row.Imported, row.Total)
+	case StateUpToDate:
+		return "Up to date as of " + localTime(row.LastSuccess)
+	case StateRetrying:
+		return fmt.Sprintf("%d threads could not be imported (oldest failure %s). %s",
+			row.RetryCount, localTime(row.OldestFailure), row.Message)
+	case StateError:
+		if row.LastSuccess == nil {
+			return row.Message
+		}
+		return row.Message + " Last successful sync: " + localTime(row.LastSuccess) + "."
+	case StateOffDisabledAgents, StateOffDisabled, StateOffNoSync, StateConfigError:
+		return row.Message
+	default:
+		return row.Message
+	}
+}
+
+func localTime(t *time.Time) string {
+	if t == nil {
+		return "never"
+	}
+	return t.Local().Format("Jan 2 15:04")
 }

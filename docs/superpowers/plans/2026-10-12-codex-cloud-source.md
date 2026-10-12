@@ -932,17 +932,24 @@ Spec: Scheduler, Configuration (gates, re-read), Status and errors.
 
     - `func codexCloudSyncJob(sync *codexcloud.Syncer) poller.Job` (name
       `codex-cloud-sync`, 5 minutes, jitter, `RunAtStart: true`).
+    - `func newCodexCloudSyncer(cfg config.Config, load func() (config.Config, error), status *codexcloud.StatusBoard) *codexcloud.Syncer`;
+      `NoSync` comes from `cfg.NoSync`, which `--no-sync` and an archive-only
+      archive both set.
+    - `NewGateSource(configPath, load, getenv, userHome)`; `Gates.Configured()`;
+      `codexcloud.SourceRowKey`; `StatusBoard.Keep`/`Delete`;
+      `codexcloud.StatusLines(HomeStatus) []string`.
     - Gate order each run: `NoSync` from the startup config, then
-      `disabled_agents`, then `Present`/`Enabled`, then `CodexCloud.Err`; a
-      `config.toml` read error keeps the last good settings and shows "<config
-      path> could not be read: <reason>. Cloud import keeps its last good
-      settings."
+      `disabled_agents`, then `CodexCloud.Err`, then `Enabled` (a config error
+      also clears `Enabled`, so it is checked first); a `config.toml` read error
+      keeps the last good settings and shows "<config path> could not be read:
+        <reason>. Cloud import keeps its last good settings." Rows for homes and
+        accounts gone from the config drop at the end of each run.
     - `GET /api/v1/codex-cloud/status` returning `[]HomeStatus`, always
       registered, empty when the source is not configured (configuration can
       change without a restart).
     - `serve status` prints one line per row from that endpoint.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
     - `TestCodexCloudJobOffStates` (each gate, including `--no-sync` and an
       archive-only daemon, yields its Off state and sends no request to the fake
@@ -958,13 +965,13 @@ Spec: Scheduler, Configuration (gates, re-read), Status and errors.
       Tasks 17 and 20 extend it.
     - `TestUnconfiguredSourceHasNoStatusRow` (route answers an empty list).
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: run codex-cloud sync in the daemon"`
 
 **Milestone: working locally.** After the gate's probe answers are in, ask the

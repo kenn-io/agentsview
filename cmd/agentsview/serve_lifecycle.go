@@ -4,15 +4,19 @@ package main
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/apiclient"
+	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/kit/daemon"
 )
@@ -157,6 +161,11 @@ func runServeStatus(cfg config.Config) {
 			for _, line := range serveStatusLines(rt) {
 				fmt.Println(line)
 			}
+			for _, line := range codexCloudStatusLines(
+				context.Background(), urlFromDaemonRuntime(rt), cfg.AuthToken,
+			) {
+				fmt.Println(line)
+			}
 			return
 		}
 	}
@@ -194,6 +203,40 @@ func runServeStatus(cfg config.Config) {
 		return
 	}
 	fmt.Println("No agentsview server is running.")
+}
+
+// codexCloudStatusLines reads the daemon's codex-cloud status rows. An
+// older daemon has no such route and adds no lines.
+func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []string {
+	api, err := apiclient.NewHTTPClient(baseURL, authToken, &http.Client{Timeout: 5 * time.Second})
+	if err != nil {
+		return []string{"  codex-cloud status unavailable: " + err.Error()}
+	}
+	resp, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
+	if resp == nil {
+		return []string{"  codex-cloud status unavailable: " + err.Error()}
+	}
+	if resp.HTTPResponse != nil {
+		defer resp.HTTPResponse.Body.Close()
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return nil
+	default:
+		return []string{fmt.Sprintf("  codex-cloud status unavailable: HTTP %d", resp.StatusCode)}
+	}
+	var rows []codexcloud.HomeStatus
+	if err := json.Unmarshal(resp.Body, &rows); err != nil {
+		return []string{"  codex-cloud status unavailable: " + err.Error()}
+	}
+	var lines []string
+	for _, row := range rows {
+		for _, line := range codexcloud.StatusLines(row) {
+			lines = append(lines, "  "+line)
+		}
+	}
+	return lines
 }
 
 // serveStatusLines renders the human-readable status of a discovered daemon.

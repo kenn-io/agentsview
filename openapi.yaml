@@ -608,6 +608,50 @@ components:
         - status
         - body
       type: object
+    CodexcloudHomeStatus:
+      additionalProperties: false
+      properties:
+        found:
+          format: int64
+          type: integer
+        homes:
+          items:
+            type: string
+          type: array
+        imported:
+          format: int64
+          type: integer
+        key:
+          type: string
+        last_success:
+          format: date-time
+          type:
+            - string
+            - "null"
+        live:
+          type: string
+        message:
+          type: string
+        oldest_failure:
+          format: date-time
+          type:
+            - string
+            - "null"
+        plan_usage:
+          type: string
+        retry_count:
+          format: int64
+          type: integer
+        state:
+          type: string
+        total:
+          format: int64
+          type: integer
+      required:
+        - key
+        - homes
+        - state
+      type: object
     Comparison:
       additionalProperties: false
       properties:
@@ -11486,6 +11530,81 @@ paths:
       summary: List branches
       tags:
         - Metadata
+  /api/v1/codex-cloud/status:
+    get:
+      operationId: get-api-v1-codex-cloud-status
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/CodexcloudHomeStatus"
+                type: array
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Read codex-cloud import status
+      tags:
+        - CodexCloud
   /api/v1/config/github:
     get:
       operationId: get-api-v1-config-github

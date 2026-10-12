@@ -24,6 +24,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
 	"go.kenn.io/agentsview/internal/apiclient"
+	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
@@ -210,6 +211,7 @@ type Server struct {
 	rawSyncDeviceAuth      RawSyncDeviceAuth
 	rawSyncCustody         RawSyncCustody
 	rawSyncStatus          RawSyncStatusReader
+	codexCloudStatus       *codexcloud.StatusBoard
 	rawSyncSchemaOnly      bool
 	rawSyncUploads         RawSyncUploads
 	rawSyncJobHealth       RawSyncJobHealth

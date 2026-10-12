@@ -82,7 +82,7 @@ func newPassEnv(t *testing.T, homes ...string) *passEnv {
 		Dial: Dial,
 		Gates: func() Gates {
 			return Gates{
-				CodexCloud: config.CodexCloudConfig{Enabled: true, Endpoint: endpoint},
+				CodexCloud: config.CodexCloudConfig{Present: true, Enabled: true, Endpoint: endpoint},
 				Homes:      homes,
 			}
 		},
