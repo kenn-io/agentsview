@@ -60,6 +60,10 @@ The latest release is
   daemon keeps serving the existing archive, retries after an hour, and backs
   off to once a day. Before, the rebuild waited for a restart or a manual
   resync.
+- Re-importing an unchanged archive with usage-only storage no longer re-reads
+  every titled Codex thread. Usage-only storage discards session titles, so the
+  empty stored title always differed from the thread's title in
+  `session_index.jsonl`, and each import parsed those threads again.
 
 - Codex threads rewound with undo keep every message and every day's usage.
   Each extra rollout file Codex writes for the undo now shows as its own linked
