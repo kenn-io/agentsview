@@ -48,7 +48,7 @@
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
   let chromeRefused = $state(false);
-  const canSync = $derived(open && provider === "claude-ai" && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
+  const canSync = $derived(open && (provider === "claude-ai" || !host) && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
   let chromeStatus = $state<ClaudeAIChromeOutputBody | null>(null);
   let signInError = $state<string | null>(null);
   const chromeRead = new LatestRead();
@@ -58,10 +58,10 @@
   const shownProgress = $derived(claudeAISync.running ? claudeAISync.progress : progressStats);
   const chromeState = $derived(
     claudeAISync.running ? "connected" :
-    claudeAISync.flag === "claude_ai_chrome_host_update_required" ? "extension-update" :
+    claudeAISync.flag === (provider === "chatgpt" ? "chrome_host_update_required" : "claude_ai_chrome_host_update_required") ? "extension-update" :
     !host && !chromeStatus ? "checking" :
     !host && !chromeStatus?.connected ? "disconnected" :
-    claudeAISync.flag === "claude_ai_auth_required" ? "signed-out" : "connected",
+    claudeAISync.flag === (provider === "chatgpt" ? "chatgpt_auth_required" : "claude_ai_auth_required") ? "signed-out" : "connected",
   );
   const syncDisabled = $derived(busy || ["checking", "disconnected"].includes(chromeState));
 
@@ -118,7 +118,7 @@
     signInError = null;
     try {
       if (host) await connectClaudeAI(host);
-      else window.open("https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
+      else window.open(provider === "chatgpt" ? "https://chatgpt.com/" : "https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
     } catch (e) { signInError = e instanceof Error ? e.message : String(e); }
   }
 
@@ -127,7 +127,7 @@
     error = null;
     signInError = null;
     result = null;
-    void claudeAISync.start(host, onimported);
+    void claudeAISync.start(host, onimported, provider);
   }
 
   const fileSize = $derived(
@@ -162,6 +162,11 @@
     error = null;
     untrack(() => {
       if (fileInput) fileInput.value = "";
+      syncFlag = null;
+      syncError = null;
+      signInError = null;
+      chromeStatus = null;
+      chromeRefused = false;
     });
   });
 
@@ -406,7 +411,7 @@
               <Button size="sm" label={m.import_claude_stop()} tone="neutral" surface="outline" onclick={() => claudeAISync.stop()} />
             {:else}
               {#if host || chromeState === "signed-out"}
-                <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
+                <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : provider === "chatgpt" ? m.import_chatgpt_signed_out() : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
               {/if}
               <Button size="sm" label={m.import_claude_sync()} tone={chromeState === "signed-out" ? "neutral" : "info"} surface={chromeState === "signed-out" ? "outline" : "soft"} disabled={syncDisabled} onclick={sync} />
             {/if}
@@ -417,9 +422,9 @@
             {:else if chromeState === "disconnected"}
               <p class="hint">{m.import_claude_open_chrome()}</p>
             {:else if chromeState === "connected"}
-              <p class="hint">{m.import_claude_tab_note()}</p>
+              <p class="hint">{provider === "chatgpt" ? m.import_chatgpt_tab_note() : m.import_claude_tab_note()}</p>
             {:else if chromeState === "signed-out"}
-              <p class="hint">{m.import_claude_signed_out()}</p>
+              <p class="hint">{provider === "chatgpt" ? m.import_chatgpt_signed_out() : m.import_claude_signed_out()}</p>
             {:else if chromeState === "extension-update"}
               <p class="hint">{m.import_claude_update_app()}</p>
             {/if}

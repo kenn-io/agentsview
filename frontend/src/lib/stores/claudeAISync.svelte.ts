@@ -1,6 +1,6 @@
 import type { ImporterImportStats as ImportStats } from "../api/generated/index.js";
 import type { BrowserHost } from "../api/browserHost.js";
-import { syncClaudeAI } from "../api/client.js";
+import { syncClaudeAI, syncChatGPTChrome } from "../api/client.js";
 import { ApiError } from "../api/runtime.js";
 import { m } from "../i18n/index.js";
 import { reportSyncFailed } from "../utils/telemetry.js";
@@ -16,7 +16,7 @@ class ClaudeAISyncStore {
   flag = $state<string | null>(null);
   private controller: AbortController | undefined;
 
-  async start(host: BrowserHost | undefined, onimported: () => void) {
+  async start(host: BrowserHost | undefined, onimported: () => void, provider: "claude-ai" | "chatgpt" = "claude-ai") {
     if (this.running) return;
     this.dismiss();
     this.running = true;
@@ -29,19 +29,21 @@ class ClaudeAISyncStore {
     };
     let refreshAfterSync = true;
     try {
-      const stats = await syncClaudeAI(host, callbacks, controller.signal);
+      const stats = provider === "chatgpt"
+        ? await syncChatGPTChrome(callbacks, controller.signal)
+        : await syncClaudeAI(host, callbacks, controller.signal);
       if (!controller.signal.aborted) this.result = stats;
     } catch (e) {
       if (controller.signal.aborted) return;
       reportSyncFailed(e);
-      if (e instanceof ApiError && e.code === "claude_ai_chrome_host_required") {
+      if (e instanceof ApiError && ["claude_ai_chrome_host_required", "chrome_host_required"].includes(e.code ?? "")) {
         return;
       } else if (
         e instanceof ApiError &&
-        ["claude_ai_auth_required", "claude_ai_chrome_host_update_required"].includes(e.code ?? "")
+        ["claude_ai_auth_required", "claude_ai_chrome_host_update_required", "chatgpt_auth_required", "chrome_host_update_required"].includes(e.code ?? "")
       ) {
         this.flag = e.code ?? null;
-      } else if (e instanceof ApiError && e.code === "claude_ai_sync_running") {
+      } else if (e instanceof ApiError && ["claude_ai_sync_running", "chrome_sync_running"].includes(e.code ?? "")) {
         this.error = m.import_claude_sync_running();
         refreshAfterSync = false;
       } else {
