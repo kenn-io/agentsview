@@ -209,10 +209,7 @@ func WriteHermesSessionJSONL(ctx context.Context,
 	if !ok {
 		return errors.New("hermes provider unavailable")
 	}
-	source, found, err := hp.FindSource(
-		ctx,
-		FindSourceRequest{RawSessionID: rawSessionID},
-	)
+	source, found, err := hp.sources.findExportSource(ctx, rawSessionID)
 	if err != nil {
 		return err
 	}
@@ -236,6 +233,45 @@ func WriteHermesSessionJSONL(ctx context.Context,
 		return writeHermesStateSessionJSONL(ctx, w, src.Path, rawSessionID)
 	}
 	return copyHermesTranscriptFile(w, src.Path)
+}
+
+func (s hermesSourceSet) findExportSource(ctx context.Context, id string) (SourceRef, bool, error) {
+	if !isValidHermesSessionID(id) {
+		return SourceRef{}, false, nil
+	}
+	roots, expandErr := s.expandedRoots()
+	var readErr error
+	for _, root := range roots {
+		if err := ctx.Err(); err != nil {
+			return SourceRef{}, false, err
+		}
+		if stateDB, _, ok := hermesStatePaths(root); ok {
+			_, _, _, err := readHermesStateSessionSource(ctx, stateDB, id)
+			if err == nil {
+				return s.stateMemberSourceRef(root, stateDB, id), true, nil
+			}
+			readErr = errors.Join(readErr, err)
+		}
+		dir := hermesTranscriptRoot(root)
+		for _, path := range []string{filepath.Join(dir, "session_"+id+".json"), filepath.Join(dir, id+".jsonl")} {
+			if !IsRegularFile(path) {
+				continue
+			}
+			var err error
+			if filepath.Ext(path) == ".json" {
+				_, _, err = parseHermesJSONSession(path, "", "")
+			} else {
+				_, _, err = parseHermesJSONLSession(path, "", "")
+			}
+			if err != nil {
+				readErr = errors.Join(readErr, err)
+				continue
+			}
+			source, _ := s.transcriptSourceRef(root, path)
+			return source, true, nil
+		}
+	}
+	return SourceRef{}, false, errors.Join(readErr, expandErr)
 }
 
 func (p *hermesProvider) Parse(

@@ -2219,3 +2219,16 @@ func TestWriteHermesSessionJSONLReadableSnapshotIgnoresMalformedAlternate(t *tes
 	require.NoError(t, WriteHermesSessionJSONL(t.Context(), &output, filepath.Join(root, "state.db"), []string{root}, "child"))
 	assert.JSONEq(t, content, output.String())
 }
+
+func TestWriteHermesSessionJSONLConfiguredRootUsesExportSelection(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	dir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	content := `{"messages":[{"role":"user","content":"readable prompt"},{"role":"assistant","content":"readable answer"}]}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session_child.json"), []byte(content), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "child.jsonl"), []byte("invalid JSON\n"), 0o600))
+	var output strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(), &output, filepath.Join(t.TempDir(), "state.db"), []string{root}, "child"))
+	assert.JSONEq(t, content, output.String())
+}

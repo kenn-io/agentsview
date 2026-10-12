@@ -3243,12 +3243,25 @@ schemas keep their existing ordering behavior.
   archived history, including during full rebuilds and imports with Windows or
   UNC paths. State-database fallback also preserves richer archived messages
   when a selected transcript has disappeared or become empty. The comparison
-  includes message count, text, thinking and tool-use information. Complete
-  edits to an existing JSON snapshot remain replaceable. Agentsview records the
+  includes message text, thinking, individual tool calls, exact arguments and
+  tool-result content. Source changes cannot remove an archived call or change
+  its result just because the message count remains equal. Standalone transcript
+  fallback preserves archived state-derived usage when the database cannot
+  supply accounting. Selected JSON snapshots receive the same protection as
+  JSONL when they disappear or become empty. Aggregate archive parsing propagates
+  transcript validation failures, and discovery retains all member errors and
+  membership checks after mixed failures. Raw export uses export-specific
+  selection even when resolving another configured root. Complete edits to an existing JSON snapshot remain replaceable. Agentsview records the
   selected encoding in `source_version` as `hermes-state-v1`, `hermes-json-v1`
   or `hermes-jsonl-v1`. These are Agentsview format labels. A fingerprint
   generation marker makes existing members reparse once to record the label.
-  Database-only sessions keep accepting complete edits. Discovery, member
+  Database-only sessions with known provenance keep accepting complete edits.
+  Legacy `hermes-state-db` labels do not identify whether messages came from the
+  database or a transcript. Matching archived content can acquire a current
+  label; conflicting content remains archived until its source can be
+  established. This can defer a genuine database edit during upgrade because
+  the legacy metadata cannot distinguish that edit from transcript loss.
+  Discovery, member
   fingerprints and lookups accept dotted cron job IDs from the documented
   producer format. Remote path and skip-cache translation preserve the physical
   database identity and virtual member suffix separately. Existing archive-level
