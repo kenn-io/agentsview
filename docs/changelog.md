@@ -45,6 +45,11 @@ The latest release is
 
 - DeepSeek Harness v4 sessions now appear after sync, with tool results and
   recorded token usage.
+- ClickHouse usage reports read prepared usage again for a machine whose
+  mirror held a session with no archive id that the machine's archive no
+  longer has. No push removed such a session, and it kept every session of
+  that machine on the slower raw usage reads. The first push from each
+  machine after upgrading removes them.
 - Fill MCP content-search pages with older matches by excluding recent sessions
   before the limit. Cutoffs preserve their UTC instant across time zones. Older
   daemons keep the previous guard after pagination and can return short pages.
