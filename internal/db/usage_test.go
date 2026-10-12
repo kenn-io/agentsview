@@ -6249,3 +6249,34 @@ func TestGroupTopSessions(t *testing.T) {
 		})
 	}
 }
+
+func TestUsageEventFingerprintNormalizationPreservesArchivePrecision(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	insertSession(t, database, "hermes:usage", "project")
+	const timestamp = "2026-07-01T12:00:00.123456789Z"
+	require.NoError(t, database.ReplaceSessionUsageEvents(ctx, "hermes:usage", []UsageEvent{{
+		SessionID: "hermes:usage", Source: "session", Model: "model",
+		InputTokens: 10, OutputTokens: 2, OccurredAt: timestamp, DedupKey: "event",
+	}}))
+	raw, err := database.UsageEventFingerprints([]string{"hermes:usage", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"hermes:usage": "false|0|7:session|5:model|0:|10|2|0|0|0|false|0|0:|0:|30:2026-07-01T12:00:00.123456789Z|5:event;",
+		"missing":      "",
+	}, raw)
+	normalized, err := database.UsageEventFingerprintsWithTimestampNormalizer(ctx,
+		[]string{"hermes:usage", "missing"}, func(value string) string {
+			require.Equal(t, timestamp, value)
+			return "2026-07-01T12:00:00.123456Z"
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"hermes:usage": "false|0|7:session|5:model|0:|10|2|0|0|0|false|0|0:|0:|27:2026-07-01T12:00:00.123456Z|5:event;",
+		"missing":      "",
+	}, normalized)
+	after, err := database.UsageEventFingerprints([]string{"hermes:usage", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, raw, after)
+}

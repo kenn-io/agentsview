@@ -586,6 +586,14 @@ must compare the same fields so incremental and resync paths agree. A no-op
 message replacement preserves existing secret findings; changed transcript
 content clears them for a fresh scan.
 
+### PostgreSQL usage comparisons
+
+PostgreSQL push compares usage timestamps in UTC at microsecond precision,
+matching PostgreSQL storage and the existing message and tool-result
+comparisons. SQLite retains the original timestamp text and precision.
+Metadata-only pushes preserve unchanged messages, tool calls and usage events;
+changes to the accounting fields still replace the session's mirrored data.
+
 ### Tool result summaries
 
 `tool_calls.result_content` is a display summary derived from the call's

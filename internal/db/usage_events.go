@@ -180,10 +180,8 @@ func replaceSessionUsageEventsTx(
 	return nil
 }
 
-// GetUsageEvents returns usage events for one session in stable order.
 // UsageEventFingerprints returns exact ordered fingerprints of
-// stored usage events keyed by session ID. Used by PG push fast-paths
-// to detect usage-only changes without N+1 queries.
+// stored usage events keyed by session ID.
 func (db *DB) UsageEventFingerprints(
 	sessionIDs []string,
 ) (map[string]string, error) {
@@ -194,6 +192,24 @@ func (db *DB) UsageEventFingerprints(
 
 func usageEventFingerprintsWithQuerier(
 	ctx context.Context, q messageRowsQuerier, sessionIDs []string,
+) (map[string]string, error) {
+	return usageEventFingerprintsWithTimestampNormalizer(ctx, q, sessionIDs, nil)
+}
+
+// UsageEventFingerprintsWithTimestampNormalizer returns ordered fingerprints
+// after applying normalizeTimestamp to each occurred_at value. SQLite keeps
+// the original timestamps and the usage cache uses their full precision.
+func (db *DB) UsageEventFingerprintsWithTimestampNormalizer(
+	ctx context.Context, sessionIDs []string, normalizeTimestamp func(string) string,
+) (map[string]string, error) {
+	return usageEventFingerprintsWithTimestampNormalizer(
+		ctx, db.getReader(), sessionIDs, normalizeTimestamp,
+	)
+}
+
+func usageEventFingerprintsWithTimestampNormalizer(
+	ctx context.Context, q messageRowsQuerier, sessionIDs []string,
+	normalizeTimestamp func(string) string,
 ) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	if len(sessionIDs) == 0 {
@@ -206,8 +222,8 @@ func usageEventFingerprintsWithQuerier(
 	const batchSize = 900
 	for start := 0; start < len(sessionIDs); start += batchSize {
 		end := min(start+batchSize, len(sessionIDs))
-		if err := appendUsageEventFingerprints(
-			ctx, q, out, sessionIDs[start:end],
+		if err := appendUsageEventFingerprintsWithTimestampNormalizer(
+			ctx, q, out, sessionIDs[start:end], normalizeTimestamp,
 		); err != nil {
 			return nil, err
 		}
@@ -218,6 +234,14 @@ func usageEventFingerprintsWithQuerier(
 func appendUsageEventFingerprints(
 	ctx context.Context, q messageRowsQuerier,
 	out map[string]string, sessionIDs []string,
+) error {
+	return appendUsageEventFingerprintsWithTimestampNormalizer(ctx, q, out, sessionIDs, nil)
+}
+
+func appendUsageEventFingerprintsWithTimestampNormalizer(
+	ctx context.Context, q messageRowsQuerier,
+	out map[string]string, sessionIDs []string,
+	normalizeTimestamp func(string) string,
 ) error {
 	placeholders := make([]string, len(sessionIDs))
 	args := make([]any, len(sessionIDs))
@@ -268,6 +292,9 @@ func appendUsageEventFingerprints(
 		occurred := ""
 		if occurredAt.Valid {
 			occurred = occurredAt.String
+		}
+		if normalizeTimestamp != nil {
+			occurred = normalizeTimestamp(occurred)
 		}
 		// Sanitize before measuring so fingerprints match the
 		// PG-readback fingerprint, whose values were sanitized

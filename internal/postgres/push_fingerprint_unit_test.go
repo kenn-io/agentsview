@@ -83,7 +83,7 @@ func TestBatchedDependencyFingerprintMatchesPerSession(t *testing.T) {
 			)
 			require.NoError(t, err, id)
 			got, err := state.dependencyFingerprint(
-				local, id, usageFPs[id], usageKnown,
+				ctx, local, id, usageFPs[id], usageKnown,
 			)
 			require.NoError(t, err, id)
 			assert.Equal(t, want, got,

@@ -394,8 +394,8 @@ func (s *Sync) PushWithOptions(
 		return result, err
 	}
 
-	usageFingerprints, err := s.local.UsageEventFingerprints(
-		mapKeys(sessionByID),
+	usageFingerprints, err := s.local.UsageEventFingerprintsWithTimestampNormalizer(
+		ctx, mapKeys(sessionByID), pgPushTimestampFingerprintText,
 	)
 	if err != nil {
 		return result, fmt.Errorf(
@@ -431,7 +431,7 @@ func (s *Sync) PushWithOptions(
 		for _, id := range chunk {
 			usageFP, usageKnown := usageFingerprints[id]
 			dependencyFP, err := depState.dependencyFingerprint(
-				s.local, id, usageFP, usageKnown,
+				ctx, s.local, id, usageFP, usageKnown,
 			)
 			if err != nil {
 				return result, fmt.Errorf(
@@ -2829,7 +2829,7 @@ func (s *Sync) pushMessages(
 			usageFromMap = ok
 		}
 		if !usageFromMap {
-			localFP.UsageEventFP, err = s.local.UsageEventFingerprint(sessionID)
+			localFP.UsageEventFP, err = localUsageEventPGFingerprint(ctx, s.local, sessionID)
 			if err != nil {
 				return 0, fmt.Errorf(
 					"computing local usage event fingerprint: %w",

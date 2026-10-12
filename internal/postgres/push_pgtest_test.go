@@ -163,6 +163,85 @@ func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 	assert.Equal(t, want, batched["exact-money"])
 }
 
+func TestPGPushMetadataChangesPreserveMessagesWithUsageTimestamps(t *testing.T) {
+	type mirroredMessage struct {
+		MessageVersion string
+		Name           string
+	}
+	for _, test := range []struct {
+		name      string
+		timestamp string
+	}{
+		{name: "nanoseconds", timestamp: "2026-07-01T12:00:00.123456789Z"},
+		{name: "trailing zeroes", timestamp: "2026-07-01T12:00:00.000Z"},
+		{name: "offset", timestamp: "2026-07-01T13:00:00.123456789+01:00"},
+		{name: "empty"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			pgURL := testPGURL(t)
+			const schema = "agentsview_usage_timestamp_test"
+			cleanNamedPGSchema(t, pgURL, schema)
+			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+			local := testDB(t)
+			const sessionID = "hermes:usage-timestamp"
+			session := db.Session{
+				ID: sessionID, Project: "project", Machine: "machine", Agent: "hermes",
+				MessageCount: 1, FileMtime: new(time.Now().Add(time.Hour).UnixNano()),
+				FileHash: new("first-source"),
+			}
+			require.NoError(t, local.UpsertSession(ctx, session))
+			require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+				SessionID: sessionID, Ordinal: 0, Role: "user", Content: "unchanged message", ContentLength: 17,
+			}}))
+			usage := db.UsageEvent{
+				SessionID: sessionID, Source: "session", Model: "model", InputTokens: 10, OutputTokens: 2,
+				OccurredAt: test.timestamp, DedupKey: "session:usage-timestamp",
+			}
+			require.NoError(t, local.ReplaceSessionUsageEvents(ctx, sessionID, []db.UsageEvent{usage}))
+			pusher, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = pusher.Close() })
+			_, err = pusher.Push(ctx, false, nil)
+			require.NoError(t, err)
+			var originalMessageVersion string
+			require.NoError(t, pusher.DB().QueryRowContext(ctx,
+				"SELECT xmin::text FROM messages WHERE session_id = $1 AND ordinal = 0", sessionID,
+			).Scan(&originalMessageVersion))
+
+			session.SessionName = new("Renamed session")
+			session.FileHash = new("second-source")
+			require.NoError(t, local.UpsertSession(ctx, session))
+			result, err := pusher.Push(ctx, false, nil)
+			require.NoError(t, err)
+			assert.Zero(t, result.MessagesPushed, "metadata changes must preserve unchanged messages")
+			var stored mirroredMessage
+			require.NoError(t, pusher.DB().QueryRowContext(ctx, `
+				SELECT m.xmin::text, s.session_name FROM messages m JOIN sessions s ON s.id = m.session_id
+				WHERE m.session_id = $1 AND m.ordinal = 0`, sessionID,
+			).Scan(&stored.MessageVersion, &stored.Name))
+			assert.Equal(t, mirroredMessage{
+				MessageVersion: originalMessageVersion, Name: "Renamed session",
+			}, stored)
+
+			usage.OutputTokens = 3
+			require.NoError(t, local.ReplaceSessionUsageEvents(ctx, sessionID, []db.UsageEvent{usage}))
+			_, err = pusher.Push(ctx, false, nil)
+			require.NoError(t, err)
+			var outputTokens int
+			require.NoError(t, pusher.DB().QueryRowContext(ctx,
+				"SELECT output_tokens FROM usage_events WHERE session_id = $1", sessionID,
+			).Scan(&outputTokens))
+			assert.Equal(t, 3, outputTokens, "genuine usage changes must still be mirrored")
+			rows, err := local.GetUsageEvents(ctx, sessionID)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			usage.ID = rows[0].ID
+			assert.Equal(t, []db.UsageEvent{usage}, rows, "mirroring must preserve the archive timestamp")
+		})
+	}
+}
+
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	t *testing.T,
 ) {

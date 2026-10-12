@@ -189,6 +189,7 @@ func readLocalPushDependencyState(
 // only queried on the usageKnown=false fallback, which the push loop never
 // takes (it prefetches usage fingerprints for every candidate).
 func (st *localPushDependencyState) dependencyFingerprint(
+	ctx context.Context,
 	local *db.DB,
 	sessionID string,
 	usageEventFingerprint string,
@@ -213,7 +214,7 @@ func (st *localPushDependencyState) dependencyFingerprint(
 		msgFP.UsageEventFP = usageEventFingerprint
 	} else {
 		var err error
-		msgFP.UsageEventFP, err = local.UsageEventFingerprint(sessionID)
+		msgFP.UsageEventFP, err = localUsageEventPGFingerprint(ctx, local, sessionID)
 		if err != nil {
 			return "", fmt.Errorf(
 				"computing local usage event fingerprint: %w", err,
@@ -277,7 +278,7 @@ func localPushMessageFingerprint(ctx context.Context,
 		fp.UsageEventFP = usageEventFingerprint
 		return fp, nil
 	}
-	fp.UsageEventFP, err = local.UsageEventFingerprint(sessionID)
+	fp.UsageEventFP, err = localUsageEventPGFingerprint(ctx, local, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local usage event fingerprint: %w", err)
 	}
@@ -1000,4 +1001,14 @@ func shouldSkipSessionMessages(
 		localFP.ToolResultFP == comparisons.ToolResultFingerprint[sessionID] &&
 		localFP.TokenFP == comparisons.MessageTokenFingerprint[sessionID] &&
 		localFP.UsageEventFP == comparisons.UsageEventFingerprint[sessionID]
+}
+
+func localUsageEventPGFingerprint(ctx context.Context, local *db.DB, sessionID string) (string, error) {
+	fingerprints, err := local.UsageEventFingerprintsWithTimestampNormalizer(
+		ctx, []string{sessionID}, pgPushTimestampFingerprintText,
+	)
+	if err != nil {
+		return "", err
+	}
+	return fingerprints[sessionID], nil
 }
