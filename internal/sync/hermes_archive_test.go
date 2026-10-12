@@ -1510,3 +1510,52 @@ func TestHermesSyncAllSinceIncludesWALOnlyEdits(t *testing.T) {
 		})
 	}
 }
+
+func TestHermesIncompleteTranscriptPreservesArchivedHistory(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, mode := range []string{"full sync", "transcript event"} {
+			for _, test := range []struct {
+				name, content string
+			}{
+				{name: "empty"},
+				{name: "metadata only", content: `{"role":"session_meta","platform":"cli"}` + "\n"},
+				{name: "malformed", content: "invalid JSON\n"},
+			} {
+				t.Run(string(agent)+"/"+mode+"/"+test.name, func(t *testing.T) {
+					root := t.TempDir()
+					writeHermesArchiveStateDB(t, root)
+					dir := filepath.Join(root, "sessions")
+					writeHermesTranscriptFile(t, dir, "standalone")
+					path := filepath.Join(dir, "standalone.jsonl")
+					database := dbtest.OpenTestDB(t)
+					engine := NewEngine(t.Context(), database, EngineConfig{
+						AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+					})
+					t.Cleanup(engine.Close)
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					id := string(agent) + ":standalone"
+					before, err := database.GetSessionFull(t.Context(), id)
+					require.NoError(t, err)
+					require.NotNil(t, before)
+					messagesBefore, err := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					require.NoError(t, os.WriteFile(path, []byte(test.content), 0o600))
+					if mode == "full sync" {
+						require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					} else {
+						require.NoError(t, engine.syncPathsContext(t.Context(), []string{path}, false))
+					}
+					for range 2 {
+						after, getErr := database.GetSessionFull(t.Context(), id)
+						require.NoError(t, getErr)
+						assert.Equal(t, before, after)
+						messagesAfter, getErr := database.GetAllMessages(t.Context(), id)
+						require.NoError(t, getErr)
+						assert.Equal(t, messagesBefore, messagesAfter)
+						require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					}
+				})
+			}
+		}
+	}
+}

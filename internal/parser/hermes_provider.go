@@ -312,7 +312,6 @@ func (p *hermesProvider) Parse(
 	if sess == nil {
 		return ParseOutcome{
 			ResultSetComplete: true,
-			ForceReplace:      true,
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
