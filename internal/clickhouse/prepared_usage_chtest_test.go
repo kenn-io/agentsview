@@ -819,7 +819,7 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 	for _, stmt := range []string{
 		"CREATE TABLE prepared_usage_rebuild_lock_6 (x UInt8) ENGINE = Memory COMMENT 'released'",
 		"CREATE TABLE prepared_usage_rebuild_lock_7 (x UInt8) ENGINE = Memory COMMENT 'held 1'",
-		"CREATE TABLE prepared_usage_build_7 (x UInt8) ENGINE = Memory",
+		"CREATE TABLE prepared_usage_build_7 AS prepared_usage",
 	} {
 		_, err := conn.ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)
@@ -829,6 +829,8 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 	superseded, err := rebuildLockSuperseded(ctx, conn, 7)
 	require.NoError(t, err)
 	require.True(t, superseded, "a rebuild paused through the switch must find a newer lock")
+	_, err = conn.ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM prepared_usage_build_7")
+	require.True(t, isMissingTableError(err), "a rebuild paused through the switch must not publish: %v", err)
 	_, acquired, err := acquireRebuildLock(ctx, conn)
 	require.NoError(t, err)
 	require.False(t, acquired, "a push paused before taking the lock must not rebuild")

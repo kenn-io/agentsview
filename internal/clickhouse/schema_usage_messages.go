@@ -214,6 +214,11 @@ const (
 // retireRebuildLocks.
 const chRebuildLockRetired = "retired"
 
+// chRetiredSkipMessage explains why a push skips its rebuild once the
+// newest rebuild lock is retired.
+const chRetiredSkipMessage = "clickhouse push: skipping the prepared usage rebuild: this database can exchange " +
+	"tables again, so the view's scheduled refresh keeps prepared usage current"
+
 // chExchangeProbePrefix names the scratch tables chExchangeSupported
 // exchanges.
 const chExchangeProbePrefix = "agentsview_exchange_probe_"
@@ -512,15 +517,23 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 		}
 		return reopenRebuildLocks(ctx, conn)
 	}
+	// Fence off rebuilds before the view exists, so none can publish after
+	// a view refresh: a rebuild that already took a lock finds the retired
+	// lock newer than its own, and dropping its build table waits for a
+	// publish already running and fails a later one. A push that tries to
+	// take the lock from here on finds it retired; see acquireRebuildLock.
+	if err := retireRebuildLocks(ctx, conn); err != nil {
+		return fmt.Errorf("switching prepared usage to scheduled refresh: %w", err)
+	}
 	if _, err := conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage REFRESH `+chPreparedUsageRefresh+`
 		TO prepared_usage EMPTY AS `+prepared+" SETTINGS "+chPreparedUsageRefreshSettings); err != nil {
 		return fmt.Errorf("creating prepared usage: %w", err)
 	}
-	// After the view exists: a push that takes the lock from here on finds
-	// the view and stands down, and one that took it earlier finds the
-	// retirement lock newer than its own; see acquireRebuildLock.
+	// With no lock to retire, a push could have taken the first lock
+	// between the fence and the view; retiring again fences it off before
+	// the refresh below starts.
 	if err := retireRebuildLocks(ctx, conn); err != nil {
-		return fmt.Errorf("retiring prepared usage rebuild tables: %w", err)
+		return fmt.Errorf("switching prepared usage to scheduled refresh: %w", err)
 	}
 	// A new table serves reads only once filled; start that now rather
 	// than after the schedule or the next push.
@@ -820,16 +833,16 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 	}
 	if len(generations) > 0 {
 		if newestComment == chRebuildLockRetired {
-			log.Print("clickhouse push: skipping the prepared usage rebuild: this database now refreshes " +
-				"prepared usage with its view")
+			log.Print(chRetiredSkipMessage)
 			return 0, false, nil
 		}
 		if since, held := strings.CutPrefix(newestComment, "held "); held {
 			heldAt, err := strconv.ParseInt(since, 10, 64)
 			if err == nil && now-heldAt < int64(chRebuildLockTimeout/time.Second) {
-				log.Printf("clickhouse push: skipping the prepared usage rebuild: another push holds %s%d, "+
-					"last renewed %s; usage reads stay correct but slower meanwhile, and the lock expires an hour "+
-					"after its last renewal (see \"Lock of a stopped push\" in the ClickHouse sync docs)",
+				log.Printf("clickhouse push: skipping the prepared usage rebuild: another push holds %s%d "+
+					"(last renewed %s); usage reads are slower until that push finishes, or for an hour after "+
+					"its last renewal if it stopped; "+
+					"see \"Lock of a stopped push\" in docs/clickhouse-sync.md",
 					chPreparedUsageRebuildLockPrefix, generations[len(generations)-1],
 					time.Unix(heldAt, 0).Format(time.RFC3339))
 				return 0, false, nil
@@ -859,10 +872,11 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 	}
 	if _, err := conn.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s%d MODIFY COMMENT '%s'",
 		chPreparedUsageRebuildLockPrefix, generation, chRebuildLockRetired)); err != nil && !isMissingTableError(err) {
-		return 0, false, fmt.Errorf("retiring prepared usage rebuild lock: %w", err)
+		// Still acquired, so the caller releases the lock instead of
+		// leaving it held for an hour.
+		return generation, true, fmt.Errorf("retiring prepared usage rebuild lock: %w", err)
 	}
-	log.Print("clickhouse push: skipping the prepared usage rebuild: this database now refreshes " +
-		"prepared usage with its view")
+	log.Print(chRetiredSkipMessage)
 	return 0, false, nil
 }
 
