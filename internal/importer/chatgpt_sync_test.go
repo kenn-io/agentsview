@@ -12,6 +12,11 @@ import (
 
 const chatGPTSyncID = "22222222-2222-4222-8222-222222222222"
 
+func init() {
+	// Tests use fake fetches; the real pacing would only slow them down.
+	chatGPTDetailGap = 0
+}
+
 func chatGPTSyncDetail(updated float64, extraTurn bool, firstQuestion string) string {
 	turns := `"u1":{"id":"u1","message":{"id":"u1","author":{"role":"user"},"create_time":1700000000,"content":{"content_type":"text","parts":["` + firstQuestion + `"]}}},` +
 		`"a1":{"id":"a1","parent":"u1","message":{"id":"a1","author":{"role":"assistant"},"create_time":1700000001,"content":{"content_type":"text","parts":["Answer"]}}}`
@@ -112,4 +117,26 @@ func TestSyncChatGPTSkipsConversationDeletedAfterList(t *testing.T) {
 	assert.Equal(t, 1, stats.Skipped)
 	assert.Zero(t, stats.Errors)
 	assert.Empty(t, stats.Refusals)
+}
+
+func TestSyncChatGPTStopsWhenRateLimited(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	_, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
+		switch path {
+		case chatGPTRequest(chatGPTListRequest, "", 0):
+			return ClaudeAIResponse{Status: 200, Body: []byte(fmt.Sprintf(`{"items":[{"id":%q,"update_time":1}],"total":1}`, chatGPTSyncID))}, nil
+		case chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0):
+			details++
+			return ClaudeAIResponse{Status: 429, RetryAfter: "0"}, nil
+		default:
+			require.FailNow(t, "unexpected ChatGPT request path: %s", path)
+			return ClaudeAIResponse{}, nil
+		}
+	}, nil)
+	require.ErrorContains(t, err, "ChatGPT rate limited")
+	assert.Equal(t, 5, details, "a 429 retries the same request at most five times, then stops the sync")
+	messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
+	require.NoError(t, err)
+	assert.Empty(t, messages)
 }

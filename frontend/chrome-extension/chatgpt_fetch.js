@@ -1,18 +1,39 @@
+// jwtExpiryMs returns the token's exp claim in milliseconds, or 0 when it is not a readable JWT.
+function jwtExpiryMs(token) {
+  const payload = token.split(".")[1];
+  if (!payload) return 0;
+  try {
+    const claims = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    return typeof claims.exp === "number" ? claims.exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function chatgptFetch(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
-    const session = await fetch("https://chatgpt.com/api/auth/session", {
-      method: "GET",
-      credentials: "include",
-      redirect: "error",
-      signal: controller.signal,
-    });
-    if (!session.ok) return { status: session.status, body: "" };
-    const auth = await session.json();
-    const accessToken = auth?.accessToken;
-    if (typeof accessToken !== "string" || accessToken.length === 0) {
-      return { status: 401, body: "" };
+    // Reuse the page token until shortly before it expires, so a sync does not
+    // add a /api/auth/session request in front of every conversation request.
+    let accessToken = globalThis.__agentsviewChatGPTToken;
+    if (!accessToken || Date.now() > (globalThis.__agentsviewChatGPTTokenUntil ?? 0)) {
+      const session = await fetch("https://chatgpt.com/api/auth/session", {
+        method: "GET",
+        credentials: "include",
+        redirect: "error",
+        signal: controller.signal,
+      });
+      if (!session.ok) return { status: session.status, body: "" };
+      const auth = await session.json();
+      accessToken = auth?.accessToken;
+      if (typeof accessToken !== "string" || accessToken.length === 0) {
+        globalThis.__agentsviewChatGPTToken = undefined;
+        return { status: 401, body: "" };
+      }
+      globalThis.__agentsviewChatGPTToken = accessToken;
+      // Keep the token only when its JWT expiry is readable; otherwise fetch it each time.
+      globalThis.__agentsviewChatGPTTokenUntil = jwtExpiryMs(accessToken) - 60000;
     }
 
     const response = await fetch(url, {
