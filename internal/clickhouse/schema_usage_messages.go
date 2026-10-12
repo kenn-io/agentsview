@@ -570,10 +570,13 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 		log.Print("ClickHouse: this database cannot swap tables (EXCHANGE TABLES), usually because its data " +
 			"directory is on NFS; each push rebuilds prepared usage itself instead of the prepare_usage view's " +
 			"scheduled refresh")
-		if err := dropPreparedUsageView(ctx, conn); err != nil {
+		// Release a retired lock before dropping the view, so a push never
+		// finds a retired lock without the view here and mistakes it for a
+		// switch to the view that stopped halfway.
+		if err := openRebuildLocks(ctx, conn); err != nil {
 			return err
 		}
-		return openRebuildLocks(ctx, conn)
+		return dropPreparedUsageView(ctx, conn)
 	}
 	// Fence off rebuilds before the view exists, so none can publish after
 	// a view refresh: a rebuild that already took a lock finds the retired
@@ -1052,18 +1055,36 @@ func retireRebuildLocks(ctx context.Context, conn *sql.DB) error {
 		retired := newest
 		if state.Status != rebuildLockRetired {
 			retired++
-			err := createRebuildLock(ctx, conn, retired, rebuildLockState{Status: rebuildLockRetired})
-			if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
-				continue
-			}
+			newestRetired, err := createRetiredLock(ctx, conn, retired)
 			if err != nil {
-				return fmt.Errorf("retiring prepared usage rebuild lock: %w", err)
+				return err
+			}
+			if !newestRetired {
+				continue
 			}
 		}
 		return dropTables(ctx, conn, "match(name, ?) OR (match(name, ?) AND "+chTableNumberSQL+" < ?)",
 			chPreparedUsageBuildPattern, chPreparedUsageRebuildLockPattern, retired)
 	}
 	return errors.New("retiring prepared usage rebuild locks: other pushes kept taking newer locks")
+}
+
+// createRetiredLock creates the retired lock of generation and reports
+// whether it is the newest lock. While retirement paused after reading the
+// locks, pushes may have taken newer numbers and dropped this one, so the
+// create can succeed below a newer lock; that lock's holder would stay
+// unfenced, so the caller retires above it instead. The lower retired lock
+// is dropped with the other old locks.
+func createRetiredLock(ctx context.Context, conn *sql.DB, generation uint64) (bool, error) {
+	err := createRebuildLock(ctx, conn, generation, rebuildLockState{Status: rebuildLockRetired})
+	if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("retiring prepared usage rebuild lock: %w", err)
+	}
+	superseded, err := rebuildLockSuperseded(ctx, conn, generation)
+	return err == nil && !superseded, err
 }
 
 // openRebuildLocks lets pushes rebuild prepared_usage in a database that

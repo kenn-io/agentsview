@@ -303,8 +303,13 @@ A lock can outlive its holder:
 - If the schema step stops after retiring the lock but before creating the view,
   a push that finds the newest lock retired and no view retires again, creates
   the view, and starts its refresh.
+- Retirement can pause after reading the locks while pushes take newer numbers,
+  so it checks for a higher number right after creating its retired lock, as a
+  push does after taking a lock. If one exists, it retires again above it.
 - If the database later loses the ability to swap tables again, the schema step
-  marks the retired lock released, and pushes rebuild again.
+  marks the retired lock released before it drops the view, so a push never
+  finds a retired lock without the view except after a switch to the view that
+  stopped halfway. Pushes then rebuild again.
 
 **Currency is proven per read.** A read uses prepared rows only when every
 session has a current snapshot. Sessions pushed since the last refresh form a

@@ -828,6 +828,16 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 	require.False(t, acquired, "a push paused before taking the lock must not rebuild")
 	newTestSync(t, local, target, storage.PusherOptions{})
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_8 retired"}, rebuildTables())
+
+	// Retirement that read the locks before pushes took newer numbers can
+	// create a retired lock below a newer one. That lock is not the fence,
+	// and retiring again goes above the newer lock.
+	require.NoError(t, createRebuildLock(ctx, conn, 10, rebuildLockState{Status: rebuildLockHeld, RenewedAt: 1}))
+	newestRetired, err := createRetiredLock(ctx, conn, 9)
+	require.NoError(t, err)
+	require.False(t, newestRetired)
+	require.NoError(t, retireRebuildLocks(ctx, conn))
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_11 retired"}, rebuildTables())
 }
 
 // A database that can swap tables has no rebuild lock, so a push that finds
@@ -874,8 +884,14 @@ func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T)
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
 	target := Target{URL: dsn, Database: database}
 	conn := chtest.Open(t, dsn, database)
+	newTestSync(t, local, target, storage.PusherOptions{})
+	// As an earlier switch to the view left the database.
 	require.NoError(t, createRebuildLock(ctx, conn, 5, rebuildLockState{Status: rebuildLockRetired}))
+	require.NoError(t, createPreparedUsageView(ctx, conn))
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	hasView, err := preparedUsageViewExists(ctx, conn)
+	require.NoError(t, err)
+	require.False(t, hasView, "a database that cannot swap tables must not keep the view")
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
