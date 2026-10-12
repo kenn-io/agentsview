@@ -916,6 +916,11 @@ func (c *usageFillCoordinator) invalidateChangedIdentitySharers(
 func (c *usageFillCoordinator) recheckSourceVersions(
 	ctx context.Context, observed []usageSourceVersion,
 ) (map[string]usageSourceVersion, error) {
+	release, err := c.archive.acquireBulkRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	conn, err := c.archive.getReader().Conn(ctx)
 	if err != nil {
 		return nil, err

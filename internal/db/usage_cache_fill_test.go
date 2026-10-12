@@ -18,7 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-func TestUsageFillExtractionWaitsInBulkLane(t *testing.T) {
+func TestUsageArchiveReadsWaitInBulkLane(t *testing.T) {
 	database := usageCandidateFixture(t)
 	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
 	require.NoError(t, err)
@@ -29,16 +29,31 @@ func TestUsageFillExtractionWaitsInBulkLane(t *testing.T) {
 		require.NoError(t, err)
 		defer release()
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	spool, versions, err := cache.fill.extractSessions(ctx, snapshot.Versions)
-	if spool != nil {
-		defer spool.Close()
+	for _, tc := range []struct {
+		name string
+		read func(context.Context) error
+	}{
+		{"capture", func(ctx context.Context) error {
+			_, err := database.captureUsageQuery(ctx, UsageFilter{}, usageQueryKindToken)
+			return err
+		}},
+		{"extraction", func(ctx context.Context) error {
+			spool, versions, err := cache.fill.extractSessions(ctx, snapshot.Versions)
+			if spool != nil {
+				defer spool.Close()
+			}
+			assert.Nil(t, spool)
+			assert.Nil(t, versions)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			require.ErrorIs(t, tc.read(ctx), context.DeadlineExceeded)
+			assert.Zero(t, database.rawReader().Stats().InUse)
+		})
 	}
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Nil(t, spool)
-	assert.Nil(t, versions)
-	assert.Zero(t, database.rawReader().Stats().InUse)
 }
 
 func TestUsageCacheFillInstallsCompleteSessionFacts(t *testing.T) {

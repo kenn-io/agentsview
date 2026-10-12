@@ -10,6 +10,11 @@ to handle a data-version change.
 
 Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`.
 
+Slow archive scans take the bulk lane through `acquireBulkRead`, using at most
+`readerMaxOpenConns - 1` reader connections so quick reads always get one.
+New readers that can run for multiple seconds must take this lane. Release the
+permit before waiting for another bulk reader or doing host git/GitHub lookups.
+
 A parser upgrade normally requires a full resync. A parser change that needs a
 full resync must build a fresh database, sync source files, copy orphaned
 sessions from the old database, and swap the files atomically. Preserve sessions

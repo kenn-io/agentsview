@@ -356,6 +356,11 @@ func usageBackfillLocations(
 }
 
 func (db *DB) usageBackfillActivity(ctx context.Context) (map[string]string, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT session_id, MAX(activity_at) FROM (
 			SELECT m.session_id, m.timestamp AS activity_at

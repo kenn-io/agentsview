@@ -120,6 +120,7 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 	reader := database.rawReader()
 	configureReaderPool(reader)
 	blocked := make(chan struct{})
+	hookReached := make(chan struct{}, readerMaxOpenConns)
 	var unblockOnce sync.Once
 	unblock := func() { unblockOnce.Do(func() { close(blocked) }) }
 	var summaries sync.WaitGroup
@@ -134,6 +135,10 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 		connections = append(connections, conn)
 		require.NoError(t, conn.Raw(func(driverConn any) error {
 			return driverConn.(*sqlite3.SQLiteConn).RegisterFunc("strftime", func(...any) string {
+				select {
+				case hookReached <- struct{}{}:
+				default:
+				}
 				<-blocked
 				return "2024-06-01"
 			}, false)
@@ -151,9 +156,13 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 			results <- err
 		}()
 	}
-	require.Eventually(t, func() bool {
-		return reader.Stats().InUse >= bulkReadSlots
-	}, 10*time.Second, 10*time.Millisecond)
+	for range bulkReadSlots {
+		select {
+		case <-hookReached:
+		case <-time.After(10 * time.Second):
+			t.Fatal("analytics did not reach the blocking strftime hook")
+		}
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	session, err := database.GetSession(ctx, "summary")

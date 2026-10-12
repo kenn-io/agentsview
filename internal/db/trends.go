@@ -52,6 +52,11 @@ func (db *DB) GetTrendsTerms(
 	terms []TrendTermInput,
 	granularity string,
 ) (TrendsTermsResponse, error) {
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return TrendsTermsResponse{}, err
+	}
+	defer release()
 	if granularity == "" {
 		granularity = "week"
 	}

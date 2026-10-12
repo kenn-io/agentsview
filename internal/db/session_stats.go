@@ -59,7 +59,11 @@ func (db *DB) GetSessionStats(
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 
 	// Root-only rows drive every consumer (distributions, velocity,
 	// timing, the human/automation split, archetypes, outcomes), so
@@ -148,6 +152,8 @@ func (db *DB) GetSessionStats(
 		return nil, fmt.Errorf("computing adoption: %w", err)
 	}
 
+	release()
+	release = nil
 	if f.IncludeGitOutcomes || f.IncludeGitHubOutcomes {
 		if err := db.computeOutcomeStats(ctx, stats, f, from, to, rows); err != nil {
 			return nil, fmt.Errorf("computing outcome stats: %w", err)
