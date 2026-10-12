@@ -2,6 +2,7 @@ export * as ActivityService from "./activity/activity.ts";
 export * as AnalyticsService from "./analytics/analytics.ts";
 export * as ArtifactsService from "./artifacts/artifacts.ts";
 export * as AssetsService from "./assets/assets.ts";
+export * as CodexCloudService from "./codex-cloud/codex-cloud.ts";
 export * as ConfigService from "./config/config.ts";
 export * as DataService from "./data/data.ts";
 export * as EmbeddingsService from "./embeddings/embeddings.ts";

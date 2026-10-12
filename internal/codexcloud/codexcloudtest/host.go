@@ -108,6 +108,13 @@ func (h *Host) RefuseHandshake(status int, header http.Header, body string) {
 	h.refuse = &refusal{status: status, header: header, body: body}
 }
 
+// AcceptHandshakes undoes RefuseHandshake.
+func (h *Host) AcceptHandshakes() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.refuse = nil
+}
+
 // RefuseBearer makes later upgrades that carry token answer status, so
 // tests can refuse one login while accepting another.
 func (h *Host) RefuseBearer(token string, status int) {

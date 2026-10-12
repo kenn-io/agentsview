@@ -5172,6 +5172,7 @@ type ClientInterface interface {
 	GetAPIV1AnalyticsSignalsWithResponse(ctx context.Context, options *GetAPIV1AnalyticsSignalsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1AnalyticsSignalsResp, error)
 	GetAPIV1AnalyticsToolsWithResponse(ctx context.Context, options *GetAPIV1AnalyticsToolsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1AnalyticsToolsResp, error)
 	PostAPIV1ArtifactsExchangeWithResponse(ctx context.Context, options *PostAPIV1ArtifactsExchangeRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ArtifactsExchangeResp, error)
+	GetAPIV1CodexCloudStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1CodexCloudStatusResp, error)
 	PostAPIV1DataCompactWithResponse(ctx context.Context, options *PostAPIV1DataCompactRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DataCompactResp, error)
 	PostAPIV1EmbeddingsBuildWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsBuildRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsBuildResp, error)
 	GetAPIV1EmbeddingsGenerationsWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsGenerationsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsGenerationsResp, error)
@@ -6475,6 +6476,212 @@ func (c *Client) PostAPIV1ArtifactsExchangeWithResponse(ctx context.Context, opt
 	case 503:
 		v := PostAPIV1ArtifactsExchangeErrorResponseText503(resp.Content)
 		out.Text503 = &v
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1CodexCloudStatus Read codex-cloud import status
+func (c *Client) GetAPIV1CodexCloudStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1CodexCloudStatusResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/codex-cloud/status",
+		Method:     "GET",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/codex-cloud/status")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1CodexCloudStatusResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1CodexCloudStatusResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1CodexCloudStatusErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1CodexCloudStatusErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1CodexCloudStatusErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1CodexCloudStatusErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1CodexCloudStatusErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1CodexCloudStatusErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1CodexCloudStatusErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1CodexCloudStatusErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1CodexCloudStatusErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1CodexCloudStatusErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1CodexCloudStatusErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	default:
 		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
@@ -20094,6 +20301,28 @@ type PostAPIV1ArtifactsExchangeErrorResponseText502 string
 
 type PostAPIV1ArtifactsExchangeErrorResponseText503 string
 
+type GetAPIV1CodexCloudStatusResponse []CodexcloudHomeStatus
+
+type GetAPIV1CodexCloudStatusErrorResponse = APIErrorResponse
+
+type GetAPIV1CodexCloudStatusErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1CodexCloudStatusErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1CodexCloudStatusErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1CodexCloudStatusErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1CodexCloudStatusErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1CodexCloudStatusErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1CodexCloudStatusErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1CodexCloudStatusErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1CodexCloudStatusErrorResponseJSON504 = APIErrorResponse
+
 type PostAPIV1DataCompactResponse = db.CompactResult
 
 type PostAPIV1DataCompactErrorResponse = APIErrorResponse
@@ -21487,6 +21716,23 @@ type PostAPIV1ArtifactsExchangeResp struct {
 	Text503      *PostAPIV1ArtifactsExchangeErrorResponseText503
 }
 
+type GetAPIV1CodexCloudStatusResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1CodexCloudStatusResponse
+	JSON400      *GetAPIV1CodexCloudStatusErrorResponse
+	JSON401      *GetAPIV1CodexCloudStatusErrorResponseJSON
+	JSON403      *GetAPIV1CodexCloudStatusErrorResponseJSON403
+	JSON404      *GetAPIV1CodexCloudStatusErrorResponseJSON404
+	JSON409      *GetAPIV1CodexCloudStatusErrorResponseJSON409
+	JSON500      *GetAPIV1CodexCloudStatusErrorResponseJSON500
+	JSON501      *GetAPIV1CodexCloudStatusErrorResponseJSON501
+	JSON502      *GetAPIV1CodexCloudStatusErrorResponseJSON502
+	JSON503      *GetAPIV1CodexCloudStatusErrorResponseJSON503
+	JSON504      *GetAPIV1CodexCloudStatusErrorResponseJSON504
+}
+
 type PostAPIV1DataCompactResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
@@ -22704,6 +22950,25 @@ func (a ArtifactSyncResult) Validate() error {
 }
 
 type CacheStats = service.CacheStats
+
+type CodexcloudHomeStatus struct {
+	Found         *int64     `json:"found,omitempty"`
+	Homes         []string   `json:"homes" validate:"required"`
+	Imported      *int64     `json:"imported,omitempty"`
+	Key           string     `json:"key" validate:"required"`
+	LastSuccess   *time.Time `json:"last_success,omitempty"`
+	Live          *string    `json:"live,omitempty"`
+	Message       *string    `json:"message,omitempty"`
+	OldestFailure *time.Time `json:"oldest_failure,omitempty"`
+	PlanUsage     *string    `json:"plan_usage,omitempty"`
+	RetryCount    *int64     `json:"retry_count,omitempty"`
+	State         string     `json:"state" validate:"required"`
+	Total         *int64     `json:"total,omitempty"`
+}
+
+func (c CodexcloudHomeStatus) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(c))
+}
 
 type Comparison struct {
 	DeltaPct       float64    `json:"deltaPct"`

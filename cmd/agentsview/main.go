@@ -21,6 +21,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
@@ -530,7 +531,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		pricingRefreshRunner = engine
 	}
 	seedPricing(database, pricingRefreshRunner)
-	scheduler := poller.Start(ctx, pricingRefreshJob(database, pricingRefreshRunner))
+	codexCloudStatus := codexcloud.NewStatusBoard()
+	scheduler := poller.Start(ctx,
+		pricingRefreshJob(database, pricingRefreshRunner),
+		codexCloudSyncJob(newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)),
+	)
 	defer func() {
 		stop()
 		scheduler.Wait()
@@ -546,6 +551,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	rtOpts.BasePath = opts.BasePath
 
 	srvOpts := []server.Option{
+		server.WithCodexCloudStatus(codexCloudStatus),
 		server.WithVersion(server.VersionInfo{
 			Version:   version,
 			Commit:    commit,
