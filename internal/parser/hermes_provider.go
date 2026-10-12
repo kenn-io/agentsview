@@ -1178,10 +1178,11 @@ func (s hermesSourceSet) FindSource(
 		return SourceRef{}, false, err
 	}
 	roots, expandErr := s.expandedRoots()
-	// Not-found is only authoritative when every profiles container
-	// expanded; otherwise return the expansion failure so callers retry
-	// instead of treating the source as gone.
+	var lookupErr error
 	notFound := func() (SourceRef, bool, error) {
+		if lookupErr != nil {
+			return SourceRef{}, false, lookupErr
+		}
 		if expandErr != nil {
 			return SourceRef{}, false, incompleteProfileExpansionError(expandErr)
 		}
@@ -1192,8 +1193,26 @@ func (s hermesSourceSet) FindSource(
 			continue
 		}
 		for _, root := range roots {
-			if source, ok := s.sourceForPath(root, path); ok {
+			source, ok := s.sourceRef(root, path)
+			if !ok {
+				source, ok = s.sourceForPath(root, path)
+			}
+			if !ok {
+				continue
+			}
+			src := source.Opaque.(hermesSource)
+			if src.SessionID == "" {
 				return source, true, nil
+			}
+			resolved, found, err := s.findReadableMemberSource(ctx, source)
+			if ctx.Err() != nil {
+				return SourceRef{}, false, ctx.Err()
+			}
+			if found {
+				return resolved, true, nil
+			}
+			if lookupErr == nil {
+				lookupErr = err
 			}
 		}
 	}
@@ -1203,20 +1222,17 @@ func (s hermesSourceSet) FindSource(
 	for _, root := range roots {
 		if stateDB, _, ok := hermesStatePaths(root); ok &&
 			IsValidSessionID(req.RawSessionID) {
-			found, err := hermesStateDBHasSession(ctx, stateDB, req.RawSessionID)
-			switch {
-			case err != nil:
-				// Mirror parseArchive: an unreadable or schema-incompatible
-				// state.db falls back to transcripts rather than aborting the
-				// lookup, so a valid transcript session next to a bad state.db
-				// stays resolvable for resync.
-				log.Printf(
-					"hermes: state db lookup failed for %s: %v; "+
-						"falling back to transcripts", stateDB, err,
-				)
-			case !found:
-			default:
-				return s.stateMemberSourceRef(root, stateDB, req.RawSessionID), true, nil
+			source, found, err := s.findReadableMemberSource(ctx,
+				s.stateMemberSourceRef(root, stateDB, req.RawSessionID),
+			)
+			if ctx.Err() != nil {
+				return SourceRef{}, false, ctx.Err()
+			}
+			if found {
+				return source, true, nil
+			}
+			if lookupErr == nil {
+				lookupErr = err
 			}
 		}
 		transcriptRoot := hermesTranscriptRoot(root)
@@ -1229,6 +1245,30 @@ func (s hermesSourceSet) FindSource(
 		}
 	}
 	return notFound()
+}
+
+func (s hermesSourceSet) findReadableMemberSource(
+	ctx context.Context, source SourceRef,
+) (SourceRef, bool, error) {
+	src := source.Opaque.(hermesSource)
+	src.FingerprintSingleMember = true
+	source.Opaque = src
+	fingerprint, err := s.Fingerprint(ctx, source)
+	if ctx.Err() != nil {
+		return SourceRef{}, false, ctx.Err()
+	}
+	if err == nil && fingerprint.Hash != "" {
+		return source, true, nil
+	}
+	transcript := findHermesSourceFile(filepath.Join(filepath.Dir(src.StateDB), "sessions"), src.SessionID)
+	if transcript == "" || !IsRegularFile(transcript) {
+		return SourceRef{}, false, err
+	}
+	if err != nil {
+		log.Printf("hermes: state member lookup failed for %s: %v; falling back to %s", src.Path, err, transcript)
+	}
+	fallback, found := s.sourceRef(src.Root, transcript)
+	return fallback, found, nil
 }
 
 type hermesStateLookupError struct {

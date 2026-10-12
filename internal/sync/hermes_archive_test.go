@@ -1666,3 +1666,63 @@ func TestHermesUnreadableStateMembersUseTranscriptFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestHermesSingleSessionResyncUsesTranscriptAfterDatabaseFailure(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, damage := range []string{"malformed database", "session IDs only", "messages unavailable"} {
+			t.Run(string(agent)+"/"+damage, func(t *testing.T) {
+				root := t.TempDir()
+				stateDB := writeHermesArchiveStateDB(t, root)
+				dir := filepath.Join(root, "sessions")
+				writeHermesTranscriptFile(t, dir, "sibling")
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+				})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":child"
+				require.Equal(t, parser.VirtualSourcePath(stateDB, "child"), database.GetSessionFilePath(t.Context(), id))
+				siblingID := string(agent) + ":sibling"
+				before, err := database.GetSessionFull(t.Context(), siblingID)
+				require.NoError(t, err)
+				require.NotNil(t, before)
+				seedDB := writeHermesArchiveStateDB(t, t.TempDir())
+				require.NoError(t, os.Remove(stateDB))
+				if damage == "malformed database" {
+					require.NoError(t, os.WriteFile(stateDB, []byte("not a sqlite database"), 0o600))
+				} else {
+					conn, openErr := sql.Open("sqlite3", stateDB)
+					require.NoError(t, openErr)
+					if damage == "session IDs only" {
+						_, err = conn.ExecContext(t.Context(), "CREATE TABLE sessions (id TEXT PRIMARY KEY); INSERT INTO sessions VALUES ('child')")
+					} else {
+						_, err = conn.ExecContext(t.Context(), "ATTACH DATABASE ? AS seed; CREATE TABLE sessions AS SELECT * FROM seed.sessions", seedDB)
+					}
+					require.NoError(t, err)
+					require.NoError(t, conn.Close())
+				}
+				writeHermesTranscriptFile(t, dir, "child")
+				writeHermesTranscriptFile(t, dir, "unrequested")
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "sibling.jsonl"), []byte(
+					`{"role":"user","content":"unsynced sibling edit","timestamp":"2026-05-14T10:01:00Z"}`+"\n",
+				), 0o600))
+				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), id))
+				messages, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				contents := make([]string, len(messages))
+				for i, message := range messages {
+					contents[i] = message.Content
+				}
+				assert.Equal(t, []string{"hello", "Done."}, contents)
+				assert.Equal(t, filepath.Join(dir, "child.jsonl"), database.GetSessionFilePath(t.Context(), id))
+				after, err := database.GetSessionFull(t.Context(), siblingID)
+				require.NoError(t, err)
+				assert.Equal(t, before, after, "single-session resync must leave siblings untouched")
+				unrequested, err := database.GetSession(t.Context(), string(agent)+":unrequested")
+				require.NoError(t, err)
+				assert.Nil(t, unrequested)
+			})
+		}
+	}
+}

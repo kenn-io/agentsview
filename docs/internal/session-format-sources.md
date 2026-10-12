@@ -3228,10 +3228,13 @@ schemas keep their existing ordering behavior.
   content cannot be read. The pinned schema requires session metadata and
   message columns as well as IDs; an ID query alone does not establish that
   a member can be imported. Discovery remains incomplete after database read
-  failures. Empty or entirely malformed standalone transcripts preserve
-  archived history. Existing archive-level paths migrate
-  during ordinary sync; historical sessions remain in SQLite when their
-  source disappears. Augure Desktop uses the same member selection.
+  failures. Single-session lookup validates stored member paths and selects
+  the preferred transcript when a member cannot be read. Processing keeps
+  that transcript selection, so resync does not import sibling sessions.
+  Empty or entirely malformed standalone transcripts preserve archived
+  history. Existing archive-level paths migrate during ordinary sync;
+  historical sessions remain in SQLite when their source disappears. Augure
+  Desktop uses the same member selection.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it
