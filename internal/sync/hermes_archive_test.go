@@ -1793,23 +1793,36 @@ func TestHermesTranscriptOnlySnapshotEventPrefersJSONL(t *testing.T) {
 
 func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
-		for _, mode := range []string{"full sync", "state event", "transcript event", "single session"} {
-			for _, damage := range []string{"malformed middle", "truncated tail", "oversized"} {
+		for _, mode := range []string{"full sync", "state event", "transcript event", "single session", "full resync"} {
+			for _, damage := range []string{"malformed middle", "truncated tail", "oversized", "empty", "removed", "malformed JSON snapshot", "truncated JSON snapshot", "removed rich single message"} {
 				if damage == "oversized" && mode != "full sync" {
 					continue
 				}
 				t.Run(string(agent)+"/"+mode+"/"+damage, func(t *testing.T) {
 					root := t.TempDir()
 					stateDB := writeHermesArchiveStateDB(t, root)
+					conn, err := sql.Open("sqlite3", stateDB)
+					require.NoError(t, err)
+					_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET input_tokens = 100, output_tokens = 73")
+					require.NoError(t, err)
+					require.NoError(t, conn.Close())
 					dir := filepath.Join(root, "sessions")
 					writeHermesTranscriptFile(t, dir, "child")
 					path := filepath.Join(dir, "child.jsonl")
+					if damage == "removed rich single message" {
+						require.NoError(t, os.WriteFile(path, []byte(`{"role":"user","content":"long original response from the transcript"}`+"\n"), 0o600))
+					}
 					database := dbtest.OpenTestDB(t)
 					engine := NewEngine(t.Context(), database, EngineConfig{
 						AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
 					})
 					t.Cleanup(engine.Close)
 					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					if damage == "malformed JSON snapshot" || damage == "truncated JSON snapshot" {
+						snapshot := filepath.Join(dir, "session_child.json")
+						require.NoError(t, os.WriteFile(snapshot, []byte(`{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"Done."},{"role":"user","content":"follow-up"}]}`), 0o600))
+						require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					}
 					id := string(agent) + ":child"
 					before, err := database.GetAllMessages(t.Context(), id)
 					require.NoError(t, err)
@@ -1817,17 +1830,39 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 					for i, message := range before {
 						contents[i] = message.Content
 					}
-					require.Equal(t, []string{"hello", "Done."}, contents)
+					want := []string{"hello", "Done."}
+					if damage == "removed rich single message" {
+						want = []string{"long original response from the transcript"}
+					}
+					if damage == "malformed JSON snapshot" || damage == "truncated JSON snapshot" {
+						want = append(want, "follow-up")
+					}
+					require.Equal(t, want, contents)
+					usageBefore, getErr := database.GetUsageEvents(t.Context(), id)
+					require.NoError(t, getErr)
+					require.Len(t, usageBefore, 1)
 					content := `{"role":"user","content":"changed"}` + "\n"
 					switch damage {
 					case "malformed middle":
 						content += "invalid JSON\n" + `{"role":"assistant","content":"shorter"}` + "\n"
 					case "oversized":
 						content += strings.Repeat("x", 64*1024*1024+1) + "\n"
+					case "empty", "removed", "removed rich single message":
+						content = ""
+					case "truncated JSON snapshot":
+						content = `{"messages":[{"role":"user","content":"shorter"}]`
+						path = filepath.Join(dir, "session_child.json")
+					case "malformed JSON snapshot":
+						content = "invalid JSON"
+						path = filepath.Join(dir, "session_child.json")
 					default:
 						content += `{"role":"assistant","content":`
 					}
-					require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+					if damage == "removed" || damage == "removed rich single message" {
+						require.NoError(t, os.Remove(path))
+					} else {
+						require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+					}
 					switch mode {
 					case "full sync":
 						engine.SyncAll(t.Context(), nil)
@@ -1835,6 +1870,8 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 						_ = engine.syncPathsContext(t.Context(), []string{stateDB}, false)
 					case "transcript event":
 						_ = engine.syncPathsContext(t.Context(), []string{path}, false)
+					case "full resync":
+						engine.ResyncAll(t.Context(), nil)
 					case "single session":
 						_ = engine.SyncSingleSessionContext(t.Context(), id)
 					}
@@ -1842,7 +1879,13 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 						after, getErr := database.GetAllMessages(t.Context(), id)
 						require.NoError(t, getErr)
 						assert.Equal(t, before, after)
+						usageAfter, getErr := database.GetUsageEvents(t.Context(), id)
+						require.NoError(t, getErr)
+						assert.Equal(t, usageBefore, usageAfter)
 						engine.SyncAll(t.Context(), nil)
+					}
+					if damage == "malformed JSON snapshot" || damage == "truncated JSON snapshot" {
+						require.NoError(t, os.Remove(filepath.Join(dir, "session_child.json")))
 					}
 					writeHermesTranscriptFile(t, dir, "child")
 					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
@@ -1854,7 +1897,7 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 
 func TestHermesRemovedJSONLPreservesHistoryAgainstSnapshot(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
-		for _, mode := range []string{"full sync", "removal event"} {
+		for _, mode := range []string{"full sync", "removal event", "full resync"} {
 			t.Run(string(agent)+"/"+mode, func(t *testing.T) {
 				root := t.TempDir()
 				writeHermesTranscriptFile(t, root, "standalone")
@@ -1874,6 +1917,8 @@ func TestHermesRemovedJSONLPreservesHistoryAgainstSnapshot(t *testing.T) {
 				t.Cleanup(engine.Close)
 				if mode == "full sync" {
 					engine.SyncAll(t.Context(), nil)
+				} else if mode == "full resync" {
+					engine.ResyncAll(t.Context(), nil)
 				} else {
 					_ = engine.syncPathsContext(t.Context(), []string{path}, false)
 				}

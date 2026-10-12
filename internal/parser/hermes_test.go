@@ -333,7 +333,7 @@ func TestParseHermesArchiveOpenStateSessionEndsAtLatestMessage(t *testing.T) {
 	// branch runs.
 	assert.Equal(t, "hermes:open1", cont.Session.ParentSessionID)
 	assert.Equal(t, RelContinuation, cont.Session.RelationshipType)
-	assert.Equal(t, "hermes-state-db", cont.Session.SourceVersion)
+	assert.Equal(t, "hermes-state-v1", cont.Session.SourceVersion)
 	assert.False(t, cont.Session.EndedAt.IsZero())
 }
 
@@ -380,7 +380,7 @@ func TestParseHermesArchiveReconcilesTranscriptAndStateEndedAt(t *testing.T) {
 
 			res := results[0]
 			assert.Equal(t, "hermes:trans1", res.Session.ID)
-			assert.Equal(t, "hermes-state-db", res.Session.SourceVersion)
+			assert.Equal(t, "hermes-json-v1", res.Session.SourceVersion)
 			require.Len(t, res.Messages, 2)
 			assert.Equal(t, "hello from transcript", res.Messages[0].Content)
 			assert.Equal(t, tt.wantEndedAt, res.Session.EndedAt.Format(time.RFC3339Nano))
@@ -507,7 +507,7 @@ func TestParseHermesArchive_StateDBMetadataUsageAndTranscriptChoice(
 	assert.Equal(t, "Child Session", res.Session.SessionName)
 	assert.Equal(t, "hermes-discord", res.Session.Project)
 	assert.Equal(t, "child", res.Session.SourceSessionID)
-	assert.Equal(t, "hermes-state-db", res.Session.SourceVersion)
+	assert.Equal(t, "hermes-json-v1", res.Session.SourceVersion)
 	require.Len(t, res.Messages, 2)
 	assert.Equal(t, "hello from transcript", res.Messages[0].Content)
 	require.Len(t, res.UsageEvents, 1)
@@ -890,7 +890,7 @@ func TestParseHermesArchive_UsesStateMessagesWhenJSONLIsLowerQuality(
 	res := results[0]
 	require.Len(t, res.Messages, 1)
 	assert.Equal(t, "state db only has one message", res.Messages[0].Content)
-	assert.Equal(t, "hermes-state-db", res.Session.SourceVersion)
+	assert.Equal(t, "hermes-state-v1", res.Session.SourceVersion)
 }
 
 func TestParseHermesArchiveIncludesTranscriptsMissingFromStateDB(
@@ -2205,4 +2205,17 @@ func TestHermesCronRecordedNames(t *testing.T) {
 	} {
 		t.Run(tc.title, func(t *testing.T) { assert.Equal(t, tc.want, HermesCronJobName("job-a", tc.title)) })
 	}
+}
+
+func TestWriteHermesSessionJSONLReadableSnapshotIgnoresMalformedAlternate(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	dir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	content := `{"messages":[{"role":"user","content":"readable prompt"},{"role":"assistant","content":"readable answer"}]}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session_child.json"), []byte(content), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "child.jsonl"), []byte("invalid JSON\n"), 0o600))
+	var output strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(), &output, filepath.Join(root, "state.db"), []string{root}, "child"))
+	assert.JSONEq(t, content, output.String())
 }

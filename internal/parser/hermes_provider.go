@@ -582,7 +582,7 @@ func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 					stateDB, stateErr,
 				)
 				appendDiscoveryErr(stateErr)
-				if !yieldedAny {
+				if _, transcriptErr := errors.AsType[hermesTranscriptValidationError](stateErr); !yieldedAny && !transcriptErr {
 					stateDB = ""
 				}
 			}
@@ -698,7 +698,11 @@ func (s hermesSourceSet) discoverTranscriptEach(
 				lookupErr = err
 				if found && err == nil {
 					_, lookupErr = s.Fingerprint(ctx, s.stateMemberSourceRef(root, stateDB, id))
-					if lookupErr == nil {
+					_, transcriptErr := errors.AsType[hermesTranscriptValidationError](lookupErr)
+					if transcriptErr && lookupErrors == nil {
+						lookupErrors = lookupErr
+					}
+					if lookupErr == nil || transcriptErr {
 						return nil
 					}
 				}
@@ -1150,6 +1154,9 @@ func (s hermesSourceSet) changedPathSources(
 				if readErr == nil {
 					return []SourceRef{source}, nil
 				}
+				if _, transcriptErr := errors.AsType[hermesTranscriptValidationError](readErr); transcriptErr {
+					return nil, readErr
+				}
 				lookupErr = incompleteDiscoveryError(s.agent, "read transcript membership", readErr)
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
@@ -1219,6 +1226,9 @@ func (s hermesSourceSet) FindSource(
 			if ctx.Err() != nil {
 				return SourceRef{}, false, ctx.Err()
 			}
+			if _, transcriptErr := errors.AsType[hermesTranscriptValidationError](err); transcriptErr {
+				return SourceRef{}, false, err
+			}
 			if found {
 				return resolved, true, nil
 			}
@@ -1238,6 +1248,9 @@ func (s hermesSourceSet) FindSource(
 			)
 			if ctx.Err() != nil {
 				return SourceRef{}, false, ctx.Err()
+			}
+			if _, transcriptErr := errors.AsType[hermesTranscriptValidationError](err); transcriptErr {
+				return SourceRef{}, false, err
 			}
 			if found {
 				return source, true, nil
@@ -1271,6 +1284,9 @@ func (s hermesSourceSet) findReadableMemberSource(
 	if err == nil && fingerprint.Hash != "" {
 		return source, true, nil
 	}
+	if _, transcriptErr := errors.AsType[hermesTranscriptValidationError](err); transcriptErr {
+		return SourceRef{}, false, err
+	}
 	transcript := findHermesSourceFile(filepath.Join(filepath.Dir(src.StateDB), "sessions"), src.SessionID)
 	if transcript == "" || !IsRegularFile(transcript) {
 		return SourceRef{}, false, err
@@ -1280,6 +1296,18 @@ func (s hermesSourceSet) findReadableMemberSource(
 	}
 	fallback, found := s.sourceRef(src.Root, transcript)
 	return fallback, found, nil
+}
+
+type hermesTranscriptValidationError struct {
+	err error
+}
+
+func (e hermesTranscriptValidationError) Error() string {
+	return e.err.Error()
+}
+
+func (e hermesTranscriptValidationError) Unwrap() error {
+	return e.err
 }
 
 type hermesStateLookupError struct {
@@ -1708,7 +1736,7 @@ func hermesStateMemberFingerprint(
 	}
 	defer conn.Close()
 	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(ctx,
-		conn, src.StateDB, src.SessionID,
+		conn, src.StateDB, src.SessionID, hermesSourceReplacement,
 	)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1838,7 +1866,7 @@ func cacheHermesMemberCore(
 	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey string,
 ) error {
 	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(ctx,
-		conn, stateDB, id,
+		conn, stateDB, id, hermesSourceReplacement,
 	)
 	if err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
@@ -1907,7 +1935,7 @@ func addHermesStateSessionFingerprint(
 	}
 	if _, err := fmt.Fprintf(
 		h,
-		"state-member\x00%q\x00%q\x00%q\x00%q\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%t\x00%g\x00%t\x00%g\x00%q\x00%q\x00%q\x00%d\x00",
+		"state-member-source-v1\x00%q\x00%q\x00%q\x00%q\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%t\x00%g\x00%t\x00%g\x00%q\x00%q\x00%q\x00%d\x00",
 		ss.id,
 		ss.source,
 		ss.model,

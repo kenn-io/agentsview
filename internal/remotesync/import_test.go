@@ -908,3 +908,33 @@ func TestRemoteSkipCacheRoundTripsQualifiedExtraFile(t *testing.T) {
 	assert.Equal(t, map[string]int64{qualified: 123}, remoteCache,
 		"temporary translation must restore the identical remote cache key")
 }
+
+func TestImporterPreservesWindowsHermesJSONLAgainstSnapshotFallback(t *testing.T) {
+	for _, remoteDir := range []string{`C:\Users\remote\.hermes\sessions`, `\\server\share\.hermes\sessions`} {
+		t.Run(remoteDir, func(t *testing.T) {
+			database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			extracted := t.TempDir()
+			localDir := remappedRemotePath(extracted, remoteDir)
+			require.NoError(t, os.MkdirAll(localDir, 0o755))
+			jsonl := filepath.Join(localDir, "child.jsonl")
+			require.NoError(t, os.WriteFile(jsonl, []byte(`{"role":"user","content":"current prompt"}`+"\n"+`{"role":"assistant","content":"current answer"}`+"\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(localDir, "session_child.json"), []byte(`{"messages":[{"role":"user","content":"stale prompt"}]}`), 0o600))
+			targets := TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentHermes: {remoteDir}}}
+			importer := Importer{Host: "devbox", DB: database}
+			_, err = importer.ImportExtracted(t.Context(), targets, extracted)
+			require.NoError(t, err)
+			id := "devbox~hermes:child"
+			before, err := database.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, before, 2)
+			require.NoError(t, os.Remove(jsonl))
+			_, _ = importer.ImportExtracted(t.Context(), targets, extracted)
+			after, err := database.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			assert.Equal(t, "devbox:"+remoteDir+`\child.jsonl`, database.GetSessionFilePath(t.Context(), id))
+		})
+	}
+}

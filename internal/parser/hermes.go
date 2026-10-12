@@ -25,6 +25,9 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+// HermesStateSourceVersion identifies conversations decoded from state.db.
+const HermesStateSourceVersion = "hermes-state-v1"
+
 const hermesIDPrefix = string(AgentHermes) + ":"
 
 var hermesCronSessionID = regexp.MustCompile(`^cron_([A-Za-z0-9][A-Za-z0-9._-]*)_\d{8}_\d{6}$`)
@@ -378,6 +381,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
+		SourceVersion:              "hermes-jsonl-v1",
 		FirstMessage:               firstMsg,
 		StartedAt:                  startedAt,
 		EndedAt:                    endedAt,
@@ -407,7 +411,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 	}
 
 	root := gjson.ParseBytes(data)
-	if !root.IsObject() {
+	if !gjson.ValidBytes(data) || !root.IsObject() {
 		return nil, nil, fmt.Errorf("invalid JSON in %s", path)
 	}
 
@@ -569,6 +573,7 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 		projectSynthesizedByHermes: projectSynthesized,
 		Machine:                    machine,
 		Agent:                      AgentHermes,
+		SourceVersion:              "hermes-json-v1",
 		FirstMessage:               firstMsg,
 		StartedAt:                  startedAt,
 		EndedAt:                    endedAt,
@@ -862,14 +867,14 @@ func readHermesStateSessionSource(ctx context.Context,
 		}
 	}
 	defer conn.Close()
-	return readHermesStateSessionSourceConn(ctx, conn, stateDB, rawSessionID)
+	return readHermesStateSessionSourceConn(ctx, conn, stateDB, rawSessionID, hermesSourceExport)
 }
 
 // readHermesStateSessionSourceConn is readHermesStateSessionSource on an
 // already-open connection, so per-pass callers can reuse one state.db open
 // across every member instead of opening the database per session.
 func readHermesStateSessionSourceConn(ctx context.Context,
-	conn *sql.DB, stateDB, rawSessionID string,
+	conn *sql.DB, stateDB, rawSessionID string, purpose hermesSourcePurpose,
 ) (hermesStateSession, []hermesStateMessage, string, error) {
 	ss, found, err := readHermesStateSession(ctx, conn, rawSessionID)
 	if err != nil {
@@ -892,6 +897,7 @@ func readHermesStateSessionSourceConn(ctx context.Context,
 		stateDB,
 		"",
 		"",
+		purpose,
 	)
 	if err != nil {
 		return hermesStateSession{}, nil, "", err
@@ -977,7 +983,7 @@ func buildHermesStateResult(
 	sessionsDir, stateDB, project, machine string,
 ) (ParseResult, bool, error) {
 	selectedPath, sess, msgs, err := chooseHermesStateSessionSource(
-		ss, stateMessages, sessionsDir, stateDB, project, machine,
+		ss, stateMessages, sessionsDir, stateDB, project, machine, hermesSourceReplacement,
 	)
 	if err != nil {
 		return ParseResult{}, false, err
@@ -991,6 +997,7 @@ func buildHermesStateResult(
 		sess = &ParsedSession{
 			ID:               "hermes:" + ss.id,
 			Agent:            AgentHermes,
+			SourceVersion:    HermesStateSourceVersion,
 			Machine:          machine,
 			StartedAt:        ss.startedAt,
 			EndedAt:          ss.endedAt,
@@ -1008,17 +1015,29 @@ func buildHermesStateResult(
 			sess.EndedAt = latest
 		}
 	}
+	policy := ContentReplaceComplete
+	if selectedPath == stateDB {
+		policy = ContentPreserveRicherArchive
+	}
 	return ParseResult{
-		Session:     *sess,
-		Messages:    msgs,
-		UsageEvents: usageEvents,
+		Session:            *sess,
+		Messages:           msgs,
+		UsageEvents:        usageEvents,
+		ContentReplacement: policy,
 	}, true, nil
 }
+
+type hermesSourcePurpose uint8
+
+const (
+	hermesSourceReplacement hermesSourcePurpose = iota
+	hermesSourceExport
+)
 
 func chooseHermesStateSessionSource(
 	ss hermesStateSession,
 	stateMessages []hermesStateMessage,
-	sessionsDir, stateDB, project, machine string,
+	sessionsDir, stateDB, project, machine string, purpose hermesSourcePurpose,
 ) (selectedPath string, sess *ParsedSession, msgs []ParsedMessage, err error) {
 	jsonPath := filepath.Join(sessionsDir, "session_"+ss.id+".json")
 	jsonlPath := filepath.Join(sessionsDir, ss.id+".jsonl")
@@ -1028,11 +1047,15 @@ func chooseHermesStateSessionSource(
 	if IsRegularFile(jsonPath) {
 		jsonSession, jsonMessages, jsonErr = parseHermesJSONSession(jsonPath, project, machine)
 	}
+	if purpose == hermesSourceExport && jsonErr == nil && jsonSession != nil &&
+		hermesMessageQuality(jsonMessages) >= hermesStateQuality(stateMessages) {
+		return jsonPath, jsonSession, jsonMessages, nil
+	}
 	if IsRegularFile(jsonlPath) {
 		jsonlSession, jsonlMessages, jsonlErr = parseHermesJSONLSession(jsonlPath, project, machine)
 	}
-	if err := errors.Join(jsonErr, jsonlErr); err != nil {
-		return "", nil, nil, err
+	if err := errors.Join(jsonErr, jsonlErr); err != nil && purpose == hermesSourceReplacement {
+		return "", nil, nil, hermesTranscriptValidationError{err: err}
 	}
 	if jsonSession != nil && hermesMessageQuality(jsonMessages) >= hermesStateQuality(stateMessages) {
 		return jsonPath, jsonSession, jsonMessages, nil
@@ -1070,7 +1093,6 @@ func applyHermesStateMetadata(
 	}
 	setHermesCronGroup(sess, ss.source, ss.cronJob)
 	sess.SourceSessionID = ss.id
-	sess.SourceVersion = "hermes-state-db"
 	sess.SessionName = ss.title
 
 	// Populate the session-aggregate token columns from Hermes's own

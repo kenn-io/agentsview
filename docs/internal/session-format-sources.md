@@ -3231,18 +3231,29 @@ schemas keep their existing ordering behavior.
   failures. Single-session lookup validates stored member paths and selects
   the preferred transcript when a member cannot be read. Processing keeps
   that transcript selection, so resync does not import sibling sessions.
-  Empty standalone transcripts preserve archived history. Malformed or
-  oversized JSONL records reject the parse, preserve archived content and
-  remain retryable. State-member fingerprinting and parsing propagate those
-  errors, so damaged transcripts cannot select a shorter database fallback.
-  Transcript-only watcher events also prefer JSONL over
-  JSON snapshots. After a preferred standalone JSONL disappears, a JSON
-  snapshot cannot replace its archived history. Complete edits to an
-  existing JSON snapshot remain replaceable. Discovery, member fingerprints
-  and lookups accept dotted cron job IDs from the documented producer
-  format. Existing archive-level paths migrate during ordinary sync;
-  historical sessions remain in SQLite when their source disappears. Augure
-  Desktop uses the same member selection.
+  Empty standalone transcripts preserve archived history. Malformed or oversized
+  JSONL records reject the parse, preserve archived content and remain
+  retryable. State-member fingerprinting and parsing propagate those errors, so
+  damaged transcripts cannot select a shorter database fallback. Transcript
+  validation failures remain distinct from database read failures during
+  discovery, changed-path resolution and single-session lookup. Raw export
+  selects readable source data separately from replacement validation.
+  Transcript-only watcher events also prefer JSONL over JSON snapshots. After a
+  preferred standalone JSONL disappears, a JSON snapshot cannot replace its
+  archived history, including during full rebuilds and imports with Windows or
+  UNC paths. State-database fallback also preserves richer archived messages
+  when a selected transcript has disappeared or become empty. The comparison
+  includes message count, text, thinking and tool-use information. Complete
+  edits to an existing JSON snapshot remain replaceable. Agentsview records the
+  selected encoding in `source_version` as `hermes-state-v1`, `hermes-json-v1`
+  or `hermes-jsonl-v1`. These are Agentsview format labels. A fingerprint
+  generation marker makes existing members reparse once to record the label.
+  Database-only sessions keep accepting complete edits. Discovery, member
+  fingerprints and lookups accept dotted cron job IDs from the documented
+  producer format. Remote path and skip-cache translation preserve the physical
+  database identity and virtual member suffix separately. Existing archive-level
+  paths migrate during ordinary sync; historical sessions remain in SQLite when
+  their source disappears. Augure Desktop uses the same member selection.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it
@@ -3257,7 +3268,8 @@ schemas keep their existing ordering behavior.
   job name. Agentsview treats that generated title as unnamed and stores
   `group_key` as the job ID plus a hash of the source home path. Usage groups
   by project, machine, home and job ID. The pinned recognizer's legacy `job-1`
-  example and dotted job IDs were reverified on 2026-10-12. `TestHermesCronGroupsScopeHomes`
+  example and dotted job IDs were reverified on 2026-10-12.
+  `TestHermesCronGroupsScopeHomes`
   verifies that rewritten Windows paths keep distinct homes separate by
   accepting both path separators. Names derive from the recorded
   `session_name` at read time; usage-only archives show job IDs because their

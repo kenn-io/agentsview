@@ -1864,11 +1864,20 @@ func (s *ParsedSession) TokenCoverageContext(
 	return hasTotal, hasPeak, ctx.Err()
 }
 
+// ContentReplacementPolicy controls whether a complete parse may replace richer archived content.
+type ContentReplacementPolicy uint8
+
+const (
+	ContentReplaceComplete ContentReplacementPolicy = iota
+	ContentPreserveRicherArchive
+)
+
 // ParseResult pairs a parsed session with its messages.
 type ParseResult struct {
-	Session     ParsedSession
-	Messages    []ParsedMessage
-	UsageEvents []ParsedUsageEvent
+	Session            ParsedSession
+	Messages           []ParsedMessage
+	UsageEvents        []ParsedUsageEvent
+	ContentReplacement ContentReplacementPolicy
 	// Checkpoint is opaque provider continuation state (a parser
 	// checkpoint) that the sync engine persists after this result's
 	// session rows commit, so later appends can resume without rescanning
