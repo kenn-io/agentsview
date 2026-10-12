@@ -68,6 +68,10 @@ Second probe, 2026-10-12, with AgentsView's own `User-Agent` and `originator`:
 
 - The server accepted AgentsView's identity. AgentsView never presents itself as
   the desktop app.
+- `thread/read` and `thread/turns/list` (with `limit`) also answered. Turn
+  records carry `id`, `status`, `startedAt`, `completedAt`, `durationMs`,
+  `error`, `items`, and `itemsView`. The `itemsView` request parameter was not
+  sent in the probes.
 - 33 active and 3 archived threads. Listing with every source kind returned no
   extra threads, so the dot's own conversation is not on this server.
 - One dot thread had 7 turns and 845 items: 384 reasoning, 357 shell commands,
@@ -76,8 +80,8 @@ Second probe, 2026-10-12, with AgentsView's own `User-Agent` and `originator`:
 
 Usage checks, 2026-10-12, on a personal Pro account whose owner ran them:
 
-- The durable host rejects `account/usage/read` ("unsupported app-server
-  method").
+- The durable host rejects `account/usage/read` with JSON-RPC error `-32601` and
+  the message "unsupported app-server method: account/usage/read".
 - `POST https://chatgpt.com/backend-api/wham/usage/thread_usage/query`, the
   endpoint a local Codex app-server calls for that method, is the only one
   found whose response has per-thread token counts and US dollar estimates. It
@@ -121,8 +125,9 @@ Live token checks, 2026-10-12, run by the account owner:
   `cachedInputTokens`, `cacheWriteInputTokens`, `outputTokens`,
   `reasoningOutputTokens`, and `totalTokens`, plus `modelContextWindow` and
   `turnId`. The dot sent no requests to AgentsView and kept working.
-- `thread/unsubscribe` is unsupported on the durable host. Closing the
-  connection leaves the thread.
+- `thread/unsubscribe` is unsupported on the durable host (`-32601`,
+  "unsupported app-server method: thread/unsubscribe"). Closing the connection
+  leaves the thread.
 - `thread/resume` on a stopped, unarchived dot thread (all turns completed)
   returned `resumeKind: "cold"`. It started no turn and no new environment
   (the environment ID was unchanged), and the thread's status, `updatedAt`,
@@ -130,8 +135,8 @@ Live token checks, 2026-10-12, run by the account owner:
   server-side process, which started every MCP server configured for the dot
   (seven ready, seven failed to start) and sent one warning. It sent no token
   totals, with or without turns requested.
-- On an archived thread, `thread/resume` failed with `environment_terminated`
-  and changed nothing.
+- On an archived thread, `thread/resume` failed with JSON-RPC error `-32600`
+  whose `data.errorType` is `environment_terminated`, and changed nothing.
 - The listing's `status` can be stale: a thread listed as `idle` had a turn in
   progress and kept adding items.
 - Saved items lag the live work: during a running turn, `thread/items/list` did
@@ -288,10 +293,11 @@ running threads --(live token monitor)--> token usage records in the same mirror
   Codex home does not save its ChatGPT login, so AgentsView cannot use it."
   instead.
 - At the start of each fetch, and before each live-capture connection, read
-  `tokens.access_token` and `tokens.account_id` from that home's `auth.json`.
-  Hold the token in memory only until that fetch ends or that connection's
-  handshake completes; a joined connection does not keep it. Sync errors name
-  the Codex home they affect, never the token.
+  `tokens.access_token`, `tokens.account_id`, and `tokens.id_token` from that
+  home's `auth.json`; the ID token follows the same in-memory-only rule as the
+  access token. Hold the token in memory only until that fetch ends or that
+  connection's handshake completes; a joined connection does not keep it. Sync
+  errors name the Codex home they affect, never the token.
 - Never refresh. A missing token or HTTP 401 is a signed-out error that tells
   the user to run `codex login`. HTTP 403 is an access-denied error: OpenAI
   refused the request, and `codex login` is not offered as the fix because a
@@ -333,6 +339,45 @@ scheduled run, so a wait shorter than the job's interval ends at the next run.
 - A successful request resets that account's wait.
 
 Per-thread failures use the retry set under Incremental sync.
+
+### JSON-RPC errors
+
+The durable host is not open source, so the rules use what the probes saw
+(Background) plus the open-source app-server (`codex-rs/app-server`), which uses
+`-32600` for a request it cannot read, for an experimental field sent without
+opt-in, and for a missing thread. The code alone therefore cannot tell a
+protocol change from a missing thread; the message decides. The fetcher and the
+live token monitor apply these rules in this order:
+
+- **Thread environment ended** (`-32600` with
+  `data.errorType: "environment_terminated"`, seen from `thread/resume` on an
+  archived thread): the "error for this thread" category below, checked first
+  so its message never matters.
+- **Overloaded** (`-32001`) or **shutting down** (`-32600` with
+  `data.reason: "serverShuttingDown"`): end the pass or join for that account,
+  set the shared account wait as for HTTP 5xx, show the "OpenAI's service had
+  an error" message, and add no thread to the retry set.
+- **Protocol change:** `-32601` (the durable host answers an unsupported method
+  this way), or `-32600` whose message starts with `Invalid request:` or names
+  `experimentalApi`. The fetcher fails the account's pass with "Handshake
+  refused or reply not understood" and waits as for HTTP 403 (one hour,
+  doubling to 24 hours); the monitor stops live capture for the account with
+  the same error, as for an unknown `resumeKind`, and does not set the sync
+  job's wait; sync finds the change on its own next request.
+- **Error on an anchored item read:** any `-32602` in reply to a
+  `thread/items/list` call that used an item anchor. In the same pass, the
+  fetcher re-reads that turn in full without the anchor; the thread joins the
+  retry set only if that read also fails.
+- **Any other code** in reply to `initialize` or `thread/list`: the account's
+  pass fails with the HTTP 5xx wait and the "OpenAI's service had an error"
+  message. In reply to a per-thread request (`thread/read`,
+  `thread/turns/list`, `thread/items/list`, or the monitor's `thread/resume`):
+  the "error for this thread" category. The fetcher puts the thread in the
+  retry set; the monitor closes that connection, logs and counts it, and
+  retries on the next run if the thread is still running; discovery, for a
+  thread it has not joined, skips that thread and continues the run. This
+  covers `environment_terminated` (`-32600` with that `data.errorType`) and a
+  missing thread.
 
 ### Fetcher state
 
@@ -462,16 +507,17 @@ Each pass, for each listing separately:
    whose next-attempt time has not passed, however it was selected. A failing
    thread that stays at the top of the listing still waits out its backoff.
 1. **Fetch.** For each selected thread, first call `thread/turns/list` for the
-   turn statuses, newest first with `itemsView: notLoaded` (instead of the
-   default `summary` view), stopping at the turn that holds the resume point,
-   so the call's cost follows the turns since the resume point, not the
-   thread's length, then `thread/items/list` from the resume point, using an
-   item anchor `{type: "item", itemId}` plus its `turnId`. An item anchor
-   reads only within that turn (the protocol requires `turnId` with it), so
-   the fetcher then reads each later turn in full by its `turnId`, oldest
-   first, paging with the returned cursor. Reading turn statuses first means a
-   turn that ends between the two calls is not yet treated as ended, so the
-   items it finalizes are fetched again on the next pass.
+   turn statuses, newest first (the default order) with `itemsView: notLoaded`
+   (instead of the default `summary` view), stopping at the turn that holds
+   the resume point, so the call's cost follows the turns since the resume
+   point, not the thread's length, then `thread/items/list` from the resume
+   point, using an item anchor `{type: "item", itemId}` plus its `turnId`. An
+   item anchor reads only within that turn (the protocol requires `turnId`
+   with it), so the fetcher then reads each later turn in full by its
+   `turnId`, oldest first, paging with the returned cursor. Reading turn
+   statuses first means a turn that ends between the two calls is not yet
+   treated as ended, so the items it finalizes are fetched again on the next
+   pass.
 1. **Make it durable, then advance.** Append the fetched records to the mirror,
    fsync the file (and its directory when the file is new), and only then save
    the thread's new `updatedAt`, resume point, and mirror offset, and remove
@@ -479,15 +525,17 @@ Each pass, for each listing separately:
    skips records.
 1. **Failures.** A thread whose fetch fails joins or stays in the retry set with
    exponential backoff, capped at one hour, and the pass goes on. The latest
-   failure category (see Status and errors) is stored with it.
+   failure category (see Status and errors) is stored with it. JSON-RPC error
+   replies follow the rules under JSON-RPC errors (below Failure timing).
 1. **Deleted threads.** No probe has seen a deleted thread, so the exact reply
    is not known (see Open questions). Only that specific not-found reply
    counts as a deletion; any other error goes to the retry set. Until the
-   probe identifies the reply, nothing counts as a deletion. A deletion is
-   final: remove the thread from the retry set, clear its check-again flag and
-   any usage-pending mark, and stop fetching it, unless a later listing shows
-   it with a new `updatedAt`, which selects it again. Everything already
-   stored stays.
+   probe identifies the reply, nothing counts as a deletion: a deleted thread
+   stays in the retry set, retried at the one-hour cap, and is counted in the
+   "could not be imported" status. A deletion is final: remove the thread from
+   the retry set, clear its check-again flag and any usage-pending mark, and
+   stop fetching it, unless a later listing shows it with a new `updatedAt`,
+   which selects it again. Everything already stored stays.
 1. **Advance the listing watermark** to the newest `updatedAt` that listing
    returned, once the listing finished and every changed thread from it is
    either mirrored or recorded in the persisted retry set. A thread that keeps
@@ -611,10 +659,12 @@ records every token update, and leaves when the turn ends.
 
 **Finding running threads.**
 
-- A separate `poller.Job` runs every 30 seconds with jitter, only while every
-  live-capture gate is open (the list below). It follows
-  `docs/agents/background-work.md`. The job only finds running threads and
-  hands them to the monitor; it returns without waiting for joined threads.
+- A separate `poller.Job` runs every 30 seconds with jitter. Each run re-reads
+  the live-capture gates (the list below); when any gate is closed it tells
+  the monitor to flush and close every joined connection and finds nothing
+  new. It follows `docs/agents/background-work.md`. The job only finds running
+  threads and hands them to the monitor; it returns without waiting for joined
+  threads.
 - The monitor owns the joined connections: at most 10 per account, each with its
   own goroutine, all flushed and closed on daemon shutdown or when live
   capture turns off. Live capture is off when any gate is closed: `enabled` is
@@ -622,15 +672,20 @@ records every token update, and leaves when the turn ends.
   sync is off (below), or `[agents.codex-cloud]` has a config error. Its
   memory is bounded by that cap, not by archive size.
 - The listing's `status` can be stale, so it only narrows the search. Each run
-  lists the first page of active threads by `updated_at`, with `sourceKinds`
-  set to every source kind as sync does, and checks the newest turn
-  (`thread/turns/list`, limit 1, `itemsView: notLoaded`) of every thread that
-  is listed as `active` or whose `updatedAt` is within the past 30 minutes,
-  skipping threads the monitor has already joined. A thread is running when
-  that turn's status is `inProgress`.
-- Work per run is bounded by recent activity, not by archive size. A thread that
-  starts a turn without updating `updatedAt` or its status for more than 30
-  minutes is missed; that is a documented limit.
+  lists the non-archived listing by `updated_at`, newest first,, with
+  `sourceKinds` set to every source kind as sync does, and checks the newest
+  turn (`thread/turns/list`, limit 1, `itemsView: notLoaded`) of every thread
+  that is listed as `active` or whose `updatedAt` is within the past 30
+  minutes, skipping threads the monitor has already joined. A thread is
+  running when that turn's status is `inProgress`.
+- Work per run is bounded by recent activity, not by archive size. Discovery
+  reads further pages while the last page still holds a thread listed as
+  `active` or updated in the past 30 minutes. It also checks every thread that
+  the sync job's unfinished set records with an `inProgress` turn, except
+  threads stopped by the 24-hour stall rule, one `thread/turns/list` call
+  each, so a running thread on a later page whose listing says `idle` is still
+  found. A thread that starts a turn without updating `updatedAt` or its
+  status for more than 30 minutes is missed; that is a documented limit.
 
 **Joining.**
 
@@ -648,8 +703,12 @@ records every token update, and leaves when the turn ends.
 - Immediately before joining, the monitor checks the newest turn again and joins
   only if it is still `inProgress`. It then sends `thread/resume` with only
   `threadId` and `excludeTurns: true`.
-- The response's `resumeKind`, a field only the hosted server returns, decides
-  what happens; a missing `resumeKind` counts as "anything else":
+- A JSON-RPC error reply to `thread/resume` (for example
+  `environment_terminated`) follows JSON-RPC errors: most close the connection
+  and are retried on the next run if the thread is still running.
+- For a successful response, its `resumeKind`, a field only the hosted server
+  returns, decides what happens; a missing `resumeKind` counts as "anything
+  else":
     - `warm`: the thread is running and the monitor stays.
     - `cold`: the turn ended between the check and the join. The monitor logs the
       race, counts it in status, and closes the connection at once.
@@ -817,12 +876,13 @@ A thread is sent in exactly one group.
   host's wait. Only when every home on the key has been tried, or none is
   usable, does plan usage pause for that account, until the `auth.json` of any
   home on that login key changes or one hour passes. A `query_v2` 401 on a
-  home is remembered in memory until that home's `auth.json` changes, so later
-  passes skip it, and the plan usage line shows the signed-out message; thread
-  sync keeps its own status. HTTP 403 or 404 means OpenAI does not offer this
-  usage to the account: AgentsView records "Usage isn't available for this
-  account", sends no usage requests for that account for 24 hours, and shows
-  no error. Other failures use the per-root backoff above.
+  home is remembered in memory until that home's `auth.json` changes or one
+  hour passes, so later passes skip it until then, and the plan usage line
+  shows the signed-out message; thread sync keeps its own status. HTTP 403 or
+  404 means OpenAI does not offer this usage to the account: AgentsView
+  records "Usage isn't available for this account", sends no usage requests
+  for that account for 24 hours, and shows no error. Other failures use the
+  per-root backoff above.
 - The fetcher resolves roots, settling, and the 24-hour pause from its state,
   and records the outcome in the mirror files: a response row (with
   `data_as_of` and whether it is final) is appended to the root's file only
@@ -860,23 +920,30 @@ sessions out of token and cost totals applies in every backend's usage queries
 (the SQLite usage queries and usage cache, and the PostgreSQL, DuckDB, and
 ClickHouse usage queries served through `internal/service`), so every backend
 returns the same totals. Plan-usage-only sessions still produce activity facts
-in the usage cache: each assistant message with a model counts as activity
-(`FromMessage` in `internal/usagefacts/fact.go`), so per-model views show their
-message counts. That is correct, since the work happened; activity facts carry
-no tokens or cost, and every token and cost figure comes from usage events,
-which these sessions lack. Per-model token and cost columns show such a model's
-plan-only sessions as "Plan usage", not zero. The cache has no record of plan
-usage, so the "sessions left out" count is computed at query time, not from the
-cache: each backend counts sessions in its own copy of the per-session table
-that have no usage events, applying the same usage filter as the totals (agent,
-project, machine, model, exclusions, automated scope, and the date window in the
+in the usage cache: each assistant message whose model is not `<synthetic>`,
+including an empty model, counts as activity (`FromMessage` in
+`internal/usagefacts/fact.go`), so per-model views show their message counts.
+That is correct, since the work happened; activity facts carry no tokens or
+cost, and every token and cost figure comes from usage events, which these
+sessions lack. Per-model token and cost columns show such a model's plan-only
+sessions as "Plan usage", not zero. The cache has no record of plan usage, so
+the "sessions left out" count is computed at query time, not from the cache:
+each backend counts sessions in its own copy of the per-session table that have
+no usage events, applying the same usage filter as the totals (agent, project,
+machine, model, exclusions, automated scope, and the date window in the
 requested timezone). A plan-only session has no usage events, so the date and
 model filters test the same inputs as its activity facts: its assistant
 messages' times and models. A session matches when at least one of its assistant
-messages does. The partly-captured count uses the same rule. The cache's
-contents do not change, so its format version stays. A parity test checks that
-SQLite, each replica, and the mirror return the same plan usage and the same
-totals.
+messages does, using the same relaxed message rule and separate model filter
+that `GetUsageMatchingSessionCount` already uses
+(`usageMatchingMessageEligibility` in `internal/db/usage.go`). A plan-only
+session with no assistant message is matched by its `started_at` and is excluded
+whenever an include-model filter is set; an exclude-model filter does not
+exclude it. The partly-captured count instead matches a session when at least
+one of its usage events matches the window and model filters, as the totals do.
+The cache's contents do not change, so its format version stays. A parity test
+checks that SQLite, each replica, and the mirror return the same plan usage and
+the same totals.
 
 **Display.**
 
@@ -887,6 +954,10 @@ totals.
   includes, so 0 credits means the plan covered the work. These credits are
   stored only in the plan usage table, never in the existing Copilot
   `ai_credits` fields, and `codex-cloud` does not set `AICreditsDenominated`.
+  It also does not set `NoPerMessageTokenData`: the existing "no token data"
+  notice (`UnsupportedUsage` in `internal/service/direct.go`) would fire for a
+  plan-only filter and contradict the "sessions billed as plan usage" count,
+  which replaces it for this source.
 - Session details show one of these when there is no complete row:
     - "Plan usage: not checked yet": no request has finished.
     - "Plan usage: still updating, as of T": a `partial` row that is still
@@ -939,8 +1010,10 @@ totals.
   accepts it (`internal/config/config.go` rejects other providers there). Its
   root is `{dataDir}/sources/codex-cloud`, resolved from the data directory
   rather than `$HOME` or an environment variable; the builder adds that kind
-  of root to discovery. It is excluded explicitly from the settings provider
-  list, which otherwise shows every file-based provider.
+  of root to discovery, and `ResolveDirs` returns it, so remote host sync's
+  forbidden roots (built from `ResolveDirs` in
+  `internal/remotesync/resolve.go`) include it. It is excluded explicitly from
+  the settings provider list, which otherwise shows every file-based provider.
 - Unlike other agents, which are on unless listed in `disabled_agents`, fetching
   is off until the user sets `enabled = true`, because it uses a private,
   undocumented endpoint as the user's ChatGPT account. `enabled` gates
@@ -1016,6 +1089,7 @@ the table below.
 | Network failure                              | Can't reach OpenAI. AgentsView retries automatically.                                                                                       |
 | HTTP 429                                     | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                     |
 | HTTP 5xx                                     | OpenAI's service had an error. AgentsView retries automatically.                                                                            |
+| JSON-RPC error reply for one thread          | OpenAI returned an error for this thread. It may have been deleted.                                                                         |
 | Handshake refused or reply not understood    | OpenAI changed its service in a way this version of AgentsView can't read. Update AgentsView. Sessions already imported are safe.           |
 | Keyring-backed home, no token in `auth.json` | This Codex home keeps its ChatGPT login in the system keyring, which AgentsView does not read.                                              |
 | `ephemeral` credential store                 | This Codex home does not save its ChatGPT login, so AgentsView cannot use it.                                                               |
@@ -1078,14 +1152,27 @@ same session from two machines and documents it.
   interval, in a thread whose `updatedAt` does not change, still ends with its
   final output and exit status.
 
+- Error codes: `-32601`, and `-32600` with an `Invalid request:` message or an
+  `experimentalApi` message, fail the pass as a protocol change and wait as
+  for a 403; `-32602` on an anchored `thread/items/list` re-reads the turn
+  without the anchor in the same pass, and only a second failure puts the
+  thread in the retry set; overloaded and shutting-down replies end the pass
+  with the account wait and no retry-set entry; other error replies to
+  `thread/list` fail the pass with the 5xx wait; a `-32600` "no rollout found"
+  reply to a fetcher thread request puts that thread in the retry set; an
+  `environment_terminated` reply to the monitor's `thread/resume` closes the
+  connection and is retried on the next run.
+
 - Failures: a thread that keeps failing and stays at the top of the listing is
   not fetched again before its next-attempt time, backs off to the one-hour
   cap, does not hold back the listing watermark, and is fetched once it
   recovers.
 
-- Deletion: a thread the server reports as gone leaves the retry set, is not
-  fetched again, keeps its stored session, and does not keep the "could not be
-  imported" state up.
+- Deletion (blocked on the deleted-thread probe in Open questions): a thread the
+  server reports as gone leaves the retry set, is not fetched again, keeps its
+  stored session, and does not keep the "could not be imported" state up.
+  Until then: a thread whose fetch fails stays in the retry set at the
+  one-hour cap and is counted in status.
 
 - Resume point: parallel tool calls that finish out of order all end with their
   final output. An item without a terminal status in a finished turn, or in a
@@ -1153,6 +1240,15 @@ same session from two machines and documents it.
     - a thread still running after 6 hours is left and joined again on a later
       run;
     - a running sub-agent thread is found and not joined;
+    - discovery reads a second listing page while the first page holds only recent
+      or `active` threads, and stops after the first page that holds none; a
+      running thread listed `idle` on a later page is found through the sync
+      job's unfinished set;
+    - an ordinary error reply to `thread/resume` is retried on the next run and
+      does not stop capture; `-32601`, or `-32600` with an `Invalid request:` or
+      `experimentalApi` message, stops capture for the account without setting
+      the sync job's wait with the protocol-change error; an overloaded reply
+      sets the shared account wait;
     - a thread joined before sync mirrored it gets a mirror file that starts with
       its metadata; a mirror file with no metadata is skipped;
     - after a decrease, the first record of the new baseline adds its full total,
@@ -1295,10 +1391,16 @@ same session from two machines and documents it.
       is done;
     - enable the source, or at least live capture, on one machine only (see
       Several machines);
-- a turn that starts without changing the thread's `updatedAt` or status for
-  more than 30 minutes is not captured live.
+    - a turn that starts without changing the thread's `updatedAt` or status for
+      more than 30 minutes is not captured live.
 
 ## Open questions
+
+1. **Turn listing view.** The probes called `thread/turns/list` with `limit`
+   only. Newest first is the default, so no `sortDirection` is sent. Before
+   the fetcher and the live token monitor rely on `itemsView: notLoaded`, the
+   user runs one read-only probe with it on the durable host. If it is
+   rejected, both omit it and pay the cost of the default `summary` view.
 
 1. **How the server reports a deleted thread.** The user runs a probe that reads
    a thread they have deleted (for example after resetting a dot) and records
