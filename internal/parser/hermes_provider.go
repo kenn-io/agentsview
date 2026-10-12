@@ -523,7 +523,19 @@ func (s hermesSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	return sources, err
 }
 
-func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) (retErr error) {
+	if !reconciliationCacheAvailable(ctx) {
+		cachedCtx, closeCache, err := WithReconciliationCache(ctx)
+		if err != nil {
+			return err
+		}
+		ctx = cachedCtx
+		defer func() {
+			if err := closeCache(); err != nil {
+				retErr = errors.Join(retErr, err)
+			}
+		}()
+	}
 	var discoveryErr error
 	appendDiscoveryErr := func(err error) {
 		err = incompleteDiscoveryError(
@@ -554,36 +566,22 @@ func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 			return err
 		}
 		if stateDB, sessionsDir, ok := hermesStatePaths(root); ok {
-			yieldedAny, err := s.discoverStateEach(ctx, root, stateDB, yield)
-			if err != nil {
-				if cause, ok := discoveryYieldCause(err); ok {
-					return cause
-				}
-				if yieldedAny || ctx.Err() != nil {
-					if ctxErr := ctx.Err(); ctxErr != nil {
-						return ctxErr
-					}
-					appendDiscoveryErr(err)
-					continue
-				}
+			yieldedAny, stateErr := s.discoverStateEach(ctx, root, stateDB, yield)
+			if cause, ok := discoveryYieldCause(stateErr); ok {
+				return cause
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if stateErr != nil {
 				log.Printf(
-					"hermes: state db discovery failed for %s: %v; "+
-						"falling back to transcripts",
-					stateDB, err,
+					"hermes: state db discovery failed for %s: %v; falling back to transcripts",
+					stateDB, stateErr,
 				)
-				stateErr := err
-				fallbackErr := discoverTranscripts(root, sessionsDir, "")
-				if cause, ok := discoveryYieldCause(fallbackErr); ok {
-					return cause
-				}
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return ctxErr
-				}
 				appendDiscoveryErr(stateErr)
-				if fallbackErr != nil {
-					appendDiscoveryErr(fallbackErr)
+				if !yieldedAny {
+					stateDB = ""
 				}
-				continue
 			}
 			if err := discoverTranscripts(root, sessionsDir, stateDB); err != nil {
 				if cause, ok := discoveryYieldCause(err); ok {
@@ -593,7 +591,6 @@ func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 					return ctxErr
 				}
 				appendDiscoveryErr(err)
-				continue
 			}
 			continue
 		}
@@ -627,6 +624,7 @@ func (s hermesSourceSet) discoverStateEach(
 	}
 	defer rows.Close()
 	yieldedAny := false
+	var memberErrors error
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -635,13 +633,23 @@ func (s hermesSourceSet) discoverStateEach(
 		if !IsValidSessionID(id) {
 			continue
 		}
+		source := s.stateMemberSourceRef(root, stateDB, id)
+		if _, err := s.Fingerprint(ctx, source); err != nil {
+			if ctx.Err() != nil {
+				return yieldedAny, ctx.Err()
+			}
+			if memberErrors == nil {
+				memberErrors = err
+			}
+			continue
+		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
 		yieldedAny = true
-		if err := yield(s.stateMemberSourceRef(root, stateDB, id)); err != nil {
+		if err := yield(source); err != nil {
 			return yieldedAny, discoveryYieldError{cause: err}
 		}
 	}
-	return yieldedAny, rows.Err()
+	return yieldedAny, errors.Join(memberErrors, rows.Err())
 }
 
 func (s hermesSourceSet) discoverTranscriptEach(
@@ -653,12 +661,13 @@ func (s hermesSourceSet) discoverTranscriptEach(
 	// reconciliation work with archive size instead of the changed batch.
 	// Opened lazily so transcript-free directories cost nothing.
 	var membership *hermesStateMembership
+	var membershipErr, lookupErrors error
 	defer func() {
 		if membership != nil {
 			membership.Close()
 		}
 	}()
-	return streamDirectoryEntries(ctx, sessionsDir, func(entry os.DirEntry) error {
+	scanErr := streamDirectoryEntries(ctx, sessionsDir, func(entry os.DirEntry) error {
 		if entry.IsDir() {
 			return nil
 		}
@@ -677,19 +686,25 @@ func (s hermesSourceSet) discoverTranscriptEach(
 			return nil
 		}
 		if stateDB != "" {
-			if membership == nil {
-				opened, err := openHermesStateMembership(ctx, stateDB)
-				if err != nil {
-					return err
+			if membership == nil && membershipErr == nil {
+				membership, membershipErr = openHermesStateMembership(ctx, stateDB)
+			}
+			lookupErr := membershipErr
+			if membership != nil {
+				found, err := membership.Has(ctx, id)
+				lookupErr = err
+				if found && err == nil {
+					_, lookupErr = s.Fingerprint(ctx, s.stateMemberSourceRef(root, stateDB, id))
+					if lookupErr == nil {
+						return nil
+					}
 				}
-				membership = opened
 			}
-			found, err := membership.Has(ctx, id)
-			if err != nil {
-				return err
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			if found {
-				return nil
+			if lookupErrors == nil {
+				lookupErrors = lookupErr
 			}
 		}
 		ref, ok := s.transcriptSourceRef(root, filepath.Join(sessionsDir, name))
@@ -698,6 +713,7 @@ func (s hermesSourceSet) discoverTranscriptEach(
 		}
 		return yield(ref)
 	})
+	return errors.Join(lookupErrors, scanErr)
 }
 
 // hermesStateMembership answers "does state.db hold this session id" through
@@ -1108,12 +1124,7 @@ func (s hermesSourceSet) changedPathSources(
 			if samePath(path, stateDB+"-wal") && !sqliteWALHasFrames(path) {
 				return nil, nil
 			}
-			var sources []SourceRef
-			_, err := s.discoverStateEach(ctx, root, stateDB, func(source SourceRef) error {
-				sources = append(sources, source)
-				return nil
-			})
-			return sources, err
+			return newHermesSourceSet(s.agent, []string{root}).Discover(ctx)
 		}
 		if hermesPathInTranscriptDir(sessionsDir, path) {
 			id := HermesSessionID(filepath.Base(path))
@@ -1132,7 +1143,14 @@ func (s hermesSourceSet) changedPathSources(
 				src := source.Opaque.(hermesSource)
 				src.FingerprintSingleMember = true
 				source.Opaque = src
-				return []SourceRef{source}, nil
+				_, readErr := s.Fingerprint(ctx, source)
+				if readErr == nil {
+					return []SourceRef{source}, nil
+				}
+				lookupErr = incompleteDiscoveryError(s.agent, "read transcript membership", readErr)
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 			}
 			selected := findHermesSourceFile(sessionsDir, id)
 			if selected == "" {
@@ -1618,7 +1636,7 @@ func hermesStateMemberFingerprint(
 	if !IsRegularFile(src.StateDB) {
 		return SourceFingerprint{Key: source.FingerprintKey}, nil
 	}
-	if reconciliationCacheAvailable(ctx) && !src.FingerprintSingleMember {
+	if reconciliationCacheAvailable(ctx) {
 		if h, selectedPath, ok := cachedHermesMemberCore(ctx, src); ok {
 			return hermesStateMemberFingerprintFinish(source, src, h, selectedPath)
 		}
@@ -1626,7 +1644,7 @@ func hermesStateMemberFingerprint(
 		// of the reconciliation fingerprints without reopening the database.
 		// Seeding failures fall through to the instrumented per-member open,
 		// which surfaces the underlying error with its usual handling.
-		if seedHermesMemberCores(ctx, src.StateDB) == nil {
+		if !src.FingerprintSingleMember && seedHermesMemberCores(ctx, src.StateDB) == nil {
 			if h, selectedPath, ok := cachedHermesMemberCore(ctx, src); ok {
 				return hermesStateMemberFingerprintFinish(source, src, h, selectedPath)
 			}
@@ -1652,6 +1670,9 @@ func hermesStateMemberFingerprint(
 	}
 	h := sha256.New()
 	if err := addHermesStateSessionFingerprint(h, ss, messages); err != nil {
+		return SourceFingerprint{}, err
+	}
+	if err := storeHermesMemberCore(ctx, src.Path, h, selectedPath); err != nil {
 		return SourceFingerprint{}, err
 	}
 	return hermesStateMemberFingerprintFinish(source, src, h, selectedPath)
@@ -1778,6 +1799,10 @@ func cacheHermesMemberCore(
 	if err := addHermesStateSessionFingerprint(h, ss, messages); err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
+	return storeHermesMemberCore(ctx, fingerprintKey, h, selectedPath)
+}
+
+func storeHermesMemberCore(ctx context.Context, fingerprintKey string, h hash.Hash, selectedPath string) error {
 	marshaler, ok := h.(encoding.BinaryMarshaler)
 	if !ok {
 		return nil

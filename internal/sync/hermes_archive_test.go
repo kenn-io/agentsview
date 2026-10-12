@@ -1559,3 +1559,110 @@ func TestHermesIncompleteTranscriptPreservesArchivedHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestHermesUnreadableStateMembersUseTranscriptFallback(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, damage := range []string{"malformed database", "session IDs only", "messages unavailable", "unreadable member"} {
+			for _, mode := range []string{"full sync", "state event", "WAL event", "transcript event", "reconciliation"} {
+				if damage == "malformed database" && mode == "WAL event" {
+					continue
+				}
+				t.Run(string(agent)+"/"+damage+"/"+mode, func(t *testing.T) {
+					root := t.TempDir()
+					stateDB := writeHermesArchiveStateDB(t, root)
+					conn, err := sql.Open("sqlite3", stateDB)
+					require.NoError(t, err)
+					_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions
+						(id, source, model, started_at, message_count) VALUES ('keeper', 'cli', 'model', 1778767200, 1);
+						INSERT INTO messages (session_id, role, content, timestamp)
+						VALUES ('keeper', 'user', 'retained history', 1778767210)`)
+					require.NoError(t, err)
+					require.NoError(t, conn.Close())
+					database := dbtest.OpenTestDB(t)
+					engine := NewEngine(t.Context(), database, EngineConfig{
+						AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+					})
+					t.Cleanup(engine.Close)
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					before, err := database.GetSessionFull(t.Context(), string(agent)+":keeper")
+					require.NoError(t, err)
+					require.NotNil(t, before)
+					seedDB := writeHermesArchiveStateDB(t, t.TempDir())
+					require.NoError(t, os.Remove(stateDB))
+					if damage == "malformed database" {
+						require.NoError(t, os.WriteFile(stateDB, []byte("not a sqlite database"), 0o600))
+					} else {
+						writer, openErr := sql.Open("sqlite3", stateDB)
+						require.NoError(t, openErr)
+						writer.SetMaxOpenConns(1)
+						t.Cleanup(func() { require.NoError(t, writer.Close()) })
+						if mode == "WAL event" {
+							_, err = writer.ExecContext(t.Context(), "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0")
+							require.NoError(t, err)
+						}
+						switch damage {
+						case "session IDs only":
+							_, err = writer.ExecContext(t.Context(), "CREATE TABLE sessions (id TEXT PRIMARY KEY); INSERT INTO sessions VALUES ('child')")
+						case "messages unavailable":
+							_, err = writer.ExecContext(t.Context(), "ATTACH DATABASE ? AS seed; CREATE TABLE sessions AS SELECT * FROM seed.sessions", seedDB)
+						default:
+							_, err = writer.ExecContext(t.Context(), `ATTACH DATABASE ? AS seed;
+								CREATE TABLE sessions AS SELECT * FROM seed.sessions;
+								CREATE TABLE messages AS SELECT * FROM seed.messages;
+								UPDATE sessions SET started_at = 'invalid' WHERE id = 'child';
+								INSERT INTO sessions (id, source, started_at, message_count)
+								VALUES ('usable', 'cli', 1778767200, 1);
+								INSERT INTO messages (session_id, role, content, timestamp)
+								VALUES ('usable', 'user', 'usable state message', 1778767210)`, seedDB)
+						}
+						require.NoError(t, err)
+					}
+					dir := filepath.Join(root, "sessions")
+					writeHermesTranscriptFile(t, dir, "child")
+					writeHermesTranscriptFile(t, dir, "standalone")
+					path := filepath.Join(dir, "child.jsonl")
+					switch mode {
+					case "full sync":
+						assert.Positive(t, engine.SyncAll(t.Context(), nil).Failed)
+					case "reconciliation":
+						err = engine.ReconcileWatchRootsAfterLostEvents(t.Context(), []string{root}, false)
+						require.Error(t, err)
+						assert.False(t, engine.LastReconciliationResult().Complete)
+					default:
+						event := stateDB
+						switch mode {
+						case "WAL event":
+							event += "-wal"
+						case "transcript event":
+							event = path
+						}
+						err = engine.syncPathsContext(t.Context(), []string{event}, false)
+						require.Error(t, err)
+					}
+					messages, err := database.GetAllMessages(t.Context(), string(agent)+":child")
+					require.NoError(t, err)
+					contents := make([]string, len(messages))
+					for i, message := range messages {
+						contents[i] = message.Content
+					}
+					assert.Equal(t, []string{"hello", "Done."}, contents)
+					if mode != "transcript event" {
+						standalone, getErr := database.GetSession(t.Context(), string(agent)+":standalone")
+						require.NoError(t, getErr)
+						require.NotNil(t, standalone)
+						assert.Equal(t, new("hello"), standalone.FirstMessage)
+						if damage == "unreadable member" {
+							usable, getErr := database.GetSession(t.Context(), string(agent)+":usable")
+							require.NoError(t, getErr)
+							require.NotNil(t, usable)
+							assert.Equal(t, new("usable state message"), usable.FirstMessage)
+						}
+					}
+					after, err := database.GetSessionFull(t.Context(), string(agent)+":keeper")
+					require.NoError(t, err)
+					assert.Equal(t, before, after)
+				})
+			}
+		}
+	}
+}

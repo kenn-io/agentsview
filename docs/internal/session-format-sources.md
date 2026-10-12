@@ -3224,8 +3224,12 @@ schemas keep their existing ordering behavior.
   resolve only their indexed member or standalone transcript, with JSONL
   preferred over JSON snapshots. The pinned source enables SQLite WAL mode;
   member freshness includes committed WAL data for timestamp cutoffs.
-  Malformed or incompatible state databases still allow transcript fallback,
-  but discovery remains incomplete. Existing archive-level paths migrate
+  Transcript fallback also applies when session IDs can be listed but member
+  content cannot be read. The pinned schema requires session metadata and
+  message columns as well as IDs; an ID query alone does not establish that
+  a member can be imported. Discovery remains incomplete after database read
+  failures. Empty or entirely malformed standalone transcripts preserve
+  archived history. Existing archive-level paths migrate
   during ordinary sync; historical sessions remain in SQLite when their
   source disappears. Augure Desktop uses the same member selection.
 - **Usage and cost:** State records distinguish input, output, cache-read,
