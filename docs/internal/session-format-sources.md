@@ -3245,7 +3245,11 @@ schemas keep their existing ordering behavior.
   when a selected transcript has disappeared or become empty. The comparison
   includes message text, thinking, individual tool calls, exact arguments and
   tool-result content. Source changes cannot remove an archived call or change
-  its result just because the message count remains equal. Standalone transcript
+  its result just because the message count remains equal. Previously unanswered
+  calls can acquire results while call identity, arguments and existing nonempty
+  results remain protected. Image projection applies to both sides during
+  comparison, including ordinary sync under the offload policy.
+  Standalone transcript
   fallback preserves archived state-derived usage when the database cannot
   supply accounting. Selected JSON snapshots receive the same protection as
   JSONL when they disappear or become empty. Aggregate archive parsing propagates

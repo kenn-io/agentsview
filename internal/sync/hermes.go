@@ -57,7 +57,7 @@ func (e *Engine) validateHermesReplacement(ctx context.Context, result parser.Pa
 		if err != nil {
 			return err
 		}
-		candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
+		candidate.Messages, _ = e.db.ProjectToolResultImagesForComparison(candidate.Messages, e.toolResultImages)
 		if err := e.applyRemoteRewritesContext(ctx, &candidate.Session, candidate.Messages); err != nil {
 			return err
 		}
@@ -65,7 +65,7 @@ func (e *Engine) validateHermesReplacement(ctx context.Context, result parser.Pa
 		if err != nil {
 			return err
 		}
-		archived, _ = e.projectToolResultImagesForPrepare(archived)
+		archived, _ = e.db.ProjectToolResultImagesForComparison(archived, e.toolResultImages)
 		_, archived = db.ProjectSessionForStoragePolicy(*stored, archived, options.ArchiveContent)
 		if !hermesReplacementIncludesArchived(incoming.Messages, archived) {
 			return fmt.Errorf("hermes source fallback cannot replace archived content for session %s", id)
@@ -95,7 +95,7 @@ func hermesReplacementIncludesArchived(incoming, archived []db.Message) bool {
 	}
 	for _, message := range archived {
 		candidate, ok := byOrdinal[message.Ordinal]
-		if !ok || !reflect.DeepEqual(candidate, normalizedHermesMessage(message)) {
+		if !ok || !candidate.includes(normalizedHermesMessage(message)) {
 			return false
 		}
 	}
@@ -109,6 +109,39 @@ type hermesArchivedMessage struct {
 	ThinkingText string
 	IsSystem     bool
 	ToolCalls    []db.ToolCall
+}
+
+func (message hermesArchivedMessage) includes(archived hermesArchivedMessage) bool {
+	incomingCalls, archivedCalls := message.ToolCalls, archived.ToolCalls
+	message.ToolCalls, archived.ToolCalls = nil, nil
+	if !reflect.DeepEqual(message, archived) || len(incomingCalls) < len(archivedCalls) {
+		return false
+	}
+	for i, call := range archivedCalls {
+		if !hermesToolCallIncludesArchived(incomingCalls[i], call) {
+			return false
+		}
+	}
+	return true
+}
+
+func hermesToolCallIncludesArchived(incoming, archived db.ToolCall) bool {
+	if (archived.ResultContent != "" || archived.ResultContentLength != 0) &&
+		(incoming.ResultContent != archived.ResultContent || incoming.ResultContentLength != archived.ResultContentLength) {
+		return false
+	}
+	if len(incoming.ResultEvents) < len(archived.ResultEvents) {
+		return false
+	}
+	for i, event := range archived.ResultEvents {
+		if !reflect.DeepEqual(incoming.ResultEvents[i], event) {
+			return false
+		}
+	}
+	incoming.ResultContent, archived.ResultContent = "", ""
+	incoming.ResultContentLength, archived.ResultContentLength = 0, 0
+	incoming.ResultEvents, archived.ResultEvents = nil, nil
+	return reflect.DeepEqual(incoming, archived)
 }
 
 func normalizedHermesMessage(message db.Message) hermesArchivedMessage {

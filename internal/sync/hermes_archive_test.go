@@ -2067,7 +2067,7 @@ func TestHermesUnreadableMemberPreservesArchivedUsage(t *testing.T) {
 
 func TestHermesFallbackPreservesIndividualToolsAndResults(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
-		for _, change := range []string{"unchanged", "remove call", "change result", "large argument"} {
+		for _, change := range []string{"unchanged", "complete result", "remove call", "change result", "large argument"} {
 			t.Run(string(agent)+"/"+change, func(t *testing.T) {
 				root := t.TempDir()
 				stateDB := writeHermesArchiveStateDB(t, root)
@@ -2095,6 +2095,9 @@ func TestHermesFallbackPreservesIndividualToolsAndResults(t *testing.T) {
 				content := `{"role":"user","content":"same","timestamp":"2026-05-14T14:00:10Z"}` + "\n" +
 					`{"role":"assistant","content":"tools","timestamp":"2026-05-14T14:00:11Z","tool_calls":` + originalCalls + "}\n" +
 					`{"role":"tool","content":"old result","tool_call_id":"call-a","timestamp":"2026-05-14T14:00:12Z"}` + "\n"
+				if change == "complete result" {
+					content = strings.Join(strings.Split(content, "\n")[:2], "\n") + "\n"
+				}
 				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 				database := dbtest.OpenTestDB(t)
 				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
@@ -2115,6 +2118,20 @@ func TestHermesFallbackPreservesIndividualToolsAndResults(t *testing.T) {
 				engine.SyncAll(t.Context(), nil)
 				after, err := database.GetAllMessages(t.Context(), id)
 				require.NoError(t, err)
+				if change == "complete result" {
+					require.Len(t, after, 2)
+					require.Len(t, after[1].ToolCalls, 1)
+					call := after[1].ToolCalls[0]
+					type completedCall struct {
+						ID, Name, Input, Result string
+						ResultLength            int
+					}
+					assert.Equal(t, completedCall{"call-a", "lookup", `{"value":9007199254740993}`, "old result", 10}, completedCall{call.ToolUseID, call.ToolName, call.InputJSON, call.ResultContent, call.ResultContentLength})
+					row, err := database.GetSessionFull(t.Context(), id)
+					require.NoError(t, err)
+					assert.Equal(t, parser.HermesStateSourceVersion, row.SourceVersion)
+					return
+				}
 				if change == "unchanged" {
 					row, err := database.GetSessionFull(t.Context(), id)
 					require.NoError(t, err)
@@ -2414,5 +2431,65 @@ func TestHermesSingleSessionResyncReturnsToRecoveredDatabase(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, siblingBefore, siblingAfter)
 		})
+	}
+}
+
+func TestHermesSourceMigrationComparesOffloadedImages(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, mode := range []string{"provenance migration", "database source"} {
+			t.Run(string(agent)+"/"+mode, func(t *testing.T) {
+				root := t.TempDir()
+				stateDB := writeHermesArchiveStateDB(t, root)
+				conn, err := sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), "DELETE FROM messages")
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				dir := filepath.Join(root, "sessions")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				path := filepath.Join(dir, "child.jsonl")
+				const calls = `[{"id":"call-a","function":{"name":"lookup","arguments":"{}"}}]`
+				const image = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+				content := `{"role":"user","content":"hello","timestamp":"2026-05-14T14:00:10Z"}` + "\n" + `{"role":"assistant","content":"tools","timestamp":"2026-05-14T14:00:11Z","tool_calls":` + calls + "}\n" + `{"role":"tool","content":` + strconv.Quote(image) + `,"tool_call_id":"call-a","timestamp":"2026-05-14T14:00:12Z"}` + "\n"
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+				database := dbtest.OpenTestDB(t)
+				database.SetAssetsDir(t.TempDir())
+				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local", ToolResultImages: config.ToolResultImagesOffload})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":child"
+				before, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				require.Len(t, before, 2)
+				require.Len(t, before[1].ToolCalls, 1)
+				require.Contains(t, before[1].ToolCalls[0].ResultContent, "asset://")
+				conn, err = sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				if mode == "provenance migration" {
+					row, err := database.GetSessionFull(t.Context(), id)
+					require.NoError(t, err)
+					row.SourceVersion = "hermes-state-db"
+					require.NoError(t, database.UpsertSession(t.Context(), *row))
+					_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET title='new title'")
+					require.NoError(t, err)
+				} else {
+					_, err = conn.ExecContext(t.Context(), `INSERT INTO messages(session_id,role,content,timestamp) VALUES('child','user','hello',1778767210); INSERT INTO messages(session_id,role,content,tool_calls,timestamp) VALUES('child','assistant','tools',?,1778767211); INSERT INTO messages(session_id,role,content,tool_call_id,timestamp) VALUES('child','tool',?,'call-a',1778767212)`, calls, image)
+					require.NoError(t, err)
+					require.NoError(t, os.Remove(path))
+				}
+				require.NoError(t, conn.Close())
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				after, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				assert.Equal(t, before, after)
+				row, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				want := "hermes-jsonl-v1"
+				if mode == "database source" {
+					want = parser.HermesStateSourceVersion
+				}
+				assert.Equal(t, want, row.SourceVersion)
+			})
+		}
 	}
 }
