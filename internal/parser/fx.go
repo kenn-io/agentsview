@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -37,6 +38,10 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	metadata, err := readFxMetadata(filepath.Join(dir, "session.json"))
 	if err != nil {
 		return nil, nil, err
+	}
+	if metadata.Raw == "" {
+		log.Printf("skipping fx session: missing session.json")
+		return nil, nil, nil
 	}
 	if fxUnsupportedSchema(metadata, 4, 4, "session.json") {
 		return nil, nil, nil
@@ -88,6 +93,12 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 			continue
 		}
 		if !gjson.Valid(line) {
+			var tail [1]byte
+			if reader.bytesRead == info.Size() {
+				if _, err := f.ReadAt(tail[:], reader.bytesRead-1); err == nil && tail[0] != '\n' {
+					break
+				}
+			}
 			return nil, nil, fmt.Errorf("invalid fx events.jsonl JSON frame")
 		}
 		frame := gjson.Parse(line)
@@ -159,6 +170,13 @@ func fxUnsupportedSchema(value gjson.Result, minimum, maximum int64, source stri
 	return true
 }
 
+func fxProviderName(provider gjson.Result) string {
+	if provider.IsObject() {
+		return provider.Get("name").Str
+	}
+	return provider.Str
+}
+
 func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time.Time, metadata gjson.Result) {
 	message := ParsedMessage{Timestamp: timestamp}
 	switch {
@@ -169,7 +187,7 @@ func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time
 	case event.Get("assistant").Exists():
 		message.Role, message.Content = RoleAssistant, event.Get("assistant.text").Str
 		message.Model = event.Get("assistant.provider_replay.source.model").Str
-		message.ProviderID = event.Get("assistant.provider_replay.source.provider").Str
+		message.ProviderID = fxProviderName(event.Get("assistant.provider_replay.source.provider"))
 	case event.Get("tool_call").Exists():
 		call := event.Get("tool_call")
 		tool := ParsedToolCall{
@@ -182,10 +200,13 @@ func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time
 			location := gjson.Get(tool.InputJSON, "location").Str
 			if tool.SkillName == "" && location != "" {
 				tool.SkillName = path.Base(location)
+				if decoded, err := url.PathUnescape(tool.SkillName); err == nil {
+					tool.SkillName = decoded
+				}
 			}
 		}
 		if len(*messages) == 0 || (*messages)[len(*messages)-1].Role != RoleAssistant {
-			model, provider := metadata.Get("model").Str, metadata.Get("provider").Str
+			model, provider := metadata.Get("model").Str, fxProviderName(metadata.Get("provider"))
 			for i := len(*messages) - 1; i >= 0; i-- {
 				previous := (*messages)[i]
 				if previous.Role == RoleUser && len(previous.ToolResults) == 0 {
@@ -227,7 +248,7 @@ func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time
 			message.Model = metadata.Get("model").Str
 		}
 		if message.ProviderID == "" {
-			message.ProviderID = metadata.Get("provider").Str
+			message.ProviderID = fxProviderName(metadata.Get("provider"))
 		}
 	}
 	*messages = append(*messages, message)
@@ -239,12 +260,12 @@ func fxUsageEvents(session *ParsedSession, usage gjson.Result, latestEventTime t
 		cacheRead := max(0, int(model.Get("cache_read_tokens").Int()))
 		cacheWrite := max(0, int(model.Get("cache_write_tokens").Int()))
 		name := model.Get("model").Str
-		provider, normalized, prefixed := strings.Cut(name, "/")
+		provider, _, prefixed := strings.Cut(name, "/")
 		if !prefixed {
-			provider, normalized = "", name
+			provider = ""
 		}
 		events = append(events, ParsedUsageEvent{
-			SessionID: session.ID, Source: "session", Model: normalized, ProviderID: provider,
+			SessionID: session.ID, Source: "session", Model: name, ProviderID: provider,
 			DedupKey:             "session:" + session.ID + "|" + name,
 			OccurredAt:           timeString(latestEventTime, session.StartedAt),
 			InputTokens:          max(0, int(model.Get("input_tokens").Int())-cacheRead-cacheWrite),

@@ -4368,8 +4368,16 @@ schemas keep their existing ordering behavior.
   defines prompts, replies, steering, tool calls and results, interruptions,
   and context checkpoints. Result text uses the stored preview. Tool calls
   retain the preceding assistant's model and provider within a user turn.
-  [Compaction](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_compaction.zig)
-  atomically replaces the log, so every change reparses the complete transcript.
+  [Provider IDs](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/config/model_provider.zig)
+  are strings for built-in providers or objects with `name` and `binding` for
+  configured providers. Model names retain publisher prefixes for pricing.
+  Skill names percent-decode the location leaf.
+  [Context compaction](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_log.zig)
+  appends a `context_checkpoint` frame and preserves earlier messages.
+  [Log-size compaction](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_compaction.zig)
+  copies unchanged frames verbatim and moves oversized inline file snapshots to
+  artifacts before atomically replacing the log. Every change reparses the
+  complete transcript.
   [Child state](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/subagent/child_state.zig)
   records `subagent/owner.json` with `parent_id`. AgentsView imports that link
   as a child session.
@@ -4390,9 +4398,10 @@ schemas keep their existing ordering behavior.
   Newer versions skip the source. Full tool-result artifacts and encrypted
   reasoning are excluded. Changes to `session.json`,
   `usage-v2.json`, or `subagent/owner.json` refresh their owning transcript.
-  Invalid frames or usage structures and mismatched usage session IDs fail
-  parsing, preserving the stored session for retry. Tool previews and status
-  attach to calls without separate transcript rows.
+  A torn final line without a newline is ignored. Other invalid frames or usage
+  structures and mismatched usage session IDs fail parsing, preserving the
+  stored session for retry. Tool previews and status attach to calls without
+  separate transcript rows.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go

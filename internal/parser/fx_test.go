@@ -68,7 +68,7 @@ func TestFxFixture(t *testing.T) {
 	assert.Contains(t, messages[len(messages)-1].Content, "Added `func Name()")
 	require.Len(t, session.UsageEvents, 1)
 	assert.Equal(t, ParsedUsageEvent{
-		SessionID: "fx:parent-session", Source: "session", Model: "gpt-6.1-sol", ProviderID: "codex",
+		SessionID: "fx:parent-session", Source: "session", Model: "codex/gpt-6.1-sol", ProviderID: "codex",
 		InputTokens: 29248, OutputTokens: 647, CacheReadInputTokens: 72320,
 		OccurredAt: "2026-10-12T21:07:21.056Z", DedupKey: "session:fx:parent-session|codex/gpt-6.1-sol",
 	}, session.UsageEvents[0])
@@ -150,6 +150,10 @@ func TestFxMetadataAndCancellation(t *testing.T) {
 			if test.metadata != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "session.json"), []byte(test.metadata), 0o600))
 			}
+			var logs bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previous) })
 			session, _, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
 			if test.wantError {
 				assert.Error(t, err)
@@ -157,6 +161,11 @@ func TestFxMetadataAndCancellation(t *testing.T) {
 				assert.NoError(t, err)
 			}
 			assert.Nil(t, session)
+			if test.metadata == "" {
+				assert.Contains(t, logs.String(), "missing session.json")
+			} else if test.name == "old event log" {
+				assert.Contains(t, logs.String(), "schema_version 3 is older than supported 4")
+			}
 		})
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -270,6 +279,8 @@ func TestFxSkillNames(t *testing.T) {
 		{"explicit", `{"name":"review","location":"/tmp/skills/other"}`, "review"},
 		{"name only", `{"name":"review"}`, "review"},
 		{"location", `{"location":"/tmp/skills/review"}`, "review"},
+		{"encoded leaf", `{"location":"file:///tmp/skills/code%20review"}`, "code review"},
+		{"literal plus", `{"location":"file:///tmp/skills/review+edit"}`, "review+edit"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -289,11 +300,46 @@ func TestFxInvalidFrames(t *testing.T) {
 		t.Run(frame, func(t *testing.T) {
 			dir := t.TempDir()
 			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
-			writeSourceFile(t, filepath.Join(dir, "events.jsonl"), "{\"event\":{\"user\":{\"text\":\"Hello\"}}}\n"+frame)
+			writeSourceFile(t, filepath.Join(dir, "events.jsonl"), "{\"event\":{\"user\":{\"text\":\"Hello\"}}}\n"+frame+"\n")
 			session, messages, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
 			require.ErrorContains(t, err, "invalid fx events.jsonl")
 			assert.Nil(t, session)
 			assert.Empty(t, messages)
+		})
+	}
+}
+
+func TestFxTornTail(t *testing.T) {
+	for _, test := range []struct {
+		name, tail string
+		wantError  bool
+		wantCount  int
+	}{
+		{"torn tail", `{"event":{"assistant":{"text":"Partial`, false, 1},
+		{"complete tail without newline", `{"event":{"assistant":{"text":"Answer"}}}`, false, 2},
+		{"malformed final terminated line", "{broken\n", true, 0},
+		{"malformed middle line", "{broken\n" + `{"event":{"assistant":{"text":"Answer"}}}`, true, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
+			filePath := filepath.Join(dir, "events.jsonl")
+			writeSourceFile(t, filePath, "{\"event\":{\"user\":{\"text\":\"Question\"}}}\n"+test.tail)
+			session, messages, err := parseFxSession(t.Context(), filePath, "local")
+			if test.wantError {
+				require.ErrorContains(t, err, "invalid fx events.jsonl")
+				assert.Nil(t, session)
+				assert.Empty(t, messages)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			require.Len(t, messages, test.wantCount)
+			assert.Equal(t, "Question", messages[0].Content)
+			assert.Equal(t, test.wantCount, session.MessageCount)
+			if test.wantCount == 2 {
+				assert.Equal(t, "Answer", messages[1].Content)
+			}
 		})
 	}
 }

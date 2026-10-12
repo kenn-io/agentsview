@@ -1,14 +1,80 @@
 package sync
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
+
+func TestFxSyncProviderModelsAndSkills(t *testing.T) {
+	for _, test := range []struct{ name, provider, replayProvider, wantProvider, wantReplayProvider string }{
+		{"builtin", `"gateway"`, `"codex"`, "gateway", "codex"},
+		{"configured", `{"name":"custom","binding":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`, `{"name":"custom-replay","binding":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`, "custom", "custom-replay"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "provider-session")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "session.json"), []byte(fmt.Sprintf(`{"schema_version":4,"model":"anthropic/claude-sonnet-4.5","provider":%s}`, test.provider)), 0o600))
+			events := fmt.Sprintf(`{"schema_version":3,"seq":1,"timestamp_ms":1791839193807,"event":{"user":{"text":"Review the code"}}}
+{"schema_version":3,"seq":2,"timestamp_ms":1791839194000,"event":{"tool_call":{"call_id":"skill-1","tool_name":"skill","arguments_json":"{\"location\":\"file:///tmp/skills/code%%20review\"}"}}}
+{"schema_version":3,"seq":3,"timestamp_ms":1791839195000,"event":{"tool_result":{"call_id":"skill-1","status":"success","preview":"Loaded"}}}
+{"schema_version":3,"seq":4,"timestamp_ms":1791839196000,"event":{"interrupted":{"partial_text":"Partial review"}}}
+{"schema_version":3,"seq":5,"timestamp_ms":1791839197000,"event":{"assistant":{"text":"Reviewed","provider_replay":{"source":{"model":"anthropic/claude-sonnet-4.5","provider":%s}}}}}
+{"schema_version":3,"seq":6,"timestamp_ms":1791839198000,"event":{"tool_call":{"call_id":"read-1","tool_name":"read_file","arguments_json":"{}"}}}
+{"schema_version":3,"seq":7,"timestamp_ms":1791839199000,"event":{"tool_result":{"call_id":"read-1","status":"success","preview":"Contents"}}}
+{"schema_version":3,"seq":8,"timestamp_ms":1791839200000,"event":{"tool_call":{"call_id":"read-2","tool_name":"read_file","arguments_json":"{}"}}}
+`, test.replayProvider)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "usage-v2.json"), []byte(`{"schema_version":1,"session_id":"provider-session","snapshot":{"schema_version":3,"models":[{"model":"anthropic/claude-sonnet-4.5","input_tokens":100,"output_tokens":20,"cache_read_tokens":10}]}}`), 0o600))
+			database := openTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentFx: {root}},
+				Machine:   "local", DisableSignalRecomputation: true,
+			})
+			t.Cleanup(engine.Close)
+			engine.SyncAllForceParse(t.Context(), nil)
+			messages, err := database.GetAllMessages(t.Context(), "fx:provider-session")
+			require.NoError(t, err)
+			require.Len(t, messages, 5)
+			require.Len(t, messages[1].ToolCalls, 1)
+			assert.Equal(t, "code review", messages[1].ToolCalls[0].SkillName)
+			assert.Equal(t, "Partial review", messages[2].Content)
+			assert.Equal(t, "Reviewed", messages[3].Content)
+			for i, message := range messages[1:] {
+				assert.Equal(t, "anthropic/claude-sonnet-4.5", message.Model)
+				if i < 2 {
+					assert.Equal(t, test.wantProvider, message.ProviderID)
+				} else {
+					assert.Equal(t, test.wantReplayProvider, message.ProviderID)
+				}
+			}
+			usage, err := database.GetUsageEvents(t.Context(), "fx:provider-session")
+			require.NoError(t, err)
+			require.Len(t, usage, 1)
+			assert.Equal(t, "anthropic/claude-sonnet-4.5", usage[0].Model)
+			assert.Equal(t, "2026-10-12T21:06:40Z", usage[0].OccurredAt)
+			embedded := pricingpkg.EmbeddedGenAIDocument()
+			resolver := export.NewPricingResolver([]export.EffectivePricingRow{{GenAI: embedded.Prices, GenAISource: export.PricingRowSourceEmbedded}})
+			at, err := time.Parse(time.RFC3339Nano, usage[0].OccurredAt)
+			require.NoError(t, err)
+			priced, lookup := resolver.ResolveAt(usage[0].Model, "", at)
+			require.True(t, lookup.OK)
+			assert.Equal(t, "anthropic/claude-sonnet-4.5", priced)
+			assert.Equal(t, money.MustParseDollars("3"), lookup.Rates.InputPerMTok)
+			assert.Equal(t, money.MustParseDollars("15"), lookup.Rates.OutputPerMTok)
+		})
+	}
+}
 
 func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 	root := t.TempDir()
@@ -107,13 +173,21 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 		})
 	}
 
-	require.NoError(t, os.WriteFile(path, []byte(`{"seq":6,"timestamp_ms":1735689604000,"event":{"context_checkpoint":{"summary":"Compacted work"}}}`+"\n"), 0o600))
+	logFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = logFile.WriteString(`{"seq":6,"timestamp_ms":1735689604000,"event":{"context_checkpoint":{"summary":"Compacted work"}}}` + "\n")
+	require.NoError(t, logFile.Close())
+	require.NoError(t, err)
 	engine.SyncAll(t.Context(), nil)
 	messages, err = database.GetAllMessages(t.Context(), "fx:sync-session")
 	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "Compacted work", messages[0].Content)
-	assert.True(t, messages[0].IsCompactBoundary)
+	require.Len(t, messages, 3)
+	assert.Equal(t, "Question", messages[0].Content)
+	assert.Equal(t, "Answer", messages[1].Content)
+	require.Len(t, messages[1].ToolCalls, 1)
+	assert.Equal(t, "File contents", messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, "Compacted work", messages[2].Content)
+	assert.True(t, messages[2].IsCompactBoundary)
 }
 
 func TestFxSyncChildBeforeParent(t *testing.T) {
@@ -186,8 +260,8 @@ func TestFxSyncFixtureToolResults(t *testing.T) {
 	usage, err := database.GetUsageEvents(t.Context(), "fx:parent-session")
 	require.NoError(t, err)
 	require.Len(t, usage, 1)
-	assert.Equal(t, "gpt-6.1-sol", usage[0].Model)
+	assert.Equal(t, "codex/gpt-6.1-sol", usage[0].Model)
 	assert.Equal(t, "codex", usage[0].ProviderID)
-	assert.Equal(t, usage[0].Model, messages[1].Model)
+	assert.Equal(t, "gpt-6.1-sol", messages[1].Model)
 	assert.Equal(t, usage[0].ProviderID, messages[1].ProviderID)
 }

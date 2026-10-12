@@ -35,8 +35,8 @@ coding yesterday?" — across multiple coding agents from one archive.
     IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual Studio Copilot**, **Mistral
     Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**, and **StepCode**. Coverage
     also includes **Cline CLI**, **Tencent CodeBuddy CN**, **Augure Code**,
-    **Augure Desktop 3 beta**, and **Charm Crush**, and reads **DeepSeek Harness**
-    formats through version 3.
+    **Augure Desktop 3 beta**, **Charm Crush**, and **fx**, and reads **DeepSeek
+    Harness** formats through version 3.
 
     Coverage depends on what each agent records. AgentsView uses recorded costs
     when available; otherwise it estimates cost from usable token counts and a
@@ -48,6 +48,9 @@ Crush contributes recorded session totals and cost, with no per-message token or
 cache breakdown. Its aggregate usage is attributed to the most recent assistant
 model, so it does not provide a model-by-model account of a session that
 switched models.
+
+fx contributes cumulative totals per model from `usage-v2.json`, dated at the
+session's last event. Costs use AgentsView's pricing catalog.
 
 Augure Code and Augure Desktop retain recorded usage. Proprietary Augure models
 have no catalog price, so token-based cost estimates remain unpriced unless you

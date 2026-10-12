@@ -524,9 +524,10 @@ AgentsView.
 
 fx sessions appear from `~/.fx/sessions/` when `session.json` uses schema 4.
 Subagent runs appear as children of their parent session. Usage comes from
-`usage-v2.json` and costs use AgentsView's pricing catalog. Set
-`FX_SESSIONS_DIR` or `agents.fx.dirs` to scan another root, including a WSL
-path on Windows. The legacy `fx_dirs` key converts to `agents.fx.dirs`.
+`usage-v2.json` as cumulative totals per model, dated at the session's last event.
+Costs use AgentsView's pricing catalog. Set `FX_SESSIONS_DIR` or `agents.fx.dirs`
+to scan another root, including a WSL path on Windows. The legacy `fx_dirs` key
+converts to `agents.fx.dirs`.
 
 Tau stores multiple session transcripts in each project directory under
 `~/.tau/sessions/`. AgentsView reads `.jsonl` files directly below those project
