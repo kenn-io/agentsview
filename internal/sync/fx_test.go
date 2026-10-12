@@ -50,13 +50,11 @@ func TestFxSyncProviderModelsAndSkills(t *testing.T) {
 			assert.Equal(t, "code review", messages[1].ToolCalls[0].SkillName)
 			assert.Equal(t, "Partial review", messages[2].Content)
 			assert.Equal(t, "Reviewed", messages[3].Content)
-			for i, message := range messages[1:] {
-				assert.Equal(t, "anthropic/claude-sonnet-4.5", message.Model)
-				if i < 2 {
-					assert.Equal(t, test.wantProvider, message.ProviderID)
-				} else {
-					assert.Equal(t, test.wantReplayProvider, message.ProviderID)
-				}
+			assert.Equal(t, "anthropic/claude-sonnet-4.5", messages[3].Model)
+			assert.Equal(t, test.wantReplayProvider, messages[3].ProviderID)
+			for _, row := range []int{1, 2, 4} {
+				assert.Empty(t, messages[row].Model)
+				assert.Empty(t, messages[row].ProviderID)
 			}
 			usage, err := database.GetUsageEvents(t.Context(), "fx:provider-session")
 			require.NoError(t, err)
@@ -155,6 +153,9 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 		{"broken frame", path, string(transcript) + "{broken\n"},
 		{"null usage", usagePath, `null`},
 		{"missing snapshot", usagePath, `{}`},
+		{"null snapshot", usagePath, `{"snapshot":null}`},
+		{"null model", usagePath, `{"snapshot":{"models":[null]}}`},
+		{"negative count", usagePath, `{"snapshot":{"models":[{"model":"gpt-6.1-sol","input_tokens":-1}]}}`},
 		{"wrong session", usagePath, `{"session_id":"other-session","snapshot":{"models":[]}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -264,4 +265,55 @@ func TestFxSyncFixtureToolResults(t *testing.T) {
 	assert.Equal(t, "codex", usage[0].ProviderID)
 	assert.Equal(t, "gpt-6.1-sol", messages[1].Model)
 	assert.Equal(t, usage[0].ProviderID, messages[1].ProviderID)
+}
+
+func TestFxSyncEqualLengthCompanionRewrites(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "session-a")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	events := filepath.Join(dir, "events.jsonl")
+	metadata := filepath.Join(dir, "session.json")
+	usageFile := filepath.Join(dir, "usage-v2.json")
+	require.NoError(t, os.WriteFile(events, []byte(`{"timestamp_ms":2000,"event":{"assistant":{"text":"Reply","provider_replay":{"source":{"model":"historical","provider":"codex"}}}}}`), 0o600))
+	require.NoError(t, os.WriteFile(metadata, []byte(`{"schema_version":4,"title":"Before","model":"old"}`), 0o600))
+	require.NoError(t, os.WriteFile(usageFile, []byte(`{"snapshot":{"models":[{"model":"test","output_tokens":5}]}}`), 0o600))
+	newer, older := time.Unix(2000, 0), time.Unix(1000, 0)
+	require.NoError(t, os.Chtimes(events, newer, newer))
+	for _, file := range []string{metadata, usageFile} {
+		require.NoError(t, os.Chtimes(file, older, older))
+	}
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentFx: {root}}, Machine: "local", DisableSignalRecomputation: true})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	for _, test := range []struct {
+		name, file, content, title string
+		output                     int
+	}{
+		{"metadata", metadata, `{"schema_version":4,"title":"After!","model":"new"}`, "After!", 5},
+		{"usage", usageFile, `{"snapshot":{"models":[{"model":"test","output_tokens":9}]}}`, "After!", 9},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, os.WriteFile(test.file, []byte(test.content), 0o600))
+			require.NoError(t, os.Chtimes(test.file, older, older))
+			engine.SyncAll(t.Context(), nil)
+			session, err := database.GetSessionFull(t.Context(), "fx:session-a")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			require.NotNil(t, session.SessionName)
+			assert.Equal(t, test.title, *session.SessionName)
+			usage, err := database.GetUsageEvents(t.Context(), "fx:session-a")
+			require.NoError(t, err)
+			require.Len(t, usage, 1)
+			assert.Equal(t, test.output, usage[0].OutputTokens)
+			messages, err := database.GetAllMessages(t.Context(), "fx:session-a")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "historical", messages[0].Model)
+			assert.Equal(t, "codex", messages[0].ProviderID)
+		})
+	}
+	stats := engine.SyncAll(t.Context(), nil)
+	assert.Zero(t, stats.Synced)
+	assert.GreaterOrEqual(t, stats.Skipped, 1)
 }

@@ -20,13 +20,15 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 		},
 	}
 	caps.Source.ForceReplaceOnParse = CapabilitySupported
+	caps.Sync.FingerprintHashRequiredForFreshness = true
 	return NewSourceSetFactory(def, caps, func(cfg ProviderConfig) SourceSet {
 		return NewDirectoryJSONLSourceSet(AgentFx, cfg.Roots,
 			WithDescendPath(func(root, path string) bool {
-				return filepath.Dir(path) == filepath.Clean(root) && IsValidSessionID(filepath.Base(path))
+				return filepath.Dir(path) == filepath.Clean(root) && IsValidSessionID(filepath.Base(path)) ||
+					filepath.Dir(filepath.Dir(path)) == filepath.Clean(root) && filepath.Base(path) == "subagent"
 			}),
-			WithIncludePath(func(_, path string) bool {
-				return filepath.Base(path) == "events.jsonl"
+			WithIncludePath(func(root, path string) bool {
+				return filepath.Base(path) == "events.jsonl" && filepath.Dir(filepath.Dir(path)) == filepath.Clean(root)
 			}),
 			WithSessionIDFromPath(func(_, path string) string { return filepath.Base(filepath.Dir(path)) }),
 			WithProjectHint(func(_, _ string) string { return "" }),
@@ -34,6 +36,7 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 			WithCompanionTranscript(fxCompanionTranscript),
 			WithParseFile(fxParseFile),
 			WithForceReplace(),
+			WithContentHashing(),
 		)
 	})
 }
@@ -61,13 +64,6 @@ func fxParseFile(ctx context.Context, path string, req ParseRequest) ([]ParseRes
 	if err != nil || session == nil {
 		return nil, nil, err
 	}
-	// Companion metadata contributes to the same freshness identity as the transcript.
 	session.File.Hash = req.Fingerprint.Hash
-	if req.Fingerprint.Size > 0 {
-		session.File.Size = req.Fingerprint.Size
-	}
-	if req.Fingerprint.MTimeNS > 0 {
-		session.File.Mtime = req.Fingerprint.MTimeNS
-	}
 	return []ParseResult{{Session: *session, Messages: messages, UsageEvents: session.UsageEvents}}, nil, nil
 }

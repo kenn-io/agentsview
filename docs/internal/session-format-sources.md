@@ -4366,8 +4366,10 @@ schemas keep their existing ordering behavior.
   timestamps. `events.jsonl` stores version 3 frames. The
   [event union](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_event.zig)
   defines prompts, replies, steering, tool calls and results, interruptions,
-  and context checkpoints. Result text uses the stored preview. Tool calls
-  retain the preceding assistant's model and provider within a user turn.
+  and context checkpoints. Result text uses the stored preview. Only assistant
+  replay records supply historical model and provider identities.
+  Tool calls share them when attached to that assistant row; separate tool-call
+  rows and interrupted text leave those identities unknown.
   [Provider IDs](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/config/model_provider.zig)
   are strings for built-in providers or objects with `name` and `binding` for
   configured providers. Model names retain publisher prefixes for pricing.
@@ -4398,6 +4400,7 @@ schemas keep their existing ordering behavior.
   Newer versions skip the source. Full tool-result artifacts and encrypted
   reasoning are excluded. Changes to `session.json`,
   `usage-v2.json`, or `subagent/owner.json` refresh their owning transcript.
+  Companion content hashes detect equal-length rewrites.
   A torn final line without a newline is ignored. Other invalid frames or usage
   structures and mismatched usage session IDs fail parsing, preserving the
   stored session for retry. Tool previews and status attach to calls without

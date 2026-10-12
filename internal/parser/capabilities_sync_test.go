@@ -131,6 +131,9 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentEvener: {
 			FingerprintHashRequiredForFreshness: true,
 		},
+		AgentFx: {
+			FingerprintHashRequiredForFreshness: true,
+		},
 		// Codebuff requires the per-component stat-hash digest (persisted in
 		// the provider_freshness side-table) before a warm pass may consider a
 		// source fresh; the side-table row is the only signal that sees

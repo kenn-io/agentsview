@@ -40,7 +40,7 @@ func TestFxFixture(t *testing.T) {
 		roles = append(roles, message.Role)
 		calls = append(calls, message.ToolCalls...)
 		results = append(results, message.ToolResults...)
-		if message.Role == RoleAssistant {
+		if message.Role == RoleAssistant && message.Content != "" {
 			assert.Equal(t, "gpt-6.1-sol", message.Model)
 			assert.Equal(t, "codex", message.ProviderID)
 		}
@@ -113,13 +113,13 @@ func TestFxEventVariants(t *testing.T) {
 	require.Len(t, messages[1].ToolCalls, 1)
 	assert.Equal(t, "review", messages[1].ToolCalls[0].SkillName)
 	assert.Equal(t, "Tool", messages[1].ToolCalls[0].Category)
-	assert.Equal(t, "fallback", messages[1].Model)
+	assert.Empty(t, messages[1].Model)
 	assert.True(t, messages[3].IsCompactBoundary)
 	assert.True(t, messages[3].IsSystem)
 	assert.Equal(t, "compact_boundary", messages[3].SourceSubtype)
 	assert.Equal(t, "Earlier work", messages[3].Content)
 	assert.Equal(t, "Half an answer", messages[4].Content)
-	assert.Equal(t, "fallback", messages[4].Model)
+	assert.Empty(t, messages[4].Model)
 	assert.Equal(t, "actual", messages[5].Model)
 	assert.Equal(t, "codex", messages[5].ProviderID)
 	require.Len(t, session.UsageEvents, 2)
@@ -140,9 +140,8 @@ func TestFxMetadataAndCancellation(t *testing.T) {
 		wantError bool
 	}{
 		{"missing", "", false},
-		{"inline schema", `{"schema_version":2}`, false},
-		{"old event log", `{"schema_version":3}`, false},
-		{"future schema", `{"schema_version":5}`, false},
+		{"null", `null`, true},
+		{"wrong type", `{"schema_version":"4"}`, true},
 		{"malformed", `{broken`, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -163,8 +162,6 @@ func TestFxMetadataAndCancellation(t *testing.T) {
 			assert.Nil(t, session)
 			if test.metadata == "" {
 				assert.Contains(t, logs.String(), "missing session.json")
-			} else if test.name == "old event log" {
-				assert.Contains(t, logs.String(), "schema_version 3 is older than supported 4")
 			}
 		})
 	}
@@ -195,22 +192,23 @@ func TestFxToolCallsKeepAssistantModel(t *testing.T) {
 	_, messages, err := parseFxSession(t.Context(), filePath, "local")
 	require.NoError(t, err)
 	require.Len(t, messages, 11)
-	for _, row := range []int{0, 2} {
-		assert.Equal(t, "earlier-model", messages[row].Model)
-		assert.Equal(t, "earlier-provider", messages[row].ProviderID)
-	}
-	for _, row := range []int{4, 6} {
-		assert.Equal(t, "later-model", messages[row].Model)
-		assert.Equal(t, "later-provider", messages[row].ProviderID)
-	}
+	assert.Equal(t, "earlier-model", messages[0].Model)
+	assert.Equal(t, "earlier-provider", messages[0].ProviderID)
+	assert.Equal(t, "later-model", messages[4].Model)
+	assert.Equal(t, "later-provider", messages[4].ProviderID)
 	require.Len(t, messages[2].ToolCalls, 1)
 	assert.Equal(t, "two", messages[2].ToolCalls[0].ToolUseID)
 	require.Len(t, messages[6].ToolCalls, 1)
 	assert.Equal(t, "four", messages[6].ToolCalls[0].ToolUseID)
-	for _, row := range []int{8, 10} {
-		assert.Equal(t, "current-model", messages[row].Model)
-		assert.Equal(t, "current-provider", messages[row].ProviderID)
+	for _, row := range []int{2, 6, 8, 10} {
+		assert.Empty(t, messages[row].Model)
+		assert.Empty(t, messages[row].ProviderID)
 	}
+	before := messages
+	writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4,"model":"changed-model","provider":"changed-provider"}`)
+	_, messages, err = parseFxSession(t.Context(), filePath, "local")
+	require.NoError(t, err)
+	assert.Equal(t, before, messages)
 }
 
 func TestFxToolResultWithoutPreview(t *testing.T) {
@@ -350,15 +348,21 @@ func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 		{"empty models", `{"snapshot":{"models":[]}}`, ""},
 		{"matching session", `{"session_id":"session-a","snapshot":{"models":[]}}`, ""},
 		{"other session", `{"session_id":"session-b","snapshot":{"models":[]}}`, "session_id does not match"},
+		{"empty session", `{"session_id":"","snapshot":{"models":[]}}`, "session_id does not match"},
 		{"malformed", `{broken`, "invalid fx metadata"},
-		{"null envelope", `null`, "snapshot object and models array"},
-		{"array envelope", `[]`, "snapshot object and models array"},
-		{"missing snapshot", `{}`, "snapshot object and models array"},
-		{"null snapshot", `{"snapshot":null}`, "snapshot object and models array"},
-		{"array snapshot", `{"snapshot":[]}`, "snapshot object and models array"},
-		{"missing models", `{"snapshot":{}}`, "snapshot object and models array"},
-		{"null models", `{"snapshot":{"models":null}}`, "snapshot object and models array"},
-		{"object models", `{"snapshot":{"models":{}}}`, "snapshot object and models array"},
+		{"null envelope", `null`, "invalid fx"},
+		{"array envelope", `[]`, "invalid fx"},
+		{"missing snapshot", `{}`, "invalid fx"},
+		{"null snapshot", `{"snapshot":null}`, "invalid fx"},
+		{"array snapshot", `{"snapshot":[]}`, "invalid fx"},
+		{"missing models", `{"snapshot":{}}`, "invalid fx"},
+		{"null model entry", `{"snapshot":{"models":[null]}}`, "model entry"},
+		{"empty model entry", `{"snapshot":{"models":[{}]}}`, "model entry"},
+		{"negative count", `{"snapshot":{"models":[{"model":"test","input_tokens":-1}]}}`, "negative fx token count"},
+		{"fractional count", `{"snapshot":{"models":[{"model":"test","output_tokens":1.5}]}}`, "invalid fx"},
+		{"null count", `{"snapshot":{"models":[{"model":"test","cache_read_tokens":null}]}}`, "null fx token count"},
+		{"null models", `{"snapshot":{"models":null}}`, "invalid fx"},
+		{"object models", `{"snapshot":{"models":{}}}`, "invalid fx"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "session-a")
@@ -379,4 +383,18 @@ func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 			assert.Empty(t, session.UsageEvents)
 		})
 	}
+}
+
+func TestFxUnknownAssistantModelAndStart(t *testing.T) {
+	dir := t.TempDir()
+	writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4,"model":"preference","provider":"codex"}`)
+	file := filepath.Join(dir, "events.jsonl")
+	writeSourceFile(t, file, `{"timestamp_ms":2000,"event":{"assistant":{"text":"Old reply"}}}`)
+	session, messages, err := parseFxSession(t.Context(), file, "local")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.Len(t, messages, 1)
+	assert.Empty(t, messages[0].Model)
+	assert.Empty(t, messages[0].ProviderID)
+	assert.Equal(t, time.UnixMilli(2000).UTC(), session.StartedAt)
 }

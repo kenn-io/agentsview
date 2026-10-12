@@ -1,8 +1,10 @@
 package parser
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,6 +42,44 @@ func TestFxProviderDiscoveryAndParse(t *testing.T) {
 	assert.Equal(t, "Hello", result.Messages[0].Content)
 	require.Len(t, result.UsageEvents, 1)
 	assert.Equal(t, 5, result.UsageEvents[0].InputTokens)
-	assert.Equal(t, fingerprint.Size, result.Session.File.Size)
-	assert.Equal(t, fingerprint.MTimeNS, result.Session.File.Mtime)
+	assert.Equal(t, fingerprint.Hash, result.Session.File.Hash)
+	assert.NotEmpty(t, fingerprint.Hash)
+}
+
+func TestFxCompanionEqualLengthRewrites(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "session-a", "events.jsonl")
+	writeSourceFile(t, file, `{"event":{"user":{"text":"Hello"}}}`)
+	newer := time.Unix(2000, 0)
+	older := time.Unix(1000, 0)
+	require.NoError(t, os.Chtimes(file, newer, newer))
+	for _, test := range []struct{ path, before, after string }{
+		{"session.json", `{"schema_version":4,"title":"Before"}`, `{"schema_version":4,"title":"After!"}`},
+		{"usage-v2.json", `{"snapshot":{"models":[{"model":"test","input_tokens":5}]}}`, `{"snapshot":{"models":[{"model":"test","input_tokens":9}]}}`},
+		{"subagent/owner.json", `{"parent_id":"parent-a"}`, `{"parent_id":"parent-b"}`},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			companion := filepath.Join(filepath.Dir(file), filepath.FromSlash(test.path))
+			writeSourceFile(t, companion, test.before)
+			require.NoError(t, os.Chtimes(companion, older, older))
+			provider, ok := NewProvider(AgentFx, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			before, err := provider.Fingerprint(t.Context(), sources[0])
+			require.NoError(t, err)
+			writeSourceFile(t, companion, test.after)
+			require.NoError(t, os.Chtimes(companion, older, older))
+			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: companion, EventKind: "write", WatchRoot: root})
+			require.NoError(t, err)
+			require.Len(t, changed, 1)
+			assert.Equal(t, file, changed[0].DisplayPath)
+			after, err := provider.Fingerprint(t.Context(), sources[0])
+			require.NoError(t, err)
+			assert.Equal(t, before.Size, after.Size)
+			assert.Equal(t, before.MTimeNS, after.MTimeNS)
+			assert.NotEqual(t, before.Hash, after.Hash)
+		})
+	}
 }
