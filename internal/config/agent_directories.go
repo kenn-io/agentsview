@@ -32,6 +32,11 @@ func (c *Config) applyAgentDirectories(value any) error {
 		return errors.New("agents: expected a TOML table")
 	}
 	for _, name := range slices.Sorted(maps.Keys(agents)) {
+		if name == string(parser.AgentCodexCloud) {
+			// Parsed by parseCodexCloudTable; its errors stay local to that
+			// source.
+			continue
+		}
 		def, ok := parser.AgentByType(parser.AgentType(name))
 		if !ok {
 			return fmt.Errorf("agents: unknown session provider %q", name)

@@ -96,6 +96,7 @@ const (
 )
 
 const AgentDeepSeekHarness AgentType = "deepseek-harness"
+const AgentCodexCloud AgentType = "codex-cloud"
 
 // AgentDef describes a supported coding agent's filesystem
 // layout, configuration keys, and session ID conventions.
