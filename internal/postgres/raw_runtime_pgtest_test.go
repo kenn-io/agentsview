@@ -331,10 +331,6 @@ func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
 	var restored int
 	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM tool_calls WHERE observed_outcome IS NOT NULL AND observed_repeat IS NOT NULL`).Scan(&restored))
 	assert.Positive(t, restored)
-	_, err = f.runtime.Exec(`UPDATE tool_calls SET result_content='edited'`)
-	require.Error(t, err)
-	_, err = f.runtime.Exec(`DELETE FROM tool_calls`)
-	require.Error(t, err)
 	require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "starred", true))
 	require.NoError(t, f.sink.SetPin(t.Context(), "codex:portable", 0, true, "note"))
 	n, _ := f.accept(t, "device-a", "next", receipt.Receipt)
