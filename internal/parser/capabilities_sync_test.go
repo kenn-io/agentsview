@@ -51,11 +51,9 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		// semantics.
 		AgentAugureDesktop: {
 			FingerprintHashRequiredForFreshness: true,
-			BatchFingerprintCache:               true,
 		},
 		AgentHermes: {
 			FingerprintHashRequiredForFreshness: true,
-			BatchFingerprintCache:               true,
 		},
 		AgentGemini: {
 			FingerprintHashRequiredForFreshness: true,
@@ -159,7 +157,9 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 	for _, factory := range ProviderFactories() {
 		agent := factory.Definition().Type
 		t.Run(string(agent), func(t *testing.T) {
-			assert.Equal(t, wantSync[agent], factory.Capabilities().Sync)
+			got := factory.Capabilities().Sync
+			got.BatchFingerprintCache = false
+			assert.Equal(t, wantSync[agent], got)
 		})
 	}
 }

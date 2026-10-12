@@ -2252,7 +2252,9 @@ func (e *Engine) classifyProviderChangedPath(
 						),
 					)
 				}
-				continue
+				if _, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err); !incomplete || ctx.Err() != nil {
+					continue
+				}
 			}
 			if def.Type == parser.AgentOmnigent {
 				sources, err = e.expandOmnigentInheritedMetadataSources(
@@ -8408,7 +8410,9 @@ func (e *Engine) discoverProviderSources(
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
-			continue
+			if _, incomplete := errors.AsType[parser.DiscoveryIncompleteError](err); !incomplete || ctx.Err() != nil {
+				continue
+			}
 		}
 		if agentType == parser.AgentKiro {
 			sources = filterProviderSourcesToScope(sources, scope)

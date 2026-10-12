@@ -312,6 +312,7 @@ func (p *hermesProvider) Parse(
 	if sess == nil {
 		return ParseOutcome{
 			ResultSetComplete: true,
+			ForceReplace:      true,
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
@@ -327,6 +328,7 @@ func (p *hermesProvider) Parse(
 				DataVersion: DataVersionCurrent,
 			}},
 			ResultSetComplete: true,
+			ForceReplace:      true,
 		}, nil
 	}
 	return ParseOutcome{
@@ -338,6 +340,7 @@ func (p *hermesProvider) Parse(
 			DataVersion: DataVersionCurrent,
 		}},
 		ResultSetComplete: true,
+		ForceReplace:      true,
 	}, nil
 }
 
@@ -380,7 +383,7 @@ func (p *hermesProvider) parseStateMember(
 	if fingerprint.Hash != "" {
 		result.Session.File.Hash = fingerprint.Hash
 	}
-	// Store the fingerprint's freshness identity (state.db plus selected
+	// Store the fingerprint's freshness identity (state.db, WAL and selected
 	// transcript) so the engine's stored size+mtime skip recognizes an
 	// unchanged member while the container is untouched. The stat is shared
 	// by every member, so after any sibling change the engine falls back to
@@ -1118,9 +1121,12 @@ func (s hermesSourceSet) changedPathSources(
 			if !IsValidSessionID(id) {
 				return nil, nil
 			}
-			found, err := hermesStateDBHasSession(ctx, stateDB, id)
-			if err != nil {
-				return nil, err
+			found, lookupErr := hermesStateDBHasSession(ctx, stateDB, id)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if lookupErr != nil {
+				lookupErr = incompleteDiscoveryError(s.agent, "resolve transcript membership", lookupErr)
 			}
 			if found {
 				source := s.stateMemberSourceRef(root, stateDB, id)
@@ -1129,11 +1135,15 @@ func (s hermesSourceSet) changedPathSources(
 				source.Opaque = src
 				return []SourceRef{source}, nil
 			}
-			if !allowMissing && !IsRegularFile(path) {
-				return nil, nil
+			selected := findHermesSourceFile(sessionsDir, id)
+			if selected == "" {
+				if !allowMissing {
+					return nil, lookupErr
+				}
+				selected = path
 			}
-			source, _ := s.transcriptSourceRef(root, path)
-			return []SourceRef{source}, nil
+			source, _ := s.transcriptSourceRef(root, selected)
+			return []SourceRef{source}, lookupErr
 		}
 	}
 	source, ok := s.sourceForChangedPath(root, path, allowMissing)
@@ -1658,6 +1668,13 @@ func hermesStateMemberFingerprintFinish(
 	fingerprint := SourceFingerprint{
 		Key:  firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.Path),
 		Size: info.Size(), MTimeNS: info.ModTime().UnixNano(),
+	}
+	walInfo, err := os.Stat(src.StateDB + "-wal")
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return SourceFingerprint{}, err
+	}
+	if err == nil && sqliteWALInfoHasFrames(walInfo) {
+		fingerprint.MTimeNS = max(fingerprint.MTimeNS, walInfo.ModTime().UnixNano())
 	}
 	if selectedPath != src.StateDB {
 		selectedInfo, err := os.Stat(selectedPath)

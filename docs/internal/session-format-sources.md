@@ -3221,10 +3221,13 @@ schemas keep their existing ordering behavior.
   contents, titles and usage can change independently of `ended_at`.
   Discovery and database/WAL events use virtual `state.db#<session ID>`
   sources and compare member fingerprints before parsing. Transcript events
-  resolve only their indexed member or standalone transcript. Existing
-  archive-level paths migrate during ordinary sync; historical sessions
-  remain in SQLite when their source disappears. Augure Desktop uses the
-  same member selection.
+  resolve only their indexed member or standalone transcript, with JSONL
+  preferred over JSON snapshots. The pinned source enables SQLite WAL mode;
+  member freshness includes committed WAL data for timestamp cutoffs.
+  Malformed or incompatible state databases still allow transcript fallback,
+  but discovery remains incomplete. Existing archive-level paths migrate
+  during ordinary sync; historical sessions remain in SQLite when their
+  source disappears. Augure Desktop uses the same member selection.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it

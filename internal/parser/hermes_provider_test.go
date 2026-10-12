@@ -1076,7 +1076,7 @@ func TestHermesProviderParse(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, outcome.ResultSetComplete)
-	require.False(t, outcome.ForceReplace)
+	require.True(t, outcome.ForceReplace)
 	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0]
 	assert.Equal(t, DataVersionCurrent, result.DataVersion)
@@ -1582,6 +1582,38 @@ func TestHermesChangedPathIgnoresReaderWALEvents(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sources, 1, "committed WAL frames must still refresh their members")
 			assert.Equal(t, VirtualSourcePath(stateDB, "child"), sources[0].DisplayPath)
+		})
+	}
+}
+
+func TestHermesStandaloneEventsPreferJSONL(t *testing.T) {
+	for _, agent := range []AgentType{AgentHermes, AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			createHermesStateDB(t, root)
+			dir := filepath.Join(root, "sessions")
+			jsonlPath := filepath.Join(dir, "standalone.jsonl")
+			jsonPath := filepath.Join(dir, "session_standalone.json")
+			writeSourceFile(t, jsonlPath, hermesProviderJSONLFixture("current prompt"))
+			writeSourceFile(t, jsonPath, hermesProviderJSONFixture("stale prompt"))
+			provider, ok := NewProvider(agent, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			for _, test := range []struct {
+				path, event, want string
+			}{
+				{path: jsonPath, event: "write", want: jsonlPath},
+				{path: jsonlPath, event: "remove", want: jsonPath},
+			} {
+				if test.event == "remove" {
+					require.NoError(t, os.Remove(jsonlPath))
+				}
+				sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
+					Path: test.path, EventKind: test.event, WatchRoot: dir,
+				})
+				require.NoError(t, err)
+				require.Len(t, sources, 1)
+				assert.Equal(t, test.want, sources[0].DisplayPath)
+			}
 		})
 	}
 }

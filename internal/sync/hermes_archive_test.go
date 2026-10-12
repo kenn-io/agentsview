@@ -1383,3 +1383,130 @@ func TestHermesMemberDiscoveryMigratesLegacyArchivePaths(t *testing.T) {
 	assert.Nil(t, after.SourceMissingAt)
 	assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 }
+
+func TestHermesStandaloneTranscriptEditsReplaceMessages(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, mode := range []string{"full sync", "transcript event"} {
+			t.Run(string(agent)+"/"+mode, func(t *testing.T) {
+				root := t.TempDir()
+				writeHermesArchiveStateDB(t, root)
+				dir := filepath.Join(root, "sessions")
+				writeHermesTranscriptFile(t, dir, "standalone")
+				path := filepath.Join(dir, "standalone.jsonl")
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+				})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				require.NoError(t, os.WriteFile(path, []byte(
+					`{"role":"user","content":"edited prompt","timestamp":"2026-05-14T10:01:00Z"}`+"\n"+
+						`{"role":"assistant","content":"corrected reply","timestamp":"2026-05-14T10:02:00Z"}`+"\n",
+				), 0o600))
+				if mode == "full sync" {
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				} else {
+					require.NoError(t, engine.syncPathsContext(t.Context(), []string{path}, false))
+				}
+				for range 2 {
+					messages, err := database.GetAllMessages(t.Context(), string(agent)+":standalone")
+					require.NoError(t, err)
+					contents := make([]string, len(messages))
+					for i, message := range messages {
+						contents[i] = message.Content
+					}
+					assert.Equal(t, []string{"edited prompt", "corrected reply"}, contents)
+					assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+				}
+			})
+		}
+	}
+}
+
+func TestHermesPartialDiscoverySyncsReadableTranscripts(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, damage := range []string{"malformed database", "incompatible schema"} {
+			for _, mode := range []string{"full sync", "transcript event"} {
+				t.Run(string(agent)+"/"+damage+"/"+mode, func(t *testing.T) {
+					root := t.TempDir()
+					stateDB := writeHermesArchiveStateDB(t, root)
+					healthyRoot := t.TempDir()
+					database := dbtest.OpenTestDB(t)
+					engine := NewEngine(t.Context(), database, EngineConfig{
+						AgentDirs: map[parser.AgentType][]string{agent: {root, healthyRoot}}, Machine: "local",
+					})
+					t.Cleanup(engine.Close)
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					before, err := database.GetSessionFull(t.Context(), string(agent)+":child")
+					require.NoError(t, err)
+					require.NotNil(t, before)
+					require.NoError(t, os.Remove(stateDB))
+					if damage == "malformed database" {
+						require.NoError(t, os.WriteFile(stateDB, []byte("not a sqlite database"), 0o600))
+					} else {
+						conn, openErr := sql.Open("sqlite3", stateDB)
+						require.NoError(t, openErr)
+						_, execErr := conn.ExecContext(t.Context(), "CREATE TABLE unrelated (id TEXT PRIMARY KEY)")
+						require.NoError(t, execErr)
+						require.NoError(t, conn.Close())
+					}
+					dir := filepath.Join(root, "sessions")
+					writeHermesTranscriptFile(t, dir, "fallback")
+					writeHermesTranscriptFile(t, healthyRoot, "healthy")
+					if mode == "full sync" {
+						stats := engine.SyncAll(t.Context(), nil)
+						assert.Positive(t, stats.Failed, "partial discovery must report the database error")
+					} else {
+						err = engine.syncPathsContext(t.Context(), []string{filepath.Join(dir, "fallback.jsonl"), filepath.Join(healthyRoot, "healthy.jsonl")}, false)
+						require.Error(t, err, "partial classification must report the database error")
+					}
+					for _, id := range []string{"fallback", "healthy"} {
+						stored, getErr := database.GetSession(t.Context(), string(agent)+":"+id)
+						require.NoError(t, getErr)
+						require.NotNil(t, stored)
+						assert.Equal(t, new("hello"), stored.FirstMessage)
+					}
+					after, err := database.GetSessionFull(t.Context(), string(agent)+":child")
+					require.NoError(t, err)
+					assert.Equal(t, before, after, "incomplete discovery must preserve state-only history")
+				})
+			}
+		}
+	}
+}
+
+func TestHermesSyncAllSinceIncludesWALOnlyEdits(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			conn.SetMaxOpenConns(1)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			_, err = conn.ExecContext(t.Context(), "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)")
+			require.NoError(t, err)
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			_, err = conn.ExecContext(t.Context(), "UPDATE messages SET content = 'WAL-only edit' WHERE session_id = 'child'")
+			require.NoError(t, err)
+			old := time.Now().Add(-2 * time.Hour)
+			cutoff := time.Now().Add(-time.Hour)
+			require.NoError(t, os.Chtimes(stateDB, old, old))
+			walInfo, err := os.Stat(stateDB + "-wal")
+			require.NoError(t, err)
+			require.True(t, walInfo.ModTime().After(cutoff))
+			stats := engine.SyncAllSince(t.Context(), cutoff, nil)
+			assert.Zero(t, stats.Failed)
+			assert.Equal(t, 1, stats.Synced)
+			messages, err := database.GetAllMessages(t.Context(), string(agent)+":child")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "WAL-only edit", messages[0].Content)
+		})
+	}
+}
