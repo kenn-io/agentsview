@@ -5,6 +5,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -158,8 +159,11 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 		}, nil},
 		{"usage capture", func(ctx context.Context) error {
 			captured, err := database.captureUsageQuery(ctx, UsageFilter{}, usageQueryKindToken)
+			if err != nil {
+				return err
+			}
 			defer captured.Close()
-			return err
+			return nil
 		}, nil},
 		{"usage source recheck", func(ctx context.Context) error {
 			_, err := cache.fill.recheckSourceVersions(ctx, snapshot.Versions)
@@ -223,21 +227,19 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			if blocked {
 				budget = 100 * time.Millisecond
 			}
-			//nolint:kennlint // The deadline expires while all bulk permits are held, except for input errors.
 			ctx, cancel := context.WithTimeout(t.Context(), budget)
 			defer cancel()
 			require.NoError(t, ctx.Err())
 			err := tc.read(ctx)
 			if tc.wantError != nil {
-				switch want := tc.wantError.(type) {
-				case *StatsInputError:
-					require.ErrorAs(t, err, &want)
-				case *SearchInputError:
-					require.ErrorAs(t, err, &want)
-				default:
-					require.ErrorIs(t, err, want)
+				if statsError, ok := errors.AsType[*StatsInputError](tc.wantError); ok {
+					require.ErrorAs(t, err, &statsError)
+				} else if searchError, ok := errors.AsType[*SearchInputError](tc.wantError); ok {
+					require.ErrorAs(t, err, &searchError)
+				} else {
+					require.ErrorIs(t, err, tc.wantError)
 				}
-				assert.NoError(t, ctx.Err())
+				require.NoError(t, ctx.Err())
 			} else if blocked {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			} else {
@@ -266,7 +268,7 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			require.Len(t, page.Matches, 1)
 			assert.Equal(t, tc.sessionID, page.Matches[0].SessionID)
 			assert.Equal(t, tc.snippet, page.Matches[0].Snippet)
-			assert.NoError(t, ctx.Err())
+			require.NoError(t, ctx.Err())
 			assert.Zero(t, database.rawReader().Stats().InUse)
 		})
 	}
@@ -277,7 +279,7 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 		require.NoError(t, err)
 		require.Len(t, page.Matches, 1)
 		assert.Equal(t, "inside-message", page.Matches[0].SessionID)
-		assert.NoError(t, ctx.Err())
+		require.NoError(t, ctx.Err())
 		assert.Zero(t, database.rawReader().Stats().InUse)
 	})
 }
