@@ -4,6 +4,7 @@ package clickhouse
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -717,7 +718,10 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	require.NoError(t, err)
 	// While another push holds the rebuild lock, a push leaves the rows in
 	// place, and reads prepare the republished session themselves.
-	_, err = store.DB().ExecContext(ctx, "CREATE TABLE prepared_usage_rebuild_lock (x UInt8) ENGINE = Memory")
+	var now int64
+	require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT toUnixTimestamp(now())").Scan(&now))
+	_, err = store.DB().ExecContext(ctx, fmt.Sprintf(
+		"CREATE TABLE prepared_usage_rebuild_lock_100 (x UInt8) ENGINE = Memory COMMENT 'held %d'", now))
 	require.NoError(t, err)
 	result, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -726,9 +730,24 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	state, err := store.preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{usagePriceRoundID}, state.changed)
-	_, err = store.DB().ExecContext(ctx, "DROP TABLE prepared_usage_rebuild_lock SYNC")
+	// A lock held for more than an hour belongs to a killed push. The next
+	// push takes over, and one released lock table remains.
+	_, err = store.DB().ExecContext(ctx, fmt.Sprintf(
+		"ALTER TABLE prepared_usage_rebuild_lock_100 MODIFY COMMENT 'held %d'", now-2*60*60))
 	require.NoError(t, err)
 	push()
+	var locks []string
+	rows, err := store.DB().QueryContext(ctx, `SELECT name || ' ' || comment FROM system.tables
+		WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_rebuild_lock')`)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var lock string
+		require.NoError(t, rows.Scan(&lock))
+		locks = append(locks, lock)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_101 released"}, locks)
 	prepared := read()
 	var roundRows []activity.UsageRow
 	for _, row := range prepared {
@@ -745,4 +764,35 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ready)
 	require.Equal(t, read(), prepared, "prepared usage must match the raw rows it replaces")
+}
+
+// A push that held the rebuild lock past its timeout must not publish once
+// another push has taken a newer lock, and releasing a lock a successor
+// already dropped is not an error.
+func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
+	ctx := t.Context()
+	dsn, database := chtest.FreshDatabase(t)
+	conn := chtest.Open(t, dsn, database)
+	generation, acquired, err := acquireRebuildLock(ctx, conn)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	superseded, err := rebuildLockSuperseded(ctx, conn, generation)
+	require.NoError(t, err)
+	require.False(t, superseded)
+
+	_, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"ALTER TABLE prepared_usage_rebuild_lock_%d MODIFY COMMENT 'held 1'", generation))
+	require.NoError(t, err)
+	successor, acquired, err := acquireRebuildLock(ctx, conn)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Equal(t, generation+1, successor)
+	superseded, err = rebuildLockSuperseded(ctx, conn, generation)
+	require.NoError(t, err)
+	require.True(t, superseded)
+	require.NoError(t, releaseRebuildLock(ctx, conn, generation))
+
+	_, acquired, err = acquireRebuildLock(ctx, conn)
+	require.NoError(t, err)
+	require.False(t, acquired, "the successor's lock is still held")
 }
