@@ -305,11 +305,13 @@ func hasSource(f ContentSearchFilter, name string) bool {
 func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	release, err := db.acquireBulkRead(ctx)
-	if err != nil {
-		return ContentSearchPage{}, err
+	if f.SessionID == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
 	}
-	defer release()
 
 	scope, scopeArgs := sessionScopeSubquery(f)
 	like := "%" + escapeLike(f.Pattern) + "%"
@@ -485,11 +487,13 @@ func (db *DB) searchContentTerms(
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
-	release, err := db.acquireBulkRead(ctx)
-	if err != nil {
-		return ContentSearchPage{}, err
+	if f.SessionID == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
 	}
-	defer release()
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -511,11 +515,13 @@ func (db *DB) searchContentRegex(
 	if err != nil {
 		return ContentSearchPage{}, searchInputErrorf("search: invalid regex: %v", err)
 	}
-	release, err := db.acquireBulkRead(ctx)
-	if err != nil {
-		return ContentSearchPage{}, err
+	if f.SessionID == "" {
+		release, err := db.acquireBulkRead(ctx)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
+		defer release()
 	}
-	defer release()
 	lit := LiteralPrefix(f.Pattern)
 
 	rows, err := db.regexCandidateRows(ctx, f, lit)

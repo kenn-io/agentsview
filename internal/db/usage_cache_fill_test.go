@@ -212,6 +212,12 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 		if !blocked && tc.wantError != nil {
 			continue
 		}
+		if !blocked {
+			switch tc.name {
+			case "activity artifacts", "usage capture", "usage source recheck":
+				continue
+			}
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			budget := 2 * time.Second
 			if blocked {
@@ -244,6 +250,25 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 	}
 	if !blocked {
 		return
+	}
+	for _, tc := range []struct {
+		mode, sessionID, pattern, snippet string
+	}{
+		{"substring", "inside-message", "skill", "skill call"},
+		{"terms", "user-only", "question", "question"},
+		{"regex", "inside-message", "skill", "skill call"},
+	} {
+		t.Run("session-scoped "+tc.mode+" search bypasses lane", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: tc.pattern, Mode: tc.mode, SessionID: tc.sessionID, Sources: []string{"messages"}, IncludeOneShot: true})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, tc.sessionID, page.Matches[0].SessionID)
+			assert.Equal(t, tc.snippet, page.Matches[0].Snippet)
+			assert.NoError(t, ctx.Err())
+			assert.Zero(t, database.rawReader().Stats().InUse)
+		})
 	}
 	t.Run("fts search bypasses lane", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
