@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json/jsontext"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -264,4 +265,28 @@ func BenchmarkCodexCloudParseLargeThread(b *testing.B) {
 		_, _, err := ParseCodexCloudFile(b.Context(), path, "machine-a")
 		require.NoError(b, err)
 	}
+}
+
+func TestCodexCloudRawCapturePlanOneEntry(t *testing.T) {
+	path := writeCodexCloudMirror(t, "thread-f", ccRecord(mirror.KindThread, ccListing))
+	root := filepath.Dir(filepath.Dir(path))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(path), "thread-f.state.json"), []byte("{}"), 0o600))
+	provider, ok := NewProvider(AgentCodexCloud, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	assert.Equal(t, RawCaptureCapabilities{
+		Support: CapabilitySupported, Shape: RawCaptureShapeFiles, Append: RawCaptureAppendOne,
+	}, provider.Capabilities().RawCapture)
+	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+	require.NoError(t, err)
+	require.True(t, discovery.Complete)
+	require.Len(t, discovery.Sources, 1)
+
+	planner, ok := provider.(RawCaptureProvider)
+	require.True(t, ok)
+	plan, err := planner.PlanRawCapture(t.Context(), discovery.Sources[0])
+	require.NoError(t, err)
+	assert.Equal(t, root, plan.CaptureRoot)
+	assert.Equal(t, []RawCaptureEntry{{
+		Path: "account-key/thread-f.jsonl.zstd", LocalPath: path, Appendable: true,
+	}}, plan.Entries)
 }
