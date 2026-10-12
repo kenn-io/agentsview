@@ -402,10 +402,11 @@ func (p *hermesProvider) parseStateMember(
 }
 
 type hermesSource struct {
-	Root      string
-	Path      string
-	StateDB   string
-	SessionID string
+	Root                    string
+	Path                    string
+	StateDB                 string
+	SessionID               string
+	FingerprintSingleMember bool
 }
 
 type hermesSourceSet struct {
@@ -512,24 +513,12 @@ func hermesProfileRootForPath(profilesRoot, changedPath string) (string, bool) {
 func (s hermesSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
-	roots, expandErr := s.expandedRoots()
-	for _, root := range roots {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		for _, file := range discoverHermesSessions(root) {
-			source, ok := s.sourceRef(root, file.Path)
-			if !ok {
-				continue
-			}
-			addJSONLSource(source, &sources, seen)
-		}
-	}
+	err := s.DiscoverEach(ctx, func(source SourceRef) error {
+		addJSONLSource(source, &sources, seen)
+		return nil
+	})
 	sortJSONLSources(sources)
-	if expandErr != nil {
-		return sources, incompleteProfileExpansionError(expandErr)
-	}
-	return sources, nil
+	return sources, err
 }
 
 func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
@@ -1088,52 +1077,70 @@ func (s hermesSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	allowMissing := jsonlMissingPathFallbackAllowed(req)
-	if req.WatchRoot != "" {
-		watchRoot := filepath.Clean(req.WatchRoot)
-		for _, root := range s.roots {
-			if isHermesProfilesContainer(root) && samePath(root, watchRoot) {
-				profileRoot, ok := hermesProfileRootForPath(root, req.Path)
-				if !ok {
-					return nil, nil
-				}
-				source, ok := s.sourceForChangedPath(
-					profileRoot, req.Path, allowMissing,
-				)
-				if ok {
-					return []SourceRef{source}, nil
-				}
-				return nil, nil
-			}
-			if !hermesWatchRootMatches(root, watchRoot) {
-				continue
-			}
-			source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
-			if ok {
-				return []SourceRef{source}, nil
-			}
-		}
-		return nil, nil
-	}
 	for _, root := range s.roots {
 		if isHermesProfilesContainer(root) {
+			if req.WatchRoot != "" && !samePath(root, req.WatchRoot) {
+				continue
+			}
 			profileRoot, ok := hermesProfileRootForPath(root, req.Path)
 			if !ok {
 				continue
 			}
-			source, ok := s.sourceForChangedPath(
-				profileRoot, req.Path, allowMissing,
-			)
-			if ok {
-				return []SourceRef{source}, nil
-			}
+			root = profileRoot
+		} else if req.WatchRoot != "" && !hermesWatchRootMatches(root, req.WatchRoot) {
 			continue
 		}
-		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
-		if ok {
-			return []SourceRef{source}, nil
+		sources, err := s.changedPathSources(ctx, root, req.Path, allowMissing)
+		if err != nil || len(sources) > 0 {
+			return sources, err
 		}
 	}
 	return nil, nil
+}
+
+func (s hermesSourceSet) changedPathSources(
+	ctx context.Context, root, path string, allowMissing bool,
+) ([]SourceRef, error) {
+	if stateDB, sessionsDir, ok := hermesStatePaths(root); ok {
+		if hermesStatePathAffectsArchive(path, stateDB) {
+			if samePath(path, stateDB+"-wal") && !sqliteWALHasFrames(path) {
+				return nil, nil
+			}
+			var sources []SourceRef
+			_, err := s.discoverStateEach(ctx, root, stateDB, func(source SourceRef) error {
+				sources = append(sources, source)
+				return nil
+			})
+			return sources, err
+		}
+		if hermesPathInTranscriptDir(sessionsDir, path) {
+			id := HermesSessionID(filepath.Base(path))
+			if !IsValidSessionID(id) {
+				return nil, nil
+			}
+			found, err := hermesStateDBHasSession(ctx, stateDB, id)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				source := s.stateMemberSourceRef(root, stateDB, id)
+				src := source.Opaque.(hermesSource)
+				src.FingerprintSingleMember = true
+				source.Opaque = src
+				return []SourceRef{source}, nil
+			}
+			if !allowMissing && !IsRegularFile(path) {
+				return nil, nil
+			}
+			source, _ := s.transcriptSourceRef(root, path)
+			return []SourceRef{source}, nil
+		}
+	}
+	source, ok := s.sourceForChangedPath(root, path, allowMissing)
+	if !ok {
+		return nil, nil
+	}
+	return []SourceRef{source}, nil
 }
 
 func (s hermesSourceSet) FindSource(
@@ -1215,6 +1222,7 @@ func hermesStateDBHasSession(ctx context.Context, stateDB string, rawID string) 
 		return false, fmt.Errorf("open hermes state db: %w", err)
 	}
 	defer conn.Close()
+	observeSharedContainerScan(ctx)
 
 	var found int
 	err = conn.QueryRowContext(ctx,
@@ -1601,7 +1609,7 @@ func hermesStateMemberFingerprint(
 	if !IsRegularFile(src.StateDB) {
 		return SourceFingerprint{Key: source.FingerprintKey}, nil
 	}
-	if reconciliationCacheAvailable(ctx) {
+	if reconciliationCacheAvailable(ctx) && !src.FingerprintSingleMember {
 		if h, selectedPath, ok := cachedHermesMemberCore(ctx, src); ok {
 			return hermesStateMemberFingerprintFinish(source, src, h, selectedPath)
 		}
@@ -1956,6 +1964,7 @@ func hermesProviderCapabilities() Capabilities {
 		},
 		Sync: ProviderSyncSemantics{
 			FingerprintHashRequiredForFreshness: true,
+			BatchFingerprintCache:               true,
 		},
 	}
 }

@@ -51,9 +51,11 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		// semantics.
 		AgentAugureDesktop: {
 			FingerprintHashRequiredForFreshness: true,
+			BatchFingerprintCache:               true,
 		},
 		AgentHermes: {
 			FingerprintHashRequiredForFreshness: true,
+			BatchFingerprintCache:               true,
 		},
 		AgentGemini: {
 			FingerprintHashRequiredForFreshness: true,

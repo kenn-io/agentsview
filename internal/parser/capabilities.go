@@ -40,6 +40,8 @@ const (
 type ProviderSyncSemantics struct {
 	FingerprintHashInCacheKey           bool
 	FingerprintHashRequiredForFreshness bool
+	// BatchFingerprintCache shares member fingerprint reads within a sync pass.
+	BatchFingerprintCache bool
 	// SkipCacheFreshWithoutStoredRow permits a matching skip-cache entry to
 	// remain fresh before this provider has persisted a row for the source.
 	SkipCacheFreshWithoutStoredRow bool

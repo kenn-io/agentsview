@@ -3216,6 +3216,15 @@ schemas keep their existing ordering behavior.
   transcript or recorded end time and advances it when a state message is
   newer than both that value and `started_at`. The aggregate usage event still
   uses the recorded `ended_at`, falling back to `started_at`.
+- **Incremental sync check (2026-10-12):** Reverified the pinned
+  `hermes_state.py`: session rows have no modification watermark. Message
+  contents, titles and usage can change independently of `ended_at`.
+  Discovery and database/WAL events use virtual `state.db#<session ID>`
+  sources and compare member fingerprints before parsing. Transcript events
+  resolve only their indexed member or standalone transcript. Existing
+  archive-level paths migrate during ordinary sync; historical sessions
+  remain in SQLite when their source disappears. Augure Desktop uses the
+  same member selection.
 - **Usage and cost:** State records distinguish input, output, cache-read,
   cache-write, and reasoning tokens and can retain estimated or actual cost
   with status/source metadata. Agentsview uses provider-reported cost when it
