@@ -18,6 +18,29 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
+func TestUsageFillExtractionWaitsInBulkLane(t *testing.T) {
+	database := usageCandidateFixture(t)
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	for range bulkReadSlots {
+		release, err := database.acquireBulkRead(t.Context())
+		require.NoError(t, err)
+		defer release()
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	spool, versions, err := cache.fill.extractSessions(ctx, snapshot.Versions)
+	if spool != nil {
+		defer spool.Close()
+	}
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Nil(t, spool)
+	assert.Nil(t, versions)
+	assert.Zero(t, database.rawReader().Stats().InUse)
+}
+
 func TestUsageCacheFillInstallsCompleteSessionFacts(t *testing.T) {
 	database := testDB(t)
 	started := "2026-08-10T08:00:00Z"

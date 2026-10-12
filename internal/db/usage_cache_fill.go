@@ -424,6 +424,11 @@ func (s *usageFactSpool) Close() error {
 func (c *usageFillCoordinator) extractSessions(
 	ctx context.Context, versions []usageSourceVersion,
 ) (*usageFactSpool, map[string]usageSourceVersion, error) {
+	release, err := c.archive.acquireBulkRead(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
 	spool, err := newUsageFactSpool(ctx)
 	if err != nil {
 		return nil, nil, err

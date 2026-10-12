@@ -55,6 +55,11 @@ func (db *DB) GetSessionStats(
 	if err != nil {
 		return nil, &StatsInputError{Msg: err.Error()}
 	}
+	release, err := db.acquireBulkRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	// Root-only rows drive every consumer (distributions, velocity,
 	// timing, the human/automation split, archetypes, outcomes), so
