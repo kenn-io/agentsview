@@ -963,7 +963,7 @@ func TestHermesCronTranscriptProjects(t *testing.T) {
 // TestBuildHermesStateResultKeepsUsageEventPinnedToStartedAtWhenEndedAtBackfills
 // below, where the branch genuinely fires, is P7's proof.
 func TestBuildHermesStateResultKeepsUsageOnlySessions(t *testing.T) {
-	res, ok := buildHermesStateResult(
+	res, ok, err := buildHermesStateResult(
 		hermesStateSession{
 			id:          "usage-only",
 			source:      "cli",
@@ -973,6 +973,7 @@ func TestBuildHermesStateResultKeepsUsageOnlySessions(t *testing.T) {
 		},
 		nil, t.TempDir(), "state.db", "", "local",
 	)
+	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "hermes:usage-only", res.Session.ID)
 	assert.Empty(t, res.Messages)
@@ -988,7 +989,7 @@ func TestBuildHermesStateResultKeepsUsageOnlySessions(t *testing.T) {
 // nil) and no state messages, so both halves of the early return's
 // condition are hit at once, unlike the usage-only case above.
 func TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage(t *testing.T) {
-	res, ok := buildHermesStateResult(
+	res, ok, err := buildHermesStateResult(
 		hermesStateSession{
 			id:        "empty",
 			source:    "cli",
@@ -996,13 +997,14 @@ func TestBuildHermesStateResultReturnsFalseWhenNoMessagesAndNoUsage(t *testing.T
 		},
 		nil, t.TempDir(), "state.db", "", "local",
 	)
+	require.NoError(t, err)
 	require.False(t, ok)
 	assert.Equal(t, ParseResult{}, res)
 }
 
 func TestBuildHermesStateResultReconcilesRecordedEndedAt(t *testing.T) {
 	t.Run("ended_at later than every message", func(t *testing.T) {
-		res, ok := buildHermesStateResult(
+		res, ok, err := buildHermesStateResult(
 			hermesStateSession{
 				id:        "closed-later",
 				startedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
@@ -1013,12 +1015,13 @@ func TestBuildHermesStateResultReconcilesRecordedEndedAt(t *testing.T) {
 			},
 			t.TempDir(), "state.db", "", "local",
 		)
+		require.NoError(t, err)
 		require.True(t, ok)
 		assert.Equal(t, time.Date(2026, 5, 14, 13, 0, 0, 0, time.UTC), res.Session.EndedAt)
 	})
 
 	t.Run("ended_at earlier than the newest message", func(t *testing.T) {
-		res, ok := buildHermesStateResult(
+		res, ok, err := buildHermesStateResult(
 			hermesStateSession{
 				id:        "closed-earlier",
 				startedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
@@ -1029,6 +1032,7 @@ func TestBuildHermesStateResultReconcilesRecordedEndedAt(t *testing.T) {
 			},
 			t.TempDir(), "state.db", "", "local",
 		)
+		require.NoError(t, err)
 		require.True(t, ok)
 		assert.Equal(t, time.Date(2026, 5, 14, 12, 30, 0, 0, time.UTC), res.Session.EndedAt)
 	})
@@ -1040,7 +1044,7 @@ func TestBuildHermesStateResultReconcilesRecordedEndedAt(t *testing.T) {
 // usable timestamp to back-fill from and EndedAt stays zero rather than
 // becoming a spurious 1970-ish date.
 func TestBuildHermesStateResultKeepsEndedAtZeroWhenMessageTimestampsAreNonPositive(t *testing.T) {
-	res, ok := buildHermesStateResult(
+	res, ok, err := buildHermesStateResult(
 		hermesStateSession{
 			id:        "raw-nonpositive",
 			startedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
@@ -1051,6 +1055,7 @@ func TestBuildHermesStateResultKeepsEndedAtZeroWhenMessageTimestampsAreNonPositi
 		},
 		t.TempDir(), "state.db", "", "local",
 	)
+	require.NoError(t, err)
 	require.True(t, ok)
 	assert.True(t, res.Session.EndedAt.IsZero())
 }
@@ -1065,7 +1070,7 @@ func TestBuildHermesStateResultKeepsEndedAtZeroWhenMessageTimestampsAreNonPositi
 // so the float64 round trip is exact.
 func TestBuildHermesStateResultKeepsEndedAtZeroWhenNewestMessagePrecedesStartedAt(t *testing.T) {
 	t.Run("newest message strictly before started_at", func(t *testing.T) {
-		res, ok := buildHermesStateResult(
+		res, ok, err := buildHermesStateResult(
 			hermesStateSession{
 				id:        "precedes-start",
 				startedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
@@ -1076,13 +1081,14 @@ func TestBuildHermesStateResultKeepsEndedAtZeroWhenNewestMessagePrecedesStartedA
 			},
 			t.TempDir(), "state.db", "", "local",
 		)
+		require.NoError(t, err)
 		require.True(t, ok)
 		assert.True(t, res.Session.EndedAt.IsZero())
 	})
 
 	t.Run("newest message equals started_at exactly", func(t *testing.T) {
 		startedAt := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
-		res, ok := buildHermesStateResult(
+		res, ok, err := buildHermesStateResult(
 			hermesStateSession{
 				id:        "equals-start",
 				startedAt: startedAt,
@@ -1092,13 +1098,14 @@ func TestBuildHermesStateResultKeepsEndedAtZeroWhenNewestMessagePrecedesStartedA
 			},
 			t.TempDir(), "state.db", "", "local",
 		)
+		require.NoError(t, err)
 		require.True(t, ok)
 		assert.True(t, res.Session.EndedAt.IsZero())
 	})
 }
 
 func TestBuildHermesStateResultPopulatesSessionAggregateTokens(t *testing.T) {
-	res, ok := buildHermesStateResult(
+	res, ok, err := buildHermesStateResult(
 		hermesStateSession{
 			id:              "agg",
 			source:          "cli",
@@ -1110,6 +1117,7 @@ func TestBuildHermesStateResultPopulatesSessionAggregateTokens(t *testing.T) {
 		},
 		nil, t.TempDir(), "state.db", "", "local",
 	)
+	require.NoError(t, err)
 	require.True(t, ok)
 	// Session-aggregate columns (session list / detail / stats portfolio)
 	// must reflect Hermes's own authoritative accounting, not stay at 0.
@@ -1227,7 +1235,7 @@ func TestHermesUsageEvents_PositiveEstimateUsedWhenStatusEmpty(t *testing.T) {
 func TestBuildHermesStateResultKeepsUsageEventPinnedToStartedAtWhenEndedAtBackfills(t *testing.T) {
 	startedAt := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	newestMessage := time.Date(2026, 5, 14, 12, 0, 1, 0, time.UTC)
-	res, ok := buildHermesStateResult(
+	res, ok, err := buildHermesStateResult(
 		hermesStateSession{
 			id:          "ended-at-backfill-usage",
 			source:      "cli",
@@ -1242,6 +1250,7 @@ func TestBuildHermesStateResultKeepsUsageEventPinnedToStartedAtWhenEndedAtBackfi
 		}},
 		t.TempDir(), "state.db", "", "local",
 	)
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.False(t, res.Session.EndedAt.IsZero())
 	assert.Equal(t, newestMessage, res.Session.EndedAt)

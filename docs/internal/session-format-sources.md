@@ -3233,7 +3233,9 @@ schemas keep their existing ordering behavior.
   that transcript selection, so resync does not import sibling sessions.
   Empty standalone transcripts preserve archived history. Malformed or
   oversized JSONL records reject the parse, preserve archived content and
-  remain retryable. Transcript-only watcher events also prefer JSONL over
+  remain retryable. State-member fingerprinting and parsing propagate those
+  errors, so damaged transcripts cannot select a shorter database fallback.
+  Transcript-only watcher events also prefer JSONL over
   JSON snapshots. Existing archive-level paths migrate during ordinary sync;
   historical sessions remain in SQLite when their source disappears. Augure
   Desktop uses the same member selection.

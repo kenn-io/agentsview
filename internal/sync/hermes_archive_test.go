@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1777,6 +1778,67 @@ func TestHermesTranscriptOnlySnapshotEventPrefersJSONL(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, messagesBefore, messagesAfter)
 			})
+		}
+	}
+}
+
+func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, mode := range []string{"full sync", "state event", "transcript event", "single session"} {
+			for _, damage := range []string{"malformed middle", "truncated tail", "oversized"} {
+				if damage == "oversized" && mode != "full sync" {
+					continue
+				}
+				t.Run(string(agent)+"/"+mode+"/"+damage, func(t *testing.T) {
+					root := t.TempDir()
+					stateDB := writeHermesArchiveStateDB(t, root)
+					dir := filepath.Join(root, "sessions")
+					writeHermesTranscriptFile(t, dir, "child")
+					path := filepath.Join(dir, "child.jsonl")
+					database := dbtest.OpenTestDB(t)
+					engine := NewEngine(t.Context(), database, EngineConfig{
+						AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+					})
+					t.Cleanup(engine.Close)
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					id := string(agent) + ":child"
+					before, err := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					contents := make([]string, len(before))
+					for i, message := range before {
+						contents[i] = message.Content
+					}
+					require.Equal(t, []string{"hello", "Done."}, contents)
+					content := `{"role":"user","content":"changed"}` + "\n"
+					switch damage {
+					case "malformed middle":
+						content += "invalid JSON\n" + `{"role":"assistant","content":"shorter"}` + "\n"
+					case "oversized":
+						content += strings.Repeat("x", 64*1024*1024+1) + "\n"
+					default:
+						content += `{"role":"assistant","content":`
+					}
+					require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+					switch mode {
+					case "full sync":
+						engine.SyncAll(t.Context(), nil)
+					case "state event":
+						_ = engine.syncPathsContext(t.Context(), []string{stateDB}, false)
+					case "transcript event":
+						_ = engine.syncPathsContext(t.Context(), []string{path}, false)
+					case "single session":
+						_ = engine.SyncSingleSessionContext(t.Context(), id)
+					}
+					for range 2 {
+						after, getErr := database.GetAllMessages(t.Context(), id)
+						require.NoError(t, getErr)
+						assert.Equal(t, before, after)
+						engine.SyncAll(t.Context(), nil)
+					}
+					writeHermesTranscriptFile(t, dir, "child")
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				})
+			}
 		}
 	}
 }

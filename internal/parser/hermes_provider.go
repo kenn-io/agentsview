@@ -368,10 +368,13 @@ func (p *hermesProvider) parseStateMember(
 	if err != nil {
 		return ParseOutcome{}, err
 	}
-	result, ok := buildHermesStateResult(
+	result, ok, err := buildHermesStateResult(
 		ss, messages, filepath.Join(filepath.Dir(src.StateDB), "sessions"),
 		src.StateDB, project, machine,
 	)
+	if err != nil {
+		return ParseOutcome{}, err
+	}
 	if !ok {
 		return ParseOutcome{ResultSetComplete: true, ForceReplace: true, SkipReason: SkipNoSession}, nil
 	}
