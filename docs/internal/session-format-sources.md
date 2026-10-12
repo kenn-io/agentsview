@@ -1672,13 +1672,16 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 - **Format:** Current SQLite-backed session/message/part records and the legacy
   JSON storage tree.
+
 - **Evidence:** `source`.
+
 - **Upstream:** Clone `https://github.com/anomalyco/opencode.git` at
   `67caf894e0843ee370e72839e8265e483233479b`; see
   [message-v2.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/message-v2.ts)
   and
   [session.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/session.ts).
   Channel database naming was reverified 2026-08-27 against `database.ts`.
+
 - **Session names (2026-09-30):** `session.title` holds both the name a user
   sets in the TUI rename dialog and the title OpenCode generates while the
   title is still a `New session - <ISO>` or `Child session - <ISO>`
@@ -1690,6 +1693,7 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   non-placeholder title as the session name. The first message is the first
   user message and falls back to the title only when there is none. Kilo and
   MiMo Code share this parser.
+
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
   cache-write tokens, plus model/provider identity. Agentsview computes price
   from those tokens rather than consuming a persisted USD total. Reverified
@@ -1697,11 +1701,13 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   of its part rows. Agentsview retains model identity even when no recognized
   token fields are available; usage-only resync guards check model loss before
   checking token counts.
+
 - **Working directory:** SQLite sessions store a per-session `directory` and a
   `project_id`. The synthetic `global` project uses `worktree=/`. Agentsview
   prefers a concrete `session.directory` over `project.worktree` when
   resolving cwd/project (verified against live `opencode.db` rows under
   `project_id=global` on 2026-07-23; see #1236).
+
 - **Invalid tool calls:** Model calls to unknown or malformed tools are recorded
   as a synthetic `invalid` tool part whose `execute` succeeds
   (`packages/opencode/src/tool/invalid.ts`, registered in
@@ -1709,6 +1715,7 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   `state.status` is `completed` with the error text in the output. Agentsview
   attaches an errored result event to `tool:"invalid"` parts so tool health
   counts them as failures (verified 2026-07-24; see #1254).
+
 - **Bash exit codes:** The `bash` tool declares a structured output of
   `{exit, truncated, timeout}` and returns the child process exit code as
   `exit`
@@ -1727,6 +1734,7 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   counts as a failure, matching the existing `exit status N` heuristic, and a
   timed-out command records `timeout: true` with no `exit` key, so it is not
   detected here. See #1256.
+
 - **Change detection (SQLite layout):** every session in a root shares one
   physical `opencode.db`, so the container's own size and mtime move whenever
   any single session is written and cannot discriminate between sessions.
@@ -1781,51 +1789,53 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   is always a candidate, wherever other sessions' watermarks or its own child
   timestamps sit.
 
-  Workers restore prior SQLite state and the original verification time from
-  durable sync metadata. Native identity and counter rollback checks reject
-  replacements and restores; Windows reads identity and the database header
-  from the same handle. Verification permits timestamp-first discovery for
-  five minutes, including after ordinary writes and restarts. Child-only edits
-  wait for a complete pass after that original deadline. Each pass atomically
-  consumes durable authority before processing, opening a write transaction
-  only when a record still holds authority. Preparation errors abort the pass,
-  cheap successes restore the original deadline, and failures leave authority
-  revoked. A container write during a pass blocks promotion and advancement
-  but restores the prior authority, so active use keeps timestamp-first
-  discovery until the original deadline. Expired and failed verification
-  history survives restarts so deferred edits remain eligible despite advancing
-  quick-sync cutoffs until complete recovery succeeds. Due quick syncs compare full fingerprints with
-  paged archive freshness: unchanged members finish before workers, while
-  changed or unresolved members retry. Ephemeral engines leave durable records
-  untouched. Every member of an unchanged container
-  gate-skips before fingerprinting, so a child identity scan would do
-  archive-sized work nothing reads. Watermark-only skips require the pass's
-  container capture to still be valid (`sqliteContainerPassCaptureValid`) — a container
-  that changes between listing and the recapture check resolves full per-session
-  digests instead, so a concurrent child-only write cannot hide beneath an
-  unchanged metadata watermark. The trade is explicit: any child-only write that
-  leaves the session and project rows untouched — wherever its timestamps land
-  relative to the stored composite — is invisible to watermark-only discovery
-  and is reconciled by the next full digest pass, at most five minutes after
-  the last successful digest verification. That due pass bypasses the
-  container-level trusted-state skip so every session reaches the
-  authoritative digest comparison; when the platform cannot provide stable
-  file identity, the policy fails closed to this full digest form rather than
-  authorizing a stale verification timestamp; on the production container
-  above, 96% of sessions carry a session/project timestamp at or above every
-  child, and actively watched sessions bypass this entirely via the
-  per-session composite poll. Per-event work is bounded by the changed batch
-  plus one O(session-count) scan of small fixed-width rows (the session table
-  and the paged stored-member reads); that floor is irreducible without a
-  watermark index, which OpenCode's schema does not have and which is not
-  agentsview's to add — but only the changed batch and one stored page are
-  ever held in memory.
+    Workers restore prior SQLite state and the original verification time from
+    durable sync metadata. Native identity and counter rollback checks reject
+    replacements and restores; Windows reads identity and the database header
+    from the same handle. Verification permits timestamp-first discovery for
+    five minutes, including after ordinary writes and restarts. Child-only edits
+    wait for a complete pass after that original deadline. Each pass atomically
+    consumes durable authority before processing, opening a write transaction
+    only when a record still holds authority. Preparation errors abort the pass,
+    cheap successes restore the original deadline, and failures leave authority
+    revoked. A container write during a pass blocks promotion and advancement
+    but restores the prior authority, so active use keeps timestamp-first
+    discovery until the original deadline. Expired and failed verification
+    history survives restarts so deferred edits remain eligible despite
+    advancing quick-sync cutoffs until complete recovery succeeds. Due quick
+    syncs compare full fingerprints with paged archive freshness: unchanged
+    members finish before workers, while changed or unresolved members retry.
+    Ephemeral engines leave durable records untouched. Every member of an
+    unchanged container gate-skips before fingerprinting, so a child identity
+    scan would do archive-sized work nothing reads. Watermark-only skips require
+    the pass's container capture to still be valid
+    (`sqliteContainerPassCaptureValid`) — a container that changes between
+    listing and the recapture check resolves full per-session digests instead,
+    so a concurrent child-only write cannot hide beneath an unchanged metadata
+    watermark. The trade is explicit: any child-only write that leaves the
+    session and project rows untouched — wherever its timestamps land relative
+    to the stored composite — is invisible to watermark-only discovery and is
+    reconciled by the next full digest pass, at most five minutes after the last
+    successful digest verification. That due pass bypasses the container-level
+    trusted-state skip so every session reaches the authoritative digest
+    comparison; when the platform cannot provide stable file identity, the
+    policy fails closed to this full digest form rather than authorizing a stale
+    verification timestamp; on the production container above, 96% of sessions
+    carry a session/project timestamp at or above every child, and actively
+    watched sessions bypass this entirely via the per-session composite poll.
+    Per-event work is bounded by the changed batch plus one O(session-count)
+    scan of small fixed-width rows (the session table and the paged
+    stored-member reads); that floor is irreducible without a watermark index,
+    which OpenCode's schema does not have and which is not agentsview's to add —
+    but only the changed batch and one stored page are ever held in memory.
+
 - **Archive message identity:** Reverified 2026-09-05 against `message-v2.ts` at
   the pinned revision: hydrated messages expose the persisted message row ID
   as `info.id`. Agentsview's pre-version-100 parsers did not retain that ID in
   `source_uuid`. Usage archive comparisons match those stored rows by ordinal
   and role until a complete source rewrite records the ID; rows that already
   have an ID require an exact identity match.
+
 - **Ollama Cloud model tags and cost (2026-09-10):** An assistant message's
   `data.modelID` is the model key from the user's OpenCode provider config,
   recorded verbatim. A custom `@ai-sdk/openai-compatible` provider that points
@@ -1843,6 +1853,7 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   name fails. The pinned LiteLLM snapshot lists `ollama/*-cloud` rows at $0;
   those exact rows still win, and local tags such as `:27b-mlx` or `:latest`
   stay unpriced.
+
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
   `internal/parser/opencode_storage_state.go`; legacy and database layouts are
@@ -2708,8 +2719,8 @@ schemas keep their existing ordering behavior.
   renames the PTC dispatch tags to `tool/ptc-dispatch[-start]`, and spells
   replacement coordinates as `startSeq`/`endSeq`. Generation 4 promotes tool
   results to `role: tool` messages with direct content, `toolCallId`, and
-  optional `isError`, and adds `developer/message` for incremental instructions
-  and named tool additions/removals. Session IDs are arbitrary
+  optional `isError`, and adds `developer/message` for incremental
+  instructions and named tool additions/removals. Session IDs are arbitrary
   non-empty strings and are injectively encoded before use as a directory
   name. A sessions root belongs to one physical encoding; the upstream backend
   rejects an opposite-suffix artifact rather than providing mixed-root
@@ -2756,14 +2767,17 @@ schemas keep their existing ordering behavior.
     Generation 4 was reverified 2026-10-09 against release `dsh-v0.2.0-rc.2`,
     commit `639ed015397290b3745d163aafe02ffee4aa3f84`: the
     [v4 migration](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/session/session-format-v3-to-v4/README.md),
+    the
     [tool-role conversion](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/session/session-format-v3-to-v4/src/tool-role.ts),
-    and [event schema](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/core/session/src/types.ts).
+    and
+    [event schema](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/core/session/src/types.ts).
     Dense sequences and physical framing remain unchanged.
     [`workspace/changes` and `image/offload`](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/packages/core/session/src/known-event-types.ts)
     are metadata. Release `dsh-v0.2.1-alpha.2`, commit
     `d743267388641bc76f17c45ce8b4c231aed1d32c`, retains generation 4 and adds
     [working-directory changes](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/session/working-directory/src/index.ts),
-    also metadata; the producer separately emits readable directory-change text.
+    also metadata; the producer separately emits readable directory-change
+    text.
 
 - **Usage and cost:** Each model response and summarizing compaction can persist
   disjoint input, output, cache-read, cache-write, and reasoning token counts.
@@ -2784,16 +2798,16 @@ schemas keep their existing ordering behavior.
   replaces it on the next authoritative parse. Generation-2 and later messages
   read embedded stream usage and finish reasons when the outer data omits
   them, and system and developer messages join the transcript as system rows.
-  Developer tool changes retain their recorded names without rebuilding schemas.
-  Agentsview reversibly escapes `%` and the reserved remote-host separator `~`
-  in canonical session IDs. Explicit raw-ID lookups remain literal; canonical
-  escaping is decoded only when lookup starts from a full session ID.
-  Per-response usage events are the sole analytics rows, while messages retain
-  explicit context/output token fields without duplicating the raw Harness
-  usage blob into `token_usage`. Plain and zstd artifacts in one session
-  directory are treated as one logical source and rejected while both exist; a
-  change maps directly to the surviving sibling once that conflict is removed.
-  The version-0 inventory accepts all released event names, including
+  Developer tool changes retain their recorded names without rebuilding
+  schemas. Agentsview reversibly escapes `%` and the reserved remote-host
+  separator `~` in canonical session IDs. Explicit raw-ID lookups remain
+  literal; canonical escaping is decoded only when lookup starts from a full
+  session ID. Per-response usage events are the sole analytics rows, while
+  messages retain explicit context/output token fields without duplicating the
+  raw Harness usage blob into `token_usage`. Plain and zstd artifacts in one
+  session directory are treated as one logical source and rejected while both
+  exist; a change maps directly to the surviving sibling once that conflict is
+  removed. The version-0 inventory accepts all released event names, including
   `model/selection`, delivery tracking, subagent model policy, and team
   events; those metadata events do not add transcript rows. The version-0
   provenance validator accepts mixed safe-integer and inclusive-range entries
