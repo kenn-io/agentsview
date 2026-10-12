@@ -3236,7 +3236,10 @@ schemas keep their existing ordering behavior.
   remain retryable. State-member fingerprinting and parsing propagate those
   errors, so damaged transcripts cannot select a shorter database fallback.
   Transcript-only watcher events also prefer JSONL over
-  JSON snapshots. Existing archive-level paths migrate during ordinary sync;
+  JSON snapshots. After a preferred standalone JSONL disappears, a JSON
+  snapshot cannot replace its archived history. Complete edits to an
+  existing JSON snapshot remain replaceable. Existing archive-level paths
+  migrate during ordinary sync;
   historical sessions remain in SQLite when their source disappears. Augure
   Desktop uses the same member selection.
 - **Usage and cost:** State records distinguish input, output, cache-read,

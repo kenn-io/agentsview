@@ -1388,38 +1388,47 @@ func TestHermesMemberDiscoveryMigratesLegacyArchivePaths(t *testing.T) {
 func TestHermesStandaloneTranscriptEditsReplaceMessages(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
 		for _, mode := range []string{"full sync", "transcript event"} {
-			t.Run(string(agent)+"/"+mode, func(t *testing.T) {
-				root := t.TempDir()
-				writeHermesArchiveStateDB(t, root)
-				dir := filepath.Join(root, "sessions")
-				writeHermesTranscriptFile(t, dir, "standalone")
-				path := filepath.Join(dir, "standalone.jsonl")
-				database := dbtest.OpenTestDB(t)
-				engine := NewEngine(t.Context(), database, EngineConfig{
-					AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
-				})
-				t.Cleanup(engine.Close)
-				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-				require.NoError(t, os.WriteFile(path, []byte(
-					`{"role":"user","content":"edited prompt","timestamp":"2026-05-14T10:01:00Z"}`+"\n"+
-						`{"role":"assistant","content":"corrected reply","timestamp":"2026-05-14T10:02:00Z"}`+"\n",
-				), 0o600))
-				if mode == "full sync" {
-					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-				} else {
-					require.NoError(t, engine.syncPathsContext(t.Context(), []string{path}, false))
-				}
-				for range 2 {
-					messages, err := database.GetAllMessages(t.Context(), string(agent)+":standalone")
-					require.NoError(t, err)
-					contents := make([]string, len(messages))
-					for i, message := range messages {
-						contents[i] = message.Content
+			for _, format := range []string{"jsonl", "json"} {
+				t.Run(string(agent)+"/"+mode+"/"+format, func(t *testing.T) {
+					root := t.TempDir()
+					writeHermesArchiveStateDB(t, root)
+					dir := filepath.Join(root, "sessions")
+					writeHermesTranscriptFile(t, dir, "standalone")
+					path := filepath.Join(dir, "standalone.jsonl")
+					if format == "json" {
+						require.NoError(t, os.Remove(path))
+						path = filepath.Join(dir, "session_standalone.json")
+						require.NoError(t, os.WriteFile(path, []byte(`{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"Done."}]}`), 0o600))
 					}
-					assert.Equal(t, []string{"edited prompt", "corrected reply"}, contents)
-					assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
-				}
-			})
+					database := dbtest.OpenTestDB(t)
+					engine := NewEngine(t.Context(), database, EngineConfig{
+						AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+					})
+					t.Cleanup(engine.Close)
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					content := `{"role":"user","content":"edited prompt","timestamp":"2026-05-14T10:01:00Z"}` + "\n" +
+						`{"role":"assistant","content":"corrected reply","timestamp":"2026-05-14T10:02:00Z"}` + "\n"
+					if format == "json" {
+						content = `{"messages":[{"role":"user","content":"edited prompt"},{"role":"assistant","content":"corrected reply"}]}`
+					}
+					require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+					if mode == "full sync" {
+						require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					} else {
+						require.NoError(t, engine.syncPathsContext(t.Context(), []string{path}, false))
+					}
+					for range 2 {
+						messages, err := database.GetAllMessages(t.Context(), string(agent)+":standalone")
+						require.NoError(t, err)
+						contents := make([]string, len(messages))
+						for i, message := range messages {
+							contents[i] = message.Content
+						}
+						assert.Equal(t, []string{"edited prompt", "corrected reply"}, contents)
+						assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+					}
+				})
+			}
 		}
 	}
 }
@@ -1839,6 +1848,45 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 				})
 			}
+		}
+	}
+}
+
+func TestHermesRemovedJSONLPreservesHistoryAgainstSnapshot(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, mode := range []string{"full sync", "removal event"} {
+			t.Run(string(agent)+"/"+mode, func(t *testing.T) {
+				root := t.TempDir()
+				writeHermesTranscriptFile(t, root, "standalone")
+				path := filepath.Join(root, "standalone.jsonl")
+				snapshot := filepath.Join(root, "session_standalone.json")
+				require.NoError(t, os.WriteFile(snapshot, []byte(`{"messages":[{"role":"user","content":"stale prompt"}]}`), 0o600))
+				database := dbtest.OpenTestDB(t)
+				cfg := EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"}
+				engine := NewEngine(t.Context(), database, cfg)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":standalone"
+				before, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				require.NoError(t, os.Remove(path))
+				engine.Close()
+				engine = NewEngine(t.Context(), database, cfg)
+				t.Cleanup(engine.Close)
+				if mode == "full sync" {
+					engine.SyncAll(t.Context(), nil)
+				} else {
+					_ = engine.syncPathsContext(t.Context(), []string{path}, false)
+				}
+				for range 2 {
+					after, getErr := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, getErr)
+					assert.Equal(t, before, after)
+					assert.Equal(t, path, database.GetSessionFilePath(t.Context(), id))
+					engine.SyncAll(t.Context(), nil)
+				}
+				writeHermesTranscriptFile(t, root, "standalone")
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			})
 		}
 	}
 }
