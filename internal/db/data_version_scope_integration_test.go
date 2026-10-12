@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -28,7 +29,9 @@ func TestLegacyUpgradePreservesIncompleteRetry(t *testing.T) {
 	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}})
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	engine.Close()
-	require.Equal(t, 129, database.GetSessionDataVersion(t.Context(), "codex:"+id), "missing parent output must retain the old writer's retry stamp")
+	require.Equal(t, db.CurrentDataVersion()-1, database.GetSessionDataVersion(t.Context(), "codex:"+id), "missing parent output must remain retryable")
+	// Reproduce the retry stamp written by the legacy parser before reopening.
+	require.NoError(t, database.SetSessionDataVersion(t.Context(), "codex:"+id, 129))
 	path := database.Path()
 	require.NoError(t, database.Close())
 	reopened, err := db.OpenIsolated(t.Context(), path)
@@ -39,7 +42,8 @@ func TestLegacyUpgradePreservesIncompleteRetry(t *testing.T) {
 }
 
 func TestSimulatedScopedUpgradeReparsesUnchangedFreebuffSource(t *testing.T) {
-	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{130: {parser.AgentCodebuff}}))
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: {parser.AgentCodebuff}}))
 	database := dbtest.OpenTestDB(t)
 	root, unaffected := t.TempDir(), t.TempDir()
 	source := filepath.Join(root, "project", "chats", "2026-09-15T10-00-00.000Z", "chat-messages.json")
@@ -62,7 +66,7 @@ func TestSimulatedScopedUpgradeReparsesUnchangedFreebuffSource(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET data_version=129; PRAGMA user_version=129")
+		_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
 		return err
 	}))
 	path := database.Path()
@@ -92,12 +96,13 @@ func TestSimulatedScopedUpgradeReparsesUnchangedFreebuffSource(t *testing.T) {
 }
 
 func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
+	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(
-		map[int][]parser.AgentType{130: {parser.AgentCodebuff}},
+		map[int][]parser.AgentType{version: {parser.AgentCodebuff}},
 	))
 	database := dbtest.OpenTestDB(t)
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), "PRAGMA user_version=129")
+		_, err := tx.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version=%d", version-1))
 		return err
 	}))
 	path := database.Path()
