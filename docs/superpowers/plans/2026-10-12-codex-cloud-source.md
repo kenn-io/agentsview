@@ -445,21 +445,21 @@ Spec: Components (Provider) raw capture paragraph.
   `StreamingRawCaptureSourceProvider` interface) yields every mirror file and
   no state file. Raw discovery rejects the provider without it.
 
-- [ ] **Step 1: Write failing tests** `TestCodexCloudRawCapturePlanOneEntry`
+- [x] **Step 1: Write failing tests** `TestCodexCloudRawCapturePlanOneEntry`
   (entry path ends in `.jsonl.zstd`, `Appendable`; no `.state.json`), and
   `TestCodexCloudRawCaptureReplacesAfterTruncation` (capture, truncate the
   tail and append, capture again: the plan replaces the file), and
   `TestCodexCloudRawDiscovery` (`parser.DiscoverRawCaptureSources` returns the
   mirror files, no state files, and no unsupported-feature error).
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement** following `codexProvider.PlanRawCapture`
+- [x] **Step 3: Implement** following `codexProvider.PlanRawCapture`
   (`internal/parser/codex_provider.go:360`).
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(parser): raw capture for codex-cloud"`
 
 ## Phase 3: The fetcher

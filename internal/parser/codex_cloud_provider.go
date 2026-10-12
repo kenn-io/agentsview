@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -12,13 +13,70 @@ import (
 const codexCloudMirrorSuffix = ".jsonl.zstd"
 
 func newCodexCloudProviderFactory(def AgentDef) ProviderFactory {
-	return NewSourceSetFactory(
+	return codexCloudProviderFactory{NewSourceSetFactory(
 		def,
 		codexCloudProviderCapabilities(),
 		func(cfg ProviderConfig) SourceSet {
 			return newCodexCloudSourceSet(cfg.Roots)
 		},
-	)
+	)}
+}
+
+// codexCloudProviderFactory adds raw capture of mirror files to the
+// source set provider.
+type codexCloudProviderFactory struct{ ProviderFactory }
+
+func (f codexCloudProviderFactory) NewProvider(cfg ProviderConfig) Provider {
+	return &codexCloudProvider{f.ProviderFactory.NewProvider(cfg).(*SourceSetProvider)}
+}
+
+type codexCloudProvider struct{ *SourceSetProvider }
+
+var _ StreamingRawCaptureSourceProvider = (*codexCloudProvider)(nil)
+
+func (p *codexCloudProvider) DiscoverRawCaptureSourcesEach(
+	ctx context.Context, yield func(SourceRef) error,
+) (bool, error) {
+	err := p.DiscoverEach(withRawCaptureStreamingTraversal(ctx), yield)
+	return err == nil, err
+}
+
+// PlanRawCapture captures the mirror file alone. Fetcher state files hold
+// offsets and cursors for this machine only, so they never travel.
+func (p *codexCloudProvider) PlanRawCapture(
+	ctx context.Context, source SourceRef,
+) (RawCapturePlan, error) {
+	if err := ctx.Err(); err != nil {
+		return RawCapturePlan{}, err
+	}
+	src, ok := source.Opaque.(JSONLSource)
+	if !ok || src.Root == "" || src.Path == "" || isS3URI(src.Root) ||
+		!isCodexCloudMirrorPath(src.Root, src.Path) {
+		return RawCapturePlan{}, invalidRawCapturePlan("codex-cloud source is not a local mirror file")
+	}
+	info, err := os.Lstat(src.Path)
+	if err != nil {
+		return RawCapturePlan{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return RawCapturePlan{}, invalidRawCapturePlan("codex-cloud mirror is not a regular file")
+	}
+	rel, err := filepath.Rel(src.Root, src.Path)
+	if err != nil {
+		return RawCapturePlan{}, invalidRawCapturePlan(
+			"resolve codex-cloud mirror path: %s", rawCaptureFilesystemError(err),
+		)
+	}
+	return RawCapturePlan{
+		ConfiguredRoot: src.Root,
+		CaptureRoot:    src.Root,
+		SourceKey:      source.Key,
+		// The fetcher only appends whole zstd frames, apart from cutting a
+		// torn tail; the capturer's prefix check turns that into a replace.
+		Entries: []RawCaptureEntry{{
+			Path: filepath.ToSlash(rel), LocalPath: src.Path, Appendable: true,
+		}},
+	}, nil
 }
 
 func newCodexCloudSourceSet(roots []string) JSONLSourceSet {
@@ -73,6 +131,11 @@ func codexCloudProviderCapabilities() Capabilities {
 	source.StreamingDiscovery = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
 	return Capabilities{
+		RawCapture: RawCaptureCapabilities{
+			Support: CapabilitySupported,
+			Shape:   RawCaptureShapeFiles,
+			Append:  RawCaptureAppendOne,
+		},
 		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
