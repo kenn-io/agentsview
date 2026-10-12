@@ -11,6 +11,8 @@ The latest release is
 
 **New features**
 
+- Browse and search fx sessions, including tool results and child runs. Schema
+  4 sessions sync from `~/.fx/sessions/`, with token costs from the pricing catalog.
 - Browse and search the retained archive during full parser and archive-only
   preservation rebuilds with a stale warning; archive writes fail with a retryable
   503. Scoped upgrades and schema repairs finish before serving.

@@ -4360,6 +4360,32 @@ schemas keep their existing ordering behavior.
   minutes) or transcript write. Direct session lookups refresh metadata
   without consuming the watcher baseline.
 
+## fx (`fx`)
+
+- **Evidence:** `source`. Reverified 2026-10-12 against
+  [vercel-labs/fx at b9ca60d](https://github.com/vercel-labs/fx/tree/b9ca60d0102cf84cea061456c41206f66149b311).
+  Fixtures were captured with fx v0.0.13.
+- **Format:** Schema 4 `session.json` holds the title, workspace, model, and
+  timestamps. `events.jsonl` stores version 3 frames. The
+  [event union](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_event.zig)
+  defines prompts, replies, steering, tool calls and results, interruptions,
+  and context checkpoints. Result text uses the stored preview.
+  [Compaction](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_compaction.zig)
+  atomically replaces the log, so every change reparses the complete transcript.
+- **Relationships:**
+  [Child state](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/subagent/child_state.zig)
+  records `subagent/owner.json` with `parent_id`. AgentsView imports that link
+  as a child session.
+- **Usage:**
+  [Session usage](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_usage.zig)
+  stores cumulative per-model totals in `usage-v2.json` under `snapshot.models`.
+  Input includes cache reads and writes. AgentsView subtracts those tokens from
+  fresh input and prices the separate token counts from its catalog. It omits
+  fx's reported cost, which can be zero for subscription runs.
+- **Limits:** Schema 1, 2, and 3 sessions are excluded. Full tool-result
+  artifacts and encrypted reasoning are excluded. Changes to `session.json`,
+  `usage-v2.json`, or `subagent/owner.json` refresh their owning transcript.
+
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
