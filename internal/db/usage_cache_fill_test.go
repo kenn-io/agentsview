@@ -158,18 +158,6 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			assert.ErrorIs(t, err, ErrUnsupportedAnalyticsSignal)
 			return err
 		}, "unsupported analytics signal"},
-		{"invalid heatmap metric", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsHeatmap(ctx, filter, "invalid")
-			return err
-		}, "unsupported heatmap metric: invalid"},
-		{"invalid skills granularity", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsSkills(ctx, filter, "invalid")
-			return err
-		}, "unsupported skills granularity: invalid"},
-		{"invalid top sessions metric", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsTopSessions(ctx, filter, "invalid")
-			return err
-		}, "unsupported top sessions metric: invalid"},
 		{"invalid stats timezone", func(ctx context.Context) error {
 			_, err := database.GetSessionStats(ctx, StatsFilter{Timezone: "invalid"})
 			return err

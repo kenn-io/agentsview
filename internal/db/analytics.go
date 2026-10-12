@@ -1628,11 +1628,6 @@ func (db *DB) GetAnalyticsHeatmap(
 	if metric == "" {
 		metric = "messages"
 	}
-	switch metric {
-	case "messages", "sessions", "output_tokens":
-	default:
-		return HeatmapResponse{}, fmt.Errorf("unsupported heatmap metric: %s", metric)
-	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return HeatmapResponse{}, err
@@ -3177,14 +3172,6 @@ func (f AnalyticsFilter) ResolveSkillRowTime(
 func (db *DB) GetAnalyticsSkills(
 	ctx context.Context, f AnalyticsFilter, granularity string,
 ) (SkillsAnalyticsResponse, error) {
-	if granularity == "" {
-		granularity = "week"
-	}
-	switch granularity {
-	case "day", "week", "month":
-	default:
-		return SkillsAnalyticsResponse{}, fmt.Errorf("unsupported skills granularity: %s", granularity)
-	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return SkillsAnalyticsResponse{}, err
@@ -5433,11 +5420,6 @@ func (db *DB) GetAnalyticsTopSessions(
 ) (TopSessionsResponse, error) {
 	if metric == "" {
 		metric = "messages"
-	}
-	switch metric {
-	case "messages", "duration", "output_tokens":
-	default:
-		return TopSessionsResponse{}, fmt.Errorf("unsupported top sessions metric: %s", metric)
 	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {

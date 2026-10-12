@@ -847,8 +847,10 @@ type DB struct {
 	cjkFTSUnavailableLog sync.Once
 
 	bulkReads struct {
-		once  sync.Once
-		slots chan struct{}
+		once         sync.Once
+		slots        chan struct{}
+		waitCount    atomic.Int64
+		waitDuration atomic.Int64
 	}
 }
 
@@ -1188,6 +1190,14 @@ func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
 	db.bulkReads.once.Do(func() {
 		db.bulkReads.slots = make(chan struct{}, bulkReadSlots)
 	})
+	select {
+	case db.bulkReads.slots <- struct{}{}:
+		return func() { <-db.bulkReads.slots }, nil
+	default:
+	}
+	started := time.Now()
+	db.bulkReads.waitCount.Add(1)
+	defer func() { db.bulkReads.waitDuration.Add(int64(time.Since(started))) }()
 	select {
 	case db.bulkReads.slots <- struct{}{}:
 		return func() { <-db.bulkReads.slots }, nil

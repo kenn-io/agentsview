@@ -103,6 +103,7 @@ func readerPoolWaitDelta(
 type walDiagnostics struct {
 	stall       walStallTracker
 	readerStats sql.DBStats
+	bulkStats   sql.DBStats
 }
 
 // walMaintenanceTick runs one periodic pass: it logs a WAL that is not
@@ -138,6 +139,20 @@ func (db *DB) walMaintenanceTick(ctx context.Context, diag *walDiagnostics) {
 				current.MaxOpenConnections, walCheckpointInterval,
 			)
 		}
+	}
+
+	current := sql.DBStats{
+		WaitCount:    db.bulkReads.waitCount.Load(),
+		WaitDuration: time.Duration(db.bulkReads.waitDuration.Load()),
+	}
+	waits, waited := readerPoolWaitDelta(diag.bulkStats, current)
+	diag.bulkStats = current
+	if waited >= readerPoolWaitLogThreshold {
+		log.Printf(
+			"sqlite reader pool: %d requests waited %s in total for "+
+				"one of %d bulk read slots over the last %s",
+			waits, waited.Round(time.Millisecond), bulkReadSlots, walCheckpointInterval,
+		)
 	}
 
 	attempted, err := db.MaybeCheckpointLargeWAL(ctx)
