@@ -229,11 +229,12 @@ func openDatabase(ctx context.Context, dsn, database string) (*sql.DB, error) {
 
 // ClickHouse error codes the mirror inspects.
 const (
-	codeUnsupportedMethod = 1
-	codeAccessDenied      = 497
-	codeUnknownTable      = 60
-	codeUnknownDatabase   = 81
-	codeUnknownIdentifier = 47
+	codeUnsupportedMethod  = 1
+	codeAccessDenied       = 497
+	codeUnknownTable       = 60
+	codeTableAlreadyExists = 57
+	codeUnknownDatabase    = 81
+	codeUnknownIdentifier  = 47
 )
 
 // IsPermissionError reports whether err is a ClickHouse "not enough

@@ -500,6 +500,10 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   `clickhouse/clickhouse-server:26.8`.
 - **Data directory on NFS.** ClickHouse cannot exchange tables when its data
   directory is on a filesystem without atomic rename exchange, such as NFS.
-  The schema step detects this, and each push then rebuilds the prepared usage
-  table before it returns instead of leaving the rebuild to the server. Pushes
-  take longer by the time of that rebuild.
+  The schema step detects this and logs
+  `this database cannot exchange tables`. Each push then rebuilds the prepared
+  usage table before it returns instead of leaving the rebuild to the server,
+  and logs how long the rebuild took. A push that changed nothing skips the
+  rebuild, and so does a push that finds another push rebuilding. A failed
+  rebuild does not fail the push: usage reads stay correct but slower, and the
+  next push tries again.

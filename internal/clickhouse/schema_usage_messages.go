@@ -11,6 +11,7 @@ import (
 	"log"
 	"slices"
 	"strings"
+	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 
@@ -180,6 +181,14 @@ const chPreparedUsageRefreshSettings = "final=1,max_threads=4"
 // chPreparedUsageBuildPrefix names the tables a push fills before it moves
 // their rows into prepared_usage; see rebuildPreparedUsage.
 const chPreparedUsageBuildPrefix = "prepared_usage_build_"
+
+// chPreparedUsageRebuildLock names the table a push holds while it rebuilds
+// prepared_usage; see rebuildPreparedUsage.
+const chPreparedUsageRebuildLock = "prepared_usage_rebuild_lock"
+
+// chExchangeProbePrefix names the scratch tables chExchangeSupported
+// exchanges.
+const chExchangeProbePrefix = "agentsview_exchange_probe_"
 
 // chSnapshotStampSQL identifies the complete snapshot set as a row count and
 // a sum of per-row hashes, so any republished or deleted session changes it.
@@ -468,7 +477,8 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 		// Every refresh of the view would fail at its exchange, so each
 		// push rebuilds the table instead, including the push that runs
 		// this schema step.
-		log.Print("ClickHouse: this database cannot exchange tables, so each push rebuilds prepared usage")
+		log.Print("ClickHouse: this database cannot exchange tables, which happens when its data directory " +
+			"is on NFS; each push rebuilds prepared usage before it returns")
 		return dropPreparedUsageView(ctx, conn)
 	}
 	if _, err := conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage REFRESH `+chPreparedUsageRefresh+`
@@ -524,7 +534,10 @@ func dropPreparedUsageView(ctx context.Context, conn *sql.DB) error {
 // database, so it renames files in the same metadata directory a refresh
 // does; where the tables keep their data does not matter.
 func chExchangeSupported(ctx context.Context, conn *sql.DB) (supported bool, err error) {
-	probe := "agentsview_exchange_probe_" + strings.ToLower(rand.Text())
+	if err := dropAbandonedTables(ctx, conn, "^"+chExchangeProbePrefix+"[a-z0-9]+_[ab]$"); err != nil {
+		return false, err
+	}
+	probe := chExchangeProbePrefix + strings.ToLower(rand.Text())
 	tables := []string{probe + "_a", probe + "_b"}
 	defer func() {
 		for _, table := range tables {
@@ -571,13 +584,40 @@ func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
 // table's parts into prepared_usage with REPLACE PARTITION, which swaps all
 // of the table's parts at once. Readers therefore see either the previous
 // rows or the new ones, each with the stamp of the snapshots they were
-// derived from. Concurrent pushes use separate build tables, and the last
-// to finish wins even when it read older snapshots; reads prepare the newer
-// sessions from their snapshots until the next rebuild.
+// derived from.
+//
+// Rebuilds take turns, as the view's refreshes do. A read checks freshness
+// and fetches rows in separate queries, so a build that read older snapshots
+// must not replace a newer one between them: the read would trust the newer
+// stamp and serve the older rows. A push that finds another rebuild running
+// skips its own; reads prepare its sessions from their snapshots until the
+// next rebuild.
 func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
-	if err := dropAbandonedPreparedUsageBuilds(ctx, conn); err != nil {
+	// A lock or build table older than an hour is taken to belong to a push
+	// that was killed. A rebuild that runs longer loses its lock, and the
+	// next one may overlap it.
+	if err := dropAbandonedTables(ctx, conn, "^("+chPreparedUsageRebuildLock+"|"+chPreparedUsageBuildPrefix+"[a-z0-9]+)$"); err != nil {
 		return err
 	}
+	_, err = conn.ExecContext(ctx, "CREATE TABLE "+chPreparedUsageRebuildLock+" (x UInt8) ENGINE = Memory")
+	if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
+		log.Print("clickhouse push: another push is rebuilding prepared usage; skipping this rebuild")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("locking prepared usage rebuild: %w", err)
+	}
+	defer func() {
+		if _, dropErr := conn.ExecContext(context.WithoutCancel(ctx), "DROP TABLE IF EXISTS "+chPreparedUsageRebuildLock+" SYNC"); dropErr != nil {
+			err = errors.Join(err, fmt.Errorf("unlocking prepared usage rebuild: %w", dropErr))
+		}
+	}()
+	current, err := preparedUsageCurrent(ctx, conn)
+	if err != nil || current {
+		return err
+	}
+	log.Print("clickhouse push: rebuilding prepared usage")
+	started := time.Now()
 	build := chPreparedUsageBuildPrefix + strings.ToLower(rand.Text())
 	if _, err := conn.ExecContext(ctx, "CREATE TABLE "+build+" AS prepared_usage"); err != nil {
 		return fmt.Errorf("creating prepared usage build table: %w", err)
@@ -596,36 +636,59 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 	if _, err := conn.ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM "+build); err != nil {
 		return fmt.Errorf("replacing prepared usage rows: %w", err)
 	}
+	log.Printf("clickhouse push: rebuilt prepared usage in %s", time.Since(started).Round(time.Millisecond))
 	return nil
 }
 
-// dropAbandonedPreparedUsageBuilds drops build tables that a push stopped
-// by a crash or a kill left behind. A build table younger than an hour may
-// still belong to a running push, so it is kept.
-func dropAbandonedPreparedUsageBuilds(ctx context.Context, conn *sql.DB) error {
-	// The name pattern matches only names rebuildPreparedUsage makes, which
-	// need no quoting.
+// preparedUsageCurrent reports whether the prepared rows were derived from
+// the current snapshots and price records. The refresh query reads nothing
+// else, so a rebuild would store the same rows. An empty table has no stamp
+// and is never current.
+func preparedUsageCurrent(ctx context.Context, conn *sql.DB) (bool, error) {
+	var stored, live usageStamp
+	err := conn.QueryRowContext(ctx, `SELECT snapshot_count, snapshot_hash, pricing_digest, price_count
+		FROM prepared_usage LIMIT 1 SETTINGS final=0`).Scan(
+		&stored.snapshotCount, &stored.snapshotHash, &stored.pricingDigest, &stored.priceCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading prepared usage stamp: %w", err)
+	}
+	if err := conn.QueryRowContext(ctx, `SELECT `+chSnapshotStampSQL+`,
+		`+chPreparedUsagePricingDigestSQL+` AS pricing_digest, `+chPriceStampSQL).Scan(
+		&live.snapshotCount, &live.snapshotHash, &live.pricingDigest, &live.priceCount); err != nil {
+		return false, fmt.Errorf("reading current usage stamp: %w", err)
+	}
+	return stored == live, nil
+}
+
+// dropAbandonedTables drops the tables whose names match pattern and whose
+// metadata is more than an hour old: tables a push stopped by a crash or a
+// kill left behind. Callers pass patterns that match only names they make,
+// which need no quoting.
+func dropAbandonedTables(ctx context.Context, conn *sql.DB, pattern string) error {
 	rows, err := conn.QueryContext(ctx, `SELECT name FROM system.tables
 		WHERE database = currentDatabase() AND match(name, ?)
-		AND metadata_modification_time < now() - INTERVAL 1 HOUR`, "^"+chPreparedUsageBuildPrefix+"[a-z0-9]+$")
+		AND metadata_modification_time < now() - INTERVAL 1 HOUR`, pattern)
 	if err != nil {
-		return fmt.Errorf("listing abandoned prepared usage builds: %w", err)
+		return fmt.Errorf("listing abandoned tables: %w", err)
 	}
 	defer rows.Close()
 	var abandoned []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return fmt.Errorf("scanning abandoned prepared usage build: %w", err)
+			return fmt.Errorf("scanning abandoned table: %w", err)
 		}
 		abandoned = append(abandoned, name)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("listing abandoned prepared usage builds: %w", err)
+		return fmt.Errorf("listing abandoned tables: %w", err)
 	}
 	for _, name := range abandoned {
 		if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS "+name+" SYNC"); err != nil {
-			return fmt.Errorf("dropping abandoned prepared usage build: %w", err)
+			return fmt.Errorf("dropping abandoned table %s: %w", name, err)
 		}
 	}
 	return nil

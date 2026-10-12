@@ -249,13 +249,15 @@ then rebuilds the table itself before it returns: it runs the view's query into
 a new `prepared_usage_build_*` table and moves that table's parts into
 `prepared_usage` with `REPLACE PARTITION`, which replaces all the parts at once.
 Readers see the previous rows or the new ones, never a mix, and read them as
-they read rows the view prepared. Pushes that rebuild at the same time use
-separate build tables; the last to finish wins, and reads prepare any newer
-sessions from their snapshots until the next rebuild. A build table that a
-killed push left behind is dropped by the next rebuild once it is an hour old.
-Without the view, nothing refreshes on a schedule, and a failed rebuild waits
-for the next push. Because `prepared_usage` is then not a refreshable view's
-target, native backups include its rows without
+they read rows the view prepared. Rebuilds take turns through the
+`prepared_usage_rebuild_lock` table, as the view's refreshes do: a read checks
+freshness and fetches rows in separate queries, so an older build must never
+replace a newer one between them. A push that finds the lock held, or finds the
+stored stamp equal to the current one, skips its rebuild. Locks, build tables,
+and probe tables that a killed push left behind are dropped once they are an
+hour old. Without the view, nothing refreshes on a schedule, and a failed
+rebuild waits for the next push. Because `prepared_usage` is then not a
+refreshable view's target, native backups include its rows without
 `backup_data_from_refreshable_materialized_view_targets`.
 
 **Currency is proven per read.** A read uses prepared rows only when every

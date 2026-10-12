@@ -683,7 +683,28 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 		require.Empty(t, state.changed)
 		require.Empty(t, state.stale)
 	}
+	parts := func() []string {
+		t.Helper()
+		var names []string
+		rows, err := store.DB().QueryContext(ctx, `SELECT name FROM system.parts
+			WHERE database = currentDatabase() AND table = 'prepared_usage' AND active ORDER BY name`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			require.NoError(t, rows.Scan(&name))
+			names = append(names, name)
+		}
+		require.NoError(t, rows.Err())
+		return names
+	}
 	push()
+	built := parts()
+	require.NotEmpty(t, built)
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	require.Equal(t, built, parts(), "a push that changed nothing must keep the prepared rows")
 
 	session, err := local.GetSessionFull(ctx, usagePriceRoundID)
 	require.NoError(t, err)
@@ -693,6 +714,19 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: *session, Messages: messages[:1], ReplaceMessages: true, DataVersion: 1,
 	}})
+	require.NoError(t, err)
+	// While another push holds the rebuild lock, a push leaves the rows in
+	// place, and reads prepare the republished session themselves.
+	_, err = store.DB().ExecContext(ctx, "CREATE TABLE prepared_usage_rebuild_lock (x UInt8) ENGINE = Memory")
+	require.NoError(t, err)
+	result, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	require.Equal(t, built, parts(), "a push must not rebuild while another holds the lock")
+	state, err := store.preparedUsageState(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{usagePriceRoundID}, state.changed)
+	_, err = store.DB().ExecContext(ctx, "DROP TABLE prepared_usage_rebuild_lock SYNC")
 	require.NoError(t, err)
 	push()
 	prepared := read()
