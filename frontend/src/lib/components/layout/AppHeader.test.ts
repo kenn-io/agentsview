@@ -130,7 +130,7 @@ describe("AppHeader export actions", () => {
     await tick();
     const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
     expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
-    void claudeAISync.start(undefined, () => {});
+    void claudeAISync.start("claude-ai", undefined, () => {});
     await tick();
     expect(importButton.getAttribute("aria-label")).toBe(
       "Claude.ai Sync is running. Open Import to see progress or stop it.",

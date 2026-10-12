@@ -9,7 +9,7 @@
     importChatGPT,
     connectClaudeAI,
   } from "../../api/client.js";
-  import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
+  import { claudeAISync, type BrowserSyncProvider } from "../../stores/claudeAISync.svelte.js";
   import { getBrowserHost } from "../../api/browserHost.js";
   import { sync as syncState } from "../../stores/sync.svelte.js";
   import { ApiError, isRemoteConnection } from "../../api/runtime.js";
@@ -35,8 +35,7 @@
 
   let fileInput: HTMLInputElement | undefined = $state();
   let selectedFile = $state<File | null>(null);
-  let provider: "claude-ai" | "chatgpt" =
-    $state("claude-ai");
+  let provider = $state<BrowserSyncProvider>("claude-ai");
   let importing = $state(false);
   let dragOver = $state(false);
   let dragCount = $state(0);
@@ -48,7 +47,7 @@
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
   let chromeRefused = $state(false);
-  const canSync = $derived(open && provider === "claude-ai" && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
+  const canSync = $derived(open && (provider === "claude-ai" || !host) && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
   let chromeStatus = $state<ClaudeAIChromeOutputBody | null>(null);
   let signInError = $state<string | null>(null);
   const chromeRead = new LatestRead();
@@ -56,12 +55,14 @@
   const busy = $derived(importing || claudeAISync.running);
   const shownResult = $derived(result ?? claudeAISync.result);
   const shownProgress = $derived(claudeAISync.running ? claudeAISync.progress : progressStats);
+  const updateRequiredCode = $derived(provider === "chatgpt" ? "chrome_host_update_required" : "claude_ai_chrome_host_update_required");
+  const authRequiredCode = $derived(provider === "chatgpt" ? "chatgpt_auth_required" : "claude_ai_auth_required");
   const chromeState = $derived(
     claudeAISync.running ? "connected" :
-    claudeAISync.flag === "claude_ai_chrome_host_update_required" ? "extension-update" :
+    claudeAISync.flag === updateRequiredCode ? "extension-update" :
     !host && !chromeStatus ? "checking" :
     !host && !chromeStatus?.connected ? "disconnected" :
-    claudeAISync.flag === "claude_ai_auth_required" ? "signed-out" : "connected",
+    claudeAISync.flag === authRequiredCode ? "signed-out" : "connected",
   );
   const syncDisabled = $derived(busy || ["checking", "disconnected"].includes(chromeState));
 
@@ -118,7 +119,7 @@
     signInError = null;
     try {
       if (host) await connectClaudeAI(host);
-      else window.open("https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
+      else window.open(provider === "chatgpt" ? "https://chatgpt.com/" : "https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
     } catch (e) { signInError = e instanceof Error ? e.message : String(e); }
   }
 
@@ -127,7 +128,7 @@
     error = null;
     signInError = null;
     result = null;
-    void claudeAISync.start(host, onimported);
+    void claudeAISync.start(provider, host, onimported);
   }
 
   const fileSize = $derived(
@@ -162,6 +163,10 @@
     error = null;
     untrack(() => {
       if (fileInput) fileInput.value = "";
+      if (!claudeAISync.running) claudeAISync.dismiss();
+      signInError = null;
+      chromeStatus = null;
+      chromeRefused = false;
     });
   });
 
@@ -406,7 +411,7 @@
               <Button size="sm" label={m.import_claude_stop()} tone="neutral" surface="outline" onclick={() => claudeAISync.stop()} />
             {:else}
               {#if host || chromeState === "signed-out"}
-                <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
+                <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : provider === "chatgpt" ? m.import_chatgpt_signed_out() : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
               {/if}
               <Button size="sm" label={m.import_claude_sync()} tone={chromeState === "signed-out" ? "neutral" : "info"} surface={chromeState === "signed-out" ? "outline" : "soft"} disabled={syncDisabled} onclick={sync} />
             {/if}
@@ -417,9 +422,9 @@
             {:else if chromeState === "disconnected"}
               <p class="hint">{m.import_claude_open_chrome()}</p>
             {:else if chromeState === "connected"}
-              <p class="hint">{m.import_claude_tab_note()}</p>
+              <p class="hint">{provider === "chatgpt" ? m.import_chatgpt_tab_note() : m.import_claude_tab_note()}</p>
             {:else if chromeState === "signed-out"}
-              <p class="hint">{m.import_claude_signed_out()}</p>
+              <p class="hint">{provider === "chatgpt" ? m.import_chatgpt_signed_out() : m.import_claude_signed_out()}</p>
             {:else if chromeState === "extension-update"}
               <p class="hint">{m.import_claude_update_app()}</p>
             {/if}

@@ -290,7 +290,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			start := time.Now()
 			srv.mux.ServeHTTP(recorder, req)
 			assert.Equal(t, 2*time.Minute, time.Since(start))
-			assert.Contains(t, recorder.Body.String(), "claude browser fetch timed out")
+			assert.Contains(t, recorder.Body.String(), "browser fetch timed out")
 			assert.Contains(t, recorder.Body.String(), "event: error")
 			var request struct {
 				ID string `json:"id"`
