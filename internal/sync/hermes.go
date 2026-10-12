@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -33,16 +34,33 @@ func (e *Engine) validateHermesReplacement(ctx context.Context, result parser.Pa
 	if stored == nil {
 		return nil
 	}
-	if result.ContentReplacement == parser.ContentPreserveRicherArchive && stored.SourceVersion != session.SourceVersion && stored.SourceVersion != parser.HermesStateSourceVersion {
+	needsContentCheck := stored.SourceVersion != session.SourceVersion &&
+		(result.PreserveArchivedUsage || stored.SourceVersion != parser.HermesStateSourceVersion)
+	if result.ContentReplacement == parser.ContentPreserveRicherArchive && needsContentCheck {
 		archived, err := store.GetAllMessages(ctx, id)
 		if err != nil {
 			return err
 		}
-		incoming, err := toDBMessagesContext(ctx, pendingWrite{sess: session, msgs: result.Messages}, e.blockedResultCategories)
+		options := ingest.ContentOptions{
+			BlockedResultCategories: e.blockedResultCategories,
+			ToolResultImages:        e.toolResultImages,
+			ArchiveContent:          e.db.ArchiveContent(),
+		}
+		candidate, err := ingest.PrepareCandidate(ctx, result, options)
 		if err != nil {
 			return err
 		}
-		if !hermesReplacementIncludesArchived(incoming, archived) {
+		candidate.Messages, _ = e.projectToolResultImagesForPrepare(candidate.Messages)
+		if err := e.applyRemoteRewritesContext(ctx, &candidate.Session, candidate.Messages); err != nil {
+			return err
+		}
+		incoming, err := ingest.FinalizeRows(ctx, candidate, options)
+		if err != nil {
+			return err
+		}
+		archived, _ = e.projectToolResultImagesForPrepare(archived)
+		_, archived = db.ProjectSessionForStoragePolicy(*stored, archived, options.ArchiveContent)
+		if !hermesReplacementIncludesArchived(incoming.Messages, archived) {
 			return fmt.Errorf("hermes source fallback cannot replace archived content for session %s", id)
 		}
 	}

@@ -672,6 +672,7 @@ func (p *hermesProvider) parseStateDB(ctx context.Context,
 		if sess != nil {
 			results = append(results, ParseResult{
 				Session: *sess, Messages: msgs,
+				ContentReplacement: ContentPreserveRicherArchive, PreserveArchivedUsage: true,
 			})
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
@@ -1573,6 +1574,11 @@ func TestHermesIncompleteTranscriptPreservesArchivedHistory(t *testing.T) {
 						assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 					}
 					writeHermesTranscriptFile(t, dir, "standalone")
+					file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+					require.NoError(t, err)
+					_, err = file.WriteString(`{"role":"user","content":"recovered follow-up"}` + "\n")
+					require.NoError(t, err)
+					require.NoError(t, file.Close())
 					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
 					recovered, getErr := database.GetAllMessages(t.Context(), id)
 					require.NoError(t, getErr)
@@ -1580,7 +1586,7 @@ func TestHermesIncompleteTranscriptPreservesArchivedHistory(t *testing.T) {
 					for i, message := range recovered {
 						contents[i] = message.Content
 					}
-					assert.Equal(t, []string{"hello", "Done."}, contents)
+					assert.Equal(t, []string{"hello", "Done.", "recovered follow-up"}, contents)
 				})
 			}
 		}
@@ -1599,7 +1605,8 @@ func TestHermesUnreadableStateMembersUseTranscriptFallback(t *testing.T) {
 					stateDB := writeHermesArchiveStateDB(t, root)
 					conn, err := sql.Open("sqlite3", stateDB)
 					require.NoError(t, err)
-					_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions
+					_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content = 'hello' WHERE session_id = 'child';
+						INSERT INTO sessions
 						(id, source, model, started_at, message_count) VALUES ('keeper', 'cli', 'model', 1778767200, 1);
 						INSERT INTO messages (session_id, role, content, timestamp)
 						VALUES ('keeper', 'user', 'retained history', 1778767210)`)
@@ -1700,6 +1707,11 @@ func TestHermesSingleSessionResyncUsesTranscriptAfterDatabaseFailure(t *testing.
 			t.Run(string(agent)+"/"+damage, func(t *testing.T) {
 				root := t.TempDir()
 				stateDB := writeHermesArchiveStateDB(t, root)
+				conn, err := sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), "UPDATE messages SET content = 'hello' WHERE session_id = 'child'")
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
 				dir := filepath.Join(root, "sessions")
 				writeHermesTranscriptFile(t, dir, "sibling")
 				database := dbtest.OpenTestDB(t)
@@ -2158,6 +2170,138 @@ func TestHermesLegacyProvenancePreservesAmbiguousHistory(t *testing.T) {
 					}
 					assert.Equal(t, want, row.SourceVersion)
 				}
+			})
+		}
+	}
+}
+
+func TestHermesDatabaseLossPreservesArchivedConversation(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, damage := range []string{"removed", "unreadable"} {
+			for _, mode := range []string{"full sync", "single session", "full resync"} {
+				t.Run(string(agent)+"/"+damage+"/"+mode, func(t *testing.T) {
+					root := t.TempDir()
+					stateDB := writeHermesArchiveStateDB(t, root)
+					conn, err := sql.Open("sqlite3", stateDB)
+					require.NoError(t, err)
+					_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET input_tokens=100, output_tokens=73, estimated_cost_usd=0.5, cost_status='estimated'")
+					require.NoError(t, err)
+					require.NoError(t, conn.Close())
+					database := dbtest.OpenTestDB(t)
+					engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+					t.Cleanup(engine.Close)
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					id := string(agent) + ":child"
+					before, err := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					usageBefore, err := database.GetUsageEvents(t.Context(), id)
+					require.NoError(t, err)
+					require.Len(t, usageBefore, 1)
+					dir := filepath.Join(root, "sessions")
+					require.NoError(t, os.MkdirAll(dir, 0o755))
+					require.NoError(t, os.WriteFile(filepath.Join(dir, "child.jsonl"), []byte(`{"role":"user","content":"short"}`+"\n"), 0o600))
+					if damage == "removed" {
+						require.NoError(t, os.Remove(stateDB))
+					} else {
+						require.NoError(t, os.WriteFile(stateDB, []byte("not a SQLite database"), 0o600))
+					}
+					switch mode {
+					case "full sync":
+						engine.SyncAll(t.Context(), nil)
+					case "single session":
+						_ = engine.SyncSingleSessionContext(t.Context(), id)
+					case "full resync":
+						engine.ResyncAll(t.Context(), nil)
+					}
+					after, err := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					assert.Equal(t, before, after)
+					usageAfter, err := database.GetUsageEvents(t.Context(), id)
+					require.NoError(t, err)
+					assert.Equal(t, usageBefore, usageAfter)
+				})
+			}
+		}
+	}
+}
+
+func TestHermesLegacyAggregateStandaloneFallbackPreservesHistory(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			stateDB := writeHermesArchiveStateDB(t, root)
+			conn, err := sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), "UPDATE sessions SET input_tokens = 100, output_tokens = 73")
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			dir := filepath.Join(root, "sessions")
+			writeHermesTranscriptFile(t, dir, "child")
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+			id := string(agent) + ":child"
+			before, err := database.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			usageBefore, err := database.GetUsageEvents(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, usageBefore, 1)
+			row, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			row.FilePath = &stateDB
+			require.NoError(t, database.UpsertSession(t.Context(), *row))
+			conn, err = sql.Open("sqlite3", stateDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), "DELETE FROM messages; DELETE FROM sessions")
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			require.NoError(t, os.Remove(filepath.Join(dir, "child.jsonl")))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "session_child.json"), []byte(`{"messages":[{"role":"user","content":"stale"}]}`), 0o600))
+			_ = engine.SyncSingleSessionContext(t.Context(), id)
+			after, err := database.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			usageAfter, err := database.GetUsageEvents(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, usageBefore, usageAfter)
+		})
+	}
+}
+
+func TestHermesProvenanceMigrationUsesStorageProjection(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+			t.Run(string(agent)+"/"+string(policy), func(t *testing.T) {
+				root := t.TempDir()
+				stateDB := writeHermesArchiveStateDB(t, root)
+				conn, err := sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), "DELETE FROM messages")
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				dir := filepath.Join(root, "sessions")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				content := `{"role":"user","content":"hello\u0000\u0001"}` + "\n" + `{"role":"assistant","content":"tools","tool_calls":[{"id":"call-a","function":{"name":"lookup","arguments":"{}"}}]}` + "\n" + `{"role":"tool","content":"result\u0000\u0001","tool_call_id":"call-a"}` + "\n"
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "child.jsonl"), []byte(content), 0o600))
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local", ArchiveContent: policy})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":child"
+				before, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				row, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				row.SourceVersion = "hermes-state-db"
+				require.NoError(t, database.UpsertSession(t.Context(), *row))
+				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), id))
+				after, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				assert.Equal(t, before, after)
+				row, err = database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				assert.Equal(t, "hermes-jsonl-v1", row.SourceVersion)
 			})
 		}
 	}
