@@ -1266,6 +1266,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newDeepSeekTUIProviderFactory(def)
 	case AgentDeepSeekHarness:
 		return newDeepSeekHarnessProviderFactory(def)
+	case AgentCodexCloud:
+		return newCodexCloudProviderFactory(def)
 	case AgentForge:
 		return newForgeProviderFactory(def)
 	case AgentDevin:

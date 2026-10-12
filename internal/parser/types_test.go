@@ -236,6 +236,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentDevin, true},
 		{AgentDeepSeekTUI, true},
 		{AgentDeepSeekHarness, true},
+		{AgentCodexCloud, true},
 		{AgentCline, true},
 		{"unknown", false},
 	}
@@ -415,6 +416,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"codex cloud prefix",
+			"codex-cloud:thread-id",
+			AgentCodexCloud,
+			true,
+		},
+		{
 			"qoder prefix",
 			"qoder:sess-id",
 			AgentQoder,
@@ -498,6 +505,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCommandCode,
 		AgentDeepSeekTUI,
 		AgentDeepSeekHarness,
+		AgentCodexCloud,
 		AgentOpenClaw,
 		AgentQClaw,
 		AgentKimi,

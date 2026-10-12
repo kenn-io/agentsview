@@ -31,7 +31,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 	for _, factory := range parser.ProviderFactories() {
 		def := factory.Definition()
 		resolvedDirs := cfg.ResolveDirs(def.Type)
-		if def.RemoteSyncExcluded {
+		if def.RemoteHostSyncBlocked() {
 			for _, dir := range resolvedDirs {
 				forbiddenRoots = appendUniqueForbiddenRoot(forbiddenRoots, dir)
 			}
@@ -503,7 +503,7 @@ func hermesStateFiles(stateDB string, includeDB bool) []string {
 }
 
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
-	if def.RemoteSyncExcluded {
+	if def.RemoteHostSyncBlocked() {
 		return false
 	}
 	if !def.FileBased {

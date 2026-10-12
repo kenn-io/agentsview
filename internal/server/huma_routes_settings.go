@@ -83,6 +83,10 @@ func (s *Server) humaGetSettings(
 		if !def.FileBased && def.EnvVar == "" {
 			continue
 		}
+		// AgentsView writes these roots itself; there is nothing to configure.
+		if def.DataDirRoot != "" {
+			continue
+		}
 		d := s.cfg.ConfiguredDirs(def.Type)
 		if d == nil {
 			d = []string{}

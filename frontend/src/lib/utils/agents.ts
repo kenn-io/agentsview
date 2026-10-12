@@ -8,6 +8,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   { name: "claude", color: "var(--accent-blue)" },
   { name: "cowork", color: "var(--accent-sky)", label: "Claude Cowork" },
   { name: "codex", color: "var(--accent-green)" },
+  { name: "codex-cloud", color: "var(--accent-red)", label: "Codex Cloud" },
   { name: "traex", color: "var(--accent-coral)", label: "TraeX" },
   { name: "augure-code", color: "var(--accent-lime)", label: "Augure Code" },
   {

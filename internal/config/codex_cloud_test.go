@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func writeRawConfig(t *testing.T, dir, text string) {
@@ -123,4 +124,35 @@ func TestCodexCloudErrorKeepsOtherAgents(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cfg.CodexCloud.Err)
 	assert.Equal(t, []string{other}, cfg.AgentDirs["claude"])
+}
+
+func TestCodexCloudRootUnderDataDir(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeRawConfig(t, dir, "[agents.codex-cloud]\nenabled = true\n")
+	want := []string{filepath.Join(dir, "sources", "codex-cloud")}
+	minimal, err := LoadMinimal()
+	require.NoError(t, err)
+	readOnly, err := LoadReadOnly()
+	require.NoError(t, err)
+	for _, cfg := range []Config{minimal, readOnly} {
+		assert.Equal(t, want, cfg.AgentDirs[parser.AgentCodexCloud])
+		assert.Equal(t, want, cfg.ResolveDirs(parser.AgentCodexCloud))
+		assert.False(t, cfg.IsUserConfigured(parser.AgentCodexCloud))
+	}
+}
+
+func TestDisabledAgentsAcceptsCodexCloud(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeRawConfig(t, dir, "disabled_agents = [\"codex-cloud\"]\n")
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+	assert.True(t, cfg.AgentDisabled(parser.AgentCodexCloud))
+}
+
+func TestSessionSourcesRejectCodexCloud(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeRawConfig(t, dir, "[[session_sources]]\nagent = \"codex-cloud\"\ndir = \""+
+		filepath.ToSlash(filepath.Join(dir, "elsewhere"))+"\"\n")
+	_, err := LoadMinimal()
+	require.ErrorContains(t, err, "codex-cloud")
 }

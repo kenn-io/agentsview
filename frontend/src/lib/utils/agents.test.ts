@@ -14,6 +14,7 @@ describe("KNOWN_AGENTS", () => {
       "claude",
       "cowork",
       "codex",
+      "codex-cloud",
       "traex",
       "augure-code",
       "augure-desktop",

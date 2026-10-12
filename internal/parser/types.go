@@ -96,6 +96,7 @@ const (
 )
 
 const AgentDeepSeekHarness AgentType = "deepseek-harness"
+
 const AgentCodexCloud AgentType = "codex-cloud"
 
 // AgentDef describes a supported coding agent's filesystem
@@ -133,6 +134,17 @@ type AgentDef struct {
 	// with secrets or state that cannot be copied safely; each artifact
 	// seam checks it so exclusion fails closed.
 	RemoteSyncExcluded bool
+
+	// RemoteHostSyncExcluded keeps the agent's roots out of remote host
+	// sync only. Raw capture may still ship them to a hub. Set for roots
+	// that hold local state files beside transcripts that are safe to
+	// capture one file at a time.
+	RemoteHostSyncExcluded bool
+
+	// DataDirRoot is the agent's only root, relative to the AgentsView
+	// data directory in slash form, for sources AgentsView writes itself. Such an agent
+	// has no user-configurable directories.
+	DataDirRoot string
 
 	// WatchRootsFunc resolves the directories to watch for live
 	// updates under a configured root, for agents whose watch
@@ -658,6 +670,14 @@ var Registry = []AgentDef{
 		DefaultDirs:       []string{".dsh/sessions"},
 		IDPrefix:          "deepseek-harness:",
 		FileBased:         true,
+	},
+	{
+		Type:                   AgentCodexCloud,
+		DisplayName:            "Codex Cloud",
+		IDPrefix:               "codex-cloud:",
+		FileBased:              true,
+		DataDirRoot:            "sources/codex-cloud",
+		RemoteHostSyncExcluded: true,
 	},
 	{
 		Type:        AgentOpenClaw,
@@ -1220,7 +1240,13 @@ func AgentByType(t AgentType) (AgentDef, bool) {
 // stay out of every remote sync artifact. Unknown agents are not excluded.
 func RemoteSyncExcludedAgent(agent AgentType) bool {
 	def, ok := AgentByType(agent)
-	return ok && def.RemoteSyncExcluded
+	return ok && def.RemoteHostSyncBlocked()
+}
+
+// RemoteHostSyncBlocked reports whether remote host sync must leave the
+// agent's roots behind.
+func (d AgentDef) RemoteHostSyncBlocked() bool {
+	return d.RemoteSyncExcluded || d.RemoteHostSyncExcluded
 }
 
 // AgentHasPostAnswerToolWork reports whether the agent may continue calling
