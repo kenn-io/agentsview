@@ -254,9 +254,10 @@ func parseRebuildLockState(generation uint64, comment string) (rebuildLockState,
 		err = fmt.Errorf("unknown status %q", state.Status)
 	}
 	lock := fmt.Sprintf("%s%d", chPreparedUsageRebuildLockPrefix, generation)
+	// The statement comes last so it can be copied from the log as is.
 	return rebuildLockState{}, fmt.Errorf("prepared usage rebuild lock %s has comment %q, which is not a lock "+
-		"state; repair it in the mirror database with: ALTER TABLE %s MODIFY COMMENT %s: %w",
-		lock, comment, lock, rebuildLockState{Status: rebuildLockReleased}.commentSQL(), err)
+		"state (%w); repair it in the mirror database with: ALTER TABLE %s MODIFY COMMENT %s",
+		lock, comment, err, lock, rebuildLockState{Status: rebuildLockReleased}.commentSQL())
 }
 
 // createRebuildLock creates the lock table of generation with state.
@@ -278,9 +279,9 @@ func setRebuildLock(ctx context.Context, conn *sql.DB, generation uint64, state 
 // chNoLockSkipMessage explains why a push without the view skips its
 // rebuild when the database has no rebuild lock: only the schema step of a
 // database that cannot swap tables creates one; see openRebuildLocks.
-const chNoLockSkipMessage = "clickhouse push: the prepare_usage view is missing, so usage reads are slower " +
-	"until it exists; another client may be recreating it, and if this message repeats, restarting " +
-	"agentsview recreates it"
+const chNoLockSkipMessage = "clickhouse push: the prepare_usage view is missing. Usage reads are slower " +
+	"until it exists. Another client may be recreating it. If this message repeats, restart agentsview " +
+	"to recreate it."
 
 // chRetiredSkipMessage explains why a push skips its rebuild once the
 // newest rebuild lock is retired.

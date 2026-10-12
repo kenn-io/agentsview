@@ -278,8 +278,9 @@ themselves meanwhile.
 A lock's comment holds its state as JSON, which ClickHouse changes atomically.
 `status` is `held`, `released`, or `retired`. A held lock also carries
 `renewed_at`, the ClickHouse server's Unix time when its holder last renewed it.
-A comment that is not valid JSON or has another status stops rebuilds with an
-error that names the lock and the statement that repairs it.
+A comment that is not valid JSON or has another status fails every read of the
+newest lock. Each push logs the error and skips its rebuild, and the schema step
+fails. The error names the lock and ends with the statement that repairs it.
 
 A lock can outlive its holder:
 

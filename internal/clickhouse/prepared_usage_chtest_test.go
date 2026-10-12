@@ -3,9 +3,11 @@
 package clickhouse
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,8 +105,10 @@ func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, probeUnchanged, probeRestored, "the same usage rows must restore the same fingerprint")
 
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "round-test",
-		InputPerMTok: money.MustParseDollars("2"), OutputPerMTok: money.MustParseDollars("3")}}))
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "round-test",
+		InputPerMTok: money.MustParseDollars("2"), OutputPerMTok: money.MustParseDollars("3"),
+	}}))
 	require.NoError(t, syncer.syncModelPricing(ctx))
 	requireReady(true)
 	repriced := read()
@@ -605,8 +609,10 @@ func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
 	_, err := store.DB().ExecContext(ctx, "SYSTEM STOP VIEW prepare_usage")
 	require.NoError(t, err)
 	push()
-	for _, stmt := range []string{"SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
-		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage"} {
+	for _, stmt := range []string{
+		"SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage",
+	} {
 		_, err := store.DB().ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)
 	}
@@ -701,18 +707,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	}
 	locks := func() []string {
 		t.Helper()
-		var names []string
-		rows, err := store.DB().QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
-			WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_rebuild_lock')`)
-		require.NoError(t, err)
-		defer rows.Close()
-		for rows.Next() {
-			var lock string
-			require.NoError(t, rows.Scan(&lock))
-			names = append(names, lock)
-		}
-		require.NoError(t, rows.Err())
-		return names
+		return preparedUsageTables(t, store.DB(), "prepared_usage_rebuild_lock")
 	}
 	push()
 	built := parts()
@@ -795,19 +790,7 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 	conn := chtest.Open(t, target.URL, target.Database)
 	rebuildTables := func() []string {
 		t.Helper()
-		var names []string
-		rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
-			WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_') AND name != 'prepared_usage'
-			ORDER BY name`)
-		require.NoError(t, err)
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			require.NoError(t, rows.Scan(&name))
-			names = append(names, name)
-		}
-		require.NoError(t, rows.Err())
-		return names
+		return preparedUsageTables(t, conn, "prepared_usage_")
 	}
 	newTestSync(t, local, target, storage.PusherOptions{})
 	require.Empty(t, rebuildTables())
@@ -851,19 +834,7 @@ func TestRefreshPreparedUsageWithoutViewFollowsRebuildLock(t *testing.T) {
 	newTestSync(t, local, target, storage.PusherOptions{})
 	tables := func() []string {
 		t.Helper()
-		var names []string
-		rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
-			WHERE database = currentDatabase() AND startsWith(name, 'prepare') AND name != 'prepared_usage'
-			ORDER BY name`)
-		require.NoError(t, err)
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			require.NoError(t, rows.Scan(&name))
-			names = append(names, name)
-		}
-		require.NoError(t, rows.Err())
-		return names
+		return preparedUsageTables(t, conn, "prepare")
 	}
 	require.NoError(t, dropPreparedUsageView(ctx, conn))
 	require.NoError(t, refreshPreparedUsage(ctx, conn))
@@ -890,8 +861,10 @@ func TestRebuildLockRejectsUnreadableComment(t *testing.T) {
 		require.NoError(t, err)
 		_, acquired, err := acquireRebuildLock(ctx, conn)
 		require.False(t, acquired)
-		require.ErrorContains(t, err,
-			`ALTER TABLE prepared_usage_rebuild_lock_4 MODIFY COMMENT '{"status":"released"}'`, comment)
+		require.Error(t, err, comment)
+		require.True(t, strings.HasSuffix(err.Error(),
+			`: ALTER TABLE prepared_usage_rebuild_lock_4 MODIFY COMMENT '{"status":"released"}'`),
+			"the error must end with the repair statement so it can be copied as is: %v", err)
 		_, _, _, err = newestRebuildLock(ctx, conn)
 		require.ErrorContains(t, err, "prepared_usage_rebuild_lock_4", comment)
 	}
@@ -919,18 +892,8 @@ func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T)
 	ready, err := NewStoreFromDB(syncer.conn).preparedUsageReady(ctx)
 	require.NoError(t, err)
 	require.True(t, ready, "the push must rebuild prepared usage")
-	var locks []string
-	rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
-		WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_rebuild_lock')`)
-	require.NoError(t, err)
-	defer rows.Close()
-	for rows.Next() {
-		var lock string
-		require.NoError(t, rows.Scan(&lock))
-		locks = append(locks, lock)
-	}
-	require.NoError(t, rows.Err())
-	require.Equal(t, []string{"prepared_usage_rebuild_lock_6 released"}, locks)
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_6 released"},
+		preparedUsageTables(t, conn, "prepared_usage_rebuild_lock"))
 }
 
 // A schema step that replaces prepared_usage drops the view before it
@@ -952,19 +915,7 @@ func TestRefreshPreparedUsageWithRetiredLockWithoutTableExchange(t *testing.T) {
 	ready, err := NewStoreFromDB(syncer.conn).preparedUsageReady(ctx)
 	require.NoError(t, err)
 	require.True(t, ready, "the push must rebuild prepared usage")
-	var tables []string
-	rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
-		WHERE database = currentDatabase() AND startsWith(name, 'prepare') AND name != 'prepared_usage'
-		ORDER BY name`)
-	require.NoError(t, err)
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		require.NoError(t, rows.Scan(&name))
-		tables = append(tables, name)
-	}
-	require.NoError(t, rows.Err())
-	require.Equal(t, []string{"prepared_usage_rebuild_lock_3 released"}, tables,
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_3 released"}, preparedUsageTables(t, conn, "prepare"),
 		"the push must release the retired lock and rebuild without creating the view")
 }
 
@@ -1025,4 +976,24 @@ func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 	_, acquired, err = acquireRebuildLock(ctx, conn)
 	require.NoError(t, err)
 	require.False(t, acquired, "the successor's lock is still held")
+}
+
+// preparedUsageTables lists the tables other than prepared_usage whose names
+// start with prefix, each with the status in its rebuild lock comment, which
+// is empty for tables that are not locks.
+func preparedUsageTables(t *testing.T, conn *sql.DB, prefix string) []string {
+	t.Helper()
+	rows, err := conn.QueryContext(t.Context(), `SELECT name || ' ' || JSONExtractString(comment, 'status')
+		FROM system.tables WHERE database = currentDatabase() AND startsWith(name, ?) AND name != 'prepared_usage'
+		ORDER BY name`, prefix)
+	require.NoError(t, err)
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+	require.NoError(t, rows.Err())
+	return names
 }

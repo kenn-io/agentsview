@@ -518,10 +518,12 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   running, end that wait by marking that lock released. Run this in the mirror
   database:
   `ALTER TABLE prepared_usage_rebuild_lock_<n> MODIFY COMMENT '{"status":"released"}'`.
-  The comment must be exactly that JSON; anything else stops rebuilds until
-  it is fixed, and the error repeats the statement. Do not drop the lock
-  table; the next push would reuse its number. Leave a lock whose status is
-  `retired` alone.
+  A lock comment is JSON whose `status` is `held`, `released`, or `retired`.
+  If an edit leaves a comment that is not one of these, each push logs an
+  error and skips its rebuild, and the schema step fails. The error names the
+  lock and gives the statement above to repair it. Do not drop the lock table;
+  the next push would reuse its number. Leave a lock whose status is `retired`
+  alone.
 - **Moving off NFS.** When the schema step finds that the database can swap
   tables again, it creates a new lock table with status `retired`, drops the
   older lock tables, and then creates the `prepare_usage` view. Do not drop
