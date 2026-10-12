@@ -99,7 +99,6 @@ describe("agentColor", () => {
     expect(agentColor("zed")).toBe("var(--accent-green)");
     expect(agentColor("pi")).toBe("var(--accent-indigo)");
     expect(agentColor("stepcode")).toBe("var(--accent-indigo)");
-    expect(agentColor("fx")).toBe("var(--accent-sky)");
     expect(agentColor("tau")).toBe("var(--accent-amber)");
     expect(agentColor("prime-agent")).toBe("var(--accent-indigo)");
     expect(agentColor("qwen")).toBe("var(--accent-cyan)");

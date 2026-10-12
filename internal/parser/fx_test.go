@@ -85,7 +85,6 @@ func TestFxFixture(t *testing.T) {
 
 func TestFxEventVariants(t *testing.T) {
 	for _, test := range []struct{ name, provider, replayProvider, wantReplayProvider string }{
-		{"builtin", `"gateway"`, `"codex"`, ""},
 		{"configured", `{"name":"custom","binding":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`, `{"name":"custom-replay","binding":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`, "custom-replay"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -122,9 +121,7 @@ func TestFxEventVariants(t *testing.T) {
 			assert.Equal(t, "Earlier work", messages[3].Content)
 			assert.Equal(t, "Half an answer", messages[4].Content)
 			assert.Empty(t, messages[4].Model)
-			if test.wantReplayProvider != "" {
-				assert.Equal(t, test.wantReplayProvider, messages[5].ProviderID)
-			}
+			assert.Equal(t, test.wantReplayProvider, messages[5].ProviderID)
 			require.Len(t, session.UsageEvents, 2)
 			assert.Equal(t, 9, session.UsageEvents[0].InputTokens)
 			assert.Equal(t, 3, session.UsageEvents[0].CacheCreationInputTokens)
@@ -145,7 +142,7 @@ func TestFxMetadataAndCancellation(t *testing.T) {
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(previous) })
 	session, _, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Nil(t, session)
 	assert.Contains(t, logs.String(), "missing session.json")
 

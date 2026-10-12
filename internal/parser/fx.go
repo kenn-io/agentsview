@@ -44,7 +44,7 @@ func (p *fxProvider) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		if provider == nil || provider.Name == "" {
-			return fmt.Errorf("invalid fx provider")
+			return errors.New("invalid fx provider")
 		}
 		name = provider.Name
 	}
@@ -97,7 +97,7 @@ func (e *fxEvent) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if len(keys) != 1 {
-		return fmt.Errorf("fx event must contain one event type")
+		return errors.New("fx event must contain one event type")
 	}
 	var fields fxEvent
 	for key, value := range keys {
@@ -120,7 +120,7 @@ func (e *fxEvent) UnmarshalJSON(data []byte) error {
 		case "turn_completed":
 			target = &fields.TurnCompleted
 		case "":
-			return fmt.Errorf("fx event type must be non-empty")
+			return errors.New("fx event type must be non-empty")
 		}
 		if target != nil {
 			if string(value) == "null" {
@@ -147,7 +147,7 @@ func (c *fxCount) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if count < 0 {
-		return fmt.Errorf("negative fx token count")
+		return errors.New("negative fx token count")
 	}
 	*c = fxCount(count)
 	return nil
@@ -188,13 +188,13 @@ func readFxMetadata[T any](path string) (*T, error) {
 	return value, nil
 }
 
-func fxSchemaOK(version, min, max int, session, file string) bool {
-	if version >= min && version <= max {
+func fxSchemaOK(version, minimum, maximum int, session, file string) bool {
+	if version >= minimum && version <= maximum {
 		return true
 	}
-	direction, supported := "newer", max
-	if version < min {
-		direction, supported = "older", min
+	direction, supported := "newer", maximum
+	if version < minimum {
+		direction, supported = "older", minimum
 	}
 	log.Printf("skipping fx session %s: unsupported %s schema_version %d is %s than supported %d", session, file, version, direction, supported)
 	return false
@@ -275,7 +275,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 			return nil, nil, fmt.Errorf("invalid fx events.jsonl frame: %w", err)
 		}
 		if frame == nil || frame.Event == nil {
-			return nil, nil, fmt.Errorf("invalid fx events.jsonl frame: event must be an object")
+			return nil, nil, errors.New("invalid fx events.jsonl frame: event must be an object")
 		}
 		if !fxSchemaOK(frame.Version, 0, 3, rawID, "events.jsonl frame") {
 			return nil, nil, nil
@@ -296,7 +296,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		return nil, nil, fmt.Errorf("read fx events: %w", err)
 	}
 	if reader.skippedOversized {
-		return nil, nil, fmt.Errorf("fx event exceeds maximum line size")
+		return nil, nil, errors.New("fx event exceeds maximum line size")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -315,17 +315,17 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	}
 	if usage != nil {
 		if usage.Snapshot == nil || usage.Snapshot.Models == nil {
-			return nil, nil, fmt.Errorf("invalid fx usage-v2.json: expected snapshot object and models array")
+			return nil, nil, errors.New("invalid fx usage-v2.json: expected snapshot object and models array")
 		}
 		if usage.SessionID != nil && *usage.SessionID != rawID {
-			return nil, nil, fmt.Errorf("fx usage-v2.json session_id does not match session folder")
+			return nil, nil, errors.New("fx usage-v2.json session_id does not match session folder")
 		}
 		if !fxSchemaOK(usage.Version, 0, 1, rawID, "usage-v2.json") || !fxSchemaOK(usage.Snapshot.Version, 0, 3, rawID, "usage-v2.json snapshot") {
 			return nil, nil, nil
 		}
 		for _, model := range usage.Snapshot.Models {
 			if model == nil || model.Model == "" {
-				return nil, nil, fmt.Errorf("invalid fx usage-v2.json model entry")
+				return nil, nil, errors.New("invalid fx usage-v2.json model entry")
 			}
 			provider, _, prefixed := strings.Cut(model.Model, "/")
 			if !prefixed {
