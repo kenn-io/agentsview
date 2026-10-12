@@ -54,86 +54,87 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 		}
 	}
 	for _, tc := range []struct {
-		name      string
-		read      func(context.Context) error
-		wantError error
+		name        string
+		read        func(context.Context) error
+		wantError   error
+		blockedOnly bool
 	}{
 		{"summary", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsSummary(ctx, filter)
 			return err
-		}, nil},
+		}, nil, false},
 		{"activity", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsActivity(ctx, filter, "day")
 			return err
-		}, nil},
+		}, nil, false},
 		{"heatmap", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsHeatmap(ctx, filter, "messages")
 			return err
-		}, nil},
+		}, nil, false},
 		{"projects", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsProjects(ctx, filter)
 			return err
-		}, nil},
+		}, nil, false},
 		{"project inventory", func(ctx context.Context) error {
 			_, err := database.GetProjectInventory(ctx, ProjectDateFilter{})
 			return err
-		}, nil},
+		}, nil, false},
 		{"hour of week", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsHourOfWeek(ctx, filter)
 			return err
-		}, nil},
+		}, nil, false},
 		{"session shape", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsSessionShape(ctx, filter)
 			return err
-		}, nil},
+		}, nil, false},
 		{"tools", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsTools(ctx, filter)
 			return err
-		}, nil},
+		}, nil, false},
 		{"skills", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsSkills(ctx, filter, "week")
 			return err
-		}, nil},
+		}, nil, false},
 		{"velocity", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsVelocity(ctx, filter)
 			return err
-		}, nil},
+		}, nil, false},
 		{"signals", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsSignals(ctx, filter)
 			return err
-		}, nil},
+		}, nil, false},
 		{"signal sessions", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsSignalSessions(ctx, filter, "outcome_completed", 10)
 			return err
-		}, nil},
+		}, nil, false},
 		{"tool signal sessions", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsSignalSessions(ctx, filter, "tool_empty_rate", 10)
 			return err
-		}, nil},
+		}, nil, false},
 		{"top sessions", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsTopSessions(ctx, filter, "messages")
 			return err
-		}, nil},
+		}, nil, false},
 		{"session stats", func(ctx context.Context) error {
 			_, err := database.GetSessionStats(ctx, StatsFilter{Since: "2026-08-01", Until: "2026-08-21", Timezone: "UTC"})
 			return err
-		}, nil},
+		}, nil, false},
 		{"archive regex search", func(ctx context.Context) error {
 			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: `[a-z]+ call`, Mode: "regex"})
 			return err
-		}, nil},
+		}, nil, false},
 		{"prefixed regex search", func(ctx context.Context) error {
 			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "regex"})
 			return err
-		}, nil},
+		}, nil, false},
 		{"substring search", func(ctx context.Context) error {
 			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "substring"})
 			return err
-		}, nil},
+		}, nil, false},
 		{"terms search", func(ctx context.Context) error {
 			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "question", Mode: "terms", IncludeOneShot: true})
 			return err
-		}, nil},
+		}, nil, false},
 		{"embeddable units", func(ctx context.Context) error {
 			var units []EmbeddableUnit
 			_, err := database.ScanEmbeddableUnits(ctx, "", false, func(unit EmbeddableUnit) error {
@@ -144,19 +145,19 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 				assert.Empty(t, units)
 			}
 			return err
-		}, nil},
+		}, nil, false},
 		{"recent edits", func(ctx context.Context) error {
 			_, err := database.RecentEdits(ctx, RecentEditsParams{})
 			return err
-		}, nil},
+		}, nil, false},
 		{"trends", func(ctx context.Context) error {
 			_, err := database.GetTrendsTerms(ctx, filter, []TrendTermInput{{Term: "test"}}, "week")
 			return err
-		}, nil},
+		}, nil, false},
 		{"activity artifacts", func(ctx context.Context) error {
 			_, err := database.BuildActivityReportArtifacts(ctx, filter, q, nil)
 			return err
-		}, nil},
+		}, nil, true},
 		{"usage capture", func(ctx context.Context) error {
 			captured, err := database.captureUsageQuery(ctx, UsageFilter{}, usageQueryKindToken)
 			if err != nil {
@@ -164,15 +165,15 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			}
 			defer captured.Close()
 			return nil
-		}, nil},
+		}, nil, true},
 		{"usage source recheck", func(ctx context.Context) error {
 			_, err := cache.fill.recheckSourceVersions(ctx, snapshot.Versions)
 			return err
-		}, nil},
+		}, nil, true},
 		{"usage backfill activity", func(ctx context.Context) error {
 			_, err := database.usageBackfillActivity(ctx)
 			return err
-		}, nil},
+		}, nil, false},
 		{"usage extraction", func(ctx context.Context) error {
 			spool, versions, err := cache.fill.extractSessions(ctx, snapshot.Versions)
 			if spool != nil {
@@ -183,44 +184,41 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 				assert.Nil(t, versions)
 			}
 			return err
-		}, nil},
+		}, nil, false},
 		{"Cursor batch", func(ctx context.Context) error {
 			_, _, err := cache.fill.readCursorBatch(ctx, 0, snapshot.CursorHighWater)
 			return err
-		}, nil},
+		}, nil, false},
 		{"unsupported signal", func(ctx context.Context) error {
 			_, err := database.GetAnalyticsSignalSessions(ctx, filter, "unsupported", 10)
 			return err
-		}, ErrUnsupportedAnalyticsSignal},
+		}, ErrUnsupportedAnalyticsSignal, false},
 		{"invalid stats timezone", func(ctx context.Context) error {
 			_, err := database.GetSessionStats(ctx, StatsFilter{Timezone: "invalid"})
 			return err
-		}, &StatsInputError{}},
+		}, &StatsInputError{}, false},
 		{"invalid stats window", func(ctx context.Context) error {
 			_, err := database.GetSessionStats(ctx, StatsFilter{Since: "2026-08-11", Until: "2026-08-10"})
 			return err
-		}, &StatsInputError{}},
+		}, &StatsInputError{}, false},
 		{"invalid regex", func(ctx context.Context) error {
 			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "[", Mode: "regex"})
 			return err
-		}, &SearchInputError{}},
+		}, &SearchInputError{}, false},
 		{"invalid terms scope", func(ctx context.Context) error {
 			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "question", Mode: "terms", Scope: "invalid"})
 			return err
-		}, &SearchInputError{}},
+		}, &SearchInputError{}, false},
 		{"invalid substring source", func(ctx context.Context) error {
 			_, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "substring", Sources: []string{"invalid"}})
 			return err
-		}, &SearchInputError{}},
+		}, &SearchInputError{}, false},
 	} {
 		if !blocked && tc.wantError != nil {
 			continue
 		}
-		if !blocked {
-			switch tc.name {
-			case "activity artifacts", "usage capture", "usage source recheck":
-				continue
-			}
+		if !blocked && tc.blockedOnly {
+			continue
 		}
 		t.Run(tc.name, func(t *testing.T) {
 			budget := 2 * time.Second
