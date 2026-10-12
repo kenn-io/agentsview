@@ -55,11 +55,29 @@ What the probe saw:
   The protocol also defines `fileChange`, `webSearch`, `dynamicToolCall`,
   `collabAgentToolCall`, `subAgentActivity`, `plan`, `imageView`,
   `imageGeneration`, `hookPrompt`, `sleep`, and review-mode markers.
-- Stored history has no per-turn token usage. Per-thread usage comes from
-  `account/usage/read {threadId}`: estimated credits and US dollars, and
-  input, cached input, net new input, output, and total tokens grouped by
-  model, reasoning effort, and speed. Per-turn usage exists only as live
+- Stored history has no per-turn token usage. Per-turn usage exists only as live
   `thread/tokenUsage/updated` notifications.
+- The durable host rejects `account/usage/read` ("unsupported app-server
+  method"). A local Codex app-server answers that method by calling a ChatGPT
+  HTTPS endpoint (`codex-rs/backend-client/src/client/thread_usage.rs`):
+  `POST https://chatgpt.com/backend-api/wham/usage/thread_usage/query` with
+  body `{"thread_ids": [...]}`, 1 to 100 distinct IDs per call, the same
+  ChatGPT token as an `Authorization: Bearer` header, and
+  `ChatGPT-Account-Id`. Each returned row has `thread_id`,
+  `estimated_usage_credits_micros`, `estimated_usage_usd_micros`,
+  `native_usage_usd_micros`, and `groups` of
+  `{model, reasoning_effort, speed, estimated_usage_credits_micros, native_usage_usd_micros, input_tokens, cached_input_tokens, net_new_input_tokens, output_tokens, total_tokens}`.
+  Omitted threads are "unavailable, not zero".
+
+Second probe, 2026-10-12, with AgentsView's own `User-Agent` and `originator`:
+
+- The server accepted AgentsView's identity. AgentsView never presents itself as
+  the desktop app.
+- 33 active and 3 archived threads. Listing with every source kind returned no
+  extra threads, so the dot's own conversation is not on this server.
+- One dot thread had 7 turns and 845 items: 384 reasoning, 357 shell commands,
+  82 agent messages, 11 function call outputs, 7 MCP calls, 3 compactions, and
+  1 user message.
 
 ## Goals
 
@@ -78,8 +96,8 @@ What the probe saw:
 - Starting, steering, or changing anything on OpenAI's side.
 - Per-turn token usage or cost. The server does not keep it.
 - Live streaming of in-progress turns. Background sync is enough.
-- The dot's own chat in ChatGPT, Slack, or Teams, unless it turns out to be
-  listable on the durable host (see Open questions).
+- The dot's own chat in ChatGPT, Slack, or Teams. It is not listable on the
+  durable host.
 - Codex OpenTelemetry export. It covers only local processes and leaves out
   content by default.
 
@@ -105,10 +123,11 @@ durable host --(fetcher, poller job)--> mirror files --(provider)--> SQLite --> 
 ```
 
 1. **Fetcher.** A new package containing a minimal app-server websocket client:
-   handshake, JSON-RPC requests, paging. An allowlist enforced in the client
-   permits only `initialize`, the `initialized` notification, `thread/list`,
-   `thread/read`, `thread/items/list`, `thread/turns/list`, and
-   `account/usage/read`. Any other outgoing method fails before it is sent.
+   handshake, JSON-RPC requests, paging, plus one HTTPS call for usage. An
+   allowlist enforced in the client permits only `initialize`, the
+   `initialized` notification, `thread/list`, `thread/read`,
+   `thread/items/list`, and `thread/turns/list` on the websocket, and only the
+   thread-usage query URL over HTTPS. Anything else fails before it is sent.
    Server-initiated requests, such as a token refresh, are answered with a
    JSON-RPC error. Notifications are ignored.
 1. **Scheduler.** A `poller.Job`, which `docs/agents/background-work.md`
@@ -135,37 +154,58 @@ durable host --(fetcher, poller job)--> mirror files --(provider)--> SQLite --> 
 - At the start of each fetch, read `tokens.access_token` and `tokens.account_id`
   from that home's `auth.json`. Hold them in memory for that fetch only. Sync
   errors name the Codex home they affect, never the token.
-- Never refresh. On HTTP 401 or 403, or a missing token, record a sync error
+- Never refresh. On HTTP 401 or 403, or a missing token, record a fetch error
   that tells the user to run `codex login`, and back off through the poller.
+- Make fetch results visible. Poller status lives only in memory, and AgentsView
+  has no general sync-error display today. Report each Codex home's last fetch
+  result (last success time, or the error and the action to take) through the
+  daemon status API, and show it in the UI's sync status area. The next
+  successful fetch clears the error.
 - Redact the token from every error string before it leaves the fetcher,
   including echoed handshake headers. The subprotocol carries the token, so
   any handshake error formatting must be treated as sensitive.
 - Identify the client honestly: send a `User-Agent` naming AgentsView and its
-  version, and an `originator` naming AgentsView. Before implementation
-  starts, re-run the probe with those values. If the server refuses them, stop
-  and ask the user whether to send the desktop app's values instead. Do not
-  silently copy the desktop app's identity.
+  version, and an `originator` naming AgentsView. The second probe confirmed
+  the server accepts this. If a later server release refuses it, stop and ask
+  the user; never fall back to the desktop app's identity on your own.
 
 ### Incremental sync
 
 Every step is bounded by what changed since the last fetch, never by the total
 size of the archive or of a thread.
 
+Per account, the fetcher stores:
+
+- an **account watermark**: the newest `updatedAt` of a pass in which every
+  changed thread was fetched and mirrored successfully;
+- a **retry set**: threads whose last fetch failed;
+- for each thread, its last mirrored `updatedAt` and its **anchor** (below).
+
+Each pass:
+
 1. **Changed threads.** Call `thread/list` with `sortKey: updated_at`,
-   descending, 50 per page. Stop paging at the first thread whose `updatedAt`
-   matches the stored value. Do the same with `archived: true`. An unchanged
-   account costs one call per list.
-1. **New items.** For each changed thread, call `thread/items/list` with an item
-   anchor `{type: "item", itemId}` plus its `turnId`, pointing at the last
-   stored item that was finished. An item counts as finished when
-   `completedAtMs` is set and, for items with a `status`, the status is
-   terminal. Items after the anchor are the open tail plus anything new;
-   re-fetching the open tail is how in-progress commands pick up their final
-   output.
-1. **Usage.** For each changed thread, call `account/usage/read {threadId}` and
-   replace that thread's stored totals.
-1. **First run.** With no stored state, backfill every thread once from the
-   start.
+   descending, 50 per page. Collect threads whose `updatedAt` differs from the
+   stored value. Stop paging at the first thread whose `updatedAt` is older
+   than or equal to the account watermark. Do the same with `archived: true`.
+   With no watermark (first run, or a backfill that never finished), page
+   through everything. An unchanged account costs one call per list.
+1. **Add the retry set** to the changed threads.
+1. **New items.** For each changed thread, call `thread/items/list` from its
+   anchor, using an item anchor `{type: "item", itemId}` plus its `turnId`.
+   The anchor is the last item of the longest run of finished items from the
+   start of the thread, not simply the last finished item. Codex runs tool
+   calls in parallel, so a later command can finish before an earlier one;
+   anchoring past an unfinished item would skip its final output. An item
+   counts as finished when `completedAtMs` is set and, for items with a
+   `status`, the status is terminal. Everything after the anchor is fetched
+   again each pass until it finishes.
+1. **Usage.** Query the thread-usage endpoint for the changed threads, up to 100
+   IDs per call.
+1. **Advance state.** A thread's stored `updatedAt` and anchor advance only
+   after its records are mirrored. A thread that fails joins the retry set and
+   the pass goes on. The account watermark advances to the pass's newest
+   `updatedAt` only when every changed thread succeeded, so an interrupted
+   backfill or a failed thread is never skipped by a later pass.
 
 Known limit: the protocol has no "items updated since" query. The open-source
 thread store supports `after_updated_at_ordinal`, but the app-server's
@@ -184,14 +224,32 @@ later protocol exposes update-ordinal paging, switch to it.
 - Compression is zstd only, using `github.com/klauspost/compress/zstd` (already
   a direct dependency; the Go standard library has no zstd encoder). No other
   codec, and no option to choose one.
-- Readers process complete frames only, so an interrupted append cannot produce
-  a corrupt read. `internal/parser/deepseek_harness_format.go` already reads
-  append-only multi-frame `*.jsonl.zstd` files this way; reuse or share that
-  logic rather than writing a second reader.
-- Re-fetched items are appended again. The parser keeps the last record per
-  `(turnId, item.id)`.
+- Every frame carries a zstd content checksum. There is no header frame.
+- Before appending, the writer finds the end of the last complete, checksummed
+  frame and truncates anything after it. A torn frame from an interrupted
+  append is discarded, never built upon, so later frames stay readable.
+- Readers decode only complete frames and never keep records from a torn frame.
+- `internal/parser/deepseek_harness_format.go` cannot be reused as is: it
+  requires a header frame and, as written, decodes the whole file and keeps
+  lines from a torn last frame. Share only its frame inspection and decoder
+  memory limits, and apply the rules above.
+- Re-fetched items are appended again. The newest record for a
+  `(turnId, item.id)` wins.
 - The mirror holds conversation content and is never written outside the data
   directory. It never contains the token.
+
+### Incremental parsing
+
+- The provider resumes from the end of the last frame it parsed, never from a
+  byte offset inside a frame.
+- Each item's `(turnId, item.id)` is its stable identity in the archive. A new
+  record for an item already stored updates that item's message or tool call
+  in place: final output, exit status, duration, status. It never adds a
+  duplicate and never forces a reparse of the whole file.
+- A full parse of a mirror file happens only on full resync or a parser version
+  change, as for other providers.
+- So the local work for a pass is proportional to the records appended in that
+  pass, matching the fetch cost.
 
 ### Mapping to AgentsView sessions
 
@@ -223,21 +281,36 @@ Session fields:
 
 ### Usage and cost
 
-- Store the per-model groups from `account/usage/read` as the session's usage.
-  They must show up in AgentsView's existing usage and cost views, split by
-  model.
-- Cost: use `estimatedUsageUsdMicros` when present and label it as OpenAI's
-  estimate. Otherwise price the token counts with the pricing catalog. Models
-  missing from the catalog show tokens without cost, as other agents already
-  do.
-- Never invent a per-turn split. Updating a growing thread must replace its
-  totals, never add to them.
+- The usage endpoint returns running totals per thread and model group. Each
+  pass compares them with the last totals mirrored for that thread and records
+  only the increase, as a usage entry dated at the newest item timestamp seen
+  in that pass. Cost therefore lands on the day the work was observed, and
+  past days never change as a thread grows.
+- The first fetch of a thread has no earlier totals, so its whole total is dated
+  at the thread's last activity. The user-facing docs state this limit.
+- A decrease in a running total (a server-side correction) is recorded as a
+  negative entry dated the same way, so the sum of entries always equals the
+  server's latest total.
+- Entries show up in AgentsView's existing usage and cost views, split by model.
+- Cost: use the endpoint's US dollar estimate when present and label it as
+  OpenAI's estimate. Otherwise price the token counts with the pricing
+  catalog. Models missing from the catalog show tokens without cost, as other
+  agents already do.
+- A thread the endpoint omits has unknown usage, not zero. Keep its last entries
+  and retry on the next pass.
+- Never invent a per-turn split.
 
 ### Configuration
 
 - Settings live in the existing per-agent table, `[agents.codex-cloud]`:
-  `enabled` (default `false`) and `endpoint` (default
-  `wss://codex-cloud-backend.chatgpt.com/`, for tests and future moves).
+  `enabled` (default `false`), `endpoint` (default
+  `wss://codex-cloud-backend.chatgpt.com/`), and `usage_endpoint` (default
+  `https://chatgpt.com/backend-api/wham/usage/thread_usage/query`). The
+  endpoint overrides exist for tests and future moves.
+- The shared `[agents.<id>]` reader (`applyAgentDirectories`) parses only `dirs`
+  and `homes` and silently ignores other keys. Add parsing and validation for
+  these three keys, and reject unknown keys in `[agents.codex-cloud]` with an
+  error naming the key.
 - Unlike other agents, which are on unless listed in `disabled_agents`, this
   source is off until the user sets `enabled = true`, because it uses a
   private, undocumented endpoint as the user's ChatGPT account.
@@ -270,10 +343,21 @@ only one machine.
   tail, not the whole thread. Add the cardinality-scaling regression
   `docs/agents/background-work.md` requires (small versus large archive,
   unchanged work stays bounded).
-- Mirror: interrupted appends, truncated frames, and duplicate item records
-  parse correctly.
+- Watermark: an interrupted backfill resumes and reaches every thread; a thread
+  that failed while newer threads succeeded is fetched on the next pass.
+- Anchor: parallel tool calls that finish out of order all end with their final
+  output.
+- Mirror: an interrupted append followed by a restart and a successful append
+  leaves every complete frame readable; torn frames contribute no records.
+- Parsing: an item that finishes after a resume point updates its stored message
+  in place without a full reparse or a duplicate.
 - Mapping: every item type in the protocol schema, plus an unknown type.
-- Usage: totals are replaced, not summed, when a thread grows.
+- Usage: a thread that grows across several days adds only increases, dated per
+  pass; past days stay unchanged; the entries sum to the server's latest
+  total.
+- Config: unknown keys in `[agents.codex-cloud]` are rejected.
+- Status: a login failure appears in the daemon status API with the Codex home
+  and the `codex login` action, and clears after a successful fetch.
 
 ## Documentation
 
@@ -285,20 +369,17 @@ only one machine.
 
 ## Open questions
 
-Implementation starts only after the user runs the second probe (the read-only
-script used for the first one, with AgentsView's own identity) and its results
-are recorded here. Only the user runs it, because it uses their ChatGPT login;
-whoever executes the plan never reads the token. Test fixtures are synthetic:
-modeled on the shapes the probe returned, with every value replaced. The probe
-answers these questions, and the design covers either answer.
+The second probe settled archived threads, the dot's own conversation, and the
+client identity (see Background). One question remains:
 
-1. **Archived threads:** whether `thread/list` with `archived: true` returns
-   more threads. The design lists both regardless.
-1. **The dot's own conversation:** whether listing with every source kind
-   returns threads beyond the 31 seen. If so, import them like any other
-   thread. If not, they stay a non-goal.
-1. **Usage response shape:** confirm the `account/usage/read {threadId}`
-   response matches the schema above.
+1. **Usage endpoint for cloud threads:** confirm the thread-usage query returns
+   rows for durable-host thread IDs with the fields listed under Background.
+   If it returns none, cloud sessions ship without usage, and the Usage and
+   cost section is dropped from the first version.
+
+Only the user runs the probe, because it uses their ChatGPT login; whoever
+executes the plan never reads the token. Test fixtures are synthetic: modeled on
+the shapes the probe returned, with every value replaced.
 
 ## Risks
 
