@@ -1828,7 +1828,7 @@ func TestTokenUse_UsesDiscoveredDaemon(t *testing.T) {
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
-	out, code, err := sessionUsageData("remote-session")
+	out, code, err := sessionUsageData(t.Context(), "remote-session")
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Equal(t, "/api/v1/sessions/remote-session/usage", gotUsagePath)
@@ -1843,7 +1843,7 @@ func TestTokenUse_UsesArchivedReadOnlyDaemonUsage(t *testing.T) {
 	ts, paths := readOnlySessionUsageRuntimeServer(t)
 	registerTestRuntime(t, dataDir, ts.URL, true)
 
-	out, code, err := sessionUsageData("remote-session")
+	out, code, err := sessionUsageData(t.Context(), "remote-session")
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Equal(t, tokenUseExitOK, code)

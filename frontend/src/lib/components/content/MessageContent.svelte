@@ -166,7 +166,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   });
   let copyTimer: ReturnType<typeof setTimeout>;
   let pinTimer: ReturnType<typeof setTimeout>;
-  let pinPending = $state(false);
   let forkTimer: ReturnType<typeof setTimeout>;
   async function handleCopy() {
     const ok = await copyToClipboard(formatMessageForCopy(message));
@@ -176,8 +175,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     }
   }
   async function handleTogglePin() {
-    if (pinPending) return;
-    pinPending = true;
     clearTimeout(pinTimer);
     pinFeedback = "";
     pinFailed = false;
@@ -190,8 +187,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     } catch (error) {
       pinFailed = true;
       pinFeedback = generatedErrorMessage(error);
-    } finally {
-      pinPending = false;
     }
   }
   let canForkFromMessage = $derived(allowMutations && owningSession?.agent === "claude" &&

@@ -100,7 +100,7 @@
   "header_actions_settings": "Settings",
   "header_actions_keyboard_shortcuts": "Keyboard shortcuts",
   "header_actions_keyboard_shortcuts_shortcut": "Keyboard shortcuts (?)",
-  "status_bar_archive_stale": "Archive results may be stale.",
+  "status_bar_archive_stale": "Archive results may be stale. Changes are paused until the rebuild finishes.",
   "status_bar_sessions": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],

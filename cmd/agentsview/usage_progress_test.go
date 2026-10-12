@@ -62,7 +62,7 @@ func TestUsageCommandsDeferStartupSyncOnlyForDaily(t *testing.T) {
 					_, _, err := sessionUsageDataForCommand(cmd, "codex:session-a")
 					require.NoError(t, err)
 				case "token-use":
-					_, _, err := sessionUsageData("codex:session-a")
+					_, _, err := sessionUsageData(t.Context(), "codex:session-a")
 					require.NoError(t, err)
 				}
 			})

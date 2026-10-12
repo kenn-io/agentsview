@@ -1609,11 +1609,11 @@ counts, and Antigravity `gen_metadata without usage` counts. A
 metadata for one or more records, but AgentsView could not derive normalized
 usage totals from those records during that sync.
 
-When a data-version resync runs, startup output prints durable phase and
-completion lines for the resync steps. Background daemons also publish startup
-state while they hold the start lock, so `agentsview daemon status` can show the
-starting PID, elapsed time, current phase, progress detail, and log path before
-the HTTP server is ready.
+Full parser rebuilds serve the retained archive while rebuilding; the dashboard
+and CLI report stale results. Scoped upgrades and schema repairs finish before
+HTTP readiness. Their startup output prints phase and completion lines, and
+`agentsview daemon status` shows the starting PID, elapsed time, current phase,
+progress detail, and log path while the daemon holds the start lock.
 
 ### Restricting Ingestion by Working Directory
 

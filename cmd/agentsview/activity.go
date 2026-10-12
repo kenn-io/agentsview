@@ -25,6 +25,7 @@ import (
 
 // ActivityReportConfig holds the flags for `agentsview activity report`.
 type ActivityReportConfig struct {
+	ctx                 context.Context
 	Preset              string
 	Date                string
 	From                string
@@ -52,7 +53,10 @@ var activityReportNow = time.Now
 // runActivityReport syncs, resolves the range, runs the report, and prints it.
 func runActivityReport(cfg ActivityReportConfig) {
 	cfg.ProgressWriter = os.Stderr
-	ctx := context.Background()
+	ctx := cfg.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,

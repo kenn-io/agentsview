@@ -63,6 +63,7 @@ func defaultUsageDateRange(
 }
 
 type UsageDailyConfig struct {
+	ctx       context.Context
 	JSON      bool
 	Since     string
 	Until     string
@@ -168,7 +169,11 @@ func runUsageDailyResult(cfg UsageDailyConfig) error {
 	}
 	noDefaultRange := cfg.All || cfg.Since != "" || cfg.Until != ""
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx := cfg.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
@@ -247,6 +252,7 @@ func noTokenDataNote(agent string, totals db.UsageTotals) string {
 }
 
 type UsageStatuslineConfig struct {
+	ctx     context.Context
 	JSON    bool
 	Agent   string
 	Offline bool
@@ -289,7 +295,11 @@ func runUsageStatuslineResult(cfg UsageStatuslineConfig) error {
 		Timezone: timezone,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx := cfg.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,

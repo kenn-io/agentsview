@@ -19,13 +19,12 @@ import (
 
 var projectsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-func runProjects(jsonOutput bool) {
+func runProjects(ctx context.Context, jsonOutput bool) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
 
-	ctx := context.Background()
 	tr, err := ensureTransport(&appCfg, transportIntentRead, 0)
 	if err != nil {
 		fatal("resolving transport: %v", err)

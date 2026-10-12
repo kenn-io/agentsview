@@ -488,7 +488,7 @@ func newTokenUseCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			runTokenUse(args)
+			runTokenUse(cmd.Context(), args)
 		},
 	}
 }
@@ -533,7 +533,7 @@ func newProjectsCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runProjects(outputFormat(cmd) == "json")
+			runProjects(cmd.Context(), outputFormat(cmd) == "json")
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -590,6 +590,7 @@ func newUsageDailyCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg.JSON = outputFormat(cmd) == "json"
+			cfg.ctx = cmd.Context()
 			runUsageDaily(cfg)
 		},
 	}
@@ -614,6 +615,7 @@ func newUsageStatuslineCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg.JSON = outputFormat(cmd) == "json"
+			cfg.ctx = cmd.Context()
 			runUsageStatusline(cfg)
 		},
 	}
@@ -648,6 +650,7 @@ func newActivityReportCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg.JSON = outputFormat(cmd) == "json"
+			cfg.ctx = cmd.Context()
 			runActivityReport(cfg)
 		},
 	}

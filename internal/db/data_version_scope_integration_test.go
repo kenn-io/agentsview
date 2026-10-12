@@ -73,7 +73,7 @@ func TestSimulatedScopedUpgradeReparsesUnchangedFreebuffSource(t *testing.T) {
 	require.NoError(t, database.Close())
 	database, err = db.OpenIsolated(t.Context(), path)
 	require.NoError(t, err)
-	needsSync, err := db.ArchiveNeedsResync(t.Context(), path)
+	needsSync, _, err := db.ArchiveResyncState(t.Context(), path)
 	require.NoError(t, err)
 	require.True(t, needsSync)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
@@ -85,7 +85,7 @@ func TestSimulatedScopedUpgradeReparsesUnchangedFreebuffSource(t *testing.T) {
 	assert.Equal(t, 1, stats.Synced)
 	assert.Equal(t, 1, stats.Skipped)
 	assert.Equal(t, 1, stats.Failed)
-	needsSync, err = db.ArchiveNeedsResync(t.Context(), path)
+	needsSync, _, err = db.ArchiveResyncState(t.Context(), path)
 	require.NoError(t, err)
 	assert.False(t, needsSync)
 	assert.Equal(t, source, database.GetSessionFilePath(t.Context(), id))
@@ -114,7 +114,7 @@ func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
 
 	waiting := func() (startup, coldRead bool) {
 		t.Helper()
-		startup, err := db.ArchiveNeedsResync(t.Context(), path)
+		startup, _, err := db.ArchiveResyncState(t.Context(), path)
 		require.NoError(t, err)
 		reader, err := db.OpenReadOnly(t.Context(), path)
 		require.NoError(t, err)

@@ -2041,12 +2041,6 @@ func CheckDataVersion(ctx context.Context, path string) error {
 	return err
 }
 
-// ArchiveNeedsResync reports whether startup must run its initial sync.
-func ArchiveNeedsResync(ctx context.Context, path string) (bool, error) {
-	needs, _, err := ArchiveResyncState(ctx, path)
-	return needs, err
-}
-
 // ArchiveResyncState reads both startup decisions from one archive probe.
 func ArchiveResyncState(ctx context.Context, path string) (needsResync, fullRebuild bool, err error) {
 	schema, stale, full, err := probeDatabase(ctx, path, true)

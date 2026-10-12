@@ -5,16 +5,52 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
 	"go.yaml.in/yaml/v3"
 )
+
+func TestCLIArchiveStaleWarning(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(strconv.FormatBool(stale), func(t *testing.T) {
+			newAgentDataDir(t)
+			calls := 0
+			ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if stale {
+					w.Header().Set(apiclient.ArchiveStaleHeader, "true")
+				}
+				switch r.URL.Path {
+				case "/api/v1/sessions":
+					writeJSONResponse(w, `{"sessions":[],"total":0}`)
+				default:
+					assert.Fail(t, "unexpected request", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			})
+			var stdout, stderr bytes.Buffer
+			require.NoError(t, executeCLIWithLegacyFlagCompat([]string{"session", "list", "--server", ts.URL, "--json"}, &stdout, &stderr))
+			assert.GreaterOrEqual(t, calls, 2)
+			decodeCLIJSON[cliSessionList](t, stdout.String())
+			assert.NotContains(t, stdout.String(), apiclient.ArchiveStaleWarning)
+			wantWarnings := 0
+			if stale {
+				wantWarnings = 1
+			}
+			assert.Equal(t, wantWarnings, strings.Count(stderr.String(), apiclient.ArchiveStaleWarning))
+		})
+	}
+}
 
 func executeCommand(root *cobra.Command, args ...string) (string, error) {
 	_, output, err := executeCommandC(root, args...)

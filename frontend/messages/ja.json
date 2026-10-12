@@ -100,7 +100,7 @@
   "header_actions_settings": "設定",
   "header_actions_keyboard_shortcuts": "キーボードショートカット",
   "header_actions_keyboard_shortcuts_shortcut": "キーボードショートカット(?)",
-  "status_bar_archive_stale": "アーカイブの結果が古い可能性があります。",
+  "status_bar_archive_stale": "アーカイブの結果が古い可能性があります。再構築が完了するまで変更は一時停止されています。",
   "status_bar_sessions": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],

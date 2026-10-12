@@ -11,7 +11,8 @@ The latest release is
 
 **New features**
 
-- Browse and search the retained archive during full parser rebuilds with a stale warning; archive writes fail with a retryable 503.
+- Browse and search the retained archive during full parser rebuilds with a stale
+  warning; archive writes fail with a retryable 503.
 - Sync Claude.ai chats from the desktop or Chrome Import dialog without
   downloading an export. Later runs fetch new or changed chats, including branch
   switches. Run `agentsview chrome setup` once and load the printed folder in

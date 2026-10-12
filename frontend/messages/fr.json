@@ -100,7 +100,7 @@
   "header_actions_settings": "Paramètres",
   "header_actions_keyboard_shortcuts": "Raccourcis clavier",
   "header_actions_keyboard_shortcuts_shortcut": "Raccourcis clavier (?)",
-  "status_bar_archive_stale": "Les résultats des archives peuvent être obsolètes.",
+  "status_bar_archive_stale": "Les résultats des archives peuvent être obsolètes. Les modifications sont suspendues jusqu'à la fin de la reconstruction.",
   "status_bar_sessions": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],

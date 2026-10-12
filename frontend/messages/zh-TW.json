@@ -100,7 +100,7 @@
   "header_actions_settings": "設定",
   "header_actions_keyboard_shortcuts": "鍵盤快捷鍵",
   "header_actions_keyboard_shortcuts_shortcut": "鍵盤快捷鍵 (?)",
-  "status_bar_archive_stale": "封存資料結果可能已過時。",
+  "status_bar_archive_stale": "封存資料結果可能已過時。重建完成前，變更操作已暫停。",
   "status_bar_sessions": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],

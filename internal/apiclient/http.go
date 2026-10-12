@@ -43,10 +43,15 @@ const (
 
 type archiveFreshnessKey struct{}
 
-// TrackArchiveFreshness collects stale responses for one operation.
-func TrackArchiveFreshness(ctx context.Context) (context.Context, func() bool) {
-	freshness := &atomic.Bool{}
-	return context.WithValue(ctx, archiveFreshnessKey{}, freshness), freshness.Load
+type archiveFreshness struct {
+	stale   atomic.Bool
+	onStale func()
+}
+
+// TrackArchiveFreshness collects stale responses and optionally calls onStale once.
+func TrackArchiveFreshness(ctx context.Context, onStale func()) (context.Context, func() bool) {
+	freshness := &archiveFreshness{onStale: onStale}
+	return context.WithValue(ctx, archiveFreshnessKey{}, freshness), freshness.stale.Load
 }
 
 // ObserveArchiveFreshness records freshness for successful raw HTTP responses.
@@ -54,7 +59,7 @@ func ObserveArchiveFreshness(ctx context.Context, response *http.Response) {
 	if response == nil || response.StatusCode < 200 || response.StatusCode >= 300 || response.Header.Get(ArchiveStaleHeader) != "true" {
 		return
 	}
-	if freshness, ok := ctx.Value(archiveFreshnessKey{}).(*atomic.Bool); ok {
-		freshness.Store(true)
+	if freshness, ok := ctx.Value(archiveFreshnessKey{}).(*archiveFreshness); ok && freshness.stale.CompareAndSwap(false, true) && freshness.onStale != nil {
+		freshness.onStale()
 	}
 }

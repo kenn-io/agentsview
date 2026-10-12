@@ -267,9 +267,9 @@ func (s *Server) humaTriggerSync(
 		if err != nil {
 			return nil, err
 		}
-	}
-	if err := s.rejectStaleArchiveForSync(); err != nil {
-		return nil, err
+		if err := s.rejectStaleArchiveForSync(); err != nil {
+			return nil, err
+		}
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
@@ -305,7 +305,7 @@ func (s *Server) runSyncWhenReady(
 		if err := ctx.Err(); err != nil {
 			return syncpkg.SyncStats{}, err
 		}
-		if in.StartupOnly && (engine == nil || engine.StartupReconciled()) {
+		if in.StartupOnly && (s.archiveStale() || engine == nil || engine.StartupReconciled()) {
 			return syncpkg.SyncStats{}, nil
 		}
 		stats, err := s.runSyncWithResyncFallback(ctx, engine, progress)

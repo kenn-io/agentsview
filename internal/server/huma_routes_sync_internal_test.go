@@ -2331,8 +2331,15 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 	f.srv.memoryRefreshRequest = func() {}
 	f.srv.telemetryCapture = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
 	f.srv.registerTelemetryCaptureRoute()
+	syncCalls := 0
+	f.srv.localSyncRunner = func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+		syncCalls++
+		return syncpkg.SyncStats{}, errors.New("startup rebuild must not ingest")
+	}
 	require.NoError(t, f.db.CloseWriter())
 	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	f.srv.engine = engine
+	require.False(t, engine.StartupReconciled())
 	locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	go func() {
 		done <- engine.RunExclusive(func() error { close(locked); <-release; return nil })
@@ -2348,6 +2355,8 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 		blocked, probe     bool
 	}{
 		{http.MethodPost, "/api/v1/sync?wait=true", "", true, false},
+		{http.MethodPost, "/api/v1/sync?startup_only=true", "", false, false},
+		{http.MethodPost, "/api/v1/recall/import?dry_run=true", `{"candidate_id":"dry-run","type":"debugging_method","scope":"repository","title":"Check transcript","body":"Read the retained transcript.","project":"project","agent":"claude","session_id":"retained","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":1}}`, false, false},
 		{http.MethodPost, "/api/v1/resync", "", true, false},
 		{http.MethodPost, "/api/v1/sync/remotes", `{"full":false,"hosts":[],"include_local":false}`, true, false},
 		{http.MethodPost, "/api/v1/sessions/sync", `{"id":"retained"}`, true, false},
@@ -2380,6 +2389,15 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(tc.body), &body))
 			}
 			w := serveJSON(t, f.handler, tc.method, tc.path, body)
+			if tc.path == "/api/v1/sync?startup_only=true" {
+				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				assert.Zero(t, syncCalls)
+			}
+			if tc.path == "/api/v1/recall/import?dry_run=true" {
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				assert.Contains(t, w.Body.String(), `"would_import":1`)
+				assert.Contains(t, w.Body.String(), `"imported":0`)
+			}
 			if tc.path == "/api/v1/sessions" {
 				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				var page service.SessionList

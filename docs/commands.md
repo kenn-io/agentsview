@@ -431,8 +431,8 @@ warnings. Archive writes return HTTP 503 with `Retry-After`; the CLI reports the
 server's message and exits. Scoped upgrades and schema repairs finish before the
 daemon listens.
 
-CLI output carries no stale notice; the dashboard, MCP, and the
-`X-Agentsview-Archive-Stale` HTTP header report it.
+CLI commands print one stale warning to stderr. The dashboard, MCP, and the
+`X-Agentsview-Archive-Stale` HTTP header also report stale results.
 
 The server shuts down cleanly on `Ctrl+C`, flushing the database and stopping
 file watchers.

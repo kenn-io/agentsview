@@ -209,7 +209,7 @@ type sessionUsageOutput struct {
 // on-demand sync or direct DB access.
 const startupWaitTimeout = 30 * time.Second
 
-func runTokenUse(args []string) {
+func runTokenUse(ctx context.Context, args []string) {
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr,
 			"usage: agentsview token-use <session-id>")
@@ -218,7 +218,7 @@ func runTokenUse(args []string) {
 	fmt.Fprintln(os.Stderr,
 		"note: 'token-use' is deprecated; use 'session usage <id>' instead")
 
-	out, code, err := sessionUsageData(args[0])
+	out, code, err := sessionUsageData(ctx, args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(tokenUseExitErr)
@@ -233,7 +233,7 @@ func runTokenUse(args []string) {
 	os.Exit(code)
 }
 
-func sessionUsageData(sessionID string) (*sessionUsageOutput, int, error) {
+func sessionUsageData(ctx context.Context, sessionID string) (*sessionUsageOutput, int, error) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
@@ -244,7 +244,6 @@ func sessionUsageData(sessionID string) (*sessionUsageOutput, int, error) {
 			fmt.Errorf("creating data dir: %w", err)
 	}
 
-	ctx := context.Background()
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
 		ctx,
 		appCfg,

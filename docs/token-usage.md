@@ -656,10 +656,12 @@ reports can finish beyond the server's normal write timeout. Press Ctrl+C to
 stop waiting; shared cache preparation can continue in the daemon. Canceling
 daemon startup also leaves the detached child running.
 
-Required archive reparsing finishes before the daemon serves requests. Startup
-waits show phases and continue while progress updates arrive, including when a
-foreground server is starting in another terminal. Restart older daemons after
-upgrading to provide the usage progress endpoint.
+Full parser rebuilds serve the retained archive while rebuilding. CLI reports
+print a stale warning to stderr. Scoped upgrades and schema repairs finish before
+the daemon serves requests. Their startup waits show phases and continue while
+progress updates arrive, including when a foreground server starts in another
+terminal. Restart older daemons after upgrading to provide the usage progress
+endpoint.
 
 ```bash
 agentsview usage daily [flags]
@@ -1058,13 +1060,16 @@ time.
 
 `usage daily` reads committed archive data. When it starts a daemon, routine
 source ingestion runs after readiness. Run `agentsview sync` before the report
-when it must include new source changes. Required archive reparsing still
-finishes before the daemon serves requests.
+when it must include new source changes. Full parser rebuilds serve the retained
+archive with a stale warning; scoped upgrades and schema repairs finish before
+the daemon serves requests.
 
 `session usage`, `token-use`, and `usage statusline` complete pending startup
 ingestion before querying. This also applies when a previous daily report
 started the daemon. Once startup ingestion is complete, subsequent queries do
 not repeat a full sync; the daemon's file watcher handles later source changes.
+During a full parser rebuild, these commands skip startup ingestion and read the
+retained archive with a stale warning.
 
 `--no-sync` skips source refresh and starts any new daemon without automatic
 sync. It does not disable sync on an already-running daemon. `--offline` reads

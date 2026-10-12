@@ -41,10 +41,10 @@ describe("StatusBar", () => {
     sync.archiveStale = true;
     const component = mount(StatusBar, { target: document.body });
     await tick();
-    expect(document.body.textContent).toContain("Archive results may be stale.");
+    expect(document.body.textContent).toContain("Archive results may be stale. Changes are paused until the rebuild finishes.");
     sync.archiveStale = false;
     await tick();
-    expect(document.body.textContent).not.toContain("Archive results may be stale.");
+    expect(document.body.textContent).not.toContain("Archive results may be stale. Changes are paused until the rebuild finishes.");
     await unmount(component);
   });
 
