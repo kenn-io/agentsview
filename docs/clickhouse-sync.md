@@ -514,6 +514,11 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
 - **Lock of a stopped push.** A lock expires an hour after its push last renewed
   it, so a push stopped mid-rebuild makes later pushes skip their rebuilds for
   up to an hour. If you know no push is running, end that wait by marking the
-  lock named in the skip message released:
+  lock named in the skip message released. Run this in the mirror database:
   `ALTER TABLE prepared_usage_rebuild_lock_<n> MODIFY COMMENT 'released'`. Do
   not drop the lock table; the next push would reuse its number.
+- **Moving off NFS.** When the schema step finds that the database can exchange
+  tables again, it creates the refreshing view and marks the newest lock
+  `retired`. That one lock table stays so that a push still running the old
+  way cannot publish over the view's rows. If the database later loses table
+  exchange again, the schema step reopens the lock and pushes rebuild again.

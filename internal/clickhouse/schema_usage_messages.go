@@ -679,10 +679,10 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 		}
 		switch pass {
 		case 1:
-			log.Print("clickhouse push: snapshots changed during the rebuild; rebuilding prepared usage once more")
+			log.Print("clickhouse push: another push changed sessions or prices during the rebuild; rebuilding prepared usage once more")
 		case 2:
-			log.Print("clickhouse push: snapshots changed again during the second rebuild; " +
-				"reads prepare the newest sessions themselves until the next push rebuilds prepared usage")
+			log.Print("clickhouse push: another push changed sessions or prices during the second rebuild; " +
+				"usage reads compute those sessions directly, which is slower, until the next push rebuilds prepared usage")
 			return nil
 		}
 		if err := publishPreparedUsageBuild(ctx, conn, generation); err != nil {
@@ -828,7 +828,8 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 			heldAt, err := strconv.ParseInt(since, 10, 64)
 			if err == nil && now-heldAt < int64(chRebuildLockTimeout/time.Second) {
 				log.Printf("clickhouse push: skipping the prepared usage rebuild: another push holds %s%d, "+
-					"last renewed %s; the lock expires an hour after its last renewal",
+					"last renewed %s; usage reads stay correct but slower meanwhile, and the lock expires an hour "+
+					"after its last renewal (see \"Lock of a stopped push\" in the ClickHouse sync docs)",
 					chPreparedUsageRebuildLockPrefix, generations[len(generations)-1],
 					time.Unix(heldAt, 0).Format(time.RFC3339))
 				return 0, false, nil
