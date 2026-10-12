@@ -85,6 +85,19 @@ type itemAnchor struct {
 func fetchThread(
 	ctx context.Context, c *Conn, threadID string, st ThreadState, listing jsontext.Value, now time.Time,
 ) (fetchResult, error) {
+	return fetchThreadPaged(ctx, c, threadID, st, listing, now, itemPageSize)
+}
+
+// errTurnListTooLarge marks an oversized turn listing, which a smaller item
+// page cannot fix.
+var errTurnListTooLarge = fmt.Errorf("%w: turn listing", ErrReplyTooLarge)
+
+// fetchThreadPaged is fetchThread with an item page size; the pass uses one
+// item per page to retry after an oversized reply.
+func fetchThreadPaged(
+	ctx context.Context, c *Conn, threadID string, st ThreadState, listing jsontext.Value,
+	now time.Time, itemLimit int,
+) (fetchResult, error) {
 	next := st
 	var records []mirror.Record
 	if len(listing) > 0 {
@@ -106,6 +119,9 @@ func fetchThread(
 	}
 
 	turnRecords, err := listTurns(ctx, c, threadID, st.ResumeTurnID)
+	if errors.Is(err, ErrReplyTooLarge) {
+		return fetchResult{}, errTurnListTooLarge
+	}
 	if err != nil {
 		return fetchResult{}, err
 	}
@@ -129,7 +145,7 @@ func fetchThread(
 		if turn.ID == st.ResumeTurnID {
 			anchorID = st.ResumeItemID
 		}
-		rows, err := listItems(ctx, c, threadID, turn.ID, anchorID)
+		rows, err := listItems(ctx, c, threadID, turn.ID, anchorID, itemLimit)
 		if err != nil {
 			return fetchResult{}, err
 		}
@@ -211,8 +227,8 @@ func listTurns(ctx context.Context, c *Conn, threadID, resumeTurnID string) ([]j
 // so this never depends on whether the server includes it. A rejected
 // anchor falls back to reading the turn in full and skipping through the
 // anchor.
-func listItems(ctx context.Context, c *Conn, threadID, turnID, anchorID string) ([]jsontext.Value, error) {
-	params := itemsParams{ThreadID: threadID, TurnID: turnID, Limit: itemPageSize}
+func listItems(ctx context.Context, c *Conn, threadID, turnID, anchorID string, limit int) ([]jsontext.Value, error) {
+	params := itemsParams{ThreadID: threadID, TurnID: turnID, Limit: limit}
 	if anchorID != "" {
 		anchor, err := json.Marshal(itemAnchor{Type: "item", ItemID: anchorID})
 		if err != nil {
@@ -389,20 +405,21 @@ func pruneItemDigests(st *ThreadState) {
 // commitThread makes records durable and only then saves st. It first
 // recovers frames an earlier append wrote without saving state, so dedup
 // never compares against digests a crash left stale. A crash before the
-// save repeats the fetch; it never skips records.
+// save repeats the fetch; it never skips records. appended reports whether
+// any record was new.
 func commitThread(
 	store *Store, key AccountKey, threadID string, st ThreadState, records []mirror.Record, now time.Time,
-) (ThreadState, error) {
+) (next ThreadState, appended bool, err error) {
 	path, err := store.MirrorPath(key, threadID)
 	if err != nil {
-		return st, err
+		return st, false, err
 	}
 	info, statErr := os.Stat(path)
 	switch {
 	case errors.Is(statErr, fs.ErrNotExist):
 		st = forgetMirror(st)
 	case statErr != nil:
-		return st, fmt.Errorf("codex-cloud: stat mirror: %w", statErr)
+		return st, false, fmt.Errorf("codex-cloud: stat mirror: %w", statErr)
 	default:
 		if info.Size() < st.Offset {
 			// The file was replaced or cut short; the stored digests no
@@ -411,7 +428,7 @@ func commitThread(
 		}
 		recovered, err := mirror.Append(path, st.Offset, nil)
 		if err != nil {
-			return st, err
+			return st, false, err
 		}
 		st.Offset = recovered.Offset
 		absorb(&st, recovered.Recovered)
@@ -420,7 +437,7 @@ func commitThread(
 	if len(kept) > 0 {
 		result, err := mirror.Append(path, st.Offset, kept)
 		if err != nil {
-			return st, err
+			return st, false, err
 		}
 		st.Offset = result.Offset
 		if slices.ContainsFunc(kept, func(r mirror.Record) bool { return r.Kind == mirror.KindItem }) {
@@ -429,9 +446,9 @@ func commitThread(
 	}
 	pruneItemDigests(&st)
 	if err := store.SaveThread(key, threadID, st); err != nil {
-		return st, err
+		return st, false, err
 	}
-	return st, nil
+	return st, len(kept) > 0, nil
 }
 
 func forgetMirror(st ThreadState) ThreadState {

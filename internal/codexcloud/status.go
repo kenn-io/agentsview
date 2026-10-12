@@ -63,6 +63,15 @@ func (b *StatusBoard) Set(row HomeStatus) {
 	b.rows[row.Key] = row
 }
 
+// Row returns the row with key.
+func (b *StatusBoard) Row(key string) (HomeStatus, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	row, ok := b.rows[key]
+	row.Homes = slices.Clone(row.Homes)
+	return row, ok
+}
+
 // Snapshot returns every row in the order first set.
 func (b *StatusBoard) Snapshot() []HomeStatus {
 	b.mu.Lock()
