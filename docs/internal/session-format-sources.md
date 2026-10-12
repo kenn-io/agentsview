@@ -3225,6 +3225,34 @@ schemas keep their existing ordering behavior.
   shapes. Multiple chat organizations, web-search blocks, unanswered final
   prompts, and tree fields in official exports still need live verification.
 
+## Codex Cloud (`codex-cloud`)
+
+- **Format:** AgentsView-written mirror files,
+  `{dataDir}/sources/codex-cloud/<accountKey>/<threadId>.jsonl.zstd`. Each
+  file holds JSON lines in independent zstd frames with content checksums.
+  Each line is `{kind, fetched_at, data}`, where `data` is a thread, turn, or
+  item object exactly as OpenAI's hosted Codex app-server returned it, or a
+  token usage, turn completion, or plan usage record AgentsView writes.
+- **Evidence:** `no-public-source`.
+- **Upstream:** The hosted service at `codex-cloud-backend.chatgpt.com` speaks
+  the Codex app-server JSON-RPC protocol over a websocket. It has no public
+  documentation or source. The thread, turn, and item shapes and the handshake
+  were checked 2026-10-12 with read-only probes against the maintainer's own
+  login; recorded replies were replaced by synthetic fixtures. The open-source
+  Codex app-server shares the protocol types but not the hosted defaults: the
+  hosted turn listing returns every item unless `itemsView` is sent, and every
+  probed thread had `historyMode: "legacy"`.
+- **Usage and cost:** The hosted thread history carries no token counts. Token
+  counts come only from `thread/tokenUsage/updated` notifications while
+  AgentsView is joined to a running thread; counters arrive as JSON numbers
+  such as `4603049.0`. Plan usage (weekly and five-hour percentages, credits)
+  comes from `wham/usage/thread_usage/query_v2` per root thread and has no
+  token or dollar figures.
+- **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
+  `internal/parser/codex_cloud_provider.go` discovers mirror files. Design and
+  open questions:
+  `docs/superpowers/specs/2026-10-11-codex-cloud-source-design.md`.
+
 ## ChatGPT Export (`chatgpt`)
 
 - **Format:** `conversations.json` and numbered `conversations-*.json` export

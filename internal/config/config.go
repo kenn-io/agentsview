@@ -2571,6 +2571,13 @@ func finalize(cfg *Config) error {
 	if err := expandLocalPaths(cfg); err != nil {
 		return err
 	}
+	// The data directory is final only now: AGENTSVIEW_DATA_DIR is applied
+	// after Default, and expandLocalPaths expands it.
+	for _, def := range parser.Registry {
+		if def.DataDirRoot != "" {
+			cfg.AgentDirs[def.Type] = []string{filepath.Join(cfg.DataDir, filepath.FromSlash(def.DataDirRoot))}
+		}
+	}
 	if strings.TrimSpace(cfg.LocalMachineName) == "" {
 		return errors.New("identify local sync machine: hostname is empty")
 	}
@@ -2718,9 +2725,15 @@ func (c *Config) resolveSessionSources() error {
 				fmt.Sprintf("entry %d: agent is required", entry))
 			continue
 		}
-		if _, ok := parser.AgentByType(agent); !ok {
+		def, ok := parser.AgentByType(agent)
+		if !ok {
 			problems = append(problems,
 				fmt.Sprintf("entry %d: unknown agent %q; use a registered parser name such as claude, codex, or copilot", entry, input.Agent))
+			continue
+		}
+		if def.DataDirRoot != "" {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%s): %s keeps its sessions in the AgentsView data directory and takes no session_sources entry", entry, agent, agent))
 			continue
 		}
 		factory, hasFactory := parser.ProviderFactoryByType(agent)

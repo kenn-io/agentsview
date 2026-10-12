@@ -1524,3 +1524,24 @@ func TestClineRemoteSyncRejectsSymlinkedFiles(t *testing.T) {
 	expectedFiles := []string{validMeta, validMsgs, validTm}
 	assert.ElementsMatch(t, expectedFiles, goTargets.Files[parser.AgentCline])
 }
+
+// TestResolveTargetsForbidsCodexCloudMirror keeps the Codex cloud mirror,
+// with its fetcher state files, out of remote host sync.
+func TestResolveTargetsForbidsCodexCloudMirror(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "account"), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "account", "thread.state.json"), []byte("{}"), 0o600,
+	))
+
+	targets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodexCloud: {root},
+		},
+	})
+
+	assert.True(t, parser.RemoteSyncExcludedAgent(parser.AgentCodexCloud))
+	assert.NotContains(t, targets.Dirs, parser.AgentCodexCloud)
+	assert.NotContains(t, targets.Files, parser.AgentCodexCloud)
+	assert.Equal(t, []string{filepath.Clean(root)}, targets.ForbiddenRoots)
+}
