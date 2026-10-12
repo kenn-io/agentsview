@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -10,6 +11,8 @@ import (
 	"log"
 	"slices"
 	"strings"
+
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -169,6 +172,14 @@ const chPreparedUsageSortingKey = chPreparedUsageKeyColumn + ", session_id"
 // chPreparedUsageRefresh is the scheduled rebuild. Every push also starts a
 // refresh, so the schedule only covers a trigger that failed.
 const chPreparedUsageRefresh = "EVERY 15 MINUTE"
+
+// chPreparedUsageRefreshSettings apply to every query that fills
+// prepared_usage, whether the view runs it or a push does.
+const chPreparedUsageRefreshSettings = "final=1,max_threads=4"
+
+// chPreparedUsageBuildPrefix names the tables a push fills before it moves
+// their rows into prepared_usage; see rebuildPreparedUsage.
+const chPreparedUsageBuildPrefix = "prepared_usage_build_"
 
 // chSnapshotStampSQL identifies the complete snapshot set as a row count and
 // a sum of per-row hashes, so any republished or deleted session changes it.
@@ -392,13 +403,12 @@ func ensurePreparedUsageProjections(ctx context.Context, conn *sql.DB) (err erro
 	if len(missing) == 0 {
 		return nil
 	}
-	var hasView uint8
-	if err := conn.QueryRowContext(ctx, `SELECT count() > 0 FROM system.tables
-		WHERE database = currentDatabase() AND name = 'prepare_usage'`).Scan(&hasView); err != nil {
-		return fmt.Errorf("checking prepared usage view: %w", err)
+	hasView, err := preparedUsageViewExists(ctx, conn)
+	if err != nil {
+		return err
 	}
 	queries := missing
-	if hasView != 0 {
+	if hasView {
 		if _, err := conn.ExecContext(ctx, "SYSTEM STOP VIEW prepare_usage"); err != nil {
 			return fmt.Errorf("stopping prepared usage refresh: %w", err)
 		}
@@ -432,26 +442,14 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 	if err == nil && rebuild {
 		// The table is derived from the snapshots, so replacing it loses
 		// nothing; the next refresh fills it, and reads use the raw rows
-		// until it has. Stop the refresh first so it cannot block the drop.
-		// An earlier rebuild may have dropped the view and stopped before
-		// the table, so stop it only when it exists.
+		// until it has. Drop the view first so a refresh cannot block the
+		// drop of the table.
 		log.Print("ClickHouse: rebuilding prepared usage for the current refresh query")
-		var hasView uint8
-		if err := conn.QueryRowContext(ctx, `SELECT count() > 0 FROM system.tables
-			WHERE database = currentDatabase() AND name = 'prepare_usage'`).Scan(&hasView); err != nil {
-			return fmt.Errorf("checking prepared usage view: %w", err)
+		if err := dropPreparedUsageView(ctx, conn); err != nil {
+			return err
 		}
-		queries := []string{
-			"DROP VIEW IF EXISTS prepare_usage SYNC",
-			"DROP TABLE IF EXISTS prepared_usage SYNC",
-		}
-		if hasView != 0 {
-			queries = append([]string{"SYSTEM STOP VIEW prepare_usage"}, queries...)
-		}
-		for _, query := range queries {
-			if _, err := conn.ExecContext(ctx, query); err != nil {
-				return fmt.Errorf("replacing prepared usage: %w", err)
-			}
+		if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS prepared_usage SYNC"); err != nil {
+			return fmt.Errorf("replacing prepared usage: %w", err)
 		}
 	}
 	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS prepared_usage ENGINE=MergeTree
@@ -462,8 +460,19 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 	if err := ensurePreparedUsageProjections(ctx, conn); err != nil {
 		return err
 	}
+	exchange, err := chExchangeSupported(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if !exchange {
+		// Every refresh of the view would fail at its exchange, so each
+		// push rebuilds the table instead, including the push that runs
+		// this schema step.
+		log.Print("ClickHouse: this database cannot exchange tables, so each push rebuilds prepared usage")
+		return dropPreparedUsageView(ctx, conn)
+	}
 	if _, err := conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage REFRESH `+chPreparedUsageRefresh+`
-		TO prepared_usage EMPTY AS `+prepared+" SETTINGS final=1,max_threads=4"); err != nil {
+		TO prepared_usage EMPTY AS `+prepared+" SETTINGS "+chPreparedUsageRefreshSettings); err != nil {
 		return fmt.Errorf("creating prepared usage: %w", err)
 	}
 	// A new table serves reads only once filled; start that now rather
@@ -471,6 +480,152 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 	if rebuild {
 		if _, err := conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage"); err != nil {
 			return fmt.Errorf("filling prepared usage: %w", err)
+		}
+	}
+	return nil
+}
+
+func preparedUsageViewExists(ctx context.Context, conn *sql.DB) (bool, error) {
+	var hasView uint8
+	if err := conn.QueryRowContext(ctx, `SELECT count() > 0 FROM system.tables
+		WHERE database = currentDatabase() AND name = 'prepare_usage'`).Scan(&hasView); err != nil {
+		return false, fmt.Errorf("checking prepared usage view: %w", err)
+	}
+	return hasView != 0, nil
+}
+
+// dropPreparedUsageView drops the view that refreshes prepared_usage. It
+// stops the refresh first so a running one cannot block the drop; an earlier
+// rebuild may have dropped the view already, so it is stopped only when it
+// exists.
+func dropPreparedUsageView(ctx context.Context, conn *sql.DB) error {
+	hasView, err := preparedUsageViewExists(ctx, conn)
+	if err != nil {
+		return err
+	}
+	queries := []string{"DROP VIEW IF EXISTS prepare_usage SYNC"}
+	if hasView {
+		queries = append([]string{"SYSTEM STOP VIEW prepare_usage"}, queries...)
+	}
+	for _, query := range queries {
+		if _, err := conn.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("dropping prepared usage view: %w", err)
+		}
+	}
+	return nil
+}
+
+// chExchangeSupported reports whether the mirror database can exchange two
+// tables. A refreshable view that replaces its target ends every refresh
+// with EXCHANGE TABLES, which ClickHouse runs as a renameat2 call with the
+// RENAME_EXCHANGE flag on the database's metadata files and no fallback. A
+// filesystem without that flag, such as NFS, fails it with
+// UNSUPPORTED_METHOD. The probe exchanges two empty tables in the same
+// database, so it renames files in the same metadata directory a refresh
+// does; where the tables keep their data does not matter.
+func chExchangeSupported(ctx context.Context, conn *sql.DB) (supported bool, err error) {
+	probe := "agentsview_exchange_probe_" + strings.ToLower(rand.Text())
+	tables := []string{probe + "_a", probe + "_b"}
+	defer func() {
+		for _, table := range tables {
+			if _, dropErr := conn.ExecContext(context.WithoutCancel(ctx), "DROP TABLE IF EXISTS "+table+" SYNC"); dropErr != nil {
+				err = errors.Join(err, fmt.Errorf("dropping table exchange probe: %w", dropErr))
+			}
+		}
+	}()
+	for _, table := range tables {
+		if _, err := conn.ExecContext(ctx, "CREATE TABLE "+table+" (x UInt8) ENGINE = Memory"); err != nil {
+			return false, fmt.Errorf("creating table exchange probe: %w", err)
+		}
+	}
+	_, err = conn.ExecContext(ctx, "EXCHANGE TABLES "+tables[0]+" AND "+tables[1])
+	if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeUnsupportedMethod {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("probing table exchange: %w", err)
+	}
+	return true, nil
+}
+
+// refreshPreparedUsage brings prepared_usage up to date after a push. Where
+// the view exists, it starts the view's refresh, which runs on the server.
+// Without the view, the database cannot exchange tables and the push
+// rebuilds the table before it returns.
+func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
+	hasView, err := preparedUsageViewExists(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if !hasView {
+		return rebuildPreparedUsage(ctx, conn)
+	}
+	if _, err := conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage"); err != nil {
+		return fmt.Errorf("starting prepared usage refresh: %w", err)
+	}
+	return nil
+}
+
+// rebuildPreparedUsage refreshes prepared_usage without exchanging tables.
+// It runs the view's query into a new build table, then moves the build
+// table's parts into prepared_usage with REPLACE PARTITION, which swaps all
+// of the table's parts at once. Readers therefore see either the previous
+// rows or the new ones, each with the stamp of the snapshots they were
+// derived from. Concurrent pushes use separate build tables, and the last
+// to finish wins even when it read older snapshots; reads prepare the newer
+// sessions from their snapshots until the next rebuild.
+func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
+	if err := dropAbandonedPreparedUsageBuilds(ctx, conn); err != nil {
+		return err
+	}
+	build := chPreparedUsageBuildPrefix + strings.ToLower(rand.Text())
+	if _, err := conn.ExecContext(ctx, "CREATE TABLE "+build+" AS prepared_usage"); err != nil {
+		return fmt.Errorf("creating prepared usage build table: %w", err)
+	}
+	defer func() {
+		if _, dropErr := conn.ExecContext(context.WithoutCancel(ctx), "DROP TABLE IF EXISTS "+build+" SYNC"); dropErr != nil {
+			err = errors.Join(err, fmt.Errorf("dropping prepared usage build table: %w", dropErr))
+		}
+	}()
+	// The build table copies prepared_usage, whose columns were created
+	// from this query, so the columns match by position.
+	if _, err := conn.ExecContext(ctx, "INSERT INTO "+build+" "+chPreparedUsageQuery()+
+		" SETTINGS "+chPreparedUsageRefreshSettings); err != nil {
+		return fmt.Errorf("filling prepared usage build table: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM "+build); err != nil {
+		return fmt.Errorf("replacing prepared usage rows: %w", err)
+	}
+	return nil
+}
+
+// dropAbandonedPreparedUsageBuilds drops build tables that a push stopped
+// by a crash or a kill left behind. A build table younger than an hour may
+// still belong to a running push, so it is kept.
+func dropAbandonedPreparedUsageBuilds(ctx context.Context, conn *sql.DB) error {
+	// The name pattern matches only names rebuildPreparedUsage makes, which
+	// need no quoting.
+	rows, err := conn.QueryContext(ctx, `SELECT name FROM system.tables
+		WHERE database = currentDatabase() AND match(name, ?)
+		AND metadata_modification_time < now() - INTERVAL 1 HOUR`, "^"+chPreparedUsageBuildPrefix+"[a-z0-9]+$")
+	if err != nil {
+		return fmt.Errorf("listing abandoned prepared usage builds: %w", err)
+	}
+	defer rows.Close()
+	var abandoned []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("scanning abandoned prepared usage build: %w", err)
+		}
+		abandoned = append(abandoned, name)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("listing abandoned prepared usage builds: %w", err)
+	}
+	for _, name := range abandoned {
+		if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS "+name+" SYNC"); err != nil {
+			return fmt.Errorf("dropping abandoned prepared usage build: %w", err)
 		}
 	}
 	return nil

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
@@ -637,4 +638,77 @@ func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{usagePriceRoundID, usagePriceTierID}, state.changed)
 	requireFresh()
+}
+
+// A server that cannot exchange tables, such as one whose data directory is
+// on NFS, fails every refresh of a refreshable view that replaces its
+// target. There, each push must leave prepared usage filled from the
+// snapshots it published, and prepared reads must match the raw rows they
+// replace. A mirror an earlier version set up with such a view recovers on
+// the next push.
+func TestPreparedUsageWithoutTableExchange(t *testing.T) {
+	ctx := t.Context()
+	local, _ := seedUsagePriceFixture(t)
+	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
+	target := Target{URL: dsn, Database: database}
+	earlier := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := earlier.conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage
+		REFRESH EVERY 15 MINUTE TO prepared_usage EMPTY AS `+chPreparedUsageQuery()+
+		" SETTINGS final=1,max_threads=4")
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := NewStoreFromDB(syncer.conn)
+	ids := []string{usagePriceRoundID, usagePriceTierID, usagePriceSnapAID, usagePriceSnapBID, usagePriceMixedID, usagePriceCopilotID}
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-12", Timezone: "UTC"},
+		time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	start, end := activityReportRangeBoundsUTC(q)
+	read := func() []activity.UsageRow {
+		t.Helper()
+		rows, _, err := store.activityReportUsage(ctx, chSessionSetFromIDs(ids), ids, start, end, q)
+		require.NoError(t, err)
+		return rows
+	}
+	push := func() {
+		t.Helper()
+		result, err := syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+		require.Zero(t, result.Errors)
+		// The push itself refreshed prepared usage, so its rows cover every
+		// session without preparing any at read time.
+		state, err := store.preparedUsageState(ctx)
+		require.NoError(t, err)
+		require.True(t, state.ready)
+		require.Empty(t, state.changed)
+		require.Empty(t, state.stale)
+	}
+	push()
+
+	session, err := local.GetSessionFull(ctx, usagePriceRoundID)
+	require.NoError(t, err)
+	messages, err := local.GetAllMessages(ctx, usagePriceRoundID)
+	require.NoError(t, err)
+	messages[0].TokenUsage = []byte(`{"input_tokens":100}`)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: *session, Messages: messages[:1], ReplaceMessages: true, DataVersion: 1,
+	}})
+	require.NoError(t, err)
+	push()
+	prepared := read()
+	var roundRows []activity.UsageRow
+	for _, row := range prepared {
+		if row.SessionID == usagePriceRoundID {
+			roundRows = append(roundRows, row)
+		}
+	}
+	require.Len(t, roundRows, 1)
+	require.Equal(t, 100, roundRows[0].InputTokens)
+
+	_, err = store.DB().ExecContext(ctx, "TRUNCATE TABLE prepared_usage")
+	require.NoError(t, err)
+	ready, err := store.preparedUsageReady(ctx)
+	require.NoError(t, err)
+	require.False(t, ready)
+	require.Equal(t, read(), prepared, "prepared usage must match the raw rows it replaces")
 }

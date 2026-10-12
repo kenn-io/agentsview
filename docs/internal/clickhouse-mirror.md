@@ -238,6 +238,26 @@ and rebuilt on the next schema step, and a rebuild that stopped halfway finishes
 on the next start. The schema step adds a missing projection only with the
 refresh stopped, and always starts it again.
 
+**Refresh without a table exchange.** Every refresh of the view ends with
+`EXCHANGE TABLES`, which ClickHouse runs as a `renameat2` call with the
+`RENAME_EXCHANGE` flag on the database's metadata files and has no fallback for.
+Filesystems without that flag, such as NFS, fail every refresh with
+`UNSUPPORTED_METHOD`, and the table is never filled. The schema step therefore
+exchanges two empty scratch tables in the mirror database. When that fails, it
+does not create the view and drops one an earlier version created. Each push
+then rebuilds the table itself before it returns: it runs the view's query into
+a new `prepared_usage_build_*` table and moves that table's parts into
+`prepared_usage` with `REPLACE PARTITION`, which replaces all the parts at once.
+Readers see the previous rows or the new ones, never a mix, and read them as
+they read rows the view prepared. Pushes that rebuild at the same time use
+separate build tables; the last to finish wins, and reads prepare any newer
+sessions from their snapshots until the next rebuild. A build table that a
+killed push left behind is dropped by the next rebuild once it is an hour old.
+Without the view, nothing refreshes on a schedule, and a failed rebuild waits
+for the next push. Because `prepared_usage` is then not a refreshable view's
+target, native backups include its rows without
+`backup_data_from_refreshable_materialized_view_targets`.
+
 **Currency is proven per read.** A read uses prepared rows only when every
 session has a current snapshot. Sessions pushed since the last refresh form a
 delta: their rows are prepared and priced in Go once per snapshot, sent to the
@@ -292,5 +312,8 @@ hides the stale ones from readers.
 
 Unit tests cover dialect rendering, config, TLS checks, and fingerprints.
 Integration tests use the `chtest` tag against
-`clickhouse/clickhouse-server:26.8` or `TEST_CLICKHOUSE_URL`.
-`make test-clickhouse` is the suite. Do not point it at a live mirror.
+`clickhouse/clickhouse-server:26.8` or `TEST_CLICKHOUSE_URL`. Tests of the
+refresh without a table exchange start a second server under a seccomp profile
+that fails every `renameat2` call with a flag, as NFS does, or use
+`TEST_CLICKHOUSE_NO_EXCHANGE_URL`. `make test-clickhouse` is the suite. Do not
+point it at a live mirror.
