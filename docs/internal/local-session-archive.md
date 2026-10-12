@@ -3,11 +3,58 @@
 Status: implemented on this branch; not yet released. User instructions and
 command limits live in [the CLI reference](../commands.md#agentsview-archive).
 
-The approved
-[multi-machine archive design](../superpowers/specs/2026-09-30-multi-machine-session-archive-design.md)
-defines source attribution, artifact/raw identity matching and recovery.
-Portable capture, seed assembly, multi-machine source identity mapping, recovery
-and persisted archive-only mode are implemented here.
+Portable capture, seed assembly, multi-machine source identity mapping,
+recovery and persisted archive-only mode are implemented here. This delivery
+was reviewed against [PR #2036](https://github.com/kenn-io/agentsview/pull/2036);
+approval of that review does not mean every retirement acceptance criterion has
+been exercised end to end.
+
+## Outcome and limits
+
+A person retiring a computer can keep its original agent files, their existing
+AgentsView history and curation, and durable evidence of which machine each
+session came from. They can move the archive to another computer, browse it,
+extract the original files, and explicitly reparse supported sources without
+access to the retired computer.
+
+This delivery is a controlled, offline move into one personal archive. It
+collects Claude and Codex captures; the receiving computer may itself be one of
+the sources. Repeating an identical capture does not duplicate a conversation.
+Artifact exchange is refused in an archive-only destination.
+
+Each source's browsable raw history stops at its first accepted capture. Later
+changes to the same source are recoverable evidence, not browsable updates — a
+change to Codex's shared `session_index.jsonl` can conflict every source that
+includes it. The retirement archive is assembled afresh from a final capture;
+this delivery does not provide an ongoing collector for machines still in use.
+
+Continuous capture, automatic source deletion, team access controls, arbitrary
+cross-machine conversation merging, and cloud object placement are outside this
+delivery. A future team service would use a separate archive per team; its raw
+retention, garbage collection and disaster rebuild remain tracked under
+[issue #1352](https://github.com/kenn-io/agentsview/issues/1352).
+
+## Source identity model
+
+Several existing identities have different jobs. None of them is replaced by a
+new universal ID:
+
+| Record                       | Meaning and rule                                                                                                                                                          |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source installation ID       | Identifies the original installation, independent of its display label. Reused from `telemetry-install-id` when available, or generated once in the capture descriptor. |
+| Artifact origin              | Identifies an artifact publisher. Bound explicitly to the source installation; never regenerated or adopted as the collector's own publisher.                            |
+| Hosted tenant and device ID  | Identify an authenticated sender within a tenant. An explicit binding records the relationship; importing it does not grant upload authority.                            |
+| Configured root ID           | Identifies a provider root on a source. Existing checkpoint IDs are preserved; a capture path is only that root's current location.                                      |
+| Archive ID                   | Identifies the archive that owns SQLite state. A whole-archive restore preserves it; collecting another source into that archive does not replace it.                    |
+
+Root records are namespaced by source installation and provider as well as root
+ID, since two machines may use the same root name. A session from a foreign
+installation uses `installation~parser-id` identity and keeps its original
+machine attribution; namespace collisions are refused rather than silently
+merged. Collection into an existing archive preserves that archive's own owner
+and publisher — the retiring installation's captured database is never adopted
+as the receiving host's identity, and the receiving host's own sessions remain
+a separate source.
 
 ## Source capture
 
@@ -76,7 +123,7 @@ object references, and 16 GiB per logical source file; larger retained files are
 supplemental.
 
 | Existing subsystem   | Reuse and boundary                                                                                                                  |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Hosted raw sync      | Canonical manifests, provider plans, object adapter, verified materializer. PostgreSQL leases and server publication remain hosted. |
 | Local sync           | Normal SQLite content policy, conversation identities, signals, secret scanning, and bounded large-Codex parsing.                   |
 | Artifact folder sync | Existing normalized session exchange stays separate from the original-file vault.                                                   |
@@ -172,6 +219,24 @@ application extras without the old 4 GiB limit. Extras over 64 MiB require Kit
 reader version 6. Once such a snapshot exists, older readers cannot use the
 repository, including its older snapshots. Existing experimental filesystem
 recovery points require their saved readers and are left untouched.
+
+## Relationship to other raw-history work
+
+[Hosted raw sync](../hosted-raw-sync.md) retains originals and authenticated
+source generations on a server. [Artifact folder sync](../artifact-sync.md)
+exchanges normalized sessions without the original files or curation. Neither
+is a substitute for a complete offline archive recovery point, and this
+delivery does not make an offline capture or import equivalent to a hosted
+acceptance receipt.
+
+[PR #1741](https://github.com/kenn-io/agentsview/pull/1741) and
+[PR #1751](https://github.com/kenn-io/agentsview/pull/1751) extract shared raw
+source/group identity logic for hosted raw sync. This delivery reuses that
+identity reasoning for local source bindings without adopting the PostgreSQL
+acceptance, leasing and publication subsystem into SQLite. Adding artifact
+exchange on top of this identity mapping — matching a wire alias to a
+raw-imported row regardless of which side arrives first — is deferred
+integration work, not part of this delivery.
 
 ## Deferred work
 
