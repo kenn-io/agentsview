@@ -319,7 +319,7 @@ func (p *hermesProvider) Parse(
 		sess.File.Hash = req.Fingerprint.Hash
 	}
 	if p.spec.relabel != nil {
-		result := ParseResult{Session: *sess, Messages: msgs}
+		result := ParseResult{Session: *sess, Messages: msgs, ContentReplacement: ContentPreserveRicherArchive, PreserveArchivedUsage: true}
 		p.spec.relabel(&result)
 		return ParseOutcome{
 			Results: []ParseResultOutcome{{
@@ -333,8 +333,9 @@ func (p *hermesProvider) Parse(
 	return ParseOutcome{
 		Results: []ParseResultOutcome{{
 			Result: ParseResult{
-				Session:  *sess,
-				Messages: msgs,
+				Session:            *sess,
+				Messages:           msgs,
+				ContentReplacement: ContentPreserveRicherArchive, PreserveArchivedUsage: true,
 			},
 			DataVersion: DataVersionCurrent,
 		}},
@@ -569,7 +570,7 @@ func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 			return err
 		}
 		if stateDB, sessionsDir, ok := hermesStatePaths(root); ok {
-			yieldedAny, stateErr := s.discoverStateEach(ctx, root, stateDB, yield)
+			_, stateErr := s.discoverStateEach(ctx, root, stateDB, yield)
 			if cause, ok := discoveryYieldCause(stateErr); ok {
 				return cause
 			}
@@ -582,9 +583,6 @@ func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 					stateDB, stateErr,
 				)
 				appendDiscoveryErr(stateErr)
-				if _, transcriptErr := errors.AsType[hermesTranscriptValidationError](stateErr); !yieldedAny && !transcriptErr {
-					stateDB = ""
-				}
 			}
 			if err := discoverTranscripts(root, sessionsDir, stateDB); err != nil {
 				if cause, ok := discoveryYieldCause(err); ok {
@@ -641,9 +639,7 @@ func (s hermesSourceSet) discoverStateEach(
 			if ctx.Err() != nil {
 				return yieldedAny, ctx.Err()
 			}
-			if memberErrors == nil {
-				memberErrors = err
-			}
+			memberErrors = errors.Join(memberErrors, err)
 			continue
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)

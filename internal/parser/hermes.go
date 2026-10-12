@@ -129,6 +129,9 @@ func (p *hermesProvider) parseArchive(ctx context.Context, root, project, machin
 	if err == nil {
 		return results, nil
 	}
+	if _, validationErr := errors.AsType[hermesTranscriptValidationError](err); validationErr {
+		return nil, err
+	}
 	log.Printf(
 		"hermes: state db parse failed for %s: %v; falling back to transcripts",
 		stateDB, err,
@@ -156,6 +159,7 @@ func (p *hermesProvider) parseTranscriptArchive(
 		if sess != nil {
 			results = append(results, ParseResult{
 				Session: *sess, Messages: msgs,
+				ContentReplacement: ContentPreserveRicherArchive, PreserveArchivedUsage: true,
 			})
 		}
 	}
@@ -1015,15 +1019,11 @@ func buildHermesStateResult(
 			sess.EndedAt = latest
 		}
 	}
-	policy := ContentReplaceComplete
-	if selectedPath == stateDB {
-		policy = ContentPreserveRicherArchive
-	}
 	return ParseResult{
 		Session:            *sess,
 		Messages:           msgs,
 		UsageEvents:        usageEvents,
-		ContentReplacement: policy,
+		ContentReplacement: ContentPreserveRicherArchive,
 	}, true, nil
 }
 

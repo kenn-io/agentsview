@@ -1794,7 +1794,7 @@ func TestHermesTranscriptOnlySnapshotEventPrefersJSONL(t *testing.T) {
 func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
 		for _, mode := range []string{"full sync", "state event", "transcript event", "single session", "full resync"} {
-			for _, damage := range []string{"malformed middle", "truncated tail", "oversized", "empty", "removed", "malformed JSON snapshot", "truncated JSON snapshot", "removed rich single message"} {
+			for _, damage := range []string{"malformed middle", "truncated tail", "oversized", "empty", "removed", "malformed JSON snapshot", "truncated JSON snapshot", "removed rich single message", "removed JSON snapshot", "empty JSON snapshot", "mixed member failures", "legacy archive path"} {
 				if damage == "oversized" && mode != "full sync" {
 					continue
 				}
@@ -1818,7 +1818,7 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 					})
 					t.Cleanup(engine.Close)
 					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
-					if damage == "malformed JSON snapshot" || damage == "truncated JSON snapshot" {
+					if strings.Contains(damage, "JSON snapshot") {
 						snapshot := filepath.Join(dir, "session_child.json")
 						require.NoError(t, os.WriteFile(snapshot, []byte(`{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"Done."},{"role":"user","content":"follow-up"}]}`), 0o600))
 						require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
@@ -1834,10 +1834,16 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 					if damage == "removed rich single message" {
 						want = []string{"long original response from the transcript"}
 					}
-					if damage == "malformed JSON snapshot" || damage == "truncated JSON snapshot" {
+					if strings.Contains(damage, "JSON snapshot") {
 						want = append(want, "follow-up")
 					}
 					require.Equal(t, want, contents)
+					if damage == "legacy archive path" {
+						row, getErr := database.GetSessionFull(t.Context(), id)
+						require.NoError(t, getErr)
+						row.FilePath = &stateDB
+						require.NoError(t, database.UpsertSession(t.Context(), *row))
+					}
 					usageBefore, getErr := database.GetUsageEvents(t.Context(), id)
 					require.NoError(t, getErr)
 					require.Len(t, usageBefore, 1)
@@ -1852,16 +1858,28 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 					case "truncated JSON snapshot":
 						content = `{"messages":[{"role":"user","content":"shorter"}]`
 						path = filepath.Join(dir, "session_child.json")
-					case "malformed JSON snapshot":
+					case "removed JSON snapshot":
+						path = filepath.Join(dir, "session_child.json")
+					case "empty JSON snapshot":
+						content = `{"messages":[]}`
+						path = filepath.Join(dir, "session_child.json")
+					case "mixed member failures", "legacy archive path", "malformed JSON snapshot":
 						content = "invalid JSON"
 						path = filepath.Join(dir, "session_child.json")
 					default:
 						content += `{"role":"assistant","content":`
 					}
-					if damage == "removed" || damage == "removed rich single message" {
+					if damage == "removed" || damage == "removed rich single message" || damage == "removed JSON snapshot" {
 						require.NoError(t, os.Remove(path))
 					} else {
 						require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+					}
+					if damage == "mixed member failures" {
+						conn, openErr := sql.Open("sqlite3", stateDB)
+						require.NoError(t, openErr)
+						_, writeErr := conn.ExecContext(t.Context(), `INSERT INTO sessions (id, source, started_at) VALUES ('aaa-bad', 'cli', 'invalid')`)
+						require.NoError(t, writeErr)
+						require.NoError(t, conn.Close())
 					}
 					switch mode {
 					case "full sync":
@@ -1884,11 +1902,11 @@ func TestHermesStateTranscriptDamagePreservesHistory(t *testing.T) {
 						assert.Equal(t, usageBefore, usageAfter)
 						engine.SyncAll(t.Context(), nil)
 					}
-					if damage == "malformed JSON snapshot" || damage == "truncated JSON snapshot" {
-						require.NoError(t, os.Remove(filepath.Join(dir, "session_child.json")))
+					if strings.Contains(damage, "JSON snapshot") {
+						require.NoError(t, os.WriteFile(filepath.Join(dir, "session_child.json"), []byte(`{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"Done."},{"role":"user","content":"follow-up"}]}`), 0o600))
 					}
 					writeHermesTranscriptFile(t, dir, "child")
-					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					engine.SyncAll(t.Context(), nil)
 				})
 			}
 		}
@@ -1982,6 +2000,164 @@ func TestHermesDottedCronIDsSyncAndResolve(t *testing.T) {
 				}
 				assert.Equal(t, want, contents)
 				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), fullID))
+			})
+		}
+	}
+}
+
+func TestHermesUnreadableMemberPreservesArchivedUsage(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, mode := range []string{"full sync", "transcript event", "single session", "full resync"} {
+			t.Run(string(agent)+"/"+mode, func(t *testing.T) {
+				root := t.TempDir()
+				stateDB := writeHermesArchiveStateDB(t, root)
+				conn, err := sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET input_tokens = 100, output_tokens = 73, estimated_cost_usd = 0.5, cost_status = 'estimated'`)
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				dir := filepath.Join(root, "sessions")
+				writeHermesTranscriptFile(t, dir, "child")
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":child"
+				before, err := database.GetUsageEvents(t.Context(), id)
+				require.NoError(t, err)
+				require.Len(t, before, 1)
+				require.NotNil(t, before[0].Cost)
+				require.NoError(t, os.WriteFile(stateDB, []byte("not a SQLite database"), 0o600))
+				switch mode {
+				case "full sync":
+					engine.SyncAll(t.Context(), nil)
+				case "transcript event":
+					_ = engine.syncPathsContext(t.Context(), []string{filepath.Join(dir, "child.jsonl")}, false)
+				case "single session":
+					_ = engine.SyncSingleSessionContext(t.Context(), id)
+				case "full resync":
+					engine.ResyncAll(t.Context(), nil)
+				}
+				for range 2 {
+					after, getErr := database.GetUsageEvents(t.Context(), id)
+					require.NoError(t, getErr)
+					assert.Equal(t, before, after)
+					messages, getErr := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, getErr)
+					contents := make([]string, len(messages))
+					for i, message := range messages {
+						contents[i] = message.Content
+					}
+					assert.Equal(t, []string{"hello", "Done."}, contents)
+					engine.SyncAll(t.Context(), nil)
+				}
+			})
+		}
+	}
+}
+
+func TestHermesFallbackPreservesIndividualToolsAndResults(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, change := range []string{"unchanged", "remove call", "change result", "large argument"} {
+			t.Run(string(agent)+"/"+change, func(t *testing.T) {
+				root := t.TempDir()
+				stateDB := writeHermesArchiveStateDB(t, root)
+				call := `{"id":"call-a","function":{"name":"lookup","arguments":"{\"value\":9007199254740993}"}}`
+				calls := "[" + call + "]"
+				originalCalls := calls
+				if change == "remove call" {
+					originalCalls = "[" + call + `,{"id":"call-b","function":{"name":"lookup","arguments":"{}"}}]`
+				}
+				result := "old result"
+				if change == "change result" {
+					result = "new result"
+				}
+				if change == "large argument" {
+					calls = strings.ReplaceAll(calls, "9007199254740993", "9007199254740992")
+				}
+				conn, err := sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), "DELETE FROM messages")
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				dir := filepath.Join(root, "sessions")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				path := filepath.Join(dir, "child.jsonl")
+				content := `{"role":"user","content":"same","timestamp":"2026-05-14T14:00:10Z"}` + "\n" +
+					`{"role":"assistant","content":"tools","timestamp":"2026-05-14T14:00:11Z","tool_calls":` + originalCalls + "}\n" +
+					`{"role":"tool","content":"old result","tool_call_id":"call-a","timestamp":"2026-05-14T14:00:12Z"}` + "\n"
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":child"
+				row, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				require.Equal(t, "hermes-jsonl-v1", row.SourceVersion)
+				before, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				conn, err = sql.Open("sqlite3", stateDB)
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (session_id, role, content, timestamp) VALUES ('child', 'user', 'same', 1778767210); INSERT INTO messages (session_id, role, content, tool_calls, timestamp) VALUES ('child', 'assistant', 'tools', ?, 1778767211); INSERT INTO messages (session_id, role, content, tool_call_id, timestamp) VALUES ('child', 'tool', ?, 'call-a', 1778767212)`, calls, result)
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+				require.NoError(t, os.Remove(path))
+				engine.SyncAll(t.Context(), nil)
+				after, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				if change == "unchanged" {
+					row, err := database.GetSessionFull(t.Context(), id)
+					require.NoError(t, err)
+					assert.Equal(t, parser.HermesStateSourceVersion, row.SourceVersion)
+					assert.Equal(t, before, after)
+					return
+				}
+				assert.Equal(t, before, after)
+			})
+		}
+	}
+}
+
+func TestHermesLegacyProvenancePreservesAmbiguousHistory(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, change := range []string{"unchanged", "shortened"} {
+			t.Run(string(agent)+"/"+change, func(t *testing.T) {
+				root := t.TempDir()
+				stateDB := writeHermesArchiveStateDB(t, root)
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+				})
+				t.Cleanup(engine.Close)
+				require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				id := string(agent) + ":child"
+				row, err := database.GetSessionFull(t.Context(), id)
+				require.NoError(t, err)
+				row.SourceVersion = "hermes-state-db"
+				require.NoError(t, database.UpsertSession(t.Context(), *row))
+				before, err := database.GetAllMessages(t.Context(), id)
+				require.NoError(t, err)
+				if change == "shortened" {
+					conn, err := sql.Open("sqlite3", stateDB)
+					require.NoError(t, err)
+					_, err = conn.ExecContext(t.Context(), "UPDATE messages SET content = 'short'")
+					require.NoError(t, err)
+					require.NoError(t, conn.Close())
+				}
+				for range 2 {
+					engine.ResyncAll(t.Context(), nil)
+					after, err := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, err)
+					assert.Equal(t, before, after)
+					row, err = database.GetSessionFull(t.Context(), id)
+					require.NoError(t, err)
+					want := parser.HermesStateSourceVersion
+					if change == "shortened" {
+						want = "hermes-state-db"
+					}
+					assert.Equal(t, want, row.SourceVersion)
+				}
 			})
 		}
 	}

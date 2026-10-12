@@ -1874,10 +1874,11 @@ const (
 
 // ParseResult pairs a parsed session with its messages.
 type ParseResult struct {
-	Session            ParsedSession
-	Messages           []ParsedMessage
-	UsageEvents        []ParsedUsageEvent
-	ContentReplacement ContentReplacementPolicy
+	Session               ParsedSession
+	Messages              []ParsedMessage
+	UsageEvents           []ParsedUsageEvent
+	ContentReplacement    ContentReplacementPolicy
+	PreserveArchivedUsage bool
 	// Checkpoint is opaque provider continuation state (a parser
 	// checkpoint) that the sync engine persists after this result's
 	// session rows commit, so later appends can resume without rescanning

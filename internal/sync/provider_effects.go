@@ -99,6 +99,9 @@ func (a *providerResultAdmission) admit(r parser.ParseResultOutcome) error {
 	if err := a.engine.validateHermesReplacement(a.ctx, r.Result); err != nil {
 		return err
 	}
+	if err := a.engine.preserveHermesUsage(a.ctx, &r.Result); err != nil {
+		return err
+	}
 	if a.codexIdentities {
 		prepareCodexResultIdentities(r.Result.Messages, nil)
 	}
