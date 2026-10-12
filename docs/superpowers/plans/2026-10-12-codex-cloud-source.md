@@ -771,38 +771,46 @@ format (dedup).
 
 **Files:**
 
-- Create: `internal/codexcloud/fetch.go`, `resume.go`, `fetch_test.go`
+- Create: `internal/codexcloud/fetch.go`, `resume.go`, `fetch_test.go`,
+  `internal/codexcloud/codexcloudtest/threads.go` (scripted threads)
 
 **Interfaces:**
 
-- Consumes: `mirror.Append`, `mirror.Turn`, `mirror.Item`, `Store`, `Conn.Call`.
+- Consumes: `mirror.Append`, `mirror.Turn`, `mirror.ItemRecord`, `Store`,
+  `Conn.Call`.
 
 - Produces:
 
     - `type TurnView string` with `TurnViewNotLoaded = "notLoaded"`,
       `TurnViewSummary = "summary"`, `TurnViewFull = "full"`; package variable
       `turnView` set from the gate's answer (default `notLoaded`).
-    - `func fetchThread(ctx context.Context, c *Conn, st ThreadState, listing jsontext.Value, now time.Time) (records []mirror.Record, next ThreadState, err error)`:
+    - `type fetchResult struct { Records []mirror.Record; Next ThreadState; Unfinished, InProgress bool }`
+    - `func fetchThread(ctx context.Context, c *Conn, threadID string, st ThreadState, listing jsontext.Value, now time.Time) (fetchResult, error)`:
       turn statuses first (newest first, stop at the resume turn, always with
       `itemsView`), then items from the resume anchor (`cursor` = item anchor,
-      `turnId`), discarding the anchor item, then each later turn in full.
-      `ErrReplyTooLarge` returns to the caller, which owns the redial.
-    - `func itemFinished(it mirror.Item, turn TurnState, later *TurnState, archivedFirstSeen time.Time, now time.Time) bool`:
+      `turnId`), discarding the anchor item, then each later turn in full. A
+      `-32602` on the anchored read re-reads the turn in full and skips through
+      the anchor. `ErrReplyTooLarge` returns to the caller, which owns the
+      redial. The caller sets `st.ArchivedFirstSeen` before the fetch.
+    - `func itemFinished(record mirror.ItemRecord, turn TurnState, later *TurnState, archivedFirstSeen, now time.Time) bool`:
       12 minutes against server timestamps, 10 minutes after first sight
       otherwise; an archived thread counts only 10 minutes after
       `archivedFirstSeen`.
-    - `func advanceResume(st ThreadState, items []mirror.Item, now time.Time) (turnID, itemID string)`:
+    - `func advanceResume(st ThreadState, turns []TurnState, items map[string][]mirror.ItemRecord, now time.Time) (turnID, itemID string)`:
       stops at the first unfinished item, and never leaves a turn until the
       save-lag margin has passed for that turn's end or for the start of a later
       turn, even when every saved item is finished.
-    - `func dedup(st ThreadState, recs []mirror.Record) []mirror.Record` (by
-      digest per key).
-    - `func commitThread(store *Store, key AccountKey, threadID string, st ThreadState, recs []mirror.Record) (ThreadState, error)`:
+    - `func dedup(st *ThreadState, recs []mirror.Record) []mirror.Record` (by
+      digest per key; records the kept digests in `st`).
+    - `func commitThread(store *Store, key AccountKey, threadID string, st ThreadState, recs []mirror.Record, now time.Time) (ThreadState, error)`:
       `mirror.Append(path, st.Offset, nil)` to recover, rebuild digests and the
       last plan record from `Recovered`, then `dedup`, then append, then save
-      state. Dedup never runs against digests a crash left stale.
+      state. Dedup never runs against digests a crash left stale; a missing or
+      shrunken mirror file forgets every digest so everything is written again.
+    - `codexcloudtest.Threads`: `NewThreads`, `Set`, `Update`, `RejectAnchor`,
+      `TurnsList`, `ItemsList`, and `Host.ServeThreads`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
     - `TestFirstImportFinishedThreadOneFetch` (`completedAt` 13 minutes old).
     - `TestRecentEndRefetchUntilMargin` (11 minutes: fetched until 12).
@@ -822,14 +830,16 @@ format (dedup).
       duplicate item after parse).
     - `TestEveryTurnsListCarriesItemsView`.
     - `TestAnchoredReadErrorRereadsTurn`.
+    - `TestLostMirrorFileRewritesEverything`,
+      `TestCompletedTimeWithRunningStatusNotFinished`.
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): fetch threads incrementally"`
 
 ### Task 14: The sync pass: retries, check-again, refresh, oversized replies
