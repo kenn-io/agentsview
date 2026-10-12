@@ -913,6 +913,9 @@ type sessionSourceConfig struct {
 //
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Config struct {
+	// CodexCloud is the [agents.codex-cloud] table, read from config.toml
+	// only.
+	CodexCloud           CodexCloudConfig            `json:"-" toml:"-"`
 	Host                 string                      `json:"host" toml:"host"`
 	Port                 int                         `json:"port" toml:"port"`
 	ChartPalette         ChartPalette                `json:"chart_palette" toml:"chart_palette"`
@@ -1321,6 +1324,7 @@ func Default() (Config, error) {
 		EventsCoalesceInterval:         10 * time.Second,
 		DaemonIdleTimeout:              20 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
+		CodexCloud:                     defaultCodexCloudConfig(),
 		Vector: VectorConfig{
 			RecallMaxRevisionLag: DefaultRecallMaxRevisionLag,
 			Embeddings: VectorEmbeddingsConfig{
@@ -2070,6 +2074,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.sessionSourceConfigs = append([]sessionSourceConfig(nil), file.SessionSources...)
 	}
 
+	c.CodexCloud = parseCodexCloudTable(c.configPath(), raw["agents"])
 	if err := c.applyAgentDirectories(raw["agents"]); err != nil {
 		return err
 	}
