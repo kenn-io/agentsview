@@ -217,8 +217,11 @@ These would make the feature a failure even if it worked:
   fixtures.
 - Network cost growing with the size of the archive or with the square of a
   thread's length, or local work per pass growing with the size of the
-  archive. The two accepted exceptions within one running turn are listed
-  under Risks.
+  archive. Two exceptions are accepted. The cases within one running turn are
+  listed under Risks. Locally, the sync engine lists every mirror file on each
+  pass to compare fingerprints, as it does for every file-backed agent; that
+  is a directory walk and a file status check per thread, with no network call
+  and no parse of an unchanged file.
 - AgentsView refreshing the ChatGPT token itself, which would rotate the refresh
   token the Codex CLI depends on.
 - A cloud session with no token data looking free in cost views.
@@ -292,14 +295,17 @@ running threads --(live token monitor)--> token usage records in the same mirror
    projection (`internal/postgres/raw_projection_rows.go`), which writes
    parsed rows directly rather than through a push. Raw capture is opt-in per
    provider: the provider declares the `RawCapture` capability as supported
-   and implements `PlanRawCapture` (`internal/parser/raw_capture.go`) so that
-   each thread's mirror file is captured and fetcher state files never are.
-   Mirror files declare `RawCaptureAppendOne`
-   (`internal/parser/raw_capture.go`): each pass appends frames, and a
-   torn-frame truncation during recovery changes the existing prefix, which
-   forces raw capture to replace that file rather than extend it. The agent
-   definition must not set `RemoteSyncExcluded`: raw ingest rejects every
-   provider with that flag (`validateProvider` in
+   and implements both `PlanRawCapture` and
+   `StreamingRawCaptureSourceProvider` (`DiscoverRawCaptureSourcesEach`), all
+   in `internal/parser/raw_capture.go`; raw discovery rejects a provider that
+   declares the capability without the streaming interface, and hosted
+   derivation uses that same discovery. This is so that each thread's mirror
+   file is captured and fetcher state files never are. Mirror files declare
+   `RawCaptureAppendOne` (`internal/parser/raw_capture.go`): each pass appends
+   frames, and a torn-frame truncation during recovery changes the existing
+   prefix, which forces raw capture to replace that file rather than extend
+   it. The agent definition must not set `RemoteSyncExcluded`: raw ingest
+   rejects every provider with that flag (`validateProvider` in
    `internal/rawsync/manifest.go`), which would stop the mirror from reaching
    a hub. Remote host sync (`internal/remotesync`) instead skips this source
    through a second, narrower definition flag, which the builder adds. Today
@@ -308,8 +314,8 @@ running threads --(live token monitor)--> token usage records in the same mirror
    return true when either flag is set, and makes every remotesync check use
    it, including the two that read `RemoteSyncExcluded` directly today
    (`internal/remotesync/resolve.go`, target resolution and its forbidden
-   roots), so remote host sync fails closed and never ships the mirror directory
-   or its state files. Raw ingest (`validateProvider` in
+   roots), so remote host sync fails closed and never ships the mirror
+   directory or its state files. Raw ingest (`validateProvider` in
    `internal/rawsync/manifest.go`) keeps reading only `RemoteSyncExcluded`.
 
 ### Authentication
@@ -462,22 +468,23 @@ kinds of file, each written atomically:
   that thread's last mirrored `updatedAt`, resume point, verified mirror
   offset, resolved parent (see Mapping), and for each turn its stored status,
   when the fetcher first saw the turn, and when it first saw the ended status
-  (for the 10-minute rules), plus the time of the last new item or `updatedAt`
-  change (for the 24-hour stall rule), digests of the newest stored thread
-  metadata record, of each turn, and of each item after the resume point (to
-  tell whether a re-fetched record changed), the thread's `createdAt` (for
-  usage groups), the digest and kind of the last plan usage record of any kind
-  in its file (updated by every writer of a row or outcome record), and the
-  root it is currently counted under. Every writer that appends to a mirror
-  file (step 7, the plan usage step, a late-parent move, and the live token
-  monitor) saves the fields it changed together with the new offset, after the
-  fsync. The changed-threads step reads it for each thread on the listing
-  pages it walks; otherwise it is read and written only when the thread is
-  selected, joined by the monitor, or walked for a usage root (below). Live
-  discovery does not read it: the account's unfinished set keeps, for each
-  thread, whether its newest turn is `inProgress`, whether the 24-hour stall
-  rule has stopped it, and whether it is a sub-agent thread (see Joining), so
-  discovery skips sub-agent threads it finds only through that set.
+  (for the 10-minute rules), when it first saw the thread archived, plus the
+  time of the last new item or `updatedAt` change (for the 24-hour stall
+  rule), digests of the newest stored thread metadata record, of each turn,
+  and of each item after the resume point (to tell whether a re-fetched record
+  changed), the thread's `createdAt` (for usage groups), the digest and kind
+  of the last plan usage record of any kind in its file (updated by every
+  writer of a row or outcome record), and the root it is currently counted
+  under. Every writer that appends to a mirror file (step 7, the plan usage
+  step, a late-parent move, and the live token monitor) saves the fields it
+  changed together with the new offset, after the fsync. The changed-threads
+  step reads it for each thread on the listing pages it walks; otherwise it is
+  read and written only when the thread is selected, joined by the monitor, or
+  walked for a usage root (below). Live discovery does not read it: the
+  account's unfinished set keeps, for each thread, whether its newest turn is
+  `inProgress`, whether the 24-hour stall rule has stopped it, and whether it is
+  a sub-agent thread (see Joining), so discovery skips sub-agent threads it
+  finds only through that set.
 - **Per root:**
   `{dataDir}/sources/codex-cloud/<accountKey>/<rootId>.descendants.json` lists
   that usage root's known descendants. When a thread with a resolved parent is
@@ -544,7 +551,10 @@ An item counts as finished when any of these holds:
   for its start, judged the same way from its `startedAt`, so a turn that
   never reports a final status cannot pin the resume point forever, and the
   save lag is still covered;
-- the thread is archived;
+- the thread is archived and the fetcher first saw it archived at least 10
+  minutes before this fetch started. Archiving does not end the save lag: a
+  user can archive a thread seconds after its turn ends, while a command's
+  final output is still unsaved;
 - `completedAtMs` is set and, for items with a `status`, that status is
   terminal.
 
@@ -740,9 +750,10 @@ full, as most file-based providers do:
 
 - The parse builds each item from its newest record for `(turnId, item.id)`, so
   a re-fetched item replaces its earlier version and never appears twice.
-- Only threads whose mirror file changed are parsed. Local work per pass is
+- Only threads whose mirror file changed are parsed. Parse work per pass is
   proportional to the size of the threads that changed in that pass, never to
-  the size of the archive.
+  the size of the archive. Discovery still lists every mirror file to compare
+  fingerprints, as for every file-backed agent (see Anti-goals).
 - A thread that changes on every pass while it runs is parsed in full on every
   pass. Live token records are buffered so they add at most one parse per
   minute per joined thread (see Live token capture). That cost grows with the
@@ -992,6 +1003,13 @@ records every token update, and leaves when the turn ends.
   baseline, the first record's total starts from the fresh counter, so it does
   not cover turns that finished after the last record of the previous
   baseline.
+- A reset is detected only as a decrease. If the counters restarted while no
+  join was open and grew past every earlier value before the next join, the
+  provider adds only the difference and counts the turns in between as
+  covered, which undercounts. No probe has shown a reset: a join to a
+  long-running thread reported a total in the millions, which suggests the
+  hosted server keeps totals for the thread's life. The user-facing docs state
+  this limit, and Open questions asks for the evidence that settles it.
 
 **How it shows up.**
 
@@ -1626,6 +1644,11 @@ double-count its tokens.
   until that turn's `completedAt` is 12 minutes old (the next pass, at the
   usual interval), then not again.
 
+- Archived during the save lag: a thread archived seconds after its turn ends,
+  with a command item whose final output is not yet saved, keeps its resume
+  point before that item until 10 minutes after the fetcher first saw it
+  archived, and the later fetch stores the final output.
+
 - Failed first import: a thread whose first fetch fails while the listing
   watermark advances is retried from the retry set, and the retry appends its
   listing record, so the session is parsed with its metadata.
@@ -1852,6 +1875,14 @@ double-count its tokens.
    unfinished selection. Until then, sync reads both listings (see Incremental
    sync); if the default listing turns out to include them, the sub-agent
    listing can be dropped.
+
+1. **Counter resets.** Whether the hosted token totals ever restart from zero,
+   for example after a cold start. The user joins a thread before and after
+   its environment ends and restarts, with a read-only probe, and compares the
+   totals. If totals restart, the monitor needs a signal that separates
+   counter generations before coverage can be trusted across joins; until then
+   a decrease is the only signal, and the provider logs every decrease it
+   sees.
 
 1. **Saved-item lag.** The 10-minute margin before an ended turn's items count
    as finished is a guess. The user runs a read-only probe that reads a turn's
