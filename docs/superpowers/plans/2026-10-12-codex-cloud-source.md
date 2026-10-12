@@ -660,7 +660,7 @@ Spec: JSON-RPC errors, Failure timing, Status and errors (messages).
 **Files:**
 
 - Create: `internal/codexcloud/classify.go`, `waits.go`, `status.go`,
-  `classify_test.go`, `waits_test.go`, `status_test.go`
+  `classify_test.go`
 
 **Interfaces:**
 
@@ -676,13 +676,14 @@ Spec: JSON-RPC errors, Failure timing, Status and errors (messages).
       `serverShuttingDown`; `-32601` with `unsupported app-server method`;
       `-32600` with `Invalid request:` or `experimentalApi`; `-32602` anchored
       vs elsewhere; other replies by method).
-    - `type Failure int` with `FailSignedOut`, `FailKeyring`,
-      `FailRefreshRequested`, `FailRefused`, `FailRateLimited`, `FailNetwork`,
-      `FailServer`, `FailProtocol`, `FailTooLarge`.
+    - `type Failure int` with `FailNone`, `FailSignedOut`, `FailKeyring`,
+      `FailEphemeral`, `FailRefreshRequested`, `FailRefused`, `FailRateLimited`,
+      `FailNetwork`, `FailServer`, `FailProtocol`, `FailTooLarge`, `FailThread`.
     - `func FailureFor(err error, login Login) Failure`: a 401 in `auto` mode is
       `FailKeyring`, not `FailSignedOut`.
-    - `type Waits struct{...}` with an injected `now func() time.Time`:
-      `RecordAccount(st *AccountState, f Failure, retryAfter time.Duration)`,
+    - `type Waits struct{...}`, `NewWaits(now func() time.Time)`:
+      `RecordAccount(st *AccountState, f Failure, retryAfter time.Duration) error`
+      (an error for a failure that is not account-level),
       `AccountReady(st *AccountState) bool`, `ResetAccount(st *AccountState)`
       (the caller saves the state);
       `RecordHome(home string, f Failure, authMTime time.Time)`,
@@ -690,27 +691,28 @@ Spec: JSON-RPC errors, Failure timing, Status and errors (messages).
     - Durations: refused 1h doubling to 24h; 429 `Retry-After` else 5m doubling to
       1h; network/5xx 1m doubling to 1h; signed out and refresh requested until
       `auth.json` mtime changes or 1h; protocol change as refused.
-    - `type StatusBoard struct{...}` (safe for concurrent use) with
-      `Set(row HomeStatus)`, `Snapshot() []HomeStatus`.
-    - `type HomeStatus struct { Homes []string; State string; Message string; LastSuccess *time.Time; Imported, Total, Found int; RetryCount int; OldestFailure *time.Time; Live string; PlanUsage string }`
+    - `type StatusBoard struct{...}` (safe for concurrent use),
+      `NewStatusBoard()`, `Set(row HomeStatus)` (replaces the row with the same
+      `Key`), `Snapshot() []HomeStatus`.
+    - `type HomeStatus struct { Key string; Homes []string; State State; Message string; LastSuccess *time.Time; Imported, Total, Found int; RetryCount int; OldestFailure *time.Time; Live string; PlanUsage string }`
       with states `off_disabled_agents`, `off_disabled`, `off_no_sync`,
       `config_error`, `waiting`, `importing`, `up_to_date`, `retrying`, `error`.
     - `func Message(f Failure, retryAt time.Time) string`: the spec's table, word
       for word.
 
-- [ ] **Step 1: Write failing tests** table-driven `TestClassify` (every rule
+- [x] **Step 1: Write failing tests** table-driven `TestClassify` (every rule
   and the spec's examples, including "no rollout found" and "not supported
   yet"), `TestWaitsDurations` on an injected clock,
   `TestHomeWaitEndsOnAuthChange`, `TestAccountsIndependent`,
   `TestAutoMode401IsKeyring`, `TestMessages` (each row of the spec table).
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): classify errors and time waits"`
 
 ### Task 12: Listings and selection
