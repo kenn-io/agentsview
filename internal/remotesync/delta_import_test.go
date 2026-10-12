@@ -625,3 +625,66 @@ func TestImporterHermesDatabaseDeltaBoundsSharedScans(t *testing.T) {
 		}
 	}
 }
+
+func TestImporterHermesIncompleteDiscoveryProcessesHealthyDelta(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		t.Run(string(agent), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			const sessionsDir = "/srv/agent/hermes/sessions"
+			const otherDir = "/srv/agent/claude"
+			localDir := remappedRemotePath(root, sessionsDir)
+			require.NoError(t, os.MkdirAll(localDir, 0o755))
+			stateDB := filepath.Join(filepath.Dir(localDir), "state.db")
+			writeHermesImportStateDB(t, stateDB)
+			transcript := filepath.Join(localDir, "database-only.jsonl")
+			content := `{"role":"user","content":"database-only message","timestamp":"2026-05-14T14:00:10Z"}` + "\n"
+			require.NoError(t, os.WriteFile(transcript, []byte(content), 0o600))
+			otherPath := filepath.Join(remappedRemotePath(root, otherDir), "project", "other-session.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(otherPath), 0o755))
+			require.NoError(t, os.WriteFile(otherPath, []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-08-15T10:00:00Z", "initial prompt", "other-session").String()), 0o600))
+			targets := TargetSet{Dirs: map[parser.AgentType][]string{agent: {sessionsDir}, parser.AgentClaude: {otherDir}}}
+			importer := Importer{Host: "remote", DB: database, Root: root, Targets: targets}
+			_, err := importer.ImportExtracted(t.Context(), targets, root)
+			require.NoError(t, err)
+			otherBefore, err := database.GetSessionFull(t.Context(), "remote~other-session")
+			require.NoError(t, err)
+			require.NotNil(t, otherBefore)
+			require.Equal(t, new("initial prompt"), otherBefore.FirstMessage)
+			id := "remote~" + string(agent) + ":database-only"
+			usageBefore, err := database.GetUsageEvents(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, usageBefore, 1)
+			require.NoError(t, os.WriteFile(stateDB, []byte("not a SQLite database"), 0o600))
+			require.NoError(t, os.WriteFile(transcript, []byte(content+`{"role":"assistant","content":"recovered transcript response","timestamp":"2026-05-14T14:00:11Z"}`+"\n"), 0o600))
+			require.NoError(t, os.WriteFile(otherPath, []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-08-15T10:00:00Z", "healthy delta", "other-session").String()), 0o600))
+			statePath, err := mirrorRelativeLocalChangePath(root, stateDB)
+			require.NoError(t, err)
+			otherRelative, err := mirrorRelativeLocalChangePath(root, otherPath)
+			require.NoError(t, err)
+			pending, err := importer.PreparePending(t.Context(), DeltaImportRequest{Journal: MirrorChangeJournal{Version: mirrorJournalVersion, Entries: []MirrorChangeEntry{{Path: otherRelative, InvalidateCache: true}, {Path: statePath, InvalidateCache: true}}}})
+			require.NoError(t, err)
+			assert.Equal(t, []parser.AgentType{agent}, pending.plan.FallbackProviders)
+			stats, err := pending.Execute(t.Context())
+			var incomplete parser.DiscoveryIncompleteError
+			require.ErrorAs(t, err, &incomplete)
+			assert.Equal(t, JournalProcessingFailures, stats.JournalOutcome)
+			assert.Positive(t, stats.Failed)
+			assert.Equal(t, 2, stats.SessionsSynced)
+			messages, err := database.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			contents := make([]string, len(messages))
+			for i, message := range messages {
+				contents[i] = message.Content
+			}
+			assert.Equal(t, []string{"database-only message", "recovered transcript response"}, contents)
+			usageAfter, err := database.GetUsageEvents(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, usageBefore, usageAfter)
+			other, err := database.GetSessionFull(t.Context(), "remote~other-session")
+			require.NoError(t, err)
+			require.NotNil(t, other)
+			assert.Equal(t, new("healthy delta"), other.FirstMessage)
+		})
+	}
+}

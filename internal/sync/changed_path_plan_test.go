@@ -829,13 +829,13 @@ func TestDiscoverChangedPathFallbackIsProviderBounded(t *testing.T) {
 		factoryA.agent: {rootA}, factoryB.agent: {rootB},
 	}, factoryA, factoryB)
 
-	files, counts, err := engine.discoverChangedPathFallbackProviders(
+	discovery, err := engine.discoverChangedPathFallbackProviders(
 		t.Context(), []parser.AgentType{factoryA.agent},
 	)
 	require.NoError(t, err)
-	require.Len(t, files, 1)
-	assert.Equal(t, source, files[0].Path)
-	assert.Equal(t, map[parser.AgentType]int{factoryA.agent: 1}, counts)
+	require.Len(t, discovery.files, 1)
+	assert.Equal(t, source, discovery.files[0].Path)
+	assert.Equal(t, map[parser.AgentType]int{factoryA.agent: 1}, discovery.counts)
 	assert.Equal(t, 1, discoveriesA)
 	assert.Zero(t, discoveriesB)
 }
