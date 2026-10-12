@@ -790,8 +790,9 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 // A database that can exchange tables refreshes prepared usage with its
 // view. The schema step leaves a database that never rebuilt without lock
 // tables. After rebuilds, as when the data directory moved off NFS, it
-// drops their build tables and older locks and keeps one newer released
-// lock, so a rebuild that paused through the switch discards its build.
+// drops their build tables and older locks and keeps one newer retired
+// lock: a rebuild that paused through the switch discards its build, and a
+// push that paused before taking the lock skips its rebuild.
 func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedFixture(t)
@@ -824,10 +825,63 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 		require.NoError(t, err, stmt)
 	}
 	newTestSync(t, local, target, storage.PusherOptions{})
-	require.Equal(t, []string{"prepared_usage_rebuild_lock_8 released"}, rebuildTables())
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_8 retired"}, rebuildTables())
 	superseded, err := rebuildLockSuperseded(ctx, conn, 7)
 	require.NoError(t, err)
 	require.True(t, superseded, "a rebuild paused through the switch must find a newer lock")
+	_, acquired, err := acquireRebuildLock(ctx, conn)
+	require.NoError(t, err)
+	require.False(t, acquired, "a push paused before taking the lock must not rebuild")
+	newTestSync(t, local, target, storage.PusherOptions{})
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_8 retired"}, rebuildTables())
+}
+
+// A push that found no view and took the lock after the schema step
+// created the view, with no lock to retire yet, stands down and leaves its
+// lock retired.
+func TestRebuildLockStandsDownWhenViewExists(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	conn := chtest.Open(t, target.URL, target.Database)
+	newTestSync(t, local, target, storage.PusherOptions{})
+	_, acquired, err := acquireRebuildLock(ctx, conn)
+	require.NoError(t, err)
+	require.False(t, acquired)
+	var comment string
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT comment FROM system.tables
+		WHERE database = currentDatabase() AND name = 'prepared_usage_rebuild_lock_1'`).Scan(&comment))
+	require.Equal(t, "retired", comment)
+}
+
+// A database that loses the ability to exchange tables again lets pushes
+// take the rebuild lock that an earlier switch to the view retired.
+func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T) {
+	ctx := t.Context()
+	local, _ := seedUsagePriceFixture(t)
+	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
+	target := Target{URL: dsn, Database: database}
+	conn := chtest.Open(t, dsn, database)
+	_, err := conn.ExecContext(ctx, "CREATE TABLE prepared_usage_rebuild_lock_5 (x UInt8) ENGINE = Memory COMMENT 'retired'")
+	require.NoError(t, err)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	ready, err := NewStoreFromDB(syncer.conn).preparedUsageReady(ctx)
+	require.NoError(t, err)
+	require.True(t, ready, "the push must rebuild prepared usage")
+	var locks []string
+	rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || comment FROM system.tables
+		WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_rebuild_lock')`)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var lock string
+		require.NoError(t, rows.Scan(&lock))
+		locks = append(locks, lock)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_6 released"}, locks)
 }
 
 // A renewed rebuild lock stays held past its timeout. A push that stopped

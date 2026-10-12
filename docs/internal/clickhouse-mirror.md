@@ -285,10 +285,15 @@ A lock can outlive its holder:
 - A push drops its own build table when it finishes, so a leftover exists only
   between a killed push and the next rebuild.
 - When a later schema step finds that the database can exchange tables, as when
-  the data directory moved off NFS, it creates one more lock number marked
-  released, then drops the older locks and every build table. A rebuild paused
-  through that switch finds the newer lock and discards its build. A database
-  that never rebuilt this way gets no lock table.
+  the data directory moved off NFS, it creates the view, then creates one more
+  lock number marked `retired` and drops the older locks and every build
+  table. A rebuild paused through that switch finds the newer lock and
+  discards its build. A push that decided to rebuild before the view existed
+  skips when it finds the newest lock retired. If it took a lock first, it
+  checks for the view right after and retires its own lock when the view
+  exists. A database that never rebuilt this way gets no lock table.
+- If the database later loses the ability to exchange tables again, the schema
+  step marks the retired lock released, and pushes rebuild again.
 
 **Currency is proven per read.** A read uses prepared rows only when every
 session has a current snapshot. Sessions pushed since the last refresh form a
