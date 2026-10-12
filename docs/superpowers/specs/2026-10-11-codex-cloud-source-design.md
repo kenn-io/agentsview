@@ -11,7 +11,8 @@ reasoning, shell commands, MCP and other tool calls with output, exit status,
 and timing) and the plan usage OpenAI reports for it: the share of the weekly
 and five-hour limits it used and the credits it spent, split by model. Sessions
 sync in the background like every other agent and ship to the usual replicas
-(PostgreSQL, DuckDB, ClickHouse) without extra work.
+(PostgreSQL, DuckDB, ClickHouse). Sessions and messages need no replica changes;
+plan usage needs the replica work described under Plan usage.
 
 Today none of this is visible. Dot work runs on OpenAI's cloud computer or
 drives a connected personal computer, but the thread that records it stays on
@@ -252,10 +253,19 @@ Each pass, for each listing separately:
    thread strictly older than the listing watermark, and finish that whole
    page. With no watermark (first run, or a backfill that never finished),
    page through everything. An unchanged account costs one call per listing.
+1. **Unfinished threads.** Also include every thread that the listing shows as
+   not idle (`status.type` other than `idle`), or that has unfinished items
+   after its resume point. A command can run silently for longer than the poll
+   interval, and it is unverified whether finishing an item changes the
+   thread's `updatedAt`, so these threads are fetched every pass until they
+   finish.
 1. **Check-again threads.** Also include every thread whose check-again flag is
-   set. A fetch sets the flag; it is cleared only by a later fetch that starts
-   at least one second after the thread's stored `updatedAt` and finds no
-   change. A second update within the same second as the first is therefore
+   set. A fetch sets the flag. A later fetch clears it only when that fetch
+   starts at least one second after the thread's stored `updatedAt`, finds no
+   change, and the thread is no longer selected as unfinished. "No change"
+   means the listing returned the same `updatedAt` and status, and the item
+   fetch returned no record that differs from the newest stored record for
+   that item. A second update within the same second as the first is therefore
    always fetched, however long the poll interval.
 1. **Retry set.** Add retry-set threads whose next-attempt time has passed.
 1. **Apply backoff.** Remove from the selection every thread in the retry set
@@ -273,17 +283,20 @@ Each pass, for each listing separately:
    it from the retry set. A crash before the save repeats the fetch; it never
    skips records.
 1. **Failures.** A thread whose fetch fails joins or stays in the retry set with
-   exponential backoff, capped at one hour, and the pass goes on. If the
-   server reports that the thread no longer exists, everything already stored
-   stays.
+   exponential backoff, capped at one hour, and the pass goes on. The latest
+   failure category (see Status and errors) is stored with it.
+1. **Deleted threads.** If the server reports that a thread no longer exists,
+   that outcome is final: remove the thread from the retry set, clear its
+   check-again flag and any usage-pending mark, and stop fetching it.
+   Everything already stored stays.
 1. **Advance the listing watermark** to the newest `updatedAt` that listing
    returned, once the listing finished and every changed thread from it is
    either mirrored or recorded in the persisted retry set. A thread that keeps
    failing therefore never holds the watermark back.
 
-AgentsView does not track whether a thread still exists on OpenAI's side. An
-unchanged thread is never fetched again, so a deletion would go unnoticed, and
-stored sessions are kept either way.
+AgentsView does not scan for deleted threads. An unchanged thread is never
+fetched again, so a deletion is noticed only when a fetch reports it, and stored
+sessions are kept either way.
 
 Known limit: the protocol has no "items updated since" query. The open-source
 thread store supports `after_updated_at_ordinal`, but the app-server's
@@ -375,41 +388,84 @@ Session fields:
 OpenAI reports usage for these threads as a share of the plan's limits and as
 credits, not as tokens or dollars. AgentsView stores and shows exactly that.
 
+**Usage roots.** The desktop app counts a thread's sub-agent threads toward the
+thread that started them. AgentsView does the same. A thread is a **usage root**
+unless a known ancestor exists through its `parentThreadId` chain. Each root's
+group contains every known descendant at any depth, with duplicate IDs removed.
+A thread is sent in exactly one group.
+
 **Fetching.**
 
 - Plan usage is a separate step that runs after the thread step in each pass.
   Its failures never change thread sync status, its backoff, or the listing
   watermarks.
-- Each pass queries `query_v2` for threads fetched in that pass, threads whose
-  last usage row was `partial` or `unavailable`, and threads whose last usage
-  row is older than one day while the thread changed in the past week.
-  Requests follow the desktop app's limits: at most 100 groups and 1,000
-  thread IDs each.
-- Each group sends the thread's `created_at` and, in `descendant_thread_ids`,
-  every known thread whose `parentThreadId` names it, so sub-agent usage
-  counts toward its parent as it does in the desktop app. A thread sent as a
-  descendant is not also sent as its own group.
-- The response rows are appended to the thread's mirror file with `data_as_of`.
+- Each root carries a persisted **usage-pending** mark. The mark is set when the
+  root or any of its descendants is fetched, when the root has no usage row,
+  when a usage request for it fails, when the response leaves it out, and
+  while its row is `partial` or `unavailable`. Only a usable row, or settling
+  (below), clears it.
+- Each pending root has its own next-attempt time. A failed or unresolved
+  attempt doubles the wait, from 5 minutes up to 6 hours.
+- **Settling.** A root whose row stays `partial` or `unavailable`, unchanged,
+  for 7 days after the thread's last change is settled. Automatic retries
+  stop, the last values stay, and the row is marked final. A later change to
+  the root or a descendant starts the cycle again.
+- Rows older than one day are refreshed for roots that changed in the past week.
+- Each pass sends at most 5 requests, oldest pending first. Requests follow the
+  desktop app's limits: at most 100 groups and 1,000 thread IDs each. Roots
+  left over wait for the next pass, so a large backlog never makes one pass
+  unbounded.
+- A group sends the root's `thread_id` and `created_at`, and its descendants in
+  `descendant_thread_ids`.
+- HTTP 401, 403, or 404 from `query_v2` means OpenAI does not offer this usage
+  to the account. AgentsView records "Usage isn't available for this account",
+  sends no usage requests for that account for 24 hours, and shows no error.
+  Other failures use the per-root backoff above.
+- A response row is appended to the root's mirror file, with `data_as_of`, only
+  when it differs from the last stored row.
 
 **Storage.** Usage rows are running totals for the thread, not increments, and a
 percentage of a weekly limit does not add up across weeks. So AgentsView keeps
-the latest row per thread, replacing the previous one, with its `data_as_of`,
-`data_status`, `usage_source`, the thread-level percentages and credits, and the
-per-group values. It does not create token usage events. The builder chooses the
-table and follows `docs/agents/storage.md`.
+the latest row per root, replacing the previous one, with its `data_as_of`,
+`data_status`, `usage_source`, the thread-level percentages and credits, the
+per-group values, and whether the row is final. It does not create token usage
+events. Descendants have no row of their own; when a stored thread turns out to
+be a descendant, its own row is deleted and it leaves the usage retries. The
+builder chooses the table and follows `docs/agents/storage.md`.
+
+**Replicas.** The plan usage table is pushed to every replica backend
+(PostgreSQL and CockroachDB, DuckDB, ClickHouse) the same way other per-session
+data is, following `docs/agents/storage.md`. The rule that leaves these sessions
+out of token and cost totals lives in the shared read layer
+(`internal/readbase`) and the SQLite read path, so every backend returns the
+same totals. A parity test checks that SQLite and each replica return the same
+plan usage and the same totals.
 
 **Display.**
 
-- Session details show "Plan usage": the share of the weekly limit, the share of
-  the five-hour limit when present, and credits, split by model, reasoning
-  effort, and speed, with "as of T" in local time. A `partial` row is labeled
-  "Partial, still updating". An `unavailable` row, or no row yet, shows "Usage
-  not reported yet".
-- Token and cost views leave these sessions out of their totals. Where a view
-  lists sessions or totals by agent, it shows the source as "Plan usage, not
-  priced" with a note that OpenAI reports this work as a share of the plan, so
-  totals do not include it. These sessions never appear with zero tokens or
-  zero cost.
+- Session details show "Plan usage": the share of the weekly Codex limit, the
+  share of the five-hour Codex limit when present, and credits, split by
+  model, reasoning effort, and speed, with "as of T" in local time. A note
+  explains that credits are OpenAI's unit for usage beyond what the plan
+  includes, so 0 credits means the plan covered the work.
+- Session details show one of these when there is no complete row:
+    - "Plan usage: not checked yet": no request has finished.
+    - "Plan usage: still updating, as of T": a `partial` row that is still
+      pending.
+    - "Partial plan usage, as of T": a settled `partial` row.
+    - "Not reported by OpenAI": a settled `unavailable` row, or none.
+    - "Counted under parent thread", with a link to the parent session: a
+      descendant.
+    - "Usage isn't available for this account": see Fetching.
+- These sessions never appear with zero tokens or zero cost on any surface:
+    - Session lists show "Plan usage" in the token and cost cells and sort these
+      sessions after priced sessions, as missing values.
+    - Totals in the UI and in CLI usage reports leave them out and say how many
+      sessions were left out and why ("N sessions billed as plan usage, not
+      priced").
+    - The HTTP API returns `null`, never `0`, for their token and cost fields, and
+      a separate plan usage object.
+    - Exports write empty cost and token values and include the plan usage fields.
 
 ### Configuration
 
@@ -427,7 +483,7 @@ table and follows `docs/agents/storage.md`.
   source is off until the user sets `enabled = true`, because it uses a
   private, undocumented endpoint as the user's ChatGPT account.
 - `disabled_agents` wins: if `codex-cloud` is listed there, nothing is fetched
-  or parsed, whatever `enabled` says.
+  or parsed, even when `enabled = true`.
 - Poller jobs can only be registered at daemon start, so the job is always
   registered and reads the current setting on each run. A config change takes
   effect on the next run without a restart.
@@ -447,34 +503,40 @@ never set it up see nothing.
 
 Each Codex home shows one state:
 
-- **Off:** `enabled` is false, or `codex-cloud` is in `disabled_agents`.
+- **Off: listed in `disabled_agents`.** Shown even when `enabled = true`, since
+  `disabled_agents` wins.
+- **Off: `enabled` is false.**
 - **Waiting for first sync:** enabled, no pass has finished.
 - **Importing, found N threads so far:** during a first backfill, until both
   listings have been read. After that: **Importing N of M threads.**
 - **Up to date as of T:** the last pass succeeded and no thread is waiting to be
   retried.
 - **N threads could not be imported:** the last pass succeeded but threads are
-  in the retry set. Shows the count, the oldest failure time, and "AgentsView
-  keeps retrying them."
+  in the retry set. Shows the count, the oldest failure time, and the latest
+  failure's message from the table below, followed by "AgentsView keeps
+  retrying them. The daemon log lists each thread. Sessions already imported
+  are not affected."
 - **Error:** the whole pass failed. Shows the message below and when the last
   successful pass finished.
 
 Plan usage has its own line under the home's state, so a usage problem never
-hides or replaces thread status: "Plan usage as of T", or a usage error from the
-table below.
+hides or replaces thread status. It shows "Plan usage: not checked yet", "Plan
+usage as of T", "Usage isn't available for this account", or a usage error from
+the table below.
 
-| Cause                                     | Message                                                                                                                                                       |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No token, or HTTP 401                     | Signed out of ChatGPT in this Codex home. Run `codex login`, then AgentsView picks up the new login on its next sync.                                         |
-| HTTP 403                                  | OpenAI refused access for this account. Your login still works. AgentsView retries automatically; if this persists, OpenAI may have changed who can use this. |
-| Network failure                           | Can't reach OpenAI. AgentsView retries automatically.                                                                                                         |
-| HTTP 429                                  | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                                       |
-| HTTP 5xx                                  | OpenAI's service had an error. AgentsView retries automatically.                                                                                              |
-| Handshake refused or reply not understood | OpenAI changed its service in a way this version of AgentsView can't read. Update AgentsView. Sessions already imported are safe.                             |
-| Unknown key in `[agents.codex-cloud]`     | `config.toml` has an unknown setting `<key>` under `[agents.codex-cloud]`. Cloud import is off until it is removed or fixed.                                  |
+| Cause                                      | Message                                                                                                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| No token, or HTTP 401 from the thread host | Signed out of ChatGPT in this Codex home. Run `codex login`, then AgentsView picks up the new login on its next sync.                       |
+| HTTP 403 from the thread host              | OpenAI refused this request. AgentsView retries automatically. If this continues, check that this ChatGPT account can use Codex.            |
+| Network failure                            | Can't reach OpenAI. AgentsView retries automatically.                                                                                       |
+| HTTP 429                                   | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                     |
+| HTTP 5xx                                   | OpenAI's service had an error. AgentsView retries automatically.                                                                            |
+| Handshake refused or reply not understood  | OpenAI changed its service in a way this version of AgentsView can't read. Update AgentsView. Sessions already imported are safe.           |
+| Unknown key in `[agents.codex-cloud]`      | `<config path>` has an unknown setting `<key>` under `[agents.codex-cloud]`. Remove it or correct its name. Cloud import is off until then. |
 
-Raw error details go to the daemon log, with the token redacted and the endpoint
-named (thread host or plan usage). The next successful pass clears the error.
+Raw error details go to the daemon log, with the token redacted, the endpoint
+named (thread host or plan usage), and the thread ID for per-thread failures.
+The next successful pass clears the error.
 
 ### Several machines
 
@@ -505,10 +567,16 @@ only one machine.
 - Same-second update: a thread changes twice within one second, the first pass
   sees only the first change, and the next pass, five minutes later, fetches
   the second.
+- Silent command: a command that produces no output for longer than the poll
+  interval, in a thread whose `updatedAt` does not change, still ends with its
+  final output and exit status.
 - Failures: a thread that keeps failing and stays at the top of the listing is
   not fetched again before its next-attempt time, backs off to the one-hour
   cap, does not hold back the listing watermark, and is fetched once it
-  recovers. A thread the server no longer has keeps its stored session.
+  recovers.
+- Deletion: a thread the server reports as gone leaves the retry set, is not
+  fetched again, keeps its stored session, and does not keep the "could not be
+  imported" state up.
 - Resume point: parallel tool calls that finish out of order all end with their
   final output. An item without a terminal status in a finished turn, or in a
   turn followed by a later turn, does not pin the resume point. A turn that
@@ -525,18 +593,35 @@ only one machine.
 - Parsing: an item that finishes after a resume point updates its stored message
   in place without a full reparse or a duplicate.
 - Mapping: every item type in the protocol schema, plus an unknown type.
-- Plan usage: a newer row replaces the older one; `partial` and `unavailable`
-  rows are queried again; sub-agent threads are sent as descendants of their
-  parent and never as their own group; a 403 or 5xx from `query_v2` leaves
-  thread sync status unchanged; sessions with plan usage are left out of token
-  and cost totals and never show zero cost.
-- Config: an unknown key in `[agents.codex-cloud]` produces the message above,
-  the source stays off, and local agents still load.
+- Plan usage:
+    - a newer row replaces the older one;
+    - a usage request that fails during the first import is retried after the
+      thread's own sync has settled, until a usable row arrives;
+    - a `partial` or `unavailable` row backs off and settles after 7 days without
+      change, keeping its last values, and a later thread change reopens it;
+    - a large backlog of pending roots sends at most 5 requests per pass;
+    - nested sub-agent threads (child and grandchild) are all sent with their
+      root, never as their own group, and a change in a grandchild refreshes the
+      root;
+    - a thread that turns out to be a descendant loses its own row and shows
+      "Counted under parent thread";
+    - a 403 from `query_v2` shows "Usage isn't available for this account", stops
+      usage requests for 24 hours, and leaves thread sync status unchanged.
+- Cost surfaces: sessions with plan usage are left out of token and cost totals
+  in the UI, CLI reports, API, and exports; the API returns `null` for their
+  token and cost fields; totals state how many sessions were left out; no
+  surface shows them as zero cost.
+- Replicas: SQLite, PostgreSQL, DuckDB, and ClickHouse return the same plan
+  usage and the same totals for the same data.
+- Config: an unknown key in `[agents.codex-cloud]` produces the message above
+  with the config path, the source stays off, and local agents still load.
+  `disabled_agents` wins over `enabled = true` and shows its own Off state.
 - Status: each state appears in the status API and `agentsview serve status`. A
-  401 shows the `codex login` message and a 403 with a valid login does not. A
-  permanently failing thread shows "N threads could not be imported", never
-  "Up to date". Backfill shows "found N so far" until both listings are read.
-  A user who never configured the source sees no row.
+  401 from the thread host shows the `codex login` message and a 403 does not.
+  A permanently failing thread shows "N threads could not be imported" with
+  the latest failure's message, never "Up to date". Backfill shows "found N so
+  far" until both listings are read. A user who never configured the source
+  sees no row.
 
 ## Documentation
 
