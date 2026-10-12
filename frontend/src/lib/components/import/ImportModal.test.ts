@@ -91,7 +91,7 @@ it("offers Chrome Sync for ChatGPT and opens ChatGPT sign-in after auth failure"
   await clickSync();
   await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
   expect(screen.getByText(m.import_chatgpt_signed_out())).toBeTruthy();
-  expect(screen.getByText(m.import_chatgpt_tab_note())).toBeNull();
+  expect(screen.queryByText(m.import_chatgpt_tab_note())).toBeNull();
   expect(syncChatGPTChrome).toHaveBeenCalledWith(expect.objectContaining({ onProgress: expect.any(Function) }), expect.any(AbortSignal));
   await fireEvent.click(screen.getByRole("button", { name: m.import_chatgpt_signed_out() }));
   expect(open).toHaveBeenCalledExactlyOnceWith("https://chatgpt.com/", "_blank", "noopener,noreferrer");
@@ -526,9 +526,11 @@ it("polls every two seconds and pauses on hidden page, sync, tab change and clos
   expect(chromeStatus).toHaveBeenCalledTimes(4);
   await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
   await vi.advanceTimersByTimeAsync(4000);
-  expect(chromeStatus).toHaveBeenCalledTimes(4);
+  expect(chromeStatus).toHaveBeenCalledTimes(6);
   await fireEvent.click(screen.getByRole("button", { name: "Claude.ai" }));
-  expect(chromeStatus).toHaveBeenCalledTimes(5);
+  await tick();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(chromeStatus).toHaveBeenCalledTimes(6);
   let reject!: (error: Error) => void;
   syncClaudeAI.mockImplementation(
     () =>
@@ -538,15 +540,15 @@ it("polls every two seconds and pauses on hidden page, sync, tab change and clos
   );
   await fireEvent.click(syncButton());
   await vi.advanceTimersByTimeAsync(4000);
-  expect(chromeStatus).toHaveBeenCalledTimes(5);
+  expect(chromeStatus).toHaveBeenCalledTimes(6);
   await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   reject(new Error("Stopped"));
   await tick();
   await vi.advanceTimersByTimeAsync(0);
-  expect(chromeStatus).toHaveBeenCalledTimes(6);
+  expect(chromeStatus).toHaveBeenCalledTimes(7);
   await rerender({ ...p, open: false });
   await vi.advanceTimersByTimeAsync(4000);
-  expect(chromeStatus).toHaveBeenCalledTimes(6);
+  expect(chromeStatus).toHaveBeenCalledTimes(7);
 });
 
 it("cancels stale reads and clears auth on close and reopen", async () => {

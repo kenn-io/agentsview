@@ -293,7 +293,7 @@ func TestChromeHostLocalOnly(t *testing.T) {
 func TestChromeHostIncompatibleReply(t *testing.T) {
 	for _, reply := range []struct{ name, body string }{
 		{"missing revision", `{"status":0,"error":"Unsupported Claude fetch path"}`},
-		{"wrong revision", `{"version":2,"status":600,"body":"private"}`},
+		{"wrong revision", `{"version":1,"status":600,"body":"private"}`},
 	} {
 		t.Run(reply.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)

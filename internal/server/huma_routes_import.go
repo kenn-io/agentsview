@@ -63,7 +63,7 @@ func (s *Server) registerImportRoutes() {
 			})
 			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required."
 		})
-	registerRoute(group, http.MethodPost, "/chatgpt/sync", "Sync ChatGPT conversations",
+	s.stream(group, http.MethodPost, "/chatgpt/sync", "Sync ChatGPT conversations",
 		s.humaSyncChatGPT,
 		func(op *huma.Operation) {
 			op.Middlewares = append(op.Middlewares, localChrome)
