@@ -106,11 +106,10 @@ func usageLocationName(location *time.Location) string {
 	}
 	normalized := filepath.ToSlash(resolved)
 	const marker = "/zoneinfo/"
-	index := strings.LastIndex(normalized, marker)
-	if index < 0 {
+	_, candidate, ok := strings.CutLast(normalized, marker)
+	if !ok {
 		return name
 	}
-	candidate := normalized[index+len(marker):]
 	if _, err := time.LoadLocation(candidate); err != nil {
 		return name
 	}

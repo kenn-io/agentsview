@@ -105,11 +105,11 @@ func claudeS3SubagentTranscriptPaths(sessionPath string) []string {
 	prefix := strings.TrimSuffix(sessionPath, ".jsonl") + "/subagents"
 	if strings.HasPrefix(stem, "agent-") {
 		const marker = "/subagents/"
-		idx := strings.LastIndex(sessionPath, marker)
-		if idx < 0 {
+		before, _, ok := strings.CutLast(sessionPath, marker)
+		if !ok {
 			return nil
 		}
-		prefix = sessionPath[:idx] + "/subagents"
+		prefix = before + "/subagents"
 	}
 	objects, err := listS3Objects(prefix)
 	if err != nil {

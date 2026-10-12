@@ -13,11 +13,10 @@ func VirtualSourcePath(containerPath, sourceID string) string {
 
 // ParseVirtualSourcePath splits a path created by VirtualSourcePath.
 func ParseVirtualSourcePath(path string) (string, string, bool) {
-	idx := strings.LastIndex(path, "#")
-	if idx < 0 {
+	containerPath, sourceID, ok := strings.CutLast(path, "#")
+	if !ok {
 		return "", "", false
 	}
-	containerPath, sourceID := path[:idx], path[idx+1:]
 	if containerPath == "" || sourceID == "" {
 		return "", "", false
 	}

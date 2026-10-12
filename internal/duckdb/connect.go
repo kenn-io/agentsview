@@ -621,22 +621,21 @@ func redactNativeQuackCredentialValues(message, transport string) string {
 
 func nativeQuackUserinfo(base string) string {
 	authority, _, hasPath := strings.Cut(base, "/")
-	if at := strings.LastIndex(authority, "@"); at >= 0 {
-		return authority[:at]
+	if before, _, ok := strings.CutLast(authority, "@"); ok {
+		return before
 	}
 	if !hasPath {
 		return ""
 	}
-	at := strings.LastIndex(base, "@")
-	if at < 0 {
+	userinfo, after, ok := strings.CutLast(base, "@")
+	if !ok {
 		return ""
 	}
-	userinfo := base[:at]
 	userinfoHead, _, _ := strings.Cut(userinfo, "/")
 	if !strings.Contains(userinfoHead, ":") {
 		return ""
 	}
-	reattachedAuthority, _, hasReattachedPath := strings.Cut(base[at+1:], "/")
+	reattachedAuthority, _, hasReattachedPath := strings.Cut(after, "/")
 	if nativeQuackLooksLikeAuthority(reattachedAuthority) ||
 		(hasReattachedPath && reattachedAuthority != "" &&
 			!nativeQuackLooksLikeAuthority(userinfoHead)) {
@@ -869,8 +868,8 @@ func quackURIHost(uri string) (string, error) {
 		return raw[1:end], nil
 	}
 	host := raw
-	if i := strings.LastIndex(raw, ":"); i > -1 {
-		host = raw[:i]
+	if before, _, ok := strings.CutLast(raw, ":"); ok {
+		host = before
 	}
 	if host == "" {
 		return "", errors.New("duckdb quack bind uri host is required")

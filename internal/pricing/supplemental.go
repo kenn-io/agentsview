@@ -143,8 +143,8 @@ func fixedCanonicalModel(model string) string {
 }
 
 func pricingAliasName(model string) string {
-	if idx := strings.LastIndex(model, "/"); idx != -1 {
-		return model[idx+1:]
+	if _, after, ok := strings.CutLast(model, "/"); ok {
+		return after
 	}
 	return model
 }

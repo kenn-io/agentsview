@@ -68,11 +68,10 @@ func validateArtifactName(name string) error {
 
 func normalizeMetadataName(name string) (filename, hash string, err error) {
 	base := strings.TrimSuffix(name, metadataEventExtension)
-	idx := strings.LastIndex(base, "-")
-	if idx < 0 {
+	_, hash, ok := strings.CutLast(base, "-")
+	if !ok {
 		return "", "", fmt.Errorf("%w: metadata artifact missing hash suffix", ErrArtifactInvalid)
 	}
-	hash = base[idx+1:]
 	if err := validateHashHex(hash); err != nil {
 		return "", "", err
 	}

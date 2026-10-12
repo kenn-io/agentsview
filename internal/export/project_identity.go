@@ -753,8 +753,7 @@ func looksWindowsDrivePath(path string) bool {
 }
 
 func splitSCPGitRemote(raw string) (host, repoPath string, ok bool) {
-	if at := strings.LastIndex(raw, "@"); at >= 0 {
-		rest := raw[at+1:]
+	if _, rest, found := strings.CutLast(raw, "@"); found {
 		colon := strings.Index(rest, ":")
 		if colon <= 0 || colon == len(rest)-1 {
 			return "", "", false

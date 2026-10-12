@@ -510,11 +510,11 @@ func parseMountOutputForAutofs(data []byte) []string {
 			continue
 		}
 		rest := after
-		parenIdx := strings.LastIndex(rest, " (")
-		if parenIdx < 0 {
+		before, _, ok := strings.CutLast(rest, " (")
+		if !ok {
 			continue
 		}
-		mount := strings.TrimSpace(rest[:parenIdx])
+		mount := strings.TrimSpace(before)
 		mount = strings.TrimPrefix(mount, "/System/Volumes/Data")
 		if mount == "" || mount == "/" {
 			continue

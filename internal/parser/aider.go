@@ -364,11 +364,10 @@ func AiderVirtualPath(path string, idx int) string {
 // integer, so a real path (no "#") or any other "#"-bearing path is
 // rejected. Mirrors ParseShelleyVirtualPath.
 func ParseAiderVirtualPath(path string) (string, int, bool) {
-	sep := strings.LastIndex(path, aiderVPathSep)
-	if sep < 0 {
+	physical, idxStr, ok := strings.CutLast(path, aiderVPathSep)
+	if !ok {
 		return "", 0, false
 	}
-	physical, idxStr := path[:sep], path[sep+1:]
 	if filepath.Base(physical) != aiderHistoryFile || idxStr == "" {
 		return "", 0, false
 	}

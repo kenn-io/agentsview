@@ -1608,8 +1608,8 @@ func isCodexEncryptedToolContent(content string) bool {
 
 func codexAgentPathLeaf(agentPath string) string {
 	trimmed := strings.Trim(agentPath, "/")
-	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
-		return trimmed[i+1:]
+	if _, after, ok := strings.CutLast(trimmed, "/"); ok {
+		return after
 	}
 	return trimmed
 }

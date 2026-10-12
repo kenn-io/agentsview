@@ -219,8 +219,8 @@ func s3MachineFromRoot(root, provider string) string {
 }
 
 func pathBase(p string) string {
-	if idx := strings.LastIndex(p, "/"); idx >= 0 {
-		return p[idx+1:]
+	if _, after, ok := strings.CutLast(p, "/"); ok {
+		return after
 	}
 	return p
 }

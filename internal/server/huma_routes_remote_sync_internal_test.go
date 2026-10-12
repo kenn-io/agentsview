@@ -867,11 +867,11 @@ func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
 }
 
 func pathBaseSlash(p string) string {
-	i := strings.LastIndex(p, "/")
-	if i < 0 {
+	_, after, ok := strings.CutLast(p, "/")
+	if !ok {
 		return p
 	}
-	return p[i+1:]
+	return after
 }
 
 type tarTestEntry struct {
