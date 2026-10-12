@@ -2232,3 +2232,16 @@ func TestWriteHermesSessionJSONLConfiguredRootUsesExportSelection(t *testing.T) 
 	require.NoError(t, WriteHermesSessionJSONL(t.Context(), &output, filepath.Join(t.TempDir(), "state.db"), []string{root}, "child"))
 	assert.JSONEq(t, content, output.String())
 }
+
+func TestWriteHermesSessionJSONLStandaloneConfiguredRoot(t *testing.T) {
+	for _, content := range []string{`{"role":"user","content":"current"}` + "\n", `{"role":"user","content":"current"}` + "\n" + `{"role":"assistant","content":`} {
+		t.Run(content, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(root, "child.jsonl"), []byte(content), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(root, "session_child.json"), []byte(`{"messages":[{"role":"user","content":"stale"}]}`), 0o600))
+			var output strings.Builder
+			require.NoError(t, WriteHermesSessionJSONL(t.Context(), &output, filepath.Join(t.TempDir(), "state.db"), []string{root}, "child"))
+			assert.Equal(t, content, output.String())
+		})
+	}
+}

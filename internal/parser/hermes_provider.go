@@ -252,21 +252,7 @@ func (s hermesSourceSet) findExportSource(ctx context.Context, id string) (Sourc
 			}
 			readErr = errors.Join(readErr, err)
 		}
-		dir := hermesTranscriptRoot(root)
-		for _, path := range []string{filepath.Join(dir, "session_"+id+".json"), filepath.Join(dir, id+".jsonl")} {
-			if !IsRegularFile(path) {
-				continue
-			}
-			var err error
-			if filepath.Ext(path) == ".json" {
-				_, _, err = parseHermesJSONSession(path, "", "")
-			} else {
-				_, _, err = parseHermesJSONLSession(path, "", "")
-			}
-			if err != nil {
-				readErr = errors.Join(readErr, err)
-				continue
-			}
+		if path := findHermesSourceFile(hermesTranscriptRoot(root), id); path != "" {
 			source, _ := s.transcriptSourceRef(root, path)
 			return source, true, nil
 		}

@@ -3251,7 +3251,14 @@ schemas keep their existing ordering behavior.
   JSONL when they disappear or become empty. Aggregate archive parsing propagates
   transcript validation failures, and discovery retains all member errors and
   membership checks after mixed failures. Raw export uses export-specific
-  selection even when resolving another configured root. Complete edits to an existing JSON snapshot remain replaceable. Agentsview records the
+  selection even when resolving another configured root. Standalone raw export
+  prefers JSONL and copies readable bytes without parser validation, so an
+  unfinished record remains exportable. Preservation compares the sanitised
+  storage projection under the configured archive policy. Database-origin
+  exemptions apply only while the database supplies authoritative member data;
+  standalone fallback after database loss must preserve archived content.
+  Aggregate parsing also marks unindexed transcripts as content and accounting
+  fallbacks. Complete edits to an existing JSON snapshot remain replaceable. Agentsview records the
   selected encoding in `source_version` as `hermes-state-v1`, `hermes-json-v1`
   or `hermes-jsonl-v1`. These are Agentsview format labels. A fingerprint
   generation marker makes existing members reparse once to record the label.
