@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -1641,27 +1642,34 @@ func TestEnsureBackgroundServeWaitsForLaunchOwnerToRestartIncumbent(t *testing.T
 
 func TestWaitForBackgroundLaunchOwnerKeepsStartupWaitWithinDeadline(t *testing.T) {
 	setStartProbeTickForTest(t, 10*time.Millisecond)
-	dir := runtimeTestDir(t)
-	launchLock, ok := acquireBackgroundLaunchLock(dir)
-	require.True(t, ok)
-	t.Cleanup(func() { _ = launchLock.Unlock() })
-	holdExternalDaemonStartLock(t, dir)
-
-	const waitTimeout = 50 * time.Millisecond
-	slowed := false
-	oldProbe := backgroundServeProbeHook
-	backgroundServeProbeHook = func() {
-		if !slowed {
-			slowed = true
-			// The deadline passes before the waiter observes the external startup.
-			time.Sleep(2 * waitTimeout)
-		}
+	oldTryLock := tryAcquireStartLock
+	tryAcquireStartLock = func(daemon.RuntimeStore, context.Context) (func(), bool, error) {
+		return nil, false, nil
 	}
-	t.Cleanup(func() { backgroundServeProbeHook = oldProbe })
+	t.Cleanup(func() { tryAcquireStartLock = oldTryLock })
 
-	started := time.Now()
-	waitForBackgroundLaunchOwner(t.Context(), dir, "", waitTimeout)
-	assert.Less(t, time.Since(started), backgroundServeReadyTimeout)
+	synctest.Test(t, func(t *testing.T) {
+		dir := runtimeTestDir(t)
+		launchLock, ok := acquireBackgroundLaunchLock(dir)
+		require.True(t, ok)
+		t.Cleanup(func() { _ = launchLock.Unlock() })
+
+		const waitTimeout = 50 * time.Millisecond
+		slowed := false
+		oldProbe := backgroundServeProbeHook
+		backgroundServeProbeHook = func() {
+			if !slowed {
+				slowed = true
+				// The deadline passes before the waiter observes the external startup.
+				time.Sleep(2 * waitTimeout)
+			}
+		}
+		t.Cleanup(func() { backgroundServeProbeHook = oldProbe })
+
+		started := time.Now()
+		waitForBackgroundLaunchOwner(t.Context(), dir, "", waitTimeout)
+		assert.Less(t, time.Since(started), backgroundServeReadyTimeout)
+	})
 }
 
 func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
