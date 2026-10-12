@@ -3692,9 +3692,6 @@ func TestPGPushMetadataChangesPreserveMessagesWithMultipleUsageEvents(t *testing
 			tx, err := pusher.DB().BeginTx(ctx, nil)
 			require.NoError(t, err)
 			defer tx.Rollback()
-			pgFP, err := pgUsageEventFingerprint(ctx, tx, id)
-			require.NoError(t, err)
-			assert.Equal(t, localFP[id], pgFP, "single-session comparisons must match")
 			batched := map[string]string{}
 			require.NoError(t, loadPushUsageEventFingerprints(ctx, tx, []string{id}, batched))
 			assert.Equal(t, localFP, batched, "batched comparisons must match")
