@@ -428,8 +428,8 @@ On startup, the server:
 
 During a full parser rebuild, the daemon serves the retained archive with stale
 warnings. Archive writes return HTTP 503 with `Retry-After`; the CLI reports the
-server's message and exits. Scoped upgrades and schema repairs finish before the
-daemon listens.
+server's message and exits. Scoped upgrades, schema repairs, and archive-only
+preservation rebuilds finish before the daemon listens.
 
 CLI commands print one stale warning to stderr. The dashboard, MCP, and the
 `X-Agentsview-Archive-Stale` HTTP header also report stale results.

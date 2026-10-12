@@ -177,7 +177,7 @@ func TestServeCommandMountsWritableServerAtBasePath(t *testing.T) {
 }
 
 func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
-	for _, kind := range []string{"data version", "scoped pending", "schema repair"} {
+	for _, kind := range []string{"data version", "failed", "aborted", "unlaunchable", "scoped pending", "schema repair"} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
@@ -185,7 +185,8 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 			require.NoError(t, err)
 			dbtest.SeedSessionWithMessages(t, database, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript")})
 			require.NoError(t, database.Close())
-			if kind == "data version" {
+			failed := kind == "failed" || kind == "aborted" || kind == "unlaunchable"
+			if kind == "data version" || failed {
 				markArchiveStale(t, cfg.DBPath)
 			} else {
 				conn, err := sql.Open("sqlite3", cfg.DBPath)
@@ -208,7 +209,7 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 			require.NoError(t, err, string(out))
 			stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
-			assert.False(t, stale)
+			assert.Equal(t, failed, stale)
 		})
 	}
 }
@@ -228,12 +229,19 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 		return
 	}
 	release := make(chan struct{})
-	if kind == "data version" {
+	failed := kind == "failed" || kind == "aborted" || kind == "unlaunchable"
+	if kind == "data version" || failed {
 		stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, request syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
 			select {
 			case <-release:
 			case <-ctx.Done():
 				return workerResult{}, ctx.Err()
+			}
+			if failed {
+				if kind == "unlaunchable" {
+					return workerResult{}, errWorkerSpawn
+				}
+				return workerResult{Status: kind}, errors.New("worker stopped")
 			}
 			var result workerResult
 			err := runSyncWorkerResyncBuild(ctx, cfg, request.Mode, func(line workerLine) {
@@ -257,7 +265,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 		require.NoError(t, resp.Body.Close())
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		require.Contains(t, string(body), "retained transcript")
-		if kind == "data version" {
+		if kind == "data version" || failed {
 			require.Equal(t, "true", resp.Header.Get("X-Agentsview-Archive-Stale"))
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, base+"/api/v1/sessions/retained/rename", strings.NewReader(`{"display_name":"changed"}`))
 			require.NoError(t, err)
@@ -278,10 +286,22 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 				}
 				defer resp.Body.Close()
 				var status struct {
-					ArchiveStale bool `json:"archive_stale"`
+					ArchiveStale *bool               `json:"archive_stale"`
+					Progress     *agentsync.Progress `json:"progress"`
 				}
-				return json.UnmarshalRead(resp.Body, &status) == nil && !status.ArchiveStale
+				return json.UnmarshalRead(resp.Body, &status) == nil && status.ArchiveStale != nil && *status.ArchiveStale == failed && status.Progress == nil
 			}, 20*time.Second, 10*time.Millisecond)
+			if failed {
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, base+"/api/v1/sessions/retained/rename", strings.NewReader(`{"display_name":"after failure"}`))
+				require.NoError(t, err)
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Origin", base)
+				resp, err := client.Do(req)
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+				require.Equal(t, "true", resp.Header.Get("X-Agentsview-Archive-Stale"))
+			}
 		} else {
 			require.Empty(t, resp.Header.Get("X-Agentsview-Archive-Stale"))
 		}

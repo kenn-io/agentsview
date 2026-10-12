@@ -52,17 +52,6 @@ const PIN_BETA = {
 };
 
 describe("PinsStore mutations", () => {
-  it("propagates retained pin removal failure and keeps the card", async () => {
-    const store = createPinsStore();
-    const pin = { ...PIN_ALPHA, message_key: "message-10" };
-    store.pins = [pin];
-    pinsService.getApiV1Pins.mockResolvedValueOnce({ pins: [pin] });
-    const error = new Error("archive is read-only while it rebuilds");
-    pinsService.deleteApiV1SessionsByIdPinReferencesByMessageKey.mockRejectedValueOnce(error);
-    await expect(store.removeReference(pin)).rejects.toBe(error);
-    expect(store.pins).toEqual([pin]);
-  });
-
   it.each([false, true])("propagates failure with pinned=%s and keeps persisted state", async (pinned) => {
     const store = createPinsStore();
     await store.loadForSession("s1");
@@ -239,9 +228,18 @@ describe("retained pin references", () => {
     expect(store.isPinned(1)).toBe(false);
     expect(store.isPinned(2)).toBe(true);
     store.pins = [oldPin, currentPin];
+    pinsService.getApiV1Pins.mockResolvedValueOnce({ pins: [oldPin, currentPin] });
+    const error = new Error("archive is read-only while it rebuilds");
+    pinsService.deleteApiV1SessionsByIdPinReferencesByMessageKey.mockRejectedValueOnce(error);
+    await expect(store.removeReference(oldPin)).rejects.toBe(error);
+    expect(PinsService.deleteApiV1SessionsByIdPinReferencesByMessageKey).toHaveBeenLastCalledWith({
+      id: "s1",
+      messageKey: "old-message",
+    });
+    expect(store.pins).toEqual([oldPin, currentPin]);
     pinsService.getApiV1Pins.mockResolvedValue({ pins: [currentPin] });
     await store.removeReference(oldPin);
-    expect(PinsService.deleteApiV1SessionsByIdPinReferencesByMessageKey).toHaveBeenCalledWith({
+    expect(PinsService.deleteApiV1SessionsByIdPinReferencesByMessageKey).toHaveBeenLastCalledWith({
       id: "s1",
       messageKey: "old-message",
     });

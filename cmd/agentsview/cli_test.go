@@ -24,9 +24,7 @@ func TestCLIArchiveStaleWarning(t *testing.T) {
 	for _, stale := range []bool{false, true} {
 		t.Run(strconv.FormatBool(stale), func(t *testing.T) {
 			newAgentDataDir(t)
-			calls := 0
 			ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
-				calls++
 				if stale {
 					w.Header().Set(apiclient.ArchiveStaleHeader, "true")
 				}
@@ -40,7 +38,6 @@ func TestCLIArchiveStaleWarning(t *testing.T) {
 			})
 			var stdout, stderr bytes.Buffer
 			require.NoError(t, executeCLIWithLegacyFlagCompat([]string{"session", "list", "--server", ts.URL, "--json"}, &stdout, &stderr))
-			assert.GreaterOrEqual(t, calls, 2)
 			decodeCLIJSON[cliSessionList](t, stdout.String())
 			assert.NotContains(t, stdout.String(), apiclient.ArchiveStaleWarning)
 			wantWarnings := 0

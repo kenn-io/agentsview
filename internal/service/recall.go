@@ -147,9 +147,6 @@ func recordRecallQueryOutcome(
 	surface string,
 	resp *RecallQueryResult,
 ) error {
-	if local, ok := store.(*db.DB); ok && local.WriterClosed() && !req.StrictRecording {
-		return nil
-	}
 	if store.ReadOnly() {
 		if req.StrictRecording {
 			return fmt.Errorf(

@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +19,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -533,7 +530,7 @@ func TestRunWorkerResyncBuildHonorsRequiredOnly(t *testing.T) {
 	}
 }
 
-func TestStartupRebuildFailureKeepsServing(t *testing.T) {
+func TestStartupRebuildFailureReleasesWriter(t *testing.T) {
 	for _, outcome := range []string{"failed", "aborted", "unlaunchable"} {
 		t.Run(outcome, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
@@ -578,19 +575,14 @@ func TestStartupRebuildFailureKeepsServing(t *testing.T) {
 			close(allowClose)
 			<-ready
 			require.True(t, database.WriterClosed())
-			handler := server.New(cfg, database, engine).Handler()
-			read := func() {
-				w := httptest.NewRecorder()
-				handler.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/retained/messages", nil))
-				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
-				assert.Contains(t, w.Body.String(), "retained transcript")
-				assert.Equal(t, "true", w.Header().Get("X-Agentsview-Archive-Stale"))
-			}
-			read()
 			close(release)
 			require.ErrorIs(t, <-done, sentinel)
-			read()
 			requireStartupMaintenanceReleased(t, engine)
+			require.NoError(t, writeOneSession(t.Context(), database))
+			written, err := database.GetSession(t.Context(), "worker-pass-write")
+			require.NoError(t, err)
+			require.NotNil(t, written)
+			assert.Equal(t, "handoff", written.Project)
 		})
 	}
 }

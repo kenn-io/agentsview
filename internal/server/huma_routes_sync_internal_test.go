@@ -2326,6 +2326,8 @@ func TestOnDemandSyncEngineKeepsStartupProvidersUntilRestart(t *testing.T) {
 }
 
 func TestStartupRebuildWriteGate(t *testing.T) {
+	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
+	t.Setenv("PATH", t.TempDir())
 	f := newSyncRouteFixture(t, withStaleDB())
 	dbtest.SeedSessionWithMessages(t, f.db, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript"), dbtest.UserMsg("retained", 1, "follow-up")}, dbtest.WithMessageCounts(2, 2), func(session *db.Session) { session.Cwd = "/work/branch" })
 	f.srv.memoryRefreshRequest = func() {}
@@ -2353,35 +2355,37 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 	for _, tc := range []struct {
 		method, path, body string
 		blocked, probe     bool
+		status             int
+		response           string
 	}{
-		{http.MethodPost, "/api/v1/sync?wait=true", "", true, false},
-		{http.MethodPost, "/api/v1/sync?startup_only=true", "", false, false},
-		{http.MethodPost, "/api/v1/recall/import?dry_run=true", `{"candidate_id":"dry-run","type":"debugging_method","scope":"repository","title":"Check transcript","body":"Read the retained transcript.","project":"project","agent":"claude","session_id":"retained","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":1}}`, false, false},
-		{http.MethodPost, "/api/v1/resync", "", true, false},
-		{http.MethodPost, "/api/v1/sync/remotes", `{"full":false,"hosts":[],"include_local":false}`, true, false},
-		{http.MethodPost, "/api/v1/sessions/sync", `{"id":"retained"}`, true, false},
-		{http.MethodPost, "/api/v1/push/pg", `{"full":false}`, true, false},
-		{http.MethodPatch, "/api/v1/sessions/retained/rename", `{"display_name":"renamed"}`, true, false},
-		{http.MethodDelete, "/api/v1/sessions/retained", "", true, false},
-		{http.MethodPost, "/api/v1/settings/worktree-mappings", `{"machine":"local","path_prefix":"/work","project":"project"}`, true, false},
-		{http.MethodPost, "/api/v1/data/compact", `{}`, true, false},
-		{http.MethodPost, "/api/v1/data/strip-images", `{"confirmed":true}`, true, false},
-		{http.MethodPut, "/api/v1/settings/session-project-assignments/retained", `{"project":"new-project"}`, true, false},
-		{http.MethodDelete, "/api/v1/settings/session-project-assignments/retained", "", true, false},
-		{http.MethodPost, "/api/v1/settings/worktree-mappings/apply", `{}`, true, false},
-		{http.MethodPost, "/api/v1/settings/worktree-mappings/reclassify", `{}`, true, false},
-		{http.MethodPost, "/api/v1/config/github", `{}`, false, false},
-		{http.MethodPost, "/api/v1/sessions/retained/publish", `{}`, false, false},
-		{http.MethodPost, "/api/v1/sessions/retained/resume", `{"command_only":true}`, false, false},
-		{http.MethodPost, "/api/v1/sessions/retained/open", `{}`, false, false},
-		{http.MethodPost, "/api/v1/telemetry/events", `{}`, false, false},
-		{http.MethodPost, "/api/v1/settings/worktree-mappings/preview", `{"machine":"local","path_prefix":"/work","project":"new-project","enabled":true}`, false, false},
-		{http.MethodPost, "/api/v1/memory/refresh", "", false, false},
-		{http.MethodPost, "/api/v1/recall/query", `{"query":"retained transcript"}`, false, false},
-		{http.MethodGet, "/api/v1/sessions", "", false, false},
-		{http.MethodGet, "/api/ping", "", false, true},
-		{http.MethodGet, "/api/v1/version", "", false, true},
-		{http.MethodGet, "/api/v1/sync/status", "", false, true},
+		{http.MethodPost, "/api/v1/sync?wait=true", "", true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/sync?startup_only=true", "", false, false, http.StatusOK, ""},
+		{http.MethodPost, "/api/v1/recall/import?dry_run=true", `{"candidate_id":"dry-run","type":"debugging_method","scope":"repository","title":"Check transcript","body":"Read the retained transcript.","project":"project","agent":"claude","session_id":"retained","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":1}}`, false, false, http.StatusOK, ""},
+		{http.MethodPost, "/api/v1/resync", "", true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/sync/remotes", `{"full":false,"hosts":[],"include_local":false}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/sessions/sync", `{"id":"retained"}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/push/pg", `{"full":false}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPatch, "/api/v1/sessions/retained/rename", `{"display_name":"renamed"}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodDelete, "/api/v1/sessions/retained", "", true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/settings/worktree-mappings", `{"machine":"local","path_prefix":"/work","project":"project"}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/data/compact", `{}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/data/strip-images", `{"confirmed":true}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPut, "/api/v1/settings/session-project-assignments/retained", `{"project":"new-project"}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodDelete, "/api/v1/settings/session-project-assignments/retained", "", true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/settings/worktree-mappings/apply", `{}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/settings/worktree-mappings/reclassify", `{}`, true, false, http.StatusServiceUnavailable, ""},
+		{http.MethodPost, "/api/v1/config/github", `{"token":" "}`, false, false, http.StatusBadRequest, "token required"},
+		{http.MethodPost, "/api/v1/sessions/retained/publish", `{}`, false, false, http.StatusUnauthorized, "GitHub token not configured"},
+		{http.MethodPost, "/api/v1/sessions/retained/resume", `{"command_only":true}`, false, false, http.StatusOK, "command"},
+		{http.MethodPost, "/api/v1/sessions/retained/open", `{}`, false, false, http.StatusBadRequest, "opener"},
+		{http.MethodPost, "/api/v1/telemetry/events", `{}`, false, false, http.StatusAccepted, ""},
+		{http.MethodPost, "/api/v1/settings/worktree-mappings/preview", `{"machine":"local","path_prefix":"/work","project":"new-project","enabled":true}`, false, false, http.StatusOK, ""},
+		{http.MethodPost, "/api/v1/memory/refresh", "", false, false, http.StatusAccepted, "\"queued\":true"},
+		{http.MethodPost, "/api/v1/recall/query", `{"query":"retained transcript"}`, false, false, http.StatusOK, ""},
+		{http.MethodGet, "/api/v1/sessions", "", false, false, http.StatusOK, ""},
+		{http.MethodGet, "/api/ping", "", false, true, http.StatusOK, ""},
+		{http.MethodGet, "/api/v1/version", "", false, true, http.StatusOK, ""},
+		{http.MethodGet, "/api/v1/sync/status", "", false, true, http.StatusOK, ""},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			var body any
@@ -2415,6 +2419,11 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				assert.Equal(t, "true", w.Header().Get("X-Agentsview-Archive-Stale"))
 				return
 			}
+			if tc.path == "/api/v1/sync/status" {
+				var status map[string]any
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &status))
+				assert.Equal(t, true, status["archive_stale"])
+			}
 			if tc.probe {
 				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				assert.Empty(t, w.Header().Get("X-Agentsview-Archive-Stale"))
@@ -2424,9 +2433,8 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				assert.Equal(t, "true", w.Header().Get("X-Agentsview-Archive-Stale"))
 				assert.Contains(t, w.Body.String(), "archive is read-only while it rebuilds")
 			} else {
-				assert.NotEqual(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
-				assert.NotEqual(t, http.StatusMethodNotAllowed, w.Code)
-				assert.NotEqual(t, http.StatusNotFound, w.Code, w.Body.String())
+				assert.Equal(t, tc.status, w.Code, w.Body.String())
+				assert.Contains(t, w.Body.String(), tc.response)
 				assert.Equal(t, "true", w.Header().Get("X-Agentsview-Archive-Stale"))
 				assert.NotContains(t, w.Body.String(), "archive is read-only")
 			}

@@ -102,7 +102,8 @@
   "header_actions_settings": "Parametrlər",
   "header_actions_keyboard_shortcuts": "Klaviatura qısayolları",
   "header_actions_keyboard_shortcuts_shortcut": "Klaviatura qısayolları (?)",
-  "status_bar_archive_stale": "Arxiv nəticələri köhnəlmiş ola bilər. Yenidən qurma bitənədək dəyişikliklər dayandırılıb.",
+  "status_bar_archive_stale": "Arxiv nəticələri köhnəlmiş ola bilər.",
+  "status_bar_archive_rebuilding": "Arxiv nəticələri köhnəlmiş ola bilər. Yenidən qurma bitənədək dəyişikliklər dayandırılıb.",
   "status_bar_sessions": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],

@@ -178,7 +178,7 @@
     {#if sync.archiveStale}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
       <span class="archive-warn" role="status">
-        {m.status_bar_archive_stale()}
+        {sync.syncing && sync.progress?.resync ? m.status_bar_archive_rebuilding() : m.status_bar_archive_stale()}
       </span>
     {/if}
     {#if progressText}
