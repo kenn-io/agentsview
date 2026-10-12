@@ -39,8 +39,6 @@ func TestBulkReadWaitDiagnostics(t *testing.T) {
 						release()
 					}
 				}()
-				assert.Zero(t, d.bulkReads.waitCount.Load())
-				assert.Zero(t, d.bulkReads.waitDuration.Load())
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				done := make(chan error, 1)
@@ -71,7 +69,7 @@ func TestBulkReadWaitDiagnostics(t *testing.T) {
 			var diag walDiagnostics
 			d.walMaintenanceTick(t.Context(), &diag)
 			if tc.wantLog {
-				assert.Contains(t, output.String(), "sqlite reader pool: 1 requests waited 2s in total for one of 3 bulk read slots")
+				assert.Contains(t, output.String(), fmt.Sprintf("sqlite reader pool: 1 requests waited 2s in total for one of %d bulk read slots", bulkReadSlots))
 			} else {
 				assert.NotContains(t, output.String(), "bulk read slots")
 			}

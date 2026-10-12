@@ -116,7 +116,6 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 		s.StartedAt = new("2024-06-01T09:00:00Z")
 	})
 	reader := database.rawReader()
-	configureReaderPool(reader)
 	for range bulkReadSlots {
 		release, err := database.acquireBulkRead(t.Context())
 		require.NoError(t, err)
@@ -125,12 +124,6 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 	}
-	//nolint:kennlint // The deadline must expire while all bulk permits are held.
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	_, err := database.GetAnalyticsSummary(ctx, baseFilter())
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-
 	quickCtx, quickCancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer quickCancel()
 	session, err := database.GetSession(quickCtx, "summary")

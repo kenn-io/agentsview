@@ -2743,6 +2743,7 @@ func statsOutcomeRepo(t *testing.T) string {
 
 func TestGetSessionStatsReleasesBulkLaneBeforeOutcomeLookups(t *testing.T) {
 	skipIfNoGit(t)
+	statsIsolateGit(t)
 	d := testDB(t)
 	insertSessionFixture(t, d, sessionFixture{
 		id: "outcome-lane", agent: "claude", userMsgs: 5,
@@ -2768,7 +2769,7 @@ func TestGetSessionStatsReleasesBulkLaneBeforeOutcomeLookups(t *testing.T) {
 		}
 		result <- err
 	}()
-	// The git cache uses the writer after repository discovery and author lookup.
+	// WaitCount signals outcome lookup only while the git cache uses the writer.
 	require.Eventually(t, func() bool {
 		return writer.Stats().WaitCount > waits
 	}, 10*time.Second, 10*time.Millisecond)
