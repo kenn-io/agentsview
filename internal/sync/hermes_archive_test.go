@@ -440,7 +440,7 @@ func TestSyncPathsHermesArchiveWALCommitRefreshesMetadata(t *testing.T) {
 	storedSize, storedMtime, found := database.GetFileInfoByPath(t.Context(), parser.VirtualSourcePath(stateDB, "child"))
 	require.True(t, found)
 	assert.Equal(t, stateAfter.Size(), storedSize)
-	assert.Equal(t, stateAfter.ModTime().UnixNano(), storedMtime)
+	assert.Equal(t, walTime.UnixNano(), storedMtime)
 }
 
 func openHermesArchiveWALWriter(t *testing.T, stateDB string) *sql.DB {
