@@ -20,7 +20,7 @@ function loadFetch(fetch: typeof globalThis.fetch) {
 describe("ChatGPT page fetch", () => {
   it("uses the page session token only for the approved API request", async () => {
     const fetch = vi
-      .fn()
+      .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ accessToken: "synthetic-test-value" })))
       .mockResolvedValueOnce(new Response('{"items":[]}'));
     const chatgptFetch = loadFetch(fetch);
@@ -47,7 +47,7 @@ describe("ChatGPT page fetch", () => {
   });
 
   it("does not make API requests when the page has no access token", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response("{}"));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response("{}"));
     const chatgptFetch = loadFetch(fetch);
 
     await expect(
