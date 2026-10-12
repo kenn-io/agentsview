@@ -151,7 +151,7 @@ func (p *hermesProvider) ReconciliationAggregateMemberPaths(
 		return nil
 	}
 	rawID := strings.TrimPrefix(fullSessionID, string(p.sources.agent)+":")
-	if rawID == fullSessionID || !IsValidSessionID(rawID) {
+	if rawID == fullSessionID || !isValidHermesSessionID(rawID) {
 		return nil
 	}
 	sessionsDir := filepath.Join(filepath.Dir(path), "sessions")
@@ -633,7 +633,7 @@ func (s hermesSourceSet) discoverStateEach(
 		if err := rows.Scan(&id); err != nil {
 			return yieldedAny, fmt.Errorf("scan hermes session id: %w", err)
 		}
-		if !IsValidSessionID(id) {
+		if !isValidHermesSessionID(id) {
 			continue
 		}
 		source := s.stateMemberSourceRef(root, stateDB, id)
@@ -676,7 +676,7 @@ func (s hermesSourceSet) discoverTranscriptEach(
 		}
 		name := entry.Name()
 		id := HermesSessionID(name)
-		if !IsValidSessionID(id) {
+		if !isValidHermesSessionID(id) {
 			return nil
 		}
 		switch {
@@ -1131,7 +1131,7 @@ func (s hermesSourceSet) changedPathSources(
 		}
 		if hermesPathInTranscriptDir(sessionsDir, path) {
 			id := HermesSessionID(filepath.Base(path))
-			if !IsValidSessionID(id) {
+			if !isValidHermesSessionID(id) {
 				return nil, nil
 			}
 			found, lookupErr := hermesStateDBHasSession(ctx, stateDB, id)
@@ -1232,7 +1232,7 @@ func (s hermesSourceSet) FindSource(
 	}
 	for _, root := range roots {
 		if stateDB, _, ok := hermesStatePaths(root); ok &&
-			IsValidSessionID(req.RawSessionID) {
+			isValidHermesSessionID(req.RawSessionID) {
 			source, found, err := s.findReadableMemberSource(ctx,
 				s.stateMemberSourceRef(root, stateDB, req.RawSessionID),
 			)
@@ -1394,7 +1394,7 @@ func (s hermesSourceSet) sourceForChangedPath(
 	path = filepath.Clean(path)
 	if stateDB, sessionID, ok := ParseVirtualSourcePathForBase(path, "state.db"); ok {
 		if expected, _, valid := hermesArchivePathsForEvent(root, stateDB); valid &&
-			samePath(expected, stateDB) && IsValidSessionID(sessionID) {
+			samePath(expected, stateDB) && isValidHermesSessionID(sessionID) {
 			return s.stateMemberSourceRef(root, stateDB, sessionID), true
 		}
 		return SourceRef{}, false
@@ -1814,7 +1814,7 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 		if err := rows.Scan(&id); err != nil {
 			return fmt.Errorf("scan hermes session id: %w", err)
 		}
-		if !IsValidSessionID(id) {
+		if !isValidHermesSessionID(id) {
 			continue
 		}
 		retainedIDBytes := int64(len(id))

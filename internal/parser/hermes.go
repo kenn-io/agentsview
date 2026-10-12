@@ -1342,6 +1342,10 @@ func firstNonEmptyHermes(values ...string) string {
 	return ""
 }
 
+func isValidHermesSessionID(id string) bool {
+	return IsValidSessionID(id) || hermesCronSessionID.MatchString(id)
+}
+
 // HermesSessionID extracts the session ID from a Hermes filename.
 // "20260403_153620_5a3e2ff1.jsonl" -> "20260403_153620_5a3e2ff1"
 func HermesSessionID(name string) string {
@@ -1425,7 +1429,7 @@ func discoverHermesTranscriptFiles(sessionsDir string) []DiscoveredFile {
 // sessionsDir. It is the provider-owned find-source body folded off the
 // package-level entrypoint.
 func findHermesSourceFile(sessionsDir, sessionID string) string {
-	if !IsValidSessionID(sessionID) {
+	if !isValidHermesSessionID(sessionID) {
 		return ""
 	}
 	candidate := filepath.Join(sessionsDir, sessionID+".jsonl")

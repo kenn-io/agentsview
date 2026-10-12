@@ -3238,8 +3238,9 @@ schemas keep their existing ordering behavior.
   Transcript-only watcher events also prefer JSONL over
   JSON snapshots. After a preferred standalone JSONL disappears, a JSON
   snapshot cannot replace its archived history. Complete edits to an
-  existing JSON snapshot remain replaceable. Existing archive-level paths
-  migrate during ordinary sync;
+  existing JSON snapshot remain replaceable. Discovery, member fingerprints
+  and lookups accept dotted cron job IDs from the documented producer
+  format. Existing archive-level paths migrate during ordinary sync;
   historical sessions remain in SQLite when their source disappears. Augure
   Desktop uses the same member selection.
 - **Usage and cost:** State records distinguish input, output, cache-read,
@@ -3256,7 +3257,7 @@ schemas keep their existing ordering behavior.
   job name. Agentsview treats that generated title as unnamed and stores
   `group_key` as the job ID plus a hash of the source home path. Usage groups
   by project, machine, home and job ID. The pinned recognizer's legacy `job-1`
-  example was reverified on 2026-10-09. `TestHermesCronGroupsScopeHomes`
+  example and dotted job IDs were reverified on 2026-10-12. `TestHermesCronGroupsScopeHomes`
   verifies that rewritten Windows paths keep distinct homes separate by
   accepting both path separators. Names derive from the recorded
   `session_name` at read time; usage-only archives show job IDs because their

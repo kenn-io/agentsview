@@ -1890,3 +1890,54 @@ func TestHermesRemovedJSONLPreservesHistoryAgainstSnapshot(t *testing.T) {
 		}
 	}
 }
+
+func TestHermesDottedCronIDsSyncAndResolve(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
+		for _, mode := range []string{"full sync", "state event", "WAL event", "transcript only"} {
+			t.Run(string(agent)+"/"+mode, func(t *testing.T) {
+				root := t.TempDir()
+				id := "cron_job.daily_20261012_120000"
+				event := filepath.Join(root, "state.db")
+				if mode == "transcript only" {
+					writeHermesTranscriptFile(t, root, id)
+				} else {
+					stateDB := writeHermesArchiveStateDB(t, root)
+					conn, err := sql.Open("sqlite3", stateDB)
+					require.NoError(t, err)
+					defer conn.Close()
+					_, err = conn.ExecContext(t.Context(), `PRAGMA journal_mode=WAL; UPDATE sessions SET id = ?, source = 'cron'; UPDATE messages SET session_id = ?`, id, id)
+					require.NoError(t, err)
+					if mode == "WAL event" {
+						event += "-wal"
+					}
+				}
+				database := dbtest.OpenTestDB(t)
+				engine := NewEngine(t.Context(), database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+				})
+				t.Cleanup(engine.Close)
+				if mode == "state event" || mode == "WAL event" {
+					require.NoError(t, engine.syncPathsContext(t.Context(), []string{event}, false))
+				} else {
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+				}
+				fullID := string(agent) + ":" + id
+				session, err := database.GetSessionFull(t.Context(), fullID)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				messages, err := database.GetAllMessages(t.Context(), fullID)
+				require.NoError(t, err)
+				contents := make([]string, len(messages))
+				for i, message := range messages {
+					contents[i] = message.Content
+				}
+				want := []string{"state db message"}
+				if mode == "transcript only" {
+					want = []string{"hello", "Done."}
+				}
+				assert.Equal(t, want, contents)
+				require.NoError(t, engine.SyncSingleSessionContext(t.Context(), fullID))
+			})
+		}
+	}
+}
