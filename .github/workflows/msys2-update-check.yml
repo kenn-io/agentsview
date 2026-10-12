@@ -63,7 +63,8 @@ jobs:
 
       # Capture tests reject the parent permissions of the SYSTEM temp path.
       # Keep their fixtures in a private directory on the system drive.
-      - name: Prepare test temporary directory
+      - name: Prepare capture test temporary directory
+        if: contains(matrix.package, './internal/capture')
         shell: pwsh
         run: |
           $testTemp = Join-Path $env:SystemDrive ("agentsview-ci-" + [guid]::NewGuid().ToString("N"))
@@ -94,7 +95,7 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
-      - name: Remove test temporary directory
-        if: always() && env.AGENTSVIEW_CI_TEMP != ''
+      - name: Remove capture test temporary directory
+        if: always() && contains(matrix.package, './internal/capture') && env.AGENTSVIEW_CI_TEMP != ''
         shell: pwsh
         run: Remove-Item -LiteralPath $env:AGENTSVIEW_CI_TEMP -Recurse -Force
