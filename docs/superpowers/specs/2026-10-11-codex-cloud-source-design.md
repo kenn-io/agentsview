@@ -8,11 +8,12 @@ ChatGPT agent that stays signed in to the user's account and runs Codex work on
 OpenAI's cloud computer or on a personal computer the user connected. Each
 thread becomes a browsable, searchable session with its full trace (messages,
 reasoning, shell commands, MCP and other tool calls with output, exit status,
-and timing) and the plan usage OpenAI reports for it: the share of the weekly
-and five-hour limits it used and the credits it spent, split by model. Sessions
-sync in the background like every other agent and ship to the usual replicas
-(PostgreSQL, DuckDB, ClickHouse). Sessions and messages need no replica changes;
-plan usage needs the replica work described under Plan usage.
+and timing), real token counts for work AgentsView sees while it runs, and the
+plan usage OpenAI reports for it: the share of the weekly and five-hour limits
+it used and the credits it spent, split by model. Sessions sync in the
+background like every other agent and ship to the usual replicas (PostgreSQL,
+DuckDB, ClickHouse). Sessions and messages need no replica changes; plan usage
+needs the replica work described under Plan usage.
 
 Today none of this is visible. Dot work runs on OpenAI's cloud computer or
 drives a connected personal computer, but the thread that records it stays on
@@ -107,16 +108,41 @@ Usage checks, 2026-10-12, on a personal Pro account whose owner ran them:
 - `GET /wham/usage/daily-token-usage-breakdown` also reports percentages only
   (`units: percent`), per day, split by thread source, trigger, model, and
   surface.
-- `thread/resume` on the durable host sends `thread/tokenUsage/updated` with
-  running token totals, but it reattaches the thread's cloud environment. On
-  an archived thread it failed with `environment_terminated`. Resume can
-  change state on OpenAI's side, so the fetcher never calls it.
+
+Live token checks, 2026-10-12, run by the account owner:
+
+- Listening without joining a thread receives nothing: a 3-minute listen while
+  two dot threads ran received no notifications.
+- `thread/resume` with `excludeTurns: true` and no other parameters on a running
+  dot thread joined it. The response had `resumeKind: "warm"`. The server then
+  sent `thread/tokenUsage/updated` with `total` (running totals since the
+  thread started) and `last` (the latest model call), each with `inputTokens`,
+  `cachedInputTokens`, `cacheWriteInputTokens`, `outputTokens`,
+  `reasoningOutputTokens`, and `totalTokens`, plus `modelContextWindow` and
+  `turnId`. The dot sent no requests to AgentsView and kept working.
+- `thread/unsubscribe` is unsupported on the durable host. Closing the
+  connection leaves the thread.
+- `thread/resume` on a stopped, unarchived dot thread (all turns completed)
+  returned `resumeKind: "cold"`. It started no turn and no new environment
+  (the environment ID was unchanged), and the thread's status, `updatedAt`,
+  turns, and items were unchanged afterward. It did load the thread into a new
+  server-side process, which started every MCP server configured for the dot
+  (seven ready, seven failed to start) and sent one warning. It sent no token
+  totals, with or without turns requested.
+- On an archived thread, `thread/resume` failed with `environment_terminated`
+  and changed nothing.
+- The listing's `status` can be stale: a thread listed as `idle` had a turn in
+  progress and kept adding items.
+- Saved items lag the live work: during a running turn, `thread/items/list` did
+  not grow for minutes while live item notifications arrived.
 
 ## Goals
 
 - Import every thread the account can list on the durable host, including
   archived threads, and keep them current.
 - Preserve the full trace with per-item timing.
+- Record real token counts for every turn AgentsView sees running, as token
+  usage like any other agent.
 - Show each thread's plan usage as OpenAI reports it: share of the weekly and
   five-hour limits, and credits, split by model, reasoning effort, and speed.
 - Label each session's origin: dot, Codex web, or Codex cloud.
@@ -128,8 +154,9 @@ Usage checks, 2026-10-12, on a personal Pro account whose owner ran them:
 ## Non-goals
 
 - Starting, steering, or changing anything on OpenAI's side.
-- Token counts or dollar costs for these threads. OpenAI does not return them
-  for plan-billed accounts (see Background).
+- Token counts for work that started and finished before AgentsView saw it
+  running. OpenAI does not return them for plan-billed accounts (see
+  Background); those turns have plan usage only.
 - Token estimates computed from the trace text. The trace leaves out system
   prompts, tool definitions, and the history each turn rereads, and these
   models have no public tokenizer, so an estimate would be far off.
@@ -144,7 +171,11 @@ Usage checks, 2026-10-12, on a personal Pro account whose owner ran them:
 
 These would make the feature a failure even if it worked:
 
-- AgentsView sending any request that can change state on OpenAI's side.
+- AgentsView sending any request that can change state on OpenAI's side, with
+  one documented exception: live token capture joins running threads with
+  `thread/resume` (see Live token capture).
+- Restarting a dot's cloud environment, starting a turn, or answering a dot's
+  approval prompt or question.
 - The ChatGPT token appearing in logs, errors, files, the archive, or test
   fixtures.
 - Sync cost growing with the size of the archive or with the square of a
@@ -161,6 +192,7 @@ These would make the feature a failure even if it worked:
 durable host --(fetcher, poller job)--> mirror files --(provider)--> SQLite --> UI, replicas
   wss                                    {dataDir}/sources/codex-cloud/
 query_v2 --(fetcher)--> plan usage records in the same mirror files
+running threads --(live token monitor)--> token usage records in the same mirror files
 ```
 
 1. **Fetcher.** A new package containing a minimal app-server websocket client:
@@ -171,6 +203,10 @@ query_v2 --(fetcher)--> plan usage records in the same mirror files
    `query_v2` URL over HTTPS. Anything else fails before it is sent.
    Server-initiated requests, such as a token refresh, are answered with a
    JSON-RPC error. Notifications are ignored.
+1. **Live token monitor.** A second client mode used only for live token
+   capture. Its allowlist adds `thread/resume`, accepted only with
+   `excludeTurns: true` and no other parameters. It never answers
+   server-initiated requests (see Live token capture).
 1. **Scheduler.** A `poller.Job`, which `docs/agents/background-work.md`
    requires for interval jobs against external APIs. It inherits jitter,
    cooldown, failure backoff, `Retry-After`, and `TriggerNow` for manual sync.
@@ -254,11 +290,13 @@ Each pass, for each listing separately:
    page. With no watermark (first run, or a backfill that never finished),
    page through everything. An unchanged account costs one call per listing.
 1. **Unfinished threads.** Also include every thread that the listing shows as
-   not idle (`status.type` other than `idle`), or that has unfinished items
-   after its resume point. A command can run silently for longer than the poll
-   interval, and it is unverified whether finishing an item changes the
-   thread's `updatedAt`, so these threads are fetched every pass until they
-   finish.
+   not idle (`status.type` other than `idle`), whose last fetch saw a turn in
+   `inProgress`, or that has unfinished items after its resume point. The
+   listing's `status` can say `idle` while a turn runs, so the stored turn
+   statuses decide. A command can run silently for longer than the poll
+   interval, saved items can lag the live work by minutes, and it is
+   unverified whether finishing an item changes the thread's `updatedAt`, so
+   these threads are fetched every pass until their turns finish.
 1. **Check-again threads.** Also include every thread whose check-again flag is
    set. A fetch sets the flag. A later fetch clears it only when that fetch
    starts at least one second after the thread's stored `updatedAt`, finds no
@@ -383,6 +421,83 @@ Session fields:
   falling back to `cwd`.
 - **Parent:** from `forkedFromId` or `parentThreadId` when present.
 
+### Live token capture
+
+OpenAI shows a thread's token counts only to a client that has joined the thread
+while it runs (see Background). The live token monitor joins running threads,
+records every token update, and leaves when the turn ends.
+
+**Finding running threads.**
+
+- A separate `poller.Job` runs every 30 seconds with jitter, only when the
+  source is enabled and `live_tokens` is true. It follows
+  `docs/agents/background-work.md`.
+- The listing's `status` can be stale, so it only narrows the search. Each run
+  lists the first page of active threads by `updated_at` and checks the newest
+  turn (`thread/turns/list`, limit 1) of every thread that is listed as not
+  idle or whose `updatedAt` is within the past 30 minutes. A thread is running
+  when that turn's status is `inProgress`.
+- Work per run is bounded by recent activity, not by archive size. A thread that
+  starts a turn without updating `updatedAt` or its status for more than 30
+  minutes is missed; that is a documented limit.
+
+**Joining.**
+
+- Each joined thread gets its own websocket connection, because the durable host
+  does not support `thread/unsubscribe` and closing the connection is the only
+  way to leave. At most 10 threads per account are joined at once; others wait
+  for a free slot.
+- Immediately before joining, the monitor checks the newest turn again and joins
+  only if it is still `inProgress`. It then sends `thread/resume` with
+  `excludeTurns: true` and no other parameters.
+- The response's `resumeKind` decides what happens:
+    - `warm`: the thread is running and the monitor stays.
+    - `cold`: the turn ended between the check and the join. The monitor logs the
+      race, counts it in status, and closes the connection at once.
+    - anything else: the monitor closes the connection, stops live capture for the
+      account, and reports a protocol-change error.
+
+**While joined.**
+
+- The monitor reads only `thread/tokenUsage/updated` and `turn/completed` for
+  that thread and ignores every other notification.
+- It never answers a server-initiated request. Approval prompts and questions
+  stay for the user's own apps to answer.
+- It leaves when the turn has completed and a token update for that turn has
+  arrived, or 30 seconds after the turn completed, or after 6 hours, or when
+  the user turns live capture off.
+- If the connection drops, the next run joins the thread again if it is still
+  running.
+
+**What gets stored.**
+
+- Each token update is appended to the thread's mirror file as a token usage
+  record with the time it was observed, `turnId`, `total`, `last`,
+  `modelContextWindow`, and the model from the `thread/resume` response.
+  Writes from the monitor and the fetcher to one mirror file are serialized.
+- The provider turns these records into token usage events, the same kind other
+  agents produce. Each event is the increase in `total`, field by field, since
+  the previous record for that thread, dated when it was observed. Totals only
+  grow, so increases are never negative. If a total ever decreases, the
+  provider starts a new baseline, logs it, and records no negative event.
+- The first record for a thread has no earlier total, so its whole total is
+  dated when it was observed, even when earlier turns ran on an earlier day.
+  The user-facing docs state this limit.
+- Because totals cover the thread from its start, one capture covers every
+  earlier turn of that thread. Only turns that finished after the last capture
+  and were never seen running are missing.
+
+**How it shows up.**
+
+- Sessions with token usage count in token and cost views like any other agent.
+  Cost comes from AgentsView's price list; models missing from it show tokens
+  without cost.
+- Session details say "Tokens captured live, as of T". When turns finished after
+  the last capture without being seen running, they add "N later turns not
+  captured; plan usage covers them."
+- Sessions with no token usage follow the Plan usage display rules.
+- Plan usage is still shown in session details for every session.
+
 ### Plan usage
 
 OpenAI reports usage for these threads as a share of the plan's limits and as
@@ -457,7 +572,8 @@ plan usage and the same totals.
     - "Counted under parent thread", with a link to the parent session: a
       descendant.
     - "Usage isn't available for this account": see Fetching.
-- These sessions never appear with zero tokens or zero cost on any surface:
+- Sessions with no live token usage never appear with zero tokens or zero cost
+  on any surface:
     - Session lists show "Plan usage" in the token and cost cells and sort these
       sessions after priced sessions, as missing values.
     - Totals in the UI and in CLI usage reports leave them out and say how many
@@ -472,13 +588,15 @@ plan usage and the same totals.
 - Settings live in the existing per-agent table, `[agents.codex-cloud]`:
   `enabled` (default `false`), `endpoint` (default
   `wss://codex-cloud-backend.chatgpt.com/`), and `usage_endpoint` (default
-  `https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2`). The
-  endpoint overrides exist for tests and future moves.
+  `https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2`), and
+  `live_tokens` (default `true`). The endpoint overrides exist for tests and
+  future moves. `live_tokens = false` turns off live token capture, and with
+  it the only request that touches a thread on OpenAI's side.
 - The shared `[agents.<id>]` reader (`applyAgentDirectories`) parses only `dirs`
   and `homes` and silently ignores other keys. Add parsing and validation for
-  these three keys. An unknown key in `[agents.codex-cloud]` is a config
-  error. It appears at startup and in the status area (see Status and errors),
-  this source stays off until it is fixed, and every other agent still loads.
+  these four keys. An unknown key in `[agents.codex-cloud]` is a config error.
+  It appears at startup and in the status area (see Status and errors), this
+  source stays off until it is fixed, and every other agent still loads.
 - Unlike other agents, which are on unless listed in `disabled_agents`, this
   source is off until the user sets `enabled = true`, because it uses a
   private, undocumented endpoint as the user's ChatGPT account.
@@ -518,6 +636,9 @@ Each Codex home shows one state:
   are not affected."
 - **Error:** the whole pass failed. Shows the message below and when the last
   successful pass finished.
+
+Live token capture has its own line: "Live tokens: watching N running threads",
+"Live tokens: off", or a live-capture error from the table below.
 
 Plan usage has its own line under the home's state, so a usage problem never
 hides or replaces thread status. It shows "Plan usage: not checked yet", "Plan
@@ -607,10 +728,26 @@ only one machine.
       "Counted under parent thread";
     - a 403 from `query_v2` shows "Usage isn't available for this account", stops
       usage requests for 24 hours, and leaves thread sync status unchanged.
-- Cost surfaces: sessions with plan usage are left out of token and cost totals
-  in the UI, CLI reports, API, and exports; the API returns `null` for their
-  token and cost fields; totals state how many sessions were left out; no
-  surface shows them as zero cost.
+- Live token capture:
+    - a thread listed as `idle` whose newest turn is `inProgress` is found and
+      joined;
+    - `warm` keeps the connection until `turn/completed` and a token update for
+      that turn, then leaves;
+    - `cold` is logged, counted in status, and the connection closes at once;
+    - an unknown `resumeKind` stops capture for the account with an error;
+    - server-initiated requests while joined are never answered;
+    - no more than 10 threads per account are joined at once;
+    - successive totals become token usage events equal to their increases; a
+      decrease starts a new baseline with no negative event; a repeated total
+      after a reconnect adds nothing;
+    - `live_tokens = false` sends no `thread/resume`;
+    - the monitor's allowlist rejects `thread/resume` with any parameter other
+      than `threadId` and `excludeTurns: true`.
+- Cost surfaces: sessions with only plan usage are left out of token and cost
+  totals in the UI, CLI reports, API, and exports; the API returns `null` for
+  their token and cost fields; totals state how many sessions were left out;
+  no surface shows them as zero cost. A session with live token usage counts
+  in totals like any other agent.
 - Replicas: SQLite, PostgreSQL, DuckDB, and ClickHouse return the same plan
   usage and the same totals for the same data.
 - Config: an unknown key in `[agents.codex-cloud]` produces the message above
@@ -629,18 +766,16 @@ only one machine.
   `docs/internal/session-format-sources.md`, as `AGENTS.md` requires for new
   providers.
 - Document the setting, what it does with the user's ChatGPT login, the
-  private-endpoint caveat, and why these sessions show plan usage instead of
-  tokens and cost, in the user-facing docs.
+  private-endpoint caveat, what live token capture does on OpenAI's side and
+  how to turn it off, and why turns AgentsView never saw running show plan
+  usage instead of tokens, in the user-facing docs.
 
 ## Open questions
 
-1. **Live token counts.** While a dot is working, the durable host may send
-   `thread/tokenUsage/updated` notifications (input, cached input, output, and
-   reasoning token totals) to a client that only listens, without calling
-   `thread/resume`. A 10-minute listening test caught nothing because no
-   thread was running. A test during an active dot task settles it. If they
-   arrive, a later version can record real token counts for work AgentsView
-   sees live; finished threads would still have plan usage only.
+1. **Token totals across model changes.** `thread/tokenUsage/updated` has no
+   model field. If a thread switches models mid-thread, AgentsView assigns the
+   increase to the model reported for the turn in progress. The builder checks
+   whether turns carry a model, and uses it when they do.
 1. **Descendant threads.** The desktop app finds a thread's sub-agent threads
    with a local discovery step. No listed thread had a `parentThreadId`, so
    whether `parentThreadId` finds them all is unverified. The builder checks
@@ -659,6 +794,14 @@ the shapes the probes returned, with every value replaced.
   own apps.
 - Re-fetching only unfinished items misses edits to items that already looked
   finished.
+- Live token capture race: a turn that ends between the monitor's check and its
+  `thread/resume` makes the call a cold resume. The tests showed what that
+  does: the thread is loaded on OpenAI's side and starts its MCP servers;
+  nothing runs and nothing changes. The monitor detects it from
+  `resumeKind: "cold"`, logs it, and leaves at once.
+- OpenAI may change what `thread/resume` does on a running or stopped thread.
+  The monitor checks `resumeKind` on every call and stops live capture for the
+  account on any value other than `warm` or `cold`.
 
 ## Left to the builder
 
