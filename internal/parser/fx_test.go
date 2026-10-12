@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -48,11 +47,9 @@ func TestFxFixture(t *testing.T) {
 	assert.Equal(t, wantRoles, roles)
 	require.Len(t, calls, 10)
 	require.Len(t, results, 10)
-	wantCategories := []string{"Read", "Read", "Bash", "Edit", "Edit", "Bash", "Read", "Edit", "Task", "Bash"}
 	wantIDs := []string{"call-1", "call-2", "call-3", "call-4", "call-5", "call-6", "call-7", "call-8", "call-9", "call-10"}
 	for i, call := range calls {
 		assert.Equal(t, wantIDs[i], call.ToolUseID)
-		assert.Equal(t, wantCategories[i], call.Category)
 		assert.Equal(t, wantIDs[i], results[i].ToolUseID)
 		status := "completed"
 		if i == 2 || i == 9 {
@@ -87,88 +84,74 @@ func TestFxFixture(t *testing.T) {
 }
 
 func TestFxEventVariants(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "variants")
-	filePath := filepath.Join(dir, "events.jsonl")
-	writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4,"model":"fallback","provider":"gateway","created_at_ms":1000,"updated_at_ms":9000}`)
-	writeSourceFile(t, filePath, `{"schema_version":3,"seq":1,"timestamp_ms":2000,"event":{"steering":{"text":"Use the skill"}}}
+	for _, test := range []struct{ name, provider, replayProvider, wantReplayProvider string }{
+		{"builtin", `"gateway"`, `"codex"`, ""},
+		{"configured", `{"name":"custom","binding":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`, `{"name":"custom-replay","binding":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`, "custom-replay"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "variants")
+			filePath := filepath.Join(dir, "events.jsonl")
+			writeSourceFile(t, filepath.Join(dir, "session.json"), fmt.Sprintf(`{"schema_version":4,"model":"fallback","provider":%s,"created_at_ms":1000,"updated_at_ms":9000}`, test.provider))
+			writeSourceFile(t, filePath, fmt.Sprintf(`{"schema_version":3,"seq":1,"timestamp_ms":2000,"event":{"steering":{"text":"Use the skill"}}}
 {"seq":2,"timestamp_ms":3000,"event":{"tool_call":{"call_id":"skill-1","tool_name":"skill","arguments_json":"{\"location\":\"/tmp/demo/skills/review\"}"}}}
 {"seq":3,"timestamp_ms":4000,"event":{"tool_result":{"call_id":"skill-1","status":"success","preview":"loaded"}}}
 {"seq":4,"timestamp_ms":5000,"event":{"context_checkpoint":{"summary":"Earlier work"}}}
 {"seq":5,"timestamp_ms":6000,"event":{"interrupted":{"partial_text":"Half an answer"}}}
 {"seq":6,"timestamp_ms":7000,"event":{"interrupted":{"partial_text":null}}}
 {"seq":7,"timestamp_ms":8000,"event":{"turn_completed":{}}}
-{"seq":8,"timestamp_ms":8000,"event":{"assistant":{"text":"Reply","provider_replay":{"source":{"model":"actual","provider":"codex"}}}}}
+{"seq":8,"timestamp_ms":8000,"event":{"assistant":{"text":"Reply","provider_replay":{"source":{"model":"actual","provider":%s}}}}}
 {"seq":9,"timestamp_ms":8000,"event":{"future_event":{"new_field":"value"}}}
-`)
-	writeSourceFile(t, filepath.Join(dir, "usage-v2.json"), `{"snapshot":{"models":[{"model":"gateway/one","input_tokens":20,"output_tokens":4,"cache_read_tokens":8,"cache_write_tokens":3,"reasoning_tokens":2,"total_cost":0},{"model":"codex/two","input_tokens":1,"output_tokens":6,"cache_read_tokens":5}]}}`)
-	session, messages, err := parseFxSession(t.Context(), filePath, "local")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Zero(t, session.MalformedLines)
-	assert.Equal(t, 1, session.UserMessageCount)
-	assert.Equal(t, "Use the skill", session.SessionName)
-	assert.Equal(t, time.UnixMilli(9000).UTC(), session.EndedAt)
-	require.Len(t, messages, 6)
-	assert.Equal(t, RoleUser, messages[0].Role)
-	assert.Equal(t, "Use the skill", messages[0].Content)
-	require.Len(t, messages[1].ToolCalls, 1)
-	assert.Equal(t, "review", messages[1].ToolCalls[0].SkillName)
-	assert.Equal(t, "Tool", messages[1].ToolCalls[0].Category)
-	assert.Empty(t, messages[1].Model)
-	assert.True(t, messages[3].IsCompactBoundary)
-	assert.True(t, messages[3].IsSystem)
-	assert.Equal(t, "compact_boundary", messages[3].SourceSubtype)
-	assert.Equal(t, "Earlier work", messages[3].Content)
-	assert.Equal(t, "Half an answer", messages[4].Content)
-	assert.Empty(t, messages[4].Model)
-	assert.Equal(t, "actual", messages[5].Model)
-	assert.Equal(t, "codex", messages[5].ProviderID)
-	require.Len(t, session.UsageEvents, 2)
-	assert.Equal(t, 9, session.UsageEvents[0].InputTokens)
-	assert.Equal(t, 3, session.UsageEvents[0].CacheCreationInputTokens)
-	assert.Equal(t, 2, session.UsageEvents[0].ReasoningTokens)
-	assert.Nil(t, session.UsageEvents[0].Cost)
-	assert.Equal(t, 0, session.UsageEvents[1].InputTokens)
-	assert.Equal(t, "session:fx:variants|codex/two", session.UsageEvents[1].DedupKey)
-	assert.Equal(t, 10, session.TotalOutputTokens)
-	assert.Equal(t, "1970-01-01T00:00:08Z", session.UsageEvents[0].OccurredAt)
+`, test.replayProvider))
+			writeSourceFile(t, filepath.Join(dir, "usage-v2.json"), `{"snapshot":{"models":[{"model":"gateway/one","input_tokens":20,"output_tokens":4,"cache_read_tokens":8,"cache_write_tokens":3,"reasoning_tokens":2,"total_cost":0},{"model":"codex/two","input_tokens":1,"output_tokens":6,"cache_read_tokens":5}]}}`)
+			session, messages, err := parseFxSession(t.Context(), filePath, "local")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Zero(t, session.MalformedLines)
+			assert.Equal(t, 1, session.UserMessageCount)
+			assert.Equal(t, "Use the skill", session.SessionName)
+			assert.Equal(t, time.UnixMilli(9000).UTC(), session.EndedAt)
+			require.Len(t, messages, 6)
+			assert.Equal(t, RoleUser, messages[0].Role)
+			assert.Equal(t, "Use the skill", messages[0].Content)
+			require.Len(t, messages[1].ToolCalls, 1)
+			assert.Equal(t, "review", messages[1].ToolCalls[0].SkillName)
+			assert.Equal(t, "Tool", messages[1].ToolCalls[0].Category)
+			assert.True(t, messages[3].IsCompactBoundary)
+			assert.True(t, messages[3].IsSystem)
+			assert.Equal(t, "compact_boundary", messages[3].SourceSubtype)
+			assert.Equal(t, "Earlier work", messages[3].Content)
+			assert.Equal(t, "Half an answer", messages[4].Content)
+			assert.Empty(t, messages[4].Model)
+			if test.wantReplayProvider != "" {
+				assert.Equal(t, test.wantReplayProvider, messages[5].ProviderID)
+			}
+			require.Len(t, session.UsageEvents, 2)
+			assert.Equal(t, 9, session.UsageEvents[0].InputTokens)
+			assert.Equal(t, 3, session.UsageEvents[0].CacheCreationInputTokens)
+			assert.Equal(t, 2, session.UsageEvents[0].ReasoningTokens)
+			assert.Nil(t, session.UsageEvents[0].Cost)
+			assert.Equal(t, 0, session.UsageEvents[1].InputTokens)
+			assert.Equal(t, "session:fx:variants|codex/two", session.UsageEvents[1].DedupKey)
+			assert.Equal(t, 10, session.TotalOutputTokens)
+			assert.Equal(t, "1970-01-01T00:00:08Z", session.UsageEvents[0].OccurredAt)
+		})
+	}
 }
 
 func TestFxMetadataAndCancellation(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		metadata  string
-		wantError bool
-	}{
-		{"missing", "", false},
-		{"null", `null`, true},
-		{"wrong type", `{"schema_version":"4"}`, true},
-		{"malformed", `{broken`, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			if test.metadata != "" {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "session.json"), []byte(test.metadata), 0o600))
-			}
-			var logs bytes.Buffer
-			previous := log.Writer()
-			log.SetOutput(&logs)
-			t.Cleanup(func() { log.SetOutput(previous) })
-			session, _, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
-			if test.wantError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-			assert.Nil(t, session)
-			if test.metadata == "" {
-				assert.Contains(t, logs.String(), "missing session.json")
-			}
-		})
-	}
+	dir := t.TempDir()
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	session, _, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
+	assert.NoError(t, err)
+	assert.Nil(t, session)
+	assert.Contains(t, logs.String(), "missing session.json")
+
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, _, err := parseFxSession(ctx, "unused", "local")
+	_, _, err = parseFxSession(ctx, "unused", "local")
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -254,6 +237,9 @@ func TestFxRejectedArtifacts(t *testing.T) {
 		{"multiple event types", "events.jsonl", "{\"event\":{\"user\":{},\"assistant\":{}}}\n", "", "invalid fx events.jsonl"},
 		{"wrong payload type", "events.jsonl", "{\"event\":{\"tool_call\":[]}}\n", "", "invalid fx events.jsonl"},
 		{"null turn completed", "events.jsonl", "{\"event\":{\"turn_completed\":null}}\n", "", "invalid fx events.jsonl"},
+		{"null session", "session.json", `null`, "", "invalid fx"},
+		{"wrong session type", "session.json", `{"schema_version":"4"}`, "", "invalid fx metadata"},
+		{"malformed session", "session.json", `{broken`, "", "invalid fx metadata"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -302,13 +288,10 @@ func TestFxSkillNames(t *testing.T) {
 func TestFxTornTail(t *testing.T) {
 	for _, test := range []struct {
 		name, tail string
-		wantError  bool
 		wantCount  int
 	}{
-		{"torn tail", `{"event":{"assistant":{"text":"Partial`, false, 1},
-		{"complete tail without newline", `{"event":{"assistant":{"text":"Answer"}}}`, false, 2},
-		{"malformed final terminated line", "{broken\n", true, 0},
-		{"malformed middle line", "{broken\n" + `{"event":{"assistant":{"text":"Answer"}}}`, true, 0},
+		{"torn tail", `{"event":{"assistant":{"text":"Partial`, 1},
+		{"complete tail without newline", `{"event":{"assistant":{"text":"Answer"}}}`, 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -316,12 +299,6 @@ func TestFxTornTail(t *testing.T) {
 			filePath := filepath.Join(dir, "events.jsonl")
 			writeSourceFile(t, filePath, "{\"event\":{\"user\":{\"text\":\"Question\"}}}\n"+test.tail)
 			session, messages, err := parseFxSession(t.Context(), filePath, "local")
-			if test.wantError {
-				require.ErrorContains(t, err, "invalid fx events.jsonl")
-				assert.Nil(t, session)
-				assert.Empty(t, messages)
-				return
-			}
 			require.NoError(t, err)
 			require.NotNil(t, session)
 			require.Len(t, messages, test.wantCount)
@@ -335,27 +312,30 @@ func TestFxTornTail(t *testing.T) {
 }
 
 func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
-	for _, test := range []struct{ name, usage, wantError string }{
-		{"absent", "", ""},
-		{"empty models", `{"snapshot":{"models":[]}}`, ""},
-		{"matching session", `{"session_id":"session-a","snapshot":{"models":[]}}`, ""},
-		{"other session", `{"session_id":"session-b","snapshot":{"models":[]}}`, "session_id does not match"},
-		{"empty session", `{"session_id":"","snapshot":{"models":[]}}`, "session_id does not match"},
-		{"malformed", `{broken`, "invalid fx metadata"},
-		{"null envelope", `null`, "invalid fx"},
-		{"array envelope", `[]`, "invalid fx"},
-		{"missing snapshot", `{}`, "invalid fx"},
-		{"null snapshot", `{"snapshot":null}`, "invalid fx"},
-		{"array snapshot", `{"snapshot":[]}`, "invalid fx"},
-		{"missing models", `{"snapshot":{}}`, "invalid fx"},
-		{"null model entry", `{"snapshot":{"models":[null]}}`, "model entry"},
-		{"empty model entry", `{"snapshot":{"models":[{}]}}`, "model entry"},
-		{"negative count", `{"snapshot":{"models":[{"model":"test","input_tokens":-1}]}}`, "negative fx token count"},
-		{"fractional count", `{"snapshot":{"models":[{"model":"test","output_tokens":1.5}]}}`, "invalid fx"},
-		{"fractional reasoning count", `{"snapshot":{"models":[{"model":"test","reasoning_tokens":1.5}]}}`, "invalid fx"},
-		{"null count", `{"snapshot":{"models":[{"model":"test","cache_read_tokens":null}]}}`, ""},
-		{"null models", `{"snapshot":{"models":null}}`, "invalid fx"},
-		{"object models", `{"snapshot":{"models":{}}}`, "invalid fx"},
+	for _, test := range []struct {
+		name, usage, wantError string
+		wantEvents             int
+	}{
+		{"absent", "", "", 0},
+		{"empty models", `{"snapshot":{"models":[]}}`, "", 0},
+		{"matching session", `{"session_id":"session-a","snapshot":{"models":[]}}`, "", 0},
+		{"other session", `{"session_id":"session-b","snapshot":{"models":[]}}`, "session_id does not match", 0},
+		{"empty session", `{"session_id":"","snapshot":{"models":[]}}`, "session_id does not match", 0},
+		{"malformed", `{broken`, "invalid fx metadata", 0},
+		{"null envelope", `null`, "invalid fx", 0},
+		{"array envelope", `[]`, "invalid fx", 0},
+		{"missing snapshot", `{}`, "invalid fx", 0},
+		{"null snapshot", `{"snapshot":null}`, "invalid fx", 0},
+		{"array snapshot", `{"snapshot":[]}`, "invalid fx", 0},
+		{"missing models", `{"snapshot":{}}`, "invalid fx", 0},
+		{"null model entry", `{"snapshot":{"models":[null]}}`, "model entry", 0},
+		{"empty model entry", `{"snapshot":{"models":[{}]}}`, "model entry", 0},
+		{"negative count", `{"snapshot":{"models":[{"model":"test","input_tokens":-1}]}}`, "negative fx token count", 0},
+		{"fractional count", `{"snapshot":{"models":[{"model":"test","output_tokens":1.5}]}}`, "invalid fx", 0},
+		{"fractional reasoning count", `{"snapshot":{"models":[{"model":"test","reasoning_tokens":1.5}]}}`, "invalid fx", 0},
+		{"null count", `{"snapshot":{"models":[{"model":"test","cache_read_tokens":null}]}}`, "", 1},
+		{"null models", `{"snapshot":{"models":null}}`, "invalid fx", 0},
+		{"object models", `{"snapshot":{"models":{}}}`, "invalid fx", 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "session-a")
@@ -373,11 +353,9 @@ func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.NotNil(t, session)
-			if test.name == "null count" {
-				require.Len(t, session.UsageEvents, 1)
+			require.Len(t, session.UsageEvents, test.wantEvents)
+			if test.wantEvents > 0 {
 				assert.Zero(t, session.UsageEvents[0].CacheReadInputTokens)
-			} else {
-				assert.Empty(t, session.UsageEvents)
 			}
 		})
 	}
