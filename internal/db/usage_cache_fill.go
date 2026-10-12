@@ -1225,6 +1225,11 @@ func (c *usageFillCoordinator) copyCursorThrough(ctx context.Context, target int
 func (c *usageFillCoordinator) readCursorBatch(
 	ctx context.Context, from, target int64,
 ) ([]usageCursorInstall, bool, error) {
+	release, err := c.archive.acquireBulkRead(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer release()
 	archiveTx, err := c.archive.getReader().BeginTx(
 		ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {

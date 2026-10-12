@@ -4159,6 +4159,9 @@ func (db *DB) GetAnalyticsSignalSessions(
 	signal string,
 	limit int,
 ) (SignalSessionsResponse, error) {
+	if !IsToolMetric(signal) && !IsSupportedAnalyticsSignal(signal) {
+		return SignalSessionsResponse{}, ErrUnsupportedAnalyticsSignal
+	}
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return SignalSessionsResponse{}, err
@@ -4172,9 +4175,6 @@ func (db *DB) GetAnalyticsSignalSessions(
 			return SignalSessionsResponse{}, err
 		}
 		return BuildToolMetricEvidence(rows, signal, f.ToolName, f.EvidenceOffset, limit), nil
-	}
-	if !IsSupportedAnalyticsSignal(signal) {
-		return SignalSessionsResponse{}, ErrUnsupportedAnalyticsSignal
 	}
 	if limit <= 0 || limit > 20 {
 		limit = 10

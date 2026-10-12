@@ -1182,6 +1182,9 @@ func configureReaderPool(reader *sql.DB) {
 }
 
 func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	db.bulkReads.once.Do(func() {
 		db.bulkReads.slots = make(chan struct{}, bulkReadSlots)
 	})

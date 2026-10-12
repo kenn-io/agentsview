@@ -15,14 +15,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-func TestUsageArchiveReadsWaitInBulkLane(t *testing.T) {
+func TestBulkReadEntryPointsWaitInLane(t *testing.T) {
 	database := usageCandidateFixture(t)
 	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
 	require.NoError(t, err)
+	defer snapshot.Close()
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+	require.NoError(t, err)
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "day", Date: "2026-08-10", Timezone: "UTC",
+	}, time.Now())
 	require.NoError(t, err)
 	for range bulkReadSlots {
 		release, err := database.acquireBulkRead(t.Context())
@@ -30,14 +36,95 @@ func TestUsageArchiveReadsWaitInBulkLane(t *testing.T) {
 		defer release()
 	}
 	for _, tc := range []struct {
-		name string
-		read func(context.Context) error
+		name      string
+		read      func(context.Context) error
+		wantError string
 	}{
-		{"capture", func(ctx context.Context) error {
+		{"summary", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSummary(ctx, baseFilter())
+			return err
+		}, ""},
+		{"activity", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsActivity(ctx, baseFilter(), "day")
+			return err
+		}, ""},
+		{"heatmap", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsHeatmap(ctx, baseFilter(), "messages")
+			return err
+		}, ""},
+		{"projects", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsProjects(ctx, baseFilter())
+			return err
+		}, ""},
+		{"hour of week", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsHourOfWeek(ctx, baseFilter())
+			return err
+		}, ""},
+		{"session shape", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSessionShape(ctx, baseFilter())
+			return err
+		}, ""},
+		{"tools", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsTools(ctx, baseFilter())
+			return err
+		}, ""},
+		{"skills", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSkills(ctx, baseFilter(), "week")
+			return err
+		}, ""},
+		{"velocity", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsVelocity(ctx, baseFilter())
+			return err
+		}, ""},
+		{"signals", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSignals(ctx, baseFilter())
+			return err
+		}, ""},
+		{"signal sessions", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSignalSessions(ctx, baseFilter(), "outcome_completed", 10)
+			return err
+		}, ""},
+		{"tool signal sessions", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSignalSessions(ctx, baseFilter(), "tool_empty_rate", 10)
+			return err
+		}, ""},
+		{"top sessions", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsTopSessions(ctx, baseFilter(), "messages")
+			return err
+		}, ""},
+		{"session stats", func(ctx context.Context) error {
+			_, err := database.GetSessionStats(ctx, StatsFilter{})
+			return err
+		}, ""},
+		{"trends", func(ctx context.Context) error {
+			_, err := database.GetTrendsTerms(ctx, baseFilter(), []TrendTermInput{{Term: "test"}}, "week")
+			return err
+		}, ""},
+		{"activity report", func(ctx context.Context) error {
+			_, err := database.GetActivityReport(ctx, baseFilter(), q)
+			return err
+		}, ""},
+		{"activity artifacts", func(ctx context.Context) error {
+			_, err := database.BuildActivityReportArtifacts(ctx, baseFilter(), q, nil)
+			return err
+		}, ""},
+		{"activity probe", func(ctx context.Context) error {
+			_, err := database.ActivityReportSourceProbe(ctx)
+			return err
+		}, ""},
+		{"usage capture", func(ctx context.Context) error {
 			_, err := database.captureUsageQuery(ctx, UsageFilter{}, usageQueryKindToken)
 			return err
-		}},
-		{"extraction", func(ctx context.Context) error {
+		}, ""},
+		{"usage source recheck", func(ctx context.Context) error {
+			_, err := cache.fill.recheckSourceVersions(ctx, snapshot.Versions)
+			return err
+		}, ""},
+		{"usage backfill activity", func(ctx context.Context) error {
+			_, err := database.usageBackfillActivity(ctx)
+			return err
+		}, ""},
+		{"usage extraction", func(ctx context.Context) error {
 			spool, versions, err := cache.fill.extractSessions(ctx, snapshot.Versions)
 			if spool != nil {
 				defer spool.Close()
@@ -45,12 +132,37 @@ func TestUsageArchiveReadsWaitInBulkLane(t *testing.T) {
 			assert.Nil(t, spool)
 			assert.Nil(t, versions)
 			return err
-		}},
+		}, ""},
+		{"Cursor batch", func(ctx context.Context) error {
+			_, _, err := cache.fill.readCursorBatch(ctx, 0, snapshot.CursorHighWater)
+			return err
+		}, ""},
+		{"unsupported signal", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSignalSessions(ctx, baseFilter(), "unsupported", 10)
+			assert.ErrorIs(t, err, ErrUnsupportedAnalyticsSignal)
+			return err
+		}, "unsupported analytics signal"},
+		{"invalid stats timezone", func(ctx context.Context) error {
+			_, err := database.GetSessionStats(ctx, StatsFilter{Timezone: "invalid"})
+			return err
+		}, "invalid timezone: invalid"},
+		{"invalid stats window", func(ctx context.Context) error {
+			_, err := database.GetSessionStats(ctx, StatsFilter{Since: "2026-08-11", Until: "2026-08-10"})
+			return err
+		}, "window since (2026-08-11T00:00:00Z) must precede until (2026-08-10T00:00:00Z)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			//nolint:kennlint // The deadline must expire while all bulk permits are held, except for input errors.
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 			defer cancel()
-			require.ErrorIs(t, tc.read(ctx), context.DeadlineExceeded)
+			require.NoError(t, ctx.Err())
+			err := tc.read(ctx)
+			if tc.wantError != "" {
+				require.EqualError(t, err, tc.wantError)
+				assert.NoError(t, ctx.Err())
+			} else {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			}
 			assert.Zero(t, database.rawReader().Stats().InUse)
 		})
 	}

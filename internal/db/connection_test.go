@@ -4,11 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,65 +117,26 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 	})
 	reader := database.rawReader()
 	configureReaderPool(reader)
-	blocked := make(chan struct{})
-	hookReached := make(chan struct{}, readerMaxOpenConns)
-	var unblockOnce sync.Once
-	unblock := func() { unblockOnce.Do(func() { close(blocked) }) }
-	var summaries sync.WaitGroup
-	t.Cleanup(func() {
-		unblock()
-		summaries.Wait()
-	})
-	connections := make([]*sql.Conn, 0, readerMaxOpenConns)
-	for range readerMaxOpenConns {
+	for range bulkReadSlots {
+		release, err := database.acquireBulkRead(t.Context())
+		require.NoError(t, err)
+		defer release()
 		conn, err := reader.Conn(t.Context())
 		require.NoError(t, err)
-		connections = append(connections, conn)
-		require.NoError(t, conn.Raw(func(driverConn any) error {
-			return driverConn.(*sqlite3.SQLiteConn).RegisterFunc("strftime", func(...any) string {
-				select {
-				case hookReached <- struct{}{}:
-				default:
-				}
-				<-blocked
-				return "2024-06-01"
-			}, false)
-		}))
+		defer conn.Close()
 	}
-	for _, conn := range connections {
-		require.NoError(t, conn.Close())
-	}
-	results := make(chan error, readerMaxOpenConns)
-	for range readerMaxOpenConns {
-		summaries.Add(1)
-		go func() {
-			defer summaries.Done()
-			_, err := database.GetAnalyticsSummary(t.Context(), baseFilter())
-			results <- err
-		}()
-	}
-	for range bulkReadSlots {
-		select {
-		case <-hookReached:
-		case <-time.After(10 * time.Second):
-			t.Fatal("analytics did not reach the blocking strftime hook")
-		}
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	//nolint:kennlint // The deadline must expire while all bulk permits are held.
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	session, err := database.GetSession(ctx, "summary")
+	_, err := database.GetAnalyticsSummary(ctx, baseFilter())
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	quickCtx, quickCancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer quickCancel()
+	session, err := database.GetSession(quickCtx, "summary")
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "summary", session.ID)
-	unblock()
-	for range readerMaxOpenConns {
-		select {
-		case err := <-results:
-			require.NoError(t, err)
-		case <-time.After(10 * time.Second):
-			t.Fatal("analytics did not finish after unblocking reads")
-		}
-	}
 }
 
 func TestAcquireBulkReadHonorsContext(t *testing.T) {
@@ -203,4 +162,18 @@ func TestAcquireBulkReadHonorsContext(t *testing.T) {
 	release, err = database.acquireBulkRead(t.Context())
 	require.NoError(t, err)
 	release()
+}
+
+func TestAcquireBulkReadRejectsCanceledContextWithFreeSlots(t *testing.T) {
+	database := &DB{}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for range 100 {
+		release, err := database.acquireBulkRead(ctx)
+		if release != nil {
+			release()
+		}
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Nil(t, release)
+	}
 }
