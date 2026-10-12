@@ -26,6 +26,7 @@
   /** Set of expanded pin IDs. */
   let expanded: Set<number> = $state(new Set());
   let pinError = $state("");
+  let failedPinId: number | null = $state(null);
 
   async function unpin(pin: import("../../api/generated/index.js").DbPinnedMessage) {
     pinError = "";
@@ -33,6 +34,7 @@
       if (pin.message_key) await pins.removeReference(pin);
       else await pins.unpin(pin.session_id, pin.message_id);
     } catch (error) {
+      failedPinId = pin.id;
       pinError = generatedErrorMessage(error);
     }
   }
@@ -105,7 +107,6 @@
 </script>
 
 <div class="pinned-page">
-  {#if pinError}<p role="alert">{pinError}</p>{/if}
   <div class="pinned-header">
     <PinIcon size="18" strokeWidth="2" class="pin-icon" aria-hidden="true" />
     <h2>{m.pinned_title()}</h2>
@@ -135,6 +136,7 @@
         {@const preview = previewContent(pin.content)}
         {@const hasMore = (pin.content?.length ?? 0) > 300}
         <div class="pin-card" class:expanded={isExpanded}>
+          {#if pinError && failedPinId === pin.id}<p role="alert">{pinError}</p>{/if}
           <div class="pin-card-header">
             <span
               class="role-badge"

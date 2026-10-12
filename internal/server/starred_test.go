@@ -49,12 +49,17 @@ func TestStarSessionReturns503WhileWriterClosed(t *testing.T) {
 	require.NoError(t, te.db.CloseWriter())
 	defer func() { assert.NoError(t, te.db.ReopenWriter()) }()
 
-	w := te.put(t, "/api/v1/sessions/s1/star", `{}`)
-	require.Equal(t, http.StatusServiceUnavailable, w.Code,
-		"body: %s", w.Body.String())
-	assert.Equal(t, "5", w.Header().Get("Retry-After"),
-		"a writer-closed write must advertise Retry-After")
-	assert.Contains(t, w.Body.String(), "archive is briefly read-only for a maintenance pass; retry shortly")
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPut, "/api/v1/sessions/s1/star"},
+		{http.MethodPost, "/api/v1/export/conversations/initialize"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			w := te.requestJSON(t, tc.method, tc.path, `{}`)
+			require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+			assert.Equal(t, "5", w.Header().Get("Retry-After"))
+			assert.Contains(t, w.Body.String(), "archive is briefly read-only for a maintenance pass; retry shortly")
+		})
+	}
 }
 
 func TestStarredHandlers(t *testing.T) {

@@ -2053,11 +2053,15 @@ func probeDatabase(ctx context.Context, path string, includeScoped bool) (schema
 		if os.IsNotExist(err) {
 			return false, false, false, nil
 		}
-		return false, false, false, fmt.Errorf("checking database file: %w", err)
+		return false, false, false, fmt.Errorf(
+			"checking database file: %w", err,
+		)
 	}
 	conn, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, true))
 	if err != nil {
-		return false, false, false, fmt.Errorf("probing schema: %w", err)
+		return false, false, false, fmt.Errorf(
+			"probing schema: %w", err,
+		)
 	}
 	defer conn.Close()
 	return probeDatabaseConn(ctx, conn, includeScoped)

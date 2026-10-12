@@ -375,7 +375,7 @@ func (s *Server) generateCannedInsight(
 	if err != nil {
 		log.Printf("canned insight insert error: %v", err)
 		sendJSON("error", map[string]string{
-			"message": insightSaveErrorMessage(err),
+			"message": s.insightSaveErrorMessage(err),
 		})
 		return
 	}

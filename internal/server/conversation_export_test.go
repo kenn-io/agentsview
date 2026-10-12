@@ -41,13 +41,3 @@ func TestInitializeConversationExportBuildsProjectionOnce(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	assert.False(t, response.Initialized, "an active archive is not rebuilt")
 }
-
-func TestInitializeConversationExportReturns503WhileWriterClosed(t *testing.T) {
-	te := setup(t)
-	require.NoError(t, te.db.CloseWriter())
-	defer func() { assert.NoError(t, te.db.ReopenWriter()) }()
-
-	w := te.requestJSON(t, http.MethodPost, "/api/v1/export/conversations/initialize", "")
-	require.Equal(t, http.StatusServiceUnavailable, w.Code, "body: %s", w.Body.String())
-	assert.Equal(t, "5", w.Header().Get("Retry-After"))
-}

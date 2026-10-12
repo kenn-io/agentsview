@@ -50,7 +50,7 @@ func TestArchiveOnlyRefusesReceivingHostOnRestart(t *testing.T) {
 		assert.False(t, database.NeedsResync())
 		require.NoError(t, database.Close())
 	}
-	for _, mode := range []string{"startup", "sync", "audit", "resync-build"} {
+	for _, mode := range []string{"startup", "sync", "audit"} {
 		var out bytes.Buffer
 		err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: mode}, &out)
 		assert.ErrorContains(t, err, "archive-only", mode)

@@ -16,6 +16,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -279,6 +280,7 @@ func doInsightRequest(
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := (&http.Client{Timeout: 0}).Do(req)
+	apiclient.ObserveArchiveFreshness(ctx, resp)
 	if err != nil {
 		return nil, err
 	}

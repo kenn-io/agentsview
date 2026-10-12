@@ -940,7 +940,10 @@ func archiveWriteRequest(r *http.Request) bool {
 	path := r.URL.Path
 	switch path {
 	case "/api/v1/sync":
-		startupOnly, _ := strconv.ParseBool(r.URL.Query().Get("startup_only"))
+		query := r.URL.Query()
+		value := query.Get("startup_only")
+		startupOnly, _ := strconv.ParseBool(value)
+		startupOnly = startupOnly || query.Has("startup_only") && value == ""
 		return !startupOnly
 	case "/api/v1/recall/import":
 		return r.URL.Query().Get("dry_run") != "true"

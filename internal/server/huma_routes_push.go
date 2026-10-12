@@ -131,9 +131,10 @@ func runPushStream[T any](
 	result, err := run(nil)
 	if err != nil {
 		if errors.Is(err, db.ErrWriterClosed) {
-			hctx.SetHeader("Retry-After", writerClosedRetryAfterSeconds)
-			writeHumaJSON(hctx, http.StatusServiceUnavailable,
-				map[string]string{"error": err.Error()})
+			server, ok := hctx.Context().Value(ctxKeyHumaServer).(*Server)
+			response := writerClosedResponse(hctx.AppendHeader, ok && server.archiveStale())
+			writeHumaJSON(hctx, response.Status,
+				map[string]string{"error": response.Message})
 			return
 		}
 		writeHumaJSON(hctx, http.StatusInternalServerError,

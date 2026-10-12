@@ -54,9 +54,9 @@ func TrackArchiveFreshness(ctx context.Context, onStale func()) (context.Context
 	return context.WithValue(ctx, archiveFreshnessKey{}, freshness), freshness.stale.Load
 }
 
-// ObserveArchiveFreshness records freshness for successful raw HTTP responses.
+// ObserveArchiveFreshness records freshness for results, including missing records.
 func ObserveArchiveFreshness(ctx context.Context, response *http.Response) {
-	if response == nil || response.StatusCode < 200 || response.StatusCode >= 300 || response.Header.Get(ArchiveStaleHeader) != "true" {
+	if response == nil || (response.StatusCode < 200 || response.StatusCode >= 300) && response.StatusCode != http.StatusNotFound || response.Header.Get(ArchiveStaleHeader) != "true" {
 		return
 	}
 	if freshness, ok := ctx.Value(archiveFreshnessKey{}).(*archiveFreshness); ok && freshness.stale.CompareAndSwap(false, true) && freshness.onStale != nil {

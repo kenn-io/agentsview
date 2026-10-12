@@ -213,7 +213,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	var workerStartupResult workerResult
 	workerSyncDone := false
 	startupRebuild := false
-	if !cfg.NoSync {
+	if !cfg.NoSync || archiveOnly {
 		needsResync, fullRebuild, err := db.ArchiveResyncState(ctx, cfg.DBPath)
 		if err != nil && opts.SkipInitialSync {
 			fatal("checking archive before startup: %v", err)
@@ -273,7 +273,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 	}()
 
-	if archiveOnly && database.NeedsResync() {
+	if archiveOnly && database.NeedsResync() && !startupRebuild {
 		// The engine disables every provider for an archive-only database and
 		// carries stored sessions forward without accessing receiving-host roots.
 		preserve := sync.NewEngine(ctx, database, sync.EngineConfig{Ephemeral: true, ArchiveContent: cfg.ArchiveContent})
@@ -474,6 +474,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 	}
 
+	if archiveOnly && startupRebuild {
+		engine = sync.NewEngine(ctx, database, sync.EngineConfig{Ephemeral: true, ArchiveContent: cfg.ArchiveContent})
+		defer engine.Close()
+	}
+
 	if !archiveOnly {
 		identityBackfillEngine := engine
 		if identityBackfillEngine == nil {
@@ -579,10 +584,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	))
 	srv := server.New(cfg, database, engine, srvOpts...)
 
+	stopAudit := func() {}
 	if engine != nil {
 		auditCtx, cancelAudit := context.WithCancel(ctx)
 		auditDone := make(chan struct{})
-		defer func() { cancelAudit(); <-auditDone }()
+		stopAudit = func() { cancelAudit(); <-auditDone }
+		defer stopAudit()
 		var startupReady chan struct{}
 		if startupRebuild {
 			startupReady = make(chan struct{})
@@ -604,6 +611,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	startupProgress.SetPhase("starting HTTP server")
 	rt, err := startServerWithOptionalCaddy(ctx, cfg, srv, rtOpts)
 	if err != nil {
+		stopAudit()
 		if errors.Is(err, context.Canceled) {
 			return
 		}
@@ -638,7 +646,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		go idleTracker.Run(ctx)
 	}
 	startDaemonUsageCacheBackfill(ctx, database, idleTracker)
-	if engine != nil && opts.SkipInitialSync {
+	if engine != nil && !cfg.NoSync && opts.SkipInitialSync {
 		go func() {
 			timer := time.NewTimer(deferredStartupSyncGracePeriod)
 			defer timer.Stop()
@@ -3048,7 +3056,18 @@ func startArchiveAudit(
 			return runArchiveAuditAttempt(ctx, idleTracker, func(ctx context.Context) error {
 				firstReady := startupReady
 				startupReady = nil
-				return runArchiveAudit(ctx, cfg, engine, database, lock, emitter, firstReady)
+				if firstReady != nil {
+					log.Print("startup archive rebuild started")
+				}
+				err := runArchiveAudit(ctx, cfg, engine, database, lock, emitter, firstReady)
+				if firstReady != nil {
+					if err != nil {
+						log.Printf("startup archive rebuild failed: %v", err)
+					} else {
+						log.Print("startup archive rebuild finished")
+					}
+				}
+				return err
 			})
 		},
 	)
@@ -3135,6 +3154,9 @@ func runArchiveAudit(
 	}
 	if startupReady != nil {
 		close(startupReady)
+	}
+	if cfg.NoSync {
+		return nil
 	}
 	result, err := runWorkerWritePass(
 		ctx, ctx, cfg, engine, database, lock, "audit", nil,

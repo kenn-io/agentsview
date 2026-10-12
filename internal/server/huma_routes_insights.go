@@ -505,7 +505,7 @@ func (s *Server) humaGenerateInsight(
 		if err != nil {
 			log.Printf("insight insert error: %v", err)
 			sendJSON("error", map[string]string{
-				"message": insightSaveErrorMessage(err),
+				"message": s.insightSaveErrorMessage(err),
 			})
 			return
 		}
@@ -521,12 +521,10 @@ func (s *Server) humaGenerateInsight(
 	}}, nil
 }
 
-// insightSaveErrorMessage names a failed insight save for the SSE error event.
-// A writer closed for a maintenance pass is transient and worth telling the
-// client to retry; anything else stays a generic failure.
-func insightSaveErrorMessage(err error) string {
+// Saves can fail after the response stream opens.
+func (s *Server) insightSaveErrorMessage(err error) string {
 	if errors.Is(err, db.ErrWriterClosed) {
-		return "archive is briefly read-only for a maintenance pass; retry shortly"
+		return writerClosedResponse(func(string, string) {}, s.archiveStale()).Message
 	}
 	return "failed to save insight"
 }

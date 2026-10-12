@@ -1,4 +1,5 @@
 import { StarredService } from "../api/generated/index";
+import { generatedErrorMessage } from "../api/runtime.js";
 
 const STORAGE_KEY = "agentsview-starred-sessions";
 
@@ -7,6 +8,7 @@ class StarredStore {
   // before the async server load and migration complete.
   ids: Set<string> = $state(readLocalStorage());
   filterOnly: boolean = $state(false);
+  errors: Record<string, string> = $state({});
   private loaded = false;
   private loading: Promise<void> | null = null;
   /** Global mutation counter for load/migration staleness detection. */
@@ -170,6 +172,7 @@ class StarredStore {
   }
 
   private enqueue(sessionId: string, op: () => Promise<unknown>) {
+    delete this.errors[sessionId];
     const prev = this.queues.get(sessionId) ?? Promise.resolve();
     const chain: Promise<void> = prev
       .then(
@@ -177,8 +180,8 @@ class StarredStore {
         () => op(),
       )
       .then(
-        () => {},
-        () => {},
+        () => { delete this.errors[sessionId]; },
+        (error) => { this.errors[sessionId] = generatedErrorMessage(error); },
       )
       .then(() => {
         if (this.queues.get(sessionId) === chain) {

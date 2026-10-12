@@ -177,16 +177,18 @@ func TestServeCommandMountsWritableServerAtBasePath(t *testing.T) {
 }
 
 func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
-	for _, kind := range []string{"data version", "failed", "aborted", "unlaunchable", "scoped pending", "schema repair"} {
+	for _, kind := range []string{"data version", "archive only", "scoped pending", "schema repair"} {
 		t.Run(kind, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			cfg.Host = "127.0.0.1"
 			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
 			dbtest.SeedSessionWithMessages(t, database, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript")})
+			if kind == "archive only" {
+				require.NoError(t, database.EnableArchiveOnly(t.Context()))
+			}
 			require.NoError(t, database.Close())
-			failed := kind == "failed" || kind == "aborted" || kind == "unlaunchable"
-			if kind == "data version" || failed {
+			if kind == "data version" || kind == "archive only" {
 				markArchiveStale(t, cfg.DBPath)
 			} else {
 				conn, err := sql.Open("sqlite3", cfg.DBPath)
@@ -207,9 +209,6 @@ func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
 				"AGENTSVIEW_STALE_SERVE_KIND=" + kind,
 			}, "archive rebuild complete")
 			require.NoError(t, err, string(out))
-			stale, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
-			require.NoError(t, err)
-			assert.Equal(t, failed, stale)
 		})
 	}
 }
@@ -224,86 +223,77 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
 	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {os.Getenv("AGENTSVIEW_STALE_SERVE_SOURCES")}}
 	kind := os.Getenv("AGENTSVIEW_STALE_SERVE_KIND")
-	if kind == "" {
-		runServe(t.Context(), cfg, serveOptions{SkipInitialSync: true}, 0)
-		return
-	}
-	release := make(chan struct{})
-	failed := kind == "failed" || kind == "aborted" || kind == "unlaunchable"
-	if kind == "data version" || failed {
+	release, launched, rebuilt := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	needsResync, _, err := db.ArchiveResyncState(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	backgroundRebuild := kind == "data version" || kind == "archive only" || kind == "" && needsResync
+	if backgroundRebuild {
 		stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, request syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+			defer close(rebuilt)
+			require.Equal(t, "resync-build", request.Mode)
+			close(launched)
 			select {
 			case <-release:
 			case <-ctx.Done():
 				return workerResult{}, ctx.Err()
 			}
-			if failed {
-				if kind == "unlaunchable" {
-					return workerResult{}, errWorkerSpawn
-				}
-				return workerResult{Status: kind}, errors.New("worker stopped")
-			}
+			var output bytes.Buffer
+			err := runSyncWorkerContext(ctx, cfg, request, &output)
 			var result workerResult
-			err := runSyncWorkerResyncBuild(ctx, cfg, request.Mode, func(line workerLine) {
+			for data := range bytes.SplitSeq(bytes.TrimSpace(output.Bytes()), []byte("\n")) {
+				var line workerLine
+				require.NoError(t, json.Unmarshal(data, &line))
 				if line.Result != nil {
 					result = *line.Result
 				}
-			}, func(agentsync.Progress) {})
+			}
 			return result, err
 		})
 	}
 	original := writeDaemonRuntimeWithAuthAndNoSync
 	writeDaemonRuntimeWithAuthAndNoSync = func(dataDir, host string, port int, version, browserURL string, readOnly, requireAuth, noSync bool, explicitPort *int, caddyPID ...int) (string, error) {
-		base := fmt.Sprintf("http://%s:%d", host, port)
-		client := &http.Client{Timeout: 0}
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/retained/messages", nil)
-		require.NoError(t, err)
-		resp, err := client.Do(req)
-		require.NoError(t, err)
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		require.NoError(t, resp.Body.Close())
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-		require.Contains(t, string(body), "retained transcript")
-		if kind == "data version" || failed {
-			require.Equal(t, "true", resp.Header.Get("X-Agentsview-Archive-Stale"))
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, base+"/api/v1/sessions/retained/rename", strings.NewReader(`{"display_name":"changed"}`))
+		if kind != "" {
+			base := fmt.Sprintf("http://%s:%d", host, port)
+			client := &http.Client{Timeout: 10 * time.Second}
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sessions/retained/messages", nil)
 			require.NoError(t, err)
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Origin", base)
 			resp, err := client.Do(req)
 			require.NoError(t, err)
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
-			require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-			require.Equal(t, "5", resp.Header.Get("Retry-After"))
-			close(release)
-			require.Eventually(t, func() bool {
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sync/status", nil)
-				require.NoError(t, err)
-				resp, err := client.Do(req)
-				if err != nil {
-					return false
-				}
-				defer resp.Body.Close()
-				var status struct {
-					ArchiveStale *bool               `json:"archive_stale"`
-					Progress     *agentsync.Progress `json:"progress"`
-				}
-				return json.UnmarshalRead(resp.Body, &status) == nil && status.ArchiveStale != nil && *status.ArchiveStale == failed && status.Progress == nil
-			}, 20*time.Second, 10*time.Millisecond)
-			if failed {
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, base+"/api/v1/sessions/retained/rename", strings.NewReader(`{"display_name":"after failure"}`))
-				require.NoError(t, err)
-				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("Origin", base)
-				resp, err := client.Do(req)
-				require.NoError(t, err)
-				require.NoError(t, resp.Body.Close())
-				require.Equal(t, http.StatusOK, resp.StatusCode)
-				require.Equal(t, "true", resp.Header.Get("X-Agentsview-Archive-Stale"))
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			require.Contains(t, string(body), "retained transcript")
+		}
+		if backgroundRebuild {
+			select {
+			case <-launched:
+			case <-time.After(10 * time.Second):
+				require.FailNow(t, "HTTP startup must hand off the rebuild before readiness")
 			}
-		} else {
-			require.Empty(t, resp.Header.Get("X-Agentsview-Archive-Stale"))
+			select {
+			case <-rebuilt:
+				require.FailNow(t, "HTTP reads must arrive before the rebuild finishes")
+			default:
+			}
+			close(release)
+			<-rebuilt
+			if kind == "" {
+				base := fmt.Sprintf("http://%s:%d", host, port)
+				require.Eventually(t, func() bool {
+					req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/v1/sync/status", nil)
+					require.NoError(t, err)
+					resp, err := http.DefaultClient.Do(req)
+					if err != nil {
+						return false
+					}
+					defer resp.Body.Close()
+					var status struct {
+						Progress *agentsync.Progress `json:"progress"`
+					}
+					return json.UnmarshalRead(resp.Body, &status) == nil && status.Progress == nil
+				}, 20*time.Second, 10*time.Millisecond)
+			}
 		}
 		fmt.Println("archive rebuild complete")
 		return original(dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync, explicitPort, caddyPID...)

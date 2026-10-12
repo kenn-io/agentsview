@@ -139,7 +139,7 @@ func runSyncWorkerContext(
 	}
 	onProgress := func(p sync.Progress) { emit(workerLine{Progress: &p}) }
 	archiveOnly, err := db.ArchiveOnlyAt(ctx, cfg.DBPath)
-	if archiveOnly {
+	if archiveOnly && mode != "resync-build" {
 		err = db.ErrArchiveOnly
 	}
 	if err == nil {

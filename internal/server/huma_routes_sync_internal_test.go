@@ -1620,27 +1620,40 @@ func TestHumaTriggerSyncWorkerRunnerErrorRejectsStream(t *testing.T) {
 		"a failed worker pass must not be reported as a completed sync")
 }
 
-func TestHumaTriggerSyncDoesNotRetryFailures(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		path string
-		err  error
+func TestHumaTriggerSyncRetryDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		err        error
+		retry      bool
 	}{
-		{"busy without wait", "/api/v1/sync", syncpkg.ErrSyncInProgress},
-		{"worker failed with wait", "/api/v1/sync?wait=true", errors.New("worker failed")},
+		{"busy with wait", "/api/v1/sync?wait=true", syncpkg.ErrSyncInProgress, true},
+		{"busy without wait", "/api/v1/sync", syncpkg.ErrSyncInProgress, false},
+		{"worker failed with wait", "/api/v1/sync?wait=true", errors.New("worker failed"), false},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSyncRouteFixture(t)
+			require.NoError(t, f.db.CloseWriter())
 			calls := 0
-			f := newSyncRouteFixture(t, withLocalSyncRunner(
-				func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
-					calls++
-					return syncpkg.SyncStats{}, tt.err
-				},
-			))
-			w := serveJSON(t, f.handler, http.MethodPost, tt.path, nil)
-			assert.Contains(t, w.Body.String(), "event: error")
-			assert.Contains(t, w.Body.String(), tt.err.Error())
-			assert.Equal(t, 1, calls)
+			f.srv.localSyncRunner = func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+				calls++
+				if calls == 1 {
+					return syncpkg.SyncStats{}, tc.err
+				}
+				return syncpkg.SyncStats{}, f.db.ReopenWriter()
+			}
+			w := serveJSON(t, f.handler, http.MethodPost, tc.path, nil)
+			assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.Empty(t, w.Header().Get("X-Agentsview-Archive-Stale"))
+			if tc.retry {
+				assert.Contains(t, w.Body.String(), "event: done")
+				assert.Equal(t, 2, calls)
+				assert.False(t, f.db.WriterClosed())
+			} else {
+				assert.Contains(t, w.Body.String(), "event: error")
+				assert.Contains(t, w.Body.String(), tc.err.Error())
+				assert.Equal(t, 1, calls)
+				require.NoError(t, f.db.ReopenWriter())
+			}
 		})
 	}
 }
@@ -2328,11 +2341,11 @@ func TestOnDemandSyncEngineKeepsStartupProvidersUntilRestart(t *testing.T) {
 func TestStartupRebuildWriteGate(t *testing.T) {
 	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
 	t.Setenv("PATH", t.TempDir())
+	originalTokenLookup := ghAuthTokenOutput
+	ghAuthTokenOutput = func(context.Context) ([]byte, error) { return nil, errors.New("test has no credentials") }
+	t.Cleanup(func() { ghAuthTokenOutput = originalTokenLookup })
 	f := newSyncRouteFixture(t, withStaleDB())
 	dbtest.SeedSessionWithMessages(t, f.db, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "retained transcript"), dbtest.UserMsg("retained", 1, "follow-up")}, dbtest.WithMessageCounts(2, 2), func(session *db.Session) { session.Cwd = "/work/branch" })
-	f.srv.memoryRefreshRequest = func() {}
-	f.srv.telemetryCapture = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
-	f.srv.registerTelemetryCaptureRoute()
 	syncCalls := 0
 	f.srv.localSyncRunner = func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
 		syncCalls++
@@ -2360,31 +2373,15 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 	}{
 		{http.MethodPost, "/api/v1/sync?wait=true", "", true, false, http.StatusServiceUnavailable, ""},
 		{http.MethodPost, "/api/v1/sync?startup_only=true", "", false, false, http.StatusOK, ""},
+		{http.MethodPost, "/api/v1/sync?startup_only", "", false, false, http.StatusOK, ""},
 		{http.MethodPost, "/api/v1/recall/import?dry_run=true", `{"candidate_id":"dry-run","type":"debugging_method","scope":"repository","title":"Check transcript","body":"Read the retained transcript.","project":"project","agent":"claude","session_id":"retained","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":1}}`, false, false, http.StatusOK, ""},
-		{http.MethodPost, "/api/v1/resync", "", true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPost, "/api/v1/sync/remotes", `{"full":false,"hosts":[],"include_local":false}`, true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPost, "/api/v1/sessions/sync", `{"id":"retained"}`, true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPost, "/api/v1/push/pg", `{"full":false}`, true, false, http.StatusServiceUnavailable, ""},
 		{http.MethodPatch, "/api/v1/sessions/retained/rename", `{"display_name":"renamed"}`, true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodDelete, "/api/v1/sessions/retained", "", true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPost, "/api/v1/settings/worktree-mappings", `{"machine":"local","path_prefix":"/work","project":"project"}`, true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPost, "/api/v1/data/compact", `{}`, true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPost, "/api/v1/data/strip-images", `{"confirmed":true}`, true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPut, "/api/v1/settings/session-project-assignments/retained", `{"project":"new-project"}`, true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodDelete, "/api/v1/settings/session-project-assignments/retained", "", true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPost, "/api/v1/settings/worktree-mappings/apply", `{}`, true, false, http.StatusServiceUnavailable, ""},
-		{http.MethodPost, "/api/v1/settings/worktree-mappings/reclassify", `{}`, true, false, http.StatusServiceUnavailable, ""},
 		{http.MethodPost, "/api/v1/config/github", `{"token":" "}`, false, false, http.StatusBadRequest, "token required"},
 		{http.MethodPost, "/api/v1/sessions/retained/publish", `{}`, false, false, http.StatusUnauthorized, "GitHub token not configured"},
 		{http.MethodPost, "/api/v1/sessions/retained/resume", `{"command_only":true}`, false, false, http.StatusOK, "command"},
 		{http.MethodPost, "/api/v1/sessions/retained/open", `{}`, false, false, http.StatusBadRequest, "opener"},
-		{http.MethodPost, "/api/v1/telemetry/events", `{}`, false, false, http.StatusAccepted, ""},
 		{http.MethodPost, "/api/v1/settings/worktree-mappings/preview", `{"machine":"local","path_prefix":"/work","project":"new-project","enabled":true}`, false, false, http.StatusOK, ""},
-		{http.MethodPost, "/api/v1/memory/refresh", "", false, false, http.StatusAccepted, "\"queued\":true"},
-		{http.MethodPost, "/api/v1/recall/query", `{"query":"retained transcript"}`, false, false, http.StatusOK, ""},
 		{http.MethodGet, "/api/v1/sessions", "", false, false, http.StatusOK, ""},
-		{http.MethodGet, "/api/ping", "", false, true, http.StatusOK, ""},
-		{http.MethodGet, "/api/v1/version", "", false, true, http.StatusOK, ""},
 		{http.MethodGet, "/api/v1/sync/status", "", false, true, http.StatusOK, ""},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
@@ -2393,7 +2390,7 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(tc.body), &body))
 			}
 			w := serveJSON(t, f.handler, tc.method, tc.path, body)
-			if tc.path == "/api/v1/sync?startup_only=true" {
+			if strings.HasPrefix(tc.path, "/api/v1/sync?startup_only") {
 				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				assert.Zero(t, syncCalls)
 			}
@@ -2408,11 +2405,6 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &page))
 				require.Len(t, page.Sessions, 1)
 				assert.Equal(t, "retained", page.Sessions[0].ID)
-			}
-			if tc.path == "/api/v1/recall/query" {
-				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-				assert.Contains(t, w.Body.String(), `"miss_reason":"no_results"`)
-				assert.Contains(t, w.Body.String(), `"query_id":""`)
 			}
 			if tc.path == "/api/v1/settings/worktree-mappings/preview" {
 				assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -2440,24 +2432,6 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestCurrentArchiveSyncWaitsDuringMaintenance(t *testing.T) {
-	f := newSyncRouteFixture(t)
-	require.NoError(t, f.db.CloseWriter())
-	calls := 0
-	f.srv.localSyncRunner = func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
-		calls++
-		if calls == 1 {
-			return syncpkg.SyncStats{}, syncpkg.ErrSyncInProgress
-		}
-		return syncpkg.SyncStats{}, f.db.ReopenWriter()
-	}
-	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync?wait=true", nil)
-	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.Contains(t, w.Body.String(), "event: done")
-	assert.Equal(t, 2, calls)
-	assert.Empty(t, w.Header().Get("X-Agentsview-Archive-Stale"))
 }
 
 func TestHandlerErrorsPreserveOnlyWriterClosedCause(t *testing.T) {

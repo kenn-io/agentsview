@@ -495,6 +495,7 @@
             {displayLabel.text}
           {/if}
         </div>
+        {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
         <div class="session-meta">
           {#if !hideProject}
             <span class="session-project" title={session.project}>{session.project}</span>

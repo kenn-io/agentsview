@@ -11,10 +11,11 @@ it("shows an unpin failure for the clicked card", async () => {
   const component = mount(PinnedPage, { target: document.body });
   try {
     await tick();
-    document.querySelector<HTMLButtonElement>(".unpin-btn")!.click();
+    const card = document.querySelector(".pin-card")!;
+    card.querySelector<HTMLButtonElement>(".unpin-btn")!.click();
     await Promise.resolve();
     await tick();
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe("archive is read-only while it rebuilds");
+    expect(card.querySelector('[role="alert"]')?.textContent).toBe("archive is read-only while it rebuilds");
     expect(unpin).toHaveBeenCalledExactlyOnceWith("session-1", 10);
   } finally {
     await unmount(component);
