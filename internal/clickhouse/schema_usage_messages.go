@@ -504,12 +504,8 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 			"is on NFS; each push rebuilds prepared usage before it returns")
 		return dropPreparedUsageView(ctx, conn)
 	}
-	// The view refreshes the table from here on, so no push rebuilds it
-	// again and nothing else would drop what an earlier push left from its
-	// rebuilds, as when the data directory moved off NFS.
-	if err := dropTables(ctx, conn, "match(name, ?) OR match(name, ?)",
-		chPreparedUsageBuildPattern, chPreparedUsageRebuildLockPattern); err != nil {
-		return err
+	if err := retireRebuildLocks(ctx, conn); err != nil {
+		return fmt.Errorf("dropping leftover prepared usage rebuild tables: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage REFRESH `+chPreparedUsageRefresh+`
 		TO prepared_usage EMPTY AS `+prepared+" SETTINGS "+chPreparedUsageRefreshSettings); err != nil {
@@ -610,7 +606,7 @@ func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
 		return nil
 	}
 	if _, err := conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage"); err != nil {
-		return fmt.Errorf("starting prepared usage refresh (the view's next scheduled refresh retries): %w", err)
+		return fmt.Errorf("starting prepared usage refresh (the next scheduled refresh retries): %w", err)
 	}
 	return nil
 }
@@ -665,13 +661,18 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 	}
 	// The first pass checks again because the previous holder may have
 	// published these snapshots while this push waited for the lock.
-	for pass := range 2 {
+	for pass := range 3 {
 		current, err := preparedUsageCurrent(ctx, conn)
 		if err != nil || current {
 			return err
 		}
-		if pass > 0 {
+		switch pass {
+		case 1:
 			log.Print("clickhouse push: snapshots changed during the rebuild; rebuilding prepared usage once more")
+		case 2:
+			log.Print("clickhouse push: snapshots changed again during the second rebuild; " +
+				"reads prepare the newest sessions themselves until the next push rebuilds prepared usage")
+			return nil
 		}
 		if err := publishPreparedUsageBuild(ctx, conn, generation); err != nil {
 			return err
@@ -720,7 +721,7 @@ func publishPreparedUsageBuild(ctx context.Context, conn *sql.DB, generation uin
 
 // errRebuildSuperseded reports a rebuild that a newer rebuild took over
 // from after this one outlasted its lock.
-var errRebuildSuperseded = errors.New("this rebuild outlasted its lock and a newer rebuild took over; discarding it")
+var errRebuildSuperseded = errors.New("a newer rebuild took over; discarding this build")
 
 // supersededBuildError returns errRebuildSuperseded when err comes from a
 // missing table and the build table is gone, which means a newer rebuild
@@ -811,9 +812,9 @@ func acquireRebuildLock(ctx context.Context, conn *sql.DB) (generation uint64, a
 			heldAt, err := strconv.ParseInt(since, 10, 64)
 			if err == nil && now-heldAt < int64(chRebuildLockTimeout/time.Second) {
 				log.Printf("clickhouse push: skipping the prepared usage rebuild: another push holds %s%d, "+
-					"last renewed %s; a lock its push stops renewing expires after %s",
+					"last renewed %s; the lock expires an hour after its last renewal",
 					chPreparedUsageRebuildLockPrefix, generations[len(generations)-1],
-					time.Unix(heldAt, 0).Format(time.RFC3339), chRebuildLockTimeout)
+					time.Unix(heldAt, 0).Format(time.RFC3339))
 				return 0, false, nil
 			}
 		}
@@ -855,7 +856,7 @@ func takeRebuildLock(ctx context.Context, conn *sql.DB, generation uint64, now i
 		err = errors.Join(err, fmt.Errorf("dropping prepared usage rebuild lock: %w", dropErr))
 	}
 	if err == nil {
-		log.Print("clickhouse push: skipping the prepared usage rebuild: a newer push holds the rebuild lock")
+		log.Print("clickhouse push: skipping the prepared usage rebuild: a newer push already took a later rebuild lock")
 	}
 	return false, err
 }
@@ -906,12 +907,46 @@ func preparedUsageCurrent(ctx context.Context, conn *sql.DB) (bool, error) {
 	return stored == live, nil
 }
 
+// retireRebuildLocks fences off rebuilds that pushes started while the
+// database could not exchange tables. The view refreshes prepared_usage
+// from here on, as when the data directory moved off NFS, so no push takes
+// the lock again. retireRebuildLocks takes one more lock number, marked
+// released, so a rebuild that paused for over an hour finds a newer lock
+// and discards its build instead of publishing older rows over the view's.
+// It then drops the older locks and every build table. A database that
+// never rebuilt this way has no lock tables and gets none.
+func retireRebuildLocks(ctx context.Context, conn *sql.DB) error {
+	for range 3 {
+		var locks, newest uint64
+		if err := conn.QueryRowContext(ctx, `SELECT count(), max(`+chTableNumberSQL+`) FROM system.tables
+			WHERE database = currentDatabase() AND match(name, ?)`,
+			chPreparedUsageRebuildLockPattern).Scan(&locks, &newest); err != nil {
+			return fmt.Errorf("reading prepared usage rebuild locks: %w", err)
+		}
+		if locks == 0 {
+			return nil
+		}
+		retired := newest + 1
+		_, err := conn.ExecContext(ctx, fmt.Sprintf("CREATE TABLE %s%d (x UInt8) ENGINE = Memory COMMENT 'released'",
+			chPreparedUsageRebuildLockPrefix, retired))
+		if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("retiring prepared usage rebuild lock: %w", err)
+		}
+		return dropTables(ctx, conn, "match(name, ?) OR (match(name, ?) AND "+chTableNumberSQL+" < ?)",
+			chPreparedUsageBuildPattern, chPreparedUsageRebuildLockPattern, retired)
+	}
+	return errors.New("retiring prepared usage rebuild locks: other pushes kept taking newer locks")
+}
+
 // dropTables drops the tables of the current database that the condition
 // on system.tables selects. Callers select only names they make, which need
 // no quoting.
 func dropTables(ctx context.Context, conn *sql.DB, condition string, args ...any) error {
 	rows, err := conn.QueryContext(ctx, `SELECT name FROM system.tables
-		WHERE database = currentDatabase() AND `+condition, args...)
+		WHERE database = currentDatabase() AND (`+condition+`)`, args...)
 	if err != nil {
 		return fmt.Errorf("listing tables to drop: %w", err)
 	}

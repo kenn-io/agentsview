@@ -506,8 +506,14 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   and logs how long the rebuild took. A push that changed nothing skips the
   rebuild. A push that finds another push rebuilding also skips it and logs
   which lock that push holds. The running rebuild checks once more after it
-  publishes and rebuilds again for data that arrived meanwhile. A lock whose
-  push stopped expires an hour after its last renewal. A skipped or failed
-  rebuild does not fail the push: usage reads stay correct but slower until a
-  later rebuild succeeds, and the next push tries again. The mirror database
-  keeps one small `prepared_usage_rebuild_lock_<n>` table between pushes.
+  publishes and rebuilds again for data that arrived meanwhile. A skipped or
+  failed rebuild does not fail the push: usage reads stay correct but slower
+  until a later rebuild succeeds, and the next push tries again. The mirror
+  database keeps one small `prepared_usage_rebuild_lock_<n>` table between
+  pushes.
+- **Lock of a stopped push.** A lock expires an hour after its push last renewed
+  it, so a push stopped mid-rebuild makes later pushes skip their rebuilds for
+  up to an hour. If you know no push is running, end that wait by marking the
+  lock named in the skip message released:
+  `ALTER TABLE prepared_usage_rebuild_lock_<n> MODIFY COMMENT 'released'`. Do
+  not drop the lock table; the next push would reuse its number.

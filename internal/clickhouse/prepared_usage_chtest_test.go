@@ -788,21 +788,46 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 }
 
 // A database that can exchange tables refreshes prepared usage with its
-// view, so the schema step drops what rebuilds left behind, such as after
-// the data directory moved off NFS.
-func TestEnsurePreparedUsageDropsRebuildTablesWithTableExchange(t *testing.T) {
+// view. The schema step leaves a database that never rebuilt without lock
+// tables. After rebuilds, as when the data directory moved off NFS, it
+// drops their build tables and older locks and keeps one newer released
+// lock, so a rebuild that paused through the switch discards its build.
+func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	conn := chtest.Open(t, target.URL, target.Database)
-	_, err := conn.ExecContext(ctx, "CREATE TABLE prepared_usage_rebuild_lock_7 (x UInt8) ENGINE = Memory COMMENT 'released'")
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, "CREATE TABLE prepared_usage_build_7 (x UInt8) ENGINE = Memory")
-	require.NoError(t, err)
+	rebuildTables := func() []string {
+		t.Helper()
+		var names []string
+		rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || comment FROM system.tables
+			WHERE database = currentDatabase() AND startsWith(name, 'prepared_usage_') AND name != 'prepared_usage'
+			ORDER BY name`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			require.NoError(t, rows.Scan(&name))
+			names = append(names, name)
+		}
+		require.NoError(t, rows.Err())
+		return names
+	}
 	newTestSync(t, local, target, storage.PusherOptions{})
-	var left uint64
-	require.NoError(t, conn.QueryRowContext(ctx, `SELECT count() FROM system.tables
-		WHERE database = currentDatabase() AND name IN ('prepared_usage_rebuild_lock_7', 'prepared_usage_build_7')`).Scan(&left))
-	require.Zero(t, left)
+	require.Empty(t, rebuildTables())
+
+	for _, stmt := range []string{
+		"CREATE TABLE prepared_usage_rebuild_lock_6 (x UInt8) ENGINE = Memory COMMENT 'released'",
+		"CREATE TABLE prepared_usage_rebuild_lock_7 (x UInt8) ENGINE = Memory COMMENT 'held 1'",
+		"CREATE TABLE prepared_usage_build_7 (x UInt8) ENGINE = Memory",
+	} {
+		_, err := conn.ExecContext(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+	newTestSync(t, local, target, storage.PusherOptions{})
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_8 released"}, rebuildTables())
+	superseded, err := rebuildLockSuperseded(ctx, conn, 7)
+	require.NoError(t, err)
+	require.True(t, superseded, "a rebuild paused through the switch must find a newer lock")
 }
 
 // A renewed rebuild lock stays held past its timeout. A push that stopped

@@ -237,8 +237,7 @@ func (s *Sync) PushWithOptions(
 		// schedule. Where the view refreshes it, the scheduled refresh
 		// still covers a failed trigger; elsewhere the next push retries.
 		if err := refreshPreparedUsage(ctx, conn); err != nil {
-			log.Printf("clickhouse push: prepared usage is behind, so usage reads stay correct "+
-				"but slower until a retry succeeds: %v", err)
+			log.Printf("clickhouse push: prepared usage is behind; usage reads stay correct but slower: %v", err)
 		}
 	}
 	result.Duration = time.Since(start)
