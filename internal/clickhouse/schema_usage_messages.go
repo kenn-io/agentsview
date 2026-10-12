@@ -581,9 +581,9 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 		log.Print("ClickHouse: this database cannot swap tables (EXCHANGE TABLES), usually because its data " +
 			"directory is on NFS; each push rebuilds prepared usage itself instead of the prepare_usage view's " +
 			"scheduled refresh")
-		// Release a retired lock before dropping the view, so a push never
-		// finds a retired lock without the view here and mistakes it for a
-		// switch to the view that stopped halfway.
+		// Release a retired lock before dropping the view, so a push that
+		// finds no view rebuilds; see refreshPreparedUsage for the gap a
+		// replaced prepared_usage leaves.
 		if err := openRebuildLocks(ctx, conn); err != nil {
 			return err
 		}
@@ -711,10 +711,25 @@ func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
 			log.Print(chNoLockSkipMessage)
 			return nil
 		case state.Status == rebuildLockRetired:
-			if err := finishScheduledRefreshSwitch(ctx, conn); err != nil {
-				return fmt.Errorf("finishing the switch to the prepare_usage view (the next push retries): %w", err)
+			// A schema step that replaces prepared_usage drops the view
+			// first. If the database also lost its swap support, the step
+			// releases the retired lock only afterwards, so this push may
+			// see that gap rather than a switch that stopped halfway.
+			// Creating the view then would leave every refresh failing
+			// until the next schema step.
+			exchange, err := chExchangeSupported(ctx, conn)
+			if err != nil {
+				return err
 			}
-			return nil
+			if exchange {
+				if err := finishScheduledRefreshSwitch(ctx, conn); err != nil {
+					return fmt.Errorf("finishing the switch to the prepare_usage view (the next push retries): %w", err)
+				}
+				return nil
+			}
+			if err := openRebuildLocks(ctx, conn); err != nil {
+				return err
+			}
 		}
 		if err := rebuildPreparedUsage(ctx, conn); err != nil {
 			return fmt.Errorf("rebuilding prepared usage (the next push retries): %w", err)

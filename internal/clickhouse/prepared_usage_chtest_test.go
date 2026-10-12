@@ -933,6 +933,41 @@ func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T)
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_6 released"}, locks)
 }
 
+// A schema step that replaces prepared_usage drops the view before it
+// releases a retired lock, so a push in that gap finds the newest lock
+// retired and no view. In a database that cannot swap tables, the push must
+// rebuild rather than create a view whose every refresh fails.
+func TestRefreshPreparedUsageWithRetiredLockWithoutTableExchange(t *testing.T) {
+	ctx := t.Context()
+	local, _ := seedUsagePriceFixture(t)
+	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
+	target := Target{URL: dsn, Database: database}
+	conn := chtest.Open(t, dsn, database)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	// The retired lock an earlier switch to the view left behind.
+	require.NoError(t, createRebuildLock(ctx, conn, 2, rebuildLockState{Status: rebuildLockRetired}))
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	ready, err := NewStoreFromDB(syncer.conn).preparedUsageReady(ctx)
+	require.NoError(t, err)
+	require.True(t, ready, "the push must rebuild prepared usage")
+	var tables []string
+	rows, err := conn.QueryContext(ctx, `SELECT name || ' ' || JSONExtractString(comment, 'status') FROM system.tables
+		WHERE database = currentDatabase() AND startsWith(name, 'prepare') AND name != 'prepared_usage'
+		ORDER BY name`)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		tables = append(tables, name)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"prepared_usage_rebuild_lock_3 released"}, tables,
+		"the push must release the retired lock and rebuild without creating the view")
+}
+
 // A renewed rebuild lock stays held past its timeout. A push that stopped
 // renewing must not publish once another push has taken a newer lock,
 // renewing or releasing a lock a successor already dropped changes nothing,

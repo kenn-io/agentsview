@@ -530,7 +530,9 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   again, the schema step marks the retired lock released, and pushes rebuild
   again.
 - **Half-finished switch.** If the schema step stops between retiring the lock
-  and creating the view, the next push creates the view.
+  and creating the view, the next push creates the view. If the database can
+  no longer swap tables by then, the push releases the lock and rebuilds
+  instead.
 - **Missing view.** If a push logs that the `prepare_usage` view is missing,
   usage reads stay correct but slower until it exists. Another client may be
   recreating it. If the message repeats, restart agentsview; its schema step

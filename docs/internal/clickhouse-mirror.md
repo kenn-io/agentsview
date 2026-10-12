@@ -306,15 +306,19 @@ A lock can outlive its holder:
   rebuilds only while a lock exists, a database with no lock has no rebuild to
   fence.
 - If the schema step stops after retiring the lock but before creating the view,
-  a push that finds the newest lock retired and no view retires again, creates
-  the view, and starts its refresh.
+  a push finds the newest lock retired and no view. The push first checks that
+  the database can still swap tables. If it can, the push retires again,
+  creates the view, and starts its refresh. If it cannot, the push releases
+  the retired lock and rebuilds.
 - Retirement can pause after reading the locks while pushes take newer numbers,
   so it checks for a higher number right after creating its retired lock, as a
   push does after taking a lock. If one exists, it retires again above it.
-- If the database later loses the ability to swap tables again, the schema step
-  marks the retired lock released before it drops the view, so a push never
-  finds a retired lock without the view except after a switch to the view that
-  stopped halfway. Pushes then rebuild again.
+- If the database later loses the ability to swap tables, the schema step marks
+  the retired lock released and then drops the view. From then on, each push
+  rebuilds. A schema step that also replaces `prepared_usage` drops the view
+  before it releases the lock. A push in that gap finds the newest lock
+  retired and no view, and its swap check sends it to rebuild instead of
+  creating the view.
 
 **Currency is proven per read.** A read uses prepared rows only when every
 session has a current snapshot. Sessions pushed since the last refresh form a
