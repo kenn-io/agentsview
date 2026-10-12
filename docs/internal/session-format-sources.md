@@ -3231,8 +3231,9 @@ schemas keep their existing ordering behavior.
   failures. Single-session lookup validates stored member paths and selects
   the preferred transcript when a member cannot be read. Processing keeps
   that transcript selection, so resync does not import sibling sessions.
-  Empty or entirely malformed standalone transcripts preserve archived
-  history. Existing archive-level paths migrate during ordinary sync;
+  Empty standalone transcripts preserve archived history. Malformed or
+  oversized JSONL records reject the parse, preserve archived content and
+  remain retryable. Existing archive-level paths migrate during ordinary sync;
   historical sessions remain in SQLite when their source disappears. Augure
   Desktop uses the same member selection.
 - **Usage and cost:** State records distinguish input, output, cache-read,

@@ -1516,10 +1516,13 @@ func TestHermesIncompleteTranscriptPreservesArchivedHistory(t *testing.T) {
 		for _, mode := range []string{"full sync", "transcript event"} {
 			for _, test := range []struct {
 				name, content string
+				wantFailed    int
 			}{
 				{name: "empty"},
 				{name: "metadata only", content: `{"role":"session_meta","platform":"cli"}` + "\n"},
-				{name: "malformed", content: "invalid JSON\n"},
+				{name: "malformed", content: "invalid JSON\n", wantFailed: 1},
+				{name: "malformed middle", content: `{"role":"user","content":"changed prompt"}` + "\ninvalid JSON\n" + `{"role":"assistant","content":"shorter reply"}` + "\n", wantFailed: 1},
+				{name: "truncated tail", content: `{"role":"user","content":"changed prompt"}` + "\n" + `{"role":"assistant","content":`, wantFailed: 1},
 			} {
 				t.Run(string(agent)+"/"+mode+"/"+test.name, func(t *testing.T) {
 					root := t.TempDir()
@@ -1541,9 +1544,14 @@ func TestHermesIncompleteTranscriptPreservesArchivedHistory(t *testing.T) {
 					require.NoError(t, err)
 					require.NoError(t, os.WriteFile(path, []byte(test.content), 0o600))
 					if mode == "full sync" {
-						require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+						require.Equal(t, test.wantFailed, engine.SyncAll(t.Context(), nil).Failed)
 					} else {
-						require.NoError(t, engine.syncPathsContext(t.Context(), []string{path}, false))
+						err := engine.syncPathsContext(t.Context(), []string{path}, false)
+						if test.wantFailed != 0 {
+							require.ErrorContains(t, err, "changed-path sync incomplete")
+						} else {
+							require.NoError(t, err)
+						}
 					}
 					for range 2 {
 						after, getErr := database.GetSessionFull(t.Context(), id)
@@ -1552,8 +1560,17 @@ func TestHermesIncompleteTranscriptPreservesArchivedHistory(t *testing.T) {
 						messagesAfter, getErr := database.GetAllMessages(t.Context(), id)
 						require.NoError(t, getErr)
 						assert.Equal(t, messagesBefore, messagesAfter)
-						require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+						assert.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
 					}
+					writeHermesTranscriptFile(t, dir, "standalone")
+					require.Zero(t, engine.SyncAll(t.Context(), nil).Failed)
+					recovered, getErr := database.GetAllMessages(t.Context(), id)
+					require.NoError(t, getErr)
+					contents := make([]string, len(recovered))
+					for i, message := range recovered {
+						contents[i] = message.Content
+					}
+					assert.Equal(t, []string{"hello", "Done."}, contents)
 				})
 			}
 		}

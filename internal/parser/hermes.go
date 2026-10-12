@@ -212,8 +212,11 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 		if !ok {
 			break
 		}
-		if !gjson.Valid(line) {
+		if strings.TrimSpace(line) == "" {
 			continue
+		}
+		if !gjson.Valid(line) || !gjson.Parse(line).IsObject() {
+			return nil, nil, fmt.Errorf("invalid JSONL record in %s", path)
 		}
 
 		role := gjson.Get(line, "role").Str
@@ -345,6 +348,10 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 
 	if err := lr.Err(); err != nil {
 		return nil, nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+
+	if lr.skippedOversized {
+		return nil, nil, fmt.Errorf("JSONL record exceeds size limit in %s", path)
 	}
 
 	if len(messages) == 0 {

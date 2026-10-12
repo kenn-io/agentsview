@@ -1565,11 +1565,20 @@ func TestParseHermesSession_JSONL_InvalidJSON(t *testing.T) {
 		`{"role":"user","content":"hello","timestamp":"2026-04-03T15:00:00.000000"}`,
 	}, "\n")
 
-	sess, msgs := runHermesJSONLTest(t, "", content)
-	require.NotNil(t, sess)
-	// Invalid line is skipped, valid messages are parsed.
-	assertMessageCount(t, sess.MessageCount, 1)
-	require.Len(t, msgs, 1)
+	path := createTestFile(t, "session.jsonl", content)
+	sess, msgs, err := parseHermesTestSession(t, path, "", "local")
+	require.ErrorContains(t, err, "invalid JSONL record")
+	assert.Nil(t, sess)
+	assert.Nil(t, msgs)
+}
+
+func TestParseHermesSession_JSONL_OversizedRecord(t *testing.T) {
+	content := `{"role":"user","content":"hello"}` + "\n" + strings.Repeat("x", maxLineSize+1) + "\n"
+	path := createTestFile(t, "session.jsonl", content)
+	sess, msgs, err := parseHermesTestSession(t, path, "", "local")
+	require.ErrorContains(t, err, "JSONL record exceeds size limit")
+	assert.Nil(t, sess)
+	assert.Nil(t, msgs)
 }
 
 func TestParseHermesSession_JSONL_Timestamps(t *testing.T) {
