@@ -560,6 +560,7 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".fx/sessions"},
 		IDPrefix:    "fx:",
 		FileBased:   true,
+		Usage:       UsageCapabilities{NoPerMessageTokenData: true},
 	},
 	{
 		Type:        AgentTau,

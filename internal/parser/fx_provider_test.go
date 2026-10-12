@@ -12,7 +12,7 @@ func TestFxProviderDiscoveryAndCompanions(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "session-a", "events.jsonl")
 	writeSourceFile(t, path, `{"event":{"user":{"text":"Hello"}}}`)
-	for _, ignored := range []string{"events.jsonl", "session-a/other.jsonl", "session-a/subagent/events.jsonl", "invalid.id/events.jsonl", "session-a/tool-results/output.jsonl"} {
+	for _, ignored := range []string{"events.jsonl", "session-a/other.jsonl", "session-a/subagent/events.jsonl", "invalid.id/events.jsonl", "session-a/tool-results/output.jsonl", "session-a/artifacts/events.jsonl", "session-a/logs/events.jsonl"} {
 		writeSourceFile(t, filepath.Join(root, filepath.FromSlash(ignored)), `{}`)
 	}
 	provider, ok := NewProvider(AgentFx, ProviderConfig{Roots: []string{root}, Machine: "local"})

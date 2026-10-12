@@ -1,11 +1,12 @@
 package parser
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
-	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 func readFxMetadata(path string) (gjson.Result, error) {
@@ -40,12 +40,10 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		return nil, nil, err
 	}
 	if metadata.Get("schema_version").Int() != 4 {
+		slog.DebugContext(ctx, "skipping fx session: unsupported session.json schema_version", "schema_version", metadata.Get("schema_version").Int())
 		return nil, nil, nil
 	}
 	rawID := filepath.Base(dir)
-	if !IsValidSessionID(rawID) {
-		return nil, nil, fmt.Errorf("invalid fx session ID")
-	}
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, nil, err
@@ -68,18 +66,26 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	if err != nil {
 		return nil, nil, err
 	}
+	if fxUnsupportedSchema(owner, 1, "owner.json") {
+		return nil, nil, nil
+	}
 	if parent := owner.Get("parent_id").Str; IsValidSessionID(parent) {
 		session.ParentSessionID = "fx:" + parent
 		session.RelationshipType = RelSubagent
 	}
 	var messages []ParsedMessage
-	scanner := bufio.NewScanner(ctxio.Reader{Context: ctx, Reader: f})
-	scanner.Buffer(make([]byte, 64*1024), maxLineSize)
-	for scanner.Scan() {
+	var latestEventTime time.Time
+	reader := newLineReaderContext(ctx, f, maxLineSize)
+	defer releaseLineReader(reader)
+	for {
+		line, ok := reader.next()
+		if !ok {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -88,19 +94,28 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 			continue
 		}
 		frame := gjson.Parse(line)
+		if fxUnsupportedSchema(frame, 3, "events.jsonl frame") {
+			return nil, nil, nil
+		}
 		event := frame.Get("event")
 		if !event.IsObject() {
 			session.MalformedLines++
 			continue
 		}
 		timestamp := time.UnixMilli(frame.Get("timestamp_ms").Int()).UTC()
+		if timestamp.After(latestEventTime) {
+			latestEventTime = timestamp
+		}
 		if timestamp.After(session.EndedAt) {
 			session.EndedAt = timestamp
 		}
 		fxAppendEvent(&messages, event, timestamp, metadata)
 	}
-	if err := scanner.Err(); err != nil {
+	if err := reader.Err(); err != nil {
 		return nil, nil, fmt.Errorf("read fx events: %w", err)
+	}
+	if reader.skippedOversized {
+		return nil, nil, fmt.Errorf("fx event exceeds maximum line size")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -118,9 +133,22 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	if err != nil {
 		return nil, nil, err
 	}
-	session.UsageEvents = fxUsageEvents(session, usage)
-	applyUsageEventTokenTotals(session, session.UsageEvents)
+	if fxUnsupportedSchema(usage, 1, "usage-v2.json") || fxUnsupportedSchema(usage.Get("snapshot"), 3, "usage-v2.json snapshot") {
+		return nil, nil, nil
+	}
+	session.UsageEvents = fxUsageEvents(session, usage, latestEventTime)
+	// Cumulative session usage cannot establish a per-request context peak.
+	session.TotalOutputTokens, session.HasTotalOutputTokens, _, _ = UsageEventTokenAggregate(session.UsageEvents)
 	return session, messages, nil
+}
+
+func fxUnsupportedSchema(value gjson.Result, supported int64, source string) bool {
+	version := value.Get("schema_version").Int()
+	if version <= supported {
+		return false
+	}
+	log.Printf("skipping fx session: unsupported %s schema_version %d (maximum %d)", source, version, supported)
+	return true
 }
 
 func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time.Time, metadata gjson.Result) {
@@ -148,7 +176,14 @@ func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time
 			}
 		}
 		if len(*messages) == 0 || (*messages)[len(*messages)-1].Role != RoleAssistant {
-			*messages = append(*messages, ParsedMessage{Role: RoleAssistant, Timestamp: timestamp, Model: metadata.Get("model").Str, ProviderID: metadata.Get("provider").Str})
+			model, provider := metadata.Get("model").Str, metadata.Get("provider").Str
+			for i := len(*messages) - 1; i >= 0; i-- {
+				if previous := (*messages)[i]; previous.Role == RoleAssistant {
+					model, provider = previous.Model, previous.ProviderID
+					break
+				}
+			}
+			*messages = append(*messages, ParsedMessage{Role: RoleAssistant, Timestamp: timestamp, Model: model, ProviderID: provider})
 		}
 		assistant := &(*messages)[len(*messages)-1]
 		assistant.ToolCalls = append(assistant.ToolCalls, tool)
@@ -185,7 +220,7 @@ func fxAppendEvent(messages *[]ParsedMessage, event gjson.Result, timestamp time
 	*messages = append(*messages, message)
 }
 
-func fxUsageEvents(session *ParsedSession, usage gjson.Result) []ParsedUsageEvent {
+func fxUsageEvents(session *ParsedSession, usage gjson.Result, latestEventTime time.Time) []ParsedUsageEvent {
 	var events []ParsedUsageEvent
 	for _, model := range usage.Get("snapshot.models").Array() {
 		cacheRead := max(0, int(model.Get("cache_read_tokens").Int()))
@@ -194,7 +229,7 @@ func fxUsageEvents(session *ParsedSession, usage gjson.Result) []ParsedUsageEven
 		events = append(events, ParsedUsageEvent{
 			SessionID: session.ID, Source: "session", Model: name,
 			DedupKey:             "session:" + session.ID + "|" + name,
-			OccurredAt:           timeString(session.EndedAt, session.StartedAt),
+			OccurredAt:           timeString(latestEventTime, session.StartedAt),
 			InputTokens:          max(0, int(model.Get("input_tokens").Int())-cacheRead-cacheWrite),
 			OutputTokens:         max(0, int(model.Get("output_tokens").Int())),
 			CacheReadInputTokens: cacheRead, CacheCreationInputTokens: cacheWrite,

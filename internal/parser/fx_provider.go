@@ -22,6 +22,9 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 	caps.Source.ForceReplaceOnParse = CapabilitySupported
 	return NewSourceSetFactory(def, caps, func(cfg ProviderConfig) SourceSet {
 		return NewDirectoryJSONLSourceSet(AgentFx, cfg.Roots,
+			WithDescendPath(func(root, path string) bool {
+				return filepath.Dir(path) == filepath.Clean(root) && IsValidSessionID(filepath.Base(path))
+			}),
 			WithIncludePath(func(_, path string) bool {
 				return filepath.Base(path) == "events.jsonl" && IsValidSessionID(filepath.Base(filepath.Dir(path)))
 			}),
