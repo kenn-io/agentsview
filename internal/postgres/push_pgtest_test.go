@@ -238,6 +238,14 @@ func TestPGPushMetadataChangesPreserveMessagesWithUsageTimestamps(t *testing.T) 
 			require.Len(t, rows, 1)
 			usage.ID = rows[0].ID
 			assert.Equal(t, []db.UsageEvent{usage}, rows, "mirroring must preserve the archive timestamp")
+
+			usage.OccurredAt = "invalid"
+			require.NoError(t, local.ReplaceSessionUsageEvents(ctx, sessionID, []db.UsageEvent{usage}))
+			session.FileHash = new("third-source")
+			require.NoError(t, local.UpsertSession(ctx, session))
+			result, err = pusher.Push(ctx, false, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Errors, "malformed usage timestamps must remain retryable")
 		})
 	}
 }

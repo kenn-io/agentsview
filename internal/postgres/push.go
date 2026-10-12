@@ -395,7 +395,7 @@ func (s *Sync) PushWithOptions(
 	}
 
 	usageFingerprints, err := s.local.UsageEventFingerprintsWithTimestampNormalizer(
-		ctx, mapKeys(sessionByID), pgPushTimestampFingerprintText,
+		ctx, mapKeys(sessionByID), pgUsageEventTimestampFingerprintText,
 	)
 	if err != nil {
 		return result, fmt.Errorf(

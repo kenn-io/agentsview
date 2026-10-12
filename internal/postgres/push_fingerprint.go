@@ -1005,10 +1005,18 @@ func shouldSkipSessionMessages(
 
 func localUsageEventPGFingerprint(ctx context.Context, local *db.DB, sessionID string) (string, error) {
 	fingerprints, err := local.UsageEventFingerprintsWithTimestampNormalizer(
-		ctx, []string{sessionID}, pgPushTimestampFingerprintText,
+		ctx, []string{sessionID}, pgUsageEventTimestampFingerprintText,
 	)
 	if err != nil {
 		return "", err
 	}
 	return fingerprints[sessionID], nil
+}
+
+func pgUsageEventTimestampFingerprintText(value string) string {
+	normalized := pgPushTimestampFingerprintText(value)
+	if value != "" && normalized == "" {
+		return value
+	}
+	return normalized
 }
