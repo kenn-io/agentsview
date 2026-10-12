@@ -165,7 +165,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"200", 200, strings.Repeat("x", importer.ClaudeAIResponseLimit+2)},
+		{"200", 200, `{"uuid":"22222222-2222-4222-8222-222222222226","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"` + strings.Repeat("x", importer.ClaudeAIResponseLimit) + `","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Oversized relay message","created_at":"2026-03-01T10:00:00Z"}]}`},
 		{"413", 413, strings.Repeat("x", importer.ClaudeAIResponseLimit+2)},
 		{"413 empty body", 413, ""},
 	} {
@@ -218,6 +218,10 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			})
 			require.True(t, done)
 			assert.Equal(t, 1, stats.Errors)
+			assert.Zero(t, stats.Imported)
+			session, err := srv.db.GetSession(t.Context(), "claude-ai:22222222-2222-4222-8222-222222222226")
+			require.NoError(t, err)
+			assert.Nil(t, session)
 		})
 	}
 	for _, tt := range []struct {
