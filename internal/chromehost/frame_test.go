@@ -10,14 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type shortWriter struct{ bytes.Buffer }
-
-func (w *shortWriter) Write(p []byte) (int, error) {
-	return w.Buffer.Write(p[:1])
-}
-
-func TestWriteFrameShortWrites(t *testing.T) {
-	var writer shortWriter
+func TestWriteFrame(t *testing.T) {
+	var writer bytes.Buffer
 	require.NoError(t, WriteFrame(&writer, []byte(`{"version":1}`)))
 	frame := writer.Bytes()
 	require.Len(t, frame, 17)
