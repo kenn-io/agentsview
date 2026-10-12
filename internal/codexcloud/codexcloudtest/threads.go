@@ -29,10 +29,18 @@ type Turn struct {
 	Items       []Item
 }
 
-// Thread is one scripted thread, its turns oldest first.
+// Thread is one scripted thread, its turns oldest first. The listing
+// fields drive thread/list.
 type Thread struct {
-	ID    string
-	Turns []Turn
+	ID        string
+	Name      string
+	CreatedAt int64
+	UpdatedAt int64
+	// Status is the listing status type; empty means "idle".
+	Status   string
+	Archived bool
+	SubAgent bool
+	Turns    []Turn
 }
 
 // Threads answers thread/turns/list and thread/items/list from scripted
@@ -70,10 +78,57 @@ func (s *Threads) RejectAnchor() {
 	s.rejectAnchor = true
 }
 
-// ServeThreads answers the thread history methods from s.
+// ServeThreads answers thread/list and the thread history methods from s.
 func (h *Host) ServeThreads(s *Threads) {
+	h.Handle("thread/list", s.ThreadList)
 	h.Handle("thread/turns/list", s.TurnsList)
 	h.Handle("thread/items/list", s.ItemsList)
+}
+
+// ThreadList answers thread/list newest updatedAt first. A request with
+// sourceKinds lists sub-agent threads; one without lists the others.
+func (s *Threads) ThreadList(params jsontext.Value) (any, *Error) {
+	var p struct {
+		Cursor      jsontext.Value `json:"cursor"`
+		Limit       int            `json:"limit"`
+		Archived    bool           `json:"archived"`
+		SourceKinds []string       `json:"sourceKinds"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &Error{Code: -32602, Message: err.Error()}
+	}
+	if p.Limit <= 0 {
+		p.Limit = 50
+	}
+	s.mu.Lock()
+	var rows []Thread
+	for _, thread := range s.threads {
+		if thread.Archived == p.Archived && thread.SubAgent == (len(p.SourceKinds) > 0) {
+			rows = append(rows, thread)
+		}
+	}
+	s.mu.Unlock()
+	slices.SortFunc(rows, func(a, b Thread) int {
+		if a.UpdatedAt != b.UpdatedAt {
+			return int(b.UpdatedAt - a.UpdatedAt)
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	start := offsetCursor(p.Cursor)
+	end := min(start+p.Limit, len(rows))
+	data := []map[string]any{}
+	for _, thread := range rows[start:end] {
+		status := thread.Status
+		if status == "" {
+			status = "idle"
+		}
+		data = append(data, map[string]any{
+			"id": thread.ID, "name": thread.Name, "createdAt": thread.CreatedAt, "updatedAt": thread.UpdatedAt,
+			"status": map[string]string{"type": status}, "originator": "codex_cloud",
+			"environments": []any{},
+		})
+	}
+	return page(data, end, len(rows)), nil
 }
 
 type pageParams struct {

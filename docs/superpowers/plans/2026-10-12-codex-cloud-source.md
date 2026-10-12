@@ -802,7 +802,7 @@ format (dedup).
       turn, even when every saved item is finished.
     - `func dedup(st *ThreadState, recs []mirror.Record) []mirror.Record` (by
       digest per key; records the kept digests in `st`).
-    - `func commitThread(store *Store, key AccountKey, threadID string, st ThreadState, recs []mirror.Record, now time.Time) (ThreadState, error)`:
+    - `func commitThread(store *Store, key AccountKey, threadID string, st ThreadState, recs []mirror.Record, now time.Time) (next ThreadState, appended bool, err error)`:
       `mirror.Append(path, st.Offset, nil)` to recover, rebuild digests and the
       last plan record from `Recovered`, then `dedup`, then append, then save
       state. Dedup never runs against digests a crash left stale; a missing or
@@ -856,16 +856,21 @@ oversized replies), Failure timing.
 - Produces:
 
     - `type Gates struct { CodexCloud config.CodexCloudConfig; Disabled bool; Homes []string; ReadErr error }`
-      and `type GateSource func() Gates`: re-reads `config.toml` with
-      `config.LoadReadOnly`, keeps the last good `Gates` on a read error and
-      sets `ReadErr`. Both jobs use it. `NoSync` is passed separately (Global
-      Constraints).
+      with `Fetching() bool`, and `type GateSource func() Gates` built by
+      `NewGateSource(load func() (config.Config, error), getenv, userHome)`:
+      re-reads `config.toml` (the daemon passes `config.LoadReadOnly`), keeps
+      the last good `Gates` on a read error and sets `ReadErr`. Both jobs use
+      it. `NoSync` is passed separately (Global Constraints).
     - `type Syncer struct{ Store *Store; Waits *Waits; Status *StatusBoard; Now func() time.Time; Dial func(context.Context, DialOptions) (*Conn, error); Gates GateSource; NoSync bool; ReadLogin func(home string) (Login, HomeState, error); Version string; Log *log.Logger }`
     - `func (s *Syncer) Run(ctx context.Context) error` (the poller job's `Run`;
       returns nil for per-account failures).
-    - `func (s *Syncer) runAccount(ctx context.Context, key AccountKey, logins []Login) error`:
+    - `func (s *Syncer) runAccount(ctx context.Context, gates Gates, key AccountKey, logins []Login) error`:
       the thread step runs only when the account wait allows it; the plan usage
-      step (Task 20) runs either way.
+      step (Task 20) runs either way. Each thread is fetched and committed under
+      the account lock, so the monitor's writes land between threads.
+    - A failed fetch still commits the thread's listing record, so the thread
+      imports with its metadata while its history waits in the retry set. Thread
+      retries wait 5 minutes, doubling to one hour.
     - Check-again: set when the fetch started less than 2 minutes after the
       thread's `updatedAt`; cleared per the spec rule.
     - Retry entry stores the listing record; a retry appends it first when it
@@ -882,7 +887,7 @@ oversized replies), Failure timing.
     - Status rows: "Importing, found N threads so far" until all four listings
       have finished a first pass, then "Importing N of M threads".
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
     - `TestFailedFirstImportKeepsMetadata` (Review Focus).
     - `TestFailingThreadBacksOffAndDoesNotHoldWatermark`.
@@ -895,17 +900,16 @@ oversized replies), Failure timing.
     - `TestInterruptedBackfillResumes` and `TestFoundSoFarUntilAllListings`.
     - `TestFullResyncKeepsStateAndFetchesNothing` and
       `TestLostStateRefetchesWithoutDuplicates`.
-    - `TestCardinalityScaling` (small vs large archive with deletions, tombstones,
-      and a persistent archive: unchanged-pass calls and state files read stay
-      constant).
+    - `TestCardinalityScaling` (small vs large archive: an unchanged pass makes
+      one `thread/list` call per listing and no history calls either way).
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): run sync passes with retries"`
 
 ### Task 15: Sync job in the daemon, gates, and status

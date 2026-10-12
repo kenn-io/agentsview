@@ -94,6 +94,16 @@ var failureNames = map[Failure]string{
 
 func (f Failure) String() string { return failureNames[f] }
 
+// failureFromString reads a failure name back from persisted state.
+func failureFromString(name string) Failure {
+	for f, n := range failureNames {
+		if n == name {
+			return f
+		}
+	}
+	return FailNone
+}
+
 // FailureFor names the cause of an error from Dial or a call. A JSON-RPC
 // reply is classified as account-level; per-thread callers use Classify
 // first. Callers check their own context before calling this.

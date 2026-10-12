@@ -48,7 +48,7 @@ func (e *fetchEnv) pass(t *testing.T, id string, st ThreadState, updated int64, 
 	t.Helper()
 	result, err := fetchThread(t.Context(), e.conn, id, st, listingRecord(id, updated), now)
 	require.NoError(t, err)
-	next, err := commitThread(e.store, fetchKey, id, result.Next, result.Records, now)
+	next, _, err := commitThread(e.store, fetchKey, id, result.Next, result.Records, now)
 	require.NoError(t, err)
 	return next, result
 }

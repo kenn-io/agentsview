@@ -53,6 +53,7 @@ type Host struct {
 	conns      []*websocket.Conn
 	selected   string
 	refuse     *refusal
+	bearers    map[string]int
 	echo       bool
 	serverIDs  int
 }
@@ -105,6 +106,17 @@ func (h *Host) RefuseHandshake(status int, header http.Header, body string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.refuse = &refusal{status: status, header: header, body: body}
+}
+
+// RefuseBearer makes later upgrades that carry token answer status, so
+// tests can refuse one login while accepting another.
+func (h *Host) RefuseBearer(token string, status int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.bearers == nil {
+		h.bearers = map[string]int{}
+	}
+	h.bearers["openai-bearer."+token] = status
 }
 
 // Redirect makes later upgrades answer 302 to target.
@@ -183,6 +195,11 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		Subprotocols: websocketSubprotocols(r.Header),
 	})
 	refuse, selected, echo := h.refuse, h.selected, h.echo
+	for _, protocol := range websocketSubprotocols(r.Header) {
+		if status, ok := h.bearers[protocol]; ok {
+			refuse = &refusal{status: status}
+		}
+	}
 	h.mu.Unlock()
 	if echo {
 		echoUpgrade(w, r)
