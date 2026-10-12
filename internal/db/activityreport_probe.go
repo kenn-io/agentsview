@@ -10,13 +10,8 @@ import (
 func (db *DB) ActivityReportSourceProbe(
 	ctx context.Context,
 ) (activity.SourceProbe, error) {
-	release, err := db.acquireBulkRead(ctx)
-	if err != nil {
-		return activity.SourceProbe{}, err
-	}
-	defer release()
 	var probe activity.SourceProbe
-	err = db.getReader().QueryRowContext(ctx, `SELECT
+	err := db.getReader().QueryRowContext(ctx, `SELECT
 		(SELECT COUNT(*) FROM sessions),
 		COALESCE((SELECT MAX(local_modified_at) FROM sessions), ''),
 		COALESCE((SELECT MAX(data_version) FROM sessions), 0),

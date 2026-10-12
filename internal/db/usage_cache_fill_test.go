@@ -20,7 +20,19 @@ import (
 )
 
 func TestBulkReadEntryPointsWaitInLane(t *testing.T) {
+	t.Run("saturated lane", func(t *testing.T) { testBulkReadEntryPoints(t, true) })
+	t.Run("one reader connection", func(t *testing.T) { testBulkReadEntryPoints(t, false) })
+}
+
+func testBulkReadEntryPoints(t *testing.T, blocked bool) {
+	t.Helper()
 	database := usageCandidateFixture(t)
+	message := asstMsgAt("inside-message", 1, "skill call", "2026-08-10T10:01:00Z")
+	message.HasToolUse = true
+	message.ToolCalls = []ToolCall{{SessionID: "inside-message", ToolName: "Skill", Category: "Skill", SkillName: "review-code"}}
+	insertMessages(t, database, message)
+	database.rawReader().SetMaxOpenConns(1)
+	filter := AnalyticsFilter{From: "2026-08-01", To: "2026-08-20", Timezone: "UTC"}
 	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
 	require.NoError(t, err)
 	defer snapshot.Close()
@@ -30,10 +42,12 @@ func TestBulkReadEntryPointsWaitInLane(t *testing.T) {
 		Preset: "day", Date: "2026-08-10", Timezone: "UTC",
 	}, time.Now())
 	require.NoError(t, err)
-	for range bulkReadSlots {
-		release, err := database.acquireBulkRead(t.Context())
-		require.NoError(t, err)
-		defer release()
+	if blocked {
+		for range bulkReadSlots {
+			release, err := database.acquireBulkRead(t.Context())
+			require.NoError(t, err)
+			defer release()
+		}
 	}
 	for _, tc := range []struct {
 		name      string
@@ -41,79 +55,76 @@ func TestBulkReadEntryPointsWaitInLane(t *testing.T) {
 		wantError string
 	}{
 		{"summary", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsSummary(ctx, baseFilter())
+			_, err := database.GetAnalyticsSummary(ctx, filter)
 			return err
 		}, ""},
 		{"activity", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsActivity(ctx, baseFilter(), "day")
+			_, err := database.GetAnalyticsActivity(ctx, filter, "day")
 			return err
 		}, ""},
 		{"heatmap", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsHeatmap(ctx, baseFilter(), "messages")
+			_, err := database.GetAnalyticsHeatmap(ctx, filter, "messages")
 			return err
 		}, ""},
 		{"projects", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsProjects(ctx, baseFilter())
+			_, err := database.GetAnalyticsProjects(ctx, filter)
 			return err
 		}, ""},
 		{"hour of week", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsHourOfWeek(ctx, baseFilter())
+			_, err := database.GetAnalyticsHourOfWeek(ctx, filter)
 			return err
 		}, ""},
 		{"session shape", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsSessionShape(ctx, baseFilter())
+			_, err := database.GetAnalyticsSessionShape(ctx, filter)
 			return err
 		}, ""},
 		{"tools", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsTools(ctx, baseFilter())
+			_, err := database.GetAnalyticsTools(ctx, filter)
 			return err
 		}, ""},
 		{"skills", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsSkills(ctx, baseFilter(), "week")
+			_, err := database.GetAnalyticsSkills(ctx, filter, "week")
 			return err
 		}, ""},
 		{"velocity", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsVelocity(ctx, baseFilter())
+			_, err := database.GetAnalyticsVelocity(ctx, filter)
 			return err
 		}, ""},
 		{"signals", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsSignals(ctx, baseFilter())
+			_, err := database.GetAnalyticsSignals(ctx, filter)
 			return err
 		}, ""},
 		{"signal sessions", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsSignalSessions(ctx, baseFilter(), "outcome_completed", 10)
+			_, err := database.GetAnalyticsSignalSessions(ctx, filter, "outcome_completed", 10)
 			return err
 		}, ""},
 		{"tool signal sessions", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsSignalSessions(ctx, baseFilter(), "tool_empty_rate", 10)
+			_, err := database.GetAnalyticsSignalSessions(ctx, filter, "tool_empty_rate", 10)
 			return err
 		}, ""},
 		{"top sessions", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsTopSessions(ctx, baseFilter(), "messages")
+			_, err := database.GetAnalyticsTopSessions(ctx, filter, "messages")
 			return err
 		}, ""},
 		{"session stats", func(ctx context.Context) error {
-			_, err := database.GetSessionStats(ctx, StatsFilter{})
+			_, err := database.GetSessionStats(ctx, StatsFilter{Since: "2026-08-01", Until: "2026-08-21", Timezone: "UTC"})
 			return err
 		}, ""},
 		{"trends", func(ctx context.Context) error {
-			_, err := database.GetTrendsTerms(ctx, baseFilter(), []TrendTermInput{{Term: "test"}}, "week")
+			_, err := database.GetTrendsTerms(ctx, filter, []TrendTermInput{{Term: "test"}}, "week")
 			return err
 		}, ""},
 		{"activity report", func(ctx context.Context) error {
-			_, err := database.GetActivityReport(ctx, baseFilter(), q)
+			_, err := database.GetActivityReport(ctx, filter, q)
 			return err
 		}, ""},
 		{"activity artifacts", func(ctx context.Context) error {
-			_, err := database.BuildActivityReportArtifacts(ctx, baseFilter(), q, nil)
-			return err
-		}, ""},
-		{"activity probe", func(ctx context.Context) error {
-			_, err := database.ActivityReportSourceProbe(ctx)
+			_, err := database.BuildActivityReportArtifacts(ctx, filter, q, nil)
 			return err
 		}, ""},
 		{"usage capture", func(ctx context.Context) error {
-			_, err := database.captureUsageQuery(ctx, UsageFilter{}, usageQueryKindToken)
+			captured, err := database.captureUsageQuery(ctx, UsageFilter{}, usageQueryKindToken)
+			defer captured.Close()
 			return err
 		}, ""},
 		{"usage source recheck", func(ctx context.Context) error {
@@ -129,8 +140,13 @@ func TestBulkReadEntryPointsWaitInLane(t *testing.T) {
 			if spool != nil {
 				defer spool.Close()
 			}
-			assert.Nil(t, spool)
-			assert.Nil(t, versions)
+			if blocked {
+				assert.Nil(t, spool)
+				assert.Nil(t, versions)
+			} else {
+				assert.NotNil(t, spool)
+				assert.NotEmpty(t, versions)
+			}
 			return err
 		}, ""},
 		{"Cursor batch", func(ctx context.Context) error {
@@ -138,10 +154,22 @@ func TestBulkReadEntryPointsWaitInLane(t *testing.T) {
 			return err
 		}, ""},
 		{"unsupported signal", func(ctx context.Context) error {
-			_, err := database.GetAnalyticsSignalSessions(ctx, baseFilter(), "unsupported", 10)
+			_, err := database.GetAnalyticsSignalSessions(ctx, filter, "unsupported", 10)
 			assert.ErrorIs(t, err, ErrUnsupportedAnalyticsSignal)
 			return err
 		}, "unsupported analytics signal"},
+		{"invalid heatmap metric", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsHeatmap(ctx, filter, "invalid")
+			return err
+		}, "unsupported heatmap metric: invalid"},
+		{"invalid skills granularity", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsSkills(ctx, filter, "invalid")
+			return err
+		}, "unsupported skills granularity: invalid"},
+		{"invalid top sessions metric", func(ctx context.Context) error {
+			_, err := database.GetAnalyticsTopSessions(ctx, filter, "invalid")
+			return err
+		}, "unsupported top sessions metric: invalid"},
 		{"invalid stats timezone", func(ctx context.Context) error {
 			_, err := database.GetSessionStats(ctx, StatsFilter{Timezone: "invalid"})
 			return err
@@ -152,16 +180,23 @@ func TestBulkReadEntryPointsWaitInLane(t *testing.T) {
 		}, "window since (2026-08-11T00:00:00Z) must precede until (2026-08-10T00:00:00Z)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			//nolint:kennlint // The deadline must expire while all bulk permits are held, except for input errors.
-			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			budget := 2 * time.Second
+			if blocked {
+				budget = 100 * time.Millisecond
+			}
+			//nolint:kennlint // The deadline expires while all bulk permits are held, except for input errors.
+			ctx, cancel := context.WithTimeout(t.Context(), budget)
 			defer cancel()
 			require.NoError(t, ctx.Err())
 			err := tc.read(ctx)
 			if tc.wantError != "" {
 				require.EqualError(t, err, tc.wantError)
 				assert.NoError(t, ctx.Err())
-			} else {
+			} else if blocked {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
+			} else {
+				require.NoError(t, err, "bulk holder must complete with one reader connection")
+				assert.NoError(t, ctx.Err())
 			}
 			assert.Zero(t, database.rawReader().Stats().InUse)
 		})

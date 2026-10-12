@@ -137,34 +137,12 @@ func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "summary", session.ID)
+	probe, err := database.ActivityReportSourceProbe(quickCtx)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, probe.SessionCount)
 }
 
 func TestAcquireBulkReadHonorsContext(t *testing.T) {
-	database := &DB{}
-	releases := make([]func(), 0, bulkReadSlots)
-	for range bulkReadSlots {
-		release, err := database.acquireBulkRead(t.Context())
-		require.NoError(t, err)
-		releases = append(releases, release)
-	}
-	defer func() {
-		for _, release := range releases {
-			release()
-		}
-	}()
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	release, err := database.acquireBulkRead(ctx)
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Nil(t, release)
-	releases[0]()
-	releases = releases[1:]
-	release, err = database.acquireBulkRead(t.Context())
-	require.NoError(t, err)
-	release()
-}
-
-func TestAcquireBulkReadRejectsCanceledContextWithFreeSlots(t *testing.T) {
 	database := &DB{}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -176,4 +154,23 @@ func TestAcquireBulkReadRejectsCanceledContextWithFreeSlots(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 		assert.Nil(t, release)
 	}
+	releases := make([]func(), 0, bulkReadSlots)
+	for range bulkReadSlots {
+		release, err := database.acquireBulkRead(t.Context())
+		require.NoError(t, err)
+		releases = append(releases, release)
+	}
+	defer func() {
+		for _, release := range releases {
+			release()
+		}
+	}()
+	release, err := database.acquireBulkRead(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, release)
+	releases[0]()
+	releases = releases[1:]
+	release, err = database.acquireBulkRead(t.Context())
+	require.NoError(t, err)
+	release()
 }
