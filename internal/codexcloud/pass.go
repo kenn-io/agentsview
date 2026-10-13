@@ -475,6 +475,11 @@ func (p *pass) thread(ctx context.Context, id string) error {
 			return err
 		}
 	}
+	// The parent is saved with the resume cursor: once the cursor moves,
+	// the delegation tag in the first user message is not read again, so
+	// a crash before linkUsage must not lose it.
+	parent := resolveParent(id, listing, st.ResolvedParent, result.Records, st.ResumeTurnID == "")
+	result.Next.ResolvedParent = parent
 	next, appended, err := commitThread(p.Store, p.key, id, result.Next, result.Records, now)
 	if err != nil {
 		return err
@@ -490,7 +495,6 @@ func (p *pass) thread(ctx context.Context, id string) error {
 	} else {
 		delete(acct.Unfinished, id)
 	}
-	parent := resolveParent(id, listing, st.ResolvedParent, result.Records, st.ResumeTurnID == "")
 	if err := p.linkUsage(p.key, &acct, id, parent, now); err != nil {
 		return err
 	}
