@@ -54,9 +54,7 @@ func (db *DB) GetActivityReport(
 	if err != nil {
 		return activity.Report{}, err
 	}
-	artifacts.Report.BySession = artifacts.Sessions
-	artifacts.Report.SessionsTotal = len(artifacts.Sessions)
-	return artifacts.Report, nil
+	return activity.ReportWithSessions(artifacts), nil
 }
 
 func (db *DB) BuildActivityReportArtifacts(
@@ -86,70 +84,12 @@ func (db *DB) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	usage, pricing, err := db.activityReportUsage(ctx, ids, lowerBound, upperBound, q)
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-
-	rowsProcessed := int64(0)
-	source := db.activityReportCandidateSource(ids, q)
-	artifacts, err := activity.BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, activity.Params{
-		RangeStart:    q.RangeStart,
-		RangeEnd:      q.RangeEnd,
-		Loc:           q.Loc,
-		EffectiveEnd:  q.EffectiveEnd,
-		Partial:       q.Partial,
-		GapCapSeconds: q.GapCapSeconds,
-		Bucket:        q.Bucket,
-	}, sessions, func(
-		ctx context.Context, yield func(activity.IntervalCandidate) error,
-	) error {
-		ReportProgress(onProgress, activity.Progress{
-			Phase: activity.ProgressScanningActivity, SessionsTotal: len(sessions),
-		})
-		return source(ctx, func(candidate activity.IntervalCandidate) error {
-			rowsProcessed++
-			ReportProgress(onProgress, activity.Progress{
-				Phase:         activity.ProgressScanningActivity,
-				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
-			})
-			return yield(candidate)
-		})
-	}, usage)
-	if err != nil {
-		return activity.CandidateArtifacts{}, fmt.Errorf("aggregating activity report: %w", err)
-	}
-	if err := db.activityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	ReportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressFinalizing, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
-	artifacts.Report.Pricing = pricing
-	projects, err := db.BuildProjectIdentityMap(ctx,
-		ActivityReportProjectLabels(sessions))
-	if err != nil {
-		return activity.CandidateArtifacts{}, err
-	}
-	artifacts.Report.BySession = artifacts.Sessions
-	activity.SanitizeProjectLabels(&artifacts.Report, projects)
-	artifacts.Sessions = artifacts.Report.BySession
-	artifacts.Report.BySession = []activity.SessionRow{}
-	artifacts.Report.Projects = export.ProjectMapForWire(projects)
-	ReportProgress(onProgress, activity.Progress{
-		Phase: activity.ProgressDone, SessionsTotal: len(sessions),
-		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	return artifacts, nil
+	return activity.BuildReportArtifacts(ctx, activityReportBackend{DB: db, lower: lowerBound, upper: upperBound}, sessions, ids, q, onProgress, "aggregating activity report")
 }
 
 // ReportProgress calls callback with progress when callback is set.
 func ReportProgress(callback activity.ProgressFunc, progress activity.Progress) {
-	if callback != nil {
-		callback(progress)
-	}
+	activity.ReportProgress(callback, progress)
 }
 
 func (db *DB) activityReportMessageCounts(
@@ -261,7 +201,6 @@ func (db *DB) GetSessionUsageRows(
 	}
 	snapshotRows := make([]activity.UsageRow, len(rowsAcc))
 	rowContributes := make([]bool, len(rowsAcc))
-	rawOutputTokensBySession := make(map[string]int)
 	for i, o := range rowsAcc {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -289,53 +228,10 @@ func (db *DB) GetSessionUsageRows(
 			o.scan.cost.Valid, inputTok, outputTok, reasoningTok,
 			cacheCrTok, cacheRdTok,
 			usageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
-		rawOutputTokensBySession[o.scan.sessionID] += outputTok
 	}
-	canonicalTokenCoverageBySession, err := activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
-	if err != nil {
-		return nil, err
-	}
-	snapshotMask, snapshotAttribution, snapshotWebSearchRequests, err := activity.ClaudeSnapshotSurvivorSelectionContext(ctx, snapshotRows)
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[UsageDedupToken]struct{})
-	deduplicatedOutputTokens := make(map[string]int)
-	discardedContributingSessions := make(map[string]struct{})
-	out := make([]activity.UsageRow, 0, len(rowsAcc))
-	for i, o := range rowsAcc {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if !snapshotMask[i] {
-			deduplicatedOutputTokens[o.scan.sessionID] += snapshotRows[i].OutputTokens
-			if rowContributes[i] {
-				discardedContributingSessions[o.scan.sessionID] = struct{}{}
-			}
-			continue
-		}
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsageRow, error) {
+		o := rowsAcc[i]
 		r := o.scan
-		inputTok, outputTok, cacheCrTok, cacheRdTok, _ := sqliteSessionUsageRowTokens(r)
-		attributionSessionID := snapshotAttribution[i]
-		if attributionSessionID != r.sessionID {
-			deduplicatedOutputTokens[r.sessionID] += outputTok
-			if rowContributes[i] {
-				discardedContributingSessions[r.sessionID] = struct{}{}
-			}
-		}
-		if key, ok := UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := seen[key]; dup {
-				deduplicatedOutputTokens[r.sessionID] += outputTok
-				if rowContributes[i] {
-					discardedContributingSessions[r.sessionID] = struct{}{}
-				}
-				continue
-			}
-			seen[key] = struct{}{}
-		}
 		costRow := r
 		var sessionCost *money.Money
 		if r.costSource == CopilotReportedCostSource && r.cost.Valid {
@@ -345,50 +241,23 @@ func (db *DB) GetSessionUsageRows(
 			rateResolver.RecordUnattributedReported()
 		}
 		cost, priced, contributes, priceErr := sessionRowCostWithWebSearchRequests(
-			costRow, snapshotWebSearchRequests[i], rateResolver)
+			costRow, webSearches, rateResolver)
 		if priceErr != nil {
-			return nil, priceErr
+			return activity.UsageRow{}, priceErr
 		}
 		costSource := export.CostSourceComputed
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
-		out = append(out, activity.UsageRow{
-			SessionID:       attributionSessionID,
-			SourceSessionID: r.sessionID,
-			Model:           r.model,
-			Timestamp:       r.ts,
-			OutputTokens:    outputTok,
-			Cost:            cost,
-			CostSource:      costSource,
-			SessionCost:     sessionCost,
-			Priced:          priced,
-			Contributes:     contributes,
-			Agent:           r.agent,
-			ProviderID:      r.providerID,
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
-			SourceUUID:      r.sourceUUID,
-			UsageDedupKey:   r.usageDedupKey,
-
-			UsageSource:         r.usageSource,
-			MessageOrdinal:      UsageRowMessageOrdinal(r.messageOrdinal),
-			InputTokens:         inputTok,
-			CacheCreationTokens: cacheCrTok,
-			CacheReadTokens:     cacheRdTok,
-			WebSearchRequests:   snapshotWebSearchRequests[i],
-		})
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return &activity.SessionUsageRows{
-		Rows:                            out,
-		RawOutputTokensBySession:        rawOutputTokensBySession,
-		DeduplicatedOutputTokens:        deduplicatedOutputTokens,
-		DiscardedContributingSessions:   discardedContributingSessions,
-		CanonicalTokenCoverageBySession: canonicalTokenCoverageBySession,
-	}, nil
+		row := snapshotRows[i]
+		row.Model = r.model
+		row.Cost = cost
+		row.CostSource = costSource
+		row.SessionCost = sessionCost
+		row.Priced = priced
+		row.Contributes = contributes
+		return row, nil
+	})
 }
 
 func stableSortContext[T any](
@@ -505,17 +374,6 @@ func sqliteSessionUsageRowLess(
 		return a.scan.usageDedupKey < b.scan.usageDedupKey
 	}
 	return !a.validTS && a.scan.ts < b.scan.ts
-}
-
-// ActivityReportProjectLabels returns the distinct session projects, sorted.
-func ActivityReportProjectLabels(
-	sessions []activity.SessionMeta,
-) []string {
-	set := make(map[string]struct{}, len(sessions))
-	for _, session := range sessions {
-		set[session.Project] = struct{}{}
-	}
-	return SortedKeys(set)
 }
 
 // activityReportSessions returns the candidate sessions whose window
@@ -1360,4 +1218,17 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 		rdTok,
 	)
 	return cost, true, true, nil
+}
+
+type activityReportBackend struct {
+	*DB
+	lower, upper string
+}
+
+func (b activityReportBackend) ActivityReportUsage(ctx context.Context, ids []string, q activity.Query) ([]activity.UsageRow, *export.PricingBlock, error) {
+	return b.activityReportUsage(ctx, ids, b.lower, b.upper, q)
+}
+
+func (b activityReportBackend) ActivityReportMessageCounts(ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts) error {
+	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
 }

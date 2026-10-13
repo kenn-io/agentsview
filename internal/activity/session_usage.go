@@ -1,0 +1,61 @@
+package activity
+
+import "context"
+
+// SelectSessionUsageRows selects and prices survivors from sorted rows with matching contribution flags.
+func SelectSessionUsageRows(ctx context.Context, rows []UsageRow, contributes []bool, price func(int, int) (UsageRow, error)) (*SessionUsageRows, error) {
+	coverage, err := CanonicalSessionTokenCoverageContext(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	mask, attribution, searches, err := ClaudeSnapshotSurvivorSelectionContext(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	result := &SessionUsageRows{
+		Rows:                            make([]UsageRow, 0, len(rows)),
+		RawOutputTokensBySession:        make(map[string]int),
+		DeduplicatedOutputTokens:        make(map[string]int),
+		DiscardedContributingSessions:   make(map[string]struct{}),
+		CanonicalTokenCoverageBySession: coverage,
+	}
+	seen := make(map[usageDedupToken]struct{})
+	for i, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		result.RawOutputTokensBySession[row.SessionID] += row.OutputTokens
+		discard := func() {
+			result.DeduplicatedOutputTokens[row.SessionID] += row.OutputTokens
+			if contributes[i] {
+				result.DiscardedContributingSessions[row.SessionID] = struct{}{}
+			}
+		}
+		if !mask[i] {
+			discard()
+			continue
+		}
+		if attribution[i] != row.SessionID {
+			discard()
+		}
+		if key, ok := sessionUsageDedupTokenForRow(row); ok {
+			if _, duplicate := seen[key]; duplicate {
+				discard()
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		priced, err := price(i, searches[i])
+		if err != nil {
+			return nil, err
+		}
+		priced.SourceSessionID = row.SessionID
+		priced.SessionID = attribution[i]
+		priced.WebSearchRequests = searches[i]
+		result.Rows = append(result.Rows, priced)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}

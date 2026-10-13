@@ -1,0 +1,106 @@
+package activity
+
+import (
+	"context"
+	"fmt"
+	"sort"
+
+	"go.kenn.io/agentsview/internal/export"
+)
+
+// ReportBackend supplies backend reads and pricing for shared report assembly.
+type ReportBackend interface {
+	ActivityReportUsage(context.Context, []string, Query) ([]UsageRow, *export.PricingBlock, error)
+	ActivityReportCandidateSource([]string, Query) CandidateSource
+	ActivityReportMessageCounts(context.Context, []string, Query, *CandidateArtifacts) error
+	BuildProjectIdentityMap(context.Context, []string) (map[string]export.ProjectMapEntry, error)
+}
+
+// BuildReportArtifacts assembles a report after the backend selects its sessions.
+func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions []SessionMeta, ids []string, q Query, onProgress ProgressFunc, aggregationLabel string) (CandidateArtifacts, error) {
+	usage, pricing, err := backend.ActivityReportUsage(ctx, ids, q)
+	if err != nil {
+		return CandidateArtifacts{}, err
+	}
+
+	rowsProcessed := int64(0)
+	source := backend.ActivityReportCandidateSource(ids, q)
+	artifacts, err := BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, Params{
+		RangeStart:    q.RangeStart,
+		RangeEnd:      q.RangeEnd,
+		Loc:           q.Loc,
+		EffectiveEnd:  q.EffectiveEnd,
+		Partial:       q.Partial,
+		GapCapSeconds: q.GapCapSeconds,
+		Bucket:        q.Bucket,
+	}, sessions, func(
+		ctx context.Context, yield func(IntervalCandidate) error,
+	) error {
+		ReportProgress(onProgress, Progress{
+			Phase: ProgressScanningActivity, SessionsTotal: len(sessions),
+		})
+		return source(ctx, func(candidate IntervalCandidate) error {
+			rowsProcessed++
+			ReportProgress(onProgress, Progress{
+				Phase:         ProgressScanningActivity,
+				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
+			})
+			return yield(candidate)
+		})
+	}, usage)
+	if err != nil {
+		return CandidateArtifacts{}, fmt.Errorf("%s: %w", aggregationLabel, err)
+	}
+	if err := backend.ActivityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
+		return CandidateArtifacts{}, err
+	}
+	ReportProgress(onProgress, Progress{
+		Phase: ProgressFinalizing, SessionsTotal: len(sessions),
+		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
+	})
+	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
+	artifacts.Report.Pricing = pricing
+	projects, err := backend.BuildProjectIdentityMap(ctx,
+		ProjectLabels(sessions))
+	if err != nil {
+		return CandidateArtifacts{}, err
+	}
+	artifacts.Report.BySession = artifacts.Sessions
+	SanitizeProjectLabels(&artifacts.Report, projects)
+	artifacts.Sessions = artifacts.Report.BySession
+	artifacts.Report.BySession = []SessionRow{}
+	artifacts.Report.Projects = export.ProjectMapForWire(projects)
+	ReportProgress(onProgress, Progress{
+		Phase: ProgressDone, SessionsTotal: len(sessions),
+		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
+	})
+	return artifacts, nil
+}
+
+// ReportWithSessions includes the session rows in the full report response.
+func ReportWithSessions(artifacts CandidateArtifacts) Report {
+	artifacts.Report.BySession = artifacts.Sessions
+	artifacts.Report.SessionsTotal = len(artifacts.Sessions)
+	return artifacts.Report
+}
+
+// ReportProgress calls callback when it is set.
+func ReportProgress(callback ProgressFunc, progress Progress) {
+	if callback != nil {
+		callback(progress)
+	}
+}
+
+// ProjectLabels returns the distinct session projects, sorted.
+func ProjectLabels(sessions []SessionMeta) []string {
+	set := make(map[string]struct{}, len(sessions))
+	for _, session := range sessions {
+		set[session.Project] = struct{}{}
+	}
+	labels := make([]string, 0, len(set))
+	for label := range set {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	return labels
+}
