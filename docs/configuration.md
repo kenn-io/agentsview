@@ -1216,7 +1216,7 @@ ChatGPT account share one import.
   then keeps the ChatGPT login in `auth.json`, a plain file that any program
   running as you can read. With the default `auto` store, a refused login can
   mean either an expired login in `auth.json` or a current login in the
-  keyring; the status names both.
+  keyring; the status names both and suggests `codex login` first.
 
 #### Private endpoints
 
