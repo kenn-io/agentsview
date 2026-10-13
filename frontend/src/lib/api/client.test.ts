@@ -435,14 +435,21 @@ describe("syncChatGPTChrome", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("uses the local Chrome route and forwards progress", async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(
-      'event: progress\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\nevent: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    ));
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          'event: progress\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\nevent: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
+          { headers: { "Content-Type": "text/event-stream" } },
+        ),
+      );
     vi.stubGlobal("fetch", fetch);
     const onProgress = vi.fn();
     await expect(syncChatGPTChrome({ onProgress })).resolves.toMatchObject({ imported: 1 });
-    expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/v1/import/chatgpt/sync?browser=chrome", expect.objectContaining({ method: "POST" }));
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/api/v1/import/chatgpt/sync?browser=chrome",
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(onProgress).toHaveBeenCalledWith({ imported: 1, updated: 0, skipped: 0, errors: 0 });
   });
 });
