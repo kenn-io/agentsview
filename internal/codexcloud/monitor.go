@@ -703,7 +703,7 @@ func (m *Monitor) updateLive(key AccountKey) {
 	m.Status.SetLive(string(key), text)
 }
 
-// chats counts n of a noun ending in "chat".
+// chats counts n of a noun ending in "chat", in the words users see.
 func chats(n int, noun string) string {
 	if n == 1 {
 		return "1 " + noun
