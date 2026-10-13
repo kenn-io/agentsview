@@ -55,6 +55,9 @@ AgentsView reads it when an older session has one, as cumulative totals per
 model dated at the earlier of the session's latest event and the usage file's
 modification time. Sessions from current fx have no token usage. An old session
 resumed in newer fx keeps its old totals. Costs use AgentsView's pricing catalog.
+Tool results use saved `.txt` output only when it is a regular UTF-8 file that
+matches the saved byte count or reaches the 16 MiB cap. Otherwise, the preview
+stays. Restored files refresh the result on the next sync.
 
 Augure Code and Augure Desktop retain recorded usage. Proprietary Augure models
 have no catalog price, so token-based cost estimates remain unpriced unless you

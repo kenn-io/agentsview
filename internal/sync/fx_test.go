@@ -21,7 +21,7 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(`{"seq":1,"timestamp_ms":1735689601000,"event":{"user":{"text":"Question"}}}
 {"seq":2,"timestamp_ms":1735689602000,"event":{"assistant":{"text":"Answer"}}}
 {"seq":3,"timestamp_ms":1735689602000,"event":{"tool_call":{"call_id":"read-1","tool_name":"read_file","arguments_json":"{}"}}}
-{"seq":4,"timestamp_ms":1735689602000,"event":{"tool_result":{"call_id":"read-1","status":"success","preview":"File contents"}}}
+{"seq":4,"timestamp_ms":1735689602000,"event":{"tool_result":{"call_id":"read-1","status":"success","preview":"File contents","artifact_ref":"result.txt","stored_bytes":21}}}
 {"seq":5,"timestamp_ms":1735689603000,"event":{"turn_completed":{}}}
 `), 0o600))
 	database := openTestDB(t)
@@ -49,6 +49,22 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 	assert.Equal(t, "completed", messages[1].ToolCalls[0].ResultEvents[0].Status)
 	assert.Equal(t, "tool_result", messages[1].ToolCalls[0].ResultEvents[0].Source)
 	assert.Equal(t, "File contents", messages[1].ToolCalls[0].ResultEvents[0].Content)
+
+	artifact := filepath.Join(dir, "tool-results", "result.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(artifact), 0o755))
+	require.NoError(t, os.WriteFile(artifact, []byte("File contents in full"), 0o600))
+	provider, ok := parser.NewProvider(parser.AgentFx, parser.ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	changed, err := provider.SourcesForChangedPath(t.Context(), parser.ChangedPathRequest{Path: artifact, EventKind: "write", WatchRoot: root})
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, path, changed[0].DisplayPath)
+	engine.SyncAll(t.Context(), nil)
+	messages, err = database.GetAllMessages(t.Context(), "fx:sync-session")
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 1)
+	assert.Equal(t, "File contents in full", messages[1].ToolCalls[0].ResultContent)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "usage-v2.json"), []byte(`{"snapshot":{"models":[{"model":"gpt-6.1-sol","input_tokens":20,"cache_read_tokens":5,"cache_write_tokens":null,"output_tokens":7,"reasoning_tokens":null,"request_count":null}]}}`), 0o600))
 	engine.SyncAll(t.Context(), nil)
@@ -85,7 +101,7 @@ func TestFxSyncCompanionChangesAndCompaction(t *testing.T) {
 	assert.Equal(t, "Question", messages[0].Content)
 	assert.Equal(t, "Answer", messages[1].Content)
 	require.Len(t, messages[1].ToolCalls, 1)
-	assert.Equal(t, "File contents", messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, "File contents in full", messages[1].ToolCalls[0].ResultContent)
 	assert.Equal(t, "Compacted work", messages[2].Content)
 	assert.True(t, messages[2].IsCompactBoundary)
 }

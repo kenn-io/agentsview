@@ -46,7 +46,9 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 			WithSessionIDFromPath(func(_, path string) string { return filepath.Base(filepath.Dir(path)) }),
 			WithProjectHint(func(_, _ string) string { return "" }),
 			WithCompanionFiles(fxCompanionFiles),
-			WithOptionalCompanion(func(path string) bool { return filepath.Base(path) == "usage-v2.json" }),
+			WithOptionalCompanion(func(path string) bool {
+				return filepath.Base(path) == "usage-v2.json" || filepath.Base(path) == "tool-results"
+			}),
 			WithCompanionTranscript(fxCompanionTranscript),
 			WithParseFile(fxParseFile),
 			WithForceReplace(),
@@ -57,12 +59,17 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 
 func fxCompanionFiles(path string) []string {
 	dir := filepath.Dir(path)
-	return []string{filepath.Join(dir, "session.json"), filepath.Join(dir, "usage-v2.json"), filepath.Join(dir, "subagent", "owner.json")}
+	return []string{filepath.Join(dir, "session.json"), filepath.Join(dir, "usage-v2.json"), filepath.Join(dir, "subagent", "owner.json"), filepath.Join(dir, "tool-results")}
 }
 
 func fxCompanionTranscript(path string) (string, bool) {
 	dir := filepath.Dir(path)
+	if filepath.Base(dir) == "tool-results" {
+		return filepath.Join(filepath.Dir(dir), "events.jsonl"), true
+	}
 	switch filepath.Base(path) {
+	case "tool-results":
+		return filepath.Join(dir, "events.jsonl"), true
 	case "session.json", "usage-v2.json":
 		return filepath.Join(dir, "events.jsonl"), true
 	case "owner.json":

@@ -9,7 +9,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -2494,9 +2493,7 @@ func readClaudePersistedToolResultContext(
 		if err != nil {
 			return "", false, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
-		b, readErr := io.ReadAll(io.LimitReader(
-			ctxio.Reader{Context: ctx, Reader: f}, maxPersistedToolResultSize+1,
-		))
+		b, readErr := readPersistedToolResultBytes(ctxio.Reader{Context: ctx, Reader: f})
 		closeErr := f.Close()
 		if errors.Is(readErr, context.Canceled) ||
 			errors.Is(readErr, context.DeadlineExceeded) {
@@ -2505,11 +2502,7 @@ func readClaudePersistedToolResultContext(
 		if readErr != nil || closeErr != nil {
 			return "", false, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
-		if len(b) > maxPersistedToolResultSize {
-			return stringutil.SafeTruncate(string(b), maxPersistedToolResultSize) +
-				"\n\n[agentsview: persisted tool result truncated at 16 MiB]", true, nil
-		}
-		return string(b), true, nil
+		return persistedToolResultText(b), true, nil
 	}
 	return "", false, nil
 }

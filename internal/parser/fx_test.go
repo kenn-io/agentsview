@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,16 +183,39 @@ func TestFxUsageDate(t *testing.T) {
 }
 
 func TestFxPersistedToolResult(t *testing.T) {
-	for _, test := range []struct{ ref, want string }{
-		{"result.txt", "Full tool output"},
-		{"result.bin", "Full"},
+	for _, test := range []struct {
+		name, ref, content, want string
+		storedBytes              int64
+	}{
+		{"complete", "result.txt", "Full tool output", "Full tool output", 16},
+		{"unsupported", "result.bin", "Full tool output", "Full", 16},
+		{"empty", "result.txt", "", "Full", 16},
+		{"short", "result.txt", "Full tool", "Full", 16},
+		{"long", "result.txt", "Full tool output extra", "Full", 16},
+		{"invalid UTF-8", "result.txt", "Full\xfftool output", "Full", 16},
+		{"directory", "result.txt", "", "Full", 16},
+		{"symlink", "result.txt", "Full tool output", "Full", 16},
+		{"capped", "result.txt", strings.Repeat("a", maxPersistedToolResultSize+1), strings.Repeat("a", maxPersistedToolResultSize) + "\n\n[agentsview: persisted tool result truncated at 16 MiB]", maxPersistedToolResultSize + 100},
 	} {
-		t.Run(test.ref, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
-			writeSourceFile(t, filepath.Join(dir, "tool-results", test.ref), "Full tool output")
+			artifact := filepath.Join(dir, "tool-results", test.ref)
+			switch test.name {
+			case "directory":
+				require.NoError(t, os.MkdirAll(artifact, 0o755))
+			case "symlink":
+				target := filepath.Join(dir, "output.txt")
+				writeSourceFile(t, target, test.content)
+				require.NoError(t, os.MkdirAll(filepath.Dir(artifact), 0o755))
+				if err := os.Symlink(target, artifact); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+			default:
+				writeSourceFile(t, artifact, test.content)
+			}
 			file := filepath.Join(dir, "events.jsonl")
-			writeSourceFile(t, file, fmt.Sprintf(`{"event":{"tool_result":{"call_id":"read-1","status":"success","preview":"Full","artifact_ref":%q,"stored_bytes":16}}}`, test.ref))
+			writeSourceFile(t, file, fmt.Sprintf(`{"event":{"tool_result":{"call_id":"read-1","status":"success","preview":"Full","artifact_ref":%q,"stored_bytes":%d}}}`, test.ref, test.storedBytes))
 			_, messages, err := parseFxSession(t.Context(), file, "local")
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
@@ -400,6 +424,7 @@ func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 		{"missing models", `{"snapshot":{}}`, 0},
 		{"null model entry", `{"snapshot":{"models":[null]}}`, 0},
 		{"empty model entry", `{"snapshot":{"models":[{}]}}`, 0},
+		{"duplicate model", `{"snapshot":{"models":[{"model":"test","input_tokens":5},{"model":"test","output_tokens":3}]}}`, 0},
 		{"negative count", `{"snapshot":{"models":[{"model":"test","input_tokens":-1}]}}`, 0},
 		{"fractional count", `{"snapshot":{"models":[{"model":"test","output_tokens":1.5}]}}`, 0},
 		{"fractional reasoning count", `{"snapshot":{"models":[{"model":"test","reasoning_tokens":1.5}]}}`, 0},

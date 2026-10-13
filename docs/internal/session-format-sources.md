@@ -4367,8 +4367,9 @@ schemas keep their existing ordering behavior.
   [event union](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_event.zig)
   defines prompts, replies, steering, tool calls and results, interruptions,
   and context checkpoints. Larger results use plain `.txt` filenames in
-  `tool-results/`, capped at 16 MiB with a truncation notice. Missing, unreadable,
-  or unsupported artifacts fall back to the stored preview, up to 4 KB.
+  `tool-results/`, capped at 16 MiB with a truncation notice. AgentsView uses
+  regular UTF-8 files whose length matches `stored_bytes` or reaches the cap.
+  Other artifacts keep the stored preview, up to 4 KB.
   Only assistant replay records supply historical model and provider identities.
   Tool calls share them when attached to that assistant row; separate tool-call
   rows and interrupted text leave those identities unknown.
@@ -4413,15 +4414,18 @@ schemas keep their existing ordering behavior.
   usage envelopes and owner markers schema 1, and usage snapshots schema 3.
   Unsupported session, event, or owner versions skip the source. Encrypted
   reasoning is excluded. Changes to `session.json`,
-  `usage-v2.json`, or `subagent/owner.json` refresh their owning transcript.
+  `usage-v2.json`, `subagent/owner.json`, or `tool-results/` refresh their owning
+  transcript. Tool-result entry names, sizes, modes, and modification times
+  contribute to freshness, including files restored after import.
   Companion content hashes detect equal-length rewrites.
   A torn final line without a newline is ignored. Empty events and null known event
   types fail parsing; named unknown event types are skipped.
   JSON fields match case-sensitively; unknown object fields are ignored.
   Other invalid frames fail parsing, preserving the stored session for retry.
-  Malformed, mismatched, unsupported-version, or unreadable usage is skipped
-  with a log while the transcript imports. Unreadable usage contributes a stable
-  fingerprint marker so restoring access triggers a reparse. Tool results and
+  Malformed, mismatched, duplicate-model, unsupported-version, or unreadable
+  usage is skipped with a log while the transcript imports. Unreadable usage
+  contributes a stable fingerprint marker so restoring access triggers a
+  reparse. Tool results and
   status attach to calls without separate transcript rows.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go

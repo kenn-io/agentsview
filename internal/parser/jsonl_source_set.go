@@ -114,7 +114,7 @@ type JSONLSourceSetOptions struct {
 	// providers describe companions once as transcript->companions and the base
 	// drives watch, freshness, and changed-path mapping from that single hook.
 	CompanionFiles func(transcriptPath string) []string
-	// OptionalCompanion lets unreadable companions contribute a marker while the transcript imports.
+	// OptionalCompanion lets unreadable companions contribute a marker and directories contribute entry metadata.
 	OptionalCompanion func(companionPath string) bool
 	// RejectSymlinkCompanions makes companion freshness use Lstat and ignore
 	// symlinked companions. The default preserves legacy followed-symlink
@@ -517,7 +517,7 @@ func (s JSONLSourceSet) foldCompanionFingerprint(
 			if os.IsNotExist(err) {
 				continue
 			}
-			if err == nil && !info.Mode().IsRegular() {
+			if err == nil && !info.Mode().IsRegular() && !info.IsDir() {
 				err = fmt.Errorf("companion is not a regular file: %s", companion)
 			}
 		} else {
@@ -793,7 +793,9 @@ func (s JSONLSourceSet) sourceForCompanionPath(
 		// not claim as a companion must not remap to it.
 		if !slices.ContainsFunc(
 			s.options.CompanionFiles(transcript),
-			func(companion string) bool { return samePath(companion, path) },
+			func(companion string) bool {
+				return samePath(companion, path) || (s.options.OptionalCompanion != nil && s.options.OptionalCompanion(companion) && pathWithinDir(path, companion))
+			},
 		) {
 			return SourceRef{}, false, nil
 		}
