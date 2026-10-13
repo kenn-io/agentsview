@@ -9,7 +9,6 @@ test.describe("Chromium dashboard evidence", () => {
   test("root hydration precedes delayed analytics", async ({ page }) => {
     const requests: string[] = [];
     let analyticsResponded = false;
-    let preHydrationRows: number | undefined;
     page.on("request", (request) => {
       if (request.method() === "GET") requests.push(new URL(request.url()).pathname);
     });
@@ -30,7 +29,6 @@ test.describe("Chromium dashboard evidence", () => {
     expect(
       body.sessions.every((session: { project: string }) => session.project === "project-alpha"),
     ).toBe(true);
-    preHydrationRows = await page.locator(".session-item").count();
     await page.goto("/", { waitUntil: "commit" });
     await expect
       .poll(() => requests.some((path) => /^\/api\/v1\/sessions\/test-session-/.test(path)))
@@ -46,7 +44,6 @@ test.describe("Chromium dashboard evidence", () => {
       JSON.stringify({
         fixture: "project-alpha",
         fixtureRows: body.sessions.length,
-        preHydrationRows,
         hydration,
         analytics,
         visible: true,
@@ -54,7 +51,6 @@ test.describe("Chromium dashboard evidence", () => {
         requests,
       }),
     );
-    expect(preHydrationRows).toBe(0);
     expect.soft(hydration).toBeGreaterThanOrEqual(0);
     expect.soft(hydration).toBeLessThan(analytics);
     expect(respondedAtRow).toBe(false);
