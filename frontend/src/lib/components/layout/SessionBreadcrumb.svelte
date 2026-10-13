@@ -384,16 +384,25 @@
   let missedTurnsLine = $derived(
     uncapturedTurns > 0 ? (captureCoverageLines.at(-1) ?? null) : null,
   );
-  let planUsageTitle = $derived.by(() => {
-    if (!planUsageDisplay) return undefined;
-    const rootId = planUsageDisplay.countedUnder;
-    const state = rootId
+  // Shared by the closed trigger and the opened menu so both name the
+  // same root session.
+  let countedUnderLabel = $derived.by(() => {
+    const rootId = planUsageDisplay?.countedUnder;
+    return rootId
       ? m.plan_usage_counted_under({
           title: usageRootTitle ?? sessionDisplayId(rootId),
         })
-      : planUsageDisplay.headline;
+      : null;
+  });
+  let planUsageTitle = $derived.by(() => {
+    if (!planUsageDisplay) return undefined;
+    const state = countedUnderLabel ?? planUsageDisplay.headline;
     return [state, missedTurnsLine].filter(Boolean).join("\n") || undefined;
   });
+  // Screen readers hear the closed trigger's explanations as part of its name.
+  let planUsageSrText = $derived(
+    [countedUnderLabel, missedTurnsLine].filter(Boolean).join(", "),
+  );
 
   onDestroy(() => {
     openersRead.cancel();
@@ -1262,8 +1271,8 @@
               <TriangleAlertIcon size="10" strokeWidth="2.2" aria-hidden="true" />
             {/if}
             {planUsageDisplay.trigger}
-            {#if missedTurnsLine}
-              <span class="kit-sr-only">, {missedTurnsLine}</span>
+            {#if planUsageSrText}
+              <span class="kit-sr-only">, {planUsageSrText}</span>
             {/if}
           </summary>
           {#if planUsageOpen}
@@ -1280,9 +1289,7 @@
                     router.navigateToSession(rootId);
                   }}
                 >
-                  {m.plan_usage_counted_under({
-                    title: usageRootTitle ?? sessionDisplayId(rootId),
-                  })}
+                  {countedUnderLabel}
                 </a>
               {:else}
                 <div class="plan-usage-headline">{planUsageDisplay.headline}</div>

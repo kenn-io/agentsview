@@ -1743,6 +1743,10 @@ describe("SessionBreadcrumb", () => {
           "Counted under chat Root task",
         );
       });
+      // Screen readers hear where the figures live without opening the menu.
+      expect(document.querySelector(".plan-usage-trigger .kit-sr-only")?.textContent).toBe(
+        ", Counted under chat Root task",
+      );
       await openPlanUsage();
       await vi.waitFor(() => {
         expect(document.querySelector(".plan-usage-root")?.textContent?.trim()).toBe(
