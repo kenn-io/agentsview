@@ -168,6 +168,7 @@ test.describe("go to session", () => {
     await input.press("Enter");
     await expect(page.getByRole("alert")).toHaveText("No session matches that ID or UUID.");
     await expect(page).toHaveURL(/\/usage\?desktop=1$/);
+    expect(await page.evaluate(() => window.history.length)).toBe(initialHistoryLength);
 
     for (const width of [1280, 768, 400]) {
       await page.setViewportSize({ width, height: 900 });

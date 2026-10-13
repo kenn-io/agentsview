@@ -2,8 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { ui } from "../../stores/ui.svelte.js";
-import { sessions } from "../../stores/sessions.svelte.js";
-import { router } from "../../stores/router.svelte.js";
 // @ts-ignore
 import GoToSessionModal from "./GoToSessionModal.svelte";
 
