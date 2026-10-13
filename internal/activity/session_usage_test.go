@@ -14,12 +14,11 @@ import (
 
 func TestUsageDedupTokenIdentity(t *testing.T) {
 	for _, tc := range []struct {
-		name, source, agent, messageID, requestID, uuid, key string
-		ordinary                                             UsageDedupToken
+		name, agent, messageID, requestID, uuid, key string
+		ordinary                                     UsageDedupToken
 	}{
 		{
 			name:      "Claude pair wins",
-			source:    "message",
 			agent:     "claude",
 			messageID: "m",
 			requestID: "r",
@@ -29,7 +28,6 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 		},
 		{
 			name:      "incomplete pair falls back to message UUID",
-			source:    "message",
 			agent:     "claude",
 			messageID: "m",
 			uuid:      "u",
@@ -38,7 +36,6 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 		},
 		{
 			name:     "UUID without agent falls back to stored key",
-			source:   "message",
 			uuid:     "u",
 			key:      "k",
 			ordinary: UsageDedupToken{Kind: "usage", Value: "k"},
@@ -47,7 +44,7 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			identity := UsageIdentity{
-				UsageSource: tc.source, Agent: tc.agent,
+				Agent:           tc.agent,
 				ClaudeMessageID: tc.messageID, ClaudeRequestID: tc.requestID,
 				SourceUUID: tc.uuid, UsageDedupKey: tc.key,
 			}
@@ -94,7 +91,6 @@ func TestSelectSessionUsageRows(t *testing.T) {
 					WebSearchRequests: 3,
 					ClaudeMessageID:   "m",
 					ClaudeRequestID:   "r",
-					Contributes:       true,
 				},
 				{
 					SessionID:         "child",
@@ -105,7 +101,6 @@ func TestSelectSessionUsageRows(t *testing.T) {
 					WebSearchRequests: 1,
 					ClaudeMessageID:   "m",
 					ClaudeRequestID:   "r",
-					Contributes:       true,
 				},
 			},
 			wantIndexes: []int{1}, wantSearches: []int{3},
