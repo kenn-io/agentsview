@@ -354,12 +354,14 @@ running threads --(live token monitor)--> token usage records in the same mirror
   no token in `auth.json`, is keyring-backed. In `auto` mode Codex reads the
   keyring first and deletes `auth.json` after a keyring save, logging only a
   warning if that fails, so a leftover `auth.json` can be stale: when its
-  token gets HTTP 401 in `auto` mode, AgentsView shows the keyring message,
-  not the signed-out one. AgentsView does not read the keyring; it shows "This
-  Codex home keeps its ChatGPT login in the system keyring, which AgentsView
-  does not read." instead of the signed-out message. A home in `ephemeral`
-  mode keeps its login only in memory; it shows "This Codex home does not save
-  its ChatGPT login, so AgentsView cannot use it." instead.
+  token gets HTTP 401 in `auto` mode, AgentsView says OpenAI did not accept
+  the login in `auth.json` and that Codex may keep the current one in the
+  keyring, not the signed-out message. AgentsView does not read the keyring. A
+  home in `ephemeral` mode keeps its login only in memory. Each of these
+  messages (see Status and errors) gives the fix: set
+  `cli_auth_credentials_store = "file"` in the home's `config.toml` and run
+  `codex login`. Each also warns that this stores the ChatGPT login in a plain
+  file that any program running as the user can read.
 - At the start of each fetch, and before each live-capture connection, read
   `tokens.access_token`, `tokens.account_id`, and `tokens.id_token` from that
   home's `auth.json`; the ID token follows the same in-memory-only rule as the
@@ -460,11 +462,10 @@ live token monitor apply these rules in this order:
   error" message. In reply to a per-thread request (`thread/turns/list`,
   `thread/items/list`, or the monitor's `thread/resume`): the "error for this
   thread" category. The fetcher puts the thread in the retry set; the monitor
-  closes that connection, logs and counts it, and retries on the next run if
-  the thread is still running; discovery, for a thread it has not joined,
-  skips that thread and continues the run. This covers
-  `environment_terminated` (`-32600` with that `data.errorType`) and a missing
-  thread.
+  closes that connection, logs it, and retries on the next run if the thread
+  is still running; discovery, for a thread it has not joined, skips that
+  thread and continues the run. This covers `environment_terminated` (`-32600`
+  with that `data.errorType`) and a missing thread.
 
 ### Fetcher state
 
@@ -643,7 +644,8 @@ listing:
    and no `updatedAt` change for 24 hours stops this every-pass selection,
    including selection because the listing shows the thread as `active` or
    because its check-again flag is set; a later `updatedAt` change selects the
-   thread again.
+   thread again. A thread retired under Unreadable threads is not selected
+   because the listing shows it as `active`.
 1. **Check-again threads.** Also include every thread whose check-again flag is
    set. `updatedAt` comes from OpenAI's clock and the fetch start from the
    local clock, so both rules below allow 2 minutes of clock difference. A
@@ -705,9 +707,12 @@ listing:
    item larger than the read limit even at `limit: 1`. The fetcher removes it
    from the retry set, the unfinished set, and the check-again flags, saves
    the retry entry's listing `updatedAt` as the thread's stored `updatedAt`,
-   and logs the thread ID with its last failure. Everything already stored
-   stays, and the thread no longer counts in the "could not be imported"
-   status. A later listing with a new `updatedAt` selects it again. A new
+   marks it retired in `account.json`, and logs the thread ID with its last
+   failure. Everything already stored stays, and the thread no longer counts
+   in the "could not be imported" status. While it is retired, a listing that
+   shows it as `active` does not select it, so OpenAI keeping a failing thread
+   `active` cannot restart its retries forever. A later listing with a new
+   `updatedAt` selects it again, and any fetch of it clears the mark. A new
    `updatedAt` seen while the thread is in the retry set restarts its 7 days.
 1. **Advance the listing watermark** to the newest `updatedAt` that listing
    returned, once the listing finished and every changed thread from it is
@@ -823,7 +828,7 @@ Session fields:
   raw originator. It goes in the existing `Entrypoint` field; no new column.
   `SessionKind` stays empty, as for interactive sessions, because its other
   values drive automated-session classification (`internal/db/automated.go`).
-  My call: dot tasks show as normal sessions, not as automated workers.
+  Dot tasks therefore show as normal sessions, not as automated workers.
 - **Working directory and project:** from the first `environments[].cwd` of the
   newest listing metadata record that has a non-empty `environments` (the
   monitor's first record is not used, because a resume response abbreviates
@@ -874,27 +879,31 @@ records every token update, and leaves when the turn ends.
   sync is off (below), or `[agents.codex-cloud]` has a config error. Its
   memory is bounded by that cap, not by archive size.
 - **Join rule:** the monitor joins a thread only when its newest turn is
-  `inProgress` and its listing `updatedAt` is within the last 2 minutes. A
+  `inProgress` and its listing `updatedAt` is within the last 5 minutes. A
   thread that finished long ago can still show an `inProgress` turn (see the
   save lag under While joined), and resuming it would be a cold resume: it
   loads the thread on OpenAI's side, starts the dot's MCP servers, and might
   continue an active goal (see Risks). The recency rule keeps the monitor away
-  from such threads.
+  from such threads. It compares OpenAI's `updatedAt` with the local clock, so
+  the window is wide enough that a clock a few minutes off does not skip
+  running threads. A clock more than about 5 minutes fast still skips them
+  all, and a slow clock admits threads that stopped longer ago, each limited
+  to one cold resume.
 - The listing's `status` can be stale, so discovery ignores it. Each run lists
   the non-archived default listing by `updated_at`, newest first, with no
   `sourceKinds`, as sync does. It checks the newest turn (`thread/turns/list`,
   limit 1, `itemsView: notLoaded`) of every thread whose `updatedAt` is within
-  the last 2 minutes. It skips, without a turn check, threads the monitor has
+  the last 5 minutes. It skips, without a turn check, threads the monitor has
   already joined and sub-agent threads (see Joining). A thread is running when
   that turn's status is `inProgress`.
 - Work per run is bounded by recent activity, not by archive size. Discovery
   reads further pages only while the last page still holds a thread updated in
-  the last 2 minutes. It reads no other listing and none of the sync job's
+  the last 5 minutes. It reads no other listing and none of the sync job's
   working sets.
 - Accepted limit: a turn that ends before the monitor joins it gets no live
   tokens; its thread has plan usage only, unless a later join's running total
   covers it. If a running thread's `updatedAt` does not change while its turn
-  runs, a turn that the monitor does not join within 2 minutes of the last
+  runs, a turn that the monitor does not join within 5 minutes of the last
   change (daemon down, join cap full) is not captured live either.
 
 **Joining.**
@@ -927,13 +936,13 @@ records every token update, and leaves when the turn ends.
     - `warm`: the thread is running and the monitor stays.
     - `cold`: the turn ended between the check and the join, or the turn listing
       shows a turn as `inProgress` that the server no longer runs. The join rule
-      narrows this to threads updated in the last 2 minutes. The monitor logs
-      it, counts it in status, and closes the connection at once. It records the
-      newest turn's ID in the per-thread state and does not join that thread
-      again until its turn listing shows a newer turn ID, so a turn stuck in
-      `inProgress` causes at most one cold resume. The resume response's
-      `updatedAt` is the time of the resume, so the monitor never stores it;
-      only the fetcher's listing sets a thread's stored `updatedAt`.
+      narrows this to threads updated in the last 5 minutes. The monitor logs it
+      and closes the connection at once. It records the newest turn's ID in the
+      per-thread state and does not join that thread again until its turn
+      listing shows a newer turn ID, so a turn stuck in `inProgress` causes at
+      most one cold resume. The resume response's `updatedAt` is the time of the
+      resume, so the monitor never stores it; only the fetcher's listing sets a
+      thread's stored `updatedAt`.
     - anything else: the monitor closes the connection, stops live capture for the
       account, and reports a protocol-change error. Capture stays off for that
       account until the daemon restarts or the user changes `live_tokens`.
@@ -1143,11 +1152,12 @@ one group.
   "settled with no row" record. Automatic retries stop, the last values stay,
   and the row is marked final. A later change to the root or a descendant
   starts the cycle again.
-- **Could not check.** A pending root with no answered request in the 7 days
-  after its last change stops retrying with a "could not check" outcome
-  record. Its last row, if any, stays and is not marked final, and session
-  details show "AgentsView could not check plan usage". A later change to the
-  root or a descendant starts the cycle again.
+- **Could not check.** A pending root whose request fails after the 7 days since
+  its last change stops retrying with a "could not check" outcome record,
+  because only an answer after that point can settle it. An answer earlier in
+  the 7 days does not prevent this. Its last row, if any, stays and is not
+  marked final, and session details show "AgentsView could not check plan
+  usage". A later change to the root or a descendant starts the cycle again.
 - Roots with a usable row stay in a refresh set in `account.json` until 7 days
   after their last change, each with a next attempt at the later of one day
   after its row's `data_as_of` and one day after its last attempt. Rows are
@@ -1192,8 +1202,8 @@ one group.
     - an "account unavailable" record goes to each root in the request that got
       the 403 or 404, so the work stays bounded by the request;
     - a "too many sub-agent threads" record goes to a root whose group is too
-      large to send, and a "could not check" record to a root that stops
-      retrying with no answered request;
+      large to send, and a "could not check" record to a root whose request
+      fails after the 7-day point;
     - a thread found to be a descendant gets a "counted under `<root>`" record in
       its own file, even while usage requests are paused, since it needs no
       request. The provider stays per-file. It keeps the newest response row and
@@ -1344,7 +1354,8 @@ same outcome kind and time, and the same totals.
   still load. A different case: if `config.toml` as a whole fails to parse
   when a job re-reads it, the job keeps the last good settings and shows
   "`<config path>` could not be read: `<reason>`. Cloud import keeps its last
-  good settings."
+  good settings.", followed by the reason those settings keep import off, if
+  they do.
 - `codex-cloud` is registered as a file-based provider so that `disabled_agents`
   accepts it (`internal/config/config.go` rejects other providers there). Its
   root is `{dataDir}/sources/codex-cloud`, resolved from the data directory
@@ -1400,44 +1411,63 @@ States:
 - **Off: source sync is off for this daemon** (`--no-sync` or an archive-only
   archive).
 - **Waiting for first sync:** enabled, no pass has finished.
-- **Importing, found N threads so far:** during a first backfill, until all four
-  listings have finished a first pass. After that: **Importing N of M
-  threads.**
+- **Importing, found N chats so far:** during a first backfill, until all four
+  listings have finished a first pass. After that: **Importing N of M chats.**
 - **Up to date as of T:** the last pass succeeded and no thread is waiting to be
   retried.
-- **N threads could not be imported:** the last pass succeeded but threads are
-  in the retry set. Shows the count, the oldest failure time, and the latest
-  failure's message from the table below, followed by "AgentsView keeps
-  retrying them. The daemon log lists each thread. Sessions already imported
-  are not affected."
+- **N chats could not be imported:** the last pass succeeded but threads are in
+  the retry set. Shows the count, the oldest failure time, and the latest
+  failure's message from the table below, followed by "AgentsView retries each
+  one for 7 days; a change to the chat in OpenAI restarts the 7 days. The
+  daemon log lists each chat. Sessions already imported are not affected."
 - **Error:** the whole pass failed. Shows the message below and when the last
   successful pass finished.
 
-Live token capture has its own line: "Live tokens: watching N running threads"
-(with "M joins arrived after the turn ended" when that count is not zero), "Live
-tokens: off", or a live-capture error from the table below.
+Live token capture has its own line: "Live tokens: listening in on N running
+chats.", "Live tokens: idle.", "Live tokens: off, because ..." naming the daemon
+option or setting that keeps it off, or "Live tokens: stopped." with the
+protocol-change message and "Then restart AgentsView to listen in again." When a
+save of token records failed, the line adds "Token counts for N chats could not
+be saved yet; AgentsView keeps retrying." Cold resumes are logged per thread,
+not counted in the line: the count only grew until restart, so a normal event
+looked like a growing fault. Each session's capture coverage still shows the
+turns it missed.
 
 Plan usage has its own line under the home's state, so a usage problem never
 hides or replaces thread status. It shows "Plan usage: not checked yet", "Plan
-usage as of T", "Usage isn't available for this account", or a usage error from
-the table below.
+usage as of T", "Usage isn't available for this account", or "Plan usage: "
+followed by a usage error from the table below. After a restart, T is the stored
+`data_as_of` of the newest answered report, shown with the year when it is not
+the current year. A home skipped for another login problem shows that problem's
+message instead of the signed-out one.
 
-| Cause                                        | Message                                                                                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No token, or HTTP 401 from the thread host   | Signed out of ChatGPT in this Codex home. Run `codex login`, then AgentsView picks up the new login on its next sync.                             |
-| A reply larger than the read limit           | A reply from OpenAI was larger than AgentsView accepts.                                                                                           |
-| Token refresh request from the thread host   | OpenAI asked for a fresh ChatGPT login in this Codex home. Open Codex or run `codex login`; AgentsView retries when the login changes.            |
-| HTTP 403 from the thread host                | OpenAI refused this request. AgentsView retries automatically. If this continues, check that this ChatGPT account can use Codex.                  |
-| Network failure                              | Can't reach OpenAI. AgentsView retries automatically.                                                                                             |
-| HTTP 429                                     | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                           |
-| HTTP 5xx                                     | OpenAI's service had an error. AgentsView retries automatically.                                                                                  |
-| JSON-RPC error reply for one thread          | OpenAI returned an error for this thread. It may have been deleted.                                                                               |
-| Handshake refused or reply not understood    | OpenAI changed its service in a way this version of AgentsView can't read. Update AgentsView. Sessions already imported are safe.                 |
-| Keyring-backed home, no token in `auth.json` | This Codex home keeps its ChatGPT login in the system keyring, which AgentsView does not read.                                                    |
-| `ephemeral` credential store                 | This Codex home does not save its ChatGPT login, so AgentsView cannot use it.                                                                     |
-| Bad value in `[agents.codex-cloud]`          | `<config path>` has an invalid value for `<key>` under `[agents.codex-cloud]`: `<reason>`. Codex cloud import is off until then.                  |
-| HTTP 401 from plan usage                     | Plan usage: signed out of ChatGPT in this Codex home. Run `codex login`.                                                                          |
-| Unknown key in `[agents.codex-cloud]`        | `<config path>` has an unknown setting `<key>` under `[agents.codex-cloud]`. Remove it or correct its name. Codex cloud import is off until then. |
+| Cause                                               | Message                                                                                                                                                                                                                 |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No token, or HTTP 401 from the thread host          | Signed out of ChatGPT in this Codex home. Run `codex login`, then AgentsView picks up the new login on its next sync.                                                                                                   |
+| HTTP 401 in `auto` mode                             | OpenAI did not accept the ChatGPT login in this Codex home's auth.json. With `cli_auth_credentials_store = "auto"`, Codex may keep the current login in the system keyring, which AgentsView does not read. (file fix)  |
+| A reply larger than the read limit                  | A reply from OpenAI was larger than AgentsView accepts.                                                                                                                                                                 |
+| Token refresh request from the thread host          | OpenAI asked for a fresh ChatGPT login in this Codex home. Open Codex or run `codex login`; AgentsView retries when the login changes.                                                                                  |
+| HTTP 403 from the thread host                       | OpenAI refused this request. AgentsView retries automatically. If this continues, check that this ChatGPT account can use Codex.                                                                                        |
+| Network failure                                     | Can't reach OpenAI. AgentsView retries automatically.                                                                                                                                                                   |
+| HTTP 429                                            | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                                                                                                 |
+| HTTP 5xx                                            | OpenAI's service had an error. AgentsView retries automatically.                                                                                                                                                        |
+| JSON-RPC error reply for one thread                 | OpenAI returned an error for the chat. It may have been deleted.                                                                                                                                                        |
+| Handshake refused or reply not understood           | OpenAI's service answered in a way this version of AgentsView can't read. If config.toml sets endpoint under [agents.codex-cloud], check that address; otherwise update AgentsView. Sessions already imported are safe. |
+| Keyring-backed home, no token in `auth.json`        | This Codex home keeps its ChatGPT login in the system keyring, which AgentsView does not read. (file fix)                                                                                                               |
+| `ephemeral` credential store                        | This Codex home does not save its ChatGPT login, so AgentsView cannot use it. (file fix)                                                                                                                                |
+| Codex home login settings or `auth.json` unreadable | One message per cause (a `config.toml` that does not parse, an unknown `cli_auth_credentials_store`, an `auth.json` that cannot be read or is not valid JSON), never quoting file content.                              |
+| Local account state unreadable or unwritable        | AgentsView could not read or save its import state, so imports from this account are paused. The daemon log names the file and the error. AgentsView tries again on the next sync.                                      |
+| Bad value in `[agents.codex-cloud]`                 | `<config path>` has an invalid value for `<key>` under `[agents.codex-cloud]`: `<reason>`. Codex cloud import is off until then.                                                                                        |
+| HTTP 401 from plan usage                            | Plan usage: signed out of ChatGPT in this Codex home. Run `codex login`.                                                                                                                                                |
+| Unknown key in `[agents.codex-cloud]`               | `<config path>` has an unknown setting `<key>` under `[agents.codex-cloud]`. Remove it or correct its name. Codex cloud import is off until then.                                                                       |
+
+"(file fix)" stands for: "To let AgentsView use it, set
+`cli_auth_credentials_store = "file"` in this home's config.toml and run
+`codex login`. That stores the ChatGPT login in a plain file that any program
+running as you can read." For a Codex home other than the first, every
+`codex login` in a message names that home: `CODEX_HOME=<home> codex login`,
+shell-quoted when needed, or on Windows an instruction to set `CODEX_HOME` to
+the home and run `codex login`.
 
 Raw error details go to the daemon log, with the token redacted, the endpoint
 named (thread host or plan usage), and the thread ID for per-thread failures.
@@ -1584,9 +1614,10 @@ double-count its tokens.
       pending roots go first and leftover refresh roots run on the next pass;
     - a `partial` or `unavailable` row backs off and settles after 7 days without
       change, keeping its last values, and a later thread change reopens it;
-    - a root whose requests all fail for 7 days does not settle as final; it gets
-      a "could not check" outcome, keeps any `partial` row unfinal, stops
-      retrying, and a later thread change reopens it;
+    - a root whose request fails after the 7-day point does not settle as final,
+      even when an earlier request was answered; it gets a "could not check"
+      outcome, keeps any `partial` row unfinal, stops retrying, and a later
+      thread change reopens it;
     - a large backlog of pending roots sends at most 5 requests per pass;
     - nested sub-agent threads (child and grandchild) are all sent with their
       root, never as their own group, and a change in a grandchild refreshes the
@@ -1603,8 +1634,8 @@ double-count its tokens.
 - Live token capture:
 
     - a thread listed as `idle` whose newest turn is `inProgress` and whose
-      `updatedAt` is within the last 2 minutes is found and joined;
-    - a thread whose newest turn is `inProgress` but whose `updatedAt` is 3
+      `updatedAt` is within the last 5 minutes is found and joined;
+    - a thread whose newest turn is `inProgress` but whose `updatedAt` is 6
       minutes old gets no turn check and no `thread/resume`, including when the
       listing shows it as `active`;
     - a delegated dot task (`threadSource: "aeon_child"`, parent only in its
@@ -1622,9 +1653,9 @@ double-count its tokens.
     - after `turn/completed`, a discovery run that still sees that turn as
       `inProgress` does not join the thread;
     - usage events have a nil `MessageOrdinal`;
-    - `cold` is logged, counted in status, and the connection closes at once; a
-      turn stuck in `inProgress` causes one cold resume, and the thread is
-      joined again only after a newer turn ID appears;
+    - `cold` is logged and the connection closes at once; a turn stuck in
+      `inProgress` causes one cold resume, and the thread is joined again only
+      after a newer turn ID appears;
     - an unknown `resumeKind` stops capture for the account with an error;
     - server-initiated requests while joined are never answered; a token refresh
       request flushes the buffered records, closes the connection unanswered,
@@ -1637,7 +1668,7 @@ double-count its tokens.
       run;
     - a running sub-agent thread is not joined and gets no turn check;
     - discovery reads a second listing page while the first page holds only
-      threads updated in the last 2 minutes, and stops after the first page that
+      threads updated in the last 5 minutes, and stops after the first page that
       holds none;
     - `-32601` with an `unsupported app-server method` message on a discovery
       `thread/turns/list` stops capture for the account and does not set the
@@ -1901,7 +1932,7 @@ double-count its tokens.
       is done;
     - enable the source, or at least live capture, on one machine only (see
       Several machines);
-    - live capture joins a running thread only within 2 minutes of its last
+    - live capture joins a running thread only within 5 minutes of its last
       `updatedAt` change, so a turn that ends before a join, or that runs
       without changing `updatedAt` after the monitor missed that window, gets no
       live tokens;
@@ -2007,7 +2038,7 @@ the shapes the probes returned, with every value replaced.
   nothing runs, and the stored thread is unchanged. The probed thread had no
   active goal; in open-source Codex a resume also runs the thread's idle step,
   which can continue an active goal, so a cold resume of such a thread might
-  start a turn. The join rule (listing `updatedAt` within the last 2 minutes)
+  start a turn. The join rule (listing `updatedAt` within the last 5 minutes)
   limits cold resumes to threads that changed moments before, and the
   monitor's one-cold-resume-per-turn rule bounds how often each can happen.
   The resume response reports the resume time as `updatedAt`; if the listing
