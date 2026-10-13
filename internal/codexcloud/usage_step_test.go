@@ -584,3 +584,32 @@ func TestStoredUsageLineWithOnlyPartialRows(t *testing.T) {
 	acct := AccountState{UsagePending: map[string]PendingEntry{"a": {HasRow: true}, "b": {}}}
 	assert.Equal(t, "Plan usage: still updating", storedUsageLine(acct))
 }
+
+// TestCouldNotCheckAfterEarlyAnswerThenFailures covers a chat answered
+// once soon after its last change, then failing on every later request:
+// its retries stop after the settle point instead of running forever.
+func TestCouldNotCheckAfterEarlyAnswerThenFailures(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "partial", pct(1), nil))
+	env.run(t)
+	require.Contains(t, env.account(t).UsagePending, "a")
+
+	env.usage.Refuse(http.StatusBadGateway, nil, "")
+	for env.clock.Now().Before(fetchNow.Add(9 * 24 * time.Hour)) {
+		entry, ok := env.account(t).UsagePending["a"]
+		if !ok {
+			break
+		}
+		env.clock.Set(entry.NextAttempt)
+		env.run(t)
+	}
+
+	assert.NotContains(t, env.account(t).UsagePending, "a", "retries stop")
+	plan := env.plan(t, "a")
+	require.NotEmpty(t, plan.outcomes)
+	assert.Equal(t, mirror.OutcomeCouldNotCheck, plan.outcomes[len(plan.outcomes)-1].Kind)
+	for _, row := range plan.rows {
+		assert.False(t, row.Final, "the partial row stays unfinal")
+	}
+}
