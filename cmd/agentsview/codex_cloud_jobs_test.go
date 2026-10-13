@@ -43,14 +43,25 @@ func TestCodexCloudServeStatusLines(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		status int
+		token  string
 		want   string
 	}{
 		{
-			"a rejected token says so", http.StatusUnauthorized,
-			"  codex-cloud status unavailable: the server did not accept this command's auth token.",
+			"a missing token says so", http.StatusUnauthorized, "",
+			"  codex-cloud status unavailable: the server needs an auth token, and this command has none. " +
+				"Set auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, to the server's token.",
 		},
 		{
-			"another failure names its status", http.StatusInternalServerError,
+			"a rejected token says so", http.StatusUnauthorized, "stale",
+			"  codex-cloud status unavailable: the server did not accept this command's auth token. " +
+				"Check that auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, matches the server's.",
+		},
+		{
+			"a refusal does not blame the token", http.StatusForbidden, "secret",
+			"  codex-cloud status unavailable: the server answered with HTTP status 403.",
+		},
+		{
+			"another failure names its status", http.StatusInternalServerError, "",
 			"  codex-cloud status unavailable: the server answered with HTTP status 500.",
 		},
 	} {
@@ -59,7 +70,7 @@ func TestCodexCloudServeStatusLines(t *testing.T) {
 				w.WriteHeader(tt.status)
 			}))
 			defer srv.Close()
-			assert.Equal(t, []string{tt.want}, codexCloudStatusLines(t.Context(), srv.URL, ""))
+			assert.Equal(t, []string{tt.want}, codexCloudStatusLines(t.Context(), srv.URL, tt.token))
 		})
 	}
 	t.Run("an unreachable server says so", func(t *testing.T) {

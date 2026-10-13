@@ -205,6 +205,9 @@ func runServeStatus(cfg config.Config) {
 	fmt.Println("No agentsview server is running.")
 }
 
+// codexCloudStatusTimeout bounds the codex-cloud status request.
+const codexCloudStatusTimeout = 5 * time.Second
+
 // codexCloudStatusLines reads the daemon's codex-cloud status rows. An
 // older daemon has no such route and adds no lines. A failure gets a plain
 // sentence; the request's own error is noise next to the daemon lines.
@@ -212,14 +215,15 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 	unavailable := func(reason string) []string {
 		return []string{"  codex-cloud status unavailable: " + reason}
 	}
-	api, err := apiclient.NewHTTPClient(baseURL, authToken, &http.Client{Timeout: 5 * time.Second})
+	api, err := apiclient.NewHTTPClient(baseURL, authToken, &http.Client{Timeout: codexCloudStatusTimeout})
 	if err != nil {
 		return unavailable("the server address could not be used.")
 	}
 	resp, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
 	if resp == nil {
 		if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
-			return unavailable("the server did not answer within 5 seconds.")
+			return unavailable(fmt.Sprintf("the server did not answer within %d seconds.",
+				int(codexCloudStatusTimeout.Seconds())))
 		}
 		return unavailable("the server could not be reached.")
 	}
@@ -230,14 +234,20 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 	case http.StatusOK:
 	case http.StatusNotFound:
 		return nil
-	case http.StatusUnauthorized, http.StatusForbidden:
-		return unavailable("the server did not accept this command's auth token.")
+	case http.StatusUnauthorized:
+		if authToken == "" {
+			return unavailable("the server needs an auth token, and this command has none. " +
+				"Set auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, to the server's token.")
+		}
+		return unavailable("the server did not accept this command's auth token. " +
+			"Check that auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, matches the server's.")
 	default:
 		return unavailable(fmt.Sprintf("the server answered with HTTP status %d.", resp.StatusCode))
 	}
 	var rows []codexcloud.HomeStatus
 	if err := json.Unmarshal(resp.Body, &rows); err != nil {
-		return unavailable("the server's reply could not be read.")
+		return unavailable("the server's reply could not be read. " +
+			"The server may run a different AgentsView version than this command.")
 	}
 	var lines []string
 	for _, row := range rows {
