@@ -41,7 +41,8 @@ type codexCloudEdit struct {
 }
 
 // codexCloudItemMessages maps one item to messages. Every item type yields
-// at least one message, so nothing is dropped silently.
+// at least one message, so nothing is dropped silently, except a reasoning
+// item with no text, which would only add an empty thinking row.
 func codexCloudItemMessages(
 	record mirror.ItemRecord, ts time.Time, meta *mirror.Thread,
 ) []ParsedMessage {
@@ -74,6 +75,9 @@ func codexCloudItemMessages(
 		if thinking == "" {
 			thinking = strings.Join(codexCloudStrings(item.Content), "\n\n")
 		}
+		if strings.TrimSpace(thinking) == "" {
+			return nil
+		}
 		return []ParsedMessage{assistant(ParsedMessage{ThinkingText: thinking, HasThinking: true})}
 	case "contextCompaction":
 		return []ParsedMessage{{
@@ -91,10 +95,16 @@ func codexCloudItemMessages(
 		Content: call.Rendering, HasToolUse: true, ToolCalls: []ParsedToolCall{call},
 	})
 	if item.Type == "fileChange" && len(item.Changes) > 0 {
+		// One call per file, as the codex parser emits for apply_patch, so
+		// file-keyed views group by path. Results pair by tool-use ID, so
+		// each file of a multi-file change gets its own ID and result.
 		calls := make([]ParsedToolCall, 0, len(item.Changes))
-		for _, change := range item.Changes {
+		for i, change := range item.Changes {
 			perFile := call
 			perFile.FilePath = change.Path
+			if len(item.Changes) > 1 {
+				perFile.ToolUseID = fmt.Sprintf("%s#%d", item.ID, i+1)
+			}
 			calls = append(calls, perFile)
 		}
 		callMsg.ToolCalls = calls
@@ -111,12 +121,17 @@ func codexCloudItemMessages(
 	if done := mirror.Millis(record.CompletedAtMs); !done.IsZero() {
 		resultTS = done
 	}
+	status := codexCloudResultStatus(item)
+	results := make([]ParsedToolResult, 0, len(callMsg.ToolCalls))
+	for _, call := range callMsg.ToolCalls {
+		results = append(results, ParsedToolResult{
+			ToolUseID: call.ToolUseID, Source: "tool_result", Status: status,
+			ContentRaw: string(quoted), ContentLength: len(result),
+		})
+	}
 	return append(messages, ParsedMessage{
 		Role: RoleUser, Timestamp: resultTS, ContentLength: len(result),
-		ToolResults: []ParsedToolResult{{
-			ToolUseID: item.ID, Source: "tool_result", Status: codexCloudResultStatus(item),
-			ContentRaw: string(quoted), ContentLength: len(result),
-		}},
+		ToolResults: results,
 	})
 }
 
@@ -303,14 +318,19 @@ func codexCloudTerminal(status jsontext.Value) bool {
 	}
 }
 
+// codexCloudResultStatus maps an item status to a tool result status. An
+// interrupted call did not succeed, so it counts as errored; a call still
+// in progress reports partial output as running.
 func codexCloudResultStatus(item codexCloudItem) string {
-	switch codexCloudString(item.Status) {
-	case "failed", "declined":
+	status := codexCloudString(item.Status)
+	switch {
+	case status == "failed" || status == "declined" || status == "interrupted":
 		return "errored"
+	case len(item.Error) > 0 && string(item.Error) != "null":
+		return "errored"
+	case status == "inProgress":
+		return "running"
 	default:
-		if len(item.Error) > 0 && string(item.Error) != "null" {
-			return "errored"
-		}
 		return "completed"
 	}
 }
