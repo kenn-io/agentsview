@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -1330,6 +1331,12 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 			fmt.Errorf("iterating pg top session metadata: %w", err)
 	}
 	return out, nil
+}
+
+// GetSessionPlanUsage reports that this backend does not store plan
+// usage yet.
+func (*Store) GetSessionPlanUsage(context.Context, string) (*db.SessionPlanUsage, error) {
+	return nil, fmt.Errorf("postgres: session plan usage: %w", errors.ErrUnsupported)
 }
 
 // GetSessionUsage returns one session's token totals and cost

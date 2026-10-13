@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -1978,6 +1979,12 @@ func (s *Store) GetUsageMatchingSessionCount(
 		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
 	}
 	return len(seen), nil
+}
+
+// GetSessionPlanUsage reports that this backend does not store plan
+// usage yet.
+func (*Store) GetSessionPlanUsage(context.Context, string) (*db.SessionPlanUsage, error) {
+	return nil, fmt.Errorf("duckdb: session plan usage: %w", errors.ErrUnsupported)
 }
 
 func (s *Store) GetSessionUsage(

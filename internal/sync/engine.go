@@ -18513,6 +18513,20 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			outcome.failedSessions++
 			continue
 		}
+		if err := e.db.ReplaceSessionPlanUsage(ctx,
+			s.ID, prepared.PlanUsage,
+		); err != nil {
+			if ctx.Err() != nil {
+				return outcome
+			}
+			log.Printf(
+				"write plan usage for %s: %v",
+				s.ID, err,
+			)
+			e.markStaleFailedMemberWrite(ctx, pw)
+			outcome.failedSessions++
+			continue
+		}
 		if ctx.Err() != nil {
 			return outcome
 		}
@@ -18694,6 +18708,11 @@ func (e *Engine) prepareSessionNormalizedContext(
 	prepared, err := ingest.FinalizeRows(ctx, candidate, options)
 	if err != nil {
 		return ingest.PreparedSession{}, sessionWritePreserved, err
+	}
+	if prepared.PlanUsage != nil {
+		prepared.PlanUsage.CountedUnder = applyIDPrefixToID(
+			e.idPrefix, prepared.PlanUsage.CountedUnder,
+		)
 	}
 	if derive && pw.staged == nil && !e.disableSignalRecompute {
 		prepared.Signals, prepared.Findings = e.computeSignalsAndSecretsForStorage(
@@ -19101,6 +19120,16 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				outcome.failedSessions++
 				continue
 			}
+			if err := e.db.ReplaceSessionPlanUsage(ctx,
+				s.ID, prepared.PlanUsage,
+			); err != nil {
+				log.Printf(
+					"write plan usage for %s: %v", s.ID, err,
+				)
+				e.markStaleFailedMemberWrite(ctx, pw)
+				outcome.failedSessions++
+				continue
+			}
 			if err := e.db.SetSessionDataVersion(ctx,
 				s.ID, dataVersionForWrite(pw),
 			); err != nil {
@@ -19167,6 +19196,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			Session:          s,
 			Messages:         msgs,
 			UsageEvents:      prepared.UsageEvents,
+			PlanUsage:        prepared.PlanUsage,
 			ToolResultImages: &e.toolResultImages,
 			IdentityObservation: identityObservationOrZero(
 				identityObservation, hasIdentityObservation,
@@ -20191,6 +20221,15 @@ func (e *Engine) writeSessionFullWithResolver(
 	); err != nil {
 		log.Printf(
 			"replace usage events for %s: %v",
+			s.ID, err,
+		)
+		return err
+	}
+	if err := e.db.ReplaceSessionPlanUsage(ctx,
+		s.ID, prepared.PlanUsage,
+	); err != nil {
+		log.Printf(
+			"replace plan usage for %s: %v",
 			s.ID, err,
 		)
 		return err

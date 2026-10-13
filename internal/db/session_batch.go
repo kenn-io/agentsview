@@ -15,9 +15,11 @@ import (
 // complete message set to store, the computed signal values,
 // and the data version to stamp after messages are written.
 type SessionBatchWrite struct {
-	Session             Session
-	Messages            []Message
-	UsageEvents         []UsageEvent
+	Session     Session
+	Messages    []Message
+	UsageEvents []UsageEvent
+	// PlanUsage replaces the session's plan usage row; nil removes it.
+	PlanUsage           *SessionPlanUsage
 	IdentityObservation export.ProjectIdentityObservation
 	// IdentitySnapshotProject distinguishes legacy omission (nil, use the
 	// aggregate project) from an explicit empty parser source (omit snapshot).
@@ -562,6 +564,11 @@ func writeOneSessionBatchTx(
 	}
 	if err := replaceSessionUsageEventsTx(
 		queries, write.Session.ID, write.UsageEvents, false,
+	); err != nil {
+		return 0, err
+	}
+	if err := replaceSessionPlanUsageTx(
+		queries, write.Session.ID, write.PlanUsage,
 	); err != nil {
 		return 0, err
 	}

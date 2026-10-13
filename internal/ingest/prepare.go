@@ -30,10 +30,13 @@ type PreparedSession struct {
 	Session     db.Session
 	Messages    []db.Message
 	UsageEvents []db.UsageEvent
-	Signals     db.SessionSignalUpdate
-	Findings    []db.SecretFinding
-	Friction    db.SessionFrictionUpdate
-	Validation  db.ValidationStats
+	// PlanUsage is the session's plan usage and live-capture coverage
+	// row; nil when the parser reported neither.
+	PlanUsage  *db.SessionPlanUsage
+	Signals    db.SessionSignalUpdate
+	Findings   []db.SecretFinding
+	Friction   db.SessionFrictionUpdate
+	Validation db.ValidationStats
 }
 
 // PrepareCandidate converts and pairs parser output before caller-owned
@@ -163,6 +166,10 @@ func finalize(
 	}
 	return PreparedSession{
 		Session: session, Messages: messages, UsageEvents: usageEvents,
+		PlanUsage: ConvertPlanUsage(
+			candidate.Parsed.Session.PlanUsage,
+			candidate.Parsed.Session.CaptureCoverage,
+		),
 		Signals: signalUpdate, Findings: findings, Validation: validation,
 	}, ctx.Err()
 }

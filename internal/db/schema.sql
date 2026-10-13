@@ -296,6 +296,29 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_session
 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
     ON usage_events(occurred_at);
 
+-- Per-session plan usage and live-capture coverage. Codex cloud reports
+-- usage as shares of plan limits and credits, not tokens, so these never
+-- become usage_events. A row holds the latest plan usage report and the
+-- newest outcome after it, the live-capture coverage, or both.
+CREATE TABLE IF NOT EXISTS session_plan_usage (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    has_plan_usage INTEGER NOT NULL DEFAULT 0,
+    data_as_of TEXT,
+    data_status TEXT NOT NULL DEFAULT '',
+    usage_source TEXT NOT NULL DEFAULT '',
+    weekly_percent REAL,
+    five_hour_percent REAL,
+    credits TEXT,
+    groups_json TEXT NOT NULL DEFAULT '[]',
+    is_final INTEGER NOT NULL DEFAULT 0,
+    outcome_kind TEXT NOT NULL DEFAULT '',
+    outcome_at TEXT,
+    counted_under TEXT NOT NULL DEFAULT '',
+    has_coverage INTEGER NOT NULL DEFAULT 0,
+    last_capture_at TEXT,
+    uncaptured_turns INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
     id INTEGER PRIMARY KEY,
     occurred_at TEXT NOT NULL,

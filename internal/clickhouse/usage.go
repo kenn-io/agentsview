@@ -2497,6 +2497,12 @@ func (s *Store) GetUsageMatchingSessionCount(
 	return len(seen), nil
 }
 
+// GetSessionPlanUsage reports that this backend does not store plan
+// usage yet.
+func (*Store) GetSessionPlanUsage(context.Context, string) (*db.SessionPlanUsage, error) {
+	return nil, fmt.Errorf("clickhouse: session plan usage: %w", errors.ErrUnsupported)
+}
+
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
