@@ -10,6 +10,7 @@ export interface CodexcloudHomeStatus {
   /** @nullable */
   last_success?: string | null;
   live?: string;
+  live_warn?: boolean;
   message?: string;
   /** @nullable */
   oldest_failure?: string | null;

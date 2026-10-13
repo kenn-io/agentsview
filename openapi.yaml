@@ -630,6 +630,8 @@ components:
             - "null"
         live:
           type: string
+        live_warn:
+          type: boolean
         message:
           type: string
         oldest_failure:
