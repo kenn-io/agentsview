@@ -81,6 +81,8 @@ var annotationFilterCases = []struct {
 		Labels: []string{"role=worker"}, IncludeChildren: true,
 	}},
 	{"repository ignores case", db.SessionFilter{PR: db.PRFilter{Repository: "ACME/widgets"}}},
+	{"host ignores case", db.SessionFilter{PR: db.PRFilter{Repository: "acme/widgets", Number: 7, Host: "GITHUB.COM"}}},
+	{"other host", db.SessionFilter{PR: db.PRFilter{Repository: "acme/widgets", Number: 7, Host: "gitlab.com"}}},
 	{"second link", db.SessionFilter{PR: db.PRFilter{Repository: "other/repo", Number: 3}}},
 	{"number from another repository", db.SessionFilter{PR: db.PRFilter{
 		Repository: "other/repo", Number: 7,

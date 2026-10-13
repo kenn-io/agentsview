@@ -7,6 +7,10 @@ Export session metadata and token and cost totals without transcript text. Use
 `agentsview export sessions` for reporting scripts that need pricing and project
 identity. JSON produces one document; NDJSON writes one JSON object per line.
 
+Labels and launcher parent links belong to the local archive and are excluded
+from artifact export and import. Transcript parents and spawn edges remain
+part of the artifact.
+
 ## Commands
 
 ```bash

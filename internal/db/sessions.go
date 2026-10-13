@@ -122,11 +122,15 @@ const sessionPruneCols = `id, project, machine, agent,
 	pr_links, ` + sessionLabelsSelectSQL
 
 // sessionFullCols includes all columns for a complete session record.
-const sessionFullCols = `id, project, machine, agent,
+const sessionFullCols = sessionFullColsBeforeParent + "parent_session_id" + sessionFullColsAfterParent
+
+const sessionFullColsBeforeParent = `id, project, machine, agent,
 	agent_label, entrypoint, session_kind,
 	first_message, display_name, session_name, started_at, ended_at,
 	message_count, user_message_count,
-	parent_session_id, parser_parent_session_id, relationship_type,
+`
+
+const sessionFullColsAfterParent = `, parser_parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
 	has_total_output_tokens, has_peak_context_tokens,
 	is_automated,
@@ -1202,7 +1206,7 @@ func (db *DB) GetArtifactExportSession(
 		AND EXISTS (SELECT 1 FROM session_external_parents ep
 			WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)
 		THEN NULL ELSE parent_session_id END`
-	cols := strings.Replace(sessionFullCols, "parent_session_id,", parent+",", 1)
+	cols := sessionFullColsBeforeParent + parent + sessionFullColsAfterParent
 	return scanSessionFullRow(db.getReader().QueryRowContext(ctx,
 		"SELECT "+cols+" FROM sessions WHERE id = ?", id), id)
 }

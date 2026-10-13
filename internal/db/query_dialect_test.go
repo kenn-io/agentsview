@@ -404,3 +404,21 @@ func TestNormalizeSQLHelperDoesNotMaskPlaceholders(t *testing.T) {
 	require.True(t, regexp.MustCompile(`\?\)|\$1`).MatchString(
 		normalizeSQL("value IN (?,?) OR value = $1")))
 }
+
+func TestBuildSessionFilterSQLPRHost(t *testing.T) {
+	for _, dialect := range []QueryDialect{SQLiteQueryDialect(), PostgresQueryDialect(), DuckDBQueryDialect(), ClickHouseQueryDialect()} {
+		t.Run(dialect.name, func(t *testing.T) {
+			for _, host := range []string{"", "GITHUB.COM"} {
+				where, args := BuildSessionFilterSQL(SessionFilter{PR: PRFilter{Repository: "OWNER/REPO", Number: 12, Host: host}}, dialect)
+				wantArgs := []any{"owner/repo", 12}
+				if host != "" {
+					wantArgs = append(wantArgs, "github.com")
+					assert.Contains(t, where, "host")
+				} else {
+					assert.NotContains(t, where, "host")
+				}
+				assert.Equal(t, wantArgs, args)
+			}
+		})
+	}
+}

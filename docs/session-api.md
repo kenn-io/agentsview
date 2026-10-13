@@ -324,7 +324,7 @@ therefore appear on both dates.
 | `--min-tool-failures` | `min_tool_failures` | int; `0` is a meaningful filter                                                                                                                                                   |
 | `--has-secret`        | `has_secret`        | bool — only sessions with at least one definite [secret finding](#secret-scanning)                                                                                                |
 | `--label`             | `label`             | repeatable; exact label match, every listed label required                                                                                                                        |
-| `--pr`                | `pr`                | `owner/repo` or `owner/repo#123`; see [Pull request links](#pull-request-links)                                                                              |
+| `--pr`                | `pr`                | `owner/repo`, `owner/repo#123`, or `github.com/owner/repo#123`; see [Pull request links](#pull-request-links)                                                                              |
 | `--sort`              | `order_by`          | comma-separated keys; optional `:asc` / `:desc` suffix per key                                                                                                                    |
 | `--reverse`, `-r`     | `descending`        | flips the default direction for unsuffixed sort keys                                                                                                                              |
 | `--cursor`            | `cursor`            | opaque string from prior response                                                                                                                                                 |
@@ -625,8 +625,10 @@ and git branch.
 
 Filter by pull request with `session list --pr` or the `pr` query parameter.
 The value is `owner/repo` for any pull request in that repository,
-`owner/repo#123` for one pull request. Repository matching ignores case and
-matches any host.
+`owner/repo#123` for one pull request, or `github.com/owner/repo#123` to
+restrict it to a host. Matching ignores case. Omitting the host matches any
+host, including nested repository paths such as `group/subgroup/repo`. A host
+prefix contains a dot or port separator.
 
 #### Filtering by label or pull request
 

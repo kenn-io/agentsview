@@ -132,7 +132,7 @@ func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 	}})
 	_, err := executeCommand(newRootCommand(), "session", "label", "worker", "nightly")
 	require.NoError(t, err)
-	for _, filter := range [][]string{{"--label", "nightly"}, {"--pr", "owner/repo#7"}} {
+	for _, filter := range [][]string{{"--label", "nightly"}, {"--pr", "owner/repo#7"}, {"--pr", "github.com/owner/repo#7"}} {
 		for _, explicit := range []bool{false, true} {
 			args := append([]string{"session", "list", "--format", "json"}, filter...)
 			if explicit {

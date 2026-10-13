@@ -25,6 +25,9 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 		}
 	})
 	insertSession(t, d, "without-prs", "proj")
+	insertSession(t, d, "other-host", "proj", func(s *Session) {
+		s.PRLinks = []PRLink{{URL: "https://gitlab.com/owner/repo/-/merge_requests/12", Host: "gitlab.com", Repository: "owner/repo", Number: 12}}
+	})
 
 	got, err := d.GetSession(t.Context(), "with-prs")
 	require.NoError(t, err)
@@ -41,8 +44,13 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 		filter string
 		want   []string
 	}{
-		{filter: "owner/repo", want: []string{"with-prs"}},
-		{filter: "owner/repo#12", want: []string{"with-prs"}},
+		{filter: "owner/repo", want: []string{"other-host", "with-prs"}},
+		{filter: "owner/repo#12", want: []string{"other-host", "with-prs"}},
+		{filter: "GITHUB.COM/OWNER/REPO#12", want: []string{"with-prs"}},
+		{filter: "github.com/owner/repo", want: []string{"with-prs"}},
+		{filter: "gitlab.com/owner/repo#12", want: []string{"other-host"}},
+		{filter: "forge.example/owner/repo#12", want: []string{}},
+		{filter: "github.com/owner/repo#3", want: []string{}},
 		{filter: "owner/repo#13", want: []string{}},
 
 		{filter: "owner/missing", want: []string{}},
@@ -634,5 +642,21 @@ func TestDetachedLauncherLinkKeepsWorkerClassification(t *testing.T) {
 				assertDetached(t, d)
 			})
 		})
+	}
+}
+
+func TestParsePRFilterRepositoryPaths(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  PRFilter
+	}{
+		{"group/subgroup/repo#12", PRFilter{Repository: "group/subgroup/repo", Number: 12}},
+		{"owner.name/repo", PRFilter{Repository: "owner.name/repo"}},
+		{" GITLAB.COM/group/subgroup/repo#12 ", PRFilter{Host: "gitlab.com", Repository: "group/subgroup/repo", Number: 12}},
+		{"forge.example:8443/owner/repo", PRFilter{Host: "forge.example:8443", Repository: "owner/repo"}},
+	} {
+		got, err := ParsePRFilter(tt.value)
+		require.NoError(t, err)
+		assert.Equal(t, tt.want, got)
 	}
 }
