@@ -114,6 +114,27 @@ func (b *StatusBoard) Snapshot() []HomeStatus {
 	return rows
 }
 
+// fileStoreFix tells the user how to give AgentsView a login Codex keeps
+// out of auth.json, and what that costs.
+const fileStoreFix = "To let AgentsView use it, set `cli_auth_credentials_store = \"file\"` in this home's " +
+	"config.toml and run `codex login`. That stores the ChatGPT login in a plain file that any program " +
+	"running as you can read."
+
+// keyringRefusedMessage is the text for an HTTP 401 in auto mode: the
+// token in auth.json was refused, and Codex may hold the current login in
+// the keyring.
+const keyringRefusedMessage = "OpenAI did not accept the ChatGPT login in this Codex home's auth.json. " +
+	"With `cli_auth_credentials_store = \"auto\"`, Codex may keep the current login in the system keyring, " +
+	"which AgentsView does not read. " + fileStoreFix
+
+// refusedMessage is the text for a home whose login OpenAI refused.
+func refusedMessage(f Failure) string {
+	if f == FailKeyring {
+		return keyringRefusedMessage
+	}
+	return Message(f, time.Time{})
+}
+
 // Message is the user-facing text for a failure. retryAt is used only for
 // a rate limit.
 func Message(f Failure, retryAt time.Time) string {
@@ -138,9 +159,10 @@ func Message(f Failure, retryAt time.Time) string {
 	case FailProtocol:
 		return "OpenAI changed its service in a way this version of AgentsView can't read. Update AgentsView. Sessions already imported are safe."
 	case FailKeyring:
-		return "This Codex home keeps its ChatGPT login in the system keyring, which AgentsView does not read."
+		return "This Codex home keeps its ChatGPT login in the system keyring, which AgentsView does not read. " +
+			fileStoreFix
 	case FailEphemeral:
-		return "This Codex home does not save its ChatGPT login, so AgentsView cannot use it."
+		return "This Codex home does not save its ChatGPT login, so AgentsView cannot use it. " + fileStoreFix
 	default:
 		return ""
 	}

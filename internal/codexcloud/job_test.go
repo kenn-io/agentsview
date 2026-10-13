@@ -175,7 +175,9 @@ func TestStatusMessages(t *testing.T) {
 		env.run(t)
 		row, ok := env.syncer.Status.Row("/homes/a")
 		require.True(t, ok)
-		assert.Equal(t, Message(FailKeyring, time.Time{}), row.Message)
+		assert.Contains(t, row.Message, "OpenAI did not accept the ChatGPT login")
+		assert.Contains(t, row.Message, "set `cli_auth_credentials_store = \"file\"`")
+		assert.Contains(t, row.Message, "plain file that any program running as you can read")
 	})
 	t.Run("403 does not", func(t *testing.T) {
 		env := newPassEnv(t)

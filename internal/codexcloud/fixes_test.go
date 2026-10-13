@@ -488,3 +488,19 @@ func TestUnreadableLoginShowsItsOwnProblem(t *testing.T) {
 	assert.Equal(t, StateError, row.State)
 	assert.Equal(t, "config.toml is broken.", row.Message, "signing in again would not fix it")
 }
+
+func TestLoginOutsideAuthJSONGivesFileStoreFix(t *testing.T) {
+	for _, state := range []HomeState{HomeKeyring, HomeEphemeral} {
+		env := newPassEnv(t)
+		env.syncer.ReadLogin = func(home string) (Login, HomeState, error) { return Login{Home: home}, state, nil }
+
+		env.run(t)
+
+		row, ok := env.syncer.Status.Row("/homes/a")
+		require.True(t, ok)
+		assert.Contains(t, row.Message, "set `cli_auth_credentials_store = \"file\"` in this home's config.toml "+
+			"and run `codex login`")
+		assert.Contains(t, row.Message, "plain file that any program running as you can read",
+			"the fix trades the keyring's protection for access")
+	}
+}
