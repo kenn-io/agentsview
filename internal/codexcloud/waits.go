@@ -106,6 +106,17 @@ func (w *Waits) HomeReady(home string, authMTime time.Time) bool {
 	return false
 }
 
+// HomeFailure returns the failure a waiting home recorded, or FailNone
+// when the home is not waiting.
+func (w *Waits) HomeFailure(home string) Failure {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if wait, ok := w.homes[home]; ok {
+		return wait.failure
+	}
+	return FailNone
+}
+
 // RecordUsageHome remembers a plan usage 401 for home until its auth.json
 // changes from authMTime or an hour passes.
 func (w *Waits) RecordUsageHome(home string, authMTime time.Time) {

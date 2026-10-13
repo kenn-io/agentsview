@@ -647,3 +647,22 @@ func TestSettledLeftOutRootUsesRecoveredRow(t *testing.T) {
 	assert.True(t, last.Final)
 	assert.InDelta(t, 2, *last.Row.WeeklyPercent, 0, "the recovered row is the newest")
 }
+
+// TestNoUsableHomeNamesTheLoginProblem covers plan usage skipped because
+// the only Codex home began waiting on a login problem other than a
+// sign-out during the pass, as when live capture gets a token refresh
+// request.
+func TestNoUsableHomeNamesTheLoginProblem(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	login := env.logins["/homes/a"]
+	env.host.Handle("thread/turns/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
+		env.syncer.Waits.RecordHome(login.Home, FailRefreshRequested, login.AuthModTime)
+		return env.threads.TurnsList(params)
+	})
+
+	env.run(t)
+
+	assert.Empty(t, env.usage.Requests())
+	assert.Equal(t, "Plan usage: "+Message(FailRefreshRequested, time.Time{}), env.planLine(t))
+}
