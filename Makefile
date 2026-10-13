@@ -416,20 +416,22 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 
 # PostgreSQL integration tests for CI (postgres already running as service)
-.NOTPARALLEL: test-postgres-ci test-postgres-core-ci
 POSTGRES_CORE_HEAVY_TEST := TestRawProjectionProofLookupsStayBounded
-test-postgres-ci: test-postgres-raw-sync-ci test-postgres-core-ci
+test-postgres-ci:
+	$(MAKE) -j1 test-postgres-raw-sync-ci test-postgres-core-ci
 
 test-postgres-raw-sync-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
 		-run 'TestRawSync.*CleanUploads|TestRawSyncBackfill|TestHostedRuntimeHealthRequiresStatusToken' -count=1
 
-test-postgres-core-ci: test-postgres-core-fast-ci test-postgres-core-heavy-ci
+test-postgres-core-ci:
+	$(MAKE) -j1 test-postgres-core-fast-ci test-postgres-core-heavy-ci
 
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -skip '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
 
 test-postgres-core-heavy-ci: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres/... -list '^$(POSTGRES_CORE_HEAVY_TEST)$$' | grep -Fx '$(POSTGRES_CORE_HEAVY_TEST)'
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... -run '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
 
 # Start test ClickHouse container (native 19000, HTTP 18123)

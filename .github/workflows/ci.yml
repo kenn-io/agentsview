@@ -335,10 +335,10 @@ jobs:
           # Complementary filters keep every sync test in exactly one job.
           - name: Sync A-R
             package: ./internal/sync
-            run: '^Test[A-R]'
+            run: &sync-test-prefix '^Test[A-R]'
           - name: Sync remaining
             package: ./internal/sync
-            skip: '^Test[A-R]'
+            skip: *sync-test-prefix
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -561,15 +561,15 @@ jobs:
         include:
           - name: Sync A-R
             runner: namespace-profile-linux-4cpu
-            sync: true
-            run: '^Test[A-R]'
+            testSet: sync
+            run: *sync-test-prefix
           - name: Sync remaining
             runner: namespace-profile-linux-4cpu
-            sync: true
-            skip: '^Test[A-R]'
+            testSet: sync
+            skip: *sync-test-prefix
           - name: Other packages
             runner: namespace-profile-linux-8cpu
-            sync: false
+            testSet: other
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -600,13 +600,13 @@ jobs:
       # main test job's ./... run. Limit package fan-out because the race
       # detector makes highly parallel runs slow enough to exhaust deadlines.
       - name: Run Go tests (race detector)
-        if: ${{ !matrix.sync }}
+        if: matrix.testSet == 'other'
         run: go list ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
       - name: Run sync tests (race detector)
-        if: matrix.sync
+        if: matrix.testSet == 'sync'
         run: go test -tags "fts5" -race ./internal/sync -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
