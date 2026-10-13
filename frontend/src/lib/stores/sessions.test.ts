@@ -225,7 +225,8 @@ describe("SessionsStore", () => {
   });
 
   it("preserves explicit automated exclusion for annotation requests", async () => {
-    for (const filter of [{ label: "nightly" }, { pr: "owner/repo#7" }]) {
+    const filters: Record<string, string>[] = [{ label: "nightly" }, { pr: "owner/repo#7" }];
+    for (const filter of filters) {
       sessions.initFromParams(filter);
       await sessions.load();
       expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBeUndefined();
