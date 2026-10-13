@@ -496,7 +496,7 @@ keeps its default directories.
 | Claude Cowork         | (platform-specific, see below)                                                                                                                                   | Claude Desktop cowork sessions                                                                                                                                |
 | Codebuff / Freebuff   | `~/.config/manicode/projects/`                                                                                                                                   | Per-session `chat-messages.json` + `run-state.json` with subagent transcripts                                                                                 |
 | Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                                                                                                           | JSONL per session                                                                                                                                             |
-| Codex Cloud           | Fetched from OpenAI when `[agents.codex-cloud] enabled = true`; see [Codex Cloud](#codex-cloud)                                                                  | Compressed JSONL copy per thread under `<data dir>/sources/codex-cloud/`                                                                                      |
+| Codex Cloud           | Fetched from OpenAI when `[agents.codex-cloud] enabled = true`; see [Codex Cloud](#codex-cloud)                                                                  | Compressed JSONL copy per chat under `<data dir>/sources/codex-cloud/`                                                                                      |
 | Cline CLI             | `~/.cline/data/sessions/` or `~/.cline/`                                                                                                                         | Paired `<id>.json` metadata and `<id>.messages.json` transcript files                                                                                         |
 | Command Code          | `~/.commandcode/projects/`                                                                                                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                                              |
 | Copilot CLI           | `~/.copilot/`                                                                                                                                                    | JSONL per session under `session-state/`                                                                                                                      |
@@ -1148,12 +1148,11 @@ discovery, including metadata left behind when its transcript is deleted.
 
 ### Codex Cloud
 
-The `codex-cloud` source imports the threads that ChatGPT dot, Codex web, and
-Codex cloud tasks keep on OpenAI's servers. These threads never exist as local
+The `codex-cloud` source imports the chats that ChatGPT dot, Codex web, and
+Codex cloud tasks keep on OpenAI's servers. These chats never exist as local
 files, so AgentsView fetches them with the ChatGPT login of a local Codex home
-and keeps a compressed copy under `<data dir>/sources/codex-cloud/`. Each thread
-becomes a session; a dot-delegated task links to the dot conversation that
-started it.
+and keeps a compressed copy under `<data dir>/sources/codex-cloud/`. Each chat
+becomes a session.
 
 The source is off until you turn it on. It is configured in `config.toml` only;
 the Settings page does not show it.
@@ -1164,99 +1163,161 @@ enabled = true
 # live_tokens = false   # turn off live token capture (on by default)
 ```
 
-| Key              | Default                                                              | Meaning                                       |
-| ---------------- | -------------------------------------------------------------------- | --------------------------------------------- |
-| `enabled`        | `false`                                                              | Fetch threads and capture tokens from OpenAI  |
-| `live_tokens`    | `true`                                                               | Join running threads to record token counts   |
-| `endpoint`       | `wss://codex-cloud-backend.chatgpt.com/`                             | Thread service; for tests only                |
-| `usage_endpoint` | `https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2`   | Plan usage report; for tests only             |
+| Key              | Default                                                              | Meaning                                                 |
+| ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------- |
+| `enabled`        | `false`                                                              | Fetch chats and capture tokens from OpenAI              |
+| `live_tokens`    | `true`                                                               | Listen in on running chats to record their token counts |
+| `endpoint`       | `wss://codex-cloud-backend.chatgpt.com/`                             | Chat service; for tests only                            |
+| `usage_endpoint` | `https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2`   | Plan usage report; for tests only                       |
+
+Live capture is on by default: setting `enabled = true` also makes AgentsView
+listen in on your running chats. Read
+[Tokens and plan usage](#tokens-and-plan-usage) for what that does on OpenAI's
+side, and set `live_tokens = false` if you want only the import.
 
 An endpoint override must use `wss` or `https` on `chatgpt.com`, `openai.com`,
 or a subdomain of either. Plain `ws` and `http` are accepted only for loopback
 addresses. Neither client follows redirects, so the login is never sent to a
-host these rules did not check. An unknown key or a bad value turns this source
-off, shows the error at startup and in the status bar, and leaves the rest of
-the config working. Listing `codex-cloud` in `disabled_agents` stops fetching,
-live capture, and parsing even when `enabled = true`. The daemon re-reads this
-table at the start of each run, so a hand edit takes effect without a restart.
+host these rules did not check.
 
-**What it does with your login.** AgentsView reads the ChatGPT access token
-from the `auth.json` of each Codex home: `CODEX_HOME` (or `~/.codex` when it is
-unset) and each entry in `[agents.codex] homes`. It sends the token only to the
-endpoints above, never writes to a Codex home, and never stores the token.
-Homes signed in to the same ChatGPT account share one import. A home whose
-token is refused waits until its `auth.json` changes; run `codex login` to
-refresh it. A home that keeps its login in the system keyring is not read.
+An unknown key or a bad value turns this source off and leaves the rest of the
+config working. The error names `config.toml`, the key, and the problem, and
+shows in the status bar and in `agentsview serve status`.
 
-**Private endpoints.** OpenAI does not document these endpoints, and they may
-change or stop working without notice. OpenAI may also treat third-party
-clients differently from its own apps. When a reply no longer matches what
-AgentsView expects, the source stops for that account and the status bar says
-"OpenAI changed its service in a way this version of AgentsView can't read."
+Listing `codex-cloud` in `disabled_agents` stops fetching, live capture, and
+parsing even when `enabled = true`. The daemon re-reads
+`[agents.codex-cloud]`, `disabled_agents`, and `[agents.codex] homes` at the
+start of each run, so a hand edit turns fetching and live capture on or off
+without a restart. Parsing of chats already fetched follows the daemon's
+provider list instead: adding `codex-cloud` to `disabled_agents` by hand stops
+parsing only after a restart or a save on the Settings page. If `config.toml`
+cannot be read at all, the source keeps its last good settings and the status
+says so.
+
+#### What it does with your login
+
+AgentsView reads the ChatGPT access token from the `auth.json` of each Codex
+home: `CODEX_HOME` (or `~/.codex` when it is unset) and each entry in
+`[agents.codex] homes`. It sends the token only to the endpoints above, never
+writes to a Codex home, and never stores the token. Homes signed in to the same
+ChatGPT account share one import.
+
+- If OpenAI does not accept a home's login, or asks for a fresh one, the status
+  tells you to run `codex login` for that home. AgentsView tries the home again
+  when its `auth.json` changes, or after one hour.
+- If OpenAI refuses the account's requests, AgentsView waits one hour, then
+  doubles the wait up to one day. Running `codex login` does not help here; the
+  status asks you to check that the ChatGPT account can use Codex.
+- Codex can keep the login in the system keyring instead of `auth.json`, or not
+  save it at all. AgentsView does not read the keyring. To let AgentsView use
+  such a home, set `cli_auth_credentials_store = "file"` in that home's
+  `config.toml` and run `codex login`. This stores the ChatGPT login in a plain
+  file that any program running as you can read.
+
+#### Private endpoints
+
+OpenAI does not document these endpoints, and they may change or stop working
+without notice. OpenAI may also treat third-party clients differently from its
+own apps. When a reply no longer matches what AgentsView expects, the status
+says "OpenAI's service answered in a way this version of AgentsView can't read"
+and asks you to check an `endpoint` override or update AgentsView. Imports from
+that account pause and are tried again after one hour, then at longer waits up
+to one day. Live capture for that account stops until AgentsView restarts.
 Sessions already imported are kept.
 
-**Tokens and plan usage.** The hosted thread history has no token counts.
-OpenAI reports token counts only to a client watching a thread while it runs.
-With `live_tokens = true`, the daemon checks every 30 seconds for threads that
-are running, joins each one (up to 10 per account), records every token update,
-and leaves when the turn ends.
+#### Tokens and plan usage
 
-Joining is the only request that touches a thread on OpenAI's side:
+The hosted chat history has no token counts. OpenAI reports token counts only
+to a client connected to a chat while it runs. With `live_tokens = true`, the
+daemon checks every 30 seconds for chats updated in the last 5 minutes whose
+newest turn is still running. It listens in on each one, up to 10 per account,
+records every token update, and disconnects when the turn ends or after 6
+hours.
 
-- While joined, the running task reports AgentsView as its client, and later
-  turns' starting context can mention it.
-- If a turn ends just before the join, the join loads the stopped thread on
-  OpenAI's side and starts its MCP servers. In testing nothing ran and the
-  thread did not change, but a thread with an active goal might continue it.
-  AgentsView leaves at once and does not join that turn again. To keep this
-  rare, AgentsView joins only threads updated in the last 5 minutes.
+Listening in is the only request that touches a chat on OpenAI's side.
+AgentsView connects by resuming the chat (`thread/resume`):
 
-Set `live_tokens = false` to stop joining. Fetching and plan usage continue.
+- While AgentsView is connected, the running task reports AgentsView as its
+  client, and later turns' starting context can mention it.
+- If a turn ends just before AgentsView connects, connecting loads the stopped
+  chat on OpenAI's side and starts its MCP servers. In testing nothing ran and
+  the chat did not change. The chat may move to the top of your chat list in
+  OpenAI's apps. AgentsView disconnects at once and does not connect for that
+  turn again. To keep this rare, AgentsView checks again right before
+  connecting that the chat was updated in the last 5 minutes.
+- Untested risk: for a stopped chat with an active goal, that same load might
+  continue the goal and start a new turn.
+- Untested: AgentsView never answers approval prompts. Whether your app still
+  shows a prompt raised while AgentsView was connected, after AgentsView
+  disconnects, has not been checked.
 
-A thread AgentsView never watched while it ran has no token counts. For those,
-AgentsView asks OpenAI's usage report for the thread's share of your plan's
-weekly and five-hour limits, plus any credits used beyond the plan. That plan
-usage shows in the session details. Such sessions are left out of token and cost
-totals, and the totals say how many were left out ("N sessions billed as plan
-usage, not priced"). A session that live capture saw for only some of its turns
-counts in the totals, which then say "N sessions partly captured; their token
-counts are low."
+Set `live_tokens = false` to stop listening in. Fetching and plan usage
+continue. The status bar and `agentsview serve status` show a live tokens line
+for each account: how many running chats AgentsView is listening in on, idle,
+off and why, or stopped after a reply it could not read.
 
-**Limits.**
+Each token update carries the chat's running total, so the first update
+AgentsView records also covers every turn that finished before it. A turn that
+finished after AgentsView's last token update for that chat has no token
+counts. A session with such turns counts in the token and cost totals, which
+then say "N sessions partly captured; their token counts are low."
 
-- Live capture joins a thread only within 5 minutes of the thread's last
-  update. A turn that ends before a join gets no live tokens. If the daemon is
-  down or all 10 join slots are busy for longer than that while a turn runs,
-  that turn is not captured live either.
-- A thread's first token record is dated when AgentsView saw it, even when the
+A chat that AgentsView never listened in on has no token counts. For those,
+AgentsView asks OpenAI's usage report for the chat's share of your plan's
+weekly and five-hour limits, and the credits figure the report includes. That
+plan usage shows in the session details. Such sessions are left out of token
+and cost totals, and the totals say how many were left out ("N sessions billed
+as plan usage, not priced").
+
+AgentsView asks for plan usage again after a failed request or an incomplete
+report, with waits that grow to 6 hours, so a chat's final figures can arrive
+up to 6 hours after it finishes. It refreshes complete figures once a day. It
+stops asking 7 days after the chat's last change; if no request after that
+point was answered, the session details say AgentsView could not check plan
+usage.
+
+#### Limits
+
+- Live capture listens in on a chat only within 5 minutes of the chat's last
+  update. A turn that ends before AgentsView connects gets no live tokens. If
+  the daemon is down, or all 10 connections for the account are busy, for
+  longer than that while a turn runs, that turn is not captured live either.
+- The 5 minutes compare OpenAI's update time with this computer's clock. A
+  clock that runs more than a few minutes fast makes running chats look old,
+  so AgentsView skips them. A clock that runs slow makes stopped chats look
+  recent, so AgentsView connects to more stopped chats.
+- A chat's first token record is dated when AgentsView saw it, even when the
   earlier turns it covers ran on an earlier day.
 - Live capture does not see two kinds of model change. After a change reported
-  only as a thread settings update, tokens count toward the earlier model until
-  the next join. After a reroute that happened before the join, tokens count
-  toward the thread's configured model.
+  only as a chat settings update, tokens count toward the earlier model until
+  AgentsView next connects. After a reroute that happened before AgentsView
+  connected, tokens count toward the chat's configured model.
 - When one token update covers several model calls, it is priced at base rates.
   This can understate the cost of long-context calls inside it.
 - If OpenAI's running counter restarts in a way AgentsView does not see as a
   decrease, the turns in between are undercounted.
-- Running sub-agent threads are not joined yet, so their tokens are not
-  captured. Dot-delegated tasks are not sub-agent threads in this sense and are
-  joined like any other thread.
-- A thread that fails to import for 7 days without changing is no longer
-  retried. The daemon log names it. It is tried again when it changes.
-- ChatGPT dot's own conversation thread has no turns and is never imported.
-  Its delegated tasks appear as top-level sessions.
+- AgentsView does not listen in on running sub-agent chats yet, so their tokens
+  are not captured. Dot-delegated tasks are not sub-agent chats in this sense,
+  and AgentsView listens in on them like any other chat.
+- A chat that fails to import for 7 days without changing is no longer
+  retried, even while OpenAI lists it as active. The daemon log names it.
+  AgentsView tries it again when it changes.
+- ChatGPT dot's own conversation has no turns and is never imported. Its
+  delegated tasks appear as top-level sessions.
 
-**Use one machine.** Every machine produces the same session ID for the same
-thread. Enable this source, or at least live capture, on one machine only:
+#### Use one machine
+
+Every machine produces the same session ID for the same chat. Enable this
+source, or at least live capture, on one machine only:
 
 - PostgreSQL keeps the first machine's copy of each session and skips the other
   machine's pushes of it, so tokens or plan usage captured only on the second
   machine never arrive.
 - ClickHouse keeps whichever machine pushed last. The other machine's copy
   returns only after its next local change to that session.
-- A hosted hub keeps raw uploads per device, so two machines uploading one
-  thread can produce two sessions and count its tokens twice.
-- Both machines would join the same running threads.
+- A hosted hub keeps raw uploads per device, so two machines uploading one chat
+  can produce two sessions and count its tokens twice.
+- Both machines would listen in on the same running chats.
 
 ### Disabling Session Providers
 
