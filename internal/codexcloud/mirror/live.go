@@ -3,8 +3,8 @@ package mirror
 import "time"
 
 // The types below are the bodies of records the live token monitor writes.
-// Unlike the server objects above, AgentsView defines them, so the monitor
-// and the parser agree on them here.
+// Unlike the server objects in server.go, AgentsView defines them, so the
+// monitor and the parser agree on them here.
 
 // TokenCounts is one breakdown from thread/tokenUsage/updated. Input
 // includes cached reads and cache writes, and Output includes
