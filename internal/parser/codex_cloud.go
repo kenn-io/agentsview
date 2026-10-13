@@ -32,7 +32,6 @@ type codexCloudThread struct {
 	// itemOrder lists item keys in first-seen order, so a re-fetched item
 	// keeps its place while its newest record wins.
 	itemOrder []codexCloudItemKey
-	newestAt  time.Time
 	// tokens and completions hold the live monitor's records in file
 	// order.
 	tokens      []mirror.TokenUsageData
@@ -140,7 +139,6 @@ func collectCodexCloudRecords(records []mirror.Record) (*codexCloudThread, error
 		items: map[codexCloudItemKey]mirror.ItemRecord{},
 	}
 	for index, record := range records {
-		thread.newestAt = codexCloudLaterTime(thread.newestAt, record.FetchedAt)
 		switch record.Kind {
 		case mirror.KindThread, mirror.KindThreadResume:
 			var meta mirror.Thread
@@ -379,7 +377,7 @@ func codexCloudLaterTime(a, b time.Time) time.Time {
 	return a
 }
 
-// rawString decodes a JSON string, returning "" for anything else.
+// codexCloudString decodes a JSON string, returning "" for anything else.
 func codexCloudString(v jsontext.Value) string {
 	var s string
 	if len(v) == 0 || json.Unmarshal(v, &s) != nil {
