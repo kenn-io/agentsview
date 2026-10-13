@@ -21,12 +21,16 @@ func TestCodexCloudServeStatusLines(t *testing.T) {
 			assert.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"key":"k","homes":["/homes/a","/homes/b"],"state":"importing","found":3},` +
-				`{"key":"/homes/c","homes":["/homes/c"],"state":"error","message":"Signed out."}]`))
+				`{"key":"/homes/c","homes":["/homes/c"],"state":"error","message":"Signed out."},` +
+				`{"key":"codex-cloud","homes":[],"state":"off_disabled","message":"Off: enabled is false."},` +
+				`{"key":"j","homes":["/homes/d"],"state":"importing","imported":0,"total":1}]`))
 		}))
 		defer srv.Close()
 		assert.Equal(t, []string{
-			"  codex-cloud /homes/a, /homes/b: Importing, found 3 threads so far",
+			"  codex-cloud /homes/a, /homes/b: Importing, found 3 chats so far",
 			"  codex-cloud /homes/c: Signed out.",
+			"  codex-cloud: Off: enabled is false.",
+			"  codex-cloud /homes/d: Importing 0 of 1 chat",
 		}, codexCloudStatusLines(t.Context(), srv.URL, "secret"))
 	})
 	t.Run("an older daemon adds nothing", func(t *testing.T) {
@@ -34,12 +38,28 @@ func TestCodexCloudServeStatusLines(t *testing.T) {
 		defer srv.Close()
 		assert.Empty(t, codexCloudStatusLines(t.Context(), srv.URL, ""))
 	})
-	t.Run("a failure says so", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		}))
-		defer srv.Close()
-		assert.Equal(t, []string{"  codex-cloud status unavailable: HTTP 500"},
+	for _, tt := range []struct {
+		name   string
+		status int
+		want   string
+	}{
+		{"a rejected token says so", http.StatusUnauthorized,
+			"  codex-cloud status unavailable: the server did not accept this command's auth token."},
+		{"another failure names its status", http.StatusInternalServerError,
+			"  codex-cloud status unavailable: the server answered with HTTP status 500."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+			assert.Equal(t, []string{tt.want}, codexCloudStatusLines(t.Context(), srv.URL, ""))
+		})
+	}
+	t.Run("an unreachable server says so", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		srv.Close()
+		assert.Equal(t, []string{"  codex-cloud status unavailable: the server could not be reached."},
 			codexCloudStatusLines(t.Context(), srv.URL, ""))
 	})
 }
