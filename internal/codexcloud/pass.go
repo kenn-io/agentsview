@@ -9,12 +9,15 @@ import (
 	"io/fs"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const (
@@ -44,6 +47,11 @@ type Syncer struct {
 	ReadLogin func(home string) (Login, HomeState, error)
 	Version   string
 	Log       *log.Logger
+	// UsageClient carries plan usage requests; nil uses a default client.
+	UsageClient *http.Client
+
+	usageMu    sync.Mutex
+	usageLines map[AccountKey]string
 }
 
 // passEndError stops a pass early for the whole account.
@@ -158,6 +166,8 @@ type pass struct {
 	conn   *Conn
 	now    time.Time
 	listed map[string]listedInfo
+	// skipUsage ends the pass without the plan usage step.
+	skipUsage bool
 }
 
 type listedInfo struct {
@@ -174,7 +184,17 @@ func (s *Syncer) runAccount(ctx context.Context, gates Gates, key AccountKey, lo
 	if err != nil {
 		return err
 	}
-	if !s.Waits.AccountReady(&acct) {
+	if err := p.threadStep(ctx, acct, logins); err != nil || p.skipUsage {
+		return err
+	}
+	// Plan usage runs even while the thread host waits.
+	return s.runUsage(ctx, gates, key, logins)
+}
+
+// threadStep runs the thread step when the account wait allows it. Only a
+// local failure is returned.
+func (p *pass) threadStep(ctx context.Context, acct AccountState, logins []Login) error {
+	if !p.Waits.AccountReady(&acct) {
 		p.keepWaitRow(acct)
 		return nil
 	}
@@ -378,6 +398,10 @@ func (p *pass) thread(ctx context.Context, id string) error {
 			if _, _, err := commitThread(p.Store, p.key, id, st, []mirror.Record{record}, now); err != nil {
 				return err
 			}
+			parent := resolveParent(id, listing, st.ResolvedParent, nil, false)
+			if err := p.linkUsage(p.key, &acct, id, parent, now); err != nil {
+				return err
+			}
 		}
 		return p.Store.SaveAccount(p.key, acct)
 	}
@@ -406,6 +430,10 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		}
 	} else {
 		delete(acct.Unfinished, id)
+	}
+	parent := resolveParent(id, listing, st.ResolvedParent, result.Records, st.ResumeTurnID == "")
+	if err := p.linkUsage(p.key, &acct, id, parent, now); err != nil {
+		return err
 	}
 	updated := time.Unix(next.UpdatedAt, 0)
 	switch {
@@ -571,6 +599,11 @@ func (p *pass) finish(ctx context.Context, err error) error {
 		p.Status.Delete(string(p.key))
 		return nil
 	}
+	if end.failure == FailRefreshRequested {
+		// The pass that saw a refresh request ends early, plan usage
+		// included.
+		p.skipUsage = true
+	}
 	if end.failure == FailRefreshRequested || end.failure == FailSignedOut || end.failure == FailKeyring {
 		// A fresh login was requested, or a redial after an oversized
 		// reply was refused.
@@ -690,4 +723,40 @@ func (p *pass) updateAccount(change func(*AccountState)) error {
 	}
 	change(&acct)
 	return p.Store.SaveAccount(p.key, acct)
+}
+
+// resolveParent applies the spec's resolved-parent rules: the listing's
+// parentThreadId, else the parent its source names for a spawned
+// sub-agent, else the parent a delegated dot task names in its first user
+// message. The delegation tag is read only when fresh, that is when this
+// fetch read the thread from its start; the result is then kept in the
+// thread state as prior.
+func resolveParent(threadID string, listing jsontext.Value, prior string, records []mirror.Record, fresh bool) string {
+	if len(listing) > 0 {
+		var meta mirror.Thread
+		if err := json.Unmarshal(listing, &meta); err == nil {
+			for _, parent := range []string{meta.ParentThreadID, parser.CodexCloudSpawnParent(meta.Source)} {
+				if parent != "" && parent != threadID {
+					return parent
+				}
+			}
+		}
+	}
+	if prior != "" || !fresh {
+		return prior
+	}
+	for _, record := range records {
+		if record.Kind != mirror.KindItem {
+			continue
+		}
+		var row mirror.ItemRecord
+		var head mirror.ItemHeader
+		if json.Unmarshal(record.Data, &row) != nil || json.Unmarshal(row.Item, &head) != nil {
+			continue
+		}
+		if head.Type == "userMessage" {
+			return parser.CodexCloudDelegatedParent(threadID, row.Item)
+		}
+	}
+	return ""
 }

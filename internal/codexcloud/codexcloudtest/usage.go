@@ -34,6 +34,7 @@ type UsageHost struct {
 	rows     map[string]any
 	dataAsOf time.Time
 	refuse   *refusal
+	bearers  map[string]int
 	requests []UsageRequest
 }
 
@@ -80,6 +81,16 @@ func (u *UsageHost) Refuse(status int, header http.Header, body string) {
 	u.refuse = &refusal{status: status, header: header, body: body}
 }
 
+// RefuseBearer makes later requests carrying token answer status.
+func (u *UsageHost) RefuseBearer(token string, status int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.bearers == nil {
+		u.bearers = map[string]int{}
+	}
+	u.bearers["Bearer "+token] = status
+}
+
 // Accept undoes Refuse.
 func (u *UsageHost) Accept() {
 	u.mu.Lock()
@@ -118,6 +129,9 @@ func (u *UsageHost) serve(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	u.requests = append(u.requests, UsageRequest{Header: r.Header.Clone(), Threads: body.Threads})
 	refuse, asOf := u.refuse, u.dataAsOf
+	if status, ok := u.bearers[r.Header.Get("Authorization")]; ok {
+		refuse = &refusal{status: status}
+	}
 	rows := []any{}
 	for _, g := range body.Threads {
 		if row, ok := u.rows[g.ThreadID]; ok {

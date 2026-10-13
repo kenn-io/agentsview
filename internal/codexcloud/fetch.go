@@ -326,7 +326,7 @@ func absorb(st *ThreadState, records []mirror.Record) {
 	for _, record := range records {
 		switch record.Kind {
 		case mirror.KindPlanUsageRow, mirror.KindPlanUsageOutcome:
-			st.LastPlanRecordDigest, st.LastPlanRecordKind = digest(record.Data), string(record.Kind)
+			notePlanRecord(st, record)
 		default:
 			setDigest(st, recordKey(record), digest(record.Data))
 		}
@@ -376,6 +376,17 @@ func setDigest(st *ThreadState, key, sum string) {
 func dedup(st *ThreadState, records []mirror.Record) []mirror.Record {
 	var kept []mirror.Record
 	for _, record := range records {
+		if record.Kind == mirror.KindPlanUsageRow || record.Kind == mirror.KindPlanUsageOutcome {
+			// A plan usage record is kept when it differs from the newest
+			// plan usage record of any kind, so a row returning after an
+			// outcome is stored again.
+			if digest(record.Data) == st.LastPlanRecordDigest {
+				continue
+			}
+			notePlanRecord(st, record)
+			kept = append(kept, record)
+			continue
+		}
 		key, sum := recordKey(record), digest(record.Data)
 		if key != "" && storedDigest(st, key) == sum {
 			continue
@@ -384,6 +395,13 @@ func dedup(st *ThreadState, records []mirror.Record) []mirror.Record {
 		kept = append(kept, record)
 	}
 	return kept
+}
+
+func notePlanRecord(st *ThreadState, record mirror.Record) {
+	st.LastPlanRecordDigest, st.LastPlanRecordKind = digest(record.Data), string(record.Kind)
+	if record.Kind == mirror.KindPlanUsageRow {
+		st.LastPlanRow = record.Data
+	}
 }
 
 // pruneItemDigests keeps digests only for items in turns that can still be
@@ -471,7 +489,7 @@ func forgetMirror(st ThreadState) ThreadState {
 	st.Offset = 0
 	st.MetaDigest = ""
 	st.ItemDigests = nil
-	st.LastPlanRecordDigest, st.LastPlanRecordKind = "", ""
+	st.LastPlanRecordDigest, st.LastPlanRecordKind, st.LastPlanRow = "", "", nil
 	for i := range st.Turns {
 		st.Turns[i].Digest = ""
 	}
