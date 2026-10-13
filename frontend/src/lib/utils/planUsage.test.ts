@@ -84,9 +84,9 @@ describe("describePlanUsage", () => {
       "Not reported by OpenAI",
     ],
     [
-      "too many sub-agent threads",
+      "too many sub-agent chats",
       plan({ outcome_kind: "too_many_descendants", outcome_at: OUTCOME_AT }),
-      "Too many sub-agent threads for OpenAI's usage report",
+      "Too many sub-agent chats for OpenAI's usage report",
     ],
     [
       "a root that could not be checked",

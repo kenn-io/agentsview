@@ -2834,10 +2834,10 @@
   "plan_usage_not_reported_yet": "プラン使用量: 未報告 ({time} 時点)",
   "plan_usage_partial": "一部のプラン使用量 ({time} 時点)",
   "plan_usage_not_reported": "OpenAI から報告されていません",
-  "plan_usage_too_many_subagents": "サブエージェントのスレッドが多すぎて OpenAI の使用量レポートに含められません",
+  "plan_usage_too_many_subagents": "サブエージェントのチャットが多すぎて OpenAI の使用量レポートに含められません",
   "plan_usage_could_not_check": "AgentsView はプラン使用量を確認できませんでした",
   "plan_usage_account_unavailable": "このアカウントでは使用量を利用できません",
-  "plan_usage_counted_under": "スレッド {title} に含めて集計",
+  "plan_usage_counted_under": "チャット {title} に含めて集計",
   "plan_usage_weekly_share": "Codex の週間上限の {percent}%",
   "plan_usage_five_hour_share": "Codex の 5 時間上限の {percent}%",
   "plan_usage_credits": [
@@ -2897,18 +2897,18 @@
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "Codex Cloud: インポート中、これまでに {countLabel} スレッドを検出"
+        "countPlural=other": "Codex Cloud: インポート中、これまでに {countLabel} 件のチャットを検出"
       }
     }
   ],
-  "status_bar_codex_cloud_importing_progress": "Codex Cloud: {total} スレッド中 {imported} をインポート中",
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud: {total} 件のチャット中 {imported} 件をインポート中",
   "status_bar_codex_cloud_up_to_date": "Codex Cloud: {time} 時点で最新",
   "status_bar_codex_cloud_retrying": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "Codex Cloud: {countLabel} スレッドをインポートできませんでした"
+        "countPlural=other": "Codex Cloud: {countLabel} 件のチャットをインポートできませんでした"
       }
     }
   ],
@@ -2916,7 +2916,7 @@
   "status_bar_codex_cloud_off": "Codex Cloud: オフ",
   "status_bar_codex_cloud_config_error": "Codex Cloud: 設定エラー",
   "status_bar_codex_cloud_oldest_failure": "最も古い失敗: {time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView は再試行を続けます。各スレッドはデーモンのログに記録されます。インポート済みのセッションには影響しません。",
+  "status_bar_codex_cloud_retry_note": "AgentsView は再試行を続けます。各チャットはデーモンのログに記録されます。インポート済みのセッションには影響しません。",
   "status_bar_codex_cloud_last_success": "最後に成功した同期: {time}",
   "status_bar_codex_cloud_homes": "Codex ホーム: {homes}"
 }

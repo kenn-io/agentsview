@@ -2870,10 +2870,10 @@
   "plan_usage_not_reported_yet": "Uso del plan: aún no informado, a {time}",
   "plan_usage_partial": "Uso del plan parcial, a {time}",
   "plan_usage_not_reported": "OpenAI no lo informó",
-  "plan_usage_too_many_subagents": "Demasiados hilos de subagentes para el informe de uso de OpenAI",
+  "plan_usage_too_many_subagents": "Demasiados chats de subagentes para el informe de uso de OpenAI",
   "plan_usage_could_not_check": "AgentsView no pudo comprobar el uso del plan",
   "plan_usage_account_unavailable": "El uso no está disponible para esta cuenta",
-  "plan_usage_counted_under": "Contado en el hilo {title}",
+  "plan_usage_counted_under": "Contado en el chat {title}",
   "plan_usage_weekly_share": "{percent}% del límite semanal de Codex",
   "plan_usage_five_hour_share": "{percent}% del límite de cinco horas de Codex",
   "plan_usage_credits": [
@@ -2938,20 +2938,20 @@
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "Codex Cloud: importando, {countLabel} hilo encontrado hasta ahora",
-        "countPlural=other": "Codex Cloud: importando, {countLabel} hilos encontrados hasta ahora"
+        "countPlural=one": "Codex Cloud: importando, {countLabel} chat encontrado hasta ahora",
+        "countPlural=other": "Codex Cloud: importando, {countLabel} chats encontrados hasta ahora"
       }
     }
   ],
-  "status_bar_codex_cloud_importing_progress": "Codex Cloud: importando {imported} de {total} hilos",
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud: importando {imported} de {total} chats",
   "status_bar_codex_cloud_up_to_date": "Codex Cloud: al día a {time}",
   "status_bar_codex_cloud_retrying": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "Codex Cloud: {countLabel} hilo no se pudo importar",
-        "countPlural=other": "Codex Cloud: {countLabel} hilos no se pudieron importar"
+        "countPlural=one": "Codex Cloud: {countLabel} chat no se pudo importar",
+        "countPlural=other": "Codex Cloud: {countLabel} chats no se pudieron importar"
       }
     }
   ],
@@ -2959,7 +2959,7 @@
   "status_bar_codex_cloud_off": "Codex Cloud: desactivado",
   "status_bar_codex_cloud_config_error": "Codex Cloud: error de configuración",
   "status_bar_codex_cloud_oldest_failure": "Fallo más antiguo: {time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView sigue reintentándolos. El registro del daemon lista cada hilo. Las sesiones ya importadas no se ven afectadas.",
+  "status_bar_codex_cloud_retry_note": "AgentsView sigue reintentándolos. El registro del daemon lista cada chat. Las sesiones ya importadas no se ven afectadas.",
   "status_bar_codex_cloud_last_success": "Última sincronización correcta: {time}",
   "status_bar_codex_cloud_homes": "Carpetas de Codex: {homes}"
 }
