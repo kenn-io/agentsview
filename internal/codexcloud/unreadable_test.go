@@ -125,3 +125,32 @@ func TestNewUpdatedAtRestartsCountForRetryWithoutListing(t *testing.T) {
 	env.retryUntil(t, "a", first.Add(7*24*time.Hour+2*time.Hour))
 	assert.Contains(t, env.account(t).Retry, "a", "7 days have not passed since the new updatedAt")
 }
+
+func TestRetiredActiveThreadStaysRetiredUntilItChanges(t *testing.T) {
+	env := newPassEnv(t)
+	th := finishedThread("a", ago(time.Hour), message("m", "hi"))
+	th.Status = "active"
+	env.threads.Set(th)
+	fail, mu := true, &sync.Mutex{}
+	env.failThread("a", &fail, mu)
+	env.run(t)
+	env.retryUntil(t, "a", fetchNow.Add(8*24*time.Hour))
+	require.NotContains(t, env.account(t).Retry, "a", "retired after 7 days")
+
+	env.clock.Advance(time.Hour)
+	from := len(env.host.Requests())
+	env.run(t)
+	assert.NotContains(t, env.fetchedThreads(from), "a", "listed active but unchanged since it was retired")
+	assert.NotContains(t, env.account(t).Retry, "a")
+
+	mu.Lock()
+	fail = false
+	mu.Unlock()
+	env.threads.Update("a", func(th *codexcloudtest.Thread) { th.UpdatedAt = env.clock.Now().Unix() - 3600 })
+	env.clock.Advance(time.Minute)
+	env.run(t)
+	env.clock.Advance(5 * time.Minute)
+	from = len(env.host.Requests())
+	env.run(t)
+	assert.Contains(t, env.fetchedThreads(from), "a", "after a change, an active thread is fetched every pass again")
+}

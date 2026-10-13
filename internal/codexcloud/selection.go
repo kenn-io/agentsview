@@ -8,9 +8,10 @@ import (
 
 // buildSelection returns each thread to fetch this pass, once: threads the
 // listings found changed, then listed-active and unfinished threads that
-// the 24-hour stall rule has not stopped, check-again threads, and due
-// retries. A retry entry not yet due removes its thread however it was
-// selected, so a failing thread at the top of a listing still waits.
+// the 24-hour stall rule has not stopped, except retired ones listed
+// active, then check-again threads and due retries. A retry entry not yet
+// due removes its thread however it was selected, so a failing thread at
+// the top of a listing still waits.
 func buildSelection(now time.Time, acct *AccountState, changed []ListedThread, active []string) []string {
 	var selected []string
 	seen := map[string]bool{}
@@ -24,7 +25,9 @@ func buildSelection(now time.Time, acct *AccountState, changed []ListedThread, a
 		add(thread.ID)
 	}
 	for _, id := range active {
-		if !acct.Unfinished[id].Stalled {
+		// A retired thread listed active has not changed since it was
+		// retired; a change puts it in changed above.
+		if !acct.Unfinished[id].Stalled && !acct.Retired[id] {
 			add(id)
 		}
 	}

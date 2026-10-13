@@ -134,17 +134,21 @@ type UnfinishedEntry struct {
 // AccountState is one account's state, kept in account.json. Its sets hold
 // only threads with outstanding work.
 type AccountState struct {
-	Watermarks   map[ListingID]int64        `json:"watermarks,omitzero"`
-	Wait         WaitState                  `json:"wait,omitzero"`
-	UsagePause   UsagePauseState            `json:"usage_pause,omitzero"`
-	Retry        map[string]RetryEntry      `json:"retry,omitzero"`
-	CheckAgain   map[string]bool            `json:"check_again,omitzero"`
-	Unfinished   map[string]UnfinishedEntry `json:"unfinished,omitzero"`
-	UsagePending map[string]PendingEntry    `json:"usage_pending,omitzero"`
-	Refresh      map[string]RefreshEntry    `json:"refresh,omitzero"`
-	AccountID    string                     `json:"account_id,omitzero"`
-	UserID       string                     `json:"user_id,omitzero"`
-	Backfilled   map[ListingID]bool         `json:"backfilled,omitzero"`
+	Watermarks map[ListingID]int64        `json:"watermarks,omitzero"`
+	Wait       WaitState                  `json:"wait,omitzero"`
+	UsagePause UsagePauseState            `json:"usage_pause,omitzero"`
+	Retry      map[string]RetryEntry      `json:"retry,omitzero"`
+	CheckAgain map[string]bool            `json:"check_again,omitzero"`
+	Unfinished map[string]UnfinishedEntry `json:"unfinished,omitzero"`
+	// Retired holds threads no longer retried after failing for 7 days.
+	// The listing showing one as active does not select it again; only a
+	// new updatedAt does.
+	Retired      map[string]bool         `json:"retired,omitzero"`
+	UsagePending map[string]PendingEntry `json:"usage_pending,omitzero"`
+	Refresh      map[string]RefreshEntry `json:"refresh,omitzero"`
+	AccountID    string                  `json:"account_id,omitzero"`
+	UserID       string                  `json:"user_id,omitzero"`
+	Backfilled   map[ListingID]bool      `json:"backfilled,omitzero"`
 }
 
 // Store reads and writes fetcher state under the codex-cloud mirror root.
@@ -215,6 +219,7 @@ func (s *Store) LoadAccount(key AccountKey) (AccountState, error) {
 	st.Retry = allocated(st.Retry)
 	st.CheckAgain = allocated(st.CheckAgain)
 	st.Unfinished = allocated(st.Unfinished)
+	st.Retired = allocated(st.Retired)
 	st.UsagePending = allocated(st.UsagePending)
 	st.Refresh = allocated(st.Refresh)
 	st.Backfilled = allocated(st.Backfilled)
