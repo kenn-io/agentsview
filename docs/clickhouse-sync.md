@@ -420,6 +420,11 @@ read-only serve role fails the compatibility check with a message naming the
 missing fill; run `agentsview clickhouse push` with a role that can create
 tables to finish it.
 
+Codex cloud plan usage adds the `session_plan_usage` table. A read-only serve
+role cannot create it, so after an upgrade `clickhouse serve` refuses the mirror
+until a push has run. Upgrade the machine that pushes first, run
+`agentsview clickhouse push` once, then upgrade the machines that serve.
+
 The serve role also needs `GRANT SELECT ON system.parts`. The Activity report
 checks whether the mirror changed by hashing the active parts of its source
 tables before it rescans them. With the default server setting
