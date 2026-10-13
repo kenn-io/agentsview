@@ -601,9 +601,9 @@ class SessionsStore {
     const epoch = this.sidebarHydrationEpochByVersion.get(version) ?? 0;
     const signal = this.routeSignal();
 
+    const uncached = uniqueIds.filter((id) => !cache.has(id));
     await Promise.all(
-      uniqueIds.map((id) => {
-        if (cache.has(id)) return;
+      uncached.map((id) => {
         const existing = inflight.get(id);
         if (existing) return existing;
 
