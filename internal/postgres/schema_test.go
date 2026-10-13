@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -1186,4 +1187,22 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 	// Already-present raw job columns are probed without issuing a redundant ALTER.
 	assert.Equal(t, 6, state.alterTableExecCount(), "ALTER TABLE execs")
 	assert.Contains(t, state.alterTableSQL(), "ADD COLUMN IF NOT EXISTS observed_outcome TEXT, ADD COLUMN IF NOT EXISTS observed_repeat TEXT, ADD COLUMN IF NOT EXISTS sequence_ending TEXT")
+}
+
+func TestServeSchemaErrorAsksForAGrantWhenReadIsDenied(t *testing.T) {
+	denied := fmt.Errorf("session_plan_usage table missing required columns: %w",
+		&pgconn.PgError{Code: "42501", Message: "permission denied for table session_plan_usage"})
+
+	err := serveSchemaError(denied)
+
+	require.ErrorIs(t, err, denied)
+	assert.Contains(t, err.Error(), "Grant the serve role SELECT")
+	assert.NotContains(t, err.Error(), "Drop and recreate")
+}
+
+func TestServeSchemaErrorAsksForARebuildWhenColumnsAreMissing(t *testing.T) {
+	missing := fmt.Errorf("session_plan_usage table missing required columns: %w",
+		&pgconn.PgError{Code: "42703", Message: `column "credits" does not exist`})
+
+	assert.Contains(t, serveSchemaError(missing).Error(), "Drop and recreate the PG schema")
 }
