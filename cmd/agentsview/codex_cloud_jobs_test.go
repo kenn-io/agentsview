@@ -43,10 +43,14 @@ func TestCodexCloudServeStatusLines(t *testing.T) {
 		status int
 		want   string
 	}{
-		{"a rejected token says so", http.StatusUnauthorized,
-			"  codex-cloud status unavailable: the server did not accept this command's auth token."},
-		{"another failure names its status", http.StatusInternalServerError,
-			"  codex-cloud status unavailable: the server answered with HTTP status 500."},
+		{
+			"a rejected token says so", http.StatusUnauthorized,
+			"  codex-cloud status unavailable: the server did not accept this command's auth token.",
+		},
+		{
+			"another failure names its status", http.StatusInternalServerError,
+			"  codex-cloud status unavailable: the server answered with HTTP status 500.",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
