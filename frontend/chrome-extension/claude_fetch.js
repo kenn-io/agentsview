@@ -2,7 +2,12 @@ async function claudeFetch(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
-    const response = await fetch(url, { method: "GET", credentials: "include", redirect: "error", signal: controller.signal });
+    const response = await fetch(url, {
+      method: "GET",
+      credentials: "include",
+      redirect: "error",
+      signal: controller.signal,
+    });
     const limit = 32 * 1024 * 1024; // Matches importer.ClaudeAIResponseLimit.
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
@@ -15,7 +20,9 @@ async function claudeFetch(url) {
         size += value.byteLength;
         if (size > limit) {
           controller.abort();
-          try { await reader.cancel(); } catch {}
+          try {
+            await reader.cancel();
+          } catch {}
           return { status: 413, body: "" };
         }
         body += decoder.decode(value, { stream: true });

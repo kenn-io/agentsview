@@ -165,12 +165,16 @@ describe("AttributionPanel selection", () => {
     const narrowed = structuredClone(full);
     narrowed.projectTotals = [narrowed.projectTotals[1]!];
     usage.summary = full;
-    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) => params.project_key ? narrowed : full);
+    usageServiceMocks.getApiV1UsageSummary.mockImplementation(async (params) =>
+      params.project_key ? narrowed : full,
+    );
     usage.toggles.attribution.groupBy = "project";
     usage.toggles.attribution.view = view;
     const component = mountPanel();
     await tick();
-    document.querySelectorAll(selector)[1]!.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    document
+      .querySelectorAll(selector)[1]!
+      .dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     await vi.waitFor(() => expect(usage.attributionSummary).toEqual(full));
     await tick();
     const rows = document.querySelectorAll(selector);
@@ -213,7 +217,12 @@ describe("AttributionPanel selection", () => {
     ["project", "Enter"],
     ["project", " "],
   ] as const)("%s row: %j selects it", async (by, key) => {
-    const full = by === "model" ? summaryWithModels() : by === "agent" ? summaryWithAgents(["claude", "codex"]) : summaryWithDuplicateProjectLabels();
+    const full =
+      by === "model"
+        ? summaryWithModels()
+        : by === "agent"
+          ? summaryWithAgents(["claude", "codex"])
+          : summaryWithDuplicateProjectLabels();
     if (by === "project") full.projectTotals[1]!.project = "Project B";
     usage.summary = full;
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValue(full);
@@ -221,7 +230,12 @@ describe("AttributionPanel selection", () => {
     usage.toggles.attribution.view = "list";
     const component = mountPanel();
     await tick();
-    const openButton = () => [...document.querySelectorAll<HTMLButtonElement>(".selection-actions:not(.inactive) span:not(.inactive) button")].find((button) => button.textContent?.trim() === "Open");
+    const openButton = () =>
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          ".selection-actions:not(.inactive) span:not(.inactive) button",
+        ),
+      ].find((button) => button.textContent?.trim() === "Open");
     const actions = document.querySelector<HTMLElement>(".selection-actions")!;
     expect(actions.classList.contains("inactive")).toBe(true);
     const row = document.querySelectorAll(".list-row")[1]!;
@@ -235,7 +249,10 @@ describe("AttributionPanel selection", () => {
     if (by !== "project") {
       // Open appears only for projects; models clear through Clear selection, agents through a quick second click.
       expect(openButton()).toBeUndefined();
-      if (by === "model") [...actions.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Clear selection")!.click();
+      if (by === "model")
+        [...actions.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent?.trim() === "Clear selection")!
+          .click();
       else row.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
       await tick();
       expect(row.getAttribute("aria-pressed")).toBe("false");
@@ -426,50 +443,143 @@ describe("AttributionPanel job groups", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["with a summary", "after the summary fails on a date change"])("keeps the zoom remainder %s", async (situation) => {
-    const withSummary = situation === "with a summary";
-    let component;
-    if (withSummary) {
-      component = mountPanel();
+  it.each(["with a summary", "after the summary fails on a date change"])(
+    "keeps the zoom remainder %s",
+    async (situation) => {
+      const withSummary = situation === "with a summary";
+      let component;
+      if (withSummary) {
+        component = mountPanel();
+        await tick();
+        document
+          .querySelectorAll<HTMLElement>(".list-row")[0]!
+          .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+        expect(document.activeElement).toBe(document.querySelector(".attribution-panel"));
+      } else {
+        usage.applyDateRange("2024-02-01", "2024-02-29");
+        usage.summary = null;
+        usage.setOpenProject("pl1:sha256:first");
+      }
+      await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+      usage.zoomRows = [
+        {
+          ...topSessionForRemainder(),
+          groupKey: "job-a",
+          groupLabel: "Digest",
+          cost: testMoney(2),
+        },
+        {
+          ...topSessionForRemainder(),
+          groupKey: "job-b",
+          groupLabel: "Research",
+          cost: testMoney(3),
+        },
+        topSessionForRemainder(),
+      ];
+      component ??= mountPanel();
       await tick();
-      document.querySelectorAll<HTMLElement>(".list-row")[0]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-      expect(document.activeElement).toBe(document.querySelector(".attribution-panel"));
-    } else {
-      usage.applyDateRange("2024-02-01", "2024-02-29");
-      usage.summary = null;
-      usage.setOpenProject("pl1:sha256:first");
-    }
-    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
-    usage.zoomRows = [
-      { ...topSessionForRemainder(), groupKey: "job-a", groupLabel: "Digest", cost: testMoney(2) },
-      { ...topSessionForRemainder(), groupKey: "job-b", groupLabel: "Research", cost: testMoney(3) },
-      topSessionForRemainder(),
-    ];
-    component ??= mountPanel();
-    await tick();
-    const rows = [...document.querySelectorAll<HTMLElement>(".list-row")];
-    expect(rows.map((row) => row.querySelector(".list-cost")!.textContent?.trim())).toEqual(["$3.00", "$2.00", "$1.00"]);
-    expect(rows[2]!.querySelector(".list-label")!.textContent).toBe("Other");
-    expect(rows[2]!.title).toBe("Other");
-    expect(new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size).toBe(1);
-    if (!withSummary) expect(rows.map((row) => row.querySelector(".list-pct")!.textContent?.trim())).toEqual(["50.0%", "33.3%", "16.7%"]);
-    await unmount(component);
-  });
-
-  const machineRows = ["a1b2c3d4-job", "e5f6a7b8-job", "digest"].flatMap((groupKey) => ["host-a", "host-b"].map((machine) => ({ groupKey, machine, groupLabel: groupKey === "digest" ? "Daily digest" : "Digest" })));
-  const machineLabels = ["Digest · a1b2c3d4 · host-a", "Digest · a1b2c3d4 · host-b", "Digest · e5f6a7b8 · host-a", "Digest · e5f6a7b8 · host-b", "Daily digest · host-a", "Daily digest · host-b"];
-  const machineTitles = ["Digest · a1b2c3d4-job · host-a", "Digest · a1b2c3d4-job · host-b", "Digest · e5f6a7b8-job · host-a", "Digest · e5f6a7b8-job · host-b", "Daily digest · digest · host-a", "Daily digest · digest · host-b"];
-  it.each<{ name: string; view: "list" | "treemap"; rows: Partial<DbTopSessionEntry>[]; labels: string[]; titles?: string[] }>([
-    { name: "shows an unnamed job's ID", view: "list", rows: [{ groupKey: "digest", groupLabel: "", displayName: "digest" }], labels: ["digest"], titles: ["digest"] },
-    { name: "shortens same-named job IDs", view: "list", rows: [{ groupKey: "abcdef-job", groupLabel: "Daily digest" }, { groupKey: "abcdef-other", groupLabel: "Daily digest" }], labels: ["Daily digest · abcdef-j", "Daily digest · abcdef-o"] },
-    {
-      name: "hides the home hash in tooltips and shows it only for the same job in two homes", view: "list",
-      rows: [{ groupKey: "job-1:0a1b2c3d", groupLabel: "Digest" }, { groupKey: "job-1:4e5f6a7b", groupLabel: "Digest" }, { groupKey: "job-2:0a1b2c3d", groupLabel: "Backup" }],
-      labels: ["Digest · 0a1b2c3d", "Digest · 4e5f6a7b", "Backup"], titles: ["Digest · job-1", "Digest · job-1", "Backup · job-2"],
+      const rows = [...document.querySelectorAll<HTMLElement>(".list-row")];
+      expect(rows.map((row) => row.querySelector(".list-cost")!.textContent?.trim())).toEqual([
+        "$3.00",
+        "$2.00",
+        "$1.00",
+      ]);
+      expect(rows[2]!.querySelector(".list-label")!.textContent).toBe("Other");
+      expect(rows[2]!.title).toBe("Other");
+      expect(
+        new Set(rows.map((row) => row.querySelector(".list-dot")?.getAttribute("style"))).size,
+      ).toBe(1);
+      if (!withSummary)
+        expect(rows.map((row) => row.querySelector(".list-pct")!.textContent?.trim())).toEqual([
+          "50.0%",
+          "33.3%",
+          "16.7%",
+        ]);
+      await unmount(component);
     },
-    { name: "distinguishes same-named jobs on two machines in the list", view: "list", rows: machineRows, labels: machineLabels, titles: machineTitles },
-    { name: "distinguishes same-named jobs on two machines in the treemap rail", view: "treemap", rows: machineRows, labels: machineLabels, titles: machineTitles },
-    { name: "shortens full IDs for same-named ungrouped sessions", view: "list", rows: ["hermes:run-a", "augure-desktop:run-a"].map((sessionId) => ({ groupKey: "", sessionId, displayName: "Repeated run" })), labels: ["Repeated run · hermes:r", "Repeated run · augure-d"] },
+  );
+
+  const machineRows = ["a1b2c3d4-job", "e5f6a7b8-job", "digest"].flatMap((groupKey) =>
+    ["host-a", "host-b"].map((machine) => ({
+      groupKey,
+      machine,
+      groupLabel: groupKey === "digest" ? "Daily digest" : "Digest",
+    })),
+  );
+  const machineLabels = [
+    "Digest · a1b2c3d4 · host-a",
+    "Digest · a1b2c3d4 · host-b",
+    "Digest · e5f6a7b8 · host-a",
+    "Digest · e5f6a7b8 · host-b",
+    "Daily digest · host-a",
+    "Daily digest · host-b",
+  ];
+  const machineTitles = [
+    "Digest · a1b2c3d4-job · host-a",
+    "Digest · a1b2c3d4-job · host-b",
+    "Digest · e5f6a7b8-job · host-a",
+    "Digest · e5f6a7b8-job · host-b",
+    "Daily digest · digest · host-a",
+    "Daily digest · digest · host-b",
+  ];
+  it.each<{
+    name: string;
+    view: "list" | "treemap";
+    rows: Partial<DbTopSessionEntry>[];
+    labels: string[];
+    titles?: string[];
+  }>([
+    {
+      name: "shows an unnamed job's ID",
+      view: "list",
+      rows: [{ groupKey: "digest", groupLabel: "", displayName: "digest" }],
+      labels: ["digest"],
+      titles: ["digest"],
+    },
+    {
+      name: "shortens same-named job IDs",
+      view: "list",
+      rows: [
+        { groupKey: "abcdef-job", groupLabel: "Daily digest" },
+        { groupKey: "abcdef-other", groupLabel: "Daily digest" },
+      ],
+      labels: ["Daily digest · abcdef-j", "Daily digest · abcdef-o"],
+    },
+    {
+      name: "hides the home hash in tooltips and shows it only for the same job in two homes",
+      view: "list",
+      rows: [
+        { groupKey: "job-1:0a1b2c3d", groupLabel: "Digest" },
+        { groupKey: "job-1:4e5f6a7b", groupLabel: "Digest" },
+        { groupKey: "job-2:0a1b2c3d", groupLabel: "Backup" },
+      ],
+      labels: ["Digest · 0a1b2c3d", "Digest · 4e5f6a7b", "Backup"],
+      titles: ["Digest · job-1", "Digest · job-1", "Backup · job-2"],
+    },
+    {
+      name: "distinguishes same-named jobs on two machines in the list",
+      view: "list",
+      rows: machineRows,
+      labels: machineLabels,
+      titles: machineTitles,
+    },
+    {
+      name: "distinguishes same-named jobs on two machines in the treemap rail",
+      view: "treemap",
+      rows: machineRows,
+      labels: machineLabels,
+      titles: machineTitles,
+    },
+    {
+      name: "shortens full IDs for same-named ungrouped sessions",
+      view: "list",
+      rows: ["hermes:run-a", "augure-desktop:run-a"].map((sessionId) => ({
+        groupKey: "",
+        sessionId,
+        displayName: "Repeated run",
+      })),
+      labels: ["Repeated run · hermes:r", "Repeated run · augure-d"],
+    },
   ])("$name", async ({ view, rows: zoomRows, labels, titles }) => {
     usage.setOpenProject("pl1:sha256:first");
     await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
@@ -477,8 +587,12 @@ describe("AttributionPanel job groups", () => {
     usage.zoomRows = zoomRows.map((row) => ({ ...topSessionForRemainder(), ...row }));
     const component = mountPanel();
     await tick();
-    const rows = document.querySelectorAll<HTMLElement>(view === "list" ? ".list-row" : ".rail-row");
-    expect(Array.from(rows, (row) => row.querySelector(".list-label, .rail-label")!.textContent)).toEqual(labels);
+    const rows = document.querySelectorAll<HTMLElement>(
+      view === "list" ? ".list-row" : ".rail-row",
+    );
+    expect(
+      Array.from(rows, (row) => row.querySelector(".list-label, .rail-label")!.textContent),
+    ).toEqual(labels);
     if (titles) expect(Array.from(rows, (row) => row.title)).toEqual(titles);
     for (const row of rows) {
       expect(row.hasAttribute("role")).toBe(false);
@@ -490,24 +604,29 @@ describe("AttributionPanel job groups", () => {
     await unmount(component);
   });
 
-  it.each(["switching attribution dimensions", "the project leaving the refreshed summary"])("handles zoom after %s", async (event) => {
-    usage.setOpenProject("pl1:sha256:first");
-    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
-    const switching = event === "switching attribution dimensions";
-    if (!switching) {
-      await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
-      usage.zoomRows = [];
-      usage.summary = summaryWithAgents([]);
-    }
-    const component = mountPanel();
-    await tick();
-    if (switching) {
-      [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Agent")!.click();
-      expect(usage.zoomedProject).toBeNull();
-    } else {
-      expect(document.querySelector(".panel-header")?.textContent).toContain("hermes-cron");
-      expect(document.querySelector(".empty")?.textContent).toBe("No data for this period");
-    }
-    unmount(component);
-  });
+  it.each(["switching attribution dimensions", "the project leaving the refreshed summary"])(
+    "handles zoom after %s",
+    async (event) => {
+      usage.setOpenProject("pl1:sha256:first");
+      await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+      const switching = event === "switching attribution dimensions";
+      if (!switching) {
+        await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+        usage.zoomRows = [];
+        usage.summary = summaryWithAgents([]);
+      }
+      const component = mountPanel();
+      await tick();
+      if (switching) {
+        [...document.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent?.trim() === "Agent")!
+          .click();
+        expect(usage.zoomedProject).toBeNull();
+      } else {
+        expect(document.querySelector(".panel-header")?.textContent).toContain("hermes-cron");
+        expect(document.querySelector(".empty")?.textContent).toBe("No data for this period");
+      }
+      unmount(component);
+    },
+  );
 });

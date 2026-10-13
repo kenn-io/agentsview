@@ -195,7 +195,19 @@ export function summarizeToolCall(toolCall: ToolCall): string | null {
   return null;
 }
 
-const PREVIEW_KEYS = ["command", "cmd", "pattern", "query", "file_path", "filePath", "path", "file", "url", "description", "prompt"];
+const PREVIEW_KEYS = [
+  "command",
+  "cmd",
+  "pattern",
+  "query",
+  "file_path",
+  "filePath",
+  "path",
+  "file",
+  "url",
+  "description",
+  "prompt",
+];
 const PATH_KEYS = new Set(["file_path", "filePath", "path", "file"]);
 
 function previewValue(key: string, value: string): string {

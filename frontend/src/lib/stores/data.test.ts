@@ -109,7 +109,10 @@ describe("hydrateFromUrl", () => {
       date_to: "2026-08-31",
     });
     data.setDateSelection({ mode: "relative", days: 0 });
-    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith({}, { signal: expect.any(AbortSignal) });
+    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith(
+      {},
+      { signal: expect.any(AbortSignal) },
+    );
     expect(data.selectedProjectKey).toBe("");
     await Promise.resolve();
   });
@@ -336,17 +339,15 @@ describe("cancelInFlightReads", () => {
 
     const pending = data.load();
     expect(data.loading).toBe(true);
-    expect(
-      vi.mocked(DataService.getApiV1DataProjects).mock.calls[0]?.[1]?.signal
-        ?.aborted,
-    ).toBe(false);
+    expect(vi.mocked(DataService.getApiV1DataProjects).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      false,
+    );
 
     data.cancelInFlightReads();
     expect(data.loading).toBe(false);
-    expect(
-      vi.mocked(DataService.getApiV1DataProjects).mock.calls[0]?.[1]?.signal
-        ?.aborted,
-    ).toBe(true);
+    expect(vi.mocked(DataService.getApiV1DataProjects).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
 
     resolveLoad(makeInventory([makeRow()]));
     await expect(pending).resolves.toBe(false);

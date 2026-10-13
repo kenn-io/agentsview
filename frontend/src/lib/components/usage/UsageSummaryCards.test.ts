@@ -75,9 +75,11 @@ function cardLabels(): string[] {
 }
 
 function cardFor(label: string): HTMLElement | undefined {
-  return Array.from(document.querySelectorAll<HTMLElement>(".card-label")).find(
-    (el) => el.textContent?.trim() === label,
-  )?.parentElement ?? undefined;
+  return (
+    Array.from(document.querySelectorAll<HTMLElement>(".card-label")).find(
+      (el) => el.textContent?.trim() === label,
+    )?.parentElement ?? undefined
+  );
 }
 
 function cardValue(label: string): string | undefined {
@@ -129,28 +131,31 @@ describe("UsageSummaryCards", () => {
     expect(peakDay).toBe("25");
   });
 
-  it.each(["a brushed range is active", "a selected project has no credits"])("keeps the Copilot credits card while %s", async (situation) => {
-    const parent = summary();
-    parent.from = "2026-07-01";
-    parent.to = "2026-07-03";
-    parent.totals.copilotAICredits = 5;
-    usage.summary = parent;
-    if (situation !== "a brushed range is active") {
-      usage.selectedProjectKey = "pl1:sha256:selected";
-      usage.referenceSummary = parent;
-    }
-    component = mount(UsageSummaryCards, { target: document.body });
-    await tick();
-    const cardCount = document.querySelectorAll(".summary-cards .card").length;
+  it.each(["a brushed range is active", "a selected project has no credits"])(
+    "keeps the Copilot credits card while %s",
+    async (situation) => {
+      const parent = summary();
+      parent.from = "2026-07-01";
+      parent.to = "2026-07-03";
+      parent.totals.copilotAICredits = 5;
+      usage.summary = parent;
+      if (situation !== "a brushed range is active") {
+        usage.selectedProjectKey = "pl1:sha256:selected";
+        usage.referenceSummary = parent;
+      }
+      component = mount(UsageSummaryCards, { target: document.body });
+      await tick();
+      const cardCount = document.querySelectorAll(".summary-cards .card").length;
 
-    if (situation === "a brushed range is active") {
-      usage.setTimeRange("2026-07-01", "2026-07-02");
-      usage.cancelInFlightReads();
-    } else usage.summary = summary();
-    await tick();
-    expect(document.querySelectorAll(".summary-cards .card")).toHaveLength(cardCount);
-    expect(document.body.textContent).toContain("Copilot AI Credits");
-  });
+      if (situation === "a brushed range is active") {
+        usage.setTimeRange("2026-07-01", "2026-07-02");
+        usage.cancelInFlightReads();
+      } else usage.summary = summary();
+      await tick();
+      expect(document.querySelectorAll(".summary-cards .card")).toHaveLength(cardCount);
+      expect(document.body.textContent).toContain("Copilot AI Credits");
+    },
+  );
 
   it("labels uncached input and adds total input", async () => {
     usage.summary = issueSummary();
@@ -232,7 +237,13 @@ describe("UsageSummaryCards", () => {
     parent.to = "2026-07-02";
     const day = parent.daily[0]!;
     parent.daily = [
-      { ...day, date: "2026-07-01", inputTokens: 100, cacheCreationTokens: 10, cacheReadTokens: 900 },
+      {
+        ...day,
+        date: "2026-07-01",
+        inputTokens: 100,
+        cacheCreationTokens: 10,
+        cacheReadTokens: 900,
+      },
       { ...day, date: "2026-07-02", inputTokens: 50, cacheCreationTokens: 5, cacheReadTokens: 450 },
     ];
     parent.totals = {

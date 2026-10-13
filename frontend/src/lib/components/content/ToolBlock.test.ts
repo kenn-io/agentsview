@@ -389,17 +389,33 @@ describe("ToolBlock output and controls", () => {
     expect(document.querySelector(".result-history")).toBeNull();
   });
   it("hides empty timing-only events from result history", async () => {
-    const timing = (event_index: number, status: string, content = "") =>
-      ({ event_index, status, source: "tool_execution", content, content_length: content.length });
-    await render({ toolCall: call("bash", {}, { result_events: [timing(0, "started"), timing(1, "completed")] }) });
+    const timing = (event_index: number, status: string, content = "") => ({
+      event_index,
+      status,
+      source: "tool_execution",
+      content,
+      content_length: content.length,
+    });
+    await render({
+      toolCall: call("bash", {}, { result_events: [timing(0, "started"), timing(1, "completed")] }),
+    });
     await click(".tool-header");
     expect(document.querySelector(".history-header")).toBeNull();
   });
   it("keeps the raw event index on history rows after hiding timing marks", async () => {
-    const timing = (event_index: number, status: string, content = "") =>
-      ({ event_index, status, source: "tool_execution", content, content_length: content.length });
+    const timing = (event_index: number, status: string, content = "") => ({
+      event_index,
+      status,
+      source: "tool_execution",
+      content,
+      content_length: content.length,
+    });
     await render({
-      toolCall: call("bash", {}, { result_events: [timing(0, "started"), timing(1, "completed", "done")] }),
+      toolCall: call(
+        "bash",
+        {},
+        { result_events: [timing(0, "started"), timing(1, "completed", "done")] },
+      ),
       searchScope: { ordinal: 3, callIdx: 0 },
     });
     await click(".tool-header");

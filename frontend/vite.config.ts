@@ -54,7 +54,15 @@ export default defineConfig(({ command }) => {
   const liveDevelopment = command === "serve" && !process.env.VITEST;
   const devTranslations = fileURLToPath(new URL("./.paraglide/dev/", import.meta.url));
   return {
-    fmt: {},
+    fmt: {
+      ignorePatterns: [
+        // The repository's mdformat hook owns Markdown; oxfmt's list
+        // indentation disagrees with it.
+        "**/*.md",
+        // Tests assert this captured payload's exact bytes.
+        "src/lib/utils/__fixtures__/retained-tool-image-1735.json",
+      ],
+    },
     lint: {
       jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
       rules: {
@@ -74,11 +82,20 @@ export default defineConfig(({ command }) => {
         name: "chrome-extension",
         apply: "build",
         closeBundle() {
-          cpSync(fileURLToPath(new URL("./chrome-extension/", import.meta.url)), fileURLToPath(new URL("./dist/chrome-extension/", import.meta.url)), {
-            recursive: true,
-            filter: (source) => !source.endsWith(".test.ts"),
-          });
-          cpSync(fileURLToPath(new URL("../internal/importer/claude_ai_requests.txt", import.meta.url)), fileURLToPath(new URL("./dist/chrome-extension/claude_ai_requests.txt", import.meta.url)));
+          cpSync(
+            fileURLToPath(new URL("./chrome-extension/", import.meta.url)),
+            fileURLToPath(new URL("./dist/chrome-extension/", import.meta.url)),
+            {
+              recursive: true,
+              filter: (source) => !source.endsWith(".test.ts"),
+            },
+          );
+          cpSync(
+            fileURLToPath(new URL("../internal/importer/claude_ai_requests.txt", import.meta.url)),
+            fileURLToPath(
+              new URL("./dist/chrome-extension/claude_ai_requests.txt", import.meta.url),
+            ),
+          );
         },
       },
       svelte(),

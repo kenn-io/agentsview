@@ -180,8 +180,12 @@ class StarredStore {
         () => op(),
       )
       .then(
-        () => { delete this.errors[sessionId]; },
-        (error) => { this.errors[sessionId] = generatedErrorMessage(error); },
+        () => {
+          delete this.errors[sessionId];
+        },
+        (error) => {
+          this.errors[sessionId] = generatedErrorMessage(error);
+        },
       )
       .then(() => {
         if (this.queues.get(sessionId) === chain) {
