@@ -82,7 +82,7 @@ func (p *fxSessionProvider) ParseSourceSize(ctx context.Context, source SourceRe
 		return 0, errors.New("fx source path unavailable")
 	}
 	info, err := os.Stat(path)
-	if err != nil {
+	if err != nil || info == nil {
 		return 0, err
 	}
 	size := info.Size()
@@ -94,7 +94,7 @@ func (p *fxSessionProvider) ParseSourceSize(ctx context.Context, source SourceRe
 		if filepath.Base(companion) != "tool-results" {
 			info, err = os.Stat(companion)
 		}
-		if err != nil {
+		if err != nil || info == nil {
 			continue
 		}
 		if info.Mode().IsRegular() {
@@ -120,7 +120,7 @@ func (p *fxSessionProvider) ParseSourceSize(ctx context.Context, source SourceRe
 					continue
 				}
 				info, err := os.Lstat(filepath.Join(companion, ref))
-				if err == nil && info.Mode().IsRegular() {
+				if err == nil && info != nil && info.Mode().IsRegular() {
 					size += min(info.Size(), int64(maxPersistedToolResultSize))
 				}
 			}
