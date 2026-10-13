@@ -159,7 +159,6 @@ func scanPGSessionWithSource(
 		&s.GroupKey, &s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.DeletionCause, &s.TerminationStatus, &s.TranscriptRevision,
-<<<<<<< HEAD
 		&s.TrashIncludesCodexPages, &prLinks, db.LabelsScanner(&s.Labels),
 	}
 	if includeSource {

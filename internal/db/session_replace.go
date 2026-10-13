@@ -116,11 +116,6 @@ func (db *DB) ReplaceSessionKeepingTrashedCopy(
 		}
 	}
 
-	if _, err := writeOneSessionBatchTx(
-		ctx, tx, ctxTx, write, &pending, db.usageOnlyStorage(),
-	); err != nil {
-		return "", err
-	}
 	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{id, copyID}); err != nil {
 		return "", err
 	}
