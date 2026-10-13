@@ -336,3 +336,45 @@ func TestUnreadableThreadStateDuringListingIsLocal(t *testing.T) {
 	assert.Equal(t, StateError, row.State)
 	assert.Contains(t, row.Message, "import state")
 }
+
+func TestStalledThreadRecoversAfterStopBeforeAccountSave(t *testing.T) {
+	env := newPassEnv(t)
+	updated := ago(30 * time.Second)
+	env.threads.Set(codexcloudtest.Thread{
+		ID: "s", Name: "s", CreatedAt: updated - 60, UpdatedAt: updated,
+		Turns: []codexcloudtest.Turn{{ID: "s-1", Status: "inProgress", StartedAt: updated - 60}},
+	})
+	env.run(t)
+	env.clock.Advance(25 * time.Hour)
+	env.run(t)
+	require.True(t, env.account(t).Unfinished["s"].Stalled)
+
+	// The thread changes. The pass commits it, then fails before its final
+	// account save: a directory in place of a usage file makes the usage
+	// link that runs between the two saves fail.
+	env.threads.Update("s", func(th *codexcloudtest.Thread) {
+		th.UpdatedAt = env.clock.Now().Add(-10 * time.Second).Unix()
+		th.Turns[0].Items = append(th.Turns[0].Items, message("m1", "progress"))
+	})
+	blocker, err := env.syncer.Store.path(passKey, "s", ".waiting.json")
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(blocker, 0o700))
+	env.clock.Advance(5 * time.Minute)
+	env.run(t)
+	row, _ := env.syncer.Status.Row(string(passKey))
+	require.Equal(t, StateError, row.State, "the pass stopped between the saves")
+	require.NoError(t, os.Remove(blocker))
+
+	// A later item arrives without a new updatedAt.
+	env.threads.Update("s", func(th *codexcloudtest.Thread) {
+		th.Turns[0].Items = append(th.Turns[0].Items, message("m2", "more"))
+	})
+	from := len(env.host.Requests())
+	env.clock.Advance(5 * time.Minute)
+	env.run(t)
+
+	assert.Contains(t, env.fetchedThreads(from), "s", "the interrupted thread is checked again")
+	records, err := mirror.ReadAll(t.Context(), env.mirrorPath(t, "s"))
+	require.NoError(t, err)
+	assert.Contains(t, recordedItemIDs(records), "m2")
+}

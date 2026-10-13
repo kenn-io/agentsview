@@ -421,10 +421,18 @@ func (p *pass) thread(ctx context.Context, id string) error {
 
 	// The thread state saved below makes the thread look unchanged to the
 	// next listing. Mark it to check again first, so a failure before the
-	// final account save still brings it back.
+	// final account save still brings it back. A stalled turn is not
+	// checked again, so the stall mark goes too; the final save sets it
+	// again if the turn still shows no progress.
 	checkAgain, hadCheckAgain := acct.CheckAgain[id]
-	if !checkAgain {
+	unfinished, stalled := acct.Unfinished[id]
+	stalled = stalled && unfinished.Stalled
+	if !checkAgain || stalled {
 		acct.CheckAgain[id] = true
+		if stalled {
+			unfinished.Stalled = false
+			acct.Unfinished[id] = unfinished
+		}
 		if err := p.Store.SaveAccount(p.key, acct); err != nil {
 			return err
 		}
