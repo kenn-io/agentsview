@@ -1149,9 +1149,12 @@ one group.
   `unavailable`, or leaves it out. A root that is always left out settles as
   "Not reported by OpenAI". A root that already has a usable row and is then
   left out settles by appending a copy of that row marked final, not with a
-  "settled with no row" record. Automatic retries stop, the last values stay,
-  and the row is marked final. A later change to the root or a descendant
-  starts the cycle again.
+  "settled with no row" record. When the row's `data_as_of` is before the
+  root's last change, a "left out" record follows the copy in the same write:
+  the row may not count the newest turns, so session details must not present
+  it as covering them. Automatic retries stop, the last values stay, and the
+  row is marked final. A later change to the root or a descendant starts the
+  cycle again.
 - **Could not check.** A pending root whose request fails after the 7 days since
   its last change stops retrying with a "could not check" outcome record,
   because only an answer after that point can settle it. An answer earlier in

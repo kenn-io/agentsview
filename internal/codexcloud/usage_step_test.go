@@ -661,6 +661,34 @@ func TestCouldNotCheckAfterEarlyAnswerThenFailures(t *testing.T) {
 // appended but before the thread state was saved: settling a root the
 // report leaves out stores that newest row as final, not the older one
 // the saved state still names.
+// A row stored again at settling is old: if the chat changed after the
+// report's data, the row may not count the newer turns, and the file must
+// still say the report left the chat out.
+func TestSettledRowOlderThanTheLastChangeStaysLeftOut(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(2*time.Hour), message("m", "hi")))
+	env.usage.SetDataAsOf(fetchNow.Add(-time.Hour))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(3), nil))
+	env.run(t)
+
+	// The chat changed after the report's data, then the report left it
+	// out until the root settled.
+	env.usage.SetRow("a", nil)
+	env.clock.Set(fetchNow.Add(7*24*time.Hour + time.Hour))
+	acct := env.account(t)
+	delete(acct.Refresh, "a")
+	acct.UsagePending["a"] = PendingEntry{Since: fetchNow, NextAttempt: fetchNow, LastChange: fetchNow, HasRow: true}
+	require.NoError(t, env.syncer.Store.SaveAccount(passKey, acct))
+	env.run(t)
+
+	plan := env.plan(t, "a")
+	require.Len(t, plan.rows, 2)
+	assert.True(t, plan.rows[1].Final)
+	assert.Equal(t, []mirror.Kind{mirror.KindPlanUsageRow, mirror.KindPlanUsageRow, mirror.KindPlanUsageOutcome},
+		plan.kinds, "the left-out outcome follows the final row")
+	assert.Equal(t, mirror.OutcomeLeftOut, plan.outcomes[len(plan.outcomes)-1].Kind)
+}
+
 func TestSettledLeftOutRootUsesRecoveredRow(t *testing.T) {
 	env := newUsageEnv(t)
 	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))

@@ -472,7 +472,7 @@ func (s *Syncer) usageAnswer(key AccountKey, acct *AccountState, groups []UsageG
 				return err
 			}
 		case settles:
-			if err := s.settleLeftOut(key, root, now); err != nil {
+			if err := s.settleLeftOut(key, root, entry.LastChange, now); err != nil {
 				return err
 			}
 		default:
@@ -495,8 +495,10 @@ func (s *Syncer) usageAnswer(key AccountKey, acct *AccountState, groups []UsageG
 
 // settleLeftOut settles a root the report left out 7 days after its last
 // change: its last row is stored again as final, or, with none, a
-// "settled with no row" record.
-func (s *Syncer) settleLeftOut(key AccountKey, root string, now time.Time) error {
+// "settled with no row" record. A row whose data predates lastChange may
+// not count the newest turns, so a "left out" record follows it; without
+// one, the final row would read as a complete account of the chat.
+func (s *Syncer) settleLeftOut(key AccountKey, root string, lastChange, now time.Time) error {
 	st, err := s.Store.LoadThread(key, root)
 	if err != nil {
 		return err
@@ -515,7 +517,22 @@ func (s *Syncer) settleLeftOut(key AccountKey, root string, now time.Time) error
 		return fmt.Errorf("codex-cloud: chat %s: stored plan usage row: %w", root, err)
 	}
 	last.Final = true
-	return s.appendPlan(key, root, now, mirror.KindPlanUsageRow, last)
+	final, err := planRecord(mirror.KindPlanUsageRow, last, now)
+	if err != nil {
+		return err
+	}
+	records := []mirror.Record{final}
+	if last.DataAsOf.Before(lastChange) {
+		leftOut, err := planRecord(mirror.KindPlanUsageOutcome,
+			mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeLeftOut, At: now}, now)
+		if err != nil {
+			return err
+		}
+		records = append(records, leftOut)
+	}
+	// One commit, so a crash cannot keep the final row without its mark.
+	_, _, err = commitThread(s.Store, key, root, st, records, now)
+	return err
 }
 
 // appendPlan appends one plan usage record to root's mirror file unless
