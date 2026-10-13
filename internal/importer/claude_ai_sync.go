@@ -281,7 +281,8 @@ func SyncClaudeAI(ctx context.Context, store interface {
 func fetchConversationDetailIfChanged(ctx context.Context, store interface {
 	db.Store
 	GetProviderStatHash(context.Context, parser.AgentType, string) (uint64, bool, error)
-}, agent parser.AgentType, id string, freshness func(*db.Session) uint64, fetch func(context.Context) ([]byte, error)) ([]byte, bool, error, error) {
+}, agent parser.AgentType, id string, freshness func(*db.Session) uint64, fetch func(context.Context) ([]byte, error),
+) ([]byte, bool, error, error) {
 	existing, err := store.GetSessionFull(ctx, id)
 	if err != nil {
 		return nil, false, nil, err

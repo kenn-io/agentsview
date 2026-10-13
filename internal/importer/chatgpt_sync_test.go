@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 const chatGPTSyncID = "22222222-2222-4222-8222-222222222222"
@@ -43,7 +45,7 @@ func TestSyncChatGPTAppendFreshnessAndRefusals(t *testing.T) {
 				details++
 				return ClaudeAIResponse{Status: 200, Body: []byte(body)}, nil
 			default:
-				require.FailNow(t, "unexpected ChatGPT request path: %s", path)
+				require.Failf(t, "unexpected ChatGPT request path", "%s", path)
 				return ClaudeAIResponse{}, nil
 			}
 		}, nil)
@@ -90,7 +92,11 @@ func TestSyncChatGPTRejectsInvalidSummaryAndOversizedResponse(t *testing.T) {
 		{name: "missing update time", list: fmt.Sprintf(`{"items":[{"id":%q}],"total":1}`, chatGPTSyncID), want: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stats, err := SyncChatGPT(t.Context(), testDB(t), func(context.Context, string) (ClaudeAIResponse, error) {
+			stats, err := SyncChatGPT(t.Context(), testDB(t), func(_ context.Context, path string) (ClaudeAIResponse, error) {
+				// The item must be rejected before any detail request; a detail fetch means the guard was removed.
+				if path != chatGPTRequest(chatGPTListRequest, "", 0) {
+					require.Failf(t, "unexpected ChatGPT detail request", "%s", path)
+				}
 				return ClaudeAIResponse{Status: 200, Body: []byte(tc.list)}, nil
 			}, nil)
 			require.NoError(t, err)
@@ -130,7 +136,7 @@ func TestSyncChatGPTStopsWhenRateLimited(t *testing.T) {
 			details++
 			return ClaudeAIResponse{Status: 429, RetryAfter: "0"}, nil
 		default:
-			require.FailNow(t, "unexpected ChatGPT request path: %s", path)
+			require.Failf(t, "unexpected ChatGPT request path", "%s", path)
 			return ClaudeAIResponse{}, nil
 		}
 	}, nil)
@@ -139,4 +145,74 @@ func TestSyncChatGPTStopsWhenRateLimited(t *testing.T) {
 	messages, err := d.GetAllMessages(t.Context(), "chatgpt:"+chatGPTSyncID)
 	require.NoError(t, err)
 	assert.Empty(t, messages)
+}
+
+func chatGPTSyncFetch(t *testing.T, listUpdate string, detail string, details *int) func(context.Context, string) (ClaudeAIResponse, error) {
+	t.Helper()
+	return func(_ context.Context, path string) (ClaudeAIResponse, error) {
+		switch path {
+		case chatGPTRequest(chatGPTListRequest, "", 0):
+			return ClaudeAIResponse{Status: 200, Body: []byte(fmt.Sprintf(`{"items":[{"id":%q,"update_time":%s}],"total":1}`, chatGPTSyncID, listUpdate))}, nil
+		case chatGPTRequest(chatGPTDetailRequest, chatGPTSyncID, 0):
+			*details++
+			return ClaudeAIResponse{Status: 200, Body: []byte(detail)}, nil
+		default:
+			require.Failf(t, "unexpected ChatGPT request path", "%s", path)
+			return ClaudeAIResponse{}, nil
+		}
+	}
+}
+
+func TestSyncChatGPTEquivalentTimestampsSkipSecondDetail(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	detail := chatGPTSyncDetail(1700000000, false, "Question")
+	_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1700000000", detail, &details), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, details)
+
+	// The same instant encoded as a string must not look changed.
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, `"1700000000"`, detail, &details), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, 1, details, "an equivalent timestamp should not refetch the conversation")
+}
+
+func TestSyncChatGPTRenameWithSameMessagesCountsUpdate(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	_, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "1", chatGPTSyncDetail(1, false, "Question"), &details), nil)
+	require.NoError(t, err)
+
+	renamed := strings.Replace(chatGPTSyncDetail(2, false, "Question"), `"title":"Example"`, `"title":"Renamed"`, 1)
+	stats, err := SyncChatGPT(t.Context(), d, chatGPTSyncFetch(t, "2", renamed, &details), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated, "a title-only change is an update")
+	assert.Zero(t, stats.Imported)
+	stored, err := d.GetSessionFull(t.Context(), "chatgpt:"+chatGPTSyncID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.SessionName)
+	assert.Equal(t, "Renamed", *stored.SessionName)
+}
+
+func TestCompareChatGPTPrefixTreatsImagePlaceholdersAsEquivalent(t *testing.T) {
+	msg := func(content string) db.Message {
+		return db.Message{Ordinal: 0, Role: "assistant", Content: content, ContentLength: len(content)}
+	}
+	placeholder := msg("Here is the chart [image unavailable] and notes.")
+	reference := msg("Here is the chart ![image](assets/chart-1.png) and notes.")
+
+	// Sync archived first, ZIP export arrives later.
+	_, ok := compareChatGPTPrefix([]db.Message{placeholder}, []db.Message{reference})
+	assert.True(t, ok, "placeholder archive should accept the ZIP image reference")
+
+	// ZIP archived first, sync arrives later.
+	_, ok = compareChatGPTPrefix([]db.Message{reference}, []db.Message{placeholder})
+	assert.True(t, ok, "ZIP image reference archive should accept the sync placeholder")
+
+	// Text outside the image still has to match exactly.
+	changed := msg("Here is the graph [image unavailable] and notes.")
+	_, ok = compareChatGPTPrefix([]db.Message{placeholder}, []db.Message{changed})
+	assert.False(t, ok, "different text must still diverge")
 }
