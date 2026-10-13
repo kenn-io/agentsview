@@ -74,16 +74,22 @@ func (s *Syncer) Run(ctx context.Context) error {
 		return nil
 	}
 	shown := map[string]bool{}
-	if row, ok := gates.readErrRow(); ok && !s.NoSync {
-		s.Status.Set(row)
-		shown[row.Key] = true
-	}
+	readRow, readErr := gates.readErrRow()
+	readErr = readErr && !s.NoSync
 	if row, off := gates.offRow(s.NoSync); off {
-		if !shown[row.Key] {
-			s.Status.Set(row)
+		if readErr {
+			// Both share the source row; the last good settings are what
+			// keep import off, so the row says so.
+			readRow.Message += " " + row.Message
+			row = readRow
 		}
+		s.Status.Set(row)
 		s.Status.Keep(map[string]bool{row.Key: true})
 		return nil
+	}
+	if readErr {
+		s.Status.Set(readRow)
+		shown[readRow.Key] = true
 	}
 	// Rows for homes and accounts gone from the config drop at the end.
 	defer func() { s.Status.Keep(shown) }()
