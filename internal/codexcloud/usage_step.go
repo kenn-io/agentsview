@@ -203,7 +203,13 @@ func (s *Syncer) noteUsage(gates Gates, key AccountKey, resp UsageResponse, err 
 		s.usageLines[key] = "Plan usage: " + withLoginCommand(gates, noHome.home,
 			"signed out of ChatGPT in this Codex home. Run `codex login`.")
 	default:
-		if f := FailureFor(err, login); f != FailRateLimited {
+		f := FailureFor(err, login)
+		switch f {
+		case FailRateLimited:
+		case FailTooLarge:
+			// Each root's request is retried with its usual backoff.
+			s.usageLines[key] = "Plan usage: " + Message(f, time.Time{}) + " AgentsView asks again later."
+		default:
 			s.usageLines[key] = "Plan usage: " + Message(f, time.Time{})
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -825,4 +826,15 @@ func TestUsage401InAutoModeNamesBothCauses(t *testing.T) {
 	assert.Contains(t, line, "Either that saved login expired")
 	assert.Contains(t, line, "Run `codex login` first.", "signing in again is tried before changing the store")
 	assert.NotContains(t, line, "keeps its ChatGPT login in the system keyring")
+}
+
+func TestOversizedUsageReplySaysItIsAskedAgain(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.Refuse(http.StatusOK, nil, strings.Repeat(" ", 16<<20+1))
+
+	env.run(t)
+
+	assert.Equal(t, "Plan usage: "+Message(FailTooLarge, time.Time{})+" AgentsView asks again later.", env.planLine(t))
+	assert.Contains(t, env.account(t).UsagePending, "a", "the root stays pending for a later request")
 }
