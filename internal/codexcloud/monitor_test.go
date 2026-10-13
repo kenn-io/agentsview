@@ -476,3 +476,18 @@ func TestRetriedFlushAppendsRecordsOnce(t *testing.T) {
 	}
 	assert.Equal(t, []int64{100, 200, 300}, totals)
 }
+
+func TestUnreadableMessageStopsCapture(t *testing.T) {
+	env := newMonitorEnv(t)
+	// readLoop ends a connection this way when a message does not decode.
+	conn := &Conn{done: make(chan struct{})}
+	conn.setErr(fmt.Errorf("%w: unreadable message from the thread host", ErrProtocolChange))
+	j := &join{key: passKey, threadID: "a", login: env.login(), conn: conn, stop: make(chan struct{})}
+
+	env.monitor.ended(j)
+
+	assert.Contains(t, env.live(t), "Live tokens: stopped.")
+	env.threads.Set(runningThread("b", "warm"))
+	env.join(t, "b")
+	assert.Empty(t, env.host.Handshakes(), "no chat is listened in on until capture starts again")
+}
