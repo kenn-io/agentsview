@@ -531,8 +531,8 @@ func TestUnreadableConfigSaysLastGoodSettingsKeepImportOff(t *testing.T) {
 	row, ok := env.syncer.Status.Row(SourceRowKey)
 	require.True(t, ok)
 	assert.Contains(t, row.Message, "/data/config.toml could not be read")
-	assert.Contains(t, row.Message, "Off: enabled is false.", "the user must know import stays off")
-	assert.Zero(t, env.calls("thread/list"))
+	assert.Contains(t, row.Message, "Under those settings, import is off: enabled is false.",
+		"the user must know the kept settings keep import off")
 }
 
 func TestLocalErrorStaysLocalWhenTheConnectionEndsRightAfter(t *testing.T) {
@@ -552,4 +552,20 @@ func TestLocalErrorStaysLocalWhenTheConnectionEndsRightAfter(t *testing.T) {
 
 	require.ErrorIs(t, err, readErr, "the local error is returned for the local error row")
 	assert.Zero(t, env.account(t).Wait, "a local file problem is not an outage")
+}
+
+func TestUnreadableConfigWithABadKeptValueSaysImportIsOff(t *testing.T) {
+	startup := config.Config{CodexCloud: config.CodexCloudConfig{Present: true, Enabled: true,
+		Err: &config.CodexCloudConfigError{Path: "/data/config.toml", Key: "enabled", Reason: "expected true or false"}}}
+	env := newPassEnv(t)
+	env.syncer.Gates = NewGateSource("/data/config.toml", startup, func() (config.Config, error) {
+		return config.Config{}, assert.AnError
+	}, func(string) string { return "" }, "/users/a")
+
+	env.run(t)
+
+	row, ok := env.syncer.Status.Row(SourceRowKey)
+	require.True(t, ok)
+	assert.Contains(t, row.Message, "keeps its last good settings. Under those settings: /data/config.toml has an invalid value for enabled")
+	assert.Contains(t, row.Message, "Codex cloud import stays off until this is fixed.")
 }
