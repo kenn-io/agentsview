@@ -519,3 +519,19 @@ func TestLoginOutsideAuthJSONGivesFileStoreFix(t *testing.T) {
 			"the fix trades the keyring's protection for access")
 	}
 }
+
+func TestUnreadableConfigSaysLastGoodSettingsKeepImportOff(t *testing.T) {
+	startup := config.Config{CodexCloud: config.CodexCloudConfig{Present: true}}
+	env := newPassEnv(t)
+	env.syncer.Gates = NewGateSource("/data/config.toml", startup, func() (config.Config, error) {
+		return config.Config{}, assert.AnError
+	}, func(string) string { return "" }, "/users/a")
+
+	env.run(t)
+
+	row, ok := env.syncer.Status.Row(SourceRowKey)
+	require.True(t, ok)
+	assert.Contains(t, row.Message, "/data/config.toml could not be read")
+	assert.Contains(t, row.Message, "Off: enabled is false.", "the user must know import stays off")
+	assert.Zero(t, env.calls("thread/list"))
+}
