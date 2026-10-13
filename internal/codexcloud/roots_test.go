@@ -1,6 +1,7 @@
 package codexcloud
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,10 +19,16 @@ func mirrored(t *testing.T, s *Store, threadID string) {
 	require.NoError(t, os.WriteFile(path, nil, 0o600))
 }
 
+// link links child to parent and returns its root and the threads newly
+// counted under a root, in the order they were counted.
 func link(t *testing.T, s *Store, child, parent string) (string, []string) {
 	t.Helper()
 	mirrored(t, s, child)
-	root, moved, err := s.LinkParent(passKey, child, parent)
+	var moved []string
+	root, err := s.LinkParent(passKey, child, parent, func(id, _ string) error {
+		moved = append(moved, id)
+		return nil
+	})
 	require.NoError(t, err)
 	return root, moved
 }
@@ -113,4 +120,24 @@ func TestChangedParentLeavesOldWaitingFile(t *testing.T) {
 	assert.Empty(t, moved, "c now belongs to q, not to the parent it once waited for")
 	assert.Equal(t, []string{"c"}, descendants(t, s, "q"))
 	assert.Empty(t, descendants(t, s, "p"))
+}
+
+// TestInterruptedLinkCountsEveryMovedThreadOnRetry covers a link that stops
+// while it writes "counted under" records, as a crash would: the retry
+// still counts every thread the late parent takes.
+func TestInterruptedLinkCountsEveryMovedThreadOnRetry(t *testing.T) {
+	s := NewStore(t.TempDir())
+	link(t, s, "c", "p")
+	link(t, s, "gc", "c")
+	mirrored(t, s, "p")
+	interrupted := errors.New("interrupted")
+	_, err := s.LinkParent(passKey, "p", "", func(string, string) error { return interrupted })
+	require.ErrorIs(t, err, interrupted)
+
+	root, moved := link(t, s, "p", "")
+
+	assert.Equal(t, "p", root)
+	assert.Equal(t, []string{"c", "gc"}, moved, "every moved thread is counted on the retry")
+	assert.Equal(t, []string{"c", "gc"}, descendants(t, s, "p"))
+	assert.Empty(t, descendants(t, s, "c"))
 }
