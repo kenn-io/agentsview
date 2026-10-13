@@ -256,8 +256,21 @@ func (p *pass) threads(ctx context.Context) error {
 	results := map[ListingID]ListingResult{}
 	var changed []ListedThread
 	var active []string
+	// A thread state file that cannot be read is a local failure, not
+	// OpenAI's; it must not start the account's network wait.
+	var stateErr error
+	stored := func(threadID string) (int64, bool, error) {
+		have, ok, err := p.storedUpdatedAt(threadID)
+		if err != nil {
+			stateErr = err
+		}
+		return have, ok, err
+	}
 	for _, id := range Listings {
-		result, err := listChanged(ctx, p.conn, id, acct.Watermarks[id], p.storedUpdatedAt)
+		result, err := listChanged(ctx, p.conn, id, acct.Watermarks[id], stored)
+		if stateErr != nil {
+			return stateErr
+		}
 		if err != nil {
 			return p.accountEnd(err, p.login)
 		}

@@ -316,3 +316,23 @@ func TestFirstGateReadFailureKeepsStartupConfig(t *testing.T) {
 	require.ErrorIs(t, gates.ReadErr, assert.AnError)
 	assert.Equal(t, "/data/config.toml", gates.ConfigPath)
 }
+
+func TestUnreadableThreadStateDuringListingIsLocal(t *testing.T) {
+	env := newPassEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "one")))
+	env.run(t)
+	path, err := env.syncer.Store.path(passKey, "a", ".state.json")
+	require.NoError(t, err)
+	// A directory in the state file's place cannot be read on any platform.
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0o700))
+
+	env.clock.Advance(10 * time.Minute)
+	env.run(t)
+
+	assert.Zero(t, env.account(t).Wait, "a local file problem is not an outage")
+	row, ok := env.syncer.Status.Row(string(passKey))
+	require.True(t, ok)
+	assert.Equal(t, StateError, row.State)
+	assert.Contains(t, row.Message, "import state")
+}
