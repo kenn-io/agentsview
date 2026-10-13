@@ -52,9 +52,9 @@ switched models.
 fx stopped writing `usage-v2.json` in
 [vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226).
 AgentsView reads it when an older session has one, as cumulative totals per
-model dated at the session's latest event. Sessions from current fx have no
-token usage. An old session resumed in newer fx keeps its old totals. Costs use
-AgentsView's pricing catalog.
+model dated at the earlier of the session's latest event and the usage file's
+modification time. Sessions from current fx have no token usage. An old session
+resumed in newer fx keeps its old totals. Costs use AgentsView's pricing catalog.
 
 Augure Code and Augure Desktop retain recorded usage. Proprietary Augure models
 have no catalog price, so token-based cost estimates remain unpriced unless you

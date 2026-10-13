@@ -150,6 +150,11 @@ func WithCompanionFiles(fn func(transcriptPath string) []string) JSONLOption {
 	return func(o *JSONLSourceSetOptions) { o.CompanionFiles = fn }
 }
 
+// WithOptionalCompanion folds an "unreadable" marker into the fingerprint on companion read failures.
+func WithOptionalCompanion(fn func(companionPath string) bool) JSONLOption {
+	return func(o *JSONLSourceSetOptions) { o.OptionalCompanion = fn }
+}
+
 // WithCompanionTranscript registers the inverse of WithCompanionFiles: given a
 // changed sidecar path, derive the owning transcript path directly. With the
 // inverse configured, a companion event resolves through the same per-path

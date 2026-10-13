@@ -4366,7 +4366,9 @@ schemas keep their existing ordering behavior.
   timestamps. `events.jsonl` stores version 3 frames. The
   [event union](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_event.zig)
   defines prompts, replies, steering, tool calls and results, interruptions,
-  and context checkpoints. Result text uses the stored preview, up to 4 KB.
+  and context checkpoints. Larger results use plain `.txt` filenames in
+  `tool-results/`, capped at 16 MiB with a truncation notice. Missing, unreadable,
+  or unsupported artifacts fall back to the stored preview, up to 4 KB.
   Only assistant replay records supply historical model and provider identities.
   Tool calls share them when attached to that assistant row; separate tool-call
   rows and interrupted text leave those identities unknown.
@@ -4391,32 +4393,36 @@ schemas keep their existing ordering behavior.
   and parent IDs, excluding `.` and `..` and the reserved `v2` name in any case.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/vercel-labs/fx.git` at
-  `b9ca60d0102cf84cea061456c41206f66149b311`. Reverified 2026-10-12.
+  `b9ca60d0102cf84cea061456c41206f66149b311`. Reverified 2026-10-13.
   Fixtures were captured with fx v0.0.13.
 - **Usage and cost:**
   [Session usage](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_usage.zig)
   stores cumulative per-model totals in `usage-v2.json` under `snapshot.models`.
   fx removed the file at
-  [bc968ad](https://github.com/vercel-labs/fx/commit/bc968ad) (PR #1226), so only
+  [bc968ad](https://github.com/vercel-labs/fx/commit/bc968ad),
+  [vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226), so only
   older sessions have it.
   Input includes cache reads and writes. AgentsView subtracts those tokens from
   fresh input and prices the separate token counts from its catalog. It omits
   fx's reported cost, which can be zero for subscription runs. Cumulative totals
-  leave peak context unknown. Usage dates follow the latest transcript event
-  because preference changes also advance metadata timestamps.
+  leave peak context unknown. Usage dates use the earlier of the latest
+  transcript event and the usage file's modification time, falling back to the
+  latest event or session start when the modification time is unavailable.
   Optional counts can be null, which AgentsView treats as unknown with zero tokens.
 - **Agentsview:** Sessions require schema 4. Event frames support up to schema 3,
   usage envelopes and owner markers schema 1, and usage snapshots schema 3.
-  Newer versions skip the source. Full tool-result artifacts and encrypted
-  reasoning are excluded. Changes to `session.json`,
+  Unsupported session, event, or owner versions skip the source. Encrypted
+  reasoning is excluded. Changes to `session.json`,
   `usage-v2.json`, or `subagent/owner.json` refresh their owning transcript.
   Companion content hashes detect equal-length rewrites.
   A torn final line without a newline is ignored. Empty events and null known event
   types fail parsing; named unknown event types are skipped.
   JSON fields match case-sensitively; unknown object fields are ignored.
-  Other invalid frames or usage structures and mismatched usage session IDs fail
-  parsing, preserving the stored session for retry. Tool previews and status
-  attach to calls without separate transcript rows.
+  Other invalid frames fail parsing, preserving the stored session for retry.
+  Malformed, mismatched, unsupported-version, or unreadable usage is skipped
+  with a log while the transcript imports. Unreadable usage contributes a stable
+  fingerprint marker so restoring access triggers a reparse. Tool results and
+  status attach to calls without separate transcript rows.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go

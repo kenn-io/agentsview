@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestFxFixture(t *testing.T) {
 	assert.Contains(t, messages[len(messages)-1].Content, "Added `func Name()")
 	require.Len(t, session.UsageEvents, 1)
 	assert.Equal(t, ParsedUsageEvent{
-		SessionID: "fx:parent-session", Source: "session", Model: "codex/gpt-6.1-sol", ProviderID: "codex",
+		SessionID: "fx:parent-session", Source: "session", Model: "codex/gpt-6.1-sol",
 		InputTokens: 29248, OutputTokens: 647, CacheReadInputTokens: 72320,
 		OccurredAt: "2026-10-12T21:07:21.056Z", DedupKey: "session:fx:parent-session|codex/gpt-6.1-sol",
 	}, session.UsageEvents[0])
@@ -152,6 +153,55 @@ func TestFxMetadataAndCancellation(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
+func TestFxUsageDate(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		mtime int64
+		want  string
+	}{
+		{"usage before last event", 3, "1970-01-01T00:00:03Z"},
+		{"usage after last event", 9, "1970-01-01T00:00:08Z"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4,"created_at_ms":1000}`)
+			file := filepath.Join(dir, "events.jsonl")
+			writeSourceFile(t, file, `{"timestamp_ms":8000,"event":{"user":{"text":"Hello"}}}`)
+			usage := filepath.Join(dir, "usage-v2.json")
+			writeSourceFile(t, usage, `{"snapshot":{"models":[{"model":"codex/test","input_tokens":5}]}}`)
+			mtime := time.Unix(test.mtime, 0)
+			require.NoError(t, os.Chtimes(usage, mtime, mtime))
+			session, _, err := parseFxSession(t.Context(), file, "local")
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			require.Len(t, session.UsageEvents, 1)
+			assert.Equal(t, test.want, session.UsageEvents[0].OccurredAt)
+			assert.Empty(t, session.UsageEvents[0].ProviderID)
+		})
+	}
+}
+
+func TestFxPersistedToolResult(t *testing.T) {
+	for _, test := range []struct{ ref, want string }{
+		{"result.txt", "Full tool output"},
+		{"result.bin", "Full"},
+	} {
+		t.Run(test.ref, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
+			writeSourceFile(t, filepath.Join(dir, "tool-results", test.ref), "Full tool output")
+			file := filepath.Join(dir, "events.jsonl")
+			writeSourceFile(t, file, fmt.Sprintf(`{"event":{"tool_result":{"call_id":"read-1","status":"success","preview":"Full","artifact_ref":%q,"stored_bytes":16}}}`, test.ref))
+			_, messages, err := parseFxSession(t.Context(), file, "local")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			require.Len(t, messages[0].ToolResults, 1)
+			assert.Equal(t, fmt.Sprintf("%q", test.want), messages[0].ToolResults[0].ContentRaw)
+			assert.Equal(t, len(test.want), messages[0].ToolResults[0].ContentLength)
+		})
+	}
+}
+
 func TestFxJSONFieldMatching(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "field-matching")
 	writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4,"title":"Session","TITLE":"Wrong title","workspace_root":"/tmp/demo","future_field":true}`)
@@ -216,7 +266,7 @@ func TestFxToolCallsKeepAssistantModel(t *testing.T) {
 func TestFxToolResultWithoutPreview(t *testing.T) {
 	for _, test := range []struct{ name, result, raw string }{
 		{"absent", `{"call_id":"read-1","status":"success"}`, ""},
-		{"null", `{"call_id":"read-1","status":"success","preview":null}`, "null"},
+		{"null", `{"call_id":"read-1","status":"success","preview":null}`, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -338,9 +388,9 @@ func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 	}{
 		{"absent", "", 0},
 		{"empty models", `{"snapshot":{"models":[]}}`, 0},
-		{"matching session", `{"session_id":"session-a","snapshot":{"models":[]}}`, 0},
-		{"other session", `{"session_id":"session-b","snapshot":{"models":[]}}`, 0},
-		{"empty session", `{"session_id":"","snapshot":{"models":[]}}`, 0},
+		{"matching session", `{"session_id":"session-a","snapshot":{"models":[{"model":"test","input_tokens":5}]}}`, 1},
+		{"other session", `{"session_id":"session-b","snapshot":{"models":[{"model":"test","input_tokens":5}]}}`, 0},
+		{"empty session", `{"session_id":"","snapshot":{"models":[{"model":"test","input_tokens":5}]}}`, 0},
 		{"malformed", `{broken`, 0},
 		{"null envelope", `null`, 0},
 		{"array envelope", `[]`, 0},

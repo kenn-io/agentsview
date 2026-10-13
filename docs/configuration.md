@@ -525,8 +525,10 @@ AgentsView.
 fx sessions appear from `~/.fx/sessions/` when `session.json` uses schema 4.
 Subagent runs appear as children of their parent session. Usage comes from
 `usage-v2.json` when present (older fx only) as cumulative totals per model,
-dated at the session's last event.
-Tool results show fx's stored previews, up to 4 KB each.
+dated at the earlier of the session's last event and the usage file's
+modification time.
+Tool results read larger `.txt` files from `tool-results/`, capped at 16 MiB,
+and fall back to stored previews when the file is unavailable or unsupported.
 Costs use AgentsView's pricing catalog. Set `FX_SESSIONS_DIR` or `agents.fx.dirs`
 to scan another root, including a WSL path on Windows. The legacy `fx_dirs` key
 converts to `agents.fx.dirs`.

@@ -37,8 +37,7 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 	return NewSourceSetFactory(def, caps, func(cfg ProviderConfig) SourceSet {
 		return NewDirectoryJSONLSourceSet(AgentFx, cfg.Roots,
 			WithDescendPath(func(root, path string) bool {
-				return filepath.Dir(path) == filepath.Clean(root) && fxSessionIDValid(filepath.Base(path)) ||
-					filepath.Dir(filepath.Dir(path)) == filepath.Clean(root) && filepath.Base(path) == "subagent"
+				return filepath.Dir(path) == filepath.Clean(root) && fxSessionIDValid(filepath.Base(path))
 			}),
 			WithIncludePath(func(_, path string) bool {
 				return filepath.Base(path) == "events.jsonl"
@@ -47,6 +46,7 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 			WithSessionIDFromPath(func(_, path string) string { return filepath.Base(filepath.Dir(path)) }),
 			WithProjectHint(func(_, _ string) string { return "" }),
 			WithCompanionFiles(fxCompanionFiles),
+			WithOptionalCompanion(func(path string) bool { return filepath.Base(path) == "usage-v2.json" }),
 			WithCompanionTranscript(fxCompanionTranscript),
 			WithParseFile(fxParseFile),
 			WithForceReplace(),

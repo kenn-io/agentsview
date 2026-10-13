@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/url"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 type fxMetadata struct {
@@ -79,9 +82,11 @@ type fxEvent struct {
 		Arguments string `json:"arguments_json"`
 	} `json:"tool_call"`
 	ToolResult *struct {
-		ID      string         `json:"call_id"`
-		Status  string         `json:"status"`
-		Preview jsontext.Value `json:"preview"`
+		ID          string         `json:"call_id"`
+		Status      string         `json:"status"`
+		Preview     jsontext.Value `json:"preview"`
+		ArtifactRef string         `json:"artifact_ref"`
+		StoredBytes int64          `json:"stored_bytes"`
 	} `json:"tool_result"`
 	Checkpoint *struct {
 		Summary string `json:"summary"`
@@ -171,8 +176,6 @@ type fxUsage struct {
 	} `json:"snapshot"`
 }
 
-var errFxInvalidMetadata = errors.New("invalid fx metadata")
-
 func readFxMetadata[T any](path string) (*T, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -183,10 +186,10 @@ func readFxMetadata[T any](path string) (*T, error) {
 	}
 	var value *T
 	if err := json.Unmarshal(data, &value); err != nil {
-		return nil, fmt.Errorf("%w in %s: %w", errFxInvalidMetadata, path, err)
+		return nil, fmt.Errorf("invalid fx metadata in %s: %w", path, err)
 	}
 	if value == nil {
-		return nil, fmt.Errorf("%w in %s: null object", errFxInvalidMetadata, path)
+		return nil, fmt.Errorf("invalid fx metadata in %s: null object", path)
 	}
 	return value, nil
 }
@@ -296,7 +299,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		if timestamp.After(session.EndedAt) {
 			session.EndedAt = timestamp
 		}
-		fxAppendEvent(&messages, frame.Event, timestamp)
+		fxAppendEvent(&messages, frame.Event, timestamp, dir)
 	}
 	if err := reader.Err(); err != nil {
 		return nil, nil, fmt.Errorf("read fx events: %w", err)
@@ -315,7 +318,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	if session.SessionName == "" {
 		session.SessionName = session.FirstMessage
 	}
-	events, err := fxUsageEvents(dir, rawID, session.ID, timeString(latestEventTime, session.StartedAt))
+	events, err := fxUsageEvents(dir, rawID, session.ID, latestEventTime, session.StartedAt)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -326,14 +329,21 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 }
 
 // fxUsageEvents reads the legacy usage-v2.json. Bad content drops all usage and keeps the transcript.
-func fxUsageEvents(dir, rawID, sessionID, occurredAt string) ([]ParsedUsageEvent, error) {
-	usage, err := readFxMetadata[fxUsage](filepath.Join(dir, "usage-v2.json"))
-	if errors.Is(err, errFxInvalidMetadata) {
+func fxUsageEvents(dir, rawID, sessionID string, latest, started time.Time) ([]ParsedUsageEvent, error) {
+	usagePath := filepath.Join(dir, "usage-v2.json")
+	usage, err := readFxMetadata[fxUsage](usagePath)
+	if err != nil {
+		// Unreadable or malformed usage must not block the transcript.
 		log.Printf("skipping fx usage for session %s: %v", rawID, err)
 		return nil, nil
 	}
-	if err != nil || usage == nil {
-		return nil, err
+	if usage == nil {
+		return nil, nil
+	}
+	// Resuming an old session adds events without touching usage-v2.json, so cap the date at its mtime.
+	occurredAt := timeString(latest, started)
+	if info, err := os.Stat(usagePath); err == nil && !latest.IsZero() && info.ModTime().Before(latest) {
+		occurredAt = timeString(info.ModTime().UTC(), started)
 	}
 	skip := func(reason string) ([]ParsedUsageEvent, error) {
 		log.Printf("skipping fx usage for session %s: %s", rawID, reason)
@@ -353,12 +363,8 @@ func fxUsageEvents(dir, rawID, sessionID, occurredAt string) ([]ParsedUsageEvent
 		if model == nil || model.Model == "" {
 			return skip("invalid model entry")
 		}
-		provider, _, prefixed := strings.Cut(model.Model, "/")
-		if !prefixed {
-			provider = ""
-		}
 		events = append(events, ParsedUsageEvent{
-			SessionID: sessionID, Source: "session", Model: model.Model, ProviderID: provider,
+			SessionID: sessionID, Source: "session", Model: model.Model,
 			DedupKey: "session:" + sessionID + "|" + model.Model, OccurredAt: occurredAt,
 			InputTokens: max(0, int(model.Input)-int(model.CacheRead)-int(model.CacheWrite)), OutputTokens: int(model.Output),
 			CacheReadInputTokens: int(model.CacheRead), CacheCreationInputTokens: int(model.CacheWrite), ReasoningTokens: int(model.Reasoning),
@@ -367,23 +373,35 @@ func fxUsageEvents(dir, rawID, sessionID, occurredAt string) ([]ParsedUsageEvent
 	return events, nil
 }
 
-func fxAppendEvent(messages *[]ParsedMessage, event *fxEvent, timestamp time.Time) {
+// fxFullToolOutput reads a .txt result file larger than the preview; any failure keeps the preview.
+func fxFullToolOutput(dir, ref string, storedBytes int64, previewLen int) (string, bool) {
+	if !strings.HasSuffix(ref, ".txt") || storedBytes <= int64(previewLen) || filepath.Base(ref) != ref || strings.ContainsAny(ref, `/\`) {
+		return "", false
+	}
+	f, err := os.Open(filepath.Join(dir, "tool-results", ref))
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxPersistedToolResultSize+1))
+	if err != nil {
+		return "", false
+	}
+	if len(b) > maxPersistedToolResultSize {
+		return stringutil.SafeTruncate(string(b), maxPersistedToolResultSize) +
+			"\n\n[agentsview: persisted tool result truncated at 16 MiB]", true
+	}
+	return string(b), true
+}
+
+func fxAppendEvent(messages *[]ParsedMessage, event *fxEvent, timestamp time.Time, dir string) {
 	message := ParsedMessage{Timestamp: timestamp}
 	switch {
 	case event.User != nil:
-		if event.User.Text == "" {
-			return
-		}
 		message.Role, message.Content = RoleUser, event.User.Text
 	case event.Steering != nil:
-		if event.Steering.Text == "" {
-			return
-		}
 		message.Role, message.Content = RoleUser, event.Steering.Text
 	case event.Assistant != nil:
-		if event.Assistant.Text == "" {
-			return
-		}
 		message.Role, message.Content = RoleAssistant, event.Assistant.Text
 		if replay := event.Assistant.Replay; replay != nil && replay.Source != nil {
 			message.Model, message.ProviderID = replay.Source.Model, string(replay.Source.Provider)
@@ -422,7 +440,16 @@ func fxAppendEvent(messages *[]ParsedMessage, event *fxEvent, timestamp time.Tim
 		case "failure":
 			status = "errored"
 		}
-		message.ToolResults = []ParsedToolResult{{ToolUseID: result.ID, Source: "tool_result", Status: status, ContentLength: len(gjson.ParseBytes(result.Preview).Str), ContentRaw: string(result.Preview)}}
+		preview := gjson.ParseBytes(result.Preview)
+		toolResult := ParsedToolResult{ToolUseID: result.ID, Source: "tool_result", Status: status, ContentLength: toolResultContentLength(preview)}
+		if preview.Type != gjson.Null {
+			toolResult.ContentRaw = preview.Raw
+		}
+		if full, ok := fxFullToolOutput(dir, result.ArtifactRef, result.StoredBytes, len(preview.Str)); ok {
+			raw, _ := json.Marshal(full)
+			toolResult.ContentLength, toolResult.ContentRaw = len(full), string(raw)
+		}
+		message.ToolResults = []ParsedToolResult{toolResult}
 	case event.Checkpoint != nil:
 		message.Role, message.Content = RoleSystem, event.Checkpoint.Summary
 		message.IsSystem, message.IsCompactBoundary = true, true
