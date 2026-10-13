@@ -18,6 +18,9 @@ type Waits struct {
 
 	mu    sync.Mutex
 	homes map[string]homeWait
+	// usageHomes holds plan usage 401s, which skip a home for plan usage
+	// only; thread sync keeps using it.
+	usageHomes map[string]homeWait
 }
 
 type homeWait struct {
@@ -28,7 +31,7 @@ type homeWait struct {
 
 // NewWaits times waits on now.
 func NewWaits(now func() time.Time) *Waits {
-	return &Waits{now: now, homes: map[string]homeWait{}}
+	return &Waits{now: now, homes: map[string]homeWait{}, usageHomes: map[string]homeWait{}}
 }
 
 // accountSchedule is the first wait and the cap for each account failure.
@@ -98,6 +101,30 @@ func (w *Waits) HomeReady(home string, authMTime time.Time) bool {
 	}
 	if !authMTime.Equal(wait.authMTime) || !w.now().Before(wait.until) {
 		delete(w.homes, home)
+		return true
+	}
+	return false
+}
+
+// RecordUsageHome remembers a plan usage 401 for home until its auth.json
+// changes from authMTime or an hour passes.
+func (w *Waits) RecordUsageHome(home string, authMTime time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.usageHomes[home] = homeWait{failure: FailSignedOut, until: w.now().Add(homeWaitLimit), authMTime: authMTime}
+}
+
+// UsageHomeReady reports whether plan usage may use home, given its
+// auth.json's current modification time.
+func (w *Waits) UsageHomeReady(home string, authMTime time.Time) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	wait, ok := w.usageHomes[home]
+	if !ok {
+		return true
+	}
+	if !authMTime.Equal(wait.authMTime) || !w.now().Before(wait.until) {
+		delete(w.usageHomes, home)
 		return true
 	}
 	return false

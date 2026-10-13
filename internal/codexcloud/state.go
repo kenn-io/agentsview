@@ -57,12 +57,15 @@ type ThreadState struct {
 	CreatedAt    int64             `json:"created_at,omitzero"`
 	// LastPlanRecordDigest and LastPlanRecordKind describe the newest plan
 	// usage record of any kind in the mirror file.
-	LastPlanRecordDigest string    `json:"last_plan_record_digest,omitzero"`
-	LastPlanRecordKind   string    `json:"last_plan_record_kind,omitzero"`
-	CountedUnder         string    `json:"counted_under,omitzero"`
-	LastHandledTurnID    string    `json:"last_handled_turn_id,omitzero"`
-	IsSubAgent           bool      `json:"is_sub_agent,omitzero"`
-	ArchivedFirstSeen    time.Time `json:"archived_first_seen,omitzero"`
+	LastPlanRecordDigest string `json:"last_plan_record_digest,omitzero"`
+	LastPlanRecordKind   string `json:"last_plan_record_kind,omitzero"`
+	CountedUnder         string `json:"counted_under,omitzero"`
+	// LastPlanRow is the newest plan usage row body in the file, kept so a
+	// root that settles after being left out can store it again as final.
+	LastPlanRow       jsontext.Value `json:"last_plan_row,omitzero"`
+	LastHandledTurnID string         `json:"last_handled_turn_id,omitzero"`
+	IsSubAgent        bool           `json:"is_sub_agent,omitzero"`
+	ArchivedFirstSeen time.Time      `json:"archived_first_seen,omitzero"`
 	// Listing is the newest listing record, so a mirror file rebuilt for a
 	// thread outside this pass's listing pages still gets its metadata.
 	Listing jsontext.Value `json:"listing,omitzero"`
@@ -75,24 +78,39 @@ type WaitState struct {
 	Until    time.Time `json:"until,omitzero"`
 }
 
-// UsagePauseState pauses the plan usage step for an account.
+// UsagePauseState pauses the plan usage step for an account: after a 429,
+// or for 24 hours when OpenAI does not offer plan usage to it.
 type UsagePauseState struct {
-	Until  time.Time `json:"until,omitzero"`
-	Reason string    `json:"reason,omitzero"`
+	Until    time.Time `json:"until,omitzero"`
+	Reason   string    `json:"reason,omitzero"`
+	Attempts int       `json:"attempts,omitzero"`
 }
 
-// PendingEntry is a usage root waiting for its first usable row.
+// PendingEntry is a usage root waiting for a usable row.
 type PendingEntry struct {
+	// Since orders pending roots, oldest first.
 	Since       time.Time `json:"since,omitzero"`
 	NextAttempt time.Time `json:"next_attempt,omitzero"`
-	Attempts    int       `json:"attempts,omitzero"`
+	// Attempts counts failed or unresolved attempts in a row.
+	Attempts int `json:"attempts,omitzero"`
+	// LastChange is the last fetch of the root or a descendant; settling
+	// and "could not check" count 7 days from it.
+	LastChange time.Time `json:"last_change,omitzero"`
+	// Answered is the last answered (HTTP 200) request for the root.
+	Answered time.Time `json:"answered,omitzero"`
+	// HasRow marks a root that re-entered pending while it had a usable
+	// row; Reentries doubles its re-entry wait.
+	HasRow    bool `json:"has_row,omitzero"`
+	Reentries int  `json:"reentries,omitzero"`
 }
 
-// RefreshEntry is a usage root with a usable row that is still refreshed.
+// RefreshEntry is a usage root with a usable row, refreshed daily until 7
+// days after its last change.
 type RefreshEntry struct {
 	DataAsOf    time.Time `json:"data_as_of,omitzero"`
 	LastAttempt time.Time `json:"last_attempt,omitzero"`
-	Settled     bool      `json:"settled,omitzero"`
+	LastChange  time.Time `json:"last_change,omitzero"`
+	Reentries   int       `json:"reentries,omitzero"`
 }
 
 // RetryEntry is a thread whose last fetch failed. Listing keeps the thread

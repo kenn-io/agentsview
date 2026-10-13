@@ -220,8 +220,8 @@ func TestStatusLinesRetrying(t *testing.T) {
 }
 
 // TestTokenCanary sends a unique token through every path that writes:
-// a good sync, a refresh request, and refused handshakes whose bodies
-// echo the token. No file, log line, or status output may contain it.
+// a good sync with plan usage, a refresh request, and refused handshakes
+// and plan usage requests whose bodies echo the token. No file, log line, or status output may contain it.
 func TestTokenCanary(t *testing.T) {
 	const access = "canary-access-9d27e1c4"
 	home := writeHome(t, homeSpec{
@@ -239,9 +239,16 @@ func TestTokenCanary(t *testing.T) {
 	env := newPassEnv(t)
 	env.syncer.Log = log.New(&logs, "", 0)
 	env.syncer.ReadLogin = ReadLogin
-	endpoint := env.host.URL()
+	usage := codexcloudtest.NewUsageHost(t, fetchNow)
+	usage.SetRow("a", codexcloudtest.Row("a", "available", nil, nil))
+	endpoint, usageEndpoint := env.host.URL(), usage.URL()
 	env.syncer.Gates = func() Gates {
-		return Gates{CodexCloud: config.CodexCloudConfig{Present: true, Enabled: true, Endpoint: endpoint}, Homes: []string{home}}
+		return Gates{
+			CodexCloud: config.CodexCloudConfig{
+				Present: true, Enabled: true, Endpoint: endpoint, UsageEndpoint: usageEndpoint,
+			},
+			Homes: []string{home},
+		}
 	}
 	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "one")))
 
@@ -257,6 +264,8 @@ func TestTokenCanary(t *testing.T) {
 
 	env.run(t)
 	capture()
+	require.Len(t, usage.Requests(), 1)
+	assert.Equal(t, "Bearer "+access, usage.Requests()[0].Header.Get("Authorization"))
 
 	// A warm join through the same login, ended by a refresh request.
 	monitor := &Monitor{
@@ -294,11 +303,14 @@ func TestTokenCanary(t *testing.T) {
 		env.clock.Set(now)
 		require.NoError(t, os.Chtimes(filepath.Join(home, "auth.json"), now, now))
 		env.host.RefuseHandshake(status, http.Header{"X-Echo": {access}}, "bad token "+access)
+		usage.Refuse(status, http.Header{"X-Echo": {access}}, "bad token "+access)
 		env.run(t)
 		capture()
 	}
 
 	all := strings.Join(outputs, "\n")
+	assert.Greater(t, len(usage.Requests()), 1, "refused plan usage requests ran")
+	assert.Contains(t, all, "Plan usage as of")
 	for _, f := range []Failure{FailRefreshRequested, FailSignedOut, FailRefused, FailServer} {
 		assert.Contains(t, all, Message(f, time.Time{}), "the canary reached the %s path", f)
 	}

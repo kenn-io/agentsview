@@ -47,26 +47,33 @@ type StatusBoard struct {
 	mu    sync.Mutex
 	order []string
 	rows  map[string]HomeStatus
-	// live holds each account's live token line apart from its row, since
-	// sync replaces whole rows and the monitor sets this line on its own.
+	// live and plan hold each account's live token and plan usage lines
+	// apart from its row, since sync replaces whole rows and these lines
+	// are set on their own.
 	live map[string]string
+	plan map[string]string
 }
 
 // NewStatusBoard returns an empty board.
 func NewStatusBoard() *StatusBoard {
-	return &StatusBoard{rows: map[string]HomeStatus{}, live: map[string]string{}}
+	return &StatusBoard{rows: map[string]HomeStatus{}, live: map[string]string{}, plan: map[string]string{}}
 }
 
 // SetLive sets the live token line shown with the row for key. It shows
 // once sync has set that row.
-func (b *StatusBoard) SetLive(key, text string) {
+func (b *StatusBoard) SetLive(key, text string) { b.setLine(b.live, key, text) }
+
+// SetPlanUsage sets the plan usage line shown with the row for key.
+func (b *StatusBoard) SetPlanUsage(key, text string) { b.setLine(b.plan, key, text) }
+
+func (b *StatusBoard) setLine(lines map[string]string, key, text string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if text == "" {
-		delete(b.live, key)
+		delete(lines, key)
 		return
 	}
-	b.live[key] = text
+	lines[key] = text
 }
 
 // Set replaces the row with row.Key.
@@ -88,7 +95,7 @@ func (b *StatusBoard) Row(key string) (HomeStatus, bool) {
 	row, ok := b.rows[key]
 	row.Homes = slices.Clone(row.Homes)
 	if ok {
-		row.Live = b.live[key]
+		row.Live, row.PlanUsage = b.live[key], b.plan[key]
 	}
 	return row, ok
 }
@@ -101,7 +108,7 @@ func (b *StatusBoard) Snapshot() []HomeStatus {
 	for _, key := range b.order {
 		row := b.rows[key]
 		row.Homes = slices.Clone(row.Homes)
-		row.Live = b.live[key]
+		row.Live, row.PlanUsage = b.live[key], b.plan[key]
 		rows = append(rows, row)
 	}
 	return rows
@@ -148,6 +155,7 @@ func (b *StatusBoard) Delete(key string) {
 		b.order = slices.DeleteFunc(b.order, func(k string) bool { return k == key })
 	}
 	delete(b.live, key)
+	delete(b.plan, key)
 }
 
 // Keep drops every row whose key is not in keys.
@@ -161,9 +169,11 @@ func (b *StatusBoard) Keep(keys map[string]bool) {
 		delete(b.rows, key)
 		return true
 	})
-	for key := range b.live {
-		if !keys[key] {
-			delete(b.live, key)
+	for _, lines := range []map[string]string{b.live, b.plan} {
+		for key := range lines {
+			if !keys[key] {
+				delete(lines, key)
+			}
 		}
 	}
 }
