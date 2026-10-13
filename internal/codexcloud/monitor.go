@@ -335,10 +335,32 @@ func (m *Monitor) run(j *join) {
 		case <-leave.C:
 			m.Log.Printf("codex-cloud: chat %s: disconnecting after %s; listening in again on a later run if it still runs",
 				j.threadID, m.limit())
+			m.keepQueued(j, notes, &buf)
 			flush()
 			return
 		case <-j.stop:
+			m.keepQueued(j, notes, &buf)
 			flush()
+			return
+		}
+	}
+}
+
+// keepQueued records the notifications that already arrived when the join
+// leaves. select picks at random among ready cases, so without this a stop
+// can win over queued updates, and the last of them may be the reply's final
+// token count. It stops at the first notification it cannot record.
+func (m *Monitor) keepQueued(j *join, notes <-chan Notification, buf *[]mirror.Record) {
+	for {
+		select {
+		case n, ok := <-notes:
+			if !ok {
+				return
+			}
+			if _, err := m.handle(j, n, buf); err != nil {
+				return
+			}
+		default:
 			return
 		}
 	}
