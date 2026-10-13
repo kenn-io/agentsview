@@ -1924,3 +1924,20 @@ func TestListSessionsAnnotationsPreserveAutomatedPresence(t *testing.T) {
 		}
 	}
 }
+
+func TestListSessionsKeepsPendingLauncherWorkerVisible(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "worker", "proj", func(s *db.Session) { s.UserMessageCount = 2 })
+	link, err := d.SetSessionExternalParent(t.Context(), "worker", "manager")
+	require.NoError(t, err)
+	assert.False(t, link.Applied)
+	_, out, err := ts.listSessions(t.Context(), nil, listSessionsIn{})
+	require.NoError(t, err)
+	require.Len(t, out.Sessions, 1)
+	assert.Equal(t, "worker", out.Sessions[0].SessionID)
+	dbtest.SeedSession(t, d, "manager", "proj", func(s *db.Session) { s.UserMessageCount = 2 })
+	_, out, err = ts.listSessions(t.Context(), nil, listSessionsIn{})
+	require.NoError(t, err)
+	require.Len(t, out.Sessions, 1)
+	assert.Equal(t, "manager", out.Sessions[0].SessionID)
+}

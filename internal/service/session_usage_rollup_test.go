@@ -3,12 +3,15 @@ package service_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
@@ -356,4 +359,34 @@ func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {
 	require.Equal(t, 1, got.SubagentCount)
 	require.False(t, got.HasCost)
 	require.Zero(t, got.Cost)
+}
+
+func TestLauncherParentArrivalRollsWorkerCostIntoLauncher(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	d.SetCustomPricing(map[string]config.CustomModelRate{"fixture-model": {InputMicrodollarsPerMTok: 1_000_000}})
+	seed := func(id string, tokens int) {
+		t.Helper()
+		msg := dbtest.AsstMsg(id, 1, "done")
+		msg.Timestamp, msg.Model = "2026-01-01T00:00:00Z", "fixture-model"
+		msg.TokenUsage = fmt.Appendf(nil, `{"input_tokens":%d,"output_tokens":0}`, tokens)
+		dbtest.SeedSessionWithMessages(t, d, id, "proj", []db.Message{dbtest.UserMsg(id, 0, "work"), msg})
+	}
+	seed("worker", 2_000_000)
+	link, err := d.SetSessionExternalParent(t.Context(), "worker", "launcher")
+	require.NoError(t, err)
+	assert.False(t, link.Applied)
+	seed("launcher", 1_000_000)
+	rollup, err := service.GetSessionUsageRollup(t.Context(), d, "launcher", false)
+	require.NoError(t, err)
+	require.True(t, rollup.HasCost)
+	assert.Equal(t, money.MustParseDollars("3"), rollup.Cost)
+	assert.Equal(t, 1, rollup.SubagentCount)
+	_, err = d.ClearSessionExternalParent(t.Context(), "worker")
+	require.NoError(t, err)
+	rollup, err = service.GetSessionUsageRollup(t.Context(), d, "launcher", false)
+	require.NoError(t, err)
+	assert.False(t, rollup.HasCost)
+	require.True(t, rollup.Usage.HasCost)
+	assert.Equal(t, money.MustParseDollars("1"), rollup.Usage.Cost)
+	assert.Zero(t, rollup.SubagentCount)
 }

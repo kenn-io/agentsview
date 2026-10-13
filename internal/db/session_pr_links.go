@@ -82,7 +82,7 @@ func (f PRFilter) IsZero() bool { return f.Repository == "" }
 // ErrInvalidPRFilter identifies a pull request filter ParsePRFilter rejects.
 var ErrInvalidPRFilter = errors.New("invalid pr filter")
 
-// ParsePRFilter accepts owner/repo[#123], optionally prefixed by a forge hostname.
+// ParsePRFilter accepts owner/repo[#123] or host::owner/repo[#123].
 func ParsePRFilter(value string) (PRFilter, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -90,15 +90,21 @@ func ParsePRFilter(value string) (PRFilter, error) {
 	}
 	repo, num, hasNum := strings.Cut(value, "#")
 	repo = strings.Trim(strings.TrimSpace(repo), "/")
+	host, path, qualified := strings.Cut(repo, "::")
+	if qualified {
+		repo = strings.Trim(path, "/")
+		if host == "" || strings.ContainsAny(host, "/ \t\r\n") {
+			return PRFilter{}, fmt.Errorf("%w %q: invalid host", ErrInvalidPRFilter, value)
+		}
+	}
 	if repo == "" || !strings.Contains(repo, "/") || strings.Contains(repo, "://") {
 		return PRFilter{}, fmt.Errorf(
-			"%w %q: want owner/repo, owner/repo#123, or host/owner/repo#123", ErrInvalidPRFilter, value,
+			"%w %q: want owner/repo, owner/repo#123, or host::owner/repo#123", ErrInvalidPRFilter, value,
 		)
 	}
 	f := PRFilter{Repository: strings.ToLower(repo)}
-	first, rest, _ := strings.Cut(f.Repository, "/")
-	if strings.ContainsAny(first, ".:") && strings.Contains(rest, "/") {
-		f.Host, f.Repository = first, rest
+	if qualified {
+		f.Host = strings.ToLower(host)
 	}
 	if hasNum {
 		n, err := strconv.Atoi(strings.TrimSpace(num))

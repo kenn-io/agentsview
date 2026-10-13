@@ -148,6 +148,10 @@ func printSessionParentHuman(
 	w io.Writer, id string, link *db.SessionExternalParent, cleared bool,
 ) {
 	if cleared {
+		if link.ParentSessionID == "" {
+			fmt.Fprintf(w, "%s: no launcher parent to remove\n", sanitizeTerminal(id))
+			return
+		}
 		fmt.Fprintf(w, "%s: removed parent %s\n", sanitizeTerminal(id),
 			sanitizeTerminal(link.ParentSessionID))
 		return
@@ -157,8 +161,8 @@ func printSessionParentHuman(
 		sanitizeTerminal(link.RelationshipType))
 	switch {
 	case !link.SessionFound:
-		fmt.Fprintln(w, "note: session not synced yet; the link applies once it is")
+		fmt.Fprintln(w, "note: link stored; applies after both sessions sync")
 	case !link.Applied:
-		fmt.Fprintln(w, "note: link stored but not applied; a transcript parent or spawning session outranks it, or it would form a loop")
+		fmt.Fprintln(w, "note: link stored but not applied; the parent may not be synced yet, a transcript parent or spawning session outranks it, or it would form a loop")
 	}
 }

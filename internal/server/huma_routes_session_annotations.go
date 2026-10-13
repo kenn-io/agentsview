@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
@@ -82,8 +81,6 @@ func (s *Server) humaSetSessionParent(
 
 func sessionAnnotationError(op string, err error) error {
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return apiError(http.StatusNotFound, "session parent link not found")
 	case errors.Is(err, db.ErrSessionLabelsInvalid),
 		errors.Is(err, db.ErrSessionExternalParentInvalid):
 		return apiError(http.StatusBadRequest, err.Error())

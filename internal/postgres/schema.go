@@ -1153,7 +1153,7 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
 		// idx_sessions_labels backs the label filter's array containment,
-		// the PostgreSQL counterpart of SQLite's idx_session_labels_label.
+		// SQLite probes the session_labels primary key (session_id, label).
 		`CREATE INDEX IF NOT EXISTS idx_sessions_labels
 		 ON sessions USING GIN (labels)`,
 		// idx_tool_calls_file_path backs the cross-session Recent Edits feed.

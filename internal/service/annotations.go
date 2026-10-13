@@ -12,8 +12,7 @@ import (
 // synced yet; reads go through the session itself. Backends without a
 // writable archive return db.ErrReadOnly.
 type SessionAnnotator interface {
-	// UpdateSessionLabels removes every label first when replace is set, then
-	// applies remove and add.
+	// UpdateSessionLabels replaces the set with add, ignoring remove, when replace is true.
 	UpdateSessionLabels(
 		ctx context.Context, id string, add, remove []string, replace bool,
 	) (*db.SessionLabels, error)

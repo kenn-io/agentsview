@@ -46,11 +46,11 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 	}{
 		{filter: "owner/repo", want: []string{"other-host", "with-prs"}},
 		{filter: "owner/repo#12", want: []string{"other-host", "with-prs"}},
-		{filter: "GITHUB.COM/OWNER/REPO#12", want: []string{"with-prs"}},
-		{filter: "github.com/owner/repo", want: []string{"with-prs"}},
-		{filter: "gitlab.com/owner/repo#12", want: []string{"other-host"}},
-		{filter: "forge.example/owner/repo#12", want: []string{}},
-		{filter: "github.com/owner/repo#3", want: []string{}},
+		{filter: "GITHUB.COM::OWNER/REPO#12", want: []string{"with-prs"}},
+		{filter: "github.com::owner/repo", want: []string{"with-prs"}},
+		{filter: "gitlab.com::owner/repo#12", want: []string{"other-host"}},
+		{filter: "forge.example::owner/repo#12", want: []string{}},
+		{filter: "github.com::owner/repo#3", want: []string{}},
 		{filter: "owner/repo#13", want: []string{}},
 
 		{filter: "owner/missing", want: []string{}},
@@ -73,7 +73,7 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 func TestParsePRFilterRejectsMalformedValues(t *testing.T) {
 	for _, value := range []string{
 		"repo-without-owner", "owner/repo#", "owner/repo#zero",
-		"https://github.com/owner/repo",
+		"https://github.com/owner/repo", "::owner/repo", "github.com::repo",
 	} {
 		_, err := ParsePRFilter(value)
 		assert.Error(t, err, value)
@@ -661,11 +661,86 @@ func TestParsePRFilterRepositoryPaths(t *testing.T) {
 	}{
 		{"group/subgroup/repo#12", PRFilter{Repository: "group/subgroup/repo", Number: 12}},
 		{"owner.name/repo", PRFilter{Repository: "owner.name/repo"}},
-		{" GITLAB.COM/group/subgroup/repo#12 ", PRFilter{Host: "gitlab.com", Repository: "group/subgroup/repo", Number: 12}},
-		{"forge.example:8443/owner/repo", PRFilter{Host: "forge.example:8443", Repository: "owner/repo"}},
+		{"my.org/sub/repo#12", PRFilter{Repository: "my.org/sub/repo", Number: 12}},
+		{" GITLAB.COM::group/subgroup/repo#12 ", PRFilter{Host: "gitlab.com", Repository: "group/subgroup/repo", Number: 12}},
+		{"forge::owner/repo", PRFilter{Host: "forge", Repository: "owner/repo"}},
+		{"forge.example:8443::owner/repo", PRFilter{Host: "forge.example:8443", Repository: "owner/repo"}},
 	} {
 		got, err := ParsePRFilter(tt.value)
 		require.NoError(t, err)
 		assert.Equal(t, tt.want, got)
 	}
+}
+
+func TestSessionExternalParentWaitsForParentArrival(t *testing.T) {
+	for _, beforeWorker := range []bool{false, true} {
+		t.Run(fmt.Sprintf("before-worker=%t", beforeWorker), func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			if !beforeWorker {
+				insertSession(t, d, "worker", "proj")
+			}
+			link, err := d.SetSessionExternalParent(ctx, "worker", "manager")
+			require.NoError(t, err)
+			assert.False(t, link.Applied)
+			assert.False(t, link.Changed)
+			insertSession(t, d, "worker", "proj")
+			require.NoError(t, d.LinkSubagentSessions())
+			worker, err := d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			assert.Nil(t, worker.ParentSessionID)
+			assert.Empty(t, worker.RelationshipType)
+			assert.Equal(t, []string{"worker"}, listSortedIDs(t, d, SessionFilter{}))
+			link, err = d.GetSessionExternalParent(ctx, "worker")
+			require.NoError(t, err)
+			assert.Equal(t, "manager", link.ParentSessionID)
+			assert.False(t, link.Applied)
+
+			_, err = d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_pending_parent
+				BEFORE UPDATE OF parent_session_id ON sessions
+				WHEN NEW.id = 'worker' AND NEW.parent_session_id = 'manager'
+				BEGIN SELECT RAISE(ABORT, 'pending parent recompute failed'); END`)
+			require.NoError(t, err)
+			err = d.UpsertSession(ctx, Session{ID: "manager", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1})
+			require.ErrorContains(t, err, "pending parent recompute failed")
+			manager, err := d.GetSession(ctx, "manager")
+			require.NoError(t, err)
+			assert.Nil(t, manager, "failed child recomputation must roll back parent arrival")
+			worker, err = d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			assert.Nil(t, worker.ParentSessionID)
+			_, err = d.getWriter().ExecContext(ctx, "DROP TRIGGER fail_pending_parent")
+			require.NoError(t, err)
+
+			insertSession(t, d, "manager", "proj")
+			worker, err = d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			require.NotNil(t, worker.ParentSessionID)
+			assert.Equal(t, "manager", *worker.ParentSessionID)
+			assert.Equal(t, "subagent", worker.RelationshipType)
+			link, err = d.GetSessionExternalParent(ctx, "worker")
+			require.NoError(t, err)
+			assert.True(t, link.Applied)
+		})
+	}
+}
+
+func TestClearLauncherParentAfterParentDisappears(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "manager", "proj")
+	insertSession(t, d, "worker", "proj")
+	_, err := d.SetSessionExternalParent(t.Context(), "worker", "manager")
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'manager'")
+	require.NoError(t, err)
+	link, err := d.GetSessionExternalParent(t.Context(), "worker")
+	require.NoError(t, err)
+	assert.False(t, link.Applied)
+	link, err = d.ClearSessionExternalParent(t.Context(), "worker")
+	require.NoError(t, err)
+	assert.True(t, link.Changed)
+	worker, err := d.GetSession(t.Context(), "worker")
+	require.NoError(t, err)
+	assert.Nil(t, worker.ParentSessionID)
+	assert.Empty(t, worker.RelationshipType)
 }

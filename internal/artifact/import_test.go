@@ -26,6 +26,8 @@ func TestArtifactImportKeepsLauncherParentEditable(t *testing.T) {
 			seedSession(t, source, "worker", "project", func(s *db.Session) {
 				s.SessionKind, s.RelationshipType = kind, relationship
 			})
+			seedSession(t, source, "manager-a", "project")
+			seedSession(t, source, "manager-b", "project")
 			store := newTestArtifactStore(t)
 			exportHash := func() string {
 				t.Helper()
@@ -50,6 +52,7 @@ func TestArtifactImportKeepsLauncherParentEditable(t *testing.T) {
 			require.NotNil(t, worker)
 			assert.Nil(t, worker.ParentSessionID)
 			assert.Equal(t, relationship, worker.RelationshipType)
+			seedSession(t, destination, "manager-c", "project")
 			link, err := destination.SetSessionExternalParent(t.Context(), id, "manager-c")
 			require.NoError(t, err)
 			assert.True(t, link.Applied)

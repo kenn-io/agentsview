@@ -169,3 +169,18 @@ func TestSessionAnnotationWritesUnavailableOnReadOnlyStore(t *testing.T) {
 	w = te.put(t, "/api/v1/sessions/any/parent", `{"parent_session_id":"p"}`)
 	assertStatus(t, w, http.StatusNotImplemented)
 }
+
+func TestPendingLauncherParentKeepsWorkerVisible(t *testing.T) {
+	te := setup(t)
+	seedAnnotatedSession(t, te, "worker", nil)
+	w := te.put(t, "/api/v1/sessions/worker/parent", `{"parent_session_id":"manager"}`)
+	assertStatus(t, w, http.StatusOK)
+	assert.False(t, decode[db.SessionExternalParent](t, w).Applied)
+	assert.Equal(t, []string{"worker"}, listedSessionIDs(t, te, nil))
+	seedAnnotatedSession(t, te, "manager", nil)
+	worker, err := te.db.GetSession(t.Context(), "worker")
+	require.NoError(t, err)
+	require.NotNil(t, worker.ParentSessionID)
+	assert.Equal(t, "manager", *worker.ParentSessionID)
+	assert.Equal(t, []string{"manager"}, listedSessionIDs(t, te, nil))
+}

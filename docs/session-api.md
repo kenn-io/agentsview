@@ -324,7 +324,7 @@ therefore appear on both dates.
 | `--min-tool-failures` | `min_tool_failures` | int; `0` is a meaningful filter                                                                                                                                                   |
 | `--has-secret`        | `has_secret`        | bool — only sessions with at least one definite [secret finding](#secret-scanning)                                                                                                |
 | `--label`             | `label`             | repeatable; exact label match, every listed label required                                                                                                                        |
-| `--pr`                | `pr`                | `owner/repo`, `owner/repo#123`, or `github.com/owner/repo#123`; see [Pull request links](#pull-request-links)                                                                              |
+| `--pr`                | `pr`                | `owner/repo`, `owner/repo#123`, or `github.com::owner/repo#123`; see [Pull request links](#pull-request-links)                                                                              |
 | `--sort`              | `order_by`          | comma-separated keys; optional `:asc` / `:desc` suffix per key                                                                                                                    |
 | `--reverse`, `-r`     | `descending`        | flips the default direction for unsuffixed sort keys                                                                                                                              |
 | `--cursor`            | `cursor`            | opaque string from prior response                                                                                                                                                 |
@@ -625,10 +625,11 @@ and git branch.
 
 Filter by pull request with `session list --pr` or the `pr` query parameter.
 The value is `owner/repo` for any pull request in that repository,
-`owner/repo#123` for one pull request, or `github.com/owner/repo#123` to
+`owner/repo#123` for one pull request, or `github.com::owner/repo#123` to
 restrict it to a host. Matching ignores case. Omitting the host matches any
-host, including nested repository paths such as `group/subgroup/repo`. A host
-prefix contains a dot or port separator.
+host, including nested repository paths such as `group/subgroup/repo`.
+Separate a host from the repository with `::`; dotted group names such as
+`my.org/sub/repo` remain hostless.
 
 #### Filtering by label or pull request
 
@@ -704,8 +705,8 @@ The API is `PUT /api/v1/sessions/{id}/parent` with
 removes the link. The body accepts only `parent_session_id`;
 `relationship_type` is rejected, and links always record `subagent`.
 
-A launched worker is delegated work, so the link always makes it a subagent of
-the launching session, and the response reports `relationship_type` as
+An applied link makes the worker a subagent of the launching session, and
+the response reports `relationship_type` as
 `subagent`. The worker nests under that session in the sidebar, and
 `session usage` includes its cost in the launcher's total. The response also
 reports `session_found` and `applied`.
@@ -717,7 +718,9 @@ reports `session_found` and `applied`.
   and setting or clearing launcher links.
   When the transcript parent or loop that blocked it goes away, the session
   goes back under the linked parent.
-- The session does not have to exist yet; the link applies when sync imports it.
+- Either session may be missing when the link is recorded. It stays pending
+  with `applied=false` until both rows exist. A pending launcher link leaves
+  the worker's parent and classification unchanged.
 - The link is stored apart from the transcript and survives reparses and full
   resyncs. Mirrors receive the resulting parent on push.
 - A session cannot be its own parent, and a link that would make a session its

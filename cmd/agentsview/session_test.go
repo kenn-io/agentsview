@@ -713,7 +713,7 @@ func TestPrintSessionParentHumanUnapplied(t *testing.T) {
 	printSessionParentHuman(&out, "worker", &db.SessionExternalParent{
 		ParentSessionID: "manager", RelationshipType: "subagent", SessionFound: true,
 	}, false)
-	assert.Contains(t, out.String(), "note: link stored but not applied; a transcript parent or spawning session outranks it, or it would form a loop")
+	assert.Contains(t, out.String(), "note: link stored but not applied; the parent may not be synced yet, a transcript parent or spawning session outranks it, or it would form a loop")
 	assert.NotContains(t, out.String(), "transcript names")
 }
 
@@ -2495,4 +2495,10 @@ func TestLooksLikePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrintSessionParentHumanClearAbsent(t *testing.T) {
+	var out bytes.Buffer
+	printSessionParentHuman(&out, "worker", &db.SessionExternalParent{}, true)
+	assert.Equal(t, "worker: no launcher parent to remove\n", out.String())
 }
