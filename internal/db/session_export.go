@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const sessionExportOrder = "last_activity_at DESC, id ASC"
@@ -1257,9 +1258,11 @@ func attachSessionExportPlanUsage(
 		p := byID[rows[i].ID]
 		rows[i].PlanUsage = p.PlanUsageView()
 		rows[i].CaptureCoverage = p.CaptureCoverageView()
-		// A plan-only session's usage is billed as plan usage, so it has
-		// no token or cost figures to export, not zero ones.
-		if p != nil && rows[i].ModelUsage != nil && len(rows[i].ModelUsage.Models) == 0 {
+		// A codex-cloud session without usage events is billed as plan
+		// usage, so it has no token or cost figures to export, not zero
+		// ones. That holds before its first plan usage row is stored too.
+		planOnly := p != nil || rows[i].Agent == string(parser.AgentCodexCloud)
+		if planOnly && rows[i].ModelUsage != nil && len(rows[i].ModelUsage.Models) == 0 {
 			rows[i].ModelUsage = nil
 		}
 	}
