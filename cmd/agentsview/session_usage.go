@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -420,13 +422,24 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 		sanitizeTerminal(out.SessionID))
 	fmt.Fprintf(w, "%s %s\n", label("Agent"),
 		sanitizeTerminal(out.Agent))
-	fmt.Fprintf(w, "%s %d\n", label("Output"), out.TotalOutputTokens)
-	fmt.Fprintf(w, "%s %d\n", label("Peak ctx"), out.PeakContextTokens)
+	// A Codex cloud session that live capture never saw has only plan
+	// usage; zeros would read as a session that used nothing.
+	planOnly := out.Agent == string(parser.AgentCodexCloud) && !out.HasTokenData && !out.HasCost
+	if planOnly {
+		fmt.Fprintf(w, "%s plan usage\n", label("Output"))
+		fmt.Fprintf(w, "%s plan usage\n", label("Peak ctx"))
+	} else {
+		fmt.Fprintf(w, "%s %d\n", label("Output"), out.TotalOutputTokens)
+		fmt.Fprintf(w, "%s %d\n", label("Peak ctx"), out.PeakContextTokens)
+	}
 	if out.SubagentCount > 0 {
 		fmt.Fprintf(w, "%s %d (included)\n", label("Subagents"),
 			out.SubagentCount)
 	}
-	if out.HasCost {
+	switch {
+	case planOnly:
+		fmt.Fprintf(w, "%s plan usage\n", label("Cost"))
+	case out.HasCost:
 		models := strings.Join(out.Models, ", ")
 		prefix := "~"
 		if out.CostSource == export.CostSourceReported {
@@ -438,10 +451,10 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 		}
 		fmt.Fprintf(w, "%s %s%s%s\n", label("Cost"), prefix,
 			money.FormatUSD(out.Cost, money.DisplayCents), suffix)
-	} else if len(out.UnpricedModels) > 0 {
+	case len(out.UnpricedModels) > 0:
 		fmt.Fprintf(w, "%s n/a (unpriced: %s)\n", label("Cost"),
 			sanitizeTerminal(strings.Join(out.UnpricedModels, ", ")))
-	} else {
+	default:
 		fmt.Fprintf(w, "%s n/a\n", label("Cost"))
 	}
 	if out.AICredits > 0 {
@@ -489,13 +502,13 @@ func planUsageLine(agent string, plan *db.PlanUsageView) string {
 	}
 	var parts []string
 	if plan.WeeklyPercent != nil {
-		parts = append(parts, fmt.Sprintf("%g%% of weekly limit", *plan.WeeklyPercent))
+		parts = append(parts, planFigure(*plan.WeeklyPercent)+"% of weekly limit")
 	}
 	if plan.FiveHourPercent != nil {
-		parts = append(parts, fmt.Sprintf("%g%% of 5-hour limit", *plan.FiveHourPercent))
+		parts = append(parts, planFigure(*plan.FiveHourPercent)+"% of 5-hour limit")
 	}
 	if plan.Credits != nil {
-		parts = append(parts, *plan.Credits+" credits")
+		parts = append(parts, planCredits(*plan.Credits)+" credits")
 	}
 	line := strings.Join(parts, ", ") + asOfLocal(plan.DataAsOf)
 	if plan.DataStatus == "partial" {
@@ -505,6 +518,27 @@ func planUsageLine(agent string, plan *db.PlanUsageView) string {
 		return "still updating: " + line
 	}
 	return line
+}
+
+// planFigure rounds a plan usage percentage or credit amount to two
+// decimal places. A nonzero amount that rounds to zero prints as "<0.01",
+// so a small share never reads as none.
+func planFigure(v float64) string {
+	rounded := math.Round(v*100) / 100
+	if rounded == 0 && v > 0 {
+		return "<0.01"
+	}
+	return strconv.FormatFloat(rounded, 'f', -1, 64)
+}
+
+// planCredits formats OpenAI's decimal credits string, such as "0E-10",
+// like a percentage. A string that is not a number prints as sent.
+func planCredits(credits string) string {
+	v, err := strconv.ParseFloat(credits, 64)
+	if err != nil {
+		return credits
+	}
+	return planFigure(v)
 }
 
 // captureCoverageLine describes live token capture for a session, "" when
