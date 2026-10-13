@@ -537,9 +537,15 @@ func (m *Monitor) flushPending() {
 }
 
 // ended handles a connection the server or the network closed. A token
-// refresh request makes the home wait and ends every join through it.
+// refresh request makes the home wait and ends every join through it. A
+// message the monitor cannot read stops capture, as unreadable
+// notification params do; joining again would only repeat the resume.
 func (m *Monitor) ended(j *join) {
 	err := j.conn.Err()
+	if errors.Is(err, ErrProtocolChange) {
+		_ = m.stopCapture(j.key, Redact(err, j.login.Token)) // stopCapture returns no error today
+		return
+	}
 	if !errors.Is(err, ErrRefreshRequested) {
 		m.Log.Printf("codex-cloud: thread %s: joined connection ended: %v; joining again on a later run if it still runs",
 			j.threadID, Redact(err, j.login.Token))
