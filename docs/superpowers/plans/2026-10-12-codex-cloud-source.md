@@ -1228,7 +1228,7 @@ waiting files).
       (descendants file, waiting file, late-parent move, "counted under" records
       via the caller).
 
-- [ ] **Step 1: Write failing tests** `TestQueryUsageRequestShape`,
+- [x] **Step 1: Write failing tests** `TestQueryUsageRequestShape`,
   `TestQueryUsageNoRedirect`, `TestQueryUsageCreditsExponent`,
   `TestNestedDescendantsGroupedUnderRoot`,
   `TestLateParentMovesChildAndGrandchildren`,
@@ -1236,13 +1236,13 @@ waiting files).
   whose parent is never listed stays its own root in the parent's waiting
   file).
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): query plan usage per root"`
 
 ### Task 20: Plan usage scheduling, settling, and outcome records
@@ -1288,7 +1288,7 @@ Spec: Plan usage (Fetching, Settling, outcome records).
       `auth.json`, or one hour passes.
     - Dedup of plan records runs after `commitThread`'s recovery step.
 
-- [ ] **Step 1: Write failing tests** for every Plan usage case in the spec's
+- [x] **Step 1: Write failing tests** for every Plan usage case in the spec's
   Testing list (budget, settling, refresh timing including `data_as_of`
   earlier than the last attempt, left-out, stale outcome, 401 home fallback,
   403/404, 429, pending re-entry, oversized group at 999 and 1,000
@@ -1297,13 +1297,13 @@ Spec: Plan usage (Fetching, Settling, outcome records).
   usage while the thread host waits, a crash after a row append with a newer
   outcome recovered).
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS. Extend `TestTokenCanary` with plan usage.
+- [x] **Step 4: Run**; PASS. Extend `TestTokenCanary` with plan usage.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): schedule and record plan usage"`
 
 ### Task 21: Parse plan usage records
