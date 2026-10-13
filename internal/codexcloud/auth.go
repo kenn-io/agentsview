@@ -85,6 +85,21 @@ func DiscoverHomes(getenv func(string) string, userHome string, configured []str
 	return homes
 }
 
+// LoginReadError is a Codex home whose login could not be read at all.
+// Message is the status text; it never quotes file content, which can
+// hold tokens or other secrets.
+type LoginReadError struct {
+	Message string
+	err     error
+}
+
+func (e *LoginReadError) Error() string { return e.err.Error() }
+func (e *LoginReadError) Unwrap() error { return e.err }
+
+// credentialStores are the cli_auth_credentials_store values Codex
+// accepts.
+const credentialStores = `"file", "keyring", "auto", or "ephemeral"`
+
 // ReadLogin reads a home's ChatGPT login. It reads auth.json only in the
 // file and auto credential modes, because Codex ignores that file in the
 // others and a leftover copy is stale. The ID token is decoded in memory
@@ -102,9 +117,12 @@ func ReadLogin(home string) (Login, HomeState, error) {
 		return login, HomeEphemeral, nil
 	case "file", "auto":
 	default:
-		return login, HomeSignedOut, fmt.Errorf(
-			"codex home %s: unknown cli_auth_credentials_store %q", home, store,
-		)
+		return login, HomeSignedOut, &LoginReadError{
+			Message: fmt.Sprintf("This Codex home's config.toml sets cli_auth_credentials_store to %q, "+
+				"which AgentsView does not know. Use %s.", store, credentialStores),
+			err: fmt.Errorf("codex home %s: unknown cli_auth_credentials_store %q; use %s",
+				home, store, credentialStores),
+		}
 	}
 
 	path := filepath.Join(home, "auth.json")
@@ -117,7 +135,11 @@ func ReadLogin(home string) (Login, HomeState, error) {
 		return login, HomeSignedOut, nil
 	}
 	if err != nil {
-		return login, HomeSignedOut, fmt.Errorf("codex home %s: read auth.json: %w", home, err)
+		return login, HomeSignedOut, &LoginReadError{
+			Message: "AgentsView could not read this Codex home's auth.json. Check that you can read the file, " +
+				"or run `codex login` to write it again. The daemon log has the details.",
+			err: fmt.Errorf("codex home %s: read auth.json: %w", home, err),
+		}
 	}
 	if statErr == nil {
 		login.AuthModTime = info.ModTime()
@@ -131,7 +153,10 @@ func ReadLogin(home string) (Login, HomeState, error) {
 	}
 	if err := json.Unmarshal(data, &auth); err != nil {
 		// The decoder's message can quote file content, which holds tokens.
-		return login, HomeSignedOut, fmt.Errorf("codex home %s: auth.json is not valid JSON", home)
+		return login, HomeSignedOut, &LoginReadError{
+			Message: "This Codex home's auth.json is not valid JSON. Run `codex login` to write it again.",
+			err:     fmt.Errorf("codex home %s: auth.json is not valid JSON", home),
+		}
 	}
 	if auth.Tokens == nil || strings.TrimSpace(auth.Tokens.AccessToken) == "" {
 		if store == "auto" {
@@ -156,7 +181,13 @@ func credentialStore(home string) (string, error) {
 	}
 	path := filepath.Join(home, "config.toml")
 	if _, err := toml.DecodeFile(path, &cfg); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("codex home %s: read config.toml: %w", home, err)
+		// The decoder's message can quote the file, which may hold
+		// secrets, so only the log gets it.
+		return "", &LoginReadError{
+			Message: "AgentsView could not read this Codex home's config.toml, so it cannot tell where Codex " +
+				"keeps the login. Fix the file; the daemon log has the details.",
+			err: fmt.Errorf("codex home %s: read config.toml: %w", home, err),
+		}
 	}
 	if cfg.Store == "" {
 		return "file", nil

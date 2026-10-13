@@ -92,13 +92,13 @@ func (s *Syncer) Run(ctx context.Context) error {
 		switch {
 		case err != nil:
 			s.Log.Printf("codex-cloud: %v", err)
-			s.homeRow(gates, home, FailSignedOut)
+			s.homeRow(gates, home, loginErrorMessage(err))
 		case state == HomeKeyring:
-			s.homeRow(gates, home, FailKeyring)
+			s.homeRow(gates, home, Message(FailKeyring, time.Time{}))
 		case state == HomeEphemeral:
-			s.homeRow(gates, home, FailEphemeral)
+			s.homeRow(gates, home, Message(FailEphemeral, time.Time{}))
 		case state == HomeSignedOut:
-			s.homeRow(gates, home, FailSignedOut)
+			s.homeRow(gates, home, Message(FailSignedOut, time.Time{}))
 		case !s.Waits.HomeReady(home, login.AuthModTime):
 		default:
 			// The home's row, if any, is stale; a failed dial sets it again.
@@ -146,8 +146,17 @@ func loginHomes(logins []Login) []string {
 	return homes
 }
 
-func (s *Syncer) homeRow(gates Gates, home string, f Failure) {
-	message := Message(f, time.Time{})
+// loginErrorMessage is the status text for a home whose login could not
+// be read. Signing in again does not fix every such error, such as a bad
+// config.toml, so it is not the signed-out message.
+func loginErrorMessage(err error) string {
+	if readErr, ok := errors.AsType[*LoginReadError](err); ok {
+		return readErr.Message
+	}
+	return "AgentsView could not read this Codex home's login. The daemon log has the details."
+}
+
+func (s *Syncer) homeRow(gates Gates, home, message string) {
 	if len(gates.Homes) > 0 && home != gates.Homes[0] {
 		// A plain `codex login` signs in the default home, not this one.
 		message = strings.ReplaceAll(message, "`codex login`", "`CODEX_HOME="+home+" codex login`")
@@ -221,7 +230,7 @@ func (p *pass) dialFirst(ctx context.Context, logins []Login) error {
 		}
 		p.Log.Printf("codex-cloud: thread host refused the login in %s: %v", login.Home, Redact(err, login.Token))
 		p.Waits.RecordHome(login.Home, f, login.AuthModTime)
-		p.homeRow(p.gates, login.Home, f)
+		p.homeRow(p.gates, login.Home, Message(f, time.Time{}))
 		last = err
 	}
 	return &passEndError{failure: FailNone, err: last}
@@ -716,7 +725,7 @@ func (p *pass) threadEnd(err error) bool {
 // pass uses the next home on the key.
 func (p *pass) homeEnd(f Failure) error {
 	p.Waits.RecordHome(p.login.Home, f, p.login.AuthModTime)
-	p.homeRow(p.gates, p.login.Home, f)
+	p.homeRow(p.gates, p.login.Home, Message(f, time.Time{}))
 	p.Status.Delete(string(p.key))
 	return nil
 }
