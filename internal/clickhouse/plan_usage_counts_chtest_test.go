@@ -47,6 +47,7 @@ func TestPlanUsageCountsReadOnlyPlanSessions(t *testing.T) {
 	counts, err := store.GetPlanUsageSessionCounts(ctx, db.UsageFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, counts.PlanOnly, "beta has plan usage and no usage events")
+	require.Positive(t, read.Load(), "the server must report progress, or the bound below proves nothing")
 	assert.Less(t, read.Load(), uint64(bigMessages/2),
 		"the query must not scan the messages of sessions without plan usage")
 }
