@@ -106,17 +106,19 @@ func TestCodexCloudSettings(t *testing.T) {
 
 func TestCodexCloudErrorMessages(t *testing.T) {
 	path := filepath.FromSlash("/data/config.toml")
+	const off = " Codex cloud import stays off until this is fixed."
 	unknown := &CodexCloudConfigError{Path: path, Key: "dirs", Unknown: true}
 	assert.Equal(t,
-		path+" has an unknown setting dirs under [agents.codex-cloud]. Remove it or correct its name. Codex cloud import is off until then.",
+		path+` has an unknown setting "dirs" under [agents.codex-cloud]. Remove it or correct its name.`+off,
 		unknown.Error())
 	bad := &CodexCloudConfigError{Path: path, Key: "enabled", Reason: "expected true or false"}
 	assert.Equal(t,
-		path+" has an invalid value for enabled under [agents.codex-cloud]: expected true or false. Codex cloud import is off until then.",
+		path+" has an invalid value for enabled under [agents.codex-cloud]: expected true or false."+off,
 		bad.Error())
-	table := &CodexCloudConfigError{Path: path, Reason: "expected a table"}
+	table := &CodexCloudConfigError{Path: path}
 	assert.Equal(t,
-		path+" has an invalid [agents.codex-cloud] entry: expected a table. Codex cloud import is off until then.",
+		path+" sets agents.codex-cloud to a single value, not a table of settings. "+
+			"Write the settings under an [agents.codex-cloud] section."+off,
 		table.Error())
 }
 
@@ -126,7 +128,18 @@ func TestCodexCloudNonTableEntry(t *testing.T) {
 	cfg, err := LoadMinimal()
 	require.NoError(t, err)
 	require.NotNil(t, cfg.CodexCloud.Err)
-	assert.Contains(t, cfg.CodexCloud.Err.Error(), "invalid [agents.codex-cloud] entry: expected a table")
+	assert.Contains(t, cfg.CodexCloud.Err.Error(), "not a table of settings")
+}
+
+// An empty quoted key is valid TOML; it is an unknown setting, not a
+// table problem.
+func TestCodexCloudEmptyKeyIsUnknown(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeRawConfig(t, dir, "[agents.codex-cloud]\n\"\" = true\n")
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.CodexCloud.Err)
+	assert.Contains(t, cfg.CodexCloud.Err.Error(), `has an unknown setting "" under [agents.codex-cloud]`)
 }
 
 // A clear-text URL on a foreign host needs a new host, not just a new scheme,
@@ -179,4 +192,13 @@ func TestSessionSourcesRejectCodexCloud(t *testing.T) {
 		filepath.ToSlash(filepath.Join(dir, "elsewhere"))+"\"\n")
 	_, err := LoadMinimal()
 	require.ErrorContains(t, err, "codex-cloud")
+}
+
+func TestCodexCloudWrongSchemeNamesTheScheme(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeRawConfig(t, dir, "[agents.codex-cloud]\nendpoint = \"https://chatgpt.com/\"\n")
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.CodexCloud.Err)
+	assert.Equal(t, "expected a URL that starts with wss://", cfg.CodexCloud.Err.Reason)
 }
