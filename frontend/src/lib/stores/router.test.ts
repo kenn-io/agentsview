@@ -442,12 +442,14 @@ describe("RouterStore", () => {
       pr: "acme/widgets#42",
     });
 
-    expect(
-      store.navigate("sessions", {
-        label: "ticket=ABC-123\nrole=reviewer, lead",
-        pr: "acme/widgets#42",
-      }),
-    ).toBe(false);
+    expect(new URLSearchParams(window.location.search).getAll("label")).toEqual([
+      "ticket=ABC-123",
+      "role=reviewer, lead",
+    ]);
+    expect(parsePath().params).toEqual({
+      label: "ticket=ABC-123\nrole=reviewer, lead",
+      pr: "acme/widgets#42",
+    });
   });
 
   it("navigate with params builds query string", () => {
