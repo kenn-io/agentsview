@@ -181,15 +181,16 @@ func providerSourcePath(source parser.SourceRef) (string, bool) {
 	return "", false
 }
 
-// usageExitCode classifies a SessionUsage into an exit code: 2 when
-// the session is not in the DB, 0 when token data OR cost is present,
-// 3 when the session exists but has neither. Cost-only sessions
-// (e.g. Hermes) return 0 so callers do not discard useful cost.
-func usageExitCode(u *db.SessionUsage) int {
-	if u == nil {
+// usageExitCode classifies a usage document into an exit code: 2 when
+// the session is not in the DB, 0 when it reports token data, cost, or
+// plan usage figures, 3 when the session exists but has none of them.
+// Cost-only sessions (e.g. Hermes) and plan-only codex-cloud sessions
+// return 0 so callers do not discard what is printed.
+func usageExitCode(out *sessionUsageOutput) int {
+	if out == nil {
 		return tokenUseExitNotFound
 	}
-	if u.HasTokenData || u.HasCost {
+	if out.HasTokenData || out.HasCost || planFiguresShown(out.Plan) {
 		return tokenUseExitOK
 	}
 	return tokenUseExitNoTokenData
