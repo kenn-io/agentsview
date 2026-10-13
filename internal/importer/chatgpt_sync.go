@@ -77,6 +77,17 @@ func waitChatGPTDetailGap(ctx context.Context) error {
 	}
 }
 
+// chatGPTMaxConsecutiveDetailFailures stops a sync whose detail requests keep failing.
+const chatGPTMaxConsecutiveDetailFailures = 3
+
+// chatGPTTransportError marks a failure to reach the browser at all, such as a
+// disconnected native host, as opposed to an HTTP status from ChatGPT.
+type chatGPTTransportError struct{ err error }
+
+func (e *chatGPTTransportError) Error() string { return e.err.Error() }
+
+func (e *chatGPTTransportError) Unwrap() error { return e.err }
+
 type chatGPTHTTPError struct{ status int }
 
 func (e *chatGPTHTTPError) Error() string {
@@ -94,6 +105,7 @@ func SyncChatGPT(ctx context.Context, store interface {
 }, fetch func(context.Context, string) (ClaudeAIResponse, error), cb *ImportCallbacks, machine ...string,
 ) (stats ImportStats, retErr error) {
 	seen := make(map[string]struct{})
+	detailFailures := 0
 	for offset := 0; ; {
 		raw, err := fetchChatGPT(ctx, fetch, chatGPTRequest(chatGPTListRequest, "", offset))
 		if err != nil {
@@ -179,10 +191,19 @@ func SyncChatGPT(ctx context.Context, store interface {
 					cb.progress(stats)
 					continue
 				}
+				if transport, ok := errors.AsType[*chatGPTTransportError](fetchErr); ok {
+					// The browser is gone, so every further request would fail the same way.
+					return stats, transport.err
+				}
+				detailFailures++
+				if detailFailures >= chatGPTMaxConsecutiveDetailFailures {
+					return stats, fmt.Errorf("ChatGPT detail requests failed %d times in a row; sync stopped: %w", detailFailures, fetchErr)
+				}
 				stats.record(id, importSkipped, fetchErr)
 				cb.progress(stats)
 				continue
 			}
+			detailFailures = 0
 			result, err := parser.ParseChatGPTConversation(detail)
 			if err == nil && result.Session.ID != id {
 				err = errors.New("conversation ID differs from requested UUID")
@@ -276,7 +297,7 @@ func fetchChatGPT(ctx context.Context, fetch func(context.Context, string) (Clau
 	body, err := backoff.Retry(ctx, func() ([]byte, error) {
 		response, err := fetch(ctx, path)
 		if err != nil {
-			return nil, backoff.Permanent(err)
+			return nil, backoff.Permanent(&chatGPTTransportError{err: err})
 		}
 		if len(response.Body) > ChatGPTResponseLimit {
 			return nil, backoff.Permanent(ErrChatGPTResponseTooLarge)

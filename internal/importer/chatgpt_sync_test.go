@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -222,4 +223,42 @@ func TestCompareChatGPTPrefixReconcilesImages(t *testing.T) {
 	changed := msg("Here is the graph [image unavailable] and notes.")
 	_, ok = compareChatGPTPrefix([]db.Message{placeholder}, []db.Message{changed})
 	assert.False(t, ok, "different text must still diverge")
+}
+
+// chatGPTPopulatedList returns a full first page of distinct conversation IDs.
+func chatGPTPopulatedList(t *testing.T) string {
+	t.Helper()
+	items := make([]string, 0, chatGPTPageSize)
+	for i := range chatGPTPageSize {
+		items = append(items, fmt.Sprintf(`{"id":"%08x-0000-4000-8000-000000000000","update_time":1}`, i+1))
+	}
+	return fmt.Sprintf(`{"items":[%s],"total":%d}`, strings.Join(items, ","), len(items))
+}
+
+func TestSyncChatGPTStopsWhenBrowserDisconnects(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	_, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
+		if path == chatGPTRequest(chatGPTListRequest, "", 0) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTPopulatedList(t))}, nil
+		}
+		details++
+		return ClaudeAIResponse{}, errors.New("chrome host not connected")
+	}, nil)
+	require.ErrorContains(t, err, "chrome host not connected")
+	assert.Equal(t, 1, details, "a disconnected browser must stop the run at the first request")
+}
+
+func TestSyncChatGPTStopsAfterRepeatedDetailFailures(t *testing.T) {
+	d := testDB(t)
+	details := 0
+	_, err := SyncChatGPT(t.Context(), d, func(_ context.Context, path string) (ClaudeAIResponse, error) {
+		if path == chatGPTRequest(chatGPTListRequest, "", 0) {
+			return ClaudeAIResponse{Status: 200, Body: []byte(chatGPTPopulatedList(t))}, nil
+		}
+		details++
+		return ClaudeAIResponse{Status: 0, Body: nil}, nil
+	}, nil)
+	require.ErrorContains(t, err, "failed 3 times in a row")
+	assert.Equal(t, chatGPTMaxConsecutiveDetailFailures, details)
 }
