@@ -2,8 +2,9 @@
 //
 // A mirror file holds one thread's fetched records as JSON lines inside
 // zstd frames. Each append writes exactly one frame and syncs it, so a
-// crash can only tear the final frame. Readers ignore a torn tail; the next
-// append truncates it.
+// crash can only tear the final frame. A power loss can also leave that
+// frame zero-filled or failing its checksum. Readers ignore a torn or
+// unreadable final frame; the next append truncates it.
 package mirror
 
 import (
@@ -16,6 +17,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"go.kenn.io/agentsview/internal/zstdframe"
@@ -49,11 +51,12 @@ type AppendResult struct {
 	// offset: frames written by an earlier append whose state was never
 	// saved. With a stored offset of 0 it holds every earlier record.
 	Recovered []Record
-	// Truncated reports that a torn final frame was removed.
+	// Truncated reports that a torn or unreadable final frame was removed.
 	Truncated bool
 }
 
-// Append verifies the frames after storedOffset, truncates a torn tail,
+// Append verifies the frames after storedOffset, truncates a torn or
+// unreadable final frame,
 // and writes records as one frame. A storedOffset of 0, past the end of the
 // file, or not on a frame boundary scans the whole file. Callers serialize
 // appends to one file.
@@ -77,11 +80,11 @@ func Append(path string, storedOffset int64, records []Record) (result AppendRes
 	if err != nil {
 		return AppendResult{}, err
 	}
-	end := layout.End(from)
-	result.Recovered, err = decodeRange(context.Background(), f, from, end)
+	result.Recovered, layout, err = decodeFrames(context.Background(), f, from, layout)
 	if err != nil {
 		return AppendResult{}, err
 	}
+	end := layout.End(from)
 	if layout.Torn {
 		if err := f.Truncate(end); err != nil {
 			return AppendResult{}, fmt.Errorf("truncate torn mirror frame: %w", err)
@@ -90,7 +93,9 @@ func Append(path string, storedOffset int64, records []Record) (result AppendRes
 	}
 	result.Offset = end
 	if len(records) == 0 {
-		if result.Truncated {
+		// The caller saves Offset, so recovered frames from an append that
+		// crashed before its sync must be made durable too.
+		if result.Truncated || len(result.Recovered) > 0 {
 			return result, syncFile(f)
 		}
 		return result, nil
@@ -115,8 +120,8 @@ func Append(path string, storedOffset int64, records []Record) (result AppendRes
 	return result, nil
 }
 
-// ReadAll returns the records in every complete frame. A torn final frame
-// contributes nothing.
+// ReadAll returns the records in every complete frame. A torn or
+// unreadable final frame contributes nothing.
 func ReadAll(ctx context.Context, path string) ([]Record, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -127,7 +132,8 @@ func ReadAll(ctx context.Context, path string) ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decodeRange(ctx, f, from, layout.End(from))
+	records, _, err := decodeFrames(ctx, f, from, layout)
+	return records, err
 }
 
 // inspect inspects from storedOffset when it is a usable frame boundary
@@ -150,7 +156,7 @@ func inspect(f *os.File, storedOffset int64) (int64, zstdframe.Layout, error) {
 			return 0, zstdframe.Layout{}, fmt.Errorf("inspect mirror file: %w", err)
 		}
 	}
-	full, err := zstdframe.Inspect(f, size, 0)
+	full, err := walk(f, size, 0)
 	if err != nil {
 		return 0, zstdframe.Layout{}, fmt.Errorf("inspect mirror file: %w", err)
 	}
@@ -162,6 +168,124 @@ func inspect(f *os.File, storedOffset int64) (int64, zstdframe.Layout, error) {
 		}
 	}
 	return 0, full, nil
+}
+
+// walk inspects the frames from offset from. Bytes after the last complete
+// frame that fail inspection count as a torn tail when they look like an
+// interrupted frame write; any other format failure is an error.
+func walk(f *os.File, size, from int64) (zstdframe.Layout, error) {
+	layout, formatErr, err := completeFrames(f, size, from)
+	if err != nil || formatErr == nil {
+		return layout, err
+	}
+	torn, err := interruptedTail(f, layout.End(from), size)
+	if err != nil {
+		return zstdframe.Layout{}, err
+	}
+	if !torn {
+		return zstdframe.Layout{}, formatErr
+	}
+	layout.Size = size
+	layout.Torn = true
+	return layout, nil
+}
+
+// completeFrames returns the complete frames from offset from up to the
+// first bytes that fail inspection, along with that failure.
+func completeFrames(f *os.File, size, from int64) (zstdframe.Layout, *zstdframe.FormatError, error) {
+	layout, err := zstdframe.Inspect(f, size, from)
+	formatErr, ok := errors.AsType[*zstdframe.FormatError](err)
+	if !ok {
+		return layout, nil, err
+	}
+	// The walk up to the failing bytes passed once, so it passes again and
+	// reports the frames before them.
+	layout, err = zstdframe.Inspect(f, formatErr.Offset, from)
+	return layout, formatErr, err
+}
+
+// frameMagic is the little-endian zstd frame magic number.
+var frameMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
+
+// interruptedTail reports whether the bytes from start to size look like
+// a frame write cut short by a power loss: they start with zeros or a
+// frame magic, and no complete frame follows them. Corruption followed by
+// a complete frame is not a tail, and neither are bytes that never were a
+// frame.
+func interruptedTail(f *os.File, start, size int64) (bool, error) {
+	tail, err := io.ReadAll(io.NewSectionReader(f, start, size-start))
+	if err != nil {
+		return false, fmt.Errorf("read mirror tail: %w", err)
+	}
+	if len(tail) == 0 || (tail[0] != 0 && !bytes.HasPrefix(tail, frameMagic)) {
+		return false, nil
+	}
+	for searched := 1; ; {
+		index := bytes.Index(tail[searched:], frameMagic)
+		if index < 0 {
+			return true, nil
+		}
+		searched += index
+		layout, _, err := completeFrames(f, size, start+int64(searched))
+		if err != nil {
+			return false, fmt.Errorf("inspect mirror tail: %w", err)
+		}
+		if layout.CompleteFrames > 0 {
+			return false, nil
+		}
+		searched++
+	}
+}
+
+// decodeFrames decodes the complete frames in layout. A final frame that
+// does not decompress, such as one failing its checksum after a power
+// loss, is dropped from the layout and marked torn. A failure in any
+// earlier frame, or a final frame that decompresses but does not decode,
+// is an error.
+func decodeFrames(
+	ctx context.Context, f *os.File, from int64, layout zstdframe.Layout,
+) ([]Record, zstdframe.Layout, error) {
+	records, err := decodeRange(ctx, f, from, layout.End(from))
+	frames := len(layout.FrameEnds)
+	if err == nil || frames == 0 || ctx.Err() != nil {
+		return records, layout, err
+	}
+	lastStart := from
+	if frames > 1 {
+		lastStart = layout.FrameEnds[frames-2]
+	}
+	intact, checkErr := decompresses(f, lastStart, layout.FrameEnds[frames-1])
+	if checkErr != nil {
+		return nil, zstdframe.Layout{}, checkErr
+	}
+	if intact {
+		return nil, zstdframe.Layout{}, err
+	}
+	records, err = decodeRange(ctx, f, from, lastStart)
+	if err != nil {
+		return nil, zstdframe.Layout{}, err
+	}
+	layout.FrameEnds = layout.FrameEnds[:frames-1]
+	layout.CompleteFrames = frames - 1
+	layout.Torn = true
+	return records, layout, nil
+}
+
+// decompresses reports whether the frame from start to end decompresses
+// and passes its content checksum. The frame is read into memory first so
+// a read error is returned rather than mistaken for a bad frame.
+func decompresses(f *os.File, start, end int64) (bool, error) {
+	frame := make([]byte, end-start)
+	if _, err := f.ReadAt(frame, start); err != nil {
+		return false, fmt.Errorf("read mirror frame: %w", err)
+	}
+	decoder, err := zstdframe.NewDecoder(bytes.NewReader(frame))
+	if err != nil {
+		return false, fmt.Errorf("open mirror frame: %w", err)
+	}
+	defer decoder.Close()
+	_, err = io.Copy(io.Discard, decoder)
+	return err == nil, nil
 }
 
 func decodeRange(ctx context.Context, f *os.File, from, end int64) ([]Record, error) {
@@ -217,7 +341,9 @@ func syncDir(dir string) error {
 		return fmt.Errorf("open mirror directory: %w", err)
 	}
 	defer d.Close()
-	if err := d.Sync(); err != nil {
+	if err := d.Sync(); err != nil && runtime.GOOS != "windows" {
+		// Windows cannot sync directory handles. The file sync remains the
+		// durability boundary available there.
 		return fmt.Errorf("sync mirror directory: %w", err)
 	}
 	return nil
