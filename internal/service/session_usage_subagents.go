@@ -11,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // SessionUsageWithSubagents returns rootID's usage with every reachable
@@ -202,6 +203,11 @@ func withDescendantCoverage(
 	for _, descendant := range descendants {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if descendant.Agent != string(parser.AgentCodexCloud) {
+			// Only codex-cloud chats have coverage rows; a remote store
+			// would pay a round trip for each other descendant.
+			continue
 		}
 		p, err := store.GetSessionPlanUsage(ctx, descendant.ID)
 		if err != nil {
