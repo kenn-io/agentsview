@@ -91,10 +91,7 @@ func codexCloudBaselines(recs []mirror.TokenUsageData) []int {
 	baselines := make([]int, len(recs))
 	for i := 1; i < len(recs); i++ {
 		baselines[i] = baselines[i-1]
-		prev, cur := recs[i-1].Total, recs[i].Total
-		if cur.Input < prev.Input || cur.CachedInput < prev.CachedInput ||
-			cur.CacheWriteInput < prev.CacheWriteInput || cur.Output < prev.Output ||
-			cur.ReasoningOutput < prev.ReasoningOutput || cur.Total < prev.Total {
+		if !recs[i].Total.AtLeast(recs[i-1].Total) {
 			baselines[i]++
 		}
 	}

@@ -282,7 +282,7 @@ func TestFailedFinalFlushIsSavedOnTheNextRun(t *testing.T) {
 	env.complete(t, "a", "a-turn-2")
 	env.waitLeft(t, "a")
 	assert.Empty(t, tokenRecords(t, env.records(t, "a")))
-	assert.Contains(t, env.live(t), "could not be saved yet")
+	assert.Contains(t, env.live(t), "not saved yet")
 
 	require.NoError(t, os.Remove(state))
 	require.NoError(t, os.Rename(state+".saved", state))
@@ -293,7 +293,28 @@ func TestFailedFinalFlushIsSavedOnTheNextRun(t *testing.T) {
 	assert.Equal(t, mirror.KindTurnCompleted, records[len(records)-1].Kind)
 	assert.Equal(t, "a-turn-2", env.thread(t, "a").LastHandledTurnID)
 	assert.Equal(t, 1, env.resumes(), "the completed turn is not joined again")
-	assert.NotContains(t, env.live(t), "could not be saved")
+	assert.NotContains(t, env.live(t), "not saved yet")
+}
+
+func TestPendingRecordsAreKeptWhileLiveTokensAreOff(t *testing.T) {
+	env, gates := newDiscoveryEnv(t)
+	j := &join{key: passKey, threadID: "a", id: "join-1"}
+	restore := env.failSaves(t, "a")
+	require.Error(t, env.monitor.flush(passKey, "a", []mirror.Record{liveTokenRecord(t, j, 100, fetchNow)}, ""))
+	gates.set(func(g *Gates) { g.CodexCloud.LiveTokens = false })
+
+	env.discover(t)
+
+	live := env.live(t)
+	assert.Contains(t, live, "live_tokens = false")
+	assert.Contains(t, live, "Token counts for 1 chat are not saved yet")
+	assert.Contains(t, live, "restarting it before a save works loses them")
+
+	restore()
+	gates.set(func(g *Gates) { g.CodexCloud.Present = false })
+	env.discover(t)
+	assert.Equal(t, []int64{100}, tokenTotals(t, env.records(t, "a")),
+		"pending records are saved even when the source is no longer configured")
 }
 
 func TestDiscoverySuccessResetsAccountWait(t *testing.T) {

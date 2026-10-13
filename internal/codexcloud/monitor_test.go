@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -477,6 +479,116 @@ func TestRetriedFlushAppendsRecordsOnce(t *testing.T) {
 		totals[i] = rec.Total.Total
 	}
 	assert.Equal(t, []int64{100, 200, 300}, totals)
+}
+
+// failSaves puts a directory in place of the chat's state file, so every
+// save of the chat fails until the returned function puts the file back.
+func (e *monitorEnv) failSaves(t *testing.T, id string) (restore func()) {
+	t.Helper()
+	state := filepath.Join(e.root, string(passKey), id+".state.json")
+	_, err := os.Stat(state)
+	existed := err == nil
+	if existed {
+		require.NoError(t, os.Rename(state, state+".saved"))
+	}
+	require.NoError(t, os.MkdirAll(state, 0o700))
+	return func() {
+		require.NoError(t, os.Remove(state))
+		if existed {
+			require.NoError(t, os.Rename(state+".saved", state))
+		}
+	}
+}
+
+func tokenTotals(t *testing.T, records []mirror.Record) []int64 {
+	t.Helper()
+	var totals []int64
+	for _, rec := range tokenRecords(t, records) {
+		totals = append(totals, rec.Total.Total)
+	}
+	return totals
+}
+
+func (e *monitorEnv) pendingRecords(id string) int {
+	e.monitor.mu.Lock()
+	defer e.monitor.mu.Unlock()
+	return len(e.monitor.pending[threadKey{passKey, id}].records)
+}
+
+func TestPendingRecordsAreSavedBeforeNewerOnes(t *testing.T) {
+	env := newMonitorEnv(t)
+	m := env.monitor
+	first := &join{key: passKey, threadID: "a", id: "join-1"}
+	second := &join{key: passKey, threadID: "a", id: "join-2"}
+	restore := env.failSaves(t, "a")
+	require.Error(t, m.flush(passKey, "a", []mirror.Record{
+		liveTokenRecord(t, first, 100, fetchNow),
+		liveTokenRecord(t, first, 200, fetchNow.Add(10*time.Second)),
+	}, ""))
+	restore()
+
+	require.NoError(t, m.flush(passKey, "a", []mirror.Record{
+		liveTokenRecord(t, second, 300, fetchNow.Add(time.Minute)),
+	}, ""))
+
+	assert.Equal(t, []int64{100, 200, 300}, tokenTotals(t, env.records(t, "a")))
+	assert.Zero(t, env.pendingRecords("a"))
+}
+
+func TestColdJoinSavesPendingRecordsFirst(t *testing.T) {
+	env := newMonitorEnv(t)
+	j := &join{key: passKey, threadID: "a", id: "join-1"}
+	restore := env.failSaves(t, "a")
+	require.Error(t, env.monitor.flush(passKey, "a", []mirror.Record{liveTokenRecord(t, j, 100, fetchNow)}, "a-turn-1"))
+	restore()
+	env.threads.Set(runningThread("a", "cold"))
+
+	env.join(t, "a")
+
+	assert.Equal(t, []int64{100}, tokenTotals(t, env.records(t, "a")))
+	assert.Equal(t, "a-turn-2", env.thread(t, "a").LastHandledTurnID,
+		"the pending batch's older handled turn does not replace the cold join's")
+}
+
+func TestPendingTokenRecordsStayBounded(t *testing.T) {
+	env := newMonitorEnv(t)
+	m := env.monitor
+	j := &join{key: passKey, threadID: "a", id: "join-1"}
+	restore := env.failSaves(t, "a")
+	at := fetchNow
+	add := func(total int64) {
+		at = at.Add(time.Second)
+		require.Error(t, m.flush(passKey, "a", []mirror.Record{liveTokenRecord(t, j, total, at)}, ""))
+	}
+	for i := range int64(2 * pendingCompactAt) {
+		add((i + 1) * 100)
+	}
+	// The server's counter went back down: the total before it holds
+	// tokens the later records do not.
+	add(50)
+	add(150)
+	assert.LessOrEqual(t, env.pendingRecords("a"), pendingCompactAt)
+	restore()
+
+	require.NoError(t, m.flush(passKey, "a", nil, ""))
+
+	totals := tokenTotals(t, env.records(t, "a"))
+	require.NotEmpty(t, totals)
+	assert.Contains(t, totals, int64(2*pendingCompactAt*100), "the total before the reset is kept")
+	assert.Equal(t, []int64{50, 150}, totals[len(totals)-2:])
+	assert.True(t, slices.IsSorted(totals[:len(totals)-2]), "kept totals stay in order")
+}
+
+func TestRepeatedSaveFailureIsLoggedOnce(t *testing.T) {
+	env := newMonitorEnv(t)
+	j := &join{key: passKey, threadID: "a", id: "join-1"}
+	env.failSaves(t, "a")
+	require.Error(t, env.monitor.flush(passKey, "a", []mirror.Record{liveTokenRecord(t, j, 100, fetchNow)}, ""))
+
+	env.monitor.flushPending()
+	env.monitor.flushPending()
+
+	assert.Equal(t, 1, strings.Count(env.logs.String(), "save token records"))
 }
 
 func TestUnreadableMessageStopsCapture(t *testing.T) {

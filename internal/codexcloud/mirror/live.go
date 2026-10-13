@@ -18,6 +18,14 @@ type TokenCounts struct {
 	Total           int64 `json:"total"`
 }
 
+// AtLeast reports whether no counter in c is below its value in prev. A
+// running total that falls below the previous one means the counter reset.
+func (c TokenCounts) AtLeast(prev TokenCounts) bool {
+	return c.Input >= prev.Input && c.CachedInput >= prev.CachedInput &&
+		c.CacheWriteInput >= prev.CacheWriteInput && c.Output >= prev.Output &&
+		c.ReasoningOutput >= prev.ReasoningOutput && c.Total >= prev.Total
+}
+
 // TokenUsageData is the body of a KindTokenUsage record: one token update
 // seen while joined. Total is the thread's running total; Last is the
 // latest model call. JoinID names the joined connection that saw it.
