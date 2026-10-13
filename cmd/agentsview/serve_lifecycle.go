@@ -217,7 +217,7 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 	}
 	api, err := apiclient.NewHTTPClient(baseURL, authToken, &http.Client{Timeout: codexCloudStatusTimeout})
 	if err != nil {
-		return unavailable("the server address could not be used.")
+		return unavailable(fmt.Sprintf("the server address %s could not be used.", baseURL))
 	}
 	resp, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
 	if resp == nil {
@@ -225,7 +225,7 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 			return unavailable(fmt.Sprintf("the server did not answer within %d seconds.",
 				int(codexCloudStatusTimeout.Seconds())))
 		}
-		return unavailable("the server could not be reached.")
+		return unavailable("the server could not be reached. It may have just stopped; run this command again to check.")
 	}
 	if resp.HTTPResponse != nil {
 		defer resp.HTTPResponse.Body.Close()
@@ -242,7 +242,7 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 		return unavailable("the server did not accept this command's auth token. " +
 			"Check that auth_token in config.toml, or AGENTSVIEW_AUTH_TOKEN, matches the server's.")
 	default:
-		return unavailable(fmt.Sprintf("the server answered with HTTP status %d.", resp.StatusCode))
+		return unavailable(fmt.Sprintf("the server answered with HTTP status %d. The server log may say why.", resp.StatusCode))
 	}
 	var rows []codexcloud.HomeStatus
 	if err := json.Unmarshal(resp.Body, &rows); err != nil {

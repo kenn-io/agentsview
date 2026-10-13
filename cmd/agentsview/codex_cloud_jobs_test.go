@@ -58,11 +58,11 @@ func TestCodexCloudServeStatusLines(t *testing.T) {
 		},
 		{
 			"a refusal does not blame the token", http.StatusForbidden, "secret",
-			"  codex-cloud status unavailable: the server answered with HTTP status 403.",
+			"  codex-cloud status unavailable: the server answered with HTTP status 403. The server log may say why.",
 		},
 		{
 			"another failure names its status", http.StatusInternalServerError, "",
-			"  codex-cloud status unavailable: the server answered with HTTP status 500.",
+			"  codex-cloud status unavailable: the server answered with HTTP status 500. The server log may say why.",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,7 +76,8 @@ func TestCodexCloudServeStatusLines(t *testing.T) {
 	t.Run("an unreachable server says so", func(t *testing.T) {
 		srv := httptest.NewServer(http.NotFoundHandler())
 		srv.Close()
-		assert.Equal(t, []string{"  codex-cloud status unavailable: the server could not be reached."},
+		assert.Equal(t, []string{"  codex-cloud status unavailable: the server could not be reached. " +
+			"It may have just stopped; run this command again to check."},
 			codexCloudStatusLines(t.Context(), srv.URL, ""))
 	})
 }
