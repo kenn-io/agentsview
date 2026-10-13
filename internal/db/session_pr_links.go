@@ -6,8 +6,10 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -30,6 +32,8 @@ func EncodePRLinks(links []PRLink) string {
 	return string(b)
 }
 
+var malformedPRLinksWarning sync.Once
+
 // DecodePRLinks parses the stored text form. Empty or malformed text
 // decodes to nil so one damaged row cannot break a session listing.
 func DecodePRLinks(text string) []PRLink {
@@ -39,6 +43,7 @@ func DecodePRLinks(text string) []PRLink {
 	}
 	var links []PRLink
 	if err := json.Unmarshal([]byte(text), &links); err != nil {
+		malformedPRLinksWarning.Do(func() { log.Print("invalid stored PR-link JSON; links omitted") })
 		return nil
 	}
 	if len(links) == 0 {

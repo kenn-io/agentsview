@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -165,6 +166,68 @@ func TestScopedSpawnLinkRecomputesMovedChildLauncherCycle(t *testing.T) {
 		assert.Nil(t, s.ParentSessionID, id)
 	}
 	assert.ElementsMatch(t, []string{"q", "a", "b"}, listSortedIDs(t, d, SessionFilter{}))
+}
+
+func TestMalformedStoredPRLinksPreserveSessionReads(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "worker", "proj")
+	_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET pr_links = '{' WHERE id = 'worker'")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"worker"}, listSortedIDs(t, d, SessionFilter{}))
+	worker, err := d.GetSession(t.Context(), "worker")
+	require.NoError(t, err)
+	require.NotNil(t, worker)
+	assert.Empty(t, worker.PRLinks)
+	links, err := d.GetSessionPRLinkURLs(t.Context(), "worker")
+	require.NoError(t, err)
+	assert.Empty(t, links)
+}
+
+func TestPermanentDeletionRemovesOnlyStoredSessionAnnotations(t *testing.T) {
+	for _, action := range []string{"single", "batch", "trash", "empty trash", "excluded"} {
+		t.Run(action, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "worker", "proj")
+			insertSession(t, d, "manager", "proj")
+			for _, id := range []string{"worker", "pending"} {
+				_, err := d.SetSessionLabels(ctx, id, []string{"nightly"})
+				require.NoError(t, err)
+				_, err = d.SetSessionExternalParent(ctx, id, "manager")
+				require.NoError(t, err)
+			}
+			switch action {
+			case "single":
+				require.NoError(t, d.DeleteSession(ctx, "pending"))
+				require.NoError(t, d.DeleteSession(ctx, "worker"))
+			case "batch":
+				_, err := d.DeleteSessions(ctx, []string{"worker", "pending"})
+				require.NoError(t, err)
+			case "trash", "empty trash":
+				require.NoError(t, d.SoftDeleteSession(ctx, "worker"))
+				if action == "trash" {
+					_, err := d.DeleteSessionIfTrashed(ctx, "worker")
+					require.NoError(t, err)
+				} else {
+					_, err := d.EmptyTrash(ctx)
+					require.NoError(t, err)
+				}
+			case "excluded":
+				require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+					if err := excludeSessionIDTx(ctx, tx, "worker", sql.NullString{}); err != nil {
+						return err
+					}
+					_, err := purgeExcludedSessionsTx(ctx, tx)
+					return err
+				}))
+			}
+			for _, table := range []string{"session_labels", "session_external_parents"} {
+				var ids string
+				require.NoError(t, d.getReader().QueryRowContext(ctx, "SELECT group_concat(session_id) FROM "+table).Scan(&ids))
+				assert.Equal(t, "pending", ids)
+			}
+		})
+	}
 }
 
 func TestSessionExternalParentApplication(t *testing.T) {

@@ -2,6 +2,7 @@ package parser
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -33,6 +34,16 @@ func NewPRLink(
 	repository = strings.Trim(strings.TrimSpace(repository), "/")
 	if repository == "" || number <= 0 {
 		return PRLink{}, false
+	}
+	path := strings.TrimRight(u.Path, "/")
+	for _, separator := range []string{"/pull/", "/pulls/", "/-/merge_requests/"} {
+		if i := strings.LastIndex(path, separator); i >= 0 {
+			urlNumber, err := strconv.Atoi(path[i+len(separator):])
+			if err != nil || urlNumber != number || !strings.EqualFold(strings.TrimPrefix(path[:i], "/"), repository) {
+				return PRLink{}, false
+			}
+			break
+		}
 	}
 	normalized := url.URL{Scheme: u.Scheme, Host: host, Path: u.Path}
 	normalized.RawPath = ""

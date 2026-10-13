@@ -185,8 +185,9 @@ fixtures retain this field; missing identities remain source-local.
   PR links apply to every split of a forked transcript.
   One transcript can repeat the same link hundreds of times, so
   Agentsview requires the recorded repository and number and keeps every
-  distinct normalized URL. Parser fixtures reverified on 2026-10-07 cover
-  more than 100 links and incremental reparsing only for new URLs. The record does not say whether the session opened the
+  distinct normalized URL. Parser fixtures reverified on 2026-10-13 cover
+  more than 100 links, incremental reparsing only for new URLs, and rejection
+  when a recognized PR URL disagrees with its repository or number. The record does not say whether the session opened the
   pull request. Undocumented upstream; evidence is `no-public-source`. See
   `claudePRLink` in `internal/parser/claude.go` and
   `internal/parser/pr_links.go`.

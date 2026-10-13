@@ -1386,6 +1386,9 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 			return 0, fmt.Errorf("pre-deleting excluded session %s messages: %w", id, err)
 		}
 	}
+	if err := deleteSessionAnnotationsTx(ctx, tx, excluded); err != nil {
+		return 0, err
+	}
 	res, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE "+excluded)
 	if err != nil {
 		return 0, fmt.Errorf("purging excluded sessions: %w", err)
@@ -5655,6 +5658,9 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 			return 0, fmt.Errorf("pre-deleting session %s messages: %w", id, err)
 		}
 	}
+	if err := deleteSessionAnnotationsTx(ctx, tx, where, args...); err != nil {
+		return 0, err
+	}
 	res, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE "+where, args...)
 	if err != nil {
 		return 0, fmt.Errorf("deleting sessions: %w", err)
@@ -5671,6 +5677,15 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 		n += pages
 	}
 	return n, nil
+}
+
+func deleteSessionAnnotationsTx(ctx context.Context, tx *sql.Tx, where string, args ...any) error {
+	for _, table := range []string{"session_labels", "session_external_parents"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE session_id IN (SELECT id FROM sessions WHERE "+where+")", args...); err != nil {
+			return fmt.Errorf("deleting %s: %w", table, err)
+		}
+	}
+	return nil
 }
 
 func excludeSessionIDTx(ctx context.Context, tx *sql.Tx, id string, filePath sql.NullString) error {
