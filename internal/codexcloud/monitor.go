@@ -21,8 +21,10 @@ import (
 const (
 	// joinWindow is the join rule's recency limit: a thread whose listing
 	// updatedAt is older is never resumed, because an old inProgress turn
-	// is usually save lag, and resuming it would be a cold resume.
-	joinWindow = 2 * time.Minute
+	// is usually save lag, and resuming it would be a cold resume. The
+	// limit compares OpenAI's clock with this machine's, so it is wide
+	// enough that a few minutes of clock drift do not skip running turns.
+	joinWindow = 5 * time.Minute
 	// maxJoins caps the joined threads of one account; each holds its own
 	// connection.
 	maxJoins = 10

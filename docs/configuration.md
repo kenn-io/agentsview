@@ -1209,7 +1209,7 @@ Joining is the only request that touches a thread on OpenAI's side:
   OpenAI's side and starts its MCP servers. In testing nothing ran and the
   thread did not change, but a thread with an active goal might continue it.
   AgentsView leaves at once and does not join that turn again. To keep this
-  rare, AgentsView joins only threads updated in the last 2 minutes.
+  rare, AgentsView joins only threads updated in the last 5 minutes.
 
 Set `live_tokens = false` to stop joining. Fetching and plan usage continue.
 
@@ -1224,7 +1224,7 @@ counts are low."
 
 **Limits.**
 
-- Live capture joins a thread only within 2 minutes of the thread's last
+- Live capture joins a thread only within 5 minutes of the thread's last
   update. A turn that ends before a join gets no live tokens. If the daemon is
   down or all 10 join slots are busy for longer than that while a turn runs,
   that turn is not captured live either.

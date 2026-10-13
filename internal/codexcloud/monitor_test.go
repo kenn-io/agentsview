@@ -409,11 +409,11 @@ func TestNonIntegralCounterStopsCapture(t *testing.T) {
 func TestOldThreadIsNotResumed(t *testing.T) {
 	env := newMonitorEnv(t)
 	thread := runningThread("a", "warm")
-	thread.UpdatedAt = fetchNow.Add(-3 * time.Minute).Unix()
+	thread.UpdatedAt = fetchNow.Add(-6 * time.Minute).Unix()
 	env.threads.Set(thread)
 
 	env.join(t, "a")
-	assert.Empty(t, env.host.Handshakes(), "an inProgress turn updated 3 minutes ago is never checked or resumed")
+	assert.Empty(t, env.host.Handshakes(), "an inProgress turn updated 6 minutes ago is never checked or resumed")
 }
 
 func TestIdleNewestTurnIsNotResumed(t *testing.T) {
@@ -490,4 +490,16 @@ func TestUnreadableMessageStopsCapture(t *testing.T) {
 	env.threads.Set(runningThread("b", "warm"))
 	env.join(t, "b")
 	assert.Empty(t, env.host.Handshakes(), "no chat is listened in on until capture starts again")
+}
+
+func TestJoinAllowsClockDrift(t *testing.T) {
+	env := newMonitorEnv(t)
+	thread := runningThread("a", "warm")
+	// OpenAI's clock runs 4 minutes behind this machine's.
+	thread.UpdatedAt = fetchNow.Add(-4 * time.Minute).Unix()
+	env.threads.Set(thread)
+
+	env.join(t, "a")
+
+	assert.Equal(t, []string{"a"}, env.monitor.Joined(passKey))
 }
