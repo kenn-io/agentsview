@@ -203,6 +203,18 @@ func TestPartlyCapturedCount(t *testing.T) {
 func TestExportPlanOnlyEmptyCost(t *testing.T) {
 	d := testDB(t)
 	seedPlanUsageCountSessions(t, d)
+	started := "2026-09-10T10:00:00Z"
+	_, err := d.WriteSessionBatch([]SessionBatchWrite{{
+		Session: Session{
+			ID: "codex-cloud:unchecked", Project: "alpha", Machine: "m1", Agent: "codex-cloud",
+			StartedAt: &started, CreatedAt: started, MessageCount: 1, UserMessageCount: 1, DataVersion: 1,
+		},
+		Messages: []Message{{
+			SessionID: "codex-cloud:unchecked", Role: "user", Content: "user", Timestamp: started,
+		}},
+		ReplaceMessages: true, DataVersion: 1,
+	}})
+	require.NoError(t, err)
 
 	result, err := d.ExportSessionSummaries(t.Context(), SessionExportOptions{Limit: 10})
 	require.NoError(t, err)
@@ -228,6 +240,11 @@ func TestExportPlanOnlyEmptyCost(t *testing.T) {
 	claude := rows["claude-a"]
 	assert.Nil(t, claude.PlanUsage)
 	assert.Nil(t, claude.CaptureCoverage)
+
+	unchecked := rows["codex-cloud:unchecked"]
+	assert.Nil(t, unchecked.ModelUsage,
+		"a codex-cloud session with no plan usage row yet has unknown, not zero, usage")
+	assert.Nil(t, unchecked.PlanUsage)
 
 	// Other sessions without usage keep the zero model usage they always had.
 	idle := rows["claude-idle"]
