@@ -129,8 +129,14 @@ func (m *Monitor) discoverAccount(ctx context.Context, gates Gates, key AccountK
 		if err := conn.Call(ctx, "thread/list", params, &page); err != nil {
 			return m.failure(ctx, key, login, "", "thread/list", err)
 		}
-		if err := m.resetAccount(key, wait); err != nil {
+		ended, err := m.resetAccount(key, wait)
+		if err != nil {
 			return err
+		}
+		if ended {
+			// The sync job's error row for the wait stays until its next
+			// pass; run one now.
+			m.trigger()
 		}
 		wait = WaitState{}
 		recentToEnd := len(page.Data) > 0
@@ -227,21 +233,26 @@ func (m *Monitor) accountWait(key AccountKey) (WaitState, bool, error) {
 
 // resetAccount clears the wait discovery saw before a successful request,
 // as a successful sync pass does, so failures between successes start
-// again from the shortest wait. A wait another job set since then is
-// newer than this success and stays.
-func (m *Monitor) resetAccount(key AccountKey, seen WaitState) error {
-	if seen == (WaitState{}) {
-		return nil
+// again from the shortest wait. It reports whether it cleared one. A wait
+// another job set since then is newer than this success and stays. A
+// listing only shows that OpenAI answers, so it ends only waits about
+// reaching OpenAI; a too-large reply, a protocol change, or a refusal
+// keeps backing off until a sync pass succeeds.
+func (m *Monitor) resetAccount(key AccountKey, seen WaitState) (bool, error) {
+	switch failureFromString(seen.Failure) {
+	case FailNetwork, FailServer, FailRateLimited:
+	default:
+		return false, nil
 	}
 	unlock := m.Store.Lock(key)
 	defer unlock()
 	acct, err := m.Store.LoadAccount(key)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if acct.Wait.Failure != seen.Failure || acct.Wait.Attempts != seen.Attempts || !acct.Wait.Until.Equal(seen.Until) {
-		return nil
+		return false, nil
 	}
 	m.Waits.ResetAccount(&acct)
-	return m.Store.SaveAccount(key, acct)
+	return true, m.Store.SaveAccount(key, acct)
 }

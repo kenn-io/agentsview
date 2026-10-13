@@ -479,6 +479,9 @@ func TestRetriedFlushAppendsRecordsOnce(t *testing.T) {
 		totals[i] = rec.Total.Total
 	}
 	assert.Equal(t, []int64{100, 200, 300}, totals)
+	for digest := range env.thread(t, "a").ItemDigests {
+		assert.False(t, strings.HasPrefix(digest, liveKeyPrefix), "live record keys are dropped once the records are saved")
+	}
 }
 
 // failSaves puts a directory in place of the chat's state file, so every
