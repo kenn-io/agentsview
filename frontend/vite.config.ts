@@ -68,6 +68,16 @@ export default defineConfig(({ command }) => {
       rules: {
         "vite-plus/prefer-vite-plus-imports": "error",
       },
+      overrides: [
+        {
+          // Tests pass mocked methods to expect() and vi.mocked(), which never
+          // call them, so this rule reports only false positives there.
+          // typescript-eslint's fix is a Vitest-aware variant that oxlint
+          // does not have.
+          files: ["**/*.test.ts"],
+          rules: { "typescript/unbound-method": "off" },
+        },
+      ],
       options: {
         typeAware: true,
         typeCheck: true,
