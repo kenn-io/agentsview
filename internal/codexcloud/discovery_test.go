@@ -317,6 +317,70 @@ func TestPendingRecordsAreKeptWhileLiveTokensAreOff(t *testing.T) {
 		"pending records are saved even when the source is no longer configured")
 }
 
+// setWait stores an account wait that has already ended.
+func (e *monitorEnv) setWait(t *testing.T, f Failure, attempts int) {
+	t.Helper()
+	acct := e.account(t)
+	acct.Wait = WaitState{Failure: f.String(), Attempts: attempts, Until: e.clock.Now().Add(-time.Minute)}
+	require.NoError(t, e.syncer.Store.SaveAccount(passKey, acct))
+}
+
+// A listing proves OpenAI answers, not that a chat which failed in sync
+// would now import, so only waits about reaching OpenAI end.
+func TestDiscoveryKeepsWaitsAListingDoesNotDisprove(t *testing.T) {
+	for _, tt := range []struct {
+		failure Failure
+		reset   bool
+	}{
+		{FailNetwork, true}, {FailServer, true}, {FailRateLimited, true},
+		{FailTooLarge, false}, {FailProtocol, false}, {FailRefused, false},
+	} {
+		t.Run(tt.failure.String(), func(t *testing.T) {
+			env, _ := newDiscoveryEnv(t)
+			env.setWait(t, tt.failure, 3)
+
+			env.discover(t)
+
+			if tt.reset {
+				assert.Empty(t, env.account(t).Wait.Failure)
+			} else {
+				assert.Equal(t, 3, env.account(t).Wait.Attempts, "the wait keeps its count, so the next one is longer")
+			}
+		})
+	}
+}
+
+func TestDiscoveryKeepsAWaitRecordedDuringTheListing(t *testing.T) {
+	env, _ := newDiscoveryEnv(t)
+	env.setWait(t, FailNetwork, 1)
+	// The sync job records a newer failure while discovery's listing is
+	// in flight.
+	env.host.Handle("thread/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
+		acct := env.account(t)
+		require.NoError(t, env.syncer.Waits.RecordAccount(&acct, FailNetwork, 0))
+		require.NoError(t, env.syncer.Store.SaveAccount(passKey, acct))
+		return env.threads.ThreadList(params)
+	})
+
+	env.discover(t)
+
+	wait := env.account(t).Wait
+	assert.Equal(t, 2, wait.Attempts, "the newer wait stays")
+	assert.True(t, wait.Until.After(env.clock.Now()))
+}
+
+func TestDiscoveryEndingAWaitQueuesASync(t *testing.T) {
+	env, _ := newDiscoveryEnv(t)
+	env.setWait(t, FailNetwork, 1)
+
+	env.discover(t)
+
+	require.Eventually(t, func() bool { return env.triggers.Load() == 1 }, 5*time.Second, 5*time.Millisecond,
+		"a sync runs soon and clears the account's error row")
+	env.discover(t)
+	assert.Equal(t, int64(1), env.triggers.Load(), "no wait ended, so no sync is queued")
+}
+
 func TestDiscoverySuccessResetsAccountWait(t *testing.T) {
 	env, _ := newDiscoveryEnv(t)
 	env.host.RefuseHandshake(http.StatusServiceUnavailable, nil, "")
