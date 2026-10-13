@@ -3279,18 +3279,19 @@ schemas keep their existing ordering behavior.
   the cost of long-context calls inside it. A fall in any counter starts a new
   baseline, and that baseline's first record adds its whole total; no negative
   event is recorded. A record that exactly repeats an earlier one (same join
-  ID, observation time, and counts) is skipped, because a retried save can
-  write one batch twice. Counters map as for [Codex (`codex`)](#codex-codex):
-  input includes cached reads and cache writes. Uncached input is input minus
-  cached input, floored at zero; cache writes are capped at that amount; the
-  input field is uncached input minus those cache writes. Cached input becomes
-  cache-read tokens, and reasoning stays inside output. That entry holds the
-  upstream evidence for the mapping. The hosted-only behavior (`total` as a
-  chat-wide running total, `last` as one call, and whole-number counters
-  written as JSON floats such as `4603049.0`; a true fraction is rejected) is
-  `no-public-source`: it comes from the 2026-10-12 read-only probes. These
-  rules were written down on 2026-10-13. No probe has shown a counter restart,
-  so the baseline rule is a guard, not observed behavior.
+  ID, turn ID, observation time, and counts) is skipped, because a retried
+  save can write one batch twice. Counters map as for
+  [Codex (`codex`)](#codex-codex): input includes cached reads and cache
+  writes. Uncached input is input minus cached input, floored at zero; cache
+  writes are capped at that amount; the input field is uncached input minus
+  those cache writes. Cached input becomes cache-read tokens, and reasoning
+  stays inside output. That entry holds the upstream evidence for the mapping.
+  The hosted-only behavior (`total` as a chat-wide running total, `last` as
+  one call, and whole-number counters written as JSON floats such as
+  `4603049.0`; a true fraction is rejected) is `no-public-source`: it comes
+  from the 2026-10-12 read-only probes. These rules were written down on
+  2026-10-13. No probe has shown a counter restart, so the baseline rule is a
+  guard, not observed behavior.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
   `internal/parser/codex_cloud_provider.go` discovers mirror files. Design and
   open questions:
