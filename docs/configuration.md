@@ -1713,6 +1713,10 @@ against the budget. The Antigravity IDE watcher also watches
 This cap applies to the Linux and Windows watcher. The macOS FSEvents watcher
 has no per-directory budget.
 
+Runtime folder watch failures put the root on polling until every failed
+folder is watchable or gone. Retries start after 10 seconds and back off to
+two minutes.
+
 Roots that fall back to polling are picked up by:
 
 - the existing 15-minute periodic full sync, plus
