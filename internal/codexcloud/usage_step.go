@@ -237,7 +237,7 @@ func (s *Syncer) planUsage(key AccountKey, now time.Time) ([]usageRequest, error
 	slices.SortFunc(refresh, func(a, b string) int {
 		return cmp.Or(refreshDue(acct.Refresh[a]).Compare(refreshDue(acct.Refresh[b])), cmp.Compare(a, b))
 	})
-	var requests []usageRequest
+	requests := make([]usageRequest, 0, usageBudget)
 	for _, root := range append(pending, refresh...) {
 		// A crash after a thread moved under another root, before the
 		// account was saved, leaves it here; its usage counts there.
