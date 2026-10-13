@@ -761,7 +761,8 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 		rowSet.RawOutputTokensBySession)
 	assert.Equal(t, map[string]int{"root": 5, "child": 631},
 		rowSet.DeduplicatedOutputTokens)
-	assert.Equal(t, map[string]struct{}{"root": {}, "child": {}}, rowSet.DiscardedContributingSessions)
+	assert.Equal(t, map[string]struct{}{"root": {}, "child": {}},
+		rowSet.DiscardedContributingSessions)
 	assert.Equal(t, map[string]activity.SessionTokenCoverage{
 		"root":  {OutputTokens: 631, PeakContextTokens: 2},
 		"child": {OutputTokens: 631, PeakContextTokens: 2},

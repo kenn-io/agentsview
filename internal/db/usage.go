@@ -1600,25 +1600,12 @@ type UsageDedupToken struct {
 func UsageDedupTokenForRow(
 	usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string,
 ) (UsageDedupToken, bool) {
-	if claudeMessageID != "" && claudeRequestID != "" {
-		return UsageDedupToken{
-			Kind:  "claude",
-			Value: claudeMessageID + ":" + claudeRequestID,
-		}, true
-	}
-	if usageSource == "message" && agent != "" && sourceUUID != "" {
-		return UsageDedupToken{
-			Kind:  "source",
-			Value: agent + ":" + sourceUUID,
-		}, true
-	}
-	if usageDedupKey != "" {
-		return UsageDedupToken{
-			Kind:  "usage",
-			Value: usageDedupKey,
-		}, true
-	}
-	return UsageDedupToken{}, false
+	kind, value, ok := activity.SessionUsageDedupTokenForRow(activity.UsageRow{
+		UsageSource: usageSource, Agent: agent, ClaudeMessageID: claudeMessageID,
+		ClaudeRequestID: claudeRequestID, SourceUUID: sourceUUID,
+		UsageDedupKey: usageDedupKey,
+	})
+	return UsageDedupToken{Kind: kind, Value: value}, ok
 }
 
 func (db *DB) loadTopSessionMetadata(

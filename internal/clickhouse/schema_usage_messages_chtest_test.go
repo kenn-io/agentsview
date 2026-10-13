@@ -49,6 +49,7 @@ func TestClickHouseUsageMessagesReplacement(t *testing.T) {
 					want = 31
 				}
 				require.Equal(t, want, got.RawOutputTokensBySession[id])
+				require.Equal(t, want, got.CanonicalTokenCoverageBySession[id].OutputTokens)
 				var source string
 				require.NoError(t, store.DB().QueryRowContext(ctx,
 					"SELECT token_usage FROM messages WHERE session_id=?", id).Scan(&source))

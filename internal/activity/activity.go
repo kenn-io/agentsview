@@ -590,26 +590,27 @@ func usageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
 	return usageDedupToken{}, false
 }
 
-func sessionUsageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
+// SessionUsageDedupTokenForRow returns the strongest available identity used
+// when deduplicating a session's usage rows.
+func SessionUsageDedupTokenForRow(u UsageRow) (kind, value string, ok bool) {
 	if u.ClaudeMessageID != "" && u.ClaudeRequestID != "" {
-		return usageDedupToken{
-			kind:  "claude",
-			value: u.ClaudeMessageID + ":" + u.ClaudeRequestID,
-		}, true
+		return "claude", u.ClaudeMessageID + ":" + u.ClaudeRequestID, true
 	}
 	if u.UsageSource == "message" && u.Agent != "" && u.SourceUUID != "" {
-		return usageDedupToken{
-			kind:  "source",
-			value: u.Agent + ":" + u.SourceUUID,
-		}, true
+		return "source", u.Agent + ":" + u.SourceUUID, true
 	}
 	if u.UsageDedupKey != "" {
-		return usageDedupToken{
-			kind:  "usage",
-			value: u.UsageDedupKey,
-		}, true
+		return "usage", u.UsageDedupKey, true
 	}
-	return usageDedupToken{}, false
+	return "", "", false
+}
+
+func sessionUsageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
+	kind, value, ok := SessionUsageDedupTokenForRow(u)
+	if !ok {
+		return usageDedupToken{}, false
+	}
+	return usageDedupToken{kind: kind, value: value}, ok
 }
 
 // ClaudeSnapshotSurvivorSelection also returns the earliest session and the

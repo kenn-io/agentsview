@@ -139,6 +139,9 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 	assert.Equal(t, sqliteRows.DiscardedContributingSessions,
 		duckRows.DiscardedContributingSessions,
 		"discarded contributing-row metadata matches SQLite")
+	assert.Equal(t, sqliteRows.CanonicalTokenCoverageBySession,
+		duckRows.CanonicalTokenCoverageBySession,
+		"canonical per-source token coverage matches SQLite")
 	require.Len(t, sqliteRows.Rows, 3)
 	require.Len(t, duckRows.Rows, 3)
 	assert.Equal(t, []string{

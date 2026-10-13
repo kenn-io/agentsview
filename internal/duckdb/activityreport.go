@@ -263,16 +263,6 @@ func (s *Store) GetSessionUsageRows(
 	})
 }
 
-// duckUsageOrdinalOrNeg renders a nullable message ordinal in
-// activity.UsageRow's COALESCE(message_ordinal, -1) convention.
-func duckUsageOrdinalOrNeg(v any) int64 {
-	o, ok := duckUsageOrdinal(v)
-	if !ok {
-		return -1
-	}
-	return o
-}
-
 func duckSessionUsageRowLess(
 	a, b duckSessionUsageOrderedRow,
 	sessionOrder map[string]int,
