@@ -23,6 +23,7 @@ The latest release is
   session shows its prompts, replies, reasoning summaries, tool calls, and tool
   results. Subagent runs appear as child sessions. Usage reports include Muse
   token counts, priced at Meta's published Muse Spark and Muse Wonder rates.
+  (#2241)
 - Browse and search the retained archive during full parser and archive-only
   preservation rebuilds with a stale warning; archive writes fail with a retryable
   503. Scoped upgrades and schema repairs finish before serving.
