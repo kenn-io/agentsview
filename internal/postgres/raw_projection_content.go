@@ -192,11 +192,12 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 		for i := range v.NumField() {
 			f := v.Type().Field(i)
 			// Projection bookkeeping and inherited trash scope add no content.
-			// Omit empty GroupKey values so existing revisions stay stable. Derived tool
+			// Omit empty GroupKey and PlanUsage values so existing revisions stay stable. Derived tool
 			// observation fields preserve the historical normalized-content-v1 representation.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "TrashIncludesCodexPages" ||
 				f.Name == "ToolObservations" || f.Name == "ObservedOutcome" || f.Name == "ObservedRepeat" || f.Name == "SequenceEnding" ||
-				(v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) {
+				(v.Type() == reflect.TypeFor[db.Session]() && f.Name == "GroupKey" && v.Field(i).IsZero()) ||
+				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() && f.Name == "PlanUsage" && v.Field(i).IsZero()) {
 				continue
 			}
 			// Session fields added after normalized-content-v1 was recorded

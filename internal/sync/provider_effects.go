@@ -148,6 +148,11 @@ func validateProviderParseResultSessionIDs(def parser.AgentDef, result parser.Pa
 			return err
 		}
 	}
+	if plan := result.Session.PlanUsage; plan != nil {
+		if err := validateProviderSessionID(def, plan.CountedUnder, "plan usage counted-under session id"); err != nil {
+			return err
+		}
+	}
 	for _, usage := range result.Session.UsageEvents {
 		if err := validateProviderSessionID(def, usage.SessionID, "session usage event session id"); err != nil {
 			return err

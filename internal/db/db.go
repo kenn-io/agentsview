@@ -1889,6 +1889,7 @@ var readOnlyRequiredTables = []string{
 	"messages",
 	"stats",
 	"usage_events",
+	"session_plan_usage",
 	"tool_calls",
 	"tool_result_events",
 	"insights",

@@ -103,6 +103,7 @@ type Store interface {
 	GetUsageSessionCounts(ctx context.Context, f UsageFilter) (UsageSessionCounts, error)
 	GetUsageMatchingSessionCount(ctx context.Context, f UsageFilter) (int, error)
 	GetSessionUsage(ctx context.Context, sessionID string, includeBreakdown bool) (*SessionUsage, error)
+	GetSessionPlanUsage(ctx context.Context, sessionID string) (*SessionPlanUsage, error)
 
 	// Stars.
 	StarSession(ctx context.Context, sessionID string) (bool, error)

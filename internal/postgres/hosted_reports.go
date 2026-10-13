@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -124,6 +126,12 @@ func (h *HostedStore) GetSessionTiming(ctx context.Context, id string) (*db.Sess
 			}
 		}
 	})
+}
+
+// GetSessionPlanUsage reports that this backend does not store plan
+// usage yet.
+func (*HostedStore) GetSessionPlanUsage(context.Context, string) (*db.SessionPlanUsage, error) {
+	return nil, fmt.Errorf("hosted postgres: session plan usage: %w", errors.ErrUnsupported)
 }
 
 func (h *HostedStore) GetSessionUsage(ctx context.Context, id string, breakdown bool) (*db.SessionUsage, error) {
