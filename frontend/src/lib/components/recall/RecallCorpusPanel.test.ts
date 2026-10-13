@@ -9,12 +9,6 @@ import type { RecallEntry } from "../../api/types/recall.js";
 import RecallCorpusPanel from "./RecallCorpusPanel.svelte";
 import { requestUrl } from "../../test-support/request-url.js";
 
-function requestURL(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.toString();
-  return input.url;
-}
-
 function reviewFixture(overrides: Partial<RecallEntry> = {}): RecallEntry {
   return {
     id: "reviewable",
@@ -919,7 +913,7 @@ describe("RecallCorpusPanel", () => {
       init?: RequestInit,
     ) => Promise<Response>;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (requestURL(input).includes("/recall/entries?")) {
+      if (requestUrl(input).includes("/recall/entries?")) {
         return new Response(
           JSON.stringify({
             entries: [
@@ -983,7 +977,7 @@ describe("RecallCorpusPanel", () => {
     ) => Promise<Response>;
     let entryRequests = 0;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = requestURL(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/entries?")) entryRequests++;
       if (url.endsWith("/recall/entries/recall-1/review")) {
         return new Response(
@@ -1044,7 +1038,7 @@ describe("RecallCorpusPanel", () => {
     ) => Promise<Response>;
     let entryRequests = 0;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = requestURL(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/entries?")) entryRequests++;
       if (url.endsWith("/recall/entries/recall-1/review")) {
         return new Response(
@@ -1109,7 +1103,7 @@ describe("RecallCorpusPanel", () => {
       init?: RequestInit,
     ) => Promise<Response>;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = requestURL(input);
+      const url = requestUrl(input);
       if (url.includes("review_state=human_rejected") && url.includes("status=archived")) {
         return new Response(
           JSON.stringify({
@@ -1168,7 +1162,7 @@ describe("RecallCorpusPanel", () => {
       init?: RequestInit,
     ) => Promise<Response>;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (requestURL(input).endsWith("/recall/entries/recall-1/review")) {
+      if (requestUrl(input).endsWith("/recall/entries/recall-1/review")) {
         return new Response(
           JSON.stringify(
             reviewFixture({
@@ -1241,7 +1235,7 @@ describe("RecallCorpusPanel", () => {
     ) => Promise<Response>;
     let resolveReview!: (response: Response) => void;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (requestURL(input).endsWith("/recall/entries/recall-1/review")) {
+      if (requestUrl(input).endsWith("/recall/entries/recall-1/review")) {
         return await new Promise<Response>((resolve) => {
           resolveReview = resolve;
         });
