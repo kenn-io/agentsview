@@ -731,9 +731,9 @@ func (m *Monitor) updateLive(key AccountKey) {
 	switch {
 	case stopped != nil:
 		text = "Live tokens: stopped. " + Message(FailProtocol, time.Time{}) +
-			" Then restart AgentsView to listen in again."
+			" After that, restart AgentsView, or set live_tokens = false and back to true, to listen in again."
 	case watching == 0:
-		text = "Live tokens: idle."
+		text = "Live tokens: on, no running chats to listen in on."
 	default:
 		text = fmt.Sprintf("Live tokens: listening in on %s.", chats(watching, "running chat"))
 	}

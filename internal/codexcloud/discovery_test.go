@@ -184,12 +184,27 @@ func TestDiscoveryOffWithoutSourceSync(t *testing.T) {
 }
 
 func TestDiscoveryOffWhenSyncIsOff(t *testing.T) {
-	env, gates := newDiscoveryEnv(t)
-	gates.set(func(g *Gates) { g.CodexCloud.Enabled = false })
+	for _, tt := range []struct {
+		name   string
+		change func(*Gates)
+		want   string
+	}{
+		{"enabled is false", func(g *Gates) { g.CodexCloud.Enabled = false },
+			"Live tokens: off, because enabled = false under [agents.codex-cloud]."},
+		{"disabled_agents", func(g *Gates) { g.Disabled = true },
+			"Live tokens: off, because codex-cloud is listed in disabled_agents."},
+		{"config error", func(g *Gates) { g.CodexCloud.Err = &config.CodexCloudConfigError{} },
+			"Live tokens: off until the [agents.codex-cloud] settings are fixed."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env, gates := newDiscoveryEnv(t)
+			gates.set(tt.change)
 
-	env.discover(t)
+			env.discover(t)
 
-	assert.Equal(t, "Live tokens: off, because Codex cloud sync is off.", env.live(t))
+			assert.Equal(t, tt.want, env.live(t))
+		})
+	}
 }
 
 func TestSync429HoldsDiscovery(t *testing.T) {
