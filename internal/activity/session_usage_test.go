@@ -19,19 +19,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 		wantIndexes            []int
 		wantRaw, wantDiscarded map[string]int
 		wantContributing       map[string]struct{}
-		wantSourceSessionID    string
-		wantCost               money.Money
 	}{
-		{
-			name: "complete snapshot keeps earliest attribution and maximum searches",
-			rows: []UsageRow{
-				{SessionID: "root", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 10, OutputTokens: 5, WebSearchRequests: 3, ClaudeMessageID: "m", ClaudeRequestID: "r"},
-				{SessionID: "child", Timestamp: "2026-06-16T10:00:01Z", InputTokens: 100, OutputTokens: 20, WebSearchRequests: 1, ClaudeMessageID: "m", ClaudeRequestID: "r"},
-			},
-			wantIndexes: []int{1}, wantRaw: map[string]int{"root": 5, "child": 20},
-			wantDiscarded: map[string]int{"root": 5, "child": 20}, wantContributing: map[string]struct{}{"root": {}, "child": {}},
-			wantSourceSessionID: "child", wantCost: money.Money{Microdollars: 10},
-		},
 		{
 			name: "message UUID deduplicates while event UUID does not",
 			rows: []UsageRow{
@@ -81,48 +69,66 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				assert.True(t, row.Priced)
 				assert.True(t, row.Contributes)
 			}
-			if tc.wantSourceSessionID != "" {
-				assert.Equal(t, "root", result.Rows[0].SessionID)
-				assert.Equal(t, tc.wantSourceSessionID, result.Rows[0].SourceSessionID)
-				assert.Equal(t, 3, result.Rows[0].WebSearchRequests)
-				assert.Equal(t, tc.wantCost, result.Rows[0].Cost)
-				assert.NotNil(t, result.CanonicalTokenCoverageBySession)
-			}
 		})
 	}
+}
+
+func TestSelectSessionUsageRowsPreservesSurvivorFields(t *testing.T) {
+	rows := []UsageRow{
+		{SessionID: "root", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 10, OutputTokens: 5, WebSearchRequests: 3, ClaudeMessageID: "m", ClaudeRequestID: "r"},
+		{SessionID: "child", Timestamp: "2026-06-16T10:00:01Z", InputTokens: 100, OutputTokens: 20, WebSearchRequests: 1, ClaudeMessageID: "m", ClaudeRequestID: "r"},
+	}
+	var pricedIndexes, pricedSearches []int
+	result, err := SelectSessionUsageRows(context.Background(), rows, []bool{true, true}, func(i, searches int) (UsageRow, error) {
+		pricedIndexes = append(pricedIndexes, i)
+		pricedSearches = append(pricedSearches, searches)
+		row := rows[i]
+		row.Cost = money.Money{Microdollars: int64(searches + 7)}
+		return row, nil
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Rows, 1)
+	assert.Equal(t, []int{1}, pricedIndexes)
+	assert.Equal(t, []int{3}, pricedSearches)
+	assert.Equal(t, "root", result.Rows[0].SessionID)
+	assert.Equal(t, "child", result.Rows[0].SourceSessionID)
+	assert.Equal(t, 3, result.Rows[0].WebSearchRequests)
+	assert.Equal(t, money.Money{Microdollars: 10}, result.Rows[0].Cost)
+	assert.NotNil(t, result.CanonicalTokenCoverageBySession)
 }
 
 func TestSelectSessionUsageRowsErrors(t *testing.T) {
 	priceErr := errors.New("pricing unavailable")
 	for _, tc := range []struct {
-		name                       string
-		cancelBefore, cancelDuring bool
-		want                       error
+		name           string
+		rows           []UsageRow
+		cancelAfter    bool
+		priceErr       error
+		want           error
+		wantPriceCalls int
 	}{
-		{"pricing", false, false, priceErr}, {"already canceled", true, false, context.Canceled}, {"canceled by pricing", false, true, context.Canceled},
+		{name: "pricing", rows: []UsageRow{{SessionID: "root"}}, priceErr: priceErr, want: priceErr, wantPriceCalls: 1},
+		{name: "canceled between pricing calls", rows: []UsageRow{{SessionID: "root"}, {SessionID: "child"}}, cancelAfter: true, want: context.Canceled, wantPriceCalls: 1},
+		{name: "canceled after last pricing call", rows: []UsageRow{{SessionID: "root"}}, cancelAfter: true, want: context.Canceled, wantPriceCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			if tc.cancelBefore {
-				cancel()
-			}
 			calls := 0
-			result, err := SelectSessionUsageRows(ctx, []UsageRow{{SessionID: "root"}}, []bool{false}, func(int, int) (UsageRow, error) {
+			contributes := make([]bool, len(tc.rows))
+			result, err := SelectSessionUsageRows(ctx, tc.rows, contributes, func(int, int) (UsageRow, error) {
 				calls++
-				if tc.cancelDuring {
-					cancel()
-					return UsageRow{}, nil
+				if tc.priceErr != nil {
+					return UsageRow{}, tc.priceErr
 				}
-				return UsageRow{}, priceErr
+				if tc.cancelAfter {
+					cancel()
+				}
+				return UsageRow{}, nil
 			})
 			assert.ErrorIs(t, err, tc.want)
 			assert.Nil(t, result)
-			if tc.cancelBefore {
-				assert.Zero(t, calls)
-			} else {
-				assert.Equal(t, 1, calls)
-			}
+			assert.Equal(t, tc.wantPriceCalls, calls)
 		})
 	}
 }
