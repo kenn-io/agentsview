@@ -24046,26 +24046,23 @@ type SessionToolSequenceCall struct {
 	CallIndex            int64                          `json:"call_index"`
 	InputBytes           int64                          `json:"input_bytes"`
 	InputOmittedBytes    int64                          `json:"input_omitted_bytes"`
-	InputPreview         string                         `json:"input_preview" validate:"required"`
+	InputPreview         string                         `json:"input_preview"`
 	Ordinal              int64                          `json:"ordinal"`
 	Outcome              SessionToolSequenceCallOutcome `json:"outcome" validate:"required"`
 	Repeat               SessionToolSequenceCallRepeat  `json:"repeat" validate:"required"`
-	ResultBytes          *int64                         `json:"result_bytes,omitempty"`
+	ResultBytes          *int64                         `json:"result_bytes"`
 	ResultContentUnknown bool                           `json:"result_content_unknown"`
-	ResultOmittedBytes   *int64                         `json:"result_omitted_bytes,omitempty"`
-	ResultPreview        string                         `json:"result_preview" validate:"required"`
+	ResultOmittedBytes   *int64                         `json:"result_omitted_bytes"`
+	ResultPreview        string                         `json:"result_preview"`
 	ToolChanged          bool                           `json:"tool_changed"`
-	ToolName             string                         `json:"tool_name" validate:"required"`
-	ToolUseID            string                         `json:"tool_use_id" validate:"required"`
+	ToolName             string                         `json:"tool_name"`
+	ToolUseID            string                         `json:"tool_use_id"`
 }
 
 func (s SessionToolSequenceCall) Validate() error {
 	var errors runtime.ValidationErrors
 	if err := typesValidator.Var(s.CallFingerprint, "required"); err != nil {
 		errors = errors.Append("CallFingerprint", err)
-	}
-	if err := typesValidator.Var(s.InputPreview, "required"); err != nil {
-		errors = errors.Append("InputPreview", err)
 	}
 	if v, ok := any(s.Outcome).(runtime.Validator); ok {
 		if err := v.Validate(); err != nil {
@@ -24076,15 +24073,6 @@ func (s SessionToolSequenceCall) Validate() error {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("Repeat", err)
 		}
-	}
-	if err := typesValidator.Var(s.ResultPreview, "required"); err != nil {
-		errors = errors.Append("ResultPreview", err)
-	}
-	if err := typesValidator.Var(s.ToolName, "required"); err != nil {
-		errors = errors.Append("ToolName", err)
-	}
-	if err := typesValidator.Var(s.ToolUseID, "required"); err != nil {
-		errors = errors.Append("ToolUseID", err)
 	}
 	if len(errors) == 0 {
 		return nil
