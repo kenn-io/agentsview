@@ -35,6 +35,17 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 	}
 }
 
+func TestAddUsageDedupToken(t *testing.T) {
+	seen := make(map[UsageDedupToken]int)
+	token := UsageDedupToken{Kind: "source", Value: "agent:uuid"}
+	assert.True(t, AddUsageDedupToken(seen, token, 7))
+	assert.False(t, AddUsageDedupToken(seen, token, 9))
+	assert.Equal(t, 7, seen[token])
+	assert.True(t, AddUsageDedupToken(seen, UsageDedupToken{Kind: "usage", Value: token.Value}, 9))
+	assert.Len(t, seen, 2)
+	assert.True(t, AddUsageDedupToken(make(map[UsageDedupToken]struct{}), token, struct{}{}))
+}
+
 func TestSelectSessionUsageRows(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string

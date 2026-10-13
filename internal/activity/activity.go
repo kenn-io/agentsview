@@ -564,6 +564,15 @@ type UsageDedupToken struct {
 	Value string
 }
 
+// AddUsageDedupToken records the first value for a token and reports whether it was new.
+func AddUsageDedupToken[T any](seen map[UsageDedupToken]T, token UsageDedupToken, value T) bool {
+	if _, exists := seen[token]; exists {
+		return false
+	}
+	seen[token] = value
+	return true
+}
+
 type claudeUsageSnapshotToken struct {
 	messageID string
 	requestID string
@@ -722,11 +731,10 @@ func CanonicalSessionTokenCoverageContext(
 		}
 		genericCanonical[i] = i
 		if key, ok := SessionUsageDedupTokenForRow(row.UsageSource, row.Agent, row.ClaudeMessageID, row.ClaudeRequestID, row.SourceUUID, row.UsageDedupKey); ok {
-			if previous, duplicate := seen[key]; duplicate {
-				genericCanonical[i] = previous
+			if !AddUsageDedupToken(seen, key, i) {
+				genericCanonical[i] = seen[key]
 				continue
 			}
-			seen[key] = i
 		}
 	}
 	coverage := make(map[string]SessionTokenCoverage)
@@ -851,11 +859,8 @@ func usageSurvivorSelection(
 				continue
 			}
 		}
-		if k, ok := UsageDedupTokenForRow(u.Agent, u.ClaudeMessageID, u.ClaudeRequestID, u.SourceUUID, u.UsageDedupKey); ok {
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
+		if k, ok := UsageDedupTokenForRow(u.Agent, u.ClaudeMessageID, u.ClaudeRequestID, u.SourceUUID, u.UsageDedupKey); ok && !AddUsageDedupToken(seen, k, struct{}{}) {
+			continue
 		}
 		mask[i] = true
 		attribution[i] = snapshotAttribution[i]

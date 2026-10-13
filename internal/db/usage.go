@@ -2113,11 +2113,8 @@ func (db *DB) getDailyUsageLegacy(
 		if key, ok := UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
+		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+			continue
 		}
 
 		if seenSessions != nil && r.usageSource != "cursor" {
@@ -2850,11 +2847,8 @@ func (db *DB) getTopSessionsByCostLegacy(
 		if key, ok := UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
+		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+			continue
 		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _, priceErr := dailyUsageAmounts(r, rateResolver)
@@ -3250,11 +3244,8 @@ func (db *DB) getSessionUsageLegacy(
 		if key, ok := UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
+		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+			continue
 		}
 
 		costRow := r
@@ -3469,11 +3460,8 @@ func (db *DB) getUsageSessionCountsLegacy(
 		if key, ok := UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := dedup[key]; dup {
-				continue
-			}
-			dedup[key] = struct{}{}
+		); ok && !activity.AddUsageDedupToken(dedup, key, struct{}{}) {
+			continue
 		}
 
 		if _, ok := seen[r.sessionID]; !ok {

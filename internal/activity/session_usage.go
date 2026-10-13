@@ -52,12 +52,9 @@ func SelectSessionUsageRows(ctx context.Context, rows []UsageRow, contributes []
 		if attribution[i] != row.SessionID {
 			discard()
 		}
-		if key, ok := SessionUsageDedupTokenForRow(row.UsageSource, row.Agent, row.ClaudeMessageID, row.ClaudeRequestID, row.SourceUUID, row.UsageDedupKey); ok {
-			if _, duplicate := seen[key]; duplicate {
-				discard()
-				continue
-			}
-			seen[key] = struct{}{}
+		if key, ok := SessionUsageDedupTokenForRow(row.UsageSource, row.Agent, row.ClaudeMessageID, row.ClaudeRequestID, row.SourceUUID, row.UsageDedupKey); ok && !AddUsageDedupToken(seen, key, struct{}{}) {
+			discard()
+			continue
 		}
 		pricing, err := price(i, searches[i])
 		if err != nil {

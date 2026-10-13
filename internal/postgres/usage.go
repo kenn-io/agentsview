@@ -1403,11 +1403,8 @@ func (s *Store) GetSessionUsage(
 		if key, ok := db.UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
+		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+			continue
 		}
 
 		costRow := r
@@ -1565,11 +1562,8 @@ func (s *Store) GetDailyUsage(
 		if key, ok := db.UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
+		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+			continue
 		}
 
 		if seenSessions != nil && r.usageSource != "cursor" {
@@ -2148,11 +2142,8 @@ func (s *Store) GetTopSessionsByCost(
 		if key, ok := db.UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
+		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+			continue
 		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _, priceErr := pgDailyUsageAmounts(r, rateResolver)
@@ -2287,11 +2278,8 @@ func (s *Store) GetUsageSessionCounts(
 		if key, ok := db.UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := dedup[key]; dup {
-				continue
-			}
-			dedup[key] = struct{}{}
+		); ok && !activity.AddUsageDedupToken(dedup, key, struct{}{}) {
+			continue
 		}
 
 		if _, ok := seen[r.sessionID]; !ok {

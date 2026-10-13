@@ -980,11 +980,8 @@ func (db *DB) attachSessionExportUsage(
 		if key, ok := UsageDedupTokenForRow(
 			r.usageSource, r.agent, r.claudeMessageID,
 			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok {
-			if _, dup := a.seen[key]; dup {
-				continue
-			}
-			a.seen[key] = struct{}{}
+		); ok && !activity.AddUsageDedupToken(a.seen, key, struct{}{}) {
+			continue
 		}
 		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := sessionExportUsageTokens(r)
 		costRow := r
