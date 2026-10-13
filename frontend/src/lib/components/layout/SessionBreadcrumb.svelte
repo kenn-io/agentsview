@@ -379,6 +379,21 @@
     describeCaptureCoverage(sessionCaptureCoverage, sessionPlanUsage),
   );
   let uncapturedTurns = $derived(sessionCaptureCoverage?.uncaptured_turns ?? 0);
+  // The missed-turn line comes last in the coverage lines; the closed
+  // trigger repeats it so its warning icon is explained without opening.
+  let missedTurnsLine = $derived(
+    uncapturedTurns > 0 ? (captureCoverageLines.at(-1) ?? null) : null,
+  );
+  let planUsageTitle = $derived.by(() => {
+    if (!planUsageDisplay) return undefined;
+    const rootId = planUsageDisplay.countedUnder;
+    const state = rootId
+      ? m.plan_usage_counted_under({
+          title: usageRootTitle ?? sessionDisplayId(rootId),
+        })
+      : planUsageDisplay.headline;
+    return [state, missedTurnsLine].filter(Boolean).join("\n") || undefined;
+  });
 
   onDestroy(() => {
     openersRead.cancel();
@@ -1241,12 +1256,15 @@
           <summary
             class="usage-breakdown-trigger plan-usage-trigger"
             class:plan-usage-trigger--empty={!planUsageDisplay.hasFigures}
-            title={planUsageDisplay.headline || undefined}
+            title={planUsageTitle}
           >
-            {#if uncapturedTurns > 0}
+            {#if missedTurnsLine}
               <TriangleAlertIcon size="10" strokeWidth="2.2" aria-hidden="true" />
             {/if}
             {planUsageDisplay.trigger}
+            {#if missedTurnsLine}
+              <span class="kit-sr-only">, {missedTurnsLine}</span>
+            {/if}
           </summary>
           {#if planUsageOpen}
             {@const rootId = planUsageDisplay.countedUnder}
