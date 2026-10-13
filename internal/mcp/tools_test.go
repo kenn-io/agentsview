@@ -1904,7 +1904,7 @@ func TestListSessionsIncludesBrowserLink(t *testing.T) {
 func TestListSessionsAnnotationsPreserveAutomatedPresence(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "worker", "proj", func(s *db.Session) {
-		s.MessageCount, s.UserMessageCount, s.IsAutomated = 2, 1, true
+		s.MessageCount, s.UserMessageCount, s.IsAutomated = 4, 2, true
 		s.PRLinks = []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}
 	})
 	_, err := d.SetSessionLabels(t.Context(), "worker", []string{"nightly"})

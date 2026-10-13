@@ -40,7 +40,7 @@ func TestForkDetection_LinearSession(t *testing.T) {
 	assertMessageCount(t, len(results[0].Messages), 4)
 }
 
-func TestForkDetection_LargeGapFork(t *testing.T) {
+func TestForkDetection_LargeGapForkPropagatesPRLinks(t *testing.T) {
 	// Main branch: a->b->c->d->e->f->g->h (4+ user turns after fork)
 	// Fork from b: i->j
 	// Fork point is at node b, which has children c (first) and i.

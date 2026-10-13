@@ -53,7 +53,7 @@ func TestIncrementalSync_ClaudePRLinkAppends(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "pr-link-append", 2)
 }
 
-func TestParseDiffAnnotations(t *testing.T) {
+func TestParseDiffIgnoresLauncherParentsButDetectsMissingPRLinks(t *testing.T) {
 	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentGemini)
 	env.writeClaudeSession(t, "test-proj", "pd-prs.jsonl", testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON("Open a PR", tsZero),

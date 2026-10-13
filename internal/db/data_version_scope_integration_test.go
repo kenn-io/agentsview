@@ -97,6 +97,8 @@ func TestSimulatedScopedUpgradeReparsesUnchangedFreebuffSource(t *testing.T) {
 
 func TestClaudePRLinkUpgradePreservesSessionIdentity(t *testing.T) {
 	assert.Equal(t, []parser.AgentType{parser.AgentClaude}, db.ScopedDataVersionProviders(131, 132))
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: {parser.AgentClaude}}))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	source := filepath.Join(root, "project", "worker.jsonl")
@@ -109,7 +111,7 @@ func TestClaudePRLinkUpgradePreservesSessionIdentity(t *testing.T) {
 	var id string
 	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT id FROM sessions").Scan(&id))
 	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET data_version=131, pr_links=''; PRAGMA user_version=131")
+		_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d, pr_links=''; PRAGMA user_version=%d", version-1, version-1))
 		return err
 	}))
 	path := database.Path()

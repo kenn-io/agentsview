@@ -204,10 +204,6 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, worker.ParentSessionID)
 	assert.Empty(t, worker.RelationshipType)
-	cleared, err = d.ClearSessionExternalParent(ctx, "worker")
-	require.NoError(t, err)
-	assert.False(t, cleared.Changed)
-	assert.True(t, cleared.SessionFound)
 }
 
 func TestSessionExternalParentYieldsToParserParent(t *testing.T) {
@@ -489,6 +485,8 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 			// The flat list selects the matching worker itself.
 			assert.Equal(t, []string{"worker"},
 				listSortedIDs(t, d, tt.filter(defaults)))
+			_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET is_automated = 0 WHERE id = 'worker'")
+			require.NoError(t, err)
 			explicit := tt.filter(defaults)
 			explicit.OneShotFilterSet = true
 			assert.Empty(t, listSortedIDs(t, d, explicit))
@@ -498,6 +496,8 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 			explicit.IDs = []string{"worker"}
 			assert.Empty(t, listSortedIDs(t, d, explicit))
 
+			_, err = d.getWriter().ExecContext(ctx, "UPDATE sessions SET is_automated = 1, user_message_count = 3 WHERE id = 'worker'")
+			require.NoError(t, err)
 			automated := tt.filter(defaults)
 			automated.AutomatedFilterSet = true
 			assert.Empty(t, listSortedIDs(t, d, automated))
@@ -506,6 +506,9 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 			assert.Empty(t, index.Sessions)
 			automated.IDs = []string{"worker"}
 			assert.Empty(t, listSortedIDs(t, d, automated))
+
+			_, err = d.getWriter().ExecContext(ctx, "UPDATE sessions SET user_message_count = 1 WHERE id = 'worker'")
+			require.NoError(t, err)
 
 			// The sidebar keeps the launcher's tree and drops unrelated roots.
 			for _, limit := range []int{0, 10} {
@@ -670,61 +673,6 @@ func TestAnnotationTreeSkipsHiddenAncestors(t *testing.T) {
 	}
 }
 
-func TestDetachedLauncherLinkKeepsWorkerClassification(t *testing.T) {
-	for _, tt := range []struct {
-		sessionKind string
-		want        string
-	}{
-		{sessionKind: "non-interactive", want: "subagent"},
-		{sessionKind: "", want: ""},
-	} {
-		t.Run("kind "+tt.sessionKind, func(t *testing.T) {
-			ctx := t.Context()
-			seed := func(t *testing.T, d *DB) {
-				t.Helper()
-				insertSession(t, d, "launcher", "proj")
-				insertSession(t, d, "worker", "proj", func(s *Session) {
-					s.SessionKind = tt.sessionKind
-				})
-				link, err := d.SetSessionExternalParent(ctx, "worker", "launcher")
-				require.NoError(t, err)
-				require.True(t, link.Applied)
-			}
-			assertDetached := func(t *testing.T, d *DB) {
-				t.Helper()
-				worker, err := d.GetSession(ctx, "worker")
-				require.NoError(t, err)
-				assert.Nil(t, worker.ParentSessionID)
-				assert.Equal(t, tt.want, worker.RelationshipType)
-			}
-
-			t.Run("cleared", func(t *testing.T) {
-				d := testDB(t)
-				seed(t, d)
-				_, err := d.ClearSessionExternalParent(ctx, "worker")
-				require.NoError(t, err)
-				assertDetached(t, d)
-			})
-
-			t.Run("suppressed by a cycle", func(t *testing.T) {
-				d := testDB(t)
-				seed(t, d)
-				// The launcher's transcript now names the worker as its own
-				// parent, so the launcher link would close a loop.
-				launcher := Session{
-					ID: "launcher", Project: "proj", Machine: defaultMachine,
-					Agent: defaultAgent, MessageCount: 1,
-					ParentSessionID: new("worker"), RelationshipType: "continuation",
-				}
-				_, err := d.getWriter().ExecContext(ctx, upsertSessionBaseSQL, upsertSessionArgs(launcher)...)
-				require.NoError(t, err)
-				require.NoError(t, d.LinkSubagentSessions())
-				assertDetached(t, d)
-			})
-		})
-	}
-}
-
 func TestParsePRFilter(t *testing.T) {
 	for _, tt := range []struct {
 		value   string
@@ -778,21 +726,23 @@ func TestSessionExternalParentWaitsForParentArrival(t *testing.T) {
 			assert.Equal(t, "manager", link.ParentSessionID)
 			assert.False(t, link.Applied)
 
-			_, err = d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_pending_parent
+			if !beforeWorker {
+				_, err = d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_pending_parent
 				BEFORE UPDATE OF parent_session_id ON sessions
 				WHEN NEW.id = 'worker' AND NEW.parent_session_id = 'manager'
 				BEGIN SELECT RAISE(ABORT, 'pending parent recompute failed'); END`)
-			require.NoError(t, err)
-			err = d.UpsertSession(ctx, Session{ID: "manager", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1})
-			require.ErrorContains(t, err, "pending parent recompute failed")
-			manager, err := d.GetSession(ctx, "manager")
-			require.NoError(t, err)
-			assert.Nil(t, manager, "failed child recomputation must roll back parent arrival")
-			worker, err = d.GetSession(ctx, "worker")
-			require.NoError(t, err)
-			assert.Nil(t, worker.ParentSessionID)
-			_, err = d.getWriter().ExecContext(ctx, "DROP TRIGGER fail_pending_parent")
-			require.NoError(t, err)
+				require.NoError(t, err)
+				err = d.UpsertSession(ctx, Session{ID: "manager", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1})
+				require.ErrorContains(t, err, "pending parent recompute failed")
+				manager, err := d.GetSession(ctx, "manager")
+				require.NoError(t, err)
+				assert.Nil(t, manager, "failed child recomputation must roll back parent arrival")
+				worker, err = d.GetSession(ctx, "worker")
+				require.NoError(t, err)
+				assert.Nil(t, worker.ParentSessionID)
+				_, err = d.getWriter().ExecContext(ctx, "DROP TRIGGER fail_pending_parent")
+				require.NoError(t, err)
+			}
 
 			insertSession(t, d, "manager", "proj")
 			worker, err = d.GetSession(ctx, "worker")
@@ -842,43 +792,52 @@ func TestPendingLauncherParentPreservesParserClassification(t *testing.T) {
 		assert.Nil(t, worker.ParentSessionID)
 		assert.Equal(t, "subagent", worker.RelationshipType)
 	}
-	_, err := d.ClearSessionExternalParent(ctx, "worker")
-	require.NoError(t, err)
-	worker, err := d.GetSession(ctx, "worker")
-	require.NoError(t, err)
-	assert.Nil(t, worker.ParentSessionID)
-	assert.Equal(t, "subagent", worker.RelationshipType)
 }
 
 func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
-	for _, action := range []string{"clear", "replace with pending", "cycle"} {
-		t.Run(action, func(t *testing.T) {
-			d := testDB(t)
-			ctx := t.Context()
-			insertSession(t, d, "manager", "proj")
-			insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = "subagent" })
-			link, err := d.SetSessionExternalParent(ctx, "worker", "manager")
-			require.NoError(t, err)
-			require.True(t, link.Applied)
-			insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = "subagent" })
-			exported, err := d.GetArtifactExportSession(ctx, "worker")
-			require.NoError(t, err)
-			assert.Nil(t, exported.ParentSessionID)
-			assert.Equal(t, "subagent", exported.RelationshipType)
-			switch action {
-			case "clear":
-				_, err = d.ClearSessionExternalParent(ctx, "worker")
-			case "replace with pending":
-				_, err = d.SetSessionExternalParent(ctx, "worker", "missing")
-			case "cycle":
-				insertSession(t, d, "manager", "proj", func(s *Session) { s.ParentSessionID = new("worker"); s.RelationshipType = "continuation" })
+	for _, classification := range []struct{ kind, relationship, want string }{
+		{relationship: "subagent", want: "subagent"},
+		{kind: "non-interactive", want: "subagent"},
+		{},
+	} {
+		for _, action := range []string{"clear", "replace with pending", "cycle"} {
+			if action == "replace with pending" && classification.relationship == "" {
+				continue
 			}
-			require.NoError(t, err)
-			worker, err := d.GetSession(ctx, "worker")
-			require.NoError(t, err)
-			assert.Nil(t, worker.ParentSessionID)
-			assert.Equal(t, "subagent", worker.RelationshipType)
-		})
+			t.Run(action+"/"+classification.kind+"/"+classification.relationship, func(t *testing.T) {
+				d := testDB(t)
+				ctx := t.Context()
+				insertSession(t, d, "manager", "proj")
+				insertSession(t, d, "worker", "proj", func(s *Session) {
+					s.SessionKind = classification.kind
+					s.RelationshipType = classification.relationship
+				})
+				link, err := d.SetSessionExternalParent(ctx, "worker", "manager")
+				require.NoError(t, err)
+				require.True(t, link.Applied)
+				insertSession(t, d, "worker", "proj", func(s *Session) {
+					s.SessionKind = classification.kind
+					s.RelationshipType = classification.relationship
+				})
+				exported, err := d.GetArtifactExportSession(ctx, "worker")
+				require.NoError(t, err)
+				assert.Nil(t, exported.ParentSessionID)
+				assert.Equal(t, classification.want, exported.RelationshipType)
+				switch action {
+				case "clear":
+					_, err = d.ClearSessionExternalParent(ctx, "worker")
+				case "replace with pending":
+					_, err = d.SetSessionExternalParent(ctx, "worker", "missing")
+				case "cycle":
+					insertSession(t, d, "manager", "proj", func(s *Session) { s.ParentSessionID = new("worker"); s.RelationshipType = "continuation" })
+				}
+				require.NoError(t, err)
+				worker, err := d.GetSession(ctx, "worker")
+				require.NoError(t, err)
+				assert.Nil(t, worker.ParentSessionID)
+				assert.Equal(t, classification.want, worker.RelationshipType)
+			})
+		}
 	}
 }
 

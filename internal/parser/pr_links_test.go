@@ -65,7 +65,7 @@ func TestNewPRLink(t *testing.T) {
 	}
 }
 
-func TestClaudePRLinksDeduplicated(t *testing.T) {
+func TestClaudePRLinksDeduplicateWithoutCappingDistinctLinks(t *testing.T) {
 	t.Parallel()
 	duplicates := strings.Join([]string{
 		`{"type":"user","sessionId":"pr-links","uuid":"u1","timestamp":"2026-10-05T03:00:00Z","message":{"content":"open a PR"}}`,

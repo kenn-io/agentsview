@@ -11,7 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-func TestSetSessionLabelsMapsRemoteReadOnly(t *testing.T) {
+func TestSessionAnnotationWritesMapRemoteReadOnly(t *testing.T) {
 	for _, tt := range []struct {
 		method, path string
 		call         func(*httpBackend) error

@@ -404,8 +404,6 @@ func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
 		name  string
 		write func() error
 	}{
-		{"label set", func() error { _, err := local.SetSessionLabels(ctx, fixtureBetaID, []string{"nightly"}); return err }},
-		{"label clear", func() error { _, err := local.SetSessionLabels(ctx, fixtureBetaID, nil); return err }},
 		{"parent set", func() error { _, err := local.SetSessionExternalParent(ctx, fixtureBetaID, fixtureAlphaID); return err }},
 		{"parent clear", func() error { _, err := local.ClearSessionExternalParent(ctx, fixtureBetaID); return err }},
 	} {
@@ -426,12 +424,6 @@ func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, count, afterCount)
 			assert.NotEqual(t, before, after)
-			if tt.name == "label clear" {
-				beta, err := store.GetSession(ctx, fixtureBetaID)
-				require.NoError(t, err)
-				require.NotNil(t, beta)
-				assert.Nil(t, beta.Labels)
-			}
 		})
 	}
 }

@@ -690,7 +690,7 @@ func TestCommitExtractedUnitBindsEvidenceAndAdvances(t *testing.T) {
 	assert.Equal(t, ExtractProgressDone, progress.State)
 }
 
-func TestExtractedSessionAnnotationsPreserveCoverage(t *testing.T) {
+func TestSessionAnnotationsAdvanceSyncMarkerPreservingExtractedCoverage(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	seedCommitUnitSession(t, d, "sess-1")

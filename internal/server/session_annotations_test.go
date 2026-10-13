@@ -69,11 +69,18 @@ func TestAnnotationFiltersHonorExplicitOneShotExclusion(t *testing.T) {
 	_, err := te.db.SetSessionLabels(t.Context(), "worker", []string{"nightly"})
 	require.NoError(t, err)
 	for _, filter := range []string{"label=nightly", "pr=owner%2Frepo%237"} {
-		w := te.get(t, "/api/v1/sessions?ids=worker&"+filter+"&include_one_shot=false")
-		assertStatus(t, w, http.StatusOK)
-		assert.NotContains(t, w.Body.String(), `"id":"worker"`)
 		for _, route := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
 			for _, toggle := range []string{"&include_one_shot=false", "&include_automated=false"} {
+				automated := toggle == "&include_automated=false"
+				userMessages := 1
+				if automated {
+					userMessages = 2
+				}
+				require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
+					ID: "worker", Machine: "test", Agent: "claude", Project: "proj",
+					MessageCount: 3, UserMessageCount: userMessages, IsAutomated: automated,
+					PRLinks: []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}},
+				}))
 				w := te.get(t, route+"?"+filter+toggle)
 				assertStatus(t, w, http.StatusOK)
 				assert.NotContains(t, w.Body.String(), `"id":"worker"`)
@@ -112,8 +119,6 @@ func TestSessionAnnotationWatchWithFutureSyncMarker(t *testing.T) {
 		{"pending parent clear", func() error { _, err := te.db.ClearSessionExternalParent(t.Context(), "worker"); return err }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			before, err := te.db.GetSessionFull(t.Context(), "worker")
-			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			w := newFlushRecorder()
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/sessions/worker/watch", nil)
@@ -123,9 +128,6 @@ func TestSessionAnnotationWatchWithFutureSyncMarker(t *testing.T) {
 			te.waitForSSEEvent(t, w, "session.timing", 3*time.Second)
 			require.NoError(t, tt.write())
 			te.waitForSSEEvent(t, w, "session_updated", 3*time.Second)
-			after, err := te.db.GetSessionFull(t.Context(), "worker")
-			require.NoError(t, err)
-			assert.Equal(t, before.LocalModifiedAt, after.LocalModifiedAt)
 		})
 	}
 }

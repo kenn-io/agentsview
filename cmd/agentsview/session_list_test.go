@@ -124,17 +124,20 @@ func TestSessionListIncludeSource(t *testing.T) {
 }
 
 func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	seedSessionsWithOpts(t, dataDir, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
-		s.UserMessageCount = 1
-		s.IsAutomated = true
-		s.SessionKind = "roborev"
-		s.PRLinks = []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}
-	}})
-	_, err := executeCommand(newRootCommand(), "session", "label", "worker", "nightly")
-	require.NoError(t, err)
 	for _, filter := range [][]string{{"--label", "nightly"}, {"--pr", "owner/repo#7"}} {
 		for _, toggle := range []string{"--include-one-shot=false", "--include-automated=false"} {
+			dataDir := newAgentDataDir(t)
+			seedSessionsWithOpts(t, dataDir, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
+				s.UserMessageCount = 1
+				s.IsAutomated = toggle == "--include-automated=false"
+				if s.IsAutomated {
+					s.UserMessageCount = 3
+					s.SessionKind = "roborev"
+				}
+				s.PRLinks = []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}
+			}})
+			_, err := executeCommand(newRootCommand(), "session", "label", "worker", "nightly")
+			require.NoError(t, err)
 			args := append([]string{"session", "list", "--format", "json"}, filter...)
 			args = append(args, toggle)
 			cmd := newRootCommand()
