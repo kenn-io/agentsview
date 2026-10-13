@@ -65,8 +65,24 @@ type Monitor struct {
 	joins   map[AccountKey]map[string]*join
 	stopped map[AccountKey]error
 	cold    map[AccountKey]int
+	// pending holds records a failed save left behind, per chat. They are
+	// saved before any later record of the same chat, because the parser
+	// reads token totals in file order.
+	pending map[threadKey]pendingBatch
 	closed  bool
 	wg      sync.WaitGroup
+}
+
+type threadKey struct {
+	key      AccountKey
+	threadID string
+}
+
+// pendingBatch is what one chat still has to save: token and turn
+// completion records, and the newest turn the monitor saw complete.
+type pendingBatch struct {
+	records []mirror.Record
+	handled string
 }
 
 // join is one joined thread. A nil *join in Monitor.joins reserves a slot
@@ -168,7 +184,9 @@ func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadI
 		m.cold[key]++
 		m.mu.Unlock()
 		m.updateLive(key)
-		return m.setLastHandled(key, threadID, turnID)
+		// Through flush, so a pending batch with an older handled turn
+		// cannot overwrite this one later.
+		return m.flush(key, threadID, nil, turnID)
 	default:
 		return m.stopCapture(key, fmt.Errorf("%w: thread/resume returned resumeKind %q", ErrProtocolChange, reply.ResumeKind))
 	}
@@ -223,6 +241,9 @@ func (m *Monitor) init() {
 	if m.cold == nil {
 		m.cold = map[AccountKey]int{}
 	}
+	if m.pending == nil {
+		m.pending = map[threadKey]pendingBatch{}
+	}
 }
 
 // reserve takes a join slot for threadID unless the thread is joined, the
@@ -273,9 +294,9 @@ func (m *Monitor) run(j *join) {
 	defer func() { _ = j.conn.Close() }() // leaving: the close error changes nothing
 	var buf []mirror.Record
 	flush := func() {
-		if err := m.flush(j, buf); err != nil {
-			m.Log.Printf("codex-cloud: thread %s: save token records: %v", j.threadID, err)
-			return
+		// A failed save keeps buf as the chat's pending batch.
+		if err := m.flush(j.key, j.threadID, buf, j.handled); err != nil {
+			m.Log.Printf("codex-cloud: chat %s: save token records: %v; retrying on the next save", j.threadID, err)
 		}
 		buf = nil
 	}
@@ -448,30 +469,71 @@ func appendRecord(buf *[]mirror.Record, kind mirror.Kind, data any, now time.Tim
 	return nil
 }
 
-// flush appends buf to the thread's mirror file and records a completed
-// turn, under the account lock the fetcher also takes.
-func (m *Monitor) flush(j *join, buf []mirror.Record) error {
-	if len(buf) == 0 && j.handled == "" {
+// flush appends the chat's pending records, then buf, to its mirror file
+// and records handled as its newest completed turn, under the account lock
+// the fetcher also takes. An empty handled keeps the stored one. When the
+// save fails, everything stays pending for the chat's next save.
+func (m *Monitor) flush(key AccountKey, threadID string, buf []mirror.Record, handled string) error {
+	unlock := m.Store.Lock(key)
+	defer unlock()
+	// Taking the batch under the account lock keeps the order: no other
+	// save of this chat can write newer records first.
+	id := threadKey{key, threadID}
+	m.mu.Lock()
+	m.init()
+	batch, had := m.pending[id]
+	delete(m.pending, id)
+	m.mu.Unlock()
+	batch.records = append(batch.records, buf...)
+	if handled != "" {
+		batch.handled = handled
+	}
+	if len(batch.records) == 0 && batch.handled == "" {
 		return nil
 	}
-	unlock := m.Store.Lock(j.key)
-	defer unlock()
-	st, err := m.Store.LoadThread(j.key, j.threadID)
+	err := m.save(key, threadID, batch)
+	if err != nil {
+		m.mu.Lock()
+		m.pending[id] = batch
+		m.mu.Unlock()
+	}
+	if err != nil || had {
+		m.updateLive(key)
+	}
+	return err
+}
+
+func (m *Monitor) save(key AccountKey, threadID string, batch pendingBatch) error {
+	st, err := m.Store.LoadThread(key, threadID)
 	if err != nil {
 		return err
 	}
-	next, _, err := commitThread(m.Store, j.key, j.threadID, st, buf, m.Now())
-	if err != nil {
+	if batch.handled != "" {
+		// commitThread saves the state only after the records are durable.
+		st.LastHandledTurnID = batch.handled
+	}
+	if _, _, err := commitThread(m.Store, key, threadID, st, batch.records, m.Now()); err != nil {
 		return err
 	}
-	if len(buf) > 0 {
+	if len(batch.records) > 0 {
 		m.flushes.Add(1)
 	}
-	if j.handled == "" || next.LastHandledTurnID == j.handled {
-		return nil
+	return nil
+}
+
+// flushPending retries every chat's pending batch.
+func (m *Monitor) flushPending() {
+	m.mu.Lock()
+	ids := make([]threadKey, 0, len(m.pending))
+	for id := range m.pending {
+		ids = append(ids, id)
 	}
-	next.LastHandledTurnID = j.handled
-	return m.Store.SaveThread(j.key, j.threadID, next)
+	m.mu.Unlock()
+	for _, id := range ids {
+		if err := m.flush(id.key, id.threadID, nil, ""); err != nil {
+			m.Log.Printf("codex-cloud: chat %s: save token records: %v; retrying on the next run", id.threadID, err)
+		}
+	}
 }
 
 // ended handles a connection the server or the network closed. A token
@@ -578,6 +640,12 @@ func (m *Monitor) updateLive(key AccountKey) {
 	m.init()
 	stopped := m.stopped[key]
 	cold := m.cold[key]
+	unsaved := 0
+	for id := range m.pending {
+		if id.key == key {
+			unsaved++
+		}
+	}
 	watching := 0
 	for _, j := range m.joins[key] {
 		if j != nil {
@@ -585,33 +653,32 @@ func (m *Monitor) updateLive(key AccountKey) {
 		}
 	}
 	m.mu.Unlock()
-	if stopped != nil {
-		m.Status.SetLive(string(key), "Live tokens: stopped. "+Message(FailProtocol, time.Time{}))
-		return
-	}
 	text := fmt.Sprintf("Live tokens: watching %d running threads", watching)
 	if cold > 0 {
 		text += fmt.Sprintf(" (%d joins arrived after the turn ended)", cold)
 	}
+	if stopped != nil {
+		text = "Live tokens: stopped. " + Message(FailProtocol, time.Time{})
+	}
+	if unsaved > 0 {
+		text += fmt.Sprintf(" Token counts for %d chats could not be saved yet; AgentsView keeps retrying.", unsaved)
+	}
 	m.Status.SetLive(string(key), text)
 }
 
+// lastHandled reads the chat's newest handled turn, counting one still
+// waiting to be saved.
 func (m *Monitor) lastHandled(key AccountKey, threadID string) (string, error) {
 	unlock := m.Store.Lock(key)
 	defer unlock()
+	m.mu.Lock()
+	pending := m.pending[threadKey{key, threadID}].handled
+	m.mu.Unlock()
+	if pending != "" {
+		return pending, nil
+	}
 	st, err := m.Store.LoadThread(key, threadID)
 	return st.LastHandledTurnID, err
-}
-
-func (m *Monitor) setLastHandled(key AccountKey, threadID, turnID string) error {
-	unlock := m.Store.Lock(key)
-	defer unlock()
-	st, err := m.Store.LoadThread(key, threadID)
-	if err != nil {
-		return err
-	}
-	st.LastHandledTurnID = turnID
-	return m.Store.SaveThread(key, threadID, st)
 }
 
 // writeResumeMetadata starts a mirror file the monitor reaches before sync
