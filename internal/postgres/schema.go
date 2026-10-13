@@ -2276,7 +2276,7 @@ func CheckSchemaCompat(
 		 FROM session_plan_usage LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
-			"session_plan_usage table missing or incomplete: %w",
+			"session_plan_usage table missing required columns: %w",
 			err,
 		)
 	}
