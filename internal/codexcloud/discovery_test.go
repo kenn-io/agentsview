@@ -285,3 +285,21 @@ func TestFailedFinalFlushIsSavedOnTheNextRun(t *testing.T) {
 	assert.Equal(t, 1, env.resumes(), "the completed turn is not joined again")
 	assert.NotContains(t, env.live(t), "could not be saved")
 }
+
+func TestDiscoverySuccessResetsAccountWait(t *testing.T) {
+	env, _ := newDiscoveryEnv(t)
+	env.host.RefuseHandshake(http.StatusServiceUnavailable, nil, "")
+	env.discover(t)
+	require.Equal(t, 1, env.account(t).Wait.Attempts)
+
+	env.clock.Advance(2 * time.Minute)
+	env.host.AcceptHandshakes()
+	env.discover(t)
+	assert.Empty(t, env.account(t).Wait.Failure, "a successful listing ends the wait")
+
+	env.host.RefuseHandshake(http.StatusServiceUnavailable, nil, "")
+	env.discover(t)
+	wait := env.account(t).Wait
+	assert.Equal(t, 1, wait.Attempts, "the next failure starts from the first wait")
+	assert.Equal(t, env.clock.Now().Add(time.Minute), wait.Until)
+}
