@@ -25,6 +25,7 @@ func BenchmarkSessionAnnotationFilters(b *testing.B) {
 	where, args := BuildSessionFilterSQL(SessionFilter{Labels: []string{"nightly"}}, SQLiteQueryDialect())
 	rows, err := d.getReader().QueryContext(ctx, "EXPLAIN QUERY PLAN SELECT id FROM sessions WHERE "+where, args...)
 	require.NoError(b, err)
+	defer rows.Close()
 	for rows.Next() {
 		var id, parent, unused int
 		var detail string
@@ -32,7 +33,6 @@ func BenchmarkSessionAnnotationFilters(b *testing.B) {
 		b.Log(detail)
 	}
 	require.NoError(b, rows.Err())
-	require.NoError(b, rows.Close())
 	for _, tt := range []struct {
 		name   string
 		filter SessionFilter

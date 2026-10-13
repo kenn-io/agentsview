@@ -1058,7 +1058,7 @@ func oneShotPredicate(
 	f SessionFilter, b *QueryBuilder, q func(string) string, scope string,
 ) string {
 	conds := []string{q("user_message_count") + " > 1"}
-	if scope != "human" && !(f.OneShotFilterSet && f.HasAnnotationFilter()) {
+	if scope != "human" && (!f.OneShotFilterSet || !f.HasAnnotationFilter()) {
 		conds = append(conds,
 			q("is_automated")+" = "+b.dialect.trueLiteral)
 	}

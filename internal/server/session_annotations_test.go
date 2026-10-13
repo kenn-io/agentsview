@@ -1,15 +1,20 @@
 package server_test
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/sessionwatch"
 )
 
 func seedAnnotatedSession(t *testing.T, te *testEnv, id string, prs []db.PRLink) {
@@ -80,4 +85,44 @@ func TestSessionAnnotationWritesUnavailableOnReadOnlyStore(t *testing.T) {
 	assertStatus(t, w, http.StatusNotImplemented)
 	w = te.put(t, "/api/v1/sessions/any/parent", `{"parent_session_id":"p"}`)
 	assertStatus(t, w, http.StatusNotImplemented)
+}
+
+func TestSessionAnnotationWatchWithFutureSyncMarker(t *testing.T) {
+	t.Cleanup(sessionwatch.SetTimingsForTest(25*time.Millisecond, 50*time.Millisecond))
+	te := setup(t)
+	seedAnnotatedSession(t, te, "worker", nil)
+	seedAnnotatedSession(t, te, "manager", nil)
+	require.NoError(t, te.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET sync_marker = '2999-01-01T00:00:00Z' WHERE id = 'worker'")
+		return err
+	}))
+	for _, tt := range []struct {
+		name  string
+		write func() error
+	}{
+		{"label set", func() error { _, err := te.db.SetSessionLabels(t.Context(), "worker", []string{"nightly"}); return err }},
+		{"label clear", func() error { _, err := te.db.SetSessionLabels(t.Context(), "worker", nil); return err }},
+		{"parent set", func() error { _, err := te.db.SetSessionExternalParent(t.Context(), "worker", "manager"); return err }},
+		{"parent clear", func() error { _, err := te.db.ClearSessionExternalParent(t.Context(), "worker"); return err }},
+		{"pending parent set", func() error { _, err := te.db.SetSessionExternalParent(t.Context(), "worker", "missing-a"); return err }},
+		{"pending parent replace", func() error { _, err := te.db.SetSessionExternalParent(t.Context(), "worker", "missing-b"); return err }},
+		{"pending parent clear", func() error { _, err := te.db.ClearSessionExternalParent(t.Context(), "worker"); return err }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			before, err := te.db.GetSessionFull(t.Context(), "worker")
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			w := newFlushRecorder()
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/sessions/worker/watch", nil)
+			done := make(chan struct{})
+			go func() { defer close(done); te.handler.ServeHTTP(w, req) }()
+			t.Cleanup(func() { cancel(); <-done })
+			te.waitForSSEEvent(t, w, "session.timing", 3*time.Second)
+			require.NoError(t, tt.write())
+			te.waitForSSEEvent(t, w, "session_updated", 3*time.Second)
+			after, err := te.db.GetSessionFull(t.Context(), "worker")
+			require.NoError(t, err)
+			assert.Equal(t, before.LocalModifiedAt, after.LocalModifiedAt)
+		})
+	}
 }

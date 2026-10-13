@@ -438,15 +438,16 @@ describe("RouterStore", () => {
     setURL("/");
     store = new RouterStore();
     store.navigate("sessions", {
-      label: "ticket=ABC-123",
+      label: "ticket=ABC-123\nrole=reviewer",
       pr: "acme/widgets#42",
     });
 
     expect(new URLSearchParams(window.location.search).getAll("label")).toEqual([
       "ticket=ABC-123",
+      "role=reviewer",
     ]);
     expect(parsePath().params).toEqual({
-      label: "ticket=ABC-123",
+      label: "ticket=ABC-123\nrole=reviewer",
       pr: "acme/widgets#42",
     });
   });

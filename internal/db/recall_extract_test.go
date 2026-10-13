@@ -694,6 +694,7 @@ func TestExtractedSessionAnnotationsPreserveCoverage(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	seedCommitUnitSession(t, d, "sess-1")
+	insertSession(t, d, "manager", "proj")
 	_, err := d.getWriter().ExecContext(ctx,
 		"UPDATE sessions SET local_modified_at = '2000-01-01T00:00:00.000Z' WHERE id = 'sess-1'")
 	require.NoError(t, err)

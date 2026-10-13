@@ -1209,7 +1209,7 @@ func (db *DB) GetArtifactExportSession(
 		AND EXISTS (SELECT 1 FROM session_external_parents ep
 			WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)`
 	parent := `CASE WHEN ` + launcherApplied + ` THEN NULL ELSE parent_session_id END`
-	relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + parentlessRelationshipSQL + ` ELSE relationship_type END`
+	relationship := `CASE WHEN ` + launcherApplied + ` THEN COALESCE((SELECT ep.prior_relationship_type FROM session_external_parents ep WHERE ep.session_id = sessions.id), ` + parentlessRelationshipSQL + `) ELSE relationship_type END`
 	cols := sessionFullColsBeforeParent + parent + `, parser_parent_session_id, ` + relationship + sessionFullColsAfterRelationship
 	return scanSessionFullRow(db.getReader().QueryRowContext(ctx,
 		"SELECT "+cols+" FROM sessions WHERE id = ?", id), id)
@@ -1738,6 +1738,9 @@ func upsertSessionExec(
 	}
 	parentChanged := !nullableStringEqual(previousParent, s.ParentSessionID)
 	if result.inserted || parentChanged || previousRelationship != s.RelationshipType {
+		if _, err := exec(ctx, "UPDATE session_external_parents SET prior_relationship_type = ? WHERE session_id = ?", SessionRelationship(s), s.ID); err != nil {
+			return sessionUpsertResult{}, fmt.Errorf("saving parser relationship for %s: %w", s.ID, err)
+		}
 		if _, err := applySessionExternalParentsFor(ctx, exec, queryRow, []string{s.ID}); err != nil {
 			return sessionUpsertResult{}, err
 		}
@@ -2941,13 +2944,15 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 	id string,
 ) (count int, version int64, ok bool) {
 	var fileMtime int64
-	var fileHash, localModifiedAt, syncMarker string
+	var fileHash, localModifiedAt, syncMarker, labels, parent, relationship, launcherParent string
 	err := db.getReader().QueryRow(ctx,
 		"SELECT message_count, COALESCE(file_mtime, 0),"+
 			" COALESCE(file_hash, ''), COALESCE(local_modified_at, ''), COALESCE(sync_marker, '')"+
-			" FROM sessions WHERE id = ?",
+			", (SELECT json_group_array(label) FROM (SELECT label FROM session_labels WHERE session_id = sessions.id ORDER BY label)),"+
+			" COALESCE(parent_session_id, ''), COALESCE(relationship_type, ''),"+
+			" COALESCE((SELECT ep.parent_session_id FROM session_external_parents ep WHERE ep.session_id = sessions.id), '') FROM sessions WHERE id = ?",
 		id,
-	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt, &syncMarker)
+	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt, &syncMarker, &labels, &parent, &relationship, &launcherParent)
 	if err != nil {
 		return 0, 0, false
 	}
@@ -2956,6 +2961,10 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 		fileHash,
 		localModifiedAt,
 		syncMarker,
+		labels,
+		parent,
+		relationship,
+		launcherParent,
 	), true
 }
 

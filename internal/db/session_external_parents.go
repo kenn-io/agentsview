@@ -36,6 +36,8 @@ type SessionExternalParent struct {
 	Applied bool `json:"applied"`
 	// Changed reports whether a write moved the session's effective parent.
 	Changed bool `json:"-"`
+
+	priorRelationship sql.NullString
 }
 
 // GetSessionExternalParent returns the stored external parent link, or
@@ -81,12 +83,14 @@ func (db *DB) SetSessionExternalParent(
 		return SessionExternalParent{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO session_external_parents (session_id, parent_session_id)
-		VALUES (?, ?)
+		INSERT INTO session_external_parents (session_id, parent_session_id, prior_relationship_type)
+		VALUES (?, ?, (SELECT CASE WHEN COALESCE(parser_parent_session_id, '') = ''
+			AND `+spawnEdgeExistsSQL("sessions")+` THEN `+parentlessRelationshipSQL+`
+			ELSE relationship_type END FROM sessions WHERE id = ?))
 		ON CONFLICT(session_id) DO UPDATE SET
 			parent_session_id = excluded.parent_session_id,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
-		sessionID, parentID,
+		sessionID, parentID, sessionID,
 	); err != nil {
 		return SessionExternalParent{}, fmt.Errorf("saving session parent: %w", err)
 	}
@@ -144,11 +148,11 @@ func (db *DB) ClearSessionExternalParent(
 	cleared, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET parent_session_id = NULL,
-			relationship_type = `+parentlessRelationshipSQL+`,
+			relationship_type = COALESCE(?, `+parentlessRelationshipSQL+`),
 			sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		WHERE id = ? AND parent_session_id = ? AND relationship_type = 'subagent'
 		AND COALESCE(parser_parent_session_id, '') = ''
-		AND NOT `+spawnEdgeExistsSQL("sessions"), sessionID, link.ParentSessionID)
+		AND NOT `+spawnEdgeExistsSQL("sessions"), link.priorRelationship, sessionID, link.ParentSessionID)
 	if err != nil {
 		return SessionExternalParent{}, fmt.Errorf("removing session parent: %w", err)
 	}
@@ -196,7 +200,7 @@ func loadSessionExternalParent(
 	)
 	err := q.QueryRowContext(ctx, `
 		SELECT ep.session_id, ep.parent_session_id,
-			ep.created_at, ep.updated_at,
+			ep.created_at, ep.updated_at, ep.prior_relationship_type,
 			s.id IS NOT NULL, s.parent_session_id, s.relationship_type,
 			s.parser_parent_session_id,
 			s.id IS NOT NULL AND `+spawnEdgeExistsSQL("s")+`,
@@ -206,7 +210,7 @@ func loadSessionExternalParent(
 		WHERE ep.session_id = ?`, sessionID,
 	).Scan(
 		&link.SessionID, &link.ParentSessionID,
-		&link.CreatedAt, &link.UpdatedAt,
+		&link.CreatedAt, &link.UpdatedAt, &link.priorRelationship,
 		&link.SessionFound, &currentParent, &currentType, &parserParent,
 		&spawned, &parentFound,
 	)
@@ -254,12 +258,11 @@ func externalParentChainSQL(start, target string) string {
 }
 
 // applySessionExternalParentsSQL recomputes the launcher links that
-// linksSQL selects (with columns session_id and parent_session_id) from
+// linksSQL selects (session_id, parent_session_id, prior_relationship_type) from
 // current evidence. A link is the effective parent
 // when the parent exists, the session has no transcript parent or spawn edge, and the link's
 // chain does not lead back to the session; otherwise a session it once
-// applied to returns to no parent, keeping the subagent classification a
-// parentless non-interactive worker has without one.
+// applied to returns to no parent with its parser classification.
 // Launcher annotations advance mirror selection without changing Recall coverage.
 func applySessionExternalParentsSQL(linksSQL string) string {
 	// LIMIT -1 keeps the planner from flattening l into the update, which
@@ -268,10 +271,10 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	return `
 	UPDATE sessions
 	SET parent_session_id = IIF(l.blocked, NULL, l.parent_session_id),
-		relationship_type = IIF(l.blocked, ` + parentlessRelationshipSQL + `, 'subagent'),
+		relationship_type = IIF(l.blocked, COALESCE(l.prior_relationship_type, ` + parentlessRelationshipSQL + `), 'subagent'),
 		sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 	FROM (
-		SELECT ep.session_id, ep.parent_session_id,
+		SELECT ep.session_id, ep.parent_session_id, ep.prior_relationship_type,
 			` + externalParentChainSQL("ep.parent_session_id", "ep.session_id") + `
 			OR NOT EXISTS (SELECT 1 FROM sessions parent WHERE parent.id = ep.parent_session_id) AS blocked
 		FROM (` + linksSQL + `) AS ep
@@ -280,9 +283,10 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	WHERE sessions.id = +l.session_id
 	AND COALESCE(sessions.parser_parent_session_id, '') = ''
 	AND NOT ` + spawnEdgeExistsSQL("sessions") + `
+	AND (NOT l.blocked OR COALESCE(sessions.parent_session_id, '') <> '')
 	AND (
 		COALESCE(sessions.parent_session_id, '') <> IIF(l.blocked, '', l.parent_session_id)
-		OR COALESCE(sessions.relationship_type, '') <> IIF(l.blocked, ` + parentlessRelationshipSQL + `, 'subagent')
+		OR COALESCE(sessions.relationship_type, '') <> IIF(l.blocked, COALESCE(l.prior_relationship_type, ` + parentlessRelationshipSQL + `), 'subagent')
 	)`
 }
 
@@ -316,7 +320,7 @@ func scopedSessionExternalParentsSQL(start string) string {
 			LEFT JOIN session_external_parents pe ON pe.session_id = up.id
 			WHERE ` + externalParentStepSQL + ` IS NOT NULL
 		)
-		SELECT ep.session_id, ep.parent_session_id
+		SELECT ep.session_id, ep.parent_session_id, ep.prior_relationship_type
 		FROM down
 		CROSS JOIN session_external_parents ep ON ep.session_id = down.id
 		CROSS JOIN sessions cur ON cur.id = ep.session_id

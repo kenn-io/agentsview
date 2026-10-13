@@ -142,7 +142,7 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 			schema:          v06LegacySchema,
 			wantInsightDate: "2026-02-23",
 			userVersion:     dataVersion,
-			wantVersion:     dataVersion - 1,
+			wantVersion:     fullRebuildDataVersion() - 1,
 		},
 	}
 

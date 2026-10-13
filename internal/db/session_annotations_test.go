@@ -664,7 +664,7 @@ func TestParsePRFilter(t *testing.T) {
 	} {
 		got, err := ParsePRFilter(tt.value)
 		if tt.invalid {
-			assert.Error(t, err, tt.value)
+			require.Error(t, err, tt.value)
 			continue
 		}
 		require.NoError(t, err)
@@ -744,4 +744,80 @@ func TestClearLauncherParentAfterParentDisappears(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, worker.ParentSessionID)
 	assert.Empty(t, worker.RelationshipType)
+}
+
+func TestPendingLauncherParentPreservesParserClassification(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = "subagent" })
+	for _, parent := range []string{"missing-a", "missing-b"} {
+		link, err := d.SetSessionExternalParent(ctx, "worker", parent)
+		require.NoError(t, err)
+		assert.False(t, link.Applied)
+		assert.False(t, link.Changed)
+		worker, err := d.GetSession(ctx, "worker")
+		require.NoError(t, err)
+		assert.Nil(t, worker.ParentSessionID)
+		assert.Equal(t, "subagent", worker.RelationshipType)
+	}
+	_, err := d.ClearSessionExternalParent(ctx, "worker")
+	require.NoError(t, err)
+	worker, err := d.GetSession(ctx, "worker")
+	require.NoError(t, err)
+	assert.Nil(t, worker.ParentSessionID)
+	assert.Equal(t, "subagent", worker.RelationshipType)
+}
+
+func TestAppliedLauncherParentRestoresParserClassification(t *testing.T) {
+	for _, action := range []string{"clear", "replace with pending", "cycle"} {
+		t.Run(action, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "manager", "proj")
+			insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = "subagent" })
+			link, err := d.SetSessionExternalParent(ctx, "worker", "manager")
+			require.NoError(t, err)
+			require.True(t, link.Applied)
+			insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = "subagent" })
+			exported, err := d.GetArtifactExportSession(ctx, "worker")
+			require.NoError(t, err)
+			assert.Nil(t, exported.ParentSessionID)
+			assert.Equal(t, "subagent", exported.RelationshipType)
+			switch action {
+			case "clear":
+				_, err = d.ClearSessionExternalParent(ctx, "worker")
+			case "replace with pending":
+				_, err = d.SetSessionExternalParent(ctx, "worker", "missing")
+			case "cycle":
+				insertSession(t, d, "manager", "proj", func(s *Session) { s.ParentSessionID = new("worker"); s.RelationshipType = "continuation" })
+			}
+			require.NoError(t, err)
+			worker, err := d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			assert.Nil(t, worker.ParentSessionID)
+			assert.Equal(t, "subagent", worker.RelationshipType)
+		})
+	}
+}
+
+func TestLauncherRelationshipProvenanceSchemaUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	d, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = "subagent" })
+	_, err = d.SetSessionExternalParent(t.Context(), "worker", "missing")
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(t.Context(), "ALTER TABLE session_external_parents DROP COLUMN prior_relationship_type")
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	d, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	insertSession(t, d, "missing", "proj")
+	_, err = d.ClearSessionExternalParent(t.Context(), "worker")
+	require.NoError(t, err)
+	worker, err := d.GetSession(t.Context(), "worker")
+	require.NoError(t, err)
+	assert.Nil(t, worker.ParentSessionID)
+	assert.Equal(t, "subagent", worker.RelationshipType)
 }
