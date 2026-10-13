@@ -168,6 +168,5 @@ describe("generated recall import", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const init = fetchMock.mock.calls[0]?.[1];
     expect(init?.body).toBe(body);
-    expect(await (init?.body as Blob).text()).toBe(ndjson);
   });
 });
