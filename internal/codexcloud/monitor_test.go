@@ -172,7 +172,7 @@ func TestWarmJoinRecordsUntilTurnCompleted(t *testing.T) {
 
 	env.join(t, "a")
 	assert.Equal(t, []string{"a"}, env.monitor.Joined(passKey))
-	assert.Equal(t, "Live tokens: watching 1 running threads", env.live(t))
+	assert.Equal(t, "Live tokens: listening in on 1 running chat.", env.live(t))
 	env.notify(t, "a", tokenUsageMethod, tokenParams("a", "a-turn-2",
 		[6]float64{4603049, 4000000, 1000, 20000, 5000, 4623049}, [6]float64{90000, 80000, 0, 700, 100, 90700}))
 	env.notify(t, "a", "item/agentMessage/delta", map[string]any{"threadId": "a", "delta": "hi"})
@@ -215,7 +215,7 @@ func TestWarmJoinRecordsUntilTurnCompleted(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "a", resume.ThreadID)
-	assert.Equal(t, "Live tokens: watching 0 running threads", env.live(t))
+	assert.Equal(t, "Live tokens: idle.", env.live(t))
 
 	from := env.resumes()
 	env.join(t, "a")
@@ -231,8 +231,7 @@ func TestColdResumeOnceUntilNewerTurn(t *testing.T) {
 	require.Eventually(t, func() bool { return env.host.Joined("a") == 0 }, 5*time.Second, 5*time.Millisecond,
 		"a cold resume closes the connection at once")
 	assert.Equal(t, "a-turn-2", env.thread(t, "a").LastHandledTurnID)
-	assert.Contains(t, env.logs.String(), "had ended when AgentsView joined")
-	assert.Equal(t, "Live tokens: watching 0 running threads (1 joins arrived after the turn ended)", env.live(t))
+	assert.Contains(t, env.logs.String(), "had ended when AgentsView connected")
 
 	env.join(t, "a")
 	assert.Equal(t, 1, env.resumes(), "a stuck turn causes one cold resume")
@@ -253,7 +252,8 @@ func TestUnknownResumeKindStopsCapture(t *testing.T) {
 
 			env.join(t, "a")
 			assert.Empty(t, env.monitor.Joined(passKey))
-			assert.Equal(t, "Live tokens: stopped. "+Message(FailProtocol, time.Time{}), env.live(t))
+			assert.Equal(t, "Live tokens: stopped. "+Message(FailProtocol, time.Time{})+
+				" Then restart AgentsView to listen in again.", env.live(t))
 			handshakes := len(env.host.Handshakes())
 			env.join(t, "b")
 			assert.Len(t, env.host.Handshakes(), handshakes, "capture stays off for the account")
@@ -310,6 +310,7 @@ func TestJoinCapPerAccount(t *testing.T) {
 	}
 	assert.Len(t, env.monitor.Joined(passKey), maxJoins)
 	assert.Equal(t, maxJoins, env.resumes())
+	assert.Equal(t, "Live tokens: listening in on 10 running chats.", env.live(t))
 }
 
 func TestJoinLimitLeavesAndRejoins(t *testing.T) {

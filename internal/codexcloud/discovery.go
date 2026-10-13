@@ -53,8 +53,17 @@ func (m *Monitor) Discover(ctx context.Context) error {
 	groups, order := GroupByKey(logins)
 	if !live {
 		m.liveOff()
+		var text string
+		switch {
+		case m.NoSync:
+			text = "Live tokens: off, because source sync is off for this daemon."
+		case !gates.Fetching():
+			text = "Live tokens: off, because Codex cloud sync is off."
+		default:
+			text = "Live tokens: off, because live_tokens = false under [agents.codex-cloud]."
+		}
 		for _, key := range order {
-			m.Status.SetLive(string(key), "Live tokens: off")
+			m.Status.SetLive(string(key), text)
 		}
 		return nil
 	}
@@ -92,7 +101,7 @@ func (m *Monitor) liveOff() {
 	m.closeJoins(func(*join) bool { return true })
 	m.wg.Wait()
 	m.mu.Lock()
-	m.stopped, m.cold = nil, nil
+	m.stopped = nil
 	m.mu.Unlock()
 }
 
@@ -174,7 +183,7 @@ func (m *Monitor) check(
 	if err != nil {
 		if rpcErr, ok := errors.AsType[*RPCError](err); ok &&
 			Classify("thread/turns/list", false, rpcErr) == CatThreadError {
-			m.Log.Printf("codex-cloud: thread %s: thread/turns/list failed: %v", threadID, rpcErr)
+			m.Log.Printf("codex-cloud: chat %s: thread/turns/list failed: %v", threadID, rpcErr)
 			return false, nil
 		}
 		return true, m.failure(ctx, key, login, threadID, "thread/turns/list", err)

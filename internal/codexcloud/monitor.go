@@ -66,7 +66,6 @@ type Monitor struct {
 	mu      sync.Mutex
 	joins   map[AccountKey]map[string]*join
 	stopped map[AccountKey]error
-	cold    map[AccountKey]int
 	// pending holds records a failed save left behind, per chat. They are
 	// saved before any later record of the same chat, because the parser
 	// reads token totals in file order.
@@ -186,11 +185,7 @@ func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadI
 		// The turn ended before the join, or the listing still shows a
 		// turn the server no longer runs. Joining again waits for a newer
 		// turn, so a stuck turn causes one cold resume.
-		m.Log.Printf("codex-cloud: thread %s: turn %s had ended when AgentsView joined", threadID, turnID)
-		m.mu.Lock()
-		m.cold[key]++
-		m.mu.Unlock()
-		m.updateLive(key)
+		m.Log.Printf("codex-cloud: chat %s: turn %s had ended when AgentsView connected", threadID, turnID)
 		// Through flush, so a pending batch with an older handled turn
 		// cannot overwrite this one later.
 		return m.flush(key, threadID, nil, turnID)
@@ -249,9 +244,6 @@ func (m *Monitor) init() {
 	}
 	if m.stopped == nil {
 		m.stopped = map[AccountKey]error{}
-	}
-	if m.cold == nil {
-		m.cold = map[AccountKey]int{}
 	}
 	if m.pending == nil {
 		m.pending = map[threadKey]pendingBatch{}
@@ -339,7 +331,7 @@ func (m *Monitor) run(j *join) {
 		case <-tick.C:
 			flush()
 		case <-leave.C:
-			m.Log.Printf("codex-cloud: thread %s: leaving after %s; joining again on a later run if it still runs",
+			m.Log.Printf("codex-cloud: chat %s: disconnecting after %s; listening in again on a later run if it still runs",
 				j.threadID, m.limit())
 			flush()
 			return
@@ -559,11 +551,11 @@ func (m *Monitor) ended(j *join) {
 		return
 	}
 	if !errors.Is(err, ErrRefreshRequested) {
-		m.Log.Printf("codex-cloud: thread %s: joined connection ended: %v; joining again on a later run if it still runs",
+		m.Log.Printf("codex-cloud: chat %s: connection ended: %v; listening in again on a later run if it still runs",
 			j.threadID, Redact(err, j.login.Token))
 		return
 	}
-	m.Log.Printf("codex-cloud: thread %s: OpenAI asked for a fresh login in %s; leaving every thread joined through it",
+	m.Log.Printf("codex-cloud: chat %s: OpenAI asked for a fresh login in %s; disconnecting every chat that uses it",
 		j.threadID, j.login.Home)
 	m.Waits.RecordHome(j.login.Home, FailRefreshRequested, j.login.AuthModTime)
 	home := j.login.Home
@@ -599,7 +591,7 @@ func (m *Monitor) failure(ctx context.Context, key AccountKey, login Login, thre
 		default:
 			// The thread's own error; the next run tries again if it still
 			// runs.
-			m.Log.Printf("codex-cloud: thread %s: %s failed: %v", threadID, method, rpcErr)
+			m.Log.Printf("codex-cloud: chat %s: %s failed: %v", threadID, method, rpcErr)
 			return nil
 		}
 	}
@@ -612,7 +604,7 @@ func (m *Monitor) failure(ctx context.Context, key AccountKey, login Login, thre
 		m.Waits.RecordHome(login.Home, f, login.AuthModTime)
 		return nil
 	case FailTooLarge:
-		m.Log.Printf("codex-cloud: thread %s: %v", threadID, err)
+		m.Log.Printf("codex-cloud: chat %s: %v", threadID, err)
 		return nil
 	default:
 		m.Log.Printf("codex-cloud: live tokens: %v", Redact(err, login.Token))
@@ -657,7 +649,6 @@ func (m *Monitor) updateLive(key AccountKey) {
 	m.mu.Lock()
 	m.init()
 	stopped := m.stopped[key]
-	cold := m.cold[key]
 	unsaved := 0
 	for id := range m.pending {
 		if id.key == key {
@@ -671,17 +662,29 @@ func (m *Monitor) updateLive(key AccountKey) {
 		}
 	}
 	m.mu.Unlock()
-	text := fmt.Sprintf("Live tokens: watching %d running threads", watching)
-	if cold > 0 {
-		text += fmt.Sprintf(" (%d joins arrived after the turn ended)", cold)
-	}
-	if stopped != nil {
-		text = "Live tokens: stopped. " + Message(FailProtocol, time.Time{})
+	var text string
+	switch {
+	case stopped != nil:
+		text = "Live tokens: stopped. " + Message(FailProtocol, time.Time{}) +
+			" Then restart AgentsView to listen in again."
+	case watching == 0:
+		text = "Live tokens: idle."
+	default:
+		text = fmt.Sprintf("Live tokens: listening in on %s.", chats(watching, "running chat"))
 	}
 	if unsaved > 0 {
-		text += fmt.Sprintf(" Token counts for %d chats could not be saved yet; AgentsView keeps retrying.", unsaved)
+		text += fmt.Sprintf(" Token counts for %s could not be saved yet; AgentsView keeps retrying.",
+			chats(unsaved, "chat"))
 	}
 	m.Status.SetLive(string(key), text)
+}
+
+// chats counts n of a noun ending in "chat".
+func chats(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // lastHandled reads the chat's newest handled turn, counting one still
