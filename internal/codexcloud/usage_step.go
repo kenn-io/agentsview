@@ -237,6 +237,17 @@ func (s *Syncer) planUsage(key AccountKey, now time.Time) ([]usageRequest, error
 	})
 	var requests []usageRequest
 	for _, root := range append(pending, refresh...) {
+		// A crash after a thread moved under another root, before the
+		// account was saved, leaves it here; its usage counts there.
+		current, err := s.Store.RootOf(key, root)
+		if err != nil {
+			return nil, err
+		}
+		if current != root {
+			delete(acct.UsagePending, root)
+			delete(acct.Refresh, root)
+			continue
+		}
 		group, err := s.Store.UsageGroupFor(key, root)
 		if err != nil {
 			return nil, err
