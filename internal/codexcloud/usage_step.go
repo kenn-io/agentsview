@@ -168,7 +168,7 @@ func (s *Syncer) runUsage(ctx context.Context, gates Gates, key AccountKey, logi
 		if applyErr != nil {
 			return applyErr
 		}
-		s.noteUsage(key, resp, err, login)
+		s.noteUsage(gates, key, resp, err, login)
 		if stop {
 			break
 		}
@@ -179,7 +179,7 @@ func (s *Syncer) runUsage(ctx context.Context, gates Gates, key AccountKey, logi
 
 // noteUsage keeps the outcome of the latest plan usage request for the
 // status line. Status is in memory, like the rest of the board.
-func (s *Syncer) noteUsage(key AccountKey, resp UsageResponse, err error, login Login) {
+func (s *Syncer) noteUsage(gates Gates, key AccountKey, resp UsageResponse, err error, login Login) {
 	s.usageMu.Lock()
 	defer s.usageMu.Unlock()
 	if s.usageLines == nil {
@@ -192,9 +192,10 @@ func (s *Syncer) noteUsage(key AccountKey, resp UsageResponse, err error, login 
 	case isNoHome && noHome.failure != FailNone && noHome.failure != FailSignedOut:
 		// The home waits on a login problem the thread host or live
 		// capture found; name it rather than calling it a sign-out.
-		s.usageLines[key] = "Plan usage: " + Message(noHome.failure, time.Time{})
+		s.usageLines[key] = "Plan usage: " + withLoginCommand(gates, noHome.home, Message(noHome.failure, time.Time{}))
 	case isNoHome:
-		s.usageLines[key] = "Plan usage: signed out of ChatGPT in this Codex home. Run `codex login`."
+		s.usageLines[key] = "Plan usage: " + withLoginCommand(gates, noHome.home,
+			"signed out of ChatGPT in this Codex home. Run `codex login`.")
 	default:
 		if f := FailureFor(err, login); f != FailRateLimited {
 			s.usageLines[key] = "Plan usage: " + Message(f, time.Time{})
@@ -302,10 +303,10 @@ func (s *Syncer) queryUsage(
 		login := (*homes)[0]
 		switch {
 		case !s.Waits.UsageHomeReady(login.Home, login.AuthModTime):
-			noHome.failure = FailureFor(&HTTPError{Status: http.StatusUnauthorized}, login)
+			noHome.refuse(FailureFor(&HTTPError{Status: http.StatusUnauthorized}, login), login.Home)
 		case !s.Waits.HomeReady(login.Home, login.AuthModTime):
-			if noHome.failure == FailNone {
-				noHome.failure = s.Waits.HomeFailure(login.Home)
+			if !noHome.refused && noHome.failure == FailNone {
+				noHome.failure, noHome.home = s.Waits.HomeFailure(login.Home), login.Home
 			}
 		default:
 			resp, err := QueryUsage(ctx, s.UsageClient, gates.CodexCloud.UsageEndpoint, login, s.Version, groups)
@@ -315,7 +316,7 @@ func (s *Syncer) queryUsage(
 			}
 			s.Log.Printf("codex-cloud: plan usage refused the login in %s", login.Home)
 			s.Waits.RecordUsageHome(login.Home, login.AuthModTime)
-			noHome.failure = FailureFor(err, login)
+			noHome.refuse(FailureFor(err, login), login.Home)
 		}
 		*homes = (*homes)[1:]
 	}
@@ -323,10 +324,21 @@ func (s *Syncer) queryUsage(
 }
 
 // noUsageHomeError means no Codex home on the key may serve plan usage.
-// failure is why: the refusal FailureFor gives a 401 when plan usage
-// refused a login, else the login problem a skipped home waits on.
+// failure is why: the refusal FailureFor gives a 401 for the first home
+// plan usage refused, else the login problem a skipped home waits on.
+// home is the home failure is about; a new login there resumes plan
+// usage, so the status tells the user to sign in to it.
 type noUsageHomeError struct {
 	failure Failure
+	home    string
+	refused bool
+}
+
+// refuse records a home plan usage refused, unless an earlier one was.
+func (e *noUsageHomeError) refuse(f Failure, home string) {
+	if !e.refused {
+		e.failure, e.home, e.refused = f, home, true
+	}
 }
 
 func (e *noUsageHomeError) Error() string {
