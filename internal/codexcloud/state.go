@@ -147,6 +147,9 @@ type AccountState struct {
 	AccountID    string                  `json:"account_id,omitzero"`
 	UserID       string                  `json:"user_id,omitzero"`
 	Backfilled   map[ListingID]bool      `json:"backfilled,omitzero"`
+	// UsageAsOf is the data_as_of of the newest answered plan usage
+	// request, so the status line can date stored reports after a restart.
+	UsageAsOf time.Time `json:"usage_as_of,omitzero"`
 }
 
 // Store reads and writes fetcher state under the codex-cloud mirror root.

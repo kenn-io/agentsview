@@ -555,10 +555,7 @@ func TestRestartShowsStoredPlanUsageDate(t *testing.T) {
 	env.run(t)
 	asOf := fetchNow.Add(-time.Hour)
 
-	env.syncer = &Syncer{
-		Store: env.syncer.Store, Waits: NewWaits(env.clock.Now), Status: NewStatusBoard(), Now: env.clock.Now,
-		Dial: Dial, Gates: env.syncer.Gates, ReadLogin: env.syncer.ReadLogin, Version: "test", Log: env.syncer.Log,
-	}
+	env.restart()
 	env.clock.Advance(time.Hour)
 	env.run(t)
 
@@ -580,9 +577,55 @@ func (e *usageEnv) planLineOrEmpty(t *testing.T) string {
 	return row.PlanUsage
 }
 
-func TestStoredUsageLineWithOnlyPartialRows(t *testing.T) {
-	acct := AccountState{UsagePending: map[string]PendingEntry{"a": {HasRow: true}, "b": {}}}
-	assert.Equal(t, "Plan usage: still updating", storedUsageLine(acct))
+// restart replaces the syncer with a new one over the same store, as a
+// daemon restart does: the in-memory status is gone.
+func (e *usageEnv) restart() {
+	e.syncer = &Syncer{
+		Store: e.syncer.Store, Waits: NewWaits(e.clock.Now), Status: NewStatusBoard(), Now: e.clock.Now,
+		Dial: Dial, Gates: e.syncer.Gates, ReadLogin: e.syncer.ReadLogin, Version: "test", Log: e.syncer.Log,
+	}
+}
+
+// TestRestartAfterQuietWeekShowsStoredDate covers an account whose chats
+// stopped changing more than 7 days ago: the refresh set has emptied, yet
+// the stored reports are still dated.
+func TestRestartAfterQuietWeekShowsStoredDate(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(1), nil))
+	env.run(t)
+
+	env.restart()
+	env.clock.Advance(8 * 24 * time.Hour)
+	from := len(env.usage.Requests())
+	env.run(t)
+
+	assert.Len(t, env.usage.Requests(), from, "nothing is due")
+	assert.Equal(t, "Plan usage as of "+fetchNow.Add(-time.Hour).Local().Format("Jan 2 15:04"), env.planLine(t))
+}
+
+// TestRestartAfterPartialReportShowsStoredDate covers a restart before the
+// retry of a chat whose only report so far was partial.
+func TestRestartAfterPartialReportShowsStoredDate(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "partial", pct(1), nil))
+	env.run(t)
+
+	env.restart()
+	env.clock.Advance(time.Minute)
+	env.run(t)
+
+	assert.Equal(t, "Plan usage as of "+fetchNow.Add(-time.Hour).Local().Format("Jan 2 15:04"), env.planLine(t))
+}
+
+func TestPlanUsageDateShowsYearWhenNotThisYear(t *testing.T) {
+	lastYear := fetchNow.AddDate(-1, 0, 0)
+	assert.Equal(t, "Plan usage as of "+lastYear.Local().Format("Jan 2 2006 15:04"),
+		storedUsageLine(AccountState{UsageAsOf: lastYear}, fetchNow))
+	assert.Equal(t, "Plan usage as of "+fetchNow.Local().Format("Jan 2 15:04"),
+		storedUsageLine(AccountState{UsageAsOf: fetchNow}, fetchNow))
+	assert.Equal(t, "Plan usage: not checked yet", storedUsageLine(AccountState{}, fetchNow))
 }
 
 // TestCouldNotCheckAfterEarlyAnswerThenFailures covers a chat answered
