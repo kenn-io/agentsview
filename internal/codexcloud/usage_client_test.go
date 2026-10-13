@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,6 +104,18 @@ func TestQueryUsageCreditsMustBeDecimal(t *testing.T) {
 			require.ErrorIs(t, err, ErrProtocolChange)
 		})
 	}
+}
+
+func TestQueryUsageBadCreditsErrorIsBounded(t *testing.T) {
+	credits := strings.Repeat("x", 10_000)
+	usage := codexcloudtest.NewUsageHost(t, fetchNow)
+	usage.SetRow("a", codexcloudtest.Row("a", "available", nil, &credits))
+
+	_, err := QueryUsage(t.Context(), nil, usage.URL(), usageLogin(""), "1", []UsageGroup{{ThreadID: "a"}})
+
+	require.ErrorIs(t, err, ErrProtocolChange)
+	assert.Contains(t, err.Error(), "are not a decimal number")
+	assert.Less(t, len(err.Error()), 200, "the log line quotes only the start of the value")
 }
 
 func TestQueryUsageErrorsHideToken(t *testing.T) {
