@@ -227,14 +227,14 @@ func stateText(row HomeStatus) string {
 		return "Waiting for first sync"
 	case StateImporting:
 		if row.Total == 0 {
-			return "Importing, found " + chats(row.Found) + " so far"
+			return "Importing, found " + chats(row.Found, "chat") + " so far"
 		}
-		return fmt.Sprintf("Importing %d of %s", row.Imported, chats(row.Total))
+		return fmt.Sprintf("Importing %d of %s", row.Imported, chats(row.Total, "chat"))
 	case StateUpToDate:
 		return "Up to date as of " + localTime(row.LastSuccess)
 	case StateRetrying:
 		return fmt.Sprintf("%s could not be imported (oldest failure %s). %s",
-			chats(row.RetryCount), localTime(row.OldestFailure), row.Message)
+			chats(row.RetryCount, "chat"), localTime(row.OldestFailure), row.Message)
 	case StateError:
 		if row.LastSuccess == nil {
 			return row.Message
@@ -245,14 +245,6 @@ func stateText(row HomeStatus) string {
 	default:
 		return row.Message
 	}
-}
-
-// chats counts OpenAI Codex threads in the words users see.
-func chats(n int) string {
-	if n == 1 {
-		return "1 chat"
-	}
-	return fmt.Sprintf("%d chats", n)
 }
 
 func localTime(t *time.Time) string {
