@@ -2841,7 +2841,7 @@
   "status_bar_codex_cloud_off": "Codex Cloud：已关闭",
   "status_bar_codex_cloud_config_error": "Codex Cloud：设置错误",
   "status_bar_codex_cloud_oldest_failure": "最早的失败：{time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView 会持续重试。守护进程日志列出了每个聊天。已导入的会话不受影响。",
+  "status_bar_codex_cloud_retry_note": "AgentsView 会对每个聊天重试 7 天；在 OpenAI 中修改该聊天会重新开始计算这 7 天。守护进程日志按 ID 列出了每个聊天。已导入的聊天不受影响。",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
   "status_bar_codex_cloud_homes": "Codex 主目录：{homes}"
 }

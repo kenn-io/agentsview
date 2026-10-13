@@ -2959,7 +2959,7 @@
   "status_bar_codex_cloud_off": "Codex Cloud : désactivé",
   "status_bar_codex_cloud_config_error": "Codex Cloud : erreur de réglages",
   "status_bar_codex_cloud_oldest_failure": "Plus ancien échec : {time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView continue de les réessayer. Le journal du démon liste chaque conversation. Les sessions déjà importées ne sont pas affectées.",
+  "status_bar_codex_cloud_retry_note": "AgentsView réessaie chacune pendant 7 jours ; une modification de la conversation dans OpenAI relance ces 7 jours. Le journal du démon liste chaque conversation par son identifiant. Les conversations déjà importées ne sont pas affectées.",
   "status_bar_codex_cloud_last_success": "Dernière synchronisation réussie : {time}",
   "status_bar_codex_cloud_homes": "Dossiers Codex : {homes}"
 }
