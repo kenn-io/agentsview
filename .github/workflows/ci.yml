@@ -561,12 +561,15 @@ jobs:
         include:
           - name: Sync A-R
             runner: namespace-profile-linux-4cpu
+            sync: true
             run: '^Test[A-R]'
           - name: Sync remaining
             runner: namespace-profile-linux-4cpu
+            sync: true
             skip: '^Test[A-R]'
           - name: Other packages
             runner: namespace-profile-linux-8cpu
+            sync: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -597,13 +600,13 @@ jobs:
       # main test job's ./... run. Limit package fan-out because the race
       # detector makes highly parallel runs slow enough to exhaust deadlines.
       - name: Run Go tests (race detector)
-        if: matrix.name == 'Other packages'
+        if: ${{ !matrix.sync }}
         run: go list ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
       - name: Run sync tests (race detector)
-        if: matrix.name != 'Other packages'
+        if: matrix.sync
         run: go test -tags "fts5" -race ./internal/sync -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
@@ -679,6 +682,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       clickhouse:
+        # An empty image omits this service for the PostgreSQL-only lane.
         image: ${{ matrix.clickhouse && 'clickhouse/clickhouse-server:26.8' || '' }}
         env:
           CLICKHOUSE_SKIP_USER_SETUP: "1"
