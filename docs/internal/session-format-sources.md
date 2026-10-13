@@ -581,10 +581,14 @@ fixtures retain this field; missing identities remain source-local.
   page. Raw capture carries those same parent files across configured roots,
   including nested custom roots, so hosted parsing also drops copied messages
   and usage. Reverified these producer paths on 2026-09-30 at the same commit.
-  Parent lookup shares a file inventory across providers from the same
-  factory. Sync batches refresh each root's inventory at the start and end;
-  warm fork parses check only their parent's files, avoiding a directory walk
-  per fork. The thread index survives across batches, and only changed
+  Raw capture resolves local path aliases before deduplicating parent files
+  found through overlapping roots. Reverified on 2026-10-13 with
+  `TestCodexProviderPlansForkWithAliasedReplayParent`; a linked parent
+  directory and its original path contribute one captured copy of each
+  transcript. Parent lookup shares a file inventory across providers from the
+  same factory. Sync batches refresh each root's inventory at the start and
+  end; warm fork parses check only their parent's files, avoiding a directory
+  walk per fork. The thread index survives across batches, and only changed
   directories replace their contributions. If parent pages appear or move
   during a batch, affected forks lose their stored freshness and retry on the
   next sync, including after restart. Temporary materializations use
