@@ -7,6 +7,7 @@ import type { RecallEntry } from "../../api/types/recall.js";
 
 // @ts-ignore
 import RecallCorpusPanel from "./RecallCorpusPanel.svelte";
+import { requestUrl } from "../../test-support/request-url.js";
 
 function requestURL(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
@@ -59,7 +60,7 @@ describe("RecallCorpusPanel", () => {
   beforeEach(() => {
     setLocale("en");
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/extraction/status")) {
         return new Response(
           JSON.stringify({
@@ -293,7 +294,7 @@ describe("RecallCorpusPanel", () => {
     let entryRequests = 0;
     let statusRequests = 0;
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/entries?")) {
         entryRequests++;
         if (entryRequests > 1) {
@@ -387,7 +388,7 @@ describe("RecallCorpusPanel", () => {
     let entryRequests = 0;
     let statusRequests = 0;
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/entries?")) {
         entryRequests++;
         if (entryRequests > 1) nowMs += 500;
@@ -424,7 +425,7 @@ describe("RecallCorpusPanel", () => {
     let entryRequests = 0;
     let releaseRefreshEntries: (() => void) | undefined;
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/entries?")) {
         entryRequests++;
         // Hold the refresh's entries request open until the test releases it.
@@ -473,7 +474,7 @@ describe("RecallCorpusPanel", () => {
     let statusRequests = 0;
     let releaseRefreshStatus: (() => void) | undefined;
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/entries?")) entryRequests++;
       if (url.includes("/recall/extraction/status")) {
         statusRequests++;
@@ -581,7 +582,7 @@ describe("RecallCorpusPanel", () => {
       init?: RequestInit,
     ) => Promise<Response>;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).includes("/recall/extraction/progress")) {
+      if (requestUrl(input).includes("/recall/extraction/progress")) {
         return await new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener(
             "abort",
@@ -626,7 +627,7 @@ describe("RecallCorpusPanel", () => {
   it("hides extraction progress when the backend does not support it", async () => {
     const defaultFetch = fetchMock as unknown as (input: RequestInfo | URL) => Promise<Response>;
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/extraction/status")) {
         return new Response(
           JSON.stringify({
@@ -666,7 +667,7 @@ describe("RecallCorpusPanel", () => {
       init?: RequestInit,
     ) => Promise<Response>;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/extraction/status")) {
         return new Response(
           JSON.stringify({
@@ -829,7 +830,7 @@ describe("RecallCorpusPanel", () => {
     const defaultFetch = fetchMock as unknown as (input: RequestInfo | URL) => Promise<Response>;
     let initialPageRequests = 0;
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/entries?") && url.includes("cursor=cursor-2")) {
         return new Response(
           JSON.stringify({

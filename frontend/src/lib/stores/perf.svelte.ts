@@ -141,10 +141,7 @@ function requestInfo(input: RequestInfo | URL): {
   if (input instanceof URL) {
     return { url: input.toString(), method: "GET" };
   }
-  if (typeof Request !== "undefined" && input instanceof Request) {
-    return { url: input.url, method: input.method };
-  }
-  return { url: String(input), method: "GET" };
+  return { url: input.url, method: input.method };
 }
 
 function apiPath(url: string): string | null {

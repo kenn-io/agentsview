@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { AnalyticsService } from "./generated/index.js";
+import { requestUrl } from "../test-support/request-url.js";
 
 describe("AnalyticsService signal sessions", () => {
   afterEach(() => {
@@ -24,7 +25,7 @@ describe("AnalyticsService signal sessions", () => {
       model: "gpt-4o",
     });
 
-    const url = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://localhost");
+    const url = new URL(requestUrl(fetchMock.mock.calls[0]![0]), "http://localhost");
     expect(url.searchParams.get("signal")).toBe("runaway_tool_loop_count");
     expect(url.searchParams.get("model")).toBe("gpt-4o");
   });

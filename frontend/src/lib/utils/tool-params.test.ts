@@ -106,6 +106,16 @@ describe("extractToolParamMeta", () => {
     ]);
   });
 
+  it("shows an object parameter as JSON", () => {
+    const meta = extractToolParamMeta("Grep", { pattern: { regex: "TODO", flags: "i" } });
+    expect(meta).toEqual([{ label: "pattern", value: '{"regex":"TODO","flags":"i"}' }]);
+  });
+
+  it("joins an array command with commas", () => {
+    const meta = extractToolParamMeta("shell", { command: ["bash", "-lc", "ls -la"] }, "Bash");
+    expect(meta).toEqual([{ label: "cmd", value: "bash,-lc,ls -la" }]);
+  });
+
   it("extracts Glob params", () => {
     const meta = extractToolParamMeta("Glob", {
       pattern: "**/*.ts",

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { SessionsService, InsightsService } from "./generated/index.js";
+import { requestUrl } from "../test-support/request-url.js";
 
 describe("SessionsService path parameters", () => {
   afterEach(() => {
@@ -19,7 +20,7 @@ describe("SessionsService path parameters", () => {
 
     await SessionsService.getApiV1SessionsById({ id: "deepseek-harness:child%7E/%25?#" });
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+    expect(requestUrl(fetchMock.mock.calls[0]![0])).toBe(
       "/api/v1/sessions/deepseek-harness%3Achild%257E%2F%2525%3F%23",
     );
   });
