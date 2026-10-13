@@ -51,7 +51,7 @@ type Conn struct {
 // of the token.
 func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 	if o.Endpoint == nil {
-		return nil, errors.New("codex-cloud: no thread host endpoint")
+		return nil, errors.New("codex-cloud: no Codex service endpoint")
 	}
 	if o.Login.Token.Empty() {
 		return nil, errors.New("codex-cloud: no ChatGPT access token")
@@ -98,7 +98,7 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 	// the bearer entry.
 	if selected := ws.Subprotocol(); selected != "" && selected != ServerSubprotocol {
 		_ = ws.CloseNow() // the protocol error is the one worth reporting
-		return nil, fmt.Errorf("%w: the thread host selected an unexpected subprotocol", ErrProtocolChange)
+		return nil, fmt.Errorf("%w: OpenAI selected an unexpected subprotocol", ErrProtocolChange)
 	}
 	limit := o.ReadLimit
 	if limit <= 0 {
@@ -264,7 +264,7 @@ func (c *Conn) readLoop() {
 		}
 		var msg wireMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
-			c.fail(fmt.Errorf("%w: unreadable message from the thread host: %w", ErrProtocolChange, err))
+			c.fail(fmt.Errorf("%w: unreadable message from OpenAI: %w", ErrProtocolChange, err))
 			return
 		}
 		switch {

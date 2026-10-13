@@ -43,7 +43,7 @@ const (
 var (
 	// ErrRefreshRequested means the thread host asked for a fresh login.
 	// AgentsView never refreshes a token, so the connection is closed.
-	ErrRefreshRequested = errors.New("codex-cloud: the thread host asked for a token refresh")
+	ErrRefreshRequested = errors.New("codex-cloud: OpenAI asked for a token refresh")
 	// ErrNotAllowed means a call was refused before it was sent.
 	ErrNotAllowed = errors.New("codex-cloud: request not allowed")
 	// ErrReplyTooLarge means a message exceeded the read limit, which closes
@@ -51,9 +51,9 @@ var (
 	ErrReplyTooLarge = errors.New("codex-cloud: reply larger than the read limit")
 	// ErrProtocolChange means the thread host answered in a way this
 	// version cannot read.
-	ErrProtocolChange = errors.New("codex-cloud: the thread host changed its protocol")
+	ErrProtocolChange = errors.New("codex-cloud: OpenAI changed its protocol")
 	// ErrCallTimeout means a call got no reply within the call timeout.
-	ErrCallTimeout = errors.New("codex-cloud: no reply from the thread host")
+	ErrCallTimeout = errors.New("codex-cloud: no reply from OpenAI")
 	// ErrClosed means the connection was closed by this side.
 	ErrClosed = errors.New("codex-cloud: connection closed")
 )
