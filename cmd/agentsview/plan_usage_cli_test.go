@@ -134,6 +134,20 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 			},
 		},
 		{
+			name: "unrounded figures",
+			out: sessionUsageOutput{
+				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:e", Agent: "codex-cloud"},
+				Plan: &db.PlanUsageView{
+					DataAsOf: "2026-10-02T09:30:00Z", DataStatus: "available",
+					WeeklyPercent: new(2.6076414506625096), FiveHourPercent: new(0.001963673920498831),
+					Credits: new("0E-10"),
+				},
+			},
+			want: []string{
+				"Plan usage:    2.61% of weekly limit, <0.01% of 5-hour limit, 0 credits, as of 2026-10-02 04:30 EST",
+			},
+		},
+		{
 			name: "never checked",
 			out: sessionUsageOutput{
 				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:b", Agent: "codex-cloud"},
@@ -166,10 +180,20 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 		})
 	}
 
+	var plan strings.Builder
+	require.NoError(t, renderSessionUsageHuman(&plan, &sessionUsageOutput{
+		SessionID: "codex-cloud:f", Agent: "codex-cloud",
+		Plan: &db.PlanUsageView{DataAsOf: "2026-10-02T09:30:00Z", DataStatus: "available", WeeklyPercent: new(1.0)},
+	}))
+	for _, line := range []string{"Output:        plan usage\n", "Peak ctx:      plan usage\n", "Cost:          plan usage\n"} {
+		assert.Contains(t, plan.String(), line, "a plan-only session never shows zero tokens or cost")
+	}
+
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, &sessionUsageOutput{
 		SessionID: "claude-a", Agent: "claude",
 	}))
+	assert.Contains(t, b.String(), "Output:        0\n", "other agents keep their output")
 	assert.NotContains(t, b.String(), "Plan usage", "other agents print no plan usage line")
 }
 
