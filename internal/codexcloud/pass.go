@@ -135,13 +135,13 @@ func (s *Syncer) Run(ctx context.Context) error {
 			// A local failure, such as a state file that cannot be
 			// written, stops only this account; the log and status say so.
 			s.Log.Printf("codex-cloud: %v", err)
-			s.localErrorRow(key, groups[key], err)
+			s.localErrorRow(key, groups[key])
 		}
 	}
 	return nil
 }
 
-func (s *Syncer) localErrorRow(key AccountKey, logins []Login, err error) {
+func (s *Syncer) localErrorRow(key AccountKey, logins []Login) {
 	row, _ := s.Status.Row(string(key))
 	s.Status.Set(HomeStatus{
 		Key: string(key), Homes: loginHomes(logins), State: StateError, LastSuccess: row.LastSuccess,
