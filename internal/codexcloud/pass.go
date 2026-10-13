@@ -81,7 +81,11 @@ func (s *Syncer) Run(ctx context.Context) error {
 		if readErr {
 			// Both share the source row; the last good settings are what
 			// keep import off, so the row says so.
-			readRow.Message += " " + row.Message
+			if reason, ok := strings.CutPrefix(row.Message, "Off: "); ok {
+				readRow.Message += " Under those settings, import is off: " + reason
+			} else {
+				readRow.Message += " Under those settings: " + row.Message
+			}
 			row = readRow
 		}
 		s.Status.Set(row)

@@ -1365,8 +1365,9 @@ same outcome kind and time, and the same totals.
   still load. A different case: if `config.toml` as a whole fails to parse
   when a job re-reads it, the job keeps the last good settings and shows
   "`<config path>` could not be read: `<reason>`. Codex cloud import keeps its
-  last good settings.", followed by the reason those settings keep import off,
-  if they do.
+  last good settings.", followed, when those settings keep import off, by
+  "Under those settings, import is off: `<reason>`" (or "Under those
+  settings:" and the config error).
 - `codex-cloud` is registered as a file-based provider so that `disabled_agents`
   accepts it (`internal/config/config.go` rejects other providers there). Its
   root is `{dataDir}/sources/codex-cloud`, resolved from the data directory
