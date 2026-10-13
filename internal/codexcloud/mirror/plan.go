@@ -63,7 +63,8 @@ const (
 	OutcomeCountedUnder = "counted_under"
 	// OutcomeTooManyDescendants: the root's group is too large to send.
 	OutcomeTooManyDescendants = "too_many_descendants"
-	// OutcomeCouldNotCheck: no request was answered in the 7 days after
-	// the root's last change.
+	// OutcomeCouldNotCheck: the requests after the 7 days since the
+	// root's last change failed, 3 in a row. An answer before that point
+	// does not prevent it.
 	OutcomeCouldNotCheck = "could_not_check"
 )

@@ -1276,9 +1276,9 @@ as plan usage, not priced").
 AgentsView asks for plan usage again after a failed request or an incomplete
 report, with waits that grow to 6 hours, so a chat's final figures can arrive
 up to 6 hours after it finishes. It refreshes complete figures once a day. It
-stops asking 7 days after the chat's last change; if no request after that
-point was answered, the session details say AgentsView could not check plan
-usage.
+stops asking after the first answer that comes 7 days or more after the chat's
+last change. If 3 requests in a row fail after that point, it stops too, and
+the session details say AgentsView could not check plan usage.
 
 #### Limits
 
