@@ -823,13 +823,22 @@ func extendTruncatedTextTx(
 				sessionID, m.Ordinal, err,
 			)
 		}
-		if !IsTextExtension(stored, m.Content) && !IsImagePlaceholderUpgrade(stored, m.Content) {
-			continue
+		content, contentLength := m.Content, m.ContentLength
+		if !IsTextExtension(stored, m.Content) {
+			if !IsImagePlaceholderUpgrade(stored, m.Content) {
+				continue
+			}
+			// Keep archived concrete references that the export replaced with placeholders.
+			merged, ok := MergeImageContent(stored, m.Content)
+			if !ok {
+				continue
+			}
+			content, contentLength = merged, len(merged)
 		}
 		if _, err := tx.Exec(
 			`UPDATE messages SET content = ?, content_length = ?, dialogue_text = ?
 			 WHERE id = ?`,
-			m.Content, m.ContentLength, m.DialogueText, id,
+			content, contentLength, m.DialogueText, id,
 		); err != nil {
 			return 0, fmt.Errorf(
 				"extending text for %s ordinal %d: %w",
