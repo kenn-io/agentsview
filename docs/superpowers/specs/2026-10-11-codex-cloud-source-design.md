@@ -67,17 +67,15 @@ What the probe saw:
 Second probe, 2026-10-12, with AgentsView's own `User-Agent` and `originator`:
 
 - The server accepted AgentsView's identity in `User-Agent`, `originator`, and
-  `clientInfo.name`. The probes still sent the `codex-client.desktop`
-  subprotocol; whether the server accepts another client subprotocol is an
-  open question.
+  `clientInfo.name`. These probes still sent the `codex-client.desktop`
+  subprotocol; Open questions records the later subprotocol probe.
 - `thread/read` and `thread/turns/list` (with `limit`) also answered. Turn
   records carry `id`, `rootTurnId` (which can differ from `id`), `status`,
   `startedAt`, `completedAt`, `durationMs`, `error`, `items`, and `itemsView`.
-  Coverage and "newest turn" use `id`. The `itemsView` request parameter was
-  not sent in the probes, and the hosted server answered with
-  `itemsView: "full"`: every turn came back with all its items (199 in one
-  turn). Open-source Codex defaults to `summary` instead, so the hosted
-  default differs.
+  Coverage and "newest turn" use `id`. Without the `itemsView` request
+  parameter, the hosted server answered with `itemsView: "full"`: every turn
+  came back with all its items (199 in one turn). Open-source Codex defaults
+  to `summary` instead, so the hosted default differs.
 - 33 active and 3 archived threads, all with `source`
   `{"custom": "codex-cloud-agent"}`. The default listing (no `sourceKinds`)
   returned them all. A listing with `sourceKinds` set to every
@@ -166,6 +164,16 @@ Live token checks, 2026-10-12, run by the account owner:
 - Saved items lag the live work: during a running turn, `thread/items/list` did
   not grow for minutes while live item notifications arrived.
 
+Thread data, 2026-10-13, from the account owner's listing:
+
+- 30 of 39 threads were delegated dot tasks: `threadSource: "aeon_child"`,
+  `parentThreadId: null`, and `source` `{"custom": "codex-cloud-agent"}`. The
+  parent is named only in the thread's first `userMessage`, which starts with
+  `<codex_delegation><source_thread_id>PARENT-UUID</source_thread_id>`. Later
+  messages from the parent arrive as `functionCallOutput` items (name
+  `send_message`, namespace `cloud_threads`) carrying the same tag. The parent
+  is the dot's own conversation, which is not listable.
+
 ## Goals
 
 - Import every thread the account can list on the durable host, including
@@ -185,10 +193,11 @@ Live token checks, 2026-10-12, run by the account owner:
 
 - Starting, steering, or changing anything on OpenAI's side, apart from the join
   described under Live token capture.
-- Token counts for threads AgentsView never joined while they ran. OpenAI does
-  not return them for plan-billed accounts (see Background); those threads
-  have plan usage only. A thread joined once gets its earlier turns through
-  the first running total (see Live token capture).
+- Token counts for threads AgentsView never joined while they ran, including
+  turns that end before the monitor joins them. OpenAI does not return them
+  for plan-billed accounts (see Background); those threads have plan usage
+  only. A thread joined once gets its earlier turns through the first running
+  total (see Live token capture).
 - Token estimates computed from the trace text. The trace leaves out system
   prompts, tool definitions, and the history each turn rereads, and these
   models have no public tokenizer, so an estimate would be far off.
@@ -246,25 +255,24 @@ running threads --(live token monitor)--> token usage records in the same mirror
    explicit, bounded read limit sized for the largest page (the builder picks
    it, in the tens of MiB). A reply over that limit closes the connection; the
    fetcher reconnects, retries an oversized `thread/items/list` page once with
-   `limit: 1` (an oversized turn listing is not retried, because the fallback
-   already lists one turn per call), and only then records a failure of that
-   thread (retry set, "reply too large") and continues the pass with the next
-   thread, so one huge page never fails the whole account. Under the
-   `itemsView: full` fallback (see Open questions) one turn-listing reply holds
-   a whole turn, so the limit must cover the largest single turn. An allowlist
-   enforced in the client permits only `initialize`, the `initialized`
-   notification, `thread/list`, `thread/items/list`, and `thread/turns/list`
-   on the websocket, and only the configured `usage_endpoint` URL over HTTPS
-   (or HTTP for a loopback override; see Configuration). Anything else fails
-   before it is sent. The fetcher joins no thread and never answers a
-   server-initiated request, so it can never decline an approval prompt or
-   race another client's answer. On a token refresh request
-   (`account/chatgptAuthTokens/refresh`) it closes the connection without
-   answering and ends the pass early: what was already made durable stays, the
-   cut-off threads go to no retry set, the watermarks do not advance, and the
-   plan usage step does not run. The request starts the refresh-requested wait
-   for that Codex home (see Failure timing), so passes do not end early over
-   and over while nothing refreshes the token. Notifications are ignored.
+   `limit: 1` (an oversized turn listing is not retried, because with
+   `itemsView: notLoaded` its turns carry no items), and only then records a
+   failure of that thread (retry set, "reply too large") and continues the
+   pass with the next thread, so one huge page never fails the whole account.
+   An allowlist enforced in the client permits only `initialize`, the
+   `initialized` notification, `thread/list`, `thread/items/list`, and
+   `thread/turns/list` on the websocket, and only the configured
+   `usage_endpoint` URL over HTTPS (or HTTP for a loopback override; see
+   Configuration). Anything else fails before it is sent. The fetcher joins no
+   thread and never answers a server-initiated request, so it can never
+   decline an approval prompt or race another client's answer. On a token
+   refresh request (`account/chatgptAuthTokens/refresh`) it closes the
+   connection without answering and ends the pass early: what was already made
+   durable stays, the cut-off threads go to no retry set, the watermarks do
+   not advance, and the plan usage step does not run. The request starts the
+   refresh-requested wait for that Codex home (see Failure timing), so passes
+   do not end early over and over while nothing refreshes the token.
+   Notifications are ignored.
 1. **Live token monitor.** A second client mode used only for live token
    capture. Its allowlist adds `thread/resume`, accepted only with `threadId`
    and `excludeTurns: true` and no other parameters. Like the fetcher, it
@@ -372,10 +380,10 @@ running threads --(live token monitor)--> token usage records in the same mirror
   version, and an `originator` naming AgentsView. The second probe confirmed
   the durable host and `query_v2` both accept this. The client subprotocol
   must not name the desktop app either: AgentsView sends
-  `codex-client.agentsview` once the probe in Open questions shows the server
-  accepts it. If the server accepts only `codex-client.desktop`, stop and ask
-  the user before shipping. If a later server release refuses it, stop and ask
-  the user; never fall back to the desktop app's identity on your own.
+  `codex-client.agentsview`, which the server accepts, and the server selects
+  `codex-app-server` (see Open questions). If a later server release refuses
+  it, stop and ask the user; never fall back to the desktop app's identity on
+  your own.
 
 ### Failure timing
 
@@ -480,11 +488,9 @@ kinds of file, each written atomically:
   changed together with the new offset, after the fsync. The changed-threads
   step reads it for each thread on the listing pages it walks; otherwise it is
   read and written only when the thread is selected, joined by the monitor, or
-  walked for a usage root (below). Live discovery does not read it: the
-  account's unfinished set keeps, for each thread, whether its newest turn is
-  `inProgress`, whether the 24-hour stall rule has stopped it, and whether it is
-  a sub-agent thread (see Joining), so discovery skips sub-agent threads it
-  finds only through that set.
+  walked for a usage root (below). Live discovery reads neither this file nor
+  the account's working sets: it decides from the listing record and the
+  newest turn (see Finding running threads).
 - **Per root:**
   `{dataDir}/sources/codex-cloud/<accountKey>/<rootId>.descendants.json` lists
   that usage root's known descendants. When a thread with a resolved parent is
@@ -516,10 +522,14 @@ triggers a parse.
 Provider discovery reads only `*.jsonl.zstd` files. A full resync, which
 rebuilds SQLite from the mirror files, leaves the state intact and fetches
 nothing again. If state files are lost, the fetcher treats the affected threads
-or account as never synced and fetches them again. A lost per-thread file leaves
-a stored offset of zero, so the next append treats every frame in the mirror
-file as kept frames and rebuilds the digests from them (see Mirror format); only
-records that changed are appended.
+or account as never synced and fetches them again. A state file that does not
+decode counts as lost: it is moved to `<name>.corrupt` and logged. A lost
+per-thread file leaves a stored offset of zero, so the next append treats every
+frame in the mirror file as kept frames and rebuilds the digests from them (see
+Mirror format); only records that changed are appended. If a thread's mirror
+file is missing or shorter than its stored offset, the fetcher resets that
+thread's resume point and forgets its digests before fetching, so the fetch
+reads the whole thread and writes it again.
 
 ### Incremental sync
 
@@ -577,7 +587,9 @@ Per account, the fetcher stores:
   listing record. A retry starts by appending that record when it differs from
   the stored metadata, because the watermark may since have moved past the
   thread's listing page and a mirror file without a metadata record is never
-  parsed;
+  parsed. When any listing returns a thread that is in the retry set, the
+  entry's listing record is replaced with the new one, even when backoff skips
+  the fetch;
 - for each thread: the per-thread fields listed under Fetcher state, and in the
   account's working sets a **check-again flag** (below).
 
@@ -607,12 +619,16 @@ listing:
    listing watermark, and finish that whole page. With no watermark (first
    run, or a backfill that never finished), page through everything. An
    unchanged account costs one call per listing. The early stop is safe only
-   if the server really sorts by `updatedAt`, which no probe has checked
-   (open-source Codex defaults to `created_at`, and the probes' default
-   listing came back in `createdAt` order). So every listing call also sends
-   `modelProviders: []` (see Open questions), and a page whose `updatedAt`
-   values ever increase from one row to the next is a protocol change for the
-   account, never an early stop.
+   if the server really sorts by `updatedAt`. The listing probe in Open
+   questions found `updated_at` descending order within and across pages;
+   still, a page whose `updatedAt` values ever increase from one row to the
+   next, on the same page or from the previous page, is a protocol change for
+   the account, never an early stop. Listing calls never send `modelProviders`:
+   the server rejects it with `-32602`. Known limit: in open-source Codex a
+   listing without `modelProviders` returns only threads of the server's own
+   provider. Every probed thread had `modelProvider: "local"`, so a thread
+   under another provider, if the hosted server ever has one, would not be
+   imported.
 1. **Unfinished threads.** Also include every thread that the listing shows as
    `active`, whose last fetch saw a turn in `inProgress`, that has unfinished
    items after its resume point, or that has a turn whose save-lag margin has
@@ -625,8 +641,9 @@ listing:
    changes the thread's `updatedAt`, so these threads are fetched every pass
    until their turns finish. A turn that stays `inProgress` with no new item
    and no `updatedAt` change for 24 hours stops this every-pass selection,
-   including selection because the listing shows the thread as `active`; a
-   later `updatedAt` change selects the thread again.
+   including selection because the listing shows the thread as `active` or
+   because its check-again flag is set; a later `updatedAt` change selects the
+   thread again.
 1. **Check-again threads.** Also include every thread whose check-again flag is
    set. `updatedAt` comes from OpenAI's clock and the fetch start from the
    local clock, so both rules below allow 2 minutes of clock difference. A
@@ -646,42 +663,52 @@ listing:
    whose next-attempt time has not passed, however it was selected. A failing
    thread that stays at the top of the listing still waits out its backoff.
 1. **Fetch.** For each selected thread, first call `thread/turns/list` for the
-   turn statuses, newest first (the default order) with
-   `itemsView: notLoaded`, or `summary` if the probe in Open questions rejects
-   that (never omitted: the hosted default is `full`, which returns every
-   item; see Background), stopping at the turn that holds the resume point, so
-   the call's cost follows the turns since the resume point, not the thread's
+   turn statuses, newest first (the default order) with `itemsView: notLoaded`
+   (never omitted: the hosted default is `full`, which returns every item; see
+   Background), stopping at the turn that holds the resume point, so the
+   call's cost follows the turns since the resume point, not the thread's
    length, then `thread/items/list` from the resume point, using an item
    anchor `{type: "item", itemId}` in the `cursor` field plus its `turnId`.
    The fetcher discards any returned record for the anchor item itself, so it
    never depends on whether the anchor is inclusive. An item anchor reads only
    within that turn (the protocol requires `turnId` with it), so the fetcher
-   then reads each later turn in full by its `turnId`, oldest first, paging with
-   the returned cursor. Reading turn statuses first means a turn that ends
-   between the two calls is not yet treated as ended, so the items it
+   then reads each later turn in full by its `turnId`, oldest first, paging
+   with the returned cursor. Reading turn statuses first means a turn that
+   ends between the two calls is not yet treated as ended, so the items it
    finalizes are fetched again on the next pass.
 1. **Make it durable, then advance.** Append to the mirror only the fetched
    records that differ from the newest stored record for the same key (thread
    metadata, turn, or `(turnId, item.id)`), compared by the digests in the
    per-thread state, so an unchanged re-fetch leaves the mirror file
    byte-identical and causes no parse. Then fsync the file (and its directory
-   when the file is new) if anything was appended, and only then save the
-   thread's new `updatedAt`, resume point, and mirror offset, and remove it
-   from the retry set. A crash before the save repeats the fetch; it never
-   skips records.
+   when the file is new, except on Windows, which cannot sync a directory) if
+   anything was appended, and only then save the thread's new `updatedAt`,
+   resume point, and mirror offset, and remove it from the retry set. A crash
+   before the save repeats the fetch; it never skips records.
 1. **Failures.** A thread whose fetch fails joins or stays in the retry set with
    exponential backoff, capped at one hour, and the pass goes on. The latest
    failure category (see Status and errors) is stored with it. JSON-RPC error
    replies follow the rules under JSON-RPC errors (below Failure timing).
 1. **Deleted threads.** No probe has seen a deleted thread, so the exact reply
-   is not known (see Open questions). Only that specific not-found reply
-   counts as a deletion; any other error goes to the retry set. Until the
-   probe identifies the reply, nothing counts as a deletion: a deleted thread
-   stays in the retry set, retried at the one-hour cap, and is counted in the
-   "could not be imported" status. A deletion is final: remove the thread from
-   the retry set, clear its check-again flag and any usage-pending mark, and
-   stop fetching it, unless a later listing shows it with a new `updatedAt`,
-   which selects it again. Everything already stored stays.
+   to `thread/turns/list` and `thread/items/list`, the only per-thread calls
+   the fetcher sends, is not known (see Open questions). Only that specific
+   not-found reply counts as a deletion; any other error goes to the retry
+   set. Until the probe identifies the reply, nothing counts as a deletion,
+   and a deleted thread ends through the next step. A deletion is final:
+   remove the thread from the retry set, clear its check-again flag and any
+   usage-pending mark, and stop fetching it, unless a later listing shows it
+   with a new `updatedAt`, which selects it again. Everything already stored
+   stays.
+1. **Unreadable threads.** A thread that has failed for 7 days, with no new
+   `updatedAt` in any listing in that time, stops being retried. This covers a
+   deleted thread before the deletion reply is known, and a thread with one
+   item larger than the read limit even at `limit: 1`. The fetcher removes it
+   from the retry set, the unfinished set, and the check-again flags, saves
+   the retry entry's listing `updatedAt` as the thread's stored `updatedAt`,
+   and logs the thread ID with its last failure. Everything already stored
+   stays, and the thread no longer counts in the "could not be imported"
+   status. A later listing with a new `updatedAt` selects it again. A new
+   `updatedAt` seen while the thread is in the retry set restarts its 7 days.
 1. **Advance the listing watermark** to the newest `updatedAt` that listing
    returned, once the listing finished and every changed thread from it is
    either mirrored or recorded in the persisted retry set. A thread that keeps
@@ -725,7 +752,9 @@ later protocol exposes update-ordinal paging, switch to it.
 - The writer scans the whole file only when the stored offset is missing or lies
   past the end of the file.
 - After appending, the writer fsyncs the file, and the directory when the file
-  is new, before the new offset is saved.
+  is new, before the new offset is saved. On Windows, which cannot sync a
+  directory, the directory sync is skipped, as raw capture does
+  (`internal/rawcapture/files.go`).
 - Readers decode only complete frames and never keep records from a torn frame.
 - `internal/parser/deepseek_harness_format.go` cannot be reused as is: it
   requires a header frame and, as written, decodes the whole file and keeps
@@ -804,15 +833,25 @@ Session fields:
   opt in to the experimental API; the second probe saw the field with
   AgentsView's handshake, and the fetcher falls back to `cwd` if it ever
   disappears.
-- **Relationships:** a thread's **resolved parent** is its `parentThreadId`, or,
+- **Relationships:** a thread's **resolved parent** is its `parentThreadId`;
   when that is null, the `parent_thread_id` its `source` carries for a spawned
   sub-agent (`SubAgentSource.thread_spawn` in the Codex protocol; in the v2
   JSON the path is `source.subAgent.thread_spawn.parent_thread_id`, camelCase
-  outside and snake_case inside). The resolved parent becomes a sub-agent
-  relationship (`RelSubagent`) and `forkedFromId` a fork relationship
-  (`RelFork`), each pointing at `codex-cloud:<threadId>`. A session holds one
-  parent (`ParentSessionID` in `internal/parser/types.go`), so when a thread
-  has both, the resolved parent wins, because usage roots follow it.
+  outside and snake_case inside); when both are absent, the `source_thread_id`
+  of a `<codex_delegation>` tag at the start of the thread's first
+  `userMessage` (a delegated dot task; see Background). Later
+  `functionCallOutput` items that carry the same tag do not change it. The
+  fetcher reads the tag from the first `userMessage` it fetches and keeps the
+  result in the per-thread state; the provider reads it from the mirror file.
+  A delegated dot task is a sub-agent child for linking and plan usage grouping.
+  Its parent, the dot's own conversation, is not listable, so the child waits
+  for that parent under the waiting-file rule (see Fetcher state) and stays
+  its own usage root until the parent is mirrored. The resolved parent becomes
+  a sub-agent relationship (`RelSubagent`) and `forkedFromId` a fork
+  relationship (`RelFork`), each pointing at `codex-cloud:<threadId>`. A
+  session holds one parent (`ParentSessionID` in `internal/parser/types.go`),
+  so when a thread has both, the resolved parent wins, because usage roots
+  follow it.
 
 ### Live token capture
 
@@ -834,23 +873,29 @@ records every token update, and leaves when the turn ends.
   false, `live_tokens` is false, `codex-cloud` is in `disabled_agents`, source
   sync is off (below), or `[agents.codex-cloud]` has a config error. Its
   memory is bounded by that cap, not by archive size.
-- The listing's `status` can be stale, so it only narrows the search. Each run
-  lists the non-archived listing by `updated_at`, newest first,, with no
-  `sourceKinds`, as sync does, and checks the newest turn
-  (`thread/turns/list`, limit 1, with the turn view chosen under Open
-  questions: `notLoaded`, else `summary`) of every thread that is listed as
-  `active` or whose `updatedAt` is within the past 30 minutes, skipping
-  threads the monitor has already joined. A thread is running when that turn's
-  status is `inProgress`.
+- **Join rule:** the monitor joins a thread only when its newest turn is
+  `inProgress` and its listing `updatedAt` is within the last 2 minutes. A
+  thread that finished long ago can still show an `inProgress` turn (see the
+  save lag under While joined), and resuming it would be a cold resume: it
+  loads the thread on OpenAI's side, starts the dot's MCP servers, and might
+  continue an active goal (see Risks). The recency rule keeps the monitor away
+  from such threads.
+- The listing's `status` can be stale, so discovery ignores it. Each run lists
+  the non-archived default listing by `updated_at`, newest first, with no
+  `sourceKinds`, as sync does. It checks the newest turn (`thread/turns/list`,
+  limit 1, `itemsView: notLoaded`) of every thread whose `updatedAt` is within
+  the last 2 minutes. It skips, without a turn check, threads the monitor has
+  already joined and sub-agent threads (see Joining). A thread is running when
+  that turn's status is `inProgress`.
 - Work per run is bounded by recent activity, not by archive size. Discovery
-  reads further pages while the last page still holds a thread listed as
-  `active` or updated in the past 30 minutes. It also checks every thread that
-  the sync job's unfinished set records with an `inProgress` turn, except
-  threads stopped by the 24-hour stall rule and sub-agent threads, which it
-  skips without a turn check, one `thread/turns/list` call each, so a running
-  thread on a later page whose listing says `idle` is still found. A thread
-  that starts a turn without updating `updatedAt` or its status for more than
-  30 minutes is missed; that is a documented limit.
+  reads further pages only while the last page still holds a thread updated in
+  the last 2 minutes. It reads no other listing and none of the sync job's
+  working sets.
+- Accepted limit: a turn that ends before the monitor joins it gets no live
+  tokens; its thread has plan usage only, unless a later join's running total
+  covers it. If a running thread's `updatedAt` does not change while its turn
+  runs, a turn that the monitor does not join within 2 minutes of the last
+  change (daemon down, join cap full) is not captured live either.
 
 **Joining.**
 
@@ -860,14 +905,19 @@ records every token update, and leaves when the turn ends.
   for a free slot.
 - The monitor does not join a sub-agent thread until the user has run a probe
   confirming that joining a running sub-agent thread is a warm join with no
-  side effects (see Open questions). A thread counts as a sub-agent thread
-  when it has a resolved parent (see Mapping), when its `threadSource` is
-  `subagent`, or when its `source` is `SessionSource::SubAgent`
-  (`v2/thread_data.rs` in the Codex protocol). Such threads are found but left
-  unjoined; their tokens are not captured until then.
+  side effects (see Open questions). For joining, a thread counts as a
+  sub-agent thread when its listing record has a `parentThreadId` or a
+  `thread_spawn` parent in its `source` (the first two resolved-parent rules
+  under Mapping), when its `threadSource` is `subagent`, or when its `source`
+  is `SessionSource::SubAgent` (`v2/thread_data.rs` in the Codex protocol).
+  Such threads are left unjoined; their tokens are not captured until then. A
+  delegated dot task (`threadSource: "aeon_child"`, parent named only by its
+  `<codex_delegation>` tag) does not count: it is in the default listing, not
+  the sub-agent listings, and is joined under the same join rule as any other
+  thread.
 - Immediately before joining, the monitor checks the newest turn again and joins
-  only if it is still `inProgress`. It then sends `thread/resume` with only
-  `threadId` and `excludeTurns: true`.
+  only if it is still `inProgress` and the join rule still holds. It then
+  sends `thread/resume` with only `threadId` and `excludeTurns: true`.
 - A JSON-RPC error reply to `thread/resume` (for example
   `environment_terminated`) follows JSON-RPC errors: most close the connection
   and are retried on the next run if the thread is still running.
@@ -876,13 +926,14 @@ records every token update, and leaves when the turn ends.
   else":
     - `warm`: the thread is running and the monitor stays.
     - `cold`: the turn ended between the check and the join, or the turn listing
-      shows a turn as `inProgress` that the server no longer runs. The monitor
-      logs it, counts it in status, and closes the connection at once. It
-      records the newest turn's ID in the per-thread state and does not join
-      that thread again until its turn listing shows a newer turn ID, so a turn
-      stuck in `inProgress` causes at most one cold resume. The resume
-      response's `updatedAt` is the time of the resume, so the monitor never
-      stores it; only the fetcher's listing sets a thread's stored `updatedAt`.
+      shows a turn as `inProgress` that the server no longer runs. The join rule
+      narrows this to threads updated in the last 2 minutes. The monitor logs
+      it, counts it in status, and closes the connection at once. It records the
+      newest turn's ID in the per-thread state and does not join that thread
+      again until its turn listing shows a newer turn ID, so a turn stuck in
+      `inProgress` causes at most one cold resume. The resume response's
+      `updatedAt` is the time of the resume, so the monitor never stores it;
+      only the fetcher's listing sets a thread's stored `updatedAt`.
     - anything else: the monitor closes the connection, stops live capture for the
       account, and reports a protocol-change error. Capture stays off for that
       account until the daemon restarts or the user changes `live_tokens`.
@@ -896,10 +947,11 @@ records every token update, and leaves when the turn ends.
   the experimental API, so `thread/settings/updated` never arrives; a model
   change that only that notification reports is not tracked while joined.
 - It never answers a server-initiated request: approval prompts and questions
-  stay for the user's own apps to answer. A server request goes to every
-  connection joined to the thread and the first reply wins, so any answer from
-  AgentsView, even an error, could beat the user's app. A joined connection
-  can stay open for hours, so on a token refresh request
+  stay for the user's own apps to answer. In open-source Codex a server
+  request goes to every connection joined to the thread and the first reply
+  wins (unverified on the hosted server; see Open questions), so any answer
+  from AgentsView, even an error, could beat the user's app. A joined
+  connection can stay open for hours, so on a token refresh request
   (`account/chatgptAuthTokens/refresh`) the monitor flushes its buffered
   records, closes the connection without answering, and starts the
   refresh-requested wait for that Codex home (see Failure timing); a later run
@@ -1082,13 +1134,20 @@ one group.
   usage can lag up to 6 hours after the thread finishes.
 - Each pending root has its own next-attempt time. A failed or unresolved
   attempt doubles the wait, from 5 minutes up to 6 hours.
-- **Settling.** A root whose row stays `partial` or `unavailable`, or that every
-  response leaves out, unchanged, for 7 days after the thread's last change is
-  settled. A root that is always left out settles as "Not reported by OpenAI".
-  A root that already has a usable row and is then left out settles by
-  appending a copy of that row marked final, not with a "settled with no row"
-  record. Automatic retries stop, the last values stay, and the row is marked
-  final. A later change to the root or a descendant starts the cycle again.
+- **Settling.** Only answered requests (HTTP 200) settle a root. A root settles
+  when 7 days have passed since the last change to it or a descendant, and a
+  request answered after that point still finds its row `partial` or
+  `unavailable`, or leaves it out. A root that is always left out settles as
+  "Not reported by OpenAI". A root that already has a usable row and is then
+  left out settles by appending a copy of that row marked final, not with a
+  "settled with no row" record. Automatic retries stop, the last values stay,
+  and the row is marked final. A later change to the root or a descendant
+  starts the cycle again.
+- **Could not check.** A pending root with no answered request in the 7 days
+  after its last change stops retrying with a "could not check" outcome
+  record. Its last row, if any, stays and is not marked final, and session
+  details show "AgentsView could not check plan usage". A later change to the
+  root or a descendant starts the cycle again.
 - Roots with a usable row stay in a refresh set in `account.json` until 7 days
   after their last change, each with a next attempt at the later of one day
   after its row's `data_as_of` and one day after its last attempt. Rows are
@@ -1096,11 +1155,11 @@ one group.
 - Each pass sends at most 5 requests, shared by pending roots and the refresh
   set: pending roots first, oldest first, then refresh roots by next attempt.
   Requests follow the desktop app's limits: at most 100 groups and 1,000
-  thread IDs each. A root whose group alone has more than 1,000 IDs is never
-  sent; it settles at once with a "too many sub-agent threads for OpenAI's
-  usage report" outcome record, and session details show that message. Roots
-  left over wait for the next pass, so a large backlog never makes one pass
-  unbounded.
+  thread IDs each, counting each root's own ID. A root whose group alone has
+  more than 1,000 IDs, so 1,000 or more descendants, is never sent; it settles
+  at once with a "too many sub-agent threads for OpenAI's usage report"
+  outcome record, and session details show that message. Roots left over wait
+  for the next pass, so a large backlog never makes one pass unbounded.
 - A group sends the root's `thread_id` and `created_at`, and its descendants in
   `descendant_thread_ids`.
 - HTTP 429 from `query_v2` pauses plan usage for that account for the
@@ -1132,35 +1191,39 @@ one group.
       settles;
     - an "account unavailable" record goes to each root in the request that got
       the 403 or 404, so the work stays bounded by the request;
+    - a "too many sub-agent threads" record goes to a root whose group is too
+      large to send, and a "could not check" record to a root that stops
+      retrying with no answered request;
     - a thread found to be a descendant gets a "counted under `<root>`" record in
       its own file, even while usage requests are paused, since it needs no
       request. The provider stays per-file. It keeps the newest response row and
       the newest outcome record of each file separately: session details show
       the row when one exists, and show an outcome message only when no row
       exists or the outcome is newer than the row and says the row is stale
-      (left out or account unavailable after the row), in which case both
-      appear. A "counted under" record newer than the row overrides it: the plan
-      usage values are cleared and only "Counted under thread" shows.
+      (left out, account unavailable, too many sub-agent threads, or could not
+      check, after the row), in which case both appear. A "counted under" record
+      newer than the row overrides it: the plan usage values are cleared and
+      only "Counted under thread" shows.
 
 **Storage.** Usage rows are running totals for the thread, not increments, and a
 percentage of a weekly limit does not add up across weeks. So AgentsView keeps
 the latest row per root, replacing the previous one, with its `data_as_of`,
 `data_status`, `usage_source`, the thread-level percentages and credits, the
 per-group values, whether the row is final, and the newest outcome record's kind
-and time (left out, settled with no row, account unavailable, or counted under),
-so every backend can show the same session details. The provider resolves the
-order at parse time from the records' positions in the mirror file and stores an
-outcome only when it is newer than the newest row; backends never compare times
-to decide it. It does not create token usage events. Descendants have no plan
-usage of their own; when a thread's newest plan usage record says it is counted
-under a root, the provider clears that session's plan usage fields, keeps its
-coverage fields, and records the root as its parser session ID
-(`codex-cloud:<rootId>`), and the fetcher drops it from the usage retries. The
-root is a session reference: on a hosted hub, where sessions are stored under
-raw projection IDs (`internal/postgres/raw_projection.go`), it is mapped to the
-public ID like other session references
-(`internal/postgres/hosted_session_ids.go`). That mapper resolves a reference
-only through a link edge, and `writeRawLinks`
+and time (left out, settled with no row, account unavailable, too many sub-agent
+threads, could not check, or counted under), so every backend can show the same
+session details. The provider resolves the order at parse time from the records'
+positions in the mirror file and stores an outcome only when it is newer than
+the newest row; backends never compare times to decide it. It does not create
+token usage events. Descendants have no plan usage of their own; when a thread's
+newest plan usage record says it is counted under a root, the provider clears
+that session's plan usage fields, keeps its coverage fields, and records the
+root as its parser session ID (`codex-cloud:<rootId>`), and the fetcher drops it
+from the usage retries. The root is a session reference: on a hosted hub, where
+sessions are stored under raw projection IDs
+(`internal/postgres/raw_projection.go`), it is mapped to the public ID like
+other session references (`internal/postgres/hosted_session_ids.go`). That
+mapper resolves a reference only through a link edge, and `writeRawLinks`
 (`internal/postgres/raw_projection_links.go`) writes only the direct parent and
 tool targets, so for a grandchild the root would be cleared. The builder adds a
 usage-root link kind there, so the root reference resolves at any depth. The
@@ -1169,9 +1232,13 @@ token capture, so descendants and sessions without plan usage still have a row.
 The builder chooses the table and follows `docs/agents/storage.md`, including
 the full-resync copy of orphaned and trashed sessions, which must copy their
 plan usage rows too. In PostgreSQL the table also needs the hosted-tenant schema
-and privilege entries that `usage_events` has. Like usage events, a plan usage
-write bumps the session's `local_modified_at` and is part of every backend's
-push fingerprint, so replicas pick up changes.
+and privilege entries that `usage_events` has, and a probe in
+`CheckSchemaCompat` (`internal/postgres/schema.go`) so a reader against an older
+schema fails at startup. Every backend's session usage reader (`GetSessionUsage`
+in the `db.Store` interface, and the hosted reports wrapper) returns the plan
+usage and coverage row. Like usage events, a plan usage write bumps the
+session's `local_modified_at` and is part of every backend's push fingerprint,
+so replicas pick up changes.
 
 **Replicas and mirror.** The plan usage table is pushed to the PostgreSQL
 (including CockroachDB) and ClickHouse replicas the same way other per-session
@@ -1228,6 +1295,8 @@ same outcome kind and time, and the same totals.
     - "Partial plan usage, as of T": a settled `partial` row.
     - "Not reported by OpenAI": a settled `unavailable` row, or a root that
       settled with no row.
+    - "Too many sub-agent threads for OpenAI's usage report": see Fetching.
+    - "AgentsView could not check plan usage": see Could not check.
     - "Counted under thread `<root title>`", with a link to the usage root's
       session, which can be a grandparent or further up: a descendant.
     - "Usage isn't available for this account": see Fetching.
@@ -1397,10 +1466,9 @@ double-count its tokens.
 
 - Handshake: the token is sent only as the subprotocol, and handshake errors
   never contain it. The client subprotocol is `codex-client.agentsview`, never
-  `codex-client.desktop`. The selected subprotocol is checked against what the
-  probes in Open questions record: if the server selects `codex-app-server`,
-  anything else is a protocol change; if it selects none, none is accepted.
-  There is no retry under the desktop name.
+  `codex-client.desktop`. The server selects `codex-app-server` (see Open
+  questions); any other selected subprotocol is a protocol change. There is no
+  retry under the desktop name.
 
 - Allowlist: a non-allowlisted method or URL fails without being sent. A fake
   thread host and a fake usage endpoint that answer 302 get no second request,
@@ -1466,8 +1534,15 @@ double-count its tokens.
 - Deletion (blocked on the deleted-thread probe in Open questions): a thread the
   server reports as gone leaves the retry set, is not fetched again, keeps its
   stored session, and does not keep the "could not be imported" state up.
-  Until then: a thread whose fetch fails stays in the retry set at the
-  one-hour cap and is counted in status.
+
+- Unreadable threads: a thread that fails for 7 days with an unchanged listing
+  `updatedAt` leaves the retry set and the status count, keeps its stored
+  session, and is not fetched again; a new `updatedAt` during those 7 days
+  restarts the count, and a new `updatedAt` afterward selects it again. A
+  thread with one item over the read limit at `limit: 1` ends the same way.
+
+- Retry listing record: a thread in backoff whose listing record changes gets
+  the new record in its retry entry, and the retry appends that record.
 
 - Resume point: parallel tool calls that finish out of order all end with their
   final output. An item without a terminal status in a finished turn, or in a
@@ -1487,7 +1562,10 @@ double-count its tokens.
   complete frame written after the saved offset, and already parsed by the
   provider, survives recovery, and the next parse yields the same session with
   no duplicate items. A normal append checks only the bytes after the stored
-  offset; a missing or too-large offset triggers a full scan.
+  offset; a missing or too-large offset triggers a full scan. On Windows, the
+  first append to a new mirror file succeeds. A mirror file that is lost or
+  shorter than the stored offset makes the next fetch read and write the whole
+  thread again.
 
 - Parsing: an item that finishes after a resume point replaces its stored
   message or tool call, with no duplicate. A benchmark parses the largest
@@ -1506,6 +1584,9 @@ double-count its tokens.
       pending roots go first and leftover refresh roots run on the next pass;
     - a `partial` or `unavailable` row backs off and settles after 7 days without
       change, keeping its last values, and a later thread change reopens it;
+    - a root whose requests all fail for 7 days does not settle as final; it gets
+      a "could not check" outcome, keeps any `partial` row unfinal, stops
+      retrying, and a later thread change reopens it;
     - a large backlog of pending roots sends at most 5 requests per pass;
     - nested sub-agent threads (child and grandchild) are all sent with their
       root, never as their own group, and a change in a grandchild refreshes the
@@ -1521,8 +1602,13 @@ double-count its tokens.
 
 - Live token capture:
 
-    - a thread listed as `idle` whose newest turn is `inProgress` is found and
-      joined;
+    - a thread listed as `idle` whose newest turn is `inProgress` and whose
+      `updatedAt` is within the last 2 minutes is found and joined;
+    - a thread whose newest turn is `inProgress` but whose `updatedAt` is 3
+      minutes old gets no turn check and no `thread/resume`, including when the
+      listing shows it as `active`;
+    - a delegated dot task (`threadSource: "aeon_child"`, parent only in its
+      `<codex_delegation>` tag) that is running and recent is joined;
     - `warm` keeps the connection until `turn/completed`, writes the
       turn-completion record, flushes, then leaves;
     - a thread already joined is not joined again by a later discovery run;
@@ -1549,12 +1635,10 @@ double-count its tokens.
       increases from before and after the reset;
     - a thread still running after 6 hours is left and joined again on a later
       run;
-    - a running sub-agent thread is not joined; one known only through the sync
-      job's unfinished set is skipped without a turn check;
-    - discovery reads a second listing page while the first page holds only recent
-      or `active` threads, and stops after the first page that holds none; a
-      running thread listed `idle` on a later page is found through the sync
-      job's unfinished set;
+    - a running sub-agent thread is not joined and gets no turn check;
+    - discovery reads a second listing page while the first page holds only
+      threads updated in the last 2 minutes, and stops after the first page that
+      holds none;
     - `-32601` with an `unsupported app-server method` message on a discovery
       `thread/turns/list` stops capture for the account and does not set the
       sync job's wait;
@@ -1654,16 +1738,18 @@ double-count its tokens.
   listing record, so the session is parsed with its metadata.
 
 - Listing order: a page whose `updatedAt` increases from one row to the next
-  fails the pass as a protocol change instead of stopping early; every listing
-  call carries `modelProviders: []`.
+  fails the pass as a protocol change instead of stopping early; no listing
+  call carries `modelProviders`.
 
 - Login key: two homes signed in as the same user, one whose ID token carries
   `chatgpt_account_user_id` and one whose older token does not, get one key
   and sync once.
 
 - Price bands: an update whose `total` increase equals `last` with more than
-  272,000 input tokens is priced at the band rate; the first record of a join
-  is priced at base rates; session output totals count each increase once.
+  272,000 input tokens is priced at the band rate, including when it is the
+  first record of a join; the first record of a join whose increase differs
+  from `last` is priced at base rates; session output totals count each
+  increase once.
 
 - Coverage across a reset: turn A captured, turn B finishes while not joined,
   the counters reset, and turn C is captured; B counts as not captured.
@@ -1674,8 +1760,10 @@ double-count its tokens.
 - Endpoint overrides: an `https` override on a host outside `chatgpt.com` and
   `openai.com` is a config error and no request is sent.
 
-- Oversized usage group: a root with 1,001 descendant IDs is never sent and
-  settles with the "too many sub-agent threads" outcome.
+- Oversized usage group: a root with 999 descendants (1,000 IDs with the root)
+  is sent; a root with 1,000 descendants is never sent and settles with the
+  "too many sub-agent threads" outcome, which a root with an earlier usable
+  row shows beside that row.
 
 - Hosted usage root: a grandchild's usage root resolves to the root's public ID
   on a hosted hub.
@@ -1688,8 +1776,8 @@ double-count its tokens.
 - Reply size: a `thread/items/list` page larger than 32 KiB is read; a page over
   the configured read limit is retried once with `limit: 1`, and only a second
   oversized reply puts that thread in the retry set while the pass continues
-  with the next thread; under the `full` fallback an oversized turn listing
-  puts the thread in the retry set at once, without a retry.
+  with the next thread; an oversized turn listing puts the thread in the retry
+  set at once, without a retry.
 
 - Refresh requested: during a home's refresh-requested wait, plan usage and live
   discovery skip that home, and a second home with the same login key is used.
@@ -1751,6 +1839,13 @@ double-count its tokens.
   carries a `thread_spawn` parent is grouped under that parent's root and gets
   the sub-agent relationship.
 
+- Delegated parent: a thread with no `parentThreadId` and no spawn parent whose
+  first `userMessage` starts with a `<codex_delegation>` tag gets that
+  `source_thread_id` as its resolved parent and the sub-agent relationship; a
+  later `functionCallOutput` with a different tag does not change it; while
+  the parent is unlisted, the thread waits in that parent's waiting file and
+  is its own usage root.
+
 - Working directory: a stopped thread whose newest metadata has null
   `environments` keeps the working folder from an earlier record.
 
@@ -1769,7 +1864,9 @@ double-count its tokens.
 
 - Replicas and mirror: SQLite, PostgreSQL, ClickHouse, and DuckDB return the
   same plan usage, outcome kind and time, coverage, and totals for the same
-  data, and a plan usage change reaches each of them.
+  data, through each backend's session usage reader and the hosted reports
+  wrapper, and a plan usage change reaches each of them. A PostgreSQL schema
+  without `session_plan_usage` fails `CheckSchemaCompat`.
 
 - Config: a `config.toml` that fails to parse on re-read keeps the last good
   settings and shows its message. An endpoint override with `http` or `ws` to
@@ -1795,9 +1892,7 @@ double-count its tokens.
 - Document the setting, what it does with the user's ChatGPT login, the
   private-endpoint caveat, what live token capture does on OpenAI's side and
   how to turn it off, why threads AgentsView never joined while running show
-  plan usage instead of tokens, that live tokens are off when the server
-  rejects the cheap turn views (only if the Open questions probe finds that),
-  and these limits, in the user-facing docs:
+  plan usage instead of tokens, and these limits, in the user-facing docs:
     - a thread's first token record is dated when it was observed, even when
       earlier turns ran on an earlier day;
     - two model changes the monitor does not see (a change only
@@ -1806,49 +1901,37 @@ double-count its tokens.
       is done;
     - enable the source, or at least live capture, on one machine only (see
       Several machines);
-    - a turn that starts without changing the thread's `updatedAt` or status for
-      more than 30 minutes is not captured live.
+    - live capture joins a running thread only within 2 minutes of its last
+      `updatedAt` change, so a turn that ends before a join, or that runs
+      without changing `updatedAt` after the monitor missed that window, gets no
+      live tokens;
+    - a multi-call increase is priced at base rates, which can understate the cost
+      of long-context calls inside it (see Live token capture);
+    - a counter restart that the monitor does not see as a decrease undercounts
+      the turns in between (see Live token capture);
+    - a thread that fails for 7 days without changing stops being retried and is
+      named in the daemon log.
 
 ## Open questions
 
-1. **Turn listing view.** The probes called `thread/turns/list` with `limit`
-   only. Newest first is the default, so no `sortDirection` is sent. Before
-   the fetcher and the live token monitor rely on `itemsView: notLoaded`, the
-   user runs one read-only probe with it on the durable host. If it is
-   rejected, the user probes `itemsView: summary`. Neither component ever
-   omits the field, because the hosted default `full` returns every item of
-   every listed turn, which would make each live discovery check download
-   whole running turns. If both values are rejected, live discovery stays off
-   (status "Live tokens: off: the server rejected the turn view AgentsView
-   needs", and a line in the user-facing docs), and the fetcher sends
-   `itemsView: full`, which the probes already returned. The fetcher then uses
-   the turn listing for turn statuses only, with `limit: 1` per call so it
-   stops at the resume turn, and still reads item records from
-   `thread/items/list`, because turn items carry no `turnId`, `startedAtMs`,
-   or `completedAtMs`. Each pass then also downloads the turns since the
-   resume point in full. A rejected field is a protocol change under the
-   JSON-RPC error rules, so this probe must finish before the field ships.
+1. **Turn listing view.** Answered 2026-10-13: the server accepts
+   `itemsView: "notLoaded"` and returns turns with no items; it rejects
+   `summary`. The fetcher and the monitor always send `notLoaded`.
 
-1. **Listing order and providers.** The probes never sent `sortKey: updated_at`
-   with a saved result, and open-source Codex filters a listing with no
-   `modelProviders` to the server's own provider (every probed thread had
-   `modelProvider: "local"`). The user runs one read-only listing probe with
-   `sortKey: updated_at`, descending, and `modelProviders: []`, and records
-   whether `updatedAt` never increases from row to row and whether the empty
-   provider list is accepted and returns at least the same threads. If the
-   order is wrong, the early stop is dropped and every pass walks every page;
-   if `modelProviders: []` is rejected, it is omitted and the gap is a known
-   limit.
+1. **Listing order and providers.** Answered 2026-10-13: with
+   `sortKey: updated_at`, descending, `updatedAt` never increased from row to
+   row, within a page or across pages. The server rejects `modelProviders`
+   with `-32602`, so it is never sent; the gap is the known limit under
+   Incremental sync.
 
-1. **Client subprotocol.** Every probe sent `codex-client.desktop`. The user
-   runs one handshake probe with `codex-client.agentsview` in its place and
-   records whether the server accepts it, which subprotocol it selects (with
-   the desktop name too, for comparison), and, if it refuses, the exact reply
-   (see Authentication).
+1. **Client subprotocol.** Answered 2026-10-13: the server accepts
+   `codex-client.agentsview` and selects `codex-app-server`.
 
-1. **How the server reports a deleted thread.** The user runs a probe that reads
-   a thread they have deleted (for example after resetting a dot) and records
-   the exact reply. Until then, no reply counts as a deletion.
+1. **How the server reports a deleted thread.** The user runs a probe that sends
+   `thread/turns/list` and `thread/items/list`, the fetcher's only per-thread
+   calls, for a thread they have deleted (for example after resetting a dot)
+   and records the exact replies. Until then, no reply counts as a deletion,
+   and the 7-day unreadable rule (Incremental sync) stops the retries.
 
 1. **Joining sub-agent threads.** The resume probes covered dot threads only.
    Before the monitor joins sub-agent threads (as defined under Joining), the
@@ -1864,17 +1947,19 @@ double-count its tokens.
    whether every descendant carries `parentThreadId`. Until then, usage groups
    use the resolved parent (see Mapping) alone.
 
-1. **Sub-agent threads in the listing.** No probed thread was a sub-agent
-   thread, so it is unverified whether the default `thread/list` includes
-   them. The user runs a read-only probe after a thread has used sub-agents:
-   list with no `sourceKinds`, then with `sourceKinds` set to the sub-agent
-   kinds, and records which listing returns the sub-agent threads. The next
-   time the user archives a thread in their own app, a read-only listing
-   before and after records whether its `updatedAt` changed; if it does not,
-   the archived listing can miss it until the 24-hour stall rule stops its
-   unfinished selection. Until then, sync reads both listings (see Incremental
-   sync); if the default listing turns out to include them, the sub-agent
-   listing can be dropped.
+1. **Sub-agent threads in the listing.** On 2026-10-13 the server accepted the
+   sub-agent listings and returned no threads from them. No probed thread was
+   a sub-agent thread (delegated dot tasks are in the default listing), so it
+   is unverified whether the default `thread/list` includes sub-agent threads.
+   The user runs a read-only probe after a thread has used sub-agents: list
+   with no `sourceKinds`, then with `sourceKinds` set to the sub-agent kinds,
+   and records which listing returns the sub-agent threads. The next time the
+   user archives a thread in their own app, a read-only listing before and
+   after records whether its `updatedAt` changed; if it does not, the archived
+   listing can miss it until the 24-hour stall rule stops its unfinished
+   selection. Until then, sync reads both listings (see Incremental sync); if
+   the default listing turns out to include them, the sub-agent listing can be
+   dropped.
 
 1. **Counter resets.** Whether the hosted token totals ever restart from zero,
    for example after a cold start. The user joins a thread before and after
@@ -1889,6 +1974,13 @@ double-count its tokens.
    items at intervals after it ends and records when the last item settles.
    Until then the margin is 10 minutes.
 
+1. **Approval requests after AgentsView leaves.** First-reply-wins comes from
+   open-source Codex; no probe has checked the hosted server. The user joins a
+   thread that raises an approval prompt, closes the AgentsView connection
+   while the prompt is pending, and records whether the user's own app still
+   receives the prompt and can answer it, including an app that connects after
+   the prompt was raised.
+
 Only the user runs probes, because they use their ChatGPT login; whoever
 executes the plan never reads the token. Test fixtures are synthetic: modeled on
 the shapes the probes returned, with every value replaced.
@@ -1900,19 +1992,13 @@ the shapes the probes returned, with every value replaced.
   sync errors and must never damage stored sessions.
 - OpenAI may treat third-party clients on these endpoints differently from their
   own apps.
-- If the probe in Open questions finds both cheap turn views rejected, the
-  `itemsView: full` fallback downloads the running turn in full on every pass,
-  so network cost over one long turn grows with the square of its length. This
-  is an accepted exception to that anti-goal, limited to that fallback. Under
-  the fallback, a single turn larger than the read limit fails its thread on
-  every pass, because the turn listing is already one turn per call.
 - An item that stays unfinished early in a long turn, such as a background
   command, holds the resume point, so each pass re-reads the rest of that turn
   until the item finishes: the server has no "changed since" read
   (`after_updated_at_ordinal` is always unset in open-source Codex). Network
   cost within that one turn can grow with the square of its length. This is
-  the second accepted exception; it ends when the item finishes or its turn
-  ends and the save-lag margin passes.
+  the accepted exception within one running turn (see Anti-goals); it ends
+  when the item finishes or its turn ends and the save-lag margin passes.
 - Re-fetching only unfinished items misses edits to items that already looked
   finished.
 - Live token capture race: a turn that ends between the monitor's check and its
@@ -1921,17 +2007,21 @@ the shapes the probes returned, with every value replaced.
   nothing runs, and the stored thread is unchanged. The probed thread had no
   active goal; in open-source Codex a resume also runs the thread's idle step,
   which can continue an active goal, so a cold resume of such a thread might
-  start a turn. The monitor's one-cold-resume-per-turn rule bounds how often
-  that can happen. The resume response reports the resume time as `updatedAt`;
-  if the listing also moves the thread up, the user's thread list in OpenAI's
-  apps reorders, and the fetcher fetches that thread once more and finds no
-  change. The monitor detects it from `resumeKind: "cold"`, logs it, and
-  leaves at once.
+  start a turn. The join rule (listing `updatedAt` within the last 2 minutes)
+  limits cold resumes to threads that changed moments before, and the
+  monitor's one-cold-resume-per-turn rule bounds how often each can happen.
+  The resume response reports the resume time as `updatedAt`; if the listing
+  also moves the thread up, the user's thread list in OpenAI's apps reorders,
+  and the fetcher fetches that thread once more and finds no change. The
+  monitor detects it from `resumeKind: "cold"`, logs it, and leaves at once.
 - A join rebinds the running session's client name and version to AgentsView
   (`set_app_server_client_info` in open-source Codex) and resets its MCP
   elicitation auto-deny. Later turns' initial context can mention the client.
   This is part of the accepted join exception; the sub-agent join probe also
   records whether a dot thread's later turns change after a join.
+- If the hosted server sends an approval prompt only to connections present when
+  it fires, a dot could wait on a prompt that the user's app never sees after
+  AgentsView leaves. Open questions asks for the probe that settles it.
 - OpenAI may change what `thread/resume` does on a running or stopped thread.
   The monitor checks `resumeKind` on every call and stops live capture for the
   account on any value other than `warm` or `cold`.
