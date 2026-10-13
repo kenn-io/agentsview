@@ -1555,6 +1555,10 @@ type ParsedSession struct {
 	// usage was seen. Only Codex cloud sessions with token records set it.
 	CaptureCoverage *ParsedCaptureCoverage
 
+	// PlanUsage is the session's latest plan usage report and outcome.
+	// Only Codex cloud sessions with plan usage records set it.
+	PlanUsage *ParsedPlanUsage
+
 	// CountsAuthoritative marks parsers that own MessageCount and
 	// UserMessageCount even when they intentionally emit no transcript rows.
 	CountsAuthoritative bool
@@ -1714,6 +1718,39 @@ type ParsedMessage struct {
 type ParsedCaptureCoverage struct {
 	LastCaptureAt   *time.Time
 	UncapturedTurns int
+}
+
+// ParsedPlanUsage is a session's plan usage: OpenAI's latest report of
+// the thread's share of the plan's limits and its credits, and the newest
+// outcome record written after that report. The report fields are empty
+// when no row exists or a newer "counted under" outcome cleared them.
+// Credits stay decimal strings as OpenAI sent them.
+type ParsedPlanUsage struct {
+	DataAsOf        *time.Time
+	DataStatus      string
+	UsageSource     string
+	WeeklyPercent   *float64
+	FiveHourPercent *float64
+	Credits         *string
+	Groups          []ParsedPlanUsageGroup
+	Final           bool
+	OutcomeKind     string
+	OutcomeAt       *time.Time
+	// CountedUnder is the usage root's session ID when this thread is a
+	// descendant whose usage counts toward the root.
+	CountedUnder string
+}
+
+// ParsedPlanUsageGroup is a plan usage row's figures for one model,
+// reasoning effort, and speed.
+type ParsedPlanUsageGroup struct {
+	Model             string
+	ReasoningEffort   string
+	Speed             string
+	ProductExperience string
+	WeeklyPercent     *float64
+	FiveHourPercent   *float64
+	Credits           *string
 }
 
 // ParsedUsageEvent records session-level usage emitted by parsers
