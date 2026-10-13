@@ -22,6 +22,7 @@ import (
 func codexCloudUsageEvents(
 	threadID string, recs []mirror.TokenUsageData, fallbackModel string,
 ) (events []ParsedUsageEvent, totalOutput int64, peakContext int64) {
+	recs = codexCloudDistinctTokens(recs)
 	baselines := codexCloudBaselines(recs)
 	for i, rec := range recs {
 		peakContext = max(peakContext, codexCloudMapTokens(rec.Last).context())
@@ -60,6 +61,30 @@ func codexCloudUsageEvents(
 		})
 	}
 	return events, totalOutput, peakContext
+}
+
+// codexCloudDistinctTokens drops repeats of an earlier token record. The
+// monitor can append one batch twice when a save fails after its records
+// were written; the repeat would read as a falling total and count the
+// running total again. One joined connection observes each update once,
+// so the join ID, observation time, and counts identify a record.
+func codexCloudDistinctTokens(recs []mirror.TokenUsageData) []mirror.TokenUsageData {
+	type identity struct {
+		joinID, turnID string
+		observed       int64
+		total, last    mirror.TokenCounts
+	}
+	seen := make(map[identity]bool, len(recs))
+	distinct := make([]mirror.TokenUsageData, 0, len(recs))
+	for _, rec := range recs {
+		id := identity{rec.JoinID, rec.TurnID, rec.ObservedAt.UnixNano(), rec.Total, rec.Last}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		distinct = append(distinct, rec)
+	}
+	return distinct
 }
 
 // codexCloudBaselines numbers each record's baseline: it starts at 0 and
