@@ -60,114 +60,111 @@ func (s *Store) RootOf(key AccountKey, threadID string) (string, error) {
 // the usage groups in step. A parent that is not mirrored yet gets child
 // in its waiting file, so child stays its own root until the parent
 // arrives. Threads waiting for child move under child's root. The caller
-// holds the account lock, writes a "counted under" record to each moved
-// thread, and drops moved threads from usage retries.
+// holds the account lock.
 //
-// It returns child's root and every thread newly counted under a root
-// other than itself, child's earlier descendants included.
-func (s *Store) LinkParent(key AccountKey, child, parent string) (root string, moved []string, err error) {
+// count is called for every thread newly counted under a root other than
+// itself, child's earlier descendants included, before that thread joins
+// the root's group. The caller writes its "counted under" record there.
+// A link stopped by an error or a crash is redone by linking again, so no
+// moved thread misses its record.
+func (s *Store) LinkParent(
+	key AccountKey, child, parent string, count func(id, root string) error,
+) (root string, err error) {
 	if parent == child {
 		parent = ""
 	}
 	st, err := s.LoadThread(key, child)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	if st.ResolvedParent != parent {
 		st.ResolvedParent = parent
 		if err := s.SaveThread(key, child, st); err != nil {
-			return "", nil, err
+			return "", err
 		}
 	}
 	if parent != "" {
 		ok, err := s.known(key, parent)
 		if err != nil {
-			return "", nil, err
+			return "", err
 		}
 		if !ok {
 			if err := s.addWaiting(key, parent, child); err != nil {
-				return "", nil, err
+				return "", err
 			}
 		}
 	}
 	root, err = s.RootOf(key, child)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	if root != child {
-		group, err := s.takeGroup(key, child)
-		if err != nil {
-			return "", nil, err
+		if err := s.moveGroup(key, child, root, count); err != nil {
+			return "", err
 		}
-		added, err := s.addDescendants(key, root, group)
-		if err != nil {
-			return "", nil, err
-		}
-		moved = append(moved, added...)
 	}
 	waiting, err := s.LoadWaiting(key, child)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	for _, w := range waiting {
 		// A thread whose parent changed since it began waiting is no
 		// longer child's.
 		wst, err := s.LoadThread(key, w)
 		if err != nil {
-			return "", nil, err
+			return "", err
 		}
 		if wst.ResolvedParent != child {
 			continue
 		}
-		group, err := s.takeGroup(key, w)
-		if err != nil {
-			return "", nil, err
+		if err := s.moveGroup(key, w, root, count); err != nil {
+			return "", err
 		}
-		added, err := s.addDescendants(key, root, group)
-		if err != nil {
-			return "", nil, err
-		}
-		moved = append(moved, added...)
 	}
 	if len(waiting) > 0 {
 		if err := s.SaveWaiting(key, child, nil); err != nil {
-			return "", nil, err
+			return "", err
 		}
 	}
-	return root, moved, nil
+	return root, nil
 }
 
-// takeGroup returns a former root and its descendants and removes its
-// descendants file, since it is no longer a root.
-func (s *Store) takeGroup(key AccountKey, former string) ([]string, error) {
-	descendants, err := s.LoadDescendants(key, former)
-	if err != nil {
-		return nil, err
+// moveGroup moves a former root and its descendants into root's group.
+// Threads not yet in the group are counted first, then the group is saved,
+// and only then is the former root's own group removed, so a crash at any
+// point leaves every thread in some group and a retry redoes what is left.
+func (s *Store) moveGroup(key AccountKey, former, root string, count func(id, root string) error) error {
+	if former == root {
+		// Only a loop in the stored parents leads here; the root keeps
+		// its group.
+		return nil
 	}
-	if err := s.SaveDescendants(key, former, nil); err != nil {
-		return nil, err
-	}
-	return append([]string{former}, descendants...), nil
-}
-
-// addDescendants adds ids to root's group and returns those not already
-// in it.
-func (s *Store) addDescendants(key AccountKey, root string, ids []string) ([]string, error) {
-	descendants, err := s.LoadDescendants(key, root)
+	moving, err := s.LoadDescendants(key, former)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	moving = append([]string{former}, moving...)
+	group, err := s.LoadDescendants(key, root)
+	if err != nil {
+		return err
 	}
 	var added []string
-	for _, id := range ids {
-		if id != root && !slices.Contains(descendants, id) {
-			descendants = append(descendants, id)
+	for _, id := range moving {
+		if id != root && !slices.Contains(group, id) && !slices.Contains(added, id) {
 			added = append(added, id)
 		}
 	}
-	if len(added) == 0 {
-		return nil, nil
+	for _, id := range added {
+		if err := count(id, root); err != nil {
+			return err
+		}
 	}
-	return added, s.SaveDescendants(key, root, descendants)
+	if len(added) > 0 {
+		if err := s.SaveDescendants(key, root, append(group, added...)); err != nil {
+			return err
+		}
+	}
+	return s.SaveDescendants(key, former, nil)
 }
 
 func (s *Store) addWaiting(key AccountKey, parent, child string) error {

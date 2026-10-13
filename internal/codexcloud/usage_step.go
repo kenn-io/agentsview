@@ -84,14 +84,11 @@ func markPending(acct *AccountState, root string, now time.Time, running bool) {
 // under" record to every thread newly counted under a root, and marks the
 // root pending. The caller holds the account lock and saves acct.
 func (s *Syncer) linkUsage(key AccountKey, acct *AccountState, threadID, parent string, now time.Time) error {
-	root, moved, err := s.Store.LinkParent(key, threadID, parent)
+	root, err := s.Store.LinkParent(key, threadID, parent, func(id, root string) error {
+		return s.countedUnder(key, acct, id, root, now)
+	})
 	if err != nil {
 		return err
-	}
-	for _, id := range moved {
-		if err := s.countedUnder(key, acct, id, root, now); err != nil {
-			return err
-		}
 	}
 	running, err := s.groupRunning(key, acct, root)
 	if err != nil {
