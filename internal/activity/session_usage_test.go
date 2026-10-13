@@ -84,6 +84,10 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			if tc.wantSourceSessionID != "" {
 				assert.Equal(t, tc.wantSourceSessionID, result.Rows[0].SourceSessionID)
 				assert.Equal(t, tc.wantCost, result.Rows[0].Cost)
+				assert.Equal(t, map[string]SessionTokenCoverage{
+					"root":  {OutputTokens: 20, PeakContextTokens: 100},
+					"child": {OutputTokens: 20, PeakContextTokens: 100},
+				}, result.CanonicalTokenCoverageBySession)
 			}
 		})
 	}

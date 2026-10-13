@@ -68,7 +68,7 @@ func (db *DB) BuildActivityReportArtifacts(
 		return activity.CandidateArtifacts{}, err
 	}
 	defer release()
-	ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
+	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
@@ -80,16 +80,11 @@ func (db *DB) BuildActivityReportArtifacts(
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
-	ReportProgress(onProgress, activity.Progress{
+	activity.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
 	return activity.BuildReportArtifacts(ctx, activityReportBackend{DB: db, lower: lowerBound, upper: upperBound}, sessions, ids, q, onProgress, "aggregating activity report")
-}
-
-// ReportProgress calls callback with progress when callback is set.
-func ReportProgress(callback activity.ProgressFunc, progress activity.Progress) {
-	activity.ReportProgress(callback, progress)
 }
 
 func (db *DB) activityReportMessageCounts(

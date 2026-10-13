@@ -63,7 +63,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	q activity.Query,
 	onProgress activity.ProgressFunc,
 ) (activity.CandidateArtifacts, error) {
-	db.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
+	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	ctx, err := s.withPartsSnapshot(ctx)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
@@ -87,7 +87,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if onDisk {
 				s.touchActivityReport(selection, key, kept)
 			}
-			db.ReportProgress(onProgress, kept.done)
+			activity.ReportProgress(onProgress, kept.done)
 			return kept.artifacts, nil
 		}
 	}
@@ -110,7 +110,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if onDisk {
 				s.touchActivityReport(selection, memoKey, kept[0])
 			}
-			db.ReportProgress(onProgress, kept[0].done)
+			activity.ReportProgress(onProgress, kept[0].done)
 			return kept[0].artifacts, nil
 		}
 		if onDisk {
@@ -118,7 +118,7 @@ func (s *Store) BuildActivityReportArtifacts(
 				s.reportMemo(onDisk).put(selection, memoKey, []activityReportEntry{kept})
 				s.markActivityReportChecked(selection, fingerprint, memoKey)
 				s.touchActivityReport(selection, memoKey, kept)
-				db.ReportProgress(onProgress, kept.done)
+				activity.ReportProgress(onProgress, kept.done)
 				return kept.artifacts, nil
 			}
 		}
@@ -141,7 +141,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
 	candidates := chSessionSet{body: "SELECT id FROM activity_candidate_ids"}
-	db.ReportProgress(onProgress, activity.Progress{
+	activity.ReportProgress(onProgress, activity.Progress{
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
@@ -155,7 +155,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		if progress.Phase == activity.ProgressDone {
 			done = progress
 		}
-		db.ReportProgress(onProgress, progress)
+		activity.ReportProgress(onProgress, progress)
 	}, "aggregating clickhouse activity report")
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
