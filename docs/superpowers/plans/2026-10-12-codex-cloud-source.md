@@ -81,21 +81,30 @@ disagree, the spec wins; fix the plan.
 - A reply larger than 32 KiB must decode (Task 9); a reply over the read limit
   must fail only that thread after one `limit: 1` retry on a fresh connection
   (Task 14).
+- Live discovery must never resume a thread whose listing `updatedAt` is more
+  than 2 minutes old, whatever its turn status. Test in Task 17.
 
 ______________________________________________________________________
 
 ## Gate before any run against the real host
 
-The fakes cover everything up to here, but four values are unverified on the
-hosted server: the turn view (`itemsView: notLoaded`), the listing order and
-`modelProviders: []`, the `codex-client.agentsview` subprotocol, and which
-listing returns sub-agent threads. Before the first run against a real login
-(the milestone after Task 15), prepare a typed, read-only Python probe outside
-the repository (`/tmp`, uv script, never committed) that answers Open questions
-1, 2, 3, and 7 of the spec, and ask the user to run it. Record each answer in
-`docs/internal/session-format-sources.md` (Task 29 owns the entry) and adjust
-the constants in Tasks 9, 12, 13, and 17 to match. The gate probe is ready at
-`/tmp/dot-probe/gate_probe.py`.
+The gate probe (`/tmp/dot-probe/gate_probe.py`, a typed, read-only uv script
+outside the repository) answered spec Open questions 1, 2, 3, and 7 on
+2026-10-13:
+
+- `itemsView: "notLoaded"` is accepted and returns turns with no items;
+  `summary` is rejected. Tasks 13 and 17 send `notLoaded`.
+- `updated_at` descending order holds within and across pages. `modelProviders`
+  is rejected with `-32602`, so Task 12 never sends it.
+- `codex-client.agentsview` is accepted, and the server selects
+  `codex-app-server` (Task 9).
+- The sub-agent listings are accepted and returned no threads; sync keeps
+  reading them (Task 12).
+
+Task 29 records these answers in `docs/internal/session-format-sources.md`. Open
+questions 4 (deleted-thread replies) and 10 (approval prompts after AgentsView
+leaves) still need probes. Prepare them the same way, ask the user to run them,
+and record the answers in the same entry.
 
 ______________________________________________________________________
 
@@ -212,6 +221,9 @@ Spec: Mirror format.
       `Recovered`; truncates a torn tail; writes one frame of JSONL; fsyncs the
       file, and the directory when the file is new. `records` may be empty
       (recovery only).
+    - The directory sync is skipped on Windows, which cannot sync a directory, as
+      `internal/rawcapture/files.go` does; without the guard every first import
+      fails there.
     - A torn walk from `storedOffset` is confirmed by a walk from the start before
       truncating, because an offset inside a frame looks torn.
     - `func ReadAll(ctx context.Context, path string) ([]Record, error)`: complete
@@ -237,6 +249,11 @@ Spec: Mirror format.
 
 - [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): add zstd mirror format"`
+
+- [x] **Step 6: Windows directory sync.** Add the Windows guard above, with a
+  test that a first append to a new file succeeds (CI runs Go tests on
+  Windows). Commit
+  `git commit -m "fix(codexcloud): skip directory sync on Windows"`.
 
 ### Task 4: Register the `codex-cloud` agent
 
@@ -279,7 +296,7 @@ list exclusion), Remote host sync flag.
       `FileBased true`, `DataDirRoot`, `RemoteHostSyncExcluded true`, no
       `EnvVar`, no `DefaultDirs`, no usage-capability flags.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
     - `TestCodexCloudRootUnderDataDir`: with `AGENTSVIEW_DATA_DIR=<tmp>`,
       `cfg.AgentDirs[AgentCodexCloud]` and `ResolveDirs(AgentCodexCloud)` both
@@ -296,15 +313,15 @@ list exclusion), Remote host sync flag.
     - frontend `agents.test.ts`: `KNOWN_AGENTS` list includes `codex-cloud` with
       label "Codex Cloud".
 
-- [ ] **Step 2: Run** the four Go packages and `vp test agents`; FAIL.
+- [x] **Step 2: Run** the four Go packages and `vp test agents`; FAIL.
 
-- [ ] **Step 3: Implement.** Add the factory case in `providerFactoryForDef`
+- [x] **Step 3: Implement.** Add the factory case in `providerFactoryForDef`
   pointing at a stub provider that discovers nothing (Task 6 fills it) and a
   `provider_migration.go` entry `ProviderMigrationProviderAuthoritative`.
 
-- [ ] **Step 4: Run** again; PASS. Run `go vet ./...`.
+- [x] **Step 4: Run** again; PASS. Run `go vet ./...`.
 
-- [ ] **Step 5: Commit** `git commit -m "feat: register codex-cloud agent"`
+- [x] **Step 5: Commit** `git commit -m "feat: register codex-cloud agent"`
 
 ### Task 5: `[agents.codex-cloud]` settings
 
@@ -398,12 +415,14 @@ Rules the tests pin (from the spec):
   `environments`, else `cwd`;
 
 - resolved parent: `parentThreadId`, else
-  `source.subAgent.thread_spawn.parent_thread_id`; `RelSubagent` wins over
-  `forkedFromId` (`RelFork`);
+  `source.subAgent.thread_spawn.parent_thread_id`, else the `source_thread_id`
+  of a `<codex_delegation>` tag at the start of the first `userMessage` (later
+  `functionCallOutput` items with the tag do not change it); `RelSubagent`
+  wins over `forkedFromId` (`RelFork`);
 
 - a file with no metadata record is skipped and logged.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
     - `TestCodexCloudMappingEveryItemType`: one fixture with every item type the
       spec's table lists plus `unknownType`; assert role, tool name, category,
@@ -412,18 +431,21 @@ Rules the tests pin (from the spec):
       one tool result with the newer output.
     - `TestCodexCloudSessionFields`: title fallback, times, entrypoint values, cwd
       fallback over a record with null `environments`.
-    - `TestCodexCloudResolvedParent`: spawn-source parent and parent-plus-fork
-      both yield `ParentSessionID "codex-cloud:<parent>"`, `RelSubagent`.
+    - `TestCodexCloudResolvedParent`: spawn-source parent, parent-plus-fork, and a
+      delegated dot task (`threadSource: "aeon_child"`, null `parentThreadId`,
+      `<codex_delegation>` first user message) all yield
+      `ParentSessionID "codex-cloud:<parent>"`, `RelSubagent`; a later
+      `send_message` `functionCallOutput` with another tag changes nothing.
     - `TestCodexCloudSkipsFileWithoutMetadata`.
     - `BenchmarkCodexCloudParseLargeThread`: 900-item synthetic thread.
 
-- [ ] **Step 2: Run** `go test ./internal/parser -run CodexCloud`; FAIL.
+- [x] **Step 2: Run** `go test ./internal/parser -run CodexCloud`; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run** tests and the benchmark once; PASS.
+- [x] **Step 4: Run** tests and the benchmark once; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(parser): parse codex-cloud mirror files"`
 
 ### Task 7: Raw capture for mirror files
@@ -542,8 +564,8 @@ Authentication (identity, redaction).
     - `type Mode int` with `ModeFetch`, `ModeMonitor`.
     - `type DialOptions struct { Endpoint *url.URL; Login Login; Mode Mode; Version string; ReadLimit int64; HTTPClient *http.Client }`
     - `const DefaultReadLimit = 64 << 20`
-    - `const ClientSubprotocol = "codex-client.agentsview"` (the gate may change
-      it only with the user's consent).
+    - `const ClientSubprotocol = "codex-client.agentsview"` (the gate confirmed
+      the server accepts it).
     - `func Dial(ctx context.Context, o DialOptions) (*Conn, error)`: subprotocols
       and headers from Global Constraints, an `http.Client` whose
       `CheckRedirect` refuses, `SetReadLimit(o.ReadLimit)`, then `initialize`
@@ -560,11 +582,11 @@ Authentication (identity, redaction).
     - `type Notification struct { Method string; Params jsontext.Value }`
     - `var ErrRefreshRequested`, `ErrNotAllowed`, `ErrReplyTooLarge`,
       `ErrProtocolChange` (the server selected a subprotocol other than
-      `codex-app-server` or none; the gate may pin this further), `ErrClosed`. A
-      server request for `account/chatgptAuthTokens/refresh` closes the
-      connection and sets `Err` to `ErrRefreshRequested`; every other server
-      request is ignored, never answered. A message over the read limit closes
-      the connection with `ErrReplyTooLarge`.
+      `codex-app-server`, which the gate saw it select), `ErrClosed`. A server
+      request for `account/chatgptAuthTokens/refresh` closes the connection and
+      sets `Err` to `ErrRefreshRequested`; every other server request is
+      ignored, never answered. A message over the read limit closes the
+      connection with `ErrReplyTooLarge`.
     - `type RPCError struct { Code int; Message string; Data jsontext.Value }`
     - `type HTTPError struct { Status int; RetryAfter time.Duration }` for a
       refused handshake (401, 403, 429, 5xx, any 3xx).
@@ -715,6 +737,13 @@ Spec: JSON-RPC errors, Failure timing, Status and errors (messages).
 - [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): classify errors and time waits"`
 
+- [x] **Step 6: Classification fixes.** A reply that does not decode (malformed
+  JSON or an unexpected shape) is `FailProtocol`, not a network failure. An
+  error reading or writing local state or mirror files is a local failure: it
+  is reported as such and never classified as `FailNetwork` or set as the
+  shared account wait. A state file that does not decode is moved to
+  `<name>.corrupt` and treated as lost. Add a test for each, then commit.
+
 ### Task 12: Listings and selection
 
 Spec: Incremental sync (listings, steps 1 to 5, watermarks).
@@ -733,21 +762,22 @@ Spec: Incremental sync (listings, steps 1 to 5, watermarks).
     - `type ListingResult struct { Changed []ListedThread; Active []string; Newest int64 }`
       and `var Listings` (the four `ListingID`s in pass order).
     - `func listChanged(ctx context.Context, c *Conn, id ListingID, watermark int64, stored func(threadID string) (int64, bool, error)) (ListingResult, error)`:
-      `sortKey: "updated_at"`, `sortDirection: "desc"`, `modelProviders: []`,
-      `sourceKinds` only for sub-agent listings, `archived` per listing; stops
-      after the first page holding a thread strictly older than the watermark; a
-      row whose `updatedAt` is newer than the row before it, on the same page or
-      the previous one, returns an `ErrProtocolChange` error.
+      `sortKey: "updated_at"`, `sortDirection: "desc"`, never `modelProviders`
+      (the server rejects it with `-32602`), `sourceKinds` only for sub-agent
+      listings, `archived` per listing; stops after the first page holding a
+      thread strictly older than the watermark; a row whose `updatedAt` is newer
+      than the row before it, on the same page or the previous one, returns an
+      `ErrProtocolChange` error.
     - `func buildSelection(now time.Time, acct *AccountState, changed []ListedThread, active []string) []string`
       unions changed threads, listed-active and unfinished threads not stalled,
-      check-again flags, due retry entries; removes retry entries not yet due;
-      each thread once.
+      check-again flags of threads not stalled, due retry entries; removes retry
+      entries not yet due; each thread once.
 
 - [x] **Step 1: Write failing tests**
 
     - `TestListingParams`: default listings send no `sourceKinds`; sub-agent
-      listings send exactly the five sub-agent kinds; every call sends
-      `modelProviders: []`.
+      listings send exactly the five sub-agent kinds; no call sends
+      `modelProviders`.
     - `TestListingStopsAfterOlderPage`, `TestListingSharedSecondAcrossPages`.
     - `TestListingOutOfOrderIsProtocolChange` (Review Focus).
     - `TestUnchangedAccountOneCallPerListing`.
@@ -763,6 +793,9 @@ Spec: Incremental sync (listings, steps 1 to 5, watermarks).
 
 - [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): list and select changed threads"`
+
+- [x] **Step 6: Stalled check-again.** A stalled thread is not selected through
+  its check-again flag (`TestStallOverridesCheckAgain`). Commit.
 
 ### Task 13: Fetch a thread, resume point, durable append
 
@@ -783,7 +816,8 @@ format (dedup).
 
     - `type TurnView string` with `TurnViewNotLoaded = "notLoaded"`,
       `TurnViewSummary = "summary"`, `TurnViewFull = "full"`; package variable
-      `turnView` set from the gate's answer (default `notLoaded`).
+      `turnView` is `notLoaded`, which the gate confirmed (the server rejects
+      `summary`).
     - `type fetchResult struct { Records []mirror.Record; Next ThreadState; Unfinished, InProgress bool }`
     - `func fetchThread(ctx context.Context, c *Conn, threadID string, st ThreadState, listing jsontext.Value, now time.Time) (fetchResult, error)`:
       turn statuses first (newest first, stop at the resume turn, always with
@@ -842,6 +876,12 @@ format (dedup).
 - [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): fetch threads incrementally"`
 
+- [x] **Step 6: Lost mirror before fetch.** When the mirror file is missing or
+  shorter than `st.Offset`, reset the resume point and digests before
+  `fetchThread` runs, so the fetch reads the whole thread, not only the turns
+  after the old resume point. Extend `TestLostMirrorFileRewritesEverything`
+  with a thread whose resume point is past its first turn. Commit.
+
 ### Task 14: The sync pass: retries, check-again, refresh, oversized replies
 
 Spec: Incremental sync (steps 3, 8 to 10), Components (refresh request,
@@ -874,12 +914,18 @@ oversized replies), Failure timing.
     - Check-again: set when the fetch started less than 2 minutes after the
       thread's `updatedAt`; cleared per the spec rule.
     - Retry entry stores the listing record; a retry appends it first when it
-      differs from the stored metadata.
+      differs from the stored metadata. When any listing returns a thread in the
+      retry set, the entry's listing record is replaced, even when backoff skips
+      the fetch.
+    - Unreadable threads: a thread that has failed for 7 days with no new listing
+      `updatedAt` leaves the retry set, the unfinished set, and the check-again
+      flags; its stored `updatedAt` becomes the entry's listing `updatedAt`; the
+      log names it. A new `updatedAt` while it is in the retry set restarts the
+      7 days.
     - Oversized reply: redial, retry the same `thread/items/list` page once with
       `limit: 1`; a second overflow puts the thread in the retry set with the
-      "reply too large" message and the pass continues on a fresh connection.
-      Under the `full` turn view an oversized turn listing fails the thread at
-      once.
+      "reply too large" message and the pass continues on a fresh connection. An
+      oversized turn listing fails the thread at once.
     - `ErrRefreshRequested` ends the pass: durable work stays, no retry entries,
       no watermark advance, no plan usage;
       `Waits.RecordHome(home, FailRefreshRequested, ...)`; the next pass uses
@@ -911,6 +957,23 @@ oversized replies), Failure timing.
 
 - [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): run sync passes with retries"`
+
+- [x] **Step 6: Pass fixes.** Each with a test, then commit:
+
+    - a cancelled context (daemon shutdown) ends the pass without recording a
+      failure, a retry entry, or an account wait;
+    - an oversized `thread/list` reply, and a 401 on the redial after an oversized
+      reply, are handled as reply too large and signed out for that home, not as
+      network failures or thread failures;
+    - each thread uses the time its own fetch started, not the pass start, for the
+      save-lag and check-again rules;
+    - retry entries refresh their listing record (above,
+      `TestRetryEntryRefreshesListing`).
+
+- [ ] **Step 7: Unreadable threads.** Implement the 7-day rule above with
+  `TestUnreadableAfterSevenDays` (an oversized single item and a thread that
+  always fails; a new `updatedAt` restarts the count and later reselects the
+  thread). Commit.
 
 ### Task 15: Sync job in the daemon, gates, and status
 
@@ -974,8 +1037,12 @@ Spec: Scheduler, Configuration (gates, re-read), Status and errors.
 - [x] **Step 5: Commit**
   `git commit -m "feat: run codex-cloud sync in the daemon"`
 
-**Milestone: working locally.** After the gate's probe answers are in, ask the
-user to run `AGENTSVIEW_DATA_DIR=<scratch> agentsview serve` with
+- [x] **Step 6: Idle tracking.** Each sync run is daemon work: it calls the
+  daemon idle tracker's `BeginWork` and ends it when the run returns, like the
+  other background jobs in `cmd/agentsview/main.go`. Test, then commit.
+
+**Milestone: working locally.** The gate's probe answers are in. Ask the user to
+run `AGENTSVIEW_DATA_DIR=<scratch> agentsview serve` with
 `[agents.codex-cloud] enabled = true` and `live_tokens = false`, and to check
 that their threads appear as sessions. Do not run it yourself: it uses their
 login.
@@ -996,8 +1063,9 @@ Spec: Live token capture (Joining, While joined, What gets stored).
 - Produces:
 
     - `type Monitor struct{ Store *Store; Waits *Waits; Status *StatusBoard; Now func() time.Time; Dial func(context.Context, DialOptions) (*Conn, error); Gates GateSource; NoSync bool; ReadLogin func(home string) (Login, HomeState, error); Trigger func() error; Log *log.Logger }`
-    - `func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadID string) error`
-      (re-check newest turn, `thread/resume`, branch on `resumeKind`).
+    - `func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadID string, listedUpdatedAt int64) error`
+      (re-check that the newest turn is `inProgress` and `listedUpdatedAt` is
+      within the last 2 minutes, then `thread/resume`, branch on `resumeKind`).
     - `func (m *Monitor) CloseAll()` (flush and close; used by gates and
       shutdown).
     - Records in `internal/codexcloud/mirror`:
@@ -1050,15 +1118,26 @@ Spec: Live token capture (Finding running threads), gates.
     - `func (m *Monitor) Discover(ctx context.Context) error` (job `Run`).
     - `func codexCloudLiveJob(m *codexcloud.Monitor) poller.Job` (name
       `codex-cloud-live`, 30 seconds, jitter).
-    - Discovery: non-archived default listing pages while a page holds `active` or
-      recently updated threads; newest-turn check per candidate; unfinished set
-      entries with `InProgress` and not `Stalled` and not `SubAgent`; skip
-      joined threads and sub-agent threads.
+    - Join rule: newest turn `inProgress` and listing `updatedAt` within the last
+      2 minutes. Discovery pages the non-archived default listing only while a
+      page holds a thread updated in the last 2 minutes, and checks the newest
+      turn (`itemsView: notLoaded`) only of those threads. Listing `status` is
+      ignored. Discovery reads no account working set: the unfinished set's
+      `SubAgent` flag (Tasks 10 and 20) has no reader and can be dropped.
+    - Skip joined threads and sub-agent threads without a turn check. For joining,
+      a sub-agent thread has a `parentThreadId` or `thread_spawn` parent in its
+      listing record, `threadSource == "subagent"`, or a `SubAgent` source. A
+      delegated dot task (`threadSource: "aeon_child"`, parent only in its
+      `<codex_delegation>` tag) is not a sub-agent thread here and is joined
+      under the join rule.
 
 - [ ] **Step 1: Write failing tests** `TestDiscoveryFindsIdleListedRunning`,
-  `TestDiscoverySecondPage`, `TestDiscoverySkipsSubAgents`,
-  `TestDiscoveryGatesCloseJoins`, `TestSync429HoldsDiscovery`,
-  `TestDiscovery5xxDelaysSync`, `TestDiscoveryProtocolChangeStopsCaptureOnly`.
+  `TestDiscoveryIgnoresOldThreads` (Review Focus: `inProgress` newest turn,
+  `updatedAt` 3 minutes old, listed `active`: no turn check, no resume),
+  `TestDiscoveryJoinsDelegatedChild`, `TestDiscoverySecondPage`,
+  `TestDiscoverySkipsSubAgents`, `TestDiscoveryGatesCloseJoins`,
+  `TestSync429HoldsDiscovery`, `TestDiscovery5xxDelaysSync`,
+  `TestDiscoveryProtocolChangeStopsCaptureOnly`.
 
 - [ ] **Step 2: Run**; FAIL.
 
@@ -1100,7 +1179,8 @@ Spec: What gets stored, How it shows up (coverage).
 
     - `TestUsageIncrementsAndBaselines` (exact sum across a reset; repeated total
       adds nothing; recurring total after reset does not collide).
-    - `TestRequestScopedWhenIncreaseEqualsLast` and
+    - `TestRequestScopedWhenIncreaseEqualsLast` (including a join's first record
+      whose increase equals `last`; one that differs is `session`) and
       `TestPriceBandAppliesAbove272k` (through `export` pricing with a GPT-6
       test catalog).
     - `TestCoverageRules` (spec cases: before first record; after last; join IDs;
@@ -1151,7 +1231,10 @@ waiting files).
 - [ ] **Step 1: Write failing tests** `TestQueryUsageRequestShape`,
   `TestQueryUsageNoRedirect`, `TestQueryUsageCreditsExponent`,
   `TestNestedDescendantsGroupedUnderRoot`,
-  `TestLateParentMovesChildAndGrandchildren`.
+  `TestLateParentMovesChildAndGrandchildren`,
+  `TestDelegatedChildWaitsForUnlistedParent` (a `<codex_delegation>` child
+  whose parent is never listed stays its own root in the parent's waiting
+  file).
 
 - [ ] **Step 2: Run**; FAIL.
 
@@ -1182,16 +1265,23 @@ Spec: Plan usage (Fetching, Settling, outcome records).
       `PlanUsageRowData{Row UsageRow; DataAsOf time.Time; Final bool}`,
       `PlanUsageOutcomeData{Kind string; At time.Time; Root string}` with kinds
       `left_out`, `settled_no_row`, `account_unavailable`, `counted_under`,
-      `too_many_descendants`.
+      `too_many_descendants`, `could_not_check`.
     - Pending marks, re-entry wait (5 minutes doubling to 6 hours, reset when
       nothing runs or after 24 quiet hours), per-root backoff, refresh set
       (later of one day after `data_as_of` and one day after last attempt),
-      budget of 5 requests with pending roots first, 100 groups and 1,000 IDs,
-      settling after 7 days, 429 pause, 401 next home, 403/404 24-hour
+      budget of 5 requests with pending roots first, 100 groups and 1,000 IDs
+      counting each root's own ID (a root with 1,000 descendants is
+      `too_many_descendants`), 429 pause, 401 next home, 403/404 24-hour
       unavailable.
-    - Commit-path hook: after each thread commit, compute `ResolvedParent` and
-      `IsSubAgent`, call `Store.LinkParent`, set the unfinished entry's
-      `SubAgent` flag, and mark the usage root pending.
+    - Settling counts only answered (HTTP 200) requests: settle when a request
+      answered 7 days or more after the last change still finds the row
+      `partial` or `unavailable`, or leaves the root out. A pending root with no
+      answered request in those 7 days gets `could_not_check`, keeps its last
+      row unfinal, and stops retrying until a change.
+    - Commit-path hook: after each thread commit, compute `ResolvedParent`
+      (including the `<codex_delegation>` rule from Task 6, read from the first
+      `userMessage` fetched) and `IsSubAgent`, call `Store.LinkParent`, and mark
+      the usage root pending.
     - Waits: plan usage runs while the thread host waits; it skips homes in a
       signed-out or refresh-requested wait; a `query_v2` 401 is remembered per
       home in memory and pauses plan usage until any home on the key changes its
@@ -1201,9 +1291,11 @@ Spec: Plan usage (Fetching, Settling, outcome records).
 - [ ] **Step 1: Write failing tests** for every Plan usage case in the spec's
   Testing list (budget, settling, refresh timing including `data_as_of`
   earlier than the last attempt, left-out, stale outcome, 401 home fallback,
-  403/404, 429, pending re-entry, oversized group, linking and pending marks
-  during the thread step, plan usage while the thread host waits, a crash
-  after a row append with a newer outcome recovered).
+  403/404, 429, pending re-entry, oversized group at 999 and 1,000
+  descendants, settling only on answered requests, `could_not_check` after 7
+  days of failures, linking and pending marks during the thread step, plan
+  usage while the thread host waits, a crash after a row append with a newer
+  outcome recovered).
 
 - [ ] **Step 2: Run**; FAIL.
 
@@ -1231,13 +1323,14 @@ Spec: Plan usage (Storage, parse-time ordering).
     - `type ParsedPlanUsage struct { DataAsOf *time.Time; DataStatus, UsageSource string; WeeklyPercent, FiveHourPercent *float64; Credits *string; Groups []ParsedPlanUsageGroup; Final bool; OutcomeKind string; OutcomeAt *time.Time; CountedUnder string }`
     - `ParsedSession.PlanUsage *ParsedPlanUsage`
     - Ordering by record position: newest row and newest outcome kept separately;
-      an outcome stored only when newer than the row; a `counted_under` newer
-      than the row clears plan values and sets
-      `CountedUnder = "codex-cloud:<root>"`.
+      an outcome stored only when newer than the row (`left_out`,
+      `account_unavailable`, `too_many_descendants`, and `could_not_check` after
+      a row are shown beside it); a `counted_under` newer than the row clears
+      plan values and sets `CountedUnder = "codex-cloud:<root>"`.
 
 - [ ] **Step 1: Write failing tests** `TestPlanUsageNewestRowWins`,
-  `TestStaleOutcomeAfterRow`, `TestCountedUnderClearsValues`,
-  `TestOutcomesSurviveReparse`.
+  `TestStaleOutcomeAfterRow` (every stale-row kind),
+  `TestCountedUnderClearsValues`, `TestOutcomesSurviveReparse`.
 
 - [ ] **Step 2: Run**; FAIL.
 
@@ -1258,7 +1351,8 @@ the pattern at every site the storage survey lists.
 **Files:**
 
 - Modify: `internal/db/schema.sql`, `internal/db/db.go` (migration,
-  `readOnlyRequiredTables`), create `internal/db/plan_usage.go`
+  `readOnlyRequiredTables`), `internal/db/store.go`, `internal/db/usage.go`,
+  create `internal/db/plan_usage.go`
 - Modify: `internal/ingest/prepare.go`, `internal/ingest/convert.go`
   (`PreparedSession.PlanUsage`), `internal/db/session_batch.go`,
   `internal/sync/engine.go` (batch and direct writes),
@@ -1276,6 +1370,10 @@ the pattern at every site the storage survey lists.
       (bumps `local_modified_at`),
       `func (d *DB) GetSessionPlanUsage(ctx, id) (*SessionPlanUsage, error)`,
       `func (d *DB) PlanUsageFingerprints(ctx, ids []string) (map[string]string, error)`.
+    - `GetSessionPlanUsage` joins the `db.Store` interface
+      (`internal/db/store.go`), and `SessionUsage` (`internal/db/usage.go`)
+      gains `PlanUsage *SessionPlanUsage`, which SQLite `GetSessionUsage` fills.
+      Every other read backend implements both in Tasks 23 to 25.
 
 - [ ] **Step 1: Write failing tests** `TestPlanUsageReplaceAndRead`,
   `TestPlanUsageBumpsLocalModified`,
@@ -1299,11 +1397,14 @@ the pattern at every site the storage survey lists.
 
 **Files:**
 
-- Modify: `internal/postgres/schema.go`, `schema_columns.go`,
+- Modify: `internal/postgres/schema.go` (table, and a `session_plan_usage`
+  column probe in `CheckSchemaCompat`), `schema_columns.go`,
   `hosted_tenant_schema.go:30-39`, `raw_runtime_privileges.go:21`, `push.go`
   (replace alongside `replaceUsageEvents`), `push_fingerprint.go`,
   `raw_projection_rows.go:129-161`, `raw_projection_links.go` (new link kind
-  `usage_root`), `hosted_session_ids.go`, `hosted_reports.go`
+  `usage_root`), `hosted_session_ids.go`, `usage.go` (`GetSessionPlanUsage`,
+  and `GetSessionUsage` fills `SessionUsage.PlanUsage`), `hosted_reports.go`
+  (the hosted wrapper of both readers)
 - Test: `internal/postgres/*_pgtest_test.go`,
   `cmd/agentsview/pg_raw_parity_pgtest_test.go`
 
@@ -1316,7 +1417,9 @@ the pattern at every site the storage survey lists.
 
 - [ ] **Step 1: Write failing tests** (tag `pgtest`):
   `TestPushPlanUsageRoundTrip`, `TestPushPlanUsageChangeRepushes`,
-  `TestHostedProjectionWritesPlanUsage`, `TestHostedGrandchildUsageRootMapped`.
+  `TestHostedProjectionWritesPlanUsage`, `TestHostedGrandchildUsageRootMapped`,
+  `TestCheckSchemaCompatRequiresPlanUsage` (a schema without the table
+  fails), `TestPGSessionUsageIncludesPlanUsage` (direct and hosted readers).
 
 - [ ] **Step 2: Run** `make test-postgres` scoped with `-run PlanUsage`; FAIL.
 
@@ -1331,11 +1434,14 @@ the pattern at every site the storage survey lists.
 **Files:**
 
 - Modify: `internal/clickhouse/schema.go`, `push.go` (`dependentTables`,
-  `insertDependents`), `push_fingerprint.go`, `internal/db` snapshot loader
+  `insertDependents`), `push_fingerprint.go`, `usage.go`
+  (`GetSessionPlanUsage`, and `GetSessionUsage` fills
+  `SessionUsage.PlanUsage`), `internal/db` snapshot loader
   (`LoadSessionMirrorSnapshot` adds plan usage)
 
 - [ ] **Step 1: Write failing tests** (tag `chtest`):
   `TestClickHousePlanUsageRoundTrip`, `TestClickHouseDeleteClearsPlanUsage`,
+  `TestClickHouseSessionUsageIncludesPlanUsage`,
   `TestClickHouseSameSessionFromTwoMachines` (spec: Several machines; record
   the observed behavior for Task 29).
 
@@ -1353,10 +1459,12 @@ the pattern at every site the storage survey lists.
 **Files:**
 
 - Modify: `internal/duckdb/schema.go` (`SchemaVersion = 18`, table), `push.go`
-  (`pushSession`, `deleteMirrorSession`), `sync.go` (fingerprints)
+  (`pushSession`, `deleteMirrorSession`), `sync.go` (fingerprints),
+  `analytics_usage.go` (`GetSessionPlanUsage`, and `GetSessionUsage` fills
+  `SessionUsage.PlanUsage`)
 
 - [ ] **Step 1: Write failing tests** `TestDuckDBPlanUsageRoundTrip`,
-  `TestDuckDBSchemaVersionRebuild`.
+  `TestDuckDBSchemaVersionRebuild`, `TestDuckDBSessionUsageIncludesPlanUsage`.
 
 - [ ] **Step 2: Run** `go test -tags fts5 ./internal/duckdb -run PlanUsage`;
   FAIL.
@@ -1414,7 +1522,8 @@ Spec: Replicas and mirror (left-out and partly-captured counts), Display.
 **Files:**
 
 - Modify: `internal/service/service.go:314-375` (both alias structs),
-  `internal/db/usage.go` (`SessionUsage.PlanUsage`),
+  `internal/db/usage.go` (`SessionUsage.PlanUsage` from Task 22, which every
+  backend fills by Task 25),
   `internal/server/huma_routes_sessions.go:624-737`, `cmd/agentsview/usage.go`
   (left-out note), `cmd/agentsview/session_usage.go` (plan usage block),
   `internal/db/session_export.go`, `cmd/agentsview/export.go`; regenerate
@@ -1477,11 +1586,15 @@ Spec: Replicas and mirror (left-out and partly-captured counts), Display.
   `README.md` (agent list), `docs/changelog.md`
 
 - [ ] **Step 1: Write** the sections the spec's Documentation list names,
-  including every listed limit, the one-machine recommendation, and how
-  ClickHouse and a hosted hub handle one session pushed from two machines
-  (from Task 24's test and the hosted projection). `docs/configuration.md`,
-  `docs/commands.md`, and `docs/changelog.md` are excluded from the mdformat
-  hook (`prek.toml`); do not reformat them.
+  including every listed limit (among them the 2-minute live join window,
+  base-rate pricing of multi-call increases, the counter-reset undercount, and
+  threads that stop being retried after 7 days), the one-machine
+  recommendation, the `modelProviders` limit and the 2026-10-13 probe answers
+  in the evidence entry, and how ClickHouse and a hosted hub handle one
+  session pushed from two machines (from Task 24's test and the hosted
+  projection). `docs/configuration.md`, `docs/commands.md`, and
+  `docs/changelog.md` are excluded from the mdformat hook (`prek.toml`); do
+  not reformat them.
 
 - [ ] **Step 2: Run** the mdformat hook on the other changed files and the
   private-data scrub.
