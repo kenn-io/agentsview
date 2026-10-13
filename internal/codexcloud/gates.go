@@ -83,7 +83,8 @@ func (g Gates) offRow(noSync bool) (HomeStatus, bool) {
 	row := HomeStatus{Key: SourceRowKey}
 	switch {
 	case noSync:
-		row.State, row.Message = StateOffNoSync, "Off: source sync is off for this daemon."
+		row.State, row.Message = StateOffNoSync, "Off: this daemon does not sync sources. A command run with --no-sync started it, "+
+			"or its archive is archive-only. A daemon started with `agentsview serve` on a normal archive imports Codex cloud chats."
 	case g.Disabled:
 		row.State, row.Message = StateOffDisabledAgents, "Off: listed in disabled_agents."
 	case g.CodexCloud.Err != nil:
@@ -104,7 +105,7 @@ func (g Gates) readErrRow() (HomeStatus, bool) {
 	}
 	return HomeStatus{
 		Key: SourceRowKey, State: StateConfigError,
-		Message: fmt.Sprintf("%s could not be read: %v. Cloud import keeps its last good settings.",
+		Message: fmt.Sprintf("%s could not be read: %v. Codex cloud import keeps its last good settings.",
 			g.ConfigPath, g.ReadErr),
 	}, true
 }

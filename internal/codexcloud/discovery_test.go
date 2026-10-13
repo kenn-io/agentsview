@@ -180,7 +180,7 @@ func TestDiscoveryOffWithoutSourceSync(t *testing.T) {
 	env.discover(t)
 
 	assert.Empty(t, env.host.Handshakes())
-	assert.Equal(t, "Live tokens: off, because source sync is off for this daemon.", env.live(t))
+	assert.Equal(t, "Live tokens: off, because this daemon does not sync sources.", env.live(t))
 }
 
 func TestDiscoveryOffWhenSyncIsOff(t *testing.T) {

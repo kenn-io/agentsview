@@ -11,7 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/poller"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 func TestCodexCloudServeStatusLines(t *testing.T) {
@@ -105,4 +107,51 @@ func TestCodexCloudTriggerCoalesces(t *testing.T) {
 	close(release)
 	require.NoError(t, <-results)
 	assert.Equal(t, int32(2), runs.Load(), "three completions add one run")
+}
+
+// A background daemon reaps itself when idle. Each Codex cloud job holds
+// a work lease while it runs, so a long import is not cut off.
+func TestCodexCloudJobsKeepTheDaemonAwakeWhileRunning(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		job  func(gates func() codexcloud.Gates, idle *server.IdleTracker) poller.Job
+	}{
+		{"sync", func(gates func() codexcloud.Gates, idle *server.IdleTracker) poller.Job {
+			return codexCloudSyncJob(&codexcloud.Syncer{Gates: gates, Status: codexcloud.NewStatusBoard()}, idle)
+		}},
+		{"live", func(gates func() codexcloud.Gates, idle *server.IdleTracker) poller.Job {
+			return codexCloudLiveJob(&codexcloud.Monitor{Gates: gates}, idle)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			running, release := make(chan struct{}), make(chan struct{})
+			// The job blocks in its first step, reading the gates, until
+			// the test lets it finish.
+			gates := func() codexcloud.Gates {
+				close(running)
+				<-release
+				return codexcloud.Gates{}
+			}
+			idled := make(chan struct{})
+			tracker := server.NewIdleTracker(10*time.Millisecond, func() { close(idled) })
+			job := tt.job(gates, tracker)
+			finished := make(chan error, 1)
+			go func() { finished <- job.Run(t.Context()) }()
+			<-running
+			go tracker.Run(t.Context())
+
+			select {
+			case <-idled:
+				require.FailNow(t, "the daemon idled out while the job ran")
+			case <-time.After(100 * time.Millisecond):
+			}
+			close(release)
+			require.NoError(t, <-finished)
+			select {
+			case <-idled:
+			case <-time.After(2 * time.Second):
+				require.FailNow(t, "the daemon never idled after the job finished")
+			}
+		})
+	}
 }
