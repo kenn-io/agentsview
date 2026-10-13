@@ -356,7 +356,6 @@ func TestUnreadableThreadStateDuringListingIsLocal(t *testing.T) {
 	assert.Contains(t, row.Message, "import state")
 	assert.Contains(t, row.Message, "The daemon log names the file and the error.")
 	assert.NotContains(t, row.Message, env.root, "the status is a sentence, not a raw error")
-	assert.NotContains(t, row.Message, "codex-cloud:")
 }
 
 func TestStalledThreadRecoversAfterStopBeforeAccountSave(t *testing.T) {

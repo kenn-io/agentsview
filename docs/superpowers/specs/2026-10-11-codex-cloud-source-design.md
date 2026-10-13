@@ -1428,9 +1428,9 @@ States:
   retried.
 - **N chats could not be imported:** the last pass succeeded but threads are in
   the retry set. Shows the count, the oldest failure time, and the latest
-  failure's message from the table below, followed by "AgentsView retries each
-  one for 7 days; a change to the chat in OpenAI restarts the 7 days. The
-  daemon log lists each chat by its ID. Chats already imported are not
+  failure's message from the table below, followed by "AgentsView retries a
+  failed chat for 7 days; a change to the chat in OpenAI restarts the 7 days.
+  The daemon log lists each chat by its ID. Chats already imported are not
   affected." The web status shows this server text as is; it adds no
   translated copy of these sentences.
 - **Error:** the whole pass failed. Shows the message below and when the last
@@ -1470,8 +1470,8 @@ message instead of the signed-out one.
 | Network failure                                     | Can't reach OpenAI. AgentsView retries automatically.                                                                                                                                                                                                    |
 | HTTP 429                                            | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                                                                                                                                  |
 | HTTP 5xx                                            | OpenAI's service had an error. AgentsView retries automatically.                                                                                                                                                                                         |
-| JSON-RPC error reply for one thread                 | OpenAI returned an error for the chat. It may have been deleted.                                                                                                                                                                                         |
-| Handshake refused or reply not understood           | OpenAI's service answered in a way this version of AgentsView can't read. If config.toml sets endpoint under [agents.codex-cloud], check that address; otherwise update AgentsView. Sessions already imported are safe.                                  |
+| JSON-RPC error reply for one thread                 | OpenAI returned an error for a chat. It may have been deleted.                                                                                                                                                                                           |
+| Handshake refused or reply not understood           | OpenAI's service answered in a way this version of AgentsView can't read. Update AgentsView. If config.toml sets endpoint or usage_endpoint under [agents.codex-cloud], check those test addresses too. Sessions already imported are safe.              |
 | Keyring-backed home, no token in `auth.json`        | This Codex home keeps its ChatGPT login in the system keyring, which AgentsView does not read. (file fix)                                                                                                                                                |
 | `ephemeral` credential store                        | This Codex home does not save its ChatGPT login, so AgentsView cannot use it. (file fix)                                                                                                                                                                 |
 | Codex home login settings or `auth.json` unreadable | One message per cause (a `config.toml` that does not parse, an unknown `cli_auth_credentials_store`, an `auth.json` that cannot be read or is not valid JSON), never quoting file content.                                                               |

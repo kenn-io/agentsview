@@ -226,10 +226,10 @@ func TestMessages(t *testing.T) {
 	assert.Equal(t, "OpenAI is limiting requests from this account. AgentsView retries at "+
 		retryAt.Local().Format("Jan 2 15:04")+".",
 		codexcloud.Message(codexcloud.FailRateLimited, retryAt), "the time is shown in local time")
-	assert.Equal(t, "OpenAI returned an error for the chat. It may have been deleted.",
+	assert.Equal(t, "OpenAI returned an error for a chat. It may have been deleted.",
 		codexcloud.Message(codexcloud.FailThread, time.Time{}))
 	assert.Contains(t, codexcloud.Message(codexcloud.FailProtocol, time.Time{}),
-		"If config.toml sets endpoint under [agents.codex-cloud], check that address",
+		"If config.toml sets endpoint or usage_endpoint under [agents.codex-cloud], check those test addresses too.",
 		"a mistyped test endpoint also fails the handshake")
 	for f := codexcloud.FailSignedOut; f <= codexcloud.FailThread; f++ {
 		message := codexcloud.Message(f, retryAt)

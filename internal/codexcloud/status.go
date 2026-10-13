@@ -167,11 +167,11 @@ func Message(f Failure, retryAt time.Time) string {
 	case FailServer:
 		return "OpenAI's service had an error. AgentsView retries automatically."
 	case FailThread:
-		return "OpenAI returned an error for the chat. It may have been deleted."
+		return "OpenAI returned an error for a chat. It may have been deleted."
 	case FailProtocol:
-		return "OpenAI's service answered in a way this version of AgentsView can't read. " +
-			"If config.toml sets endpoint under [agents.codex-cloud], check that address; " +
-			"otherwise update AgentsView. Sessions already imported are safe."
+		return "OpenAI's service answered in a way this version of AgentsView can't read. Update AgentsView. " +
+			"If config.toml sets endpoint or usage_endpoint under [agents.codex-cloud], check those test addresses too. " +
+			"Sessions already imported are safe."
 	case FailKeyring:
 		// A failure, unlike the home's keyring read state, is always a
 		// refusal.
