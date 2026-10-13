@@ -19,7 +19,7 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 	}{
 		{
 			name:      "Claude pair wins",
-			source:    "event",
+			source:    "message",
 			agent:     "claude",
 			messageID: "m",
 			requestID: "r",
@@ -37,22 +37,6 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 			key:       "k",
 			ordinary:  UsageDedupToken{Kind: "source", Value: "claude:u"},
 			session:   UsageDedupToken{Kind: "source", Value: "claude:u"},
-		},
-		{
-			name:     "event UUID falls back to stored session key",
-			source:   "event",
-			agent:    "codex",
-			uuid:     "u",
-			key:      "k",
-			ordinary: UsageDedupToken{Kind: "source", Value: "codex:u"},
-			session:  UsageDedupToken{Kind: "usage", Value: "k"},
-		},
-		{
-			name:     "event UUID alone has no session identity",
-			source:   "event",
-			agent:    "codex",
-			uuid:     "u",
-			ordinary: UsageDedupToken{Kind: "source", Value: "codex:u"},
 		},
 		{
 			name:     "UUID without agent falls back to stored key",
@@ -91,13 +75,12 @@ func TestSelectSessionUsageRows(t *testing.T) {
 		wantContributing       map[string]struct{}
 	}{
 		{
-			name: "message UUID deduplicates while event UUID does not",
+			name: "message UUID deduplicates across sessions",
 			rows: []UsageRow{
 				{SessionID: "root", UsageSource: "message", Agent: "codex", SourceUUID: "u", OutputTokens: 10},
 				{SessionID: "child", UsageSource: "message", Agent: "codex", SourceUUID: "u", OutputTokens: 10},
-				{SessionID: "child", UsageSource: "event", Agent: "codex", SourceUUID: "u", OutputTokens: 2},
 			},
-			wantIndexes: []int{0, 2}, wantRaw: map[string]int{"root": 10, "child": 12},
+			wantIndexes: []int{0}, wantRaw: map[string]int{"root": 10, "child": 10},
 			wantDiscarded: map[string]int{"child": 10}, wantContributing: map[string]struct{}{"child": {}},
 		},
 		{
