@@ -104,22 +104,47 @@ func TestReplaceSessionKeepingTrashedCopy(t *testing.T) {
 }
 
 func TestReplaceSessionKeepingTrashedCopyPreservesLauncherParent(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	seedReplaceSession(t, d)
-	insertSession(t, d, "manager", "proj")
-	link, err := d.SetSessionExternalParent(ctx, "replace", "manager")
-	require.NoError(t, err)
-	require.True(t, link.Applied)
+	for _, prior := range []string{"", "subagent"} {
+		t.Run(prior, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			seedReplaceSession(t, d)
+			_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET relationship_type = ? WHERE id = 'replace'", prior)
+			require.NoError(t, err)
+			insertSession(t, d, "manager", "proj")
+			link, err := d.SetSessionExternalParent(ctx, "replace", "manager")
+			require.NoError(t, err)
+			require.True(t, link.Applied)
 
-	copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, replaceWrite("new transcript"))
-	require.NoError(t, err)
-	for _, id := range []string{"replace", copyID} {
-		session, err := d.GetSessionFull(ctx, id)
-		require.NoError(t, err)
-		require.NotNil(t, session)
-		assert.Equal(t, Ptr("manager"), session.ParentSessionID, id)
-		assert.Equal(t, "subagent", session.RelationshipType, id)
+			copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, replaceWrite("new transcript"))
+			require.NoError(t, err)
+			for _, id := range []string{"replace", copyID} {
+				session, err := d.GetSessionFull(ctx, id)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				assert.Equal(t, Ptr("manager"), session.ParentSessionID, id)
+				assert.Equal(t, "subagent", session.RelationshipType, id)
+			}
+			_, err = d.RestoreSession(ctx, copyID)
+			require.NoError(t, err)
+			link, err = d.GetSessionExternalParent(ctx, copyID)
+			require.NoError(t, err)
+			assert.True(t, link.Applied)
+			exported, err := d.GetArtifactExportSession(ctx, copyID)
+			require.NoError(t, err)
+			assert.Nil(t, exported.ParentSessionID)
+			assert.Equal(t, prior, exported.RelationshipType)
+			insertSession(t, d, "other-manager", "proj")
+			link, err = d.SetSessionExternalParent(ctx, copyID, "other-manager")
+			require.NoError(t, err)
+			assert.True(t, link.Applied)
+			_, err = d.ClearSessionExternalParent(ctx, copyID)
+			require.NoError(t, err)
+			restored, err := d.GetSession(ctx, copyID)
+			require.NoError(t, err)
+			assert.Nil(t, restored.ParentSessionID)
+			assert.Equal(t, prior, restored.RelationshipType)
+		})
 	}
 }
 

@@ -95,43 +95,56 @@ func TestSimulatedScopedUpgradeReparsesUnchangedFreebuffSource(t *testing.T) {
 	assert.Equal(t, "hello", messages[0].Content)
 }
 
-func TestClaudePRLinkUpgradePreservesSessionIdentity(t *testing.T) {
-	assert.Equal(t, []parser.AgentType{parser.AgentClaude}, db.ScopedDataVersionProviders(131, 132))
+func TestClaudeFormatPRLinkUpgradePreservesSessionIdentity(t *testing.T) {
+	providers := []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}
+	scope := db.ScopedDataVersionProviders(131, 132)
+	assert.ElementsMatch(t, providers, scope)
 	version := db.CurrentDataVersion()
-	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: {parser.AgentClaude}}))
-	database := dbtest.OpenTestDB(t)
-	root := t.TempDir()
-	source := filepath.Join(root, "project", "worker.jsonl")
-	body := testjsonl.NewSessionBuilder().AddClaudeUser("2026-10-08T12:00:00Z", "hello").String() + "\n" + `{"type":"pr-link","prNumber":7,"prUrl":"https://github.com/owner/repo/pull/7","prRepository":"owner/repo"}` + "\n"
-	dbtest.WriteTestFile(t, source, []byte(body))
-	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
-	engine := sync.NewEngine(t.Context(), database, cfg)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	engine.Close()
-	var id string
-	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT id FROM sessions").Scan(&id))
-	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d, pr_links=''; PRAGMA user_version=%d", version-1, version-1))
-		return err
-	}))
-	path := database.Path()
-	require.NoError(t, database.Close())
-	database, err := db.OpenIsolated(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	assert.False(t, database.NeedsResync(), "Claude upgrade must reparse in place")
-	engine = sync.NewEngine(t.Context(), database, cfg)
-	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	session, err := database.GetSessionFull(t.Context(), id)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, source, database.GetSessionFilePath(t.Context(), id))
-	require.Len(t, session.PRLinks, 1)
-	assert.Equal(t, 7, session.PRLinks[0].Number)
-	var count int
-	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
-	assert.Equal(t, 1, count)
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	for _, provider := range providers {
+		t.Run(string(provider), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			sessionID := "c0000000-0000-4000-8000-000000000101"
+			source := filepath.Join(root, "project", sessionID+".jsonl")
+			if provider == parser.AgentCowork {
+				workspace := filepath.Join(root, "org", "workspace")
+				localID := "local_50000000-0000-4000-8000-000000000101"
+				dbtest.WriteTestFile(t, filepath.Join(workspace, localID+".json"), []byte(`{"sessionId":"`+localID+`","cliSessionId":"`+sessionID+`"}`))
+				source = filepath.Join(workspace, localID, ".claude", "projects", "project", sessionID+".jsonl")
+			}
+			body := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-10-08T12:00:00Z", "hello", sessionID).String() + "\n" + `{"type":"pr-link","prNumber":7,"prUrl":"https://github.com/owner/repo/pull/7","prRepository":"owner/repo"}` + "\n"
+			dbtest.WriteTestFile(t, source, []byte(body))
+			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{provider: {root}}}
+			engine := sync.NewEngine(t.Context(), database, cfg)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			engine.Close()
+			var id string
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT id FROM sessions").Scan(&id))
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d, pr_links=''; PRAGMA user_version=%d", version-1, version-1))
+				return err
+			}))
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err := db.OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			assert.False(t, database.NeedsResync(), "Claude upgrade must reparse in place")
+			engine = sync.NewEngine(t.Context(), database, cfg)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			session, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Equal(t, source, database.GetSessionFilePath(t.Context(), id))
+			require.Len(t, session.PRLinks, 1)
+			assert.Equal(t, 7, session.PRLinks[0].Number)
+			var count int
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
+			assert.Equal(t, 1, count)
+		})
+	}
 }
 
 func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {
