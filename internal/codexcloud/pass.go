@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/shellquote"
 )
 
 const (
@@ -167,33 +168,28 @@ func loginErrorMessage(err error) string {
 }
 
 func (s *Syncer) homeRow(gates Gates, home, message string) {
-	if len(gates.Homes) > 0 && home != gates.Homes[0] {
-		// A plain `codex login` signs in the default home, not this one.
-		message = strings.ReplaceAll(message, "`codex login`", homeLoginCommand(home, runtime.GOOS))
+	s.Status.Set(HomeStatus{Key: home, Homes: []string{home}, State: StateError,
+		Message: withLoginCommand(gates, home, message)})
+}
+
+// withLoginCommand points the `codex login` in message at home. A plain
+// `codex login` signs in the default home, not another one.
+func withLoginCommand(gates Gates, home, message string) string {
+	if home == "" || len(gates.Homes) == 0 || home == gates.Homes[0] {
+		return message
 	}
-	s.Status.Set(HomeStatus{Key: home, Homes: []string{home}, State: StateError, Message: message})
+	return strings.ReplaceAll(message, "`codex login`", homeLoginCommand(home, runtime.GOOS))
 }
 
 // homeLoginCommand says how to run `codex login` for a home other than
-// the default one. The VAR=value prefix works only in POSIX shells.
+// the default one: a VAR=value prefix in a POSIX shell, and on Windows a
+// PowerShell line that unsets CODEX_HOME again afterwards.
 func homeLoginCommand(home, goos string) string {
 	if goos == "windows" {
-		return "`codex login` with the CODEX_HOME environment variable set to `" + home + "`"
+		return "`$env:CODEX_HOME = " + shellquote.PowerShell(home) +
+			"; codex login; Remove-Item Env:CODEX_HOME` in PowerShell"
 	}
-	return "`CODEX_HOME=" + shellQuote(home) + " codex login`"
-}
-
-// shellQuote quotes s for a POSIX shell when it holds anything beyond
-// plain path characters.
-func shellQuote(s string) string {
-	plain := s != "" && strings.IndexFunc(s, func(r rune) bool {
-		return ('a' > r || r > 'z') && ('A' > r || r > 'Z') && ('0' > r || r > '9') &&
-			!strings.ContainsRune("/._-+:@%,=", r)
-	}) < 0
-	if plain {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return "`CODEX_HOME=" + shellquote.POSIX(home) + " codex login`"
 }
 
 // pass is one account's pass in progress.

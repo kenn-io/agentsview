@@ -1484,8 +1484,10 @@ in auth.json, a plain file that any program running as you can read." A plan
 usage 401 uses the same refusal text as a sync 401: in `auto` mode it names both
 causes, not only a sign-out. For a Codex home other than the first, every
 `codex login` in a message names that home: `CODEX_HOME=<home> codex login`,
-shell-quoted when needed, or on Windows an instruction to set `CODEX_HOME` to
-the home and run `codex login`.
+shell-quoted when needed, or on Windows the PowerShell line
+`$env:CODEX_HOME = '<home>'; codex login; Remove-Item Env:CODEX_HOME`. The plan
+usage line names the first home plan usage refused, since a new login there
+resumes plan usage.
 
 Raw error details go to the daemon log, with the token redacted, the endpoint
 named (thread host or plan usage), and the thread ID for per-thread failures.

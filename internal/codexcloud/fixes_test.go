@@ -216,8 +216,8 @@ func TestHomeLoginCommand(t *testing.T) {
 		{"/homes/My Codex", "darwin", "`CODEX_HOME='/homes/My Codex' codex login`"},
 		{"/homes/it's", "linux", "`CODEX_HOME='/homes/it'\\''s' codex login`"},
 		{
-			`C:\homes\codex two`, "windows",
-			"`codex login` with the CODEX_HOME environment variable set to `C:\\homes\\codex two`",
+			`C:\homes\it's`, "windows",
+			"`$env:CODEX_HOME = 'C:\\homes\\it''s'; codex login; Remove-Item Env:CODEX_HOME` in PowerShell",
 		},
 	} {
 		assert.Equal(t, tt.want, homeLoginCommand(tt.home, tt.goos), tt.home)
