@@ -1328,17 +1328,17 @@ Spec: Plan usage (Storage, parse-time ordering).
       a row are shown beside it); a `counted_under` newer than the row clears
       plan values and sets `CountedUnder = "codex-cloud:<root>"`.
 
-- [ ] **Step 1: Write failing tests** `TestPlanUsageNewestRowWins`,
+- [x] **Step 1: Write failing tests** `TestPlanUsageNewestRowWins`,
   `TestStaleOutcomeAfterRow` (every stale-row kind),
   `TestCountedUnderClearsValues`, `TestOutcomesSurviveReparse`.
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(parser): parse codex-cloud plan usage"`
 
 ## Phase 6: Storage and replicas
@@ -1375,22 +1375,22 @@ the pattern at every site the storage survey lists.
       gains `PlanUsage *SessionPlanUsage`, which SQLite `GetSessionUsage` fills.
       Every other read backend implements both in Tasks 23 to 25.
 
-- [ ] **Step 1: Write failing tests** `TestPlanUsageReplaceAndRead`,
+- [x] **Step 1: Write failing tests** `TestPlanUsageReplaceAndRead`,
   `TestPlanUsageBumpsLocalModified`,
   `TestFullResyncKeepsOrphanAndTrashPlanUsage`,
   `TestReadOnlyOpenRequiresPlanUsageTable`, ingest test that a parsed
   `PlanUsage`/`CaptureCoverage` reaches the table.
 
-- [ ] **Step 2: Run**
+- [x] **Step 2: Run**
   `go test -tags fts5 ./internal/db ./internal/ingest ./internal/sync -run PlanUsage`;
   FAIL.
 
-- [ ] **Step 3: Implement.** Bump `dataVersion` only if parsed output for
+- [x] **Step 3: Implement.** Bump `dataVersion` only if parsed output for
   existing agents changes (it should not).
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(db): store plan usage and capture coverage"`
 
 ### Task 23: PostgreSQL, hosted tenant, and raw projection
