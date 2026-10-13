@@ -192,7 +192,9 @@ func (s *Syncer) noteUsage(gates Gates, key AccountKey, resp UsageResponse, err 
 	noHome, isNoHome := errors.AsType[*noUsageHomeError](err)
 	switch {
 	case err == nil:
-		s.usageLines[key] = "Plan usage as of " + usageTime(resp.DataAsOf, s.Now())
+		// showUsage dates the answer from saved state when it shows the
+		// line, so the date gains its year once the year changes.
+		delete(s.usageLines, key)
 	case isNoHome && noHome.failure != FailNone && noHome.failure != FailSignedOut:
 		// The home waits on a login problem the thread host or live
 		// capture found; name it rather than calling it a sign-out.
