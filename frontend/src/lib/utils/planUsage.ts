@@ -208,7 +208,15 @@ export function describeCaptureCoverage(
   const lines = [m.capture_tokens_live({ time: formatTimestamp(coverage.last_capture_at) })];
   const turns = coverage.uncaptured_turns;
   if (turns <= 0) return lines;
-  const covered = plan != null && plan.outcome_kind !== "counted_under" && hasFigures(plan);
+  // Only a complete row with no newer failure accounts for the missed
+  // turns: a partial row lacks some usage, and a newer failure means the
+  // row may predate them.
+  const covered =
+    plan != null &&
+    plan.data_status === "available" &&
+    plan.outcome_kind !== "counted_under" &&
+    !STALE_ROW_OUTCOMES.has(plan.outcome_kind ?? "") &&
+    hasFigures(plan);
   const params = { count: turns, countLabel: turns.toLocaleString(getLocale()) };
   lines.push(
     covered ? m.capture_turns_not_captured_covered(params) : m.capture_turns_not_captured(params),
