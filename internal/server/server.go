@@ -56,9 +56,6 @@ type VersionInfo struct {
 // CLI or daemon.
 const (
 	APIVersion = 11
-	// SessionAnnotationsAPIVersion is the first daemon API that applies label
-	// and pull request filters; older daemons ignore them.
-	SessionAnnotationsAPIVersion = 11
 	// ScopedWatchPushAPIVersion is the first daemon API that accepts bounded
 	// watcher batches and their authoritative recovery scope on push requests.
 	ScopedWatchPushAPIVersion = 7

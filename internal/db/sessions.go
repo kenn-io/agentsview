@@ -571,17 +571,18 @@ type SessionFilter struct {
 	GitBranch string
 	// GitBranchExact matches one raw branch name in any project. It is ANDed
 	// with GitBranch when both are set.
-	GitBranchExact  string
-	Agent           string
-	Date            string // date overlapped by session activity, YYYY-MM-DD
-	DateFrom        string // activity range start (inclusive)
-	DateTo          string // activity range end (inclusive)
-	Timezone        string // IANA timezone for date filters; empty means UTC
-	ActiveSince     string // ISO-8601 timestamp; filters on most recent activity
-	MinMessages     int    // message_count >= N (0 = no filter)
-	MaxMessages     int    // message_count <= N (0 = no filter)
-	MinUserMessages int    // user_message_count >= N (0 = no filter)
-	ExcludeOneShot  bool   // exclude sessions with user_message_count <= 1
+	GitBranchExact   string
+	Agent            string
+	Date             string // date overlapped by session activity, YYYY-MM-DD
+	DateFrom         string // activity range start (inclusive)
+	DateTo           string // activity range end (inclusive)
+	Timezone         string // IANA timezone for date filters; empty means UTC
+	ActiveSince      string // ISO-8601 timestamp; filters on most recent activity
+	MinMessages      int    // message_count >= N (0 = no filter)
+	MaxMessages      int    // message_count <= N (0 = no filter)
+	MinUserMessages  int    // user_message_count >= N (0 = no filter)
+	ExcludeOneShot   bool   // exclude sessions with user_message_count <= 1
+	OneShotFilterSet bool   // preserve an explicit one-shot exclusion with annotation filters
 	// ExcludeActiveSince keeps sessions whose last activity is at or before
 	// this instant, or unknown. The zero time disables the filter.
 	ExcludeActiveSince time.Time
@@ -1192,12 +1193,18 @@ func (db *DB) GetSessionFull(
 	return s, nil
 }
 
-// GetArtifactExportSession returns raw user- and agent-owned session names so
-// canonical manifests do not publish session_name as a user display_name.
+// GetArtifactExportSession returns uncoalesced names and omits applied launcher parents.
 func (db *DB) GetArtifactExportSession(
 	ctx context.Context, id string,
 ) (*Session, error) {
-	return db.getSessionFullUncoalesced(ctx, id)
+	parent := `CASE WHEN COALESCE(parser_parent_session_id, '') = ''
+		AND NOT ` + spawnEdgeExistsSQL("sessions") + `
+		AND EXISTS (SELECT 1 FROM session_external_parents ep
+			WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)
+		THEN NULL ELSE parent_session_id END`
+	cols := strings.Replace(sessionFullCols, "parent_session_id,", parent+",", 1)
+	return scanSessionFullRow(db.getReader().QueryRowContext(ctx,
+		"SELECT "+cols+" FROM sessions WHERE id = ?", id), id)
 }
 
 func (db *DB) getSessionFullUncoalesced(

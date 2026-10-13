@@ -17,14 +17,14 @@ The latest release is
 - Sessions show the pull requests Claude Code linked them to. Find them on the
   session page, in `session get`, and in session JSON, and filter with
   `session list --pr owner/repo#123` or the `pr` API parameter. The first sync
-  after upgrading re-reads Claude sessions once to pick up existing links.
+  after upgrading re-reads Claude sessions in place once to pick up existing links.
 - Label sessions by ticket, role, or run type with
   `agentsview session label <id> ticket=ABC-123` or
   `PATCH /api/v1/sessions/{id}/labels`, then filter with `--label`, the `label`
   API parameter, the web UI, or the MCP `list_sessions` tool. Labels survive
   reparses and resyncs. Label and pull request filters also find child and
   headless sessions, such as orchestrator workers; the web UI shows the tree
-  that contains them.
+  that contains them. An explicit one-shot exclusion still applies.
 - An orchestrator can record which session launched a worker with
   `agentsview session parent <worker-id> <manager-id>` or
   `PUT /api/v1/sessions/{id}/parent`. The worker appears under its launcher in

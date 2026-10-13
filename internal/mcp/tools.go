@@ -270,29 +270,23 @@ type listSessionsIn struct {
 }
 
 type sessionRow struct {
-	WebURL           string           `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
-	SessionID        string           `json:"session_id"`
-	Project          string           `json:"project,omitempty"`
-	Machine          string           `json:"machine,omitempty"`
-	Agent            string           `json:"agent"`
-	Name             string           `json:"name"`
-	StartedAt        string           `json:"started_at"`
-	EndedAt          string           `json:"ended_at"`
-	MessageCount     int              `json:"message_count" jsonschema:"Total stored messages for the session across all roles, including system messages. get_messages always drops system messages, so no roles filter makes its returned count match this; reconcile instead via message_count = returned + filtered summed over a full get_messages pagination sweep."`
-	UserMessageCount int              `json:"user_message_count" jsonschema:"Stored user-role messages, excluding those flagged as system-injected."`
-	OutputTokens     int64            `json:"output_tokens,omitempty"`
-	Outcome          string           `json:"outcome,omitempty"`
-	HealthGrade      string           `json:"health_grade,omitempty"`
-	GitBranch        string           `json:"git_branch,omitempty"`
-	ParentSessionID  string           `json:"parent_session_id,omitempty"`
-	Labels           []string         `json:"labels,omitempty"`
-	PullRequests     []pullRequestRow `json:"pull_requests,omitempty" jsonschema:"Pull or merge requests the session's transcript linked to."`
-}
-
-type pullRequestRow struct {
-	URL        string `json:"url"`
-	Repository string `json:"repository"`
-	Number     int    `json:"number"`
+	WebURL           string      `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
+	SessionID        string      `json:"session_id"`
+	Project          string      `json:"project,omitempty"`
+	Machine          string      `json:"machine,omitempty"`
+	Agent            string      `json:"agent"`
+	Name             string      `json:"name"`
+	StartedAt        string      `json:"started_at"`
+	EndedAt          string      `json:"ended_at"`
+	MessageCount     int         `json:"message_count" jsonschema:"Total stored messages for the session across all roles, including system messages. get_messages always drops system messages, so no roles filter makes its returned count match this; reconcile instead via message_count = returned + filtered summed over a full get_messages pagination sweep."`
+	UserMessageCount int         `json:"user_message_count" jsonschema:"Stored user-role messages, excluding those flagged as system-injected."`
+	OutputTokens     int64       `json:"output_tokens,omitempty"`
+	Outcome          string      `json:"outcome,omitempty"`
+	HealthGrade      string      `json:"health_grade,omitempty"`
+	GitBranch        string      `json:"git_branch,omitempty"`
+	ParentSessionID  string      `json:"parent_session_id,omitempty"`
+	Labels           []string    `json:"labels,omitempty"`
+	PullRequests     []db.PRLink `json:"pull_requests,omitempty" jsonschema:"Pull or merge requests the session's transcript linked to."`
 }
 
 type listSessionsOut struct {
@@ -354,21 +348,8 @@ func toSessionRow(s db.Session) sessionRow {
 		GitBranch:        s.GitBranch,
 		ParentSessionID:  strval(s.ParentSessionID),
 		Labels:           s.Labels,
-		PullRequests:     pullRequestRows(s.PRLinks),
+		PullRequests:     s.PRLinks,
 	}
-}
-
-func pullRequestRows(links []db.PRLink) []pullRequestRow {
-	if len(links) == 0 {
-		return nil
-	}
-	rows := make([]pullRequestRow, 0, len(links))
-	for _, link := range links {
-		rows = append(rows, pullRequestRow{
-			URL: link.URL, Repository: link.Repository, Number: link.Number,
-		})
-	}
-	return rows
 }
 
 // --- get_session_overview ---

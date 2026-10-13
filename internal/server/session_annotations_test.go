@@ -120,11 +120,46 @@ func TestSessionParentAPI(t *testing.T) {
 		`{"parent_session_id":"worker"}`)
 	assertStatus(t, w, http.StatusBadRequest)
 
-	// An empty parent removes the link; removing a missing link is 404.
+	// Clearing a pending parent is safe to retry.
 	w = te.put(t, "/api/v1/sessions/worker/parent", `{}`)
 	assertStatus(t, w, http.StatusOK)
 	w = te.put(t, "/api/v1/sessions/worker/parent", `{"parent_session_id":""}`)
-	assertStatus(t, w, http.StatusNotFound)
+	assertStatus(t, w, http.StatusOK)
+	assert.False(t, decode[db.SessionExternalParent](t, w).SessionFound)
+	parent := "manager"
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "native", Agent: "claude", Project: "proj", ParentSessionID: &parent, RelationshipType: "continuation"}))
+	for range 2 {
+		w = te.put(t, "/api/v1/sessions/native/parent", `{}`)
+		assertStatus(t, w, http.StatusOK)
+		assert.True(t, decode[db.SessionExternalParent](t, w).SessionFound)
+	}
+	native, err := te.db.GetSession(t.Context(), "native")
+	require.NoError(t, err)
+	assert.Equal(t, &parent, native.ParentSessionID)
+}
+
+func TestAnnotationFiltersHonorExplicitOneShotExclusion(t *testing.T) {
+	te := setup(t)
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
+		ID: "worker", Machine: "test", Agent: "claude", Project: "proj",
+		MessageCount: 2, UserMessageCount: 1, IsAutomated: true,
+		PRLinks: []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}},
+	}))
+	_, err := te.db.SetSessionLabels(t.Context(), "worker", []string{"nightly"})
+	require.NoError(t, err)
+	for _, filter := range []string{"label=nightly", "pr=owner%2Frepo%237"} {
+		for _, route := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
+			for _, toggle := range []string{"", "&include_one_shot=false", "&include_one_shot=true"} {
+				w := te.get(t, route+"?"+filter+toggle)
+				assertStatus(t, w, http.StatusOK)
+				if toggle == "&include_one_shot=false" {
+					assert.NotContains(t, w.Body.String(), `"id":"worker"`)
+				} else {
+					assert.Contains(t, w.Body.String(), `"id":"worker"`)
+				}
+			}
+		}
+	}
 }
 
 func TestSessionAnnotationWritesUnavailableOnReadOnlyStore(t *testing.T) {

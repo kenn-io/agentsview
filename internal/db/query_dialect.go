@@ -799,6 +799,9 @@ func SessionTreeMemberPredicate(
 	if scope := dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), sessionAlias+".is_automated"); scope != "" {
 		pred += " AND " + scope
 	}
+	if f.OneShotFilterSet && f.ExcludeOneShot && f.HasAnnotationFilter() {
+		pred += " AND " + sessionAlias + ".user_message_count > 1"
+	}
 	return pred
 }
 
@@ -926,10 +929,12 @@ func (f SessionFilter) HasAnnotationFilter() bool {
 // exclusions when the filter selects by label or pull request link. Those
 // filters name the sessions the caller wants, the way explicit IDs do, and
 // sessions started by a launcher are usually headless single-prompt runs
-// that the defaults would hide. An explicit AutomatedScope still applies.
+// that the defaults would hide. Explicit one-shot and AutomatedScope filters still apply.
 func (f SessionFilter) withAnnotationSelection() SessionFilter {
 	if f.HasAnnotationFilter() {
-		f.ExcludeOneShot = false
+		if !f.OneShotFilterSet {
+			f.ExcludeOneShot = false
+		}
 		f.ExcludeAutomated = false
 	}
 	return f
@@ -1033,7 +1038,7 @@ func oneShotPredicate(
 	f SessionFilter, b *QueryBuilder, q func(string) string, scope string,
 ) string {
 	conds := []string{q("user_message_count") + " > 1"}
-	if scope != "human" {
+	if scope != "human" && !(f.OneShotFilterSet && f.HasAnnotationFilter()) {
 		conds = append(conds,
 			q("is_automated")+" = "+b.dialect.trueLiteral)
 	}

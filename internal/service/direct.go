@@ -302,6 +302,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		MaxMessages:          f.MaxMessages,
 		MinUserMessages:      f.MinUserMessages,
 		ExcludeOneShot:       !f.IncludeOneShot,
+		OneShotFilterSet:     f.OneShotFilterSet,
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
 		IncludeSource:        f.IncludeSource,

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -208,8 +207,10 @@ func TestSessionExternalParentApplication(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, worker.ParentSessionID)
 	assert.Empty(t, worker.RelationshipType)
-	_, err = d.ClearSessionExternalParent(ctx, "worker")
-	assert.ErrorIs(t, err, sql.ErrNoRows)
+	cleared, err = d.ClearSessionExternalParent(ctx, "worker")
+	require.NoError(t, err)
+	assert.False(t, cleared.Changed)
+	assert.True(t, cleared.SessionFound)
 }
 
 func TestSessionExternalParentYieldsToParserParent(t *testing.T) {
@@ -233,6 +234,28 @@ func TestSessionExternalParentYieldsToParserParent(t *testing.T) {
 	require.NotNil(t, child.ParentSessionID)
 	assert.Equal(t, "real-parent", *child.ParentSessionID)
 	assert.Equal(t, "continuation", child.RelationshipType)
+}
+
+func TestSessionExternalParentClearAbsent(t *testing.T) {
+	d := testDB(t)
+	parent := "native-parent"
+	insertSession(t, d, "native", "proj", func(s *Session) {
+		s.ParentSessionID = &parent
+		s.RelationshipType = "continuation"
+	})
+	for _, id := range []string{"pending", "native"} {
+		for range 2 {
+			link, err := d.ClearSessionExternalParent(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, id, link.SessionID)
+			assert.Equal(t, id == "native", link.SessionFound)
+			assert.False(t, link.Changed)
+		}
+	}
+	native, err := d.GetSession(t.Context(), "native")
+	require.NoError(t, err)
+	assert.Equal(t, &parent, native.ParentSessionID)
+	assert.Equal(t, "continuation", native.RelationshipType)
 }
 
 func TestSessionExternalParentSkipsLinkThatClosesCycle(t *testing.T) {
@@ -391,6 +414,12 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 			// The flat list selects the matching worker itself.
 			assert.Equal(t, []string{"worker"},
 				listSortedIDs(t, d, tt.filter(defaults)))
+			explicit := tt.filter(defaults)
+			explicit.OneShotFilterSet = true
+			assert.Empty(t, listSortedIDs(t, d, explicit))
+			index, err := d.GetSidebarSessionIndex(ctx, explicit)
+			require.NoError(t, err)
+			assert.Empty(t, index.Sessions)
 
 			// The sidebar keeps the launcher's tree and drops unrelated roots.
 			for _, limit := range []int{0, 10} {
@@ -471,6 +500,25 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	// Removing the spawn edge restores the saved launcher parent during upload.
 	write.Messages[0].HasToolUse = false
 	write.Messages[0].ToolCalls = nil
+	write.Session.Project = "replacement"
+	_, err = d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_parent_recompute
+		BEFORE UPDATE OF parent_session_id ON sessions
+		WHEN NEW.id = 'child' AND NEW.parent_session_id = 'manager'
+		BEGIN SELECT RAISE(ABORT, 'parent recompute failed'); END`)
+	require.NoError(t, err)
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+	require.ErrorContains(t, err, "parent recompute failed")
+	child, err = d.GetSession(ctx, "child")
+	require.NoError(t, err)
+	assert.Equal(t, new("spawner"), child.ParentSessionID, "failed upload must roll back parent recomputation")
+	spawner, err := d.GetSession(ctx, "spawner")
+	require.NoError(t, err)
+	assert.Equal(t, "proj", spawner.Project, "failed recomputation must roll back the session upsert")
+	var edges int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, "SELECT count(*) FROM tool_calls WHERE session_id = 'spawner'").Scan(&edges))
+	assert.Equal(t, 1, edges, "failed recomputation must roll back the uploaded transcript")
+	_, err = d.getWriter().ExecContext(ctx, "DROP TRIGGER fail_parent_recompute")
+	require.NoError(t, err)
 	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
 	require.NoError(t, err)
 	child, err = d.GetSession(ctx, "child")

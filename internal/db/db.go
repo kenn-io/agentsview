@@ -572,7 +572,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // session; the resync's orphan copy drops a stale codex:<thread> row whose
 // file now belongs to a page session.)
 // (132: Claude pr-link records populate sessions.pr_links. Re-parse unchanged
-// Claude sources so existing sessions gain their pull request links.)
+// Claude sources in place so existing session IDs gain their pull request links.)
 const dataVersion = 132
 
 const archiveOnlyVersionBase = 1 << 20

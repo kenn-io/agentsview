@@ -87,7 +87,7 @@ type sessionFilterInput struct {
 	MinMessages      int               `query:"min_messages" minimum:"0" doc:"Minimum total message count"`
 	MaxMessages      int               `query:"max_messages" minimum:"0" doc:"Maximum total message count"`
 	MinUserMessages  int               `query:"min_user_messages" minimum:"0" doc:"Minimum user message count"`
-	IncludeOneShot   bool              `query:"include_one_shot" doc:"Include one-shot sessions"`
+	IncludeOneShot   optionalBoolParam `query:"include_one_shot" doc:"Include one-shot sessions"`
 	IncludeAutomated bool              `query:"include_automated" doc:"Include automated sessions"`
 	IncludeChildren  bool              `query:"include_children" doc:"Include child sessions"`
 	IncludeSource    bool              `query:"include_source" doc:"Include available source file path, size, and archive-row update time on /sessions; accepted but ignored by /sessions/sidebar-index"`
@@ -209,7 +209,8 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 		MinMessages:      in.MinMessages,
 		MaxMessages:      in.MaxMessages,
 		MinUserMessages:  in.MinUserMessages,
-		IncludeOneShot:   in.IncludeOneShot,
+		IncludeOneShot:   in.IncludeOneShot.Value,
+		OneShotFilterSet: in.IncludeOneShot.IsSet,
 		IncludeAutomated: in.IncludeAutomated,
 		IncludeChildren:  in.IncludeChildren,
 		IncludeSource:    in.IncludeSource,
@@ -271,7 +272,8 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 		MinMessages:      in.MinMessages,
 		MaxMessages:      in.MaxMessages,
 		MinUserMessages:  in.MinUserMessages,
-		ExcludeOneShot:   !in.IncludeOneShot,
+		ExcludeOneShot:   !in.IncludeOneShot.Value,
+		OneShotFilterSet: in.IncludeOneShot.IsSet,
 		ExcludeAutomated: !in.IncludeAutomated,
 		IncludeChildren:  includeChildren,
 		Cursor:           in.Cursor,

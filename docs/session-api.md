@@ -637,7 +637,8 @@ filter matches nothing.
 - In a flat list (`session list`, `GET /api/v1/sessions`, MCP `list_sessions`)
   they match each session directly. Child sessions, automated sessions, and
   one-shot sessions are included, so a headless worker that an orchestrator
-  launched appears even though it is a child of the launching session.
+  launched appears even though it is a child of the launching session. An explicit
+  `include_one_shot=false` still excludes one-shot sessions.
 - In tree views (the web UI sidebar and `include_children=true`) they keep a
   top-level session when it or any session below it matches, and show its
   whole tree. Filtering by a worker's pull request shows the orchestrator

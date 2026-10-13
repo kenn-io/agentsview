@@ -404,6 +404,7 @@ type ListFilter struct {
 	MaxMessages      int    `json:"max_messages,omitempty"`
 	MinUserMessages  int    `json:"min_user_messages,omitempty"`
 	IncludeOneShot   bool   `json:"include_one_shot,omitempty"`
+	OneShotFilterSet bool   `json:"-"`
 	IncludeAutomated bool   `json:"include_automated,omitempty"`
 	IncludeChildren  bool   `json:"include_children,omitempty"`
 	IncludeSource    bool   `json:"include_source,omitempty"`

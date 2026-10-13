@@ -402,8 +402,8 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.MinUserMessages > 0 {
 		q.MinUserMessages = new(int64(f.MinUserMessages))
 	}
-	if f.IncludeOneShot {
-		q.IncludeOneShot = new(true)
+	if f.IncludeOneShot || f.OneShotFilterSet {
+		q.IncludeOneShot = new(f.IncludeOneShot)
 	}
 	if f.IncludeAutomated {
 		q.IncludeAutomated = new(true)

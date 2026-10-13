@@ -144,7 +144,7 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, localHead)
 				require.False(t, localHead.TrashIncludesCodexPages)
-				require.Less(t, localHead.DataVersion, 131)
+				require.Less(t, localHead.DataVersion, db.CurrentDataVersion())
 			}
 			// Lexical push order puts 48 earlier sessions and the anchor/page in
 			// one batch; 49 puts the empty anchor at the end of the first batch.

@@ -664,6 +664,7 @@ describe("SessionsStore", () => {
     });
 
     it("serializes only the sidebar filter subset for the index request", async () => {
+      sessions.filters.labels = ["nightly"];
       sessions.filters.project = "proj";
       sessions.filters.machine = "host-a";
       sessions.filters.agent = "codex";
@@ -694,7 +695,8 @@ describe("SessionsStore", () => {
         min_messages: 2,
         max_messages: 20,
         min_user_messages: 1,
-        include_one_shot: undefined,
+        include_one_shot: false,
+        label: ["nightly"],
         include_automated: true,
         limit: 500,
       });
@@ -2267,8 +2269,7 @@ describe("SessionsStore", () => {
       await sessions.load();
       expect(sessions.sessions).toHaveLength(1);
 
-      const rejected =
-        'pr filter "acme/widgets#zero": invalid pull request number';
+      const rejected = 'pr filter "acme/widgets#zero": invalid pull request number';
       vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(new ApiError(400, rejected));
       sessions.setPRFilter("acme/widgets#zero");
       await vi.waitFor(() => {

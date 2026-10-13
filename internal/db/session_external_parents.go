@@ -110,7 +110,7 @@ func (db *DB) SetSessionExternalParent(
 
 // ClearSessionExternalParent removes a launcher-supplied parent. When the
 // link was the session's effective parent, the session returns to having
-// none. It returns sql.ErrNoRows when no link is recorded.
+// none. Clearing an absent link succeeds without changing the session.
 func (db *DB) ClearSessionExternalParent(
 	ctx context.Context, sessionID string,
 ) (SessionExternalParent, error) {
@@ -128,6 +128,11 @@ func (db *DB) ClearSessionExternalParent(
 	defer func() { _ = tx.Rollback() }()
 
 	link, err := loadSessionExternalParent(ctx, tx, sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		link.SessionID = sessionID
+		err = tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM sessions WHERE id = ?)", sessionID).Scan(&link.SessionFound)
+		return link, err
+	}
 	if err != nil {
 		return SessionExternalParent{}, err
 	}

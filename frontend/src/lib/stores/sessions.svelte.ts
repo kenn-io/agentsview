@@ -389,7 +389,7 @@ class SessionsStore {
       min_messages: f.minMessages > 0 ? f.minMessages : undefined,
       max_messages: f.maxMessages > 0 ? f.maxMessages : undefined,
       min_user_messages: f.minUserMessages > 0 ? f.minUserMessages : undefined,
-      include_one_shot: f.includeOneShot || undefined,
+      include_one_shot: f.includeOneShot,
       include_automated: f.includeAutomated || undefined,
       starred: starred.filterOnly || undefined,
       label: f.labels.length > 0 ? [...f.labels] : undefined,
