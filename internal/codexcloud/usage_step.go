@@ -305,12 +305,13 @@ func (s *Syncer) queryUsage(
 	noHome := &noUsageHomeError{}
 	for len(*homes) > 0 {
 		login := (*homes)[0]
+		homeFailure, homeWaits := s.Waits.HomeWait(login.Home, login.AuthModTime)
 		switch {
 		case !s.Waits.UsageHomeReady(login.Home, login.AuthModTime):
 			noHome.refuse(FailureFor(&HTTPError{Status: http.StatusUnauthorized}, login), login.Home)
-		case !s.Waits.HomeReady(login.Home, login.AuthModTime):
+		case homeWaits:
 			if !noHome.refused && noHome.failure == FailNone {
-				noHome.failure, noHome.home = s.Waits.HomeFailure(login.Home), login.Home
+				noHome.failure, noHome.home = homeFailure, login.Home
 			}
 		default:
 			resp, err := QueryUsage(ctx, s.UsageClient, gates.CodexCloud.UsageEndpoint, login, s.Version, groups)
