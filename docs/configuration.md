@@ -1170,7 +1170,7 @@ enabled = true
 | `endpoint`       | `wss://codex-cloud-backend.chatgpt.com/`                             | Chat service; for tests only                            |
 | `usage_endpoint` | `https://chatgpt.com/backend-api/wham/usage/thread_usage/query_v2`   | Plan usage report; for tests only                       |
 
-Live capture is on by default: setting `enabled = true` also makes AgentsView
+Live capture is on by default. Setting `enabled = true` also makes AgentsView
 listen in on your running chats. Read
 [Tokens and plan usage](#tokens-and-plan-usage) for what that does on OpenAI's
 side, and set `live_tokens = false` if you want only the import.
@@ -1224,9 +1224,18 @@ OpenAI does not document these endpoints, and they may change or stop working
 without notice. OpenAI may also treat third-party clients differently from its
 own apps. When a reply no longer matches what AgentsView expects, the status
 says "OpenAI's service answered in a way this version of AgentsView can't read"
-and asks you to check an `endpoint` override or update AgentsView. Imports from
-that account pause and are tried again after one hour, then at longer waits up
-to one day. Live capture for that account stops until AgentsView restarts.
+and asks you to update AgentsView, or to check an `endpoint` or
+`usage_endpoint` override. What stops depends on which request failed:
+
+- A reply from the chat service while importing pauses imports from that
+  account. AgentsView tries again after one hour, then at longer waits up to
+  one day.
+- A message AgentsView cannot read while it listens in on a chat stops live
+  capture for that account until AgentsView restarts or you set
+  `live_tokens = false` and back to `true`. Imports continue.
+- A plan usage reply AgentsView cannot read is retried like any failed plan
+  usage request.
+
 Sessions already imported are kept.
 
 #### Tokens and plan usage
@@ -1239,32 +1248,36 @@ records every token update, and disconnects when the turn ends or after 6
 hours.
 
 Listening in is the only request that touches a chat on OpenAI's side.
-AgentsView connects by resuming the chat (`thread/resume`):
+AgentsView connects the way Codex reopens a chat, with the request OpenAI calls
+`thread/resume`:
 
 - While AgentsView is connected, the running task reports AgentsView as its
   client, and later turns' starting context can mention it.
 - If a turn ends just before AgentsView connects, connecting loads the stopped
-  chat on OpenAI's side and starts its MCP servers. In testing nothing ran and
+  chat on OpenAI's side and starts its MCP servers, the tool servers the chat
+  is set up to use. In testing nothing ran and
   the chat did not change. The chat may move to the top of your chat list in
   OpenAI's apps. AgentsView disconnects at once and does not connect for that
   turn again. To make this less likely, AgentsView checks again right before
   connecting that the chat was updated in the last 5 minutes.
-- Untested risk: for a stopped chat with an active goal, that same load might
+- Not tested: for a stopped chat with an active goal, that same load might
   continue the goal and start a new turn.
-- Untested: AgentsView never answers approval prompts. Whether your app still
-  shows a prompt raised while AgentsView was connected, after AgentsView
-  disconnects, has not been checked.
+- Not tested: AgentsView never answers approval prompts. If a chat asks for
+  approval while AgentsView is connected, it is unknown whether your app still
+  shows that prompt after AgentsView disconnects.
 
 Set `live_tokens = false` to stop listening in. Fetching and plan usage
 continue. The status bar and `agentsview serve status` show a live tokens line
 for each account: how many running chats AgentsView is listening in on, idle,
 off and why, or stopped after a reply it could not read.
 
-Each token update carries the chat's running total, so the first update
-AgentsView records also covers every turn that finished before it. A turn that
-finished after AgentsView's last token update for that chat has no token
-counts. A session with such turns counts in the token and cost totals, which
-then say "N sessions partly captured; their token counts are low."
+Each token update carries the chat's running total, so an update also covers
+every turn that finished before it. A finished turn counts as captured when
+AgentsView listened in until it ended, or when a token update from a later
+turn covers it. Any other finished turn, such as a chat's last turn that ran
+while AgentsView was not connected, is missing from the chat's token counts. A
+session with such turns counts in the token and cost totals, which then say "N
+sessions partly captured; their token counts are low."
 
 A chat that AgentsView never listened in on has no token counts. For those,
 AgentsView asks OpenAI's usage report for the chat's share of your plan's
@@ -1274,11 +1287,16 @@ and cost totals, and the totals say how many were left out ("N sessions billed
 as plan usage, not priced").
 
 AgentsView asks for plan usage again after a failed request or an incomplete
-report, with waits that grow to 6 hours, so a chat's final figures can arrive
-up to 6 hours after it finishes. It refreshes complete figures once a day. It
-stops asking after the first answer that comes 7 days or more after the chat's
-last change. If 3 requests in a row fail after that point, it stops too, and
-the session details say AgentsView could not check plan usage.
+report, waiting longer each time, up to 6 hours between requests. It refreshes
+complete figures once a day. It stops asking after the first answer that comes
+7 days or more after the chat's last change. If 3 requests in a row fail after
+that point, it stops too, and the session details then say AgentsView could
+not check plan usage.
+
+Some problems pause plan usage for the whole account instead: OpenAI limiting
+requests, OpenAI saying the account has no usage report, or no Codex home with
+a usable login. While paused, no request is sent, so a chat can stay unsettled
+past its 7 days; it settles on the first answer after the pause ends.
 
 #### Limits
 
