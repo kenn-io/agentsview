@@ -523,8 +523,29 @@ func (s *Syncer) showUsage(key AccountKey, now time.Time) {
 		line := s.usageLines[key]
 		s.usageMu.Unlock()
 		if line == "" {
-			line = "Plan usage: not checked yet"
+			line = storedUsageLine(acct)
 		}
 		s.Status.SetPlanUsage(string(key), line)
 	}
+}
+
+// storedUsageLine describes plan usage from saved state, for a daemon that
+// has sent no request since it started. The newest usable report's date
+// comes from the refresh set.
+func storedUsageLine(acct AccountState) string {
+	var newest time.Time
+	for _, entry := range acct.Refresh {
+		if entry.DataAsOf.After(newest) {
+			newest = entry.DataAsOf
+		}
+	}
+	if !newest.IsZero() {
+		return "Plan usage as of " + newest.Local().Format("Jan 2 15:04")
+	}
+	for _, entry := range acct.UsagePending {
+		if entry.HasRow {
+			return "Plan usage: still updating"
+		}
+	}
+	return "Plan usage: not checked yet"
 }
