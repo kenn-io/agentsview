@@ -31,13 +31,13 @@ test.describe("Chromium dashboard evidence", () => {
     ).toBe(true);
     await page.goto("/", { waitUntil: "commit" });
     await expect
-      .poll(() => requests.some((path) => /^\/api\/v1\/sessions\/test-session-/.test(path)))
+      .poll(() => requests.some((path) => path.startsWith("/api/v1/sessions/test-session-")))
       .toBe(true);
     await expect(page.locator(".session-item").first()).toBeVisible();
     const respondedAtRow = analyticsResponded;
     await expect.poll(() => requests.some((path) => path.includes("/analytics/"))).toBe(true);
     const hydration = requests.findIndex((path) =>
-      /^\/api\/v1\/sessions\/test-session-/.test(path),
+      path.startsWith("/api/v1/sessions/test-session-"),
     );
     const analytics = requests.findIndex((path) => path.includes("/analytics/"));
     console.log(

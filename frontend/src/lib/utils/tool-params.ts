@@ -8,7 +8,7 @@ export interface MetaTag {
 }
 
 export function isAbsolutePath(value: string): boolean {
-  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value);
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
 export function pathDisplayValue(value: string): string {
@@ -19,7 +19,7 @@ export function pathDisplayValue(value: string): string {
     ? 0
     : /^[A-Za-z]:[\\/]/.test(value)
       ? 1
-      : /^\\\\/.test(value)
+      : value.startsWith("\\\\")
         ? 2
         : 0;
   if (parts.length <= rootParts + 2) return value;
