@@ -443,7 +443,7 @@ keeps its default directories.
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                                                          |
 | Omnigent              | `~/.omnigent/`                                                                                                                                                   | SQLite `chat.db`, one session per conversation                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
-| fx                    | `~/.fx/sessions/`                                                                                                                                                | Schema 4 session folders with `events.jsonl`, `session.json`, and `usage-v2.json`                                                                             |
+| fx                    | `~/.fx/sessions/`                                                                                                                                                | Schema 4 session folders with `events.jsonl`, `session.json`, and optional `usage-v2.json` (older fx)                                                                           |
 | Tau                   | `~/.tau/sessions/`                                                                                                                                               | JSONL transcripts under `<project>/`, with metadata `index.jsonl` excluded                                                                                    |
 | Prime Agent           | `~/.prime/agent/sessions/`                                                                                                                                       | Flat Pi-family JSONL sessions                                                                                                                                 |
 | StepCode              | `~/.stepcode/agent/sessions/`                                                                                                                                    | JSONL per session                                                                                                                                             |
@@ -524,7 +524,8 @@ AgentsView.
 
 fx sessions appear from `~/.fx/sessions/` when `session.json` uses schema 4.
 Subagent runs appear as children of their parent session. Usage comes from
-`usage-v2.json` as cumulative totals per model, dated at the session's last event.
+`usage-v2.json` when present (older fx only) as cumulative totals per model,
+dated at the session's last event.
 Tool results show fx's stored previews, up to 4 KB each.
 Costs use AgentsView's pricing catalog. Set `FX_SESSIONS_DIR` or `agents.fx.dirs`
 to scan another root, including a WSL path on Windows. The legacy `fx_dirs` key

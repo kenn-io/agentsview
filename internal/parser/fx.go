@@ -171,6 +171,8 @@ type fxUsage struct {
 	} `json:"snapshot"`
 }
 
+var errFxInvalidMetadata = errors.New("invalid fx metadata")
+
 func readFxMetadata[T any](path string) (*T, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -181,10 +183,10 @@ func readFxMetadata[T any](path string) (*T, error) {
 	}
 	var value *T
 	if err := json.Unmarshal(data, &value); err != nil {
-		return nil, fmt.Errorf("invalid fx metadata in %s: %w", path, err)
+		return nil, fmt.Errorf("%w in %s: %w", errFxInvalidMetadata, path, err)
 	}
 	if value == nil {
-		return nil, fmt.Errorf("invalid fx metadata in %s: null object", path)
+		return nil, fmt.Errorf("%w in %s: null object", errFxInvalidMetadata, path)
 	}
 	return value, nil
 }
@@ -246,6 +248,8 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		}
 		if fxSessionIDValid(owner.Parent) {
 			session.ParentSessionID, session.RelationshipType = "fx:"+owner.Parent, RelSubagent
+		} else {
+			log.Printf("fx session %s: ignoring invalid owner.json parent_id %q", rawID, owner.Parent)
 		}
 	}
 	var messages []ParsedMessage
@@ -311,49 +315,75 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	if session.SessionName == "" {
 		session.SessionName = session.FirstMessage
 	}
-	usage, err := readFxMetadata[fxUsage](filepath.Join(dir, "usage-v2.json"))
+	events, err := fxUsageEvents(dir, rawID, session.ID, timeString(latestEventTime, session.StartedAt))
 	if err != nil {
 		return nil, nil, err
 	}
-	if usage != nil {
-		if usage.Snapshot == nil || usage.Snapshot.Models == nil {
-			return nil, nil, errors.New("invalid fx usage-v2.json: expected snapshot object and models array")
-		}
-		if usage.SessionID != nil && *usage.SessionID != rawID {
-			return nil, nil, errors.New("fx usage-v2.json session_id does not match session folder")
-		}
-		if !fxSchemaOK(usage.Version, 0, 1, rawID, "usage-v2.json") || !fxSchemaOK(usage.Snapshot.Version, 0, 3, rawID, "usage-v2.json snapshot") {
-			return nil, nil, nil
-		}
-		for _, model := range usage.Snapshot.Models {
-			if model == nil || model.Model == "" {
-				return nil, nil, errors.New("invalid fx usage-v2.json model entry")
-			}
-			provider, _, prefixed := strings.Cut(model.Model, "/")
-			if !prefixed {
-				provider = ""
-			}
-			session.UsageEvents = append(session.UsageEvents, ParsedUsageEvent{
-				SessionID: session.ID, Source: "session", Model: model.Model, ProviderID: provider,
-				DedupKey: "session:" + session.ID + "|" + model.Model, OccurredAt: timeString(latestEventTime, session.StartedAt),
-				InputTokens: max(0, int(model.Input)-int(model.CacheRead)-int(model.CacheWrite)), OutputTokens: int(model.Output),
-				CacheReadInputTokens: int(model.CacheRead), CacheCreationInputTokens: int(model.CacheWrite), ReasoningTokens: int(model.Reasoning),
-			})
-		}
-	}
+	session.UsageEvents = events
 	// Cumulative session usage cannot establish a per-request context peak.
 	session.TotalOutputTokens, session.HasTotalOutputTokens, _, _ = UsageEventTokenAggregate(session.UsageEvents)
 	return session, messages, nil
+}
+
+// fxUsageEvents reads the legacy usage-v2.json. Bad content drops all usage and keeps the transcript.
+func fxUsageEvents(dir, rawID, sessionID, occurredAt string) ([]ParsedUsageEvent, error) {
+	usage, err := readFxMetadata[fxUsage](filepath.Join(dir, "usage-v2.json"))
+	if errors.Is(err, errFxInvalidMetadata) {
+		log.Printf("skipping fx usage for session %s: %v", rawID, err)
+		return nil, nil
+	}
+	if err != nil || usage == nil {
+		return nil, err
+	}
+	skip := func(reason string) ([]ParsedUsageEvent, error) {
+		log.Printf("skipping fx usage for session %s: %s", rawID, reason)
+		return nil, nil
+	}
+	if usage.Snapshot == nil || usage.Snapshot.Models == nil {
+		return skip("expected snapshot object and models array")
+	}
+	if usage.SessionID != nil && *usage.SessionID != rawID {
+		return skip("session_id does not match session folder")
+	}
+	if usage.Version < 0 || usage.Version > 1 || usage.Snapshot.Version < 0 || usage.Snapshot.Version > 3 {
+		return skip(fmt.Sprintf("unsupported schema_version %d (snapshot %d)", usage.Version, usage.Snapshot.Version))
+	}
+	var events []ParsedUsageEvent
+	for _, model := range usage.Snapshot.Models {
+		if model == nil || model.Model == "" {
+			return skip("invalid model entry")
+		}
+		provider, _, prefixed := strings.Cut(model.Model, "/")
+		if !prefixed {
+			provider = ""
+		}
+		events = append(events, ParsedUsageEvent{
+			SessionID: sessionID, Source: "session", Model: model.Model, ProviderID: provider,
+			DedupKey: "session:" + sessionID + "|" + model.Model, OccurredAt: occurredAt,
+			InputTokens: max(0, int(model.Input)-int(model.CacheRead)-int(model.CacheWrite)), OutputTokens: int(model.Output),
+			CacheReadInputTokens: int(model.CacheRead), CacheCreationInputTokens: int(model.CacheWrite), ReasoningTokens: int(model.Reasoning),
+		})
+	}
+	return events, nil
 }
 
 func fxAppendEvent(messages *[]ParsedMessage, event *fxEvent, timestamp time.Time) {
 	message := ParsedMessage{Timestamp: timestamp}
 	switch {
 	case event.User != nil:
+		if event.User.Text == "" {
+			return
+		}
 		message.Role, message.Content = RoleUser, event.User.Text
 	case event.Steering != nil:
+		if event.Steering.Text == "" {
+			return
+		}
 		message.Role, message.Content = RoleUser, event.Steering.Text
 	case event.Assistant != nil:
+		if event.Assistant.Text == "" {
+			return
+		}
 		message.Role, message.Content = RoleAssistant, event.Assistant.Text
 		if replay := event.Assistant.Replay; replay != nil && replay.Source != nil {
 			message.Model, message.ProviderID = replay.Source.Model, string(replay.Source.Provider)

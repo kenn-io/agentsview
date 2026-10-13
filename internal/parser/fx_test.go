@@ -238,8 +238,6 @@ func TestFxRejectedArtifacts(t *testing.T) {
 	for _, test := range []struct{ name, path, content, reason, wantError string }{
 		{"events", "events.jsonl", `{"schema_version":3,"event":{"user":{"text":"Supported"}}}
 {"schema_version":4,"event":{"assistant":{"text":"Future"}}}`, "events.jsonl frame schema_version 4", ""},
-		{"usage", "usage-v2.json", `{"schema_version":2,"snapshot":{"schema_version":3,"models":[{"model":"test","input_tokens":5}]}}`, "usage-v2.json schema_version 2", ""},
-		{"snapshot", "usage-v2.json", `{"schema_version":1,"snapshot":{"schema_version":4,"models":[{"model":"test","input_tokens":5}]}}`, "usage-v2.json snapshot schema_version 4", ""},
 		{"owner", "subagent/owner.json", `{"schema_version":2,"parent_id":"parent-a"}`, "owner.json schema_version 2", ""},
 		{"older session", "session.json", `{"schema_version":3}`, "session.json schema_version 3 is older than supported 4", ""},
 		{"newer session", "session.json", `{"schema_version":5}`, "session.json schema_version 5 is newer than supported 4", ""},
@@ -335,29 +333,31 @@ func TestFxTornTail(t *testing.T) {
 
 func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 	for _, test := range []struct {
-		name, usage, wantError string
-		wantEvents             int
+		name, usage string
+		wantEvents  int
 	}{
-		{"absent", "", "", 0},
-		{"empty models", `{"snapshot":{"models":[]}}`, "", 0},
-		{"matching session", `{"session_id":"session-a","snapshot":{"models":[]}}`, "", 0},
-		{"other session", `{"session_id":"session-b","snapshot":{"models":[]}}`, "session_id does not match", 0},
-		{"empty session", `{"session_id":"","snapshot":{"models":[]}}`, "session_id does not match", 0},
-		{"malformed", `{broken`, "invalid fx metadata", 0},
-		{"null envelope", `null`, "invalid fx", 0},
-		{"array envelope", `[]`, "invalid fx", 0},
-		{"missing snapshot", `{}`, "invalid fx", 0},
-		{"null snapshot", `{"snapshot":null}`, "invalid fx", 0},
-		{"array snapshot", `{"snapshot":[]}`, "invalid fx", 0},
-		{"missing models", `{"snapshot":{}}`, "invalid fx", 0},
-		{"null model entry", `{"snapshot":{"models":[null]}}`, "model entry", 0},
-		{"empty model entry", `{"snapshot":{"models":[{}]}}`, "model entry", 0},
-		{"negative count", `{"snapshot":{"models":[{"model":"test","input_tokens":-1}]}}`, "negative fx token count", 0},
-		{"fractional count", `{"snapshot":{"models":[{"model":"test","output_tokens":1.5}]}}`, "invalid fx", 0},
-		{"fractional reasoning count", `{"snapshot":{"models":[{"model":"test","reasoning_tokens":1.5}]}}`, "invalid fx", 0},
-		{"null count", `{"snapshot":{"models":[{"model":"test","cache_read_tokens":null}]}}`, "", 1},
-		{"null models", `{"snapshot":{"models":null}}`, "invalid fx", 0},
-		{"object models", `{"snapshot":{"models":{}}}`, "invalid fx", 0},
+		{"absent", "", 0},
+		{"empty models", `{"snapshot":{"models":[]}}`, 0},
+		{"matching session", `{"session_id":"session-a","snapshot":{"models":[]}}`, 0},
+		{"other session", `{"session_id":"session-b","snapshot":{"models":[]}}`, 0},
+		{"empty session", `{"session_id":"","snapshot":{"models":[]}}`, 0},
+		{"malformed", `{broken`, 0},
+		{"null envelope", `null`, 0},
+		{"array envelope", `[]`, 0},
+		{"missing snapshot", `{}`, 0},
+		{"null snapshot", `{"snapshot":null}`, 0},
+		{"array snapshot", `{"snapshot":[]}`, 0},
+		{"missing models", `{"snapshot":{}}`, 0},
+		{"null model entry", `{"snapshot":{"models":[null]}}`, 0},
+		{"empty model entry", `{"snapshot":{"models":[{}]}}`, 0},
+		{"negative count", `{"snapshot":{"models":[{"model":"test","input_tokens":-1}]}}`, 0},
+		{"fractional count", `{"snapshot":{"models":[{"model":"test","output_tokens":1.5}]}}`, 0},
+		{"fractional reasoning count", `{"snapshot":{"models":[{"model":"test","reasoning_tokens":1.5}]}}`, 0},
+		{"null count", `{"snapshot":{"models":[{"model":"test","cache_read_tokens":null}]}}`, 1},
+		{"null models", `{"snapshot":{"models":null}}`, 0},
+		{"object models", `{"snapshot":{"models":{}}}`, 0},
+		{"unsupported snapshot version", `{"schema_version":1,"snapshot":{"schema_version":4,"models":[{"model":"test","input_tokens":5}]}}`, 0},
+		{"unsupported usage version", `{"schema_version":2,"snapshot":{"models":[{"model":"test","input_tokens":5}]}}`, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "session-a")
@@ -367,14 +367,9 @@ func TestFxUsageStructureAndSessionIdentity(t *testing.T) {
 				writeSourceFile(t, filepath.Join(dir, "usage-v2.json"), test.usage)
 			}
 			session, messages, err := parseFxSession(t.Context(), filepath.Join(dir, "events.jsonl"), "local")
-			if test.wantError != "" {
-				require.ErrorContains(t, err, test.wantError)
-				assert.Nil(t, session)
-				assert.Empty(t, messages)
-				return
-			}
 			require.NoError(t, err)
 			require.NotNil(t, session)
+			require.Len(t, messages, 1)
 			require.Len(t, session.UsageEvents, test.wantEvents)
 			if test.wantEvents > 0 {
 				assert.Zero(t, session.UsageEvents[0].CacheReadInputTokens)

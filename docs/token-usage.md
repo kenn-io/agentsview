@@ -49,9 +49,12 @@ cache breakdown. Its aggregate usage is attributed to the most recent assistant
 model, so it does not provide a model-by-model account of a session that
 switched models.
 
-fx contributes cumulative totals per model from `usage-v2.json`, dated at the
-session's latest event. As a session grows, its earlier usage moves to the
-latest day. Costs use AgentsView's pricing catalog.
+fx stopped writing `usage-v2.json` in
+[vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226).
+AgentsView reads it when an older session has one, as cumulative totals per
+model dated at the session's latest event. Sessions from current fx have no
+token usage. An old session resumed in newer fx keeps its old totals. Costs use
+AgentsView's pricing catalog.
 
 Augure Code and Augure Desktop retain recorded usage. Proprietary Augure models
 have no catalog price, so token-based cost estimates remain unpriced unless you

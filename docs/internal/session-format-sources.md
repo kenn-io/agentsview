@@ -4396,6 +4396,9 @@ schemas keep their existing ordering behavior.
 - **Usage and cost:**
   [Session usage](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/session_usage.zig)
   stores cumulative per-model totals in `usage-v2.json` under `snapshot.models`.
+  fx removed the file at
+  [bc968ad](https://github.com/vercel-labs/fx/commit/bc968ad) (PR #1226), so only
+  older sessions have it.
   Input includes cache reads and writes. AgentsView subtracts those tokens from
   fresh input and prices the separate token counts from its catalog. It omits
   fx's reported cost, which can be zero for subscription runs. Cumulative totals
