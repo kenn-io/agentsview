@@ -723,7 +723,9 @@ func buildSessionFilterWithBuilder(
 	if f.IDs != nil {
 		// Explicit hydration selects the requested rows rather than sidebar
 		// roots and their descendants. Keep caller-supplied row filters.
-		f.ExcludeOneShot = false
+		if !f.OneShotFilterSet {
+			f.ExcludeOneShot = false
+		}
 		if !f.AutomatedFilterSet {
 			f.ExcludeAutomated = false
 		}

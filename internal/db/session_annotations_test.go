@@ -495,6 +495,8 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 			index, err := d.GetSidebarSessionIndex(ctx, explicit)
 			require.NoError(t, err)
 			assert.Empty(t, index.Sessions)
+			explicit.IDs = []string{"worker"}
+			assert.Empty(t, listSortedIDs(t, d, explicit))
 
 			automated := tt.filter(defaults)
 			automated.AutomatedFilterSet = true
@@ -524,6 +526,8 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 
 	// Without an annotation filter the defaults still hide the worker.
 	assert.ElementsMatch(t, []string{"manager", "idle"}, listSortedIDs(t, d, defaults))
+	defaults.IDs = []string{"worker"}
+	assert.Equal(t, []string{"worker"}, listSortedIDs(t, d, defaults))
 }
 
 func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
