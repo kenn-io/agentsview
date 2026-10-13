@@ -148,7 +148,9 @@
     {/if}
     {#if codexCloudLine}
       {@const detail = codexCloudLine.detail}
-      <Tooltip focusable align="end">
+      <!-- The tooltip class opts the bubble into the fixed overlay zoom
+           compensation in app.css. -->
+      <Tooltip focusable align="end" class="tooltip">
         {#snippet content()}
           <span class="codex-cloud-detail">{detail}</span>
         {/snippet}
@@ -277,9 +279,11 @@
     font-weight: 500;
   }
 
-  /* The detail is one line per fact. */
+  /* The detail is one line per fact; long home paths break anywhere to
+   * stay inside the bubble. */
   .codex-cloud-detail {
     white-space: pre-line;
+    overflow-wrap: anywhere;
   }
 
   .perf-toggle {
