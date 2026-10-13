@@ -641,7 +641,7 @@ func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) 
 		dailyUsageQuery{Filter: db.UsageFilter{
 			Timezone: time.Now().Location().String(),
 		}, NoDefaultRange: true})
-	assert.Equal(t, db.DailyUsageResult{}, base)
+	assert.Equal(t, dailyUsageReport{}, base)
 	require.EqualError(t, err,
 		`usage summary: HTTP 400: {"error":"invalid timezone: Eastern Standard Time"}`)
 	t.Logf("base: timezone=%q error=%v", gotTimezones[0], err)

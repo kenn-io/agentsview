@@ -92,3 +92,65 @@ func assertPlanOnlySummary(t *testing.T, be service.SessionService) {
 	assert.Zero(t, res.Totals.InputTokens)
 	assert.Equal(t, 1, res.PlanOnlySessions)
 }
+
+// TestSessionDetailIncludesPlanUsage checks that session details carry a
+// codex-cloud session's plan usage and capture coverage, in process and
+// through the HTTP API, and leave both out for a session without them.
+func TestSessionDetailIncludesPlanUsage(t *testing.T) {
+	env := newHTTPBackendEnv(t)
+	started := "2026-09-10T10:00:00Z"
+	session := func(id, agent string) db.Session {
+		return db.Session{
+			ID: id, Project: "alpha", Machine: "local", Agent: agent,
+			StartedAt: &started, CreatedAt: started, DataVersion: 1,
+		}
+	}
+	_, err := env.DB.WriteSessionBatch([]db.SessionBatchWrite{
+		{
+			Session: session("codex-cloud:thread-a", "codex-cloud"),
+			PlanUsage: &db.SessionPlanUsage{
+				HasPlanUsage: true, OutcomeKind: "counted_under",
+				OutcomeAt: "2026-09-11T08:00:00Z", CountedUnder: "codex-cloud:thread-root",
+				HasCoverage: true, LastCaptureAt: "2026-09-10T12:00:00Z", UncapturedTurns: 1,
+			},
+			DataVersion: 1,
+		},
+		{
+			Session:     session("codex-cloud:thread-b", "codex-cloud"),
+			PlanUsage:   &db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(0.5)},
+			DataVersion: 1,
+		},
+		{Session: session("claude-a", "claude"), DataVersion: 1},
+	})
+	require.NoError(t, err)
+
+	for name, be := range map[string]service.SessionService{
+		"direct": service.NewReadOnlyBackend(env.DB),
+		"http":   env.Backend("", false),
+	} {
+		t.Run(name, func(t *testing.T) {
+			detail, err := be.Get(t.Context(), "codex-cloud:thread-a")
+			require.NoError(t, err)
+			require.NotNil(t, detail)
+			assert.Equal(t, &db.PlanUsageView{
+				Groups: []db.SessionPlanUsageGroup{}, OutcomeKind: "counted_under",
+				OutcomeAt: "2026-09-11T08:00:00Z", CountedUnder: "codex-cloud:thread-root",
+			}, detail.PlanUsage)
+			assert.Equal(t, &db.CaptureCoverageView{
+				LastCaptureAt: "2026-09-10T12:00:00Z", UncapturedTurns: 1,
+			}, detail.CaptureCoverage)
+
+			unseen, err := be.Get(t.Context(), "codex-cloud:thread-b")
+			require.NoError(t, err)
+			require.NotNil(t, unseen)
+			require.NotNil(t, unseen.PlanUsage)
+			assert.Nil(t, unseen.CaptureCoverage, "no live capture saw this thread")
+
+			other, err := be.Get(t.Context(), "claude-a")
+			require.NoError(t, err)
+			require.NotNil(t, other)
+			assert.Nil(t, other.PlanUsage)
+			assert.Nil(t, other.CaptureCoverage)
+		})
+	}
+}

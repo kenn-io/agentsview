@@ -21,6 +21,7 @@ import (
 //   - codex-cloud:full (project alpha): an assistant message and a usage
 //     event, every turn captured.
 //   - claude-a (project alpha): token messages, no plan usage row.
+//   - claude-idle (project alpha): no assistant message, no plan usage row.
 func seedPlanUsageCountSessions(t *testing.T, d *DB) {
 	t.Helper()
 	session := func(id, agent, project, machine, started string) Session {
@@ -83,6 +84,10 @@ func seedPlanUsageCountSessions(t *testing.T, d *DB) {
 		{
 			Session:  session("claude-a", "claude", "alpha", "m1", "2026-09-10T09:00:00Z"),
 			Messages: claudeMessages, ReplaceMessages: true, DataVersion: 1,
+		},
+		{
+			Session:  session("claude-idle", "claude", "alpha", "m1", "2026-09-10T09:00:00Z"),
+			Messages: userTurns("claude-idle", "2026-09-10T09:00:00Z"), ReplaceMessages: true, DataVersion: 1,
 		},
 	})
 	require.NoError(t, err)
@@ -193,4 +198,39 @@ func TestPartlyCapturedCount(t *testing.T) {
 			assert.Equal(t, tc.want, got.PartlyCaptured)
 		})
 	}
+}
+
+func TestExportPlanOnlyEmptyCost(t *testing.T) {
+	d := testDB(t)
+	seedPlanUsageCountSessions(t, d)
+
+	result, err := d.ExportSessionSummaries(t.Context(), SessionExportOptions{Limit: 10})
+	require.NoError(t, err)
+	rows := map[string]SessionSummaryRow{}
+	for _, row := range result.Rows {
+		rows[row.ID] = row
+	}
+
+	planOnly := rows["codex-cloud:plan-a"]
+	assert.Nil(t, planOnly.ModelUsage, "a plan-only session exports no token or cost figures")
+	require.NotNil(t, planOnly.PlanUsage)
+	assert.Equal(t, new(2.25), planOnly.PlanUsage.WeeklyPercent)
+	assert.Equal(t, &CaptureCoverageView{LastCaptureAt: "2026-10-01T12:30:00Z", UncapturedTurns: 3},
+		planOnly.CaptureCoverage)
+
+	partly := rows["codex-cloud:partly"]
+	require.NotNil(t, partly.ModelUsage, "captured tokens still export")
+	assert.Equal(t, 100, partly.ModelUsage.InputTokens)
+	assert.Nil(t, partly.PlanUsage, "a coverage-only row has no plan usage")
+	assert.Equal(t, &CaptureCoverageView{LastCaptureAt: "2026-09-12T00:00:00Z", UncapturedTurns: 2},
+		partly.CaptureCoverage)
+
+	claude := rows["claude-a"]
+	assert.Nil(t, claude.PlanUsage)
+	assert.Nil(t, claude.CaptureCoverage)
+
+	// Other sessions without usage keep the zero model usage they always had.
+	idle := rows["claude-idle"]
+	require.NotNil(t, idle.ModelUsage)
+	assert.Empty(t, idle.ModelUsage.Models)
 }

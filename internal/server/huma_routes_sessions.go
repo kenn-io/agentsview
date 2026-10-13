@@ -668,6 +668,10 @@ type sessionUsageResponse struct {
 	RollupCostSource    export.CostSource               `json:"rollup_cost_source,omitempty"`
 	HasRollupCost       *bool                           `json:"has_rollup_cost,omitempty"`
 	RollupSubagentCount *int                            `json:"rollup_subagent_count,omitempty"`
+	// PlanUsage carries codex-cloud plan figures. A session with only plan
+	// usage keeps has_token_data and has_cost false.
+	PlanUsage       *db.PlanUsageView       `json:"plan_usage,omitempty"`
+	CaptureCoverage *db.CaptureCoverageView `json:"capture_coverage,omitempty"`
 }
 
 type sessionUsageInput struct {
@@ -754,6 +758,8 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		SubagentCount:     usage.SubagentCount,
 		Breakdown:         breakdown,
 		ServerRunning:     true,
+		PlanUsage:         usage.PlanUsage.PlanUsageView(),
+		CaptureCoverage:   usage.PlanUsage.CaptureCoverageView(),
 	}
 }
 
