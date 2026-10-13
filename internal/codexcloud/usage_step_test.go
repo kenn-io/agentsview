@@ -507,3 +507,39 @@ func TestRefreshRequestSkipsUsage(t *testing.T) {
 	assert.Len(t, env.usage.Requests(), from, "the pass that saw a refresh request ends before plan usage")
 	assert.Contains(t, env.account(t).UsagePending, "a", "the due root waits for a later pass")
 }
+
+// TestLostAccountSaveDoesNotQueryMovedThread covers a crash after a
+// waiting sub-agent moved under its parent's root but before the account
+// state was saved: the sub-agent is still in the refresh set, yet it must
+// not be sent as a root of its own.
+func TestLostAccountSaveDoesNotQueryMovedThread(t *testing.T) {
+	env := newUsageEnv(t)
+	grand := finishedThread("gc", ago(2*time.Hour), message("o", "grandchild"))
+	grand.ParentThreadID = "c"
+	env.threads.Set(grand)
+	env.usage.SetRow("gc", codexcloudtest.Row("gc", "available", pct(1), nil))
+	env.run(t)
+	require.Contains(t, env.account(t).Refresh, "gc", "gc is its own root until its parent arrives")
+	before := env.account(t)
+
+	env.clock.Advance(time.Hour)
+	child := finishedThread("c", ago(time.Minute), message("n", "child"))
+	env.threads.Set(child)
+	env.usage.SetRow("c", codexcloudtest.Row("c", "available", pct(2), nil))
+	env.run(t)
+	require.NoError(t, env.syncer.Store.SaveAccount(passKey, before), "the account save is lost")
+
+	env.clock.Advance(25 * time.Hour)
+	from := len(env.usage.Requests())
+	env.run(t)
+
+	for _, roots := range env.requestedRoots(from) {
+		assert.NotContains(t, roots, "gc", "a thread counted under another root is never its own root")
+	}
+	assert.NotContains(t, env.account(t).Refresh, "gc")
+	assert.NotContains(t, env.account(t).UsagePending, "gc")
+	plan := env.plan(t, "gc")
+	require.NotEmpty(t, plan.kinds)
+	assert.Equal(t, mirror.KindPlanUsageOutcome, plan.kinds[len(plan.kinds)-1])
+	assert.Equal(t, mirror.OutcomeCountedUnder, plan.outcomes[len(plan.outcomes)-1].Kind)
+}
