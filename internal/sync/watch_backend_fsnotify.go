@@ -61,12 +61,11 @@ type fsnotifyBackend struct {
 }
 
 type runtimeWatchRoot struct {
-	folders    map[string]struct{}
-	delay      time.Duration
-	retryAt    time.Time
-	timer      *time.Timer
-	polling    bool
-	reconciled bool
+	folders map[string]struct{}
+	delay   time.Duration
+	retryAt time.Time
+	timer   *time.Timer
+	polling bool
 }
 
 // nativeEventQueueLimit bounds events held between the native reader and the
@@ -688,7 +687,21 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 			return true
 		}
 		_, statErr := os.Lstat(path)
-		return errors.Is(statErr, os.ErrNotExist)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return true
+		}
+		if errors.Is(err, syscall.ENOTDIR) || errors.Is(statErr, syscall.ENOTDIR) {
+			for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
+				info, ancestorErr := os.Stat(parent)
+				if ancestorErr == nil {
+					return !info.IsDir()
+				}
+				if filepath.Dir(parent) == parent {
+					break
+				}
+			}
+		}
+		return false
 	}
 	deferFolder := func(folder string, currentOwners []string, cause error) {
 		for _, root := range currentOwners {
@@ -699,10 +712,13 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 				b.runtimeRoots[root] = state
 			}
 			if _, deferred := state.folders[folder]; !deferred {
-				log.Printf("fsnotify watch deferred under %q for %q: %v", root, folder, cause)
+				state.folders[folder] = struct{}{}
+				count := len(state.folders)
+				// Log the first deferral and doubled counts to bound burst logging.
+				if count&(count-1) == 0 {
+					log.Printf("fsnotify watch deferred under %q for %q: %v; deferred folders=%d", root, folder, cause, count)
+				}
 			}
-			state.folders[folder] = struct{}{}
-			state.reconciled = false
 			if !state.polling {
 				degraded[root] = struct{}{}
 			}
@@ -868,8 +884,27 @@ func (b *fsnotifyBackend) acquireRuntimePolling(root string) bool {
 		b.reportError(fmt.Errorf("fsnotify coverage degraded for %s without polling callback", root))
 		return false
 	}
-	if err := required(PollingObligation{Key: "fsnotify-runtime:" + root, Scopes: scopes, Probe: root}); err != nil {
+	b.pollingMu.Unlock()
+	err := required(PollingObligation{Key: "fsnotify-runtime:" + root, Scopes: scopes, Probe: root})
+	b.pollingMu.Lock()
+	if err != nil {
 		b.reportError(fmt.Errorf("transfer fsnotify coverage for %s to polling: %w", root, err))
+		return false
+	}
+	b.rootsMu.RLock()
+	registered := slices.Contains(b.roots, root)
+	b.rootsMu.RUnlock()
+	if !registered {
+		b.watchMu.Lock()
+		released := b.onPollingReleased
+		b.watchMu.Unlock()
+		b.pollingMu.Unlock()
+		if released == nil {
+			b.reportError(fmt.Errorf("fsnotify root removed for %s without polling release callback", root))
+		} else if err := released("fsnotify-runtime:" + root); err != nil {
+			b.reportError(fmt.Errorf("release fsnotify polling for %s: %w", root, err))
+		}
+		b.pollingMu.Lock()
 		return false
 	}
 	return true
@@ -905,7 +940,7 @@ func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
 		}
 		pending := len(state.folders) > 0
 		released := b.onPollingReleased
-		reconciled, polling := state.reconciled, state.polling
+		polling := state.polling
 		b.watchMu.Unlock()
 		if pending {
 			b.acquireRuntimeFolderPolling(root)
@@ -913,24 +948,16 @@ func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
 			continue
 		}
 		b.pollingMu.Unlock()
-		if !reconciled {
-			select {
-			case b.events <- backendEvent{Path: root, Root: root, Op: backendOpReconcileRootChange, ItemType: backendItemDirectory}:
-				b.watchMu.Lock()
-				state.reconciled = true
-				b.watchMu.Unlock()
-			case <-b.stop:
-				return false
-			}
+		select {
+		case b.events <- backendEvent{Path: root, Root: root, Op: backendOpReconcileRootChange, ItemType: backendItemDirectory}:
+		case <-b.stop:
+			return false
 		}
 		if polling {
 			if released == nil {
 				b.reportError(fmt.Errorf("fsnotify coverage recovered for %s without polling release callback", root))
-				continue
-			}
-			if err := released("fsnotify-runtime:" + root); err != nil {
+			} else if err := released("fsnotify-runtime:" + root); err != nil {
 				b.reportError(fmt.Errorf("release fsnotify polling for %s: %w", root, err))
-				continue
 			}
 		}
 		b.watchMu.Lock()
