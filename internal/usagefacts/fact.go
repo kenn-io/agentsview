@@ -287,6 +287,10 @@ func floorTokens(value int64) int64 {
 	return value
 }
 
+// CodexCloudRequestSource marks a Codex cloud token increase that equals the
+// latest model call, so it is exactly one request and price bands apply.
+const CodexCloudRequestSource = "codex-cloud-request"
+
 // SourceIsRequestScoped reports whether a usage source represents one
 // provider request even when the provider cannot attach it to a message.
 // Posit Assistant sidecar events ("posit-assistant-" + kind, e.g.
@@ -294,7 +298,7 @@ func floorTokens(value int64) int64 {
 // provider request, so the whole prefix is request-scoped.
 func SourceIsRequestScoped(source string) bool {
 	return source == "message" || source == "goose-request" || source == "session-store" ||
-		source == "deepseek-harness" ||
+		source == "deepseek-harness" || source == CodexCloudRequestSource ||
 		strings.HasPrefix(source, "posit-assistant-")
 }
 

@@ -33,6 +33,10 @@ type codexCloudThread struct {
 	// keeps its place while its newest record wins.
 	itemOrder []codexCloudItemKey
 	newestAt  time.Time
+	// tokens and completions hold the live monitor's records in file
+	// order.
+	tokens      []mirror.TokenUsageData
+	completions []mirror.TurnCompletedData
 }
 
 type codexCloudItemKey struct{ turnID, itemID string }
@@ -87,6 +91,7 @@ func ParseCodexCloudFile(ctx context.Context, path, machine string) (ParseResult
 		},
 	}
 	session.StartedAt, session.EndedAt = thread.times()
+	usage := thread.applyUsage(&session, meta)
 	if parent := codexCloudResolvedParent(meta, messages); parent != "" {
 		session.ParentSessionID = codexCloudSessionPrefix + parent
 		session.RelationshipType = RelSubagent
@@ -94,7 +99,32 @@ func ParseCodexCloudFile(ctx context.Context, path, machine string) (ParseResult
 		session.ParentSessionID = codexCloudSessionPrefix + meta.ForkedFromID
 		session.RelationshipType = RelFork
 	}
-	return ParseResult{Session: session, Messages: messages}, true, nil
+	return ParseResult{Session: session, Messages: messages, UsageEvents: usage}, true, nil
+}
+
+// applyUsage sets the session's token totals, usage events, and capture
+// coverage from the live monitor's records, and returns the events. A
+// thread the monitor never captured gets none of them. The engine skips
+// "session" events when it derives session totals, so the provider sets
+// them from every increase.
+func (t *codexCloudThread) applyUsage(session *ParsedSession, meta *mirror.Thread) []ParsedUsageEvent {
+	if len(t.tokens) == 0 {
+		return nil
+	}
+	events, totalOutput, peakContext := codexCloudUsageEvents(meta.ID, t.tokens, meta.Model)
+	session.UsageEvents = events
+	session.TotalOutputTokens = int(totalOutput)
+	session.HasTotalOutputTokens = true
+	session.PeakContextTokens = int(peakContext)
+	session.HasPeakContextTokens = true
+	session.aggregateTokenPresenceKnown = true
+	turns := make([]mirror.Turn, len(t.turnOrder))
+	for i, id := range t.turnOrder {
+		turns[i] = t.turns[id]
+	}
+	coverage := codexCloudCoverage(turns, t.tokens, t.completions)
+	session.CaptureCoverage = &coverage
+	return events
 }
 
 func collectCodexCloudRecords(records []mirror.Record) (*codexCloudThread, error) {
@@ -145,9 +175,20 @@ func collectCodexCloudRecords(records []mirror.Record) (*codexCloudThread, error
 				thread.turns[item.TurnID] = mirror.Turn{ID: item.TurnID}
 				thread.turnOrder = append(thread.turnOrder, item.TurnID)
 			}
+		case mirror.KindTokenUsage:
+			var tokens mirror.TokenUsageData
+			if err := json.Unmarshal(record.Data, &tokens); err != nil {
+				return nil, fmt.Errorf("codex-cloud record %d: decode token usage: %w", index, err)
+			}
+			thread.tokens = append(thread.tokens, tokens)
+		case mirror.KindTurnCompleted:
+			var completed mirror.TurnCompletedData
+			if err := json.Unmarshal(record.Data, &completed); err != nil {
+				return nil, fmt.Errorf("codex-cloud record %d: decode turn completion: %w", index, err)
+			}
+			thread.completions = append(thread.completions, completed)
 		default:
-			// Token, turn-completion, and plan usage records are read by
-			// their own steps.
+			// Plan usage records are read by their own step.
 		}
 	}
 	return thread, nil
