@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -159,9 +160,31 @@ func loginErrorMessage(err error) string {
 func (s *Syncer) homeRow(gates Gates, home, message string) {
 	if len(gates.Homes) > 0 && home != gates.Homes[0] {
 		// A plain `codex login` signs in the default home, not this one.
-		message = strings.ReplaceAll(message, "`codex login`", "`CODEX_HOME="+home+" codex login`")
+		message = strings.ReplaceAll(message, "`codex login`", homeLoginCommand(home, runtime.GOOS))
 	}
 	s.Status.Set(HomeStatus{Key: home, Homes: []string{home}, State: StateError, Message: message})
+}
+
+// homeLoginCommand says how to run `codex login` for a home other than
+// the default one. The VAR=value prefix works only in POSIX shells.
+func homeLoginCommand(home, goos string) string {
+	if goos == "windows" {
+		return "`codex login` with the CODEX_HOME environment variable set to `" + home + "`"
+	}
+	return "`CODEX_HOME=" + shellQuote(home) + " codex login`"
+}
+
+// shellQuote quotes s for a POSIX shell when it holds anything beyond
+// plain path characters.
+func shellQuote(s string) string {
+	plain := s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return ('a' > r || r > 'z') && ('A' > r || r > 'Z') && ('0' > r || r > '9') &&
+			!strings.ContainsRune("/._-+:@%,=", r)
+	}) < 0
+	if plain {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // pass is one account's pass in progress.
