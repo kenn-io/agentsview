@@ -131,12 +131,12 @@ describe("SessionFilterControl label and pull request filters", () => {
     await openControl();
     const input = screen.getByRole("textbox", { name: "Filter by label" });
 
-    await submit(input, "ticket=ABC-123");
+    await submit(input, "ticket=sample-123");
     await submit(input, "role=reviewer");
-    expect(sessions.filters.labels).toEqual(["ticket=ABC-123", "role=reviewer"]);
+    expect(sessions.filters.labels).toEqual(["ticket=sample-123", "role=reviewer"]);
     expect((input as HTMLInputElement).value).toBe("");
 
-    await fireEvent.click(screen.getByRole("button", { name: "ticket=ABC-123" }));
+    await fireEvent.click(screen.getByRole("button", { name: "ticket=sample-123" }));
     expect(sessions.filters.labels).toEqual(["role=reviewer"]);
   });
 
@@ -152,7 +152,7 @@ describe("SessionFilterControl label and pull request filters", () => {
   });
 
   it("hides label and pull request filters when the page ignores them", async () => {
-    sessions.filters.labels = ["ticket=ABC-123"];
+    sessions.filters.labels = ["ticket=sample-123"];
     await openControl({ showLabelFilters: false });
 
     expect(screen.queryByRole("textbox", { name: "Filter by label" })).toBeNull();

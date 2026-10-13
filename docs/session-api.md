@@ -656,15 +656,15 @@ Annotation commands use the ID exactly as given, with no prefix lookup, so pass 
 
 Add or remove free-form labels on a session. Use labels to find every session
 for one ticket, role, or kind of run. A `key=value` form such as
-`ticket=ABC-123` is a convention, not a requirement. `session get` and the
+`ticket=sample-123` is a convention, not a requirement. `session get` and the
 session JSON show a session's labels.
 
 ```bash
-agentsview session label <id> ticket=ABC-123 role=reviewer
+agentsview session label <id> ticket=sample-123 role=reviewer
 agentsview session label <id> --remove role=reviewer
 agentsview session label <id> --replace nightly          # replace every label
 agentsview session label <id> --clear
-agentsview session list --label ticket=ABC-123 --label role=reviewer
+agentsview session list --label ticket=sample-123 --label role=reviewer
 ```
 
 The API is `PATCH /api/v1/sessions/{id}/labels` with

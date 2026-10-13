@@ -56,9 +56,9 @@ func SeedSessionAnnotations(t *testing.T, d *db.DB) {
 	seed(AnnotatedPlainID, "2026-01-01T00:15:00Z")
 
 	for id, labels := range map[string][]string{
-		AnnotatedLauncherID: {"ticket=ABC-1", "role=lead"},
+		AnnotatedLauncherID: {"ticket=sample-1", "role=lead"},
 		AnnotatedWorkerID:   {"role=worker"},
-		AnnotatedOtherID:    {"ticket=XYZ-9"},
+		AnnotatedOtherID:    {"ticket=sample-2"},
 	} {
 		_, err := d.SetSessionLabels(ctx, id, labels)
 		require.NoError(t, err, "SetSessionLabels %s", id)
@@ -73,8 +73,8 @@ var annotationFilterCases = []struct {
 	name   string
 	filter db.SessionFilter
 }{
-	{"one label", db.SessionFilter{Labels: []string{"ticket=ABC-1"}}},
-	{"every label", db.SessionFilter{Labels: []string{"ticket=ABC-1", "role=lead"}}},
+	{"one label", db.SessionFilter{Labels: []string{"ticket=sample-1"}}},
+	{"every label", db.SessionFilter{Labels: []string{"ticket=sample-1", "role=lead"}}},
 	{"unknown label", db.SessionFilter{Labels: []string{"missing"}}},
 	{"worker label", db.SessionFilter{Labels: []string{"role=worker"}}},
 	{"worker label tree", db.SessionFilter{
@@ -88,7 +88,7 @@ var annotationFilterCases = []struct {
 		Repository: "other/repo", Number: 7,
 	}}},
 	{"label and pull request", db.SessionFilter{
-		Labels: []string{"ticket=ABC-1"}, PR: db.PRFilter{Repository: "acme/widgets", Number: 7},
+		Labels: []string{"ticket=sample-1"}, PR: db.PRFilter{Repository: "acme/widgets", Number: 7},
 	}},
 }
 
@@ -103,7 +103,7 @@ func AssertSessionAnnotationParity(t *testing.T, archive, mirror db.Store) {
 	launcher, err := mirror.GetSession(ctx, AnnotatedLauncherID)
 	require.NoError(t, err)
 	require.NotNil(t, launcher)
-	assert.Equal(t, []string{"role=lead", "ticket=ABC-1"}, launcher.Labels)
+	assert.Equal(t, []string{"role=lead", "ticket=sample-1"}, launcher.Labels)
 	assert.Equal(t, []db.PRLink{AnnotatedPRLink("Acme/Widgets", 7)}, launcher.PRLinks)
 	worker, err := mirror.GetSession(ctx, AnnotatedWorkerID)
 	require.NoError(t, err)

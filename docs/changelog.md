@@ -19,7 +19,7 @@ The latest release is
   `session list --pr owner/repo#123` or the `pr` API parameter. The first sync
   after upgrading re-reads Claude sessions in place once to pick up existing links.
 - Label sessions by ticket, role, or run type with
-  `agentsview session label <id> ticket=ABC-123` or
+  `agentsview session label <id> ticket=sample-123` or
   `PATCH /api/v1/sessions/{id}/labels`, then filter with `--label`, the `label`
   API parameter, the web UI, or the MCP `list_sessions` tool. Labels survive
   reparses and resyncs. Label and pull request filters also find child and

@@ -1498,7 +1498,7 @@ describe("SessionsStore", () => {
         includeOneShot: false,
         includeAutomated: true,
         automatedFilterSet: true,
-        labels: ["ticket=ABC-123", "role=reviewer, lead"],
+        labels: ["ticket=sample-123", "role=reviewer, lead"],
         pr: "acme/widgets#42",
       };
       expect(filtersToParams(f)).toEqual({
@@ -1516,7 +1516,7 @@ describe("SessionsStore", () => {
         min_user_messages: "3",
         include_one_shot: "false",
         include_automated: "true",
-        label: "ticket=ABC-123\nrole=reviewer, lead",
+        label: "ticket=sample-123\nrole=reviewer, lead",
         pr: "acme/widgets#42",
       });
     });
@@ -1549,7 +1549,7 @@ describe("SessionsStore", () => {
         includeOneShot: false,
         includeAutomated: true,
         automatedFilterSet: true,
-        labels: ["ticket=ABC-123", "role=reviewer, lead"],
+        labels: ["ticket=sample-123", "role=reviewer, lead"],
         pr: "acme/widgets#42",
       };
       const params = filtersToParams(original);
@@ -2231,26 +2231,26 @@ describe("SessionsStore", () => {
 
   describe("label and pull request filters", () => {
     it("sends selected labels and omits them after the last is removed", async () => {
-      sessions.addLabelFilter(" ticket=ABC-123 ");
+      sessions.addLabelFilter(" ticket=sample-123 ");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
       });
-      sessions.addLabelFilter("ticket=ABC-123");
+      sessions.addLabelFilter("ticket=sample-123");
       sessions.addLabelFilter("   ");
-      expect(sessions.filters.labels).toEqual(["ticket=ABC-123"]);
+      expect(sessions.filters.labels).toEqual(["ticket=sample-123"]);
       expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
       sessions.addLabelFilter("role=reviewer");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
       });
-      expect(sessions.filters.labels).toEqual(["ticket=ABC-123", "role=reviewer"]);
+      expect(sessions.filters.labels).toEqual(["ticket=sample-123", "role=reviewer"]);
       expect(sessions.isLabelSelected("role=reviewer")).toBe(true);
-      expectSidebarIndexCalledWith({ label: ["ticket=ABC-123", "role=reviewer"] });
+      expectSidebarIndexCalledWith({ label: ["ticket=sample-123", "role=reviewer"] });
       sessions.removeLabelFilter("role=reviewer");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(3);
       });
-      sessions.removeLabelFilter("ticket=ABC-123");
+      sessions.removeLabelFilter("ticket=sample-123");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(4);
       });
@@ -2295,7 +2295,7 @@ describe("SessionsStore", () => {
     });
 
     it("passes label and pull request filters to later pages", async () => {
-      sessions.filters.labels = ["ticket=ABC-123"];
+      sessions.filters.labels = ["ticket=sample-123"];
       sessions.filters.pr = "acme/widgets";
       sessions.nextCursor = "page-2";
 
@@ -2303,13 +2303,13 @@ describe("SessionsStore", () => {
 
       expectPaginatedSidebarIndexCalledWith({
         cursor: "page-2",
-        label: ["ticket=ABC-123"],
+        label: ["ticket=sample-123"],
         pr: "acme/widgets",
       });
     });
 
     it("counts as session-list filters but not shared filters", () => {
-      sessions.filters.labels = ["ticket=ABC-123"];
+      sessions.filters.labels = ["ticket=sample-123"];
       expect(sessions.hasActiveFilters).toBe(true);
       expect(sessions.hasSharedFilters).toBe(false);
 
@@ -2320,7 +2320,7 @@ describe("SessionsStore", () => {
     });
 
     it("clears label and pull request filters with the other filters", () => {
-      sessions.filters.labels = ["ticket=ABC-123"];
+      sessions.filters.labels = ["ticket=sample-123"];
       sessions.filters.pr = "acme/widgets";
 
       sessions.clearSessionFilters();
@@ -2332,9 +2332,9 @@ describe("SessionsStore", () => {
     it("restores saved label filters and drops malformed ones", () => {
       storageData.set(
         "session-filters",
-        JSON.stringify({ labels: ["ticket=ABC-123", 7, " "], pr: " acme/widgets ", version: 2 }),
+        JSON.stringify({ labels: ["ticket=sample-123", 7, " "], pr: " acme/widgets ", version: 2 }),
       );
-      expect(createSessionsStore().filters.labels).toEqual(["ticket=ABC-123"]);
+      expect(createSessionsStore().filters.labels).toEqual(["ticket=sample-123"]);
       expect(createSessionsStore().filters.pr).toBe("acme/widgets");
 
       storageData.set("session-filters", JSON.stringify({ labels: "oops", pr: 3, version: 2 }));

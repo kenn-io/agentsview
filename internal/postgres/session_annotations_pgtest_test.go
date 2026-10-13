@@ -57,7 +57,7 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 	require.NoError(t, err, "label-only Push")
 	assert.Equal(t, 1, result.SessionsPushed)
 	_, labels := readPG(t)
-	assert.Equal(t, []string{"role=lead", "ticket=XYZ-9"}, labels)
+	assert.Equal(t, []string{"role=lead", "ticket=sample-2"}, labels)
 
 	stored, err := local.GetSession(ctx, id)
 	require.NoError(t, err)
@@ -105,6 +105,6 @@ func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 	got, err := store.GetSession(ctx, dbtest.AnnotatedLauncherID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, []string{"role=lead", "ticket=ABC-1"}, got.Labels)
+	assert.Equal(t, []string{"role=lead", "ticket=sample-1"}, got.Labels)
 	require.Len(t, got.PRLinks, 1)
 }

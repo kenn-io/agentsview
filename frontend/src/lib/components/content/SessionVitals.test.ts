@@ -366,19 +366,19 @@ describe("SessionVitals", () => {
 
   it.each([true, false])("renders labels with a filter handler %s", async (interactive) => {
     const onFilterLabel = interactive ? vi.fn() : undefined;
-    const session: Session = { ...traceSession, labels: ["ticket=ABC-123"] };
+    const session: Session = { ...traceSession, labels: ["ticket=sample-123"] };
     component = mount(SessionVitals, {
       target: document.body,
       props: { sessionId: session.id, session, onFilterLabel },
     });
     await tick();
 
-    expect(document.body.textContent).toContain("ticket=ABC-123");
+    expect(document.body.textContent).toContain("ticket=sample-123");
     if (onFilterLabel) {
-      await fireEvent.click(screen.getByRole("button", { name: "ticket=ABC-123" }));
-      expect(onFilterLabel).toHaveBeenCalledWith("ticket=ABC-123");
+      await fireEvent.click(screen.getByRole("button", { name: "ticket=sample-123" }));
+      expect(onFilterLabel).toHaveBeenCalledWith("ticket=sample-123");
     } else {
-      expect(screen.queryByRole("button", { name: "ticket=ABC-123" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "ticket=sample-123" })).toBeNull();
     }
   });
 

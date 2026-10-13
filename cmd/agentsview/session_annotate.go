@@ -24,10 +24,10 @@ func newSessionLabelCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "label <session-id> [label...]",
 		Short: "Add or remove session labels",
-		Long: "Labels are free-form tags such as ticket=ABC-123 or role=reviewer.\n" +
+		Long: "Labels are free-form tags such as ticket=sample-123 or role=reviewer.\n" +
 			"They may be recorded before the session has synced and appear once\n" +
 			"it does. `session get` shows them; filter with `session list --label`.",
-		Example: "  agentsview session label <id> ticket=ABC-123 role=reviewer\n" +
+		Example: "  agentsview session label <id> ticket=sample-123 role=reviewer\n" +
 			"  agentsview session label <id> --remove role=reviewer\n" +
 			"  agentsview session label <id> --replace nightly\n" +
 			"  agentsview session label <id> --clear",

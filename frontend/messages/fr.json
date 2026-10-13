@@ -448,7 +448,7 @@
   "sidebar_filters_clear_filters": "Effacer les filtres",
   "sidebar_filters_labels": "Libellés",
   "sidebar_filters_label_input": "Filtrer par libellé",
-  "sidebar_filters_label_placeholder": "Ajouter un libellé, p. ex. ticket=ABC-123",
+  "sidebar_filters_label_placeholder": "Ajouter un libellé, p. ex. ticket=sample-123",
   "sidebar_filters_pull_request": "Pull request",
   "sidebar_filters_pull_request_input": "Filtrer par pull request",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123",

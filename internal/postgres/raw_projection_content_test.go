@@ -90,7 +90,7 @@ func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 	})
 	t.Run("labels", func(t *testing.T) {
 		p := clone()
-		p.Session.Labels = []string{"ticket=ABC-1"}
+		p.Session.Labels = []string{"ticket=sample-1"}
 		got, err := rawContentRevision(p)
 		require.NoError(t, err)
 		assert.Equal(t, digest, got)
