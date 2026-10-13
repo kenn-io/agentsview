@@ -2904,11 +2904,11 @@
   ],
   "capture_turns_not_captured_covered": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "input time", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{countLabel} turno sin capturar; el uso del plan lo cubre",
-        "countPlural=other": "{countLabel} turnos sin capturar; el uso del plan los cubre"
+        "countPlural=one": "{countLabel} turno sin capturar; el uso del plan lo cuenta si ocurrió antes de {time}",
+        "countPlural=other": "{countLabel} turnos sin capturar; el uso del plan cuenta los que ocurrieron antes de {time}"
       }
     }
   ],

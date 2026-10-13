@@ -2794,10 +2794,10 @@
   ],
   "capture_turns_not_captured_covered": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "input time", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{countLabel} 輪未擷取；方案用量已涵蓋"
+        "countPlural=other": "{countLabel} 輪未擷取；{time} 之前的輪次已計入方案用量"
       }
     }
   ],

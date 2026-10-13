@@ -2866,10 +2866,10 @@
   ],
   "capture_turns_not_captured_covered": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "input time", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{countLabel} ターンが未取得。プラン使用量には含まれます"
+        "countPlural=other": "{countLabel} ターンが未取得。{time} より前のターンはプラン使用量に含まれます"
       }
     }
   ],

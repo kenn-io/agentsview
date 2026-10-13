@@ -440,7 +440,7 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	}
 	switch {
 	case planOnly && planFiguresShown(out.Plan):
-		fmt.Fprintf(w, "%s plan usage\n", label("Cost"))
+		fmt.Fprintf(w, "%s billed as plan usage\n", label("Cost"))
 	case planOnly:
 		fmt.Fprintf(w, "%s n/a\n", label("Cost"))
 	case out.HasCost:
@@ -516,12 +516,32 @@ func planUsageLine(agent string, plan *db.PlanUsageView) string {
 		}
 	}
 	// The stored outcome is newer than the figures, so the figures may
-	// be stale; say what the newer check found.
+	// be stale; say what the later check found.
 	if plan.OutcomeKind != "" {
-		msg := cmp.Or(planOutcomeMessage(plan), "not reported yet")
-		line += "; newer check: " + msg + asOfLocal(plan.OutcomeAt)
+		line += "; later, " + laterPlanCheck(plan.OutcomeKind)
+		if at := localTime(plan.OutcomeAt); at != "" {
+			line += " (" + at + ")"
+		}
+		line += ", so these figures may be out of date"
 	}
 	return line
+}
+
+// laterPlanCheck says what a plan usage check after the stored figures
+// found.
+func laterPlanCheck(kind string) string {
+	switch kind {
+	case "could_not_check":
+		return "AgentsView could not check plan usage"
+	case "account_unavailable":
+		return "usage became unavailable for this account"
+	case "too_many_descendants":
+		return "the chat had too many sub-agent chats for OpenAI's usage report"
+	case "settled_no_row":
+		return "OpenAI stopped reporting this chat"
+	default:
+		return "OpenAI's usage report left this chat out"
+	}
 }
 
 // planOutcomeMessage describes a plan usage outcome that ends a root's
@@ -590,23 +610,42 @@ func captureCoverageLine(
 		turns = "turn"
 	}
 	line += fmt.Sprintf("; %d %s not captured", coverage.UncapturedTurns, turns)
-	// Only a complete report with no newer failure accounts for the
-	// missed turns; older or partial figures may not include them.
-	if plan != nil && plan.DataStatus == "available" && plan.OutcomeKind == "" && hasPlanFigures(plan) {
-		return line + ", plan usage covers them"
+	if coverage.UncapturedTurns == 1 {
+		line += ", its tokens are not in the totals"
+	} else {
+		line += ", their tokens are not in the totals"
+	}
+	// A complete report with no later failure counts every turn that ran
+	// before its data time. Whether a missed turn ran before it is not
+	// known here, so the line names the time instead of claiming it.
+	if plan == nil || plan.DataStatus != "available" || plan.OutcomeKind != "" || !hasPlanFigures(plan) {
+		return line
+	}
+	asOf := localTime(plan.DataAsOf)
+	if asOf == "" {
+		return line
 	}
 	if coverage.UncapturedTurns == 1 {
-		return line + ", its tokens are not in the totals"
+		return line + "; plan usage counts it if it ran before " + asOf
 	}
-	return line + ", their tokens are not in the totals"
+	return line + "; plan usage counts the ones that ran before " + asOf
 }
 
 // asOfLocal renders an RFC 3339 time as ", as of <local time>", or "" when
 // the time is absent or unreadable.
 func asOfLocal(ts string) string {
+	if t := localTime(ts); t != "" {
+		return ", as of " + t
+	}
+	return ""
+}
+
+// localTime renders an RFC 3339 time in the local zone, or "" when the
+// time is absent or unreadable.
+func localTime(ts string) string {
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
 		return ""
 	}
-	return ", as of " + t.Local().Format("2006-01-02 15:04 MST")
+	return t.Local().Format("2006-01-02 15:04 MST")
 }

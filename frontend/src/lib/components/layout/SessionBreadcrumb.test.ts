@@ -1698,13 +1698,12 @@ describe("SessionBreadcrumb", () => {
       // The closed trigger explains its warning icon to sighted and
       // screen-reader users alike.
       const trigger = document.querySelector<HTMLElement>(".plan-usage-trigger")!;
+      const missed = `2 turns not captured; plan usage counts the ones that ran before ${formatTimestamp("2026-03-02T09:15:00Z")}`;
       expect(trigger.title.split("\n")).toEqual([
         `Plan usage, as of ${formatTimestamp("2026-03-02T09:15:00Z")}`,
-        "2 turns not captured; plan usage covers them",
+        missed,
       ]);
-      expect(trigger.querySelector(".kit-sr-only")?.textContent).toBe(
-        ", 2 turns not captured; plan usage covers them",
-      );
+      expect(trigger.querySelector(".kit-sr-only")?.textContent).toBe(`, ${missed}`);
       const menu = await openPlanUsage();
       expect(menu).toContain("4.13% of the weekly Codex limit");
       expect(menu).toContain("0 credits");
@@ -1712,7 +1711,7 @@ describe("SessionBreadcrumb", () => {
         "model-a · high · standard",
       );
       expect(menu).toContain("so 0 credits means the plan covered the work");
-      expect(menu).toContain("2 turns not captured; plan usage covers them");
+      expect(menu).toContain(missed);
     });
 
     it("links a counted-under thread to its usage root by title", async () => {
