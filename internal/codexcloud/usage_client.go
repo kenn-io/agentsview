@@ -9,7 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
+	"regexp"
 	"time"
 
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
@@ -108,6 +108,11 @@ func QueryUsage(
 	return decodeUsageReply(raw)
 }
 
+// decimalCredits matches a plain decimal number with an optional
+// exponent. strconv.ParseFloat alone also accepts NaN, infinities, and
+// hexadecimal floats, which would be stored and shown as credits.
+var decimalCredits = regexp.MustCompile(`^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$`)
+
 func decodeUsageReply(raw []byte) (UsageResponse, error) {
 	var reply usageReply
 	if err := json.Unmarshal(raw, &reply); err != nil {
@@ -131,7 +136,7 @@ func decodeUsageReply(raw []byte) (UsageResponse, error) {
 			}
 			// Credits stay strings; this only checks they are decimal
 			// numbers, which may use exponent form such as 0E-10.
-			if _, err := strconv.ParseFloat(*c, 64); err != nil {
+			if !decimalCredits.MatchString(*c) {
 				return UsageResponse{}, fmt.Errorf("%w: plan usage credits %q are not a number", ErrProtocolChange, *c)
 			}
 		}

@@ -92,6 +92,19 @@ func TestQueryUsageCreditsExponent(t *testing.T) {
 	require.ErrorIs(t, err, ErrProtocolChange)
 }
 
+func TestQueryUsageCreditsMustBeDecimal(t *testing.T) {
+	for _, credits := range []string{"NaN", "Inf", "-Infinity", "0x1p-2", "1e", "."} {
+		t.Run(credits, func(t *testing.T) {
+			usage := codexcloudtest.NewUsageHost(t, fetchNow)
+			usage.SetRow("a", codexcloudtest.Row("a", "available", nil, &credits))
+
+			_, err := QueryUsage(t.Context(), nil, usage.URL(), usageLogin(""), "1", []UsageGroup{{ThreadID: "a"}})
+
+			require.ErrorIs(t, err, ErrProtocolChange)
+		})
+	}
+}
+
 func TestQueryUsageErrorsHideToken(t *testing.T) {
 	usage := codexcloudtest.NewUsageHost(t, fetchNow)
 	usage.Refuse(http.StatusUnauthorized, http.Header{"X-Echo": {"usage-token-1"}}, "bad token usage-token-1")
