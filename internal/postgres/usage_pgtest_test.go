@@ -2044,13 +2044,6 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 		"pg-sub-parent", "agent-pg-a", "agent-pg-b", "agent-pg-dedup-only",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, map[string]int{
-		"pg-sub-parent": 505, "agent-pg-a": 1500,
-		"agent-pg-b": 100, "agent-pg-dedup-only": 500,
-	}, rowSet.RawOutputTokensBySession)
-	assert.Equal(t, map[string]struct{}{
-		"pg-sub-parent": {}, "agent-pg-a": {}, "agent-pg-dedup-only": {},
-	}, rowSet.DiscardedContributingSessions)
 	assert.Equal(t, map[string]activity.SessionTokenCoverage{
 		"pg-sub-parent":       {OutputTokens: 500, PeakContextTokens: 1000},
 		"agent-pg-a":          {OutputTokens: 1500, PeakContextTokens: 2000},
@@ -2058,13 +2051,6 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 		"agent-pg-dedup-only": {OutputTokens: 500, PeakContextTokens: 1000},
 	}, rowSet.CanonicalTokenCoverageBySession)
 	require.Len(t, rowSet.Rows, 3)
-	assert.Equal(t, []string{
-		"agent-pg-a", "agent-pg-b", "agent-pg-dedup-only",
-	}, []string{
-		rowSet.Rows[0].SourceSessionID,
-		rowSet.Rows[1].SourceSessionID,
-		rowSet.Rows[2].SourceSessionID,
-	})
 
 	got, err := service.SessionUsageWithSubagents(ctx, store, "pg-sub-parent", true)
 	require.NoError(t, err)

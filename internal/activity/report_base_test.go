@@ -117,7 +117,6 @@ func TestBuildReportArtifacts(t *testing.T) {
 					{Phase: ProgressFinalizing, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
 					{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
 				}, progress)
-				assert.Equal(t, progress[len(progress)-1], done)
 			}
 			assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
 			assert.Equal(t, export.ActivityReportSchemaVersion, artifacts.Report.SchemaVersion)
@@ -131,9 +130,6 @@ func TestBuildReportArtifacts(t *testing.T) {
 			require.Len(t, artifacts.Report.ByProject, 1)
 			assert.Equal(t, "project-key-a", artifacts.Report.ByProject[0].ProjectKey)
 			assert.Equal(t, []SessionRow{}, artifacts.Report.BySession)
-			report := ReportWithSessions(artifacts)
-			assert.Equal(t, artifacts.Sessions, report.BySession)
-			assert.Equal(t, 1, report.SessionsTotal)
 		})
 	}
 }

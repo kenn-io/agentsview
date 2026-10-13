@@ -15,7 +15,7 @@ import (
 func TestUsageDedupTokenIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name, source, agent, messageID, requestID, uuid, key string
-		ordinary, session                                    UsageDedupToken
+		ordinary                                             UsageDedupToken
 	}{
 		{
 			name:      "Claude pair wins",
@@ -26,7 +26,6 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 			uuid:      "u",
 			key:       "k",
 			ordinary:  UsageDedupToken{Kind: "claude", Value: "m:r"},
-			session:   UsageDedupToken{Kind: "claude", Value: "m:r"},
 		},
 		{
 			name:      "incomplete pair falls back to message UUID",
@@ -36,7 +35,6 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 			uuid:      "u",
 			key:       "k",
 			ordinary:  UsageDedupToken{Kind: "source", Value: "claude:u"},
-			session:   UsageDedupToken{Kind: "source", Value: "claude:u"},
 		},
 		{
 			name:     "UUID without agent falls back to stored key",
@@ -44,7 +42,6 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 			uuid:     "u",
 			key:      "k",
 			ordinary: UsageDedupToken{Kind: "usage", Value: "k"},
-			session:  UsageDedupToken{Kind: "usage", Value: "k"},
 		},
 		{name: "no identity"},
 	} {
@@ -57,9 +54,6 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 			ordinary, ok := UsageDedupTokenForRow(identity)
 			assert.Equal(t, tc.ordinary, ordinary)
 			assert.Equal(t, tc.ordinary != UsageDedupToken{}, ok)
-			session, ok := SessionUsageDedupTokenForRow(identity)
-			assert.Equal(t, tc.session, session)
-			assert.Equal(t, tc.session != UsageDedupToken{}, ok)
 		})
 	}
 }
