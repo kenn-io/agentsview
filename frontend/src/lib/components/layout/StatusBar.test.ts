@@ -5,7 +5,7 @@ import { mount, tick, unmount } from "svelte";
 import StatusBar from "./StatusBar.svelte";
 import { sync } from "../../stores/sync.svelte.js";
 import { formatTimestamp } from "../../utils/format.js";
-import { ApiError } from "../../api/runtime.js";
+import { ApiError, setServerUrl } from "../../api/runtime.js";
 
 const { getCodexCloudStatus } = vi.hoisted(() => ({
   getCodexCloudStatus: vi.fn(),
@@ -238,6 +238,33 @@ describe("StatusBar", () => {
           "AgentsView keeps retrying them.",
       );
       void unmount(component);
+    });
+
+    it("drops the previous server's status as soon as the server changes", async () => {
+      getCodexCloudStatus.mockResolvedValue([upToDate]);
+      const component = await mountWithRows();
+      expect(document.querySelector(".codex-cloud-status")).not.toBeNull();
+
+      let answer!: (rows: (typeof upToDate)[]) => void;
+      getCodexCloudStatus.mockReturnValueOnce(
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      );
+      try {
+        setServerUrl("http://other.example:8080");
+        await tick();
+        expect(document.querySelector(".codex-cloud-status")).toBeNull();
+
+        answer([{ ...upToDate, state: "waiting" }]);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(document.querySelector(".codex-cloud-status")?.textContent?.trim()).toBe(
+          "Codex Cloud: waiting for first sync",
+        );
+      } finally {
+        setServerUrl("");
+        void unmount(component);
+      }
     });
 
     // Keep this test last: the store remembers the 404 for the page's life.
