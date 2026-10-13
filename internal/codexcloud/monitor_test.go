@@ -538,3 +538,64 @@ func TestJoinSetUpDuringARefreshRequestIsNotKept(t *testing.T) {
 	assert.Empty(t, env.monitor.Joined(passKey))
 	require.Eventually(t, func() bool { return env.host.Joined("a") == 0 }, 5*time.Second, 5*time.Millisecond)
 }
+
+// Updates that arrived before a join leaves are recorded, even when the stop
+// signal and queued updates are ready at once.
+func TestLeavingKeepsQueuedTokenUpdates(t *testing.T) {
+	env := newMonitorEnv(t)
+	env.monitor.flushEvery = time.Millisecond
+	env.threads.Set(runningThread("a", "warm"))
+	env.join(t, "a")
+	env.monitor.mu.Lock()
+	j := env.monitor.joins[passKey]["a"]
+	env.monitor.mu.Unlock()
+	require.NotNil(t, j)
+	notes := j.conn.Notifications()
+
+	// Holding the account lock blocks the join in its next save, so later
+	// updates wait in its queue.
+	unlock := env.syncer.Store.Lock(passKey)
+	sent := 0
+	send := func() {
+		sent++
+		v := float64(sent * 100)
+		env.notify(t, "a", tokenUsageMethod, tokenParams("a", "a-turn-2",
+			[6]float64{v, 0, 0, 1, 0, v + 1}, [6]float64{100, 0, 0, 1, 0, 101}))
+	}
+	require.Eventually(t, func() bool {
+		if len(notes) > 0 {
+			return true
+		}
+		send()
+		return false
+	}, 5*time.Second, 20*time.Millisecond, "the join never blocked in a save")
+	for range 5 {
+		send()
+	}
+	prev := -1
+	require.Eventually(t, func() bool {
+		cur := len(notes)
+		stable := cur == prev
+		prev = cur
+		return stable
+	}, 5*time.Second, 50*time.Millisecond)
+	require.Greater(t, len(notes), 1)
+
+	done := make(chan struct{})
+	go func() {
+		env.monitor.CloseAll()
+		close(done)
+	}()
+	require.Eventually(t, func() bool {
+		select {
+		case <-j.stop:
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 5*time.Millisecond)
+	unlock()
+	<-done
+
+	assert.Len(t, tokenRecords(t, env.records(t, "a")), sent)
+}
