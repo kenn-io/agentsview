@@ -543,3 +543,44 @@ func TestLostAccountSaveDoesNotQueryMovedThread(t *testing.T) {
 	assert.Equal(t, mirror.KindPlanUsageOutcome, plan.kinds[len(plan.kinds)-1])
 	assert.Equal(t, mirror.OutcomeCountedUnder, plan.outcomes[len(plan.outcomes)-1].Kind)
 }
+
+// TestRestartShowsStoredPlanUsageDate checks that a new daemon, which has
+// sent no plan usage request yet, shows the newest stored report date
+// rather than "not checked yet".
+func TestRestartShowsStoredPlanUsageDate(t *testing.T) {
+	env := newUsageEnv(t)
+	assert.Empty(t, env.planLineOrEmpty(t), "no row before the first pass")
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(1), nil))
+	env.run(t)
+	asOf := fetchNow.Add(-time.Hour)
+
+	env.syncer = &Syncer{
+		Store: env.syncer.Store, Waits: NewWaits(env.clock.Now), Status: NewStatusBoard(), Now: env.clock.Now,
+		Dial: Dial, Gates: env.syncer.Gates, ReadLogin: env.syncer.ReadLogin, Version: "test", Log: env.syncer.Log,
+	}
+	env.clock.Advance(time.Hour)
+	env.run(t)
+
+	assert.Equal(t, "Plan usage as of "+asOf.Local().Format("Jan 2 15:04"), env.planLine(t))
+}
+
+func TestFreshAccountShowsNotCheckedYet(t *testing.T) {
+	env := newUsageEnv(t)
+	env.usage.Refuse(http.StatusInternalServerError, nil, "")
+	require.NoError(t, env.syncer.runUsage(t.Context(), env.syncer.Gates(), passKey, nil))
+	env.syncer.Status.Set(HomeStatus{Key: string(passKey)})
+	env.syncer.showUsage(passKey, fetchNow)
+	assert.Equal(t, "Plan usage: not checked yet", env.planLine(t))
+}
+
+func (e *usageEnv) planLineOrEmpty(t *testing.T) string {
+	t.Helper()
+	row, _ := e.syncer.Status.Row(string(passKey))
+	return row.PlanUsage
+}
+
+func TestStoredUsageLineWithOnlyPartialRows(t *testing.T) {
+	acct := AccountState{UsagePending: map[string]PendingEntry{"a": {HasRow: true}, "b": {}}}
+	assert.Equal(t, "Plan usage: still updating", storedUsageLine(acct))
+}
