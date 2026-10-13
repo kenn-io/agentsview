@@ -21,7 +21,10 @@ func repoRootOwned(path string) bool {
 		return false
 	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	return err == nil && windows.EqualSid(owner, user.User.Sid)
+	if err != nil || user == nil {
+		return false
+	}
+	return windows.EqualSid(owner, user.User.Sid)
 }
 
 // Git for Windows reports zero for st_dev during repository discovery.

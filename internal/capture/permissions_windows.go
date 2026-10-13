@@ -115,6 +115,9 @@ func verifyWindowsParentSecurity(
 		if err := windows.GetAce(dacl, index, &ace); err != nil {
 			return err
 		}
+		if ace == nil {
+			return errors.New("DACL contains a null entry")
+		}
 		// The capture directory is created atomically with a protected DACL,
 		// so inheritable create/write permissions never apply to it. Validate
 		// only rights that can replace an existing ancestor. Every descendant
@@ -306,6 +309,9 @@ func verifyClaudeProviderRootSecurity(
 		if err := windows.GetAce(dacl, index, &ace); err != nil {
 			return err
 		}
+		if ace == nil {
+			return errors.New("DACL contains a null entry")
+		}
 		if ace.Mask&claudeProviderSensitiveRights() == 0 ||
 			ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
 			continue
@@ -354,6 +360,9 @@ func verifyCaptureDirectorySecurity(
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, index, &ace); err != nil {
 			return err
+		}
+		if ace == nil {
+			return errors.New("DACL contains a null entry")
 		}
 		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE ||
 			ace.Header.AceFlags&windows.INHERITED_ACE != 0 {

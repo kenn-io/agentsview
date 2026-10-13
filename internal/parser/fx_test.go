@@ -152,6 +152,27 @@ func TestFxMetadataAndCancellation(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
+func TestFxJSONFieldMatching(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "field-matching")
+	writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4,"title":"Session","TITLE":"Wrong title","workspace_root":"/tmp/demo","future_field":true}`)
+	filePath := filepath.Join(dir, "events.jsonl")
+	writeSourceFile(t, filePath, `{"event":{"user":{"text":"Question","TEXT":"Wrong prompt","future_field":true}},"future_field":true}
+{"event":{"assistant":{"text":"Answer","provider_replay":{"source":{"model":"test","provider":{"name":"gateway","NAME":"wrong-provider","binding":"custom"}}}}}}
+{"event":{"future_event":{"text":"Skip this"}}}
+`)
+	writeSourceFile(t, filepath.Join(dir, "usage-v2.json"), `{"snapshot":{"models":[{"model":"gateway/test","input_tokens":5,"INPUT_TOKENS":99,"future_field":true}]},"future_field":true}`)
+	session, messages, err := parseFxSession(t.Context(), filePath, "local")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "Session", session.SessionName)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "Question", messages[0].Content)
+	assert.Equal(t, "Answer", messages[1].Content)
+	assert.Equal(t, "gateway", messages[1].ProviderID)
+	require.Len(t, session.UsageEvents, 1)
+	assert.Equal(t, 5, session.UsageEvents[0].InputTokens)
+}
+
 func TestFxToolCallsKeepAssistantModel(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "model-change")
 	writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4,"model":"current-model","provider":"current-provider"}`)
@@ -226,6 +247,9 @@ func TestFxRejectedArtifacts(t *testing.T) {
 		{"broken frame", "events.jsonl", "{broken\n", "", "invalid fx events.jsonl"},
 		{"null frame", "events.jsonl", "null\n", "", "invalid fx events.jsonl"},
 		{"missing event", "events.jsonl", "{}\n", "", "invalid fx events.jsonl"},
+		{"wrong event casing", "events.jsonl", `{"EVENT":{"user":{"text":"Hello"}}}`, "", "invalid fx events.jsonl"},
+		{"duplicate field without newline", "events.jsonl", `{"event":{"user":{"text":"Hello","text":"Other"}}}`, "", "invalid fx events.jsonl"},
+		{"invalid UTF-8 without newline", "events.jsonl", "{\"event\":{\"user\":{\"text\":\"\xff\"}}}", "", "invalid fx events.jsonl"},
 		{"null event", "events.jsonl", "{\"event\":null}\n", "", "invalid fx events.jsonl"},
 		{"array event", "events.jsonl", "{\"event\":[]}\n", "", "invalid fx events.jsonl"},
 		{"empty event", "events.jsonl", "{\"event\":{}}\n", "", "invalid fx events.jsonl"},
@@ -236,6 +260,7 @@ func TestFxRejectedArtifacts(t *testing.T) {
 		{"null turn completed", "events.jsonl", "{\"event\":{\"turn_completed\":null}}\n", "", "invalid fx events.jsonl"},
 		{"null session", "session.json", `null`, "", "invalid fx"},
 		{"wrong session type", "session.json", `{"schema_version":"4"}`, "", "invalid fx metadata"},
+		{"wrong schema casing", "session.json", `{"SCHEMA_VERSION":4}`, "session.json schema_version 0 is older than supported 4", ""},
 		{"malformed session", "session.json", `{broken`, "", "invalid fx metadata"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -2,7 +2,8 @@ package parser
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -78,9 +79,9 @@ type fxEvent struct {
 		Arguments string `json:"arguments_json"`
 	} `json:"tool_call"`
 	ToolResult *struct {
-		ID      string          `json:"call_id"`
-		Status  string          `json:"status"`
-		Preview json.RawMessage `json:"preview"`
+		ID      string         `json:"call_id"`
+		Status  string         `json:"status"`
+		Preview jsontext.Value `json:"preview"`
 	} `json:"tool_result"`
 	Checkpoint *struct {
 		Summary string `json:"summary"`
@@ -92,7 +93,7 @@ type fxEvent struct {
 }
 
 func (e *fxEvent) UnmarshalJSON(data []byte) error {
-	var keys map[string]json.RawMessage
+	var keys map[string]jsontext.Value
 	if err := json.Unmarshal(data, &keys); err != nil {
 		return err
 	}
@@ -264,7 +265,8 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		}
 		var frame *fxFrame
 		if err := json.Unmarshal([]byte(line), &frame); err != nil {
-			if !json.Valid([]byte(line)) && !fileEndsWithNewline(f, reader.bytesRead) {
+			// Complete frames with duplicate names or invalid UTF-8 must fail rather than look torn.
+			if !jsontext.Value(line).IsValid(jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) && !fileEndsWithNewline(f, reader.bytesRead) {
 				// The newline helper also returns false on read errors.
 				var tail [1]byte
 				if _, err := f.ReadAt(tail[:], reader.bytesRead-1); err != nil {

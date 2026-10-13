@@ -4410,6 +4410,7 @@ schemas keep their existing ordering behavior.
   Companion content hashes detect equal-length rewrites.
   A torn final line without a newline is ignored. Empty events and null known event
   types fail parsing; named unknown event types are skipped.
+  JSON fields match case-sensitively; unknown object fields are ignored.
   Other invalid frames or usage structures and mismatched usage session IDs fail
   parsing, preserving the stored session for retry. Tool previews and status
   attach to calls without separate transcript rows.
