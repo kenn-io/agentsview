@@ -128,10 +128,10 @@ func SessionPlanUsageValues(p *SessionPlanUsage) ([]any, error) {
 		return nil, fmt.Errorf("encoding plan usage groups: %w", err)
 	}
 	return []any{
-		p.HasPlanUsage, nullIfEmpty(p.DataAsOf), p.DataStatus,
+		p.HasPlanUsage, nilIfEmpty(p.DataAsOf), p.DataStatus,
 		p.UsageSource, p.WeeklyPercent, p.FiveHourPercent, p.Credits,
-		string(groupsJSON), p.Final, p.OutcomeKind, nullIfEmpty(p.OutcomeAt),
-		p.CountedUnder, p.HasCoverage, nullIfEmpty(p.LastCaptureAt),
+		string(groupsJSON), p.Final, p.OutcomeKind, nilIfEmpty(p.OutcomeAt),
+		p.CountedUnder, p.HasCoverage, nilIfEmpty(p.LastCaptureAt),
 		p.UncapturedTurns,
 	}, nil
 }
@@ -238,13 +238,6 @@ func bumpLocalModifiedTx(tx transactionQueries, sessionID, after string) error {
 			sessionID, after, err)
 	}
 	return nil
-}
-
-func nullIfEmpty(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
 
 // GetSessionPlanUsage returns one session's plan usage row, or nil when

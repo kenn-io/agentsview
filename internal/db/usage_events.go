@@ -162,16 +162,8 @@ func replaceSessionUsageEventsTx(
 	// a usage-only rewrite (e.g. a pricing-driven recompute) touches no
 	// other marker signal, so without this the change would never become
 	// an incremental push candidate (see updateSessionSignalsTx).
-	if _, err := tx.Exec(
-		`UPDATE sessions
-		    SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		  WHERE id = ?`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf(
-			"bumping local_modified_at for %s after usage replace: %w",
-			sessionID, err,
-		)
+	if err := bumpLocalModifiedTx(tx, sessionID, "usage replace"); err != nil {
+		return err
 	}
 	if enqueueArtifact {
 		if err := enqueueArtifactExportTx(tx, sessionID); err != nil {
