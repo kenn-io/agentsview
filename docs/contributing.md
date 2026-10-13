@@ -115,8 +115,9 @@ make docs-check
 ```
 
 For Go changes, run `go fmt ./...` and `go vet ./...`. For frontend changes, run
-`npm run test` and `npm run check` from `frontend/`. Localized frontend changes
-also require `npm run i18n:compile`.
+`npm run test`, `npm run check`, and `npm run check:vp` from `frontend/`.
+`npm run fmt` fixes formatting. Localized frontend changes also require
+`npm run i18n:compile`.
 
 Some integration suites require external services or platform-specific
 environments. If you cannot run a relevant check, say so plainly when handing
