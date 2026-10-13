@@ -366,6 +366,84 @@ func TestCopySessionMetadataFromPreservesLabelsAndExternalParents(t *testing.T) 
 	assert.Equal(t, []string{"queued"}, pending)
 }
 
+func TestRebuildLauncherRelationshipProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name, saved, fresh               string
+		pending, copied, trashed, legacy bool
+	}{
+		{name: "pending worker first parsed", fresh: "subagent", pending: true},
+		{name: "reparsed native worker", fresh: "subagent"},
+		{name: "reparsed ordinary worker", saved: "subagent"},
+		{name: "orphan", copied: true},
+		{name: "trash", copied: true, trashed: true},
+		{name: "legacy pending worker", fresh: "subagent", pending: true, legacy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			source := testDB(t)
+			insertSession(t, source, "manager", "proj")
+			if !tc.pending {
+				insertSession(t, source, "worker", "proj", func(s *Session) { s.RelationshipType = tc.saved })
+			}
+			_, err := source.SetSessionExternalParent(ctx, "worker", "manager")
+			require.NoError(t, err)
+			_, err = source.SetSessionExternalParent(ctx, "absent", "manager")
+			require.NoError(t, err)
+			if tc.trashed {
+				_, err = source.getWriter().ExecContext(ctx, "UPDATE sessions SET deleted_at = '2026-10-01T00:00:00Z' WHERE id = 'worker'")
+				require.NoError(t, err)
+			}
+			if tc.legacy {
+				_, err = source.getWriter().ExecContext(ctx, "ALTER TABLE session_external_parents DROP COLUMN prior_relationship_type")
+				require.NoError(t, err)
+			}
+			destination := testDB(t)
+			_, err = destination.CopyTrashedDataFrom(source.Path())
+			require.NoError(t, err)
+			insertSession(t, destination, "manager", "proj")
+			if !tc.copied {
+				insertSession(t, destination, "worker", "proj", func(s *Session) {
+					s.Agent = "grok"
+					s.RelationshipType = tc.fresh
+				})
+				if !tc.pending {
+					_, err = destination.SetSessionExternalParent(ctx, "worker", "manager")
+					require.NoError(t, err)
+					insertSession(t, destination, "worker", "proj", func(s *Session) { s.RelationshipType = tc.fresh })
+				}
+			}
+			_, err = destination.CopyOrphanedDataFrom(source.Path())
+			require.NoError(t, err)
+			for range 2 {
+				require.NoError(t, destination.CopySessionMetadataFrom(source.Path()))
+			}
+			link, err := destination.GetSessionExternalParent(ctx, "worker")
+			require.NoError(t, err)
+			assert.True(t, link.Applied)
+			pending, err := destination.GetSessionExternalParent(ctx, "absent")
+			require.NoError(t, err)
+			assert.False(t, pending.Applied)
+			want := tc.fresh
+			if tc.copied {
+				want = tc.saved
+			}
+			if !tc.trashed {
+				exported, err := destination.GetArtifactExportSession(ctx, "worker")
+				require.NoError(t, err)
+				assert.Nil(t, exported.ParentSessionID)
+				assert.Equal(t, want, exported.RelationshipType)
+			}
+			_, err = destination.ClearSessionExternalParent(ctx, "worker")
+			require.NoError(t, err)
+			var relationship string
+			var parent *string
+			require.NoError(t, destination.getReader().QueryRowContext(ctx, "SELECT relationship_type, parent_session_id FROM sessions WHERE id = 'worker'").Scan(&relationship, &parent))
+			assert.Nil(t, parent)
+			assert.Equal(t, want, relationship)
+		})
+	}
+}
+
 func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

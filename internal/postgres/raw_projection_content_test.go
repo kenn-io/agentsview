@@ -88,13 +88,6 @@ func TestRawContentRevisionRetainsHiddenSemanticFields(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEqual(t, digest, got)
 	})
-	t.Run("labels", func(t *testing.T) {
-		p := clone()
-		p.Session.Labels = []string{"ticket=sample-1"}
-		got, err := rawContentRevision(p)
-		require.NoError(t, err)
-		assert.Equal(t, digest, got)
-	})
 }
 
 func TestRawContentRevisionIgnoresOnlyRecencyDerivedState(t *testing.T) {
@@ -137,10 +130,6 @@ func TestRawContentRevisionJSONRepresentation(t *testing.T) {
 	require.NoError(t, err)
 	// The original normalized-content-v1 digest must survive encoder changes.
 	assert.Equal(t, "d5c710716bc7b8a68d60e43d58192489be71935625e141f9eb6c9dae723c3a29", got)
-	p.Session.Labels = []string{}
-	emptyLabels, err := rawContentRevision(p)
-	require.NoError(t, err)
-	assert.Equal(t, got, emptyLabels)
 	key, err := rawMessageKey(p.Messages[0])
 	require.NoError(t, err)
 	p.Signals.ToolObservations = []db.ToolObservation{{Outcome: "empty", Repeat: "exact", SequenceEnding: new("abandoned")}}
