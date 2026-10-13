@@ -532,3 +532,52 @@ test("the date picker contains its calendar at 200% zoom", async ({ page }) => {
   expect(grid.x).toBeGreaterThanOrEqual(shell.x);
   expect(grid.x + grid.width).toBeLessThanOrEqual(shell.x + shell.width);
 });
+
+test("the codex-cloud status tooltip follows its trigger and wraps long paths at 150% zoom", async ({
+  page,
+}) => {
+  const home = `/synthetic/${"0123456789abcdef".repeat(8)}`;
+  await page.route("**/api/v1/codex-cloud/status", (route) =>
+    route.fulfill({
+      json: [{ key: "account-a", homes: [home], state: "waiting" }],
+    }),
+  );
+  const openTooltip = async () => {
+    const trigger = page.locator(".kit-tooltip-trigger", {
+      has: page.locator(".codex-cloud-status"),
+    });
+    await trigger.focus();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toBeVisible();
+    return {
+      trigger: (await trigger.boundingBox())!,
+      tooltip: (await tooltip.boundingBox())!,
+      overflow: await tooltip
+        .locator(".codex-cloud-detail")
+        .evaluate((el) => el.scrollWidth - el.clientWidth),
+      lineHeight: await tooltip
+        .locator(".codex-cloud-detail")
+        .evaluate((el) => el.getClientRects()[0]!.height),
+    };
+  };
+
+  await page.goto("/");
+  const normal = await openTooltip();
+
+  await page.evaluate(() => localStorage.setItem("agentsview-zoom-level", "150"));
+  await page.reload();
+  await expect.poll(() => readZoom(page)).toBe("1.5");
+  const { trigger, tooltip, overflow, lineHeight } = await openTooltip();
+
+  // The detail keeps the interface scale.
+  expect(lineHeight / normal.lineHeight).toBeGreaterThan(1.3);
+  // The bubble sits just above its trigger, inside the viewport.
+  const viewport = page.viewportSize()!;
+  expect(tooltip.x).toBeGreaterThanOrEqual(0);
+  expect(tooltip.y).toBeGreaterThanOrEqual(0);
+  expect(tooltip.x + tooltip.width).toBeLessThanOrEqual(viewport.width);
+  expect(trigger.y - (tooltip.y + tooltip.height)).toBeGreaterThanOrEqual(0);
+  expect(trigger.y - (tooltip.y + tooltip.height)).toBeLessThanOrEqual(16);
+  // A long path wraps inside the bubble instead of running past its edge.
+  expect(overflow).toBe(0);
+});
