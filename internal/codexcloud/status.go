@@ -131,9 +131,10 @@ func (b *StatusBoard) Snapshot() []HomeStatus {
 
 // fileStoreFix tells the user how to give AgentsView a login Codex keeps
 // out of auth.json, and what that costs.
-const fileStoreFix = "To let AgentsView use it, add `cli_auth_credentials_store = \"file\"` near the top of " +
-	"this home's config.toml, before any [section], and run `codex login`. Codex then keeps the ChatGPT login " +
-	"in auth.json, a plain file that any program running as you can read."
+const fileStoreFix = "To let AgentsView import from this home, add `cli_auth_credentials_store = \"file\"` " +
+	"near the top of its config.toml, before any [section], and run `codex login`; AgentsView picks up the " +
+	"new login on its next sync. Codex then keeps the ChatGPT login in auth.json, a plain file that any " +
+	"program running as you can read."
 
 // keyringHomeMessage is the text for a home whose config.toml keeps the
 // login in the system keyring.
@@ -145,7 +146,8 @@ const keyringHomeMessage = "This Codex home keeps its ChatGPT login in the syste
 // Codex keeps the current login in the keyring.
 const keyringRefusedMessage = "OpenAI did not accept the ChatGPT login in this Codex home's auth.json. " +
 	"Either that saved login expired, or, with `cli_auth_credentials_store = \"auto\"`, Codex keeps the " +
-	"current login in the system keyring, which AgentsView does not read. " + fileStoreFix
+	"current login in the system keyring, which AgentsView does not read. Run `codex login` first. " +
+	"If AgentsView still cannot use the login, Codex keeps it in the keyring. " + fileStoreFix
 
 // Message is the user-facing text for a failure. retryAt is used only for
 // a rate limit.

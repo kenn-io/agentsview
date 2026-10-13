@@ -823,5 +823,6 @@ func TestUsage401InAutoModeNamesBothCauses(t *testing.T) {
 
 	line := env.planLine(t)
 	assert.Contains(t, line, "Either that saved login expired")
+	assert.Contains(t, line, "Run `codex login` first.", "signing in again is tried before changing the store")
 	assert.NotContains(t, line, "keeps its ChatGPT login in the system keyring")
 }

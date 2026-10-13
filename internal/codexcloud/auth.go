@@ -186,7 +186,7 @@ func credentialStore(home string) (string, error) {
 		// secrets, so only the log gets it.
 		return "", &LoginReadError{
 			Message: "AgentsView could not read this Codex home's config.toml, so it cannot tell where Codex " +
-				"keeps the login. Fix the file; the daemon log has the details.",
+				"keeps the login. The file may not be valid TOML; the daemon log has the error and where it is.",
 			err: fmt.Errorf("codex home %s: read config.toml: %w", home, err),
 		}
 	}
