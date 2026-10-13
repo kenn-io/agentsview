@@ -1551,6 +1551,10 @@ type ParsedSession struct {
 	// the usage_events table for catalog-based cost pricing.
 	UsageEvents []ParsedUsageEvent
 
+	// CaptureCoverage reports how much of a live-captured session's token
+	// usage was seen. Only Codex cloud sessions with token records set it.
+	CaptureCoverage *ParsedCaptureCoverage
+
 	// CountsAuthoritative marks parsers that own MessageCount and
 	// UserMessageCount even when they intentionally emit no transcript rows.
 	CountsAuthoritative bool
@@ -1702,6 +1706,14 @@ type ParsedMessage struct {
 	// tokenPresenceKnown marks per-message token coverage as
 	// parser-owned and authoritative.
 	tokenPresenceKnown bool
+}
+
+// ParsedCaptureCoverage summarizes live token capture for one session:
+// when the newest token record was observed and how many finished turns
+// no token record covers.
+type ParsedCaptureCoverage struct {
+	LastCaptureAt   *time.Time
+	UncapturedTurns int
 }
 
 // ParsedUsageEvent records session-level usage emitted by parsers
