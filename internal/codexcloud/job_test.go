@@ -177,7 +177,8 @@ func TestStatusMessages(t *testing.T) {
 		row, ok := env.syncer.Status.Row("/homes/a")
 		require.True(t, ok)
 		assert.Contains(t, row.Message, "OpenAI did not accept the ChatGPT login")
-		assert.Contains(t, row.Message, "set `cli_auth_credentials_store = \"file\"`")
+		assert.Contains(t, row.Message, "Either that saved login expired")
+		assert.Contains(t, row.Message, "add `cli_auth_credentials_store = \"file\"`")
 		assert.Contains(t, row.Message, "plain file that any program running as you can read")
 	})
 	t.Run("403 does not", func(t *testing.T) {

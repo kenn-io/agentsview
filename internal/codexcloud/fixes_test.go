@@ -520,9 +520,9 @@ func TestLoginOutsideAuthJSONGivesFileStoreFix(t *testing.T) {
 
 		row, ok := env.syncer.Status.Row("/homes/a")
 		require.True(t, ok)
-		assert.Contains(t, row.Message, "set `cli_auth_credentials_store = \"file\"` in this home's config.toml "+
-			"and run `codex login`")
-		assert.Contains(t, row.Message, "plain file that any program running as you can read",
+		assert.Contains(t, row.Message, "add `cli_auth_credentials_store = \"file\"` near the top of this home's "+
+			"config.toml, before any [section], and run `codex login`")
+		assert.Contains(t, row.Message, "auth.json, a plain file that any program running as you can read",
 			"the fix trades the keyring's protection for access")
 	}
 }

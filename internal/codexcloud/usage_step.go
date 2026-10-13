@@ -302,7 +302,7 @@ func (s *Syncer) queryUsage(
 		login := (*homes)[0]
 		switch {
 		case !s.Waits.UsageHomeReady(login.Home, login.AuthModTime):
-			noHome.failure = FailSignedOut
+			noHome.failure = FailureFor(&HTTPError{Status: http.StatusUnauthorized}, login)
 		case !s.Waits.HomeReady(login.Home, login.AuthModTime):
 			if noHome.failure == FailNone {
 				noHome.failure = s.Waits.HomeFailure(login.Home)
@@ -315,7 +315,7 @@ func (s *Syncer) queryUsage(
 			}
 			s.Log.Printf("codex-cloud: plan usage refused the login in %s", login.Home)
 			s.Waits.RecordUsageHome(login.Home, login.AuthModTime)
-			noHome.failure = FailSignedOut
+			noHome.failure = FailureFor(err, login)
 		}
 		*homes = (*homes)[1:]
 	}
@@ -323,8 +323,8 @@ func (s *Syncer) queryUsage(
 }
 
 // noUsageHomeError means no Codex home on the key may serve plan usage.
-// failure is why: FailSignedOut when plan usage refused a login, else the
-// login problem a skipped home waits on.
+// failure is why: the refusal FailureFor gives a 401 when plan usage
+// refused a login, else the login problem a skipped home waits on.
 type noUsageHomeError struct {
 	failure Failure
 }

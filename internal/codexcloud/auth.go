@@ -118,8 +118,9 @@ func ReadLogin(home string) (Login, HomeState, error) {
 	case "file", "auto":
 	default:
 		return login, HomeSignedOut, &LoginReadError{
-			Message: fmt.Sprintf("This Codex home's config.toml sets cli_auth_credentials_store to %q, "+
-				"which AgentsView does not know. Use %s.", store, credentialStores),
+			// The status names only the setting; the log has its value.
+			Message: fmt.Sprintf("This Codex home's config.toml sets cli_auth_credentials_store to a value "+
+				"AgentsView does not know. Use %s.", credentialStores),
 			err: fmt.Errorf("codex home %s: unknown cli_auth_credentials_store %q; use %s",
 				home, store, credentialStores),
 		}

@@ -101,7 +101,7 @@ func (s *Syncer) Run(ctx context.Context) error {
 			s.Log.Printf("codex-cloud: %v", err)
 			s.homeRow(gates, home, loginErrorMessage(err))
 		case state == HomeKeyring:
-			s.homeRow(gates, home, Message(FailKeyring, time.Time{}))
+			s.homeRow(gates, home, keyringHomeMessage)
 		case state == HomeEphemeral:
 			s.homeRow(gates, home, Message(FailEphemeral, time.Time{}))
 		case state == HomeSignedOut:
@@ -262,7 +262,7 @@ func (p *pass) dialFirst(ctx context.Context, logins []Login) error {
 		}
 		p.Log.Printf("codex-cloud: OpenAI refused the login in %s: %v", login.Home, Redact(err, login.Token))
 		p.Waits.RecordHome(login.Home, f, login.AuthModTime)
-		p.homeRow(p.gates, login.Home, refusedMessage(f))
+		p.homeRow(p.gates, login.Home, Message(f, time.Time{}))
 		last = err
 	}
 	return &passEndError{failure: FailNone, err: last}
@@ -770,7 +770,7 @@ func (p *pass) threadEnd(err error) bool {
 // pass uses the next home on the key.
 func (p *pass) homeEnd(f Failure) error {
 	p.Waits.RecordHome(p.login.Home, f, p.login.AuthModTime)
-	p.homeRow(p.gates, p.login.Home, refusedMessage(f))
+	p.homeRow(p.gates, p.login.Home, Message(f, time.Time{}))
 	p.Status.Delete(string(p.key))
 	return nil
 }
