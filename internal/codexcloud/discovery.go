@@ -59,8 +59,12 @@ func (m *Monitor) Discover(ctx context.Context) error {
 		switch {
 		case m.NoSync:
 			text = "Live tokens: off, because this daemon does not sync sources."
-		case !gates.Fetching():
-			text = "Live tokens: off, because Codex cloud sync is off."
+		case gates.Disabled:
+			text = "Live tokens: off, because codex-cloud is listed in disabled_agents."
+		case gates.CodexCloud.Err != nil:
+			text = "Live tokens: off until the [agents.codex-cloud] settings are fixed."
+		case !gates.CodexCloud.Enabled:
+			text = "Live tokens: off, because enabled = false under [agents.codex-cloud]."
 		default:
 			text = "Live tokens: off, because live_tokens = false under [agents.codex-cloud]."
 		}
