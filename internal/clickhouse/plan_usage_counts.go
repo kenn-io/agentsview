@@ -8,10 +8,16 @@ import (
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
+// chPlanUsageSessions selects the sessions that have a plan usage row.
+const chPlanUsageSessions = `(SELECT session_id FROM session_plan_usage)`
+
 // GetPlanUsageSessionCounts counts the sessions a usage report leaves out
 // as plan-only and the sessions it undercounts as partly captured, with
 // the same rules as the SQLite query (db.GetPlanUsageSessionCounts).
 // ClickHouse has no correlated subqueries, so the session tests use IN.
+// Every branch reads messages and usage events only for sessions that have
+// plan usage: both tables are sorted by session_id, so the IN filter lets
+// ClickHouse skip the rest of the mirror on each usage summary.
 func (s *Store) GetPlanUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.PlanUsageSessionCounts, error) {
@@ -20,7 +26,8 @@ func (s *Store) GetPlanUsageSessionCounts(
 
 	messageWhere, args := appendChUsageSourceFilterClauses(
 		chUsageMatchingMessageEligibility+`
-			AND s.id NOT IN (SELECT session_id FROM usage_events)`,
+			AND m.session_id IN `+chPlanUsageSessions+`
+			AND s.id NOT IN (SELECT session_id FROM usage_events WHERE session_id IN `+chPlanUsageSessions+`)`,
 		args, "m.model", f)
 	messageWhere, args = appendChUsageSessionFilterClauses(messageWhere, args, f, "")
 	messageWhere, args = appendChUsageColumnBounds(
@@ -28,18 +35,18 @@ func (s *Store) GetPlanUsageSessionCounts(
 	query := `
 		SELECT '` + db.PlanUsageCountKindPlanOnly + `' AS kind, s.id AS session_id,
 			m.model AS model, COALESCE(m.timestamp, s.started_at) AS ts
-		FROM session_plan_usage p
-		JOIN sessions s ON s.id = p.session_id
-		JOIN messages m ON m.session_id = s.id
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
 		WHERE ` + messageWhere
 
 	if len(db.CSVFilterValues(f.Model)) == 0 {
 		var sessionWhere string
 		sessionWhere, args = appendChUsageSessionFilterClauses(`s.deleted_at IS NULL
-			AND s.id NOT IN (SELECT session_id FROM usage_events)
+			AND s.id NOT IN (SELECT session_id FROM usage_events WHERE session_id IN `+chPlanUsageSessions+`)
 			AND s.id NOT IN (
 				SELECT m.session_id FROM messages m
-				WHERE `+chUsageMatchingMessageSourceEligibility+`
+				WHERE m.session_id IN `+chPlanUsageSessions+`
+				AND `+chUsageMatchingMessageSourceEligibility+`
 			)`, args, f, "")
 		sessionWhere, args = appendChUsageColumnBounds(sessionWhere, "s.started_at", b, args)
 		query += `
@@ -52,6 +59,7 @@ func (s *Store) GetPlanUsageSessionCounts(
 
 	eventWhere, args := appendChUsageSourceFilterClauses(
 		chUsageEventEligibility+`
+			AND ue.session_id IN `+chPlanUsageSessions+`
 			AND p.uncaptured_turns > 0`, args, "ue.model", f)
 	eventWhere, args = appendChUsageSessionFilterClauses(eventWhere, args, f, "")
 	eventWhere, args = appendChUsageColumnBounds(
@@ -60,9 +68,9 @@ func (s *Store) GetPlanUsageSessionCounts(
 		UNION ALL
 		SELECT '` + db.PlanUsageCountKindPartlyCaptured + `', s.id, ue.model,
 			COALESCE(ue.occurred_at, s.started_at)
-		FROM session_plan_usage p
-		JOIN sessions s ON s.id = p.session_id
-		JOIN usage_events ue ON ue.session_id = s.id
+		FROM usage_events ue
+		JOIN session_plan_usage p ON p.session_id = ue.session_id
+		JOIN sessions s ON s.id = ue.session_id
 		WHERE ` + eventWhere
 
 	rows, err := s.queryContext(ctx, query, args...)
