@@ -661,3 +661,40 @@ func TestUsageOnlyBatchWritesClearExistingFriction(t *testing.T) {
 		})
 	}
 }
+
+func TestCompleteStoredRowsMergesImagePlaceholderUpgradesAndDowngrades(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	const id = "image-merge"
+	session := Session{ID: id, Project: "project", Machine: defaultMachine, Agent: "chatgpt", MessageCount: 1}
+	archived := "Start [image unavailable] middle ![image](assets/old.png) end"
+	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: session,
+		Messages: []Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Content: archived, ContentLength: len(archived),
+		}},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	// The first image is upgraded from a placeholder; the second is an archived
+	// reference that the export shows as a placeholder and must be kept.
+	incoming := "Start ![image](assets/new.png) middle [image unavailable] end"
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{
+		Session: session,
+		Messages: []Message{{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Content: incoming, ContentLength: len(incoming),
+		}},
+		CompleteStoredRows: true,
+	}})
+	require.NoError(t, err)
+
+	want := "Start ![image](assets/new.png) middle ![image](assets/old.png) end"
+	messages, err := d.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, want, messages[0].Content)
+	assert.Equal(t, len(want), messages[0].ContentLength)
+}
