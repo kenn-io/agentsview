@@ -205,7 +205,7 @@ func TestStatusMessages(t *testing.T) {
 		lines := StatusLines(row)
 		assert.Contains(t, lines[0], "1 chat could not be imported")
 		assert.Contains(t, lines[0], Message(FailThread, time.Time{}))
-		assert.Contains(t, lines[0], "retries each one for 7 days; a change to the chat in OpenAI restarts the 7 days",
+		assert.Contains(t, lines[0], "retries a failed chat for 7 days; a change to the chat in OpenAI restarts the 7 days",
 			"retries end, and the user should know when")
 		assert.NotContains(t, lines[0], "Up to date")
 	})

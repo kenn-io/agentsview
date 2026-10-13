@@ -513,7 +513,7 @@ func (p *pass) thread(ctx context.Context, id string) error {
 
 // timeoutMessage is the retry message for a thread whose history OpenAI
 // did not answer within the call timeout.
-const timeoutMessage = "OpenAI did not answer in time when reading the chat."
+const timeoutMessage = "OpenAI did not answer in time when reading a chat."
 
 // retryLater puts a failed thread in the retry set with its backoff, or
 // retires it after unreadableAfter. A listing record is stored now, so the
@@ -843,8 +843,9 @@ func oldestFailure(acct AccountState) (*time.Time, string) {
 			latest, message = entry.NextAttempt, entry.Message
 		}
 	}
-	return &oldest, message + " AgentsView retries each one for 7 days; a change to the chat in OpenAI " +
-		"restarts the 7 days. The daemon log lists each chat by its ID. Chats already imported are not affected."
+	days := int(unreadableAfter / (24 * time.Hour))
+	return &oldest, message + fmt.Sprintf(" AgentsView retries a failed chat for %d days; a change to the chat in OpenAI "+
+		"restarts the %d days. The daemon log lists each chat by its ID. Chats already imported are not affected.", days, days)
 }
 
 func (p *pass) account() (AccountState, error) {
