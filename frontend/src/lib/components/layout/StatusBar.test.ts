@@ -235,7 +235,8 @@ describe("StatusBar", () => {
           "Codex Cloud: 2 chats could not be imported\n" +
           `Oldest failure: ${formatTimestamp("2026-04-08T03:00:00Z")}\n` +
           "Can't reach OpenAI. AgentsView retries automatically.\n" +
-          "AgentsView keeps retrying them.",
+          "AgentsView retries each one for 7 days; a change to the chat in OpenAI restarts the 7 days. " +
+          "The daemon log lists each chat by its ID. Chats already imported are not affected.",
       );
       void unmount(component);
     });

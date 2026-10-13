@@ -2959,7 +2959,7 @@
   "status_bar_codex_cloud_off": "Codex Cloud: desactivado",
   "status_bar_codex_cloud_config_error": "Codex Cloud: error de configuración",
   "status_bar_codex_cloud_oldest_failure": "Fallo más antiguo: {time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView sigue reintentándolos. El registro del daemon lista cada chat. Las sesiones ya importadas no se ven afectadas.",
+  "status_bar_codex_cloud_retry_note": "AgentsView reintenta cada uno durante 7 días; un cambio en el chat en OpenAI reinicia los 7 días. El registro del daemon lista cada chat por su ID. Los chats ya importados no se ven afectados.",
   "status_bar_codex_cloud_last_success": "Última sincronización correcta: {time}",
   "status_bar_codex_cloud_homes": "Carpetas de Codex: {homes}"
 }
