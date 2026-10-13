@@ -214,8 +214,10 @@ func TestHomeLoginCommand(t *testing.T) {
 		{"/homes/b", "linux", "`CODEX_HOME=/homes/b codex login`"},
 		{"/homes/My Codex", "darwin", "`CODEX_HOME='/homes/My Codex' codex login`"},
 		{"/homes/it's", "linux", "`CODEX_HOME='/homes/it'\\''s' codex login`"},
-		{`C:\homes\codex two`, "windows",
-			"`codex login` with the CODEX_HOME environment variable set to `C:\\homes\\codex two`"},
+		{
+			`C:\homes\codex two`, "windows",
+			"`codex login` with the CODEX_HOME environment variable set to `C:\\homes\\codex two`",
+		},
 	} {
 		assert.Equal(t, tt.want, homeLoginCommand(tt.home, tt.goos), tt.home)
 	}
