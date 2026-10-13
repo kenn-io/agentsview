@@ -381,9 +381,11 @@ func (s *Syncer) usageFailure(
 		if !ok {
 			continue
 		}
-		if now.Sub(entry.LastChange) >= settleAfter && entry.Answered.Before(entry.LastChange) {
-			// No request was answered in the 7 days after the last change.
-			// Its last row, if any, stays and is not marked final.
+		if now.Sub(entry.LastChange) >= settleAfter {
+			// Only an answer after the settle point settles a root, and
+			// this request failed, so it cannot settle; an answer before
+			// that point does not keep it retrying. Its last row, if any,
+			// stays and is not marked final.
 			delete(acct.UsagePending, g.ThreadID)
 			if err := s.appendPlan(key, g.ThreadID, now, mirror.KindPlanUsageOutcome,
 				mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeCouldNotCheck, At: now}); err != nil {
@@ -425,7 +427,6 @@ func (s *Syncer) usageAnswer(key AccountKey, acct *AccountState, groups []UsageG
 			// pending again.
 			entry = PendingEntry{Since: now, LastChange: ref.LastChange, HasRow: true, Reentries: ref.Reentries}
 		}
-		entry.Answered = now
 		settles := now.Sub(entry.LastChange) >= settleAfter
 		switch {
 		case ok && row.DataStatus == mirror.UsageAvailable:
