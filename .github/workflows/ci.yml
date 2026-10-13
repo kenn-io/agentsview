@@ -604,7 +604,7 @@ jobs:
 
       - name: Run sync tests (race detector)
         if: matrix.name != 'Other packages'
-        run: go test -p 4 -tags "fts5" -race ./internal/sync -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+        run: go test -tags "fts5" -race ./internal/sync -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -657,9 +657,9 @@ jobs:
       matrix:
         include:
           - name: PostgreSQL core
-            postgres-target: test-postgres-core-ci
+            postgres-target: test-postgres-core-fast-ci
           - name: PostgreSQL raw-sync and ClickHouse
-            postgres-target: test-postgres-raw-sync-ci
+            postgres-target: test-postgres-raw-sync-ci test-postgres-core-heavy-ci
             clickhouse: true
     services:
       postgres:
@@ -679,7 +679,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       clickhouse:
-        image: clickhouse/clickhouse-server:26.8
+        image: ${{ matrix.clickhouse && 'clickhouse/clickhouse-server:26.8' || '' }}
         env:
           CLICKHOUSE_SKIP_USER_SETUP: "1"
         ports:
