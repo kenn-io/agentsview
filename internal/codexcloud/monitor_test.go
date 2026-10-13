@@ -256,6 +256,7 @@ func TestUnknownResumeKindStopsCapture(t *testing.T) {
 			assert.Empty(t, env.monitor.Joined(passKey))
 			assert.Equal(t, "Live tokens: stopped. "+Message(FailProtocol, time.Time{})+
 				" After that, restart AgentsView, or set live_tokens = false and back to true, to listen in again.", env.live(t))
+			assert.True(t, env.liveWarn(t), "a stop marks the status")
 			handshakes := len(env.host.Handshakes())
 			env.join(t, "b")
 			assert.Len(t, env.host.Handshakes(), handshakes, "capture stays off for the account")

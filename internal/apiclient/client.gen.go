@@ -22958,6 +22958,7 @@ type CodexcloudHomeStatus struct {
 	Key           string     `json:"key" validate:"required"`
 	LastSuccess   *time.Time `json:"last_success,omitempty"`
 	Live          *string    `json:"live,omitempty"`
+	LiveWarn      *bool      `json:"live_warn,omitempty"`
 	Message       *string    `json:"message,omitempty"`
 	OldestFailure *time.Time `json:"oldest_failure,omitempty"`
 	PlanUsage     *string    `json:"plan_usage,omitempty"`

@@ -298,6 +298,7 @@ func TestFailedFinalFlushIsSavedOnTheNextRun(t *testing.T) {
 	env.waitLeft(t, "a")
 	assert.Empty(t, tokenRecords(t, env.records(t, "a")))
 	assert.Contains(t, env.live(t), "not saved yet")
+	assert.True(t, env.liveWarn(t), "unsaved counts mark the status")
 
 	require.NoError(t, os.Remove(state))
 	require.NoError(t, os.Rename(state+".saved", state))
@@ -309,6 +310,15 @@ func TestFailedFinalFlushIsSavedOnTheNextRun(t *testing.T) {
 	assert.Equal(t, "a-turn-2", env.thread(t, "a").LastHandledTurnID)
 	assert.Equal(t, 1, env.resumes(), "the completed turn is not joined again")
 	assert.NotContains(t, env.live(t), "not saved yet")
+	assert.False(t, env.liveWarn(t))
+}
+
+func (e *monitorEnv) liveWarn(t *testing.T) bool {
+	t.Helper()
+	e.live(t)
+	row, ok := e.syncer.Status.Row(string(passKey))
+	require.True(t, ok)
+	return row.LiveWarn
 }
 
 func TestPendingRecordsAreKeptWhileLiveTokensAreOff(t *testing.T) {

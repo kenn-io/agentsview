@@ -38,7 +38,10 @@ type HomeStatus struct {
 	RetryCount    int        `json:"retry_count,omitzero"`
 	OldestFailure *time.Time `json:"oldest_failure,omitzero"`
 	Live          string     `json:"live,omitzero"`
-	PlanUsage     string     `json:"plan_usage,omitzero"`
+	// LiveWarn marks a live token line that needs the user: token counts
+	// not saved yet, or capture stopped.
+	LiveWarn  bool   `json:"live_warn,omitzero"`
+	PlanUsage string `json:"plan_usage,omitzero"`
 }
 
 // StatusBoard holds the latest row for each key. It is safe for
@@ -50,18 +53,30 @@ type StatusBoard struct {
 	// live and plan hold each account's live token and plan usage lines
 	// apart from its row, since sync replaces whole rows and these lines
 	// are set on their own.
-	live map[string]string
-	plan map[string]string
+	live     map[string]string
+	liveWarn map[string]bool
+	plan     map[string]string
 }
 
 // NewStatusBoard returns an empty board.
 func NewStatusBoard() *StatusBoard {
-	return &StatusBoard{rows: map[string]HomeStatus{}, live: map[string]string{}, plan: map[string]string{}}
+	return &StatusBoard{
+		rows: map[string]HomeStatus{}, live: map[string]string{}, liveWarn: map[string]bool{}, plan: map[string]string{},
+	}
 }
 
-// SetLive sets the live token line shown with the row for key. It shows
-// once sync has set that row.
-func (b *StatusBoard) SetLive(key, text string) { b.setLine(b.live, key, text) }
+// SetLive sets the live token line shown with the row for key, and
+// whether it needs the user. It shows once sync has set that row.
+func (b *StatusBoard) SetLive(key, text string, warn bool) {
+	b.setLine(b.live, key, text)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if warn && text != "" {
+		b.liveWarn[key] = true
+	} else {
+		delete(b.liveWarn, key)
+	}
+}
 
 // SetPlanUsage sets the plan usage line shown with the row for key.
 func (b *StatusBoard) SetPlanUsage(key, text string) { b.setLine(b.plan, key, text) }
@@ -95,7 +110,7 @@ func (b *StatusBoard) Row(key string) (HomeStatus, bool) {
 	row, ok := b.rows[key]
 	row.Homes = slices.Clone(row.Homes)
 	if ok {
-		row.Live, row.PlanUsage = b.live[key], b.plan[key]
+		row.Live, row.LiveWarn, row.PlanUsage = b.live[key], b.liveWarn[key], b.plan[key]
 	}
 	return row, ok
 }
@@ -108,7 +123,7 @@ func (b *StatusBoard) Snapshot() []HomeStatus {
 	for _, key := range b.order {
 		row := b.rows[key]
 		row.Homes = slices.Clone(row.Homes)
-		row.Live, row.PlanUsage = b.live[key], b.plan[key]
+		row.Live, row.LiveWarn, row.PlanUsage = b.live[key], b.liveWarn[key], b.plan[key]
 		rows = append(rows, row)
 	}
 	return rows

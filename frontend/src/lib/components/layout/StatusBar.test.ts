@@ -167,7 +167,7 @@ describe("StatusBar", () => {
       homes: ["/synthetic/codex-home"],
       state: "up_to_date",
       last_success: "2026-04-08T04:55:00Z",
-      live: "Live tokens: watching 1 running threads",
+      live: "Live tokens: listening in on 1 running chat.",
       plan_usage: "Plan usage: not checked yet",
     };
 
@@ -207,9 +207,24 @@ describe("StatusBar", () => {
       expect((await focusTooltip(line))?.split("\n")).toEqual([
         "Codex homes: /synthetic/codex-home",
         `Codex Cloud: up to date as of ${formatTimestamp("2026-04-08T04:55:00Z")}`,
-        "Live tokens: watching 1 running threads",
+        "Live tokens: listening in on 1 running chat.",
         "Plan usage: not checked yet",
       ]);
+      void unmount(component);
+    });
+
+    it("marks the status when live capture needs the user while sync is fine", async () => {
+      getCodexCloudStatus.mockResolvedValue([
+        {
+          ...upToDate,
+          live: "Live tokens: listening in on 1 running chat. Token counts for 1 chat are not saved yet.",
+          live_warn: true,
+        },
+      ]);
+      const component = await mountWithRows();
+
+      const line = document.querySelector(".codex-cloud-status");
+      expect(line?.classList.contains("codex-cloud-status--warn")).toBe(true);
       void unmount(component);
     });
 

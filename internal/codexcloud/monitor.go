@@ -737,20 +737,27 @@ func (m *Monitor) updateLive(key AccountKey) {
 	default:
 		text = fmt.Sprintf("Live tokens: listening in on %s.", chats(watching, "running chat"))
 	}
-	m.Status.SetLive(string(key), text+m.pendingNote(key))
+	unsaved := m.unsaved(key)
+	m.Status.SetLive(string(key), text+pendingNote(unsaved), stopped != nil || unsaved > 0)
 }
 
-// pendingNote warns, after a live token line, about the account's token
-// counts that only memory holds. It is empty when there are none.
-func (m *Monitor) pendingNote(key AccountKey) string {
+// unsaved counts the account's chats whose token counts only memory
+// holds.
+func (m *Monitor) unsaved(key AccountKey) int {
 	m.mu.Lock()
-	unsaved := 0
+	defer m.mu.Unlock()
+	n := 0
 	for id := range m.pending {
 		if id.key == key {
-			unsaved++
+			n++
 		}
 	}
-	m.mu.Unlock()
+	return n
+}
+
+// pendingNote warns, after a live token line, about unsaved chats' token
+// counts. It is empty when there are none.
+func pendingNote(unsaved int) string {
 	if unsaved == 0 {
 		return ""
 	}
