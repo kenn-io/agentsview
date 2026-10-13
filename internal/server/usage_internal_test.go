@@ -127,6 +127,12 @@ func (s *usageSummaryCountsSpy) GetUsageMatchingSessionCount(
 	return s.matchingSessionCount, nil
 }
 
+func (s *usageSummaryCountsSpy) GetPlanUsageSessionCounts(
+	_ context.Context, _ db.UsageFilter,
+) (db.PlanUsageSessionCounts, error) {
+	return db.PlanUsageSessionCounts{}, nil
+}
+
 func TestUsageSummaryScansCurrentPeriodOnly(t *testing.T) {
 	spy := &usageSummaryCountsSpy{}
 	s := newRoutedTestServerWithStore(t, spy)

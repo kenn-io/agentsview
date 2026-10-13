@@ -1502,19 +1502,19 @@ Spec: Replicas and mirror (left-out and partly-captured counts), Display.
     - A per-model plan-only marker in the model totals, so per-model token and
       cost columns can show "Plan usage".
 
-- [ ] **Step 1: Write failing tests** `TestPlanOnlySessionsLeftOutOfTotals`,
+- [x] **Step 1: Write failing tests** `TestPlanOnlySessionsLeftOutOfTotals`,
   `TestPlanOnlyCountFilters` (agent, project, machine, model include and
   exclude, date window, timezone, session with no assistant message),
   `TestPartlyCapturedCount`, and a cross-backend `TestPlanUsageCountsParity`
   (tags `pgtest || chtest`).
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: leave plan-only sessions out of token totals"`
 
 ### Task 27: API, CLI, and exports

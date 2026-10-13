@@ -20,6 +20,8 @@ export interface UsageSummaryResponse {
   daily: DbDailyUsageEntry[];
   from: string;
   modelTotals: ModelTotal[];
+  partlyCapturedSessions?: number;
+  planOnlySessions?: number;
   pricing?: ExportPricingBlock;
   projectTotals: ProjectTotal[];
   projects: UsageSummaryResponseProjects;
