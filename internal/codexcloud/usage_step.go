@@ -191,7 +191,7 @@ func (s *Syncer) noteUsage(key AccountKey, resp UsageResponse, err error, login 
 	noHome, isNoHome := errors.AsType[*noUsageHomeError](err)
 	switch {
 	case err == nil:
-		s.usageLines[key] = "Plan usage as of " + resp.DataAsOf.Local().Format("Jan 2 15:04")
+		s.usageLines[key] = "Plan usage as of " + usageTime(resp.DataAsOf, s.Now())
 	case isNoHome && noHome.failure != FailNone && noHome.failure != FailSignedOut:
 		// The home waits on a login problem the thread host or live
 		// capture found; name it rather than calling it a sign-out.
@@ -425,6 +425,9 @@ func (s *Syncer) usageAnswer(key AccountKey, acct *AccountState, groups []UsageG
 	if acct.UsagePause.Reason == pauseRateLimited {
 		acct.UsagePause = UsagePauseState{}
 	}
+	if resp.DataAsOf.After(acct.UsageAsOf) {
+		acct.UsageAsOf = resp.DataAsOf
+	}
 	rows := map[string]mirror.UsageRow{}
 	for _, row := range resp.Threads {
 		rows[row.ThreadID] = row
@@ -550,29 +553,26 @@ func (s *Syncer) showUsage(key AccountKey, now time.Time) {
 		line := s.usageLines[key]
 		s.usageMu.Unlock()
 		if line == "" {
-			line = storedUsageLine(acct)
+			line = storedUsageLine(acct, now)
 		}
 		s.Status.SetPlanUsage(string(key), line)
 	}
 }
 
 // storedUsageLine describes plan usage from saved state, for a daemon that
-// has sent no request since it started. The newest usable report's date
-// comes from the refresh set.
-func storedUsageLine(acct AccountState) string {
-	var newest time.Time
-	for _, entry := range acct.Refresh {
-		if entry.DataAsOf.After(newest) {
-			newest = entry.DataAsOf
-		}
+// has sent no request since it started.
+func storedUsageLine(acct AccountState, now time.Time) string {
+	if acct.UsageAsOf.IsZero() {
+		return "Plan usage: not checked yet"
 	}
-	if !newest.IsZero() {
-		return "Plan usage as of " + newest.Local().Format("Jan 2 15:04")
+	return "Plan usage as of " + usageTime(acct.UsageAsOf, now)
+}
+
+// usageTime formats a report time in local time, with the year when it
+// is not the current year.
+func usageTime(t, now time.Time) string {
+	if t.Local().Year() != now.Local().Year() {
+		return t.Local().Format("Jan 2 2006 15:04")
 	}
-	for _, entry := range acct.UsagePending {
-		if entry.HasRow {
-			return "Plan usage: still updating"
-		}
-	}
-	return "Plan usage: not checked yet"
+	return t.Local().Format("Jan 2 15:04")
 }
