@@ -387,7 +387,7 @@ const createClassComponent = ((options: Parameters<typeof createLegacyComponent>
 
 afterEach(() => {
   vi.useRealTimers();
-  for (const teardown of [...live.values()]) teardown();
+  for (const teardown of live.values()) teardown();
   live.clear();
   setLocale("en");
   document.body.innerHTML = "";
