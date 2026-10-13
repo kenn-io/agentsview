@@ -341,33 +341,47 @@ func (m *Monitor) run(j *join) {
 		case <-leave.C:
 			m.Log.Printf("codex-cloud: chat %s: disconnecting after %s; listening in again on a later run if it still runs",
 				j.threadID, m.limit())
-			m.keepQueued(j, notes, &buf)
-			flush()
+			m.leave(j, notes, &buf, flush)
 			return
 		case <-j.stop:
-			m.keepQueued(j, notes, &buf)
-			flush()
+			m.leave(j, notes, &buf, flush)
 			return
 		}
+	}
+}
+
+// leave saves what the join holds as it leaves, handling queued
+// notifications the way the main loop would: a completed turn queues a
+// sync, and one the monitor cannot read stops capture.
+func (m *Monitor) leave(j *join, notes <-chan Notification, buf *[]mirror.Record, flush func()) {
+	completed, err := m.keepQueued(j, notes, buf)
+	flush()
+	switch {
+	case err != nil:
+		_ = m.stopCapture(j.key, err) // stopCapture returns no error today
+	case completed:
+		m.trigger()
 	}
 }
 
 // keepQueued records the notifications that already arrived when the join
 // leaves. select picks at random among ready cases, so without this a stop
 // can win over queued updates, and the last of them may be the reply's final
-// token count. It stops at the first notification it cannot record.
-func (m *Monitor) keepQueued(j *join, notes <-chan Notification, buf *[]mirror.Record) {
+// token count. It stops at a completed turn or at the first notification it
+// cannot record, and reports which.
+func (m *Monitor) keepQueued(j *join, notes <-chan Notification, buf *[]mirror.Record) (completed bool, err error) {
 	for {
 		select {
 		case n, ok := <-notes:
 			if !ok {
-				return
+				return false, nil
 			}
-			if _, err := m.handle(j, n, buf); err != nil {
-				return
+			completed, err := m.handle(j, n, buf)
+			if err != nil || completed {
+				return completed, err
 			}
 		default:
-			return
+			return false, nil
 		}
 	}
 }
