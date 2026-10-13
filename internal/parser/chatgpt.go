@@ -6,6 +6,7 @@ package parser
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -168,7 +169,7 @@ func ParseChatGPTConversation(data []byte) (ParseResult, error) {
 	}
 	result, ok := convertChatGPTConversation(conv, nil)
 	if !ok {
-		return ParseResult{}, fmt.Errorf("ChatGPT conversation has no importable messages")
+		return ParseResult{}, errors.New("ChatGPT conversation has no importable messages")
 	}
 	return result, nil
 }

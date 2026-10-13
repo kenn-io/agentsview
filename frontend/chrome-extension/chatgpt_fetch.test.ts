@@ -91,4 +91,35 @@ describe("ChatGPT page fetch", () => {
     const sessionCalls = fetch.mock.calls.filter(([input]) => String(input).endsWith("/api/auth/session"));
     expect(sessionCalls).toHaveLength(2);
   });
+  it("fetches a new session after the conversation API rejects the cached token", async () => {
+    const claims = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
+    const token = `eyJhbGciOiJub25lIn0.${claims}.synthetic`;
+    let conversationStatus = 401;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) =>
+      String(input).endsWith("/api/auth/session")
+        ? new Response(JSON.stringify({ accessToken: token }))
+        : new Response('{"items":[]}', { status: conversationStatus }),
+    );
+    const chatgptFetch = loadFetch(fetch);
+    const url = "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated";
+
+    await expect(chatgptFetch(url)).resolves.toMatchObject({ status: 401 });
+    conversationStatus = 200;
+    await chatgptFetch(url);
+
+    const sessionCalls = fetch.mock.calls.filter(([input]) => String(input).endsWith("/api/auth/session"));
+    expect(sessionCalls).toHaveLength(2);
+  });
+
+  it("forwards Retry-After from a rate-limited session response", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      new Response("{}", { status: 429, headers: { "retry-after": "120" } }),
+    );
+    const chatgptFetch = loadFetch(fetch);
+
+    await expect(
+      chatgptFetch("https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated"),
+    ).resolves.toEqual({ status: 429, body: "", retryAfter: "120" });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
 });

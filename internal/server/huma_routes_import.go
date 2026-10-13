@@ -256,9 +256,12 @@ func (s *Server) humaSyncChatGPT(ctx context.Context, in *chatGPTSyncInput) (*hu
 		}
 		ctx, cancel := context.WithCancel(hctx.Context())
 		defer cancel()
+		var compatibilityErr error
 		fetch := func(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
 			response, err := s.chrome.fetch(ctx, chromehost.ChatGPT, path)
-			if errors.Is(err, chromehost.ErrCompatibility) {
+			if errors.Is(err, chromehost.ErrCompatibility) && compatibilityErr == nil {
+				// Keep the recovery error: cancelling the context makes SyncChatGPT return context.Canceled.
+				compatibilityErr = err
 				cancel()
 			}
 			return response, err
@@ -273,6 +276,9 @@ func (s *Server) humaSyncChatGPT(ctx context.Context, in *chatGPTSyncInput) (*hu
 				}
 			},
 		}, s.cfg.InstallationID)
+		if compatibilityErr != nil {
+			err = compatibilityErr
+		}
 		if stats.Imported+stats.Updated > 0 {
 			if s.broadcaster != nil {
 				s.broadcaster.Emit("sessions")

@@ -185,7 +185,7 @@ func SyncChatGPT(ctx context.Context, store interface {
 			}
 			result, err := parser.ParseChatGPTConversation(detail)
 			if err == nil && result.Session.ID != id {
-				err = fmt.Errorf("conversation ID differs from requested UUID")
+				err = errors.New("conversation ID differs from requested UUID")
 			}
 			if err != nil {
 				stats.record(id, importSkipped, err)
@@ -199,14 +199,30 @@ func SyncChatGPT(ctx context.Context, store interface {
 			_ = json.Unmarshal(detail, &detailMetadata)
 			detailUpdatedAt, detailTimeValid := chatGPTUpdateTime(detailMetadata.UpdatedAt)
 			write := func() error {
+				before, err := store.GetSessionFull(ctx, id)
+				if err != nil {
+					stats.record(id, importSkipped, err)
+					return nil
+				}
 				status, err := upsertChatGPTConversation(ctx, store, result, nil)
 				if errors.Is(err, db.ErrSessionTrashed) {
 					stats.record(id, importSkipped, nil)
 					return nil
 				}
+				if err == nil && status == importSkipped && before != nil {
+					// Messages can match while a rename was saved; count that as an update.
+					after, readErr := store.GetSessionFull(ctx, id)
+					if readErr != nil {
+						stats.record(id, importSkipped, readErr)
+						return nil
+					}
+					if after != nil && !ptrEqual(before.SessionName, after.SessionName) {
+						status = importUpdated
+					}
+				}
 				stats.record(id, status, err)
 				if err != nil {
-					return nil
+					return nil //nolint:nilerr // The failure is already recorded in stats above.
 				}
 				stored, readErr := store.GetSessionFull(ctx, id)
 				if readErr == nil && stored != nil && detailTimeValid && detailUpdatedAt == updatedAt {
@@ -242,10 +258,14 @@ func chatGPTUpdateTime(raw jsontext.Value) (string, bool) {
 	}
 	var numeric float64
 	if err := json.Unmarshal(raw, &numeric); err == nil {
-		return strconv.FormatFloat(numeric, 'g', -1, 64), true
+		return strconv.FormatFloat(numeric, 'f', -1, 64), true
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil && text != "" {
+		// Browser responses may encode the same Unix time as a string; compare it as a number.
+		if parsed, err := strconv.ParseFloat(text, 64); err == nil {
+			return strconv.FormatFloat(parsed, 'f', -1, 64), true
+		}
 		return text, true
 	}
 	return "", false
@@ -298,7 +318,7 @@ func isUUID(value string) bool {
 			}
 			continue
 		}
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return false
 		}
 	}
