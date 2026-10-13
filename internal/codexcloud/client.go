@@ -200,10 +200,11 @@ func (c *Conn) send(ctx context.Context, req request) error {
 		return fmt.Errorf("codex-cloud: encode %s: %w", req.Method, err)
 	}
 	if err := c.ws.Write(ctx, websocket.MessageText, data); err != nil {
-		if connErr := c.Err(); connErr != nil {
-			return connErr
-		}
-		return fmt.Errorf("codex-cloud: send %s: %w", req.Method, err)
+		// A failed write leaves the websocket unusable. Ending the connection
+		// here, not only when the read loop notices, lets callers treat the
+		// failure as the network problem it is.
+		c.fail(fmt.Errorf("codex-cloud: send %s: %w", req.Method, err))
+		return c.Err()
 	}
 	return nil
 }
