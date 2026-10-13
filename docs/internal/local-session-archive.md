@@ -104,6 +104,12 @@ browsable state. Empty and `local` machine sentinels denote the seed owner.
 Reparse recognizes them only for that owner's sources, with the same provider
 and path checks as other existing sessions.
 
+Keep real changes to stars, pins, names and other curation on the source archive
+until its final capture. The rehearsal archive is disposable and must receive no
+unique user curation; run synthetic curation checks in a separate copy. If the
+rehearsal contains unique edits, stop final assembly and preserve that database.
+Seed import cannot merge those edits into the final archive.
+
 ## Storage and reuse
 
 The offline commands keep original files in a dedicated embedded Docbank vault
@@ -266,15 +272,16 @@ runbook.
    parser data-version change must carry archived-only sessions forward
    without scanning the vault.
 1. Stop source writers and establish the final capture cutoff, including work
-   since the rehearsal. Assemble the final archive afresh, including a session
-   changed after rehearsal, and verify its final accepted bytes can be
-   reparsed. Verify two independent copies on different physical storage, at
-   least one off the retiring computer, and a cold restore from the final
-   recovery point. Both copies must survive erasing that computer. Record
-   covered sessions and files, exclusions, recovery command, repository ID,
-   snapshot ID and reader version. Confirm that a changed shared Codex index
-   produces a conflict during rehearsal; it must not be mistaken for ongoing
-   source refresh support.
+   since the rehearsal. Assemble the final archive afresh under the
+   [seed assembly rules](#seed-assembly), including a session changed after
+   rehearsal, and verify its final accepted bytes can be reparsed. Verify two
+   independent copies on different physical storage, at least one off the
+   retiring computer, and a cold restore from the final recovery point. Both
+   copies must survive erasing that computer. Record covered sessions and
+   files, exclusions, recovery command, repository ID, snapshot ID and reader
+   version. Confirm that a changed shared Codex index produces a conflict
+   during rehearsal; it must not be mistaken for ongoing source refresh
+   support.
 
 Successful import or backup verification alone does not establish readiness to
 erase the source computer. Require the final cutoff, complete extraction
