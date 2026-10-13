@@ -165,6 +165,22 @@ These snippets are abbreviated illustrations. Complete checked JSON and NDJSON
 outputs live in `testdata/golden/session_export_v6.json` and
 `testdata/golden/session_export_v6.ndjson`.
 
+### Codex Cloud usage
+
+Codex Cloud sessions can export no token figures at all, and add two fields:
+
+- `model_usage` is `null` when AgentsView never listened in on the chat while it
+  ran, so it has no token counts. That chat's usage is unknown and is billed
+  as plan usage; it is not zero. Do not count it as zero tokens or zero cost.
+  Sessions from other agents that recorded no usage still export zeros.
+- `plan_usage` is OpenAI's plan usage report for the chat, with the fields
+  listed under
+  [`agentsview session usage`](/docs/session-api/#agentsview-session-usage). It
+  is omitted until AgentsView has stored a report for the chat.
+- `capture_coverage` has `last_capture_at` and `uncaptured_turns`, the number of
+  finished turns that no token record covers. It is omitted when AgentsView
+  never listened in on the chat.
+
 ### Archive and database identity
 
 `archive_id` identifies the logical archive and survives full resync. Within

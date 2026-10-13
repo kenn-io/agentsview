@@ -464,21 +464,31 @@ coverage. They gain rates when their source changes and the new transcript
 replaces the stored one. Uploading an unchanged transcript keeps the stored row
 and its older signal version, so its calls stay not analyzed.
 
-Codex cloud plan usage adds the `session_plan_usage` table. A
-`GRANT ... ON ALL TABLES` covers only the tables that exist when it runs, so an
-earlier grant does not reach this table. Until the hosted runtime role has
-`SELECT` and `INSERT` on it, hosted startup fails with
-`projection privileges for session_plan_usage are incomplete`. A read-only role
-that serves the PostgreSQL UI also needs `SELECT` on it. After
+This release stores Codex Cloud plan usage in a new `session_plan_usage` table.
+A `GRANT ... ON ALL TABLES` covers only the tables that exist when it runs, so
+earlier grants do not reach this table. After
 `agentsview pg hosted-provision provision` or `agentsview pg push` creates the
-table, run these grants as the schema owner:
+table, run the grants below as the schema owner. Replace the schema names
+(`hosted_sessions`, `agentsview`) and the role names (`hosted_runtime`,
+`agentsview_reader`) with your own.
+
+In explicit hosted mode, the runtime role needs `SELECT` and `INSERT`. Until it
+has them, hosted startup fails with
+`projection privileges for session_plan_usage are incomplete`:
 
 ```sql
 GRANT SELECT, INSERT ON hosted_sessions.session_plan_usage TO hosted_runtime;
-GRANT SELECT ON agentsview.session_plan_usage TO agentsview_reader;
 ```
 
-Replace `agentsview_reader` with each read-only role of a legacy schema.
+Each read-only role that serves the PostgreSQL UI, such as the reader of a
+legacy schema, needs `SELECT`. Until it has it, `agentsview pg serve` with that
+role fails to start with `schema incompatible` and
+`session_plan_usage table missing required columns`. The cause is the missing
+grant: grant it instead of dropping the schema as that message suggests.
+
+```sql
+GRANT SELECT ON agentsview.session_plan_usage TO agentsview_reader;
+```
 
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.
