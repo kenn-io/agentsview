@@ -2429,7 +2429,16 @@
   "tool_sequences_unavailable": "This archive doesn't record transcript versions, so tool sequences aren't available.",
   "tool_sequences_none_recorded": "No tool calls recorded in this session.",
   "tool_sequences_no_sequences": "No tool call returned an error or empty result.",
-  "tool_sequences_sequence_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} sequence","countPlural=other":"{countLabel} sequences"}}],
+  "tool_sequences_sequence_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} sequence",
+        "countPlural=other": "{countLabel} sequences"
+      }
+    }
+  ],
   "tool_sequences_ending_recovered": "Recovered",
   "tool_sequences_ending_abandoned": "Abandoned",
   "tool_sequences_ending_open": "Open",
@@ -2448,10 +2457,25 @@
   "tool_sequences_missing_identity": "No tool-use ID",
   "tool_sequences_input": "Input",
   "tool_sequences_no_input": "No input recorded.",
-  "tool_sequences_byte_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} byte","countPlural=other":"{countLabel} bytes"}}],
+  "tool_sequences_byte_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "{countLabel} byte", "countPlural=other": "{countLabel} bytes" }
+    }
+  ],
   "tool_sequences_result": "Result",
   "tool_sequences_result_unknown": "This result isn't text, so its outcome is unknown.",
-  "tool_sequences_result_unavailable": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"The retained {countLabel} byte of result text is unavailable here.","countPlural=other":"The retained {countLabel} bytes of result text are unavailable here."}}],
+  "tool_sequences_result_unavailable": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "The retained {countLabel} byte of result text is unavailable here.",
+        "countPlural=other": "The retained {countLabel} bytes of result text are unavailable here."
+      }
+    }
+  ],
   "tool_sequences_result_empty": "The tool returned nothing.",
   "tool_sequences_result_size_unknown": "Result size unavailable.",
   "tool_sequences_not_measured": "Not measured",
@@ -2460,18 +2484,106 @@
   "tool_sequences_flag_identical": "Same input repeated",
   "tool_sequences_flag_near_identical": "Reformatted repeat",
   "tool_sequences_flag_tool_switch": "Tool switched",
-  "tool_sequences_sequence_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} call in sequences","countPlural=other":"{countLabel} calls in sequences"}}],
-  "tool_sequences_session_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} tool call in session","countPlural=other":"{countLabel} tool calls in session"}}],
+  "tool_sequences_sequence_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} call in sequences",
+        "countPlural=other": "{countLabel} calls in sequences"
+      }
+    }
+  ],
+  "tool_sequences_session_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} tool call in session",
+        "countPlural=other": "{countLabel} tool calls in session"
+      }
+    }
+  ],
   "tool_sequences_legend": "Outcome colors",
   "tool_sequences_message": "Message {ordinal}",
   "tool_sequences_messages_range": "Messages {first}–{last}",
   "tool_sequences_jump_label": "Message {ordinal}: open the {tool} call in the transcript",
-  "tool_sequences_more_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"+{countLabel} more","countPlural=other":"+{countLabel} more"}}],
-  "tool_sequences_calls_hidden_between": [{"declarations":["input count","input countLabel","input from","input to","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} more call between message {from} and message {to} isn't shown.","countPlural=other":"{countLabel} more calls between message {from} and message {to} aren't shown."}}],
-  "tool_sequences_calls_in_row": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} call in a row.","countPlural=other":"{countLabel} calls in a row."}}],
-  "tool_sequences_showing_sequences": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Showing {shownLabel} of {countLabel} sequence. The rest come later in the session.","countPlural=other":"Showing {shownLabel} of {countLabel} sequences. The rest come later in the session."}}],
-  "tool_sequences_calls_not_shown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} call in sequences isn't shown in this view.","countPlural=other":"{countLabel} calls in sequences aren't shown in this view."}}],
-  "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"Preview shows {shownLabel} of {countLabel} byte.","countPlural=other":"Preview shows {shownLabel} of {countLabel} bytes."}}],
+  "tool_sequences_more_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "+{countLabel} more",
+        "countPlural=other": "+{countLabel} more"
+      }
+    }
+  ],
+  "tool_sequences_calls_hidden_between": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input from",
+        "input to",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} more call between message {from} and message {to} isn't shown.",
+        "countPlural=other": "{countLabel} more calls between message {from} and message {to} aren't shown."
+      }
+    }
+  ],
+  "tool_sequences_calls_in_row": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} call in a row.",
+        "countPlural=other": "{countLabel} calls in a row."
+      }
+    }
+  ],
+  "tool_sequences_showing_sequences": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Showing {shownLabel} of {countLabel} sequence. The rest come later in the session.",
+        "countPlural=other": "Showing {shownLabel} of {countLabel} sequences. The rest come later in the session."
+      }
+    }
+  ],
+  "tool_sequences_calls_not_shown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} call in sequences isn't shown in this view.",
+        "countPlural=other": "{countLabel} calls in sequences aren't shown in this view."
+      }
+    }
+  ],
+  "tool_sequences_preview_shows": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Preview shows {shownLabel} of {countLabel} byte.",
+        "countPlural=other": "Preview shows {shownLabel} of {countLabel} bytes."
+      }
+    }
+  ],
   "tool_sequences_full_input_in_message": "Full input is in message {ordinal}.",
   "tool_sequences_full_result_in_message": "Full result is in message {ordinal}.",
   "tool_sequences_retry": "Try again",
@@ -2508,30 +2620,190 @@
   "tool_effectiveness_assessment_helped": "Helped",
   "tool_effectiveness_assessment_did_not_help": "Did not help",
   "tool_effectiveness_assessment_unknown": "Unclear",
-  "tool_effectiveness_omission_budget_input": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} call input cut to at most {keptLabel} bytes","countPlural=other":"{countLabel} call inputs cut to at most {keptLabel} bytes each"}}],
-  "tool_effectiveness_omission_budget_result": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} call result cut to at most {keptLabel} bytes","countPlural=other":"{countLabel} call results cut to at most {keptLabel} bytes each"}}],
-  "tool_effectiveness_omission_unretained": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} call result not retained","countPlural=other":"{countLabel} call results not retained"}}],
-  "tool_effectiveness_omission_no_result": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} call with no recorded result","countPlural=other":"{countLabel} calls with no recorded result"}}],
-  "tool_effectiveness_omission_previews": [{"declarations":["input count","input countLabel","input charsLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} message shown as a preview of {charsLabel} characters","countPlural=other":"{countLabel} messages shown as previews of {charsLabel} characters"}}],
+  "tool_effectiveness_omission_budget_input": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} call input cut to at most {keptLabel} bytes",
+        "countPlural=other": "{countLabel} call inputs cut to at most {keptLabel} bytes each"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_budget_result": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} call result cut to at most {keptLabel} bytes",
+        "countPlural=other": "{countLabel} call results cut to at most {keptLabel} bytes each"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_unretained": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} call result not retained",
+        "countPlural=other": "{countLabel} call results not retained"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_no_result": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} call with no recorded result",
+        "countPlural=other": "{countLabel} calls with no recorded result"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_previews": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input charsLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} message shown as a preview of {charsLabel} characters",
+        "countPlural=other": "{countLabel} messages shown as previews of {charsLabel} characters"
+      }
+    }
+  ],
   "tool_effectiveness_details_unavailable": "Report details are unavailable, so the saved text is shown instead.",
-  "tool_effectiveness_session_changed": [{"declarations":["input count","input countLabel","input currentLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"The session changed after this report: the model judged {countLabel} call and the session now has {currentLabel}.","countPlural=other":"The session changed after this report: the model judged {countLabel} calls and the session now has {currentLabel}."}}],
+  "tool_effectiveness_session_changed": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input currentLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "The session changed after this report: the model judged {countLabel} call and the session now has {currentLabel}.",
+        "countPlural=other": "The session changed after this report: the model judged {countLabel} calls and the session now has {currentLabel}."
+      }
+    }
+  ],
   "tool_effectiveness_session_revised": "The session changed after this report was generated, so the facts below may differ from what the model judged.",
   "tool_sequences_message_call": "Message {ordinal}, call {callNumber}",
   "tool_sequences_jump_call_label": "Message {ordinal}, call {callNumber}: open the {tool} call in the transcript",
-  "tool_effectiveness_calls_judged": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} call judged","countPlural=other":"{countLabel} calls judged"}}],
-  "tool_effectiveness_conclusion_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} conclusion","countPlural=other":"{countLabel} conclusions"}}],
-  "tool_effectiveness_count_helped": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} helped","countPlural=other":"{countLabel} helped"}}],
-  "tool_effectiveness_count_did_not_help": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} did not help","countPlural=other":"{countLabel} did not help"}}],
-  "tool_effectiveness_count_unknown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} unclear","countPlural=other":"{countLabel} unclear"}}],
-  "tool_effectiveness_calls_cited": [{"declarations":["input count","input countLabel","input citedLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{citedLabel} of {countLabel} call cited","countPlural=other":"{citedLabel} of {countLabel} calls cited"}}],
+  "tool_effectiveness_calls_judged": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} call judged",
+        "countPlural=other": "{countLabel} calls judged"
+      }
+    }
+  ],
+  "tool_effectiveness_conclusion_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} conclusion",
+        "countPlural=other": "{countLabel} conclusions"
+      }
+    }
+  ],
+  "tool_effectiveness_count_helped": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} helped",
+        "countPlural=other": "{countLabel} helped"
+      }
+    }
+  ],
+  "tool_effectiveness_count_did_not_help": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} did not help",
+        "countPlural=other": "{countLabel} did not help"
+      }
+    }
+  ],
+  "tool_effectiveness_count_unknown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} unclear",
+        "countPlural=other": "{countLabel} unclear"
+      }
+    }
+  ],
+  "tool_effectiveness_calls_cited": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input citedLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{citedLabel} of {countLabel} call cited",
+        "countPlural=other": "{citedLabel} of {countLabel} calls cited"
+      }
+    }
+  ],
   "tool_effectiveness_select_citation": "Select a citation to see the calls",
-  "tool_effectiveness_citation_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} citation","countPlural=other":"{countLabel} citations"}}],
+  "tool_effectiveness_citation_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} citation",
+        "countPlural=other": "{countLabel} citations"
+      }
+    }
+  ],
   "tool_effectiveness_message_label": "Message",
   "tool_effectiveness_message_no_call": "Message text, no tool call",
   "tool_effectiveness_left_out": "Left out of the model's input",
-  "tool_effectiveness_model_saw": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"model saw {countLabel} byte","countPlural=other":"model saw {countLabel} bytes"}}],
+  "tool_effectiveness_model_saw": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "model saw {countLabel} byte",
+        "countPlural=other": "model saw {countLabel} bytes"
+      }
+    }
+  ],
   "tool_effectiveness_open_session": "Open session",
-  "tool_effectiveness_message_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} message","countPlural=other":"{countLabel} messages"}}],
+  "tool_effectiveness_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} message",
+        "countPlural=other": "{countLabel} messages"
+      }
+    }
+  ],
   "analytics_tool_empty_rate": "Empty rate",
   "analytics_tool_repeat_rate": "Repeat rate",
   "analytics_tool_recovery_rate": "Recovery rate",
@@ -2550,14 +2822,8 @@
   "analytics_tool_recovery_note": "Recovery means a later call returned content. The tool that started the sequence owns its recovery rate.",
   "analytics_tool_evidence_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countLabel} session",
         "countPlural=other": "{countLabel} sessions"

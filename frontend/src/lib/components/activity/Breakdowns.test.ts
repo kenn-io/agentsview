@@ -281,8 +281,8 @@ describe("Breakdowns", () => {
     await tick();
 
     expect(target.querySelectorAll("a.bar-label")).toHaveLength(0);
-    const labels = [...target.querySelectorAll("span.bar-label")].map(
-      (element) => element.textContent?.trim(),
+    const labels = [...target.querySelectorAll("span.bar-label")].map((element) =>
+      element.textContent?.trim(),
     );
     expect(labels).toEqual(["alpha", "beta"]);
     unmount(component);

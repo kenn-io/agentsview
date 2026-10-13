@@ -173,7 +173,7 @@ export class RouterStore {
     }
     return {
       ...current,
-      ...(params ?? {}),
+      ...params,
     };
   }
 

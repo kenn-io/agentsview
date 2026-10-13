@@ -66,7 +66,7 @@ export function chooseInitialLocale(): SupportedLocale {
 }
 
 export function setLocale(value: SupportedLocale) {
-  setParaglideLocale(value);
+  void setParaglideLocale(value);
   try {
     localStorage?.setItem(LOCALE_STORAGE_KEY, value);
   } catch {

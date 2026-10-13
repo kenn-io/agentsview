@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { initI18n } from "../../i18n/index.js";
 import { YOKED_DATES_STORAGE_KEY, yokedDates } from "../../stores/yokedDates.svelte.js";

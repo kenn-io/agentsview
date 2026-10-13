@@ -512,36 +512,69 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  const names = (by: string, from: number, to: number) => Array.from({ length: to - from }, (_, index) => `${by}-${from + index}`);
+  const names = (by: string, from: number, to: number) =>
+    Array.from({ length: to - from }, (_, index) => `${by}-${from + index}`);
   const seriesSummary = (by: "model" | "agent", ids: string[]) => {
     const entry = dailyEntry(0);
     entry.projectBreakdowns = [];
-    const rows = ids.map((id) => ({ inputTokens: 60, outputTokens: 30, cacheCreationTokens: 0, cacheReadTokens: 0, cost: testMoney(12 - Number(id.split("-")[1])) }));
-    if (by === "model") entry.modelBreakdowns = rows.map((row, index) => ({ ...row, modelName: ids[index]! }));
+    const rows = ids.map((id) => ({
+      inputTokens: 60,
+      outputTokens: 30,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(12 - Number(id.split("-")[1])),
+    }));
+    if (by === "model")
+      entry.modelBreakdowns = rows.map((row, index) => ({ ...row, modelName: ids[index]! }));
     else entry.agentBreakdowns = rows.map((row, index) => ({ ...row, agent: ids[index]! }));
     return usageSummary([entry]);
   };
 
-  it.each<{ name: string; by: "model" | "agent"; selected: string; reference?: string[]; brushed?: string[]; plotted: string[]; legend: string[]; lit: string[] }>([
+  it.each<{
+    name: string;
+    by: "model" | "agent";
+    selected: string;
+    reference?: string[];
+    brushed?: string[];
+    plotted: string[];
+    legend: string[];
+    lit: string[];
+  }>([
     {
       name: "keeps the unselected entries of a single selected series and dims them",
-      by: "model", selected: "model-0", reference: names("model", 0, 2), plotted: ["model-0"],
-      legend: ["model-0", "model-1"], lit: ["model-0"],
+      by: "model",
+      selected: "model-0",
+      reference: names("model", 0, 2),
+      plotted: ["model-0"],
+      legend: ["model-0", "model-1"],
+      lit: ["model-0"],
     },
     {
       name: "lists a selected series outside the unselected top ten before Other",
-      by: "model", selected: "model-11", reference: names("model", 0, 12), plotted: ["model-11"],
-      legend: [...names("model", 0, 10), "model-11", "Other"], lit: ["model-11"],
+      by: "model",
+      selected: "model-11",
+      reference: names("model", 0, 12),
+      plotted: ["model-11"],
+      legend: [...names("model", 0, 10), "model-11", "Other"],
+      lit: ["model-11"],
     },
     {
       name: "keeps Other in the legend when eleven selected agents draw it",
-      by: "agent", selected: names("agent", 1, 12).join(","), reference: names("agent", 0, 12), plotted: names("agent", 1, 12),
-      legend: [...names("agent", 0, 11), "Other"], lit: [...names("agent", 1, 11), "Other"],
+      by: "agent",
+      selected: names("agent", 1, 12).join(","),
+      reference: names("agent", 0, 12),
+      plotted: names("agent", 1, 12),
+      legend: [...names("agent", 0, 11), "Other"],
+      lit: [...names("agent", 1, 11), "Other"],
     },
     {
       name: "lists Other once when the full window has more series than the brushed range",
-      by: "model", selected: "", brushed: names("model", 0, 10), plotted: names("model", 0, 11),
-      legend: [...names("model", 0, 10), "Other"], lit: [...names("model", 0, 10), "Other"],
+      by: "model",
+      selected: "",
+      brushed: names("model", 0, 10),
+      plotted: names("model", 0, 11),
+      legend: [...names("model", 0, 10), "Other"],
+      lit: [...names("model", 0, 10), "Other"],
     },
   ])("$name", async ({ by, selected, reference, brushed, plotted, legend, lit }) => {
     usage.toggles.timeSeries.groupBy = by;
@@ -557,7 +590,11 @@ describe("CostTimeSeriesChart", () => {
 
     const items = Array.from(document.querySelectorAll<HTMLElement>(".legend-item"));
     expect(items.map((item) => item.textContent?.trim())).toEqual(legend);
-    expect(items.filter((item) => !item.classList.contains("dimmed")).map((item) => item.textContent?.trim())).toEqual(lit);
+    expect(
+      items
+        .filter((item) => !item.classList.contains("dimmed"))
+        .map((item) => item.textContent?.trim()),
+    ).toEqual(lit);
     unmount(component);
   });
 

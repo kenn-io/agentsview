@@ -258,21 +258,21 @@ class AnalyticsStore {
     }
     sessions.activeSessionId = null;
     sessions.invalidateFilterCaches();
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   clearAgent() {
     this.agent = "";
     sessions.filters.agent = "";
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   clearModel() {
     this.model = "";
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   toggleAgent(agent: string) {
@@ -286,8 +286,8 @@ class AnalyticsStore {
     this.agent = current.join(",");
     sessions.filters.agent = this.agent;
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   toggleModel(model: string) {
@@ -298,15 +298,15 @@ class AnalyticsStore {
       current.add(model);
     }
     this.model = [...current].join(",");
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   clearMinUserMessages() {
     this.minUserMessages = 0;
     sessions.filters.minUserMessages = 0;
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   clearIncludeOneShot() {
@@ -314,8 +314,8 @@ class AnalyticsStore {
     sessions.filters.includeOneShot = true;
     sessions.activeSessionId = null;
     sessions.invalidateFilterCaches();
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   clearIncludeAutomated() {
@@ -324,51 +324,51 @@ class AnalyticsStore {
     sessions.filters.includeAutomated = false;
     sessions.activeSessionId = null;
     sessions.invalidateFilterCaches();
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   setAutomatedScope(scope: AutomatedScope) {
     this.automatedScope = scope;
     this.includeAutomated = scope !== "human";
-    this.fetchSignalsForQuality();
+    void this.fetchSignalsForQuality();
   }
 
   clearRecentlyActive() {
     this.recentlyActive = false;
     sessions.filters.recentlyActive = false;
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   clearDate() {
     this.selectedDate = null;
     this.clearDrilldownData({ preserveHourOfWeek: true });
-    this.fetchSummary();
-    this.fetchProjects();
-    this.fetchSessionShape();
-    this.fetchVelocity();
-    this.fetchTools();
-    this.fetchSkills();
-    this.fetchTopSessions();
-    this.fetchSignals();
+    void this.fetchSummary();
+    void this.fetchProjects();
+    void this.fetchSessionShape();
+    void this.fetchVelocity();
+    void this.fetchTools();
+    void this.fetchSkills();
+    void this.fetchTopSessions();
+    void this.fetchSignals();
   }
 
   clearProject() {
     this.project = "";
     sessions.filters.project = "";
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   clearMachine() {
     this.machine = "";
     sessions.filters.machine = "";
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   removeMachine(machine: string) {
@@ -376,16 +376,16 @@ class AnalyticsStore {
     this.machine = current.filter((m) => m !== machine).join(",");
     sessions.filters.machine = this.machine;
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   clearTermination() {
     this.termination = "";
     sessions.filters.termination = "";
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   toggleTerminationStatus(status: string) {
@@ -396,23 +396,23 @@ class AnalyticsStore {
     this.termination = next;
     sessions.filters.termination = next;
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchAll();
+    void sessions.load();
+    void this.fetchAll();
   }
 
   clearTimeFilter() {
     this.selectedDow = null;
     this.selectedHour = null;
-    this.fetchSummary();
-    this.fetchActivity();
-    this.fetchHeatmap();
-    this.fetchProjects();
-    this.fetchSessionShape();
-    this.fetchVelocity();
-    this.fetchTools();
-    this.fetchSkills();
-    this.fetchTopSessions();
-    this.fetchSignals();
+    void this.fetchSummary();
+    void this.fetchActivity();
+    void this.fetchHeatmap();
+    void this.fetchProjects();
+    void this.fetchSessionShape();
+    void this.fetchVelocity();
+    void this.fetchTools();
+    void this.fetchSkills();
+    void this.fetchTopSessions();
+    void this.fetchSignals();
   }
 
   private baseParams(
@@ -852,7 +852,7 @@ class AnalyticsStore {
 
   setTopMetric(m: TopSessionsMetric) {
     this.topMetric = m;
-    this.fetchTopSessions();
+    void this.fetchTopSessions();
   }
 
   applyDateRange(from: string, to: string) {
@@ -886,16 +886,16 @@ class AnalyticsStore {
     this.clearDrilldownData();
     sessions.applyPanelDateFilters({ date_from: from, date_to: to }, null);
     sessions.activeSessionId = null;
-    sessions.load();
-    this.fetchSummary();
-    this.fetchProjects();
-    this.fetchHourOfWeek();
-    this.fetchSessionShape();
-    this.fetchVelocity();
-    this.fetchTools();
-    this.fetchSkills();
-    this.fetchTopSessions();
-    this.fetchSignals();
+    void sessions.load();
+    void this.fetchSummary();
+    void this.fetchProjects();
+    void this.fetchHourOfWeek();
+    void this.fetchSessionShape();
+    void this.fetchVelocity();
+    void this.fetchTools();
+    void this.fetchSkills();
+    void this.fetchTopSessions();
+    void this.fetchSignals();
   }
 
   clearActivitySelection() {
@@ -903,25 +903,25 @@ class AnalyticsStore {
     this.selectedActivityRange = null;
     this.clearDrilldownData();
     this.restoreSessionsParentRange();
-    this.fetchSummary();
-    this.fetchProjects();
-    this.fetchHourOfWeek();
-    this.fetchSessionShape();
-    this.fetchVelocity();
-    this.fetchTools();
-    this.fetchSkills();
-    this.fetchTopSessions();
-    this.fetchSignals();
+    void this.fetchSummary();
+    void this.fetchProjects();
+    void this.fetchHourOfWeek();
+    void this.fetchSessionShape();
+    void this.fetchVelocity();
+    void this.fetchTools();
+    void this.fetchSkills();
+    void this.fetchTopSessions();
+    void this.fetchSignals();
   }
 
   setDateRange(from: string, to: string) {
     this.applyDateRange(from, to);
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   setRollingWindow(days: number) {
     this.applyRollingWindow(days);
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   selectDate(date: string) {
@@ -936,15 +936,15 @@ class AnalyticsStore {
       this.selectedDate = date;
     }
     this.clearDrilldownData({ preserveHourOfWeek: !hadActivityRange });
-    this.fetchSummary();
-    this.fetchProjects();
-    if (hadActivityRange) this.fetchHourOfWeek(this.baseParams({ includeTime: false }));
-    this.fetchSessionShape();
-    this.fetchVelocity();
-    this.fetchTools();
-    this.fetchSkills();
-    this.fetchTopSessions();
-    this.fetchSignals();
+    void this.fetchSummary();
+    void this.fetchProjects();
+    if (hadActivityRange) void this.fetchHourOfWeek(this.baseParams({ includeTime: false }));
+    void this.fetchSessionShape();
+    void this.fetchVelocity();
+    void this.fetchTools();
+    void this.fetchSkills();
+    void this.fetchTopSessions();
+    void this.fetchSignals();
   }
 
   private restoreSessionsParentRange() {
@@ -973,7 +973,7 @@ class AnalyticsStore {
 
   setGranularity(g: Granularity) {
     this.granularity = g;
-    this.fetchActivity();
+    void this.fetchActivity();
   }
 
   async setSkillsGranularity(g: Granularity): Promise<FetchResult> {
@@ -983,7 +983,7 @@ class AnalyticsStore {
 
   setMetric(m: HeatmapMetric) {
     this.metric = m;
-    this.fetchHeatmap();
+    void this.fetchHeatmap();
   }
 
   selectHourOfWeek(dow: number | null, hour: number | null) {
@@ -995,16 +995,16 @@ class AnalyticsStore {
       this.selectedDow = dow;
       this.selectedHour = hour;
     }
-    this.fetchSummary();
-    this.fetchActivity();
-    this.fetchHeatmap();
-    this.fetchProjects();
-    this.fetchSessionShape();
-    this.fetchVelocity();
-    this.fetchTools();
-    this.fetchSkills();
-    this.fetchTopSessions();
-    this.fetchSignals();
+    void this.fetchSummary();
+    void this.fetchActivity();
+    void this.fetchHeatmap();
+    void this.fetchProjects();
+    void this.fetchSessionShape();
+    void this.fetchVelocity();
+    void this.fetchTools();
+    void this.fetchSkills();
+    void this.fetchTopSessions();
+    void this.fetchSignals();
   }
 
   setProject(name: string) {
@@ -1013,7 +1013,7 @@ class AnalyticsStore {
     } else {
       this.project = name;
     }
-    this.fetchAll();
+    void this.fetchAll();
   }
 }
 

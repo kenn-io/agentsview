@@ -2346,7 +2346,16 @@
   "tool_sequences_unavailable": "此封存不記錄對話紀錄的版本，因此無法顯示工具序列。",
   "tool_sequences_none_recorded": "此工作階段未記錄工具呼叫。",
   "tool_sequences_no_sequences": "沒有工具呼叫傳回錯誤或空結果。",
-  "tool_sequences_sequence_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 個序列","countPlural=other":"{countLabel} 個序列"}}],
+  "tool_sequences_sequence_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 個序列",
+        "countPlural=other": "{countLabel} 個序列"
+      }
+    }
+  ],
   "tool_sequences_ending_recovered": "已恢復",
   "tool_sequences_ending_abandoned": "已結束",
   "tool_sequences_ending_open": "未結束",
@@ -2365,10 +2374,28 @@
   "tool_sequences_missing_identity": "沒有工具呼叫 ID",
   "tool_sequences_input": "輸入",
   "tool_sequences_no_input": "未記錄輸入。",
-  "tool_sequences_byte_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 位元組","countPlural=other":"{countLabel} 位元組"}}],
+  "tool_sequences_byte_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 位元組",
+        "countPlural=other": "{countLabel} 位元組"
+      }
+    }
+  ],
   "tool_sequences_result": "結果",
   "tool_sequences_result_unknown": "此結果不是文字，因此結果未知。",
-  "tool_sequences_result_unavailable": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"此處無法顯示保留的 {countLabel} 位元組結果文字。","countPlural=other":"此處無法顯示保留的 {countLabel} 位元組結果文字。"}}],
+  "tool_sequences_result_unavailable": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "此處無法顯示保留的 {countLabel} 位元組結果文字。",
+        "countPlural=other": "此處無法顯示保留的 {countLabel} 位元組結果文字。"
+      }
+    }
+  ],
   "tool_sequences_result_empty": "工具未傳回任何內容。",
   "tool_sequences_result_size_unknown": "結果大小未知。",
   "tool_sequences_not_measured": "未測量",
@@ -2377,18 +2404,103 @@
   "tool_sequences_flag_identical": "重複相同輸入",
   "tool_sequences_flag_near_identical": "格式不同的重複",
   "tool_sequences_flag_tool_switch": "切換了工具",
-  "tool_sequences_sequence_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"序列中 {countLabel} 次呼叫","countPlural=other":"序列中 {countLabel} 次呼叫"}}],
-  "tool_sequences_session_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"工作階段中 {countLabel} 次工具呼叫","countPlural=other":"工作階段中 {countLabel} 次工具呼叫"}}],
+  "tool_sequences_sequence_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "序列中 {countLabel} 次呼叫",
+        "countPlural=other": "序列中 {countLabel} 次呼叫"
+      }
+    }
+  ],
+  "tool_sequences_session_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "工作階段中 {countLabel} 次工具呼叫",
+        "countPlural=other": "工作階段中 {countLabel} 次工具呼叫"
+      }
+    }
+  ],
   "tool_sequences_legend": "結果顏色",
   "tool_sequences_message": "訊息 {ordinal}",
   "tool_sequences_messages_range": "訊息 {first}–{last}",
   "tool_sequences_jump_label": "訊息 {ordinal}：在對話中開啟 {tool} 呼叫",
-  "tool_sequences_more_calls": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"+{countLabel} 次","countPlural=other":"+{countLabel} 次"}}],
-  "tool_sequences_calls_hidden_between": [{"declarations":["input count","input countLabel","input from","input to","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"訊息 {from} 與訊息 {to} 之間還有 {countLabel} 次呼叫未顯示。","countPlural=other":"訊息 {from} 與訊息 {to} 之間還有 {countLabel} 次呼叫未顯示。"}}],
-  "tool_sequences_calls_in_row": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"連續 {countLabel} 次呼叫。","countPlural=other":"連續 {countLabel} 次呼叫。"}}],
-  "tool_sequences_showing_sequences": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"顯示 {countLabel} 個序列中的 {shownLabel} 個。其餘序列在工作階段後面。","countPlural=other":"顯示 {countLabel} 個序列中的 {shownLabel} 個。其餘序列在工作階段後面。"}}],
-  "tool_sequences_calls_not_shown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"此檢視未顯示序列中的 {countLabel} 次呼叫。","countPlural=other":"此檢視未顯示序列中的 {countLabel} 次呼叫。"}}],
-  "tool_sequences_preview_shows": [{"declarations":["input count","input countLabel","input shownLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。","countPlural=other":"預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。"}}],
+  "tool_sequences_more_calls": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "+{countLabel} 次", "countPlural=other": "+{countLabel} 次" }
+    }
+  ],
+  "tool_sequences_calls_hidden_between": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input from",
+        "input to",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "訊息 {from} 與訊息 {to} 之間還有 {countLabel} 次呼叫未顯示。",
+        "countPlural=other": "訊息 {from} 與訊息 {to} 之間還有 {countLabel} 次呼叫未顯示。"
+      }
+    }
+  ],
+  "tool_sequences_calls_in_row": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "連續 {countLabel} 次呼叫。",
+        "countPlural=other": "連續 {countLabel} 次呼叫。"
+      }
+    }
+  ],
+  "tool_sequences_showing_sequences": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "顯示 {countLabel} 個序列中的 {shownLabel} 個。其餘序列在工作階段後面。",
+        "countPlural=other": "顯示 {countLabel} 個序列中的 {shownLabel} 個。其餘序列在工作階段後面。"
+      }
+    }
+  ],
+  "tool_sequences_calls_not_shown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "此檢視未顯示序列中的 {countLabel} 次呼叫。",
+        "countPlural=other": "此檢視未顯示序列中的 {countLabel} 次呼叫。"
+      }
+    }
+  ],
+  "tool_sequences_preview_shows": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input shownLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。",
+        "countPlural=other": "預覽顯示 {countLabel} 位元組中的 {shownLabel} 位元組。"
+      }
+    }
+  ],
   "tool_sequences_full_input_in_message": "完整輸入在訊息 {ordinal} 中。",
   "tool_sequences_full_result_in_message": "完整結果在訊息 {ordinal} 中。",
   "tool_sequences_retry": "重試",
@@ -2425,30 +2537,190 @@
   "tool_effectiveness_assessment_helped": "有幫助",
   "tool_effectiveness_assessment_did_not_help": "沒有幫助",
   "tool_effectiveness_assessment_unknown": "不明確",
-  "tool_effectiveness_omission_budget_input": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 個呼叫輸入截斷為最多 {keptLabel} 位元組","countPlural=other":"{countLabel} 個呼叫輸入截斷為最多 {keptLabel} 位元組"}}],
-  "tool_effectiveness_omission_budget_result": [{"declarations":["input count","input countLabel","input keptLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 個呼叫結果截斷為最多 {keptLabel} 位元組","countPlural=other":"{countLabel} 個呼叫結果截斷為最多 {keptLabel} 位元組"}}],
-  "tool_effectiveness_omission_unretained": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 個呼叫結果未保留","countPlural=other":"{countLabel} 個呼叫結果未保留"}}],
-  "tool_effectiveness_omission_no_result": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 個呼叫沒有記錄到結果","countPlural=other":"{countLabel} 個呼叫沒有記錄到結果"}}],
-  "tool_effectiveness_omission_previews": [{"declarations":["input count","input countLabel","input charsLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 則訊息以 {charsLabel} 字元預覽顯示","countPlural=other":"{countLabel} 則訊息以 {charsLabel} 字元預覽顯示"}}],
+  "tool_effectiveness_omission_budget_input": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 個呼叫輸入截斷為最多 {keptLabel} 位元組",
+        "countPlural=other": "{countLabel} 個呼叫輸入截斷為最多 {keptLabel} 位元組"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_budget_result": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input keptLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 個呼叫結果截斷為最多 {keptLabel} 位元組",
+        "countPlural=other": "{countLabel} 個呼叫結果截斷為最多 {keptLabel} 位元組"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_unretained": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 個呼叫結果未保留",
+        "countPlural=other": "{countLabel} 個呼叫結果未保留"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_no_result": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 個呼叫沒有記錄到結果",
+        "countPlural=other": "{countLabel} 個呼叫沒有記錄到結果"
+      }
+    }
+  ],
+  "tool_effectiveness_omission_previews": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input charsLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 則訊息以 {charsLabel} 字元預覽顯示",
+        "countPlural=other": "{countLabel} 則訊息以 {charsLabel} 字元預覽顯示"
+      }
+    }
+  ],
   "tool_effectiveness_details_unavailable": "報告詳細資料無法使用，因此顯示已儲存的文字。",
-  "tool_effectiveness_session_changed": [{"declarations":["input count","input countLabel","input currentLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"此報告產生後工作階段已變更：模型評估了 {countLabel} 次呼叫，工作階段現在有 {currentLabel} 次。","countPlural=other":"此報告產生後工作階段已變更：模型評估了 {countLabel} 次呼叫，工作階段現在有 {currentLabel} 次。"}}],
+  "tool_effectiveness_session_changed": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input currentLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "此報告產生後工作階段已變更：模型評估了 {countLabel} 次呼叫，工作階段現在有 {currentLabel} 次。",
+        "countPlural=other": "此報告產生後工作階段已變更：模型評估了 {countLabel} 次呼叫，工作階段現在有 {currentLabel} 次。"
+      }
+    }
+  ],
   "tool_effectiveness_session_revised": "此報告產生後工作階段已變更，因此下方事實可能與模型評估的內容不同。",
   "tool_sequences_message_call": "訊息 {ordinal}，呼叫 {callNumber}",
   "tool_sequences_jump_call_label": "訊息 {ordinal}，呼叫 {callNumber}：在對話中開啟 {tool} 呼叫",
-  "tool_effectiveness_calls_judged": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"已評估 {countLabel} 次呼叫","countPlural=other":"已評估 {countLabel} 次呼叫"}}],
-  "tool_effectiveness_conclusion_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 條結論","countPlural=other":"{countLabel} 條結論"}}],
-  "tool_effectiveness_count_helped": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"有幫助 {countLabel}","countPlural=other":"有幫助 {countLabel}"}}],
-  "tool_effectiveness_count_did_not_help": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"無幫助 {countLabel}","countPlural=other":"無幫助 {countLabel}"}}],
-  "tool_effectiveness_count_unknown": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"不明確 {countLabel}","countPlural=other":"不明確 {countLabel}"}}],
-  "tool_effectiveness_calls_cited": [{"declarations":["input count","input countLabel","input citedLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"引用了 {countLabel} 次呼叫中的 {citedLabel} 次","countPlural=other":"引用了 {countLabel} 次呼叫中的 {citedLabel} 次"}}],
+  "tool_effectiveness_calls_judged": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "已評估 {countLabel} 次呼叫",
+        "countPlural=other": "已評估 {countLabel} 次呼叫"
+      }
+    }
+  ],
+  "tool_effectiveness_conclusion_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 條結論",
+        "countPlural=other": "{countLabel} 條結論"
+      }
+    }
+  ],
+  "tool_effectiveness_count_helped": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "有幫助 {countLabel}",
+        "countPlural=other": "有幫助 {countLabel}"
+      }
+    }
+  ],
+  "tool_effectiveness_count_did_not_help": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "無幫助 {countLabel}",
+        "countPlural=other": "無幫助 {countLabel}"
+      }
+    }
+  ],
+  "tool_effectiveness_count_unknown": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "不明確 {countLabel}",
+        "countPlural=other": "不明確 {countLabel}"
+      }
+    }
+  ],
+  "tool_effectiveness_calls_cited": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "input citedLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "引用了 {countLabel} 次呼叫中的 {citedLabel} 次",
+        "countPlural=other": "引用了 {countLabel} 次呼叫中的 {citedLabel} 次"
+      }
+    }
+  ],
   "tool_effectiveness_select_citation": "選擇引用以檢視呼叫",
-  "tool_effectiveness_citation_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 條引用","countPlural=other":"{countLabel} 條引用"}}],
+  "tool_effectiveness_citation_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 條引用",
+        "countPlural=other": "{countLabel} 條引用"
+      }
+    }
+  ],
   "tool_effectiveness_message_label": "訊息",
   "tool_effectiveness_message_no_call": "訊息文字，無工具呼叫",
   "tool_effectiveness_left_out": "未包含在模型輸入中",
-  "tool_effectiveness_model_saw": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"模型看到 {countLabel} 位元組","countPlural=other":"模型看到 {countLabel} 位元組"}}],
+  "tool_effectiveness_model_saw": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "模型看到 {countLabel} 位元組",
+        "countPlural=other": "模型看到 {countLabel} 位元組"
+      }
+    }
+  ],
   "tool_effectiveness_open_session": "開啟工作階段",
-  "tool_effectiveness_message_count": [{"declarations":["input count","input countLabel","local countPlural = count: plural"],"selectors":["countPlural"],"match":{"countPlural=one":"{countLabel} 則訊息","countPlural=other":"{countLabel} 則訊息"}}],
+  "tool_effectiveness_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} 則訊息",
+        "countPlural=other": "{countLabel} 則訊息"
+      }
+    }
+  ],
   "analytics_tool_empty_rate": "空結果率",
   "analytics_tool_repeat_rate": "重複率",
   "analytics_tool_recovery_rate": "恢復率",
@@ -2467,14 +2739,8 @@
   "analytics_tool_recovery_note": "恢復表示後續呼叫傳回了內容。恢復率歸屬於開始該序列的工具。",
   "analytics_tool_evidence_count": [
     {
-      "declarations": [
-        "input count",
-        "input countLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": [
-        "countPlural"
-      ],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
       "match": {
         "countPlural=other": "{countLabel} 個對話"
       }

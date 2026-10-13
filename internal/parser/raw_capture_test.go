@@ -503,6 +503,37 @@ func TestCodexProviderPlansForkCaptureWithoutReplayParent(t *testing.T) {
 	assert.True(t, plan.Entries[0].Appendable)
 }
 
+func TestCodexProviderPlansForkWithAliasedReplayParent(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "sessions")
+	const childID = "22222222-2222-4222-8222-222222222222"
+	const parentID = "11111111-1111-4111-8111-111111111111"
+	parentPath := writeCodexProviderSession(t, root, parentID, "parent task")
+	childPath := writeCodexProviderSessionContent(t, root, childID,
+		`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
+	)
+	alias := filepath.Join(t.TempDir(), "parent-sessions")
+	if err := os.Symlink(filepath.Dir(parentPath), alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root, alias}})
+	require.True(t, ok)
+	child := requireCodexProviderSource(t, provider, childID)
+
+	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, child)
+
+	require.NoError(t, err)
+	require.True(t, supported)
+	var captured []string
+	for _, entry := range plan.Entries {
+		captured = append(captured, entry.LocalPath)
+	}
+	assert.ElementsMatch(t, []string{
+		canonicalRawCaptureTestPath(t, parentPath),
+		canonicalRawCaptureTestPath(t, childPath),
+	}, captured, "each physical transcript should be captured once")
+}
+
 func TestClaudeProviderPlansThroughSymlinkedRoot(t *testing.T) {
 	base := t.TempDir()
 	realRoot := filepath.Join(base, "real-projects")

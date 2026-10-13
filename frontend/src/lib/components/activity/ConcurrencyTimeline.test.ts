@@ -299,19 +299,31 @@ describe("ConcurrencyTimeline", () => {
     const originalX = container.querySelector('[data-concurrency-bar="2"] rect')!.getAttribute("x");
 
     await fireEvent.click(getByRole("radio", { name: "User messages" }));
-    expect([...container.querySelectorAll(".y-label")].map((el) => el.textContent)).toEqual(["0", "1", "2"]);
+    expect([...container.querySelectorAll(".y-label")].map((el) => el.textContent)).toEqual([
+      "0",
+      "1",
+      "2",
+    ]);
     expect(container.querySelector(".chart-peak")?.textContent).toBe("4 total");
     const prompt = container.querySelector('[data-concurrency-bar="2"] rect')!;
     expect(prompt.getAttribute("x")).toBe(originalX);
     expect(Number(prompt.getAttribute("height"))).toBe(160);
     await fireEvent.mouseEnter(container.querySelectorAll(".slot-hit")[2]!);
     expect(container.querySelector(".tooltip-metrics")?.textContent).toMatch(/User messages\s*2/);
-    expect(container.querySelector(".tooltip-metrics")?.textContent).toMatch(/Assistant messages\s*80/);
+    expect(container.querySelector(".tooltip-metrics")?.textContent).toMatch(
+      /Assistant messages\s*80/,
+    );
     await dragRange(container, 1, 2);
     expect(onSelectRange).toHaveBeenCalledWith({ start: 1, end: 3, label: "Tue 03:00–09:00" });
 
     await fireEvent.click(getByRole("radio", { name: "Assistant messages" }));
-    expect([...container.querySelectorAll(".y-label")].map((el) => el.textContent)).toEqual(["0", "20", "40", "60", "80"]);
+    expect([...container.querySelectorAll(".y-label")].map((el) => el.textContent)).toEqual([
+      "0",
+      "20",
+      "40",
+      "60",
+      "80",
+    ]);
     expect(container.querySelector(".chart-peak")?.textContent).toBe("100 total");
     expect(container.querySelector('[data-concurrency-bar="3"] rect')).toBeNull();
 

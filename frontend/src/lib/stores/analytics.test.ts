@@ -894,10 +894,10 @@ describe("AnalyticsStore machine filter", () => {
     { name: "skills", fn: () => analyticsService.getApiV1AnalyticsSkills },
     { name: "topSessions", fn: () => analyticsService.getApiV1AnalyticsTopSessions },
     { name: "signals", fn: () => analyticsService.getApiV1AnalyticsSignals },
-  ])("should include machine in $name params", ({ fn }) => {
+  ])("should include machine in $name params", async ({ fn }) => {
     analytics.machine = "host-a,host-b";
 
-    analytics.fetchAll();
+    await analytics.fetchAll();
 
     const mock = vi.mocked(fn());
     expect(mock).toHaveBeenCalled();
@@ -907,20 +907,20 @@ describe("AnalyticsStore machine filter", () => {
 });
 
 describe("AnalyticsStore automated scope params", () => {
-  it("derives all scope from legacy includeAutomated updates", () => {
+  it("derives all scope from legacy includeAutomated updates", async () => {
     analytics.includeAutomated = true;
 
-    analytics.fetchSummary();
+    await analytics.fetchSummary();
 
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ automated_scope: "all" }),
     );
   });
 
-  it("keeps automated-only scope when selected explicitly", () => {
+  it("keeps automated-only scope when selected explicitly", async () => {
     analytics.setAutomatedScope("automated");
 
-    analytics.fetchSummary();
+    await analytics.fetchSummary();
 
     expect(analyticsService.getApiV1AnalyticsSummary.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ automated_scope: "automated" }),

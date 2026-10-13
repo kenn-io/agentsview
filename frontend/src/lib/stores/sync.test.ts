@@ -406,7 +406,12 @@ describe("SyncStore.triggerResync", () => {
   });
 
   it("blocks sync and resync for an archive-only server", async () => {
-    api.getVersion.mockResolvedValue({ version: "dev", commit: "unknown", build_date: "", archive_only: true });
+    api.getVersion.mockResolvedValue({
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      archive_only: true,
+    });
     await sync.loadVersion();
     sync.triggerSync();
     expect(sync.triggerResync()).toBe(false);

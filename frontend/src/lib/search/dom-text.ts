@@ -81,12 +81,12 @@ export interface PreparedSearchText {
 
 /** Fold ASCII runs natively and non-ASCII code points independently. */
 export function prepareSearchText(text: string): PreparedSearchText {
-  if (/^[\x00-\x7f]*$/.test(text)) return { value: text.toLowerCase() };
+  if (/^\p{ASCII}*$/u.test(text)) return { value: text.toLowerCase() };
   const parts: string[] = [];
   const expansions: number[] = [];
   let previous = 0;
   let delta = 0;
-  for (const match of text.matchAll(/[^\x00-\x7f]/gu)) {
+  for (const match of text.matchAll(/\P{ASCII}/gu)) {
     const start = match.index;
     if (start > previous) parts.push(text.slice(previous, start).toLowerCase());
     const point = match[0];

@@ -1,7 +1,6 @@
 name: CI
 
 # Run the workflow from this revision so its steps match the code under test.
-# Linux AMD64 and Windows jobs run on Namespace, including fork PRs.
 on:
   pull_request:
 

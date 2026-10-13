@@ -25,8 +25,8 @@
 The `README.md` and `Makefile` are the sources for project facts, setup, and
 commands. Do not copy their catalogues into this file.
 
-Before reviewing CI runner security, read the
-[Namespace runner policy](docs/agents/build.md#namespace-runner-policy).
+For CI runner selection and caching, read the
+[CI runner policy](docs/agents/build.md#ci-runner-policy).
 
 ## Roborev
 

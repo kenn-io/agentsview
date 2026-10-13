@@ -91,7 +91,8 @@ function specialSummary(name: string, p: Params): string | null {
   }
   if (name === "TaskUpdate") {
     const parts: string[] = [];
-    if (p.taskId != null) parts.push(`#${String(p.taskId)}`);
+    const taskId = typeof p.taskId === "number" ? String(p.taskId) : asString(p.taskId);
+    if (taskId) parts.push(`#${taskId}`);
     const status = asString(p.status);
     if (status) parts.push(status);
     const subject = asString(p.subject);
@@ -195,7 +196,19 @@ export function summarizeToolCall(toolCall: ToolCall): string | null {
   return null;
 }
 
-const PREVIEW_KEYS = ["command", "cmd", "pattern", "query", "file_path", "filePath", "path", "file", "url", "description", "prompt"];
+const PREVIEW_KEYS = [
+  "command",
+  "cmd",
+  "pattern",
+  "query",
+  "file_path",
+  "filePath",
+  "path",
+  "file",
+  "url",
+  "description",
+  "prompt",
+];
 const PATH_KEYS = new Set(["file_path", "filePath", "path", "file"]);
 
 function previewValue(key: string, value: string): string {

@@ -8,7 +8,7 @@ import { m } from "../../i18n/index.js";
 export type QualityPatternSeverity = "clear" | "watch" | "warning" | "critical" | "unavailable";
 
 export interface QualityPatternDriver {
-  id: keyof QualitySignalTotals | string;
+  id: string;
   label: string;
   total: number;
   sessions: number;

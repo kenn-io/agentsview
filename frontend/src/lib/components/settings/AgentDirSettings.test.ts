@@ -61,7 +61,9 @@ describe("AgentDirSettings", () => {
 
     expect(save).toHaveBeenCalledWith({ disabled_agents: [] });
     expect(providerSwitch("Enable Gemini session sync").checked).toBe(true);
-    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("applied these changes");
+    expect(document.body.querySelector('[role="status"]')?.textContent).toContain(
+      "applied these changes",
+    );
     await unmount(component);
   });
 
@@ -167,7 +169,9 @@ describe("AgentDirSettings", () => {
     });
     const homes = [...document.body.querySelectorAll("code")].map((el) => el.textContent);
     expect(homes).toContain(second);
-    expect(document.body.querySelector('[role="status"]')?.textContent).toContain("applied these changes");
+    expect(document.body.querySelector('[role="status"]')?.textContent).toContain(
+      "applied these changes",
+    );
     const remove = document.body.querySelector<HTMLButtonElement>(
       `button[aria-label="Remove ${name} home ${second}"]`,
     );

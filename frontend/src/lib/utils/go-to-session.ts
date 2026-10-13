@@ -4,8 +4,7 @@ export type SessionIdResolution =
   | { kind: "resolved"; id: SessionId }
   | { kind: "empty" | "unknown" | "ambiguous" | "capped" };
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function resolveSessionId(
   input: string,

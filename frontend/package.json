@@ -14,6 +14,9 @@
     "precheck": "npm run i18n:compile && npm run check:api:if-available",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "check:kit-ui": "kit-ui-check src",
+    "fmt": "vp fmt",
+    "precheck:vp": "npm run i18n:compile",
+    "check:vp": "vp check",
     "test": "vp test run",
     "e2e": "playwright test"
   },
@@ -43,6 +46,7 @@
     "@tsconfig/svelte": "5.0.8",
     "@types/d3-hierarchy": "3.1.7",
     "@types/d3-scale": "4.0.9",
+    "@types/node": "24.19.2",
     "jsdom": "30.1.1",
     "orval": "8.39.0",
     "svelte": "5.57.1",

@@ -39,9 +39,9 @@ describe("resolveSessionId", () => {
   });
 
   it("reports an unknown UUID when no canonical candidate matches", () => {
-    expect(resolveSessionId(UUID, ["codex:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"], false)).toEqual(
-      { kind: "unknown" },
-    );
+    expect(resolveSessionId(UUID, ["codex:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"], false)).toEqual({
+      kind: "unknown",
+    });
   });
 
   it("does not match a UUID that only appears inside a host name", () => {
@@ -56,9 +56,9 @@ describe("resolveSessionId", () => {
   });
 
   it("keeps duplicate provider suffixes ambiguous", () => {
-    expect(
-      resolveSessionId(UUID, [`claude:${UUID}`, `host~codex:${UUID}`], false),
-    ).toEqual({ kind: "ambiguous" });
+    expect(resolveSessionId(UUID, [`claude:${UUID}`, `host~codex:${UUID}`], false)).toEqual({
+      kind: "ambiguous",
+    });
   });
 
   it("does not resolve a capped response at the 1000-result boundary", () => {

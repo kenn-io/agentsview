@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import SessionList from "./SessionList.svelte";
@@ -47,8 +47,8 @@ class ResizeObserverMock {
 describe("SessionList filter dropdown", () => {
   let component: ReturnType<typeof mount> | undefined;
   let originalResizeObserver: typeof ResizeObserver | undefined;
-  let clientHeightSpy: ReturnType<typeof vi.spyOn> | undefined;
-  let rafSpy: ReturnType<typeof vi.spyOn> | undefined;
+  let clientHeightSpy: MockInstance<() => number> | undefined;
+  let rafSpy: MockInstance<typeof requestAnimationFrame> | undefined;
 
   beforeEach(() => {
     originalResizeObserver = globalThis.ResizeObserver;
@@ -330,8 +330,8 @@ describe("SessionList filter dropdown", () => {
 describe("SessionList visible hydration", () => {
   let component: ReturnType<typeof mount> | undefined;
   let originalResizeObserver: typeof ResizeObserver | undefined;
-  let clientHeightSpy: ReturnType<typeof vi.spyOn> | undefined;
-  let rafSpy: ReturnType<typeof vi.spyOn> | undefined;
+  let clientHeightSpy: MockInstance<() => number> | undefined;
+  let rafSpy: MockInstance<typeof requestAnimationFrame> | undefined;
 
   beforeEach(() => {
     originalResizeObserver = globalThis.ResizeObserver;

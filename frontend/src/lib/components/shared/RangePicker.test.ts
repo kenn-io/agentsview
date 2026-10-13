@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll, beforeAll } from "vite-plus/test";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 
 import RangePicker from "./RangePicker.svelte";

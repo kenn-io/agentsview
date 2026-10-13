@@ -181,12 +181,16 @@ describe("Usage model visibility", () => {
     document.querySelector(".tile")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await vi.waitFor(() => expect(usage.attributionSummary).not.toBeNull());
     expect(modelPicker().textContent).toContain("Model: model-alpha");
-    document.querySelector(".tile")!.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    document
+      .querySelector(".tile")!
+      .dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     await vi.waitFor(() => expect(usage.selectedModel).toBe(""));
     modelPicker().click();
     await tick();
     modelOption("model-bravo").click();
-    await vi.waitFor(() => expect(api.getApiV1UsageSummary.mock.lastCall?.[0].exclude_model).toBe("model-bravo"));
+    await vi.waitFor(() =>
+      expect(api.getApiV1UsageSummary.mock.lastCall?.[0].exclude_model).toBe("model-bravo"),
+    );
 
     const bulk = Array.from(
       document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__bulk-btn"),

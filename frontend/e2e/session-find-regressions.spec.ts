@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { Message } from "../src/lib/api/types.js";
+import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
 
 const SESSION_ID = "test-session-xlarge-5500";
 function message(ordinal: number, content: string, extra: Partial<Message> = {}): Message {
@@ -17,6 +17,8 @@ function message(ordinal: number, content: string, extra: Partial<Message> = {})
     model: "",
     context_tokens: 0,
     output_tokens: 0,
+    has_context_tokens: false,
+    has_output_tokens: false,
     is_system: false,
     ...extra,
   };
@@ -217,7 +219,7 @@ test("searches the displayed image placeholder rather than serialized result met
   await installMessages(page, [
     message(0, "", {
       has_tool_use: true,
-      tool_calls: [{ tool_name: "view_image", result_content: result }],
+      tool_calls: [{ tool_name: "view_image", category: "", result_content: result }],
     }),
   ]);
   const input = await find(page);

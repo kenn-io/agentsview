@@ -22,8 +22,8 @@ permissions:
 
 jobs:
   lint:
-    runs-on: namespace-profile-linux-4cpu
-    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.linter == 'nilaway' && 30 || 10 }}
     strategy:
       fail-fast: false
       matrix:
@@ -36,12 +36,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
-
-      - name: Configure Namespace Go cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
-          cache: go
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -79,7 +73,7 @@ jobs:
         run: go run go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b -fix=false ./...
 
   frontend:
-    runs-on: namespace-profile-linux-8cpu
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -88,22 +82,12 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "24"
-          package-manager-cache: false
-
-      - name: Configure Namespace npm cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
           cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
-
-      - name: Configure Namespace Go cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
-          cache: go
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -116,6 +100,13 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+        working-directory: frontend
+
+      - name: Format, lint, and type-check (fix formatting with npm run fmt)
+        # Runs before the slower checks so formatting mistakes show up
+        # first. Lint warnings do not fail this step yet; errors and
+        # unformatted files do.
+        run: npm run check:vp
         working-directory: frontend
 
       - name: Type-check (svelte-check)
@@ -134,7 +125,7 @@ jobs:
         working-directory: frontend
 
   frontend-node-26:
-    runs-on: namespace-profile-linux-8cpu
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -143,12 +134,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "26"
-          package-manager-cache: false
-
-      - name: Configure Namespace npm cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
           cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         run: npm ci
@@ -160,7 +147,7 @@ jobs:
 
   docs:
     name: Docs and scripts
-    runs-on: namespace-profile-linux-4cpu
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -193,17 +180,11 @@ jobs:
 
   test:
     name: Go Test (${{ matrix.os }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            runner: namespace-profile-linux-8cpu
-          - os: windows-latest
-            runner: namespace-profile-windows-4cpu
-          - os: macos-latest
-            runner: namespace-profile-mac-6cpu
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -213,12 +194,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
-
-      - name: Configure Namespace Go cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
-          cache: go
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -325,7 +300,7 @@ jobs:
   # Share setup for the shorter SQLite suites; keep Sync on its own runner.
   test-sqlite-packages-windows:
     name: Go Test (windows-latest, ${{ matrix.name }})
-    runs-on: namespace-profile-windows-4cpu
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
@@ -335,10 +310,10 @@ jobs:
           # Complementary filters keep every sync test in exactly one job.
           - name: Sync A-R
             package: ./internal/sync
-            run: '^Test[A-R]'
+            run: &sync-test-prefix '^Test[A-R]'
           - name: Sync remaining
             package: ./internal/sync
-            skip: '^Test[A-R]'
+            skip: *sync-test-prefix
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -348,12 +323,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
-
-      - name: Configure Namespace Go cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
-          cache: go
 
       - name: Setup MinGW
         id: setup_mingw
@@ -508,7 +477,7 @@ jobs:
   # Keep the derived-mirror suite concurrent with the main Windows package set.
   test-duckdb-windows:
     name: Go Test (windows-latest, DuckDB)
-    runs-on: namespace-profile-windows-4cpu
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -518,12 +487,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
-
-      - name: Configure Namespace Go cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
-          cache: go
 
       - name: Setup MinGW
         id: setup_mingw
@@ -553,8 +516,23 @@ jobs:
           CGO_ENABLED: "1"
 
   test-race:
-    name: Go Test (race detector)
-    runs-on: namespace-profile-linux-8cpu
+    name: Go Test (race detector, ${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Sync A-R
+            runner: ubuntu-latest
+            testSet: sync
+            run: *sync-test-prefix
+          - name: Sync remaining
+            runner: ubuntu-latest
+            testSet: sync
+            skip: *sync-test-prefix
+          - name: Other packages
+            runner: ubuntu-latest
+            testSet: other
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -564,12 +542,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
-
-      - name: Configure Namespace Go cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
-          cache: go
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -585,23 +557,29 @@ jobs:
       # main test job's ./... run. Limit package fan-out because the race
       # detector makes highly parallel runs slow enough to exhaust deadlines.
       - name: Run Go tests (race detector)
-        run: go list ./... | grep -v '/internal/duckdb$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
+        if: matrix.testSet == 'other'
+        run: go list ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Run sync tests (race detector)
+        if: matrix.testSet == 'sync'
+        run: go test -tags "fts5" -race ./internal/sync -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
   desktop-windows-unit:
     name: Desktop Unit Tests (Windows)
-    runs-on: namespace-profile-windows-4cpu
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Configure Namespace Rust cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2
         with:
-          cache: rust
-          path: desktop/src-tauri/target
+          workspaces: desktop/src-tauri -> target
 
       - name: Prepare placeholder sidecar resource
         shell: pwsh
@@ -631,7 +609,17 @@ jobs:
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib
 
   integration:
-    runs-on: namespace-profile-linux-4cpu
+    name: Integration (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: PostgreSQL core
+            postgres-target: test-postgres-core-fast-ci
+          - name: PostgreSQL raw-sync and ClickHouse
+            postgres-target: test-postgres-raw-sync-ci test-postgres-core-heavy-ci
+            clickhouse: true
     services:
       postgres:
         image: pgvector/pgvector:pg18
@@ -650,7 +638,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       clickhouse:
-        image: clickhouse/clickhouse-server:26.8
+        # An empty image omits this service for the PostgreSQL-only lane.
+        image: ${{ matrix.clickhouse && 'clickhouse/clickhouse-server:26.8' || '' }}
         env:
           CLICKHOUSE_SKIP_USER_SETUP: "1"
         ports:
@@ -671,30 +660,25 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
-
-      - name: Configure Namespace Go cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
-          cache: go
 
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run PostgreSQL integration tests
-        run: make test-postgres-ci
+        run: make ${{ matrix.postgres-target }}
         env:
           CGO_ENABLED: "1"
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
 
       - name: Run ClickHouse integration tests
+        if: matrix.clickhouse
         run: make test-clickhouse-ci
         env:
           CGO_ENABLED: "1"
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
 
   e2e:
-    runs-on: namespace-profile-linux-8cpu
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -704,12 +688,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
-          cache: false
-
-      - name: Configure Namespace Go cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
-          cache: go
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -720,12 +698,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "24"
-          package-manager-cache: false
-
-      - name: Configure Namespace npm cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
           cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         run: npm ci
@@ -753,11 +727,6 @@ jobs:
             -o /tmp/agentsview ./cmd/agentsview
         env:
           CGO_ENABLED: "1"
-
-      - name: Configure Namespace Playwright cache
-        uses: namespacelabs/nscloud-cache-action@1124a6f3ce44e5cf84cc22111530961f4d2a15f9  # v1
-        with:
-          cache: playwright
 
       - name: Install Playwright browsers and system dependencies
         run: |

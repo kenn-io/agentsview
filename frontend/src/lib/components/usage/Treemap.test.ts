@@ -59,14 +59,18 @@ describe("Treemap", () => {
     expect(tiles[0]!.getAttribute("aria-pressed")).toBe("true");
     expect(tiles[1]!.classList.contains("dimmed")).toBe(true);
     expect(tiles[1]!.querySelector("rect")!.getAttribute("fill")).toBe("#ff7f0e");
-    tiles[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    tiles[1]!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
     expect(onSelect).toHaveBeenCalledWith("beta");
     tiles[0]!.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
     await unmount(component);
     const project = mount(Treemap, { target: document.body, props: { items, onSelect, onOpen } });
     await tick();
     const tile = document.querySelector(".tile")!;
-    tile.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    tile.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
     expect(onOpen).not.toHaveBeenCalled();
     tile.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
     tile.dispatchEvent(new MouseEvent("dblclick", { detail: 2, bubbles: true }));
@@ -74,5 +78,4 @@ describe("Treemap", () => {
     expect(onSelect.mock.calls).toEqual([["beta"], ["alpha"], ["alpha"]]);
     await unmount(project);
   });
-
 });

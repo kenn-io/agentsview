@@ -9,6 +9,7 @@ import {
   setAuthToken,
   setServerUrl,
 } from "./runtime.js";
+import { requestUrl } from "../test-support/request-url.js";
 
 describe("orvalFetch", () => {
   afterEach(() => {
@@ -74,7 +75,7 @@ describe("orvalFetch", () => {
     await orvalFetch("/api/v1/usage/summary", {});
 
     const [input, init] = fetchMock.mock.calls[0]!;
-    expect(String(input)).toBe("https://example.test/api/v1/usage/summary");
+    expect(requestUrl(input)).toBe("https://example.test/api/v1/usage/summary");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer secret");
   });
   it("tests a candidate server with only the supplied credentials", async () => {

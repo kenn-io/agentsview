@@ -67,6 +67,7 @@ import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
 import { m } from "../../i18n/index.js";
 // @ts-ignore
 import SessionVitals from "./SessionVitals.svelte";
+import { requestUrl } from "../../test-support/request-url.js";
 
 describe("SessionVitals", () => {
   let component: ReturnType<typeof mount> | undefined;
@@ -76,7 +77,7 @@ describe("SessionVitals", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
+        const url = requestUrl(input);
         if (url.includes("/api/v1/recall/entries?")) {
           return new Response(JSON.stringify({ entries: [], trusted_only: false }), {
             status: 200,

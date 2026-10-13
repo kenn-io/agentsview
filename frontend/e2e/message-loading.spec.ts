@@ -2,6 +2,16 @@ import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 import { waitForStableValue, waitForRowCountStable } from "./helpers/virtual-list-helpers";
 
+// The follow-latest test replaces requestAnimationFrame in the page and parks
+// the held callbacks here so later evaluate calls can inspect and release them.
+type FollowRafWindow = Window & {
+  __followRaf?: {
+    pending: () => number;
+    flush: () => void;
+    restore: () => void;
+  };
+};
+
 test.describe("Message loading", () => {
   test("clicking session shows messages", async ({ page }) => {
     const sp = new SessionsPage(page);
@@ -354,14 +364,7 @@ test.describe("Message loading", () => {
       .toBeLessThanOrEqual(8);
 
     await page.evaluate(() => {
-      type HeldRaf = {
-        pending: () => number;
-        flush: () => void;
-        restore: () => void;
-      };
-      const win = window as Window & {
-        __followRaf?: HeldRaf;
-      };
+      const win = window as FollowRafWindow;
       const originalRequest = window.requestAnimationFrame.bind(window);
       const originalCancel = window.cancelAnimationFrame.bind(window);
       let nextId = 1;
@@ -394,33 +397,18 @@ test.describe("Message loading", () => {
 
     await follow.click();
     await expect
-      .poll(
-        () =>
-          page.evaluate(() =>
-            (
-              window as Window & {
-                __followRaf: { pending: () => number };
-              }
-            ).__followRaf.pending(),
-          ),
-        { timeout: 2_000 },
-      )
+      .poll(() => page.evaluate(() => (window as FollowRafWindow).__followRaf!.pending()), {
+        timeout: 2_000,
+      })
       .toBeGreaterThan(0);
 
     await follow.click();
     await expect(follow).toHaveAttribute("aria-pressed", "false");
 
     await page.evaluate(() => {
-      (
-        window as Window & {
-          __followRaf: { flush: () => void; restore: () => void };
-        }
-      ).__followRaf.flush();
-      (
-        window as Window & {
-          __followRaf: { flush: () => void; restore: () => void };
-        }
-      ).__followRaf.restore();
+      const raf = (window as FollowRafWindow).__followRaf!;
+      raf.flush();
+      raf.restore();
     });
 
     await expect

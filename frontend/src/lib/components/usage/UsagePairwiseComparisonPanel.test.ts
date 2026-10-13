@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
 import { usage } from "../../stores/usage.svelte.js";

@@ -253,13 +253,13 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
                 buildResumeCommand(session.agent, session.id, {
                   model: activeResumeModel(session.id),
                 });
-              if (cmd) copyToClipboard(cmd);
+              if (cmd) void copyToClipboard(cmd);
             })
             .catch(() => {
               const cmd = buildResumeCommand(session.agent, session.id, {
                 model: activeResumeModel(session.id),
               });
-              if (cmd) copyToClipboard(cmd);
+              if (cmd) void copyToClipboard(cmd);
             });
         }
       },

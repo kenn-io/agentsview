@@ -28,6 +28,7 @@ vi.mock("./lib/feature-flags.js", () => ({
 }));
 // @ts-ignore
 import App, { findUserPromptOrdinal } from "./App.svelte";
+import { requestUrl } from "./lib/test-support/request-url.js";
 
 const source = sourceRaw.replace(/\r\n/g, "\n");
 
@@ -183,7 +184,7 @@ describe("App Recall availability", () => {
       },
     );
     const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = requestUrl(input);
       if (url.includes("/recall/extraction/status")) {
         return new Response(JSON.stringify({ configured: false }), {
           status: 200,
@@ -228,7 +229,9 @@ describe("App Recall availability", () => {
     await flushEffects();
 
     expect(document.body.textContent).toContain("Generated insights");
-    expect(fetchSpy.mock.calls.some(([input]) => String(input).includes("/recall/"))).toBe(false);
+    expect(fetchSpy.mock.calls.some(([input]) => requestUrl(input).includes("/recall/"))).toBe(
+      false,
+    );
   });
 });
 
@@ -1873,8 +1876,9 @@ describe("App telemetry", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const headers = { "Content-Type": "application/json" };
-        if (String(input).includes("/api/v1/telemetry/events")) {
-          posted.push(JSON.parse(String(init?.body)));
+        if (requestUrl(input).includes("/api/v1/telemetry/events")) {
+          if (typeof init?.body !== "string") throw new Error("telemetry body is not a string");
+          posted.push(JSON.parse(init.body));
           return new Response('{"status":"disabled"}', { status: 202, headers });
         }
         return new Response("{}", { status: 200, headers });

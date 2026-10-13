@@ -229,8 +229,12 @@ describe("ToolUsage", () => {
     document.querySelector<HTMLButtonElement>(".tool-rate button")!.click();
     await tick();
     await tick();
-    expect(document.querySelector(".tool-evidence .rate-note")?.textContent).toMatch(/1\s200 sessions/u);
-    expect(document.querySelector(".evidence-count")?.textContent).toMatch(/Matching calls: 1\s100/u);
+    expect(document.querySelector(".tool-evidence .rate-note")?.textContent).toMatch(
+      /1\s200 sessions/u,
+    );
+    expect(document.querySelector(".evidence-count")?.textContent).toMatch(
+      /Matching calls: 1\s100/u,
+    );
     await unmount(component);
   });
 
@@ -386,33 +390,57 @@ describe("ToolUsage", () => {
     vi.setSystemTime(new Date("2025-06-02T12:00:00Z"));
     seedRates();
     analytics.recentlyActive = true;
-    const tools = vi.spyOn(AnalyticsService, "getApiV1AnalyticsTools")
+    const tools = vi
+      .spyOn(AnalyticsService, "getApiV1AnalyticsTools")
       .mockResolvedValueOnce(JSON.parse(JSON.stringify(analytics.tools)))
       .mockResolvedValueOnce(JSON.parse(JSON.stringify(analytics.tools)));
-    const fetch = vi.spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions")
-      .mockResolvedValueOnce({ signal: "tool_empty_rate", total: 2, next_offset: 1, sessions: [{ ...example, session_id: "expired" }] })
+    const fetch = vi
+      .spyOn(AnalyticsService, "getApiV1AnalyticsSignalSessions")
+      .mockResolvedValueOnce({
+        signal: "tool_empty_rate",
+        total: 2,
+        next_offset: 1,
+        sessions: [{ ...example, session_id: "expired" }],
+      })
       .mockResolvedValueOnce({ signal: "tool_empty_rate", total: 2, sessions: [example] })
       .mockResolvedValueOnce({ signal: "tool_empty_rate", total: 1, sessions: [example] });
     await analytics.fetchTools();
-    expect(tools).toHaveBeenLastCalledWith(expect.objectContaining({ active_since: "2025-06-01T12:00:00.000Z" }), expect.anything());
+    expect(tools).toHaveBeenLastCalledWith(
+      expect.objectContaining({ active_since: "2025-06-01T12:00:00.000Z" }),
+      expect.anything(),
+    );
     const component = mount(ToolUsage, { target: document.body });
     await tick();
     rateButton("Grep Empty rate: 70.0%")!.click();
     await tick();
     await tick();
-    expect(fetch).toHaveBeenLastCalledWith(expect.objectContaining({ active_since: "2025-06-01T12:00:00.000Z", offset: 0 }), expect.anything());
+    expect(fetch).toHaveBeenLastCalledWith(
+      expect.objectContaining({ active_since: "2025-06-01T12:00:00.000Z", offset: 0 }),
+      expect.anything(),
+    );
     expect(document.querySelector("a.evidence-row")?.getAttribute("href")).toContain("expired");
     vi.setSystemTime(new Date("2025-06-02T13:00:00Z"));
-    [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("More sessions"))!.click();
+    [...document.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("More sessions"))!
+      .click();
     await tick();
     await tick();
-    expect(fetch).toHaveBeenLastCalledWith(expect.objectContaining({ active_since: "2025-06-01T12:00:00.000Z", offset: 1 }), expect.anything());
+    expect(fetch).toHaveBeenLastCalledWith(
+      expect.objectContaining({ active_since: "2025-06-01T12:00:00.000Z", offset: 1 }),
+      expect.anything(),
+    );
     await analytics.fetchTools();
     await tick();
     await tick();
-    expect(tools).toHaveBeenLastCalledWith(expect.objectContaining({ active_since: "2025-06-01T13:00:00.000Z" }), expect.anything());
+    expect(tools).toHaveBeenLastCalledWith(
+      expect.objectContaining({ active_since: "2025-06-01T13:00:00.000Z" }),
+      expect.anything(),
+    );
     expect(fetch).toHaveBeenCalledTimes(3);
-    expect(fetch).toHaveBeenLastCalledWith(expect.objectContaining({ active_since: "2025-06-01T13:00:00.000Z", offset: 0 }), expect.anything());
+    expect(fetch).toHaveBeenLastCalledWith(
+      expect.objectContaining({ active_since: "2025-06-01T13:00:00.000Z", offset: 0 }),
+      expect.anything(),
+    );
     expect(document.querySelector(".tool-evidence .rate-note")?.textContent).toBe("1 session");
     expect(document.querySelectorAll("a.evidence-row")).toHaveLength(1);
     expect(document.querySelector("a.evidence-row")?.getAttribute("href")).toContain("recovered");
@@ -458,9 +486,14 @@ describe("ToolUsage", () => {
     await tick();
     await tick();
     expect(fetch).toHaveBeenCalledTimes(3);
-    expect(fetch).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 0 }), expect.anything());
+    expect(fetch).toHaveBeenLastCalledWith(
+      expect.objectContaining({ offset: 0 }),
+      expect.anything(),
+    );
     expect(document.querySelectorAll("a.evidence-row")).toHaveLength(1);
-    expect(document.querySelector("a.evidence-row")?.getAttribute("href")).toContain("replacement?msg=3");
+    expect(document.querySelector("a.evidence-row")?.getAttribute("href")).toContain(
+      "replacement?msg=3",
+    );
     analytics.project = "project-b";
     await tick();
     await tick();

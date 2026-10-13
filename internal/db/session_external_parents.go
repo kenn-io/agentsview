@@ -283,7 +283,6 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	WHERE sessions.id = +l.session_id
 	AND COALESCE(sessions.parser_parent_session_id, '') = ''
 	AND NOT ` + spawnEdgeExistsSQL("sessions") + `
-	AND (NOT l.blocked OR COALESCE(sessions.parent_session_id, '') <> '')
 	AND (
 		COALESCE(sessions.parent_session_id, '') <> IIF(l.blocked, '', l.parent_session_id)
 		OR COALESCE(sessions.relationship_type, '') <> IIF(l.blocked, COALESCE(l.prior_relationship_type, ` + parentlessRelationshipSQL + `), 'subagent')
@@ -326,7 +325,8 @@ func scopedSessionExternalParentsSQL(start string) string {
 		CROSS JOIN sessions cur ON cur.id = ep.session_id
 		WHERE ep.session_id IN (SELECT id FROM up)
 		OR cur.parent_session_id IS NOT ep.parent_session_id
-		OR cur.relationship_type IS NOT 'subagent'`)
+		OR cur.relationship_type IS NOT 'subagent'
+		OR NOT EXISTS (SELECT 1 FROM sessions parent WHERE parent.id = ep.parent_session_id)`)
 }
 
 // applyScopedSessionExternalParentsSQL binds the JSON id list twice.

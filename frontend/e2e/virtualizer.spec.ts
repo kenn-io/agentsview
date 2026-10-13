@@ -82,7 +82,7 @@ async function maxVerticalGap(rows: Locator) {
       const match = style.match(/translateY\((\d+(?:\.\d+)?)px\)/);
       return {
         translateY: match ? parseFloat(match[1]!) : 0,
-        height: el.offsetHeight,
+        height: (el as HTMLElement).offsetHeight,
       };
     }),
   );
@@ -145,7 +145,7 @@ test.describe("Virtualizer measurement", () => {
     const container = await waitForLayoutSettle(page, displayRows);
 
     const sumOfHeights = await rows.evaluateAll((els) =>
-      els.reduce((sum, el) => sum + el.offsetHeight, 0),
+      els.reduce((sum, el) => sum + (el as HTMLElement).offsetHeight, 0),
     );
 
     const totalHeight = await container.evaluate((el) => el.getBoundingClientRect().height);
