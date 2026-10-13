@@ -112,7 +112,8 @@ GRANT INSERT ON hosted_sessions.raw_device_tokens,
   hosted_sessions.raw_manifest_entries, hosted_sessions.raw_manifest_objects,
   hosted_sessions.messages, hosted_sessions.tool_calls,
   hosted_sessions.tool_result_events, hosted_sessions.usage_events,
-  hosted_sessions.secret_findings, hosted_sessions.excluded_sessions,
+  hosted_sessions.session_plan_usage, hosted_sessions.secret_findings,
+  hosted_sessions.excluded_sessions,
   hosted_sessions.raw_projection_generations,
   hosted_sessions.raw_source_contributions,
   hosted_sessions.raw_session_public_aliases,
@@ -462,6 +463,22 @@ Hosted sessions projected before the upgrade show as not analyzed in tool rate
 coverage. They gain rates when their source changes and the new transcript
 replaces the stored one. Uploading an unchanged transcript keeps the stored row
 and its older signal version, so its calls stay not analyzed.
+
+Codex cloud plan usage adds the `session_plan_usage` table. A
+`GRANT ... ON ALL TABLES` covers only the tables that exist when it runs, so an
+earlier grant does not reach this table. Until the hosted runtime role has
+`SELECT` and `INSERT` on it, hosted startup fails with
+`projection privileges for session_plan_usage are incomplete`. A read-only role
+that serves the PostgreSQL UI also needs `SELECT` on it. After
+`agentsview pg hosted-provision provision` or `agentsview pg push` creates the
+table, run these grants as the schema owner:
+
+```sql
+GRANT SELECT, INSERT ON hosted_sessions.session_plan_usage TO hosted_runtime;
+GRANT SELECT ON agentsview.session_plan_usage TO agentsview_reader;
+```
+
+Replace `agentsview_reader` with each read-only role of a legacy schema.
 
 Upgrading a least-privilege raw-sync role now requires `SELECT` and `UPDATE` on
 `raw_ingest_jobs`, in addition to its existing `INSERT` and sequence `USAGE`.
