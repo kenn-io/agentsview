@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -202,7 +203,21 @@ func TestNonDefaultHomeLoginNamesCodexHome(t *testing.T) {
 	first, _ := env.syncer.Status.Row("/homes/a")
 	assert.Contains(t, first.Message, "Run `codex login`")
 	second, _ := env.syncer.Status.Row("/homes/b")
-	assert.Contains(t, second.Message, "Run `CODEX_HOME=/homes/b codex login`")
+	assert.Contains(t, second.Message, "Run "+homeLoginCommand("/homes/b", runtime.GOOS))
+}
+
+func TestHomeLoginCommand(t *testing.T) {
+	for _, tt := range []struct {
+		home, goos, want string
+	}{
+		{"/homes/b", "linux", "`CODEX_HOME=/homes/b codex login`"},
+		{"/homes/My Codex", "darwin", "`CODEX_HOME='/homes/My Codex' codex login`"},
+		{"/homes/it's", "linux", "`CODEX_HOME='/homes/it'\\''s' codex login`"},
+		{`C:\homes\codex two`, "windows",
+			"`codex login` with the CODEX_HOME environment variable set to `C:\\homes\\codex two`"},
+	} {
+		assert.Equal(t, tt.want, homeLoginCommand(tt.home, tt.goos), tt.home)
+	}
 }
 
 func TestRetryKeepsNewestListing(t *testing.T) {
