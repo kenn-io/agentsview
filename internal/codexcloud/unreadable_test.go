@@ -1,6 +1,8 @@
 package codexcloud
 
 import (
+	"log"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -133,9 +135,13 @@ func TestRetiredActiveThreadStaysRetiredUntilItChanges(t *testing.T) {
 	env.threads.Set(th)
 	fail, mu := true, &sync.Mutex{}
 	env.failThread("a", &fail, mu)
+	var logged strings.Builder
+	env.syncer.Log = log.New(&logged, "", 0)
 	env.run(t)
 	env.retryUntil(t, "a", fetchNow.Add(8*24*time.Hour))
 	require.NotContains(t, env.account(t).Retry, "a", "retired after 7 days")
+	assert.Contains(t, logged.String(), "chat a: stopped retrying after failing since")
+	assert.Contains(t, logged.String(), "Its next change in OpenAI starts the retries again.")
 
 	env.clock.Advance(time.Hour)
 	from := len(env.host.Requests())

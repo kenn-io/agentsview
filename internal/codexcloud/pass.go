@@ -140,8 +140,10 @@ func (s *Syncer) localErrorRow(key AccountKey, logins []Login, err error) {
 	row, _ := s.Status.Row(string(key))
 	s.Status.Set(HomeStatus{
 		Key: string(key), Homes: loginHomes(logins), State: StateError, LastSuccess: row.LastSuccess,
-		Message: "AgentsView could not save or read its import state: " + err.Error() +
-			". It tries again on the next sync.",
+		// The error names a local path; the log has it, and the status
+		// stays one plain message.
+		Message: "AgentsView could not read or save its import state, so imports from this account are " +
+			"paused. The daemon log names the file and the error. AgentsView tries again on the next sync.",
 	})
 }
 
@@ -257,7 +259,7 @@ func (p *pass) dialFirst(ctx context.Context, logins []Login) error {
 			p.login = login
 			return p.accountEnd(err, login)
 		}
-		p.Log.Printf("codex-cloud: thread host refused the login in %s: %v", login.Home, Redact(err, login.Token))
+		p.Log.Printf("codex-cloud: OpenAI refused the login in %s: %v", login.Home, Redact(err, login.Token))
 		p.Waits.RecordHome(login.Home, f, login.AuthModTime)
 		p.homeRow(p.gates, login.Home, refusedMessage(f))
 		last = err
@@ -411,7 +413,7 @@ func (p *pass) thread(ctx context.Context, id string) error {
 	if lost {
 		// The mirror file was deleted or cut short after the resume point
 		// moved, so history before that point must be read again.
-		p.Log.Printf("codex-cloud: thread %s: mirror file missing or shorter than recorded; fetching it again", id)
+		p.Log.Printf("codex-cloud: chat %s: mirror file missing or shorter than recorded; fetching it again", id)
 		st = forgetHistory(st)
 		if listing == nil {
 			listing = st.Listing
@@ -438,14 +440,14 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		f, threadErr := p.threadFailure(err)
 		switch {
 		case threadErr:
-			p.Log.Printf("codex-cloud: thread %s: %v", id, Redact(err, p.login.Token))
+			p.Log.Printf("codex-cloud: chat %s: %v", id, Redact(err, p.login.Token))
 			return p.retryLater(id, st, acct, retry, listing, Message(f, time.Time{}), now)
 		case errors.Is(err, ErrCallTimeout):
 			// The timeout ended the connection, so the pass ends. Without
 			// a retry entry the next pass would pick this thread first
 			// again, and a thread OpenAI never answers would stop every
 			// thread after it.
-			p.Log.Printf("codex-cloud: thread %s: %v", id, Redact(err, p.login.Token))
+			p.Log.Printf("codex-cloud: chat %s: %v", id, Redact(err, p.login.Token))
 			if recordErr := p.retryLater(id, st, acct, retry, listing, timeoutMessage, now); recordErr != nil {
 				return recordErr
 			}
@@ -508,7 +510,7 @@ func (p *pass) thread(ctx context.Context, id string) error {
 
 // timeoutMessage is the retry message for a thread whose history OpenAI
 // did not answer within the call timeout.
-const timeoutMessage = "OpenAI did not answer in time for one of these chats."
+const timeoutMessage = "OpenAI did not answer in time when reading the chat."
 
 // retryLater puts a failed thread in the retry set with its backoff, or
 // retires it after unreadableAfter. A listing record is stored now, so the
@@ -562,7 +564,8 @@ func (p *pass) retryLater(
 // unchanged, so only a new updatedAt selects it again; what is already
 // stored stays.
 func (p *pass) unreadable(id string, st ThreadState, acct AccountState, entry RetryEntry, now time.Time) error {
-	p.Log.Printf("codex-cloud: thread %s: no longer retried after failing since %s: %s",
+	p.Log.Printf("codex-cloud: chat %s: stopped retrying after failing since %s: %s "+
+		"Its next change in OpenAI starts the retries again.",
 		id, entry.FirstFailure.Format(time.RFC3339), entry.Message)
 	if updated, ok := listingUpdatedAt(entry.Listing); ok {
 		st.UpdatedAt = updated
@@ -764,6 +767,11 @@ func (p *pass) keepWaitRow(acct AccountState) {
 	row, _ := p.Status.Row(string(p.key))
 	row.Key, row.Homes, row.State = string(p.key), p.homes, StateError
 	row.Message = Message(f, acct.Wait.Until)
+	if f == FailTooLarge {
+		// The same failure for one chat retries only that chat, so the
+		// pause belongs to the account row alone.
+		row.Message += " Imports from this account are paused, and AgentsView retries automatically."
+	}
 	p.Status.Set(row)
 }
 
@@ -824,8 +832,8 @@ func oldestFailure(acct AccountState) (*time.Time, string) {
 			latest, message = entry.NextAttempt, entry.Message
 		}
 	}
-	return &oldest, message + " AgentsView keeps retrying them. The daemon log lists each thread. " +
-		"Sessions already imported are not affected."
+	return &oldest, message + " AgentsView retries each one for 7 days; a change to the chat in OpenAI " +
+		"restarts the 7 days. The daemon log lists each chat. Sessions already imported are not affected."
 }
 
 func (p *pass) account() (AccountState, error) {

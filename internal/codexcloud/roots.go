@@ -53,7 +53,7 @@ func (s *Store) RootOf(key AccountKey, threadID string) (string, error) {
 		}
 		current = parent
 	}
-	return "", fmt.Errorf("codex-cloud: thread %s: parent chain longer than %d threads", threadID, maxParentDepth)
+	return "", fmt.Errorf("codex-cloud: chat %s: parent chain longer than %d chats", threadID, maxParentDepth)
 }
 
 // LinkParent records child's resolved parent (empty for none) and keeps

@@ -153,7 +153,8 @@ func TestOversizedListingWaitsWithMessage(t *testing.T) {
 	assert.True(t, acct.Wait.Until.After(env.clock.Now()))
 	row, ok := env.syncer.Status.Row(string(passKey))
 	require.True(t, ok)
-	assert.Equal(t, Message(FailTooLarge, time.Time{}), row.Message)
+	assert.Contains(t, row.Message, Message(FailTooLarge, time.Time{}))
+	assert.Contains(t, row.Message, "Imports from this account are paused, and AgentsView retries automatically.")
 }
 
 func TestRefusedRedialWaitsAtTheHome(t *testing.T) {
@@ -350,6 +351,9 @@ func TestUnreadableThreadStateDuringListingIsLocal(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, StateError, row.State)
 	assert.Contains(t, row.Message, "import state")
+	assert.Contains(t, row.Message, "The daemon log names the file and the error.")
+	assert.NotContains(t, row.Message, env.root, "the status is a sentence, not a raw error")
+	assert.NotContains(t, row.Message, "codex-cloud:")
 }
 
 func TestStalledThreadRecoversAfterStopBeforeAccountSave(t *testing.T) {
