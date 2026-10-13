@@ -48,6 +48,65 @@ type SessionPlanUsageGroup struct {
 	Credits           *string  `json:"credits"`
 }
 
+// PlanUsageView is the API and export form of a session's plan usage:
+// OpenAI's latest report of the thread's share of the plan's limits and its
+// credits, and the newest outcome after that report. OutcomeKind is empty
+// or one of the codex-cloud outcome kinds (left_out, settled_no_row,
+// account_unavailable, counted_under, too_many_descendants,
+// could_not_check). CountedUnder names the usage root's session when the
+// session's usage counts toward it. Times are RFC 3339 UTC strings.
+type PlanUsageView struct {
+	DataAsOf        string                  `json:"data_as_of,omitempty"`
+	DataStatus      string                  `json:"data_status,omitempty"`
+	UsageSource     string                  `json:"usage_source,omitempty"`
+	WeeklyPercent   *float64                `json:"weekly_percent,omitempty"`
+	FiveHourPercent *float64                `json:"five_hour_percent,omitempty"`
+	Credits         *string                 `json:"credits,omitempty"`
+	Groups          []SessionPlanUsageGroup `json:"groups"`
+	Final           bool                    `json:"final"`
+	OutcomeKind     string                  `json:"outcome_kind,omitempty"`
+	OutcomeAt       string                  `json:"outcome_at,omitempty"`
+	CountedUnder    string                  `json:"counted_under,omitempty"`
+}
+
+// CaptureCoverageView is the API and export form of a session's live token
+// capture coverage: when live capture last recorded token counts, and how
+// many finished turns it missed.
+type CaptureCoverageView struct {
+	LastCaptureAt   string `json:"last_capture_at,omitempty"`
+	UncapturedTurns int    `json:"uncaptured_turns"`
+}
+
+// PlanUsageView returns the row's plan usage, or nil when the row is nil
+// or holds coverage only.
+func (p *SessionPlanUsage) PlanUsageView() *PlanUsageView {
+	if p == nil || !p.HasPlanUsage {
+		return nil
+	}
+	groups := p.Groups
+	if groups == nil {
+		groups = []SessionPlanUsageGroup{}
+	}
+	return &PlanUsageView{
+		DataAsOf: p.DataAsOf, DataStatus: p.DataStatus, UsageSource: p.UsageSource,
+		WeeklyPercent: p.WeeklyPercent, FiveHourPercent: p.FiveHourPercent,
+		Credits: p.Credits, Groups: groups, Final: p.Final,
+		OutcomeKind: p.OutcomeKind, OutcomeAt: p.OutcomeAt,
+		CountedUnder: p.CountedUnder,
+	}
+}
+
+// CaptureCoverageView returns the row's capture coverage, or nil when the
+// row is nil or no live capture ever saw the session.
+func (p *SessionPlanUsage) CaptureCoverageView() *CaptureCoverageView {
+	if p == nil || !p.HasCoverage {
+		return nil
+	}
+	return &CaptureCoverageView{
+		LastCaptureAt: p.LastCaptureAt, UncapturedTurns: p.UncapturedTurns,
+	}
+}
+
 // SessionPlanUsageColumns lists session_plan_usage's value columns, after
 // session_id, in the order SessionPlanUsageValues and ScanSessionPlanUsage
 // use. Every backend's copy of the table has these columns.

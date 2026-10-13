@@ -92,7 +92,12 @@ type SessionSummaryRow struct {
 	PeakContextTokens     int                          `json:"peak_context_tokens"`
 	HasTotalOutputTokens  bool                         `json:"has_total_output_tokens"`
 	HasPeakContextTokens  bool                         `json:"has_peak_context_tokens"`
-	lastActivitySort      float64
+	// PlanUsage and CaptureCoverage are the session's codex-cloud plan
+	// usage and live capture coverage. A session with only plan usage has
+	// no model_usage, so it exports no token or cost figures.
+	PlanUsage        *PlanUsageView       `json:"plan_usage,omitempty"`
+	CaptureCoverage  *CaptureCoverageView `json:"capture_coverage,omitempty"`
+	lastActivitySort float64
 }
 
 type SessionModelUsage struct {
@@ -445,6 +450,9 @@ func (db *DB) exportSessionSummariesTx(
 		return SessionExportResult{}, err
 	}
 	if err := db.attachSessionExportWorktrees(ctx, tx, resultRows); err != nil {
+		return SessionExportResult{}, err
+	}
+	if err := attachSessionExportPlanUsage(ctx, tx, resultRows); err != nil {
 		return SessionExportResult{}, err
 	}
 	sessionIDs := make([]string, len(resultRows))
@@ -1212,6 +1220,60 @@ func sessionExportUsageTokens(
 		r.cacheReadInputTokens,
 	)
 	return inputTok, outputTok, cacheCrTok, cacheRdTok, r.reasoningTokens
+}
+
+func attachSessionExportPlanUsage(
+	ctx context.Context, q sessionExportQuerier, rows []SessionSummaryRow,
+) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	ids := sessionExportIDs(rows)
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	planRows, err := q.QueryContext(ctx,
+		`SELECT session_id, `+SessionPlanUsageColumns+` FROM session_plan_usage
+		WHERE session_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return fmt.Errorf("querying session export plan usage: %w", err)
+	}
+	defer planRows.Close()
+	byID := make(map[string]*SessionPlanUsage, len(rows))
+	for planRows.Next() {
+		sessionID, p, err := scanSessionIDAndPlanUsage(planRows)
+		if err != nil {
+			return fmt.Errorf("scanning session export plan usage: %w", err)
+		}
+		byID[sessionID] = p
+	}
+	if err := planRows.Err(); err != nil {
+		return fmt.Errorf("iterating session export plan usage: %w", err)
+	}
+	for i := range rows {
+		p := byID[rows[i].ID]
+		rows[i].PlanUsage = p.PlanUsageView()
+		rows[i].CaptureCoverage = p.CaptureCoverageView()
+		// A plan-only session's usage is billed as plan usage, so it has
+		// no token or cost figures to export, not zero ones.
+		if p != nil && rows[i].ModelUsage != nil && len(rows[i].ModelUsage.Models) == 0 {
+			rows[i].ModelUsage = nil
+		}
+	}
+	return nil
+}
+
+// scanSessionIDAndPlanUsage reads one row selected as session_id followed
+// by SessionPlanUsageColumns.
+func scanSessionIDAndPlanUsage(rows *sql.Rows) (string, *SessionPlanUsage, error) {
+	var sessionID string
+	p, err := ScanSessionPlanUsage(func(dest ...any) error {
+		return rows.Scan(append([]any{&sessionID}, dest...)...)
+	})
+	return sessionID, p, err
 }
 
 func (db *DB) attachSessionExportWorktrees(

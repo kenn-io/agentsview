@@ -1536,17 +1536,17 @@ Spec: Replicas and mirror (left-out and partly-captured counts), Display.
   `plan_usage`; presence flags false for plan-only sessions; export rows carry
   plan usage fields with empty token and cost values.
 
-- [ ] **Step 1: Write failing tests** `TestSessionDetailIncludesPlanUsage`,
+- [x] **Step 1: Write failing tests** `TestSessionDetailIncludesPlanUsage`,
   `TestSessionUsagePlanOnlyFlagsFalse`, `TestUsageCLILeftOutNote`,
   `TestExportPlanOnlyEmptyCost`.
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: expose plan usage in API, CLI, and exports"`
 
 ### Task 28: Frontend

@@ -177,6 +177,18 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/db
         name: db
+  - target: $.components.schemas.DbPlanUsageView
+    update:
+      x-go-type: db.PlanUsageView
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbCaptureCoverageView
+    update:
+      x-go-type: db.CaptureCoverageView
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
   - target: $.components.schemas.DbRecallResult
     update:
       x-go-type: db.RecallResult

@@ -681,6 +681,9 @@ func newCombinedSessionUsage(
 		TotalOutputTokens: root.TotalOutputTokens,
 		PeakContextTokens: root.PeakContextTokens,
 		HasTokenData:      root.HasTokenData,
+		// OpenAI already counts a thread's sub-agents in the root's plan
+		// usage, so the root's row describes the combined result.
+		PlanUsage: root.PlanUsage,
 	}
 	for _, descendant := range descendants {
 		if err := ctx.Err(); err != nil {

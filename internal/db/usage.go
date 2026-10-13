@@ -2968,8 +2968,10 @@ type SessionUsage struct {
 	SubagentCount int                          `json:"subagent_count,omitzero"`
 	Breakdown     []SessionUsageBreakdownEntry `json:"breakdown"`
 	// PlanUsage is the session's plan usage and live-capture coverage
-	// row, nil when it has none. It is not yet part of the session usage
-	// response.
+	// row, nil when it has none. Responses carry it as the separate
+	// plan_usage and capture_coverage objects (see
+	// SessionPlanUsage.PlanUsageView), so the token and cost fields above
+	// keep their meaning.
 	PlanUsage *SessionPlanUsage `json:"-"`
 }
 

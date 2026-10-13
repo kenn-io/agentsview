@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -279,6 +280,7 @@ func httpSessionUsageData(
 		Models: wire.Models, UnpricedModels: wire.UnpricedModels,
 		BreakdownCount: int(wire.BreakdownCount), Breakdown: wire.Breakdown,
 		ServerRunning: true, RefreshIncomplete: refreshIncomplete,
+		Plan: wire.PlanUsage, Coverage: wire.CaptureCoverage,
 	}
 	if wire.CostSource != nil {
 		out.CostSource = export.CostSource(*wire.CostSource)
@@ -374,10 +376,7 @@ func storeSessionUsageData(
 			u.Agent = string(def.Type)
 		}
 	}
-	return &sessionUsageOutput{
-		SessionUsage:  *u,
-		ServerRunning: false,
-	}, usageExitCode(u), nil
+	return newStoreSessionUsageOutput(u), usageExitCode(u), nil
 }
 
 func resolveStoreSessionID(
@@ -451,5 +450,92 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	if out.RefreshIncomplete {
 		fmt.Fprintln(w, "Usage refresh: incomplete; showing archived totals")
 	}
+	if line := planUsageLine(out.Agent, out.Plan); line != "" {
+		fmt.Fprintf(w, "%s %s\n", label("Plan usage"), sanitizeTerminal(line))
+	}
+	if line := captureCoverageLine(out.Coverage, out.Plan); line != "" {
+		fmt.Fprintf(w, "%s %s\n", label("Captured"), sanitizeTerminal(line))
+	}
 	return nil
+}
+
+// planUsageLine describes a session's plan usage in one line, "" for a
+// session that is not a codex-cloud thread and has no plan usage.
+func planUsageLine(agent string, plan *db.PlanUsageView) string {
+	if plan == nil {
+		if agent == string(parser.AgentCodexCloud) {
+			return "not checked yet"
+		}
+		return ""
+	}
+	if plan.OutcomeKind == "counted_under" {
+		return "counted under session " + plan.CountedUnder
+	}
+	if plan.WeeklyPercent == nil && plan.FiveHourPercent == nil && plan.Credits == nil {
+		switch plan.OutcomeKind {
+		case "account_unavailable":
+			return "usage isn't available for this account"
+		case "too_many_descendants":
+			return "too many sub-agent threads for OpenAI's usage report"
+		case "could_not_check":
+			return "AgentsView could not check plan usage"
+		case "settled_no_row":
+			return "not reported by OpenAI"
+		}
+		if plan.Final {
+			return "not reported by OpenAI"
+		}
+		return "not reported yet" + asOfLocal(cmp.Or(plan.OutcomeAt, plan.DataAsOf))
+	}
+	var parts []string
+	if plan.WeeklyPercent != nil {
+		parts = append(parts, fmt.Sprintf("%g%% of weekly limit", *plan.WeeklyPercent))
+	}
+	if plan.FiveHourPercent != nil {
+		parts = append(parts, fmt.Sprintf("%g%% of 5-hour limit", *plan.FiveHourPercent))
+	}
+	if plan.Credits != nil {
+		parts = append(parts, *plan.Credits+" credits")
+	}
+	line := strings.Join(parts, ", ") + asOfLocal(plan.DataAsOf)
+	if plan.DataStatus == "partial" {
+		if plan.Final {
+			return "partial: " + line
+		}
+		return "still updating: " + line
+	}
+	return line
+}
+
+// captureCoverageLine describes live token capture for a session, "" when
+// no live capture saw it.
+func captureCoverageLine(
+	coverage *db.CaptureCoverageView, plan *db.PlanUsageView,
+) string {
+	if coverage == nil {
+		return ""
+	}
+	line := "tokens captured live" + asOfLocal(coverage.LastCaptureAt)
+	if coverage.UncapturedTurns == 0 {
+		return line
+	}
+	turns := "turns"
+	if coverage.UncapturedTurns == 1 {
+		turns = "turn"
+	}
+	line += fmt.Sprintf("; %d %s not captured", coverage.UncapturedTurns, turns)
+	if plan != nil && (plan.WeeklyPercent != nil || plan.Credits != nil) {
+		line += ", plan usage covers them"
+	}
+	return line
+}
+
+// asOfLocal renders an RFC 3339 time as ", as of <local time>", or "" when
+// the time is absent or unreadable.
+func asOfLocal(ts string) string {
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return ""
+	}
+	return ", as of " + t.Local().Format("2006-01-02 15:04 MST")
 }
