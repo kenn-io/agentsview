@@ -91,6 +91,9 @@ The latest release is
   AgentsView is updated. Enable the source, or at least live capture, on one
   machine only. See [Codex Cloud](/docs/configuration/#codex-cloud) for what it
   sends to OpenAI, what listening in does to a chat, and its limits.
+  `agentsview export sessions` now reports schema version 7, because
+  `model_usage` is `null` for a Codex cloud chat whose token counts are unknown;
+  update consumers that expect an object there.
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on

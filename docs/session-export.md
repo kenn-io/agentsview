@@ -27,7 +27,7 @@ JSON output is one document:
 
 ```json
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "archive_id": "00000000-0000-4000-8000-000000000002",
   "database_id": "00000000-0000-4000-8000-000000000001",
   "cursor": {
@@ -157,13 +157,13 @@ rows on subsequent lines. The metadata line has `"type": "meta"`; session rows
 do not add a `type` discriminator.
 
 ```json
-{"type":"meta","schema_version":6,"archive_id":"00000000-0000-4000-8000-000000000002","database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
+{"type":"meta","schema_version":7,"archive_id":"00000000-0000-4000-8000-000000000002","database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
 {"id":"path-current","agent":"claude","model_usage":{"models":["fixture-model-reported"],"input_tokens":300,"output_tokens":60,"cost":{"microdollars":12500},"has_cost":true}}
 ```
 
 These snippets are abbreviated illustrations. Complete checked JSON and NDJSON
-outputs live in `testdata/golden/session_export_v6.json` and
-`testdata/golden/session_export_v6.ndjson`.
+outputs live in `testdata/golden/session_export_v7.json` and
+`testdata/golden/session_export_v7.ndjson`.
 
 ### Codex Cloud usage
 
@@ -369,7 +369,7 @@ error.
 Its v1 shape shipped in 0.37.1. Releases 0.38.0 and 0.38.1 introduced the
 current privacy-bounded project, repository, worktree, and checkout evidence
 shape but mistakenly continued to report version 1. Current builds report
-version 6. Version 2 corrected the project-evidence marker, version 3 introduced
+version 7. Version 2 corrected the project-evidence marker, version 3 introduced
 exact microdollar money objects, and version 4 adds explicit
 reported-to-priced-model resolutions with complete request-pricing bands and
 application counts. Version 5 selects complete Claude snapshots before generic
@@ -379,7 +379,9 @@ Version 6 applies provider-specific billing identity to computed usage and
 preserves reported cost rows and custom pricing overrides. Costs from v5 and v6
 must not be compared as the same billing semantics. Publishing `archive_id` is
 an additive v6 extension: existing session IDs, database IDs, usage, pricing,
-ordering, and cursor semantics are unchanged. The two transitional releases must
+ordering, and cursor semantics are unchanged. Version 7 lets `model_usage` be
+`null` for a Codex Cloud session whose token counts are unknown; a v6 consumer
+that expects an object there must be updated. The two transitional releases must
 not be treated as v1-compatible. There is no flag to request an earlier output
 version. Additive fields do not require a bump, but row semantic changes, field
 type changes, sort order changes, cursor semantics changes, required-field
@@ -390,7 +392,7 @@ normalization changes, and new closed-enum values require a bump.
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.
 
-Closed enums established in version 2 and unchanged in version 6 include project
+Closed enums established in version 2 and unchanged in version 7 include project
 `resolution` (`resolved`, `unknown`, `ambiguous`), session `classification`
 (`interactive`, `automated`), and `cost_source` (`computed`, `reported`,
 `mixed`).

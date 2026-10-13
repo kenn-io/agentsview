@@ -12,7 +12,7 @@ import (
 const (
 	UsageDailySchemaVersion     = 6
 	ActivityReportSchemaVersion = 8
-	SessionSummarySchemaVersion = 6
+	SessionSummarySchemaVersion = 7
 )
 
 // CostSource is a closed contract enum. Adding a value requires a schema version
