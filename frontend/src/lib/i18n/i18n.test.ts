@@ -278,7 +278,8 @@ describe("i18n locale selection", () => {
       .spyOn(Intl, "DateTimeFormat")
       .mockImplementation(function DateTimeFormatMock(locale, options) {
         return {
-          format: () => `${locale}:${options?.timeZone ?? "local"}`,
+          format: () =>
+            `${typeof locale === "string" ? locale : JSON.stringify(locale)}:${options?.timeZone ?? "local"}`,
         } as Intl.DateTimeFormat;
       } as typeof Intl.DateTimeFormat);
 

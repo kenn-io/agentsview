@@ -76,6 +76,16 @@ describe("waitForStableValue", () => {
     await rejection;
   });
 
+  it("reports an unstable object value as JSON", async () => {
+    let counter = 0;
+    const fn = vi.fn(async () => ({ n: counter++ }));
+
+    const promise = waitForStableValue(fn, 50, 10, 200);
+    const rejection = expect(promise).rejects.toThrow(/Last value: \{"n":\d+\}$/);
+    await vi.advanceTimersByTimeAsync(300);
+    await rejection;
+  });
+
   it("uses custom isEqual comparator", async () => {
     let value = { x: 1 };
     const fn = vi.fn(async () => ({ ...value }));
