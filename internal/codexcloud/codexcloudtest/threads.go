@@ -41,6 +41,14 @@ type Thread struct {
 	Archived bool
 	SubAgent bool
 	Turns    []Turn
+	// ThreadSource, ParentThreadID, and Source appear in listings when set.
+	ThreadSource   string
+	ParentThreadID string
+	Source         any
+	// Model is the thread's model in listings and thread/resume replies.
+	Model string
+	// ResumeKind is thread/resume's resumeKind; empty leaves it out.
+	ResumeKind string
 }
 
 // Threads answers thread/turns/list and thread/items/list from scripted
@@ -83,6 +91,7 @@ func (h *Host) ServeThreads(s *Threads) {
 	h.Handle("thread/list", s.ThreadList)
 	h.Handle("thread/turns/list", s.TurnsList)
 	h.Handle("thread/items/list", s.ItemsList)
+	h.Handle("thread/resume", s.Resume)
 }
 
 // ThreadList answers thread/list newest updatedAt first. A request with
@@ -123,17 +132,59 @@ func (s *Threads) ThreadList(params jsontext.Value) (any, *Error) {
 	end := min(start+p.Limit, len(rows))
 	data := []map[string]any{}
 	for _, thread := range rows[start:end] {
-		status := thread.Status
-		if status == "" {
-			status = "idle"
-		}
-		data = append(data, map[string]any{
-			"id": thread.ID, "name": thread.Name, "createdAt": thread.CreatedAt, "updatedAt": thread.UpdatedAt,
-			"status": map[string]string{"type": status}, "originator": "codex_cloud",
-			"environments": []any{},
-		})
+		data = append(data, threadObject(thread))
 	}
 	return page(data, end, len(rows)), nil
+}
+
+// Resume answers thread/resume with the thread, its model, and its
+// ResumeKind. Like the hosted server, the reply's updatedAt is the time
+// of the resume; tests see it as one hour after the listing's.
+func (s *Threads) Resume(params jsontext.Value) (any, *Error) {
+	var p struct {
+		ThreadID string `json:"threadId"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &Error{Code: -32602, Message: err.Error()}
+	}
+	s.mu.Lock()
+	thread, ok := s.threads[p.ThreadID]
+	s.mu.Unlock()
+	if !ok {
+		return nil, &Error{Code: -32600, Message: "no rollout found for thread id " + p.ThreadID}
+	}
+	obj := threadObject(thread)
+	obj["updatedAt"], obj["recencyAt"] = thread.UpdatedAt+3600, thread.UpdatedAt+3600
+	reply := map[string]any{"thread": obj, "model": thread.Model}
+	if thread.ResumeKind != "" {
+		reply["resumeKind"] = thread.ResumeKind
+	}
+	return reply, nil
+}
+
+func threadObject(thread Thread) map[string]any {
+	status := thread.Status
+	if status == "" {
+		status = "idle"
+	}
+	obj := map[string]any{
+		"id": thread.ID, "name": thread.Name, "createdAt": thread.CreatedAt, "updatedAt": thread.UpdatedAt,
+		"status": map[string]string{"type": status}, "originator": "codex_cloud",
+		"environments": []any{},
+	}
+	if thread.ThreadSource != "" {
+		obj["threadSource"] = thread.ThreadSource
+	}
+	if thread.ParentThreadID != "" {
+		obj["parentThreadId"] = thread.ParentThreadID
+	}
+	if thread.Source != nil {
+		obj["source"] = thread.Source
+	}
+	if thread.Model != "" {
+		obj["model"] = thread.Model
+	}
+	return obj
 }
 
 type pageParams struct {

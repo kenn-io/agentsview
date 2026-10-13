@@ -24,6 +24,7 @@ import (
 type Error struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Data    any    `json:"data,omitzero"`
 }
 
 // Handler answers one request. A nil *Error sends result.
@@ -52,6 +53,7 @@ type Host struct {
 	requests   []Request
 	handshakes []Handshake
 	conns      []*websocket.Conn
+	resumed    map[*websocket.Conn]string
 	selected   string
 	refuse     *refusal
 	bearers    map[string]int
@@ -69,7 +71,7 @@ type refusal struct {
 // initialize. It stops when the test ends.
 func NewHost(t *testing.T) *Host {
 	t.Helper()
-	h := &Host{handlers: map[string]Handler{}, selected: "codex-app-server"}
+	h := &Host{handlers: map[string]Handler{}, resumed: map[*websocket.Conn]string{}, selected: "codex-app-server"}
 	h.Handle("initialize", func(jsontext.Value) (any, *Error) {
 		return map[string]string{"userAgent": "codexcloudtest"}, nil
 	})
@@ -177,22 +179,67 @@ func (h *Host) ServerRequest(ctx context.Context, method string, params any) err
 	h.serverIDs++
 	id := "server-" + strconv.Itoa(h.serverIDs)
 	h.mu.Unlock()
-	return h.broadcast(ctx, map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	return h.broadcast(ctx, h.open(), map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 }
 
 // Notify sends a notification to every open connection.
 func (h *Host) Notify(ctx context.Context, method string, params any) error {
-	return h.broadcast(ctx, map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+	return h.broadcast(ctx, h.open(), map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
 }
 
-func (h *Host) broadcast(ctx context.Context, msg any) error {
+// NotifyThread sends a notification to every open connection that sent
+// thread/resume for threadID.
+func (h *Host) NotifyThread(ctx context.Context, threadID, method string, params any) error {
+	return h.broadcast(ctx, h.joined(threadID), map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+}
+
+// ServerRequestThread sends a server-initiated request to every open
+// connection that sent thread/resume for threadID.
+func (h *Host) ServerRequestThread(ctx context.Context, threadID, method string, params any) error {
+	h.mu.Lock()
+	h.serverIDs++
+	id := "server-" + strconv.Itoa(h.serverIDs)
+	h.mu.Unlock()
+	return h.broadcast(ctx, h.joined(threadID),
+		map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+}
+
+// Joined counts the open connections that sent thread/resume for threadID.
+func (h *Host) Joined(threadID string) int {
+	return len(h.joined(threadID))
+}
+
+// DropThread closes every open connection that sent thread/resume for
+// threadID, as a network failure would.
+func (h *Host) DropThread(threadID string) {
+	for _, c := range h.joined(threadID) {
+		_ = c.CloseNow() // simulating a dropped connection; the error is moot
+	}
+}
+
+func (h *Host) open() []*websocket.Conn {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]*websocket.Conn(nil), h.conns...)
+}
+
+func (h *Host) joined(threadID string) []*websocket.Conn {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var conns []*websocket.Conn
+	for _, c := range h.conns {
+		if h.resumed[c] == threadID {
+			conns = append(conns, c)
+		}
+	}
+	return conns
+}
+
+func (h *Host) broadcast(ctx context.Context, conns []*websocket.Conn, msg any) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
-	h.mu.Lock()
-	conns := append([]*websocket.Conn(nil), h.conns...)
-	h.mu.Unlock()
 	for _, c := range conns {
 		if err := c.Write(ctx, websocket.MessageText, data); err != nil {
 			return err
@@ -253,6 +300,14 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		h.requests = append(h.requests, Request{ID: msg.ID, Method: msg.Method, Params: msg.Params})
 		handler := h.handlers[msg.Method]
+		if msg.Method == "thread/resume" {
+			var resume struct {
+				ThreadID string `json:"threadId"`
+			}
+			if json.Unmarshal(msg.Params, &resume) == nil {
+				h.resumed[c] = resume.ThreadID
+			}
+		}
 		h.mu.Unlock()
 		if len(msg.ID) == 0 || msg.Method == "" {
 			continue
@@ -284,6 +339,7 @@ func (h *Host) drop(c *websocket.Conn) {
 			break
 		}
 	}
+	delete(h.resumed, c)
 }
 
 func (h *Host) close() {
