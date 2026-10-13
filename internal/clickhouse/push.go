@@ -845,11 +845,11 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 	var messages, toolCalls, toolResults, usage, planUsage, findings, pins [][]any
 	for _, p := range payloads {
 		if p.planUsage != nil {
-			values, err := db.SessionPlanUsageValues(p.planUsage)
+			row, err := planUsageRow(p.session.ID, p.planUsage, version)
 			if err != nil {
-				return fmt.Errorf("encoding plan usage for %s: %w", p.session.ID, err)
+				return err
 			}
-			planUsage = append(planUsage, slices.Concat([]any{p.session.ID}, values, []any{version}))
+			planUsage = append(planUsage, row)
 		}
 		for _, m := range p.messages {
 			messages = append(messages, messageRow(m, version))
@@ -1041,6 +1041,14 @@ func toolResultEventRow(m db.Message, callIndex int, ev db.ToolResultEvent, vers
 		timeValue(ev.Timestamp), int64(ev.EventIndex),
 		version,
 	}
+}
+
+func planUsageRow(sessionID string, p *db.SessionPlanUsage, version uint64) ([]any, error) {
+	values, err := db.SessionPlanUsageValues(p)
+	if err != nil {
+		return nil, fmt.Errorf("encoding plan usage for %s: %w", sessionID, err)
+	}
+	return slices.Concat([]any{sessionID}, values, []any{version}), nil
 }
 
 func usageEventRow(ev db.UsageEvent, version uint64) []any {

@@ -118,6 +118,8 @@ func TestRowBuildersMatchInsertColumns(t *testing.T) {
 	msg := db.Message{ID: 7, SessionID: "s", Ordinal: 1, Timestamp: "2026-01-01T00:00:00Z"}
 	tc := db.ToolCall{ToolName: "read", ResultEvents: []db.ToolResultEvent{{Content: "x"}}}
 	s := &Sync{machine: "m", archiveID: "a"}
+	planUsage, err := planUsageRow("s", &db.SessionPlanUsage{}, 1)
+	require.NoError(t, err)
 	rows := map[string][]any{
 		"sessions":           s.sessionRow(sessionPayload{session: sess, messages: []db.Message{msg}}, "fp", 1),
 		"messages":           messageRow(msg, 1),
@@ -126,6 +128,7 @@ func TestRowBuildersMatchInsertColumns(t *testing.T) {
 		"usage_events":       usageEventRow(db.UsageEvent{SessionID: "s"}, 1),
 		"secret_findings":    secretFindingRow(db.SecretFinding{SessionID: "s"}, 0, 1),
 		"pinned_messages":    pinnedMessageRow(db.PinnedMessage{SessionID: "s"}, 1),
+		"session_plan_usage": planUsage,
 	}
 	for table, row := range rows {
 		spec, ok := tableByName(table)
