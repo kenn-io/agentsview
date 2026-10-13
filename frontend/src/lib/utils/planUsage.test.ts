@@ -205,4 +205,29 @@ describe("describeCaptureCoverage", () => {
       ),
     ).toEqual([captured, "1 turn not captured"]);
   });
+
+  it("does not claim plan usage covers missed turns for a partial row", () => {
+    expect(
+      describeCaptureCoverage(
+        { ...coverage, uncaptured_turns: 2 },
+        plan({ ...figures, data_status: "partial", final: true }),
+      ),
+    ).toEqual([captured, "2 turns not captured"]);
+  });
+
+  it("does not claim plan usage covers missed turns after a newer failure", () => {
+    for (const outcome_kind of [
+      "could_not_check",
+      "left_out",
+      "account_unavailable",
+      "too_many_descendants",
+    ]) {
+      expect(
+        describeCaptureCoverage(
+          { ...coverage, uncaptured_turns: 2 },
+          plan({ ...figures, outcome_kind, outcome_at: OUTCOME_AT }),
+        ),
+      ).toEqual([captured, "2 turns not captured"]);
+    }
+  });
 });
