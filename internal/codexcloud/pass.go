@@ -230,7 +230,7 @@ func (p *pass) dialFirst(ctx context.Context, logins []Login) error {
 		}
 		p.Log.Printf("codex-cloud: thread host refused the login in %s: %v", login.Home, Redact(err, login.Token))
 		p.Waits.RecordHome(login.Home, f, login.AuthModTime)
-		p.homeRow(p.gates, login.Home, Message(f, time.Time{}))
+		p.homeRow(p.gates, login.Home, refusedMessage(f))
 		last = err
 	}
 	return &passEndError{failure: FailNone, err: last}
@@ -725,7 +725,7 @@ func (p *pass) threadEnd(err error) bool {
 // pass uses the next home on the key.
 func (p *pass) homeEnd(f Failure) error {
 	p.Waits.RecordHome(p.login.Home, f, p.login.AuthModTime)
-	p.homeRow(p.gates, p.login.Home, Message(f, time.Time{}))
+	p.homeRow(p.gates, p.login.Home, refusedMessage(f))
 	p.Status.Delete(string(p.key))
 	return nil
 }
