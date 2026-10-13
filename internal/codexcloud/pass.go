@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -49,9 +50,9 @@ type passEndError struct {
 func (e *passEndError) Error() string { return e.err.Error() }
 func (e *passEndError) Unwrap() error { return e.err }
 
-// Run is the sync job. A failure that affects one account is recorded in
-// that account's state and status, never returned, because the scheduler's
-// backoff would delay every other account too.
+// Run is the sync job. A failure that affects one account, remote or
+// local, is recorded in that account's status, never returned, because the
+// scheduler's backoff would delay every other account too.
 func (s *Syncer) Run(ctx context.Context) error {
 	gates := s.Gates()
 	if !gates.Configured() {
@@ -78,13 +79,13 @@ func (s *Syncer) Run(ctx context.Context) error {
 		switch {
 		case err != nil:
 			s.Log.Printf("codex-cloud: %v", err)
-			s.homeRow(home, FailSignedOut)
+			s.homeRow(gates, home, FailSignedOut)
 		case state == HomeKeyring:
-			s.homeRow(home, FailKeyring)
+			s.homeRow(gates, home, FailKeyring)
 		case state == HomeEphemeral:
-			s.homeRow(home, FailEphemeral)
+			s.homeRow(gates, home, FailEphemeral)
 		case state == HomeSignedOut:
-			s.homeRow(home, FailSignedOut)
+			s.homeRow(gates, home, FailSignedOut)
 		case !s.Waits.HomeReady(home, login.AuthModTime):
 		default:
 			// The home's row, if any, is stale; a failed dial sets it again.
@@ -101,14 +102,27 @@ func (s *Syncer) Run(ctx context.Context) error {
 		}
 	}
 	for _, key := range order {
-		if err := s.runAccount(ctx, gates, key, groups[key]); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
+		err := s.runAccount(ctx, gates, key, groups[key])
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			// A local failure, such as a state file that cannot be
+			// written, stops only this account; the log and status say so.
+			s.Log.Printf("codex-cloud: %v", err)
+			s.localErrorRow(key, groups[key], err)
 		}
 	}
 	return nil
+}
+
+func (s *Syncer) localErrorRow(key AccountKey, logins []Login, err error) {
+	row, _ := s.Status.Row(string(key))
+	s.Status.Set(HomeStatus{
+		Key: string(key), Homes: loginHomes(logins), State: StateError, LastSuccess: row.LastSuccess,
+		Message: "AgentsView could not save or read its import state: " + err.Error() +
+			". It tries again on the next sync.",
+	})
 }
 
 func loginHomes(logins []Login) []string {
@@ -119,8 +133,13 @@ func loginHomes(logins []Login) []string {
 	return homes
 }
 
-func (s *Syncer) homeRow(home string, f Failure) {
-	s.Status.Set(HomeStatus{Key: home, Homes: []string{home}, State: StateError, Message: Message(f, time.Time{})})
+func (s *Syncer) homeRow(gates Gates, home string, f Failure) {
+	message := Message(f, time.Time{})
+	if len(gates.Homes) > 0 && home != gates.Homes[0] {
+		// A plain `codex login` signs in the default home, not this one.
+		message = strings.ReplaceAll(message, "`codex login`", "`CODEX_HOME="+home+" codex login`")
+	}
+	s.Status.Set(HomeStatus{Key: home, Homes: []string{home}, State: StateError, Message: message})
 }
 
 // pass is one account's pass in progress.
@@ -154,10 +173,10 @@ func (s *Syncer) runAccount(ctx context.Context, gates Gates, key AccountKey, lo
 		return nil
 	}
 	if err := p.dialFirst(ctx, logins); err != nil {
-		return p.finish(err)
+		return p.finish(ctx, err)
 	}
 	defer func() { _ = p.conn.Close() }()
-	return p.finish(p.threads(ctx))
+	return p.finish(ctx, p.threads(ctx))
 }
 
 // dialFirst connects with the first home whose token works. A 401 marks
@@ -175,9 +194,9 @@ func (p *pass) dialFirst(ctx context.Context, logins []Login) error {
 			p.login = login
 			return p.accountEnd(err, login)
 		}
-		p.Log.Printf("codex-cloud: thread host refused the login in %s: %v", login.Home, err)
+		p.Log.Printf("codex-cloud: thread host refused the login in %s: %v", login.Home, Redact(err, login.Token))
 		p.Waits.RecordHome(login.Home, f, login.AuthModTime)
-		p.homeRow(login.Home, f)
+		p.homeRow(p.gates, login.Home, f)
 		last = err
 	}
 	return &passEndError{failure: FailNone, err: last}
@@ -246,6 +265,14 @@ func (p *pass) threads(ctx context.Context) error {
 			acct.Watermarks[id] = max(acct.Watermarks[id], result.Newest)
 			acct.Backfilled[id] = true
 		}
+		// A thread waiting out its backoff keeps the newest listing, since
+		// the watermark moves past it and the retry may run off this page.
+		for id, entry := range acct.Retry {
+			if info, ok := p.listed[id]; ok && info.raw != nil {
+				entry.Listing = info.raw
+				acct.Retry[id] = entry
+			}
+		}
 		p.Waits.ResetAccount(acct)
 	})
 }
@@ -269,6 +296,9 @@ func (p *pass) storedUpdatedAt(threadID string) (int64, bool, error) {
 func (p *pass) thread(ctx context.Context, id string) error {
 	unlock := p.Store.Lock(p.key)
 	defer unlock()
+	// A first backfill can run for a long time; retry deadlines and turn
+	// first-seen times use the time this thread is fetched.
+	now := p.Now()
 	st, err := p.Store.LoadThread(p.key, id)
 	if err != nil {
 		return err
@@ -285,18 +315,34 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		// a metadata record its mirror file would never be parsed.
 		listing = retry.Listing
 	}
+	lost, err := p.mirrorLost(id, st)
+	if err != nil {
+		return err
+	}
+	if lost {
+		// The mirror file was deleted or cut short after the resume point
+		// moved, so history before that point must be read again.
+		p.Log.Printf("codex-cloud: thread %s: mirror file missing or shorter than recorded; fetching it again", id)
+		st = forgetHistory(st)
+		if listing == nil {
+			listing = st.Listing
+		}
+	}
+	if info.raw != nil {
+		st.Listing = info.raw
+	}
 	switch {
 	case info.archived && st.ArchivedFirstSeen.IsZero():
-		st.ArchivedFirstSeen = p.now
+		st.ArchivedFirstSeen = now
 	case info.raw != nil && !info.archived:
 		st.ArchivedFirstSeen = time.Time{}
 	}
 	st.IsSubAgent = st.IsSubAgent || info.subAgent
 
-	result, err := p.fetch(ctx, id, st, listing)
+	result, err := p.fetch(ctx, id, st, listing, now)
 	if err != nil {
 		f, threadErr := p.threadFailure(err)
-		if !threadErr {
+		if !threadErr || ctx.Err() != nil {
 			return err
 		}
 		p.Log.Printf("codex-cloud: thread %s: %v", id, Redact(err, p.login.Token))
@@ -305,26 +351,36 @@ func (p *pass) thread(ctx context.Context, id string) error {
 			Message: Message(f, time.Time{}), Listing: listing,
 		}
 		if entry.FirstFailure.IsZero() {
-			entry.FirstFailure = p.now
+			entry.FirstFailure = now
 		}
 		wait := retryFirst
 		for range entry.Attempts - 1 {
 			wait = min(wait*2, retryLimit)
 		}
-		entry.NextAttempt = p.now.Add(wait)
+		entry.NextAttempt = now.Add(wait)
 		acct.Retry[id] = entry
 		if listing != nil {
 			// Store the metadata now, so the thread imports even while its
 			// history cannot be fetched.
-			record := mirror.Record{Kind: mirror.KindThread, FetchedAt: p.now, Data: listing}
-			if _, _, err := commitThread(p.Store, p.key, id, st, []mirror.Record{record}, p.now); err != nil {
+			record := mirror.Record{Kind: mirror.KindThread, FetchedAt: now, Data: listing}
+			if _, _, err := commitThread(p.Store, p.key, id, st, []mirror.Record{record}, now); err != nil {
 				return err
 			}
 		}
 		return p.Store.SaveAccount(p.key, acct)
 	}
 
-	next, appended, err := commitThread(p.Store, p.key, id, result.Next, result.Records, p.now)
+	// The thread state saved below makes the thread look unchanged to the
+	// next listing. Mark it to check again first, so a failure before the
+	// final account save still brings it back.
+	checkAgain, hadCheckAgain := acct.CheckAgain[id]
+	if !checkAgain {
+		acct.CheckAgain[id] = true
+		if err := p.Store.SaveAccount(p.key, acct); err != nil {
+			return err
+		}
+	}
+	next, appended, err := commitThread(p.Store, p.key, id, result.Next, result.Records, now)
 	if err != nil {
 		return err
 	}
@@ -333,7 +389,7 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		acct.Unfinished[id] = UnfinishedEntry{
 			InProgress: result.InProgress,
 			Stalled: result.InProgress && !next.LastProgress.IsZero() &&
-				p.now.Sub(next.LastProgress) >= stallLimit,
+				now.Sub(next.LastProgress) >= stallLimit,
 			SubAgent: next.IsSubAgent,
 		}
 	} else {
@@ -341,19 +397,46 @@ func (p *pass) thread(ctx context.Context, id string) error {
 	}
 	updated := time.Unix(next.UpdatedAt, 0)
 	switch {
-	case p.now.Sub(updated) < checkAgainWindow:
+	case now.Sub(updated) < checkAgainWindow:
 		acct.CheckAgain[id] = true
 	case info.raw == nil && !appended && !result.Unfinished:
+		delete(acct.CheckAgain, id)
+	case hadCheckAgain:
+		acct.CheckAgain[id] = checkAgain
+	default:
 		delete(acct.CheckAgain, id)
 	}
 	return p.Store.SaveAccount(p.key, acct)
 }
 
+// mirrorLost reports a mirror file that is missing or shorter than the
+// recorded offset while the thread has a resume point.
+func (p *pass) mirrorLost(id string, st ThreadState) (bool, error) {
+	if st.Offset == 0 && st.ResumeTurnID == "" {
+		return false, nil
+	}
+	path, err := p.Store.MirrorPath(p.key, id)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("codex-cloud: stat mirror: %w", err)
+	default:
+		return info.Size() < st.Offset, nil
+	}
+}
+
 // fetch fetches one thread, redialing once after an oversized reply to
 // retry with one item per page. An oversized turn listing is not retried:
 // a smaller page would not shrink it.
-func (p *pass) fetch(ctx context.Context, id string, st ThreadState, listing jsontext.Value) (fetchResult, error) {
-	result, err := fetchThread(ctx, p.conn, id, st, listing, p.now)
+func (p *pass) fetch(
+	ctx context.Context, id string, st ThreadState, listing jsontext.Value, now time.Time,
+) (fetchResult, error) {
+	result, err := fetchThread(ctx, p.conn, id, st, listing, now)
 	if !errors.Is(err, ErrReplyTooLarge) {
 		return result, err
 	}
@@ -363,7 +446,7 @@ func (p *pass) fetch(ctx context.Context, id string, st ThreadState, listing jso
 	if errors.Is(err, errTurnListTooLarge) {
 		return fetchResult{}, err
 	}
-	result, err = fetchThreadPaged(ctx, p.conn, id, st, listing, p.now, 1)
+	result, err = fetchThreadPaged(ctx, p.conn, id, st, listing, now, 1)
 	if errors.Is(err, ErrReplyTooLarge) {
 		if redialErr := p.redial(ctx); redialErr != nil {
 			return fetchResult{}, redialErr
@@ -396,8 +479,12 @@ func (p *pass) threadFailure(err error) (Failure, bool) {
 }
 
 // finish records how the pass ended. A passEndError is an account failure or an
-// early end; anything else is a local failure the job reports.
-func (p *pass) finish(err error) error {
+// early end; anything else is a local failure the job reports. A pass cut
+// off by shutdown records nothing: it is not OpenAI's failure.
+func (p *pass) finish(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err == nil {
 		acct, loadErr := p.account()
 		if loadErr != nil {
@@ -415,24 +502,30 @@ func (p *pass) finish(err error) error {
 	end, ok := errors.AsType[*passEndError](err)
 	if !ok {
 		if p.threadEnd(err) {
-			return p.finish(p.accountEnd(err, p.login))
+			return p.finish(ctx, p.accountEnd(err, p.login))
 		}
 		return err
 	}
 	if end.failure == FailNone {
-		// Every home on this key was refused; their rows already say so.
+		// Every home on this key was refused; their rows say so, and the
+		// account row would claim a sync that is not happening.
+		p.Status.Delete(string(p.key))
 		return nil
 	}
-	if end.failure == FailRefreshRequested {
-		return p.refreshRequested()
+	if end.failure == FailRefreshRequested || end.failure == FailSignedOut || end.failure == FailKeyring {
+		// A fresh login was requested, or a redial after an oversized
+		// reply was refused.
+		return p.homeEnd(end.failure)
 	}
 	p.Log.Printf("codex-cloud: account pass ended: %v", end.err)
+	var recordErr error
 	if err := p.updateAccount(func(acct *AccountState) {
-		if recordErr := p.Waits.RecordAccount(acct, end.failure, end.retryAfter); recordErr != nil {
-			p.Log.Printf("codex-cloud: %v", recordErr)
-		}
+		recordErr = p.Waits.RecordAccount(acct, end.failure, end.retryAfter)
 	}); err != nil {
 		return err
+	}
+	if recordErr != nil {
+		return recordErr
 	}
 	acct, err := p.account()
 	if err != nil {
@@ -454,12 +547,14 @@ func (p *pass) threadEnd(err error) bool {
 	return p.conn != nil && p.conn.Err() != nil
 }
 
-// refreshRequested ends the pass early: committed threads stay, nothing
-// goes to the retry set, and no watermark moves. The home waits until its
-// login changes, so the next pass uses the next home on the key.
-func (p *pass) refreshRequested() error {
-	p.Waits.RecordHome(p.login.Home, FailRefreshRequested, p.login.AuthModTime)
-	p.homeRow(p.login.Home, FailRefreshRequested)
+// homeEnd ends the pass early because the current home's login cannot be
+// used: committed threads stay, nothing goes to the retry set, and no
+// watermark moves. The home waits until its login changes, so the next
+// pass uses the next home on the key.
+func (p *pass) homeEnd(f Failure) error {
+	p.Waits.RecordHome(p.login.Home, f, p.login.AuthModTime)
+	p.homeRow(p.gates, p.login.Home, f)
+	p.Status.Delete(string(p.key))
 	return nil
 }
 

@@ -45,6 +45,7 @@ type Handshake struct {
 // Host is a fake durable thread host on a loopback websocket server.
 type Host struct {
 	server *httptest.Server
+	ctx    context.Context
 
 	mu         sync.Mutex
 	handlers   map[string]Handler
@@ -72,10 +73,15 @@ func NewHost(t *testing.T) *Host {
 	h.Handle("initialize", func(jsontext.Value) (any, *Error) {
 		return map[string]string{"userAgent": "codexcloudtest"}, nil
 	})
+	h.ctx = t.Context()
 	h.server = httptest.NewServer(http.HandlerFunc(h.serve))
 	t.Cleanup(h.close)
 	return h
 }
+
+// Context ends when the test ends, so a handler that never answers can
+// wait on it without holding up shutdown.
+func (h *Host) Context() context.Context { return h.ctx }
 
 // URL is the host's ws:// endpoint.
 func (h *Host) URL() *url.URL {

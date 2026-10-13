@@ -26,6 +26,9 @@ type DialOptions struct {
 	ReadLimit int64
 	// HTTPClient carries the handshake. Its redirect policy is replaced.
 	HTTPClient *http.Client
+	// CallTimeout bounds the handshake and each call; zero means
+	// DefaultCallTimeout.
+	CallTimeout time.Duration
 }
 
 // Conn is one initialized JSON-RPC connection to the thread host. It holds
@@ -36,6 +39,8 @@ type Conn struct {
 	ids   atomic.Int64
 	notes chan Notification
 	done  chan struct{}
+
+	timeout time.Duration
 
 	mu      sync.Mutex
 	pending map[int64]chan wireMessage
@@ -68,8 +73,14 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
+	timeout := o.CallTimeout
+	if timeout <= 0 {
+		timeout = DefaultCallTimeout
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	//nolint:bodyclose // coder/websocket owns the handshake response body.
-	ws, resp, err := websocket.Dial(ctx, o.Endpoint.String(), &websocket.DialOptions{
+	ws, resp, err := websocket.Dial(dialCtx, o.Endpoint.String(), &websocket.DialOptions{
 		HTTPClient: &client,
 		HTTPHeader: header,
 		Subprotocols: []string{
@@ -98,6 +109,7 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 		ws:      ws,
 		mode:    o.Mode,
 		done:    make(chan struct{}),
+		timeout: timeout,
 		pending: map[int64]chan wireMessage{},
 	}
 	if o.Mode == ModeMonitor {
@@ -144,23 +156,42 @@ func (c *Conn) call(ctx context.Context, method string, params, result any) erro
 	if err := c.send(ctx, request{JSONRPC: "2.0", ID: id, Method: method, Params: params}); err != nil {
 		return err
 	}
+	timer := time.NewTimer(c.timeout)
+	defer timer.Stop()
 	select {
 	case msg := <-reply:
-		if msg.Error != nil {
-			return msg.Error
-		}
-		if result == nil {
-			return nil
-		}
-		if err := json.Unmarshal(msg.Result, result); err != nil {
-			return fmt.Errorf("codex-cloud: decode %s reply: %w", method, err)
-		}
-		return nil
+		return decodeReply(method, msg, result)
 	case <-c.done:
+		// The reply may have arrived just before the connection ended.
+		select {
+		case msg := <-reply:
+			return decodeReply(method, msg, result)
+		default:
+			return c.Err()
+		}
+	case <-timer.C:
+		// A server that holds the request open would otherwise stall every
+		// later account until shutdown.
+		c.fail(fmt.Errorf("%w: %s", ErrCallTimeout, method))
 		return c.Err()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// decodeReply returns a reply's error or decodes its result. A result that
+// does not decode means OpenAI changed the reply.
+func decodeReply(method string, msg wireMessage, result any) error {
+	if msg.Error != nil {
+		return msg.Error
+	}
+	if result == nil {
+		return nil
+	}
+	if err := json.Unmarshal(msg.Result, result); err != nil {
+		return fmt.Errorf("%w: decode %s reply: %w", ErrProtocolChange, method, err)
+	}
+	return nil
 }
 
 func (c *Conn) send(ctx context.Context, req request) error {
@@ -233,7 +264,7 @@ func (c *Conn) readLoop() {
 		}
 		var msg wireMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
-			c.fail(fmt.Errorf("codex-cloud: unreadable message from the thread host: %w", err))
+			c.fail(fmt.Errorf("%w: unreadable message from the thread host: %w", ErrProtocolChange, err))
 			return
 		}
 		switch {

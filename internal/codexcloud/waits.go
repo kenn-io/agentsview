@@ -35,6 +35,7 @@ func NewWaits(now func() time.Time) *Waits {
 // Each consecutive failure of the same kind doubles the wait.
 var accountSchedule = map[Failure]struct{ first, limit time.Duration }{
 	FailRefused:     {time.Hour, 24 * time.Hour},
+	FailTooLarge:    {time.Hour, 24 * time.Hour},
 	FailProtocol:    {time.Hour, 24 * time.Hour},
 	FailRateLimited: {5 * time.Minute, time.Hour},
 	FailNetwork:     {time.Minute, time.Hour},

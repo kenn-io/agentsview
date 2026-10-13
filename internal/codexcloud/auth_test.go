@@ -134,7 +134,13 @@ func TestTokenNeverFormats(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	require.Equal(t, HomeOK, state)
-	formatted := fmt.Sprintf("%v %+v %#v %s %v", login.Token, login, login, login.Token, &login)
+	texts := []string{fmt.Sprintf("%v %+v %#v %s %v", login.Token, login, login, login.Token, &login)}
+	// Verbs that skip String print a struct's fields unless the type
+	// formats itself.
+	for _, verb := range []string{"%d", "%t", "%x", "%q", "%+d", "%8.3f"} {
+		texts = append(texts, fmt.Sprintf(verb, login.Token), fmt.Sprintf(verb, login))
+	}
+	formatted := strings.Join(texts, " ")
 	data, err := json.Marshal(login)
 	require.NoError(t, err)
 	for _, text := range []string{formatted, string(data)} {

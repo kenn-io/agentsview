@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,9 @@ type ThreadState struct {
 	LastHandledTurnID    string    `json:"last_handled_turn_id,omitzero"`
 	IsSubAgent           bool      `json:"is_sub_agent,omitzero"`
 	ArchivedFirstSeen    time.Time `json:"archived_first_seen,omitzero"`
+	// Listing is the newest listing record, so a mirror file rebuilt for a
+	// thread outside this pass's listing pages still gets its metadata.
+	Listing jsontext.Value `json:"listing,omitzero"`
 }
 
 // WaitState is a per-account or per-home wait after a failure.
@@ -128,6 +132,8 @@ type AccountState struct {
 // Store reads and writes fetcher state under the codex-cloud mirror root.
 type Store struct {
 	root string
+	// Log records state files set aside because they could not be decoded.
+	Log *log.Logger
 
 	mu    sync.Mutex
 	locks map[AccountKey]*sync.Mutex
@@ -135,7 +141,7 @@ type Store struct {
 
 // NewStore opens the state under root, {dataDir}/sources/codex-cloud.
 func NewStore(root string) *Store {
-	return &Store{root: root, locks: map[AccountKey]*sync.Mutex{}}
+	return &Store{root: root, Log: log.Default(), locks: map[AccountKey]*sync.Mutex{}}
 }
 
 // Lock serializes every state write for one account. The sync job and the
@@ -165,7 +171,7 @@ func (s *Store) LoadThread(key AccountKey, threadID string) (ThreadState, error)
 	if err != nil {
 		return st, err
 	}
-	return st, load(path, &st)
+	return st, load(s, path, &st)
 }
 
 // SaveThread writes one thread's state.
@@ -184,7 +190,7 @@ func (s *Store) LoadAccount(key AccountKey) (AccountState, error) {
 	if err != nil {
 		return st, err
 	}
-	if err := load(path, &st); err != nil {
+	if err := load(s, path, &st); err != nil {
 		return st, err
 	}
 	st.Watermarks = allocated(st.Watermarks)
@@ -234,7 +240,7 @@ func (s *Store) loadList(key AccountKey, id, suffix string) ([]string, error) {
 		return nil, err
 	}
 	var ids []string
-	return ids, load(path, &ids)
+	return ids, load(s, path, &ids)
 }
 
 func (s *Store) saveList(key AccountKey, id, suffix string, ids []string) error {
@@ -267,17 +273,30 @@ func plainName(name string) bool {
 		!strings.ContainsAny(name, `/\:`+"\x00") && filepath.IsLocal(name)
 }
 
-func load(path string, v any) error {
+// load reads one state file; a missing file leaves v zero. A file that
+// does not decode is moved aside to <name>.corrupt and v is left zero, so
+// the thread or account counts as never synced and is fetched again, as
+// for a lost state file. Without this, one damaged file would stop the
+// account's sync on every pass.
+func load[T any](s *Store, path string, v *T) error {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("codex-cloud: read %s: %w", filepath.Base(path), err)
+		return fmt.Errorf("codex-cloud: read %s: %w", path, err)
 	}
-	if err := json.Unmarshal(data, v); err != nil {
-		return fmt.Errorf("codex-cloud: decode %s: %w", filepath.Base(path), err)
+	decodeErr := json.Unmarshal(data, v)
+	if decodeErr == nil {
+		return nil
 	}
+	if err := atomicfile.Replace(path, path+".corrupt"); err != nil {
+		return fmt.Errorf("codex-cloud: decode %s: %w; set it aside: %w", path, decodeErr, err)
+	}
+	s.Log.Printf("codex-cloud: %s could not be decoded (%v); moved it to %s.corrupt and will fetch again",
+		path, decodeErr, filepath.Base(path))
+	var zero T
+	*v = zero
 	return nil
 }
 

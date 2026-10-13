@@ -106,7 +106,7 @@ func TestCodexCloudHandEditTakesEffect(t *testing.T) {
 			Present: true, Enabled: enabled, Endpoint: env.host.URL(),
 		}}, nil
 	}
-	env.syncer.Gates = NewGateSource("/data/config.toml", load, func(string) string { return env.homes[0] }, "/unused")
+	env.syncer.Gates = NewGateSource("/data/config.toml", config.Config{}, load, func(string) string { return env.homes[0] }, "/unused")
 
 	env.run(t)
 	assert.Empty(t, env.host.Handshakes())
@@ -134,7 +134,7 @@ func TestCodexCloudUnreadableConfigKeepsLastGood(t *testing.T) {
 			Present: true, Enabled: true, Endpoint: env.host.URL(),
 		}}, nil
 	}
-	env.syncer.Gates = NewGateSource("/data/config.toml", load, func(string) string { return env.homes[0] }, "/unused")
+	env.syncer.Gates = NewGateSource("/data/config.toml", config.Config{}, load, func(string) string { return env.homes[0] }, "/unused")
 	env.run(t)
 
 	readErr = errors.New("toml: line 3: expected '='")
