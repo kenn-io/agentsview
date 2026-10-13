@@ -1013,6 +1013,12 @@ agentsview usage daily [flags]
 | `--no-sync`   | `false`       | Skip source refresh; a new daemon starts without automatic sync          |
 | `--timezone`  | system        | IANA timezone name for date bucketing                                    |
 
+When the window includes Codex Cloud sessions that have only plan usage, the
+report leaves them out of the totals and prints "note: N sessions billed as plan
+usage, not priced, are left out of these totals." Sessions whose turns were
+captured only in part add a second note that their token counts are low. With
+`--json`, the counts are `planOnlySessions` and `partlyCapturedSessions`.
+
 **Examples:**
 
 ```bash

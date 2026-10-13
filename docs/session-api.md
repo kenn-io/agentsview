@@ -966,6 +966,14 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync]
 | `rollup_cost`           | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants                                                              |
 | `has_rollup_cost`       | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced                                                                                                                          |
 | `rollup_subagent_count` | REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows                                                                                                                              |
+| `plan_usage`            | Codex Cloud only; omitted for other agents and before the first report. OpenAI's plan usage report for the thread: `data_as_of`, `data_status` (`available`, `partial`, or `unavailable`), `weekly_percent`, `five_hour_percent`, `credits` (a decimal string), per-model `groups`, `final`, and the newest `outcome_kind` and `outcome_at`. A sub-agent thread has `outcome_kind` `counted_under` and the root session ID in `counted_under`|
+| `capture_coverage`      | Codex Cloud only; omitted when live capture never saw the thread. `last_capture_at` and `uncaptured_turns`, the number of finished turns live capture missed                                                                                     |
+
+A Codex Cloud session that live capture never saw has `has_token_data` and
+`has_cost` set to `false` and carries its figures in `plan_usage` instead. The
+CLI's human output shows "plan usage" in its output, peak context, and cost
+lines, followed by a `Plan usage:` line and, when live capture saw the thread, a
+`Captured:` line.
 
 Claude Code echoes some parent turns into a subagent's sidechain transcript, so
 the same message can appear in two sessions. Every combined figure counts it

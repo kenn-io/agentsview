@@ -72,6 +72,17 @@ The latest release is
 - Antigravity sessions show the conversation title Antigravity saves in
   `conversation_summaries.db`, and follow renames there, including for
   conversations whose transcript is gone. Names set in AgentsView still win.
+- Import ChatGPT dot, Codex web, and Codex cloud task threads that live only on
+  OpenAI's servers. Turn it on with `[agents.codex-cloud] enabled = true` in
+  `config.toml`; it uses the ChatGPT login of your local Codex homes. While a
+  thread runs, AgentsView watches it and records its token usage, so its cost
+  appears in usage totals. Threads that ran while AgentsView was not watching
+  show their share of your plan's weekly and five-hour limits instead, and
+  token totals say how many sessions were left out for that reason. The
+  endpoints are private and undocumented, so a change on OpenAI's side can stop
+  the import until AgentsView is updated. Enable it on one machine only. See
+  [Codex Cloud](/docs/configuration/#codex-cloud) for what it sends to OpenAI
+  and its limits.
 - See costs for each Hermes cron job in the `hermes-cron` Usage drill-down.
   Renamed runs and continuations stay together through recorded parent links.
   Each job shows its latest recorded name in the selected range, including on
