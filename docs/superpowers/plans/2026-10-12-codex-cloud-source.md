@@ -1288,9 +1288,9 @@ Spec: Plan usage (Fetching, Settling, outcome records).
       unavailable.
     - Settling counts only answered (HTTP 200) requests: settle when a request
       answered 7 days or more after the last change still finds the row
-      `partial` or `unavailable`, or leaves the root out. A pending root with no
-      answered request in those 7 days gets `could_not_check`, keeps its last
-      row unfinal, and stops retrying until a change.
+      `partial` or `unavailable`, or leaves the root out. A pending root whose
+      requests after those 7 days fail 3 times in a row gets `could_not_check`,
+      keeps its last row unfinal, and stops retrying until a change.
     - Commit-path hook: after each thread commit, compute `ResolvedParent`
       (including the `<codex_delegation>` rule from Task 6, read from the first
       `userMessage` fetched) and `IsSubAgent`, call `Store.LinkParent`, and mark

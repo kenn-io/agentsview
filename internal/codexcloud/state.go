@@ -96,6 +96,8 @@ type PendingEntry struct {
 	// LastChange is the last fetch of the root or a descendant; settling
 	// and "could not check" count 7 days from it.
 	LastChange time.Time `json:"last_change,omitzero"`
+	// LateFailures counts failed requests in a row after the settle point.
+	LateFailures int `json:"late_failures,omitzero"`
 	// HasRow marks a root that re-entered pending while it had a usable
 	// row; Reentries doubles its re-entry wait.
 	HasRow    bool `json:"has_row,omitzero"`

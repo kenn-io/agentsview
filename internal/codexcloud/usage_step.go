@@ -27,6 +27,10 @@ const (
 	usageRetryLimit = 6 * time.Hour
 	// settleAfter ends retries this long after a root's last change.
 	settleAfter = 7 * 24 * time.Hour
+	// settleFailures failed requests in a row after the settle point give
+	// up with "could not check", so one brief outage at that moment does
+	// not leave a root unsettled when a later answer could settle it.
+	settleFailures = 3
 	// reentryQuiet resets the re-entry wait after this long without change.
 	reentryQuiet = 24 * time.Hour
 	// refreshEvery spaces refreshes of a usable row.
@@ -58,7 +62,7 @@ func doubled(first, limit time.Duration, attempts int) time.Duration {
 // fetched every pass is not queried every pass.
 func markPending(acct *AccountState, root string, now time.Time, running bool) {
 	if entry, ok := acct.UsagePending[root]; ok {
-		entry.LastChange = now
+		entry.LastChange, entry.LateFailures = now, 0
 		if !running {
 			entry.Reentries = 0
 		}
@@ -412,10 +416,13 @@ func (s *Syncer) usageFailure(
 			continue
 		}
 		if now.Sub(entry.LastChange) >= settleAfter {
+			entry.LateFailures++
+		}
+		if entry.LateFailures >= settleFailures {
 			// Only an answer after the settle point settles a root, and
-			// this request failed, so it cannot settle; an answer before
-			// that point does not keep it retrying. Its last row, if any,
-			// stays and is not marked final.
+			// settleFailures requests since then failed; an answer before
+			// that point does not keep it retrying. Its last row, if any, stays and is
+			// not marked final.
 			delete(acct.UsagePending, g.ThreadID)
 			if err := s.appendPlan(key, g.ThreadID, now, mirror.KindPlanUsageOutcome,
 				mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeCouldNotCheck, At: now}); err != nil {

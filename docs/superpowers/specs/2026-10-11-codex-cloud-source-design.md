@@ -1158,12 +1158,15 @@ one group.
   it as covering them. Automatic retries stop, the last values stay, and the
   row is marked final. A later change to the root or a descendant starts the
   cycle again.
-- **Could not check.** A pending root whose request fails after the 7 days since
-  its last change stops retrying with a "could not check" outcome record,
-  because only an answer after that point can settle it. An answer earlier in
-  the 7 days does not prevent this. Its last row, if any, stays and is not
-  marked final, and session details show "AgentsView could not check plan
-  usage". A later change to the root or a descendant starts the cycle again.
+- **Could not check.** Only an answer after the 7 days since a root's last
+  change can settle it. A pending root keeps retrying after that point, with
+  the usual backoff, until an answer settles it or 3 requests in a row fail;
+  then it stops with a "could not check" outcome record. One brief outage at
+  the settle point therefore does not leave the root unsettled. An answer
+  earlier in the 7 days does not prevent this outcome. Its last row, if any,
+  stays and is not marked final, and session details show "AgentsView could
+  not check plan usage". A later change to the root or a descendant starts the
+  cycle again.
 - Roots with a usable row stay in a refresh set in `account.json` until 7 days
   after their last change, each with a next attempt at the later of one day
   after its row's `data_as_of` and one day after its last attempt. Rows are

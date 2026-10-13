@@ -658,6 +658,46 @@ func TestCouldNotCheckAfterEarlyAnswerThenFailures(t *testing.T) {
 	}
 }
 
+// One failed request just after the settle point does not give up: the
+// next answer still settles the root and makes its partial row final.
+func TestLateFailureStillLetsTheNextAnswerSettle(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "partial", pct(1), nil))
+	env.run(t)
+	lastChange := env.account(t).UsagePending["a"].LastChange
+
+	env.clock.Set(lastChange.Add(settleAfter))
+	env.usage.Refuse(http.StatusBadGateway, nil, "")
+	env.run(t)
+	entry, ok := env.account(t).UsagePending["a"]
+	require.True(t, ok, "one late failure keeps the root pending")
+
+	env.usage.Accept()
+	env.clock.Set(entry.NextAttempt)
+	env.run(t)
+
+	assert.NotContains(t, env.account(t).UsagePending, "a")
+	plan := env.plan(t, "a")
+	require.NotEmpty(t, plan.rows)
+	assert.True(t, plan.rows[len(plan.rows)-1].Final, "the late answer settles the row")
+	for _, outcome := range plan.outcomes {
+		assert.NotEqual(t, mirror.OutcomeCouldNotCheck, outcome.Kind)
+	}
+}
+
+// A change restarts the 7 days, so failures from before it do not count
+// toward giving up after the new settle point.
+func TestChangeClearsLateFailures(t *testing.T) {
+	acct := AccountState{UsagePending: map[string]PendingEntry{
+		"a": {LastChange: fetchNow, LateFailures: settleFailures - 1},
+	}}
+
+	markPending(&acct, "a", fetchNow.Add(settleAfter+time.Hour), false)
+
+	assert.Zero(t, acct.UsagePending["a"].LateFailures)
+}
+
 // TestSettledLeftOutRootUsesRecoveredRow covers a crash after a row was
 // appended but before the thread state was saved: settling a root the
 // report leaves out stores that newest row as final, not the older one
