@@ -966,6 +966,10 @@ func (s *Sync) sessionFingerprints(
 	if err != nil {
 		return nil, fmt.Errorf("computing usage fingerprints: %w", err)
 	}
+	planUsage, err := s.local.PlanUsageFingerprints(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("computing plan usage fingerprints: %w", err)
+	}
 	out := make(map[string]string, len(sessions))
 	for _, sess := range sessions {
 		msgs, err := s.local.GetAllMessages(ctx, sess.ID)
@@ -994,6 +998,7 @@ func (s *Sync) sessionFingerprints(
 			ToolCalls      string
 			SecretFindings []db.SecretFinding
 			Pins           []db.PinnedMessage
+			PlanUsage      string
 		}{
 			SessionFields: duckSessionFingerprintFields(
 				sess, db.MirroredSessionMachine(sess, s.machine),
@@ -1003,6 +1008,7 @@ func (s *Sync) sessionFingerprints(
 			ToolCalls:      toolCalls,
 			SecretFindings: findings,
 			Pins:           pins,
+			PlanUsage:      planUsage[sess.ID],
 		}
 		data, err := json.Marshal(payload)
 		if err != nil {

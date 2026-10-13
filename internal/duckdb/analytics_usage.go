@@ -3,7 +3,6 @@ package duckdb
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -1981,10 +1980,27 @@ func (s *Store) GetUsageMatchingSessionCount(
 	return len(seen), nil
 }
 
-// GetSessionPlanUsage reports that this backend does not store plan
-// usage yet.
-func (*Store) GetSessionPlanUsage(context.Context, string) (*db.SessionPlanUsage, error) {
-	return nil, fmt.Errorf("duckdb: session plan usage: %w", errors.ErrUnsupported)
+// GetSessionPlanUsage returns one session's plan usage row, or nil when
+// the session has none.
+func (s *Store) GetSessionPlanUsage(
+	ctx context.Context, sessionID string,
+) (*db.SessionPlanUsage, error) {
+	rows, err := s.queryContext(ctx,
+		`SELECT `+db.SessionPlanUsageColumns+` FROM session_plan_usage WHERE session_id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb plan usage for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	p, err := db.ScanSessionPlanUsage(rows.Scan)
+	if err != nil {
+		return nil, fmt.Errorf("scanning duckdb plan usage for %s: %w", sessionID, err)
+	}
+	return p, rows.Err()
 }
 
 func (s *Store) GetSessionUsage(
@@ -2120,5 +2136,8 @@ func (s *Store) GetSessionUsage(
 		out.AICredits = db.AICreditsFromCost(sess.Agent, out.Cost)
 	}
 	out.CostUSD = db.CostUSDFromCost(out.HasCost, out.Cost)
+	if out.PlanUsage, err = s.GetSessionPlanUsage(ctx, sess.ID); err != nil {
+		return nil, err
+	}
 	return out, nil
 }

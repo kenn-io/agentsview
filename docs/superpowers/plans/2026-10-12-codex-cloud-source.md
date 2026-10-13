@@ -1458,22 +1458,22 @@ the pattern at every site the storage survey lists.
 
 **Files:**
 
-- Modify: `internal/duckdb/schema.go` (`SchemaVersion = 18`, table), `push.go`
+- Modify: `internal/duckdb/schema.go` (`SchemaVersion = 19`, table), `push.go`
   (`pushSession`, `deleteMirrorSession`), `sync.go` (fingerprints),
   `analytics_usage.go` (`GetSessionPlanUsage`, and `GetSessionUsage` fills
   `SessionUsage.PlanUsage`)
 
-- [ ] **Step 1: Write failing tests** `TestDuckDBPlanUsageRoundTrip`,
+- [x] **Step 1: Write failing tests** `TestDuckDBPlanUsageRoundTrip`,
   `TestDuckDBSchemaVersionRebuild`, `TestDuckDBSessionUsageIncludesPlanUsage`.
 
-- [ ] **Step 2: Run** `go test -tags fts5 ./internal/duckdb -run PlanUsage`;
+- [x] **Step 2: Run** `go test -tags fts5 ./internal/duckdb -run PlanUsage`;
   FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit** `git commit -m "feat(duckdb): mirror plan usage"`
+- [x] **Step 5: Commit** `git commit -m "feat(duckdb): mirror plan usage"`
 
 ## Phase 7: Surfaces
 
