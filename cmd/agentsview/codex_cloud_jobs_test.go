@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/poller"
 )
 
 func TestCodexCloudServeStatusLines(t *testing.T) {
@@ -36,4 +42,43 @@ func TestCodexCloudServeStatusLines(t *testing.T) {
 		assert.Equal(t, []string{"  codex-cloud status unavailable: HTTP 500"},
 			codexCloudStatusLines(t.Context(), srv.URL, ""))
 	})
+}
+
+// TestCodexCloudTriggerCoalesces: several joined turns completing while a
+// sync run is active queue one more run, and a trigger already queued is
+// not an error.
+func TestCodexCloudTriggerCoalesces(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	release := make(chan struct{})
+	started := make(chan struct{}, 4)
+	var runs atomic.Int32
+	scheduler := poller.Start(ctx, poller.Job{
+		Name: codexCloudSyncJobName, Interval: time.Hour, RunAtStart: true,
+		Run: func(ctx context.Context) error {
+			runs.Add(1)
+			started <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return nil
+		},
+	})
+	defer scheduler.Wait()
+	defer cancel()
+	trigger := &codexCloudTrigger{}
+	trigger.scheduler.Store(scheduler)
+	<-started
+
+	results := make(chan error, 3)
+	for range 3 {
+		go func() { results <- trigger.Trigger() }()
+	}
+	for range 2 {
+		require.NoError(t, <-results, "a trigger already queued counts as success")
+	}
+	close(release)
+	require.NoError(t, <-results)
+	assert.Equal(t, int32(2), runs.Load(), "three completions add one run")
 }

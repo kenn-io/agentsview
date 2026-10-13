@@ -258,6 +258,27 @@ func TestTokenCanary(t *testing.T) {
 	env.run(t)
 	capture()
 
+	// A warm join through the same login, ended by a refresh request.
+	monitor := &Monitor{
+		Store: env.syncer.Store, Waits: env.syncer.Waits, Status: env.syncer.Status, Now: env.syncer.Now,
+		Dial: Dial, ReadLogin: ReadLogin, Version: "test", Log: env.syncer.Log,
+		Gates: func() Gates {
+			gates := env.syncer.Gates()
+			gates.CodexCloud.LiveTokens = true
+			return gates
+		},
+	}
+	env.threads.Set(runningThread("live", "warm"))
+	require.NoError(t, monitor.Discover(t.Context()))
+	require.Len(t, monitor.Joined(passKeyFor(t, home)), 1)
+	require.NoError(t, env.host.NotifyThread(t.Context(), "live", tokenUsageMethod,
+		tokenParams("live", "live-turn-2", [6]float64{10, 0, 0, 5, 0, 15}, [6]float64{10, 0, 0, 5, 0, 15})))
+	require.NoError(t, env.host.ServerRequestThread(t.Context(), "live", refreshMethod, map[string]any{}))
+	require.Eventually(t, func() bool { return len(monitor.Joined(passKeyFor(t, home))) == 0 },
+		10*time.Second, 5*time.Millisecond)
+	monitor.CloseAll()
+	capture()
+
 	env.clock.Advance(25 * time.Hour)
 	env.threads.Set(finishedThread("b", ago(time.Minute), message("n", "two")))
 	env.host.Handle("thread/turns/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
@@ -304,6 +325,15 @@ func TestTokenCanary(t *testing.T) {
 			assert.NotContains(t, out, secret, "status")
 		}
 	}
+}
+
+// passKeyFor reads the account key of the login in home.
+func passKeyFor(t *testing.T, home string) AccountKey {
+	t.Helper()
+	login, state, err := ReadLogin(home)
+	require.NoError(t, err)
+	require.Equal(t, HomeOK, state)
+	return login.Key
 }
 
 func TestSignedInHomeDropsItsErrorRow(t *testing.T) {
