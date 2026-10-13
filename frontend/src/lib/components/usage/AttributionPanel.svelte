@@ -122,12 +122,13 @@
         value: isTokenMode
           ? sumSelectedTokens(m, usage.selectedTokenTypes)
           : m.cost.microdollars,
-        // A tokenless row with a reported cost keeps its cost: another
-        // agent can report only a dollar total under the same model name.
+        // In cost mode a tokenless row with a reported cost keeps its cost:
+        // another agent can report only a dollar total under the same model
+        // name. Token mode has no tokens to show for that row either way.
         planOnly:
           (m.planOnlySessions ?? 0) > 0 &&
           m.inputTokens + m.outputTokens + m.cacheCreationTokens + m.cacheReadTokens === 0 &&
-          m.cost.microdollars === 0,
+          (isTokenMode || m.cost.microdollars === 0),
       }));
     } else {
       items = s!.agentTotals.map((a) => ({

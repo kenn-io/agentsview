@@ -317,31 +317,39 @@ describe("AttributionPanel colors", () => {
     },
   );
 
-  it("keeps a reported cost for a tokenless model that also has plan-only sessions", async () => {
-    const summary = summaryWithModels();
-    summary.modelTotals.push({
-      model: "shared-model",
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheCreationTokens: 0,
-      cacheReadTokens: 0,
-      cost: testMoney(2),
-      planOnlySessions: 1,
-    });
-    usage.summary = summary;
-    usage.mode = "cost";
-    usage.toggles.attribution.groupBy = "model";
-    usage.toggles.attribution.view = "list";
+  // A tokenless row with a reported cost keeps its cost in cost mode; in
+  // token mode it has no tokens to show, so its plan-only chats name it.
+  it.each([
+    ["cost", ["$8.00", "$4.00", "$2.00"], ["57.1%", "28.6%", "14.3%"]],
+    ["token", ["90", "60", "Plan usage"], ["60.0%", "40.0%", ""]],
+  ] as const)(
+    "shows a tokenless model with a reported cost and plan-only sessions in %s mode",
+    async (mode, values, shares) => {
+      const summary = summaryWithModels();
+      summary.modelTotals.push({
+        model: "shared-model",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: testMoney(2),
+        planOnlySessions: 1,
+      });
+      usage.summary = summary;
+      usage.mode = mode;
+      usage.toggles.attribution.groupBy = "model";
+      usage.toggles.attribution.view = "list";
 
-    const component = mountPanel();
-    await tick();
+      const component = mountPanel();
+      await tick();
 
-    const cells = Array.from(document.querySelectorAll(".list-cost"), (el) =>
-      el.textContent?.trim(),
-    );
-    expect(cells).toEqual(["$8.00", "$4.00", "$2.00"]);
-    void unmount(component);
-  });
+      const text = (selector: string) =>
+        Array.from(document.querySelectorAll(selector), (el) => el.textContent?.trim());
+      expect(text(".list-cost")).toEqual(values);
+      expect(text(".list-pct")).toEqual(shares);
+      void unmount(component);
+    },
+  );
 
   it("keeps colliding model rows distinct", async () => {
     usage.summary = summaryWithModels();
