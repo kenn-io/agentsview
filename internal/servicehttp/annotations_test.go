@@ -41,17 +41,24 @@ func TestSetSessionLabelsMapsRemoteReadOnly(t *testing.T) {
 	}
 }
 
-func TestAnnotationListPreservesExplicitOneShotFilter(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "false", r.URL.Query().Get("include_one_shot"))
-		assert.Equal(t, "nightly", r.URL.Query().Get("label"))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
-	}))
-	t.Cleanup(srv.Close)
-	backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: service.SessionAnnotationsAPIVersion})
-	_, err := backend.List(t.Context(), service.ListFilter{Labels: []string{"nightly"}, OneShotFilterSet: true})
-	require.NoError(t, err)
+func TestAnnotationListPreservesExplicitExclusions(t *testing.T) {
+	for _, filter := range []service.ListFilter{
+		{Labels: []string{"nightly"}, OneShotFilterSet: true, AutomatedFilterSet: true},
+		{PR: "owner/repo#7", OneShotFilterSet: true, AutomatedFilterSet: true},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "false", r.URL.Query().Get("include_one_shot"))
+			assert.Equal(t, "false", r.URL.Query().Get("include_automated"))
+			assert.Equal(t, filter.Labels, r.URL.Query()["label"])
+			assert.Equal(t, filter.PR, r.URL.Query().Get("pr"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+		}))
+		t.Cleanup(srv.Close)
+		backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: service.SessionAnnotationsAPIVersion})
+		_, err := backend.List(t.Context(), filter)
+		require.NoError(t, err)
+	}
 }
 
 func TestSessionAnnotationsRefuseOlderServer(t *testing.T) {

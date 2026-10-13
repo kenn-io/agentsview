@@ -429,6 +429,15 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, index.Sessions)
 
+			automated := tt.filter(defaults)
+			automated.AutomatedFilterSet = true
+			assert.Empty(t, listSortedIDs(t, d, automated))
+			index, err = d.GetSidebarSessionIndex(ctx, automated)
+			require.NoError(t, err)
+			assert.Empty(t, index.Sessions)
+			automated.IDs = []string{"worker"}
+			assert.Empty(t, listSortedIDs(t, d, automated))
+
 			// The sidebar keeps the launcher's tree and drops unrelated roots.
 			for _, limit := range []int{0, 10} {
 				f := tt.filter(defaults)

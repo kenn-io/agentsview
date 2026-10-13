@@ -405,8 +405,8 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.IncludeOneShot || f.OneShotFilterSet {
 		q.IncludeOneShot = new(f.IncludeOneShot)
 	}
-	if f.IncludeAutomated {
-		q.IncludeAutomated = new(true)
+	if f.IncludeAutomated || f.AutomatedFilterSet {
+		q.IncludeAutomated = new(f.IncludeAutomated)
 	}
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)

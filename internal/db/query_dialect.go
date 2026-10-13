@@ -724,7 +724,9 @@ func buildSessionFilterWithBuilder(
 		// Explicit hydration selects the requested rows rather than sidebar
 		// roots and their descendants. Keep caller-supplied row filters.
 		f.ExcludeOneShot = false
-		f.ExcludeAutomated = false
+		if !f.AutomatedFilterSet {
+			f.ExcludeAutomated = false
+		}
 		preds, oneShot := sessionFilterPredicates(f, b, q)
 		if oneShot != "" {
 			preds = append(preds, oneShot)
@@ -947,7 +949,9 @@ func (f SessionFilter) withAnnotationSelection() SessionFilter {
 		if !f.OneShotFilterSet {
 			f.ExcludeOneShot = false
 		}
-		f.ExcludeAutomated = false
+		if !f.AutomatedFilterSet {
+			f.ExcludeAutomated = false
+		}
 	}
 	return f
 }

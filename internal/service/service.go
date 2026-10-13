@@ -390,30 +390,31 @@ type ListFilter struct {
 	// IDs selects explicit sessions and their host copies; nil uses discovery defaults.
 	IDs []string `json:"ids,omitzero"`
 
-	Project          string `json:"project,omitempty"`
-	ExcludeProject   string `json:"exclude_project,omitempty"`
-	Machine          string `json:"machine,omitempty"`
-	GitBranch        string `json:"git_branch,omitempty"`
-	Agent            string `json:"agent,omitempty"`
-	Date             string `json:"date,omitempty"`
-	DateFrom         string `json:"date_from,omitempty"`
-	DateTo           string `json:"date_to,omitempty"`
-	Timezone         string `json:"timezone,omitempty"`
-	ActiveSince      string `json:"active_since,omitempty"`
-	MinMessages      int    `json:"min_messages,omitempty"`
-	MaxMessages      int    `json:"max_messages,omitempty"`
-	MinUserMessages  int    `json:"min_user_messages,omitempty"`
-	IncludeOneShot   bool   `json:"include_one_shot,omitempty"`
-	OneShotFilterSet bool   `json:"-"`
-	IncludeAutomated bool   `json:"include_automated,omitempty"`
-	IncludeChildren  bool   `json:"include_children,omitempty"`
-	IncludeSource    bool   `json:"include_source,omitempty"`
-	Outcome          string `json:"outcome,omitempty"`      // comma-separated
-	HealthGrade      string `json:"health_grade,omitempty"` // comma-separated
-	Termination      string `json:"termination,omitempty"`  // comma-separated
-	MinToolFailures  *int   `json:"min_tool_failures,omitempty"`
-	HasSecret        bool   `json:"has_secret,omitempty"`
-	Starred          bool   `json:"starred,omitempty"`
+	Project            string `json:"project,omitempty"`
+	ExcludeProject     string `json:"exclude_project,omitempty"`
+	Machine            string `json:"machine,omitempty"`
+	GitBranch          string `json:"git_branch,omitempty"`
+	Agent              string `json:"agent,omitempty"`
+	Date               string `json:"date,omitempty"`
+	DateFrom           string `json:"date_from,omitempty"`
+	DateTo             string `json:"date_to,omitempty"`
+	Timezone           string `json:"timezone,omitempty"`
+	ActiveSince        string `json:"active_since,omitempty"`
+	MinMessages        int    `json:"min_messages,omitempty"`
+	MaxMessages        int    `json:"max_messages,omitempty"`
+	MinUserMessages    int    `json:"min_user_messages,omitempty"`
+	IncludeOneShot     bool   `json:"include_one_shot,omitempty"`
+	OneShotFilterSet   bool   `json:"-"`
+	AutomatedFilterSet bool   `json:"-"`
+	IncludeAutomated   bool   `json:"include_automated,omitempty"`
+	IncludeChildren    bool   `json:"include_children,omitempty"`
+	IncludeSource      bool   `json:"include_source,omitempty"`
+	Outcome            string `json:"outcome,omitempty"`      // comma-separated
+	HealthGrade        string `json:"health_grade,omitempty"` // comma-separated
+	Termination        string `json:"termination,omitempty"`  // comma-separated
+	MinToolFailures    *int   `json:"min_tool_failures,omitempty"`
+	HasSecret          bool   `json:"has_secret,omitempty"`
+	Starred            bool   `json:"starred,omitempty"`
 	// Labels keeps sessions carrying every listed label.
 	Labels []string `json:"label,omitempty"`
 	// PR keeps sessions linked to a pull request: owner/repo,

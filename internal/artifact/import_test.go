@@ -16,34 +16,48 @@ import (
 const importLocalOrigin = "local-b2c3d4"
 
 func TestArtifactImportKeepsLauncherParentEditable(t *testing.T) {
-	source := testExportDB(t)
-	seedSession(t, source, "worker", "project")
-	store := newTestArtifactStore(t)
-	_, err := source.SetSessionExternalParent(t.Context(), "worker", "manager-a")
-	require.NoError(t, err)
-	_, err = ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
-	require.NoError(t, err)
-	firstHash := latestStoreCheckpointForTest(t, store, contractOrigin).Sessions[contractOrigin+"~worker"]
-	_, err = source.SetSessionExternalParent(t.Context(), "worker", "manager-b")
-	require.NoError(t, err)
-	_, err = ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
-	require.NoError(t, err)
-	assert.Equal(t, firstHash, latestStoreCheckpointForTest(t, store, contractOrigin).Sessions[contractOrigin+"~worker"], "launcher annotations must not change canonical content")
-
-	destination := testDB(t)
-	coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
-	recordAllImportEntries(t, coordinator, store, contractOrigin)
-	_, err = coordinator.Finalize(t.Context())
-	require.NoError(t, err)
-	id := contractOrigin + "~worker"
-	worker, err := destination.GetSessionFull(t.Context(), id)
-	require.NoError(t, err)
-	require.NotNil(t, worker)
-	assert.Nil(t, worker.ParentSessionID)
-	assert.Equal(t, "subagent", worker.RelationshipType)
-	link, err := destination.SetSessionExternalParent(t.Context(), id, "manager-c")
-	require.NoError(t, err)
-	assert.True(t, link.Applied)
+	for _, kind := range []string{"", "non-interactive"} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			source := testExportDB(t)
+			relationship := ""
+			if kind == "non-interactive" {
+				relationship = "subagent"
+			}
+			seedSession(t, source, "worker", "project", func(s *db.Session) {
+				s.SessionKind, s.RelationshipType = kind, relationship
+			})
+			store := newTestArtifactStore(t)
+			exportHash := func() string {
+				t.Helper()
+				_, err := ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
+				require.NoError(t, err)
+				return latestStoreCheckpointForTest(t, store, contractOrigin).Sessions[contractOrigin+"~worker"]
+			}
+			before := exportHash()
+			for _, parent := range []string{"manager-a", "manager-b"} {
+				_, err := source.SetSessionExternalParent(t.Context(), "worker", parent)
+				require.NoError(t, err)
+				assert.Equal(t, before, exportHash(), "launcher annotations must not change canonical content")
+			}
+			destination := testDB(t)
+			coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
+			recordAllImportEntries(t, coordinator, store, contractOrigin)
+			_, err := coordinator.Finalize(t.Context())
+			require.NoError(t, err)
+			id := contractOrigin + "~worker"
+			worker, err := destination.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, worker)
+			assert.Nil(t, worker.ParentSessionID)
+			assert.Equal(t, relationship, worker.RelationshipType)
+			link, err := destination.SetSessionExternalParent(t.Context(), id, "manager-c")
+			require.NoError(t, err)
+			assert.True(t, link.Applied)
+			_, err = source.ClearSessionExternalParent(t.Context(), "worker")
+			require.NoError(t, err)
+			assert.Equal(t, before, exportHash(), "clearing the annotation must preserve canonical content")
+		})
+	}
 }
 
 func TestArtifactImportPreservesNativeParents(t *testing.T) {

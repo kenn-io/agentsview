@@ -4,6 +4,7 @@ package clickhouse
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -394,4 +395,42 @@ func (s *activityVectorSearcher) PrepareSemanticSearch(context.Context, string) 
 
 func (s *activityVectorSearcher) ResolveMessageUnits(_ context.Context, refs []db.MessageRef) ([]db.UnitRef, error) {
 	return make([]db.UnitRef, len(refs)), nil
+}
+
+func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
+	ctx := t.Context()
+	store, syncer, local := newPushedStore(t)
+	for _, tt := range []struct {
+		name  string
+		write func() error
+	}{
+		{"label set", func() error { _, err := local.SetSessionLabels(ctx, fixtureBetaID, []string{"nightly"}); return err }},
+		{"label clear", func() error { _, err := local.SetSessionLabels(ctx, fixtureBetaID, nil); return err }},
+		{"parent set", func() error { _, err := local.SetSessionExternalParent(ctx, fixtureBetaID, fixtureAlphaID); return err }},
+		{"parent clear", func() error { _, err := local.ClearSessionExternalParent(ctx, fixtureBetaID); return err }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, local.Update(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `UPDATE sessions SET sync_marker = '2000-01-01T00:00:00Z' WHERE id = ?`, fixtureBetaID)
+				return err
+			}))
+			_, err := syncer.Push(ctx, true, nil)
+			require.NoError(t, err)
+			count, before, ok := store.GetSessionVersion(ctx, fixtureBetaID)
+			require.True(t, ok)
+			original, err := local.GetSessionFull(ctx, fixtureBetaID)
+			require.NoError(t, err)
+			require.NoError(t, tt.write())
+			res, err := syncer.Push(ctx, false, nil)
+			require.NoError(t, err)
+			assert.Equal(t, 1, res.SessionsPushed)
+			afterCount, after, ok := store.GetSessionVersion(ctx, fixtureBetaID)
+			require.True(t, ok)
+			assert.Equal(t, count, afterCount)
+			assert.NotEqual(t, before, after)
+			session, err := local.GetSessionFull(ctx, fixtureBetaID)
+			require.NoError(t, err)
+			assert.Equal(t, original.LocalModifiedAt, session.LocalModifiedAt)
+		})
+	}
 }

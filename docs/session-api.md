@@ -640,7 +640,8 @@ filter matches nothing.
   they match each session directly. Child sessions, automated sessions, and
   one-shot sessions are included, so a headless worker that an orchestrator
   launched appears even though it is a child of the launching session. An explicit
-  `include_one_shot=false` still excludes one-shot sessions.
+  `include_one_shot=false` still excludes one-shot sessions, and explicit
+  `include_automated=false` excludes automated sessions.
 - In tree views (the web UI sidebar and `include_children=true`) they keep a
   top-level session when it or any session below it matches, and show its
   whole tree. Filtering by a worker's pull request shows the orchestrator

@@ -100,6 +100,7 @@ export interface Filters {
   minUserMessages: number;
   includeOneShot: boolean;
   includeAutomated: boolean;
+  automatedFilterSet: boolean;
   /** Exact labels a session must carry; every label must match. */
   labels: string[];
   /** Pull request reference: owner/repo or owner/repo#123. */
@@ -122,6 +123,7 @@ function defaultFilters(): Filters {
     minUserMessages: 0,
     includeOneShot: true,
     includeAutomated: false,
+    automatedFilterSet: false,
     labels: [],
     pr: "",
   };
@@ -219,7 +221,8 @@ export function filtersToParams(f: Filters): Record<string, string> {
     p["min_user_messages"] = String(f.minUserMessages);
   }
   if (!f.includeOneShot) p["include_one_shot"] = "false";
-  if (f.includeAutomated) p["include_automated"] = "true";
+  if (f.includeAutomated || f.automatedFilterSet)
+    p["include_automated"] = String(f.includeAutomated);
   const labels = joinLabelFilterParam(f.labels);
   if (labels) p[SESSION_LABEL_PARAM] = labels;
   const pr = f.pr.trim();
@@ -286,6 +289,7 @@ export function parseFiltersFromParams(params: Record<string, string>): Filters 
     minUserMessages: Number.isFinite(minUserMsgs) ? minUserMsgs : 0,
     includeOneShot,
     includeAutomated: params["include_automated"] === "true",
+    automatedFilterSet: params["include_automated"] !== undefined,
     labels: splitLabelFilterParam(params[SESSION_LABEL_PARAM]),
     pr: (params[SESSION_PR_PARAM] ?? "").trim(),
   };
@@ -390,7 +394,8 @@ class SessionsStore {
       max_messages: f.maxMessages > 0 ? f.maxMessages : undefined,
       min_user_messages: f.minUserMessages > 0 ? f.minUserMessages : undefined,
       include_one_shot: f.includeOneShot,
-      include_automated: f.includeAutomated || undefined,
+      include_automated:
+        f.includeAutomated || f.automatedFilterSet ? f.includeAutomated : undefined,
       starred: starred.filterOnly || undefined,
       label: f.labels.length > 0 ? [...f.labels] : undefined,
       pr: f.pr || undefined,
@@ -442,7 +447,8 @@ class SessionsStore {
     this.filterPersistenceHeld = true;
     if (
       previous.includeOneShot !== this.filters.includeOneShot ||
-      previous.includeAutomated !== this.filters.includeAutomated
+      previous.includeAutomated !== this.filters.includeAutomated ||
+      previous.automatedFilterSet !== this.filters.automatedFilterSet
     ) {
       this.invalidateFilterCaches();
     }
@@ -458,7 +464,8 @@ class SessionsStore {
     this.normalizeMachineFilter();
     if (
       previous.includeOneShot !== this.filters.includeOneShot ||
-      previous.includeAutomated !== this.filters.includeAutomated
+      previous.includeAutomated !== this.filters.includeAutomated ||
+      previous.automatedFilterSet !== this.filters.automatedFilterSet
     ) {
       this.invalidateFilterCaches();
     }
@@ -482,13 +489,18 @@ class SessionsStore {
   initFromParams(params: Record<string, string>) {
     const prevOneShot = this.filters.includeOneShot;
     const prevAutomated = this.filters.includeAutomated;
+    const prevAutomatedSet = this.filters.automatedFilterSet;
     const next = parseFiltersFromParams(params);
     this.filters = next;
     this.dateFiltersWindowDays = parseWindowDaysParam(params[SESSION_ANALYTICS_WINDOW_PARAM]);
     starred.filterOnly = params["starred"] === "true";
     this.filterPersistenceHeld = false;
     this.normalizeMachineFilter();
-    if (prevOneShot !== next.includeOneShot || prevAutomated !== next.includeAutomated) {
+    if (
+      prevOneShot !== next.includeOneShot ||
+      prevAutomated !== next.includeAutomated ||
+      prevAutomatedSet !== next.automatedFilterSet
+    ) {
       this.invalidateFilterCaches();
     }
     this.setActiveSession(null);
@@ -1141,7 +1153,8 @@ class SessionsStore {
     this.setActiveSession(null);
     if (
       prev.includeOneShot !== this.filters.includeOneShot ||
-      prev.includeAutomated !== this.filters.includeAutomated
+      prev.includeAutomated !== this.filters.includeAutomated ||
+      prev.automatedFilterSet !== this.filters.automatedFilterSet
     ) {
       this.invalidateFilterCaches();
     }
@@ -1240,6 +1253,7 @@ class SessionsStore {
 
   setIncludeAutomatedFilter(include: boolean) {
     this.filters.includeAutomated = include;
+    this.filters.automatedFilterSet = true;
     this.setActiveSession(null);
     this.invalidateFilterCaches();
     this.load();
@@ -1321,14 +1335,15 @@ class SessionsStore {
       f.date ||
       f.minUserMessages > 0 ||
       !f.includeOneShot ||
-      f.includeAutomated
+      f.includeAutomated ||
+      f.automatedFilterSet
     );
   }
 
   clearSessionFilters(options: ClearSessionFiltersOptions = {}) {
     const project = this.filters.project;
     const wasOneShot = this.filters.includeOneShot;
-    const wasAutomated = this.filters.includeAutomated;
+    const wasAutomated = this.filters.includeAutomated || this.filters.automatedFilterSet;
     if (options.clearDateYoke || hasDateFilters(this.filters)) {
       yokedDates.clear();
     }

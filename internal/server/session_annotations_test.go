@@ -149,10 +149,10 @@ func TestAnnotationFiltersHonorExplicitOneShotExclusion(t *testing.T) {
 	require.NoError(t, err)
 	for _, filter := range []string{"label=nightly", "pr=owner%2Frepo%237"} {
 		for _, route := range []string{"/api/v1/sessions", "/api/v1/sessions/sidebar-index"} {
-			for _, toggle := range []string{"", "&include_one_shot=false", "&include_one_shot=true"} {
+			for _, toggle := range []string{"", "&include_one_shot=false", "&include_one_shot=true", "&include_automated=false", "&include_automated=true"} {
 				w := te.get(t, route+"?"+filter+toggle)
 				assertStatus(t, w, http.StatusOK)
-				if toggle == "&include_one_shot=false" {
+				if toggle == "&include_one_shot=false" || toggle == "&include_automated=false" {
 					assert.NotContains(t, w.Body.String(), `"id":"worker"`)
 				} else {
 					assert.Contains(t, w.Body.String(), `"id":"worker"`)

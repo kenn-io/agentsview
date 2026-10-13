@@ -262,7 +262,7 @@ type listSessionsIn struct {
 	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	ActiveSince      string   `json:"active_since,omitempty" jsonschema:"Only sessions active since this RFC3339 timestamp."`
-	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns."`
+	IncludeAutomated *bool    `json:"include_automated,omitempty" jsonschema:"Include automated runs identified by roborev tags or matching prompt patterns."`
 	Labels           []string `json:"labels,omitempty" jsonschema:"Only sessions carrying every one of these exact labels, such as ticket=ABC-123."`
 	PR               string   `json:"pr,omitempty" jsonschema:"Only sessions linked to a pull request: owner/repo, owner/repo#123, or github.com/owner/repo#123."`
 	Limit            int      `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
@@ -299,17 +299,18 @@ func (t *toolset) listSessions(
 	ctx context.Context, _ *mcp.CallToolRequest, in listSessionsIn,
 ) (*mcp.CallToolResult, listSessionsOut, error) {
 	res, err := t.svc.List(ctx, service.ListFilter{
-		Project:          in.Project,
-		Agent:            in.Agent,
-		Machine:          in.Machine,
-		DateFrom:         in.DateFrom,
-		DateTo:           in.DateTo,
-		ActiveSince:      in.ActiveSince,
-		IncludeAutomated: in.IncludeAutomated,
-		Labels:           in.Labels,
-		PR:               in.PR,
-		Cursor:           in.Cursor,
-		Limit:            clampLimit(in.Limit, defaultListLimit, maxListLimit),
+		Project:            in.Project,
+		Agent:              in.Agent,
+		Machine:            in.Machine,
+		DateFrom:           in.DateFrom,
+		DateTo:             in.DateTo,
+		ActiveSince:        in.ActiveSince,
+		IncludeAutomated:   in.IncludeAutomated != nil && *in.IncludeAutomated,
+		AutomatedFilterSet: in.IncludeAutomated != nil,
+		Labels:             in.Labels,
+		PR:                 in.PR,
+		Cursor:             in.Cursor,
+		Limit:              clampLimit(in.Limit, defaultListLimit, maxListLimit),
 	})
 	if err != nil {
 		return nil, listSessionsOut{}, err

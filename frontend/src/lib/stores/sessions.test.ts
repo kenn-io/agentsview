@@ -224,6 +224,26 @@ describe("SessionsStore", () => {
     sessions = createSessionsStore();
   });
 
+  it("preserves explicit automated exclusion for annotation requests and URLs", async () => {
+    for (const filter of [{ label: "nightly" }, { pr: "owner/repo#7" }]) {
+      sessions.initFromParams(filter);
+      await sessions.load();
+      expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBeUndefined();
+      expect(filtersToParams(sessions.filters).include_automated).toBeUndefined();
+      sessions.setIncludeAutomatedFilter(false);
+      await sessions.load();
+      expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBe(false);
+      expect(filtersToParams(sessions.filters).include_automated).toBe("false");
+      const parsed = parseFiltersFromParams(filtersToParams(sessions.filters));
+      expect(parsed.includeAutomated).toBe(false);
+      expect(parsed.automatedFilterSet).toBe(true);
+      const detach = sessions.attachSidebar();
+      await sessions.load();
+      expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBe(false);
+      detach();
+    }
+  });
+
   describe("initFromParams", () => {
     it("should parse project and date params", () => {
       sessions.initFromParams({
@@ -1482,6 +1502,7 @@ describe("SessionsStore", () => {
         minUserMessages: 3,
         includeOneShot: false,
         includeAutomated: true,
+        automatedFilterSet: true,
         labels: ["ticket=ABC-123", "role=reviewer, lead"],
         pr: "acme/widgets#42",
       };
@@ -1532,6 +1553,7 @@ describe("SessionsStore", () => {
         minUserMessages: 3,
         includeOneShot: false,
         includeAutomated: true,
+        automatedFilterSet: true,
         labels: ["ticket=ABC-123", "role=reviewer, lead"],
         pr: "acme/widgets#42",
       };

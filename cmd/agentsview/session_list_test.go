@@ -128,15 +128,16 @@ func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 	seedSessionsWithOpts(t, dataDir, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
 		s.UserMessageCount = 1
 		s.IsAutomated = true
+		s.SessionKind = "roborev"
 		s.PRLinks = []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}
 	}})
 	_, err := executeCommand(newRootCommand(), "session", "label", "worker", "nightly")
 	require.NoError(t, err)
 	for _, filter := range [][]string{{"--label", "nightly"}, {"--pr", "owner/repo#7"}, {"--pr", "github.com/owner/repo#7"}} {
-		for _, explicit := range []bool{false, true} {
+		for _, toggle := range []string{"", "--include-one-shot=false", "--include-automated=false", "--include-automated=true"} {
 			args := append([]string{"session", "list", "--format", "json"}, filter...)
-			if explicit {
-				args = append(args, "--include-one-shot=false")
+			if toggle != "" {
+				args = append(args, toggle)
 			}
 			cmd := newRootCommand()
 			var stdout, stderr bytes.Buffer
@@ -145,7 +146,7 @@ func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 			cmd.SetArgs(args)
 			require.NoError(t, cmd.Execute())
 			list := decodeCLIJSON[cliSessionList](t, stdout.String())
-			if explicit {
+			if toggle == "--include-one-shot=false" || toggle == "--include-automated=false" {
 				assert.Empty(t, list.Sessions)
 			} else {
 				require.Len(t, list.Sessions, 1)
