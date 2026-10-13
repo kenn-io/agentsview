@@ -28,12 +28,10 @@ type UsageRowGroup struct {
 	Credits           *string  `json:"balance_usage_credits"`
 }
 
-// Row data statuses OpenAI reports.
-const (
-	UsageAvailable   = "available"
-	UsagePartial     = "partial"
-	UsageUnavailable = "unavailable"
-)
+// UsageAvailable is the data status of a complete row. OpenAI also
+// reports "partial" and "unavailable"; the fetcher treats every status
+// other than this one as not yet usable.
+const UsageAvailable = "available"
 
 // PlanUsageRowData is the body of a KindPlanUsageRow record: the newest
 // row for a usage root. Final marks a row kept after the root settled.
