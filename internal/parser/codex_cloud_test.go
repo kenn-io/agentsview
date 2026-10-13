@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -96,23 +97,24 @@ func TestCodexCloudMappingEveryItemType(t *testing.T) {
 
 	calls := toolCallsByID(msgs)
 	for id, want := range map[string][2]string{
-		"c1": {"shell_command", "Bash"},
-		"m1": {"mcp__github__search", NormalizeToolCategory("mcp__github__search")},
-		"f1": {"apply_patch", "Edit"},
-		"w1": {"web_search", "Tool"},
-		"d1": {"lookup", NormalizeToolCategory("lookup")},
-		"k1": {"spawnAgent", "Task"},
-		"o1": {"exec", NormalizeToolCategory("exec")},
-		"i1": {"view_image", "Read"},
-		"g1": {"image_generation", "Tool"},
-		"x1": {"unknownType", "Other"},
+		"c1":   {"shell_command", "Bash"},
+		"m1":   {"mcp__github__search", NormalizeToolCategory("mcp__github__search")},
+		"f1#1": {"apply_patch", "Edit"},
+		"f1#2": {"apply_patch", "Edit"},
+		"w1":   {"web_search", "Tool"},
+		"d1":   {"lookup", NormalizeToolCategory("lookup")},
+		"k1":   {"spawnAgent", "Task"},
+		"o1":   {"exec", NormalizeToolCategory("exec")},
+		"i1":   {"view_image", "Read"},
+		"g1":   {"image_generation", "Tool"},
+		"x1":   {"unknownType", "Other"},
 	} {
 		require.NotEmpty(t, calls[id], id)
 		assert.Equal(t, want[0], calls[id][0].ToolName, id)
 		assert.Equal(t, want[1], calls[id][0].Category, id)
 	}
-	assert.Len(t, calls["f1"], 2, "one edit call per changed file")
-	assert.Equal(t, "/workspace/project-a/b.go", calls["f1"][1].FilePath)
+	assert.Equal(t, "/workspace/project-a/a.go", calls["f1#1"][0].FilePath, "one edit call per changed file")
+	assert.Equal(t, "/workspace/project-a/b.go", calls["f1#2"][0].FilePath)
 	assert.Contains(t, calls["x1"][0].InputJSON, `"detail":"kept"`)
 
 	var compaction, notes int
@@ -289,4 +291,126 @@ func TestCodexCloudRawCapturePlanOneEntry(t *testing.T) {
 	assert.Equal(t, []RawCaptureEntry{{
 		Path: "account-key/thread-f.jsonl.zstd", LocalPath: path, Appendable: true,
 	}}, plan.Entries)
+}
+
+func ccListingWithEnvironments(environments string) string {
+	return `{"id":"thread-a","createdAt":1,"updatedAt":2,"cwd":"/fallback","environments":` + environments + `}`
+}
+
+func TestCodexCloudCwdKeepsNewestEnvironmentFolder(t *testing.T) {
+	first := ccListingWithEnvironments(`[{"environmentId":"env-1","cwd":"/workspace/project-a"}]`)
+	tests := []struct {
+		name  string
+		later string
+		want  string
+	}{
+		{"null environments", ccListingWithEnvironments(`null`), "/workspace/project-a"},
+		{"empty environments", ccListingWithEnvironments(`[]`), "/workspace/project-a"},
+		{"blank environment folder", ccListingWithEnvironments(`[{"environmentId":"env-1","cwd":" "}]`), "/workspace/project-a"},
+		{"newer environment folder", ccListingWithEnvironments(`[{"environmentId":"env-2","cwd":"/workspace/project-b"}]`), "/workspace/project-b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := parseCodexCloud(t, writeCodexCloudMirror(t, "thread-a",
+				ccRecord(mirror.KindThread, first), ccRecord(mirror.KindThread, tt.later))).Session
+			assert.Equal(t, tt.want, s.Cwd)
+			assert.Equal(t, ExtractProjectFromCwd(tt.want), s.Project)
+		})
+	}
+}
+
+func TestCodexCloudToolResultStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		item string
+		want string // "" means no result is emitted
+	}{
+		{"completed", `{"type":"commandExecution","id":"c1","command":"make","aggregatedOutput":"ok","status":"completed"}`, "completed"},
+		{"failed", `{"type":"commandExecution","id":"c1","command":"make","aggregatedOutput":"boom","status":"failed"}`, "errored"},
+		{"declined", `{"type":"commandExecution","id":"c1","command":"make","status":"declined"}`, "errored"},
+		{"interrupted", `{"type":"commandExecution","id":"c1","command":"make","aggregatedOutput":"part","status":"interrupted"}`, "errored"},
+		{"interrupted without output", `{"type":"mcpToolCall","id":"c1","server":"s","tool":"t","status":"interrupted"}`, "errored"},
+		{"in progress with output", `{"type":"commandExecution","id":"c1","command":"make","aggregatedOutput":"part","status":"inProgress"}`, "running"},
+		{"in progress without output", `{"type":"commandExecution","id":"c1","command":"make","status":"inProgress"}`, ""},
+		{"error value", `{"type":"mcpToolCall","id":"c1","server":"s","tool":"t","error":"denied","status":"completed"}`, "errored"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseCodexCloud(t, writeCodexCloudMirror(t, "thread-a",
+				ccRecord(mirror.KindThread, ccListing), ccItem("turn-1", tt.item, 1759320000000)))
+			var statuses []string
+			for _, msg := range result.Messages {
+				for _, res := range msg.ToolResults {
+					assert.Equal(t, "c1", res.ToolUseID)
+					statuses = append(statuses, res.Status)
+				}
+			}
+			if tt.want == "" {
+				assert.Empty(t, statuses)
+				return
+			}
+			assert.Equal(t, []string{tt.want}, statuses)
+		})
+	}
+}
+
+func TestCodexCloudSkipsEmptyReasoning(t *testing.T) {
+	result := parseCodexCloud(t, writeCodexCloudMirror(t, "thread-a",
+		ccRecord(mirror.KindThread, ccListing),
+		ccItem("turn-1", `{"type":"reasoning","id":"r1","summary":[],"content":[]}`, 1759320000000),
+		ccItem("turn-1", `{"type":"reasoning","id":"r2","summary":[],"content":["Check the log"]}`, 1759320001000),
+		ccItem("turn-1", `{"type":"agentMessage","id":"a1","text":"Done."}`, 1759320002000),
+	))
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "Check the log", result.Messages[0].ThinkingText)
+	assert.Equal(t, "Done.", result.Messages[1].Content)
+	assert.Equal(t, 1, result.Messages[1].Ordinal)
+	assert.Equal(t, 2, result.Session.MessageCount)
+}
+
+func TestCodexCloudDelegatedParent(t *testing.T) {
+	const parentID = "0f8e1c2a-3b4d-4e5f-8a9b-0c1d2e3f4a5b"
+	const childID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	delegation := func(id string) string {
+		return "<codex_delegation><source_thread_id>" + id + "</source_thread_id><task>Run the tests</task></codex_delegation>"
+	}
+	userItem := func(text string) string {
+		quoted, err := json.Marshal(text)
+		require.NoError(t, err)
+		return `{"type":"userMessage","id":"u-` + strconv.Itoa(len(text)) + `","content":[{"type":"text","text":` + string(quoted) + `}]}`
+	}
+	// listing takes the parentThreadId JSON value and extra members.
+	listing := func(parent, extra string) string {
+		return `{"id":"` + childID + `","createdAt":1,"updatedAt":2,"threadSource":"aeon_child","parentThreadId":` + parent + `,` +
+			`"source":{"custom":"codex-cloud-agent"}` + extra + `}`
+	}
+	tests := []struct {
+		name     string
+		listing  string
+		users    []string
+		parent   string
+		relation RelationshipType
+	}{
+		{"delegation block", listing("null", ""), []string{delegation(parentID)}, "codex-cloud:" + parentID, RelSubagent},
+		{"upper-case UUID", listing("null", ""), []string{delegation(strings.ToUpper(parentID))}, "codex-cloud:" + strings.ToUpper(parentID), RelSubagent},
+		{"delegation beats fork", listing("null", `,"forkedFromId":"origin"`), []string{delegation(parentID)}, "codex-cloud:" + parentID, RelSubagent},
+		{"parentThreadId wins", listing(`"direct-parent"`, ""), []string{delegation(parentID)}, "codex-cloud:direct-parent", RelSubagent},
+		{"leading whitespace", listing("null", ""), []string{" " + delegation(parentID)}, "", RelNone},
+		{"tag not at start", listing("null", ""), []string{"Please see " + delegation(parentID)}, "", RelNone},
+		{"value not a UUID", listing("null", ""), []string{delegation("parent-thread")}, "", RelNone},
+		{"tag only in a later message", listing("null", ""), []string{"Run the tests", delegation(parentID)}, "", RelNone},
+		{"names the thread itself", listing("null", ""), []string{delegation(childID)}, "", RelNone},
+		{"no user message", listing("null", ""), nil, "", RelNone},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			records := []mirror.Record{ccRecord(mirror.KindThread, tt.listing)}
+			for i, text := range tt.users {
+				records = append(records, ccItem("turn-1", userItem(text), 1759320000000+int64(i)*1000))
+			}
+			s := parseCodexCloud(t, writeCodexCloudMirror(t, childID, records...)).Session
+			assert.Equal(t, tt.parent, s.ParentSessionID)
+			assert.Equal(t, tt.relation, s.RelationshipType)
+		})
+	}
 }

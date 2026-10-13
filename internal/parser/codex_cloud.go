@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -20,7 +21,11 @@ const codexCloudSessionPrefix = "codex-cloud:"
 type codexCloudThread struct {
 	listing *mirror.Thread // newest thread record from a listing
 	resume  *mirror.Thread // newest thread record from a resume reply
-	turns   map[string]mirror.Turn
+	// environmentCwd is the first environments[].cwd of the newest listing
+	// that had one. A listing of a thread that is no longer loaded carries
+	// null environments, which must not discard the folder.
+	environmentCwd string
+	turns          map[string]mirror.Turn
 	// turnOrder lists turn IDs in first-seen order.
 	turnOrder []string
 	items     map[codexCloudItemKey]mirror.ItemRecord
@@ -64,26 +69,25 @@ func ParseCodexCloudFile(ctx context.Context, path, machine string) (ParseResult
 	}
 	inode, device := sourceFileIdentity(info)
 	session := ParsedSession{
-		ID:                  codexCloudSessionPrefix + meta.ID,
-		Project:             project,
-		Machine:             machine,
-		Agent:               AgentCodexCloud,
-		Entrypoint:          codexCloudEntrypoint(meta),
-		Cwd:                 cwd,
-		SourceSessionID:     meta.ID,
-		FirstMessage:        firstMessage,
-		SessionName:         firstNonEmpty(meta.Name, meta.Preview),
-		SessionNamePresent:  meta.Name != "" || meta.Preview != "",
-		MessageCount:        len(messages),
-		UserMessageCount:    userCount,
-		CountsAuthoritative: true,
+		ID:                 codexCloudSessionPrefix + meta.ID,
+		Project:            project,
+		Machine:            machine,
+		Agent:              AgentCodexCloud,
+		Entrypoint:         codexCloudEntrypoint(meta),
+		Cwd:                cwd,
+		SourceSessionID:    meta.ID,
+		FirstMessage:       firstMessage,
+		SessionName:        firstNonEmpty(meta.Name, meta.Preview),
+		SessionNamePresent: meta.Name != "" || meta.Preview != "",
+		MessageCount:       len(messages),
+		UserMessageCount:   userCount,
 		File: FileInfo{
 			Path: path, Size: info.Size(), Mtime: info.ModTime().UnixNano(),
 			Inode: int64(inode), Device: int64(device),
 		},
 	}
 	session.StartedAt, session.EndedAt = thread.times()
-	if parent := codexCloudResolvedParent(meta); parent != "" {
+	if parent := codexCloudResolvedParent(meta, messages); parent != "" {
 		session.ParentSessionID = codexCloudSessionPrefix + parent
 		session.RelationshipType = RelSubagent
 	} else if meta.ForkedFromID != "" {
@@ -108,6 +112,9 @@ func collectCodexCloudRecords(records []mirror.Record) (*codexCloudThread, error
 			}
 			if record.Kind == mirror.KindThread {
 				thread.listing = &meta
+				if cwd := codexCloudEnvironmentCwd(meta.Environments); cwd != "" {
+					thread.environmentCwd = cwd
+				}
 			} else {
 				thread.resume = &meta
 			}
@@ -218,17 +225,22 @@ func (t *codexCloudThread) times() (time.Time, time.Time) {
 }
 
 // cwd uses only listing records: a resume reply abbreviates the home
-// directory as "~".
+// directory as "~". The listing's cwd is used only when no listing ever
+// named an environment folder.
 func (t *codexCloudThread) cwd() string {
 	if t.listing == nil {
 		return ""
 	}
-	for _, env := range t.listing.Environments {
+	return firstNonEmpty(t.environmentCwd, t.listing.Cwd)
+}
+
+func codexCloudEnvironmentCwd(environments []mirror.Environment) string {
+	for _, env := range environments {
 		if strings.TrimSpace(env.Cwd) != "" {
 			return env.Cwd
 		}
 	}
-	return t.listing.Cwd
+	return ""
 }
 
 func codexCloudEntrypoint(meta *mirror.Thread) string {
@@ -245,12 +257,41 @@ func codexCloudEntrypoint(meta *mirror.Thread) string {
 }
 
 // codexCloudResolvedParent is parentThreadId, else the parent a spawned
-// sub-agent's source names.
-func codexCloudResolvedParent(meta *mirror.Thread) string {
+// sub-agent's source names, else the thread a delegated thread's first user
+// message names in its <codex_delegation> block.
+func codexCloudResolvedParent(meta *mirror.Thread, messages []ParsedMessage) string {
 	if meta.ParentThreadID != "" {
 		return meta.ParentThreadID
 	}
-	if len(meta.Source) == 0 {
+	if parent := codexCloudSpawnParent(meta.Source); parent != "" {
+		return parent
+	}
+	return codexCloudDelegationParent(meta.ID, messages)
+}
+
+// codexCloudDelegationRe matches the block that opens a delegated thread's
+// first user message. The tag must start the text and hold a UUID.
+var codexCloudDelegationRe = regexp.MustCompile(
+	`^<codex_delegation><source_thread_id>([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-` +
+		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})</source_thread_id>`,
+)
+
+func codexCloudDelegationParent(threadID string, messages []ParsedMessage) string {
+	for _, msg := range messages {
+		if msg.Role != RoleUser || len(msg.ToolResults) > 0 {
+			continue
+		}
+		match := codexCloudDelegationRe.FindStringSubmatch(msg.Content)
+		if match == nil || match[1] == threadID {
+			return ""
+		}
+		return match[1]
+	}
+	return ""
+}
+
+func codexCloudSpawnParent(raw jsontext.Value) string {
+	if len(raw) == 0 {
 		return ""
 	}
 	var source struct {
@@ -260,7 +301,7 @@ func codexCloudResolvedParent(meta *mirror.Thread) string {
 			} `json:"thread_spawn"`
 		} `json:"subAgent"`
 	}
-	if err := json.Unmarshal(meta.Source, &source); err != nil {
+	if err := json.Unmarshal(raw, &source); err != nil {
 		return ""
 	}
 	return source.SubAgent.ThreadSpawn.ParentThreadID
