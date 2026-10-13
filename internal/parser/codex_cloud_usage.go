@@ -3,7 +3,6 @@ package parser
 import (
 	"cmp"
 	"fmt"
-	"log"
 	"slices"
 	"time"
 
@@ -26,12 +25,11 @@ func codexCloudUsageEvents(
 	baselines := codexCloudBaselines(recs)
 	for i, rec := range recs {
 		peakContext = max(peakContext, codexCloudMapTokens(rec.Last).context())
+		// A new baseline is not logged: every reparse of the mirror would
+		// log every past reset again.
 		increase := rec.Total
 		if i > 0 && baselines[i] == baselines[i-1] {
 			increase = codexCloudTokenIncrease(recs[i-1].Total, rec.Total)
-		} else if i > 0 {
-			log.Printf("codex-cloud: thread %s token total decreased; starting baseline %d",
-				threadID, baselines[i])
 		}
 		fields := codexCloudMapTokens(increase)
 		if fields == (codexCloudTokenFields{}) {

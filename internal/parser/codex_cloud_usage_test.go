@@ -233,6 +233,18 @@ func TestUsageCountsARepeatedFlushOnce(t *testing.T) {
 	assert.Equal(t, int64(30), totalOutput)
 }
 
+func TestUsageResetIsNotLogged(t *testing.T) {
+	logs := captureLog(t)
+	recs := []mirror.TokenUsageData{
+		ccTokens("join-a", "turn-1", ccCounts(300, 0, 30), ccCounts(300, 0, 30), 0),
+		ccTokens("join-b", "turn-2", ccCounts(50, 0, 5), ccCounts(50, 0, 5), 1),
+	}
+
+	codexCloudUsageEvents("thread-a", recs, "gpt-6")
+
+	assert.NotContains(t, logs.String(), "thread-a", "a reparse would repeat the line for every past reset")
+}
+
 func TestUsageKeepsEqualTotalsFromDifferentJoins(t *testing.T) {
 	// Two connections can report the same totals; only an exact repeat of
 	// one connection's record is dropped. A drop then a return to the same
