@@ -82,7 +82,8 @@ disagree, the spec wins; fix the plan.
   must fail only that thread after one `limit: 1` retry on a fresh connection
   (Task 14).
 - Live discovery must never resume a thread whose listing `updatedAt` is more
-  than 2 minutes old, whatever its turn status. Test in Task 17.
+  than 5 minutes old, whatever its turn status. Test in Task 17. (The window
+  was 2 minutes; it widened to 5 minutes to allow for clock difference.)
 
 ______________________________________________________________________
 
@@ -188,7 +189,7 @@ DeepSeek behavior.
 
 - [x] **Step 3: Implement** by moving `inspectDeepSeekHarnessZstdFrames` and
   `newDeepSeekHarnessZstdDecoder` logic; DeepSeek keeps its header-frame check
-  and line reader and calls `zstdframe.Inspect(f, 0)`.
+  and line reader and calls `zstdframe.Inspect(f, size, 0)`.
 
 - [x] **Step 4: Run**
   `go test ./internal/zstdframe ./internal/parser -run DeepSeek`; expect PASS.
@@ -201,8 +202,10 @@ Spec: Mirror format.
 
 **Files:**
 
-- Create: `internal/codexcloud/mirror/record.go`, `writer.go`, `reader.go`,
-  `mirror_test.go`
+- Create: `internal/codexcloud/mirror/mirror.go` (record kinds, `Append`,
+  `ReadAll`), `live.go` (token and turn-completion record bodies), `plan.go`
+  (plan usage record bodies), `server.go` (decode views of the server's
+  objects), and `mirror_test.go`
 
 **Interfaces:**
 
@@ -212,6 +215,8 @@ Spec: Mirror format.
       `KindItem = "item"`, `KindPlanUsageRow = "plan_usage_row"`,
       `KindPlanUsageOutcome = "plan_usage_outcome"`,
       `KindTokenUsage = "token_usage"`, `KindTurnCompleted = "turn_completed"`.
+      Shipped code adds `KindThreadResume = "thread_resume"` in `server.go` for
+      thread metadata taken from a `thread/resume` reply.
     - `type Record struct { Kind Kind \`json:"kind"\`; FetchedAt time.Time
       \`json:"fetched_at"\`; Data jsontext.Value \`json:"data"\` }\`
     - `type AppendResult struct { Offset int64; Recovered []Record; Truncated bool }`
@@ -238,12 +243,14 @@ Spec: Mirror format.
       A, B, C.
     - `TestAppendTruncatesTornTail`: write half a frame after A; next append sets
       `Truncated`; `ReadAll` returns A then the new records.
-    - `TestReadAllIgnoresTornTail`.
+    - `ReadAll` ignoring a torn tail: shipped as an assertion in
+      `TestAppendTruncatesTornTail`, not a separate test.
     - `TestAppendScansWhenOffsetPastEOF`.
 
 - [x] **Step 2: Run** `go test ./internal/codexcloud/mirror`; FAIL.
 
-- [x] **Step 3: Implement** with `zstdframe.Inspect` and `zstdframe.NewEncoder`.
+- [x] **Step 3: Implement** with `zstdframe.Inspect` and
+  `zstdframe.EncodeFrame`.
 
 - [x] **Step 4: Run**; PASS.
 
@@ -519,8 +526,9 @@ Spec: Authentication.
       `file`); `keyring`/`ephemeral` never read `auth.json`; `auto` with no
       token is keyring-backed; decodes the ID token payload in memory only
       (`chatgpt_user_id`, else `user_id`); ignores `chatgpt_account_user_id`.
-    - `func GroupByKey(logins []Login) map[AccountKey][]Login` preserving home
-      order.
+    - `func GroupByKey(logins []Login) (map[AccountKey][]Login, []AccountKey)`
+      preserving home order within a key and returning the keys in order of
+      first appearance.
 
 - [x] **Step 1: Write failing tests**
 
@@ -795,7 +803,7 @@ Spec: Incremental sync (listings, steps 1 to 5, watermarks).
   `git commit -m "feat(codexcloud): list and select changed threads"`
 
 - [x] **Step 6: Stalled check-again.** A stalled thread is not selected through
-  its check-again flag (`TestStallOverridesCheckAgain`). Commit.
+  its check-again flag (`TestStalledThreadIsNotCheckedAgain`). Commit.
 
 ### Task 13: Fetch a thread, resume point, durable append
 
@@ -895,9 +903,9 @@ oversized replies), Failure timing.
 
 - Produces:
 
-    - `type Gates struct { CodexCloud config.CodexCloudConfig; Disabled bool; Homes []string; ReadErr error }`
+    - `type Gates struct { CodexCloud config.CodexCloudConfig; Disabled bool; Homes []string; ReadErr error; ConfigPath string }`
       with `Fetching() bool`, and `type GateSource func() Gates` built by
-      `NewGateSource(load func() (config.Config, error), getenv, userHome)`:
+      `NewGateSource(configPath string, initial config.Config, load func() (config.Config, error), getenv func(string) string, userHome string)`:
       re-reads `config.toml` (the daemon passes `config.LoadReadOnly`), keeps
       the last good `Gates` on a read error and sets `ReadErr`. Both jobs use
       it. `NoSync` is passed separately (Global Constraints).
@@ -968,7 +976,7 @@ oversized replies), Failure timing.
     - each thread uses the time its own fetch started, not the pass start, for the
       save-lag and check-again rules;
     - retry entries refresh their listing record (above,
-      `TestRetryEntryRefreshesListing`).
+      `TestRetryKeepsNewestListing`).
 
 - [x] **Step 7: Unreadable threads.** Implement the 7-day rule above with
   `TestUnreadableAfterSevenDays` (an oversized single item and a thread that
@@ -993,14 +1001,14 @@ Spec: Scheduler, Configuration (gates, re-read), Status and errors.
 
 - Produces:
 
-    - `func codexCloudSyncJob(sync *codexcloud.Syncer) poller.Job` (name
-      `codex-cloud-sync`, 5 minutes, jitter, `RunAtStart: true`).
+    - `func codexCloudSyncJob(sync *codexcloud.Syncer, idle *server.IdleTracker) poller.Job`
+      (name `codex-cloud-sync`, 5 minutes, jitter, `RunAtStart: true`).
     - `func newCodexCloudSyncer(cfg config.Config, load func() (config.Config, error), status *codexcloud.StatusBoard) *codexcloud.Syncer`;
       `NoSync` comes from `cfg.NoSync`, which `--no-sync` and an archive-only
       archive both set.
-    - `NewGateSource(configPath, load, getenv, userHome)`; `Gates.Configured()`;
-      `codexcloud.SourceRowKey`; `StatusBoard.Keep`/`Delete`;
-      `codexcloud.StatusLines(HomeStatus) []string`.
+    - `NewGateSource(configPath, initial, load, getenv, userHome)`;
+      `Gates.Configured()`; `codexcloud.SourceRowKey`;
+      `StatusBoard.Keep`/`Delete`; `codexcloud.StatusLines(HomeStatus) []string`.
     - Gate order each run: `NoSync` from the startup config, then
       `disabled_agents`, then `CodexCloud.Err`, then `Enabled` (a config error
       also clears `Enabled`, so it is checked first); a `config.toml` read error
@@ -1010,7 +1018,8 @@ Spec: Scheduler, Configuration (gates, re-read), Status and errors.
     - `GET /api/v1/codex-cloud/status` returning `[]HomeStatus`, always
       registered, empty when the source is not configured (configuration can
       change without a restart).
-    - `serve status` prints one line per row from that endpoint.
+    - `serve status` prints each row from that endpoint with its live tokens and
+      plan usage lines, or one line saying why the status is unavailable.
 
 - [x] **Step 1: Write failing tests**
 
@@ -1039,7 +1048,11 @@ Spec: Scheduler, Configuration (gates, re-read), Status and errors.
 
 - [x] **Step 6: Idle tracking.** Each sync run is daemon work: it calls the
   daemon idle tracker's `BeginWork` and ends it when the run returns, like the
-  other background jobs in `cmd/agentsview/main.go`. Test, then commit.
+  other background jobs in `cmd/agentsview/main.go`. Commit.
+
+- [ ] **Step 7: Test idle tracking.** The code above shipped without a test:
+  `cmd/agentsview/codex_cloud_jobs_test.go` does not check that a sync or live
+  run holds the idle tracker while it runs.
 
 **Milestone: working locally.** The gate's probe answers are in. Ask the user to
 run `AGENTSVIEW_DATA_DIR=<scratch> agentsview serve` with
@@ -1062,10 +1075,10 @@ Spec: Live token capture (Joining, While joined, What gets stored).
 
 - Produces:
 
-    - `type Monitor struct{ Store *Store; Waits *Waits; Status *StatusBoard; Now func() time.Time; Dial func(context.Context, DialOptions) (*Conn, error); Gates GateSource; NoSync bool; ReadLogin func(home string) (Login, HomeState, error); Trigger func() error; Log *log.Logger }`
+    - `type Monitor struct{ Store *Store; Waits *Waits; Status *StatusBoard; Now func() time.Time; Dial func(context.Context, DialOptions) (*Conn, error); Gates GateSource; NoSync bool; ReadLogin func(home string) (Login, HomeState, error); Trigger func() error; Version string; Log *log.Logger }`
     - `func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadID string, listedUpdatedAt int64) error`
       (re-check that the newest turn is `inProgress` and `listedUpdatedAt` is
-      within the last 2 minutes, then `thread/resume`, branch on `resumeKind`).
+      within the last 5 minutes, then `thread/resume`, branch on `resumeKind`).
     - `func (m *Monitor) CloseAll()` (flush and close; used by gates and
       shutdown).
     - Records in `internal/codexcloud/mirror`:
@@ -1116,11 +1129,11 @@ Spec: Live token capture (Finding running threads), gates.
 - Produces:
 
     - `func (m *Monitor) Discover(ctx context.Context) error` (job `Run`).
-    - `func codexCloudLiveJob(m *codexcloud.Monitor) poller.Job` (name
-      `codex-cloud-live`, 30 seconds, jitter).
+    - `func codexCloudLiveJob(m *codexcloud.Monitor, idle *server.IdleTracker) poller.Job`
+      (name `codex-cloud-live`, 30 seconds, jitter).
     - Join rule: newest turn `inProgress` and listing `updatedAt` within the last
-      2 minutes. Discovery pages the non-archived default listing only while a
-      page holds a thread updated in the last 2 minutes, and checks the newest
+      5 minutes. Discovery pages the non-archived default listing only while a
+      page holds a thread updated in the last 5 minutes, and checks the newest
       turn (`itemsView: notLoaded`) only of those threads. Listing `status` is
       ignored. Discovery reads no account working set: the unfinished set's
       `SubAgent` flag (Tasks 10 and 20) has no reader and can be dropped.
