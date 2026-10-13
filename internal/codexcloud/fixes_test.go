@@ -378,3 +378,39 @@ func TestStalledThreadRecoversAfterStopBeforeAccountSave(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, recordedItemIDs(records), "m2")
 }
+
+func TestOffPageRetryStoresNewestListing(t *testing.T) {
+	env := newPassEnv(t)
+	env.threads.Set(finishedThread("a", ago(3*time.Hour), message("m", "one")))
+	env.run(t)
+
+	fail, mu := true, &sync.Mutex{}
+	env.failThread("a", &fail, mu)
+	env.threads.Update("a", func(th *codexcloudtest.Thread) { th.Name, th.UpdatedAt = "second name", ago(2*time.Hour) })
+	env.clock.Advance(time.Minute)
+	env.run(t)
+	require.Contains(t, env.account(t).Retry, "a")
+
+	// Renamed again while waiting out its backoff, and pushed off the first
+	// listing page by a page of newer threads.
+	env.threads.Update("a", func(th *codexcloudtest.Thread) { th.Name, th.UpdatedAt = "third name", ago(90*time.Minute) })
+	for i := range listPageSize {
+		env.threads.Set(finishedThread("t"+strconv.Itoa(i), ago(time.Hour)-int64(i), message("n", "x")))
+	}
+	env.clock.Advance(time.Minute)
+	env.run(t)
+	require.Contains(t, string(env.account(t).Retry["a"].Listing), `"third name"`)
+
+	mu.Lock()
+	fail = false
+	mu.Unlock()
+	env.clock.Set(env.account(t).Retry["a"].NextAttempt)
+	from := len(env.host.Requests())
+	env.run(t)
+	require.Equal(t, []string{"a"}, env.fetchedThreads(from), "only the due retry is fetched")
+
+	// The stored record is what a rebuilt mirror file gets as metadata.
+	st, err := env.syncer.Store.LoadThread(passKey, "a")
+	require.NoError(t, err)
+	assert.Contains(t, string(st.Listing), `"third name"`)
+}
