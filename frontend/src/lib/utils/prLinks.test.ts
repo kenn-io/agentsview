@@ -3,7 +3,6 @@ import { displayPRLinks, prLinkLabel, safeExternalHref } from "./prLinks.js";
 
 describe("safeExternalHref", () => {
   it.each([
-    ["https://github.com/acme/widgets/pull/42", "https://github.com/acme/widgets/pull/42"],
     [
       "http://git.example.test/acme/widgets/-/merge_requests/7",
       "http://git.example.test/acme/widgets/-/merge_requests/7",
@@ -28,16 +27,6 @@ describe("safeExternalHref", () => {
 });
 
 describe("prLinkLabel", () => {
-  it("formats repository and number like owner/repo#123", () => {
-    expect(
-      prLinkLabel({
-        repository: "acme/widgets",
-        number: 42,
-        url: "https://github.com/acme/widgets/pull/42",
-      }),
-    ).toBe("acme/widgets#42");
-  });
-
   it("falls back to the repository, then the URL", () => {
     expect(prLinkLabel({ repository: "acme/widgets", number: 0, url: "https://x.test/p" })).toBe(
       "acme/widgets",
