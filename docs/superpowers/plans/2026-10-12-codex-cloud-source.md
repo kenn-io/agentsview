@@ -1083,7 +1083,7 @@ Spec: Live token capture (Joining, While joined, What gets stored).
     - After `turn/completed`: call `Trigger` (wraps `TriggerNow`, treats
       `ErrTriggerPending` as success) in its own goroutine.
 
-- [ ] **Step 1: Write failing tests** following the spec's Live token capture
+- [x] **Step 1: Write failing tests** following the spec's Live token capture
   test list: warm stays until `turn/completed`; cold closes and stuck turn
   causes one cold resume (Review Focus); just-completed turn not rejoined
   (Review Focus); unknown or missing `resumeKind` stops capture; refresh
@@ -1093,13 +1093,13 @@ Spec: Live token capture (Joining, While joined, What gets stored).
   together queue at most one extra sync run and `ErrTriggerPending` is not an
   error (`TestTriggerCoalesces`).
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(codexcloud): join running threads for token counts"`
 
 ### Task 17: Live discovery job
@@ -1131,7 +1131,7 @@ Spec: Live token capture (Finding running threads), gates.
       `<codex_delegation>` tag) is not a sub-agent thread here and is joined
       under the join rule.
 
-- [ ] **Step 1: Write failing tests** `TestDiscoveryFindsIdleListedRunning`,
+- [x] **Step 1: Write failing tests** `TestDiscoveryFindsIdleListedRunning`,
   `TestDiscoveryIgnoresOldThreads` (Review Focus: `inProgress` newest turn,
   `updatedAt` 3 minutes old, listed `active`: no turn check, no resume),
   `TestDiscoveryJoinsDelegatedChild`, `TestDiscoverySecondPage`,
@@ -1139,13 +1139,13 @@ Spec: Live token capture (Finding running threads), gates.
   `TestSync429HoldsDiscovery`, `TestDiscovery5xxDelaysSync`,
   `TestDiscoveryProtocolChangeStopsCaptureOnly`.
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS. Extend `TestTokenCanary` with a warm join.
+- [x] **Step 4: Run**; PASS. Extend `TestTokenCanary` with a warm join.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: discover running codex-cloud threads"`
 
 ### Task 18: Token records to usage events and coverage
@@ -1175,7 +1175,7 @@ Spec: What gets stored, How it shows up (coverage).
     - `func codexCloudCoverage(turns []mirror.Turn, tokens []mirror.TokenUsageData, completions []mirror.TurnCompletedData) ParsedCaptureCoverage`
       (later turn in same baseline, or same-join token plus completion).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
     - `TestUsageIncrementsAndBaselines` (exact sum across a reset; repeated total
       adds nothing; recurring total after reset does not collide).
@@ -1187,15 +1187,15 @@ Spec: What gets stored, How it shows up (coverage).
       reset gap; 6-hour leave).
     - `TestSessionTotalsCountEachIncreaseOnce`.
 
-- [ ] **Step 2: Run**; FAIL.
+- [x] **Step 2: Run**; FAIL.
 
-- [ ] **Step 3: Implement.** `TotalOutputTokens` and `PeakContextTokens` set by
+- [x] **Step 3: Implement.** `TotalOutputTokens` and `PeakContextTokens` set by
   the provider with `Has*` flags; check that `prepare.go` does not count
   request-scoped events a second time.
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(parser): turn codex-cloud token records into usage"`
 
 ## Phase 5: Plan usage
