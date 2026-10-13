@@ -37,6 +37,12 @@ type codexCloudThread struct {
 	// order.
 	tokens      []mirror.TokenUsageData
 	completions []mirror.TurnCompletedData
+	// planRow and planOutcome are the newest plan usage records of each
+	// kind, with their positions in the file.
+	planRow       *mirror.PlanUsageRowData
+	planRowAt     int
+	planOutcome   *mirror.PlanUsageOutcomeData
+	planOutcomeAt int
 }
 
 type codexCloudItemKey struct{ turnID, itemID string }
@@ -92,6 +98,7 @@ func ParseCodexCloudFile(ctx context.Context, path, machine string) (ParseResult
 	}
 	session.StartedAt, session.EndedAt = thread.times()
 	usage := thread.applyUsage(&session, meta)
+	session.PlanUsage = thread.planUsage()
 	if parent := codexCloudResolvedParent(meta, messages); parent != "" {
 		session.ParentSessionID = codexCloudSessionPrefix + parent
 		session.RelationshipType = RelSubagent
@@ -187,8 +194,18 @@ func collectCodexCloudRecords(records []mirror.Record) (*codexCloudThread, error
 				return nil, fmt.Errorf("codex-cloud record %d: decode turn completion: %w", index, err)
 			}
 			thread.completions = append(thread.completions, completed)
-		default:
-			// Plan usage records are read by their own step.
+		case mirror.KindPlanUsageRow:
+			var row mirror.PlanUsageRowData
+			if err := json.Unmarshal(record.Data, &row); err != nil {
+				return nil, fmt.Errorf("codex-cloud record %d: decode plan usage row: %w", index, err)
+			}
+			thread.planRow, thread.planRowAt = &row, index
+		case mirror.KindPlanUsageOutcome:
+			var outcome mirror.PlanUsageOutcomeData
+			if err := json.Unmarshal(record.Data, &outcome); err != nil {
+				return nil, fmt.Errorf("codex-cloud record %d: decode plan usage outcome: %w", index, err)
+			}
+			thread.planOutcome, thread.planOutcomeAt = &outcome, index
 		}
 	}
 	return thread, nil
