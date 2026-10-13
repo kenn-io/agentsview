@@ -39,11 +39,8 @@ func (b *reportBackendFixture) ActivityReportUsage(_ context.Context, ids []stri
 
 func (b *reportBackendFixture) ActivityReportCandidateSource(ids []string, q Query) CandidateSource {
 	err := b.check("candidates", ids, q)
-	return func(ctx context.Context, yield func(IntervalCandidate) error) error {
+	return func(_ context.Context, yield func(IntervalCandidate) error) error {
 		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
 			return err
 		}
 		return yield(IntervalCandidate{SessionID: "s", StartOrdinal: 0, EndOrdinal: 1, Start: mustStart(b.t, "2026-06-16T10:00:00Z"), End: mustStart(b.t, "2026-06-16T10:01:00Z"), ClosingRole: "assistant", ClosingModel: "model-a"})
@@ -73,7 +70,7 @@ func TestBuildReportArtifacts(t *testing.T) {
 	require.NoError(t, err)
 	backend := &reportBackendFixture{t: t, q: q, pricing: &export.PricingBlock{}}
 	progress := []Progress{}
-	artifacts, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a", Title: "/workspace/project-a", Agent: "codex"}}, []string{"s"}, q, func(p Progress) { progress = append(progress, p) }, "aggregating example activity report")
+	artifacts, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, func(p Progress) { progress = append(progress, p) }, "aggregating example activity report")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
 	assert.Equal(t, []Progress{

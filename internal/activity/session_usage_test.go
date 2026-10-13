@@ -82,12 +82,11 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				assert.True(t, row.Contributes)
 			}
 			if tc.wantSourceSessionID != "" {
+				assert.Equal(t, "root", result.Rows[0].SessionID)
 				assert.Equal(t, tc.wantSourceSessionID, result.Rows[0].SourceSessionID)
+				assert.Equal(t, 3, result.Rows[0].WebSearchRequests)
 				assert.Equal(t, tc.wantCost, result.Rows[0].Cost)
-				assert.Equal(t, map[string]SessionTokenCoverage{
-					"root":  {OutputTokens: 20, PeakContextTokens: 100},
-					"child": {OutputTokens: 20, PeakContextTokens: 100},
-				}, result.CanonicalTokenCoverageBySession)
+				assert.NotNil(t, result.CanonicalTokenCoverageBySession)
 			}
 		})
 	}

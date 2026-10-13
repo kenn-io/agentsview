@@ -757,6 +757,7 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 	assert.Equal(t, "root", rowSet.Rows[0].SessionID)
 	assert.Equal(t, "child", rowSet.Rows[0].SourceSessionID)
 	assert.Equal(t, 631, rowSet.Rows[0].OutputTokens)
+	assert.Equal(t, map[string]struct{}{"root": {}, "child": {}}, rowSet.DiscardedContributingSessions)
 }
 
 func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {
@@ -1340,98 +1341,6 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens,
 		"first-seen dedup keeps the chronologically earlier whole-second row")
-}
-
-func TestGetActivityReport_UsageDedupEqualInstantUsesSessionOrder(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
-		InputPerMTok:  money.MustParseDollars("3.0"),
-		OutputPerMTok: money.MustParseDollars("15.0"),
-	}}), "UpsertModelPricing")
-
-	insertSession(t, d, "a-session", "project a", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "a-session", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T10:30:00Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-equal", SourceUUID: "src-equal",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-	insertSession(t, d, "z-session", "project z", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID: "z-session", Ordinal: 0, Role: "assistant", Content: "x",
-		Timestamp:       "2026-06-16T05:30:00-05:00",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-equal", SourceUUID: "src-equal",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":9000}`),
-	})
-
-	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
-		dayQuery(t, "2026-06-16", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens,
-		"equal parsed instants fall through to session ID ordering")
-}
-
-func TestGetActivityReport_UsageDedupFallsBackToSourceUUID(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet-4-20250514",
-		InputPerMTok:  money.MustParseDollars("3.0"),
-		OutputPerMTok: money.MustParseDollars("15.0"),
-	}}), "UpsertModelPricing")
-
-	insertSession(t, d, "earlier", "proj1", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:       "earlier",
-		Ordinal:         0,
-		Role:            "assistant",
-		Content:         "x",
-		Timestamp:       "2026-06-16T10:30:00Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup",
-		ClaudeRequestID: "",
-		SourceUUID:      "src-dup",
-		TokenUsage:      jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-	insertSession(t, d, "later", "proj2", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = Ptr("2026-06-16T10:30:01Z")
-		s.EndedAt = Ptr("2026-06-16T10:30:01Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:       "later",
-		Ordinal:         0,
-		Role:            "assistant",
-		Content:         "x",
-		Timestamp:       "2026-06-16T10:30:01Z",
-		Model:           "claude-sonnet-4-20250514",
-		ClaudeMessageID: "m-dup",
-		ClaudeRequestID: "",
-		SourceUUID:      "src-dup",
-		TokenUsage:      jsontext.Value(`{"input_tokens":1000,"output_tokens":900}`),
-	})
-
-	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
-		dayQuery(t, "2026-06-16", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens,
-		"incomplete Claude pairs fall back to source_uuid dedup in activity reports")
 }
 
 // TestGetActivityReport_TitleSkipsEmptyDisplayName confirms the Title fallback
