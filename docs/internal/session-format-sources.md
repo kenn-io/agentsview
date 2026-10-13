@@ -3251,13 +3251,23 @@ schemas keep their existing ordering behavior.
   server's default (`modelProvider: "local"` on every probed thread); the
   server accepts `codex-client.agentsview` and selects `codex-app-server`; the
   sub-agent listings (`sourceKinds`) are accepted and returned no threads for
-  that account.
+  that account. A read-only probe on 2026-10-13 found that ChatGPT dot's
+  delegated threads name one parent thread with `threadSource: "aeon"`. That
+  parent is the dot orchestrator: `thread/read` returns it with no turns and
+  an empty preview, and the default `thread/list` never returns it. AgentsView
+  never imports it, so its delegated threads show as top-level sessions whose
+  parent is not in the archive.
 - **Usage and cost:** The hosted thread history carries no token counts. Token
   counts come only from `thread/tokenUsage/updated` notifications while
   AgentsView is joined to a running thread; counters arrive as JSON numbers
   such as `4603049.0`. Plan usage (weekly and five-hour percentages, credits)
   comes from `wham/usage/thread_usage/query_v2` per root thread and has no
-  token or dollar figures.
+  token or dollar figures. On 2026-10-13 the report answered `unavailable` for
+  the dot orchestrator thread alone. With its 26 delegated threads as
+  descendants it answered one `partial` row whose weekly percentage equals the
+  sum of the delegated threads' own rows, so the orchestrator carries no usage
+  of its own and asking for each delegated thread as its own root loses
+  nothing.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
   `internal/parser/codex_cloud_provider.go` discovers mirror files. Design and
   open questions:
