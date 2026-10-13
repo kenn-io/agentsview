@@ -970,7 +970,7 @@ oversized replies), Failure timing.
     - retry entries refresh their listing record (above,
       `TestRetryEntryRefreshesListing`).
 
-- [ ] **Step 7: Unreadable threads.** Implement the 7-day rule above with
+- [x] **Step 7: Unreadable threads.** Implement the 7-day rule above with
   `TestUnreadableAfterSevenDays` (an oversized single item and a thread that
   always fails; a new `updatedAt` restarts the count and later reselects the
   thread). Commit.
