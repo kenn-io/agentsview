@@ -57,6 +57,30 @@ func (s *Store) GetActivityReport(
 	return activity.ReportWithSessions(artifacts), nil
 }
 
+type activityReportBackend struct {
+	*Store
+	candidates    chSessionSet
+	rangeStartUTC string
+	rangeEndUTC   string
+	pairing       *activityReportPairing
+}
+
+func (b activityReportBackend) ActivityReportUsage(
+	ctx context.Context, ids []string, q activity.Query,
+) ([]activity.UsageRow, *export.PricingBlock, error) {
+	return b.Store.activityReportUsage(ctx, b.candidates, ids, b.rangeStartUTC, b.rangeEndUTC, q)
+}
+
+func (b activityReportBackend) ActivityReportCandidateSource([]string, activity.Query) activity.CandidateSource {
+	return b.pairing.candidateSource()
+}
+
+func (b activityReportBackend) ActivityReportMessageCounts(
+	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+) error {
+	return b.pairing.countMessages(ctx, ids, q, artifacts)
+}
+
 func (s *Store) BuildActivityReportArtifacts(
 	ctx context.Context,
 	f db.AnalyticsFilter,
@@ -150,18 +174,12 @@ func (s *Store) BuildActivityReportArtifacts(
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
 	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, versions, q)
-	artifacts, done, err := activity.BuildReportArtifacts(ctx, activity.ReportSources{
-		Usage: func(
-			ctx context.Context, ids []string, query activity.Query,
-		) ([]activity.UsageRow, *export.PricingBlock, error) {
-			return s.activityReportUsage(
-				ctx, candidates, ids, rangeStartUTC, rangeEndUTC, query,
-			)
-		},
-		Candidates:    pairs.candidateSource(),
-		MessageCounts: pairs.countMessages,
-		Projects:      s.BuildProjectIdentityMap,
-	}, sessions, q, onProgress, "aggregating clickhouse activity report")
+	backend := activityReportBackend{
+		Store: s, candidates: candidates,
+		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC, pairing: pairs,
+	}
+	artifacts, done, err := activity.BuildReportArtifacts(
+		ctx, backend, sessions, q, onProgress, "aggregating clickhouse activity report")
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}

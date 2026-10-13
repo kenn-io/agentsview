@@ -84,7 +84,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			wantDiscarded: map[string]int{"child": 0}, wantContributing: map[string]struct{}{},
 		},
 		{
-			name: "Claude snapshot preserves survivor fields and attribution",
+			name: "Claude snapshot keeps attribution and combines searches",
 			rows: []UsageRow{
 				{
 					SessionID:         "root",
@@ -97,7 +97,6 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				},
 				{
 					SessionID:         "child",
-					Model:             "model-a",
 					Timestamp:         "2026-06-16T10:00:01Z",
 					InputTokens:       100,
 					OutputTokens:      20,
@@ -111,10 +110,8 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			wantDiscarded:    map[string]int{"root": 5, "child": 20},
 			wantContributing: map[string]struct{}{"root": {}, "child": {}},
 			wantSurvivor: &UsageRow{
-				SessionID: "root", SourceSessionID: "child", Model: "model-a",
-				Timestamp: "2026-06-16T10:00:01Z", InputTokens: 100,
-				OutputTokens: 20, WebSearchRequests: 3,
-				Cost: money.Money{Microdollars: 10},
+				SessionID: "root", SourceSessionID: "child",
+				WebSearchRequests: 3, Cost: money.Money{Microdollars: 10},
 			},
 		},
 		{
@@ -145,14 +142,13 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			assert.Equal(t, tc.wantDiscarded, result.DeduplicatedOutputTokens)
 			assert.Equal(t, tc.wantContributing, result.DiscardedContributingSessions)
 			if tc.wantSurvivor != nil {
+				coverage, err := CanonicalSessionTokenCoverageContext(t.Context(), tc.rows)
+				require.NoError(t, err)
+				assert.Equal(t, coverage, result.CanonicalTokenCoverageBySession)
 				assert.Equal(t, tc.wantSearches, pricedSearches)
 				row := result.Rows[0]
 				assert.Equal(t, tc.wantSurvivor.SessionID, row.SessionID)
 				assert.Equal(t, tc.wantSurvivor.SourceSessionID, row.SourceSessionID)
-				assert.Equal(t, tc.wantSurvivor.Model, row.Model)
-				assert.Equal(t, tc.wantSurvivor.Timestamp, row.Timestamp)
-				assert.Equal(t, tc.wantSurvivor.InputTokens, row.InputTokens)
-				assert.Equal(t, tc.wantSurvivor.OutputTokens, row.OutputTokens)
 				assert.Equal(t, tc.wantSurvivor.WebSearchRequests, row.WebSearchRequests)
 				assert.Equal(t, tc.wantSurvivor.Cost, row.Cost)
 			}

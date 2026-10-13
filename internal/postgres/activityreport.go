@@ -38,6 +38,23 @@ func (s *Store) GetActivityReport(
 	return activity.ReportWithSessions(artifacts), nil
 }
 
+type activityReportBackend struct {
+	*Store
+	lowerBound, upperBound string
+}
+
+func (b activityReportBackend) ActivityReportUsage(
+	ctx context.Context, ids []string, q activity.Query,
+) ([]activity.UsageRow, *export.PricingBlock, error) {
+	return b.Store.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
+}
+
+func (b activityReportBackend) ActivityReportMessageCounts(
+	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+) error {
+	return b.Store.activityReportMessageCounts(ctx, ids, q, artifacts)
+}
+
 func (s *Store) BuildActivityReportArtifacts(
 	ctx context.Context,
 	f db.AnalyticsFilter,
@@ -51,7 +68,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	lowerBound := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
-	sessions, ids, err := s.activityReportSessions(
+	sessions, _, err := s.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
@@ -60,16 +77,12 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	artifacts, _, err := activity.BuildReportArtifacts(ctx, activity.ReportSources{
-		Usage: func(
-			ctx context.Context, ids []string, query activity.Query,
-		) ([]activity.UsageRow, *export.PricingBlock, error) {
-			return s.activityReportUsage(ctx, ids, lowerBound, upperBound, query)
-		},
-		Candidates:    s.activityReportCandidateSource(ids, q),
-		MessageCounts: s.activityReportMessageCounts,
-		Projects:      s.BuildProjectIdentityMap,
-	}, sessions, q, onProgress, "aggregating pg activity report")
+	backend := activityReportBackend{
+		Store:      s,
+		lowerBound: lowerBound, upperBound: upperBound,
+	}
+	artifacts, _, err := activity.BuildReportArtifacts(
+		ctx, backend, sessions, q, onProgress, "aggregating pg activity report")
 	return artifacts, err
 }
 

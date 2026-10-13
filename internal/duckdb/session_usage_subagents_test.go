@@ -133,11 +133,24 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 	require.NoError(t, err)
 	duckRows, err := duck.GetSessionUsageRows(ctx, ids)
 	require.NoError(t, err)
+	assert.Equal(t, sqliteRows.RawOutputTokensBySession,
+		duckRows.RawOutputTokensBySession,
+		"raw per-transcript output metadata matches SQLite")
+	assert.Equal(t, sqliteRows.DiscardedContributingSessions,
+		duckRows.DiscardedContributingSessions,
+		"discarded contributing-row metadata matches SQLite")
 	assert.Equal(t, sqliteRows.CanonicalTokenCoverageBySession,
 		duckRows.CanonicalTokenCoverageBySession,
 		"canonical per-source token coverage matches SQLite")
 	require.Len(t, sqliteRows.Rows, 3)
 	require.Len(t, duckRows.Rows, 3)
+	assert.Equal(t, []string{
+		childAID, childBID, latestChildID,
+	}, []string{
+		duckRows.Rows[0].SourceSessionID,
+		duckRows.Rows[1].SourceSessionID,
+		duckRows.Rows[2].SourceSessionID,
+	})
 
 	sqliteGot, err := service.SessionUsageWithSubagents(
 		ctx, local, parentID, true)

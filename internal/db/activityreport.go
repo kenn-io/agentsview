@@ -57,6 +57,23 @@ func (db *DB) GetActivityReport(
 	return activity.ReportWithSessions(artifacts), nil
 }
 
+type activityReportBackend struct {
+	*DB
+	lowerBound, upperBound string
+}
+
+func (b activityReportBackend) ActivityReportUsage(
+	ctx context.Context, ids []string, q activity.Query,
+) ([]activity.UsageRow, *export.PricingBlock, error) {
+	return b.DB.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
+}
+
+func (b activityReportBackend) ActivityReportMessageCounts(
+	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+) error {
+	return b.DB.activityReportMessageCounts(ctx, ids, q, artifacts)
+}
+
 func (db *DB) BuildActivityReportArtifacts(
 	ctx context.Context,
 	f AnalyticsFilter,
@@ -75,7 +92,7 @@ func (db *DB) BuildActivityReportArtifacts(
 	lowerBound := PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
-	sessions, ids, err := db.activityReportSessions(
+	sessions, _, err := db.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
@@ -84,16 +101,12 @@ func (db *DB) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	artifacts, _, err := activity.BuildReportArtifacts(ctx, activity.ReportSources{
-		Usage: func(
-			ctx context.Context, ids []string, query activity.Query,
-		) ([]activity.UsageRow, *export.PricingBlock, error) {
-			return db.activityReportUsage(ctx, ids, lowerBound, upperBound, query)
-		},
-		Candidates:    db.activityReportCandidateSource(ids, q),
-		MessageCounts: db.activityReportMessageCounts,
-		Projects:      db.BuildProjectIdentityMap,
-	}, sessions, q, onProgress, "aggregating activity report")
+	backend := activityReportBackend{
+		DB:         db,
+		lowerBound: lowerBound, upperBound: upperBound,
+	}
+	artifacts, _, err := activity.BuildReportArtifacts(
+		ctx, backend, sessions, q, onProgress, "aggregating activity report")
 	return artifacts, err
 }
 

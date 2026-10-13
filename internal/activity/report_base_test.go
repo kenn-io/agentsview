@@ -41,7 +41,7 @@ func (b *reportBackendFixture) ActivityReportUsage(_ context.Context, ids []stri
 	}}, b.pricing, err
 }
 
-func (b *reportBackendFixture) ActivityReportCandidateSource() CandidateSource {
+func (b *reportBackendFixture) ActivityReportCandidateSource(_ []string, _ Query) CandidateSource {
 	var err error
 	if b.stage == "candidates" {
 		err = b.err
@@ -78,15 +78,6 @@ func (b *reportBackendFixture) BuildProjectIdentityMap(_ context.Context, labels
 	return map[string]export.ProjectMapEntry{"project-a": {DisplayLabel: "project-a", ProjectKey: "project-key-a"}}, nil
 }
 
-func (b *reportBackendFixture) sources() ReportSources {
-	return ReportSources{
-		Usage:         b.ActivityReportUsage,
-		Candidates:    b.ActivityReportCandidateSource(),
-		MessageCounts: b.ActivityReportMessageCounts,
-		Projects:      b.BuildProjectIdentityMap,
-	}
-}
-
 func TestBuildReportArtifacts(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC", BucketOverride: "1h"}, fixedNow(t))
 	require.NoError(t, err)
@@ -103,7 +94,7 @@ func TestBuildReportArtifacts(t *testing.T) {
 				onProgress = func(p Progress) { progress = append(progress, p) }
 			}
 			artifacts, done, err := BuildReportArtifacts(
-				t.Context(), backend.sources(),
+				t.Context(), backend,
 				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q,
 				onProgress,
 				"aggregating example activity report",
@@ -143,7 +134,7 @@ func TestBuildReportArtifactsErrors(t *testing.T) {
 			backend := &reportBackendFixture{t: t, q: q, stage: stage, err: failure}
 			var done bool
 			_, completion, err := BuildReportArtifacts(
-				t.Context(), backend.sources(),
+				t.Context(), backend,
 				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q,
 				func(p Progress) { done = done || p.Phase == ProgressDone },
 				"aggregating example activity report",
