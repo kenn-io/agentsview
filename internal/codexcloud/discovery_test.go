@@ -172,38 +172,65 @@ func TestDiscoveryGatesCloseJoins(t *testing.T) {
 	assert.Len(t, env.host.Requests(), from, "live_tokens = false sends nothing")
 }
 
-func TestDiscoveryOffWithoutSourceSync(t *testing.T) {
-	env, _ := newDiscoveryEnv(t)
-	env.monitor.NoSync = true
-	env.threads.Set(runningThread("a", "warm"))
-
-	env.discover(t)
-
-	assert.Empty(t, env.host.Handshakes())
-	assert.Equal(t, "Live tokens: off, because this daemon does not sync sources.", env.live(t))
+// sourceRows runs sync and discovery as the daemon does, then returns the
+// status rows sync keeps.
+func (e *monitorEnv) sourceRows(t *testing.T) []HomeStatus {
+	t.Helper()
+	e.run(t)
+	e.discover(t)
+	return e.syncer.Status.Snapshot()
 }
 
+// When the whole source is off, sync shows only the source row, so the
+// live line goes with it; the row's own message names the cause.
 func TestDiscoveryOffWhenSyncIsOff(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
+		noSync bool
 		change func(*Gates)
-		want   string
 	}{
-		{"enabled is false", func(g *Gates) { g.CodexCloud.Enabled = false },
-			"Live tokens: off, because enabled = false under [agents.codex-cloud]."},
-		{"disabled_agents", func(g *Gates) { g.Disabled = true },
-			"Live tokens: off, because codex-cloud is listed in disabled_agents."},
-		{"config error", func(g *Gates) { g.CodexCloud.Err = &config.CodexCloudConfigError{} },
-			"Live tokens: off until the [agents.codex-cloud] settings are fixed."},
+		{"no source sync", true, func(*Gates) {}},
+		{"enabled is false", false, func(g *Gates) { g.CodexCloud.Enabled = false }},
+		{"disabled_agents", false, func(g *Gates) { g.Disabled = true }},
+		{"config error", false, func(g *Gates) { g.CodexCloud.Err = &config.CodexCloudConfigError{} }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			env, gates := newDiscoveryEnv(t)
+			env.syncer.NoSync, env.monitor.NoSync = tt.noSync, tt.noSync
 			gates.set(tt.change)
+			env.threads.Set(runningThread("a", "warm"))
 
-			env.discover(t)
+			rows := env.sourceRows(t)
 
-			assert.Equal(t, tt.want, env.live(t))
+			assert.Empty(t, env.host.Handshakes())
+			require.Len(t, rows, 1)
+			assert.Equal(t, SourceRowKey, rows[0].Key)
+			assert.Equal(t, "Live tokens: off.", rows[0].Live)
+			assert.False(t, rows[0].LiveWarn)
 		})
+	}
+}
+
+func TestUnsavedCountsShowWhileTheSourceIsOff(t *testing.T) {
+	env, gates := newDiscoveryEnv(t)
+	j := &join{key: passKey, threadID: "a", id: "join-1"}
+	restore := env.failSaves(t, "a")
+	require.Error(t, env.monitor.flush(passKey, "a", []mirror.Record{liveTokenRecord(t, j, 100, fetchNow)}, ""))
+	gates.set(func(g *Gates) { g.Disabled = true })
+
+	rows := env.sourceRows(t)
+
+	require.Len(t, rows, 1)
+	assert.Contains(t, rows[0].Live, "Token counts for 1 chat are not saved yet")
+	assert.True(t, rows[0].LiveWarn, "unsaved counts mark the status")
+
+	restore()
+	gates.set(func(g *Gates) { g.Disabled = false })
+	rows = env.sourceRows(t)
+	for _, row := range rows {
+		assert.NotEqual(t, SourceRowKey, row.Key, "the source row drops once the source is on")
+		assert.NotContains(t, row.Live, "not saved yet")
+		assert.False(t, row.LiveWarn)
 	}
 }
 
