@@ -367,8 +367,10 @@ func (p *pass) thread(ctx context.Context, id string) error {
 			listing = st.Listing
 		}
 	}
-	if info.raw != nil {
-		st.Listing = info.raw
+	if listing != nil {
+		// A due retry off this pass's listing pages carries a newer record
+		// than the one stored when it first failed.
+		st.Listing = listing
 	}
 	switch {
 	case info.archived && st.ArchivedFirstSeen.IsZero():
