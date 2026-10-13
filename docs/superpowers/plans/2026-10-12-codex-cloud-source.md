@@ -1439,19 +1439,19 @@ the pattern at every site the storage survey lists.
   `SessionUsage.PlanUsage`), `internal/db` snapshot loader
   (`LoadSessionMirrorSnapshot` adds plan usage)
 
-- [ ] **Step 1: Write failing tests** (tag `chtest`):
+- [x] **Step 1: Write failing tests** (tag `chtest`):
   `TestClickHousePlanUsageRoundTrip`, `TestClickHouseDeleteClearsPlanUsage`,
   `TestClickHouseSessionUsageIncludesPlanUsage`,
   `TestClickHouseSameSessionFromTwoMachines` (spec: Several machines; record
   the observed behavior for Task 29).
 
-- [ ] **Step 2: Run** `make test-clickhouse` scoped; FAIL.
+- [x] **Step 2: Run** `make test-clickhouse` scoped; FAIL.
 
-- [ ] **Step 3: Implement** as `ReplacingMergeTree(push_version)`.
+- [x] **Step 3: Implement** as `ReplacingMergeTree(push_version)`.
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(clickhouse): replicate plan usage"`
 
 ### Task 25: DuckDB mirror

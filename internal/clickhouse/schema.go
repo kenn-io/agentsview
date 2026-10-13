@@ -295,6 +295,30 @@ var mirrorTables = []tableSpec{
 		orderBy: []string{"session_id", "id"},
 	},
 	{
+		// One row per session, the latest push winning. Times and groups
+		// stay the archive's text so every backend returns the same values.
+		name: "session_plan_usage",
+		columns: []columnSpec{
+			col("session_id", tString),
+			col("has_plan_usage", tBool),
+			col("data_as_of", tNullString),
+			col("data_status", tString),
+			col("usage_source", tString),
+			col("weekly_percent", tNullFloat),
+			col("five_hour_percent", tNullFloat),
+			col("credits", tNullString),
+			colDefault("groups_json", tString, "'[]'"),
+			col("is_final", tBool),
+			col("outcome_kind", tString),
+			col("outcome_at", tNullString),
+			col("counted_under", tString),
+			col("has_coverage", tBool),
+			col("last_capture_at", tNullString),
+			col("uncaptured_turns", tInt),
+		},
+		orderBy: []string{"session_id"},
+	},
+	{
 		name: "cursor_usage_events",
 		columns: []columnSpec{
 			col("id", tInt),

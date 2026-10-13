@@ -27,7 +27,7 @@ const idBatchSize = 500
 // insert order. Deletes run in the same order.
 var dependentTables = []string{
 	"messages", "tool_calls", "tool_result_events", "usage_events",
-	"secret_findings", "pinned_messages",
+	"session_plan_usage", "secret_findings", "pinned_messages",
 }
 
 // newPushVersion returns the version stamped on every row a push writes.
@@ -745,6 +745,7 @@ type sessionPayload struct {
 	session     db.Session
 	messages    []db.Message
 	usage       []db.UsageEvent
+	planUsage   *db.SessionPlanUsage
 	findings    []db.SecretFinding
 	pins        []db.PinnedMessage
 	fingerprint string
@@ -767,7 +768,8 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 	}
 	return sessionPayload{
 		session: snapshot.Session, messages: snapshot.Messages, usage: snapshot.Usage,
-		findings: snapshot.Findings, pins: snapshot.Pins, fingerprint: fingerprint,
+		planUsage: snapshot.PlanUsage,
+		findings:  snapshot.Findings, pins: snapshot.Pins, fingerprint: fingerprint,
 	}, nil
 }
 
@@ -840,8 +842,15 @@ func (s *Sync) pushSessionBatch(
 }
 
 func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, version uint64) error {
-	var messages, toolCalls, toolResults, usage, findings, pins [][]any
+	var messages, toolCalls, toolResults, usage, planUsage, findings, pins [][]any
 	for _, p := range payloads {
+		if p.planUsage != nil {
+			values, err := db.SessionPlanUsageValues(p.planUsage)
+			if err != nil {
+				return fmt.Errorf("encoding plan usage for %s: %w", p.session.ID, err)
+			}
+			planUsage = append(planUsage, slices.Concat([]any{p.session.ID}, values, []any{version}))
+		}
 		for _, m := range p.messages {
 			messages = append(messages, messageRow(m, version))
 			for i, tc := range m.ToolCalls {
@@ -869,6 +878,7 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 		{"tool_calls", toolCalls},
 		{"tool_result_events", toolResults},
 		{"usage_events", usage},
+		{"session_plan_usage", planUsage},
 		{"secret_findings", findings},
 		{"pinned_messages", pins},
 	} {
