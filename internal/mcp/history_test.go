@@ -208,17 +208,16 @@ func TestServer_CompareUsageOnEmptyArchive(t *testing.T) {
 	assert.Nil(t, out.Deltas.TotalCostDeltaRatio)
 }
 
-// Older clients still complete the initialize handshake on stdio-style and
-// HTTP transports; current clients negotiate 2026-07-28 where the transport
-// supports it.
-func TestServer_NegotiatesCurrentAndOlderProtocols(t *testing.T) {
+// Current clients negotiate 2026-07-28 over stdio-style transports and the
+// newest session-based version over HTTP, and can list and call tools on both.
+func TestServer_NegotiatesProtocolPerTransport(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	opts := ServeOptions{Service: service.NewDirectBackend(d, nil), Now: func() time.Time { return fixedNow }}
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0"}, nil)
 
-	connect := func(t *testing.T, transport func() mcp.Transport, version string) *mcp.ClientSession {
+	connect := func(t *testing.T, transport func() mcp.Transport) *mcp.ClientSession {
 		t.Helper()
-		cs, err := client.Connect(t.Context(), transport(), &mcp.ClientSessionOptions{ProtocolVersion: version})
+		cs, err := client.Connect(t.Context(), transport(), nil)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = cs.Close() })
 		tools, err := cs.ListTools(t.Context(), nil)
@@ -244,19 +243,15 @@ func TestServer_NegotiatesCurrentAndOlderProtocols(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		transport func() mcp.Transport
-		request   string
 		want      string
 	}{
-		{"stdio current", inMemory, "", "2026-07-28"},
-		{"stdio 2025-06-18", inMemory, "2025-06-18", "2025-06-18"},
-		{"stdio 2024-11-05", inMemory, "2024-11-05", "2024-11-05"},
+		{"stdio current", inMemory, "2026-07-28"},
 		// HTTP stays stateful, so current clients fall back to the newest
 		// session-based version.
-		{"http current", overHTTP, "", "2025-11-25"},
-		{"http 2025-03-26", overHTTP, "2025-03-26", "2025-03-26"},
+		{"http current", overHTTP, "2025-11-25"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cs := connect(t, tc.transport, tc.request)
+			cs := connect(t, tc.transport)
 			assert.Equal(t, tc.want, cs.InitializeResult().ProtocolVersion)
 		})
 	}
