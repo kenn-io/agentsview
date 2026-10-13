@@ -673,7 +673,10 @@ func TestLeavingKeepsQueuedTokenUpdates(t *testing.T) {
 
 	// Holding the account lock blocks the join in its next save, so later
 	// updates wait in its queue.
-	unlock := env.syncer.Store.Lock(passKey)
+	// A failed assertion must not leave the lock held: CloseAll in cleanup
+	// would wait forever for the blocked join.
+	unlock := sync.OnceFunc(env.syncer.Store.Lock(passKey))
+	defer unlock()
 	sent := 0
 	send := func() {
 		sent++
@@ -717,4 +720,46 @@ func TestLeavingKeepsQueuedTokenUpdates(t *testing.T) {
 	<-done
 
 	assert.Len(t, tokenRecords(t, env.records(t, "a")), sent)
+}
+
+// leaveWith runs a join's leave with notes already queued, as a stop or
+// the join limit finds them.
+func (e *monitorEnv) leaveWith(t *testing.T, queued ...Notification) {
+	t.Helper()
+	j := &join{key: passKey, threadID: "a", id: "join-1", login: e.login()}
+	notes := make(chan Notification, len(queued))
+	for _, n := range queued {
+		notes <- n
+	}
+	var buf []mirror.Record
+	e.monitor.leave(j, notes, &buf, func() {
+		_ = e.monitor.flush(j.key, j.threadID, buf, j.handled)
+		buf = nil
+	})
+}
+
+func TestLeavingWithAQueuedCompletionQueuesASync(t *testing.T) {
+	env := newMonitorEnv(t)
+	completed, err := json.Marshal(map[string]any{
+		"threadId": "a", "turn": map[string]any{"id": "a-turn-2", "status": "completed", "items": []any{}},
+	})
+	require.NoError(t, err)
+
+	env.leaveWith(t,
+		Notification{Method: tokenUsageMethod, Params: tokenParams("a", "a-turn-2",
+			[6]float64{100, 0, 0, 1, 0, 101}, [6]float64{100, 0, 0, 1, 0, 101})},
+		Notification{Method: turnCompletedMethod, Params: completed},
+	)
+
+	require.Eventually(t, func() bool { return env.triggers.Load() == 1 }, 5*time.Second, 5*time.Millisecond,
+		"the finished chat is synced now, not on the next schedule")
+	assert.Equal(t, []int64{101}, tokenTotals(t, env.records(t, "a")))
+}
+
+func TestLeavingWithAQueuedUnreadableNoteStopsCapture(t *testing.T) {
+	env := newMonitorEnv(t)
+
+	env.leaveWith(t, Notification{Method: tokenUsageMethod, Params: jsontext.Value(`{"threadId":`)})
+
+	assert.Contains(t, env.live(t), "Live tokens: stopped.")
 }
