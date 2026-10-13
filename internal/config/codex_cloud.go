@@ -44,16 +44,22 @@ type CodexCloudConfigError struct {
 }
 
 func (e *CodexCloudConfigError) Error() string {
+	if e.Key == "" {
+		return fmt.Sprintf(
+			"%s has an invalid [agents.codex-cloud] entry: %s. Codex cloud import is off until then.",
+			e.Path, e.Reason,
+		)
+	}
 	if e.Unknown {
 		return fmt.Sprintf(
 			"%s has an unknown setting %s under [agents.codex-cloud]. "+
-				"Remove it or correct its name. Cloud import is off until then.",
+				"Remove it or correct its name. Codex cloud import is off until then.",
 			e.Path, e.Key,
 		)
 	}
 	return fmt.Sprintf(
 		"%s has an invalid value for %s under [agents.codex-cloud]: %s. "+
-			"Cloud import is off until then.",
+			"Codex cloud import is off until then.",
 		e.Path, e.Key, e.Reason,
 	)
 }
@@ -85,7 +91,7 @@ func parseCodexCloudTable(cfgPath string, agents any) CodexCloudConfig {
 	}
 	values, ok := raw.(map[string]any)
 	if !ok {
-		return fail(string(parser.AgentCodexCloud), "expected a table", false)
+		return fail("", "expected a table", false)
 	}
 	for _, key := range slices.Sorted(maps.Keys(values)) {
 		value := values[key]
@@ -139,17 +145,18 @@ func codexCloudURL(value any, secure, plain string) (*url.URL, string) {
 	if ip := net.ParseIP(host); ip != nil {
 		loopback = ip.IsLoopback()
 	}
+	// Check the host first, so a URL with both a wrong scheme and a wrong
+	// host names the host, which no scheme change can fix.
+	if !loopback && !openAIHost(host) {
+		return nil, "the host must be chatgpt.com, openai.com, or a subdomain of either"
+	}
 	switch {
-	case u.Scheme == secure && (loopback || openAIHost(host)):
-		return u, ""
-	case u.Scheme == plain && loopback:
+	case u.Scheme == secure, u.Scheme == plain && loopback:
 		return u, ""
 	case u.Scheme == plain:
 		return nil, fmt.Sprintf("%s is allowed only for loopback addresses; use %s", plain, secure)
-	case u.Scheme != secure:
-		return nil, fmt.Sprintf("expected a %s URL", secure)
 	default:
-		return nil, "the host must be chatgpt.com, openai.com, or a subdomain of either"
+		return nil, fmt.Sprintf("expected a %s URL", secure)
 	}
 }
 
