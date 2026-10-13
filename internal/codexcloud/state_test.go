@@ -44,6 +44,7 @@ func TestStateRoundTrip(t *testing.T) {
 		}},
 		CheckAgain:   map[string]bool{"thread-c": true},
 		Unfinished:   map[string]codexcloud.UnfinishedEntry{"thread-d": {InProgress: true, SubAgent: true}},
+		Retired:      map[string]bool{"thread-f": true},
 		UsagePending: map[string]codexcloud.PendingEntry{"thread-a": {Since: started, NextAttempt: started}},
 		Refresh:      map[string]codexcloud.RefreshEntry{"thread-e": {DataAsOf: started, LastChange: started, Reentries: 2}},
 		Backfilled:   map[codexcloud.ListingID]bool{codexcloud.ListSubAgentArchived: true},
