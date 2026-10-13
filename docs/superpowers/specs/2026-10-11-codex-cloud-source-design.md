@@ -606,9 +606,11 @@ covers them either way, at one extra call per listing when nothing changed. Each
 pass reads the four listings, then builds one selection for the account: the
 union of every listing's changed threads with the account-wide unfinished set,
 check-again flags, and retry set, so a thread is fetched at most once per pass.
-Each listing's watermark advances only after that listing's own changed threads
-are durable or in the retry set. The steps, with the first and last run per
-listing:
+Due retries come last, after every thread without a retry entry, so a thread
+OpenAI keeps not answering, which ends the pass, never holds back the others. A
+timed-out thread's retry wait counts from the timeout. Each listing's watermark
+advances only after that listing's own changed threads are durable or in the
+retry set. The steps, with the first and last run per listing:
 
 1. **Changed threads.** Call `thread/list` with `sortKey: updated_at`,
    descending, one page at a time, with that listing's `sourceKinds` (none for

@@ -447,7 +447,9 @@ func (p *pass) thread(ctx context.Context, id string) error {
 			// again, and a thread OpenAI never answers would stop every
 			// thread after it.
 			p.Log.Printf("codex-cloud: chat %s: %v", id, Redact(err, p.login.Token))
-			if recordErr := p.retryLater(id, st, acct, retry, listing, timeoutMessage, now); recordErr != nil {
+			// The wait counts from the timeout, not from the fetch's
+			// start, which can be minutes earlier.
+			if recordErr := p.retryLater(id, st, acct, retry, listing, timeoutMessage, p.Now()); recordErr != nil {
 				return recordErr
 			}
 			return err

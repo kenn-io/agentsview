@@ -98,6 +98,11 @@ func listChanged(
 			if row.ID == "" || row.UpdatedAt == nil {
 				return ListingResult{}, fmt.Errorf("%w: thread/list row without id or updatedAt", ErrProtocolChange)
 			}
+			if !plainName(row.ID) {
+				// The ID names state files; one that cannot is the server's
+				// change, not a local file problem.
+				return ListingResult{}, fmt.Errorf("%w: thread/list row with id %q", ErrProtocolChange, row.ID)
+			}
 			updated := int64(math.Floor(*row.UpdatedAt))
 			if updated > previous {
 				return ListingResult{}, fmt.Errorf("%w: thread/list %s is not sorted by updatedAt", ErrProtocolChange, id)

@@ -176,6 +176,20 @@ func TestListingOutOfOrderIsProtocolChange(t *testing.T) {
 	}
 }
 
+// A thread ID that cannot name a state file is the server's change, not a
+// local file problem that asks the user to check the data directory.
+func TestListingUnusableIDIsProtocolChange(t *testing.T) {
+	for _, id := range []string{"../a", ".hidden", "a/b"} {
+		host := codexcloudtest.NewHost(t)
+		servePages(host, map[ListingID][][]listingRow{ListDefaultActive: {{{id, 300, "idle"}}}})
+		conn := listConn(t, host)
+
+		_, err := listChanged(t.Context(), conn, ListDefaultActive, 0, storedNone)
+
+		require.ErrorIs(t, err, ErrProtocolChange, id)
+	}
+}
+
 func TestUnchangedAccountOneCallPerListing(t *testing.T) {
 	host := codexcloudtest.NewHost(t)
 	page := [][]listingRow{{{"a", 300, "idle"}, {"b", 200, "idle"}}, {{"c", 100, "idle"}}}

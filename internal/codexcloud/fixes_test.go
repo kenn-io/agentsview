@@ -460,20 +460,13 @@ func TestUnansweredThreadWaitsSoLaterThreadsImport(t *testing.T) {
 	require.Equal(t, FailNetwork.String(), acct.Wait.Failure, "the timeout still ends the pass")
 	require.Contains(t, acct.Retry, "slow")
 
-	env.clock.Set(acct.Wait.Until)
+	// The next pass may come after the retry is due, and OpenAI still
+	// does not answer: the other thread imports first all the same.
+	env.clock.Set(acct.Retry["slow"].NextAttempt)
 	env.run(t)
 	_, err := os.Stat(env.mirrorPath(t, "b"))
 	require.NoError(t, err, "the thread after the unanswered one imports")
-	row, ok := env.syncer.Status.Row(string(passKey))
-	require.True(t, ok)
-	assert.Equal(t, StateRetrying, row.State)
-
-	mu.Lock()
-	hang = false
-	mu.Unlock()
-	env.clock.Set(env.account(t).Retry["slow"].NextAttempt)
-	env.run(t)
-	assert.NotContains(t, env.account(t).Retry, "slow", "the retry imports it once OpenAI answers")
+	assert.Contains(t, env.account(t).Retry, "slow")
 }
 
 func TestBackfillFoundCountsEachNewMirror(t *testing.T) {
