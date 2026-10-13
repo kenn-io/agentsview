@@ -454,3 +454,23 @@ func TestUnansweredThreadWaitsSoLaterThreadsImport(t *testing.T) {
 	env.run(t)
 	assert.NotContains(t, env.account(t).Retry, "slow", "the retry imports it once OpenAI answers")
 }
+
+func TestBackfillFoundCountsEachNewMirror(t *testing.T) {
+	env := newPassEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "one")))
+	env.threads.Set(finishedThread("b", ago(2*time.Hour), message("n", "two")))
+	env.threads.Set(finishedThread("c", ago(3*time.Hour), message("o", "three")))
+	var found []int
+	env.host.Handle("thread/turns/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
+		row, _ := env.syncer.Status.Row(string(passKey))
+		found = append(found, row.Found)
+		if strings.Contains(string(params), `"a"`) {
+			return nil, &codexcloudtest.Error{Code: -32600, Message: "no rollout found for thread id a"}
+		}
+		return env.threads.TurnsList(params)
+	})
+
+	env.run(t)
+
+	assert.Equal(t, []int{0, 1, 2}, found, "a failed thread's metadata-only file counts too")
+}

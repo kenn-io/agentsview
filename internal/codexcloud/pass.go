@@ -11,7 +11,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -292,10 +291,20 @@ func (p *pass) threads(ctx context.Context) error {
 
 	selection := buildSelection(p.now, &acct, changed, active)
 	backfilled := allBackfilled(acct)
+	// A first backfill counts mirror files once, then adds each new one,
+	// since reading the growing directory per thread is quadratic.
+	found := 0
+	if !backfilled {
+		found = p.mirrored()
+	}
 	for i, id := range selection {
-		p.progress(backfilled, i, len(selection))
+		p.progress(backfilled, i, len(selection), found)
+		had := !backfilled && p.hasMirror(id)
 		if err := p.thread(ctx, id); err != nil {
 			return err
+		}
+		if !backfilled && !had && p.hasMirror(id) {
+			found++
 		}
 	}
 
@@ -721,22 +730,26 @@ func (p *pass) keepWaitRow(acct AccountState) {
 }
 
 // progress shows "found N so far" during a first backfill, then "N of M".
-func (p *pass) progress(backfilled bool, done, total int) {
+func (p *pass) progress(backfilled bool, done, total, found int) {
 	row, _ := p.Status.Row(string(p.key))
 	row.Key, row.Homes, row.State = string(p.key), p.homes, StateImporting
 	row.Message = ""
 	if backfilled {
 		row.Imported, row.Total, row.Found = done, total, 0
 	} else {
-		row.Imported, row.Total, row.Found = 0, 0, p.mirrored()
+		row.Imported, row.Total, row.Found = 0, 0, found
 	}
 	p.Status.Set(row)
 }
 
 // mirrored counts the account's mirror files. It runs only during a first
-// backfill.
+// backfill; the count is for display, so an unreadable directory counts
+// as empty.
 func (p *pass) mirrored() int {
-	dir := filepath.Join(p.Store.root, string(p.key))
+	dir, err := p.Store.accountDir(p.key)
+	if err != nil {
+		return 0
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0
@@ -748,6 +761,17 @@ func (p *pass) mirrored() int {
 		}
 	}
 	return n
+}
+
+// hasMirror reports whether the thread has a mirror file, for the
+// backfill count.
+func (p *pass) hasMirror(id string) bool {
+	path, err := p.Store.MirrorPath(p.key, id)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
+	return err == nil
 }
 
 func oldestFailure(acct AccountState) (*time.Time, string) {

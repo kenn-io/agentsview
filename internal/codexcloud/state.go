@@ -180,6 +180,15 @@ func (s *Store) Lock(key AccountKey) (unlock func()) {
 	return lock.Unlock
 }
 
+// accountDir is the directory holding one account's state and mirror
+// files.
+func (s *Store) accountDir(key AccountKey) (string, error) {
+	if !plainName(string(key)) {
+		return "", fmt.Errorf("codex-cloud: %q is not a usable file name", key)
+	}
+	return filepath.Join(s.root, string(key)), nil
+}
+
 // MirrorPath is the mirror file of one thread.
 func (s *Store) MirrorPath(key AccountKey, threadID string) (string, error) {
 	return s.path(key, threadID, mirrorSuffix)
