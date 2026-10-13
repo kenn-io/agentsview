@@ -193,10 +193,10 @@ describe("describeCaptureCoverage", () => {
     expect(describeCaptureCoverage(coverage, null)).toEqual([captured]);
   });
 
-  it("counts missed turns and says plan usage covers them only with figures", () => {
+  it("counts missed turns and names the time plan usage counts up to, only with figures", () => {
     expect(describeCaptureCoverage({ ...coverage, uncaptured_turns: 3 }, plan(figures))).toEqual([
       captured,
-      "3 turns not captured; plan usage covers them",
+      `3 turns not captured; plan usage counts the ones that ran before ${formatTimestamp(AS_OF)}`,
     ]);
     expect(
       describeCaptureCoverage(
@@ -221,6 +221,7 @@ describe("describeCaptureCoverage", () => {
       "left_out",
       "account_unavailable",
       "too_many_descendants",
+      "settled_no_row",
     ]) {
       expect(
         describeCaptureCoverage(

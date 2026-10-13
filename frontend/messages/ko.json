@@ -2797,10 +2797,10 @@
   ],
   "capture_turns_not_captured_covered": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "input time", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "수집되지 않은 턴 {countLabel}개, 플랜 사용량에는 포함됨"
+        "countPlural=other": "수집되지 않은 턴 {countLabel}개, {time} 이전의 턴은 플랜 사용량에 포함됨"
       }
     }
   ],

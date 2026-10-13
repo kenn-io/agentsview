@@ -1097,8 +1097,11 @@ records every token update, and leaves when the turn ends.
   `turnId` names an earlier, finished turn. It stores both in the new
   per-session table (see Plan usage), so every backend can query them.
 - Session details say "Tokens captured live, as of T". When finished turns are
-  not captured, they add "N turns not captured", followed by "plan usage
-  covers them" only when the session has a usable plan usage row.
+  not captured, they add "N turns not captured". When the session has a
+  complete plan usage row with no later outcome, the line adds "plan usage
+  counts the ones that ran before T", with the row's data time: a missed turn
+  may have run after the report's data, so the line does not claim the row
+  covers it.
 - Totals that include such sessions say so: "N sessions partly captured; their
   token counts are low." A session is partly captured when it has at least one
   usage event and at least one turn not captured. Plan-only sessions, which
@@ -1432,16 +1435,17 @@ States:
   successful pass finished.
 
 Live token capture has its own line: "Live tokens: listening in on N running
-chats.", "Live tokens: idle.", "Live tokens: off, because ..." naming the daemon
-option or setting that keeps it off, or "Live tokens: stopped." with the
-protocol-change message and "Then restart AgentsView to listen in again." When a
-save of token records failed, the line adds "Token counts for N chats are not
-saved yet. AgentsView keeps retrying; restarting it before a save works loses
-them. The daemon log says why saving fails." The note stays when live tokens are
-off, and pending records are retried on every discovery run whatever the gates
-say. Cold resumes are logged per thread, not counted in the line: the count only
-grew until restart, so a normal event looked like a growing fault. Each
-session's capture coverage still shows the turns it missed.
+chats.", "Live tokens: on, no running chats to listen in on.", "Live tokens:
+off, because ..." naming the daemon option or setting that keeps it off, or
+"Live tokens: stopped." with the protocol-change message and "After that,
+restart AgentsView, or set live_tokens = false and back to true, to listen in
+again." When a save of token records failed, the line adds "Token counts for N
+chats are not saved yet. AgentsView keeps retrying; restarting it before a save
+works loses them. The daemon log says why saving fails." The note stays when
+live tokens are off, and pending records are retried on every discovery run
+whatever the gates say. Cold resumes are logged per thread, not counted in the
+line: the count only grew until restart, so a normal event looked like a growing
+fault. Each session's capture coverage still shows the turns it missed.
 
 Plan usage has its own line under the home's state, so a usage problem never
 hides or replaces thread status. It shows "Plan usage: not checked yet", "Plan

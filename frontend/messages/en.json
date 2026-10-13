@@ -2880,11 +2880,11 @@
   ],
   "capture_turns_not_captured_covered": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "input time", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{countLabel} turn not captured; plan usage covers it",
-        "countPlural=other": "{countLabel} turns not captured; plan usage covers them"
+        "countPlural=one": "{countLabel} turn not captured; plan usage counts it if it ran before {time}",
+        "countPlural=other": "{countLabel} turns not captured; plan usage counts the ones that ran before {time}"
       }
     }
   ],

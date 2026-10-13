@@ -971,12 +971,15 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync]
 
 A Codex Cloud session that live capture never saw has `has_token_data` and
 `has_cost` set to `false` and carries its figures in `plan_usage` instead. The
-CLI's human output shows `n/a` for output and peak context, and "plan usage" for
-cost when the session has plan usage figures. A `Plan usage:` line follows, and,
-when live capture saw the chat, a `Captured:` line. When a newer check left the
-chat out or failed, the `Plan usage:` line adds what that check found after the
-figures. The `Captured:` line says "plan usage covers them" for missed turns
-only when the newest report is complete and no newer check failed.
+CLI's human output shows `n/a` for output and peak context, and "billed as plan
+usage" for cost when the session has plan usage figures. A `Plan usage:` line
+follows, and, when live capture saw the chat, a `Captured:` line. When a later
+check left the chat out or failed, the `Plan usage:` line says what that check
+found and that the figures may be out of date. For missed turns, the `Captured:`
+line says their tokens are not in the totals. When the newest report is
+complete and no later check failed, it adds that plan usage counts the turns
+that ran before the report's data time; AgentsView does not know whether each
+missed turn ran before that time, so it does not claim more.
 
 Claude Code echoes some parent turns into a subagent's sidechain transcript, so
 the same message can appear in two sessions. Every combined figure counts it

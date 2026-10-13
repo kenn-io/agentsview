@@ -130,7 +130,18 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 			},
 			want: []string{
 				"Plan usage:    2.25% of weekly limit, 12.5% of 5-hour limit, 0 credits, as of 2026-10-02 04:30 EST",
-				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 2 turns not captured, plan usage covers them",
+				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 2 turns not captured, their tokens are not in the totals; " +
+					"plan usage counts the ones that ran before 2026-10-02 04:30 EST",
+			},
+		},
+		{
+			name: "missed turns before any plan usage",
+			out: sessionUsageOutput{
+				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:j", Agent: "codex-cloud"},
+				Coverage:     &db.CaptureCoverageView{LastCaptureAt: "2026-10-01T12:30:00Z", UncapturedTurns: 2},
+			},
+			want: []string{
+				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 2 turns not captured, their tokens are not in the totals",
 			},
 		},
 		{
@@ -166,7 +177,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 			},
 			want: []string{
 				"Plan usage:    2.25% of weekly limit, as of 2026-10-02 04:30 EST; " +
-					"newer check: AgentsView could not check plan usage, as of 2026-10-09 04:30 EST",
+					"later, AgentsView could not check plan usage (2026-10-09 04:30 EST), so these figures may be out of date",
 				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; " +
 					"2 turns not captured, their tokens are not in the totals",
 			},
@@ -182,7 +193,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 			},
 			want: []string{
 				"Plan usage:    2.25% of weekly limit, as of 2026-10-02 04:30 EST; " +
-					"newer check: not reported yet, as of 2026-10-03 04:30 EST",
+					"later, OpenAI's usage report left this chat out (2026-10-03 04:30 EST), so these figures may be out of date",
 			},
 		},
 		{
@@ -195,7 +206,8 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 				Coverage: &db.CaptureCoverageView{LastCaptureAt: "2026-10-01T12:30:00Z", UncapturedTurns: 1},
 			},
 			want: []string{
-				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 1 turn not captured, plan usage covers them",
+				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 1 turn not captured, its tokens are not in the totals; " +
+					"plan usage counts it if it ran before 2026-10-02 04:30 EST",
 			},
 		},
 		{
@@ -251,7 +263,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 		SessionID: "codex-cloud:f", Agent: "codex-cloud",
 		Plan: &db.PlanUsageView{DataAsOf: "2026-10-02T09:30:00Z", DataStatus: "available", WeeklyPercent: new(1.0)},
 	}))
-	for _, line := range []string{"Output:        n/a\n", "Peak ctx:      n/a\n", "Cost:          plan usage\n"} {
+	for _, line := range []string{"Output:        n/a\n", "Peak ctx:      n/a\n", "Cost:          billed as plan usage\n"} {
 		assert.Contains(t, plan.String(), line, "a plan-only session never shows zero tokens or cost")
 	}
 
