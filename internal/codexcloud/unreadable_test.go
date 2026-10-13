@@ -101,3 +101,27 @@ func TestNewUpdatedAtRestartsUnreadableCount(t *testing.T) {
 	env.retryUntil(t, "a", restart.Add(8*24*time.Hour))
 	assert.NotContains(t, env.account(t).Retry, "a")
 }
+
+func TestNewUpdatedAtRestartsCountForRetryWithoutListing(t *testing.T) {
+	env := newPassEnv(t)
+	env.threads.Set(finishedThread("a", ago(30*time.Second), message("m", "hi")))
+	env.run(t)
+	require.True(t, env.account(t).CheckAgain["a"])
+	fail, mu := true, &sync.Mutex{}
+	env.failThread("a", &fail, mu)
+	// The thread fails when check-again selects it, with no listing row.
+	env.clock.Advance(5 * time.Minute)
+	env.run(t)
+	first := env.account(t).Retry["a"].FirstFailure
+	require.Equal(t, env.clock.Now(), first)
+
+	env.retryUntil(t, "a", first.Add(5*24*time.Hour))
+	restart := env.clock.Now().Add(time.Minute)
+	env.threads.Update("a", func(th *codexcloudtest.Thread) { th.UpdatedAt = restart.Unix() - 30 })
+	env.clock.Set(restart)
+	env.run(t)
+	assert.Equal(t, restart, env.account(t).Retry["a"].FirstFailure, "a new updatedAt restarts the 7 days")
+
+	env.retryUntil(t, "a", first.Add(7*24*time.Hour+2*time.Hour))
+	assert.Contains(t, env.account(t).Retry, "a", "7 days have not passed since the new updatedAt")
+}

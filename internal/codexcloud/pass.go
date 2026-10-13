@@ -389,6 +389,12 @@ func (p *pass) thread(ctx context.Context, id string) error {
 			Attempts: retry.Attempts + 1, FirstFailure: retry.FirstFailure,
 			Message: Message(f, time.Time{}), Listing: retry.Listing,
 		}
+		if entry.Listing == nil {
+			// A thread selected without a listing row keeps its stored
+			// record, so a later listing with a new updatedAt restarts the
+			// unreadable count.
+			entry.Listing = st.Listing
+		}
 		if listing != nil {
 			entry = relisted(entry, listing, now)
 		}
