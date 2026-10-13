@@ -54,16 +54,29 @@ func bindRuntimePollingRecorder(t *testing.T, backend *fsnotifyBackend) (*[]Poll
 }
 
 func TestFSNotifyBackendVanishedRuntimeFolderSkipsPolling(t *testing.T) {
-	for _, vanishAt := range []string{"walk", "add"} {
-		t.Run(vanishAt, func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		remove bool
+	}{
+		{name: "walk"},
+		{name: "add", err: os.ErrNotExist},
+		{name: "access denied", err: os.ErrPermission, remove: true},
+		{name: "sharing violation", err: syscall.Errno(32), remove: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			backend := testFSNotifyBackend(t)
 			root := t.TempDir()
 			require.NoError(t, backend.AddRecursive(root, 8).Err)
 			added, _ := bindRuntimePollingRecorder(t, backend)
 			folder := filepath.Join(root, "vanished")
-			if vanishAt == "add" {
+			if tc.err != nil {
 				require.NoError(t, os.Mkdir(folder, 0o755))
-				backend.watchOps = &failPathWatchOps{watchOps: backend.watchOps, failPath: folder, err: os.ErrNotExist}
+				backend.watchOps = &failPathWatchOps{watchOps: backend.watchOps, failPath: folder, err: tc.err, beforeFail: func() {
+					if tc.remove {
+						require.NoError(t, os.Remove(folder))
+					}
+				}}
 			}
 			backend.watchMu.Lock()
 			assert.Empty(t, backend.addRuntimeSubtreeLocked(folder, []string{root}))
@@ -79,7 +92,7 @@ func TestFSNotifyBackendVanishedRuntimeFolderSkipsPolling(t *testing.T) {
 }
 
 func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
-	for _, recovery := range []string{"watchable", "gone", "file"} {
+	for _, recovery := range []string{"watchable", "create", "gone", "file"} {
 		t.Run(recovery, func(t *testing.T) {
 			backend := testFSNotifyBackend(t)
 			root := t.TempDir()
@@ -104,7 +117,7 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 			assert.Equal(t, 1, ops.addCount(a))
 			assert.Empty(t, *released)
 			assert.Empty(t, backend.events)
-			if recovery == "watchable" {
+			if recovery == "watchable" || recovery == "create" {
 				ops.setFail(b, nil)
 				child := filepath.Join(b, "nested")
 				require.NoError(t, os.Mkdir(child, 0o755))
@@ -114,9 +127,19 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 					require.NoError(t, os.WriteFile(b, nil, 0o600))
 				}
 			}
-			assert.True(t, backend.retryRuntimeFolders(now.Add(20*time.Second)))
+			if recovery == "create" {
+				require.NoError(t, os.RemoveAll(b))
+				require.NoError(t, os.MkdirAll(filepath.Join(b, "nested"), 0o755))
+				backend.translateEvent(fsnotify.Event{Name: b, Op: fsnotify.Create})
+				backend.queue.mu.Lock()
+				assert.Contains(t, backend.queue.items, nativeItem{retry: true})
+				backend.queue.mu.Unlock()
+				assert.True(t, backend.retryRuntimeFolders(time.Now()))
+			} else {
+				assert.True(t, backend.retryRuntimeFolders(now.Add(20*time.Second)))
+			}
 			assert.Equal(t, []string{"fsnotify-runtime:" + root}, *released)
-			if recovery == "watchable" {
+			if recovery == "watchable" || recovery == "create" {
 				assert.Equal(t, 1, ops.addCount(b))
 				assert.Equal(t, 1, ops.addCount(filepath.Join(b, "nested")))
 			}
@@ -532,13 +555,17 @@ type blockingRemoveWatchOps struct {
 }
 
 type failPathWatchOps struct {
-	watchOps fsnotifyWatchOps
-	failPath string
-	err      error
+	watchOps   fsnotifyWatchOps
+	failPath   string
+	err        error
+	beforeFail func()
 }
 
 func (w *failPathWatchOps) Add(path string) error {
 	if filepath.Clean(path) == filepath.Clean(w.failPath) {
+		if w.beforeFail != nil {
+			w.beforeFail()
+		}
 		return w.err
 	}
 	return w.watchOps.Add(path)

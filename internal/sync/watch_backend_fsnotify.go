@@ -662,6 +662,12 @@ func (b *fsnotifyBackend) watchCreatedPath(path string) (backendItemType, bool) 
 		return backendItemDirectory, false
 	}
 	degraded := b.addRuntimeSubtreeLocked(path, owners)
+	for _, root := range owners {
+		if state, ok := b.runtimeRoots[root]; ok && len(state.folders) == 0 {
+			state.retryAt = time.Now()
+			b.queue.push(nativeItem{retry: true})
+		}
+	}
 	b.watchMu.Unlock()
 	for _, root := range degraded {
 		b.acquireRuntimeFolderPolling(root)
@@ -677,6 +683,13 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 	owners []string,
 ) []string {
 	degraded := make(map[string]struct{})
+	vanished := func(path string, err error) bool {
+		if errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+		_, statErr := os.Lstat(path)
+		return errors.Is(statErr, os.ErrNotExist)
+	}
 	deferFolder := func(folder string, currentOwners []string, cause error) {
 		for _, root := range currentOwners {
 			state, ok := b.runtimeRoots[root]
@@ -704,7 +717,7 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 	}
 	_ = filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			if errors.Is(walkErr, os.ErrNotExist) {
+			if vanished(current, walkErr) {
 				clearFolder(current, owners)
 			} else {
 				deferFolder(current, owners, walkErr)
@@ -730,7 +743,7 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 				return filepath.SkipDir
 			}
 			if err := b.watchOps.Add(current); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
+				if vanished(current, err) {
 					clearFolder(current, currentOwners)
 				} else {
 					deferFolder(current, currentOwners, err)
