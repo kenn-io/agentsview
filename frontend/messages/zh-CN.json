@@ -2759,10 +2759,10 @@
   "plan_usage_not_reported_yet": "套餐用量：尚未报告（截至 {time}）",
   "plan_usage_partial": "部分套餐用量（截至 {time}）",
   "plan_usage_not_reported": "OpenAI 未报告",
-  "plan_usage_too_many_subagents": "子代理线程过多，OpenAI 用量报告无法包含",
+  "plan_usage_too_many_subagents": "子代理聊天过多，OpenAI 用量报告无法包含",
   "plan_usage_could_not_check": "AgentsView 无法检查套餐用量",
   "plan_usage_account_unavailable": "此账户无法获取用量",
-  "plan_usage_counted_under": "计入线程 {title}",
+  "plan_usage_counted_under": "计入聊天 {title}",
   "plan_usage_weekly_share": "Codex 每周上限的 {percent}%",
   "plan_usage_five_hour_share": "Codex 五小时上限的 {percent}%",
   "plan_usage_credits": [
@@ -2822,18 +2822,18 @@
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "Codex Cloud：正在导入，目前已发现 {countLabel} 个线程"
+        "countPlural=other": "Codex Cloud：正在导入，目前已发现 {countLabel} 个聊天"
       }
     }
   ],
-  "status_bar_codex_cloud_importing_progress": "Codex Cloud：正在导入 {imported}/{total} 个线程",
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud：正在导入 {imported}/{total} 个聊天",
   "status_bar_codex_cloud_up_to_date": "Codex Cloud：截至 {time} 已是最新",
   "status_bar_codex_cloud_retrying": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "Codex Cloud：{countLabel} 个线程无法导入"
+        "countPlural=other": "Codex Cloud：{countLabel} 个聊天无法导入"
       }
     }
   ],
@@ -2841,7 +2841,7 @@
   "status_bar_codex_cloud_off": "Codex Cloud：已关闭",
   "status_bar_codex_cloud_config_error": "Codex Cloud：设置错误",
   "status_bar_codex_cloud_oldest_failure": "最早的失败：{time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView 会持续重试。守护进程日志列出了每个线程。已导入的会话不受影响。",
+  "status_bar_codex_cloud_retry_note": "AgentsView 会持续重试。守护进程日志列出了每个聊天。已导入的会话不受影响。",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
   "status_bar_codex_cloud_homes": "Codex 主目录：{homes}"
 }

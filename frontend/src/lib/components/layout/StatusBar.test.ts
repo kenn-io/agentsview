@@ -228,11 +228,11 @@ describe("StatusBar", () => {
       const component = await mountWithRows();
 
       const line = document.querySelector(".codex-cloud-status");
-      expect(line?.textContent?.trim()).toBe("Codex Cloud: 2 threads could not be imported");
+      expect(line?.textContent?.trim()).toBe("Codex Cloud: 2 chats could not be imported");
       expect(line?.classList.contains("codex-cloud-status--warn")).toBe(true);
       expect(await focusTooltip(line)).toContain(
         "Codex homes: /synthetic/other-home\n" +
-          "Codex Cloud: 2 threads could not be imported\n" +
+          "Codex Cloud: 2 chats could not be imported\n" +
           `Oldest failure: ${formatTimestamp("2026-04-08T03:00:00Z")}\n` +
           "Can't reach OpenAI. AgentsView retries automatically.\n" +
           "AgentsView keeps retrying them.",

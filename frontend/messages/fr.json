@@ -2870,10 +2870,10 @@
   "plan_usage_not_reported_yet": "Utilisation du forfait : pas encore communiquée, au {time}",
   "plan_usage_partial": "Utilisation du forfait partielle, au {time}",
   "plan_usage_not_reported": "Non communiquée par OpenAI",
-  "plan_usage_too_many_subagents": "Trop de fils de sous-agents pour le rapport d'utilisation d'OpenAI",
+  "plan_usage_too_many_subagents": "Trop de conversations de sous-agents pour le rapport d'utilisation d'OpenAI",
   "plan_usage_could_not_check": "AgentsView n'a pas pu vérifier l'utilisation du forfait",
   "plan_usage_account_unavailable": "L'utilisation n'est pas disponible pour ce compte",
-  "plan_usage_counted_under": "Comptée dans le fil {title}",
+  "plan_usage_counted_under": "Comptée dans la conversation {title}",
   "plan_usage_weekly_share": "{percent} % de la limite hebdomadaire de Codex",
   "plan_usage_five_hour_share": "{percent} % de la limite de cinq heures de Codex",
   "plan_usage_credits": [
@@ -2938,20 +2938,20 @@
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "Codex Cloud : importation, {countLabel} fil trouvé pour l'instant",
-        "countPlural=other": "Codex Cloud : importation, {countLabel} fils trouvés pour l'instant"
+        "countPlural=one": "Codex Cloud : importation, {countLabel} conversation trouvée pour l'instant",
+        "countPlural=other": "Codex Cloud : importation, {countLabel} conversations trouvées pour l'instant"
       }
     }
   ],
-  "status_bar_codex_cloud_importing_progress": "Codex Cloud : importation de {imported} fils sur {total}",
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud : importation de {imported} conversations sur {total}",
   "status_bar_codex_cloud_up_to_date": "Codex Cloud : à jour au {time}",
   "status_bar_codex_cloud_retrying": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "Codex Cloud : {countLabel} fil n'a pas pu être importé",
-        "countPlural=other": "Codex Cloud : {countLabel} fils n'ont pas pu être importés"
+        "countPlural=one": "Codex Cloud : {countLabel} conversation n'a pas pu être importée",
+        "countPlural=other": "Codex Cloud : {countLabel} conversations n'ont pas pu être importées"
       }
     }
   ],
@@ -2959,7 +2959,7 @@
   "status_bar_codex_cloud_off": "Codex Cloud : désactivé",
   "status_bar_codex_cloud_config_error": "Codex Cloud : erreur de réglages",
   "status_bar_codex_cloud_oldest_failure": "Plus ancien échec : {time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView continue de les réessayer. Le journal du démon liste chaque fil. Les sessions déjà importées ne sont pas affectées.",
+  "status_bar_codex_cloud_retry_note": "AgentsView continue de les réessayer. Le journal du démon liste chaque conversation. Les sessions déjà importées ne sont pas affectées.",
   "status_bar_codex_cloud_last_success": "Dernière synchronisation réussie : {time}",
   "status_bar_codex_cloud_homes": "Dossiers Codex : {homes}"
 }

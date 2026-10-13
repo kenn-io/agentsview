@@ -1740,13 +1740,13 @@ describe("SessionBreadcrumb", () => {
 
       await vi.waitFor(() => {
         expect(document.querySelector<HTMLElement>(".plan-usage-trigger")?.title).toBe(
-          "Counted under thread Root task",
+          "Counted under chat Root task",
         );
       });
       await openPlanUsage();
       await vi.waitFor(() => {
         expect(document.querySelector(".plan-usage-root")?.textContent?.trim()).toBe(
-          "Counted under thread Root task",
+          "Counted under chat Root task",
         );
       });
       expect(sessionsService.getApiV1SessionsById.mock.lastCall?.[0]).toEqual({
