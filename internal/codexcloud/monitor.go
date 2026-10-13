@@ -1,0 +1,674 @@
+package codexcloud
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"go.kenn.io/agentsview/internal/codexcloud/mirror"
+)
+
+const (
+	// joinWindow is the join rule's recency limit: a thread whose listing
+	// updatedAt is older is never resumed, because an old inProgress turn
+	// is usually save lag, and resuming it would be a cold resume.
+	joinWindow = 2 * time.Minute
+	// maxJoins caps the joined threads of one account; each holds its own
+	// connection.
+	maxJoins = 10
+	// defaultFlushEvery and defaultJoinLimit are the spec's buffer flush
+	// interval and the longest a join stays open.
+	defaultFlushEvery = time.Minute
+	defaultJoinLimit  = 6 * time.Hour
+
+	tokenUsageMethod    = "thread/tokenUsage/updated"
+	turnCompletedMethod = "turn/completed"
+	modelReroutedMethod = "model/rerouted"
+)
+
+// Monitor joins running threads to record their token counts, which OpenAI
+// sends only to a client joined while the turn runs. It owns every joined
+// connection; discovery only hands it threads to join.
+type Monitor struct {
+	Store     *Store
+	Waits     *Waits
+	Status    *StatusBoard
+	Now       func() time.Time
+	Dial      func(context.Context, DialOptions) (*Conn, error)
+	Gates     GateSource
+	NoSync    bool
+	ReadLogin func(home string) (Login, HomeState, error)
+	// Trigger queues one sync run after a joined turn completes, so its
+	// items are fetched soon. A trigger already queued counts as success.
+	Trigger func() error
+	Version string
+	Log     *log.Logger
+
+	// flushEvery and joinLimit default to the spec's values; tests shorten
+	// them.
+	flushEvery time.Duration
+	joinLimit  time.Duration
+	// flushes counts mirror appends, so tests can see buffering.
+	flushes atomic.Int64
+
+	mu      sync.Mutex
+	joins   map[AccountKey]map[string]*join
+	stopped map[AccountKey]error
+	cold    map[AccountKey]int
+	closed  bool
+	wg      sync.WaitGroup
+}
+
+// join is one joined thread. A nil *join in Monitor.joins reserves a slot
+// while the join is being set up.
+type join struct {
+	key      AccountKey
+	threadID string
+	login    Login
+	conn     *Conn
+	id       string
+	model    string
+	handled  string
+	stop     chan struct{}
+	stopOnce sync.Once
+}
+
+func (j *join) close() { j.stopOnce.Do(func() { close(j.stop) }) }
+
+// resumeReply is the part of a thread/resume reply the monitor reads.
+// resumeKind is sent only by the hosted server.
+type resumeReply struct {
+	Thread     jsontext.Value `json:"thread"`
+	Model      string         `json:"model"`
+	ResumeKind string         `json:"resumeKind"`
+}
+
+// Join resumes threadID through login when its newest turn is still
+// running and listedUpdatedAt is within the join window, then keeps the
+// connection until the turn completes. It returns once the join is set
+// up. A failure from OpenAI is handled here, as the spec's error rules
+// say; only a local failure, such as a state file that cannot be written,
+// is returned.
+func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadID string, listedUpdatedAt int64) error {
+	if !m.reserve(key, threadID) {
+		return nil
+	}
+	joined := false
+	defer func() {
+		if !joined {
+			m.release(key, threadID)
+		}
+	}()
+	if m.Now().Sub(time.Unix(listedUpdatedAt, 0)) > joinWindow ||
+		!m.Waits.HomeReady(login.Home, login.AuthModTime) {
+		return nil
+	}
+	conn, err := m.Dial(ctx, DialOptions{
+		Endpoint: m.Gates().CodexCloud.Endpoint, Login: login, Mode: ModeMonitor, Version: m.Version,
+	})
+	if err != nil {
+		return m.failure(ctx, key, login, threadID, "", err)
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = conn.Close() // the join ends here; a close error changes nothing
+		}
+	}()
+	turnID, running, err := newestTurn(ctx, conn, threadID)
+	if err != nil {
+		return m.failure(ctx, key, login, threadID, "thread/turns/list", err)
+	}
+	handled, err := m.lastHandled(key, threadID)
+	if err != nil {
+		return err
+	}
+	if !running || turnID == handled {
+		return nil
+	}
+	var reply resumeReply
+	if err := conn.Call(ctx, resumeMethod, ResumeParams{ThreadID: threadID, ExcludeTurns: true}, &reply); err != nil {
+		return m.failure(ctx, key, login, threadID, resumeMethod, err)
+	}
+	switch reply.ResumeKind {
+	case "warm":
+		if err := m.writeResumeMetadata(key, threadID, reply.Thread); err != nil {
+			return err
+		}
+		id, err := joinID()
+		if err != nil {
+			return err
+		}
+		j := &join{
+			key: key, threadID: threadID, login: login, conn: conn, id: id, model: reply.Model,
+			stop: make(chan struct{}),
+		}
+		if !m.start(j) {
+			return nil
+		}
+		joined, keep = true, true
+		m.updateLive(key)
+		return nil
+	case "cold":
+		// The turn ended before the join, or the listing still shows a
+		// turn the server no longer runs. Joining again waits for a newer
+		// turn, so a stuck turn causes one cold resume.
+		m.Log.Printf("codex-cloud: thread %s: turn %s had ended when AgentsView joined", threadID, turnID)
+		m.mu.Lock()
+		m.cold[key]++
+		m.mu.Unlock()
+		m.updateLive(key)
+		return m.setLastHandled(key, threadID, turnID)
+	default:
+		return m.stopCapture(key, fmt.Errorf("%w: thread/resume returned resumeKind %q", ErrProtocolChange, reply.ResumeKind))
+	}
+}
+
+// Joined lists the threads joined for key.
+func (m *Monitor) Joined(key AccountKey) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []string
+	for id, j := range m.joins[key] {
+		if j != nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// CloseAll flushes and closes every join and accepts no new ones. The
+// daemon calls it on shutdown.
+func (m *Monitor) CloseAll() {
+	m.mu.Lock()
+	m.closed = true
+	m.mu.Unlock()
+	m.closeJoins(func(*join) bool { return true })
+	m.wg.Wait()
+}
+
+func (m *Monitor) closeJoins(match func(*join) bool) {
+	m.mu.Lock()
+	var matched []*join
+	for _, joins := range m.joins {
+		for _, j := range joins {
+			if j != nil && match(j) {
+				matched = append(matched, j)
+			}
+		}
+	}
+	m.mu.Unlock()
+	for _, j := range matched {
+		j.close()
+	}
+}
+
+func (m *Monitor) init() {
+	if m.joins == nil {
+		m.joins = map[AccountKey]map[string]*join{}
+	}
+	if m.stopped == nil {
+		m.stopped = map[AccountKey]error{}
+	}
+	if m.cold == nil {
+		m.cold = map[AccountKey]int{}
+	}
+}
+
+// reserve takes a join slot for threadID unless the thread is joined, the
+// account is at the cap or has capture stopped, or the monitor is closed.
+func (m *Monitor) reserve(key AccountKey, threadID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.init()
+	if m.closed || m.stopped[key] != nil {
+		return false
+	}
+	joins := m.joins[key]
+	if joins == nil {
+		joins = map[string]*join{}
+		m.joins[key] = joins
+	}
+	if _, ok := joins[threadID]; ok || len(joins) >= maxJoins {
+		return false
+	}
+	joins[threadID] = nil
+	return true
+}
+
+func (m *Monitor) release(key AccountKey, threadID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.joins[key], threadID)
+}
+
+// start registers j and runs it. It refuses when the monitor closed or
+// capture stopped while the join was set up.
+func (m *Monitor) start(j *join) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.stopped[j.key] != nil {
+		return false
+	}
+	m.joins[j.key][j.threadID] = j
+	m.wg.Go(func() { m.run(j) })
+	return true
+}
+
+// run reads one joined connection until its turn completes, the join
+// limit passes, the connection ends, or the monitor closes it.
+func (m *Monitor) run(j *join) {
+	defer m.updateLive(j.key)
+	defer m.release(j.key, j.threadID)
+	defer func() { _ = j.conn.Close() }() // leaving: the close error changes nothing
+	var buf []mirror.Record
+	flush := func() {
+		if err := m.flush(j, buf); err != nil {
+			m.Log.Printf("codex-cloud: thread %s: save token records: %v", j.threadID, err)
+			return
+		}
+		buf = nil
+	}
+	tick := time.NewTicker(m.every())
+	defer tick.Stop()
+	leave := time.NewTimer(m.limit())
+	defer leave.Stop()
+	notes := j.conn.Notifications()
+	for {
+		select {
+		case n, ok := <-notes:
+			if !ok {
+				flush()
+				m.ended(j)
+				return
+			}
+			completed, err := m.handle(j, n, &buf)
+			if err != nil {
+				flush()
+				_ = m.stopCapture(j.key, err) // stopCapture returns no error today
+				return
+			}
+			if completed {
+				flush()
+				m.trigger()
+				return
+			}
+		case <-tick.C:
+			flush()
+		case <-leave.C:
+			m.Log.Printf("codex-cloud: thread %s: leaving after %s; joining again on a later run if it still runs",
+				j.threadID, m.limit())
+			flush()
+			return
+		case <-j.stop:
+			flush()
+			return
+		}
+	}
+}
+
+func (m *Monitor) every() time.Duration {
+	if m.flushEvery > 0 {
+		return m.flushEvery
+	}
+	return defaultFlushEvery
+}
+
+func (m *Monitor) limit() time.Duration {
+	if m.joinLimit > 0 {
+		return m.joinLimit
+	}
+	return defaultJoinLimit
+}
+
+// wireCounts is one token breakdown as the thread host sends it. A counter
+// the host leaves out counts as zero.
+type wireCounts struct {
+	InputTokens           jsontext.Value `json:"inputTokens"`
+	CachedInputTokens     jsontext.Value `json:"cachedInputTokens"`
+	CacheWriteInputTokens jsontext.Value `json:"cacheWriteInputTokens"`
+	OutputTokens          jsontext.Value `json:"outputTokens"`
+	ReasoningOutputTokens jsontext.Value `json:"reasoningOutputTokens"`
+	TotalTokens           jsontext.Value `json:"totalTokens"`
+}
+
+func (w wireCounts) counts() (mirror.TokenCounts, error) {
+	var c mirror.TokenCounts
+	fields := []struct {
+		raw jsontext.Value
+		dst *int64
+	}{
+		{w.InputTokens, &c.Input},
+		{w.CachedInputTokens, &c.CachedInput},
+		{w.CacheWriteInputTokens, &c.CacheWriteInput},
+		{w.OutputTokens, &c.Output},
+		{w.ReasoningOutputTokens, &c.ReasoningOutput},
+		{w.TotalTokens, &c.Total},
+	}
+	for _, f := range fields {
+		if len(f.raw) == 0 {
+			continue
+		}
+		n, err := DecodeCount(f.raw)
+		if err != nil {
+			return c, fmt.Errorf("%w: %w", ErrProtocolChange, err)
+		}
+		*f.dst = n
+	}
+	return c, nil
+}
+
+type tokenUsageParams struct {
+	ThreadID   string `json:"threadId"`
+	TurnID     string `json:"turnId"`
+	TokenUsage struct {
+		Total              wireCounts     `json:"total"`
+		Last               wireCounts     `json:"last"`
+		ModelContextWindow jsontext.Value `json:"modelContextWindow"`
+	} `json:"tokenUsage"`
+}
+
+// handle reads one notification into buf. It reports when the joined turn
+// completed; an error is a protocol change that stops capture.
+func (m *Monitor) handle(j *join, n Notification, buf *[]mirror.Record) (completed bool, err error) {
+	now := m.Now()
+	switch n.Method {
+	case tokenUsageMethod:
+		var p tokenUsageParams
+		if err := json.Unmarshal(n.Params, &p); err != nil {
+			return false, fmt.Errorf("%w: unreadable %s: %w", ErrProtocolChange, n.Method, err)
+		}
+		if p.ThreadID != j.threadID {
+			return false, nil
+		}
+		data := mirror.TokenUsageData{JoinID: j.id, TurnID: p.TurnID, Model: j.model, ObservedAt: now}
+		if data.Total, err = p.TokenUsage.Total.counts(); err != nil {
+			return false, err
+		}
+		if data.Last, err = p.TokenUsage.Last.counts(); err != nil {
+			return false, err
+		}
+		if window := p.TokenUsage.ModelContextWindow; len(window) > 0 && window.Kind() != 'n' {
+			if data.ModelContextWindow, err = DecodeCount(window); err != nil {
+				return false, fmt.Errorf("%w: %w", ErrProtocolChange, err)
+			}
+		}
+		return false, appendRecord(buf, mirror.KindTokenUsage, data, now)
+	case modelReroutedMethod:
+		var p struct {
+			ThreadID string `json:"threadId"`
+			ToModel  string `json:"toModel"`
+		}
+		if err := json.Unmarshal(n.Params, &p); err != nil {
+			return false, fmt.Errorf("%w: unreadable %s: %w", ErrProtocolChange, n.Method, err)
+		}
+		if p.ThreadID == j.threadID && p.ToModel != "" {
+			j.model = p.ToModel
+		}
+		return false, nil
+	case turnCompletedMethod:
+		var p struct {
+			ThreadID string `json:"threadId"`
+			Turn     struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		}
+		if err := json.Unmarshal(n.Params, &p); err != nil {
+			return false, fmt.Errorf("%w: unreadable %s: %w", ErrProtocolChange, n.Method, err)
+		}
+		if p.ThreadID != j.threadID {
+			return false, nil
+		}
+		// Messages on one connection arrive in order, so every token update
+		// for this turn has already arrived.
+		j.handled = p.Turn.ID
+		data := mirror.TurnCompletedData{JoinID: j.id, TurnID: p.Turn.ID, ObservedAt: now}
+		return true, appendRecord(buf, mirror.KindTurnCompleted, data, now)
+	default:
+		return false, nil
+	}
+}
+
+func appendRecord(buf *[]mirror.Record, kind mirror.Kind, data any, now time.Time) error {
+	raw, err := json.Marshal(data, json.Deterministic(true))
+	if err != nil {
+		return fmt.Errorf("codex-cloud: encode %s record: %w", kind, err)
+	}
+	*buf = append(*buf, mirror.Record{Kind: kind, FetchedAt: now, Data: raw})
+	return nil
+}
+
+// flush appends buf to the thread's mirror file and records a completed
+// turn, under the account lock the fetcher also takes.
+func (m *Monitor) flush(j *join, buf []mirror.Record) error {
+	if len(buf) == 0 && j.handled == "" {
+		return nil
+	}
+	unlock := m.Store.Lock(j.key)
+	defer unlock()
+	st, err := m.Store.LoadThread(j.key, j.threadID)
+	if err != nil {
+		return err
+	}
+	next, _, err := commitThread(m.Store, j.key, j.threadID, st, buf, m.Now())
+	if err != nil {
+		return err
+	}
+	if len(buf) > 0 {
+		m.flushes.Add(1)
+	}
+	if j.handled == "" || next.LastHandledTurnID == j.handled {
+		return nil
+	}
+	next.LastHandledTurnID = j.handled
+	return m.Store.SaveThread(j.key, j.threadID, next)
+}
+
+// ended handles a connection the server or the network closed. A token
+// refresh request makes the home wait and ends every join through it.
+func (m *Monitor) ended(j *join) {
+	err := j.conn.Err()
+	if !errors.Is(err, ErrRefreshRequested) {
+		m.Log.Printf("codex-cloud: thread %s: joined connection ended: %v; joining again on a later run if it still runs",
+			j.threadID, Redact(err, j.login.Token))
+		return
+	}
+	m.Log.Printf("codex-cloud: thread %s: OpenAI asked for a fresh login in %s; leaving every thread joined through it",
+		j.threadID, j.login.Home)
+	m.Waits.RecordHome(j.login.Home, FailRefreshRequested, j.login.AuthModTime)
+	home := j.login.Home
+	m.closeJoins(func(other *join) bool { return other.login.Home == home })
+}
+
+func (m *Monitor) trigger() {
+	if m.Trigger == nil {
+		return
+	}
+	go func() {
+		if err := m.Trigger(); err != nil && !errors.Is(err, context.Canceled) {
+			m.Log.Printf("codex-cloud: queue a sync after a turn completed: %v", err)
+		}
+	}()
+}
+
+// failure applies the error rules to a failed dial or call while joining.
+// method names the call, or is empty for the dial.
+func (m *Monitor) failure(ctx context.Context, key AccountKey, login Login, threadID, method string, err error) error {
+	if ctx.Err() != nil {
+		// Shutdown or a closed gate, not a failure to record.
+		return ctx.Err()
+	}
+	if rpcErr, ok := errors.AsType[*RPCError](err); ok && method != "" {
+		switch Classify(method, false, rpcErr) {
+		case CatProtocolChange:
+			return m.stopCapture(key, fmt.Errorf("%w: %s: %w", ErrProtocolChange, method, rpcErr))
+		case CatAccountUnavailable:
+			return m.recordAccount(key, FailServer, 0)
+		default:
+			// The thread's own error; the next run tries again if it still
+			// runs.
+			m.Log.Printf("codex-cloud: thread %s: %s failed: %v", threadID, method, rpcErr)
+			return nil
+		}
+	}
+	f := FailureFor(err, login)
+	switch f {
+	case FailProtocol:
+		return m.stopCapture(key, Redact(err, login.Token))
+	case FailSignedOut, FailKeyring, FailRefreshRequested:
+		m.Log.Printf("codex-cloud: live tokens: %s: %v", login.Home, Redact(err, login.Token))
+		m.Waits.RecordHome(login.Home, f, login.AuthModTime)
+		return nil
+	case FailTooLarge:
+		m.Log.Printf("codex-cloud: thread %s: %v", threadID, err)
+		return nil
+	default:
+		m.Log.Printf("codex-cloud: live tokens: %v", Redact(err, login.Token))
+		var retryAfter time.Duration
+		if httpErr, ok := errors.AsType[*HTTPError](err); ok {
+			retryAfter = httpErr.RetryAfter
+		}
+		return m.recordAccount(key, f, retryAfter)
+	}
+}
+
+// recordAccount sets the account wait both jobs share.
+func (m *Monitor) recordAccount(key AccountKey, f Failure, retryAfter time.Duration) error {
+	unlock := m.Store.Lock(key)
+	defer unlock()
+	acct, err := m.Store.LoadAccount(key)
+	if err != nil {
+		return err
+	}
+	if err := m.Waits.RecordAccount(&acct, f, retryAfter); err != nil {
+		return err
+	}
+	return m.Store.SaveAccount(key, acct)
+}
+
+// stopCapture turns live capture off for the account until the daemon
+// restarts or live_tokens changes, and closes its joins. Sync is not
+// stopped: it finds a protocol change on its own next request.
+func (m *Monitor) stopCapture(key AccountKey, err error) error {
+	m.Log.Printf("codex-cloud: live tokens stopped for this account: %v", err)
+	m.mu.Lock()
+	m.init()
+	m.stopped[key] = err
+	m.mu.Unlock()
+	m.closeJoins(func(j *join) bool { return j.key == key })
+	m.updateLive(key)
+	return nil
+}
+
+// updateLive sets the account's live token line.
+func (m *Monitor) updateLive(key AccountKey) {
+	m.mu.Lock()
+	m.init()
+	stopped := m.stopped[key]
+	cold := m.cold[key]
+	watching := 0
+	for _, j := range m.joins[key] {
+		if j != nil {
+			watching++
+		}
+	}
+	m.mu.Unlock()
+	if stopped != nil {
+		m.Status.SetLive(string(key), "Live tokens: stopped. "+Message(FailProtocol, time.Time{}))
+		return
+	}
+	text := fmt.Sprintf("Live tokens: watching %d running threads", watching)
+	if cold > 0 {
+		text += fmt.Sprintf(" (%d joins arrived after the turn ended)", cold)
+	}
+	m.Status.SetLive(string(key), text)
+}
+
+func (m *Monitor) lastHandled(key AccountKey, threadID string) (string, error) {
+	unlock := m.Store.Lock(key)
+	defer unlock()
+	st, err := m.Store.LoadThread(key, threadID)
+	return st.LastHandledTurnID, err
+}
+
+func (m *Monitor) setLastHandled(key AccountKey, threadID, turnID string) error {
+	unlock := m.Store.Lock(key)
+	defer unlock()
+	st, err := m.Store.LoadThread(key, threadID)
+	if err != nil {
+		return err
+	}
+	st.LastHandledTurnID = turnID
+	return m.Store.SaveThread(key, threadID, st)
+}
+
+// writeResumeMetadata starts a mirror file the monitor reaches before sync
+// does with the thread from the resume reply. The reply's updatedAt and
+// recencyAt are the time of the resume, so they are dropped; times come
+// only from listing records.
+func (m *Monitor) writeResumeMetadata(key AccountKey, threadID string, thread jsontext.Value) error {
+	unlock := m.Store.Lock(key)
+	defer unlock()
+	path, err := m.Store.MirrorPath(key, threadID)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("codex-cloud: stat mirror: %w", err)
+	}
+	var fields map[string]jsontext.Value
+	if err := json.Unmarshal(thread, &fields); err != nil {
+		return fmt.Errorf("%w: unreadable thread/resume thread: %w", ErrProtocolChange, err)
+	}
+	delete(fields, "updatedAt")
+	delete(fields, "recencyAt")
+	data, err := json.Marshal(fields, json.Deterministic(true))
+	if err != nil {
+		return fmt.Errorf("codex-cloud: encode resume metadata: %w", err)
+	}
+	st, err := m.Store.LoadThread(key, threadID)
+	if err != nil {
+		return err
+	}
+	now := m.Now()
+	record := mirror.Record{Kind: mirror.KindThreadResume, FetchedAt: now, Data: data}
+	_, _, err = commitThread(m.Store, key, threadID, st, []mirror.Record{record}, now)
+	return err
+}
+
+// newestTurn reads the newest turn's ID and whether it is in progress.
+func newestTurn(ctx context.Context, c *Conn, threadID string) (id string, running bool, err error) {
+	var page turnsPage
+	params := turnsParams{ThreadID: threadID, Limit: 1, ItemsView: turnView}
+	if err := c.Call(ctx, "thread/turns/list", params, &page); err != nil {
+		return "", false, err
+	}
+	if len(page.Data) == 0 {
+		return "", false, nil
+	}
+	var turn mirror.Turn
+	if err := json.Unmarshal(page.Data[0], &turn); err != nil {
+		return "", false, fmt.Errorf("%w: unreadable turn: %w", ErrProtocolChange, err)
+	}
+	return turn.ID, turn.Status == "inProgress", nil
+}
+
+func joinID() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("codex-cloud: join ID: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}

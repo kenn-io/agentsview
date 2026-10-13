@@ -47,11 +47,26 @@ type StatusBoard struct {
 	mu    sync.Mutex
 	order []string
 	rows  map[string]HomeStatus
+	// live holds each account's live token line apart from its row, since
+	// sync replaces whole rows and the monitor sets this line on its own.
+	live map[string]string
 }
 
 // NewStatusBoard returns an empty board.
 func NewStatusBoard() *StatusBoard {
-	return &StatusBoard{rows: map[string]HomeStatus{}}
+	return &StatusBoard{rows: map[string]HomeStatus{}, live: map[string]string{}}
+}
+
+// SetLive sets the live token line shown with the row for key. It shows
+// once sync has set that row.
+func (b *StatusBoard) SetLive(key, text string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if text == "" {
+		delete(b.live, key)
+		return
+	}
+	b.live[key] = text
 }
 
 // Set replaces the row with row.Key.
@@ -72,6 +87,9 @@ func (b *StatusBoard) Row(key string) (HomeStatus, bool) {
 	defer b.mu.Unlock()
 	row, ok := b.rows[key]
 	row.Homes = slices.Clone(row.Homes)
+	if ok {
+		row.Live = b.live[key]
+	}
 	return row, ok
 }
 
@@ -83,6 +101,7 @@ func (b *StatusBoard) Snapshot() []HomeStatus {
 	for _, key := range b.order {
 		row := b.rows[key]
 		row.Homes = slices.Clone(row.Homes)
+		row.Live = b.live[key]
 		rows = append(rows, row)
 	}
 	return rows
@@ -128,6 +147,7 @@ func (b *StatusBoard) Delete(key string) {
 		delete(b.rows, key)
 		b.order = slices.DeleteFunc(b.order, func(k string) bool { return k == key })
 	}
+	delete(b.live, key)
 }
 
 // Keep drops every row whose key is not in keys.
@@ -141,6 +161,11 @@ func (b *StatusBoard) Keep(keys map[string]bool) {
 		delete(b.rows, key)
 		return true
 	})
+	for key := range b.live {
+		if !keys[key] {
+			delete(b.live, key)
+		}
+	}
 }
 
 // StatusLines renders a row for `serve status`: one line for the state,
