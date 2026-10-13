@@ -1394,16 +1394,18 @@ func (s *Store) GetSessionUsage(
 	}
 	snapshotMask, _, snapshotWebSearchRequests := activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
 	deduplicatedOutputTokens := 0
-	seen := make(map[db.UsageDedupToken]struct{})
+	seen := make(map[activity.UsageDedupToken]struct{})
 	for i, r := range usageRows {
 		if !snapshotMask[i] {
 			deduplicatedOutputTokens += snapshotRows[i].OutputTokens
 			continue
 		}
-		if key, ok := db.UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
+			UsageSource: r.usageSource, Agent: r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+		}); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -1537,7 +1539,7 @@ func (s *Store) GetDailyUsage(
 	accum := make(map[accumKey]*bucket)
 	sessionCosts := make(map[string]sessionCost)
 	useAuthoritativeCost := !f.HasModelFilter()
-	seen := make(map[db.UsageDedupToken]struct{})
+	seen := make(map[activity.UsageDedupToken]struct{})
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
 		seenSessions = make(map[string]db.UsageSessionInfo)
@@ -1559,10 +1561,12 @@ func (s *Store) GetDailyUsage(
 		if f.To != "" && date > f.To {
 			continue
 		}
-		if key, ok := db.UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
+			UsageSource: r.usageSource, Agent: r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+		}); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -2115,7 +2119,7 @@ func (s *Store) GetTopSessionsByCost(
 
 	accum := make(map[string]*sessAccum)
 	var order []string
-	seen := make(map[db.UsageDedupToken]struct{})
+	seen := make(map[activity.UsageDedupToken]struct{})
 
 	for rows.Next() {
 		var entry db.TopSessionEntry
@@ -2139,10 +2143,12 @@ func (s *Store) GetTopSessionsByCost(
 		if f.To != "" && date > f.To {
 			continue
 		}
-		if key, ok := db.UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
+			UsageSource: r.usageSource, Agent: r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+		}); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -2258,7 +2264,7 @@ func (s *Store) GetUsageSessionCounts(
 	}
 
 	seen := make(map[string]sessInfo)
-	dedup := make(map[db.UsageDedupToken]struct{})
+	dedup := make(map[activity.UsageDedupToken]struct{})
 
 	for rows.Next() {
 		r, err := scanPGDailyUsageRow(rows)
@@ -2275,10 +2281,12 @@ func (s *Store) GetUsageSessionCounts(
 			continue
 		}
 
-		if key, ok := db.UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok && !activity.AddUsageDedupToken(dedup, key, struct{}{}) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
+			UsageSource: r.usageSource, Agent: r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+		}); ok && !activity.AddUsageDedupToken(dedup, key) {
 			continue
 		}
 

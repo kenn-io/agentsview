@@ -1588,18 +1588,6 @@ func RecordComputedUsagePricing(
 		reportedModel, pricedModel, lookup)
 }
 
-// UsageDedupToken identifies a usage event for deduplication across sources.
-type UsageDedupToken = activity.UsageDedupToken
-
-// UsageDedupTokenForRow picks the strongest available dedup identity: the
-// Claude message and request pair, then the agent source UUID for message
-// rows, then the stored usage dedup key. It returns false when none apply.
-func UsageDedupTokenForRow(
-	usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string,
-) (UsageDedupToken, bool) {
-	return activity.SessionUsageDedupTokenForRow(usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey)
-}
-
 func (db *DB) loadTopSessionMetadata(
 	ctx context.Context, sessionIDs []string,
 ) (map[string]topSessionMetadata, error) {
@@ -2079,7 +2067,7 @@ func (db *DB) getDailyUsageLegacy(
 	sessionCosts := make(map[string]sessionCost)
 	useAuthoritativeCost := !f.HasModelFilter()
 
-	seen := make(map[UsageDedupToken]struct{})
+	seen := make(map[activity.UsageDedupToken]struct{})
 	var seenSessions map[string]UsageSessionInfo
 	if !f.SkipSessionCounts {
 		seenSessions = make(map[string]UsageSessionInfo)
@@ -2110,10 +2098,12 @@ func (db *DB) getDailyUsageLegacy(
 		// Dedup AFTER the date filter so out-of-range rows
 		// (pulled in by the ±14h timezone padding) don't mark
 		// a key as seen and suppress the in-range duplicate.
-		if key, ok := UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
+			UsageSource: r.usageSource, Agent: r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+		}); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -2824,7 +2814,7 @@ func (db *DB) getTopSessionsByCostLegacy(
 	// Dedup duplicate usage rows across fork/subagent
 	// boundaries so per-session totals match the aggregate
 	// totals from GetDailyUsage. Same key and ordering rules.
-	seen := make(map[UsageDedupToken]struct{})
+	seen := make(map[activity.UsageDedupToken]struct{})
 
 	for rows.Next() {
 		r, err := scanDailyUsageRow(rows)
@@ -2844,10 +2834,12 @@ func (db *DB) getTopSessionsByCostLegacy(
 		// Dedup AFTER the date filter, matching GetDailyUsage,
 		// so out-of-range rows pulled in by the ±14h padding
 		// don't claim a key and suppress the in-range duplicate.
-		if key, ok := UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
+			UsageSource: r.usageSource, Agent: r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+		}); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -3232,7 +3224,7 @@ func (db *DB) getSessionUsageLegacy(
 		return nil, err
 	}
 	deduplicatedOutputTokens := 0
-	seen := make(map[UsageDedupToken]struct{})
+	seen := make(map[activity.UsageDedupToken]struct{})
 	for i, r := range usageRows {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -3241,10 +3233,12 @@ func (db *DB) getSessionUsageLegacy(
 			deduplicatedOutputTokens += snapshotRows[i].OutputTokens
 			continue
 		}
-		if key, ok := UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok && !activity.AddUsageDedupToken(seen, key, struct{}{}) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
+			UsageSource: r.usageSource, Agent: r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+		}); ok && !activity.AddUsageDedupToken(seen, key) {
 			continue
 		}
 
@@ -3437,7 +3431,7 @@ func (db *DB) getUsageSessionCountsLegacy(
 	// session's usage (fork/subagent replays), that session
 	// should NOT be counted. Otherwise sessionCounts would
 	// disagree with the deduped token totals.
-	dedup := make(map[UsageDedupToken]struct{})
+	dedup := make(map[activity.UsageDedupToken]struct{})
 
 	for rows.Next() {
 		r, err := scanDailyUsageRow(rows)
@@ -3457,10 +3451,12 @@ func (db *DB) getUsageSessionCountsLegacy(
 
 		// Dedup AFTER the date filter, matching the other two
 		// queries so ±14h padding rows don't claim keys.
-		if key, ok := UsageDedupTokenForRow(
-			r.usageSource, r.agent, r.claudeMessageID,
-			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
-		); ok && !activity.AddUsageDedupToken(dedup, key, struct{}{}) {
+		if key, ok := activity.SessionUsageDedupTokenForRow(activity.UsageIdentity{
+			UsageSource: r.usageSource, Agent: r.agent,
+			ClaudeMessageID: r.claudeMessageID,
+			ClaudeRequestID: r.claudeRequestID,
+			SourceUUID:      r.sourceUUID, UsageDedupKey: r.usageDedupKey,
+		}); ok && !activity.AddUsageDedupToken(dedup, key) {
 			continue
 		}
 

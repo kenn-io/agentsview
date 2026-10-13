@@ -8,27 +8,30 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-// ReportBackend supplies backend reads and pricing for shared report assembly.
-type ReportBackend interface {
-	ActivityReportUsage(context.Context, []string, Query) ([]UsageRow, *export.PricingBlock, error)
-	ActivityReportCandidateSource() CandidateSource
-	ActivityReportMessageCounts(context.Context, []string, Query, *CandidateArtifacts) error
-	BuildProjectIdentityMap(context.Context, []string) (map[string]export.ProjectMapEntry, error)
+// ReportSources supplies the reads and candidate stream for one report.
+type ReportSources struct {
+	Usage         func(context.Context, []string, Query) ([]UsageRow, *export.PricingBlock, error)
+	Candidates    CandidateSource
+	MessageCounts func(context.Context, []string, Query, *CandidateArtifacts) error
+	Projects      func(context.Context, []string) (map[string]export.ProjectMapEntry, error)
 }
 
 // BuildReportArtifacts assembles a report and returns the emitted completion event.
-func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions []SessionMeta, q Query, onProgress ProgressFunc, aggregationLabel string) (CandidateArtifacts, Progress, error) {
+func BuildReportArtifacts(
+	ctx context.Context, sources ReportSources, sessions []SessionMeta,
+	q Query, onProgress ProgressFunc, aggregationLabel string,
+) (CandidateArtifacts, Progress, error) {
 	ids := make([]string, len(sessions))
 	for i, session := range sessions {
 		ids[i] = session.SessionID
 	}
-	usage, pricing, err := backend.ActivityReportUsage(ctx, ids, q)
+	usage, pricing, err := sources.Usage(ctx, ids, q)
 	if err != nil {
 		return CandidateArtifacts{}, Progress{}, err
 	}
 
 	rowsProcessed := int64(0)
-	source := backend.ActivityReportCandidateSource()
+	source := sources.Candidates
 	artifacts, err := BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
@@ -55,7 +58,7 @@ func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions [
 	if err != nil {
 		return CandidateArtifacts{}, Progress{}, fmt.Errorf("%s: %w", aggregationLabel, err)
 	}
-	if err := backend.ActivityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
+	if err := sources.MessageCounts(ctx, ids, q, &artifacts); err != nil {
 		return CandidateArtifacts{}, Progress{}, err
 	}
 	ReportProgress(onProgress, Progress{
@@ -64,7 +67,7 @@ func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions [
 	})
 	artifacts.Report.SchemaVersion = export.ActivityReportSchemaVersion
 	artifacts.Report.Pricing = pricing
-	projects, err := backend.BuildProjectIdentityMap(ctx,
+	projects, err := sources.Projects(ctx,
 		ProjectLabels(sessions))
 	if err != nil {
 		return CandidateArtifacts{}, Progress{}, err

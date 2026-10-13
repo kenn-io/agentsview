@@ -16,8 +16,11 @@ type UsagePrice struct {
 	Contributes bool
 }
 
-// SelectSessionUsageRows selects and prices survivors from sorted rows with matching contribution flags.
-func SelectSessionUsageRows(ctx context.Context, rows []UsageRow, contributes []bool, price func(int, int) (UsagePrice, error)) (*SessionUsageRows, error) {
+// SelectSessionUsageRows selects and prices survivors from sorted usage rows.
+func SelectSessionUsageRows(
+	ctx context.Context, rows []UsageRow,
+	price func(int, int) (UsagePrice, error),
+) (*SessionUsageRows, error) {
 	coverage, err := CanonicalSessionTokenCoverageContext(ctx, rows)
 	if err != nil {
 		return nil, err
@@ -41,7 +44,7 @@ func SelectSessionUsageRows(ctx context.Context, rows []UsageRow, contributes []
 		result.RawOutputTokensBySession[row.SessionID] += row.OutputTokens
 		discard := func() {
 			result.DeduplicatedOutputTokens[row.SessionID] += row.OutputTokens
-			if contributes[i] {
+			if row.Contributes {
 				result.DiscardedContributingSessions[row.SessionID] = struct{}{}
 			}
 		}
@@ -52,7 +55,7 @@ func SelectSessionUsageRows(ctx context.Context, rows []UsageRow, contributes []
 		if attribution[i] != row.SessionID {
 			discard()
 		}
-		if key, ok := SessionUsageDedupTokenForRow(row.UsageSource, row.Agent, row.ClaudeMessageID, row.ClaudeRequestID, row.SourceUUID, row.UsageDedupKey); ok && !AddUsageDedupToken(seen, key, struct{}{}) {
+		if key, ok := SessionUsageDedupTokenForRow(row.UsageIdentity()); ok && !AddUsageDedupToken(seen, key) {
 			discard()
 			continue
 		}

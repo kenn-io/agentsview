@@ -6117,22 +6117,6 @@ func TestDailyUsageAmountsPrefersExactCustomKimiAlias(t *testing.T) {
 	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
 }
 
-func TestUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
-	got, ok := UsageDedupTokenForRow(
-		"message",
-		"claude-code",
-		"msg-dup",
-		"",
-		"source-dup",
-		"",
-	)
-	require.True(t, ok, "expected source_uuid fallback key")
-	assert.Equal(t, UsageDedupToken{
-		Kind:  "source",
-		Value: "claude-code:source-dup",
-	}, got)
-}
-
 func TestGroupTopSessions(t *testing.T) {
 	entries := []TopSessionEntry{
 		{GroupKey: "job-a", InputTokens: 5, OutputTokens: 1, CacheCreationTokens: 2, CacheReadTokens: 3, TotalTokens: 11, Cost: money.Money{Microdollars: 4_000_000}},

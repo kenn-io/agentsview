@@ -150,7 +150,18 @@ func (s *Store) BuildActivityReportArtifacts(
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
 	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, versions, q)
-	artifacts, done, err := activity.BuildReportArtifacts(ctx, activityReportBackend{source: pairs.candidateSource(), Store: s, candidates: candidates, pairs: pairs, lower: rangeStartUTC, upper: rangeEndUTC}, sessions, q, onProgress, "aggregating clickhouse activity report")
+	artifacts, done, err := activity.BuildReportArtifacts(ctx, activity.ReportSources{
+		Usage: func(
+			ctx context.Context, ids []string, query activity.Query,
+		) ([]activity.UsageRow, *export.PricingBlock, error) {
+			return s.activityReportUsage(
+				ctx, candidates, ids, rangeStartUTC, rangeEndUTC, query,
+			)
+		},
+		Candidates:    pairs.candidateSource(),
+		MessageCounts: pairs.countMessages,
+		Projects:      s.BuildProjectIdentityMap,
+	}, sessions, q, onProgress, "aggregating clickhouse activity report")
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -620,7 +631,6 @@ func (s *Store) GetSessionUsageRows(
 		return clickSessionUsageRowLess(rowsAcc[i], rowsAcc[j], sessionOrder)
 	})
 	snapshotRows := make([]activity.UsageRow, len(rowsAcc))
-	rowContributes := make([]bool, len(rowsAcc))
 	for i, o := range rowsAcc {
 		snapshotRows[i] = activity.UsageRow{
 			Model:               o.scan.model,
@@ -640,12 +650,12 @@ func (s *Store) GetSessionUsageRows(
 			SourceUUID:          o.scan.sourceUUID,
 			UsageDedupKey:       o.scan.usageDedupKey,
 		}
-		rowContributes[i] = activity.UsageDataContributes(
+		snapshotRows[i].Contributes = activity.UsageDataContributes(
 			o.scan.cost.Valid, o.scan.inputTok, o.scan.outputTok,
 			o.scan.reasoningTok, o.scan.cacheCr, o.scan.cacheRd,
 			o.scan.webSearchRequests)
 	}
-	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsagePrice, error) {
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, func(i int, webSearches int) (activity.UsagePrice, error) {
 		r := rowsAcc[i].scan
 		r.webSearchRequests = webSearches
 		cost, costSource, priced, contributes, sessionCost, priceErr := clickActivityUsageCost(r, rateResolver)
@@ -1704,24 +1714,4 @@ func activityUsageSelection(k *activityUsageKept, candidates []string) (iter.Seq
 			}
 		}
 	}, count
-}
-
-type activityReportBackend struct {
-	*Store
-	source       activity.CandidateSource
-	candidates   chSessionSet
-	pairs        *activityReportPairing
-	lower, upper string
-}
-
-func (b activityReportBackend) ActivityReportUsage(ctx context.Context, ids []string, q activity.Query) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, b.candidates, ids, b.lower, b.upper, q)
-}
-
-func (b activityReportBackend) ActivityReportCandidateSource() activity.CandidateSource {
-	return b.source
-}
-
-func (b activityReportBackend) ActivityReportMessageCounts(ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts) error {
-	return b.pairs.countMessages(ctx, ids, q, artifacts)
 }

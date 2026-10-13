@@ -17,18 +17,63 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 		name, source, agent, messageID, requestID, uuid, key string
 		ordinary, session                                    UsageDedupToken
 	}{
-		{name: "Claude pair wins", source: "event", agent: "claude", messageID: "m", requestID: "r", uuid: "u", key: "k", ordinary: UsageDedupToken{Kind: "claude", Value: "m:r"}, session: UsageDedupToken{Kind: "claude", Value: "m:r"}},
-		{name: "incomplete pair falls back to message UUID", source: "message", agent: "claude", messageID: "m", uuid: "u", key: "k", ordinary: UsageDedupToken{Kind: "source", Value: "claude:u"}, session: UsageDedupToken{Kind: "source", Value: "claude:u"}},
-		{name: "event UUID falls back to stored session key", source: "event", agent: "codex", uuid: "u", key: "k", ordinary: UsageDedupToken{Kind: "source", Value: "codex:u"}, session: UsageDedupToken{Kind: "usage", Value: "k"}},
-		{name: "event UUID alone has no session identity", source: "event", agent: "codex", uuid: "u", ordinary: UsageDedupToken{Kind: "source", Value: "codex:u"}},
-		{name: "UUID without agent falls back to stored key", source: "message", uuid: "u", key: "k", ordinary: UsageDedupToken{Kind: "usage", Value: "k"}, session: UsageDedupToken{Kind: "usage", Value: "k"}},
+		{
+			name:      "Claude pair wins",
+			source:    "event",
+			agent:     "claude",
+			messageID: "m",
+			requestID: "r",
+			uuid:      "u",
+			key:       "k",
+			ordinary:  UsageDedupToken{Kind: "claude", Value: "m:r"},
+			session:   UsageDedupToken{Kind: "claude", Value: "m:r"},
+		},
+		{
+			name:      "incomplete pair falls back to message UUID",
+			source:    "message",
+			agent:     "claude",
+			messageID: "m",
+			uuid:      "u",
+			key:       "k",
+			ordinary:  UsageDedupToken{Kind: "source", Value: "claude:u"},
+			session:   UsageDedupToken{Kind: "source", Value: "claude:u"},
+		},
+		{
+			name:     "event UUID falls back to stored session key",
+			source:   "event",
+			agent:    "codex",
+			uuid:     "u",
+			key:      "k",
+			ordinary: UsageDedupToken{Kind: "source", Value: "codex:u"},
+			session:  UsageDedupToken{Kind: "usage", Value: "k"},
+		},
+		{
+			name:     "event UUID alone has no session identity",
+			source:   "event",
+			agent:    "codex",
+			uuid:     "u",
+			ordinary: UsageDedupToken{Kind: "source", Value: "codex:u"},
+		},
+		{
+			name:     "UUID without agent falls back to stored key",
+			source:   "message",
+			uuid:     "u",
+			key:      "k",
+			ordinary: UsageDedupToken{Kind: "usage", Value: "k"},
+			session:  UsageDedupToken{Kind: "usage", Value: "k"},
+		},
 		{name: "no identity"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ordinary, ok := UsageDedupTokenForRow(tc.agent, tc.messageID, tc.requestID, tc.uuid, tc.key)
+			identity := UsageIdentity{
+				UsageSource: tc.source, Agent: tc.agent,
+				ClaudeMessageID: tc.messageID, ClaudeRequestID: tc.requestID,
+				SourceUUID: tc.uuid, UsageDedupKey: tc.key,
+			}
+			ordinary, ok := UsageDedupTokenForRow(identity)
 			assert.Equal(t, tc.ordinary, ordinary)
 			assert.Equal(t, tc.ordinary != UsageDedupToken{}, ok)
-			session, ok := SessionUsageDedupTokenForRow(tc.source, tc.agent, tc.messageID, tc.requestID, tc.uuid, tc.key)
+			session, ok := SessionUsageDedupTokenForRow(identity)
 			assert.Equal(t, tc.session, session)
 			assert.Equal(t, tc.session != UsageDedupToken{}, ok)
 		})
@@ -36,14 +81,15 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 }
 
 func TestAddUsageDedupToken(t *testing.T) {
-	seen := make(map[UsageDedupToken]int)
+	seen := make(map[UsageDedupToken]struct{})
 	token := UsageDedupToken{Kind: "source", Value: "agent:uuid"}
-	assert.True(t, AddUsageDedupToken(seen, token, 7))
-	assert.False(t, AddUsageDedupToken(seen, token, 9))
-	assert.Equal(t, 7, seen[token])
-	assert.True(t, AddUsageDedupToken(seen, UsageDedupToken{Kind: "usage", Value: token.Value}, 9))
+	assert.True(t, AddUsageDedupToken(seen, token))
+	assert.False(t, AddUsageDedupToken(seen, token))
+	assert.True(t, AddUsageDedupToken(seen, UsageDedupToken{
+		Kind: "usage", Value: token.Value,
+	}))
 	assert.Len(t, seen, 2)
-	assert.True(t, AddUsageDedupToken(make(map[UsageDedupToken]struct{}), token, struct{}{}))
+	assert.True(t, AddUsageDedupToken(make(map[UsageDedupToken]struct{}), token))
 }
 
 func TestSelectSessionUsageRows(t *testing.T) {
@@ -76,12 +122,11 @@ func TestSelectSessionUsageRows(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			contributes := make([]bool, len(tc.rows))
 			for i, row := range tc.rows {
-				contributes[i] = row.OutputTokens > 0
+				tc.rows[i].Contributes = row.OutputTokens > 0
 			}
 			pricedIndexes := []int{}
-			result, err := SelectSessionUsageRows(context.Background(), tc.rows, contributes, func(i, searches int) (UsagePrice, error) {
+			result, err := SelectSessionUsageRows(t.Context(), tc.rows, func(i, searches int) (UsagePrice, error) {
 				pricedIndexes = append(pricedIndexes, i)
 				return UsagePrice{
 					Cost:        money.Money{Microdollars: int64(searches + 7)},
@@ -108,11 +153,30 @@ func TestSelectSessionUsageRows(t *testing.T) {
 
 func TestSelectSessionUsageRowsPreservesSurvivorFields(t *testing.T) {
 	rows := []UsageRow{
-		{SessionID: "root", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 10, OutputTokens: 5, WebSearchRequests: 3, ClaudeMessageID: "m", ClaudeRequestID: "r"},
-		{SessionID: "child", Model: "model-a", Timestamp: "2026-06-16T10:00:01Z", InputTokens: 100, OutputTokens: 20, WebSearchRequests: 1, ClaudeMessageID: "m", ClaudeRequestID: "r"},
+		{
+			SessionID:         "root",
+			Timestamp:         "2026-06-16T10:00:00Z",
+			InputTokens:       10,
+			OutputTokens:      5,
+			WebSearchRequests: 3,
+			ClaudeMessageID:   "m",
+			ClaudeRequestID:   "r",
+			Contributes:       true,
+		},
+		{
+			SessionID:         "child",
+			Model:             "model-a",
+			Timestamp:         "2026-06-16T10:00:01Z",
+			InputTokens:       100,
+			OutputTokens:      20,
+			WebSearchRequests: 1,
+			ClaudeMessageID:   "m",
+			ClaudeRequestID:   "r",
+			Contributes:       true,
+		},
 	}
 	var pricedIndexes, pricedSearches []int
-	result, err := SelectSessionUsageRows(context.Background(), rows, []bool{true, true}, func(i, searches int) (UsagePrice, error) {
+	result, err := SelectSessionUsageRows(t.Context(), rows, func(i, searches int) (UsagePrice, error) {
 		pricedIndexes = append(pricedIndexes, i)
 		pricedSearches = append(pricedSearches, searches)
 		return UsagePrice{Cost: money.Money{Microdollars: int64(searches + 7)}}, nil
@@ -143,15 +207,26 @@ func TestSelectSessionUsageRowsErrors(t *testing.T) {
 		wantPriceCalls int
 	}{
 		{name: "pricing", rows: []UsageRow{{SessionID: "root"}}, priceErr: priceErr, want: priceErr, wantPriceCalls: 1},
-		{name: "canceled between pricing calls", rows: []UsageRow{{SessionID: "root"}, {SessionID: "child"}}, cancelAfter: true, want: context.Canceled, wantPriceCalls: 1},
-		{name: "canceled after last pricing call", rows: []UsageRow{{SessionID: "root"}}, cancelAfter: true, want: context.Canceled, wantPriceCalls: 1},
+		{
+			name:           "canceled between pricing calls",
+			rows:           []UsageRow{{SessionID: "root"}, {SessionID: "child"}},
+			cancelAfter:    true,
+			want:           context.Canceled,
+			wantPriceCalls: 1,
+		},
+		{
+			name:           "canceled after last pricing call",
+			rows:           []UsageRow{{SessionID: "root"}},
+			cancelAfter:    true,
+			want:           context.Canceled,
+			wantPriceCalls: 1,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			calls := 0
-			contributes := make([]bool, len(tc.rows))
-			result, err := SelectSessionUsageRows(ctx, tc.rows, contributes, func(int, int) (UsagePrice, error) {
+			result, err := SelectSessionUsageRows(ctx, tc.rows, func(int, int) (UsagePrice, error) {
 				calls++
 				if tc.priceErr != nil {
 					return UsagePrice{}, tc.priceErr
@@ -161,7 +236,7 @@ func TestSelectSessionUsageRowsErrors(t *testing.T) {
 				}
 				return UsagePrice{}, nil
 			})
-			assert.ErrorIs(t, err, tc.want)
+			require.ErrorIs(t, err, tc.want)
 			assert.Nil(t, result)
 			assert.Equal(t, tc.wantPriceCalls, calls)
 		})

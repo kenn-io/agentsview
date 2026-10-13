@@ -84,7 +84,16 @@ func (db *DB) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{source: db.activityReportCandidateSource(ids, q), DB: db, lower: lowerBound, upper: upperBound}, sessions, q, onProgress, "aggregating activity report")
+	artifacts, _, err := activity.BuildReportArtifacts(ctx, activity.ReportSources{
+		Usage: func(
+			ctx context.Context, ids []string, query activity.Query,
+		) ([]activity.UsageRow, *export.PricingBlock, error) {
+			return db.activityReportUsage(ctx, ids, lowerBound, upperBound, query)
+		},
+		Candidates:    db.activityReportCandidateSource(ids, q),
+		MessageCounts: db.activityReportMessageCounts,
+		Projects:      db.BuildProjectIdentityMap,
+	}, sessions, q, onProgress, "aggregating activity report")
 	return artifacts, err
 }
 
@@ -196,7 +205,6 @@ func (db *DB) GetSessionUsageRows(
 		return nil, err
 	}
 	snapshotRows := make([]activity.UsageRow, len(rowsAcc))
-	rowContributes := make([]bool, len(rowsAcc))
 	for i, o := range rowsAcc {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -221,12 +229,12 @@ func (db *DB) GetSessionUsageRows(
 			SourceUUID:      o.scan.sourceUUID,
 			UsageDedupKey:   o.scan.usageDedupKey,
 		}
-		rowContributes[i] = activity.UsageDataContributes(
+		snapshotRows[i].Contributes = activity.UsageDataContributes(
 			o.scan.cost.Valid, inputTok, outputTok, reasoningTok,
 			cacheCrTok, cacheRdTok,
 			usageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
 	}
-	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsagePrice, error) {
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, func(i int, webSearches int) (activity.UsagePrice, error) {
 		o := rowsAcc[i]
 		r := o.scan
 		costRow := r
@@ -1211,22 +1219,4 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 		rdTok,
 	)
 	return cost, true, true, nil
-}
-
-type activityReportBackend struct {
-	*DB
-	source       activity.CandidateSource
-	lower, upper string
-}
-
-func (b activityReportBackend) ActivityReportUsage(ctx context.Context, ids []string, q activity.Query) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, ids, b.lower, b.upper, q)
-}
-
-func (b activityReportBackend) ActivityReportCandidateSource() activity.CandidateSource {
-	return b.source
-}
-
-func (b activityReportBackend) ActivityReportMessageCounts(ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts) error {
-	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
 }

@@ -60,7 +60,16 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{source: s.activityReportCandidateSource(ids, q), Store: s, lower: lowerBound, upper: upperBound}, sessions, q, onProgress, "aggregating pg activity report")
+	artifacts, _, err := activity.BuildReportArtifacts(ctx, activity.ReportSources{
+		Usage: func(
+			ctx context.Context, ids []string, query activity.Query,
+		) ([]activity.UsageRow, *export.PricingBlock, error) {
+			return s.activityReportUsage(ctx, ids, lowerBound, upperBound, query)
+		},
+		Candidates:    s.activityReportCandidateSource(ids, q),
+		MessageCounts: s.activityReportMessageCounts,
+		Projects:      s.BuildProjectIdentityMap,
+	}, sessions, q, onProgress, "aggregating pg activity report")
 	return artifacts, err
 }
 
@@ -150,7 +159,6 @@ func (s *Store) GetSessionUsageRows(
 		return pgSessionUsageRowLess(rowsAcc[i], rowsAcc[j], sessionOrder)
 	})
 	snapshotRows := make([]activity.UsageRow, len(rowsAcc))
-	rowContributes := make([]bool, len(rowsAcc))
 	for i, o := range rowsAcc {
 		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := pgDailyUsageRowTokens(
 			pgDailyUsageScanRow{
@@ -183,12 +191,12 @@ func (s *Store) GetSessionUsageRows(
 			SourceUUID:      o.scan.sourceUUID,
 			UsageDedupKey:   o.scan.usageDedupKey,
 		}
-		rowContributes[i] = activity.UsageDataContributes(
+		snapshotRows[i].Contributes = activity.UsageDataContributes(
 			o.scan.cost.Valid, inputTok, outputTok, reasoningTok,
 			cacheCrTok, cacheRdTok,
 			pgUsageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
 	}
-	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsagePrice, error) {
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, func(i int, webSearches int) (activity.UsagePrice, error) {
 		o := rowsAcc[i]
 		r := o.scan
 		costRow := r
@@ -796,22 +804,4 @@ func pgActivityReportRowStatusWithWebSearchRequests(
 		pricing, r.model, pricedModel, lookup,
 		requestScoped, inTok, crTok, rdTok)
 	return cost, true, true, nil
-}
-
-type activityReportBackend struct {
-	*Store
-	source       activity.CandidateSource
-	lower, upper string
-}
-
-func (b activityReportBackend) ActivityReportUsage(ctx context.Context, ids []string, q activity.Query) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, ids, b.lower, b.upper, q)
-}
-
-func (b activityReportBackend) ActivityReportCandidateSource() activity.CandidateSource {
-	return b.source
-}
-
-func (b activityReportBackend) ActivityReportMessageCounts(ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts) error {
-	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
 }

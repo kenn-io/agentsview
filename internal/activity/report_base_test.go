@@ -34,20 +34,29 @@ func (b *reportBackendFixture) check(stage string, ids []string, q Query) error 
 
 func (b *reportBackendFixture) ActivityReportUsage(_ context.Context, ids []string, q Query) ([]UsageRow, *export.PricingBlock, error) {
 	err := b.check("usage", ids, q)
-	return []UsageRow{{SessionID: "s", Model: "model-a", Timestamp: "2026-06-16T10:01:00Z", OutputTokens: 20, Cost: money.Money{Microdollars: 100}, Priced: true, Contributes: true}}, b.pricing, err
+	return []UsageRow{{
+		SessionID: "s", Model: "model-a", Timestamp: "2026-06-16T10:01:00Z",
+		OutputTokens: 20, Cost: money.Money{Microdollars: 100},
+		Priced: true, Contributes: true,
+	}}, b.pricing, err
 }
 
 func (b *reportBackendFixture) ActivityReportCandidateSource() CandidateSource {
-	b.calls = append(b.calls, "candidates")
 	var err error
 	if b.stage == "candidates" {
 		err = b.err
 	}
 	return func(_ context.Context, yield func(IntervalCandidate) error) error {
+		b.calls = append(b.calls, "candidates")
 		if err != nil {
 			return err
 		}
-		return yield(IntervalCandidate{SessionID: "s", StartOrdinal: 0, EndOrdinal: 1, Start: mustStart(b.t, "2026-06-16T10:00:00Z"), End: mustStart(b.t, "2026-06-16T10:01:00Z"), ClosingRole: "assistant", ClosingModel: "model-a"})
+		return yield(IntervalCandidate{
+			SessionID: "s", StartOrdinal: 0, EndOrdinal: 1,
+			Start:       mustStart(b.t, "2026-06-16T10:00:00Z"),
+			End:         mustStart(b.t, "2026-06-16T10:01:00Z"),
+			ClosingRole: "assistant", ClosingModel: "model-a",
+		})
 	}
 }
 
@@ -69,12 +78,26 @@ func (b *reportBackendFixture) BuildProjectIdentityMap(_ context.Context, labels
 	return map[string]export.ProjectMapEntry{"project-a": {DisplayLabel: "project-a", ProjectKey: "project-key-a"}}, nil
 }
 
+func (b *reportBackendFixture) sources() ReportSources {
+	return ReportSources{
+		Usage:         b.ActivityReportUsage,
+		Candidates:    b.ActivityReportCandidateSource(),
+		MessageCounts: b.ActivityReportMessageCounts,
+		Projects:      b.BuildProjectIdentityMap,
+	}
+}
+
 func TestBuildReportArtifacts(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC", BucketOverride: "1h"}, fixedNow(t))
 	require.NoError(t, err)
 	backend := &reportBackendFixture{t: t, q: q, pricing: &export.PricingBlock{}}
 	progress := []Progress{}
-	artifacts, done, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, q, func(p Progress) { progress = append(progress, p) }, "aggregating example activity report")
+	artifacts, done, err := BuildReportArtifacts(
+		t.Context(), backend.sources(),
+		[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q,
+		func(p Progress) { progress = append(progress, p) },
+		"aggregating example activity report",
+	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
 	assert.Equal(t, []Progress{
@@ -104,7 +127,11 @@ func TestBuildReportArtifactsWithoutProgressCallback(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC"}, fixedNow(t))
 	require.NoError(t, err)
 	backend := &reportBackendFixture{t: t, q: q}
-	_, done, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, q, nil, "aggregating example activity report")
+	_, done, err := BuildReportArtifacts(
+		t.Context(), backend.sources(),
+		[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q, nil,
+		"aggregating example activity report",
+	)
 	require.NoError(t, err)
 	assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
 }
@@ -117,10 +144,15 @@ func TestBuildReportArtifactsErrors(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			backend := &reportBackendFixture{t: t, q: q, stage: stage, err: failure}
 			var done bool
-			_, completion, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, q, func(p Progress) { done = done || p.Phase == ProgressDone }, "aggregating example activity report")
-			assert.ErrorIs(t, err, failure)
+			_, completion, err := BuildReportArtifacts(
+				t.Context(), backend.sources(),
+				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q,
+				func(p Progress) { done = done || p.Phase == ProgressDone },
+				"aggregating example activity report",
+			)
+			require.ErrorIs(t, err, failure)
 			if stage == "candidates" {
-				assert.EqualError(t, err, "aggregating example activity report: read failed")
+				require.EqualError(t, err, "aggregating example activity report: read failed")
 			}
 			assert.False(t, done)
 			assert.Equal(t, Progress{}, completion)

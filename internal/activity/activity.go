@@ -564,12 +564,12 @@ type UsageDedupToken struct {
 	Value string
 }
 
-// AddUsageDedupToken records the first value for a token and reports whether it was new.
-func AddUsageDedupToken[T any](seen map[UsageDedupToken]T, token UsageDedupToken, value T) bool {
+// AddUsageDedupToken inserts a token and reports whether it was new.
+func AddUsageDedupToken(seen map[UsageDedupToken]struct{}, token UsageDedupToken) bool {
 	if _, exists := seen[token]; exists {
 		return false
 	}
-	seen[token] = value
+	seen[token] = struct{}{}
 	return true
 }
 
@@ -578,26 +578,48 @@ type claudeUsageSnapshotToken struct {
 	requestID string
 }
 
+// UsageIdentity holds the stored identifiers of a usage row.
+type UsageIdentity struct {
+	UsageSource     string
+	Agent           string
+	ClaudeMessageID string
+	ClaudeRequestID string
+	SourceUUID      string
+	UsageDedupKey   string
+}
+
+// UsageIdentity returns the row's stored deduplication identifiers.
+func (row UsageRow) UsageIdentity() UsageIdentity {
+	return UsageIdentity{
+		UsageSource: row.UsageSource, Agent: row.Agent,
+		ClaudeMessageID: row.ClaudeMessageID,
+		ClaudeRequestID: row.ClaudeRequestID,
+		SourceUUID:      row.SourceUUID, UsageDedupKey: row.UsageDedupKey,
+	}
+}
+
 // UsageDedupTokenForRow picks the Claude pair, source UUID, or stored usage key.
-func UsageDedupTokenForRow(agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string) (UsageDedupToken, bool) {
-	if claudeMessageID != "" && claudeRequestID != "" {
-		return UsageDedupToken{Kind: "claude", Value: claudeMessageID + ":" + claudeRequestID}, true
+func UsageDedupTokenForRow(row UsageIdentity) (UsageDedupToken, bool) {
+	if row.ClaudeMessageID != "" && row.ClaudeRequestID != "" {
+		return UsageDedupToken{
+			Kind: "claude", Value: row.ClaudeMessageID + ":" + row.ClaudeRequestID,
+		}, true
 	}
-	if agent != "" && sourceUUID != "" {
-		return UsageDedupToken{Kind: "source", Value: agent + ":" + sourceUUID}, true
+	if row.Agent != "" && row.SourceUUID != "" {
+		return UsageDedupToken{Kind: "source", Value: row.Agent + ":" + row.SourceUUID}, true
 	}
-	if usageDedupKey != "" {
-		return UsageDedupToken{Kind: "usage", Value: usageDedupKey}, true
+	if row.UsageDedupKey != "" {
+		return UsageDedupToken{Kind: "usage", Value: row.UsageDedupKey}, true
 	}
 	return UsageDedupToken{}, false
 }
 
 // SessionUsageDedupTokenForRow restricts source UUID identity to message rows.
-func SessionUsageDedupTokenForRow(usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string) (UsageDedupToken, bool) {
-	if usageSource != "message" {
-		sourceUUID = ""
+func SessionUsageDedupTokenForRow(row UsageIdentity) (UsageDedupToken, bool) {
+	if row.UsageSource != "message" {
+		row.SourceUUID = ""
 	}
-	return UsageDedupTokenForRow(agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey)
+	return UsageDedupTokenForRow(row)
 }
 
 // ClaudeSnapshotSurvivorSelection also returns the earliest session and the
@@ -730,11 +752,12 @@ func CanonicalSessionTokenCoverageContext(
 			continue
 		}
 		genericCanonical[i] = i
-		if key, ok := SessionUsageDedupTokenForRow(row.UsageSource, row.Agent, row.ClaudeMessageID, row.ClaudeRequestID, row.SourceUUID, row.UsageDedupKey); ok {
-			if !AddUsageDedupToken(seen, key, i) {
-				genericCanonical[i] = seen[key]
+		if key, ok := SessionUsageDedupTokenForRow(row.UsageIdentity()); ok {
+			if previous, duplicate := seen[key]; duplicate {
+				genericCanonical[i] = previous
 				continue
 			}
+			seen[key] = i
 		}
 	}
 	coverage := make(map[string]SessionTokenCoverage)
@@ -859,7 +882,7 @@ func usageSurvivorSelection(
 				continue
 			}
 		}
-		if k, ok := UsageDedupTokenForRow(u.Agent, u.ClaudeMessageID, u.ClaudeRequestID, u.SourceUUID, u.UsageDedupKey); ok && !AddUsageDedupToken(seen, k, struct{}{}) {
+		if k, ok := UsageDedupTokenForRow(u.UsageIdentity()); ok && !AddUsageDedupToken(seen, k) {
 			continue
 		}
 		mask[i] = true

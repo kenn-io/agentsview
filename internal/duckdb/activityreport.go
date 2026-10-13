@@ -60,7 +60,18 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{source: s.activityReportCandidateSource(ids, q), Store: s, lower: lowerBound, upper: upperBound, filter: f, rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC}, sessions, q, onProgress, "aggregating duckdb activity report")
+	artifacts, _, err := activity.BuildReportArtifacts(ctx, activity.ReportSources{
+		Usage: func(
+			ctx context.Context, ids []string, query activity.Query,
+		) ([]activity.UsageRow, *export.PricingBlock, error) {
+			return s.activityReportUsage(
+				ctx, ids, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound, query,
+			)
+		},
+		Candidates:    s.activityReportCandidateSource(ids, q),
+		MessageCounts: s.activityReportMessageCounts,
+		Projects:      s.BuildProjectIdentityMap,
+	}, sessions, q, onProgress, "aggregating duckdb activity report")
 	return artifacts, err
 }
 
@@ -222,7 +233,6 @@ func (s *Store) GetSessionUsageRows(
 		return duckSessionUsageRowLess(rowsAcc[i], rowsAcc[j], sessionOrder)
 	})
 	snapshotRows := make([]activity.UsageRow, len(rowsAcc))
-	rowContributes := make([]bool, len(rowsAcc))
 	for i, o := range rowsAcc {
 		snapshotRows[i] = activity.UsageRow{
 			Model:               o.scan.model,
@@ -242,12 +252,12 @@ func (s *Store) GetSessionUsageRows(
 			SourceUUID:          o.scan.sourceUUID,
 			UsageDedupKey:       o.scan.usageDedupKey,
 		}
-		rowContributes[i] = activity.UsageDataContributes(
+		snapshotRows[i].Contributes = activity.UsageDataContributes(
 			o.scan.cost != nil, o.scan.inputTok, o.scan.outputTok,
 			o.scan.reasoningTok, o.scan.cacheCr, o.scan.cacheRd,
 			o.scan.webSearchRequests)
 	}
-	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsagePrice, error) {
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, func(i int, webSearches int) (activity.UsagePrice, error) {
 		r := rowsAcc[i].scan
 		r.webSearchRequests = webSearches
 		cost, costSource, priced, contributes, sessionCost, priceErr := duckActivityUsageCost(r, rateResolver)
@@ -1073,24 +1083,4 @@ func duckUsageOrdinal(v any) (int64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-type activityReportBackend struct {
-	*Store
-	source               activity.CandidateSource
-	lower, upper         string
-	filter               db.AnalyticsFilter
-	rangeStart, rangeEnd string
-}
-
-func (b activityReportBackend) ActivityReportUsage(ctx context.Context, ids []string, q activity.Query) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.activityReportUsage(ctx, ids, b.filter, b.rangeStart, b.rangeEnd, b.lower, b.upper, q)
-}
-
-func (b activityReportBackend) ActivityReportCandidateSource() activity.CandidateSource {
-	return b.source
-}
-
-func (b activityReportBackend) ActivityReportMessageCounts(ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts) error {
-	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
 }
