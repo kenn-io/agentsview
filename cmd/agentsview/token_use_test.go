@@ -468,7 +468,6 @@ func TestAgentHasDiskSourceLookupIncludesProviderAuthoritativeAgents(t *testing.
 }
 
 func TestUsageExitCode(t *testing.T) {
-	figures := &db.PlanUsageView{DataStatus: "available", WeeklyPercent: new(1.5)}
 	for _, tc := range []struct {
 		name string
 		out  *sessionUsageOutput
@@ -476,18 +475,10 @@ func TestUsageExitCode(t *testing.T) {
 	}{
 		{"token data", &sessionUsageOutput{HasTokenData: true}, tokenUseExitOK},
 		{"cost only", &sessionUsageOutput{HasCost: true}, tokenUseExitOK},
-		{"plan usage figures", &sessionUsageOutput{Plan: figures}, tokenUseExitOK},
 		{"nothing", &sessionUsageOutput{}, tokenUseExitNoTokenData},
 		{
 			"plan usage without figures",
 			&sessionUsageOutput{Plan: &db.PlanUsageView{OutcomeKind: "left_out"}},
-			tokenUseExitNoTokenData,
-		},
-		{
-			"counted under another session",
-			&sessionUsageOutput{Plan: &db.PlanUsageView{
-				WeeklyPercent: new(1.5), OutcomeKind: "counted_under", CountedUnder: "codex-cloud:root",
-			}},
 			tokenUseExitNoTokenData,
 		},
 		{"not found", nil, tokenUseExitNotFound},

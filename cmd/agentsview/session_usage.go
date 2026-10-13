@@ -481,7 +481,7 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 func planUsageLine(agent string, plan *db.PlanUsageView) string {
 	if plan == nil {
 		if agent == string(parser.AgentCodexCloud) {
-			return "not checked yet; AgentsView checks it during a later sync"
+			return "not checked yet; a sync with Codex cloud import on checks it"
 		}
 		return ""
 	}
