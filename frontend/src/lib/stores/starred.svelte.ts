@@ -86,7 +86,7 @@ class StarredStore {
     this.retryCount++;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      this.load();
+      void this.load();
     }, delay);
   }
 

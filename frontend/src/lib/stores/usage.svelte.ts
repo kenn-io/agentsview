@@ -631,12 +631,12 @@ class UsageStore {
 
   setDateRange(from: string, to: string) {
     this.applyDateRange(from, to);
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   setRollingWindow(days: number) {
     this.applyRollingWindow(days);
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   setTimeRange(from: string, to: string) {
@@ -760,7 +760,7 @@ class UsageStore {
   // excludes it; clicking an excluded item re-includes it.
   toggleProject(name: string): void {
     this.excludedProjects = this.toggleCsv(this.excludedProjects, name);
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   toggleProjectKey(key: string, options: { preserveTimeRange?: boolean } = {}): void {
@@ -836,7 +836,7 @@ class UsageStore {
   selectAllProjects(): void {
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   deselectAllProjectKeys(all: string[]): void {
@@ -845,27 +845,27 @@ class UsageStore {
     );
     for (const key of all) excluded.add(key);
     this.excludedProjectKeys = [...excluded].join(",");
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   selectAllAgents(): void {
     this.excludedAgents = "";
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   deselectAllAgents(all: string[]): void {
     this.excludedAgents = all.join(",");
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   selectAllModels(): void {
     this.excludedModels = "";
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   deselectAllModels(all: string[]): void {
     this.excludedModels = joinCsvParts(this.excludedModels, all.join(","));
-    this.fetchAll();
+    void this.fetchAll();
   }
 
   clearFilters(refresh = true): void {
@@ -876,7 +876,7 @@ class UsageStore {
     this.excludedProjectKeys = "";
     this.excludedAgents = "";
     this.excludedModels = "";
-    if (refresh) this.fetchAll();
+    if (refresh) void this.fetchAll();
   }
 
   get hasActiveFilters(): boolean {

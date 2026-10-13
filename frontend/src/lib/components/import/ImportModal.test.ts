@@ -43,13 +43,13 @@ beforeEach(() => {
   getBrowserHost.mockReturnValue(undefined);
   chromeStatus.mockResolvedValue(ready);
   syncClaudeAI.mockResolvedValue(stats);
-  setLocale("en", { reload: false });
+  void setLocale("en", { reload: false });
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.resetAllMocks();
   vi.restoreAllMocks();
-  setLocale("en", { reload: false });
+  void setLocale("en", { reload: false });
 });
 
 it("disables Sync while checking, then shows the live connection", async () => {
@@ -358,7 +358,7 @@ it.each([new ApiError(503, "Temporarily unavailable"), new Error("Network interr
 );
 
 it("localizes auth state from its code", async () => {
-  setLocale("fr", { reload: false });
+  void setLocale("fr", { reload: false });
   syncClaudeAI.mockRejectedValueOnce(
     new ApiError(0, "English auth message", "claude_ai_auth_required"),
   );

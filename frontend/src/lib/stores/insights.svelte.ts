@@ -327,7 +327,7 @@ class InsightsStore {
           this.items = [insight, ...this.items.filter((s) => s.id !== insight.id)];
           this.selectedId = insight.id;
         } else {
-          this.load();
+          void this.load();
         }
       })
       .catch((e) => {

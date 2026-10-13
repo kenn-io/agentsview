@@ -120,7 +120,7 @@ describe("i18n locale selection", () => {
   });
 
   it("renders generated Paraglide messages for each supported locale", () => {
-    runtime.setLocale("en", { reload: false });
+    void runtime.setLocale("en", { reload: false });
     expect(m.nav_sessions()).toBe("Sessions");
     expect(
       m.status_bar_sessions({
@@ -129,7 +129,7 @@ describe("i18n locale selection", () => {
       }),
     ).toBe("12 sessions");
 
-    runtime.setLocale("zh-CN", { reload: false });
+    void runtime.setLocale("zh-CN", { reload: false });
     expect(m.nav_sessions()).toBe("会话");
     expect(
       m.status_bar_sessions({
@@ -138,7 +138,7 @@ describe("i18n locale selection", () => {
       }),
     ).toBe("12 个会话");
 
-    runtime.setLocale("zh-TW", { reload: false });
+    void runtime.setLocale("zh-TW", { reload: false });
     expect(m.nav_sessions()).toBe("對話");
     expect(
       m.status_bar_sessions({
@@ -147,7 +147,7 @@ describe("i18n locale selection", () => {
       }),
     ).toBe("12 個對話");
 
-    runtime.setLocale("ko", { reload: false });
+    void runtime.setLocale("ko", { reload: false });
     expect(m.nav_sessions()).toBe("세션");
     expect(
       m.status_bar_sessions({
@@ -156,7 +156,7 @@ describe("i18n locale selection", () => {
       }),
     ).toBe("세션 12개");
 
-    runtime.setLocale("fr", { reload: false });
+    void runtime.setLocale("fr", { reload: false });
     expect(m.nav_sessions()).toBe("Sessions");
     expect(
       m.status_bar_sessions({
@@ -165,7 +165,7 @@ describe("i18n locale selection", () => {
       }),
     ).toBe("12 sessions");
 
-    runtime.setLocale("es", { reload: false });
+    void runtime.setLocale("es", { reload: false });
     expect(m.nav_sessions()).toBe("Sesiones");
     expect(
       m.status_bar_sessions({
@@ -175,7 +175,7 @@ describe("i18n locale selection", () => {
     ).toBe("12 sesiones");
     expect(m.settings_language_label()).toBe("Idioma de la interfaz");
 
-    runtime.setLocale("ja", { reload: false });
+    void runtime.setLocale("ja", { reload: false });
     expect(m.nav_sessions()).toBe(ja.nav_sessions);
     expect(
       m.session_breadcrumb_usage_breakdown_steps({
@@ -189,13 +189,13 @@ describe("i18n locale selection", () => {
     expect(m.insights_page_no_generated_saved()).toBe("保存済みの生成分析はありません。");
     expect(m.activity_loading_usage()).toBe("使用状況を読み込み中…");
 
-    runtime.setLocale("az", { reload: false });
+    void runtime.setLocale("az", { reload: false });
     expect(m.nav_sessions()).toBe(az.nav_sessions);
     expect(m.settings_language_azerbaijani()).toBe(az.settings_language_azerbaijani);
   });
 
   it("selects cardinal plural variants per locale", () => {
-    runtime.setLocale("en", { reload: false });
+    void runtime.setLocale("en", { reload: false });
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 tool call");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 tool calls");
     expect(m.parallel_group_call_count({ count: 1 })).toBe("1 call");
@@ -229,27 +229,27 @@ describe("i18n locale selection", () => {
 
     // Simplified Chinese has no plural distinction, so a single variant
     // serves every count.
-    runtime.setLocale("zh-CN", { reload: false });
+    void runtime.setLocale("zh-CN", { reload: false });
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 次 tool call");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 次 tool call");
     expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 条消息");
 
     // Traditional Chinese has no plural distinction, so a single variant
     // serves every count.
-    runtime.setLocale("zh-TW", { reload: false });
+    void runtime.setLocale("zh-TW", { reload: false });
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 次 tool call");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 次 tool call");
     expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 則訊息");
 
     // Korean has no plural distinction, so a single variant serves every count.
-    runtime.setLocale("ko", { reload: false });
+    void runtime.setLocale("ko", { reload: false });
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("도구 호출 1회");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("도구 호출 3회");
     expect(m.subagent_inline_message_count({ count: 1 })).toBe("메시지 1개");
 
     // French has one/other like English, but CLDR puts 0 in `one`, so zero
     // takes the singular form where English would say "0 tool calls".
-    runtime.setLocale("fr", { reload: false });
+    void runtime.setLocale("fr", { reload: false });
     expect(m.tool_call_group_call_count({ count: 0 })).toBe("0 appel d'outil");
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 appel d'outil");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 appels d'outil");
@@ -262,7 +262,7 @@ describe("i18n locale selection", () => {
 
     // Spanish has one/other like English, and CLDR puts 0 in `other`, so zero
     // takes the plural form unlike French.
-    runtime.setLocale("es", { reload: false });
+    void runtime.setLocale("es", { reload: false });
     expect(m.tool_call_group_call_count({ count: 0 })).toBe("0 llamadas a herramienta");
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 llamada a herramienta");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 llamadas a herramienta");
@@ -283,7 +283,7 @@ describe("i18n locale selection", () => {
         } as Intl.DateTimeFormat;
       } as typeof Intl.DateTimeFormat);
 
-    runtime.setLocale("zh-CN", { reload: false });
+    void runtime.setLocale("zh-CN", { reload: false });
 
     expect(formatDateTime(0, { timeZone: "UTC" })).toBe("zh-CN:UTC");
     expect(dateTimeFormat).toHaveBeenCalledWith("zh-CN", {
