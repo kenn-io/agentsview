@@ -277,12 +277,14 @@ func (m *Monitor) release(key AccountKey, threadID string) {
 	delete(m.joins[key], threadID)
 }
 
-// start registers j and runs it. It refuses when the monitor closed or
-// capture stopped while the join was set up.
+// start registers j and runs it. It refuses when the monitor closed,
+// capture stopped, or j's home began waiting for a fresh login while the
+// join was set up. ended records the home wait before it closes the
+// home's joins, so a join it misses is refused here.
 func (m *Monitor) start(j *join) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.closed || m.stopped[j.key] != nil {
+	if m.closed || m.stopped[j.key] != nil || !m.Waits.HomeReady(j.login.Home, j.login.AuthModTime) {
 		return false
 	}
 	m.joins[j.key][j.threadID] = j
