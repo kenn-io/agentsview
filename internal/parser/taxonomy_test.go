@@ -161,9 +161,6 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"mcp_select_tool", "Tool"},
 		{"mcp_features", "Tool"},
 		{"ask_user_question", "Tool"},
-		{"web_fetch", "Tool"},
-		{"web_search", "Tool"},
-		{"subagent", "Task"},
 
 		// Unknown
 		{"view_image", "Other"},

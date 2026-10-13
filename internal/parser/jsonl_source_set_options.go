@@ -151,8 +151,12 @@ func WithCompanionFiles(fn func(transcriptPath string) []string) JSONLOption {
 }
 
 // WithOptionalCompanion folds an "unreadable" marker into the fingerprint on companion read failures.
-func WithOptionalCompanion(fn func(companionPath string) bool) JSONLOption {
-	return func(o *JSONLSourceSetOptions) { o.OptionalCompanion = fn }
+// directoryNames opts named companion directories into entry metadata hashing.
+func WithOptionalCompanion(fn func(companionPath string) bool, directoryNames ...string) JSONLOption {
+	return func(o *JSONLSourceSetOptions) {
+		o.OptionalCompanion = fn
+		o.OptionalCompanionDirectories = directoryNames
+	}
 }
 
 // WithCompanionTranscript registers the inverse of WithCompanionFiles: given a

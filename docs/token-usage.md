@@ -57,7 +57,9 @@ modification time. Sessions from current fx have no token usage. An old session
 resumed in newer fx keeps its old totals. Costs use AgentsView's pricing catalog.
 Tool results use saved `.txt` output only when it is a regular UTF-8 file that
 matches the saved byte count or reaches the 16 MiB cap. Otherwise, the preview
-stays. Restored files refresh the result on the next sync.
+stays. Restored files refresh the result on the next sync. Freshness checks
+cover entry names, sizes, and modification times in `tool-results/`. This
+suffices because fx names result files by content hash.
 
 Augure Code and Augure Desktop retain recorded usage. Proprietary Augure models
 have no catalog price, so token-based cost estimates remain unpriced unless you

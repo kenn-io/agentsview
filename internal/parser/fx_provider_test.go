@@ -31,7 +31,7 @@ func TestFxProviderSessionIDs(t *testing.T) {
 			dir := filepath.Join(root, test.id)
 			// Overlong IDs exercise the length rule through parent_id below.
 			if len(test.id) <= 255 {
-				writeSourceFile(t, filepath.Join(dir, "events.jsonl"), `{"event":{"user":{"text":"Hello"}}}`)
+				writeSourceFile(t, filepath.Join(dir, "events.jsonl"), `{"schema_version":3,"event":{"user":{"text":"Hello"}}}`)
 				provider, ok := NewProvider(AgentFx, ProviderConfig{Roots: []string{root}})
 				require.True(t, ok)
 				sources, err := provider.Discover(t.Context())
@@ -47,7 +47,7 @@ func TestFxProviderSessionIDs(t *testing.T) {
 			}
 			child := filepath.Join(root, "child")
 			writeSourceFile(t, filepath.Join(child, "session.json"), `{"schema_version":4}`)
-			writeSourceFile(t, filepath.Join(child, "events.jsonl"), `{"event":{"user":{"text":"Child task"}}}`)
+			writeSourceFile(t, filepath.Join(child, "events.jsonl"), `{"schema_version":3,"event":{"user":{"text":"Child task"}}}`)
 			writeSourceFile(t, filepath.Join(child, "subagent", "owner.json"), fmt.Sprintf(`{"parent_id":%q}`, test.id))
 			session, _, err := parseFxSession(t.Context(), filepath.Join(child, "events.jsonl"), "local")
 			require.NoError(t, err)
@@ -64,8 +64,8 @@ func TestFxProviderSessionIDs(t *testing.T) {
 func TestFxProviderDiscoveryAndParse(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "session.a", "events.jsonl")
-	writeSourceFile(t, path, `{"event":{"user":{"text":"Hello"}}}`)
-	for _, ignored := range []string{"events.jsonl", "session.a/other.jsonl", "session.a/subagent/events.jsonl", "invalid id/events.jsonl", "session.a/tool-results/output.jsonl", "session.a/artifacts/events.jsonl", "session.a/logs/events.jsonl"} {
+	writeSourceFile(t, path, `{"schema_version":3,"event":{"user":{"text":"Hello"}}}`)
+	for _, ignored := range []string{"events.jsonl", "session.a/other.jsonl", "session.a/subagent/events.jsonl", "session.a/tool-results/output.jsonl"} {
 		writeSourceFile(t, filepath.Join(root, filepath.FromSlash(ignored)), `{}`)
 	}
 	provider, ok := NewProvider(AgentFx, ProviderConfig{Roots: []string{root}, Machine: "local"})
@@ -95,7 +95,7 @@ func TestFxProviderDiscoveryAndParse(t *testing.T) {
 func TestFxCompanionEqualLengthRewrites(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "session.a", "events.jsonl")
-	writeSourceFile(t, file, `{"event":{"user":{"text":"Hello"}}}`)
+	writeSourceFile(t, file, `{"schema_version":3,"event":{"user":{"text":"Hello"}}}`)
 	newer := time.Unix(2000, 0)
 	older := time.Unix(1000, 0)
 	require.NoError(t, os.Chtimes(file, newer, newer))

@@ -114,8 +114,10 @@ type JSONLSourceSetOptions struct {
 	// providers describe companions once as transcript->companions and the base
 	// drives watch, freshness, and changed-path mapping from that single hook.
 	CompanionFiles func(transcriptPath string) []string
-	// OptionalCompanion lets unreadable companions contribute a marker and directories contribute entry metadata.
+	// OptionalCompanion lets unreadable companions contribute a marker.
 	OptionalCompanion func(companionPath string) bool
+	// OptionalCompanionDirectories names companions whose directory entries contribute metadata.
+	OptionalCompanionDirectories []string
 	// RejectSymlinkCompanions makes companion freshness use Lstat and ignore
 	// symlinked companions. The default preserves legacy followed-symlink
 	// behavior for existing JSONL providers.
@@ -541,9 +543,13 @@ func (s JSONLSourceSet) foldCompanionFingerprint(
 			fingerprint.MTimeNS = mtime
 		}
 		if hasher != nil {
-			if err := addSiblingMetadataFingerprintPart(
-				hasher, "companion", companion, info,
-			); err != nil {
+			var err error
+			if optional && info.IsDir() && slices.Contains(s.options.OptionalCompanionDirectories, filepath.Base(companion)) {
+				err = addSiblingMetadataDirectoryFingerprintPart(hasher, "companion", companion)
+			} else {
+				err = addSiblingMetadataFingerprintPart(hasher, "companion", companion, info)
+			}
+			if err != nil {
 				if !optional {
 					return err
 				}

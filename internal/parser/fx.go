@@ -233,11 +233,13 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	session := &ParsedSession{
 		ID: "fx:" + rawID, Agent: AgentFx, Machine: machine, Cwd: metadata.Cwd,
 		Project: ExtractProjectFromCwdWithBranchContext(ctx, metadata.Cwd, ""), SessionName: metadata.Title,
-		EndedAt: time.UnixMilli(metadata.Updated).UTC(),
-		File:    FileInfo{Path: filePath, Size: info.Size(), Mtime: info.ModTime().UnixNano()},
+		File: FileInfo{Path: filePath, Size: info.Size(), Mtime: info.ModTime().UnixNano()},
 	}
 	if metadata.Created != 0 {
 		session.StartedAt = time.UnixMilli(metadata.Created).UTC()
+	}
+	if metadata.Updated != 0 {
+		session.EndedAt = time.UnixMilli(metadata.Updated).UTC()
 	}
 	owner, err := readFxMetadata[fxOwner](filepath.Join(dir, "subagent", "owner.json"))
 	if err != nil {
@@ -271,20 +273,21 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 		var frame *fxFrame
 		if err := json.Unmarshal([]byte(line), &frame); err != nil {
 			// Complete frames with duplicate names or invalid UTF-8 must fail rather than look torn.
-			if !jsontext.Value(line).IsValid(jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) && !fileEndsWithNewline(f, reader.bytesRead) {
-				// The newline helper also returns false on read errors.
+			if !jsontext.Value(line).IsValid(jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) {
 				var tail [1]byte
 				if _, err := f.ReadAt(tail[:], reader.bytesRead-1); err != nil {
 					return nil, nil, err
 				}
-				break
+				if tail[0] != '\n' {
+					break
+				}
 			}
 			return nil, nil, fmt.Errorf("invalid fx events.jsonl frame: %w", err)
 		}
 		if frame == nil || frame.Event == nil {
 			return nil, nil, errors.New("invalid fx events.jsonl frame: event must be an object")
 		}
-		if !fxSchemaOK(frame.Version, 0, 3, rawID, "events.jsonl frame") {
+		if !fxSchemaOK(frame.Version, 1, 3, rawID, "events.jsonl frame") {
 			return nil, nil, nil
 		}
 		timestamp := time.UnixMilli(frame.Timestamp).UTC()
@@ -382,13 +385,17 @@ func fxFullToolOutput(dir, ref string, storedBytes int64, previewLen int) (strin
 	if err != nil || !info.Mode().IsRegular() {
 		return "", false
 	}
-	f, err := os.Open(resultPath)
+	f, err := openNoFollow(resultPath)
 	if err != nil {
 		return "", false
 	}
 	defer f.Close()
+	openedInfo, err := f.Stat()
+	if err != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		return "", false
+	}
 	b, err := readPersistedToolResultBytes(f)
-	if err != nil || !utf8.Valid(b) || len(b) <= previewLen || (int64(len(b)) != storedBytes && len(b) < maxPersistedToolResultSize) {
+	if err != nil || !utf8.ValidString(persistedToolResultPrefix(b)) || len(b) <= previewLen || (int64(len(b)) != storedBytes && len(b) < maxPersistedToolResultSize) {
 		return "", false
 	}
 	return persistedToolResultText(b), true

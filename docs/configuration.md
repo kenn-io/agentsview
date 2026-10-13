@@ -530,7 +530,9 @@ modification time.
 Tool results use larger `.txt` files from `tool-results/` only when they are
 regular files with valid UTF-8 and match the saved byte count or reach the
 16 MiB cap. Other files keep the stored preview. Restoring a missing file
-refreshes the result on the next sync.
+refreshes the result on the next sync. Freshness checks cover entry names,
+sizes, and modification times in `tool-results/`. This suffices because fx
+names result files by content hash.
 Costs use AgentsView's pricing catalog. Set `FX_SESSIONS_DIR` or `agents.fx.dirs`
 to scan another root, including a WSL path on Windows. The legacy `fx_dirs` key
 converts to `agents.fx.dirs`.

@@ -4410,13 +4410,15 @@ schemas keep their existing ordering behavior.
   transcript event and the usage file's modification time, falling back to the
   latest event or session start when the modification time is unavailable.
   Optional counts can be null, which AgentsView treats as unknown with zero tokens.
-- **Agentsview:** Sessions require schema 4. Event frames support up to schema 3,
+- **Agentsview:** Sessions require schema 4. Event frames support schemas 1 to 3,
   usage envelopes and owner markers schema 1, and usage snapshots schema 3.
   Unsupported session, event, or owner versions skip the source. Encrypted
   reasoning is excluded. Changes to `session.json`,
   `usage-v2.json`, `subagent/owner.json`, or `tool-results/` refresh their owning
   transcript. Tool-result entry names, sizes, modes, and modification times
-  contribute to freshness, including files restored after import.
+  contribute to freshness, including files restored after import. This suffices
+  because fx names result files by content hash, as defined by the
+  [result store](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/result_store.zig).
   Companion content hashes detect equal-length rewrites.
   A torn final line without a newline is ignored. Empty events and null known event
   types fail parsing; named unknown event types are skipped.

@@ -48,7 +48,7 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 			WithCompanionFiles(fxCompanionFiles),
 			WithOptionalCompanion(func(path string) bool {
 				return filepath.Base(path) == "usage-v2.json" || filepath.Base(path) == "tool-results"
-			}),
+			}, "tool-results"),
 			WithCompanionTranscript(fxCompanionTranscript),
 			WithParseFile(fxParseFile),
 			WithForceReplace(),
