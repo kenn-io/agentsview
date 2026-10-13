@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/codexcloud"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/poller"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 const (
@@ -30,12 +32,14 @@ func newCodexCloudSyncer(
 		log.Printf("codex-cloud: home directory: %v", err)
 	}
 	return &codexcloud.Syncer{
-		Store:     codexcloud.NewStore(filepath.Join(cfg.DataDir, "sources", "codex-cloud")),
-		Waits:     codexcloud.NewWaits(time.Now),
-		Status:    status,
-		Now:       time.Now,
-		Dial:      codexcloud.Dial,
-		Gates:     codexcloud.NewGateSource(filepath.Join(cfg.DataDir, "config.toml"), load, os.Getenv, userHome),
+		Store:  codexcloud.NewStore(filepath.Join(cfg.DataDir, "sources", "codex-cloud")),
+		Waits:  codexcloud.NewWaits(time.Now),
+		Status: status,
+		Now:    time.Now,
+		Dial:   codexcloud.Dial,
+		Gates: codexcloud.NewGateSource(
+			filepath.Join(cfg.DataDir, "config.toml"), cfg, load, os.Getenv, userHome,
+		),
 		NoSync:    cfg.NoSync,
 		ReadLogin: codexcloud.ReadLogin,
 		Version:   version,
@@ -43,12 +47,21 @@ func newCodexCloudSyncer(
 	}
 }
 
-func codexCloudSyncJob(sync *codexcloud.Syncer) poller.Job {
+// codexCloudSyncJob registers each pass as tracked work, so an idle
+// daemon waits for a running import instead of cutting it off.
+func codexCloudSyncJob(sync *codexcloud.Syncer, idle *server.IdleTracker) poller.Job {
 	return poller.Job{
 		Name:       codexCloudSyncJobName,
 		Interval:   codexCloudSyncInterval,
 		Jitter:     codexCloudSyncJitter,
 		RunAtStart: true,
-		Run:        sync.Run,
+		Run: func(ctx context.Context) error {
+			done, ok := idle.BeginWork()
+			if !ok {
+				return nil
+			}
+			defer done()
+			return sync.Run(ctx)
+		},
 	}
 }

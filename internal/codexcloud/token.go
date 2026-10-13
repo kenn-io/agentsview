@@ -2,6 +2,8 @@ package codexcloud
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"net/url"
 	"strings"
 )
@@ -23,6 +25,10 @@ func (t Token) Empty() bool { return strings.TrimSpace(t.value) == "" }
 
 func (Token) String() string   { return redacted }
 func (Token) GoString() string { return redacted }
+
+// Format covers verbs that skip String, such as %d and %t, which would
+// otherwise print the struct's field.
+func (Token) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, redacted) }
 
 // MarshalJSON keeps the token out of any JSON encoding.
 func (Token) MarshalJSON() ([]byte, error) { return []byte(`"` + redacted + `"`), nil }

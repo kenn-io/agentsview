@@ -32,6 +32,9 @@ const (
 	// was about 530 KB; a whole turn under itemsView "full" can be far
 	// larger.
 	DefaultReadLimit = 64 << 20
+	// DefaultCallTimeout bounds the handshake and each call, so a server
+	// that never answers ends one account's pass instead of every pass.
+	DefaultCallTimeout = 2 * time.Minute
 
 	refreshMethod = "account/chatgptAuthTokens/refresh"
 	resumeMethod  = "thread/resume"
@@ -49,6 +52,8 @@ var (
 	// ErrProtocolChange means the thread host answered in a way this
 	// version cannot read.
 	ErrProtocolChange = errors.New("codex-cloud: the thread host changed its protocol")
+	// ErrCallTimeout means a call got no reply within the call timeout.
+	ErrCallTimeout = errors.New("codex-cloud: no reply from the thread host")
 	// ErrClosed means the connection was closed by this side.
 	ErrClosed = errors.New("codex-cloud: connection closed")
 )

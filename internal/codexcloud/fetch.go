@@ -389,8 +389,14 @@ func dedup(st *ThreadState, records []mirror.Record) []mirror.Record {
 // pruneItemDigests keeps digests only for items in turns that can still be
 // fetched again: the resume turn and later ones.
 func pruneItemDigests(st *ThreadState) {
+	// Turns run oldest first. Items of turns before the resume turn are
+	// never listed again, so their digests are dropped.
+	turns := st.Turns
+	if i := slices.IndexFunc(turns, func(t TurnState) bool { return t.ID == st.ResumeTurnID }); i >= 0 {
+		turns = turns[i:]
+	}
 	live := map[string]bool{}
-	for _, turn := range st.Turns {
+	for _, turn := range turns {
 		live[turn.ID] = true
 	}
 	for key := range st.ItemDigests {
@@ -449,6 +455,16 @@ func commitThread(
 		return st, false, err
 	}
 	return st, len(kept) > 0, nil
+}
+
+// forgetHistory resets a thread whose mirror file was lost after its
+// resume point moved: the next fetch reads every turn and item again, and
+// dedup drops what the remaining file already holds.
+func forgetHistory(st ThreadState) ThreadState {
+	st = forgetMirror(st)
+	st.ResumeTurnID, st.ResumeItemID = "", ""
+	st.Turns = nil
+	return st
 }
 
 func forgetMirror(st ThreadState) ThreadState {

@@ -34,7 +34,8 @@ func buildSelection(now time.Time, acct *AccountState, changed []ListedThread, a
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(acct.CheckAgain)) {
-		if acct.CheckAgain[id] {
+		// A stalled turn is fetched again only when its thread changes.
+		if acct.CheckAgain[id] && !acct.Unfinished[id].Stalled {
 			add(id)
 		}
 	}

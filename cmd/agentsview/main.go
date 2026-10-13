@@ -534,7 +534,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	codexCloudStatus := codexcloud.NewStatusBoard()
 	scheduler := poller.Start(ctx,
 		pricingRefreshJob(database, pricingRefreshRunner),
-		codexCloudSyncJob(newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)),
+		codexCloudSyncJob(newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus), idleTracker),
 	)
 	defer func() {
 		stop()
