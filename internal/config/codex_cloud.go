@@ -44,24 +44,18 @@ type CodexCloudConfigError struct {
 }
 
 func (e *CodexCloudConfigError) Error() string {
-	if e.Key == "" {
-		return fmt.Sprintf(
-			"%s has an invalid [agents.codex-cloud] entry: %s. Codex cloud import is off until then.",
-			e.Path, e.Reason,
-		)
+	const off = " Codex cloud import stays off until this is fixed."
+	switch {
+	case e.Unknown:
+		return fmt.Sprintf("%s has an unknown setting %q under [agents.codex-cloud]. "+
+			"Remove it or correct its name."+off, e.Path, e.Key)
+	case e.Key == "":
+		return fmt.Sprintf("%s sets agents.codex-cloud to a single value, not a table of settings. "+
+			"Write the settings under an [agents.codex-cloud] section."+off, e.Path)
+	default:
+		return fmt.Sprintf("%s has an invalid value for %s under [agents.codex-cloud]: %s."+off,
+			e.Path, e.Key, e.Reason)
 	}
-	if e.Unknown {
-		return fmt.Sprintf(
-			"%s has an unknown setting %s under [agents.codex-cloud]. "+
-				"Remove it or correct its name. Codex cloud import is off until then.",
-			e.Path, e.Key,
-		)
-	}
-	return fmt.Sprintf(
-		"%s has an invalid value for %s under [agents.codex-cloud]: %s. "+
-			"Codex cloud import is off until then.",
-		e.Path, e.Key, e.Reason,
-	)
 }
 
 func defaultCodexCloudConfig() CodexCloudConfig {
@@ -91,7 +85,7 @@ func parseCodexCloudTable(cfgPath string, agents any) CodexCloudConfig {
 	}
 	values, ok := raw.(map[string]any)
 	if !ok {
-		return fail("", "expected a table", false)
+		return fail("", "", false)
 	}
 	for _, key := range slices.Sorted(maps.Keys(values)) {
 		value := values[key]
@@ -156,7 +150,7 @@ func codexCloudURL(value any, secure, plain string) (*url.URL, string) {
 	case u.Scheme == plain:
 		return nil, fmt.Sprintf("%s is allowed only for loopback addresses; use %s", plain, secure)
 	default:
-		return nil, fmt.Sprintf("expected a %s URL", secure)
+		return nil, fmt.Sprintf("expected a URL that starts with %s://", secure)
 	}
 }
 
