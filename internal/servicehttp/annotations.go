@@ -2,7 +2,6 @@ package servicehttp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -51,11 +50,7 @@ func (b *httpBackend) SetSessionParent(
 	if response == nil {
 		return nil, err
 	}
-	link, err := annotationResult(response.HTTPResponse, response.Body, err, response.JSON200)
-	if parentID == "" && errors.Is(err, errHTTPNotFound) {
-		return nil, service.ErrNoSessionParent
-	}
-	return link, err
+	return annotationResult(response.HTTPResponse, response.Body, err, response.JSON200)
 }
 
 // annotationClient refuses read-only daemons and servers that predate the

@@ -75,6 +75,7 @@ func newSessionListCommand() *cobra.Command {
 				MaxMessages:      maxMessages,
 				MinUserMessages:  minUserMessages,
 				IncludeOneShot:   includeOneShot,
+				OneShotFilterSet: cmd.Flags().Changed("include-one-shot"),
 				IncludeAutomated: includeAutomated,
 				IncludeChildren:  includeChildren,
 				IncludeSource:    includeSource,

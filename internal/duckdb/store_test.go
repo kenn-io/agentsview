@@ -89,11 +89,12 @@ func (sessionVersionProbeConn) QueryContext(
 	}
 	return &sessionVersionProbeRows{
 		columns: []string{
-			"message_count", "file_mtime", "file_hash", "updated_at",
+			"message_count", "file_mtime", "file_hash", "updated_at", "agentsview_push_fingerprint",
 		},
 		values: [][]driver.Value{{
 			int64(7), int64(123), "hash",
 			"2026-01-10T00:00:00Z",
+			"annotation-fingerprint",
 		}},
 	}, nil
 }
@@ -139,10 +140,48 @@ func TestQuackStoreGetSessionVersionUsesRemoteQuery(t *testing.T) {
 	assert.Equal(t, 7, count)
 	assert.Equal(t,
 		db.SessionVersionMarker(
-			"123", "hash", "2026-01-10T00:00:00Z",
+			"123", "hash", "2026-01-10T00:00:00Z", "annotation-fingerprint",
 		),
 		marker,
 	)
+}
+
+func TestSessionVersionTracksPushedAnnotations(t *testing.T) {
+	ctx := t.Context()
+	local, path := newPushFixture(t, 2)
+	version := func() int64 {
+		conn, err := Open(ctx, path)
+		require.NoError(t, err)
+		_, marker, ok := NewStoreFromDB(conn).GetSessionVersion(ctx, "sess-1")
+		require.True(t, ok)
+		require.NoError(t, conn.Close())
+		return marker
+	}
+	for _, tt := range []struct {
+		name  string
+		write func() error
+	}{
+		{"label set", func() error { _, err := local.SetSessionLabels(ctx, "sess-1", []string{"nightly"}); return err }},
+		{"label clear", func() error { _, err := local.SetSessionLabels(ctx, "sess-1", nil); return err }},
+		{"parent set", func() error { _, err := local.SetSessionExternalParent(ctx, "sess-1", "sess-2"); return err }},
+		{"parent clear", func() error { _, err := local.ClearSessionExternalParent(ctx, "sess-1"); return err }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			setSessionSignalsTo(t, local, "sess-1", "2000-01-01T00:00:00Z")
+			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
+			require.NoError(t, err)
+			before := version()
+			session, err := local.GetSessionFull(ctx, "sess-1")
+			require.NoError(t, err)
+			require.NoError(t, tt.write())
+			_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+			require.NoError(t, err)
+			assert.NotEqual(t, before, version())
+			after, err := local.GetSessionFull(ctx, "sess-1")
+			require.NoError(t, err)
+			assert.Equal(t, session.LocalModifiedAt, after.LocalModifiedAt)
+		})
+	}
 }
 
 func TestStoreReadsSessionsMessagesAndMetadata(t *testing.T) {

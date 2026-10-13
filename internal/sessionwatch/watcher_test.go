@@ -1,6 +1,7 @@
 package sessionwatch
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -112,6 +113,46 @@ func TestCheckDBForChanges_FileHashChange(t *testing.T) {
 
 	assert.True(t, changed,
 		"file_hash-only rewrites must refresh session watchers")
+}
+
+func TestCheckDBForChangesSessionAnnotations(t *testing.T) {
+	w := testWatcher(t)
+	database := w.db.(*db.DB)
+	dbtest.SeedSession(t, database, "worker", "proj")
+	for _, tt := range []struct {
+		name  string
+		write func() error
+	}{
+		{"label set", func() error {
+			_, err := database.SetSessionLabels(t.Context(), "worker", []string{"nightly"})
+			return err
+		}},
+		{"label clear", func() error { _, err := database.SetSessionLabels(t.Context(), "worker", nil); return err }},
+		{"parent set", func() error {
+			_, err := database.SetSessionExternalParent(t.Context(), "worker", "manager")
+			return err
+		}},
+		{"parent clear", func() error { _, err := database.ClearSessionExternalParent(t.Context(), "worker"); return err }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET sync_marker = '2000-01-01T00:00:00Z' WHERE id = 'worker'")
+				return err
+			}))
+			before, err := database.GetSessionFull(t.Context(), "worker")
+			require.NoError(t, err)
+			count, version, ok := database.GetSessionVersion(t.Context(), "worker")
+			require.True(t, ok)
+			require.NoError(t, tt.write())
+			var path string
+			var fileMtime int64
+			var changedAt time.Time
+			assert.True(t, w.checkDBForChanges(t.Context(), "worker", &count, &version, &path, &fileMtime, &changedAt))
+			after, err := database.GetSessionFull(t.Context(), "worker")
+			require.NoError(t, err)
+			assert.Equal(t, before.LocalModifiedAt, after.LocalModifiedAt, "annotations must preserve Recall's content stamp")
+		})
+	}
 }
 
 func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(

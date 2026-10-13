@@ -2933,13 +2933,13 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 	id string,
 ) (count int, version int64, ok bool) {
 	var fileMtime int64
-	var fileHash, localModifiedAt string
+	var fileHash, localModifiedAt, syncMarker string
 	err := db.getReader().QueryRow(ctx,
 		"SELECT message_count, COALESCE(file_mtime, 0),"+
-			" COALESCE(file_hash, ''), COALESCE(local_modified_at, '')"+
+			" COALESCE(file_hash, ''), COALESCE(local_modified_at, ''), COALESCE(sync_marker, '')"+
 			" FROM sessions WHERE id = ?",
 		id,
-	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt)
+	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt, &syncMarker)
 	if err != nil {
 		return 0, 0, false
 	}
@@ -2947,6 +2947,7 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 		strconv.FormatInt(fileMtime, 10),
 		fileHash,
 		localModifiedAt,
+		syncMarker,
 	), true
 }
 

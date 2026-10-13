@@ -793,12 +793,14 @@ func (s *Store) GetSessionVersion(ctx context.Context, id string) (int, int64, b
 	var fileMtime sql.NullInt64
 	var fileHash sql.NullString
 	var updated any
+	var fingerprint string
 	err := s.queryRowContext(ctx,
 		`SELECT message_count, file_mtime, file_hash,
-		        COALESCE(local_modified_at, ended_at, started_at, created_at)
+		        COALESCE(local_modified_at, ended_at, started_at, created_at),
+		        COALESCE(agentsview_push_fingerprint, '')
 		 FROM sessions WHERE id = ?`,
 		id,
-	).Scan(&count, &fileMtime, &fileHash, &updated)
+	).Scan(&count, &fileMtime, &fileHash, &updated, &fingerprint)
 	if err != nil {
 		return 0, 0, false
 	}
@@ -814,6 +816,7 @@ func (s *Store) GetSessionVersion(ctx context.Context, id string) (int, int64, b
 		fileMtimePart,
 		fileHashPart,
 		formatDBTime(updated),
+		fingerprint,
 	), true
 }
 

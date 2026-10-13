@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -20,12 +18,9 @@ type SessionAnnotator interface {
 		ctx context.Context, id string, add, remove []string, replace bool,
 	) (*db.SessionLabels, error)
 	// SetSessionParent records a launcher parent; an empty parentID removes
-	// it and returns ErrNoSessionParent when none is recorded.
+	// it; clearing an absent link succeeds.
 	SetSessionParent(ctx context.Context, id, parentID string) (*db.SessionExternalParent, error)
 }
-
-// ErrNoSessionParent reports that a session has no launcher-supplied parent.
-var ErrNoSessionParent = errors.New("no parent link recorded for session")
 
 var _ SessionAnnotator = (*directBackend)(nil)
 
@@ -78,9 +73,6 @@ func (b *directBackend) SetSessionParent(
 		link, err = w.ClearSessionExternalParent(ctx, id)
 	} else {
 		link, err = w.SetSessionExternalParent(ctx, id, parentID)
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNoSessionParent
 	}
 	if err != nil {
 		return nil, err

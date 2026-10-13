@@ -718,8 +718,8 @@ reports `session_found` and `applied`.
 - The link is stored apart from the transcript and survives reparses and full
   resyncs. Mirrors receive the resulting parent on push.
 - A session cannot be its own parent, and a link that would make a session its
-  own ancestor returns HTTP 400. Removing a link that is not recorded returns
-  404.
+  own ancestor returns HTTP 400. Clearing an absent link succeeds without changing
+  the session.
 
 ______________________________________________________________________
 

@@ -123,6 +123,38 @@ func TestSessionListIncludeSource(t *testing.T) {
 	})
 }
 
+func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
+		s.UserMessageCount = 1
+		s.IsAutomated = true
+		s.PRLinks = []db.PRLink{{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}
+	}})
+	_, err := executeCommand(newRootCommand(), "session", "label", "worker", "nightly")
+	require.NoError(t, err)
+	for _, filter := range [][]string{{"--label", "nightly"}, {"--pr", "owner/repo#7"}} {
+		for _, explicit := range []bool{false, true} {
+			args := append([]string{"session", "list", "--format", "json"}, filter...)
+			if explicit {
+				args = append(args, "--include-one-shot=false")
+			}
+			cmd := newRootCommand()
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			cmd.SetArgs(args)
+			require.NoError(t, cmd.Execute())
+			list := decodeCLIJSON[cliSessionList](t, stdout.String())
+			if explicit {
+				assert.Empty(t, list.Sessions)
+			} else {
+				require.Len(t, list.Sessions, 1)
+				assert.Equal(t, "worker", list.Sessions[0]["id"])
+			}
+		}
+	}
+}
+
 // TestSessionListSinceMutuallyExclusiveWithActiveSince verifies the error is
 // returned before any service/DB access is attempted (no data dir is set up
 // here): --since resolution runs ahead of resolveService in the command.
