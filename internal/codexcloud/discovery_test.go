@@ -166,7 +166,7 @@ func TestDiscoveryGatesCloseJoins(t *testing.T) {
 
 	assert.Empty(t, env.monitor.Joined(passKey))
 	require.Eventually(t, func() bool { return env.host.Joined("a") == 0 }, 5*time.Second, 5*time.Millisecond)
-	assert.Equal(t, "Live tokens: off", env.live(t))
+	assert.Equal(t, "Live tokens: off, because live_tokens = false under [agents.codex-cloud].", env.live(t))
 	from := len(env.host.Requests())
 	env.discover(t)
 	assert.Len(t, env.host.Requests(), from, "live_tokens = false sends nothing")
@@ -180,6 +180,16 @@ func TestDiscoveryOffWithoutSourceSync(t *testing.T) {
 	env.discover(t)
 
 	assert.Empty(t, env.host.Handshakes())
+	assert.Equal(t, "Live tokens: off, because source sync is off for this daemon.", env.live(t))
+}
+
+func TestDiscoveryOffWhenSyncIsOff(t *testing.T) {
+	env, gates := newDiscoveryEnv(t)
+	gates.set(func(g *Gates) { g.CodexCloud.Enabled = false })
+
+	env.discover(t)
+
+	assert.Equal(t, "Live tokens: off, because Codex cloud sync is off.", env.live(t))
 }
 
 func TestSync429HoldsDiscovery(t *testing.T) {
