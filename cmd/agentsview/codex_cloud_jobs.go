@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/codexcloud"
@@ -17,6 +19,9 @@ const (
 	codexCloudSyncJobName  = "codex-cloud-sync"
 	codexCloudSyncInterval = 5 * time.Minute
 	codexCloudSyncJitter   = 30 * time.Second
+	codexCloudLiveJobName  = "codex-cloud-live"
+	codexCloudLiveInterval = 30 * time.Second
+	codexCloudLiveJitter   = 5 * time.Second
 )
 
 // newCodexCloudSyncer builds the thread syncer. load re-reads config.toml
@@ -64,4 +69,63 @@ func codexCloudSyncJob(sync *codexcloud.Syncer, idle *server.IdleTracker) poller
 			return sync.Run(ctx)
 		},
 	}
+}
+
+// newCodexCloudMonitor builds the live token monitor. It shares the
+// syncer's state store, whose per-account lock keeps the two jobs' writes
+// apart, and its waits, which both jobs honor. trigger queues a sync run
+// after a joined turn completes.
+func newCodexCloudMonitor(sync *codexcloud.Syncer, trigger *codexCloudTrigger) *codexcloud.Monitor {
+	return &codexcloud.Monitor{
+		Store:     sync.Store,
+		Waits:     sync.Waits,
+		Status:    sync.Status,
+		Now:       sync.Now,
+		Dial:      sync.Dial,
+		Gates:     sync.Gates,
+		NoSync:    sync.NoSync,
+		ReadLogin: sync.ReadLogin,
+		Trigger:   trigger.Trigger,
+		Version:   sync.Version,
+		Log:       sync.Log,
+	}
+}
+
+// codexCloudLiveJob finds running threads for the monitor. Joined threads
+// stay open after a run returns; the monitor owns them.
+func codexCloudLiveJob(m *codexcloud.Monitor, idle *server.IdleTracker) poller.Job {
+	return poller.Job{
+		Name:       codexCloudLiveJobName,
+		Interval:   codexCloudLiveInterval,
+		Jitter:     codexCloudLiveJitter,
+		RunAtStart: true,
+		Run: func(ctx context.Context) error {
+			done, ok := idle.BeginWork()
+			if !ok {
+				return nil
+			}
+			defer done()
+			return m.Discover(ctx)
+		},
+	}
+}
+
+// codexCloudTrigger queues a sync run on a scheduler set after the jobs
+// start, since the monitor is built before the scheduler exists.
+type codexCloudTrigger struct {
+	scheduler atomic.Pointer[poller.Scheduler]
+}
+
+// Trigger queues one sync run. A run already queued covers this request,
+// so several turns completing together add at most one run.
+func (t *codexCloudTrigger) Trigger() error {
+	s := t.scheduler.Load()
+	if s == nil {
+		return nil
+	}
+	err := s.TriggerNow(codexCloudSyncJobName)
+	if errors.Is(err, poller.ErrTriggerPending) {
+		return nil
+	}
+	return err
 }

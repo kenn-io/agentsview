@@ -532,13 +532,21 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}
 	seedPricing(database, pricingRefreshRunner)
 	codexCloudStatus := codexcloud.NewStatusBoard()
+	codexCloudSync := newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)
+	codexCloudTrigger := &codexCloudTrigger{}
+	codexCloudMonitor := newCodexCloudMonitor(codexCloudSync, codexCloudTrigger)
 	scheduler := poller.Start(ctx,
 		pricingRefreshJob(database, pricingRefreshRunner),
-		codexCloudSyncJob(newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus), idleTracker),
+		codexCloudSyncJob(codexCloudSync, idleTracker),
+		codexCloudLiveJob(codexCloudMonitor, idleTracker),
 	)
+	codexCloudTrigger.scheduler.Store(scheduler)
 	defer func() {
 		stop()
 		scheduler.Wait()
+		// After the jobs stop, so no discovery run adds a join; each
+		// joined thread flushes its buffered token records.
+		codexCloudMonitor.CloseAll()
 	}()
 
 	preparedCfg, rtOpts, prepErr := prepareRunServeRuntimeConfig(ctx,

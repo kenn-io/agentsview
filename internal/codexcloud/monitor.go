@@ -512,7 +512,9 @@ func (m *Monitor) failure(ctx context.Context, key AccountKey, login Login, thre
 		switch Classify(method, false, rpcErr) {
 		case CatProtocolChange:
 			return m.stopCapture(key, fmt.Errorf("%w: %s: %w", ErrProtocolChange, method, rpcErr))
-		case CatAccountUnavailable:
+		case CatAccountUnavailable, CatAccountServiceError:
+			// An overloaded server, or any other error from thread/list:
+			// the 5xx wait both jobs share.
 			return m.recordAccount(key, FailServer, 0)
 		default:
 			// The thread's own error; the next run tries again if it still
