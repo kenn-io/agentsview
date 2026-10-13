@@ -167,7 +167,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/image v0.44.0 // indirect
+	golang.org/x/image v0.45.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
 	golang.org/x/text v0.42.0 // indirect
