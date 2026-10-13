@@ -95,13 +95,13 @@ func TestDiscoveryFindsIdleListedRunning(t *testing.T) {
 func TestDiscoveryIgnoresOldThreads(t *testing.T) {
 	env, _ := newDiscoveryEnv(t)
 	thread := runningThread("a", "warm")
-	thread.UpdatedAt = fetchNow.Add(-3 * time.Minute).Unix()
+	thread.UpdatedAt = fetchNow.Add(-6 * time.Minute).Unix()
 	thread.Status = "active"
 	env.threads.Set(thread)
 
 	env.discover(t)
 
-	assert.Empty(t, env.turnChecks(), "no turn check for a thread updated 3 minutes ago, even when listed active")
+	assert.Empty(t, env.turnChecks(), "no turn check for a thread updated 6 minutes ago, even when listed active")
 	assert.Zero(t, env.resumes())
 }
 
