@@ -1715,7 +1715,7 @@ has no per-directory budget.
 
 Runtime folder watch failures put the root on polling until every failed
 folder is watchable or gone. Retries start after 10 seconds and back off to
-two minutes.
+two minutes; event-buffer overflow still puts every recursive root on polling.
 
 Roots that fall back to polling are picked up by:
 

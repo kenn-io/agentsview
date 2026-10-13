@@ -79,7 +79,7 @@ func TestFSNotifyBackendVanishedRuntimeFolderSkipsPolling(t *testing.T) {
 }
 
 func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
-	for _, recovery := range []string{"watchable", "gone"} {
+	for _, recovery := range []string{"watchable", "gone", "file"} {
 		t.Run(recovery, func(t *testing.T) {
 			backend := testFSNotifyBackend(t)
 			root := t.TempDir()
@@ -110,6 +110,9 @@ func TestFSNotifyBackendRuntimeFolderRecovery(t *testing.T) {
 				require.NoError(t, os.Mkdir(child, 0o755))
 			} else {
 				require.NoError(t, os.Remove(b))
+				if recovery == "file" {
+					require.NoError(t, os.WriteFile(b, nil, 0o600))
+				}
 			}
 			assert.True(t, backend.retryRuntimeFolders(now.Add(20*time.Second)))
 			assert.Equal(t, []string{"fsnotify-runtime:" + root}, *released)
@@ -152,22 +155,6 @@ func TestFSNotifyBackendRuntimeFailureKeepsSiblingWatches(t *testing.T) {
 		now = now.Add(delay)
 	}
 	assert.Empty(t, *released)
-}
-
-func TestFSNotifyBackendMovedDirectoryExcludedFileKeepsSubagentWatch(t *testing.T) {
-	backend := testFSNotifyBackend(t)
-	backend.excludes = normalizeExcludePatterns([]string{"*.lock"})
-	root := t.TempDir()
-	require.NoError(t, backend.AddRecursive(root, 8).Err)
-	moved := filepath.Join(root, "incoming")
-	subagents := filepath.Join(moved, "subagents")
-	require.NoError(t, os.MkdirAll(subagents, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(moved, "a.lock"), nil, 0o600))
-
-	itemType, excluded := backend.watchCreatedPath(moved)
-	assert.Equal(t, backendItemDirectory, itemType)
-	assert.False(t, excluded)
-	assert.Contains(t, backend.watcher.WatchList(), subagents)
 }
 
 func TestFSNotifyBackendRuntimeStoppedWalkCoversSiblings(t *testing.T) {
@@ -402,16 +389,47 @@ func TestFSNotifyBackendRemoveShallowRootClearsOwnership(t *testing.T) {
 }
 
 func TestFSNotifyBackendRemoveRecursiveRootRemovesDescendantWatches(t *testing.T) {
-	backend := testFSNotifyBackend(t)
-	root := t.TempDir()
-	descendant := filepath.Join(root, "child", "nested")
-	require.NoError(t, os.MkdirAll(descendant, 0o755))
-	result := backend.AddRecursive(root, math.MaxInt)
-	require.NoError(t, result.Err)
-	require.Equal(t, 3, result.Watched)
-
-	require.NoError(t, backend.Remove(root))
-	assert.Empty(t, backend.watcher.WatchList())
+	for _, coverage := range []string{"native", "deferred", "overflow"} {
+		t.Run(coverage, func(t *testing.T) {
+			backend := testFSNotifyBackend(t)
+			root := t.TempDir()
+			descendant := filepath.Join(root, "child", "nested")
+			require.NoError(t, os.MkdirAll(descendant, 0o755))
+			result := backend.AddRecursive(root, math.MaxInt)
+			require.NoError(t, result.Err)
+			require.Equal(t, 3, result.Watched)
+			added, _ := bindRuntimePollingRecorder(t, backend)
+			var releaseKeys []string
+			backend.onPollingReleased = func(key string) error {
+				require.True(t, backend.watchMu.TryLock())
+				backend.watchMu.Unlock()
+				require.True(t, backend.pollingMu.TryLock())
+				backend.pollingMu.Unlock()
+				releaseKeys = append(releaseKeys, key)
+				return nil
+			}
+			if coverage != "native" {
+				failed := filepath.Join(root, "failed")
+				require.NoError(t, os.Mkdir(failed, 0o755))
+				backend.watchOps = &failPathWatchOps{watchOps: backend.watchOps, failPath: failed, err: os.ErrPermission}
+				backend.watchCreatedPath(failed)
+				require.Len(t, *added, 1)
+				if coverage == "overflow" {
+					require.True(t, backend.forwardNativeError(fsnotify.ErrEventOverflow))
+					assert.Equal(t, backendOpFullSync, (<-backend.events).Op)
+				}
+			}
+			require.NoError(t, backend.Remove(root))
+			assert.Empty(t, backend.watcher.WatchList())
+			assert.True(t, backend.retryRuntimeFolders(time.Now().Add(3*time.Minute)))
+			if coverage == "native" {
+				assert.Empty(t, releaseKeys)
+			} else {
+				assert.Equal(t, []string{"fsnotify-runtime:" + root}, releaseKeys)
+			}
+			assert.Empty(t, backend.events)
+		})
+	}
 }
 
 func TestFSNotifyBackendRemovePreservesOverlappingRecursiveRoot(t *testing.T) {
@@ -744,12 +762,15 @@ func TestFSNotifyBackendRuntimeDegradationPreservesOverlappingRootScopes(t *test
 
 func TestFSNotifyBackendRuntimeCreateRecursivelyWatchesMovedSubtree(t *testing.T) {
 	backend := testFSNotifyBackend(t)
+	backend.excludes = normalizeExcludePatterns([]string{"*.lock"})
 	parent := t.TempDir()
 	root := filepath.Join(parent, "watched")
 	source := filepath.Join(parent, "incoming")
 	deepSource := filepath.Join(source, "nested")
 	require.NoError(t, os.MkdirAll(root, 0o755))
 	require.NoError(t, os.MkdirAll(deepSource, 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(source, "subagents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "a.lock"), nil, 0o600))
 	result := backend.AddRecursive(root, 8)
 	require.NoError(t, result.Err)
 	require.Equal(t, 1, result.Watched)
@@ -759,6 +780,7 @@ func TestFSNotifyBackendRuntimeCreateRecursivelyWatchesMovedSubtree(t *testing.T
 	itemType, excluded := backend.watchCreatedPath(moved)
 	assert.Equal(t, backendItemDirectory, itemType)
 	assert.False(t, excluded)
+	assert.Contains(t, backend.watcher.WatchList(), filepath.Join(moved, "subagents"))
 	require.NoError(t, backend.Start())
 
 	deepFile := filepath.Join(moved, "nested", "session.jsonl")

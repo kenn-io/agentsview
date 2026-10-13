@@ -350,12 +350,23 @@ func (b *fsnotifyBackend) AddShallow(root string) error {
 	return nil
 }
 
-func (b *fsnotifyBackend) Remove(root string) error {
+func (b *fsnotifyBackend) Remove(root string) (removeErr error) {
 	b.startPump()
 	b.pollingMu.Lock()
-	defer b.pollingMu.Unlock()
 	b.watchMu.Lock()
-	defer b.watchMu.Unlock()
+	var polling bool
+	defer func() {
+		released := b.onPollingReleased
+		b.watchMu.Unlock()
+		b.pollingMu.Unlock()
+		if polling {
+			if released == nil {
+				removeErr = errors.Join(removeErr, fmt.Errorf("fsnotify root removed for %s without polling release callback", root))
+			} else if err := released("fsnotify-runtime:" + root); err != nil {
+				removeErr = errors.Join(removeErr, fmt.Errorf("release fsnotify polling for %s: %w", root, err))
+			}
+		}
+	}()
 
 	root = filepath.Clean(root)
 	b.rootsMu.Lock()
@@ -375,10 +386,13 @@ func (b *fsnotifyBackend) Remove(root string) error {
 		return candidate == root
 	})
 	b.rootsMu.Unlock()
+	_, polling = b.degradedRoots[root]
 	if state, ok := b.runtimeRoots[root]; ok {
 		state.timer.Stop()
+		polling = polling || state.polling
 	}
 	delete(b.runtimeRoots, root)
+	delete(b.degradedRoots, root)
 
 	ownedPaths := make([]string, 0)
 	for path, owners := range b.watchOwners {
@@ -511,9 +525,6 @@ func (b *fsnotifyBackend) loop() {
 			if !b.forwardNativeError(item.err) {
 				return
 			}
-			continue
-		}
-		if item.event.Op == 0 {
 			continue
 		}
 		translated, relevant := b.translateEvent(item.event)
@@ -653,13 +664,7 @@ func (b *fsnotifyBackend) watchCreatedPath(path string) (backendItemType, bool) 
 	degraded := b.addRuntimeSubtreeLocked(path, owners)
 	b.watchMu.Unlock()
 	for _, root := range degraded {
-		if b.acquireRuntimePolling(root) {
-			b.watchMu.Lock()
-			if state, ok := b.runtimeRoots[root]; ok {
-				state.polling = true
-			}
-			b.watchMu.Unlock()
-		}
+		b.acquireRuntimeFolderPolling(root)
 	}
 	return backendItemDirectory, false
 }
@@ -707,6 +712,7 @@ func (b *fsnotifyBackend) addRuntimeSubtreeLocked(
 			return filepath.SkipDir
 		}
 		if !entry.IsDir() {
+			clearFolder(current, owners)
 			return nil
 		}
 		currentOwners := make([]string, 0, len(owners))
@@ -817,6 +823,17 @@ func (b *fsnotifyBackend) requireRuntimePolling(roots []string) {
 	}
 }
 
+// Caller holds pollingMu while acquiring and recording folder polling ownership.
+func (b *fsnotifyBackend) acquireRuntimeFolderPolling(root string) {
+	if b.acquireRuntimePolling(root) {
+		b.watchMu.Lock()
+		if state, ok := b.runtimeRoots[root]; ok {
+			state.polling = true
+		}
+		b.watchMu.Unlock()
+	}
+}
+
 func (b *fsnotifyBackend) acquireRuntimePolling(root string) bool {
 	b.watchMu.Lock()
 	_, degraded := b.degradedRoots[root]
@@ -878,11 +895,7 @@ func (b *fsnotifyBackend) retryRuntimeFolders(now time.Time) bool {
 		reconciled, polling := state.reconciled, state.polling
 		b.watchMu.Unlock()
 		if pending {
-			if b.acquireRuntimePolling(root) {
-				b.watchMu.Lock()
-				state.polling = true
-				b.watchMu.Unlock()
-			}
+			b.acquireRuntimeFolderPolling(root)
 			b.pollingMu.Unlock()
 			continue
 		}
