@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -709,8 +708,13 @@ func compareChatGPTPrefix(
 			return nil, false
 		}
 		extended := db.IsTextExtension(a.Content, b.Content)
-		if !extended && !chatGPTSameContent(a, b) {
-			return nil, false
+		imageFill := false
+		if !extended {
+			same, fill := db.ReconcileImageContent(a.Content, b.Content)
+			if !same || a.Content == b.Content && a.ContentLength != b.ContentLength {
+				return nil, false
+			}
+			imageFill = fill
 		}
 		if len(incoming[i].ToolCalls) < len(existing[i].ToolCalls) {
 			return nil, false
@@ -725,27 +729,11 @@ func compareChatGPTPrefix(
 				fill = true
 			}
 		}
-		if fill || extended {
+		if fill || extended || imageFill {
 			completed = append(completed, i)
 		}
 	}
 	return completed, true
-}
-
-// chatGPTImagePlaceholder matches both forms an image takes: browser sync
-// cannot download image files, so it stores "[image unavailable]", while a
-// ZIP export stores a reference to the copied file.
-var chatGPTImagePlaceholder = regexp.MustCompile(`!?\[image unavailable\]|!\[image\]\([^)]*\)`)
-
-// chatGPTSameContent reports whether two archived or incoming messages hold
-// the same text. Only image placeholders are collapsed; any other difference
-// still diverges, and identical text must keep identical lengths.
-func chatGPTSameContent(a, b db.Message) bool {
-	if a.Content == b.Content {
-		return a.ContentLength == b.ContentLength
-	}
-	return chatGPTImagePlaceholder.ReplaceAllString(a.Content, "[image]") ==
-		chatGPTImagePlaceholder.ReplaceAllString(b.Content, "[image]")
 }
 
 func emptyToolResult(tc db.ToolCall) bool {
