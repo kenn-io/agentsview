@@ -456,7 +456,7 @@ func TestRetriedFlushAppendsRecordsOnce(t *testing.T) {
 	env := newMonitorEnv(t)
 	m := env.monitor
 	j := &join{key: passKey, threadID: "a", id: "join-1"}
-	require.NoError(t, m.flush(j, []mirror.Record{liveTokenRecord(t, j, 100, fetchNow)}))
+	require.NoError(t, m.flush(j.key, j.threadID, []mirror.Record{liveTokenRecord(t, j, 100, fetchNow)}, ""))
 	buf := []mirror.Record{
 		liveTokenRecord(t, j, 200, fetchNow.Add(10*time.Second)),
 		liveTokenRecord(t, j, 300, fetchNow.Add(20*time.Second)),
@@ -467,7 +467,7 @@ func TestRetriedFlushAppendsRecordsOnce(t *testing.T) {
 	_, err := mirror.Append(env.mirrorPath(t, "a"), st.Offset, buf)
 	require.NoError(t, err)
 
-	require.NoError(t, m.flush(j, buf))
+	require.NoError(t, m.flush(j.key, j.threadID, buf, ""))
 
 	tokens := tokenRecords(t, env.records(t, "a"))
 	totals := make([]int64, len(tokens))

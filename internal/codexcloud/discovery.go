@@ -47,6 +47,7 @@ func (m *Monitor) Discover(ctx context.Context) error {
 		m.liveOff()
 		return nil
 	}
+	m.flushPending()
 	live := !m.NoSync && gates.Fetching() && gates.CodexCloud.LiveTokens
 	logins := m.readyLogins(gates)
 	groups, order := GroupByKey(logins)

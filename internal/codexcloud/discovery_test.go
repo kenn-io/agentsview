@@ -4,6 +4,8 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/codexcloud/codexcloudtest"
+	"go.kenn.io/agentsview/internal/codexcloud/mirror"
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -252,4 +255,33 @@ func TestDiscoveryThreadErrorSkipsThread(t *testing.T) {
 
 	assert.Equal(t, []string{"b"}, env.monitor.Joined(passKey))
 	assert.NotContains(t, env.live(t), "stopped")
+}
+
+func TestFailedFinalFlushIsSavedOnTheNextRun(t *testing.T) {
+	env, _ := newDiscoveryEnv(t)
+	env.threads.Set(runningThread("a", "warm"))
+	env.discover(t)
+	require.Equal(t, []string{"a"}, env.monitor.Joined(passKey))
+	env.notify(t, "a", tokenUsageMethod, tokenParams("a", "a-turn-2", [6]float64{10, 0, 0, 5, 0, 15}, [6]float64{10, 0, 0, 5, 0, 15}))
+
+	// A directory in place of the state file makes every save of the chat
+	// fail until it is put back.
+	state := filepath.Join(env.root, string(passKey), "a.state.json")
+	require.NoError(t, os.Rename(state, state+".saved"))
+	require.NoError(t, os.Mkdir(state, 0o700))
+	env.complete(t, "a", "a-turn-2")
+	env.waitLeft(t, "a")
+	assert.Empty(t, tokenRecords(t, env.records(t, "a")))
+	assert.Contains(t, env.live(t), "could not be saved yet")
+
+	require.NoError(t, os.Remove(state))
+	require.NoError(t, os.Rename(state+".saved", state))
+	env.discover(t)
+
+	records := env.records(t, "a")
+	assert.Len(t, tokenRecords(t, records), 1)
+	assert.Equal(t, mirror.KindTurnCompleted, records[len(records)-1].Kind)
+	assert.Equal(t, "a-turn-2", env.thread(t, "a").LastHandledTurnID)
+	assert.Equal(t, 1, env.resumes(), "the completed turn is not joined again")
+	assert.NotContains(t, env.live(t), "could not be saved")
 }
