@@ -90,8 +90,10 @@ func (w *Waits) RecordHome(home string, f Failure, authMTime time.Time) {
 	w.homes[home] = homeWait{failure: f, until: w.now().Add(homeWaitLimit), authMTime: authMTime}
 }
 
-// HomeReady reports whether home may be used, given its auth.json's
-// current modification time. A ready home's wait is forgotten.
+// HomeReady reports whether home may be used, given the modification
+// time of the auth.json its login came from. A newer auth.json is a new
+// login and ends the wait; a ready home's wait is forgotten. A login read
+// before the wait's is older, not new: it does not end the wait.
 func (w *Waits) HomeReady(home string, authMTime time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -99,7 +101,7 @@ func (w *Waits) HomeReady(home string, authMTime time.Time) bool {
 	if !ok {
 		return true
 	}
-	if !authMTime.Equal(wait.authMTime) || !w.now().Before(wait.until) {
+	if authMTime.After(wait.authMTime) || !w.now().Before(wait.until) {
 		delete(w.homes, home)
 		return true
 	}
@@ -134,7 +136,8 @@ func (w *Waits) UsageHomeReady(home string, authMTime time.Time) bool {
 	if !ok {
 		return true
 	}
-	if !authMTime.Equal(wait.authMTime) || !w.now().Before(wait.until) {
+	// As in HomeReady, only a newer login ends the wait.
+	if authMTime.After(wait.authMTime) || !w.now().Before(wait.until) {
 		delete(w.usageHomes, home)
 		return true
 	}

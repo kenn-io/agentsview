@@ -184,6 +184,20 @@ func TestHomeWaitEndsOnAuthChange(t *testing.T) {
 	assert.True(t, waits.HomeReady("/homes/a", authTime), "the wait ends after an hour")
 }
 
+// A connection set up with a login read before the user signed in again
+// carries an older auth.json time. It must not end a wait recorded for
+// the newer login.
+func TestHomeWaitSurvivesAnOlderLogin(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
+	waits := codexcloud.NewWaits(clock.Now)
+	older := clock.now.Add(-time.Hour)
+	newer := clock.now.Add(-time.Minute)
+	waits.RecordHome("/homes/a", codexcloud.FailRefreshRequested, newer)
+
+	assert.False(t, waits.HomeReady("/homes/a", older))
+	assert.False(t, waits.HomeReady("/homes/a", newer), "the newer login's wait is kept")
+}
+
 func TestAccountsIndependent(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
 	waits := codexcloud.NewWaits(clock.Now)
