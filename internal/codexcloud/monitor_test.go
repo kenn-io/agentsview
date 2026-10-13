@@ -521,3 +521,20 @@ func TestJoinRuleIsCheckedAgainBeforeResume(t *testing.T) {
 	assert.Zero(t, env.resumes())
 	assert.Empty(t, env.monitor.Joined(passKey))
 }
+
+func TestJoinSetUpDuringARefreshRequestIsNotKept(t *testing.T) {
+	env := newMonitorEnv(t)
+	env.threads.Set(runningThread("a", "warm"))
+	// Another connection through the same home gets a refresh request
+	// while this one is being set up.
+	env.monitor.Dial = func(ctx context.Context, o DialOptions) (*Conn, error) {
+		conn, err := Dial(ctx, o)
+		env.syncer.Waits.RecordHome(o.Login.Home, FailRefreshRequested, o.Login.AuthModTime)
+		return conn, err
+	}
+
+	env.join(t, "a")
+
+	assert.Empty(t, env.monitor.Joined(passKey))
+	require.Eventually(t, func() bool { return env.host.Joined("a") == 0 }, 5*time.Second, 5*time.Millisecond)
+}
