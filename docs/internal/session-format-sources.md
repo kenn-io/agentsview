@@ -4368,7 +4368,9 @@ schemas keep their existing ordering behavior.
   defines prompts, replies, steering, tool calls and results, interruptions,
   and context checkpoints. Larger results use plain `.txt` filenames in
   `tool-results/`, capped at 16 MiB with a truncation notice. AgentsView uses
-  regular UTF-8 files whose length matches `stored_bytes` or reaches the cap.
+  regular UTF-8 files in a real directory whose length matches `stored_bytes`
+  or reaches the cap. Symlinked directories and Windows reparse points keep
+  the preview.
   Other artifacts keep the stored preview, up to 4 KB.
   Only assistant replay records supply historical model and provider identities.
   Tool calls share them when attached to that assistant row; separate tool-call
@@ -4421,7 +4423,8 @@ schemas keep their existing ordering behavior.
   [result store](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/result_store.zig).
   Companion content hashes detect equal-length rewrites.
   A torn final line without a newline is ignored. Empty events and null known event
-  types fail parsing; named unknown event types are skipped.
+  types fail parsing; unknown event types and sibling fields are skipped.
+  Two known event types in one object fail parsing.
   JSON fields match case-sensitively; unknown object fields are ignored.
   Other invalid frames fail parsing, preserving the stored session for retry.
   Malformed, mismatched, duplicate-model, unsupported-version, or unreadable

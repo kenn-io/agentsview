@@ -100,10 +100,11 @@ func (e *fxEvent) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &keys); err != nil {
 		return err
 	}
-	if len(keys) != 1 {
+	if len(keys) == 0 {
 		return errors.New("fx event must contain one event type")
 	}
 	var fields fxEvent
+	known := false
 	for key, value := range keys {
 		var target any
 		switch key {
@@ -123,10 +124,12 @@ func (e *fxEvent) UnmarshalJSON(data []byte) error {
 			target = &fields.Interrupted
 		case "turn_completed":
 			target = &fields.TurnCompleted
-		case "":
-			return errors.New("fx event type must be non-empty")
 		}
 		if target != nil {
+			if known {
+				return errors.New("fx event must contain one event type")
+			}
+			known = true
 			if string(value) == "null" {
 				return fmt.Errorf("fx %s event must be an object", key)
 			}
@@ -143,10 +146,6 @@ type fxCount int
 
 func (c *fxCount) UnmarshalJSON(data []byte) error {
 	var count int
-	if string(data) == "null" {
-		*c = 0
-		return nil
-	}
 	if err := json.Unmarshal(data, &count); err != nil {
 		return err
 	}
@@ -380,8 +379,13 @@ func fxFullToolOutput(dir, ref string, storedBytes int64, previewLen int) (strin
 	if !strings.HasSuffix(ref, ".txt") || storedBytes <= int64(previewLen) || filepath.Base(ref) != ref || strings.ContainsAny(ref, `/\`) {
 		return "", false
 	}
-	resultPath := filepath.Join(dir, "tool-results", ref)
-	info, err := os.Lstat(resultPath)
+	resultsDir := filepath.Join(dir, "tool-results")
+	info, err := os.Lstat(resultsDir)
+	if err != nil || info.Mode().Type() != os.ModeDir {
+		return "", false
+	}
+	resultPath := filepath.Join(resultsDir, ref)
+	info, err = os.Lstat(resultPath)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", false
 	}

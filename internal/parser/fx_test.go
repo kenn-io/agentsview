@@ -186,6 +186,7 @@ func TestFxPersistedToolResult(t *testing.T) {
 		{"invalid UTF-8", "result.txt", "Full\xfftool output", "Full", 16},
 		{"directory", "result.txt", "", "Full", 16},
 		{"symlink", "result.txt", "Full tool output", "Full", 16},
+		{"symlink directory", "result.txt", "Full tool output", "Full", 16},
 		{"capped", "result.txt", strings.Repeat("a", maxPersistedToolResultSize+1), strings.Repeat("a", maxPersistedToolResultSize) + "\n\n[agentsview: persisted tool result truncated at 16 MiB]", maxPersistedToolResultSize + 100},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -193,6 +194,12 @@ func TestFxPersistedToolResult(t *testing.T) {
 			writeSourceFile(t, filepath.Join(dir, "session.json"), `{"schema_version":4}`)
 			artifact := filepath.Join(dir, "tool-results", test.ref)
 			switch test.name {
+			case "symlink directory":
+				target := t.TempDir()
+				writeSourceFile(t, filepath.Join(target, test.ref), test.content)
+				if err := os.Symlink(target, filepath.Dir(artifact)); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
 			case "directory":
 				require.NoError(t, os.MkdirAll(artifact, 0o755))
 			case "symlink":
@@ -287,7 +294,6 @@ func TestFxRejectedArtifacts(t *testing.T) {
 		{"invalid UTF-8 without newline", "events.jsonl", "{\"schema_version\":3,\"event\":{\"user\":{\"text\":\"\xff\"}}}", "", "invalid fx events.jsonl"},
 		{"array event", "events.jsonl", "{\"schema_version\":3,\"event\":[]}\n", "", "invalid fx events.jsonl"},
 		{"empty event", "events.jsonl", "{\"schema_version\":3,\"event\":{}}\n", "", "invalid fx events.jsonl"},
-		{"empty event type", "events.jsonl", "{\"schema_version\":3,\"event\":{\"\":{}}}\n", "", "invalid fx events.jsonl"},
 		{"null user", "events.jsonl", "{\"schema_version\":3,\"event\":{\"user\":null}}\n", "", "invalid fx events.jsonl"},
 		{"multiple event types", "events.jsonl", "{\"schema_version\":3,\"event\":{\"user\":{},\"assistant\":{}}}\n", "", "invalid fx events.jsonl"},
 		{"wrong payload type", "events.jsonl", "{\"schema_version\":3,\"event\":{\"tool_call\":[]}}\n", "", "invalid fx events.jsonl"},
@@ -345,6 +351,8 @@ func TestFxTornTail(t *testing.T) {
 	}{
 		{"torn tail", `{"schema_version":3,"event":{"assistant":{"text":"Partial`, 1},
 		{"complete tail without newline", `{"schema_version":3,"event":{"assistant":{"text":"Answer"}}}`, 2},
+		{"unknown sibling", `{"schema_version":3,"event":{"assistant":{"text":"Answer"},"future":{}}}`, 2},
+		{"unknown event types", `{"schema_version":3,"event":{"future":{},"other":{},"":{}}}`, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()

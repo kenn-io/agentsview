@@ -2,6 +2,8 @@ package parser
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -34,7 +36,7 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 	}
 	caps.Source.ForceReplaceOnParse = CapabilitySupported
 	caps.Sync.FingerprintHashRequiredForFreshness = true
-	return NewSourceSetFactory(def, caps, func(cfg ProviderConfig) SourceSet {
+	return fxProviderFactory{NewSourceSetFactory(def, caps, func(cfg ProviderConfig) SourceSet {
 		return NewDirectoryJSONLSourceSet(AgentFx, cfg.Roots,
 			WithDescendPath(func(root, path string) bool {
 				return filepath.Dir(path) == filepath.Clean(root) && fxSessionIDValid(filepath.Base(path))
@@ -54,7 +56,67 @@ func newFxProviderFactory(def AgentDef) ProviderFactory {
 			WithForceReplace(),
 			WithContentHashing(),
 		)
-	})
+	})}
+}
+
+type fxProviderFactory struct {
+	ProviderFactory
+}
+
+func (f fxProviderFactory) NewProvider(cfg ProviderConfig) Provider {
+	return &fxSessionProvider{f.ProviderFactory.NewProvider(cfg).(*SourceSetProvider)}
+}
+
+type fxSessionProvider struct {
+	*SourceSetProvider
+}
+
+func (p *fxSessionProvider) ParseSourceSize(ctx context.Context, source SourceRef) (int64, error) {
+	path, ok, err := p.sources.(DirectoryJSONLSourceSet).pathFromSource(ctx, source)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, errors.New("fx source path unavailable")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	size := info.Size()
+	for _, companion := range fxCompanionFiles(path) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		info, err := os.Lstat(companion)
+		if filepath.Base(companion) != "tool-results" {
+			info, err = os.Stat(companion)
+		}
+		if err != nil {
+			continue
+		}
+		if info.Mode().IsRegular() {
+			size += info.Size()
+		} else if info.Mode().Type() == os.ModeDir && filepath.Base(companion) == "tool-results" {
+			entries, err := os.ReadDir(companion)
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				if err := ctx.Err(); err != nil {
+					return 0, err
+				}
+				if !strings.HasSuffix(entry.Name(), ".txt") {
+					continue
+				}
+				info, err := entry.Info()
+				if err == nil && info.Mode().IsRegular() {
+					size += info.Size()
+				}
+			}
+		}
+	}
+	return size, nil
 }
 
 func fxCompanionFiles(path string) []string {
