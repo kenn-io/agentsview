@@ -42,12 +42,14 @@ func (r discoveryRow) subAgent() bool {
 // follows recent activity, not archive size: it reads listing pages only
 // while they hold threads updated within the join window.
 func (m *Monitor) Discover(ctx context.Context) error {
+	// Pending records are saved whatever the gates say: they are counts
+	// already observed, and only memory holds them.
+	m.flushPending()
 	gates := m.Gates()
 	if !gates.Configured() {
 		m.liveOff()
 		return nil
 	}
-	m.flushPending()
 	live := !m.NoSync && gates.Fetching() && gates.CodexCloud.LiveTokens
 	logins := m.readyLogins(gates)
 	groups, order := GroupByKey(logins)
@@ -63,7 +65,7 @@ func (m *Monitor) Discover(ctx context.Context) error {
 			text = "Live tokens: off, because live_tokens = false under [agents.codex-cloud]."
 		}
 		for _, key := range order {
-			m.Status.SetLive(string(key), text)
+			m.Status.SetLive(string(key), text+m.pendingNote(key))
 		}
 		return nil
 	}

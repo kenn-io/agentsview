@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,10 +82,17 @@ type threadKey struct {
 
 // pendingBatch is what one chat still has to save: token and turn
 // completion records, and the newest turn the monitor saw complete.
+// failure is the last save error logged for it, so a save that keeps
+// failing the same way is logged once.
 type pendingBatch struct {
 	records []mirror.Record
 	handled string
+	failure string
 }
+
+// pendingCompactAt is the pending batch size above which compactPending
+// drops token records that later ones make redundant.
+const pendingCompactAt = 256
 
 // join is one joined thread. A nil *join in Monitor.joins reserves a slot
 // while the join is being set up.
@@ -300,10 +308,8 @@ func (m *Monitor) run(j *join) {
 	defer func() { _ = j.conn.Close() }() // leaving: the close error changes nothing
 	var buf []mirror.Record
 	flush := func() {
-		// A failed save keeps buf as the chat's pending batch.
-		if err := m.flush(j.key, j.threadID, buf, j.handled); err != nil {
-			m.Log.Printf("codex-cloud: chat %s: save token records: %v; retrying on the next save", j.threadID, err)
-		}
+		// flush logs a failure and keeps buf as the chat's pending batch.
+		_ = m.flush(j.key, j.threadID, buf, j.handled)
 		buf = nil
 	}
 	tick := time.NewTicker(m.every())
@@ -500,7 +506,8 @@ func appendRecord(buf *[]mirror.Record, kind mirror.Kind, data any, now time.Tim
 // flush appends the chat's pending records, then buf, to its mirror file
 // and records handled as its newest completed turn, under the account lock
 // the fetcher also takes. An empty handled keeps the stored one. When the
-// save fails, everything stays pending for the chat's next save.
+// save fails, everything stays pending for the chat's next save, and the
+// error is logged unless it repeats the last one logged for the chat.
 func (m *Monitor) flush(key AccountKey, threadID string, buf []mirror.Record, handled string) error {
 	unlock := m.Store.Lock(key)
 	defer unlock()
@@ -521,6 +528,13 @@ func (m *Monitor) flush(key AccountKey, threadID string, buf []mirror.Record, ha
 	}
 	err := m.save(key, threadID, batch)
 	if err != nil {
+		if len(batch.records) > pendingCompactAt {
+			batch.records = compactPending(batch.records)
+		}
+		if msg := err.Error(); msg != batch.failure {
+			batch.failure = msg
+			m.Log.Printf("codex-cloud: chat %s: save token records: %v; retrying on later saves", threadID, err)
+		}
 		m.mu.Lock()
 		m.pending[id] = batch
 		m.mu.Unlock()
@@ -549,7 +563,42 @@ func (m *Monitor) save(key AccountKey, threadID string, batch pendingBatch) erro
 	return nil
 }
 
-// flushPending retries every chat's pending batch.
+// compactPending drops each token record that the next token record, of
+// the same join and turn, supersedes. Totals are cumulative, so the parser
+// counts the same tokens from the later record alone; it reads them as one
+// event spanning several model calls instead of one event per call. A
+// record whose total the next one falls below is kept: the counter reset,
+// and the earlier total holds tokens the later one does not. A chat whose
+// saves keep failing then holds about one token record per turn.
+func compactPending(records []mirror.Record) []mirror.Record {
+	tokens := make([]*mirror.TokenUsageData, len(records))
+	for i, rec := range records {
+		if rec.Kind != mirror.KindTokenUsage {
+			continue
+		}
+		var data mirror.TokenUsageData
+		if json.Unmarshal(rec.Data, &data) == nil {
+			tokens[i] = &data
+		}
+	}
+	kept := records[:0:0]
+	var next *mirror.TokenUsageData
+	for i := len(records) - 1; i >= 0; i-- {
+		cur := tokens[i]
+		superseded := cur != nil && next != nil && next.JoinID == cur.JoinID &&
+			next.TurnID == cur.TurnID && next.Total.AtLeast(cur.Total)
+		if !superseded {
+			kept = append(kept, records[i])
+		}
+		if records[i].Kind == mirror.KindTokenUsage {
+			next = cur
+		}
+	}
+	slices.Reverse(kept)
+	return kept
+}
+
+// flushPending retries every chat's pending batch. flush logs failures.
 func (m *Monitor) flushPending() {
 	m.mu.Lock()
 	ids := make([]threadKey, 0, len(m.pending))
@@ -558,9 +607,7 @@ func (m *Monitor) flushPending() {
 	}
 	m.mu.Unlock()
 	for _, id := range ids {
-		if err := m.flush(id.key, id.threadID, nil, ""); err != nil {
-			m.Log.Printf("codex-cloud: chat %s: save token records: %v; retrying on the next run", id.threadID, err)
-		}
+		_ = m.flush(id.key, id.threadID, nil, "")
 	}
 }
 
@@ -673,12 +720,6 @@ func (m *Monitor) updateLive(key AccountKey) {
 	m.mu.Lock()
 	m.init()
 	stopped := m.stopped[key]
-	unsaved := 0
-	for id := range m.pending {
-		if id.key == key {
-			unsaved++
-		}
-	}
 	watching := 0
 	for _, j := range m.joins[key] {
 		if j != nil {
@@ -696,11 +737,26 @@ func (m *Monitor) updateLive(key AccountKey) {
 	default:
 		text = fmt.Sprintf("Live tokens: listening in on %s.", chats(watching, "running chat"))
 	}
-	if unsaved > 0 {
-		text += fmt.Sprintf(" Token counts for %s could not be saved yet; AgentsView keeps retrying.",
-			chats(unsaved, "chat"))
+	m.Status.SetLive(string(key), text+m.pendingNote(key))
+}
+
+// pendingNote warns, after a live token line, about the account's token
+// counts that only memory holds. It is empty when there are none.
+func (m *Monitor) pendingNote(key AccountKey) string {
+	m.mu.Lock()
+	unsaved := 0
+	for id := range m.pending {
+		if id.key == key {
+			unsaved++
+		}
 	}
-	m.Status.SetLive(string(key), text)
+	m.mu.Unlock()
+	if unsaved == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" Token counts for %s are not saved yet. AgentsView keeps retrying;"+
+		" restarting it before a save works loses them. The daemon log says why saving fails.",
+		chats(unsaved, "chat"))
 }
 
 // chats counts n of a noun ending in "chat", in the words users see.
