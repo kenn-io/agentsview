@@ -624,9 +624,24 @@ func TestPlanUsageDateShowsYearWhenNotThisYear(t *testing.T) {
 	lastYear := fetchNow.AddDate(-1, 0, 0)
 	assert.Equal(t, "Plan usage as of "+lastYear.Local().Format("Jan 2 2006 15:04"),
 		storedUsageLine(AccountState{UsageAsOf: lastYear}, fetchNow))
-	assert.Equal(t, "Plan usage as of "+fetchNow.Local().Format("Jan 2 15:04"),
-		storedUsageLine(AccountState{UsageAsOf: fetchNow}, fetchNow))
-	assert.Equal(t, "Plan usage: not checked yet", storedUsageLine(AccountState{}, fetchNow))
+}
+
+// A daemon that runs into the next year without another answer still
+// shows the year of the last one.
+func TestPlanUsageDateGainsItsYearAfterNewYear(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(2), nil))
+	env.run(t)
+	asOf := env.account(t).UsageAsOf
+	require.Equal(t, "Plan usage as of "+asOf.Local().Format("Jan 2 15:04"), env.planLine(t))
+
+	env.clock.Set(fetchNow.AddDate(1, 0, 0))
+	from := len(env.usage.Requests())
+	env.run(t)
+
+	require.Len(t, env.usage.Requests(), from, "no request answers in the new year")
+	assert.Equal(t, "Plan usage as of "+asOf.Local().Format("Jan 2 2006 15:04"), env.planLine(t))
 }
 
 // TestCouldNotCheckAfterEarlyAnswerThenFailures covers a chat answered
