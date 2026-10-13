@@ -474,3 +474,17 @@ func TestBackfillFoundCountsEachNewMirror(t *testing.T) {
 
 	assert.Equal(t, []int{0, 1, 2}, found, "a failed thread's metadata-only file counts too")
 }
+
+func TestUnreadableLoginShowsItsOwnProblem(t *testing.T) {
+	env := newPassEnv(t)
+	env.syncer.ReadLogin = func(home string) (Login, HomeState, error) {
+		return Login{}, HomeSignedOut, &LoginReadError{Message: "config.toml is broken.", err: assert.AnError}
+	}
+
+	env.run(t)
+
+	row, ok := env.syncer.Status.Row("/homes/a")
+	require.True(t, ok)
+	assert.Equal(t, StateError, row.State)
+	assert.Equal(t, "config.toml is broken.", row.Message, "signing in again would not fix it")
+}

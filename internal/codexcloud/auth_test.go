@@ -184,3 +184,60 @@ func TestGroupByKeyKeepsHomeOrder(t *testing.T) {
 	assert.Equal(t, []AccountKey{"k1", "k2"}, order)
 	assert.Equal(t, []Login{a, c}, groups["k1"])
 }
+
+func TestReadLoginErrorsExplainTheProblem(t *testing.T) {
+	const secret = "secret-value-canary-91aa"
+	for _, tt := range []struct {
+		name  string
+		setup func(t *testing.T, home string)
+		want  string
+	}{
+		{
+			name: "config.toml does not parse",
+			setup: func(t *testing.T, home string) {
+				t.Helper()
+				cfg := "api_key = \"" + secret + "\"\nbroken = " + secret + "\n"
+				require.NoError(t, os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfg), 0o600))
+			},
+			want: "could not read this Codex home's config.toml",
+		},
+		{
+			name: "unknown credential store",
+			setup: func(t *testing.T, home string) {
+				t.Helper()
+				cfg := "cli_auth_credentials_store = \"vault\"\n"
+				require.NoError(t, os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfg), 0o600))
+			},
+			want: `cli_auth_credentials_store to "vault", which AgentsView does not know. ` +
+				`Use "file", "keyring", "auto", or "ephemeral".`,
+		},
+		{
+			name: "auth.json is not JSON",
+			setup: func(t *testing.T, home string) {
+				t.Helper()
+				data := `{"tokens":{"access_token":"` + secret
+				require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), []byte(data), 0o600))
+			},
+			want: "auth.json is not valid JSON. Run `codex login`",
+		},
+		{
+			name: "auth.json cannot be read",
+			setup: func(t *testing.T, home string) {
+				t.Helper()
+				require.NoError(t, os.Mkdir(filepath.Join(home, "auth.json"), 0o700))
+			},
+			want: "could not read this Codex home's auth.json",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			tt.setup(t, home)
+			_, _, err := ReadLogin(home)
+			readErr, ok := errors.AsType[*LoginReadError](err)
+			require.True(t, ok, "got %v", err)
+			assert.Contains(t, readErr.Message, tt.want)
+			assert.NotContains(t, readErr.Message, secret)
+			assert.NotContains(t, readErr.Message, home, "the row already names the home")
+		})
+	}
+}
