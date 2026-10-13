@@ -133,6 +133,26 @@ func (Backend) OpenServeStore(
 	return store, nil
 }
 
+// serveSchemaError explains a failed schema check to the serve operator.
+// A role without read access to a table needs a grant; recreating the
+// schema would not help and would discard the pushed data.
+func serveSchemaError(err error) error {
+	if isInsufficientPrivilege(err) {
+		return fmt.Errorf(
+			"serve role cannot read a required table: %w\n"+
+				"Grant the serve role SELECT on every table in the schema, "+
+				"then start serve again",
+			err,
+		)
+	}
+	return fmt.Errorf(
+		"schema incompatible: %w\n"+
+			"Drop and recreate the PG schema, then run "+
+			"'agentsview pg push --full' to repopulate",
+		err,
+	)
+}
+
 func prepareServeStore(ctx context.Context, store *Store, schema string) error {
 	if err := EnsureSchema(ctx, store.DB(), schema); err != nil {
 		if !IsReadOnlyError(err) {
@@ -140,12 +160,7 @@ func prepareServeStore(ctx context.Context, store *Store, schema string) error {
 		}
 	}
 	if err := CheckSchemaCompat(ctx, store.DB()); err != nil {
-		return fmt.Errorf(
-			"schema incompatible: %w\n"+
-				"Drop and recreate the PG schema, then run "+
-				"'agentsview pg push --full' to repopulate",
-			err,
-		)
+		return serveSchemaError(err)
 	}
 	if err := CheckDataVersionCompat(ctx, store.DB()); err != nil {
 		return err
