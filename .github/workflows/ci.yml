@@ -553,8 +553,20 @@ jobs:
           CGO_ENABLED: "1"
 
   test-race:
-    name: Go Test (race detector)
-    runs-on: namespace-profile-linux-8cpu
+    name: Go Test (race detector, ${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Sync A-R
+            runner: namespace-profile-linux-4cpu
+            run: '^Test[A-R]'
+          - name: Sync remaining
+            runner: namespace-profile-linux-4cpu
+            skip: '^Test[A-R]'
+          - name: Other packages
+            runner: namespace-profile-linux-8cpu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -585,7 +597,14 @@ jobs:
       # main test job's ./... run. Limit package fan-out because the race
       # detector makes highly parallel runs slow enough to exhaust deadlines.
       - name: Run Go tests (race detector)
-        run: go list ./... | grep -v '/internal/duckdb$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
+        if: matrix.name == 'Other packages'
+        run: go list ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Run sync tests (race detector)
+        if: matrix.name != 'Other packages'
+        run: go test -p 4 -tags "fts5" -race ./internal/sync -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -631,7 +650,17 @@ jobs:
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib
 
   integration:
+    name: Integration (${{ matrix.name }})
     runs-on: namespace-profile-linux-4cpu
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: PostgreSQL core
+            postgres-target: test-postgres-core-ci
+          - name: PostgreSQL raw-sync and ClickHouse
+            postgres-target: test-postgres-raw-sync-ci
+            clickhouse: true
     services:
       postgres:
         image: pgvector/pgvector:pg18
@@ -682,12 +711,13 @@ jobs:
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run PostgreSQL integration tests
-        run: make test-postgres-ci
+        run: make ${{ matrix.postgres-target }}
         env:
           CGO_ENABLED: "1"
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
 
       - name: Run ClickHouse integration tests
+        if: matrix.clickhouse
         run: make test-clickhouse-ci
         env:
           CGO_ENABLED: "1"
