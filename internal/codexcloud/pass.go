@@ -3,10 +3,12 @@ package codexcloud
 import (
 	"context"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +26,10 @@ const (
 	// retryFirst and retryLimit time a failing thread's retries.
 	retryFirst = 5 * time.Minute
 	retryLimit = time.Hour
+	// unreadableAfter stops retries of a thread that kept failing with no
+	// new updatedAt in any listing: a deleted thread, or one item larger
+	// than the read limit.
+	unreadableAfter = 7 * 24 * time.Hour
 )
 
 // Syncer runs thread sync passes for every ChatGPT login it finds.
@@ -267,10 +273,10 @@ func (p *pass) threads(ctx context.Context) error {
 		}
 		// A thread waiting out its backoff keeps the newest listing, since
 		// the watermark moves past it and the retry may run off this page.
+		now := p.Now()
 		for id, entry := range acct.Retry {
 			if info, ok := p.listed[id]; ok && info.raw != nil {
-				entry.Listing = info.raw
-				acct.Retry[id] = entry
+				acct.Retry[id] = relisted(entry, info.raw, now)
 			}
 		}
 		p.Waits.ResetAccount(acct)
@@ -348,10 +354,16 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		p.Log.Printf("codex-cloud: thread %s: %v", id, Redact(err, p.login.Token))
 		entry := RetryEntry{
 			Attempts: retry.Attempts + 1, FirstFailure: retry.FirstFailure,
-			Message: Message(f, time.Time{}), Listing: listing,
+			Message: Message(f, time.Time{}), Listing: retry.Listing,
+		}
+		if listing != nil {
+			entry = relisted(entry, listing, now)
 		}
 		if entry.FirstFailure.IsZero() {
 			entry.FirstFailure = now
+		}
+		if now.Sub(entry.FirstFailure) >= unreadableAfter {
+			return p.unreadable(id, st, acct, entry, now)
 		}
 		wait := retryFirst
 		for range entry.Attempts - 1 {
@@ -407,6 +419,53 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		delete(acct.CheckAgain, id)
 	}
 	return p.Store.SaveAccount(p.key, acct)
+}
+
+// unreadable stops retrying a thread that has failed for unreadableAfter.
+// Storing the listing's updatedAt makes later listings see the thread as
+// unchanged, so only a new updatedAt selects it again; what is already
+// stored stays.
+func (p *pass) unreadable(id string, st ThreadState, acct AccountState, entry RetryEntry, now time.Time) error {
+	p.Log.Printf("codex-cloud: thread %s: no longer retried after failing since %s: %s",
+		id, entry.FirstFailure.Format(time.RFC3339), entry.Message)
+	if updated, ok := listingUpdatedAt(entry.Listing); ok {
+		st.UpdatedAt = updated
+	}
+	var records []mirror.Record
+	if entry.Listing != nil {
+		records = []mirror.Record{{Kind: mirror.KindThread, FetchedAt: now, Data: entry.Listing}}
+	}
+	if _, _, err := commitThread(p.Store, p.key, id, st, records, now); err != nil {
+		return err
+	}
+	delete(acct.Retry, id)
+	delete(acct.Unfinished, id)
+	delete(acct.CheckAgain, id)
+	return p.Store.SaveAccount(p.key, acct)
+}
+
+// relisted stores a newer listing record in a retry entry. A new updatedAt
+// restarts the unreadable count, since the thread changed while failing.
+func relisted(entry RetryEntry, listing jsontext.Value, now time.Time) RetryEntry {
+	old, hadOld := listingUpdatedAt(entry.Listing)
+	updated, ok := listingUpdatedAt(listing)
+	if hadOld && ok && updated != old {
+		entry.FirstFailure = now
+	}
+	entry.Listing = listing
+	return entry
+}
+
+// listingUpdatedAt reads the whole-second updatedAt of a listing record.
+func listingUpdatedAt(listing jsontext.Value) (int64, bool) {
+	if len(listing) == 0 {
+		return 0, false
+	}
+	var meta mirror.Thread
+	if err := json.Unmarshal(listing, &meta); err != nil || meta.UpdatedAt == nil {
+		return 0, false
+	}
+	return int64(math.Floor(*meta.UpdatedAt)), true
 }
 
 // mirrorLost reports a mirror file that is missing or shorter than the
