@@ -474,8 +474,8 @@ func TestUsageExitCode(t *testing.T) {
 		out  *sessionUsageOutput
 		want int
 	}{
-		{"token data", &sessionUsageOutput{SessionUsage: db.SessionUsage{HasTokenData: true}}, tokenUseExitOK},
-		{"cost only", &sessionUsageOutput{SessionUsage: db.SessionUsage{HasCost: true}}, tokenUseExitOK},
+		{"token data", &sessionUsageOutput{HasTokenData: true}, tokenUseExitOK},
+		{"cost only", &sessionUsageOutput{HasCost: true}, tokenUseExitOK},
 		{"plan usage figures", &sessionUsageOutput{Plan: figures}, tokenUseExitOK},
 		{"nothing", &sessionUsageOutput{}, tokenUseExitNoTokenData},
 		{
