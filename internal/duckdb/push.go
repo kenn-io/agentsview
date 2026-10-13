@@ -997,8 +997,8 @@ func (s *Sync) refreshCurationIfChanged(ctx context.Context) (bool, error) {
 }
 
 // pushSession fully replaces one mirror session row and all of its
-// dependent rows (messages, tool calls/results, usage events, secret
-// findings, pins) with the current local content, then writes the
+// dependent rows (messages, tool calls/results, usage events, plan usage,
+// secret findings, pins) with the current local content, then writes the
 // fingerprint used to detect future changes. buildMirror and
 // incrementalPush share this single write path: on a freshly created
 // rebuild file the pre-delete below is simply a no-op.
@@ -1017,6 +1017,9 @@ func (s *Sync) pushSession(
 		return 0, err
 	}
 	if err := s.replaceUsageEvents(ctx, exec, sess.ID); err != nil {
+		return 0, err
+	}
+	if err := s.replacePlanUsage(ctx, exec, sess.ID); err != nil {
 		return 0, err
 	}
 	if err := insertMessages(ctx, exec, msgs); err != nil {
@@ -1061,6 +1064,7 @@ func (s *Sync) deleteMirrorSession(
 		`DELETE FROM tool_result_events WHERE session_id = ?`,
 		`DELETE FROM tool_calls WHERE session_id = ?`,
 		`DELETE FROM usage_events WHERE session_id = ?`,
+		`DELETE FROM session_plan_usage WHERE session_id = ?`,
 		`DELETE FROM messages WHERE session_id = ?`,
 		`DELETE FROM sessions WHERE id = ?`,
 	} {
@@ -1374,6 +1378,36 @@ func (s *Sync) replaceUsageEvents(
 		if err := insertUsageEvent(ctx, exec, ev); err != nil {
 			return fmt.Errorf("inserting duckdb usage_event %s: %w", sessionID, err)
 		}
+	}
+	return nil
+}
+
+func (s *Sync) replacePlanUsage(
+	ctx context.Context, exec duckMutationExecutor, sessionID string,
+) error {
+	p, err := s.local.GetSessionPlanUsage(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("reading local plan usage for %s: %w", sessionID, err)
+	}
+	if err := s.execMutation(ctx, exec,
+		`DELETE FROM session_plan_usage WHERE session_id = ?`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf("clearing duckdb plan usage for %s: %w", sessionID, err)
+	}
+	if p == nil {
+		return nil
+	}
+	values, err := db.SessionPlanUsageValues(p)
+	if err != nil {
+		return fmt.Errorf("writing duckdb plan usage for %s: %w", sessionID, err)
+	}
+	if _, err := exec.ExecContext(ctx, `
+		INSERT INTO session_plan_usage (session_id, `+db.SessionPlanUsageColumns+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		append([]any{sessionID}, values...)...,
+	); err != nil {
+		return fmt.Errorf("writing duckdb plan usage for %s: %w", sessionID, err)
 	}
 	return nil
 }
