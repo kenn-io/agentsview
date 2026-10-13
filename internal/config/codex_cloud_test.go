@@ -108,12 +108,36 @@ func TestCodexCloudErrorMessages(t *testing.T) {
 	path := filepath.FromSlash("/data/config.toml")
 	unknown := &CodexCloudConfigError{Path: path, Key: "dirs", Unknown: true}
 	assert.Equal(t,
-		path+" has an unknown setting dirs under [agents.codex-cloud]. Remove it or correct its name. Cloud import is off until then.",
+		path+" has an unknown setting dirs under [agents.codex-cloud]. Remove it or correct its name. Codex cloud import is off until then.",
 		unknown.Error())
 	bad := &CodexCloudConfigError{Path: path, Key: "enabled", Reason: "expected true or false"}
 	assert.Equal(t,
-		path+" has an invalid value for enabled under [agents.codex-cloud]: expected true or false. Cloud import is off until then.",
+		path+" has an invalid value for enabled under [agents.codex-cloud]: expected true or false. Codex cloud import is off until then.",
 		bad.Error())
+	table := &CodexCloudConfigError{Path: path, Reason: "expected a table"}
+	assert.Equal(t,
+		path+" has an invalid [agents.codex-cloud] entry: expected a table. Codex cloud import is off until then.",
+		table.Error())
+}
+
+func TestCodexCloudNonTableEntry(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeRawConfig(t, dir, "[agents]\ncodex-cloud = 3\n")
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.CodexCloud.Err)
+	assert.Contains(t, cfg.CodexCloud.Err.Error(), "invalid [agents.codex-cloud] entry: expected a table")
+}
+
+// A clear-text URL on a foreign host needs a new host, not just a new scheme,
+// so the error names the host first.
+func TestCodexCloudForeignClearTextURLNamesHost(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeRawConfig(t, dir, "[agents.codex-cloud]\nusage_endpoint = \"http://evil.example/x\"\n")
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.CodexCloud.Err)
+	assert.Equal(t, "the host must be chatgpt.com, openai.com, or a subdomain of either", cfg.CodexCloud.Err.Reason)
 }
 
 func TestCodexCloudErrorKeepsOtherAgents(t *testing.T) {
