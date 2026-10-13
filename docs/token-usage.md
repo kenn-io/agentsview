@@ -71,16 +71,17 @@ have no catalog price, so token-based cost estimates remain unpriced unless you
 add [custom model pricing](#custom-model-pricing). Recorded authoritative costs
 are retained when the source provides them.
 
-Codex Cloud threads (ChatGPT dot, Codex web, and Codex cloud tasks) have token
-counts only for the turns AgentsView watched live while they ran. Threads it
-never watched carry plan usage instead: their share of your ChatGPT plan's
-weekly and five-hour limits, and any credits used beyond the plan. Those
-sessions are left out of token and cost totals. The Usage page and
-`agentsview usage daily` say how many were left out, and per-model rows show
-"Plan usage" where those sessions are the model's only usage. A session watched
-for only some of its turns counts in the totals, which then note that its token
-counts are low. See [Codex Cloud](/docs/configuration/#codex-cloud) for setup
-and limits.
+Codex Cloud chats (ChatGPT dot, Codex web, and Codex cloud tasks) get token
+counts only while AgentsView listens in on them as they run. Each update carries
+the chat's running total, so one capture also covers the turns that finished
+before it. Chats AgentsView never listened in on carry plan usage instead: their
+share of your ChatGPT plan's weekly and five-hour limits, and the credits figure
+OpenAI's report includes. Those sessions are left out of token and cost totals.
+The Usage page and `agentsview usage daily` say how many were left out, and
+per-model rows show "Plan usage" where those sessions are the model's only
+usage. A session with turns that finished after AgentsView's last capture
+counts in the totals, which then note that its token counts are low. See
+[Codex Cloud](/docs/configuration/#codex-cloud) for setup and limits.
 
 Junie coverage is for CLI sessions; it excludes tool calls and IDE-only
 conversations. Antigravity plaintext-only transcripts include conversation,
