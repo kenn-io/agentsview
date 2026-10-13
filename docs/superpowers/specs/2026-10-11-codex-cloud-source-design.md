@@ -1427,11 +1427,13 @@ Live token capture has its own line: "Live tokens: listening in on N running
 chats.", "Live tokens: idle.", "Live tokens: off, because ..." naming the daemon
 option or setting that keeps it off, or "Live tokens: stopped." with the
 protocol-change message and "Then restart AgentsView to listen in again." When a
-save of token records failed, the line adds "Token counts for N chats could not
-be saved yet; AgentsView keeps retrying." Cold resumes are logged per thread,
-not counted in the line: the count only grew until restart, so a normal event
-looked like a growing fault. Each session's capture coverage still shows the
-turns it missed.
+save of token records failed, the line adds "Token counts for N chats are not
+saved yet. AgentsView keeps retrying; restarting it before a save works loses
+them. The daemon log says why saving fails." The note stays when live tokens are
+off, and pending records are retried on every discovery run whatever the gates
+say. Cold resumes are logged per thread, not counted in the line: the count only
+grew until restart, so a normal event looked like a growing fault. Each
+session's capture coverage still shows the turns it missed.
 
 Plan usage has its own line under the home's state, so a usage problem never
 hides or replaces thread status. It shows "Plan usage: not checked yet", "Plan
@@ -1441,25 +1443,25 @@ followed by a usage error from the table below. After a restart, T is the stored
 the current year. A home skipped for another login problem shows that problem's
 message instead of the signed-out one.
 
-| Cause                                               | Message                                                                                                                                                                                                                 |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No token, or HTTP 401 from the thread host          | Signed out of ChatGPT in this Codex home. Run `codex login`, then AgentsView picks up the new login on its next sync.                                                                                                   |
-| HTTP 401 in `auto` mode                             | OpenAI did not accept the ChatGPT login in this Codex home's auth.json. With `cli_auth_credentials_store = "auto"`, Codex may keep the current login in the system keyring, which AgentsView does not read. (file fix)  |
-| A reply larger than the read limit                  | A reply from OpenAI was larger than AgentsView accepts.                                                                                                                                                                 |
-| Token refresh request from the thread host          | OpenAI asked for a fresh ChatGPT login in this Codex home. Open Codex or run `codex login`; AgentsView retries when the login changes.                                                                                  |
-| HTTP 403 from the thread host                       | OpenAI refused this request. AgentsView retries automatically. If this continues, check that this ChatGPT account can use Codex.                                                                                        |
-| Network failure                                     | Can't reach OpenAI. AgentsView retries automatically.                                                                                                                                                                   |
-| HTTP 429                                            | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                                                                                                 |
-| HTTP 5xx                                            | OpenAI's service had an error. AgentsView retries automatically.                                                                                                                                                        |
-| JSON-RPC error reply for one thread                 | OpenAI returned an error for the chat. It may have been deleted.                                                                                                                                                        |
-| Handshake refused or reply not understood           | OpenAI's service answered in a way this version of AgentsView can't read. If config.toml sets endpoint under [agents.codex-cloud], check that address; otherwise update AgentsView. Sessions already imported are safe. |
-| Keyring-backed home, no token in `auth.json`        | This Codex home keeps its ChatGPT login in the system keyring, which AgentsView does not read. (file fix)                                                                                                               |
-| `ephemeral` credential store                        | This Codex home does not save its ChatGPT login, so AgentsView cannot use it. (file fix)                                                                                                                                |
-| Codex home login settings or `auth.json` unreadable | One message per cause (a `config.toml` that does not parse, an unknown `cli_auth_credentials_store`, an `auth.json` that cannot be read or is not valid JSON), never quoting file content.                              |
-| Local account state unreadable or unwritable        | AgentsView could not read or save its import state, so imports from this account are paused. The daemon log names the file and the error. AgentsView tries again on the next sync.                                      |
-| Bad value in `[agents.codex-cloud]`                 | `<config path>` has an invalid value for `<key>` under `[agents.codex-cloud]`: `<reason>`. Codex cloud import is off until then.                                                                                        |
-| HTTP 401 from plan usage                            | Plan usage: signed out of ChatGPT in this Codex home. Run `codex login`.                                                                                                                                                |
-| Unknown key in `[agents.codex-cloud]`               | `<config path>` has an unknown setting `<key>` under `[agents.codex-cloud]`. Remove it or correct its name. Codex cloud import is off until then.                                                                       |
+| Cause                                               | Message                                                                                                                                                                                                                                            |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No token, or HTTP 401 from the thread host          | Signed out of ChatGPT in this Codex home. Run `codex login`, then AgentsView picks up the new login on its next sync.                                                                                                                              |
+| HTTP 401 in `auto` mode                             | OpenAI did not accept the ChatGPT login in this Codex home's auth.json. With `cli_auth_credentials_store = "auto"`, Codex may keep the current login in the system keyring, which AgentsView does not read. (file fix)                             |
+| A reply larger than the read limit                  | A reply from OpenAI was larger than AgentsView accepts.                                                                                                                                                                                            |
+| Token refresh request from the thread host          | OpenAI asked for a fresh ChatGPT login in this Codex home. Open Codex or run `codex login`; AgentsView retries when the login changes.                                                                                                             |
+| HTTP 403 from the thread host                       | OpenAI refused this request. AgentsView retries automatically. If this continues, check that this ChatGPT account can use Codex.                                                                                                                   |
+| Network failure                                     | Can't reach OpenAI. AgentsView retries automatically.                                                                                                                                                                                              |
+| HTTP 429                                            | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                                                                                                                            |
+| HTTP 5xx                                            | OpenAI's service had an error. AgentsView retries automatically.                                                                                                                                                                                   |
+| JSON-RPC error reply for one thread                 | OpenAI returned an error for the chat. It may have been deleted.                                                                                                                                                                                   |
+| Handshake refused or reply not understood           | OpenAI's service answered in a way this version of AgentsView can't read. If config.toml sets endpoint under [agents.codex-cloud], check that address; otherwise update AgentsView. Sessions already imported are safe.                            |
+| Keyring-backed home, no token in `auth.json`        | This Codex home keeps its ChatGPT login in the system keyring, which AgentsView does not read. (file fix)                                                                                                                                          |
+| `ephemeral` credential store                        | This Codex home does not save its ChatGPT login, so AgentsView cannot use it. (file fix)                                                                                                                                                           |
+| Codex home login settings or `auth.json` unreadable | One message per cause (a `config.toml` that does not parse, an unknown `cli_auth_credentials_store`, an `auth.json` that cannot be read or is not valid JSON), never quoting file content.                                                         |
+| Local account state unreadable or unwritable        | AgentsView could not read or save its import state, so imports from this account are paused. The daemon log names the file and the error. Check that AgentsView can read and write its data directory; imports resume on the next sync after that. |
+| Bad value in `[agents.codex-cloud]`                 | `<config path>` has an invalid value for `<key>` under `[agents.codex-cloud]`: `<reason>`. Codex cloud import is off until then.                                                                                                                   |
+| HTTP 401 from plan usage                            | Plan usage: signed out of ChatGPT in this Codex home. Run `codex login`.                                                                                                                                                                           |
+| Unknown key in `[agents.codex-cloud]`               | `<config path>` has an unknown setting `<key>` under `[agents.codex-cloud]`. Remove it or correct its name. Codex cloud import is off until then.                                                                                                  |
 
 "(file fix)" stands for: "To let AgentsView use it, set
 `cli_auth_credentials_store = "file"` in this home's config.toml and run
