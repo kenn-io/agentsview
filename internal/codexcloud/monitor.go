@@ -618,6 +618,7 @@ func (m *Monitor) flushPending() {
 func (m *Monitor) ended(j *join) {
 	err := j.conn.Err()
 	if errors.Is(err, ErrProtocolChange) {
+		m.Log.Printf("codex-cloud: chat %s: a message AgentsView cannot read ended the connection", j.threadID)
 		_ = m.stopCapture(j.key, Redact(err, j.login.Token)) // stopCapture returns no error today
 		return
 	}
@@ -731,7 +732,8 @@ func (m *Monitor) updateLive(key AccountKey) {
 	switch {
 	case stopped != nil:
 		text = "Live tokens: stopped. " + Message(FailProtocol, time.Time{}) +
-			" After that, restart AgentsView, or set live_tokens = false and back to true, to listen in again."
+			" After updating AgentsView or fixing the endpoint, restart AgentsView, or set live_tokens = false" +
+			" and back to true, to listen in again."
 	case watching == 0:
 		text = "Live tokens: on, no running chats to listen in on."
 	default:
@@ -742,13 +744,13 @@ func (m *Monitor) updateLive(key AccountKey) {
 }
 
 // unsaved counts the account's chats whose token counts only memory
-// holds.
+// holds, or every account's when key is empty.
 func (m *Monitor) unsaved(key AccountKey) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
 	for id := range m.pending {
-		if id.key == key {
+		if key == "" || id.key == key {
 			n++
 		}
 	}

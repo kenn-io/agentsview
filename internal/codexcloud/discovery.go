@@ -55,25 +55,22 @@ func (m *Monitor) Discover(ctx context.Context) error {
 	groups, order := GroupByKey(logins)
 	if !live {
 		m.liveOff()
-		var text string
-		switch {
-		case m.NoSync:
-			text = "Live tokens: off, because this daemon does not sync sources."
-		case gates.Disabled:
-			text = "Live tokens: off, because codex-cloud is listed in disabled_agents."
-		case gates.CodexCloud.Err != nil:
-			text = "Live tokens: off until the [agents.codex-cloud] settings are fixed."
-		case !gates.CodexCloud.Enabled:
-			text = "Live tokens: off, because enabled = false under [agents.codex-cloud]."
-		default:
-			text = "Live tokens: off, because live_tokens = false under [agents.codex-cloud]."
+		if _, off := gates.offRow(m.NoSync); off {
+			// Sync keeps only the source row, whose message says why the
+			// source is off; the account rows and their lines drop.
+			unsaved := m.unsaved("")
+			m.Status.SetLive(SourceRowKey, "Live tokens: off."+pendingNote(unsaved), unsaved > 0)
+			return nil
 		}
+		m.Status.SetLive(SourceRowKey, "", false)
 		for _, key := range order {
 			unsaved := m.unsaved(key)
-			m.Status.SetLive(string(key), text+pendingNote(unsaved), unsaved > 0)
+			m.Status.SetLive(string(key),
+				"Live tokens: off, because live_tokens = false under [agents.codex-cloud]."+pendingNote(unsaved), unsaved > 0)
 		}
 		return nil
 	}
+	m.Status.SetLive(SourceRowKey, "", false)
 	for _, key := range order {
 		err := m.discoverAccount(ctx, gates, key, groups[key][0])
 		if ctx.Err() != nil {

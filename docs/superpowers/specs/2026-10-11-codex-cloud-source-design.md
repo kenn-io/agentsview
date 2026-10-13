@@ -1417,8 +1417,7 @@ States:
 - **Off: this daemon does not sync sources.** The message names the two causes,
   a command run with `--no-sync` or an archive-only archive, and says that a
   daemon started with `agentsview serve` on a normal archive imports Codex
-  cloud chats. The live tokens line says "Live tokens: off, because this
-  daemon does not sync sources."
+  cloud chats.
 - **Waiting for first sync:** enabled, no pass has finished.
 - **Importing, found N chats so far:** during a first backfill, until all four
   listings have finished a first pass. After that: **Importing N of M chats.**
@@ -1436,16 +1435,19 @@ States:
 
 Live token capture has its own line: "Live tokens: listening in on N running
 chats.", "Live tokens: on, no running chats to listen in on.", "Live tokens:
-off, because ..." naming the daemon option or setting that keeps it off, or
-"Live tokens: stopped." with the protocol-change message and "After that,
-restart AgentsView, or set live_tokens = false and back to true, to listen in
-again." When a save of token records failed, the line adds "Token counts for N
-chats are not saved yet. AgentsView keeps retrying; restarting it before a save
-works loses them. The daemon log says why saving fails." The note stays when
-live tokens are off, and pending records are retried on every discovery run
-whatever the gates say. Cold resumes are logged per thread, not counted in the
-line: the count only grew until restart, so a normal event looked like a growing
-fault. Each session's capture coverage still shows the turns it missed.
+off, because live_tokens = false under [agents.codex-cloud].", or "Live tokens:
+stopped." with the protocol-change message and "After updating AgentsView or
+fixing the endpoint, restart AgentsView, or set live_tokens = false and back to
+true, to listen in again." When one of the Off states above keeps the whole
+source off, sync shows only the source row, so the line goes with that row and
+says "Live tokens: off."; the row's message already names the cause. When a save
+of token records failed, the line adds "Token counts for N chats are not saved
+yet. AgentsView keeps retrying; restarting it before a save works loses them.
+The daemon log says why saving fails." The note stays when live tokens are off,
+and pending records are retried on every discovery run whatever the gates say.
+Cold resumes are logged per thread, not counted in the line: the count only grew
+until restart, so a normal event looked like a growing fault. Each session's
+capture coverage still shows the turns it missed.
 
 Plan usage has its own line under the home's state, so a usage problem never
 hides or replaces thread status. It shows "Plan usage: not checked yet", "Plan

@@ -255,7 +255,8 @@ func TestUnknownResumeKindStopsCapture(t *testing.T) {
 			env.join(t, "a")
 			assert.Empty(t, env.monitor.Joined(passKey))
 			assert.Equal(t, "Live tokens: stopped. "+Message(FailProtocol, time.Time{})+
-				" After that, restart AgentsView, or set live_tokens = false and back to true, to listen in again.", env.live(t))
+				" After updating AgentsView or fixing the endpoint, restart AgentsView, or set live_tokens = false"+
+				" and back to true, to listen in again.", env.live(t))
 			assert.True(t, env.liveWarn(t), "a stop marks the status")
 			handshakes := len(env.host.Handshakes())
 			env.join(t, "b")
@@ -605,6 +606,8 @@ func TestUnreadableMessageStopsCapture(t *testing.T) {
 	env.monitor.ended(j)
 
 	assert.Contains(t, env.live(t), "Live tokens: stopped.")
+	assert.Contains(t, env.logs.String(), "chat a: a message AgentsView cannot read ended the connection",
+		"the log names the chat that ended capture")
 	env.threads.Set(runningThread("b", "warm"))
 	env.join(t, "b")
 	assert.Empty(t, env.host.Handshakes(), "no chat is listened in on until capture starts again")

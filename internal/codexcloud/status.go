@@ -192,6 +192,7 @@ func (b *StatusBoard) Delete(key string) {
 		b.order = slices.DeleteFunc(b.order, func(k string) bool { return k == key })
 	}
 	delete(b.live, key)
+	delete(b.liveWarn, key)
 	delete(b.plan, key)
 }
 
@@ -211,6 +212,11 @@ func (b *StatusBoard) Keep(keys map[string]bool) {
 			if !keys[key] {
 				delete(lines, key)
 			}
+		}
+	}
+	for key := range b.liveWarn {
+		if !keys[key] {
+			delete(b.liveWarn, key)
 		}
 	}
 }
