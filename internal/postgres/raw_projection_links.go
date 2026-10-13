@@ -31,6 +31,13 @@ func writeRawLinks(ctx context.Context, tx *sql.Tx, branch string, p ingest.Prep
 			return err
 		}
 	}
+	// A usage root can be a grandparent or further up, which no parent
+	// edge reaches, so the root gets its own edge.
+	if p.PlanUsage != nil {
+		if err := add("usage_root", -1, -1, -1, p.PlanUsage.CountedUnder); err != nil {
+			return err
+		}
+	}
 	for _, m := range p.Messages {
 		for ci, c := range m.ToolCalls {
 			if err := add("call", m.Ordinal, ci, -1, c.SubagentSessionID); err != nil {

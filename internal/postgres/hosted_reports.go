@@ -2,8 +2,6 @@ package postgres
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"slices"
 	"time"
 
@@ -128,10 +126,31 @@ func (h *HostedStore) GetSessionTiming(ctx context.Context, id string) (*db.Sess
 	})
 }
 
-// GetSessionPlanUsage reports that this backend does not store plan
-// usage yet.
-func (*HostedStore) GetSessionPlanUsage(context.Context, string) (*db.SessionPlanUsage, error) {
-	return nil, fmt.Errorf("hosted postgres: session plan usage: %w", errors.ErrUnsupported)
+// hostedPlanUsage copies *p and maps its usage root, which owner's
+// usage_root link (or, for a legacy row, the ID itself) resolves.
+func hostedPlanUsage(r *hostedRefs, owner string, p **db.SessionPlanUsage) {
+	if *p == nil {
+		return
+	}
+	v := **p
+	*p = &v
+	r.link(owner, &v.CountedUnder)
+}
+
+func (h *HostedStore) GetSessionPlanUsage(ctx context.Context, id string) (*db.SessionPlanUsage, error) {
+	return hostedRead(ctx, h, func(_ hostedRevision) (*db.SessionPlanUsage, error) {
+		target, err := h.resolve(ctx, id)
+		if err != nil || target.SessionID == "" {
+			return nil, err
+		}
+		p, err := h.physical.GetSessionPlanUsage(ctx, target.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		r := hostedRefs{}
+		hostedPlanUsage(&r, target.SessionID, &p)
+		return p, r.mapIDs(ctx, h)
+	})
 }
 
 func (h *HostedStore) GetSessionUsage(ctx context.Context, id string, breakdown bool) (*db.SessionUsage, error) {
@@ -147,6 +166,7 @@ func (h *HostedStore) GetSessionUsage(ctx context.Context, id string, breakdown 
 		}
 		v := **p
 		*p = &v
+		hostedPlanUsage(r, v.SessionID, &v.PlanUsage)
 		r.add(&v.SessionID)
 		v.Breakdown = slices.Clone(v.Breakdown)
 		for i := range v.Breakdown {

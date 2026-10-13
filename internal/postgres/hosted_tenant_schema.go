@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -37,6 +38,7 @@ var hostedTables = append([]HostedTable{
 	{Name: "sessions", Key: []string{"id"}},
 	{Name: "messages", Key: []string{"session_id", "ordinal"}, ForeignKeys: sessionHostedFK()},
 	{Name: "usage_events", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
+	{Name: "session_plan_usage", Key: []string{"session_id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "cursor_usage_events", Key: []string{"id"}},
 	{Name: "starred_sessions", Key: []string{"session_id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "excluded_sessions", Key: []string{"id"}},
@@ -75,6 +77,38 @@ var hostedTables = append([]HostedTable{
 	}},
 	{Name: "raw_ingest_jobs", Key: []string{"id"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
 }, append(append([]HostedTable(nil), hostedFrictionTables...), rawProjectionTables...)...)
+
+// hostedCoreUpgradeTables are inventoried core tables added after hosted
+// schemas were first provisioned, with the DDL that creates each one.
+var hostedCoreUpgradeTables = []struct{ name, ddl string }{
+	{"session_plan_usage", sessionPlanUsageDDL},
+}
+
+// installHostedCoreUpgrade adds only missing upgrade tables to an already
+// bound tenant schema and protects them like the rest of the inventory. The
+// catalog check that follows rejects anything else that is missing.
+func installHostedCoreUpgrade(ctx context.Context, tx *sql.Tx, schema, tenant string) error {
+	for _, upgrade := range hostedCoreUpgradeTables {
+		i := slices.IndexFunc(hostedTables, func(t HostedTable) bool { return t.Name == upgrade.name })
+		if i < 0 {
+			return fmt.Errorf("hosted upgrade table %s is not inventoried", upgrade.name)
+		}
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT to_regclass(format('%I.%I',$1::text,$2::text)) IS NOT NULL`, schema, upgrade.name).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, upgrade.ddl); err != nil {
+			return fmt.Errorf("creating hosted %s: %w", upgrade.name, err)
+		}
+		if err := InstallHostedTables(ctx, tx, schema, tenant, hostedTables[i:i+1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func sessionHostedFK() []HostedForeignKey {
 	return []HostedForeignKey{{Columns: []string{"session_id"}, Table: "sessions", References: []string{"id"}, Delete: "CASCADE"}}

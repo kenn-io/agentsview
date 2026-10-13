@@ -48,10 +48,70 @@ type SessionPlanUsageGroup struct {
 	Credits           *string  `json:"credits"`
 }
 
-const sessionPlanUsageCols = `has_plan_usage, data_as_of, data_status,
+// SessionPlanUsageColumns lists session_plan_usage's value columns, after
+// session_id, in the order SessionPlanUsageValues and ScanSessionPlanUsage
+// use. Every backend's copy of the table has these columns.
+const SessionPlanUsageColumns = `has_plan_usage, data_as_of, data_status,
 	usage_source, weekly_percent, five_hour_percent, credits, groups_json,
 	is_final, outcome_kind, outcome_at, counted_under, has_coverage,
 	last_capture_at, uncaptured_turns`
+
+// SessionPlanUsageValues returns p's values in SessionPlanUsageColumns
+// order. Absent times and decimals are nil, so every backend stores NULL
+// for them; groups are their stored JSON text.
+func SessionPlanUsageValues(p *SessionPlanUsage) ([]any, error) {
+	groups := p.Groups
+	if groups == nil {
+		groups = []SessionPlanUsageGroup{}
+	}
+	groupsJSON, err := json.Marshal(groups)
+	if err != nil {
+		return nil, fmt.Errorf("encoding plan usage groups: %w", err)
+	}
+	return []any{
+		p.HasPlanUsage, nullIfEmpty(p.DataAsOf), p.DataStatus,
+		p.UsageSource, p.WeeklyPercent, p.FiveHourPercent, p.Credits,
+		string(groupsJSON), p.Final, p.OutcomeKind, nullIfEmpty(p.OutcomeAt),
+		p.CountedUnder, p.HasCoverage, nullIfEmpty(p.LastCaptureAt),
+		p.UncapturedTurns,
+	}, nil
+}
+
+// ScanSessionPlanUsage reads one row selected with SessionPlanUsageColumns
+// through scan, such as a sql.Rows Scan method.
+func ScanSessionPlanUsage(scan func(dest ...any) error) (*SessionPlanUsage, error) {
+	var p SessionPlanUsage
+	var dataAsOf, outcomeAt, lastCaptureAt, credits sql.NullString
+	var weekly, fiveHour sql.NullFloat64
+	var groupsJSON string
+	var uncaptured int64
+	if err := scan(
+		&p.HasPlanUsage, &dataAsOf, &p.DataStatus, &p.UsageSource,
+		&weekly, &fiveHour, &credits, &groupsJSON, &p.Final,
+		&p.OutcomeKind, &outcomeAt, &p.CountedUnder, &p.HasCoverage,
+		&lastCaptureAt, &uncaptured,
+	); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(groupsJSON), &p.Groups); err != nil {
+		return nil, fmt.Errorf("decoding plan usage groups: %w", err)
+	}
+	if len(p.Groups) == 0 {
+		p.Groups = nil
+	}
+	p.UncapturedTurns = int(uncaptured)
+	p.DataAsOf, p.OutcomeAt, p.LastCaptureAt = dataAsOf.String, outcomeAt.String, lastCaptureAt.String
+	if weekly.Valid {
+		p.WeeklyPercent = &weekly.Float64
+	}
+	if fiveHour.Valid {
+		p.FiveHourPercent = &fiveHour.Float64
+	}
+	if credits.Valid {
+		p.Credits = &credits.String
+	}
+	return &p, nil
+}
 
 // ReplaceSessionPlanUsage replaces one session's plan usage row. A nil p
 // removes the row.
@@ -94,22 +154,14 @@ func replaceSessionPlanUsageTx(
 		}
 		return bumpLocalModifiedTx(tx, sessionID, "plan usage replace")
 	}
-	groups := p.Groups
-	if groups == nil {
-		groups = []SessionPlanUsageGroup{}
-	}
-	groupsJSON, err := json.Marshal(groups)
+	values, err := SessionPlanUsageValues(p)
 	if err != nil {
-		return fmt.Errorf("encoding plan usage groups for %s: %w", sessionID, err)
+		return fmt.Errorf("writing plan usage for %s: %w", sessionID, err)
 	}
 	if _, err := tx.Exec(`
-		INSERT OR REPLACE INTO session_plan_usage (session_id, `+sessionPlanUsageCols+`)
+		INSERT OR REPLACE INTO session_plan_usage (session_id, `+SessionPlanUsageColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sessionID, p.HasPlanUsage, nullIfEmpty(p.DataAsOf), p.DataStatus,
-		p.UsageSource, p.WeeklyPercent, p.FiveHourPercent, p.Credits,
-		string(groupsJSON), p.Final, p.OutcomeKind, nullIfEmpty(p.OutcomeAt),
-		p.CountedUnder, p.HasCoverage, nullIfEmpty(p.LastCaptureAt),
-		p.UncapturedTurns,
+		append([]any{sessionID}, values...)...,
 	); err != nil {
 		return fmt.Errorf("writing plan usage for %s: %w", sessionID, err)
 	}
@@ -148,7 +200,7 @@ func sessionPlanUsageWithQuerier(
 	ctx context.Context, q messageRowsQuerier, sessionID string,
 ) (*SessionPlanUsage, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT `+sessionPlanUsageCols+` FROM session_plan_usage WHERE session_id = ?`,
+		`SELECT `+SessionPlanUsageColumns+` FROM session_plan_usage WHERE session_id = ?`,
 		sessionID,
 	)
 	if err != nil {
@@ -158,35 +210,11 @@ func sessionPlanUsageWithQuerier(
 	if !rows.Next() {
 		return nil, rows.Err()
 	}
-	var p SessionPlanUsage
-	var dataAsOf, outcomeAt, lastCaptureAt, credits sql.NullString
-	var weekly, fiveHour sql.NullFloat64
-	var groupsJSON string
-	if err := rows.Scan(
-		&p.HasPlanUsage, &dataAsOf, &p.DataStatus, &p.UsageSource,
-		&weekly, &fiveHour, &credits, &groupsJSON, &p.Final,
-		&p.OutcomeKind, &outcomeAt, &p.CountedUnder, &p.HasCoverage,
-		&lastCaptureAt, &p.UncapturedTurns,
-	); err != nil {
+	p, err := ScanSessionPlanUsage(rows.Scan)
+	if err != nil {
 		return nil, fmt.Errorf("scanning plan usage for %s: %w", sessionID, err)
 	}
-	if err := json.Unmarshal([]byte(groupsJSON), &p.Groups); err != nil {
-		return nil, fmt.Errorf("decoding plan usage groups for %s: %w", sessionID, err)
-	}
-	if len(p.Groups) == 0 {
-		p.Groups = nil
-	}
-	p.DataAsOf, p.OutcomeAt, p.LastCaptureAt = dataAsOf.String, outcomeAt.String, lastCaptureAt.String
-	if weekly.Valid {
-		p.WeeklyPercent = &weekly.Float64
-	}
-	if fiveHour.Valid {
-		p.FiveHourPercent = &fiveHour.Float64
-	}
-	if credits.Valid {
-		p.Credits = &credits.String
-	}
-	return &p, rows.Err()
+	return p, rows.Err()
 }
 
 // PlanUsageFingerprints returns each session's plan usage row as one
@@ -217,7 +245,7 @@ func appendPlanUsageFingerprints(
 		args[i] = id
 	}
 	rows, err := q.QueryContext(ctx,
-		`SELECT session_id, `+sessionPlanUsageCols+` FROM session_plan_usage
+		`SELECT session_id, `+SessionPlanUsageColumns+` FROM session_plan_usage
 		WHERE session_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`,
 		args...,
 	)

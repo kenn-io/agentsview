@@ -62,6 +62,10 @@ type pushLocalMessageFingerprint struct {
 	ToolResultFP  string
 	TokenFP       string
 	UsageEventFP  string
+	// PlanUsageFP is the archive's session_plan_usage row as
+	// db.PlanUsageFingerprints renders it. It is omitted when empty so
+	// sessions without plan usage keep their stored fingerprints.
+	PlanUsageFP string `json:",omitzero"`
 }
 
 func localSessionDependencyPushFingerprint(
@@ -132,6 +136,7 @@ type localPushDependencyState struct {
 	toolResultFP   map[string]string
 	secretFindings map[string][]db.SecretFinding
 	pins           map[string][]db.PinnedMessage
+	planUsageFP    map[string]string
 }
 
 func readLocalPushDependencyState(
@@ -189,6 +194,9 @@ func readLocalPushDependencyState(
 	if st.pins, err = local.PinnedMessagesBySession(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("reading local pinned messages: %w", err)
 	}
+	if st.planUsageFP, err = local.PlanUsageFingerprints(ctx, sessionIDs); err != nil {
+		return nil, fmt.Errorf("computing local plan usage fingerprints: %w", err)
+	}
 	return st, nil
 }
 
@@ -217,6 +225,7 @@ func (st *localPushDependencyState) dependencyFingerprint(
 		ToolCallFP:    st.toolCallFP[sessionID],
 		ToolResultFP:  st.toolResultFP[sessionID],
 		TokenFP:       st.tokenFP[sessionID],
+		PlanUsageFP:   st.planUsageFP[sessionID],
 	}
 	if usageKnown {
 		msgFP.UsageEventFP = usageEventFingerprint
@@ -282,6 +291,11 @@ func localPushMessageFingerprint(ctx context.Context,
 	if err != nil {
 		return fp, fmt.Errorf("computing local token fingerprint: %w", err)
 	}
+	planUsageFP, err := local.PlanUsageFingerprints(ctx, []string{sessionID})
+	if err != nil {
+		return fp, fmt.Errorf("computing local plan usage fingerprint: %w", err)
+	}
+	fp.PlanUsageFP = planUsageFP[sessionID]
 	if usageKnown {
 		fp.UsageEventFP = usageEventFingerprint
 		return fp, nil

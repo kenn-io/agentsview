@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -1333,12 +1332,6 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 	return out, nil
 }
 
-// GetSessionPlanUsage reports that this backend does not store plan
-// usage yet.
-func (*Store) GetSessionPlanUsage(context.Context, string) (*db.SessionPlanUsage, error) {
-	return nil, fmt.Errorf("postgres: session plan usage: %w", errors.ErrUnsupported)
-}
-
 // GetSessionUsage returns one session's token totals and cost
 // estimate from the PostgreSQL session store. BreakdownCount is
 // always populated; per-row Breakdown entries are built only when
@@ -1508,6 +1501,10 @@ func (s *Store) GetSessionUsage(
 	out.CostUSD = db.CostUSDFromCost(out.HasCost, out.Cost)
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = db.SortedKeys(unpricedSet)
+	}
+	out.PlanUsage, err = s.GetSessionPlanUsage(ctx, sess.ID)
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
