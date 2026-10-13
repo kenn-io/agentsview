@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // usageReplyLimit bounds one plan usage reply. A full request of 100 rows
@@ -137,7 +138,10 @@ func decodeUsageReply(raw []byte) (UsageResponse, error) {
 			// Credits stay strings; this only checks they are decimal
 			// numbers, which may use exponent form such as 0E-10.
 			if !decimalCredits.MatchString(*c) {
-				return UsageResponse{}, fmt.Errorf("%w: plan usage credits %q are not a number", ErrProtocolChange, *c)
+				// The value comes from the server and can be up to the
+				// reply's size, so the log gets only its start.
+				return UsageResponse{}, fmt.Errorf("%w: plan usage credits %q are not a decimal number",
+					ErrProtocolChange, stringutil.SafeTruncate(*c, 64))
 			}
 		}
 	}
