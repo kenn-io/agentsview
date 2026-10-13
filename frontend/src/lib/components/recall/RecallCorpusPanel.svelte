@@ -486,11 +486,11 @@
   }
 
   $effect(() => {
-    query;
-    project;
-    entryType;
-    generation;
-    reviewState;
+    void query;
+    void project;
+    void entryType;
+    void generation;
+    void reviewState;
     void loadEntries();
   });
 
@@ -506,8 +506,8 @@
 
   $effect(() => {
     if (!progressExpanded) return;
-    progressState;
-    status?.fingerprint;
+    void progressState;
+    void status?.fingerprint;
     void loadProgress();
   });
 </script>
