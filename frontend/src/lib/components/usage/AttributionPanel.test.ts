@@ -317,6 +317,32 @@ describe("AttributionPanel colors", () => {
     },
   );
 
+  it("keeps a reported cost for a tokenless model that also has plan-only sessions", async () => {
+    const summary = summaryWithModels();
+    summary.modelTotals.push({
+      model: "shared-model",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: testMoney(2),
+      planOnlySessions: 1,
+    });
+    usage.summary = summary;
+    usage.mode = "cost";
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "list";
+
+    const component = mountPanel();
+    await tick();
+
+    const cells = Array.from(document.querySelectorAll(".list-cost"), (el) =>
+      el.textContent?.trim(),
+    );
+    expect(cells).toEqual(["$8.00", "$4.00", "$2.00"]);
+    void unmount(component);
+  });
+
   it("keeps colliding model rows distinct", async () => {
     usage.summary = summaryWithModels();
     usage.toggles.attribution.groupBy = "model";
