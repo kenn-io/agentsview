@@ -77,32 +77,32 @@ func TestSessionLabelsLifecycle(t *testing.T) {
 
 	// Labels may be recorded before sync imports the session.
 	pending, err := d.SetSessionLabels(ctx, "worker", []string{
-		" role=reviewer ", "ticket=sample-123", "role=reviewer",
+		" role=reviewer ", "ticket=example", "role=reviewer",
 	})
 	require.NoError(t, err)
 	assert.False(t, pending.SessionFound)
-	assert.Equal(t, []string{"role=reviewer", "ticket=sample-123"}, pending.Labels)
+	assert.Equal(t, []string{"role=reviewer", "ticket=example"}, pending.Labels)
 
 	insertSession(t, d, "worker", "proj")
 	insertSession(t, d, "other", "proj")
 	got, err := d.GetSession(ctx, "worker")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"role=reviewer", "ticket=sample-123"}, got.Labels)
+	assert.Equal(t, []string{"role=reviewer", "ticket=example"}, got.Labels)
 
 	updated, err := d.UpdateSessionLabels(ctx, "worker",
 		[]string{"nightly"}, []string{"role=reviewer", "absent"})
 	require.NoError(t, err)
 	assert.True(t, updated.SessionFound)
-	assert.Equal(t, []string{"nightly", "ticket=sample-123"}, updated.Labels)
+	assert.Equal(t, []string{"nightly", "ticket=example"}, updated.Labels)
 
 	// Parser writes never touch labels.
 	insertSession(t, d, "worker", "proj")
 	stored, err := querySessionLabels(ctx, d.getReader(), "worker")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"nightly", "ticket=sample-123"}, stored)
+	assert.Equal(t, []string{"nightly", "ticket=example"}, stored)
 
 	assert.Equal(t, []string{"worker"},
-		listSortedIDs(t, d, SessionFilter{Labels: []string{"nightly", "ticket=sample-123"}}))
+		listSortedIDs(t, d, SessionFilter{Labels: []string{"nightly", "ticket=example"}}))
 	assert.Equal(t, []string{},
 		listSortedIDs(t, d, SessionFilter{Labels: []string{"nightly", "role=reviewer"}}))
 
@@ -573,7 +573,7 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 	})
 	_, err := d.SetSessionExternalParent(ctx, "worker", "manager")
 	require.NoError(t, err)
-	_, err = d.SetSessionLabels(ctx, "worker", []string{"ticket=sample-123"})
+	_, err = d.SetSessionLabels(ctx, "worker", []string{"ticket=example"})
 	require.NoError(t, err)
 
 	pr, err := ParsePRFilter("acme/widgets#42")
@@ -584,7 +584,7 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 		filter func(SessionFilter) SessionFilter
 	}{
 		{name: "label", filter: func(f SessionFilter) SessionFilter {
-			f.Labels = []string{"ticket=sample-123"}
+			f.Labels = []string{"ticket=example"}
 			return f
 		}},
 		{name: "pr", filter: func(f SessionFilter) SessionFilter {

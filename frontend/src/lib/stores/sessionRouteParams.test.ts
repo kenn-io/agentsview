@@ -164,14 +164,14 @@ describe("session route params", () => {
   });
 
   it("treats label and pull request params as session filter deep links", () => {
-    expect(hasFilterParams({ label: "ticket=sample-123" })).toBe(true);
+    expect(hasFilterParams({ label: "ticket=example" })).toBe(true);
     expect(hasFilterParams({ pr: "acme/widgets" })).toBe(true);
   });
 });
 
 describe("label filter params", () => {
   it("round-trips labels containing commas and query metacharacters", () => {
-    const labels = ["ticket=sample-123", "role=reviewer, lead", "a&b=c#d"];
+    const labels = ["ticket=example", "role=reviewer, lead", "a&b=c#d"];
     const query = searchFromRouteParams({ label: joinLabelFilterParam(labels) }).toString();
     const search = new URLSearchParams(query);
     const params = routeParamsFromSearch(search);

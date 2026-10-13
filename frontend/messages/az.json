@@ -450,7 +450,7 @@
   "sidebar_filters_clear_filters": "Süzgəcləri təmizlə",
   "sidebar_filters_labels": "Etiketlər",
   "sidebar_filters_label_input": "Etiketə görə süz",
-  "sidebar_filters_label_placeholder": "Etiket əlavə et, məs. ticket=sample-123",
+  "sidebar_filters_label_placeholder": "Etiket əlavə et, məs. ticket=example",
   "sidebar_filters_pull_request": "Pull request",
   "sidebar_filters_pull_request_input": "Pull request-ə görə süz",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123",

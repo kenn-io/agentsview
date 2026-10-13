@@ -448,7 +448,7 @@
   "sidebar_filters_clear_filters": "フィルターをクリアする",
   "sidebar_filters_labels": "ラベル",
   "sidebar_filters_label_input": "ラベルで絞り込む",
-  "sidebar_filters_label_placeholder": "ラベルを追加（例: ticket=sample-123）",
+  "sidebar_filters_label_placeholder": "ラベルを追加（例: ticket=example）",
   "sidebar_filters_pull_request": "プルリクエスト",
   "sidebar_filters_pull_request_input": "プルリクエストで絞り込む",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123",

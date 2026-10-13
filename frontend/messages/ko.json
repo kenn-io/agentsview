@@ -435,7 +435,7 @@
   "sidebar_filters_clear_filters": "필터 지우기",
   "sidebar_filters_labels": "레이블",
   "sidebar_filters_label_input": "레이블로 필터링",
-  "sidebar_filters_label_placeholder": "레이블 추가, 예: ticket=sample-123",
+  "sidebar_filters_label_placeholder": "레이블 추가, 예: ticket=example",
   "sidebar_filters_pull_request": "풀 리퀘스트",
   "sidebar_filters_pull_request_input": "풀 리퀘스트로 필터링",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123",

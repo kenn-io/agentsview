@@ -435,7 +435,7 @@
   "sidebar_filters_clear_filters": "清除筛选器",
   "sidebar_filters_labels": "标签",
   "sidebar_filters_label_input": "按标签筛选",
-  "sidebar_filters_label_placeholder": "添加标签，例如 ticket=sample-123",
+  "sidebar_filters_label_placeholder": "添加标签，例如 ticket=example",
   "sidebar_filters_pull_request": "拉取请求",
   "sidebar_filters_pull_request_input": "按拉取请求筛选",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123",

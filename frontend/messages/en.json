@@ -448,7 +448,7 @@
   "sidebar_filters_clear_filters": "Clear filters",
   "sidebar_filters_labels": "Labels",
   "sidebar_filters_label_input": "Filter by label",
-  "sidebar_filters_label_placeholder": "Add label, e.g. ticket=sample-123",
+  "sidebar_filters_label_placeholder": "Add label, e.g. ticket=example",
   "sidebar_filters_pull_request": "Pull request",
   "sidebar_filters_pull_request_input": "Filter by pull request",
   "sidebar_filters_pull_request_placeholder": "owner/repo#123",
