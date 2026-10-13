@@ -42,13 +42,12 @@ type ListingResult struct {
 }
 
 type listParams struct {
-	Limit          int            `json:"limit"`
-	Cursor         jsontext.Value `json:"cursor,omitzero"`
-	SortKey        string         `json:"sortKey"`
-	SortDirection  string         `json:"sortDirection"`
-	ModelProviders []string       `json:"modelProviders"`
-	SourceKinds    []string       `json:"sourceKinds,omitzero"`
-	Archived       bool           `json:"archived"`
+	Limit         int            `json:"limit"`
+	Cursor        jsontext.Value `json:"cursor,omitzero"`
+	SortKey       string         `json:"sortKey"`
+	SortDirection string         `json:"sortDirection"`
+	SourceKinds   []string       `json:"sourceKinds,omitzero"`
+	Archived      bool           `json:"archived"`
 }
 
 type listPage struct {
@@ -76,8 +75,9 @@ func listChanged(
 ) (ListingResult, error) {
 	params := listParams{
 		Limit: listPageSize, SortKey: "updated_at", SortDirection: "desc",
-		ModelProviders: []string{},
-		Archived:       id == ListDefaultArchived || id == ListSubAgentArchived,
+		// The hosted server rejects modelProviders, so the listing is
+		// whatever its default provider filter returns.
+		Archived: id == ListDefaultArchived || id == ListSubAgentArchived,
 	}
 	if id == ListSubAgentActive || id == ListSubAgentArchived {
 		params.SourceKinds = subAgentSourceKinds

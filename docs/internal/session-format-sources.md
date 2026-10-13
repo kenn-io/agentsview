@@ -3241,7 +3241,17 @@ schemas keep their existing ordering behavior.
   login; recorded replies were replaced by synthetic fixtures. The open-source
   Codex app-server shares the protocol types but not the hosted defaults: the
   hosted turn listing returns every item unless `itemsView` is sent, and every
-  probed thread had `historyMode: "legacy"`.
+  probed thread had `historyMode: "legacy"`. A read-only gate probe on
+  2026-10-13 found: `thread/turns/list` accepts `itemsView: "notLoaded"` and
+  returns turns with no items, but rejects `summary`; `thread/list` with
+  `sortKey: "updated_at"` and `sortDirection: "desc"` returns rows whose
+  `updatedAt` never increases, within and across pages; `thread/list` rejects
+  `modelProviders` with `-32602` ("unsupported thread/list parameter(s):
+  model_providers"), so AgentsView sends no provider filter and gets the
+  server's default (`modelProvider: "local"` on every probed thread); the
+  server accepts `codex-client.agentsview` and selects `codex-app-server`; the
+  sub-agent listings (`sourceKinds`) are accepted and returned no threads for
+  that account.
 - **Usage and cost:** The hosted thread history carries no token counts. Token
   counts come only from `thread/tokenUsage/updated` notifications while
   AgentsView is joined to a running thread; counters arrive as JSON numbers

@@ -86,16 +86,21 @@ func (h *Host) ServeThreads(s *Threads) {
 }
 
 // ThreadList answers thread/list newest updatedAt first. A request with
-// sourceKinds lists sub-agent threads; one without lists the others.
+// sourceKinds lists sub-agent threads; one without lists the others. Like
+// the hosted server, it rejects modelProviders.
 func (s *Threads) ThreadList(params jsontext.Value) (any, *Error) {
 	var p struct {
-		Cursor      jsontext.Value `json:"cursor"`
-		Limit       int            `json:"limit"`
-		Archived    bool           `json:"archived"`
-		SourceKinds []string       `json:"sourceKinds"`
+		Cursor         jsontext.Value `json:"cursor"`
+		Limit          int            `json:"limit"`
+		Archived       bool           `json:"archived"`
+		SourceKinds    []string       `json:"sourceKinds"`
+		ModelProviders jsontext.Value `json:"modelProviders"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, &Error{Code: -32602, Message: err.Error()}
+	}
+	if p.ModelProviders != nil {
+		return nil, &Error{Code: -32602, Message: "unsupported thread/list parameter(s): model_providers"}
 	}
 	if p.Limit <= 0 {
 		p.Limit = 50
