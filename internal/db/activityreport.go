@@ -84,7 +84,8 @@ func (db *DB) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	return activity.BuildReportArtifacts(ctx, activityReportBackend{DB: db, lower: lowerBound, upper: upperBound}, sessions, ids, q, onProgress, "aggregating activity report")
+	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{DB: db, lower: lowerBound, upper: upperBound}, sessions, ids, q, onProgress, "aggregating activity report")
+	return artifacts, err
 }
 
 func (db *DB) activityReportMessageCounts(
@@ -202,6 +203,7 @@ func (db *DB) GetSessionUsageRows(
 		}
 		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := sqliteSessionUsageRowTokens(o.scan)
 		snapshotRows[i] = activity.UsageRow{
+			Model:               o.scan.model,
 			SessionID:           o.scan.sessionID,
 			Timestamp:           o.scan.ts,
 			MessageOrdinal:      o.ordinal,
@@ -224,7 +226,7 @@ func (db *DB) GetSessionUsageRows(
 			cacheCrTok, cacheRdTok,
 			usageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
 	}
-	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsageRow, error) {
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsagePrice, error) {
 		o := rowsAcc[i]
 		r := o.scan
 		costRow := r
@@ -238,20 +240,16 @@ func (db *DB) GetSessionUsageRows(
 		cost, priced, contributes, priceErr := sessionRowCostWithWebSearchRequests(
 			costRow, webSearches, rateResolver)
 		if priceErr != nil {
-			return activity.UsageRow{}, priceErr
+			return activity.UsagePrice{}, priceErr
 		}
 		costSource := export.CostSourceComputed
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
-		row := snapshotRows[i]
-		row.Model = r.model
-		row.Cost = cost
-		row.CostSource = costSource
-		row.SessionCost = sessionCost
-		row.Priced = priced
-		row.Contributes = contributes
-		return row, nil
+		return activity.UsagePrice{
+			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
+			Priced: priced, Contributes: contributes,
+		}, nil
 	})
 }
 

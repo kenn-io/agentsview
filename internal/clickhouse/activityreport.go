@@ -150,13 +150,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
 	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, versions, q)
-	var done activity.Progress
-	artifacts, err := activity.BuildReportArtifacts(ctx, activityReportBackend{Store: s, candidates: candidates, pairs: pairs, lower: rangeStartUTC, upper: rangeEndUTC}, sessions, ids, q, func(progress activity.Progress) {
-		if progress.Phase == activity.ProgressDone {
-			done = progress
-		}
-		activity.ReportProgress(onProgress, progress)
-	}, "aggregating clickhouse activity report")
+	artifacts, done, err := activity.BuildReportArtifacts(ctx, activityReportBackend{Store: s, candidates: candidates, pairs: pairs, lower: rangeStartUTC, upper: rangeEndUTC}, sessions, ids, q, onProgress, "aggregating clickhouse activity report")
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -629,6 +623,7 @@ func (s *Store) GetSessionUsageRows(
 	rowContributes := make([]bool, len(rowsAcc))
 	for i, o := range rowsAcc {
 		snapshotRows[i] = activity.UsageRow{
+			Model:               o.scan.model,
 			SessionID:           o.scan.sessionID,
 			Timestamp:           o.scan.ts,
 			MessageOrdinal:      db.UsageRowMessageOrdinal(o.scan.messageOrdinal),
@@ -650,21 +645,17 @@ func (s *Store) GetSessionUsageRows(
 			o.scan.reasoningTok, o.scan.cacheCr, o.scan.cacheRd,
 			o.scan.webSearchRequests)
 	}
-	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsageRow, error) {
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsagePrice, error) {
 		r := rowsAcc[i].scan
 		r.webSearchRequests = webSearches
 		cost, costSource, priced, contributes, sessionCost, priceErr := clickActivityUsageCost(r, rateResolver)
 		if priceErr != nil {
-			return activity.UsageRow{}, priceErr
+			return activity.UsagePrice{}, priceErr
 		}
-		row := snapshotRows[i]
-		row.Model = r.model
-		row.Cost = cost
-		row.CostSource = costSource
-		row.SessionCost = sessionCost
-		row.Priced = priced
-		row.Contributes = contributes
-		return row, nil
+		return activity.UsagePrice{
+			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
+			Priced: priced, Contributes: contributes,
+		}, nil
 	})
 }
 

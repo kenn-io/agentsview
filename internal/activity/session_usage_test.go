@@ -47,14 +47,13 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				contributes[i] = row.OutputTokens > 0
 			}
 			pricedIndexes := []int{}
-			result, err := SelectSessionUsageRows(context.Background(), tc.rows, contributes, func(i, searches int) (UsageRow, error) {
+			result, err := SelectSessionUsageRows(context.Background(), tc.rows, contributes, func(i, searches int) (UsagePrice, error) {
 				pricedIndexes = append(pricedIndexes, i)
-				row := tc.rows[i]
-				row.Cost = money.Money{Microdollars: int64(searches + 7)}
-				row.SessionCost = &money.Money{Microdollars: 42}
-				row.CostSource = export.CostSourceReported
-				row.Priced, row.Contributes = true, true
-				return row, nil
+				return UsagePrice{
+					Cost:        money.Money{Microdollars: int64(searches + 7)},
+					SessionCost: &money.Money{Microdollars: 42},
+					CostSource:  export.CostSourceReported, Priced: true, Contributes: true,
+				}, nil
 			})
 			require.NoError(t, err)
 			require.Len(t, result.Rows, len(tc.wantIndexes))
@@ -76,15 +75,13 @@ func TestSelectSessionUsageRows(t *testing.T) {
 func TestSelectSessionUsageRowsPreservesSurvivorFields(t *testing.T) {
 	rows := []UsageRow{
 		{SessionID: "root", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 10, OutputTokens: 5, WebSearchRequests: 3, ClaudeMessageID: "m", ClaudeRequestID: "r"},
-		{SessionID: "child", Timestamp: "2026-06-16T10:00:01Z", InputTokens: 100, OutputTokens: 20, WebSearchRequests: 1, ClaudeMessageID: "m", ClaudeRequestID: "r"},
+		{SessionID: "child", Model: "model-a", Timestamp: "2026-06-16T10:00:01Z", InputTokens: 100, OutputTokens: 20, WebSearchRequests: 1, ClaudeMessageID: "m", ClaudeRequestID: "r"},
 	}
 	var pricedIndexes, pricedSearches []int
-	result, err := SelectSessionUsageRows(context.Background(), rows, []bool{true, true}, func(i, searches int) (UsageRow, error) {
+	result, err := SelectSessionUsageRows(context.Background(), rows, []bool{true, true}, func(i, searches int) (UsagePrice, error) {
 		pricedIndexes = append(pricedIndexes, i)
 		pricedSearches = append(pricedSearches, searches)
-		row := rows[i]
-		row.Cost = money.Money{Microdollars: int64(searches + 7)}
-		return row, nil
+		return UsagePrice{Cost: money.Money{Microdollars: int64(searches + 7)}}, nil
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Rows, 1)
@@ -92,6 +89,10 @@ func TestSelectSessionUsageRowsPreservesSurvivorFields(t *testing.T) {
 	assert.Equal(t, []int{3}, pricedSearches)
 	assert.Equal(t, "root", result.Rows[0].SessionID)
 	assert.Equal(t, "child", result.Rows[0].SourceSessionID)
+	assert.Equal(t, "model-a", result.Rows[0].Model)
+	assert.Equal(t, rows[1].Timestamp, result.Rows[0].Timestamp)
+	assert.Equal(t, 100, result.Rows[0].InputTokens)
+	assert.Equal(t, 20, result.Rows[0].OutputTokens)
 	assert.Equal(t, 3, result.Rows[0].WebSearchRequests)
 	assert.Equal(t, money.Money{Microdollars: 10}, result.Rows[0].Cost)
 	assert.NotNil(t, result.CanonicalTokenCoverageBySession)
@@ -116,15 +117,15 @@ func TestSelectSessionUsageRowsErrors(t *testing.T) {
 			defer cancel()
 			calls := 0
 			contributes := make([]bool, len(tc.rows))
-			result, err := SelectSessionUsageRows(ctx, tc.rows, contributes, func(int, int) (UsageRow, error) {
+			result, err := SelectSessionUsageRows(ctx, tc.rows, contributes, func(int, int) (UsagePrice, error) {
 				calls++
 				if tc.priceErr != nil {
-					return UsageRow{}, tc.priceErr
+					return UsagePrice{}, tc.priceErr
 				}
 				if tc.cancelAfter {
 					cancel()
 				}
-				return UsageRow{}, nil
+				return UsagePrice{}, nil
 			})
 			assert.ErrorIs(t, err, tc.want)
 			assert.Nil(t, result)

@@ -1589,10 +1589,7 @@ func RecordComputedUsagePricing(
 }
 
 // UsageDedupToken identifies a usage event for deduplication across sources.
-type UsageDedupToken struct {
-	Kind  string
-	Value string
-}
+type UsageDedupToken = activity.UsageDedupToken
 
 // UsageDedupTokenForRow picks the strongest available dedup identity: the
 // Claude message and request pair, then the agent source UUID for message
@@ -1600,12 +1597,11 @@ type UsageDedupToken struct {
 func UsageDedupTokenForRow(
 	usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string,
 ) (UsageDedupToken, bool) {
-	kind, value, ok := activity.SessionUsageDedupTokenForRow(activity.UsageRow{
+	return activity.SessionUsageDedupTokenForRow(activity.UsageRow{
 		UsageSource: usageSource, Agent: agent, ClaudeMessageID: claudeMessageID,
 		ClaudeRequestID: claudeRequestID, SourceUUID: sourceUUID,
 		UsageDedupKey: usageDedupKey,
 	})
-	return UsageDedupToken{Kind: kind, Value: value}, ok
 }
 
 func (db *DB) loadTopSessionMetadata(

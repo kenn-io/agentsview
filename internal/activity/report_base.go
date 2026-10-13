@@ -16,11 +16,11 @@ type ReportBackend interface {
 	BuildProjectIdentityMap(context.Context, []string) (map[string]export.ProjectMapEntry, error)
 }
 
-// BuildReportArtifacts assembles a report after the backend selects its sessions.
-func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions []SessionMeta, ids []string, q Query, onProgress ProgressFunc, aggregationLabel string) (CandidateArtifacts, error) {
+// BuildReportArtifacts assembles a report and returns the emitted completion event.
+func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions []SessionMeta, ids []string, q Query, onProgress ProgressFunc, aggregationLabel string) (CandidateArtifacts, Progress, error) {
 	usage, pricing, err := backend.ActivityReportUsage(ctx, ids, q)
 	if err != nil {
-		return CandidateArtifacts{}, err
+		return CandidateArtifacts{}, Progress{}, err
 	}
 
 	rowsProcessed := int64(0)
@@ -49,10 +49,10 @@ func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions [
 		})
 	}, usage)
 	if err != nil {
-		return CandidateArtifacts{}, fmt.Errorf("%s: %w", aggregationLabel, err)
+		return CandidateArtifacts{}, Progress{}, fmt.Errorf("%s: %w", aggregationLabel, err)
 	}
 	if err := backend.ActivityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {
-		return CandidateArtifacts{}, err
+		return CandidateArtifacts{}, Progress{}, err
 	}
 	ReportProgress(onProgress, Progress{
 		Phase: ProgressFinalizing, SessionsTotal: len(sessions),
@@ -63,18 +63,19 @@ func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions [
 	projects, err := backend.BuildProjectIdentityMap(ctx,
 		ProjectLabels(sessions))
 	if err != nil {
-		return CandidateArtifacts{}, err
+		return CandidateArtifacts{}, Progress{}, err
 	}
 	artifacts.Report.BySession = artifacts.Sessions
 	SanitizeProjectLabels(&artifacts.Report, projects)
 	artifacts.Sessions = artifacts.Report.BySession
 	artifacts.Report.BySession = []SessionRow{}
 	artifacts.Report.Projects = export.ProjectMapForWire(projects)
-	ReportProgress(onProgress, Progress{
+	done := Progress{
 		Phase: ProgressDone, SessionsTotal: len(sessions),
 		SessionsProcessed: len(sessions), RowsProcessed: rowsProcessed,
-	})
-	return artifacts, nil
+	}
+	ReportProgress(onProgress, done)
+	return artifacts, done, nil
 }
 
 // ReportWithSessions includes the session rows in the full report response.

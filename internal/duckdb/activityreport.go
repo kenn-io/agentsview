@@ -60,7 +60,8 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	return activity.BuildReportArtifacts(ctx, activityReportBackend{Store: s, lower: lowerBound, upper: upperBound, filter: f, rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC}, sessions, ids, q, onProgress, "aggregating duckdb activity report")
+	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{Store: s, lower: lowerBound, upper: upperBound, filter: f, rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC}, sessions, ids, q, onProgress, "aggregating duckdb activity report")
+	return artifacts, err
 }
 
 func (s *Store) activityReportMessageCounts(
@@ -224,6 +225,7 @@ func (s *Store) GetSessionUsageRows(
 	rowContributes := make([]bool, len(rowsAcc))
 	for i, o := range rowsAcc {
 		snapshotRows[i] = activity.UsageRow{
+			Model:               o.scan.model,
 			SessionID:           o.scan.sessionID,
 			Timestamp:           o.scan.ts,
 			MessageOrdinal:      o.ordinal,
@@ -245,21 +247,17 @@ func (s *Store) GetSessionUsageRows(
 			o.scan.reasoningTok, o.scan.cacheCr, o.scan.cacheRd,
 			o.scan.webSearchRequests)
 	}
-	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsageRow, error) {
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsagePrice, error) {
 		r := rowsAcc[i].scan
 		r.webSearchRequests = webSearches
 		cost, costSource, priced, contributes, sessionCost, priceErr := duckActivityUsageCost(r, rateResolver)
 		if priceErr != nil {
-			return activity.UsageRow{}, priceErr
+			return activity.UsagePrice{}, priceErr
 		}
-		row := snapshotRows[i]
-		row.Model = r.model
-		row.Cost = cost
-		row.CostSource = costSource
-		row.SessionCost = sessionCost
-		row.Priced = priced
-		row.Contributes = contributes
-		return row, nil
+		return activity.UsagePrice{
+			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
+			Priced: priced, Contributes: contributes,
+		}, nil
 	})
 }
 

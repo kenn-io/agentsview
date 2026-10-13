@@ -60,7 +60,8 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	return activity.BuildReportArtifacts(ctx, activityReportBackend{Store: s, lower: lowerBound, upper: upperBound}, sessions, ids, q, onProgress, "aggregating pg activity report")
+	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{Store: s, lower: lowerBound, upper: upperBound}, sessions, ids, q, onProgress, "aggregating pg activity report")
+	return artifacts, err
 }
 
 func (s *Store) activityReportMessageCounts(
@@ -164,6 +165,7 @@ func (s *Store) GetSessionUsageRows(
 			},
 		)
 		snapshotRows[i] = activity.UsageRow{
+			Model:               o.scan.model,
 			SessionID:           o.scan.sessionID,
 			Timestamp:           o.tsText,
 			MessageOrdinal:      o.ordinal,
@@ -186,7 +188,7 @@ func (s *Store) GetSessionUsageRows(
 			cacheCrTok, cacheRdTok,
 			pgUsageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
 	}
-	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsageRow, error) {
+	return activity.SelectSessionUsageRows(ctx, snapshotRows, rowContributes, func(i int, webSearches int) (activity.UsagePrice, error) {
 		o := rowsAcc[i]
 		r := o.scan
 		costRow := r
@@ -200,20 +202,16 @@ func (s *Store) GetSessionUsageRows(
 		cost, priced, contributes, priceErr := pgSessionRowCostWithWebSearchRequests(
 			costRow, webSearches, rateResolver)
 		if priceErr != nil {
-			return activity.UsageRow{}, priceErr
+			return activity.UsagePrice{}, priceErr
 		}
 		costSource := export.CostSourceComputed
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
-		row := snapshotRows[i]
-		row.Model = r.model
-		row.Cost = cost
-		row.CostSource = costSource
-		row.SessionCost = sessionCost
-		row.Priced = priced
-		row.Contributes = contributes
-		return row, nil
+		return activity.UsagePrice{
+			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
+			Priced: priced, Contributes: contributes,
+		}, nil
 	})
 }
 

@@ -70,7 +70,7 @@ func TestBuildReportArtifacts(t *testing.T) {
 	require.NoError(t, err)
 	backend := &reportBackendFixture{t: t, q: q, pricing: &export.PricingBlock{}}
 	progress := []Progress{}
-	artifacts, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, func(p Progress) { progress = append(progress, p) }, "aggregating example activity report")
+	artifacts, done, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, func(p Progress) { progress = append(progress, p) }, "aggregating example activity report")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
 	assert.Equal(t, []Progress{
@@ -79,6 +79,7 @@ func TestBuildReportArtifacts(t *testing.T) {
 		{Phase: ProgressFinalizing, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
 		{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
 	}, progress)
+	assert.Equal(t, progress[len(progress)-1], done)
 	assert.Equal(t, export.ActivityReportSchemaVersion, artifacts.Report.SchemaVersion)
 	assert.Same(t, backend.pricing, artifacts.Report.Pricing)
 	assert.Equal(t, 20, artifacts.Report.Totals.OutputTokens)
@@ -95,6 +96,15 @@ func TestBuildReportArtifacts(t *testing.T) {
 	assert.Equal(t, 1, report.SessionsTotal)
 }
 
+func TestBuildReportArtifactsWithoutProgressCallback(t *testing.T) {
+	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC"}, fixedNow(t))
+	require.NoError(t, err)
+	backend := &reportBackendFixture{t: t, q: q}
+	_, done, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, nil, "aggregating example activity report")
+	require.NoError(t, err)
+	assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
+}
+
 func TestBuildReportArtifactsErrors(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC"}, fixedNow(t))
 	require.NoError(t, err)
@@ -103,12 +113,13 @@ func TestBuildReportArtifactsErrors(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			backend := &reportBackendFixture{t: t, q: q, stage: stage, err: failure}
 			var done bool
-			_, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, func(p Progress) { done = done || p.Phase == ProgressDone }, "aggregating example activity report")
+			_, completion, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, func(p Progress) { done = done || p.Phase == ProgressDone }, "aggregating example activity report")
 			assert.ErrorIs(t, err, failure)
 			if stage == "candidates" {
 				assert.EqualError(t, err, "aggregating example activity report: read failed")
 			}
 			assert.False(t, done)
+			assert.Equal(t, Progress{}, completion)
 			if stage != "projects" {
 				assert.NotContains(t, backend.calls, "projects")
 			}

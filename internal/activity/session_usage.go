@@ -1,9 +1,23 @@
 package activity
 
-import "context"
+import (
+	"context"
+
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
+)
+
+// UsagePrice holds the backend pricing result for a surviving usage row.
+type UsagePrice struct {
+	Cost        money.Money
+	CostSource  export.CostSource
+	SessionCost *money.Money
+	Priced      bool
+	Contributes bool
+}
 
 // SelectSessionUsageRows selects and prices survivors from sorted rows with matching contribution flags.
-func SelectSessionUsageRows(ctx context.Context, rows []UsageRow, contributes []bool, price func(int, int) (UsageRow, error)) (*SessionUsageRows, error) {
+func SelectSessionUsageRows(ctx context.Context, rows []UsageRow, contributes []bool, price func(int, int) (UsagePrice, error)) (*SessionUsageRows, error) {
 	coverage, err := CanonicalSessionTokenCoverageContext(ctx, rows)
 	if err != nil {
 		return nil, err
@@ -19,7 +33,7 @@ func SelectSessionUsageRows(ctx context.Context, rows []UsageRow, contributes []
 		DiscardedContributingSessions:   make(map[string]struct{}),
 		CanonicalTokenCoverageBySession: coverage,
 	}
-	seen := make(map[usageDedupToken]struct{})
+	seen := make(map[UsageDedupToken]struct{})
 	for i, row := range rows {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -38,17 +52,23 @@ func SelectSessionUsageRows(ctx context.Context, rows []UsageRow, contributes []
 		if attribution[i] != row.SessionID {
 			discard()
 		}
-		if key, ok := sessionUsageDedupTokenForRow(row); ok {
+		if key, ok := SessionUsageDedupTokenForRow(row); ok {
 			if _, duplicate := seen[key]; duplicate {
 				discard()
 				continue
 			}
 			seen[key] = struct{}{}
 		}
-		priced, err := price(i, searches[i])
+		pricing, err := price(i, searches[i])
 		if err != nil {
 			return nil, err
 		}
+		priced := row
+		priced.Cost = pricing.Cost
+		priced.CostSource = pricing.CostSource
+		priced.SessionCost = pricing.SessionCost
+		priced.Priced = pricing.Priced
+		priced.Contributes = pricing.Contributes
 		priced.SourceSessionID = row.SessionID
 		priced.SessionID = attribution[i]
 		priced.WebSearchRequests = searches[i]
