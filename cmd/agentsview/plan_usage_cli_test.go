@@ -257,7 +257,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 
 	var unchecked strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&unchecked, &sessionUsageOutput{
-		SessionUsage: db.SessionUsage{SessionID: "codex-cloud:l", Agent: "codex-cloud"},
+		SessionID: "codex-cloud:l", Agent: "codex-cloud",
 	}))
 	for _, line := range []string{"Output:        n/a\n", "Peak ctx:      n/a\n", "Cost:          n/a\n"} {
 		assert.Contains(t, unchecked.String(), line, "no plan figures: nothing is billed as plan usage yet")
