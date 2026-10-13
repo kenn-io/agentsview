@@ -284,7 +284,7 @@ func refreshDue(entry RefreshEntry) time.Time {
 }
 
 func (s *Syncer) tooManyDescendants(key AccountKey, acct *AccountState, root string, now time.Time) error {
-	s.Log.Printf("codex-cloud: thread %s: too many sub-agent threads for OpenAI's usage report", root)
+	s.Log.Printf("codex-cloud: chat %s: too many sub-agent chats for OpenAI's usage report", root)
 	delete(acct.UsagePending, root)
 	delete(acct.Refresh, root)
 	return s.appendPlan(key, root, now, mirror.KindPlanUsageOutcome,
@@ -512,7 +512,7 @@ func (s *Syncer) settleLeftOut(key AccountKey, root string, now time.Time) error
 	}
 	var last mirror.PlanUsageRowData
 	if err := json.Unmarshal(st.LastPlanRow, &last); err != nil {
-		return fmt.Errorf("codex-cloud: thread %s: stored plan usage row: %w", root, err)
+		return fmt.Errorf("codex-cloud: chat %s: stored plan usage row: %w", root, err)
 	}
 	last.Final = true
 	return s.appendPlan(key, root, now, mirror.KindPlanUsageRow, last)

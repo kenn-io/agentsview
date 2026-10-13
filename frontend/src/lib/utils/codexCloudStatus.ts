@@ -61,8 +61,8 @@ function rowDetail(row: CodexcloudHomeStatus): string[] {
         time: formatTimestamp(row.oldest_failure),
       }),
     );
+    // The server's message already says how retries work.
     if (row.message) lines.push(row.message);
-    lines.push(m.status_bar_codex_cloud_retry_note());
   } else if (row.message) {
     lines.push(row.message);
   }
