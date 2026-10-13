@@ -346,6 +346,9 @@ func (p *pass) thread(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	// Only a changed thread reaches here once retired; its retries start
+	// over.
+	delete(acct.Retired, id)
 	info := p.listed[id]
 	listing := info.raw
 	retry, retrying := acct.Retry[id]
@@ -498,6 +501,7 @@ func (p *pass) unreadable(id string, st ThreadState, acct AccountState, entry Re
 	delete(acct.Retry, id)
 	delete(acct.Unfinished, id)
 	delete(acct.CheckAgain, id)
+	acct.Retired[id] = true
 	return p.Store.SaveAccount(p.key, acct)
 }
 
