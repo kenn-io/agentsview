@@ -208,7 +208,7 @@ func TestReadLoginErrorsExplainTheProblem(t *testing.T) {
 				cfg := "cli_auth_credentials_store = \"vault\"\n"
 				require.NoError(t, os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfg), 0o600))
 			},
-			want: `cli_auth_credentials_store to "vault", which AgentsView does not know. ` +
+			want: `cli_auth_credentials_store to a value AgentsView does not know. ` +
 				`Use "file", "keyring", "auto", or "ephemeral".`,
 		},
 		{
@@ -237,6 +237,7 @@ func TestReadLoginErrorsExplainTheProblem(t *testing.T) {
 			require.True(t, ok, "got %v", err)
 			assert.Contains(t, readErr.Message, tt.want)
 			assert.NotContains(t, readErr.Message, secret)
+			assert.NotContains(t, readErr.Message, "vault", "the status does not quote config.toml values")
 			assert.NotContains(t, readErr.Message, home, "the row already names the home")
 		})
 	}

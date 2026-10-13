@@ -1211,9 +1211,12 @@ ChatGPT account share one import.
   that the ChatGPT account can use Codex.
 - Codex can keep the login in the system keyring instead of `auth.json`, or not
   save it at all. AgentsView does not read the keyring. To let AgentsView use
-  such a home, set `cli_auth_credentials_store = "file"` in that home's
-  `config.toml` and run `codex login`. This stores the ChatGPT login in a plain
-  file that any program running as you can read.
+  such a home, add `cli_auth_credentials_store = "file"` near the top of that
+  home's `config.toml`, before any `[section]`, and run `codex login`. Codex
+  then keeps the ChatGPT login in `auth.json`, a plain file that any program
+  running as you can read. With the default `auto` store, a refused login can
+  mean either an expired login in `auth.json` or a current login in the
+  keyring; the status names both.
 
 #### Private endpoints
 

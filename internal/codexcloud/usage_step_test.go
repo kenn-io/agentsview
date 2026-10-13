@@ -737,3 +737,21 @@ func TestNoUsableHomeNamesTheLoginProblem(t *testing.T) {
 	assert.Empty(t, env.usage.Requests())
 	assert.Equal(t, "Plan usage: "+Message(FailRefreshRequested, time.Time{}), env.planLine(t))
 }
+
+// A plan usage 401 in auto mode can mean an expired login in auth.json as
+// well as a login kept in the keyring; the line must not claim only the
+// keyring.
+func TestUsage401InAutoModeNamesBothCauses(t *testing.T) {
+	env := newUsageEnv(t)
+	login := env.logins["/homes/a"]
+	login.Store = "auto"
+	env.logins["/homes/a"] = login
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.RefuseBearer("token-0", http.StatusUnauthorized)
+
+	env.run(t)
+
+	line := env.planLine(t)
+	assert.Contains(t, line, "Either that saved login expired")
+	assert.NotContains(t, line, "keeps its ChatGPT login in the system keyring")
+}
