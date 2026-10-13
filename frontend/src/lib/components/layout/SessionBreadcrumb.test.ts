@@ -22,6 +22,7 @@ import { ui } from "../../stores/ui.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
+import { formatTimestamp } from "../../utils/format.js";
 
 const { generateForSession, getTiming } = vi.hoisted(() => ({
   generateForSession: vi.fn(),
@@ -1690,10 +1691,20 @@ describe("SessionBreadcrumb", () => {
       });
 
       await vi.waitFor(() => {
-        expect(document.querySelector(".plan-usage-trigger")?.textContent?.trim()).toBe(
+        expect(document.querySelector(".plan-usage-trigger")?.textContent).toContain(
           "Plan usage: 4.13% weekly",
         );
       });
+      // The closed trigger explains its warning icon to sighted and
+      // screen-reader users alike.
+      const trigger = document.querySelector<HTMLElement>(".plan-usage-trigger")!;
+      expect(trigger.title.split("\n")).toEqual([
+        `Plan usage, as of ${formatTimestamp("2026-03-02T09:15:00Z")}`,
+        "2 turns not captured; plan usage covers them",
+      ]);
+      expect(trigger.querySelector(".kit-sr-only")?.textContent).toBe(
+        ", 2 turns not captured; plan usage covers them",
+      );
       const menu = await openPlanUsage();
       expect(menu).toContain("4.13% of the weekly Codex limit");
       expect(menu).toContain("0 credits");
@@ -1727,6 +1738,11 @@ describe("SessionBreadcrumb", () => {
         props: { session: cloudSession(), onBack: () => {} },
       });
 
+      await vi.waitFor(() => {
+        expect(document.querySelector<HTMLElement>(".plan-usage-trigger")?.title).toBe(
+          "Counted under thread Root task",
+        );
+      });
       await openPlanUsage();
       await vi.waitFor(() => {
         expect(document.querySelector(".plan-usage-root")?.textContent?.trim()).toBe(
