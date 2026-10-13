@@ -2377,8 +2377,8 @@ func copySessionDataForIDs(
 	}
 	if oldDBHasTable(ctx, tx, "session_plan_usage") {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO session_plan_usage (session_id, `+sessionPlanUsageCols+`)
-			SELECT session_id, `+sessionPlanUsageCols+`
+			INSERT INTO session_plan_usage (session_id, `+SessionPlanUsageColumns+`)
+			SELECT session_id, `+SessionPlanUsageColumns+`
 			FROM old_db.session_plan_usage
 			WHERE session_id IN (
 				SELECT id FROM `+tempIDsTable+`

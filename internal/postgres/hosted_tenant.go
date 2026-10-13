@@ -59,6 +59,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = checkHostedBinding(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = installHostedCoreUpgrade(ctx, tx, schema, tenant); err != nil {
+			return err
+		}
 		if err = installRawProjectionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}

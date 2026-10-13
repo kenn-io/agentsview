@@ -748,6 +748,19 @@ func TestCheckSchemaCompatRequiresUsageEventMicrodollars(t *testing.T) {
 		"usage_events table missing required columns")
 }
 
+func TestCheckSchemaCompatRequiresPlanUsage(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.execErrors = []schemaProbeQueryError{{
+		contains: "from session_plan_usage",
+		err:      &pgconn.PgError{Code: "42P01", Message: `relation "session_plan_usage" does not exist`},
+	}}
+
+	err := CheckSchemaCompat(t.Context(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session_plan_usage table missing or incomplete")
+}
+
 func TestCheckSchemaCompatRequiresMessageProviderID(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.execErrors = []schemaProbeQueryError{{

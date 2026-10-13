@@ -1415,19 +1415,19 @@ the pattern at every site the storage survey lists.
   `add("usage_root", -1, -1, -1, counted_under)`; hosted reads map
   `counted_under` through `mapIDs`.
 
-- [ ] **Step 1: Write failing tests** (tag `pgtest`):
+- [x] **Step 1: Write failing tests** (tag `pgtest`):
   `TestPushPlanUsageRoundTrip`, `TestPushPlanUsageChangeRepushes`,
   `TestHostedProjectionWritesPlanUsage`, `TestHostedGrandchildUsageRootMapped`,
   `TestCheckSchemaCompatRequiresPlanUsage` (a schema without the table
   fails), `TestPGSessionUsageIncludesPlanUsage` (direct and hosted readers).
 
-- [ ] **Step 2: Run** `make test-postgres` scoped with `-run PlanUsage`; FAIL.
+- [x] **Step 2: Run** `make test-postgres` scoped with `-run PlanUsage`; FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
 
-- [ ] **Step 4: Run**; PASS.
+- [x] **Step 4: Run**; PASS.
 
-- [ ] **Step 5: Commit** `git commit -m "feat(postgres): replicate plan usage"`
+- [x] **Step 5: Commit** `git commit -m "feat(postgres): replicate plan usage"`
 
 ### Task 24: ClickHouse
 
