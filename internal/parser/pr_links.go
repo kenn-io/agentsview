@@ -37,9 +37,9 @@ func NewPRLink(
 	}
 	path := strings.TrimRight(u.Path, "/")
 	for _, separator := range []string{"/pull/", "/pulls/", "/-/merge_requests/"} {
-		if i := strings.LastIndex(path, separator); i >= 0 {
-			urlNumber, err := strconv.Atoi(path[i+len(separator):])
-			if err != nil || urlNumber != number || !strings.EqualFold(strings.TrimPrefix(path[:i], "/"), repository) {
+		if urlRepository, rawNumber, found := strings.CutLast(path, separator); found {
+			urlNumber, err := strconv.Atoi(rawNumber)
+			if err != nil || urlNumber != number || !strings.EqualFold(strings.TrimPrefix(urlRepository, "/"), repository) {
 				return PRLink{}, false
 			}
 			break
