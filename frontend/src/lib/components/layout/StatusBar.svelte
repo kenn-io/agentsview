@@ -7,6 +7,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { codexCloudStatus } from "../../stores/codexCloud.svelte.js";
+  import { SERVER_URL_CHANGE_EVENT } from "../../api/runtime.js";
   import { codexCloudStatusLine } from "../../utils/codexCloudStatus.js";
   import { ActivityIcon } from "../../icons.js";
   import {
@@ -74,13 +75,19 @@
     const interval = window.setInterval(() => {
       relativeTimeTick = Date.now();
     }, RELATIVE_TIME_REFRESH_MS);
-    void codexCloudStatus.load();
-    const codexCloudInterval = window.setInterval(() => {
-      void codexCloudStatus.load();
-    }, CODEX_CLOUD_STATUS_REFRESH_MS);
+    const loadCodexCloudStatus = () => void codexCloudStatus.load();
+    loadCodexCloudStatus();
+    const codexCloudInterval = window.setInterval(
+      loadCodexCloudStatus,
+      CODEX_CLOUD_STATUS_REFRESH_MS,
+    );
+    // Some server switches skip the page reload; load at once so the
+    // previous server's rows do not linger until the next poll.
+    window.addEventListener(SERVER_URL_CHANGE_EVENT, loadCodexCloudStatus);
     return () => {
       window.clearInterval(interval);
       window.clearInterval(codexCloudInterval);
+      window.removeEventListener(SERVER_URL_CHANGE_EVENT, loadCodexCloudStatus);
     };
   });
 </script>
