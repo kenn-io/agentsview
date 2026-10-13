@@ -1372,7 +1372,7 @@ func (d *DB) CopySessionMetadataFrom(
 				CASE WHEN sessions.id IS NULL THEN `+priorRelationship+`
 					WHEN COALESCE(sessions.parser_parent_session_id, '') = ''
 						AND `+spawnEdgeExistsSQL("sessions")+` THEN `+parentlessRelationshipSQL+`
-					ELSE sessions.relationship_type END,
+					ELSE COALESCE(sessions.parser_relationship_type, sessions.relationship_type) END,
 				ep.created_at, ep.updated_at
 			FROM old_db.session_external_parents ep
 			LEFT JOIN main.sessions ON sessions.id = ep.session_id
@@ -1967,6 +1967,9 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	)
 	if oldDBHasColumn(ctx, tx, "sessions", "parser_parent_session_id") {
 		cols = append(cols, "parser_parent_session_id")
+	}
+	if oldDBHasColumn(ctx, tx, "sessions", "parser_relationship_type") {
+		cols = append(cols, "parser_relationship_type")
 	}
 	for _, c := range []string{"agent_label", "entrypoint", "session_kind"} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {

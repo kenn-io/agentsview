@@ -84,9 +84,9 @@ func (db *DB) SetSessionExternalParent(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_external_parents (session_id, parent_session_id, prior_relationship_type)
-		VALUES (?, ?, (SELECT CASE WHEN COALESCE(parser_parent_session_id, '') = ''
+		VALUES (?, ?, (SELECT COALESCE(parser_relationship_type, CASE WHEN COALESCE(parser_parent_session_id, '') = ''
 			AND `+spawnEdgeExistsSQL("sessions")+` THEN `+parentlessRelationshipSQL+`
-			ELSE relationship_type END FROM sessions WHERE id = ?))
+			ELSE relationship_type END) FROM sessions WHERE id = ?))
 		ON CONFLICT(session_id) DO UPDATE SET
 			parent_session_id = excluded.parent_session_id,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,

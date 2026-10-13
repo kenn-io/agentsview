@@ -98,7 +98,7 @@ func TestSimulatedScopedUpgradeReparsesUnchangedFreebuffSource(t *testing.T) {
 func TestClaudeFormatPRLinkUpgradePreservesSessionIdentity(t *testing.T) {
 	providers := []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}
 	scope := db.ScopedDataVersionProviders(131, 132)
-	assert.ElementsMatch(t, providers, scope)
+	assert.ElementsMatch(t, append(providers, parser.AgentGrok), scope)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	for _, provider := range providers {
@@ -145,6 +145,42 @@ func TestClaudeFormatPRLinkUpgradePreservesSessionIdentity(t *testing.T) {
 			assert.Equal(t, 1, count)
 		})
 	}
+}
+
+func TestGrokUpgradePreservesParserRelationship(t *testing.T) {
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: db.ScopedDataVersionProviders(131, 132)}))
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	id := "grok:019f6000-0000-7000-8000-000000000011"
+	source := filepath.Join(root, "cwd-key", "019f6000-0000-7000-8000-000000000011", "summary.json")
+	dbtest.WriteTestFile(t, source, []byte(`{"session_kind":"subagent","session_summary":"Review this change","created_at":"2026-07-18T10:01:00Z","num_messages":1}`))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}}}
+	engine := sync.NewEngine(t.Context(), database, cfg)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	engine.Close()
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d, parser_relationship_type=NULL; PRAGMA user_version=%d", version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(t.Context(), database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	session, err := database.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Empty(t, session.SessionKind)
+	assert.Nil(t, session.ParentSessionID)
+	assert.Equal(t, "subagent", session.RelationshipType)
+	assert.Equal(t, source, database.GetSessionFilePath(t.Context(), id))
+	var relationship string
+	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT parser_relationship_type FROM sessions WHERE id=?", id).Scan(&relationship))
+	assert.Equal(t, "subagent", relationship)
 }
 
 func TestScopedUpgradeWaitsForAuthoritativeFullPass(t *testing.T) {

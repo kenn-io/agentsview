@@ -1465,8 +1465,8 @@ const insertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash,
-			pr_links
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			pr_links, parser_relationship_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1494,6 +1494,7 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			parent_session_id = excluded.parent_session_id,
 			parser_parent_session_id = excluded.parser_parent_session_id,
 			relationship_type = excluded.relationship_type,
+			parser_relationship_type = excluded.parser_relationship_type,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
 			has_total_output_tokens = excluded.has_total_output_tokens,
@@ -1574,6 +1575,7 @@ func upsertSessionArgs(s Session) []any {
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
 		EncodePRLinks(s.PRLinks),
+		s.RelationshipType,
 	}
 }
 

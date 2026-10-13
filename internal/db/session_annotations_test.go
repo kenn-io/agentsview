@@ -486,6 +486,9 @@ func TestRebuildLauncherRelationshipProvenance(t *testing.T) {
 			if tc.copied {
 				want = tc.saved
 			}
+			var parserRelationship string
+			require.NoError(t, destination.getReader().QueryRowContext(ctx, "SELECT parser_relationship_type FROM sessions WHERE id = 'worker'").Scan(&parserRelationship))
+			assert.Equal(t, want, parserRelationship)
 			if !tc.trashed {
 				exported, err := destination.GetArtifactExportSession(ctx, "worker")
 				require.NoError(t, err)
@@ -594,6 +597,46 @@ func TestAnnotationFiltersFindLaunchedWorkers(t *testing.T) {
 	assert.ElementsMatch(t, []string{"manager", "idle"}, listSortedIDs(t, d, defaults))
 	defaults.IDs = []string{"worker"}
 	assert.Equal(t, []string{"worker"}, listSortedIDs(t, d, defaults))
+}
+
+func TestLauncherParentAfterSpawnPreservesParserRelationship(t *testing.T) {
+	for _, relationship := range []string{"", "subagent"} {
+		t.Run(relationship, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "manager", "proj")
+			insertSession(t, d, "child", "proj", func(s *Session) {
+				s.Agent = "grok"
+				s.RelationshipType = relationship
+			})
+			write := SessionBatchWrite{
+				Session:         Session{ID: "spawner", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
+				ReplaceMessages: true,
+				Messages: []Message{{SessionID: "spawner", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
+					ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"}},
+				}},
+			}
+			_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+			require.NoError(t, err)
+			link, err := d.SetSessionExternalParent(ctx, "child", "manager")
+			require.NoError(t, err)
+			assert.False(t, link.Applied)
+			write.Messages[0].HasToolUse = false
+			write.Messages[0].ToolCalls = nil
+			_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+			require.NoError(t, err)
+			exported, err := d.GetArtifactExportSession(ctx, "child")
+			require.NoError(t, err)
+			assert.Nil(t, exported.ParentSessionID)
+			assert.Equal(t, relationship, exported.RelationshipType)
+			_, err = d.ClearSessionExternalParent(ctx, "child")
+			require.NoError(t, err)
+			child, err := d.GetSession(ctx, "child")
+			require.NoError(t, err)
+			assert.Nil(t, child.ParentSessionID)
+			assert.Equal(t, relationship, child.RelationshipType)
+		})
+	}
 }
 
 func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
@@ -912,6 +955,8 @@ func TestLauncherRelationshipProvenanceSchemaUpgrade(t *testing.T) {
 	_, err = d.SetSessionExternalParent(t.Context(), "worker", "missing")
 	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(t.Context(), "ALTER TABLE session_external_parents DROP COLUMN prior_relationship_type")
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(t.Context(), "ALTER TABLE sessions DROP COLUMN parser_relationship_type")
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 	d, err = Open(t.Context(), path)

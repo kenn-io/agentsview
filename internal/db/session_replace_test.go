@@ -109,8 +109,10 @@ func TestReplaceSessionKeepingTrashedCopyPreservesLauncherParent(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			seedReplaceSession(t, d)
-			_, err := d.getWriter().ExecContext(ctx, "UPDATE sessions SET relationship_type = ? WHERE id = 'replace'", prior)
+			original, err := d.GetSessionFull(ctx, "replace")
 			require.NoError(t, err)
+			original.RelationshipType = prior
+			require.NoError(t, d.UpsertSession(ctx, *original))
 			insertSession(t, d, "manager", "proj")
 			link, err := d.SetSessionExternalParent(ctx, "replace", "manager")
 			require.NoError(t, err)
