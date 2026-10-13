@@ -140,6 +140,8 @@ func (f codexCloudTokenFields) context() int64 {
 func codexCloudCoverage(
 	turns []mirror.Turn, tokens []mirror.TokenUsageData, completions []mirror.TurnCompletedData,
 ) ParsedCaptureCoverage {
+	// A repeated batch would read as a counter reset and split baselines.
+	tokens = codexCloudDistinctTokens(tokens)
 	var coverage ParsedCaptureCoverage
 	for _, rec := range tokens {
 		if coverage.LastCaptureAt == nil || rec.ObservedAt.After(*coverage.LastCaptureAt) {

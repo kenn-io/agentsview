@@ -348,6 +348,25 @@ func TestCoverageRules(t *testing.T) {
 			want: 0,
 		},
 		{
+			// A retried monitor save can append an earlier batch again after
+			// newer records. The repeat must not read as a counter reset.
+			name: "a repeated batch after newer records is not a reset",
+			turns: []mirror.Turn{
+				ccTurn("turn-1", "completed", 100), ccTurn("turn-2", "completed", 200),
+				ccTurn("turn-3", "completed", 300), ccTurn("turn-4", "completed", 400),
+			},
+			tokens: []mirror.TokenUsageData{
+				ccTokens("join-a", "turn-1", small, small, 0),
+				ccTokens("join-b", "turn-4", big, small, 10),
+				ccTokens("join-a", "turn-1", small, small, 0),
+			},
+			completions: []mirror.TurnCompletedData{
+				ccCompleted("join-a", "turn-1", 1), ccCompleted("join-b", "turn-4", 11),
+				ccCompleted("join-a", "turn-1", 1),
+			},
+			want: 0,
+		},
+		{
 			name:  "left after 6 hours with no completion and no later turn",
 			turns: []mirror.Turn{ccTurn("turn-1", "completed", 100)},
 			tokens: []mirror.TokenUsageData{
