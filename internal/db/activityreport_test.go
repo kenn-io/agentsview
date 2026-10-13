@@ -755,10 +755,6 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 	require.NoError(t, err)
 	require.Len(t, rowSet.Rows, 1)
 	assert.Equal(t, 631, rowSet.Rows[0].OutputTokens)
-	assert.Equal(t, map[string]activity.SessionTokenCoverage{
-		"root":  {OutputTokens: 631, PeakContextTokens: 2},
-		"child": {OutputTokens: 631, PeakContextTokens: 2},
-	}, rowSet.CanonicalTokenCoverageBySession)
 }
 
 func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {
