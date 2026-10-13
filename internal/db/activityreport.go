@@ -65,13 +65,13 @@ type activityReportBackend struct {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.DB.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
+	return b.activityReportUsage(ctx, ids, b.lowerBound, b.upperBound, q)
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
-	return b.DB.activityReportMessageCounts(ctx, ids, q, artifacts)
+	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
 }
 
 func (db *DB) BuildActivityReportArtifacts(

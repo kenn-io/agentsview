@@ -68,7 +68,7 @@ type activityReportBackend struct {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	return b.Store.activityReportUsage(ctx, b.candidates, ids, b.rangeStartUTC, b.rangeEndUTC, q)
+	return b.activityReportUsage(ctx, b.candidates, ids, b.rangeStartUTC, b.rangeEndUTC, q)
 }
 
 func (b activityReportBackend) ActivityReportCandidateSource([]string, activity.Query) activity.CandidateSource {
