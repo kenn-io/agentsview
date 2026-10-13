@@ -758,7 +758,7 @@ func TestCheckSchemaCompatRequiresPlanUsage(t *testing.T) {
 	err := CheckSchemaCompat(t.Context(), pg)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "session_plan_usage table missing or incomplete")
+	assert.Contains(t, err.Error(), "session_plan_usage table missing required columns")
 }
 
 func TestCheckSchemaCompatRequiresMessageProviderID(t *testing.T) {
