@@ -1084,6 +1084,12 @@ func (b *httpBackend) UsageSummary(
 		SessionCounts: wire.SessionCounts, CacheStats: wire.CacheStats,
 		UnsupportedUsage: wire.UnsupportedUsage,
 	}
+	if wire.PlanOnlySessions != nil {
+		out.PlanOnlySessions = int(*wire.PlanOnlySessions)
+	}
+	if wire.PartlyCapturedSessions != nil {
+		out.PartlyCapturedSessions = int(*wire.PartlyCapturedSessions)
+	}
 	if wire.SchemaVersion != nil {
 		out.SchemaVersion = int(*wire.SchemaVersion)
 	}

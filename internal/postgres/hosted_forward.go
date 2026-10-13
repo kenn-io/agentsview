@@ -114,6 +114,10 @@ func (h *HostedStore) GetUsageMatchingSessionCount(ctx context.Context, f db.Usa
 	return h.physical.GetUsageMatchingSessionCount(ctx, f)
 }
 
+func (h *HostedStore) GetPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (db.PlanUsageSessionCounts, error) {
+	return h.physical.GetPlanUsageSessionCounts(ctx, f)
+}
+
 func (h *HostedStore) ListInsights(ctx context.Context, f db.InsightFilter) ([]db.Insight, error) {
 	return h.physical.ListInsights(ctx, f)
 }

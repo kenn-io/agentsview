@@ -5016,6 +5016,9 @@ components:
         outputTokens:
           format: int64
           type: integer
+        planOnlySessions:
+          format: int64
+          type: integer
       required:
         - model
         - inputTokens
@@ -7859,6 +7862,12 @@ components:
           items:
             $ref: "#/components/schemas/ModelTotal"
           type: array
+        partlyCapturedSessions:
+          format: int64
+          type: integer
+        planOnlySessions:
+          format: int64
+          type: integer
         pricing:
           $ref: "#/components/schemas/ExportPricingBlock"
         projectTotals:

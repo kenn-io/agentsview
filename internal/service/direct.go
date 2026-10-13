@@ -934,7 +934,11 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	summary, err := buildUsageSummary(f, result)
+	planUsage, err := b.db.GetPlanUsageSessionCounts(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := buildUsageSummary(f, result, planUsage)
 	if err != nil {
 		return nil, err
 	}
