@@ -95,28 +95,24 @@ func (w *Waits) RecordHome(home string, f Failure, authMTime time.Time) {
 // login and ends the wait; a ready home's wait is forgotten. A login read
 // before the wait's is older, not new: it does not end the wait.
 func (w *Waits) HomeReady(home string, authMTime time.Time) bool {
+	_, waiting := w.HomeWait(home, authMTime)
+	return !waiting
+}
+
+// HomeWait is HomeReady that also returns the failure the home waits on,
+// read under the same lock so the two always agree.
+func (w *Waits) HomeWait(home string, authMTime time.Time) (Failure, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	wait, ok := w.homes[home]
 	if !ok {
-		return true
+		return FailNone, false
 	}
 	if authMTime.After(wait.authMTime) || !w.now().Before(wait.until) {
 		delete(w.homes, home)
-		return true
+		return FailNone, false
 	}
-	return false
-}
-
-// HomeFailure returns the failure a waiting home recorded, or FailNone
-// when the home is not waiting.
-func (w *Waits) HomeFailure(home string) Failure {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if wait, ok := w.homes[home]; ok {
-		return wait.failure
-	}
-	return FailNone
+	return wait.failure, true
 }
 
 // RecordUsageHome remembers a plan usage 401 for home until its auth.json
