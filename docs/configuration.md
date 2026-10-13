@@ -435,6 +435,7 @@ keeps its default directories.
 | Kilo (legacy)         | (platform-specific, see below)                                                                                                                                   | `tasks/<uuid>/{task_metadata.json,ui_messages.json,api_conversation_history.json}`                                                                            |
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                          | Per-session `messages.jsonl` plus `meta.json`                                                                                                                 |
+| Muse Code             | `~/.local/share/muse/sessions/`                                                                                                                                  | `YYYY/MM/DD/<session>/session.jsonl` event logs, subagents under `subagent/`                                                                                  |
 | OMO                   | `~/.omo/agent/sessions/`                                                                                                                                         | Pi-family JSONL per session                                                                                                                                   |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                         | JSONL per session                                                                                                                                             |
 | OpenClaw              | `~/.openclaw/agents/` and `~/.kimi_openclaw/agents/`                                                                                                             | JSONL per session or SQLite per agent (`agent/openclaw-agent.sqlite`)                                                                                        |
@@ -546,6 +547,16 @@ latest `leaf` entry when selecting the active history. Set `TAU_SESSIONS_DIR` or
 User-run shell commands (`bashExecution`) and messages with the `custom`,
 `branchSummary`, or `compactionSummary` role are not shown. Separate
 `branch_summary` and `compaction` entries are shown.
+
+Muse Code keeps one event log per session under
+`~/.local/share/muse/sessions/YYYY/MM/DD/<session-id>/session.jsonl`, or under
+`$XDG_DATA_HOME/muse/sessions/` when `XDG_DATA_HOME` is set, matching Muse.
+AgentsView rebuilds the conversation from those events: prompts, replies,
+reasoning summaries, tool calls, tool results, and per-reply token usage.
+Subagent runs under `subagent/<child-id>/` appear as child sessions of the
+session that holds them. Muse's generated session names such as `quiet-lyra`
+are not used as titles; a name you set is. Set `MUSE_SESSIONS_DIR` or
+`agents.muse.dirs` to use another sessions root.
 
 **Qoder default directories** include the legacy `~/.qoder/projects/` and
 `~/.qoderwork/projects/` export roots, the Qoder CLI CN store, and the current
@@ -957,6 +968,7 @@ export KIRO_SESSIONS_DIR=~/custom/kiro
 export KIRO_IDE_DIR=~/custom/kiro-ide
 export KILO_LEGACY_DIR=~/custom/kilo-legacy
 export MIMOCODE_DIR=~/custom/mimocode
+export MUSE_SESSIONS_DIR=~/custom/muse/sessions
 export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp
 export OPENCLAW_DIR=~/custom/openclaw

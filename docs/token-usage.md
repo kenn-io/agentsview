@@ -35,8 +35,8 @@ coding yesterday?" — across multiple coding agents from one archive.
     IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual Studio Copilot**, **Mistral
     Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**, and **StepCode**. Coverage
     also includes **Cline CLI**, **Tencent CodeBuddy CN**, **Augure Code**,
-    **Augure Desktop 3 beta**, **Charm Crush**, and **fx**, and reads **DeepSeek
-    Harness** formats through version 3.
+    **Augure Desktop 3 beta**, **Charm Crush**, **fx**, and **Muse Code**, and
+    reads **DeepSeek Harness** formats through version 3.
 
     Coverage depends on what each agent records. AgentsView uses recorded costs
     when available; otherwise it estimates cost from usable token counts and a
@@ -60,6 +60,11 @@ matches the saved byte count or reaches the 16 MiB cap. Otherwise, the preview
 stays. Restored files refresh the result on the next sync. Freshness checks
 cover entry names, sizes, and modification times in `tool-results/`. This
 suffices because fx names result files by content hash.
+
+Muse Code records token counts for each model call but no cost. AgentsView
+prices them from Meta's published Muse Spark and Muse Wonder rates. Muse counts
+cached prompt tokens inside its input total, so AgentsView bills those tokens
+once, at the cached rate. Automated approval reviews are not counted.
 
 Augure Code and Augure Desktop retain recorded usage. Proprietary Augure models
 have no catalog price, so token-based cost estimates remain unpriced unless you

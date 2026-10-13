@@ -2121,6 +2121,7 @@ agentsview help
 | `KIRO_SESSIONS_DIR`                   | `~/.kiro/sessions/cli` and `~/.local/share/kiro-cli` | Kiro CLI sessions directory (JSONL and SQLite)                                                      |
 | `KIRO_IDE_DIR`                        | (platform-specific)                                  | Kiro IDE sessions directory                                                                         |
 | `MIMOCODE_DIR`                        | `~/.local/share/mimocode`                            | MiMoCode data directory                                                                             |
+| `MUSE_SESSIONS_DIR`                   | `~/.local/share/muse/sessions`                       | Muse Code sessions directory; defaults to `$XDG_DATA_HOME/muse/sessions` when set                   |
 | `VIBE_SESSIONS_DIR`                   | `~/.vibe/logs/session`                               | Mistral Vibe sessions directory                                                                     |
 | `OMP_DIR`                             | `~/.omp/agent/sessions`                              | OhMyPi sessions directory                                                                           |
 | `OPENCLAW_DIR`                        | `~/.openclaw/agents` and `~/.kimi_openclaw/agents`   | OpenClaw agents directory                                                                           |

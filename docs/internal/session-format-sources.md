@@ -4451,6 +4451,82 @@ schemas keep their existing ordering behavior.
   reparse. Tool results and
   status attach to calls without separate transcript rows.
 
+## Muse Code (`muse`)
+
+- **Format:** Muse Code writes one append-only event log per session at
+  `${XDG_DATA_HOME:-~/.local/share}/muse/sessions/YYYY/MM/DD/<session-id>/session.jsonl`.
+  The date is the local creation date. Subagent, reminder, and verifier runs
+  log to `<session-dir>/subagent/<child-id>/session.jsonl`, which can nest.
+  Each line is an envelope with `stream.{kind,id}`, a contiguous `sequence`,
+  `recorded_at` in Unix microseconds, `payload_type`, and `payload`. A
+  `retained_frame` line wraps several envelopes as JSON-encoded
+  `children[].record_json` strings. A `retained_marker` line stands in for an
+  omitted live-only record and carries no content. The conversation is the
+  `runtime.session` records with `payload.kind` `run`: `started` (with a
+  `prompt` for a user turn), `model_response_created`,
+  `reasoning_summary_committed`, `assistant_message_committed`,
+  `assistant_tool_calls_committed` (`args` is a JSON-encoded string),
+  `tool_result_batch_committed` (failures are text starting
+  `tool failed: `), and `model_completed`. Session facts come from
+  `runtime.session.metadata`, `runtime.session.route_facts`,
+  `session.workspace_branch.observed`, `session.name.changed`, and
+  `run.model.configured`. The session directory also holds `tool-outputs/`,
+  `approval-review/` logs, SQLite side stores, and lock files; the data root
+  holds a `session-index.db` and a derived `sessions/.msp-view-v1/` cache.
+- **Evidence:** `no-public-source`.
+- **Upstream:** Muse Code is distributed as a closed binary. Meta's
+  [Muse Code documentation](https://dev.meta.ai/docs/muse-code) and the
+  [Muse Session Protocol schema](https://github.com/meta-models/muse-code-sdk/blob/a0c8611b382584eb5091942b477f30e92e1c8d18/schema/msp/stable/msp.schema.json)
+  were searched 2026-10-13; neither documents the on-disk log. The record
+  shapes come from independent readers and captures:
+  a sanitized real Muse 0.2.1 capture in
+  [session-migrate](https://github.com/xhluca/session-migrate/blob/a3b0fae4a38bbe0c0c89876f2f2ee6ee0ad154c4/tests/native_corpus/v1/sources/muse/0.2.1/portable-rich/native/session.jsonl),
+  observations of a Muse 1.4.2 install and its bundled `read-session` skill in
+  [doubleagent](https://github.com/seanthegeek/doubleagent/blob/b94564f88681e6ef839b5bb06eceb54d126b4be8/analyzer/research/muse-code.md),
+  the usage readers in
+  [tokscale](https://github.com/junhoyeo/tokscale/blob/bd62b8c4e07269e5314fac06c6d23262dc714633/crates/tokscale-core/src/sessions/muse.rs)
+  and
+  [CodexBar](https://github.com/steipete/CodexBar/blob/848096328b61b9d20959d41185d972af98474209/Sources/CodexBarCore/Providers/Muse/MuseLocalUsageReader.swift),
+  and the transcript reader in
+  [agent-session-kit](https://github.com/AstroQore/agent-session-kit/blob/d0cc5355aa3ec8a841aaf92edffbdcdeb06fd086/implementations/swift/Sources/AgentSessionKit/Sessions/MuseSessionAdapter.swift).
+  The capture shows the ordering this parser depends on: a response's
+  `model_response_created` comes first, `model_completed` follows its text,
+  and a tool-only response logs `model_completed` before its tool calls.
+  `internal/parser/testdata/muse/` is a synthetic fixture written for these
+  tests in those shapes.
+- **Usage and cost:** Only `model_completed` usage is counted. The same step
+  repeats in `goal_usage_attribution`, a parent's `workflow_child_lifecycle`
+  events roll up its children's logs, and `resource_usage_sampled` reports CPU
+  and memory, so all three are ignored. `input_tokens` includes cached tokens
+  (Meta prices cached input as a discounted part of the prompt), so AgentsView
+  stores uncached input as `input_tokens - cache_read_tokens -
+  cache_write_tokens`, falling back to `cached_tokens` when
+  `cache_read_tokens` is absent. `output_tokens` already includes
+  `reasoning_tokens`. Usage attaches to the assistant message of the response
+  that was open when it arrived; usage with no open response, or a second
+  record for the same response, becomes a standalone usage event keyed by its
+  `sequence`. Muse records no cost. Bare Muse Spark ids match both the
+  `meta/` and `openrouter/meta/` LiteLLM rows, so fixed pricing aliases send
+  them to the `meta/` rows; `muse-wonder-1.0` is absent from the snapshot and
+  uses a supplemental row. Both match Meta's
+  [published rates](https://dev.meta.ai/docs/pricing-rate-limits), checked
+  2026-10-13. `-internal` model ids have no published rate and stay unpriced.
+  Approval-review usage (`automated_review_completed` and the
+  `approval-review/` logs) is not counted.
+- **Agentsview:** `internal/parser/muse.go` and `internal/parser/muse_provider.go`
+  discover only the date tree and `subagent/<child-id>` chains, so
+  `tool-outputs/`, `approval-review/`, and `.msp-view-v1/` are never read.
+  Each log is its own session with ID `muse:<directory-name>`. Records from
+  other streams mirrored into a parent log are skipped. A subagent log links
+  to the session whose `subagent/` directory holds it and inherits that
+  session's workspace, which subagent logs omit. A subagent's first prompt is
+  the parent's instruction and is shown as its user turn. Automatic session
+  names such as `quiet-lyra` are ignored; a name with any other `source`
+  becomes the session name. Task events, `runtime.user_intent.*`, and
+  bookkeeping events are skipped. Rewind and fork records, compaction
+  checkpoints, and mid-run steering prompts have not been observed in a
+  published log and are not rendered. `session-index.db` is not read.
+
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go

@@ -315,6 +315,7 @@ export KIMI_WORK_DIR=~/custom/kimi-work/sessions
 export KIRO_SESSIONS_DIR=~/custom/kiro
 export KIRO_IDE_DIR=~/custom/kiro-ide
 export MIMOCODE_DIR=~/custom/mimocode
+export MUSE_SESSIONS_DIR=~/custom/muse/sessions
 export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp/sessions
 export OPENCLAW_DIR=~/custom/openclaw/agents

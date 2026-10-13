@@ -35,9 +35,10 @@ harnesses include Claude Code, OpenClaude, Codex, Augure Code, Augure Desktop,
 Cline CLI, Crush, CodeBuddy CN, Gemini, Copilot (CLI, VS Code, and Visual
 Studio), Cursor, Cursor IDE, IcodeMate, Qwen Code, DeepSeek TUI and Harness,
 Mistral Vibe, Zed, Warp, OpenCode, Positron, Posit Assistant, Claude Cowork,
-Aider, Antigravity, gptme, Junie, OMO, StepCode, Kilo, Kimi, Kiro, OpenHands,
-Goose, Grok, RooCode, Trae, Windsurf, fx, and dozens more. Every supported source is
-listed in [session discovery](/docs/configuration/#session-discovery).
+Aider, Antigravity, gptme, Junie, Muse Code, OMO, StepCode, Kilo, Kimi, Kiro,
+OpenHands, Goose, Grok, RooCode, Trae, Windsurf, fx, and dozens more. Every
+supported source is listed in
+[session discovery](/docs/configuration/#session-discovery).
 
 - **60+** agent formats parsed
 - **1** binary, zero accounts

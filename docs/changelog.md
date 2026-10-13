@@ -19,6 +19,10 @@ The latest release is
   projects, and search the AgentsView guides. The eight new tools are read-only
   and stay out of the `memory` profile. The server now speaks MCP 2026-07-28
   over stdio, and clients on older protocol versions keep working.
+- Browse and search Muse Code sessions, Meta's terminal coding agent. Each
+  session shows its prompts, replies, reasoning summaries, tool calls, and tool
+  results. Subagent runs appear as child sessions. Usage reports include Muse
+  token counts, priced at Meta's published Muse Spark and Muse Wonder rates.
 - Browse and search the retained archive during full parser and archive-only
   preservation rebuilds with a stale warning; archive writes fail with a retryable
   503. Scoped upgrades and schema repairs finish before serving.

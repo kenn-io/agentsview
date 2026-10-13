@@ -90,6 +90,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentOmnigent:       ProviderMigrationProviderAuthoritative,
 	AgentCodebuff:       ProviderMigrationProviderAuthoritative,
 	AgentCrush:          ProviderMigrationProviderAuthoritative,
+	AgentMuse:           ProviderMigrationProviderAuthoritative,
 
 	AgentDeepSeekHarness: ProviderMigrationProviderAuthoritative,
 }

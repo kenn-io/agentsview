@@ -92,6 +92,7 @@ const (
 	AgentCodebuff       AgentType = "codebuff"
 	AgentFreebuff       AgentType = "freebuff"
 	AgentCrush          AgentType = "crush"
+	AgentMuse           AgentType = "muse"
 )
 
 const AgentDeepSeekHarness AgentType = "deepseek-harness"
@@ -1189,6 +1190,18 @@ var Registry = []AgentDef{
 		// events are not authoritative; periodic reconcile covers
 		// registry and schema churn.
 		PeriodicReconcile: true,
+	},
+	{
+		// Muse Code (Meta) keeps its data under
+		// ${XDG_DATA_HOME:-~/.local/share}/muse on every platform.
+		Type:              AgentMuse,
+		DisplayName:       "Muse Code",
+		EnvVar:            "MUSE_SESSIONS_DIR",
+		DefaultRootEnvVar: "XDG_DATA_HOME",
+		DefaultRootDir:    ".local/share",
+		DefaultDirs:       []string{".local/share/muse/sessions"},
+		IDPrefix:          "muse:",
+		FileBased:         true,
 	},
 }
 
