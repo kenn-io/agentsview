@@ -118,6 +118,13 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Format, lint, and type-check (fix formatting with npm run fmt)
+        # Runs before the slower checks so formatting mistakes show up
+        # first. Lint warnings do not fail this step yet; errors and
+        # unformatted files do.
+        run: npm run check:vp
+        working-directory: frontend
+
       - name: Type-check (svelte-check)
         run: npm run check
         working-directory: frontend
@@ -127,12 +134,6 @@ jobs:
         # kit-ui-check-ignore markers with reasons (e.g. the app token
         # definitions in app.css).
         run: npm run check:kit-ui
-        working-directory: frontend
-
-      - name: Format, lint, and type-check (fix formatting with npm run fmt)
-        # Lint warnings do not fail this step yet; errors and unformatted
-        # files do.
-        run: npm run check:vp
         working-directory: frontend
 
       - name: Run frontend tests
