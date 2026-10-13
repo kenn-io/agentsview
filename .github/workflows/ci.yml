@@ -118,6 +118,10 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Check formatting (vp fmt)
+        run: npm run check:fmt
+        working-directory: frontend
+
       - name: Type-check (svelte-check)
         run: npm run check
         working-directory: frontend
