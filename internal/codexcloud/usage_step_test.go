@@ -613,3 +613,37 @@ func TestCouldNotCheckAfterEarlyAnswerThenFailures(t *testing.T) {
 		assert.False(t, row.Final, "the partial row stays unfinal")
 	}
 }
+
+// TestSettledLeftOutRootUsesRecoveredRow covers a crash after a row was
+// appended but before the thread state was saved: settling a root the
+// report leaves out stores that newest row as final, not the older one
+// the saved state still names.
+func TestSettledLeftOutRootUsesRecoveredRow(t *testing.T) {
+	env := newUsageEnv(t)
+	env.threads.Set(finishedThread("a", ago(time.Hour), message("m", "hi")))
+	env.usage.SetRow("a", codexcloudtest.Row("a", "available", pct(1), nil))
+	env.run(t)
+	newer, err := planRecord(mirror.KindPlanUsageRow, mirror.PlanUsageRowData{
+		Row:      mirror.UsageRow{ThreadID: "a", DataStatus: "available", WeeklyPercent: pct(2)},
+		DataAsOf: fetchNow,
+	}, fetchNow)
+	require.NoError(t, err)
+	st, err := env.syncer.Store.LoadThread(passKey, "a")
+	require.NoError(t, err)
+	_, err = mirror.Append(env.mirrorPath(t, "a"), st.Offset, []mirror.Record{newer})
+	require.NoError(t, err)
+
+	acct := env.account(t)
+	delete(acct.Refresh, "a")
+	acct.UsagePending["a"] = PendingEntry{Since: fetchNow, NextAttempt: fetchNow, LastChange: fetchNow, HasRow: true}
+	require.NoError(t, env.syncer.Store.SaveAccount(passKey, acct))
+	env.usage.SetRow("a", nil)
+	env.clock.Set(fetchNow.Add(7*24*time.Hour + time.Hour))
+	env.run(t)
+
+	plan := env.plan(t, "a")
+	require.NotEmpty(t, plan.rows)
+	last := plan.rows[len(plan.rows)-1]
+	assert.True(t, last.Final)
+	assert.InDelta(t, 2, *last.Row.WeeklyPercent, 0, "the recovered row is the newest")
+}
