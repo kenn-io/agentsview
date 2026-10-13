@@ -2756,5 +2756,98 @@
   "usage_all_projects": "모든 프로젝트",
   "usage_clear_selection": "선택 해제",
   "usage_open_project": "열기",
-  "usage_loading": "불러오는 중..."
+  "usage_loading": "불러오는 중...",
+  "plan_usage_title": "플랜 사용량",
+  "plan_usage_trigger_weekly": "플랜 사용량: 주간 {percent}%",
+  "plan_usage_as_of": "플랜 사용량 ({time} 기준)",
+  "plan_usage_not_checked": "플랜 사용량: 아직 확인하지 않음",
+  "plan_usage_still_updating": "플랜 사용량: 업데이트 중 ({time} 기준)",
+  "plan_usage_not_reported_yet": "플랜 사용량: 아직 보고되지 않음 ({time} 기준)",
+  "plan_usage_partial": "일부 플랜 사용량 ({time} 기준)",
+  "plan_usage_not_reported": "OpenAI가 보고하지 않음",
+  "plan_usage_too_many_subagents": "하위 에이전트 스레드가 너무 많아 OpenAI 사용량 보고서에 포함할 수 없음",
+  "plan_usage_could_not_check": "AgentsView가 플랜 사용량을 확인하지 못했습니다",
+  "plan_usage_account_unavailable": "이 계정에서는 사용량을 사용할 수 없습니다",
+  "plan_usage_counted_under": "{title} 스레드에 포함되어 집계됨",
+  "plan_usage_weekly_share": "Codex 주간 한도의 {percent}%",
+  "plan_usage_five_hour_share": "Codex 5시간 한도의 {percent}%",
+  "plan_usage_credits": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 크레딧"
+      }
+    }
+  ],
+  "plan_usage_credits_note": "크레딧은 플랜에 포함된 양을 넘는 사용량에 대한 OpenAI의 단위이므로, 0 크레딧은 플랜이 작업을 모두 감당했다는 뜻입니다.",
+  "plan_usage_col_split": "모델, 추론 강도, 속도",
+  "plan_usage_col_weekly": "주간",
+  "plan_usage_col_five_hour": "5시간",
+  "plan_usage_col_credits": "크레딧",
+  "capture_tokens_live": "토큰 실시간 수집 ({time} 기준)",
+  "capture_turns_not_captured": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "수집되지 않은 턴 {countLabel}개"
+      }
+    }
+  ],
+  "capture_turns_not_captured_covered": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "수집되지 않은 턴 {countLabel}개, 플랜 사용량에는 포함됨"
+      }
+    }
+  ],
+  "usage_plan_only_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "플랜 사용량으로 청구되어 가격이 매겨지지 않은 세션 {countLabel}개"
+      }
+    }
+  ],
+  "usage_partly_captured_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "일부만 수집된 세션 {countLabel}개, 토큰 수가 실제보다 적습니다."
+      }
+    }
+  ],
+  "status_bar_codex_cloud_waiting": "Codex Cloud: 첫 동기화 대기 중",
+  "status_bar_codex_cloud_importing_found": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Codex Cloud: 가져오는 중, 지금까지 스레드 {countLabel}개 발견"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud: 스레드 {total}개 중 {imported}개 가져오는 중",
+  "status_bar_codex_cloud_up_to_date": "Codex Cloud: {time} 기준 최신",
+  "status_bar_codex_cloud_retrying": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Codex Cloud: 스레드 {countLabel}개를 가져오지 못함"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_error": "Codex Cloud: 오류",
+  "status_bar_codex_cloud_off": "Codex Cloud: 꺼짐",
+  "status_bar_codex_cloud_config_error": "Codex Cloud: 설정 오류",
+  "status_bar_codex_cloud_oldest_failure": "가장 오래된 실패: {time}",
+  "status_bar_codex_cloud_retry_note": "AgentsView가 계속 재시도합니다. 데몬 로그에 각 스레드가 기록됩니다. 이미 가져온 세션에는 영향이 없습니다.",
+  "status_bar_codex_cloud_last_success": "마지막 동기화 성공: {time}",
+  "status_bar_codex_cloud_homes": "Codex 홈: {homes}"
 }

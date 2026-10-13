@@ -36,6 +36,8 @@
     value: number;
     color: string;
     pct: number;
+    // Billed only as plan usage: no tokens or cost to show.
+    planOnly: boolean;
   }
 
   let panel: HTMLElement;
@@ -92,6 +94,7 @@
       id: string;
       label: string;
       value: number;
+      planOnly?: boolean;
     }> = [];
 
     if (zoomedProject && groupBy === "project") {
@@ -119,6 +122,9 @@
         value: isTokenMode
           ? sumSelectedTokens(m, usage.selectedTokenTypes)
           : m.cost.microdollars,
+        planOnly:
+          (m.planOnlySessions ?? 0) > 0 &&
+          m.inputTokens + m.outputTokens + m.cacheCreationTokens + m.cacheReadTokens === 0,
       }));
     } else {
       items = s!.agentTotals.map((a) => ({
@@ -146,6 +152,7 @@
         ? colorMap.get(zoomedProject.key) ?? "var(--text-muted)"
         : colorMap.get(d.id) ?? "var(--text-muted)",
       pct: total > 0 ? d.value / total : 0,
+      planOnly: d.planOnly ?? false,
     }));
   });
 
@@ -311,9 +318,11 @@
               ></span>
               <span class="rail-label">{row.label}</span>
               <span class="rail-cost">
-                {isTokenMode
-                  ? formatTokenCount(row.value)
-                  : formatMoney(moneyFromMicrodollars(row.value))}
+                {row.planOnly
+                  ? m.plan_usage_title()
+                  : isTokenMode
+                    ? formatTokenCount(row.value)
+                    : formatMoney(moneyFromMicrodollars(row.value))}
               </span>
             </div>
           {/each}
@@ -346,18 +355,20 @@
               <div class="list-bar-track">
                 <div
                   class="list-bar-fill"
-                  style="width: {Math.max(row.pct * 100, 1)}%;
+                  style="width: {row.planOnly ? 0 : Math.max(row.pct * 100, 1)}%;
                          background: {row.color};"
                 ></div>
               </div>
             </div>
             <span class="list-pct">
-              {(row.pct * 100).toFixed(1)}%
+              {row.planOnly ? "" : `${(row.pct * 100).toFixed(1)}%`}
             </span>
             <span class="list-cost">
-              {isTokenMode
-                ? formatTokenCount(row.value)
-                : formatMoney(moneyFromMicrodollars(row.value))}
+              {row.planOnly
+                ? m.plan_usage_title()
+                : isTokenMode
+                  ? formatTokenCount(row.value)
+                  : formatMoney(moneyFromMicrodollars(row.value))}
             </span>
           </div>
         {/each}

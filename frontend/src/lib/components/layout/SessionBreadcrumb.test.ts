@@ -1619,6 +1619,129 @@ describe("SessionBreadcrumb", () => {
     }
   });
 
+  describe("plan usage", () => {
+    const cloudSession = () => makeSession("codex-cloud", { id: "codex-cloud:thread-a" });
+
+    async function openPlanUsage(): Promise<string> {
+      await vi.waitFor(() => {
+        expect(document.querySelector(".plan-usage-trigger")).not.toBeNull();
+      });
+      const details = document.querySelector<HTMLDetailsElement>(".plan-usage")!;
+      details.open = true;
+      details.dispatchEvent(new Event("toggle"));
+      await tick();
+      return document.querySelector(".plan-usage-menu")?.textContent ?? "";
+    }
+
+    it("says not checked yet once the usage read answers without a row", async () => {
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
+        makeUsage({ agent: "codex-cloud" }),
+      );
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: cloudSession(), onBack: () => {} },
+      });
+
+      expect(await openPlanUsage()).toContain("Plan usage: not checked yet");
+    });
+
+    it("shows no plan usage control for a session from another agent", async () => {
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+      await vi.waitFor(() => {
+        expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalled();
+      });
+      await flushPromises();
+
+      expect(document.querySelector(".plan-usage")).toBeNull();
+    });
+
+    it("shows the figures, their split, the credits note, and capture coverage", async () => {
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue({
+        ...makeUsage({ agent: "codex-cloud" }),
+        plan_usage: {
+          data_as_of: "2026-03-02T09:15:00Z",
+          data_status: "available",
+          weekly_percent: 4.125,
+          credits: "0E-10",
+          final: false,
+          groups: [
+            {
+              model: "model-a",
+              reasoning_effort: "high",
+              speed: "standard",
+              product_experience: "",
+              weekly_percent: 4.125,
+              five_hour_percent: null,
+              credits: "0E-10",
+            },
+          ],
+        },
+        capture_coverage: {
+          last_capture_at: "2026-03-02T09:00:00Z",
+          uncaptured_turns: 2,
+        },
+      });
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: cloudSession(), onBack: () => {} },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".plan-usage-trigger")?.textContent?.trim()).toBe(
+          "Plan usage: 4.13% weekly",
+        );
+      });
+      const menu = await openPlanUsage();
+      expect(menu).toContain("4.13% of the weekly Codex limit");
+      expect(menu).toContain("0 credits");
+      expect(document.querySelector(".plan-usage-menu tbody tr")?.textContent).toContain(
+        "model-a · high · standard",
+      );
+      expect(menu).toContain("so 0 credits means the plan covered the work");
+      expect(menu).toContain("2 turns not captured; plan usage covers them");
+    });
+
+    it("links a counted-under thread to its usage root by title", async () => {
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue({
+        ...makeUsage({ agent: "codex-cloud" }),
+        plan_usage: {
+          outcome_kind: "counted_under",
+          outcome_at: "2026-03-02T09:15:00Z",
+          counted_under: "codex-cloud:root-thread",
+          final: false,
+          groups: [],
+        },
+      });
+      sessionsService.getApiV1SessionsById.mockResolvedValue(
+        makeSession("codex-cloud", {
+          id: "codex-cloud:root-thread",
+          display_name: "Root task",
+        }),
+      );
+      const navigateSpy = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: cloudSession(), onBack: () => {} },
+      });
+
+      await openPlanUsage();
+      await vi.waitFor(() => {
+        expect(document.querySelector(".plan-usage-root")?.textContent?.trim()).toBe(
+          "Counted under thread Root task",
+        );
+      });
+      expect(sessionsService.getApiV1SessionsById.mock.lastCall?.[0]).toEqual({
+        id: "codex-cloud:root-thread",
+      });
+      document.querySelector<HTMLElement>(".plan-usage-root")!.click();
+      expect(navigateSpy).toHaveBeenCalledWith("codex-cloud:root-thread");
+      navigateSpy.mockRestore();
+    });
+  });
+
   describe("cost badge", () => {
     afterEach(() => {
       messages.clear();

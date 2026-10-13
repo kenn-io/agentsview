@@ -14,6 +14,7 @@ import { createSessionsStore, sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
+import { codexCloudStatus } from "./lib/stores/codexCloud.svelte.js";
 import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
@@ -70,6 +71,7 @@ function stubAppDependencies() {
   vi.spyOn(sync, "loadVersion").mockResolvedValue();
   vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
   vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+  vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
   vi.spyOn(sync, "watchSession").mockImplementation(() => {});
   vi.spyOn(sessions, "loadProjects").mockResolvedValue();
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -210,6 +212,7 @@ describe("App Recall availability", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
 
@@ -252,6 +255,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
@@ -297,6 +301,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
@@ -341,6 +346,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
@@ -390,6 +396,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
@@ -433,6 +440,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
@@ -480,6 +488,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
@@ -553,6 +562,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
@@ -1462,6 +1472,7 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockImplementation(() => {
       const shared = yokedDates.seedForPanel();
@@ -1558,6 +1569,7 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockImplementation(() => {
       sessionLoadDates.push({
@@ -1624,6 +1636,7 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sessions, "load").mockImplementation(() => {
       sessionLoadFilters.push({
         project: sessions.filters.project,
@@ -1695,6 +1708,7 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sessions, "load").mockImplementation(() => {
       sessionLoadDates.push({
         dateFrom: sessions.filters.dateFrom,
@@ -1786,6 +1800,7 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();

@@ -6,6 +6,8 @@
   import { perf } from "../../stores/perf.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { codexCloudStatus } from "../../stores/codexCloud.svelte.js";
+  import { codexCloudStatusLine } from "../../utils/codexCloudStatus.js";
   import { ActivityIcon } from "../../icons.js";
   import {
     formatNumber,
@@ -14,6 +16,7 @@
   } from "../../utils/format.js";
 
   const RELATIVE_TIME_REFRESH_MS = 10_000;
+  const CODEX_CLOUD_STATUS_REFRESH_MS = 10_000;
   const isMac = navigator.platform.toUpperCase().includes("MAC");
   const mod = isMac ? "⌘" : "Ctrl";
   let relativeTimeTick = $state(0);
@@ -65,11 +68,20 @@
     sync.lastSync ? formatTimestamp(sync.lastSync) : null,
   );
 
+  let codexCloudLine = $derived(codexCloudStatusLine(codexCloudStatus.rows));
+
   onMount(() => {
     const interval = window.setInterval(() => {
       relativeTimeTick = Date.now();
     }, RELATIVE_TIME_REFRESH_MS);
-    return () => window.clearInterval(interval);
+    void codexCloudStatus.load();
+    const codexCloudInterval = window.setInterval(() => {
+      void codexCloudStatus.load();
+    }, CODEX_CLOUD_STATUS_REFRESH_MS);
+    return () => {
+      window.clearInterval(interval);
+      window.clearInterval(codexCloudInterval);
+    };
   });
 </script>
 
@@ -125,6 +137,16 @@
       >
         {m.status_bar_sync_not_ready()}
       </button>
+      <span class="sep">&middot;</span>
+    {/if}
+    {#if codexCloudLine}
+      <span
+        class="codex-cloud-status"
+        class:codex-cloud-status--warn={codexCloudLine.warn}
+        title={codexCloudLine.detail}
+      >
+        {codexCloudLine.summary}
+      </span>
       <span class="sep">&middot;</span>
     {/if}
     {#if sync.isDesktop}
@@ -230,6 +252,17 @@
 
   .sync-progress {
     color: var(--accent-green);
+  }
+
+  .codex-cloud-status {
+    font-size: 10px;
+    white-space: nowrap;
+    cursor: default;
+  }
+
+  .codex-cloud-status--warn {
+    color: var(--accent-red);
+    font-weight: 500;
   }
 
   .perf-toggle {

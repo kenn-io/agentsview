@@ -2837,5 +2837,105 @@
   "usage_all_projects": "All projects",
   "usage_clear_selection": "Clear selection",
   "usage_open_project": "Open",
-  "usage_loading": "Loading..."
+  "usage_loading": "Loading...",
+  "plan_usage_title": "Plan usage",
+  "plan_usage_trigger_weekly": "Plan usage: {percent}% weekly",
+  "plan_usage_as_of": "Plan usage, as of {time}",
+  "plan_usage_not_checked": "Plan usage: not checked yet",
+  "plan_usage_still_updating": "Plan usage: still updating, as of {time}",
+  "plan_usage_not_reported_yet": "Plan usage: not reported yet, as of {time}",
+  "plan_usage_partial": "Partial plan usage, as of {time}",
+  "plan_usage_not_reported": "Not reported by OpenAI",
+  "plan_usage_too_many_subagents": "Too many sub-agent threads for OpenAI's usage report",
+  "plan_usage_could_not_check": "AgentsView could not check plan usage",
+  "plan_usage_account_unavailable": "Usage isn't available for this account",
+  "plan_usage_counted_under": "Counted under thread {title}",
+  "plan_usage_weekly_share": "{percent}% of the weekly Codex limit",
+  "plan_usage_five_hour_share": "{percent}% of the five-hour Codex limit",
+  "plan_usage_credits": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} credit",
+        "countPlural=other": "{countLabel} credits"
+      }
+    }
+  ],
+  "plan_usage_credits_note": "Credits are OpenAI's unit for usage beyond what the plan includes, so 0 credits means the plan covered the work.",
+  "plan_usage_col_split": "Model, effort, speed",
+  "plan_usage_col_weekly": "Weekly",
+  "plan_usage_col_five_hour": "5-hour",
+  "plan_usage_col_credits": "Credits",
+  "capture_tokens_live": "Tokens captured live, as of {time}",
+  "capture_turns_not_captured": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} turn not captured",
+        "countPlural=other": "{countLabel} turns not captured"
+      }
+    }
+  ],
+  "capture_turns_not_captured_covered": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} turn not captured; plan usage covers it",
+        "countPlural=other": "{countLabel} turns not captured; plan usage covers them"
+      }
+    }
+  ],
+  "usage_plan_only_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session billed as plan usage, not priced",
+        "countPlural=other": "{countLabel} sessions billed as plan usage, not priced"
+      }
+    }
+  ],
+  "usage_partly_captured_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session partly captured; its token counts are low.",
+        "countPlural=other": "{countLabel} sessions partly captured; their token counts are low."
+      }
+    }
+  ],
+  "status_bar_codex_cloud_waiting": "Codex Cloud: waiting for first sync",
+  "status_bar_codex_cloud_importing_found": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Codex Cloud: importing, found {countLabel} thread so far",
+        "countPlural=other": "Codex Cloud: importing, found {countLabel} threads so far"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud: importing {imported} of {total} threads",
+  "status_bar_codex_cloud_up_to_date": "Codex Cloud: up to date as of {time}",
+  "status_bar_codex_cloud_retrying": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Codex Cloud: {countLabel} thread could not be imported",
+        "countPlural=other": "Codex Cloud: {countLabel} threads could not be imported"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_error": "Codex Cloud: error",
+  "status_bar_codex_cloud_off": "Codex Cloud: off",
+  "status_bar_codex_cloud_config_error": "Codex Cloud: settings error",
+  "status_bar_codex_cloud_oldest_failure": "Oldest failure: {time}",
+  "status_bar_codex_cloud_retry_note": "AgentsView keeps retrying them. The daemon log lists each thread. Sessions already imported are not affected.",
+  "status_bar_codex_cloud_last_success": "Last successful sync: {time}",
+  "status_bar_codex_cloud_homes": "Codex homes: {homes}"
 }

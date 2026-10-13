@@ -2861,5 +2861,105 @@
   "usage_all_projects": "Todos los proyectos",
   "usage_clear_selection": "Borrar selección",
   "usage_open_project": "Abrir",
-  "usage_loading": "Cargando..."
+  "usage_loading": "Cargando...",
+  "plan_usage_title": "Uso del plan",
+  "plan_usage_trigger_weekly": "Uso del plan: {percent}% semanal",
+  "plan_usage_as_of": "Uso del plan, a {time}",
+  "plan_usage_not_checked": "Uso del plan: aún no comprobado",
+  "plan_usage_still_updating": "Uso del plan: aún actualizándose, a {time}",
+  "plan_usage_not_reported_yet": "Uso del plan: aún no informado, a {time}",
+  "plan_usage_partial": "Uso del plan parcial, a {time}",
+  "plan_usage_not_reported": "OpenAI no lo informó",
+  "plan_usage_too_many_subagents": "Demasiados hilos de subagentes para el informe de uso de OpenAI",
+  "plan_usage_could_not_check": "AgentsView no pudo comprobar el uso del plan",
+  "plan_usage_account_unavailable": "El uso no está disponible para esta cuenta",
+  "plan_usage_counted_under": "Contado en el hilo {title}",
+  "plan_usage_weekly_share": "{percent}% del límite semanal de Codex",
+  "plan_usage_five_hour_share": "{percent}% del límite de cinco horas de Codex",
+  "plan_usage_credits": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} crédito",
+        "countPlural=other": "{countLabel} créditos"
+      }
+    }
+  ],
+  "plan_usage_credits_note": "Los créditos son la unidad de OpenAI para el uso que supera lo que incluye el plan, así que 0 créditos significa que el plan cubrió el trabajo.",
+  "plan_usage_col_split": "Modelo, esfuerzo, velocidad",
+  "plan_usage_col_weekly": "Semanal",
+  "plan_usage_col_five_hour": "5 horas",
+  "plan_usage_col_credits": "Créditos",
+  "capture_tokens_live": "Tokens capturados en vivo, a {time}",
+  "capture_turns_not_captured": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} turno sin capturar",
+        "countPlural=other": "{countLabel} turnos sin capturar"
+      }
+    }
+  ],
+  "capture_turns_not_captured_covered": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} turno sin capturar; el uso del plan lo cubre",
+        "countPlural=other": "{countLabel} turnos sin capturar; el uso del plan los cubre"
+      }
+    }
+  ],
+  "usage_plan_only_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} sesión facturada como uso del plan, sin precio",
+        "countPlural=other": "{countLabel} sesiones facturadas como uso del plan, sin precio"
+      }
+    }
+  ],
+  "usage_partly_captured_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} sesión capturada en parte; sus recuentos de tokens son bajos.",
+        "countPlural=other": "{countLabel} sesiones capturadas en parte; sus recuentos de tokens son bajos."
+      }
+    }
+  ],
+  "status_bar_codex_cloud_waiting": "Codex Cloud: esperando la primera sincronización",
+  "status_bar_codex_cloud_importing_found": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Codex Cloud: importando, {countLabel} hilo encontrado hasta ahora",
+        "countPlural=other": "Codex Cloud: importando, {countLabel} hilos encontrados hasta ahora"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud: importando {imported} de {total} hilos",
+  "status_bar_codex_cloud_up_to_date": "Codex Cloud: al día a {time}",
+  "status_bar_codex_cloud_retrying": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Codex Cloud: {countLabel} hilo no se pudo importar",
+        "countPlural=other": "Codex Cloud: {countLabel} hilos no se pudieron importar"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_error": "Codex Cloud: error",
+  "status_bar_codex_cloud_off": "Codex Cloud: desactivado",
+  "status_bar_codex_cloud_config_error": "Codex Cloud: error de configuración",
+  "status_bar_codex_cloud_oldest_failure": "Fallo más antiguo: {time}",
+  "status_bar_codex_cloud_retry_note": "AgentsView sigue reintentándolos. El registro del daemon lista cada hilo. Las sesiones ya importadas no se ven afectadas.",
+  "status_bar_codex_cloud_last_success": "Última sincronización correcta: {time}",
+  "status_bar_codex_cloud_homes": "Carpetas de Codex: {homes}"
 }
