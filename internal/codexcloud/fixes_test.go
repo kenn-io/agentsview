@@ -3,6 +3,7 @@ package codexcloud
 import (
 	"context"
 	"encoding/json/jsontext"
+	"fmt"
 	"net/http"
 	"os"
 	"runtime"
@@ -540,4 +541,23 @@ func TestUnreadableConfigSaysLastGoodSettingsKeepImportOff(t *testing.T) {
 	assert.Contains(t, row.Message, "/data/config.toml could not be read")
 	assert.Contains(t, row.Message, "Off: enabled is false.", "the user must know import stays off")
 	assert.Zero(t, env.calls("thread/list"))
+}
+
+func TestLocalErrorStaysLocalWhenTheConnectionEndsRightAfter(t *testing.T) {
+	env := newPassEnv(t)
+	path, err := env.syncer.Store.path(passKey, "a", ".state.json")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(path, 0o700))
+	_, readErr := env.syncer.Store.LoadThread(passKey, "a")
+	require.Error(t, readErr)
+	// The listing reply arrived, then the server closed the connection
+	// before the pass looked at the error.
+	conn := &Conn{done: make(chan struct{})}
+	conn.setErr(fmt.Errorf("%w: connection reset", ErrClosed))
+	p := &pass{Syncer: env.syncer, key: passKey, gates: env.syncer.Gates(), now: env.clock.Now(), conn: conn}
+
+	err = p.finish(t.Context(), readErr)
+
+	require.ErrorIs(t, err, readErr, "the local error is returned for the local error row")
+	assert.Zero(t, env.account(t).Wait, "a local file problem is not an outage")
 }

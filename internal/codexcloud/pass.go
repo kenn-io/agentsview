@@ -143,7 +143,8 @@ func (s *Syncer) localErrorRow(key AccountKey, logins []Login, err error) {
 		// The error names a local path; the log has it, and the status
 		// stays one plain message.
 		Message: "AgentsView could not read or save its import state, so imports from this account are " +
-			"paused. The daemon log names the file and the error. AgentsView tries again on the next sync.",
+			"paused. The daemon log names the file and the error. Check that AgentsView can read and " +
+			"write its data directory; imports resume on the next sync after that.",
 	})
 }
 
@@ -744,7 +745,11 @@ func (p *pass) finish(ctx context.Context, err error) error {
 }
 
 // threadEnd reports whether a fetch error ends the account's pass: a
-// dropped connection, an overloaded server, or a protocol change.
+// dropped connection, an overloaded server, or a protocol change. An error
+// counts as the dropped connection's only when it is the connection's own
+// error. A server can close the connection right after a reply, so a local
+// error, such as a state file that cannot be read, can arrive after the
+// connection ended and must still be reported as local.
 func (p *pass) threadEnd(err error) bool {
 	if errors.Is(err, ErrProtocolChange) {
 		return true
@@ -752,7 +757,11 @@ func (p *pass) threadEnd(err error) bool {
 	if _, ok := errors.AsType[*RPCError](err); ok {
 		return true
 	}
-	return p.conn != nil && p.conn.Err() != nil
+	if p.conn == nil {
+		return false
+	}
+	connErr := p.conn.Err()
+	return connErr != nil && errors.Is(err, connErr)
 }
 
 // homeEnd ends the pass early because the current home's login cannot be
