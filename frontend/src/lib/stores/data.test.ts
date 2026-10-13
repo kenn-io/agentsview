@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { DataService } from "../api/generated/index";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { DbProjectInventory, DbProjectInventoryRow } from "../api/generated/index";
 
 const api = vi.hoisted(() => ({
