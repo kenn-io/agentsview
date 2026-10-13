@@ -100,7 +100,7 @@ func (m *Monitor) discoverAccount(ctx context.Context, gates Gates, key AccountK
 	if m.isStopped(key) {
 		return nil
 	}
-	ready, err := m.accountReady(key)
+	wait, ready, err := m.accountWait(key)
 	if err != nil || !ready {
 		return err
 	}
@@ -118,6 +118,10 @@ func (m *Monitor) discoverAccount(ctx context.Context, gates Gates, key AccountK
 		if err := conn.Call(ctx, "thread/list", params, &page); err != nil {
 			return m.failure(ctx, key, login, "", "thread/list", err)
 		}
+		if err := m.resetAccount(key, wait); err != nil {
+			return err
+		}
+		wait = WaitState{}
 		recentToEnd := len(page.Data) > 0
 		for _, raw := range page.Data {
 			var row discoveryRow
@@ -195,11 +199,38 @@ func (m *Monitor) check(
 }
 
 func (m *Monitor) accountReady(key AccountKey) (bool, error) {
+	_, ready, err := m.accountWait(key)
+	return ready, err
+}
+
+// accountWait reads the account's wait and whether it has ended.
+func (m *Monitor) accountWait(key AccountKey) (WaitState, bool, error) {
 	unlock := m.Store.Lock(key)
 	defer unlock()
 	acct, err := m.Store.LoadAccount(key)
 	if err != nil {
-		return false, err
+		return WaitState{}, false, err
 	}
-	return m.Waits.AccountReady(&acct), nil
+	return acct.Wait, m.Waits.AccountReady(&acct), nil
+}
+
+// resetAccount clears the wait discovery saw before a successful request,
+// as a successful sync pass does, so failures between successes start
+// again from the shortest wait. A wait another job set since then is
+// newer than this success and stays.
+func (m *Monitor) resetAccount(key AccountKey, seen WaitState) error {
+	if seen == (WaitState{}) {
+		return nil
+	}
+	unlock := m.Store.Lock(key)
+	defer unlock()
+	acct, err := m.Store.LoadAccount(key)
+	if err != nil {
+		return err
+	}
+	if acct.Wait.Failure != seen.Failure || acct.Wait.Attempts != seen.Attempts || !acct.Wait.Until.Equal(seen.Until) {
+		return nil
+	}
+	m.Waits.ResetAccount(&acct)
+	return m.Store.SaveAccount(key, acct)
 }
