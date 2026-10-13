@@ -14,6 +14,7 @@
     "precheck": "npm run i18n:compile && npm run check:api:if-available",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "check:kit-ui": "kit-ui-check src",
+    "fmt": "vp fmt",
     "check:fmt": "vp fmt --check",
     "test": "vp test run",
     "e2e": "playwright test"
