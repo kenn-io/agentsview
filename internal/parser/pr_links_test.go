@@ -44,6 +44,16 @@ func TestNewPRLink(t *testing.T) {
 			},
 			wantOK: true,
 		},
+		{
+			name: "pull repository segment", url: "https://gitlab.com/group/pull/repo/-/merge_requests/7",
+			repository: "group/pull/repo", number: 7, wantOK: true,
+			want: PRLink{URL: "https://gitlab.com/group/pull/repo/-/merge_requests/7", Host: "gitlab.com", Repository: "group/pull/repo", Number: 7},
+		},
+		{
+			name: "pulls repository segment", url: "https://gitlab.com/group/pulls/repo/-/merge_requests/7",
+			repository: "group/pulls/repo", number: 7, wantOK: true,
+			want: PRLink{URL: "https://gitlab.com/group/pulls/repo/-/merge_requests/7", Host: "gitlab.com", Repository: "group/pulls/repo", Number: 7},
+		},
 		{name: "missing repository", url: "https://github.com/owner/repo/pull/1", number: 1},
 		{name: "conflicting repository", url: "https://github.com/owner/repo/pull/1", repository: "other/repo", number: 1},
 		{name: "conflicting number", url: "https://github.com/owner/repo/pull/1", repository: "owner/repo", number: 2},

@@ -230,6 +230,40 @@ func TestPermanentDeletionRemovesOnlyStoredSessionAnnotations(t *testing.T) {
 	}
 }
 
+func TestDeleteSpawnerRecomputesPendingLauncherParent(t *testing.T) {
+	for _, relationship := range []string{"", "subagent"} {
+		t.Run(relationship, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "worker", "proj", func(s *Session) { s.RelationshipType = relationship })
+			insertSession(t, d, "manager", "proj")
+			insertMessages(t, d, Message{
+				SessionID: "manager", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
+				ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}},
+			})
+			require.NoError(t, d.LinkSubagentSessions())
+			link, err := d.SetSessionExternalParent(ctx, "worker", "manager")
+			require.NoError(t, err)
+			require.False(t, link.Applied)
+			_, err = d.getWriter().ExecContext(ctx, "UPDATE sessions SET sync_marker='2000-01-01T00:00:00.000Z' WHERE id='worker'")
+			require.NoError(t, err)
+			require.NoError(t, d.DeleteSession(ctx, "manager"))
+			worker, err := d.GetSession(ctx, "worker")
+			require.NoError(t, err)
+			require.NotNil(t, worker)
+			assert.Nil(t, worker.ParentSessionID)
+			assert.Equal(t, relationship, worker.RelationshipType)
+			var marker string
+			require.NoError(t, d.getReader().QueryRowContext(ctx, "SELECT sync_marker FROM sessions WHERE id='worker'").Scan(&marker))
+			assert.Greater(t, marker, "2000-01-01T00:00:00.000Z")
+			link, err = loadSessionExternalParent(ctx, d.getReader(), "worker")
+			require.NoError(t, err)
+			assert.Equal(t, "manager", link.ParentSessionID)
+			assert.False(t, link.Applied)
+		})
+	}
+}
+
 func TestSessionExternalParentApplication(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

@@ -36,13 +36,18 @@ func NewPRLink(
 		return PRLink{}, false
 	}
 	path := strings.TrimRight(u.Path, "/")
+	var urlRepository, rawNumber string
+	var routeFound bool
 	for _, separator := range []string{"/pull/", "/pulls/", "/-/merge_requests/"} {
-		if urlRepository, rawNumber, found := strings.CutLast(path, separator); found {
-			urlNumber, err := strconv.Atoi(rawNumber)
-			if err != nil || urlNumber != number || !strings.EqualFold(strings.TrimPrefix(urlRepository, "/"), repository) {
-				return PRLink{}, false
-			}
-			break
+		if prefix, suffix, found := strings.CutLast(path, separator); found && (!routeFound || len(prefix) > len(urlRepository)) {
+			urlRepository, rawNumber = prefix, suffix
+			routeFound = true
+		}
+	}
+	if routeFound {
+		urlNumber, err := strconv.Atoi(rawNumber)
+		if err != nil || urlNumber != number || !strings.EqualFold(strings.TrimPrefix(urlRepository, "/"), repository) {
+			return PRLink{}, false
 		}
 	}
 	normalized := url.URL{Scheme: u.Scheme, Host: host, Path: u.Path}

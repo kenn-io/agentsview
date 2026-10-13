@@ -5634,6 +5634,13 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 	if err != nil {
 		return 0, err
 	}
+	children, err := sessionIDsTx(ctx, tx, `id IN (
+		SELECT tc.subagent_session_id FROM tool_calls tc
+		WHERE tc.session_id IN (SELECT id FROM sessions WHERE `+where+`)
+		AND tc.session_id IS NOT tc.subagent_session_id)`, args...)
+	if err != nil {
+		return 0, err
+	}
 	var threadScope bool
 	if err := tx.QueryRowContext(ctx,
 		"SELECT EXISTS (SELECT 1 FROM sessions WHERE ("+where+")"+
@@ -5677,6 +5684,12 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 			return 0, err
 		}
 		n += pages
+	}
+	if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		}, append(ids, children...)); err != nil {
+		return 0, err
 	}
 	return n, nil
 }
