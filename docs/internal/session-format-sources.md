@@ -3280,7 +3280,28 @@ schemas keep their existing ordering behavior.
   descendants it answered one `partial` row whose weekly percentage equals the
   sum of the delegated threads' own rows, so the orchestrator carries no usage
   of its own and asking for each delegated thread as its own root loses
-  nothing.
+  nothing. Each token record stores the notification's `total` (the chat's
+  running total) and `last` (the latest model call). The parser reads the
+  records in file order and turns each increase in `total`, field by field,
+  into one usage event dated when the record was observed. A record with no
+  increase adds nothing. An increase equal to `last` is one model call: it
+  gets the `codex-cloud-request` source, so request price bands apply. Any other
+  increase spans several calls, such as the first record of a connection or
+  updates missed while AgentsView was not listening in. It is a chat-level
+  `session` event priced at base rates, which can understate the cost of
+  long-context calls inside it. A fall in any counter starts a new baseline,
+  and that baseline's first record adds its whole total; no negative event is
+  recorded. A record that exactly repeats an earlier one (same join ID,
+  observation time, and counts) is skipped, because a retried save can write
+  one batch twice. Counters map as for [Codex (`codex`)](#codex-codex): input
+  includes cached reads and cache writes, so uncached input is what remains
+  (floored at zero), cache writes are capped at it, cached input becomes
+  cache-read tokens, and reasoning stays inside output. That entry holds the
+  upstream evidence for the mapping. The hosted-only behavior (`total` as a
+  chat-wide running total, `last` as one call, and fractional JSON counters)
+  is `no-public-source`: it comes from the 2026-10-12 read-only probes. These
+  rules were written down on 2026-10-13. No probe has shown a counter restart,
+  so the baseline rule is a guard, not observed behavior.
 - **Agentsview:** `internal/codexcloud/` fetches and mirrors threads;
   `internal/parser/codex_cloud_provider.go` discovers mirror files. Design and
   open questions:
