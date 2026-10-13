@@ -2916,7 +2916,6 @@
   "status_bar_codex_cloud_off": "Codex Cloud: オフ",
   "status_bar_codex_cloud_config_error": "Codex Cloud: 設定エラー",
   "status_bar_codex_cloud_oldest_failure": "最も古い失敗: {time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView は各チャットを 7 日間再試行します。OpenAI でチャットが変更されると、7 日間がやり直しになります。各チャットは ID とともにデーモンのログに記録されます。インポート済みのチャットには影響しません。",
   "status_bar_codex_cloud_last_success": "最後に成功した同期: {time}",
   "status_bar_codex_cloud_homes": "Codex ホーム: {homes}"
 }

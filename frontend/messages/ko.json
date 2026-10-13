@@ -2847,7 +2847,6 @@
   "status_bar_codex_cloud_off": "Codex Cloud: 꺼짐",
   "status_bar_codex_cloud_config_error": "Codex Cloud: 설정 오류",
   "status_bar_codex_cloud_oldest_failure": "가장 오래된 실패: {time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView는 각 채팅을 7일 동안 재시도합니다. OpenAI에서 채팅이 변경되면 7일이 다시 시작됩니다. 데몬 로그에 각 채팅이 ID와 함께 기록됩니다. 이미 가져온 채팅에는 영향이 없습니다.",
   "status_bar_codex_cloud_last_success": "마지막 동기화 성공: {time}",
   "status_bar_codex_cloud_homes": "Codex 홈: {homes}"
 }

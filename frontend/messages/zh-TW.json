@@ -2844,7 +2844,6 @@
   "status_bar_codex_cloud_off": "Codex Cloud：已關閉",
   "status_bar_codex_cloud_config_error": "Codex Cloud：設定錯誤",
   "status_bar_codex_cloud_oldest_failure": "最早的失敗：{time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView 會對每個聊天重試 7 天；在 OpenAI 中變更該聊天會重新計算這 7 天。常駐程式記錄依 ID 列出每個聊天。已匯入的聊天不受影響。",
   "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
   "status_bar_codex_cloud_homes": "Codex 主目錄：{homes}"
 }

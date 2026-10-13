@@ -846,7 +846,7 @@ func oldestFailure(acct AccountState) (*time.Time, string) {
 		}
 	}
 	return &oldest, message + " AgentsView retries each one for 7 days; a change to the chat in OpenAI " +
-		"restarts the 7 days. The daemon log lists each chat. Sessions already imported are not affected."
+		"restarts the 7 days. The daemon log lists each chat by its ID. Chats already imported are not affected."
 }
 
 func (p *pass) account() (AccountState, error) {

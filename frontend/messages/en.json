@@ -2935,7 +2935,6 @@
   "status_bar_codex_cloud_off": "Codex Cloud: off",
   "status_bar_codex_cloud_config_error": "Codex Cloud: settings error",
   "status_bar_codex_cloud_oldest_failure": "Oldest failure: {time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView retries each one for 7 days; a change to the chat in OpenAI restarts the 7 days. The daemon log lists each chat by its ID. Chats already imported are not affected.",
   "status_bar_codex_cloud_last_success": "Last successful sync: {time}",
   "status_bar_codex_cloud_homes": "Codex homes: {homes}"
 }

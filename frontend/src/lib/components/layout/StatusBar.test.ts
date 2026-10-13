@@ -99,7 +99,7 @@ describe("StatusBar", () => {
 
     expect(document.body.textContent).toContain("synced 1m ago");
 
-    unmount(component);
+    void unmount(component);
   });
 
   it("shows a remote-unreachable indicator only when flagged", async () => {
@@ -114,7 +114,7 @@ describe("StatusBar", () => {
     await tick();
     expect(document.body.textContent).not.toContain("remote server unreachable");
 
-    unmount(component);
+    void unmount(component);
   });
 
   it("shows a sync-not-ready indicator when backend is degraded", async () => {
@@ -132,7 +132,7 @@ describe("StatusBar", () => {
     await tick();
     expect(document.body.textContent).not.toContain("sync not ready");
 
-    unmount(component);
+    void unmount(component);
   });
 
   it("renders detailed sync progress with a hint", async () => {
@@ -158,7 +158,7 @@ describe("StatusBar", () => {
     expect(progress?.textContent).toContain("Rebuilding search index");
     expect(progress?.getAttribute("title")).toContain("may take a while");
 
-    unmount(component);
+    void unmount(component);
   });
 
   describe("codex-cloud status", () => {
@@ -214,6 +214,10 @@ describe("StatusBar", () => {
     });
 
     it("summarizes the row that needs attention", async () => {
+      // The server appends these sentences to a retrying row's message.
+      const retrySentences =
+        "AgentsView retries each one for 7 days; a change to the chat in OpenAI restarts the 7 days. " +
+        "The daemon log lists each chat by its ID. Chats already imported are not affected.";
       getCodexCloudStatus.mockResolvedValue([
         upToDate,
         {
@@ -222,7 +226,7 @@ describe("StatusBar", () => {
           state: "retrying",
           retry_count: 2,
           oldest_failure: "2026-04-08T03:00:00Z",
-          message: "Can't reach OpenAI. AgentsView retries automatically.",
+          message: `Can't reach OpenAI. AgentsView retries automatically. ${retrySentences}`,
         },
       ]);
       const component = await mountWithRows();
@@ -230,14 +234,14 @@ describe("StatusBar", () => {
       const line = document.querySelector(".codex-cloud-status");
       expect(line?.textContent?.trim()).toBe("Codex Cloud: 2 chats could not be imported");
       expect(line?.classList.contains("codex-cloud-status--warn")).toBe(true);
-      expect(await focusTooltip(line)).toContain(
+      const detail = await focusTooltip(line);
+      expect(detail).toContain(
         "Codex homes: /synthetic/other-home\n" +
           "Codex Cloud: 2 chats could not be imported\n" +
           `Oldest failure: ${formatTimestamp("2026-04-08T03:00:00Z")}\n` +
-          "Can't reach OpenAI. AgentsView retries automatically.\n" +
-          "AgentsView retries each one for 7 days; a change to the chat in OpenAI restarts the 7 days. " +
-          "The daemon log lists each chat by its ID. Chats already imported are not affected.",
+          `Can't reach OpenAI. AgentsView retries automatically. ${retrySentences}`,
       );
+      expect(detail?.split("retries each one for 7 days")).toHaveLength(2);
       void unmount(component);
     });
 

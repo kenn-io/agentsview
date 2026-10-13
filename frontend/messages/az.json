@@ -2937,7 +2937,6 @@
   "status_bar_codex_cloud_off": "Codex Cloud: söndürülüb",
   "status_bar_codex_cloud_config_error": "Codex Cloud: ayarlar xətası",
   "status_bar_codex_cloud_oldest_failure": "Ən köhnə uğursuzluq: {time}",
-  "status_bar_codex_cloud_retry_note": "AgentsView hər birini 7 gün ərzində yenidən sınayır; OpenAI-da söhbətdə dəyişiklik 7 günü yenidən başladır. Daemon jurnalı hər söhbəti ID-si ilə göstərir. Artıq idxal edilmiş söhbətlərə təsir yoxdur.",
   "status_bar_codex_cloud_last_success": "Son uğurlu sinxronizasiya: {time}",
   "status_bar_codex_cloud_homes": "Codex qovluqları: {homes}"
 }

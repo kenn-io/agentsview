@@ -1422,7 +1422,9 @@ States:
   the retry set. Shows the count, the oldest failure time, and the latest
   failure's message from the table below, followed by "AgentsView retries each
   one for 7 days; a change to the chat in OpenAI restarts the 7 days. The
-  daemon log lists each chat. Sessions already imported are not affected."
+  daemon log lists each chat by its ID. Chats already imported are not
+  affected." The web status shows this server text as is; it adds no
+  translated copy of these sentences.
 - **Error:** the whole pass failed. Shows the message below and when the last
   successful pass finished.
 
