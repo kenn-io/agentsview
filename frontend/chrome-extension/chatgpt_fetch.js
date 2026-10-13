@@ -26,7 +26,11 @@ async function chatgptFetch(url) {
       });
       if (!session.ok) {
         // Forward Retry-After so a longer cooldown from the session endpoint is honored.
-        return { status: session.status, body: "", retryAfter: session.headers.get("retry-after") ?? undefined };
+        return {
+          status: session.status,
+          body: "",
+          retryAfter: session.headers.get("retry-after") ?? undefined,
+        };
       }
       const auth = await session.json();
       accessToken = auth?.accessToken;
