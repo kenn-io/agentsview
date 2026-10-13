@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
@@ -142,8 +143,12 @@ func sessionUsageWithDescendants(
 		}
 	}
 	if rowSet == nil {
-		return combineSubagentUsageFromSessions(
+		combined, err := combineSubagentUsageFromSessions(
 			ctx, store, root, descendants, includeBreakdown, requireComplete)
+		if err != nil {
+			return nil, err
+		}
+		return withDescendantCoverage(ctx, store, combined, descendants)
 	}
 	rootStoredOutputTokens := root.TotalOutputTokens
 	storedRoot, err := store.GetSession(ctx, rootID)
@@ -168,12 +173,76 @@ func sessionUsageWithDescendants(
 			tokenExpectations[descendant.ID] = sessionTokenExpectationFromUsage(ownUsage)
 		}
 	}
-	return combineSubagentUsageFromRows(
+	combined, err := combineSubagentUsageFromRows(
 		ctx, rootID, root, rootStoredOutputTokens, descendants, rowSet.Rows,
 		rowSet.RawOutputTokensBySession,
 		rowSet.DiscardedContributingSessions,
 		rowSet.CanonicalTokenCoverageBySession, tokenExpectations,
 		includeBreakdown, requireComplete)
+	if err != nil {
+		return nil, err
+	}
+	return withDescendantCoverage(ctx, store, combined, descendants)
+}
+
+// withDescendantCoverage adds each descendant's live capture coverage to
+// the combined result. The plan figures stay the root's, since OpenAI
+// already counts a chat's sub-agents in its root's report. Coverage is per
+// session, so the combined token totals miss every descendant's
+// uncaptured turns too: the result counts them all and keeps the newest
+// capture time.
+func withDescendantCoverage(
+	ctx context.Context, store db.Store, out *db.SessionUsage, descendants []db.Session,
+) (*db.SessionUsage, error) {
+	var merged db.SessionPlanUsage
+	if out.PlanUsage != nil {
+		merged = *out.PlanUsage
+	}
+	changed := false
+	for _, descendant := range descendants {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		p, err := store.GetSessionPlanUsage(ctx, descendant.ID)
+		if err != nil {
+			return nil, err
+		}
+		if p == nil || !p.HasCoverage {
+			continue
+		}
+		newer, err := laterCaptureTime(merged.LastCaptureAt, p.LastCaptureAt)
+		if err != nil {
+			return nil, fmt.Errorf("session %s: %w", descendant.ID, err)
+		}
+		merged.HasCoverage = true
+		merged.UncapturedTurns += p.UncapturedTurns
+		merged.LastCaptureAt = newer
+		changed = true
+	}
+	if changed {
+		out.PlanUsage = &merged
+	}
+	return out, nil
+}
+
+// laterCaptureTime returns the later of two RFC 3339 capture times; an
+// empty time is earlier than any other.
+func laterCaptureTime(a, b string) (string, error) {
+	if a == "" || b == "" {
+		return max(a, b), nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, a)
+	if err != nil {
+		return "", fmt.Errorf("last capture time %q: %w", a, err)
+	}
+	bt, err := time.Parse(time.RFC3339Nano, b)
+	if err != nil {
+		return "", fmt.Errorf("last capture time %q: %w", b, err)
+	}
+	if bt.After(at) {
+		return b, nil
+	}
+	return a, nil
 }
 
 func sessionUsageIDsContext(
@@ -681,8 +750,9 @@ func newCombinedSessionUsage(
 		TotalOutputTokens: root.TotalOutputTokens,
 		PeakContextTokens: root.PeakContextTokens,
 		HasTokenData:      root.HasTokenData,
-		// OpenAI already counts a thread's sub-agents in the root's plan
-		// usage, so the root's row describes the combined result.
+		// OpenAI already counts a chat's sub-agents in the root's plan
+		// usage, so the root's figures describe the combined result.
+		// withDescendantCoverage adds the descendants' capture coverage.
 		PlanUsage: root.PlanUsage,
 	}
 	for _, descendant := range descendants {
