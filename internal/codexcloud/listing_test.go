@@ -112,7 +112,7 @@ func TestListingParams(t *testing.T) {
 	}
 	require.Len(t, raw, 4)
 	for i, params := range raw {
-		assert.JSONEq(t, `[]`, string(params["modelProviders"]), "call %d", i)
+		assert.NotContains(t, params, "modelProviders", "call %d: the hosted server rejects it", i)
 		assert.JSONEq(t, `"updated_at"`, string(params["sortKey"]), "call %d", i)
 		assert.JSONEq(t, `"desc"`, string(params["sortDirection"]), "call %d", i)
 	}
