@@ -192,3 +192,21 @@ func TestSeedFallbackPricing_RefreshOverwritesSupplementals(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.5"), row.CacheCreationPerMTok)
 	assert.Equal(t, money.MustParseDollars("0.05"), row.CacheReadPerMTok)
 }
+
+// TestSeedFallbackPricing_UpgradesExistingDBWithMuseWonderRow proves
+// databases seeded before the Muse Wonder row gain it on startup without a
+// resync.
+func TestSeedFallbackPricing_UpgradesExistingDBWithMuseWonderRow(t *testing.T) {
+	database := newTestDB(t)
+	require.NoError(t, database.SetPricingMeta("_fallback_version",
+		pricing.FallbackVersion+"+supplemental-6"))
+
+	require.NoError(t, pricingrefresh.SeedFallback(database))
+
+	row, err := database.GetModelPricing("muse-wonder-1.0")
+	require.NoError(t, err)
+	require.NotNil(t, row, "muse-wonder-1.0 must be seeded after the version bump")
+	assert.Equal(t, money.MustParseDollars("4.00"), row.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("20.00"), row.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.20"), row.CacheReadPerMTok)
+}

@@ -100,6 +100,48 @@ func TestSupplementalPricing_StepFunStep5Preview(t *testing.T) {
 	assert.Equal(t, unrelated, got)
 }
 
+// TestPricingMuseModels pins how Muse Code's reported model ids price.
+// Bare Muse Spark ids match both meta/ and openrouter/meta/ catalog rows,
+// so fixed aliases send them to Meta's rows. Muse Wonder is absent from
+// the snapshot and uses Meta's published rate, read 2026-10-13 from
+// <https://dev.meta.ai/docs/pricing-rate-limits>.
+func TestPricingMuseModels(t *testing.T) {
+	fallback := requireEmbeddedFallbackPricing(t)
+	byPattern := make(map[string]ModelPricing, len(fallback))
+	for _, p := range fallback {
+		byPattern[p.ModelPattern] = p
+	}
+	tests := []struct {
+		model       string
+		wantPattern string
+		wantInput   string
+		wantOutput  string
+		wantRead    string
+	}{
+		{"muse-spark-1.1", "meta/muse-spark-1.1", "1.25", "4.25", "0.15"},
+		{"muse-spark-1.2", "meta/muse-spark-1.2", "1.25", "4.25", "0.15"},
+		{"muse-spark-1.3", "meta/muse-spark-1.3", "1.25", "4.25", "0.15"},
+		{"muse-spark-1.2-contributor", "meta/muse-spark-1.2-contributor", "0.10", "0.20", "0.002"},
+		{"muse-spark-1.3-contributor", "meta/muse-spark-1.3-contributor", "0.10", "0.20", "0.002"},
+		{"meta/muse-spark-1.3", "meta/muse-spark-1.3", "1.25", "4.25", "0.15"},
+		{"muse-wonder-1.0", "muse-wonder-1.0", "4.00", "20.00", "0.20"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			model := tt.model
+			if canonical := CanonicalModelForDate(model, time.Time{}); canonical != "" {
+				model = canonical
+			}
+			match := ResolveMatch(model, byPattern)
+			require.True(t, match.OK, "%q found no pricing", tt.model)
+			assert.Equal(t, tt.wantPattern, match.Pattern)
+			assert.Equal(t, money.MustParseDollars(tt.wantInput), match.Value.InputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tt.wantOutput), match.Value.OutputPerMTok)
+			assert.Equal(t, money.MustParseDollars(tt.wantRead), match.Value.CacheReadPerMTok)
+		})
+	}
+}
+
 func TestDateAliasedModels(t *testing.T) {
 	assert.Equal(t, []string{
 		"daimon-kimi-code",
