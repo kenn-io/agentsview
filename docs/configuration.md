@@ -1206,8 +1206,9 @@ ChatGPT account share one import.
   tells you to run `codex login` for that home. AgentsView tries the home again
   when its `auth.json` changes, or after one hour.
 - If OpenAI refuses the account's requests, AgentsView waits one hour, then
-  doubles the wait up to one day. Running `codex login` does not help here; the
-  status asks you to check that the ChatGPT account can use Codex.
+  doubles the wait up to one day. A refusal does not show that the login is the
+  problem, so the status does not suggest `codex login`; it asks you to check
+  that the ChatGPT account can use Codex.
 - Codex can keep the login in the system keyring instead of `auth.json`, or not
   save it at all. AgentsView does not read the keyring. To let AgentsView use
   such a home, set `cli_auth_credentials_store = "file"` in that home's
