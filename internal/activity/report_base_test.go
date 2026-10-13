@@ -90,50 +90,52 @@ func (b *reportBackendFixture) sources() ReportSources {
 func TestBuildReportArtifacts(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC", BucketOverride: "1h"}, fixedNow(t))
 	require.NoError(t, err)
-	backend := &reportBackendFixture{t: t, q: q, pricing: &export.PricingBlock{}}
-	progress := []Progress{}
-	artifacts, done, err := BuildReportArtifacts(
-		t.Context(), backend.sources(),
-		[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q,
-		func(p Progress) { progress = append(progress, p) },
-		"aggregating example activity report",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
-	assert.Equal(t, []Progress{
-		{Phase: ProgressScanningActivity, SessionsTotal: 1},
-		{Phase: ProgressScanningActivity, SessionsTotal: 1, RowsProcessed: 1},
-		{Phase: ProgressFinalizing, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
-		{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
-	}, progress)
-	assert.Equal(t, progress[len(progress)-1], done)
-	assert.Equal(t, export.ActivityReportSchemaVersion, artifacts.Report.SchemaVersion)
-	assert.Same(t, backend.pricing, artifacts.Report.Pricing)
-	assert.Equal(t, 20, artifacts.Report.Totals.OutputTokens)
-	assert.Equal(t, money.Money{Microdollars: 100}, artifacts.Report.Totals.Cost)
-	assert.Equal(t, 1, artifacts.Report.Buckets[10].AssistantMessages)
-	assert.Equal(t, "project-a", artifacts.Report.Projects["project-key-a"].DisplayLabel)
-	require.Len(t, artifacts.Sessions, 1)
-	assert.Equal(t, "project-key-a", artifacts.Sessions[0].ProjectKey)
-	require.Len(t, artifacts.Report.ByProject, 1)
-	assert.Equal(t, "project-key-a", artifacts.Report.ByProject[0].ProjectKey)
-	assert.Equal(t, []SessionRow{}, artifacts.Report.BySession)
-	report := ReportWithSessions(artifacts)
-	assert.Equal(t, artifacts.Sessions, report.BySession)
-	assert.Equal(t, 1, report.SessionsTotal)
-}
-
-func TestBuildReportArtifactsWithoutProgressCallback(t *testing.T) {
-	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC"}, fixedNow(t))
-	require.NoError(t, err)
-	backend := &reportBackendFixture{t: t, q: q}
-	_, done, err := BuildReportArtifacts(
-		t.Context(), backend.sources(),
-		[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q, nil,
-		"aggregating example activity report",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
+	for _, withProgress := range []bool{true, false} {
+		name := "nil callback"
+		if withProgress {
+			name = "progress callback"
+		}
+		t.Run(name, func(t *testing.T) {
+			backend := &reportBackendFixture{t: t, q: q, pricing: &export.PricingBlock{}}
+			progress := []Progress{}
+			var onProgress ProgressFunc
+			if withProgress {
+				onProgress = func(p Progress) { progress = append(progress, p) }
+			}
+			artifacts, done, err := BuildReportArtifacts(
+				t.Context(), backend.sources(),
+				[]SessionMeta{{SessionID: "s", Project: "project-a"}}, q,
+				onProgress,
+				"aggregating example activity report",
+			)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
+			if withProgress {
+				assert.Equal(t, []Progress{
+					{Phase: ProgressScanningActivity, SessionsTotal: 1},
+					{Phase: ProgressScanningActivity, SessionsTotal: 1, RowsProcessed: 1},
+					{Phase: ProgressFinalizing, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
+					{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1},
+				}, progress)
+				assert.Equal(t, progress[len(progress)-1], done)
+			}
+			assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
+			assert.Equal(t, export.ActivityReportSchemaVersion, artifacts.Report.SchemaVersion)
+			assert.Same(t, backend.pricing, artifacts.Report.Pricing)
+			assert.Equal(t, 20, artifacts.Report.Totals.OutputTokens)
+			assert.Equal(t, money.Money{Microdollars: 100}, artifacts.Report.Totals.Cost)
+			assert.Equal(t, 1, artifacts.Report.Buckets[10].AssistantMessages)
+			assert.Equal(t, "project-a", artifacts.Report.Projects["project-key-a"].DisplayLabel)
+			require.Len(t, artifacts.Sessions, 1)
+			assert.Equal(t, "project-key-a", artifacts.Sessions[0].ProjectKey)
+			require.Len(t, artifacts.Report.ByProject, 1)
+			assert.Equal(t, "project-key-a", artifacts.Report.ByProject[0].ProjectKey)
+			assert.Equal(t, []SessionRow{}, artifacts.Report.BySession)
+			report := ReportWithSessions(artifacts)
+			assert.Equal(t, artifacts.Sessions, report.BySession)
+			assert.Equal(t, 1, report.SessionsTotal)
+		})
+	}
 }
 
 func TestBuildReportArtifactsErrors(t *testing.T) {

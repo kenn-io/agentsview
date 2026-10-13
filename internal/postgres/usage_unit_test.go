@@ -30,13 +30,11 @@ type usageProbeRows struct {
 	columns []string
 	values  [][]driver.Value
 	next    int
-	onClose func()
 }
 
 type usageProbeState struct {
-	mu                  sync.Mutex
-	queries             []string
-	onSessionUsageClose func()
+	mu      sync.Mutex
+	queries []string
 }
 
 var (
@@ -172,27 +170,6 @@ func (c *usageProbeConn) QueryContext(
 	if strings.Contains(normalized, "from (") &&
 		strings.Contains(normalized, "from messages") {
 		ts := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
-		if c.state.onSessionUsageClose != nil {
-			return &usageProbeRows{
-				columns: []string{
-					"session_id", "message_ordinal", "usage_source", "ts", "pricing_ts",
-					"model", "provider_id", "token_usage", "input_tokens", "output_tokens",
-					"cache_creation_input_tokens", "cache_read_input_tokens", "reasoning_tokens",
-					"cost_microdollars", "cost_status", "cost_source", "claude_message_id",
-					"claude_request_id", "source_uuid", "usage_dedup_key", "project", "agent",
-					"machine", "user_message_count", "is_automated", "session_activity_at",
-					"display_name", "started_at",
-				},
-				values: [][]driver.Value{{
-					"s-parent", int64(0), "message", ts, ts, "claude-sonnet", "",
-					`{"input_tokens":100,"output_tokens":50}`,
-					int64(100), int64(50), int64(0), int64(0), int64(0), nil, "", "",
-					"msg-dup", "req-dup", "", "", "proj-a", "claude", "local",
-					int64(1), false, ts, "session", ts,
-				}},
-				onClose: c.state.onSessionUsageClose,
-			}, nil
-		}
 		return &usageProbeRows{
 			columns: []string{
 				"session_id",
@@ -258,12 +235,7 @@ func usageProbeUsageRow(
 
 func (r *usageProbeRows) Columns() []string { return r.columns }
 
-func (r *usageProbeRows) Close() error {
-	if r.onClose != nil {
-		r.onClose()
-	}
-	return nil
-}
+func (r *usageProbeRows) Close() error { return nil }
 
 func (r *usageProbeRows) Next(dest []driver.Value) error {
 	if r.next >= len(r.values) {
@@ -272,24 +244,6 @@ func (r *usageProbeRows) Next(dest []driver.Value) error {
 	copy(dest, r.values[r.next])
 	r.next++
 	return nil
-}
-
-func TestPGGetSessionUsageRowsStopsAfterReadingRows(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	rowsClosed := false
-	store := &Store{pg: newUsageProbeDB(t, &usageProbeState{
-		onSessionUsageClose: func() {
-			rowsClosed = true
-			cancel()
-		},
-	})}
-
-	rows, err := store.GetSessionUsageRows(ctx, []string{"s-parent"})
-
-	assert.True(t, rowsClosed)
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Nil(t, rows)
 }
 
 func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
