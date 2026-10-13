@@ -883,7 +883,10 @@ request.
 
 - `?subagents=true` folds descendant usage into `cost`, `total_output_tokens`,
   `models`, `breakdown`, and `breakdown_count`, and adds `subagent_count`.
-  This is what the CLI requests.
+  For a Codex Cloud chat it also folds `capture_coverage`: `uncaptured_turns`
+  is the sum across the root and its sub-agents, and `last_capture_at` is the
+  newest of theirs. `plan_usage` stays the root's report, which already counts
+  its sub-agents. This is what the CLI requests.
 - `?rollup=true` keeps the totals own-session and reports the combined cost in
   the separate `rollup_*` fields below. The session detail header uses this
   form. When both `rollup=true` and `subagents=true` are passed, the handler

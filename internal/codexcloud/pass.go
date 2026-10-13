@@ -333,7 +333,9 @@ func (p *pass) threads(ctx context.Context) error {
 	selection := buildSelection(p.now, &acct, changed, active)
 	backfilled := allBackfilled(acct)
 	// A first backfill counts mirror files once, then adds each new one,
-	// since reading the growing directory per thread is quadratic.
+	// since reading the growing directory per thread is quadratic. A file
+	// the live monitor creates meanwhile for another chat is counted from
+	// the next pass; the number only shows progress.
 	found := 0
 	if !backfilled {
 		found = p.mirrored()

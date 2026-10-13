@@ -1247,7 +1247,7 @@ AgentsView connects by resuming the chat (`thread/resume`):
   chat on OpenAI's side and starts its MCP servers. In testing nothing ran and
   the chat did not change. The chat may move to the top of your chat list in
   OpenAI's apps. AgentsView disconnects at once and does not connect for that
-  turn again. To keep this rare, AgentsView checks again right before
+  turn again. To make this less likely, AgentsView checks again right before
   connecting that the chat was updated in the last 5 minutes.
 - Untested risk: for a stopped chat with an active goal, that same load might
   continue the goal and start a new turn.
