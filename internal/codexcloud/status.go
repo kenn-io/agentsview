@@ -203,11 +203,13 @@ func (b *StatusBoard) Keep(keys map[string]bool) {
 // StatusLines renders a row for `serve status`: one line for the state,
 // then the live token and plan usage lines when set. Times are local.
 func StatusLines(row HomeStatus) []string {
-	label := strings.Join(row.Homes, ", ")
-	if label == "" {
-		label = row.Key
+	// A row for the whole source has no homes; its key would only repeat
+	// the source name.
+	first := "codex-cloud: " + stateText(row)
+	if label := strings.Join(row.Homes, ", "); label != "" {
+		first = "codex-cloud " + label + ": " + stateText(row)
 	}
-	lines := []string{"codex-cloud " + label + ": " + stateText(row)}
+	lines := []string{first}
 	if row.Live != "" {
 		lines = append(lines, "  "+row.Live)
 	}
@@ -223,14 +225,14 @@ func stateText(row HomeStatus) string {
 		return "Waiting for first sync"
 	case StateImporting:
 		if row.Total == 0 {
-			return fmt.Sprintf("Importing, found %d threads so far", row.Found)
+			return "Importing, found " + chats(row.Found) + " so far"
 		}
-		return fmt.Sprintf("Importing %d of %d threads", row.Imported, row.Total)
+		return fmt.Sprintf("Importing %d of %s", row.Imported, chats(row.Total))
 	case StateUpToDate:
 		return "Up to date as of " + localTime(row.LastSuccess)
 	case StateRetrying:
-		return fmt.Sprintf("%d threads could not be imported (oldest failure %s). %s",
-			row.RetryCount, localTime(row.OldestFailure), row.Message)
+		return fmt.Sprintf("%s could not be imported (oldest failure %s). %s",
+			chats(row.RetryCount), localTime(row.OldestFailure), row.Message)
 	case StateError:
 		if row.LastSuccess == nil {
 			return row.Message
@@ -241,6 +243,14 @@ func stateText(row HomeStatus) string {
 	default:
 		return row.Message
 	}
+}
+
+// chats counts OpenAI Codex threads in the words users see.
+func chats(n int) string {
+	if n == 1 {
+		return "1 chat"
+	}
+	return fmt.Sprintf("%d chats", n)
 }
 
 func localTime(t *time.Time) string {

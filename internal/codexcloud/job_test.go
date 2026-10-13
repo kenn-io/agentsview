@@ -201,7 +201,7 @@ func TestStatusMessages(t *testing.T) {
 		assert.Equal(t, StateRetrying, row.State)
 		assert.Equal(t, 1, row.RetryCount)
 		lines := StatusLines(row)
-		assert.Contains(t, lines[0], "1 threads could not be imported")
+		assert.Contains(t, lines[0], "1 chat could not be imported")
 		assert.Contains(t, lines[0], Message(FailThread, time.Time{}))
 		assert.NotContains(t, lines[0], "Up to date")
 	})
@@ -215,7 +215,7 @@ func TestStatusLinesRetrying(t *testing.T) {
 	}
 	lines := StatusLines(row)
 	require.Len(t, lines, 1)
-	assert.Contains(t, lines[0], "2 threads could not be imported")
+	assert.Contains(t, lines[0], "2 chats could not be imported")
 	assert.Contains(t, lines[0], first.Local().Format("Jan 2 15:04"))
 	assert.Contains(t, lines[0], Message(FailThread, time.Time{}))
 	assert.NotContains(t, lines[0], "Up to date")

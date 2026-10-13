@@ -206,15 +206,22 @@ func runServeStatus(cfg config.Config) {
 }
 
 // codexCloudStatusLines reads the daemon's codex-cloud status rows. An
-// older daemon has no such route and adds no lines.
+// older daemon has no such route and adds no lines. A failure gets a plain
+// sentence; the request's own error is noise next to the daemon lines.
 func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []string {
+	unavailable := func(reason string) []string {
+		return []string{"  codex-cloud status unavailable: " + reason}
+	}
 	api, err := apiclient.NewHTTPClient(baseURL, authToken, &http.Client{Timeout: 5 * time.Second})
 	if err != nil {
-		return []string{"  codex-cloud status unavailable: " + err.Error()}
+		return unavailable("the server address could not be used.")
 	}
 	resp, err := api.GetAPIV1CodexCloudStatusWithResponse(ctx)
 	if resp == nil {
-		return []string{"  codex-cloud status unavailable: " + err.Error()}
+		if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
+			return unavailable("the server did not answer within 5 seconds.")
+		}
+		return unavailable("the server could not be reached.")
 	}
 	if resp.HTTPResponse != nil {
 		defer resp.HTTPResponse.Body.Close()
@@ -223,12 +230,14 @@ func codexCloudStatusLines(ctx context.Context, baseURL, authToken string) []str
 	case http.StatusOK:
 	case http.StatusNotFound:
 		return nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return unavailable("the server did not accept this command's auth token.")
 	default:
-		return []string{fmt.Sprintf("  codex-cloud status unavailable: HTTP %d", resp.StatusCode)}
+		return unavailable(fmt.Sprintf("the server answered with HTTP status %d.", resp.StatusCode))
 	}
 	var rows []codexcloud.HomeStatus
 	if err := json.Unmarshal(resp.Body, &rows); err != nil {
-		return []string{"  codex-cloud status unavailable: " + err.Error()}
+		return unavailable("the server's reply could not be read.")
 	}
 	var lines []string
 	for _, row := range rows {
