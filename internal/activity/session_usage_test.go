@@ -35,8 +35,7 @@ func TestUsageDedupTokenIdentity(t *testing.T) {
 			ordinary:  UsageDedupToken{Kind: "source", Value: "claude:u"},
 		},
 		{
-			name:     "UUID without agent falls back to stored key",
-			uuid:     "u",
+			name:     "key-only event uses stored key",
 			key:      "k",
 			ordinary: UsageDedupToken{Kind: "usage", Value: "k"},
 		},
@@ -75,8 +74,11 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			wantDiscarded: map[string]int{"child": 10}, wantContributing: map[string]struct{}{"child": {}},
 		},
 		{
-			name:        "usage key removes noncontributing duplicate",
-			rows:        []UsageRow{{SessionID: "root", UsageDedupKey: "k"}, {SessionID: "child", UsageDedupKey: "k"}},
+			name: "message UUID removes noncontributing duplicate",
+			rows: []UsageRow{
+				{SessionID: "root", UsageSource: "message", Agent: "codex", SourceUUID: "u"},
+				{SessionID: "child", UsageSource: "message", Agent: "codex", SourceUUID: "u"},
+			},
 			wantIndexes: []int{0}, wantRaw: map[string]int{"root": 0, "child": 0},
 			wantDiscarded: map[string]int{"child": 0}, wantContributing: map[string]struct{}{},
 		},
