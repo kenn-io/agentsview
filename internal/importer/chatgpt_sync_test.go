@@ -196,20 +196,27 @@ func TestSyncChatGPTRenameWithSameMessagesCountsUpdate(t *testing.T) {
 	assert.Equal(t, "Renamed", *stored.SessionName)
 }
 
-func TestCompareChatGPTPrefixTreatsImagePlaceholdersAsEquivalent(t *testing.T) {
+func TestCompareChatGPTPrefixReconcilesImages(t *testing.T) {
 	msg := func(content string) db.Message {
 		return db.Message{Ordinal: 0, Role: "assistant", Content: content, ContentLength: len(content)}
 	}
 	placeholder := msg("Here is the chart [image unavailable] and notes.")
 	reference := msg("Here is the chart ![image](assets/chart-1.png) and notes.")
+	otherReference := msg("Here is the chart ![image](assets/chart-2.png) and notes.")
 
-	// Sync archived first, ZIP export arrives later.
-	_, ok := compareChatGPTPrefix([]db.Message{placeholder}, []db.Message{reference})
-	assert.True(t, ok, "placeholder archive should accept the ZIP image reference")
+	// Sync archived a placeholder; the ZIP export has the real image, so the row is filled.
+	completed, ok := compareChatGPTPrefix([]db.Message{placeholder}, []db.Message{reference})
+	assert.True(t, ok)
+	assert.Equal(t, []int{0}, completed)
 
-	// ZIP archived first, sync arrives later.
-	_, ok = compareChatGPTPrefix([]db.Message{reference}, []db.Message{placeholder})
-	assert.True(t, ok, "ZIP image reference archive should accept the sync placeholder")
+	// Sync arrives after a ZIP archived the image: keep the archived reference, no rewrite.
+	completed, ok = compareChatGPTPrefix([]db.Message{reference}, []db.Message{placeholder})
+	assert.True(t, ok)
+	assert.Empty(t, completed)
+
+	// Different concrete images must diverge, even though both are "images".
+	_, ok = compareChatGPTPrefix([]db.Message{reference}, []db.Message{otherReference})
+	assert.False(t, ok, "different image references must diverge")
 
 	// Text outside the image still has to match exactly.
 	changed := msg("Here is the graph [image unavailable] and notes.")
