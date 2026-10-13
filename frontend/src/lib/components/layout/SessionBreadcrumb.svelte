@@ -17,7 +17,11 @@
   } from "../../icons.js";
   import { onDestroy, onMount, untrack } from "svelte";
   import type { Session } from "../../api/types.js";
-  import type { SessionToolSequencesResponse } from "../../api/generated/index.js";
+  import type {
+    DbCaptureCoverageView,
+    DbPlanUsageView,
+    SessionToolSequencesResponse,
+  } from "../../api/generated/index.js";
   import {
     OpenersService,
     SessionsService,
@@ -56,6 +60,10 @@
   import { codexDesktopLink } from "../../utils/codex.js";
   import { claudeCodeLink } from "../../utils/claude.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import {
+    describeCaptureCoverage,
+    describePlanUsage,
+  } from "../../utils/planUsage.js";
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
@@ -63,6 +71,7 @@
   import { formatModelEffort } from "../../utils/model.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { m } from "../../i18n/index.js";
+  import { Table, TableHeaderCell } from "@kenn-io/kit-ui";
 
   interface Props {
     session: Session | undefined;
@@ -101,6 +110,7 @@
   const directoryRead = new LatestRead();
   const costRead = new LatestRead();
   const breakdownRead = new LatestRead();
+  const usageRootRead = new LatestRead();
   const toolSequencesRead = new LatestRead();
 
   interface SessionDirectoryResponse {
@@ -178,6 +188,13 @@
   let sessionRollupSubagentCount = $state(0);
   let sessionUsageBreakdownCount = $state(0);
   let sessionUsageBreakdown = $state<SessionUsageBreakdownEntry[]>([]);
+  // Plan usage and live capture coverage from the same usage read as the
+  // cost; null until it answers or when the session has none.
+  let sessionPlanUsage = $state<DbPlanUsageView | null>(null);
+  let sessionCaptureCoverage = $state<DbCaptureCoverageView | null>(null);
+  let sessionUsageLoaded = $state(false);
+  // Title of the thread this one is counted under, once read.
+  let usageRootTitle = $state<string | null>(null);
   // Key of the last successful usage fetch. Cost depends on more
   // than output tokens (input/cache tokens and explicit usage-event
   // costs), so the key includes every cost-affecting field present
@@ -222,6 +239,13 @@
     ].join("\n");
   }
 
+  function resetPlanUsage() {
+    sessionPlanUsage = null;
+    sessionCaptureCoverage = null;
+    sessionUsageLoaded = false;
+    planUsageOpen = false;
+  }
+
   function resetUsageBreakdown() {
     breakdownRead.cancel();
     sessionUsageBreakdownCount = 0;
@@ -237,6 +261,7 @@
       sessionCost = null;
       sessionCostIsRollup = false;
       sessionRollupSubagentCount = 0;
+      resetPlanUsage();
       resetUsageBreakdown();
       costFetchKey = null;
       costSessionId = null;
@@ -252,6 +277,7 @@
       sessionCost = null;
       sessionCostIsRollup = false;
       sessionRollupSubagentCount = 0;
+      resetPlanUsage();
       resetUsageBreakdown();
       costFetchKey = null;
     }
@@ -271,6 +297,9 @@
             ? res.cost
             : null;
         sessionUsageBreakdownCount = res.breakdown_count ?? 0;
+        sessionPlanUsage = res.plan_usage ?? null;
+        sessionCaptureCoverage = res.capture_coverage ?? null;
+        sessionUsageLoaded = true;
       })
       .catch((e) => {
         if (isAbortError(e) || !costRead.isCurrent(signal)) return;
@@ -311,8 +340,49 @@
       .finally(() => breakdownRead.finish(signal));
   });
 
+  // The usage root's title names the link; the link itself needs only the ID.
+  let usageRootId = $derived(
+    sessionPlanUsage?.outcome_kind === "counted_under"
+      ? (sessionPlanUsage.counted_under ?? null)
+      : null,
+  );
+  $effect(() => {
+    const id = usageRootId;
+    usageRootTitle = null;
+    if (!id) {
+      usageRootRead.cancel();
+      return;
+    }
+    const signal = usageRootRead.begin();
+    SessionsService.getApiV1SessionsById({ id }, { signal })
+      .then((root) => {
+        if (!usageRootRead.isCurrent(signal)) return;
+        usageRootTitle =
+          root.display_name || normalizeMessagePreview(root.first_message) || null;
+      })
+      .catch((e) => {
+        // A root missing from this archive keeps its thread ID as the label.
+        if (!isAbortError(e)) console.warn("Failed to read usage root session:", e);
+      })
+      .finally(() => usageRootRead.finish(signal));
+  });
+
+  let planUsageOpen = $state(false);
+  // Waits for the usage read, so a slow read never shows "not checked yet"
+  // for a thread that has plan usage.
+  let planUsageDisplay = $derived(
+    session && sessionUsageLoaded
+      ? describePlanUsage(session.agent, sessionPlanUsage)
+      : null,
+  );
+  let captureCoverageLines = $derived(
+    describeCaptureCoverage(sessionCaptureCoverage, sessionPlanUsage),
+  );
+  let uncapturedTurns = $derived(sessionCaptureCoverage?.uncaptured_turns ?? 0);
+
   onDestroy(() => {
     openersRead.cancel();
+    usageRootRead.cancel();
     directoryRead.cancel();
     costRead.cancel();
     breakdownRead.cancel();
@@ -1166,6 +1236,89 @@
           {/if}
         </span>
       {/if}
+      {#if planUsageDisplay}
+        <details class="plan-usage" bind:open={planUsageOpen}>
+          <summary
+            class="usage-breakdown-trigger plan-usage-trigger"
+            class:plan-usage-trigger--empty={!planUsageDisplay.hasFigures}
+            title={planUsageDisplay.headline || undefined}
+          >
+            {#if uncapturedTurns > 0}
+              <TriangleAlertIcon size="10" strokeWidth="2.2" aria-hidden="true" />
+            {/if}
+            {planUsageDisplay.trigger}
+          </summary>
+          {#if planUsageOpen}
+            {@const rootId = planUsageDisplay.countedUnder}
+            {@const showFiveHour = planUsageDisplay.groups.some((g) => g.fiveHour)}
+            <div class="usage-breakdown-menu plan-usage-menu">
+              {#if rootId}
+                <a
+                  class="plan-usage-headline plan-usage-root"
+                  href={router.buildSessionHref(rootId)}
+                  onclick={(event) => {
+                    event.preventDefault();
+                    planUsageOpen = false;
+                    router.navigateToSession(rootId);
+                  }}
+                >
+                  {m.plan_usage_counted_under({
+                    title: usageRootTitle ?? sessionDisplayId(rootId),
+                  })}
+                </a>
+              {:else}
+                <div class="plan-usage-headline">{planUsageDisplay.headline}</div>
+              {/if}
+              {#if planUsageDisplay.staleNote}
+                <div class="plan-usage-stale">{planUsageDisplay.staleNote}</div>
+              {/if}
+              {#if planUsageDisplay.totals.length > 0}
+                <ul class="plan-usage-totals">
+                  {#each planUsageDisplay.totals as line (line)}
+                    <li>{line}</li>
+                  {/each}
+                </ul>
+              {/if}
+              {#if planUsageDisplay.groups.length > 0}
+                <Table
+                  class="plan-usage-groups"
+                  stickyHeader={false}
+                  ariaLabel={m.plan_usage_title()}
+                >
+                  {#snippet header()}
+                    <TableHeaderCell label={m.plan_usage_col_split()} />
+                    <TableHeaderCell label={m.plan_usage_col_weekly()} numeric />
+                    {#if showFiveHour}
+                      <TableHeaderCell label={m.plan_usage_col_five_hour()} numeric />
+                    {/if}
+                    <TableHeaderCell label={m.plan_usage_col_credits()} numeric />
+                  {/snippet}
+                  {#each planUsageDisplay.groups as group (group.key)}
+                    <tr>
+                      <td>{group.label}</td>
+                      <td class="plan-usage-num">{group.weekly}</td>
+                      {#if showFiveHour}
+                        <td class="plan-usage-num">{group.fiveHour}</td>
+                      {/if}
+                      <td class="plan-usage-num">{group.credits}</td>
+                    </tr>
+                  {/each}
+                </Table>
+              {/if}
+              {#if planUsageDisplay.hasFigures}
+                <p class="plan-usage-note">{m.plan_usage_credits_note()}</p>
+              {/if}
+              {#if captureCoverageLines.length > 0}
+                <div class="plan-usage-capture">
+                  {#each captureCoverageLines as line (line)}
+                    <div>{line}</div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </details>
+      {/if}
       {#if mainModelInfo.model}
         <span
           class="model-badge"
@@ -1571,9 +1724,80 @@
     flex-shrink: 0;
   }
 
-  .usage-breakdown {
+  .usage-breakdown,
+  .plan-usage {
     position: relative;
     flex-shrink: 0;
+  }
+
+  .plan-usage-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .plan-usage-trigger--empty {
+    font-style: italic;
+  }
+
+  .plan-usage-menu {
+    width: min(420px, calc(100vw - 24px));
+    max-height: 360px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .plan-usage-headline {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .plan-usage-root {
+    color: var(--accent-blue);
+    text-decoration: none;
+  }
+
+  .plan-usage-root:hover {
+    text-decoration: underline;
+  }
+
+  .plan-usage-stale {
+    color: var(--accent-amber);
+  }
+
+  .plan-usage-totals {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .plan-usage-menu :global(.plan-usage-groups) {
+    flex: none;
+    border: 1px solid var(--border-muted);
+    border-radius: 4px;
+  }
+
+  .plan-usage-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .plan-usage-note,
+  .plan-usage-capture {
+    margin: 0;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  .plan-usage-capture {
+    padding-top: 6px;
+    border-top: 1px solid var(--border-muted);
   }
 
   .usage-breakdown-trigger {
@@ -1909,6 +2133,16 @@
 
     .usage-breakdown {
       display: none;
+    }
+
+    /* The meta row scrolls sideways here, so a menu anchored to its
+       trigger can open past the screen edge; span the viewport instead. */
+    .plan-usage-menu {
+      position: fixed;
+      top: auto;
+      left: 8px;
+      right: 8px;
+      width: auto;
     }
   }
 

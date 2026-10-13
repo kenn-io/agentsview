@@ -159,6 +159,12 @@ describe("entrypointBadge", () => {
     expect(entrypointBadge(null)).toBeNull();
     expect(entrypointBadge(undefined)).toBeNull();
   });
+
+  it("names the codex-cloud origins", () => {
+    expect(entrypointBadge("codex-web")).toBe("Codex web");
+    expect(entrypointBadge("codex-cloud")).toBe("Codex cloud");
+    expect(entrypointBadge("dot")).toBe("dot");
+  });
 });
 
 describe("agentLabel", () => {

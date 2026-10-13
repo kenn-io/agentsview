@@ -290,6 +290,24 @@ function summaryForDateRange(
     }
   }
 
+  // Plan-only sessions have no usage events, so daily entries cannot place
+  // them in the range; keep each model's count from the source summary so
+  // its row still reads "Plan usage" instead of zero until the range's own
+  // summary arrives.
+  for (const source of summary.modelTotals) {
+    if (!source.planOnlySessions) continue;
+    const total = modelTotals.get(source.model) ?? {
+      model: source.model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: { microdollars: 0 },
+    };
+    total.planOnlySessions = source.planOnlySessions;
+    modelTotals.set(source.model, total);
+  }
+
   const byCost = <T extends { cost: { microdollars: number } }>(a: T, b: T) =>
     b.cost.microdollars - a.cost.microdollars;
   const cacheHitDenominator = cacheReadTokens + inputTokens;

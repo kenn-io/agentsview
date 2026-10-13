@@ -2750,5 +2750,98 @@
   "usage_all_projects": "所有项目",
   "usage_clear_selection": "清除选择",
   "usage_open_project": "打开",
-  "usage_loading": "正在加载..."
+  "usage_loading": "正在加载...",
+  "plan_usage_title": "套餐用量",
+  "plan_usage_trigger_weekly": "套餐用量：每周 {percent}%",
+  "plan_usage_as_of": "套餐用量（截至 {time}）",
+  "plan_usage_not_checked": "套餐用量：尚未检查",
+  "plan_usage_still_updating": "套餐用量：仍在更新（截至 {time}）",
+  "plan_usage_not_reported_yet": "套餐用量：尚未报告（截至 {time}）",
+  "plan_usage_partial": "部分套餐用量（截至 {time}）",
+  "plan_usage_not_reported": "OpenAI 未报告",
+  "plan_usage_too_many_subagents": "子代理线程过多，OpenAI 用量报告无法包含",
+  "plan_usage_could_not_check": "AgentsView 无法检查套餐用量",
+  "plan_usage_account_unavailable": "此账户无法获取用量",
+  "plan_usage_counted_under": "计入线程 {title}",
+  "plan_usage_weekly_share": "Codex 每周上限的 {percent}%",
+  "plan_usage_five_hour_share": "Codex 五小时上限的 {percent}%",
+  "plan_usage_credits": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 积分"
+      }
+    }
+  ],
+  "plan_usage_credits_note": "积分是 OpenAI 对超出套餐包含范围的用量的计量单位，因此 0 积分表示套餐已覆盖这些工作。",
+  "plan_usage_col_split": "模型、推理强度、速度",
+  "plan_usage_col_weekly": "每周",
+  "plan_usage_col_five_hour": "5 小时",
+  "plan_usage_col_credits": "积分",
+  "capture_tokens_live": "实时采集 token（截至 {time}）",
+  "capture_turns_not_captured": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 轮未采集"
+      }
+    }
+  ],
+  "capture_turns_not_captured_covered": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 轮未采集；套餐用量已包含"
+      }
+    }
+  ],
+  "usage_plan_only_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 个会话按套餐用量计费，未计价"
+      }
+    }
+  ],
+  "usage_partly_captured_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 个会话仅部分采集；其 token 数偏低。"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_waiting": "Codex Cloud：等待首次同步",
+  "status_bar_codex_cloud_importing_found": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Codex Cloud：正在导入，目前已发现 {countLabel} 个线程"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud：正在导入 {imported}/{total} 个线程",
+  "status_bar_codex_cloud_up_to_date": "Codex Cloud：截至 {time} 已是最新",
+  "status_bar_codex_cloud_retrying": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Codex Cloud：{countLabel} 个线程无法导入"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_error": "Codex Cloud：错误",
+  "status_bar_codex_cloud_off": "Codex Cloud：已关闭",
+  "status_bar_codex_cloud_config_error": "Codex Cloud：设置错误",
+  "status_bar_codex_cloud_oldest_failure": "最早的失败：{time}",
+  "status_bar_codex_cloud_retry_note": "AgentsView 会持续重试。守护进程日志列出了每个线程。已导入的会话不受影响。",
+  "status_bar_codex_cloud_last_success": "上次成功同步：{time}",
+  "status_bar_codex_cloud_homes": "Codex 主目录：{homes}"
 }

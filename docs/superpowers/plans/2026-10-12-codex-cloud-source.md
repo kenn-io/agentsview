@@ -1561,20 +1561,20 @@ Spec: Replicas and mirror (left-out and partly-captured counts), Display.
   `AttributionPanel.svelte` ("Plan usage" cells), `layout/StatusBar.svelte`
   (codex-cloud status line), `messages/*.json` (all locales)
 
-- [ ] **Step 1: Write failing tests** (Vitest): breadcrumb renders each Plan
+- [x] **Step 1: Write failing tests** (Vitest): breadcrumb renders each Plan
   usage state from the spec's list; credits note; "N turns not captured" with
   and without the plan usage clause; usage page shows the left-out and
   partly-captured counts with plural forms; every session list and per-model
   column shows "Plan usage" for plan-only rows; status bar shows the source
   line only when configured.
 
-- [ ] **Step 2: Run** `vp test`; FAIL.
+- [x] **Step 2: Run** `vp test`; FAIL.
 
-- [ ] **Step 3: Implement** with existing shared components only.
+- [x] **Step 3: Implement** with existing shared components only.
 
-- [ ] **Step 4: Run** `vp check`, `vp test`, `npm run i18n:compile`; PASS.
+- [x] **Step 4: Run** `vp check`, `vp test`, `npm run i18n:compile`; PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat(frontend): show codex-cloud plan usage and status"`
 
 ### Task 29: Documentation

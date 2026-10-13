@@ -54,7 +54,7 @@
     panelDateState,
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
-  import { m } from "../../i18n/index.js";
+  import { getLocale, m } from "../../i18n/index.js";
   import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 
   let mounted = false;
@@ -171,6 +171,27 @@
       return m.usage_summary_unsupported_generic();
     }
     return "";
+  });
+  // The derived summary for a dragged time range keeps the parent range's
+  // counts, so the notes wait for the range's own summary.
+  const usageCountNotes = $derived.by(() => {
+    const summary = usage.isTimeRangeSummaryProvisional ? null : usage.summary;
+    const notes: string[] = [];
+    const planOnly = summary?.planOnlySessions ?? 0;
+    if (planOnly > 0) {
+      notes.push(m.usage_plan_only_sessions({
+        count: planOnly,
+        countLabel: planOnly.toLocaleString(getLocale()),
+      }));
+    }
+    const partly = summary?.partlyCapturedSessions ?? 0;
+    if (partly > 0) {
+      notes.push(m.usage_partly_captured_sessions({
+        count: partly,
+        countLabel: partly.toLocaleString(getLocale()),
+      }));
+    }
+    return notes;
   });
   const sessionUrlParams = $derived(
     filtersToParams(sessions.filters),
@@ -564,6 +585,16 @@
       <Card level="default" padding="none" class="usage-note">
         <div role="status">
           {unsupportedUsageMessage}
+        </div>
+      </Card>
+    {/if}
+
+    {#if usageCountNotes.length > 0}
+      <Card level="default" padding="none" class="usage-note">
+        <div role="status">
+          {#each usageCountNotes as note (note)}
+            <div>{note}</div>
+          {/each}
         </div>
       </Card>
     {/if}

@@ -2825,5 +2825,98 @@
   "usage_all_projects": "すべてのプロジェクト",
   "usage_clear_selection": "選択をクリア",
   "usage_open_project": "開く",
-  "usage_loading": "読み込み中..."
+  "usage_loading": "読み込み中...",
+  "plan_usage_title": "プラン使用量",
+  "plan_usage_trigger_weekly": "プラン使用量: 週 {percent}%",
+  "plan_usage_as_of": "プラン使用量 ({time} 時点)",
+  "plan_usage_not_checked": "プラン使用量: 未確認",
+  "plan_usage_still_updating": "プラン使用量: 更新中 ({time} 時点)",
+  "plan_usage_not_reported_yet": "プラン使用量: 未報告 ({time} 時点)",
+  "plan_usage_partial": "一部のプラン使用量 ({time} 時点)",
+  "plan_usage_not_reported": "OpenAI から報告されていません",
+  "plan_usage_too_many_subagents": "サブエージェントのスレッドが多すぎて OpenAI の使用量レポートに含められません",
+  "plan_usage_could_not_check": "AgentsView はプラン使用量を確認できませんでした",
+  "plan_usage_account_unavailable": "このアカウントでは使用量を利用できません",
+  "plan_usage_counted_under": "スレッド {title} に含めて集計",
+  "plan_usage_weekly_share": "Codex の週間上限の {percent}%",
+  "plan_usage_five_hour_share": "Codex の 5 時間上限の {percent}%",
+  "plan_usage_credits": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} クレジット"
+      }
+    }
+  ],
+  "plan_usage_credits_note": "クレジットはプランに含まれる分を超えた使用量に対する OpenAI の単位です。0 クレジットはプランで作業がまかなえたことを意味します。",
+  "plan_usage_col_split": "モデル、推論強度、速度",
+  "plan_usage_col_weekly": "週間",
+  "plan_usage_col_five_hour": "5 時間",
+  "plan_usage_col_credits": "クレジット",
+  "capture_tokens_live": "トークンをライブで取得 ({time} 時点)",
+  "capture_turns_not_captured": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} ターンが未取得"
+      }
+    }
+  ],
+  "capture_turns_not_captured_covered": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} ターンが未取得。プラン使用量には含まれます"
+      }
+    }
+  ],
+  "usage_plan_only_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} セッションはプラン使用量として請求され、料金に含まれていません"
+      }
+    }
+  ],
+  "usage_partly_captured_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} セッションは一部のみ取得されたため、トークン数が少なめです。"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_waiting": "Codex Cloud: 初回同期を待機中",
+  "status_bar_codex_cloud_importing_found": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Codex Cloud: インポート中、これまでに {countLabel} スレッドを検出"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_importing_progress": "Codex Cloud: {total} スレッド中 {imported} をインポート中",
+  "status_bar_codex_cloud_up_to_date": "Codex Cloud: {time} 時点で最新",
+  "status_bar_codex_cloud_retrying": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "Codex Cloud: {countLabel} スレッドをインポートできませんでした"
+      }
+    }
+  ],
+  "status_bar_codex_cloud_error": "Codex Cloud: エラー",
+  "status_bar_codex_cloud_off": "Codex Cloud: オフ",
+  "status_bar_codex_cloud_config_error": "Codex Cloud: 設定エラー",
+  "status_bar_codex_cloud_oldest_failure": "最も古い失敗: {time}",
+  "status_bar_codex_cloud_retry_note": "AgentsView は再試行を続けます。各スレッドはデーモンのログに記録されます。インポート済みのセッションには影響しません。",
+  "status_bar_codex_cloud_last_success": "最後に成功した同期: {time}",
+  "status_bar_codex_cloud_homes": "Codex ホーム: {homes}"
 }
