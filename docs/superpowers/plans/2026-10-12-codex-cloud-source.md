@@ -1585,7 +1585,7 @@ Spec: Replicas and mirror (left-out and partly-captured counts), Display.
   gate's probe answers), `docs/configuration.md`, `docs/commands.md`,
   `README.md` (agent list), `docs/changelog.md`
 
-- [ ] **Step 1: Write** the sections the spec's Documentation list names,
+- [x] **Step 1: Write** the sections the spec's Documentation list names,
   including every listed limit (among them the 2-minute live join window,
   base-rate pricing of multi-call increases, the counter-reset undercount, and
   threads that stop being retried after 7 days), the one-machine
@@ -1596,7 +1596,7 @@ Spec: Replicas and mirror (left-out and partly-captured counts), Display.
   `docs/changelog.md` are excluded from the mdformat hook (`prek.toml`); do
   not reformat them.
 
-- [ ] **Step 2: Run** the mdformat hook on the other changed files and the
+- [x] **Step 2: Run** the mdformat hook on the other changed files and the
   private-data scrub.
 
-- [ ] **Step 3: Commit** `git commit -m "docs: document the codex-cloud source"`
+- [x] **Step 3: Commit** `git commit -m "docs: document the codex-cloud source"`
