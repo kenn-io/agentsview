@@ -849,8 +849,9 @@ type DB struct {
 	bulkReads struct {
 		once         sync.Once
 		slots        chan struct{}
-		waitCount    atomic.Int64
-		waitDuration atomic.Int64
+		waitMu       sync.Mutex
+		waitCount    int64
+		waitDuration time.Duration
 	}
 }
 
@@ -1196,8 +1197,13 @@ func (db *DB) acquireBulkRead(ctx context.Context) (func(), error) {
 	default:
 	}
 	started := time.Now()
-	db.bulkReads.waitCount.Add(1)
-	defer func() { db.bulkReads.waitDuration.Add(int64(time.Since(started))) }()
+	defer func() {
+		waited := time.Since(started)
+		db.bulkReads.waitMu.Lock()
+		db.bulkReads.waitCount++
+		db.bulkReads.waitDuration += waited
+		db.bulkReads.waitMu.Unlock()
+	}()
 	select {
 	case db.bulkReads.slots <- struct{}{}:
 		return func() { <-db.bulkReads.slots }, nil

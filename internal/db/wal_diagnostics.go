@@ -141,10 +141,12 @@ func (db *DB) walMaintenanceTick(ctx context.Context, diag *walDiagnostics) {
 		}
 	}
 
+	db.bulkReads.waitMu.Lock()
 	current := sql.DBStats{
-		WaitCount:    db.bulkReads.waitCount.Load(),
-		WaitDuration: time.Duration(db.bulkReads.waitDuration.Load()),
+		WaitCount:    db.bulkReads.waitCount,
+		WaitDuration: db.bulkReads.waitDuration,
 	}
+	db.bulkReads.waitMu.Unlock()
 	waits, waited := readerPoolWaitDelta(diag.bulkStats, current)
 	diag.bulkStats = current
 	if waited >= readerPoolWaitLogThreshold {

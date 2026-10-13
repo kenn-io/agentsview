@@ -146,6 +146,17 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			}
 			return err
 		}, nil, false},
+		{"recall embedding units", func(ctx context.Context) error {
+			var units []EmbeddableUnit
+			_, err := database.ScanRecallEmbeddingUnits(ctx, "", func(unit EmbeddableUnit) error {
+				units = append(units, unit)
+				return nil
+			})
+			if blocked {
+				assert.Empty(t, units)
+			}
+			return err
+		}, nil, false},
 		{"recent edits", func(ctx context.Context) error {
 			_, err := database.RecentEdits(ctx, RecentEditsParams{})
 			return err
