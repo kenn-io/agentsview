@@ -35,8 +35,7 @@
 
   let fileInput: HTMLInputElement | undefined = $state();
   let selectedFile = $state<File | null>(null);
-  let provider: "claude-ai" | "chatgpt" =
-    $state("claude-ai");
+  let provider = $state<"claude-ai" | "chatgpt">("claude-ai");
   let importing = $state(false);
   let dragOver = $state(false);
   let dragCount = $state(0);

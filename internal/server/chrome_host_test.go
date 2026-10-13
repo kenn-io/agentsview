@@ -50,6 +50,7 @@ func testChromeConnection(t *testing.T, srv *Server) (string, net.Conn) {
 }
 
 func readChromeRequest(t *testing.T, conn net.Conn) (string, string) {
+	t.Helper()
 	return readChromePlatformRequest(t, conn, chromehost.ClaudeAI)
 }
 
@@ -342,7 +343,10 @@ func TestChromeHostDisconnect(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			_, conn := testChromeConnection(t, srv)
 			finished := make(chan error, 1)
-			go func() { _, err := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations"); finished <- err }()
+			go func() {
+				_, err := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations")
+				finished <- err
+			}()
 			_, path := readChromeRequest(t, conn)
 			require.Equal(t, "/api/organizations", path)
 			switch mode {
@@ -372,7 +376,10 @@ func TestChromeHostFrameReply(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
 	_, conn := testChromeConnection(t, srv)
 	finished := make(chan importer.ClaudeAIResponse, 1)
-	go func() { response, _ := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations"); finished <- response }()
+	go func() {
+		response, _ := srv.chrome.fetch(t.Context(), chromehost.ClaudeAI, "/api/organizations")
+		finished <- response
+	}()
 	id, _ := readChromeRequest(t, conn)
 	writeChromeReply(t, conn, "foreign-id", 200, "private")
 	writeChromeReply(t, conn, id, 413, "")
@@ -517,4 +524,35 @@ func TestChromeHostCloseRemovesEndpointFiles(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestChatGPTChromeSyncKeepsCompatibilityError(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	_, conn := testChromeConnection(t, srv)
+	const id = "22222222-2222-4222-8222-222222222222"
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync?browser=chrome", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		srv.mux.ServeHTTP(response, req)
+	}()
+	requestID, path := readChromePlatformRequest(t, conn, chromehost.ChatGPT)
+	require.Equal(t, "/backend-api/conversations?offset=0&limit=50&order=updated", path)
+	writeChromeReply(t, conn, requestID, http.StatusOK, `{"items":[{"id":"`+id+`","update_time":1700000001}],"total":1}`)
+	requestID, path = readChromePlatformRequest(t, conn, chromehost.ChatGPT)
+	require.Equal(t, "/backend-api/conversation/"+id, path)
+	// A reply without the protocol version marks the Chrome host as incompatible.
+	payload := `{"id":"` + requestID + `","status":0,"error":"Unsupported ChatGPT fetch path"}`
+	require.NoError(t, chromehost.WriteFrame(conn, []byte(payload)))
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "ChatGPT Sync did not stop after an incompatible reply")
+	}
+	body := response.Body.String()
+	assert.Contains(t, body, "Restart AgentsView if you upgraded it")
+	assert.Contains(t, body, `"code":"chrome_host_update_required"`)
+	assert.NotContains(t, body, "context canceled")
 }
