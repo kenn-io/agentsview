@@ -129,3 +129,31 @@ func TestFxCompanionEqualLengthRewrites(t *testing.T) {
 		})
 	}
 }
+
+func TestFxParseSourceSize(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		refs string
+		want int64
+	}{
+		{"repeated artifact", `{"schema_version":3,"event":{"tool_result":{"call_id":"one","preview":"Full","artifact_ref":"result.txt","stored_bytes":16}}}
+{"schema_version":3,"event":{"tool_result":{"call_id":"two","preview":"Full","artifact_ref":"result.txt","stored_bytes":16}}}`, 32},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "session-a")
+			metadata := `{"schema_version":4}`
+			writeSourceFile(t, filepath.Join(dir, "session.json"), metadata)
+			writeSourceFile(t, filepath.Join(dir, "events.jsonl"), test.refs)
+			writeSourceFile(t, filepath.Join(dir, "tool-results", "result.txt"), "Full tool output")
+			provider, ok := NewProvider(AgentFx, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			size, err := provider.(ParseSourceSizer).ParseSourceSize(t.Context(), sources[0])
+			require.NoError(t, err)
+			assert.Equal(t, int64(len(metadata)+len(test.refs))+test.want, size)
+		})
+	}
+}

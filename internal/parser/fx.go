@@ -376,7 +376,7 @@ func fxUsageEvents(dir, rawID, sessionID string, latest, started time.Time) []Pa
 
 // fxFullToolOutput reads a .txt result file larger than the preview; any failure keeps the preview.
 func fxFullToolOutput(dir, ref string, storedBytes int64, previewLen int) (string, bool) {
-	if !strings.HasSuffix(ref, ".txt") || storedBytes <= int64(previewLen) || filepath.Base(ref) != ref || strings.ContainsAny(ref, `/\`) {
+	if !fxArtifactRefValid(ref) || storedBytes <= int64(previewLen) {
 		return "", false
 	}
 	resultsDir := filepath.Join(dir, "tool-results")
@@ -403,6 +403,10 @@ func fxFullToolOutput(dir, ref string, storedBytes int64, previewLen int) (strin
 		return "", false
 	}
 	return persistedToolResultText(b), true
+}
+
+func fxArtifactRefValid(ref string) bool {
+	return strings.HasSuffix(ref, ".txt") && filepath.Base(ref) == ref && !strings.ContainsAny(ref, `/\`)
 }
 
 func fxAppendEvent(messages *[]ParsedMessage, event *fxEvent, timestamp time.Time, dir string) {

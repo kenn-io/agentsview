@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 func fxSessionIDValid(id string) bool {
@@ -98,21 +100,32 @@ func (p *fxSessionProvider) ParseSourceSize(ctx context.Context, source SourceRe
 		if info.Mode().IsRegular() {
 			size += info.Size()
 		} else if info.Mode().Type() == os.ModeDir && filepath.Base(companion) == "tool-results" {
-			entries, err := os.ReadDir(companion)
+			f, err := os.Open(path)
 			if err != nil {
-				continue
+				return 0, err
 			}
-			for _, entry := range entries {
+			defer f.Close()
+			reader := newLineReaderContext(ctx, f, maxLineSize)
+			defer releaseLineReader(reader)
+			for {
+				line, ok := reader.nextBytes()
+				if !ok {
+					break
+				}
 				if err := ctx.Err(); err != nil {
 					return 0, err
 				}
-				if !strings.HasSuffix(entry.Name(), ".txt") {
+				ref := gjson.GetBytes(line, "event.tool_result.artifact_ref").Str
+				if !fxArtifactRefValid(ref) {
 					continue
 				}
-				info, err := entry.Info()
+				info, err := os.Lstat(filepath.Join(companion, ref))
 				if err == nil && info.Mode().IsRegular() {
-					size += info.Size()
+					size += min(info.Size(), int64(maxPersistedToolResultSize))
 				}
+			}
+			if err := reader.Err(); err != nil {
+				return 0, err
 			}
 		}
 	}

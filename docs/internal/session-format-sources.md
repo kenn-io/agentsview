@@ -4421,6 +4421,7 @@ schemas keep their existing ordering behavior.
   contribute to freshness, including files restored after import. This suffices
   because fx names result files by content hash, as defined by the
   [result store](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/core/session/result_store.zig).
+  Retention sizing charges each tool-result artifact reference up to the read cap.
   Companion content hashes detect equal-length rewrites.
   A torn final line without a newline is ignored. Empty events and null known event
   types fail parsing; unknown event types and sibling fields are skipped.
