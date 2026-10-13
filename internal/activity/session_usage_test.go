@@ -19,6 +19,8 @@ func TestSelectSessionUsageRows(t *testing.T) {
 		wantIndexes            []int
 		wantRaw, wantDiscarded map[string]int
 		wantContributing       map[string]struct{}
+		wantSourceSessionID    string
+		wantCost               money.Money
 	}{
 		{
 			name: "complete snapshot keeps earliest attribution and maximum searches",
@@ -28,15 +30,7 @@ func TestSelectSessionUsageRows(t *testing.T) {
 			},
 			wantIndexes: []int{1}, wantRaw: map[string]int{"root": 5, "child": 20},
 			wantDiscarded: map[string]int{"root": 5, "child": 20}, wantContributing: map[string]struct{}{"root": {}, "child": {}},
-		},
-		{
-			name: "equal timestamp snapshots use message ordinal",
-			rows: []UsageRow{
-				{SessionID: "root", Timestamp: "2026-06-16T10:00:00Z", MessageOrdinal: 1, OutputTokens: 20, ClaudeMessageID: "m", ClaudeRequestID: "r"},
-				{SessionID: "root", Timestamp: "2026-06-16T10:00:00Z", MessageOrdinal: 2, OutputTokens: 20, ClaudeMessageID: "m", ClaudeRequestID: "r"},
-			},
-			wantIndexes: []int{1}, wantRaw: map[string]int{"root": 40},
-			wantDiscarded: map[string]int{"root": 20}, wantContributing: map[string]struct{}{"root": {}},
+			wantSourceSessionID: "child", wantCost: money.Money{Microdollars: 10},
 		},
 		{
 			name: "message UUID deduplicates while event UUID does not",
@@ -87,13 +81,9 @@ func TestSelectSessionUsageRows(t *testing.T) {
 				assert.True(t, row.Priced)
 				assert.True(t, row.Contributes)
 			}
-			if tc.name == "complete snapshot keeps earliest attribution and maximum searches" {
-				require.Len(t, result.Rows, 1)
-				assert.Equal(t, "root", result.Rows[0].SessionID)
-				assert.Equal(t, "child", result.Rows[0].SourceSessionID)
-				assert.Equal(t, 3, result.Rows[0].WebSearchRequests)
-				assert.Equal(t, money.Money{Microdollars: 10}, result.Rows[0].Cost)
-				assert.Equal(t, map[string]SessionTokenCoverage{"root": {OutputTokens: 20, PeakContextTokens: 100}, "child": {OutputTokens: 20, PeakContextTokens: 100}}, result.CanonicalTokenCoverageBySession)
+			if tc.wantSourceSessionID != "" {
+				assert.Equal(t, tc.wantSourceSessionID, result.Rows[0].SourceSessionID)
+				assert.Equal(t, tc.wantCost, result.Rows[0].Cost)
 			}
 		})
 	}

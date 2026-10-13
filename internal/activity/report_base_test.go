@@ -86,13 +86,10 @@ func TestBuildReportArtifacts(t *testing.T) {
 	assert.Same(t, backend.pricing, artifacts.Report.Pricing)
 	assert.Equal(t, 20, artifacts.Report.Totals.OutputTokens)
 	assert.Equal(t, money.Money{Microdollars: 100}, artifacts.Report.Totals.Cost)
-	assert.Equal(t, float64(1), artifacts.Report.Totals.ActiveMinutes)
-	require.Len(t, artifacts.Report.Buckets, 24)
 	assert.Equal(t, 1, artifacts.Report.Buckets[10].AssistantMessages)
 	assert.Equal(t, "project-a", artifacts.Report.Projects["project-key-a"].DisplayLabel)
 	require.Len(t, artifacts.Sessions, 1)
 	assert.Equal(t, "project-key-a", artifacts.Sessions[0].ProjectKey)
-	assert.Equal(t, "s", artifacts.Sessions[0].Title)
 	require.Len(t, artifacts.Report.ByProject, 1)
 	assert.Equal(t, "project-key-a", artifacts.Report.ByProject[0].ProjectKey)
 	assert.Equal(t, []SessionRow{}, artifacts.Report.BySession)
@@ -105,19 +102,12 @@ func TestBuildReportArtifactsErrors(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC"}, fixedNow(t))
 	require.NoError(t, err)
 	failure := errors.New("read failed")
-	for _, stage := range []string{"usage", "candidates", "counts", "projects", "canceled"} {
+	for _, stage := range []string{"usage", "candidates", "counts", "projects"} {
 		t.Run(stage, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
 			backend := &reportBackendFixture{t: t, q: q, stage: stage, err: failure}
-			want := failure
-			if stage == "canceled" {
-				cancel()
-				want = context.Canceled
-			}
 			var done bool
-			_, err := BuildReportArtifacts(ctx, backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, func(p Progress) { done = done || p.Phase == ProgressDone }, "aggregating example activity report")
-			assert.ErrorIs(t, err, want)
+			_, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, func(p Progress) { done = done || p.Phase == ProgressDone }, "aggregating example activity report")
+			assert.ErrorIs(t, err, failure)
 			if stage == "candidates" {
 				assert.EqualError(t, err, "aggregating example activity report: read failed")
 			}

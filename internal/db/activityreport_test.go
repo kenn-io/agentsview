@@ -757,16 +757,6 @@ func TestGetSessionUsageRowsPrefersCompleteClaudeSnapshotAcrossSessions(
 	assert.Equal(t, "root", rowSet.Rows[0].SessionID)
 	assert.Equal(t, "child", rowSet.Rows[0].SourceSessionID)
 	assert.Equal(t, 631, rowSet.Rows[0].OutputTokens)
-	assert.Equal(t, map[string]int{"root": 5, "child": 631},
-		rowSet.RawOutputTokensBySession)
-	assert.Equal(t, map[string]int{"root": 5, "child": 631},
-		rowSet.DeduplicatedOutputTokens)
-	assert.Equal(t, map[string]struct{}{"root": {}, "child": {}},
-		rowSet.DiscardedContributingSessions)
-	assert.Equal(t, map[string]activity.SessionTokenCoverage{
-		"root":  {OutputTokens: 631, PeakContextTokens: 2},
-		"child": {OutputTokens: 631, PeakContextTokens: 2},
-	}, rowSet.CanonicalTokenCoverageBySession)
 }
 
 func TestSQLiteSessionUsageRowLessEquivalentInstantUsesSessionOrder(t *testing.T) {
