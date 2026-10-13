@@ -10,9 +10,11 @@ to handle a data-version change.
 
 Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`.
 
-Archive-wide scans take the bulk lane through `acquireBulkRead`, using at most
-`readerMaxOpenConns - 1` reader connections so quick reads always get one.
-Reads scoped to one session or an indexed lookup stay outside the lane.
+Dashboard analytics, report, and search scans, and other multi-second scans over
+message or usage rows, take the lane; the list and sidebar reads every page loads
+(session list, stats, project list) and reads scoped to one session stay outside.
+The lane uses `acquireBulkRead`, using at most `readerMaxOpenConns - 1` reader
+connections so quick reads always get one.
 Each holder uses one reader connection at a time. Validate input before
 acquiring a permit. Release it before waiting for another bulk reader or doing
 host git/GitHub lookups.
