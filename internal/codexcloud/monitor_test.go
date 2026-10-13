@@ -1,6 +1,7 @@
 package codexcloud
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -502,4 +503,20 @@ func TestJoinAllowsClockDrift(t *testing.T) {
 	env.join(t, "a")
 
 	assert.Equal(t, []string{"a"}, env.monitor.Joined(passKey))
+}
+
+func TestJoinRuleIsCheckedAgainBeforeResume(t *testing.T) {
+	env := newMonitorEnv(t)
+	env.threads.Set(runningThread("a", "warm"))
+	// A slow dial carries the chat past the join window.
+	env.monitor.Dial = func(ctx context.Context, o DialOptions) (*Conn, error) {
+		conn, err := Dial(ctx, o)
+		env.clock.Advance(joinWindow)
+		return conn, err
+	}
+
+	env.join(t, "a")
+
+	assert.Zero(t, env.resumes())
+	assert.Empty(t, env.monitor.Joined(passKey))
 }

@@ -127,8 +127,7 @@ func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadI
 			m.release(key, threadID)
 		}
 	}()
-	if m.Now().Sub(time.Unix(listedUpdatedAt, 0)) > joinWindow ||
-		!m.Waits.HomeReady(login.Home, login.AuthModTime) {
+	if !m.recent(listedUpdatedAt) || !m.Waits.HomeReady(login.Home, login.AuthModTime) {
 		return nil
 	}
 	conn, err := m.Dial(ctx, DialOptions{
@@ -152,6 +151,12 @@ func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadI
 		return err
 	}
 	if !running || turnID == handled {
+		return nil
+	}
+	// The dial and the turn check can take minutes. The join rule must
+	// still hold when the resume is sent, or a stale turn gets a cold
+	// resume.
+	if !m.recent(listedUpdatedAt) {
 		return nil
 	}
 	var reply resumeReply
@@ -192,6 +197,11 @@ func (m *Monitor) Join(ctx context.Context, key AccountKey, login Login, threadI
 	default:
 		return m.stopCapture(key, fmt.Errorf("%w: thread/resume returned resumeKind %q", ErrProtocolChange, reply.ResumeKind))
 	}
+}
+
+// recent reports whether a listing updatedAt is inside the join window.
+func (m *Monitor) recent(updatedAt int64) bool {
+	return m.Now().Sub(time.Unix(updatedAt, 0)) <= joinWindow
 }
 
 // Joined lists the threads joined for key.
