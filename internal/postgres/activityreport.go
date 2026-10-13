@@ -60,7 +60,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{Store: s, lower: lowerBound, upper: upperBound}, sessions, ids, q, onProgress, "aggregating pg activity report")
+	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{source: s.activityReportCandidateSource(ids, q), Store: s, lower: lowerBound, upper: upperBound}, sessions, q, onProgress, "aggregating pg activity report")
 	return artifacts, err
 }
 
@@ -800,11 +800,16 @@ func pgActivityReportRowStatusWithWebSearchRequests(
 
 type activityReportBackend struct {
 	*Store
+	source       activity.CandidateSource
 	lower, upper string
 }
 
 func (b activityReportBackend) ActivityReportUsage(ctx context.Context, ids []string, q activity.Query) ([]activity.UsageRow, *export.PricingBlock, error) {
 	return b.activityReportUsage(ctx, ids, b.lower, b.upper, q)
+}
+
+func (b activityReportBackend) ActivityReportCandidateSource() activity.CandidateSource {
+	return b.source
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts) error {

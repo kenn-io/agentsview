@@ -12,6 +12,29 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func TestUsageDedupTokenIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, agent, messageID, requestID, uuid, key string
+		ordinary, session                                    UsageDedupToken
+	}{
+		{name: "Claude pair wins", source: "event", agent: "claude", messageID: "m", requestID: "r", uuid: "u", key: "k", ordinary: UsageDedupToken{Kind: "claude", Value: "m:r"}, session: UsageDedupToken{Kind: "claude", Value: "m:r"}},
+		{name: "incomplete pair falls back to message UUID", source: "message", agent: "claude", messageID: "m", uuid: "u", key: "k", ordinary: UsageDedupToken{Kind: "source", Value: "claude:u"}, session: UsageDedupToken{Kind: "source", Value: "claude:u"}},
+		{name: "event UUID falls back to stored session key", source: "event", agent: "codex", uuid: "u", key: "k", ordinary: UsageDedupToken{Kind: "source", Value: "codex:u"}, session: UsageDedupToken{Kind: "usage", Value: "k"}},
+		{name: "event UUID alone has no session identity", source: "event", agent: "codex", uuid: "u", ordinary: UsageDedupToken{Kind: "source", Value: "codex:u"}},
+		{name: "UUID without agent falls back to stored key", source: "message", uuid: "u", key: "k", ordinary: UsageDedupToken{Kind: "usage", Value: "k"}, session: UsageDedupToken{Kind: "usage", Value: "k"}},
+		{name: "no identity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ordinary, ok := UsageDedupTokenForRow(tc.agent, tc.messageID, tc.requestID, tc.uuid, tc.key)
+			assert.Equal(t, tc.ordinary, ordinary)
+			assert.Equal(t, tc.ordinary != UsageDedupToken{}, ok)
+			session, ok := SessionUsageDedupTokenForRow(tc.source, tc.agent, tc.messageID, tc.requestID, tc.uuid, tc.key)
+			assert.Equal(t, tc.session, session)
+			assert.Equal(t, tc.session != UsageDedupToken{}, ok)
+		})
+	}
+}
+
 func TestSelectSessionUsageRows(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string

@@ -11,20 +11,24 @@ import (
 // ReportBackend supplies backend reads and pricing for shared report assembly.
 type ReportBackend interface {
 	ActivityReportUsage(context.Context, []string, Query) ([]UsageRow, *export.PricingBlock, error)
-	ActivityReportCandidateSource([]string, Query) CandidateSource
+	ActivityReportCandidateSource() CandidateSource
 	ActivityReportMessageCounts(context.Context, []string, Query, *CandidateArtifacts) error
 	BuildProjectIdentityMap(context.Context, []string) (map[string]export.ProjectMapEntry, error)
 }
 
 // BuildReportArtifacts assembles a report and returns the emitted completion event.
-func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions []SessionMeta, ids []string, q Query, onProgress ProgressFunc, aggregationLabel string) (CandidateArtifacts, Progress, error) {
+func BuildReportArtifacts(ctx context.Context, backend ReportBackend, sessions []SessionMeta, q Query, onProgress ProgressFunc, aggregationLabel string) (CandidateArtifacts, Progress, error) {
+	ids := make([]string, len(sessions))
+	for i, session := range sessions {
+		ids[i] = session.SessionID
+	}
 	usage, pricing, err := backend.ActivityReportUsage(ctx, ids, q)
 	if err != nil {
 		return CandidateArtifacts{}, Progress{}, err
 	}
 
 	rowsProcessed := int64(0)
-	source := backend.ActivityReportCandidateSource(ids, q)
+	source := backend.ActivityReportCandidateSource()
 	artifacts, err := BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,

@@ -37,8 +37,12 @@ func (b *reportBackendFixture) ActivityReportUsage(_ context.Context, ids []stri
 	return []UsageRow{{SessionID: "s", Model: "model-a", Timestamp: "2026-06-16T10:01:00Z", OutputTokens: 20, Cost: money.Money{Microdollars: 100}, Priced: true, Contributes: true}}, b.pricing, err
 }
 
-func (b *reportBackendFixture) ActivityReportCandidateSource(ids []string, q Query) CandidateSource {
-	err := b.check("candidates", ids, q)
+func (b *reportBackendFixture) ActivityReportCandidateSource() CandidateSource {
+	b.calls = append(b.calls, "candidates")
+	var err error
+	if b.stage == "candidates" {
+		err = b.err
+	}
 	return func(_ context.Context, yield func(IntervalCandidate) error) error {
 		if err != nil {
 			return err
@@ -70,7 +74,7 @@ func TestBuildReportArtifacts(t *testing.T) {
 	require.NoError(t, err)
 	backend := &reportBackendFixture{t: t, q: q, pricing: &export.PricingBlock{}}
 	progress := []Progress{}
-	artifacts, done, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, func(p Progress) { progress = append(progress, p) }, "aggregating example activity report")
+	artifacts, done, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, q, func(p Progress) { progress = append(progress, p) }, "aggregating example activity report")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"usage", "candidates", "counts", "projects"}, backend.calls)
 	assert.Equal(t, []Progress{
@@ -100,7 +104,7 @@ func TestBuildReportArtifactsWithoutProgressCallback(t *testing.T) {
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC"}, fixedNow(t))
 	require.NoError(t, err)
 	backend := &reportBackendFixture{t: t, q: q}
-	_, done, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, nil, "aggregating example activity report")
+	_, done, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, q, nil, "aggregating example activity report")
 	require.NoError(t, err)
 	assert.Equal(t, Progress{Phase: ProgressDone, SessionsTotal: 1, SessionsProcessed: 1, RowsProcessed: 1}, done)
 }
@@ -113,7 +117,7 @@ func TestBuildReportArtifactsErrors(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			backend := &reportBackendFixture{t: t, q: q, stage: stage, err: failure}
 			var done bool
-			_, completion, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, []string{"s"}, q, func(p Progress) { done = done || p.Phase == ProgressDone }, "aggregating example activity report")
+			_, completion, err := BuildReportArtifacts(context.Background(), backend, []SessionMeta{{SessionID: "s", Project: "project-a"}}, q, func(p Progress) { done = done || p.Phase == ProgressDone }, "aggregating example activity report")
 			assert.ErrorIs(t, err, failure)
 			if stage == "candidates" {
 				assert.EqualError(t, err, "aggregating example activity report: read failed")

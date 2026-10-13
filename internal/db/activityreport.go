@@ -84,7 +84,7 @@ func (db *DB) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{DB: db, lower: lowerBound, upper: upperBound}, sessions, ids, q, onProgress, "aggregating activity report")
+	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{source: db.activityReportCandidateSource(ids, q), DB: db, lower: lowerBound, upper: upperBound}, sessions, q, onProgress, "aggregating activity report")
 	return artifacts, err
 }
 
@@ -1215,11 +1215,16 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 
 type activityReportBackend struct {
 	*DB
+	source       activity.CandidateSource
 	lower, upper string
 }
 
 func (b activityReportBackend) ActivityReportUsage(ctx context.Context, ids []string, q activity.Query) ([]activity.UsageRow, *export.PricingBlock, error) {
 	return b.activityReportUsage(ctx, ids, b.lower, b.upper, q)
+}
+
+func (b activityReportBackend) ActivityReportCandidateSource() activity.CandidateSource {
+	return b.source
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts) error {

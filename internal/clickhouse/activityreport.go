@@ -150,7 +150,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	pairCtx, cancelPairs := context.WithCancel(ctx)
 	defer cancelPairs()
 	pairs := s.startActivityReportPairs(pairCtx, candidates, ids, versions, q)
-	artifacts, done, err := activity.BuildReportArtifacts(ctx, activityReportBackend{Store: s, candidates: candidates, pairs: pairs, lower: rangeStartUTC, upper: rangeEndUTC}, sessions, ids, q, onProgress, "aggregating clickhouse activity report")
+	artifacts, done, err := activity.BuildReportArtifacts(ctx, activityReportBackend{source: pairs.candidateSource(), Store: s, candidates: candidates, pairs: pairs, lower: rangeStartUTC, upper: rangeEndUTC}, sessions, q, onProgress, "aggregating clickhouse activity report")
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -1708,6 +1708,7 @@ func activityUsageSelection(k *activityUsageKept, candidates []string) (iter.Seq
 
 type activityReportBackend struct {
 	*Store
+	source       activity.CandidateSource
 	candidates   chSessionSet
 	pairs        *activityReportPairing
 	lower, upper string
@@ -1717,8 +1718,8 @@ func (b activityReportBackend) ActivityReportUsage(ctx context.Context, ids []st
 	return b.activityReportUsage(ctx, b.candidates, ids, b.lower, b.upper, q)
 }
 
-func (b activityReportBackend) ActivityReportCandidateSource(_ []string, _ activity.Query) activity.CandidateSource {
-	return b.pairs.candidateSource()
+func (b activityReportBackend) ActivityReportCandidateSource() activity.CandidateSource {
+	return b.source
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts) error {

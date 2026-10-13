@@ -60,7 +60,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		Phase: activity.ProgressLoadingUsage, SessionsTotal: len(sessions),
 	})
 
-	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{Store: s, lower: lowerBound, upper: upperBound, filter: f, rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC}, sessions, ids, q, onProgress, "aggregating duckdb activity report")
+	artifacts, _, err := activity.BuildReportArtifacts(ctx, activityReportBackend{source: s.activityReportCandidateSource(ids, q), Store: s, lower: lowerBound, upper: upperBound, filter: f, rangeStart: rangeStartUTC, rangeEnd: rangeEndUTC}, sessions, q, onProgress, "aggregating duckdb activity report")
 	return artifacts, err
 }
 
@@ -1077,6 +1077,7 @@ func duckUsageOrdinal(v any) (int64, bool) {
 
 type activityReportBackend struct {
 	*Store
+	source               activity.CandidateSource
 	lower, upper         string
 	filter               db.AnalyticsFilter
 	rangeStart, rangeEnd string
@@ -1084,6 +1085,10 @@ type activityReportBackend struct {
 
 func (b activityReportBackend) ActivityReportUsage(ctx context.Context, ids []string, q activity.Query) ([]activity.UsageRow, *export.PricingBlock, error) {
 	return b.activityReportUsage(ctx, ids, b.filter, b.rangeStart, b.rangeEnd, b.lower, b.upper, q)
+}
+
+func (b activityReportBackend) ActivityReportCandidateSource() activity.CandidateSource {
+	return b.source
 }
 
 func (b activityReportBackend) ActivityReportMessageCounts(ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts) error {

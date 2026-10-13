@@ -569,41 +569,26 @@ type claudeUsageSnapshotToken struct {
 	requestID string
 }
 
-func usageDedupTokenForRow(u UsageRow) (UsageDedupToken, bool) {
-	if u.ClaudeMessageID != "" && u.ClaudeRequestID != "" {
-		return UsageDedupToken{
-			Kind:  "claude",
-			Value: u.ClaudeMessageID + ":" + u.ClaudeRequestID,
-		}, true
+// UsageDedupTokenForRow picks the Claude pair, source UUID, or stored usage key.
+func UsageDedupTokenForRow(agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string) (UsageDedupToken, bool) {
+	if claudeMessageID != "" && claudeRequestID != "" {
+		return UsageDedupToken{Kind: "claude", Value: claudeMessageID + ":" + claudeRequestID}, true
 	}
-	if u.Agent != "" && u.SourceUUID != "" {
-		return UsageDedupToken{
-			Kind:  "source",
-			Value: u.Agent + ":" + u.SourceUUID,
-		}, true
+	if agent != "" && sourceUUID != "" {
+		return UsageDedupToken{Kind: "source", Value: agent + ":" + sourceUUID}, true
 	}
-	if u.UsageDedupKey != "" {
-		return UsageDedupToken{
-			Kind:  "usage",
-			Value: u.UsageDedupKey,
-		}, true
+	if usageDedupKey != "" {
+		return UsageDedupToken{Kind: "usage", Value: usageDedupKey}, true
 	}
 	return UsageDedupToken{}, false
 }
 
-// SessionUsageDedupTokenForRow returns the strongest available identity used
-// when deduplicating a session's usage rows.
-func SessionUsageDedupTokenForRow(u UsageRow) (UsageDedupToken, bool) {
-	if u.ClaudeMessageID != "" && u.ClaudeRequestID != "" {
-		return UsageDedupToken{Kind: "claude", Value: u.ClaudeMessageID + ":" + u.ClaudeRequestID}, true
+// SessionUsageDedupTokenForRow restricts source UUID identity to message rows.
+func SessionUsageDedupTokenForRow(usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string) (UsageDedupToken, bool) {
+	if usageSource != "message" {
+		sourceUUID = ""
 	}
-	if u.UsageSource == "message" && u.Agent != "" && u.SourceUUID != "" {
-		return UsageDedupToken{Kind: "source", Value: u.Agent + ":" + u.SourceUUID}, true
-	}
-	if u.UsageDedupKey != "" {
-		return UsageDedupToken{Kind: "usage", Value: u.UsageDedupKey}, true
-	}
-	return UsageDedupToken{}, false
+	return UsageDedupTokenForRow(agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey)
 }
 
 // ClaudeSnapshotSurvivorSelection also returns the earliest session and the
@@ -736,7 +721,7 @@ func CanonicalSessionTokenCoverageContext(
 			continue
 		}
 		genericCanonical[i] = i
-		if key, ok := SessionUsageDedupTokenForRow(row); ok {
+		if key, ok := SessionUsageDedupTokenForRow(row.UsageSource, row.Agent, row.ClaudeMessageID, row.ClaudeRequestID, row.SourceUUID, row.UsageDedupKey); ok {
 			if previous, duplicate := seen[key]; duplicate {
 				genericCanonical[i] = previous
 				continue
@@ -866,7 +851,7 @@ func usageSurvivorSelection(
 				continue
 			}
 		}
-		if k, ok := usageDedupTokenForRow(u); ok {
+		if k, ok := UsageDedupTokenForRow(u.Agent, u.ClaudeMessageID, u.ClaudeRequestID, u.SourceUUID, u.UsageDedupKey); ok {
 			if _, dup := seen[k]; dup {
 				continue
 			}

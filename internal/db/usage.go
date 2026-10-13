@@ -1597,11 +1597,7 @@ type UsageDedupToken = activity.UsageDedupToken
 func UsageDedupTokenForRow(
 	usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string,
 ) (UsageDedupToken, bool) {
-	return activity.SessionUsageDedupTokenForRow(activity.UsageRow{
-		UsageSource: usageSource, Agent: agent, ClaudeMessageID: claudeMessageID,
-		ClaudeRequestID: claudeRequestID, SourceUUID: sourceUUID,
-		UsageDedupKey: usageDedupKey,
-	})
+	return activity.SessionUsageDedupTokenForRow(usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey)
 }
 
 func (db *DB) loadTopSessionMetadata(
