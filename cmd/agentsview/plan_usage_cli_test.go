@@ -163,7 +163,7 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 			out: sessionUsageOutput{
 				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:b", Agent: "codex-cloud"},
 			},
-			want: []string{"Plan usage:    not checked yet; AgentsView checks it during a later sync"},
+			want: []string{"Plan usage:    not checked yet; a sync with Codex cloud import on checks it"},
 		},
 		{
 			name: "newer failure after figures",
