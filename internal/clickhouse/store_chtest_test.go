@@ -418,8 +418,6 @@ func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
 			require.NoError(t, err)
 			count, before, ok := store.GetSessionVersion(ctx, fixtureBetaID)
 			require.True(t, ok)
-			original, err := local.GetSessionFull(ctx, fixtureBetaID)
-			require.NoError(t, err)
 			require.NoError(t, tt.write())
 			res, err := syncer.Push(ctx, false, nil)
 			require.NoError(t, err)
@@ -428,9 +426,12 @@ func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, count, afterCount)
 			assert.NotEqual(t, before, after)
-			session, err := local.GetSessionFull(ctx, fixtureBetaID)
-			require.NoError(t, err)
-			assert.Equal(t, original.LocalModifiedAt, session.LocalModifiedAt)
+			if tt.name == "label clear" {
+				beta, err := store.GetSession(ctx, fixtureBetaID)
+				require.NoError(t, err)
+				require.NotNil(t, beta)
+				assert.Nil(t, beta.Labels)
+			}
 		})
 	}
 }

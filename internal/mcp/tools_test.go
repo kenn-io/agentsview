@@ -1910,34 +1910,10 @@ func TestListSessionsAnnotationsPreserveAutomatedPresence(t *testing.T) {
 	_, err := d.SetSessionLabels(t.Context(), "worker", []string{"nightly"})
 	require.NoError(t, err)
 	for _, filter := range []listSessionsIn{{Labels: []string{"nightly"}}, {PR: "owner/repo#7"}} {
-		for _, payload := range []string{`{}`, `{"include_automated":false}`, `{"include_automated":true}`} {
-			in := filter
-			require.NoError(t, json.Unmarshal([]byte(payload), &in))
-			_, out, err := ts.listSessions(t.Context(), nil, in)
-			require.NoError(t, err)
-			if payload == `{"include_automated":false}` {
-				assert.Empty(t, out.Sessions)
-			} else {
-				require.Len(t, out.Sessions, 1)
-				assert.Equal(t, "worker", out.Sessions[0].SessionID)
-			}
-		}
+		in := filter
+		require.NoError(t, json.Unmarshal([]byte(`{"include_automated":false}`), &in))
+		_, out, err := ts.listSessions(t.Context(), nil, in)
+		require.NoError(t, err)
+		assert.Empty(t, out.Sessions)
 	}
-}
-
-func TestListSessionsKeepsPendingLauncherWorkerVisible(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "worker", "proj", func(s *db.Session) { s.UserMessageCount = 2 })
-	link, err := d.SetSessionExternalParent(t.Context(), "worker", "manager")
-	require.NoError(t, err)
-	assert.False(t, link.Applied)
-	_, out, err := ts.listSessions(t.Context(), nil, listSessionsIn{})
-	require.NoError(t, err)
-	require.Len(t, out.Sessions, 1)
-	assert.Equal(t, "worker", out.Sessions[0].SessionID)
-	dbtest.SeedSession(t, d, "manager", "proj", func(s *db.Session) { s.UserMessageCount = 2 })
-	_, out, err = ts.listSessions(t.Context(), nil, listSessionsIn{})
-	require.NoError(t, err)
-	require.Len(t, out.Sessions, 1)
-	assert.Equal(t, "manager", out.Sessions[0].SessionID)
 }

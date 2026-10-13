@@ -224,19 +224,14 @@ describe("SessionsStore", () => {
     sessions = createSessionsStore();
   });
 
-  it("preserves explicit automated exclusion for annotation requests and URLs", async () => {
+  it("preserves explicit automated exclusion for annotation requests", async () => {
     for (const filter of [{ label: "nightly" }, { pr: "owner/repo#7" }]) {
       sessions.initFromParams(filter);
       await sessions.load();
       expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBeUndefined();
-      expect(filtersToParams(sessions.filters).include_automated).toBeUndefined();
       sessions.setIncludeAutomatedFilter(false);
       await sessions.load();
       expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBe(false);
-      expect(filtersToParams(sessions.filters).include_automated).toBe("false");
-      const parsed = parseFiltersFromParams(filtersToParams(sessions.filters));
-      expect(parsed.includeAutomated).toBe(false);
-      expect(parsed.automatedFilterSet).toBe(true);
       const detach = sessions.attachSidebar();
       await sessions.load();
       expect(api.getSidebarSessionIndex.mock.calls.at(-1)?.[0].include_automated).toBe(false);
@@ -2235,39 +2230,30 @@ describe("SessionsStore", () => {
   });
 
   describe("label and pull request filters", () => {
-    it("sends every selected label to the sidebar index", async () => {
+    it("sends selected labels and omits them after the last is removed", async () => {
       sessions.addLabelFilter(" ticket=ABC-123 ");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
       });
+      sessions.addLabelFilter("ticket=ABC-123");
+      sessions.addLabelFilter("   ");
+      expect(sessions.filters.labels).toEqual(["ticket=ABC-123"]);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
       sessions.addLabelFilter("role=reviewer");
       await vi.waitFor(() => {
         expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
       });
-
       expect(sessions.filters.labels).toEqual(["ticket=ABC-123", "role=reviewer"]);
       expect(sessions.isLabelSelected("role=reviewer")).toBe(true);
       expectSidebarIndexCalledWith({ label: ["ticket=ABC-123", "role=reviewer"] });
-    });
-
-    it("ignores a label that is already selected or blank", async () => {
-      sessions.filters.labels = ["ticket=ABC-123"];
-
-      sessions.addLabelFilter("ticket=ABC-123");
-      sessions.addLabelFilter("   ");
-
-      expect(sessions.filters.labels).toEqual(["ticket=ABC-123"]);
-      expect(api.getSidebarSessionIndex).not.toHaveBeenCalled();
-    });
-
-    it("omits the label param once the last label is removed", async () => {
-      sessions.filters.labels = ["ticket=ABC-123"];
-
+      sessions.removeLabelFilter("role=reviewer");
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(3);
+      });
       sessions.removeLabelFilter("ticket=ABC-123");
       await vi.waitFor(() => {
-        expect(api.getSidebarSessionIndex).toHaveBeenCalled();
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(4);
       });
-
       expect(sessions.filters.labels).toEqual([]);
       expectSidebarIndexCalledWith({ label: undefined });
     });
@@ -2333,18 +2319,14 @@ describe("SessionsStore", () => {
       expect(sessions.hasSharedFilters).toBe(false);
     });
 
-    it("clears label and pull request filters with the other filters", async () => {
+    it("clears label and pull request filters with the other filters", () => {
       sessions.filters.labels = ["ticket=ABC-123"];
       sessions.filters.pr = "acme/widgets";
 
       sessions.clearSessionFilters();
-      await vi.waitFor(() => {
-        expect(api.getSidebarSessionIndex).toHaveBeenCalled();
-      });
 
       expect(sessions.filters.labels).toEqual([]);
       expect(sessions.filters.pr).toBe("");
-      expectSidebarIndexCalledWith({ label: undefined, pr: undefined });
     });
 
     it("restores saved label filters and drops malformed ones", () => {

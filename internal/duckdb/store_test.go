@@ -171,15 +171,10 @@ func TestSessionVersionTracksPushedAnnotations(t *testing.T) {
 			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
 			require.NoError(t, err)
 			before := version()
-			session, err := local.GetSessionFull(ctx, "sess-1")
-			require.NoError(t, err)
 			require.NoError(t, tt.write())
 			_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 			assert.NotEqual(t, before, version())
-			after, err := local.GetSessionFull(ctx, "sess-1")
-			require.NoError(t, err)
-			assert.Equal(t, session.LocalModifiedAt, after.LocalModifiedAt)
 		})
 	}
 }

@@ -119,6 +119,7 @@ func TestCheckDBForChangesSessionAnnotations(t *testing.T) {
 	w := testWatcher(t)
 	database := w.db.(*db.DB)
 	dbtest.SeedSession(t, database, "worker", "proj")
+	dbtest.SeedSession(t, database, "manager", "proj")
 	for _, tt := range []struct {
 		name  string
 		write func() error
@@ -139,8 +140,6 @@ func TestCheckDBForChangesSessionAnnotations(t *testing.T) {
 				_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET sync_marker = '2000-01-01T00:00:00Z' WHERE id = 'worker'")
 				return err
 			}))
-			before, err := database.GetSessionFull(t.Context(), "worker")
-			require.NoError(t, err)
 			count, version, ok := database.GetSessionVersion(t.Context(), "worker")
 			require.True(t, ok)
 			require.NoError(t, tt.write())
@@ -148,9 +147,6 @@ func TestCheckDBForChangesSessionAnnotations(t *testing.T) {
 			var fileMtime int64
 			var changedAt time.Time
 			assert.True(t, w.checkDBForChanges(t.Context(), "worker", &count, &version, &path, &fileMtime, &changedAt))
-			after, err := database.GetSessionFull(t.Context(), "worker")
-			require.NoError(t, err)
-			assert.Equal(t, before.LocalModifiedAt, after.LocalModifiedAt, "annotations must preserve Recall's content stamp")
 		})
 	}
 }

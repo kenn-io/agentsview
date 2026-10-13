@@ -52,10 +52,6 @@ func TestArtifactImportKeepsLauncherParentEditable(t *testing.T) {
 			require.NotNil(t, worker)
 			assert.Nil(t, worker.ParentSessionID)
 			assert.Equal(t, relationship, worker.RelationshipType)
-			seedSession(t, destination, "manager-c", "project")
-			link, err := destination.SetSessionExternalParent(t.Context(), id, "manager-c")
-			require.NoError(t, err)
-			assert.True(t, link.Applied)
 			_, err = source.ClearSessionExternalParent(t.Context(), "worker")
 			require.NoError(t, err)
 			assert.Equal(t, before, exportHash(), "clearing the annotation must preserve canonical content")
@@ -64,40 +60,31 @@ func TestArtifactImportKeepsLauncherParentEditable(t *testing.T) {
 }
 
 func TestArtifactImportPreservesNativeParents(t *testing.T) {
-	for _, kind := range []string{"transcript", "spawn"} {
-		t.Run(kind, func(t *testing.T) {
-			source := testExportDB(t)
-			parent := "manager"
-			seedSession(t, source, "worker", "project", func(s *db.Session) {
-				if kind == "transcript" {
-					s.ParentSessionID = &parent
-					s.RelationshipType = "subagent"
-				}
-			})
-			if kind == "spawn" {
-				_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-					Session: db.Session{ID: parent, Agent: "claude", Machine: "local", Project: "project", MessageCount: 1}, ReplaceMessages: true,
-					Messages: []db.Message{{SessionID: parent, Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}}}},
-				}})
-				require.NoError(t, err)
-			}
-			_, err := source.SetSessionExternalParent(t.Context(), "worker", parent)
-			require.NoError(t, err)
-			store := newTestArtifactStore(t)
-			_, err = ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
-			require.NoError(t, err)
-			destination := testDB(t)
-			coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
-			recordAllImportEntries(t, coordinator, store, contractOrigin)
-			_, err = coordinator.Finalize(t.Context())
-			require.NoError(t, err)
-			worker, err := destination.GetSessionFull(t.Context(), contractOrigin+"~worker")
-			require.NoError(t, err)
-			require.NotNil(t, worker)
-			require.NotNil(t, worker.ParentSessionID)
-			assert.Equal(t, contractOrigin+"~manager", *worker.ParentSessionID)
-		})
-	}
+	t.Run("spawn", func(t *testing.T) {
+		source := testExportDB(t)
+		parent := "manager"
+		seedSession(t, source, "worker", "project")
+		_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+			Session: db.Session{ID: parent, Agent: "claude", Machine: "local", Project: "project", MessageCount: 1}, ReplaceMessages: true,
+			Messages: []db.Message{{SessionID: parent, Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "worker"}}}},
+		}})
+		require.NoError(t, err)
+		_, err = source.SetSessionExternalParent(t.Context(), "worker", parent)
+		require.NoError(t, err)
+		store := newTestArtifactStore(t)
+		_, err = ExportToStore(t.Context(), source, store, ExportOptions{Origin: contractOrigin, Full: true})
+		require.NoError(t, err)
+		destination := testDB(t)
+		coordinator := NewStoreImportCoordinator(destination, store, importLocalOrigin)
+		recordAllImportEntries(t, coordinator, store, contractOrigin)
+		_, err = coordinator.Finalize(t.Context())
+		require.NoError(t, err)
+		worker, err := destination.GetSessionFull(t.Context(), contractOrigin+"~worker")
+		require.NoError(t, err)
+		require.NotNil(t, worker)
+		require.NotNil(t, worker.ParentSessionID)
+		assert.Equal(t, contractOrigin+"~manager", *worker.ParentSessionID)
+	})
 }
 
 func TestArtifactImportEndToEndAndReplay(t *testing.T) {

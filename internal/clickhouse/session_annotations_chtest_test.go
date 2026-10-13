@@ -25,27 +25,6 @@ func TestClickHouseSessionAnnotationParity(t *testing.T) {
 	dbtest.AssertSessionAnnotationParity(t, local, store)
 }
 
-func TestPushRepublishesLabelOnlyChanges(t *testing.T) {
-	ctx := t.Context()
-	store, syncer, local := newPushedStore(t)
-
-	_, err := local.UpdateSessionLabels(ctx, fixtureBetaID, []string{"ticket-9"}, nil)
-	require.NoError(t, err)
-	res, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.SessionsPushed, "a label-only change re-pushes its session")
-
-	_, err = local.SetSessionLabels(ctx, fixtureBetaID, nil)
-	require.NoError(t, err)
-	res, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.SessionsPushed, "removing every label re-pushes its session")
-	beta, err := store.GetSession(ctx, fixtureBetaID)
-	require.NoError(t, err)
-	require.NotNil(t, beta)
-	assert.Nil(t, beta.Labels)
-}
-
 // A mirror pushed before the annotation columns existed gains them in
 // place, and its existing rows read back as unlabeled and unlinked.
 func TestEnsureSchemaAddsAnnotationColumnsToOlderMirror(t *testing.T) {

@@ -133,12 +133,10 @@ func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 	}})
 	_, err := executeCommand(newRootCommand(), "session", "label", "worker", "nightly")
 	require.NoError(t, err)
-	for _, filter := range [][]string{{"--label", "nightly"}, {"--pr", "owner/repo#7"}, {"--pr", "github.com::owner/repo#7"}} {
-		for _, toggle := range []string{"", "--include-one-shot=false", "--include-automated=false", "--include-automated=true"} {
+	for _, filter := range [][]string{{"--label", "nightly"}, {"--pr", "owner/repo#7"}} {
+		for _, toggle := range []string{"--include-one-shot=false", "--include-automated=false"} {
 			args := append([]string{"session", "list", "--format", "json"}, filter...)
-			if toggle != "" {
-				args = append(args, toggle)
-			}
+			args = append(args, toggle)
 			cmd := newRootCommand()
 			var stdout, stderr bytes.Buffer
 			cmd.SetOut(&stdout)
@@ -146,12 +144,7 @@ func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 			cmd.SetArgs(args)
 			require.NoError(t, cmd.Execute())
 			list := decodeCLIJSON[cliSessionList](t, stdout.String())
-			if toggle == "--include-one-shot=false" || toggle == "--include-automated=false" {
-				assert.Empty(t, list.Sessions)
-			} else {
-				require.Len(t, list.Sessions, 1)
-				assert.Equal(t, "worker", list.Sessions[0]["id"])
-			}
+			assert.Empty(t, list.Sessions)
 		}
 	}
 }

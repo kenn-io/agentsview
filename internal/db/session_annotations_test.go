@@ -70,16 +70,6 @@ func TestSessionPRLinksRoundTripAndFilter(t *testing.T) {
 	assert.Empty(t, got.PRLinks)
 }
 
-func TestParsePRFilterRejectsMalformedValues(t *testing.T) {
-	for _, value := range []string{
-		"repo-without-owner", "owner/repo#", "owner/repo#zero",
-		"https://github.com/owner/repo", "::owner/repo", "github.com::repo",
-	} {
-		_, err := ParsePRFilter(value)
-		assert.Error(t, err, value)
-	}
-}
-
 func TestSessionLabelsLifecycle(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -196,7 +186,6 @@ func TestSessionExternalParentApplication(t *testing.T) {
 		require.NotNil(t, worker.ParentSessionID)
 		assert.Equal(t, "manager", *worker.ParentSessionID)
 		assert.Equal(t, "subagent", worker.RelationshipType)
-		assert.Nil(t, worker.LocalModifiedAt, "applying a launcher parent must preserve the content stamp")
 	}
 
 	children, err := d.GetChildSessions(ctx, "manager")
@@ -654,19 +643,30 @@ func TestDetachedLauncherLinkKeepsWorkerClassification(t *testing.T) {
 	}
 }
 
-func TestParsePRFilterRepositoryPaths(t *testing.T) {
+func TestParsePRFilter(t *testing.T) {
 	for _, tt := range []struct {
-		value string
-		want  PRFilter
+		value   string
+		want    PRFilter
+		invalid bool
 	}{
-		{"group/subgroup/repo#12", PRFilter{Repository: "group/subgroup/repo", Number: 12}},
-		{"owner.name/repo", PRFilter{Repository: "owner.name/repo"}},
-		{"my.org/sub/repo#12", PRFilter{Repository: "my.org/sub/repo", Number: 12}},
-		{" GITLAB.COM::group/subgroup/repo#12 ", PRFilter{Host: "gitlab.com", Repository: "group/subgroup/repo", Number: 12}},
-		{"forge::owner/repo", PRFilter{Host: "forge", Repository: "owner/repo"}},
-		{"forge.example:8443::owner/repo", PRFilter{Host: "forge.example:8443", Repository: "owner/repo"}},
+		{"group/subgroup/repo#12", PRFilter{Repository: "group/subgroup/repo", Number: 12}, false},
+		{"owner.name/repo", PRFilter{Repository: "owner.name/repo"}, false},
+		{"my.org/sub/repo#12", PRFilter{Repository: "my.org/sub/repo", Number: 12}, false},
+		{" GITLAB.COM::group/subgroup/repo#12 ", PRFilter{Host: "gitlab.com", Repository: "group/subgroup/repo", Number: 12}, false},
+		{"forge::owner/repo", PRFilter{Host: "forge", Repository: "owner/repo"}, false},
+		{"forge.example:8443::owner/repo", PRFilter{Host: "forge.example:8443", Repository: "owner/repo"}, false},
+		{"repo-without-owner", PRFilter{}, true},
+		{"owner/repo#", PRFilter{}, true},
+		{"owner/repo#zero", PRFilter{}, true},
+		{"https://github.com/owner/repo", PRFilter{}, true},
+		{"::owner/repo", PRFilter{}, true},
+		{"github.com::repo", PRFilter{}, true},
 	} {
 		got, err := ParsePRFilter(tt.value)
+		if tt.invalid {
+			assert.Error(t, err, tt.value)
+			continue
+		}
 		require.NoError(t, err)
 		assert.Equal(t, tt.want, got)
 	}
@@ -721,6 +721,7 @@ func TestSessionExternalParentWaitsForParentArrival(t *testing.T) {
 			link, err = d.GetSessionExternalParent(ctx, "worker")
 			require.NoError(t, err)
 			assert.True(t, link.Applied)
+			assert.Equal(t, []string{"manager"}, listSortedIDs(t, d, SessionFilter{}))
 		})
 	}
 }

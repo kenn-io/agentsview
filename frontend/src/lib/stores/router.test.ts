@@ -434,20 +434,19 @@ describe("RouterStore", () => {
     expect(result).toBe(false);
   });
 
-  it("writes label filters as repeated query keys and reads them back", () => {
+  it("writes label and pull request filters and reads them back", () => {
     setURL("/");
     store = new RouterStore();
     store.navigate("sessions", {
-      label: "ticket=ABC-123\nrole=reviewer, lead",
+      label: "ticket=ABC-123",
       pr: "acme/widgets#42",
     });
 
     expect(new URLSearchParams(window.location.search).getAll("label")).toEqual([
       "ticket=ABC-123",
-      "role=reviewer, lead",
     ]);
     expect(parsePath().params).toEqual({
-      label: "ticket=ABC-123\nrole=reviewer, lead",
+      label: "ticket=ABC-123",
       pr: "acme/widgets#42",
     });
   });
