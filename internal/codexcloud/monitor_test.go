@@ -438,3 +438,41 @@ func TestCloseAllEndsJoins(t *testing.T) {
 	env.join(t, "b")
 	assert.Equal(t, 1, env.resumes(), "a closed monitor joins nothing")
 }
+
+// liveTokenRecord is a token record the monitor would buffer for j.
+func liveTokenRecord(t *testing.T, j *join, total int64, at time.Time) mirror.Record {
+	t.Helper()
+	data := mirror.TokenUsageData{
+		JoinID: j.id, TurnID: "turn-1", ObservedAt: at,
+		Total: mirror.TokenCounts{Input: total, Total: total},
+		Last:  mirror.TokenCounts{Input: 100, Total: 100},
+	}
+	var buf []mirror.Record
+	require.NoError(t, appendRecord(&buf, mirror.KindTokenUsage, data, at))
+	return buf[0]
+}
+
+func TestRetriedFlushAppendsRecordsOnce(t *testing.T) {
+	env := newMonitorEnv(t)
+	m := env.monitor
+	j := &join{key: passKey, threadID: "a", id: "join-1"}
+	require.NoError(t, m.flush(j, []mirror.Record{liveTokenRecord(t, j, 100, fetchNow)}))
+	buf := []mirror.Record{
+		liveTokenRecord(t, j, 200, fetchNow.Add(10*time.Second)),
+		liveTokenRecord(t, j, 300, fetchNow.Add(20*time.Second)),
+	}
+	// An earlier flush of buf wrote its records, then failed to save the
+	// thread's state, so the stored offset is still before them.
+	st := env.thread(t, "a")
+	_, err := mirror.Append(env.mirrorPath(t, "a"), st.Offset, buf)
+	require.NoError(t, err)
+
+	require.NoError(t, m.flush(j, buf))
+
+	tokens := tokenRecords(t, env.records(t, "a"))
+	totals := make([]int64, len(tokens))
+	for i, rec := range tokens {
+		totals[i] = rec.Total.Total
+	}
+	assert.Equal(t, []int64{100, 200, 300}, totals)
+}

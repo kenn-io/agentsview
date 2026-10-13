@@ -315,10 +315,20 @@ func recordKey(record mirror.Record) string {
 		var row mirror.ItemRecord
 		_ = json.Unmarshal(record.Data, &row)
 		return "item/" + row.TurnID + "/" + rowItemID(record.Data)
+	case mirror.KindTokenUsage, mirror.KindTurnCompleted:
+		// A live record never replaces another: its join ID and observation
+		// time make it unique, so its key is its content. The key exists
+		// so a retried flush drops the records an earlier attempt appended
+		// before its state save failed. pruneItemDigests drops these keys
+		// before state is saved, so they last one commit.
+		return liveKeyPrefix + digest(record.Data)
 	default:
 		return ""
 	}
 }
+
+// liveKeyPrefix starts the digest keys of live monitor records.
+const liveKeyPrefix = "live/"
 
 // absorb records the digests of records already in the mirror, so dedup
 // compares against what is really stored.
@@ -405,7 +415,8 @@ func notePlanRecord(st *ThreadState, record mirror.Record) {
 }
 
 // pruneItemDigests keeps digests only for items in turns that can still be
-// fetched again: the resume turn and later ones.
+// fetched again: the resume turn and later ones. Live record digests are
+// dropped: only the commit that recovered their frames needs them.
 func pruneItemDigests(st *ThreadState) {
 	// Turns run oldest first. Items of turns before the resume turn are
 	// never listed again, so their digests are dropped.
@@ -418,6 +429,10 @@ func pruneItemDigests(st *ThreadState) {
 		live[turn.ID] = true
 	}
 	for key := range st.ItemDigests {
+		if strings.HasPrefix(key, liveKeyPrefix) {
+			delete(st.ItemDigests, key)
+			continue
+		}
 		rest, _ := strings.CutPrefix(key, "item/")
 		turnID, _, _ := strings.Cut(rest, "/")
 		if !live[turnID] {
