@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { StatusBar } from "@kenn-io/kit-ui";
+  import { StatusBar, Tooltip } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { perf } from "../../stores/perf.svelte.js";
@@ -140,13 +140,18 @@
       <span class="sep">&middot;</span>
     {/if}
     {#if codexCloudLine}
-      <span
-        class="codex-cloud-status"
-        class:codex-cloud-status--warn={codexCloudLine.warn}
-        title={codexCloudLine.detail}
-      >
-        {codexCloudLine.summary}
-      </span>
+      {@const detail = codexCloudLine.detail}
+      <Tooltip focusable align="end">
+        {#snippet content()}
+          <span class="codex-cloud-detail">{detail}</span>
+        {/snippet}
+        <span
+          class="codex-cloud-status"
+          class:codex-cloud-status--warn={codexCloudLine.warn}
+        >
+          {codexCloudLine.summary}
+        </span>
+      </Tooltip>
       <span class="sep">&middot;</span>
     {/if}
     {#if sync.isDesktop}
@@ -263,6 +268,11 @@
   .codex-cloud-status--warn {
     color: var(--accent-red);
     font-weight: 500;
+  }
+
+  /* The detail is one line per fact. */
+  .codex-cloud-detail {
+    white-space: pre-line;
   }
 
   .perf-toggle {

@@ -186,6 +186,15 @@ describe("StatusBar", () => {
       void unmount(component);
     });
 
+    // Focus opens the tooltip at once, so keyboard users can read it.
+    async function focusTooltip(line: Element | null): Promise<string | undefined> {
+      const trigger = line?.closest<HTMLElement>(".kit-tooltip-trigger");
+      expect(trigger?.tabIndex).toBe(0);
+      trigger!.focus();
+      await tick();
+      return document.querySelector('[role="tooltip"]')?.textContent?.trim();
+    }
+
     it("shows the state with each line in its tooltip", async () => {
       getCodexCloudStatus.mockResolvedValue([upToDate]);
       const component = await mountWithRows();
@@ -195,7 +204,7 @@ describe("StatusBar", () => {
         `Codex Cloud: up to date as of ${formatTimestamp("2026-04-08T04:55:00Z")}`,
       );
       expect(line?.classList.contains("codex-cloud-status--warn")).toBe(false);
-      expect(line?.getAttribute("title")?.split("\n")).toEqual([
+      expect((await focusTooltip(line))?.split("\n")).toEqual([
         "Codex homes: /synthetic/codex-home",
         `Codex Cloud: up to date as of ${formatTimestamp("2026-04-08T04:55:00Z")}`,
         "Live tokens: watching 1 running threads",
@@ -221,7 +230,7 @@ describe("StatusBar", () => {
       const line = document.querySelector(".codex-cloud-status");
       expect(line?.textContent?.trim()).toBe("Codex Cloud: 2 threads could not be imported");
       expect(line?.classList.contains("codex-cloud-status--warn")).toBe(true);
-      expect(line?.getAttribute("title")).toContain(
+      expect(await focusTooltip(line)).toContain(
         "Codex homes: /synthetic/other-home\n" +
           "Codex Cloud: 2 threads could not be imported\n" +
           `Oldest failure: ${formatTimestamp("2026-04-08T03:00:00Z")}\n` +
