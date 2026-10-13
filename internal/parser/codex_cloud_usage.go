@@ -65,7 +65,7 @@ func codexCloudUsageEvents(
 // monitor can append one batch twice when a save fails after its records
 // were written; the repeat would read as a falling total and count the
 // running total again. One joined connection observes each update once,
-// so the join ID, observation time, and counts identify a record.
+// so the join ID, turn ID, observation time, and counts identify a record.
 func codexCloudDistinctTokens(recs []mirror.TokenUsageData) []mirror.TokenUsageData {
 	type identity struct {
 		joinID, turnID string
