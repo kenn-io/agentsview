@@ -49,6 +49,34 @@ func ReconcileImageContent(archived, incoming string) (same, fill bool) {
 	return true, fill
 }
 
+// MergeImageContent returns the archived text with each image placeholder
+// that incoming replaces by a concrete reference filled in. Every other
+// archived image is kept, so an upgrade in one place does not discard an
+// archived reference elsewhere in the same message. ok is false when the
+// texts do not reconcile.
+func MergeImageContent(archived, incoming string) (string, bool) {
+	if same, _ := ReconcileImageContent(archived, incoming); !same {
+		return "", false
+	}
+	aTokens := imageToken.FindAllStringIndex(archived, -1)
+	bTokens := imageToken.FindAllStringIndex(incoming, -1)
+	var out strings.Builder
+	aPos := 0
+	for i := range aTokens {
+		out.WriteString(archived[aPos:aTokens[i][0]])
+		a := archived[aTokens[i][0]:aTokens[i][1]]
+		b := incoming[bTokens[i][0]:bTokens[i][1]]
+		if isImagePlaceholder(a) && !isImagePlaceholder(b) {
+			out.WriteString(b)
+		} else {
+			out.WriteString(a)
+		}
+		aPos = aTokens[i][1]
+	}
+	out.WriteString(archived[aPos:])
+	return out.String(), true
+}
+
 // IsImagePlaceholderUpgrade reports whether incoming differs from stored only
 // by replacing image placeholders with concrete image references.
 func IsImagePlaceholderUpgrade(stored, incoming string) bool {
