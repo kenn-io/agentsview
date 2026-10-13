@@ -293,7 +293,7 @@ func httpSessionUsageData(
 	if wire.SubagentCount != nil {
 		out.SubagentCount = int(*wire.SubagentCount)
 	}
-	return &out, usageExitCode(&out.SessionUsage), nil
+	return &out, usageExitCode(&out), nil
 }
 
 func httpSessionSyncStatus(
@@ -378,7 +378,8 @@ func storeSessionUsageData(
 			u.Agent = string(def.Type)
 		}
 	}
-	return newStoreSessionUsageOutput(u), usageExitCode(u), nil
+	out := newStoreSessionUsageOutput(u)
+	return out, usageExitCode(out), nil
 }
 
 func resolveStoreSessionID(
@@ -423,11 +424,12 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	fmt.Fprintf(w, "%s %s\n", label("Agent"),
 		sanitizeTerminal(out.Agent))
 	// A Codex cloud session that live capture never saw has only plan
-	// usage; zeros would read as a session that used nothing.
+	// usage; zeros would read as a session that used nothing. Plan figures
+	// are shares of the plan's limits, never output or context tokens.
 	planOnly := out.Agent == string(parser.AgentCodexCloud) && !out.HasTokenData && !out.HasCost
 	if planOnly {
-		fmt.Fprintf(w, "%s plan usage\n", label("Output"))
-		fmt.Fprintf(w, "%s plan usage\n", label("Peak ctx"))
+		fmt.Fprintf(w, "%s n/a\n", label("Output"))
+		fmt.Fprintf(w, "%s n/a\n", label("Peak ctx"))
 	} else {
 		fmt.Fprintf(w, "%s %d\n", label("Output"), out.TotalOutputTokens)
 		fmt.Fprintf(w, "%s %d\n", label("Peak ctx"), out.PeakContextTokens)
@@ -437,8 +439,10 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 			out.SubagentCount)
 	}
 	switch {
-	case planOnly:
+	case planOnly && planFiguresShown(out.Plan):
 		fmt.Fprintf(w, "%s plan usage\n", label("Cost"))
+	case planOnly:
+		fmt.Fprintf(w, "%s n/a\n", label("Cost"))
 	case out.HasCost:
 		models := strings.Join(out.Models, ", ")
 		prefix := "~"
@@ -473,27 +477,20 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 }
 
 // planUsageLine describes a session's plan usage in one line, "" for a
-// session that is not a codex-cloud thread and has no plan usage.
+// session that is not a codex-cloud chat and has no plan usage.
 func planUsageLine(agent string, plan *db.PlanUsageView) string {
 	if plan == nil {
 		if agent == string(parser.AgentCodexCloud) {
-			return "not checked yet"
+			return "not checked yet; AgentsView checks it during a later sync"
 		}
 		return ""
 	}
 	if plan.OutcomeKind == "counted_under" {
 		return "counted under session " + plan.CountedUnder
 	}
-	if plan.WeeklyPercent == nil && plan.FiveHourPercent == nil && plan.Credits == nil {
-		switch plan.OutcomeKind {
-		case "account_unavailable":
-			return "usage isn't available for this account"
-		case "too_many_descendants":
-			return "too many sub-agent threads for OpenAI's usage report"
-		case "could_not_check":
-			return "AgentsView could not check plan usage"
-		case "settled_no_row":
-			return "not reported by OpenAI"
+	if !hasPlanFigures(plan) {
+		if msg := planOutcomeMessage(plan); msg != "" {
+			return msg
 		}
 		if plan.Final {
 			return "not reported by OpenAI"
@@ -513,11 +510,46 @@ func planUsageLine(agent string, plan *db.PlanUsageView) string {
 	line := strings.Join(parts, ", ") + asOfLocal(plan.DataAsOf)
 	if plan.DataStatus == "partial" {
 		if plan.Final {
-			return "partial: " + line
+			line = "partial: " + line
+		} else {
+			line = "still updating: " + line
 		}
-		return "still updating: " + line
+	}
+	// The stored outcome is newer than the figures, so the figures may
+	// be stale; say what the newer check found.
+	if plan.OutcomeKind != "" {
+		msg := cmp.Or(planOutcomeMessage(plan), "not reported yet")
+		line += "; newer check: " + msg + asOfLocal(plan.OutcomeAt)
 	}
 	return line
+}
+
+// planOutcomeMessage describes a plan usage outcome that ends a root's
+// checks without a row, or "" for the other outcomes.
+func planOutcomeMessage(plan *db.PlanUsageView) string {
+	switch plan.OutcomeKind {
+	case "account_unavailable":
+		return "usage isn't available for this account"
+	case "too_many_descendants":
+		return "too many sub-agent chats for OpenAI's usage report"
+	case "could_not_check":
+		return "AgentsView could not check plan usage"
+	case "settled_no_row":
+		return "not reported by OpenAI"
+	default:
+		return ""
+	}
+}
+
+// hasPlanFigures reports whether a plan usage row carries any figure.
+func hasPlanFigures(plan *db.PlanUsageView) bool {
+	return plan != nil && (plan.WeeklyPercent != nil || plan.FiveHourPercent != nil || plan.Credits != nil)
+}
+
+// planFiguresShown reports whether planUsageLine prints figures for the
+// session itself; a sub-agent counted under its root shows none.
+func planFiguresShown(plan *db.PlanUsageView) bool {
+	return hasPlanFigures(plan) && plan.OutcomeKind != "counted_under"
 }
 
 // planFigure rounds a plan usage percentage or credit amount to two
@@ -558,10 +590,15 @@ func captureCoverageLine(
 		turns = "turn"
 	}
 	line += fmt.Sprintf("; %d %s not captured", coverage.UncapturedTurns, turns)
-	if plan != nil && (plan.WeeklyPercent != nil || plan.Credits != nil) {
-		line += ", plan usage covers them"
+	// Only a complete report with no newer failure accounts for the
+	// missed turns; older or partial figures may not include them.
+	if plan != nil && plan.DataStatus == "available" && plan.OutcomeKind == "" && hasPlanFigures(plan) {
+		return line + ", plan usage covers them"
 	}
-	return line
+	if coverage.UncapturedTurns == 1 {
+		return line + ", its tokens are not in the totals"
+	}
+	return line + ", their tokens are not in the totals"
 }
 
 // asOfLocal renders an RFC 3339 time as ", as of <local time>", or "" when

@@ -409,7 +409,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 	}
 	out := newStoreSessionUsageOutput(u)
 	out.RefreshIncomplete = refreshIncomplete
-	return out, usageExitCode(u), nil
+	return out, usageExitCode(out), nil
 }
 
 func closeArchiveQueryBackend(cleanup func()) {

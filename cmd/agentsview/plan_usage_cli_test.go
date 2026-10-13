@@ -152,7 +152,73 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 			out: sessionUsageOutput{
 				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:b", Agent: "codex-cloud"},
 			},
-			want: []string{"Plan usage:    not checked yet"},
+			want: []string{"Plan usage:    not checked yet; AgentsView checks it during a later sync"},
+		},
+		{
+			name: "newer failure after figures",
+			out: sessionUsageOutput{
+				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:g", Agent: "codex-cloud"},
+				Plan: &db.PlanUsageView{
+					DataAsOf: "2026-10-02T09:30:00Z", DataStatus: "available", WeeklyPercent: new(2.25),
+					OutcomeKind: "could_not_check", OutcomeAt: "2026-10-09T09:30:00Z",
+				},
+				Coverage: &db.CaptureCoverageView{LastCaptureAt: "2026-10-01T12:30:00Z", UncapturedTurns: 2},
+			},
+			want: []string{
+				"Plan usage:    2.25% of weekly limit, as of 2026-10-02 04:30 EST; " +
+					"newer check: AgentsView could not check plan usage, as of 2026-10-09 04:30 EST",
+				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; " +
+					"2 turns not captured, their tokens are not in the totals",
+			},
+		},
+		{
+			name: "left out after figures",
+			out: sessionUsageOutput{
+				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:h", Agent: "codex-cloud"},
+				Plan: &db.PlanUsageView{
+					DataAsOf: "2026-10-02T09:30:00Z", DataStatus: "available", WeeklyPercent: new(2.25),
+					OutcomeKind: "left_out", OutcomeAt: "2026-10-03T09:30:00Z",
+				},
+			},
+			want: []string{
+				"Plan usage:    2.25% of weekly limit, as of 2026-10-02 04:30 EST; " +
+					"newer check: not reported yet, as of 2026-10-03 04:30 EST",
+			},
+		},
+		{
+			name: "five-hour figure only",
+			out: sessionUsageOutput{
+				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:i", Agent: "codex-cloud"},
+				Plan: &db.PlanUsageView{
+					DataAsOf: "2026-10-02T09:30:00Z", DataStatus: "available", FiveHourPercent: new(3.0),
+				},
+				Coverage: &db.CaptureCoverageView{LastCaptureAt: "2026-10-01T12:30:00Z", UncapturedTurns: 1},
+			},
+			want: []string{
+				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; 1 turn not captured, plan usage covers them",
+			},
+		},
+		{
+			name: "partial figures",
+			out: sessionUsageOutput{
+				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:j", Agent: "codex-cloud"},
+				Plan: &db.PlanUsageView{
+					DataAsOf: "2026-10-02T09:30:00Z", DataStatus: "partial", WeeklyPercent: new(1.0),
+				},
+				Coverage: &db.CaptureCoverageView{LastCaptureAt: "2026-10-01T12:30:00Z", UncapturedTurns: 1},
+			},
+			want: []string{
+				"Captured:      tokens captured live, as of 2026-10-01 07:30 EST; " +
+					"1 turn not captured, its tokens are not in the totals",
+			},
+		},
+		{
+			name: "too many sub-agents",
+			out: sessionUsageOutput{
+				SessionUsage: db.SessionUsage{SessionID: "codex-cloud:k", Agent: "codex-cloud"},
+				Plan:         &db.PlanUsageView{OutcomeKind: "too_many_descendants", Final: true},
+			},
+			want: []string{"Plan usage:    too many sub-agent chats for OpenAI's usage report"},
 		},
 		{
 			name: "descendant",
@@ -185,8 +251,16 @@ func TestSessionUsageHumanShowsPlanUsage(t *testing.T) {
 		SessionID: "codex-cloud:f", Agent: "codex-cloud",
 		Plan: &db.PlanUsageView{DataAsOf: "2026-10-02T09:30:00Z", DataStatus: "available", WeeklyPercent: new(1.0)},
 	}))
-	for _, line := range []string{"Output:        plan usage\n", "Peak ctx:      plan usage\n", "Cost:          plan usage\n"} {
+	for _, line := range []string{"Output:        n/a\n", "Peak ctx:      n/a\n", "Cost:          plan usage\n"} {
 		assert.Contains(t, plan.String(), line, "a plan-only session never shows zero tokens or cost")
+	}
+
+	var unchecked strings.Builder
+	require.NoError(t, renderSessionUsageHuman(&unchecked, &sessionUsageOutput{
+		SessionUsage: db.SessionUsage{SessionID: "codex-cloud:l", Agent: "codex-cloud"},
+	}))
+	for _, line := range []string{"Output:        n/a\n", "Peak ctx:      n/a\n", "Cost:          n/a\n"} {
+		assert.Contains(t, unchecked.String(), line, "no plan figures: nothing is billed as plan usage yet")
 	}
 
 	var b strings.Builder
@@ -241,7 +315,7 @@ func TestSessionUsageJSONIncludesPlanUsage(t *testing.T) {
 			out, code, err := read()
 			require.NoError(t, err)
 			require.NotNil(t, out)
-			assert.Equal(t, tokenUseExitNoTokenData, code)
+			assert.Equal(t, tokenUseExitOK, code, "plan usage figures are data")
 			assert.False(t, out.HasTokenData)
 			assert.False(t, out.HasCost)
 			assert.Equal(t, wantPlan, out.Plan)
