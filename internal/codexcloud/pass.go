@@ -385,49 +385,27 @@ func (p *pass) thread(ctx context.Context, id string) error {
 
 	result, err := p.fetch(ctx, id, st, listing, now)
 	if err != nil {
-		f, threadErr := p.threadFailure(err)
-		if !threadErr || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return err
 		}
-		p.Log.Printf("codex-cloud: thread %s: %v", id, Redact(err, p.login.Token))
-		entry := RetryEntry{
-			Attempts: retry.Attempts + 1, FirstFailure: retry.FirstFailure,
-			Message: Message(f, time.Time{}), Listing: retry.Listing,
-		}
-		if entry.Listing == nil {
-			// A thread selected without a listing row keeps its stored
-			// record, so a later listing with a new updatedAt restarts the
-			// unreadable count.
-			entry.Listing = st.Listing
-		}
-		if listing != nil {
-			entry = relisted(entry, listing, now)
-		}
-		if entry.FirstFailure.IsZero() {
-			entry.FirstFailure = now
-		}
-		if now.Sub(entry.FirstFailure) >= unreadableAfter {
-			return p.unreadable(id, st, acct, entry, now)
-		}
-		wait := retryFirst
-		for range entry.Attempts - 1 {
-			wait = min(wait*2, retryLimit)
-		}
-		entry.NextAttempt = now.Add(wait)
-		acct.Retry[id] = entry
-		if listing != nil {
-			// Store the metadata now, so the thread imports even while its
-			// history cannot be fetched.
-			record := mirror.Record{Kind: mirror.KindThread, FetchedAt: now, Data: listing}
-			if _, _, err := commitThread(p.Store, p.key, id, st, []mirror.Record{record}, now); err != nil {
-				return err
+		f, threadErr := p.threadFailure(err)
+		switch {
+		case threadErr:
+			p.Log.Printf("codex-cloud: thread %s: %v", id, Redact(err, p.login.Token))
+			return p.retryLater(id, st, acct, retry, listing, Message(f, time.Time{}), now)
+		case errors.Is(err, ErrCallTimeout):
+			// The timeout ended the connection, so the pass ends. Without
+			// a retry entry the next pass would pick this thread first
+			// again, and a thread OpenAI never answers would stop every
+			// thread after it.
+			p.Log.Printf("codex-cloud: thread %s: %v", id, Redact(err, p.login.Token))
+			if recordErr := p.retryLater(id, st, acct, retry, listing, timeoutMessage, now); recordErr != nil {
+				return recordErr
 			}
-			parent := resolveParent(id, listing, st.ResolvedParent, nil, false)
-			if err := p.linkUsage(p.key, &acct, id, parent, now); err != nil {
-				return err
-			}
+			return err
+		default:
+			return err
 		}
-		return p.Store.SaveAccount(p.key, acct)
 	}
 
 	// The thread state saved below makes the thread look unchanged to the
@@ -477,6 +455,57 @@ func (p *pass) thread(ctx context.Context, id string) error {
 		acct.CheckAgain[id] = checkAgain
 	default:
 		delete(acct.CheckAgain, id)
+	}
+	return p.Store.SaveAccount(p.key, acct)
+}
+
+// timeoutMessage is the retry message for a thread whose history OpenAI
+// did not answer within the call timeout.
+const timeoutMessage = "OpenAI did not answer in time for one of these chats."
+
+// retryLater puts a failed thread in the retry set with its backoff, or
+// retires it after unreadableAfter. A listing record is stored now, so the
+// thread imports with its metadata while its history cannot be fetched.
+func (p *pass) retryLater(
+	id string, st ThreadState, acct AccountState, retry RetryEntry, listing jsontext.Value,
+	message string, now time.Time,
+) error {
+	entry := RetryEntry{
+		Attempts: retry.Attempts + 1, FirstFailure: retry.FirstFailure,
+		Message: message, Listing: retry.Listing,
+	}
+	if entry.Listing == nil {
+		// A thread selected without a listing row keeps its stored
+		// record, so a later listing with a new updatedAt restarts the
+		// unreadable count.
+		entry.Listing = st.Listing
+	}
+	if listing != nil {
+		entry = relisted(entry, listing, now)
+	}
+	if entry.FirstFailure.IsZero() {
+		entry.FirstFailure = now
+	}
+	if now.Sub(entry.FirstFailure) >= unreadableAfter {
+		return p.unreadable(id, st, acct, entry, now)
+	}
+	wait := retryFirst
+	for range entry.Attempts - 1 {
+		wait = min(wait*2, retryLimit)
+	}
+	entry.NextAttempt = now.Add(wait)
+	acct.Retry[id] = entry
+	if listing != nil {
+		// Store the metadata now, so the thread imports even while its
+		// history cannot be fetched.
+		record := mirror.Record{Kind: mirror.KindThread, FetchedAt: now, Data: listing}
+		if _, _, err := commitThread(p.Store, p.key, id, st, []mirror.Record{record}, now); err != nil {
+			return err
+		}
+		parent := resolveParent(id, listing, st.ResolvedParent, nil, false)
+		if err := p.linkUsage(p.key, &acct, id, parent, now); err != nil {
+			return err
+		}
 	}
 	return p.Store.SaveAccount(p.key, acct)
 }

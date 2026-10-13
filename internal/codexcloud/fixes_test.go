@@ -414,3 +414,43 @@ func TestOffPageRetryStoresNewestListing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(st.Listing), `"third name"`)
 }
+
+func TestUnansweredThreadWaitsSoLaterThreadsImport(t *testing.T) {
+	env := newPassEnv(t)
+	env.syncer.Dial = func(ctx context.Context, o DialOptions) (*Conn, error) {
+		o.CallTimeout = 200 * time.Millisecond
+		return Dial(ctx, o)
+	}
+	env.threads.Set(finishedThread("slow", ago(time.Hour), message("m", "one")))
+	env.threads.Set(finishedThread("b", ago(2*time.Hour), message("n", "two")))
+	hang, mu := true, &sync.Mutex{}
+	env.host.Handle("thread/turns/list", func(params jsontext.Value) (any, *codexcloudtest.Error) {
+		mu.Lock()
+		hanging := hang && strings.Contains(string(params), `"slow"`)
+		mu.Unlock()
+		if hanging {
+			<-env.host.Context().Done()
+		}
+		return env.threads.TurnsList(params)
+	})
+
+	env.run(t)
+	acct := env.account(t)
+	require.Equal(t, FailNetwork.String(), acct.Wait.Failure, "the timeout still ends the pass")
+	require.Contains(t, acct.Retry, "slow")
+
+	env.clock.Set(acct.Wait.Until)
+	env.run(t)
+	_, err := os.Stat(env.mirrorPath(t, "b"))
+	require.NoError(t, err, "the thread after the unanswered one imports")
+	row, ok := env.syncer.Status.Row(string(passKey))
+	require.True(t, ok)
+	assert.Equal(t, StateRetrying, row.State)
+
+	mu.Lock()
+	hang = false
+	mu.Unlock()
+	env.clock.Set(env.account(t).Retry["slow"].NextAttempt)
+	env.run(t)
+	assert.NotContains(t, env.account(t).Retry, "slow", "the retry imports it once OpenAI answers")
+}
