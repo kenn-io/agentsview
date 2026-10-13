@@ -33,7 +33,8 @@ func TestCodexCloudJobOffStates(t *testing.T) {
 	}{
 		{
 			name: "no sync", noSync: true, gates: func(g Gates) Gates { return g },
-			state: StateOffNoSync, message: "Off: source sync is off for this daemon.",
+			state: StateOffNoSync, message: "Off: this daemon does not sync sources. A command run with --no-sync started it, " +
+				"or its archive is archive-only. A daemon started with `agentsview serve` on a normal archive imports Codex cloud chats.",
 		},
 		{
 			name: "disabled_agents wins over enabled",
@@ -148,7 +149,7 @@ func TestCodexCloudUnreadableConfigKeepsLastGood(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, StateConfigError, row.State)
 	assert.Equal(t,
-		"/data/config.toml could not be read: toml: line 3: expected '='. Cloud import keeps its last good settings.",
+		"/data/config.toml could not be read: toml: line 3: expected '='. Codex cloud import keeps its last good settings.",
 		row.Message)
 
 	readErr = nil

@@ -144,7 +144,7 @@ func Message(f Failure, retryAt time.Time) string {
 	case FailTooLarge:
 		return "A reply from OpenAI was larger than AgentsView accepts."
 	case FailRefreshRequested:
-		return "OpenAI asked for a fresh ChatGPT login in this Codex home. Open Codex or run `codex login`; AgentsView retries when the login changes."
+		return "OpenAI asked for a fresh ChatGPT login in this Codex home. Open Codex or run `codex login`; AgentsView retries when the login changes, or after an hour."
 	case FailRefused:
 		return "OpenAI refused this request. AgentsView retries automatically. If this continues, check that this ChatGPT account can use Codex."
 	case FailNetwork:

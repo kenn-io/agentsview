@@ -1013,8 +1013,8 @@ Spec: Scheduler, Configuration (gates, re-read), Status and errors.
       `disabled_agents`, then `CodexCloud.Err`, then `Enabled` (a config error
       also clears `Enabled`, so it is checked first); a `config.toml` read error
       keeps the last good settings and shows "<config path> could not be read:
-        <reason>. Cloud import keeps its last good settings." Rows for homes and
-        accounts gone from the config drop at the end of each run.
+        <reason>. Codex cloud import keeps its last good settings." Rows for homes
+        and accounts gone from the config drop at the end of each run.
     - `GET /api/v1/codex-cloud/status` returning `[]HomeStatus`, always
       registered, empty when the source is not configured (configuration can
       change without a restart).
@@ -1050,9 +1050,9 @@ Spec: Scheduler, Configuration (gates, re-read), Status and errors.
   daemon idle tracker's `BeginWork` and ends it when the run returns, like the
   other background jobs in `cmd/agentsview/main.go`. Commit.
 
-- [ ] **Step 7: Test idle tracking.** The code above shipped without a test:
-  `cmd/agentsview/codex_cloud_jobs_test.go` does not check that a sync or live
-  run holds the idle tracker while it runs.
+- [x] **Step 7: Test idle tracking.**
+  `TestCodexCloudJobsKeepTheDaemonAwakeWhileRunning` checks that a sync or
+  live run holds the idle tracker while it runs.
 
 **Milestone: working locally.** The gate's probe answers are in. Ask the user to
 run `AGENTSVIEW_DATA_DIR=<scratch> agentsview serve` with

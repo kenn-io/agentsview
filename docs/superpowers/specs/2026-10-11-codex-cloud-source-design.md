@@ -1353,9 +1353,9 @@ same outcome kind and time, and the same totals.
   with `enabled = false`), and the rest of the config and every other agent
   still load. A different case: if `config.toml` as a whole fails to parse
   when a job re-reads it, the job keeps the last good settings and shows
-  "`<config path>` could not be read: `<reason>`. Cloud import keeps its last
-  good settings.", followed by the reason those settings keep import off, if
-  they do.
+  "`<config path>` could not be read: `<reason>`. Codex cloud import keeps its
+  last good settings.", followed by the reason those settings keep import off,
+  if they do.
 - `codex-cloud` is registered as a file-based provider so that `disabled_agents`
   accepts it (`internal/config/config.go` rejects other providers there). Its
   root is `{dataDir}/sources/codex-cloud`, resolved from the data directory
@@ -1408,8 +1408,11 @@ States:
 - **Off: listed in `disabled_agents`.** Shown even when `enabled = true`, since
   `disabled_agents` wins.
 - **Off: `enabled` is false.**
-- **Off: source sync is off for this daemon** (`--no-sync` or an archive-only
-  archive).
+- **Off: this daemon does not sync sources.** The message names the two causes,
+  a command run with `--no-sync` or an archive-only archive, and says that a
+  daemon started with `agentsview serve` on a normal archive imports Codex
+  cloud chats. The live tokens line says "Live tokens: off, because this
+  daemon does not sync sources."
 - **Waiting for first sync:** enabled, no pass has finished.
 - **Importing, found N chats so far:** during a first backfill, until all four
   listings have finished a first pass. After that: **Importing N of M chats.**
@@ -1448,7 +1451,7 @@ message instead of the signed-out one.
 | No token, or HTTP 401 from the thread host          | Signed out of ChatGPT in this Codex home. Run `codex login`, then AgentsView picks up the new login on its next sync.                                                                                                                              |
 | HTTP 401 in `auto` mode                             | OpenAI did not accept the ChatGPT login in this Codex home's auth.json. With `cli_auth_credentials_store = "auto"`, Codex may keep the current login in the system keyring, which AgentsView does not read. (file fix)                             |
 | A reply larger than the read limit                  | A reply from OpenAI was larger than AgentsView accepts.                                                                                                                                                                                            |
-| Token refresh request from the thread host          | OpenAI asked for a fresh ChatGPT login in this Codex home. Open Codex or run `codex login`; AgentsView retries when the login changes.                                                                                                             |
+| Token refresh request from the thread host          | OpenAI asked for a fresh ChatGPT login in this Codex home. Open Codex or run `codex login`; AgentsView retries when the login changes, or after an hour.                                                                                           |
 | HTTP 403 from the thread host                       | OpenAI refused this request. AgentsView retries automatically. If this continues, check that this ChatGPT account can use Codex.                                                                                                                   |
 | Network failure                                     | Can't reach OpenAI. AgentsView retries automatically.                                                                                                                                                                                              |
 | HTTP 429                                            | OpenAI is limiting requests from this account. AgentsView retries at T.                                                                                                                                                                            |
