@@ -480,6 +480,11 @@ func (s *Syncer) settleLeftOut(key AccountKey, root string, now time.Time) error
 	if err != nil {
 		return err
 	}
+	// Recover records a crash left unsaved first, so the newest row in
+	// the file, not an older one the saved state names, is kept.
+	if st, _, err = commitThread(s.Store, key, root, st, nil, now); err != nil {
+		return err
+	}
 	if len(st.LastPlanRow) == 0 {
 		return s.appendPlan(key, root, now, mirror.KindPlanUsageOutcome,
 			mirror.PlanUsageOutcomeData{Kind: mirror.OutcomeSettledNoRow, At: now})
