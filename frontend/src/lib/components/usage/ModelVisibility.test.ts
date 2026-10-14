@@ -84,8 +84,8 @@ function modelOption(name: string) {
 
 let component: ReturnType<typeof mount>;
 beforeEach(() => {
-  api.getApiV1UsagePairwiseComparison.mockResolvedValue(emptyUsagePairwiseComparison());
   vi.clearAllMocks();
+  api.getApiV1UsagePairwiseComparison.mockResolvedValue(emptyUsagePairwiseComparison());
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   api.getApiV1UsageSummary.mockImplementation(async (params) => summary(params.exclude_model));
   usage.selectedProjectKey = "";
