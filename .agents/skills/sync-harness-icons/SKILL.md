@@ -147,8 +147,11 @@ Work in a fresh worktree from kit-ui `main`. One commit touches:
 | `docs/components/harness-icon.md`         | A row in the Harnesses table: id in backticks, brand, then the agent names comma separated, in the same three columns as the rows above it   |
 | `tests/browser/harness-icon.spec.ts`      | Raise both `toHaveCount` values by the number added                                                                                          |
 
-Run `bun install`, `bun run fmt`, `bun run check`, `bun run lint`,
-`bun run test:browser`, and `bun run build`. Screenshot the HarnessIcon page of
+Run `bun install`, `bun run fmt`, `bun run generate:types` (kit-ui commits the
+generated `types/` declarations, and `bun run check:types` fails until they
+match), `bun run check`, `bun run lint`, `bun run test:browser`, and
+`bun run build`. Use the brand as the id and label, not the product: StepCode
+draws `stepfun`, as QClaw draws `tencent`. Screenshot the HarnessIcon page of
 the demo gallery (`bun run dev -- --port <n>`, then `/#harness-icon` with the
 same headless Chrome command). Open the PR; its body references the AgentsView
 PR for provenance.
