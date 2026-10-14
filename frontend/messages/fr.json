@@ -2874,6 +2874,8 @@
   "plan_usage_could_not_check": "AgentsView n'a pas pu vérifier l'utilisation du forfait",
   "plan_usage_account_unavailable": "L'utilisation n'est pas disponible pour ce compte",
   "plan_usage_counted_under": "Comptée dans la conversation {title}",
+  "plan_usage_stale": "Plus tard : {reason} ({time}). Ces chiffres ne sont peut-être plus à jour.",
+  "plan_usage_left_out_later": "Le rapport d'utilisation d'OpenAI a omis cette conversation",
   "plan_usage_weekly_share": "{percent} % de la limite hebdomadaire de Codex",
   "plan_usage_five_hour_share": "{percent} % de la limite de cinq heures de Codex",
   "plan_usage_credits": [
@@ -2886,7 +2888,7 @@
       }
     }
   ],
-  "plan_usage_credits_note": "Les crédits sont l'unité d'OpenAI pour l'utilisation au-delà de ce que le forfait inclut : 0 crédit signifie que le forfait a couvert le travail.",
+  "plan_usage_credits_note": "Les crédits sont affichés tels que le rapport d'utilisation d'OpenAI les fournit.",
   "plan_usage_col_split": "Modèle, effort, vitesse",
   "plan_usage_col_weekly": "Semaine",
   "plan_usage_col_five_hour": "5 heures",
@@ -2958,6 +2960,7 @@
   "status_bar_codex_cloud_error": "Codex Cloud : erreur",
   "status_bar_codex_cloud_off": "Codex Cloud : désactivé",
   "status_bar_codex_cloud_config_error": "Codex Cloud : erreur de réglages",
+  "status_bar_codex_cloud_live_attention": "Codex Cloud : les jetons en direct demandent votre attention",
   "status_bar_codex_cloud_oldest_failure": "Plus ancien échec : {time}",
   "status_bar_codex_cloud_last_success": "Dernière synchronisation réussie : {time}",
   "status_bar_codex_cloud_homes": "Dossiers Codex : {homes}"

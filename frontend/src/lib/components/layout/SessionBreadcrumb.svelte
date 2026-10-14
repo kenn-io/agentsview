@@ -399,9 +399,10 @@
     const state = countedUnderLabel ?? planUsageDisplay.headline;
     return [state, missedTurnsLine].filter(Boolean).join("\n") || undefined;
   });
-  // Screen readers hear the closed trigger's explanations as part of its name.
+  // Screen readers hear the closed trigger's state and warnings as part of
+  // its name; the title alone may not be read.
   let planUsageSrText = $derived(
-    [countedUnderLabel, missedTurnsLine].filter(Boolean).join(", "),
+    [countedUnderLabel ?? planUsageDisplay?.headline, missedTurnsLine].filter(Boolean).join(", "),
   );
 
   onDestroy(() => {

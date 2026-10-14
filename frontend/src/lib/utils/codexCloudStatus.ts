@@ -83,7 +83,8 @@ export interface CodexCloudStatusLine {
   summary: string;
   /** Every row's state, live token, and plan usage lines, for a tooltip. */
   detail: string;
-  /** Whether the summarized row needs the user's attention. */
+  /** Whether any row needs the user's attention: its sync state or its
+   * live token line. */
   warn: boolean;
 }
 
@@ -97,11 +98,15 @@ export function codexCloudStatusLine(rows: CodexcloudHomeStatus[]): CodexCloudSt
   for (const row of rows) {
     if ((SEVERITY[row.state] ?? 0) > (SEVERITY[shown.state] ?? 0)) shown = row;
   }
+  // Live capture can need the user while sync is fine: unsaved token
+  // counts are lost on restart, and a stop ends capture. The summary says
+  // so in words, not only in color.
+  const syncWarn = (SEVERITY[shown.state] ?? 0) > 0;
+  const liveWarn = rows.some((row) => row.live_warn);
   return {
-    summary: stateSummary(shown),
+    summary:
+      liveWarn && !syncWarn ? m.status_bar_codex_cloud_live_attention() : stateSummary(shown),
     detail: rows.map((row) => rowDetail(row).join("\n")).join("\n\n"),
-    // Live capture can need the user while sync is fine: unsaved token
-    // counts are lost on restart, and a stop ends capture.
-    warn: (SEVERITY[shown.state] ?? 0) > 0 || rows.some((row) => row.live_warn),
+    warn: syncWarn || liveWarn,
   };
 }

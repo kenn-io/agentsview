@@ -225,6 +225,8 @@ describe("StatusBar", () => {
 
       const line = document.querySelector(".codex-cloud-status");
       expect(line?.classList.contains("codex-cloud-status--warn")).toBe(true);
+      // The warning is in words, not only in color.
+      expect(line?.textContent?.trim()).toBe("Codex Cloud: live tokens need attention");
       void unmount(component);
     });
 

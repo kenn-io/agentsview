@@ -2874,6 +2874,8 @@
   "plan_usage_could_not_check": "AgentsView no pudo comprobar el uso del plan",
   "plan_usage_account_unavailable": "El uso no está disponible para esta cuenta",
   "plan_usage_counted_under": "Contado en el chat {title}",
+  "plan_usage_stale": "Más tarde: {reason} ({time}). Estas cifras pueden estar desactualizadas.",
+  "plan_usage_left_out_later": "El informe de uso de OpenAI omitió este chat",
   "plan_usage_weekly_share": "{percent}% del límite semanal de Codex",
   "plan_usage_five_hour_share": "{percent}% del límite de cinco horas de Codex",
   "plan_usage_credits": [
@@ -2886,7 +2888,7 @@
       }
     }
   ],
-  "plan_usage_credits_note": "Los créditos son la unidad de OpenAI para el uso que supera lo que incluye el plan, así que 0 créditos significa que el plan cubrió el trabajo.",
+  "plan_usage_credits_note": "Los créditos se muestran tal como los da el informe de uso de OpenAI.",
   "plan_usage_col_split": "Modelo, esfuerzo, velocidad",
   "plan_usage_col_weekly": "Semanal",
   "plan_usage_col_five_hour": "5 horas",
@@ -2958,6 +2960,7 @@
   "status_bar_codex_cloud_error": "Codex Cloud: error",
   "status_bar_codex_cloud_off": "Codex Cloud: desactivado",
   "status_bar_codex_cloud_config_error": "Codex Cloud: error de configuración",
+  "status_bar_codex_cloud_live_attention": "Codex Cloud: los tokens en vivo requieren atención",
   "status_bar_codex_cloud_oldest_failure": "Fallo más antiguo: {time}",
   "status_bar_codex_cloud_last_success": "Última sincronización correcta: {time}",
   "status_bar_codex_cloud_homes": "Carpetas de Codex: {homes}"

@@ -161,8 +161,23 @@ describe("describePlanUsage", () => {
       plan({ ...figures, outcome_kind: "could_not_check", outcome_at: OUTCOME_AT }),
     );
     expect(display?.headline).toBe(`Plan usage, as of ${formatTimestamp(AS_OF)}`);
-    expect(display?.staleNote).toBe("AgentsView could not check plan usage");
+    expect(display?.staleNote).toBe(
+      `Later: AgentsView could not check plan usage (${formatTimestamp(OUTCOME_AT)}). ` +
+        "These figures may be out of date.",
+    );
     expect(display?.hasFigures).toBe(true);
+  });
+
+  it("does not promise a report for a final row the report later left out", () => {
+    const display = describePlanUsage(
+      "codex-cloud",
+      plan({ ...figures, final: true, outcome_kind: "left_out", outcome_at: OUTCOME_AT }),
+    );
+    expect(display?.staleNote).toBe(
+      `Later: OpenAI's usage report left this chat out (${formatTimestamp(OUTCOME_AT)}). ` +
+        "These figures may be out of date.",
+    );
+    expect(display?.staleNote).not.toContain("not reported yet");
   });
 
   it("replaces the figures with the usage root for a counted-under thread", () => {

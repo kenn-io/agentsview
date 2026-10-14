@@ -2838,6 +2838,8 @@
   "plan_usage_could_not_check": "AgentsView はプラン使用量を確認できませんでした",
   "plan_usage_account_unavailable": "このアカウントでは使用量を利用できません",
   "plan_usage_counted_under": "チャット {title} に含めて集計",
+  "plan_usage_stale": "その後: {reason} ({time})。これらの数値は古い可能性があります。",
+  "plan_usage_left_out_later": "OpenAI の使用量レポートにこのチャットが含まれていません",
   "plan_usage_weekly_share": "Codex の週間上限の {percent}%",
   "plan_usage_five_hour_share": "Codex の 5 時間上限の {percent}%",
   "plan_usage_credits": [
@@ -2849,7 +2851,7 @@
       }
     }
   ],
-  "plan_usage_credits_note": "クレジットはプランに含まれる分を超えた使用量に対する OpenAI の単位です。0 クレジットはプランで作業がまかなえたことを意味します。",
+  "plan_usage_credits_note": "クレジットは OpenAI の使用量レポートが示すとおりに表示します。",
   "plan_usage_col_split": "モデル、推論強度、速度",
   "plan_usage_col_weekly": "週間",
   "plan_usage_col_five_hour": "5 時間",
@@ -2915,6 +2917,7 @@
   "status_bar_codex_cloud_error": "Codex Cloud: エラー",
   "status_bar_codex_cloud_off": "Codex Cloud: オフ",
   "status_bar_codex_cloud_config_error": "Codex Cloud: 設定エラー",
+  "status_bar_codex_cloud_live_attention": "Codex Cloud: ライブトークンの確認が必要です",
   "status_bar_codex_cloud_oldest_failure": "最も古い失敗: {time}",
   "status_bar_codex_cloud_last_success": "最後に成功した同期: {time}",
   "status_bar_codex_cloud_homes": "Codex ホーム: {homes}"
