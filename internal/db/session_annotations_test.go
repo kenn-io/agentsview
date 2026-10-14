@@ -658,7 +658,8 @@ func TestLauncherParentAfterSpawnPreservesParserRelationship(t *testing.T) {
 			write := SessionBatchWrite{
 				Session:         Session{ID: "spawner", Project: "proj", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1},
 				ReplaceMessages: true,
-				Messages: []Message{{SessionID: "spawner", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
+				Messages: []Message{{
+					SessionID: "spawner", Ordinal: 0, Role: "assistant", Content: "spawn", HasToolUse: true,
 					ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"}},
 				}},
 			}
