@@ -226,6 +226,29 @@ func TestStatusBoardKeepsLatestRowPerKey(t *testing.T) {
 	assert.Equal(t, "/homes/a", board.Snapshot()[0].Homes[0], "a snapshot is a copy")
 }
 
+// A removed row takes its live warning with it, so the same key set again
+// does not show warning styling without warning text.
+func TestStatusBoardRemovedRowForgetsItsLiveWarning(t *testing.T) {
+	for name, remove := range map[string]func(*codexcloud.StatusBoard){
+		"Delete": func(b *codexcloud.StatusBoard) { b.Delete("a") },
+		"Keep":   func(b *codexcloud.StatusBoard) { b.Keep(map[string]bool{}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			board := codexcloud.NewStatusBoard()
+			board.Set(codexcloud.HomeStatus{Key: "a", State: codexcloud.StateUpToDate})
+			board.SetLive("a", "Live tokens: stopped.", true)
+
+			remove(board)
+			board.Set(codexcloud.HomeStatus{Key: "a", State: codexcloud.StateUpToDate})
+
+			rows := board.Snapshot()
+			require.Len(t, rows, 1)
+			assert.Empty(t, rows[0].Live)
+			assert.False(t, rows[0].LiveWarn)
+		})
+	}
+}
+
 func TestMessages(t *testing.T) {
 	retryAt := time.Date(2026, 10, 1, 15, 30, 0, 0, time.UTC)
 	assert.Equal(t, "OpenAI is limiting requests from this account. AgentsView retries at "+
