@@ -234,7 +234,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # SQLite-heavy packages run in their own jobs below so they do not
+          # Isolated packages run in their own jobs below so they do not
           # compete for this runner's package workers and timeout budget.
           $packages = @(go list ./...)
           if ($LASTEXITCODE -ne 0) {
@@ -299,7 +299,7 @@ jobs:
         run: echo "::warning::Codecov upload failed"
 
   # Share setup for isolated Windows Go suites; keep CLI and Sync on their own runners.
-  test-sqlite-packages-windows:
+  test-isolated-packages-windows:
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
     strategy:

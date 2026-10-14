@@ -81,7 +81,7 @@ jobs:
         run: |
           $packages = '${{ matrix.package }}' -split ' '
           if ('${{ matrix.package }}' -eq './...') {
-            # Keep SQLite-heavy packages on separate runners, as in normal CI.
+            # Keep isolated packages on separate runners, as in normal CI.
             $packages = @(go list ./...)
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $isolatedPackages = @(
