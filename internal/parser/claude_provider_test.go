@@ -80,6 +80,65 @@ func TestClaudeProviderScopedDiscoveryBoundsTraversal(t *testing.T) {
 	}
 }
 
+func TestClaudeProviderScopedDiscoverySharesTraversalAndErrors(t *testing.T) {
+	for _, mode := range []string{"overlap", "unreadable", "symlink", "yield error"} {
+		t.Run(mode, func(t *testing.T) {
+			root := filepath.Clean(t.TempDir())
+			project := filepath.Join(root, "target")
+			if mode == "symlink" {
+				target := filepath.Clean(t.TempDir())
+				require.NoError(t, os.Symlink(target, project))
+			}
+			main := filepath.Join(project, "session-main.jsonl")
+			subagents := filepath.Join(project, "session-main", "subagents")
+			child := filepath.Join(subagents, "agent-child.jsonl")
+			healthy := filepath.Join(root, "healthy", "session-healthy.jsonl")
+			writeSourceFile(t, main, claudeProviderFixture("main"))
+			writeSourceFile(t, child, claudeProviderFixture("child"))
+			writeSourceFile(t, healthy, claudeProviderFixture("healthy"))
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			var scopes []ReconciliationScope
+			for _, path := range []string{subagents, project, filepath.Dir(healthy)} {
+				plan, err := provider.ResolveReconciliationScopes(t.Context(), ReconciliationScopeRequest{Roots: []string{path}})
+				require.NoError(t, err)
+				scopes = append(scopes, plan.Scopes...)
+			}
+			reads := make(map[string]int)
+			ctx := withStreamingDirectoryReader(t.Context(), func(ctx context.Context, path string, yield func(os.DirEntry) error) error {
+				reads[path]++
+				if mode == "unreadable" && path == subagents {
+					return os.ErrPermission
+				}
+				return streamDirectoryEntriesDirect(ctx, path, yield)
+			})
+			var paths []string
+			stop := errors.New("consumer stopped")
+			err := provider.(ScopedStreamingDiscoverer).DiscoverScopesEach(ctx, scopes, func(source SourceRef) error {
+				paths = append(paths, source.DisplayPath)
+				if mode == "yield error" {
+					return stop
+				}
+				return nil
+			})
+			switch mode {
+			case "unreadable":
+				require.ErrorIs(t, err, os.ErrPermission)
+				assert.ElementsMatch(t, []string{main, healthy}, paths)
+			case "yield error":
+				require.ErrorIs(t, err, stop)
+				assert.Len(t, paths, 1)
+			default:
+				require.NoError(t, err)
+				assert.ElementsMatch(t, []string{main, child, healthy}, paths)
+			}
+			for path, count := range reads {
+				assert.Equal(t, 1, count, "repeated directory read: %s", path)
+			}
+		})
+	}
+}
+
 func TestClaudeProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	projectDir := "-Users-dev-code-demo"

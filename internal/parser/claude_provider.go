@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -59,58 +61,45 @@ func (p *claudeProvider) DiscoverEach(ctx context.Context, yield func(SourceRef)
 }
 
 func (p *claudeProvider) DiscoverScopesEach(ctx context.Context, scopes []ReconciliationScope, yield func(SourceRef) error) error {
+	paths := make(map[string][]string)
 	for _, scope := range scopes {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		for _, root := range scope.TraversalRoots {
 			for _, proof := range scope.PhysicalProofScopes {
-				path := filepath.Clean(proof.Path)
-				if reconciliationScopeSamePath(cleanReconciliationScopeRoot(root), cleanReconciliationScopeRoot(path)) {
-					if err := p.sources.discoverEachRoot(ctx, root, yield); err != nil {
-						return err
-					}
-					continue
-				}
-				if !reconciliationScopeWithinOrSame(cleanReconciliationScopeRoot(path), cleanReconciliationScopeRoot(root)) {
-					continue
-				}
-				info, err := os.Stat(path)
-				if errors.Is(err, syscall.ENOTDIR) {
-					continue
-				}
-				if errors.Is(err, os.ErrNotExist) {
-					if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-						continue
-					}
-				}
-				if err != nil {
-					return err
-				}
-				emit := func(path string) error {
-					if source, ok := p.sources.sourceRef(root, path); ok {
-						return yield(source)
-					}
-					return nil
-				}
-				if !info.IsDir() {
-					if err := emit(path); err != nil {
-						return err
-					}
-					continue
-				}
-				if err := streamDirectoryTree(ctx, path, func(path string, entry os.DirEntry) error {
-					if !strings.HasSuffix(entry.Name(), ".jsonl") {
-						return nil
-					}
-					return emit(path)
-				}); err != nil {
-					return err
-				}
+				paths[root] = append(paths[root], filepath.Clean(proof.Path))
 			}
 		}
 	}
-	return nil
+	var incomplete, yieldErr error
+	emit := func(source SourceRef) error {
+		yieldErr = yield(source)
+		return yieldErr
+	}
+	for _, root := range slices.Sorted(maps.Keys(paths)) {
+		slices.Sort(paths[root])
+		var covered []string
+		for _, path := range paths[root] {
+			if slices.ContainsFunc(covered, func(parent string) bool {
+				return reconciliationScopeWithinOrSame(path, parent)
+			}) {
+				continue
+			}
+			covered = append(covered, path)
+			var err error
+			if reconciliationScopeSamePath(cleanReconciliationScopeRoot(root), cleanReconciliationScopeRoot(path)) {
+				err = p.sources.discoverEachRoot(ctx, root, emit)
+			} else {
+				err = p.sources.streamLocalSubtree(ctx, root, path, emit)
+			}
+			if yieldErr != nil {
+				return yieldErr
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			incomplete = errors.Join(incomplete, err)
+		}
+	}
+	return incomplete
 }
 
 func (p *claudeProvider) DiscoverRawCaptureSourcesEach(
@@ -629,18 +618,7 @@ func (s claudeSourceSet) streamLocalRoot(
 			return nil
 		}
 		projectRoot := filepath.Join(root, project.Name())
-		err := streamDirectoryTreeRecursive(ctx, projectRoot, func(
-			path string, entry os.DirEntry,
-		) error {
-			if !strings.HasSuffix(entry.Name(), ".jsonl") {
-				return nil
-			}
-			source, ok := s.sourceRef(root, path)
-			if !ok {
-				return nil
-			}
-			return yield(source)
-		})
+		err := s.streamLocalSubtree(ctx, root, projectRoot, yield)
 		if err == nil {
 			return nil
 		}
@@ -657,6 +635,34 @@ func (s claudeSourceSet) streamLocalRoot(
 		return cause
 	}
 	return errors.Join(incomplete, err)
+}
+
+func (s claudeSourceSet) streamLocalSubtree(ctx context.Context, root, path string, yield func(SourceRef) error) error {
+	info, err := os.Stat(path)
+	if errors.Is(err, syscall.ENOTDIR) {
+		return nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+	}
+	if err != nil {
+		return incompleteDiscoveryError(s.spec.agent, "resolve "+s.spec.dirLabel+" "+path, err)
+	}
+	emit := func(path string, entry os.DirEntry) error {
+		if !strings.HasSuffix(entry.Name(), ".jsonl") {
+			return nil
+		}
+		if source, ok := s.sourceRef(root, path); ok {
+			return yield(source)
+		}
+		return nil
+	}
+	if !info.IsDir() {
+		return emit(path, fs.FileInfoToDirEntry(info))
+	}
+	return streamDirectoryTreeRecursive(ctx, path, emit)
 }
 
 // discoveredSourceRef builds the SourceRef for one enumerated session file.

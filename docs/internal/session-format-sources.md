@@ -200,7 +200,9 @@ fixtures retain this field; missing identities remain source-local.
   continuations and their companions into one source. Reparse preserves either
   seed transcript's stored path and refuses replacement if a recorded
   contributor is absent. Hosted capture plans and watcher discovery are
-  unchanged.
+  unchanged. Rechecked 2026-10-14 with scoped discovery and watcher
+  reconciliation fixtures: fallback polling covers the affected project so
+  companion transcripts remain in scope.
 
 - **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
   found 12,261 `ai-title` records, with a mean of 15.96 records per file and a

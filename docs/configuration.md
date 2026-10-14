@@ -1713,14 +1713,15 @@ against the budget. The Antigravity IDE watcher also watches
 This cap applies to the Linux and Windows watcher. The macOS FSEvents watcher
 has no per-directory budget.
 
-Runtime folder watch failures put only the failed folder's subtree on polling.
-Other folders keep native watching. Each folder stops polling when it becomes
-watchable or disappears. Retries start after 10 seconds and back off to two
-minutes. Recovery reconciles only the affected subtree before releasing its
-polling obligation. Claude folder polling also limits discovery to that subtree.
-Budget or native watch resource exhaustion and root removal keep root-level
-polling. Event-buffer overflow puts every recursive root on
-polling.
+Runtime folder watch failures keep healthy folders on native watches. Claude
+polling covers the affected project folder. Other providers poll the root's
+configured scopes so changes to companion files reach their owning sessions.
+Retries start after 10 seconds and back off to two minutes. Recovery queues
+reconciliation for those scopes before releasing polling. A deferred folder
+keeps polling until its watch is installed or the path disappears, including
+when a symlink or file replaces it. Removing a root from the watch plan releases
+its polling obligations. Budget or native watch resource exhaustion keeps
+root-level polling. Event-buffer overflow puts every recursive root on polling.
 
 Roots that fall back to polling are picked up by:
 
@@ -1728,7 +1729,10 @@ Roots that fall back to polling are picked up by:
 - a new 2-minute fallback sync loop that runs whenever any roots are unwatched
     (it reconciles the affected scopes)
 
-Startup logs make degradation explicit. Per-root and summary lines look like:
+The startup polling summary counts roots handed to fallback polling. It excludes
+folders already covered by separate polling obligations. Runtime
+`polling N unwatched root(s)` logs count distinct polling scopes, including
+Claude project folders. Per-root and startup summary lines look like:
 
 ```
 Couldn't watch 12500 directories under /home/me/.claude/projects, will poll every 2m0s
